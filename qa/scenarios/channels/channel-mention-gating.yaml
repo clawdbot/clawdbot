@@ -5,9 +5,9 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.group-messages
+      - channels.mention-gating
     secondary:
-      - runtime.delivery
+      - channels.automatic-final-reply
   objective: Verify required-mention group traffic stays quiet until the bot is explicitly mentioned.
   successCriteria:
     - Unmentioned group traffic produces no outbound reply.
@@ -19,6 +19,19 @@ scenario:
     - extensions/qa-channel/src/inbound.ts
     - extensions/qa-lab/src/qa-transport.ts
   execution:
+    profiles:
+      {
+        "matrix:adapter": 3,
+        "matrix:all": 35,
+        "matrix:fast": 7,
+        "matrix:transport": 34,
+        "slack:adapter": 2,
+        "telegram:adapter": 2,
+        "telegram:all": 1,
+        "telegram:mock-release": 1,
+        "telegram:release": 1,
+        "whatsapp:adapter": 3,
+      }
     kind: flow
     summary: Prove the shared mention gate with a quiet turn followed by a mentioned turn.
     transportPolicy:

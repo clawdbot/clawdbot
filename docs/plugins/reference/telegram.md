@@ -16,7 +16,7 @@ Adds the Telegram channel surface for sending and receiving OpenClaw messages.
 
 ## Surface
 
-channels: telegram
+channels: `telegram`
 
 ## Related docs
 

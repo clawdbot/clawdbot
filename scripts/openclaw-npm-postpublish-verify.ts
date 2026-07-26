@@ -25,16 +25,17 @@ import {
 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
-import { formatErrorMessage } from "../src/infra/errors.ts";
 import { ALWAYS_ALLOWED_RUNTIME_DIR_NAMES } from "../src/plugin-sdk/facade-activation-contract.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
 import { readBoundedResponseText } from "./lib/bounded-response.ts";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
+import { formatErrorMessage } from "./lib/error-format.mjs";
 import { runNpmVerifyCommand } from "./lib/npm-verify-exec.ts";
 import {
   collectRuntimeDependencySpecs,
   packageNameFromSpecifier,
 } from "./lib/plugin-package-dependencies.mjs";
+import { classifyReleaseTrain } from "./lib/release-version.mjs";
 import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mjs";
 import { parseReleaseVersion, resolveNpmCommandInvocation } from "./openclaw-npm-release-check.ts";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
@@ -201,6 +202,12 @@ type NpmProvenanceStatement = {
           repository?: string;
         };
       };
+      resolvedDependencies?: Array<{
+        digest?: {
+          gitCommit?: string;
+        };
+        uri?: string;
+      }>;
     };
     runDetails?: {
       builder?: {
@@ -277,6 +284,10 @@ export function verifyNpmRegistrySignatures(params: {
 function resolveNpmProvenanceVerificationPolicy(
   statement: NpmProvenanceStatement,
   version: string,
+  expectedWorkflow?: {
+    ref?: string;
+    sha?: string;
+  },
 ): NpmProvenanceVerificationPolicy {
   const parsedVersion = parseReleaseVersion(version);
   if (parsedVersion === null) {
@@ -285,9 +296,42 @@ function resolveNpmProvenanceVerificationPolicy(
   const workflow = statement.predicate?.buildDefinition?.externalParameters?.workflow;
   const workflowRef = workflow?.ref;
   const expectedReleaseRef = `refs/heads/release/${parsedVersion.baseVersion}`;
+  // A month's final patch >=33 releases stay on its canonical .33 maintenance branch.
+  const isExpectedExtendedStableRef =
+    classifyReleaseTrain(parsedVersion) === "extended-stable" &&
+    workflowRef === `refs/heads/extended-stable/${parsedVersion.year}.${parsedVersion.month}.33`;
+  const protectedReleasePublishMatch =
+    /^refs\/tags\/release-publish\/([a-f0-9]{12})-[1-9][0-9]*$/u.exec(workflowRef ?? "");
+  let protectedReleasePublishTrusted = false;
+  if (protectedReleasePublishMatch) {
+    const expectedRef = expectedWorkflow?.ref;
+    const expectedSha = expectedWorkflow?.sha;
+    if (
+      expectedRef !== workflowRef ||
+      !/^[a-f0-9]{40}$/u.test(expectedSha ?? "") ||
+      expectedSha?.slice(0, 12) !== protectedReleasePublishMatch[1]
+    ) {
+      throw new Error(
+        "npm provenance SHA-pinned release-publish ref does not match the approved workflow ref and SHA.",
+      );
+    }
+    const expectedDependencyUri = `git+${NPM_PROVENANCE_REPOSITORY}@${workflowRef}`;
+    protectedReleasePublishTrusted =
+      statement.predicate?.buildDefinition?.resolvedDependencies?.some(
+        (dependency) =>
+          dependency.uri === expectedDependencyUri && dependency.digest?.gitCommit === expectedSha,
+      ) === true;
+    if (!protectedReleasePublishTrusted) {
+      throw new Error(
+        "npm provenance does not bind the approved SHA-pinned release-publish ref to its workflow revision.",
+      );
+    }
+  }
   const isTrustedRef =
     workflowRef === "refs/heads/main" ||
     workflowRef === expectedReleaseRef ||
+    isExpectedExtendedStableRef ||
+    protectedReleasePublishTrusted ||
     (parsedVersion.channel === "alpha" &&
       /^refs\/heads\/tideclaw\/alpha\/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$/u.test(
         workflowRef ?? "",
@@ -320,6 +364,8 @@ async function verifySigstoreNpmProvenanceBundle(
 
 export async function verifyNpmProvenanceAttestation(params: {
   attestations: NpmRegistryAttestation[];
+  expectedWorkflowRef?: string;
+  expectedWorkflowSha?: string;
   integrity: string;
   packageName: string;
   verifyBundle?: VerifyNpmProvenanceBundle;
@@ -353,7 +399,10 @@ export async function verifyNpmProvenanceAttestation(params: {
       ) {
         let policy: NpmProvenanceVerificationPolicy;
         try {
-          policy = resolveNpmProvenanceVerificationPolicy(statement, params.version);
+          policy = resolveNpmProvenanceVerificationPolicy(statement, params.version, {
+            ref: params.expectedWorkflowRef,
+            sha: params.expectedWorkflowSha,
+          });
         } catch (error) {
           policyError = error;
           continue;
@@ -1043,6 +1092,7 @@ function isRetryableRegistryProvenanceError(error: unknown): boolean {
     /npm registry request failed \((?:404|408|425|429|5\d\d)\)/u.test(message) ||
     message.includes("npm registry metadata is incomplete") ||
     message.includes("npm registry provenance metadata is incomplete") ||
+    message.includes("npm provenance attestation does not bind") ||
     /aborted|fetch failed|network|timeout|timed out/u.test(message)
   );
 }
@@ -1156,6 +1206,8 @@ async function verifyPublishedRegistryProvenanceOnce(version: string): Promise<v
     version,
     integrity,
     attestations,
+    expectedWorkflowRef: process.env.OPENCLAW_NPM_EXPECTED_WORKFLOW_REF,
+    expectedWorkflowSha: process.env.OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA,
   });
   console.log(
     `openclaw-npm-postpublish-verify: registry signature and provenance attestation verified (${version})`,

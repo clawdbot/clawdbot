@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import {
   classifyClaudeCliHistoryMessage,
   classifyClaudeCliHistoryLine,
+  isExternalUserText,
   type SessionCatalogContinueProviderResult,
   type SessionUpstreamActivity,
   type SessionUpstreamProbe,
@@ -9,10 +10,10 @@ import {
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClaudeTranscriptItem } from "./session-catalog-transcript.js";
 
-export const MAX_CLAUDE_UPSTREAM_SCAN_BYTES = 1024 * 1024;
+const MAX_CLAUDE_UPSTREAM_SCAN_BYTES = 1024 * 1024;
 export const continueOperations = new Map<string, Promise<{ sessionKey: string }>>();
 
-export async function link(
+async function link(
   sessionKey: string,
   hostId: string,
   threadId: string,
@@ -40,7 +41,7 @@ export async function link(
   }
 }
 
-export function linkRemote(
+function linkRemote(
   sessionKey: string,
   nodeId: string,
   threadId: string,
@@ -104,16 +105,7 @@ function readMarkerOffset(probe: SessionUpstreamProbe): number | undefined {
   return Number.isSafeInteger(offset) && (offset as number) >= 0 ? (offset as number) : undefined;
 }
 
-function normalizeUserText(text: string): string {
-  return text.trim().replace(/\s+/g, " ");
-}
-
-function isExternalUserText(probe: SessionUpstreamProbe, text: string | undefined): boolean {
-  const normalized = text === undefined ? "" : normalizeUserText(text);
-  return !probe.ownRecentUserTexts.includes(normalized);
-}
-
-export async function checkClaudeSessionUpstreamActivity(
+async function checkClaudeSessionUpstreamActivity(
   probe: SessionUpstreamProbe,
 ): Promise<SessionUpstreamActivity | undefined> {
   if (probe.upstreamKind !== "claude-cli") {

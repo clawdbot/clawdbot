@@ -16,7 +16,7 @@ OpenClaw WhatsApp channel plugin for WhatsApp Web chats.
 
 ## Surface
 
-channels: whatsapp; contracts: tools; skills
+channels: `whatsapp`; contracts: `tools`; skills
 
 ## Related docs
 

@@ -5,8 +5,8 @@ import { buildDeclaredToolAllowlistContext } from "./tool-policy-declared-contex
 import {
   applyToolPolicyPipeline,
   buildDefaultToolPolicyPipelineSteps,
-  resetToolPolicyWarningCacheForTest,
 } from "./tool-policy-pipeline.js";
+import { resetToolPolicyWarningCacheForTest } from "./tool-policy-pipeline.test-support.js";
 import { resolveToolProfilePolicy } from "./tool-policy.js";
 
 const { toolPolicyAuditDebug, toolPolicyAuditInfo } = vi.hoisted(() => ({
@@ -80,6 +80,44 @@ describe("tool-policy-pipeline", () => {
     const names = filtered.map((t) => (t as unknown as DummyTool).name).toSorted();
     expect(names).toEqual(["plugin_tool"]);
   });
+
+  test.each([
+    { expected: ["exec"], policy: { deny: ["canvas"] } },
+    { expected: ["canvas", "show_widget"], policy: { allow: ["canvas"] } },
+  ])("keeps promoted show_widget in the Canvas policy family ($policy)", ({ expected, policy }) => {
+    const tools = [{ name: "exec" }, { name: "show_widget" }, { name: "canvas" }];
+    const filtered = applyToolPolicyPipeline({
+      tools: asPolicyTools(tools),
+      toolMeta: (tool) => (tool.name === "canvas" ? { pluginId: "canvas" } : undefined),
+      warn: () => {},
+      steps: [{ policy, label: "tools", stripPluginOnlyAllowlist: true }],
+    });
+
+    expect(filtered.map((tool) => tool.name).toSorted()).toEqual(expected);
+  });
+
+  test.each([
+    { expected: ["exec", "show_widget"], policy: { deny: ["canvas"] } },
+    { expected: ["canvas"], policy: { allow: ["canvas"] } },
+  ])(
+    "does not apply the Canvas core alias to Discord-owned show_widget ($policy)",
+    ({ expected, policy }) => {
+      const tools = [{ name: "exec" }, { name: "show_widget" }, { name: "canvas" }];
+      const filtered = applyToolPolicyPipeline({
+        tools: asPolicyTools(tools),
+        toolMeta: (tool) => {
+          if (tool.name === "show_widget") {
+            return { pluginId: "discord" };
+          }
+          return tool.name === "canvas" ? { pluginId: "canvas" } : undefined;
+        },
+        warn: () => {},
+        steps: [{ policy, label: "tools", stripPluginOnlyAllowlist: true }],
+      });
+
+      expect(filtered.map((tool) => tool.name).toSorted()).toEqual(expected);
+    },
+  );
 
   test("warns about unknown allowlist entries", () => {
     const warnings: string[] = [];

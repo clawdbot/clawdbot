@@ -116,14 +116,14 @@ describeMantisWebUiChat("Mantis Control UI web chat proof", () => {
           .locator(".chat-working-indicator__status > span:not(.agent-chat__sr-only)")
           .count(),
       ).toBe(0);
-      await page.clock.runFor(177_000);
+      await page.clock.fastForward(177_000);
       await expect
         .poll(() => page.locator(".chat-working-indicator__elapsed").textContent())
         .toBe("2m 57s");
       await page.screenshot({ fullPage: true, path: path.join(artifactDir, "web-ui-chat.png") });
 
       await gateway.emitChatFinal({ runId: params.idempotencyKey ?? "", text: reply });
-      await page.getByText(reply).waitFor({ timeout: 10_000 });
+      await page.locator(".chat-thread-inner").getByText(reply).waitFor({ timeout: 10_000 });
       await writeFile(
         path.join(artifactDir, "web-ui-chat-proof.json"),
         `${JSON.stringify(

@@ -20,6 +20,7 @@ export function collectHostedGateEvidence({
   pullRequestHeadBranch,
   pullRequestHeadRepository,
   workflowRuns,
+  ciGateJobs,
   changelogOnly,
   nowMs,
 }: {
@@ -30,6 +31,7 @@ export function collectHostedGateEvidence({
   pullRequestHeadBranch?: string;
   pullRequestHeadRepository?: string;
   workflowRuns: Array<Record<string, unknown>>;
+  ciGateJobs?: Array<Record<string, unknown>>;
   changelogOnly?: boolean | undefined;
   nowMs?: number | undefined;
 }): {
@@ -67,6 +69,5 @@ export function workflowRunQueryPaths(
   },
   page?: number,
 ): string[];
-export function main(argv?: string[]): void;
 export const SCHEDULED_HOSTED_WORKFLOWS: string[];
 export const HOSTED_GATE_MAX_AGE_HOURS: 24;

@@ -2,9 +2,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import {
-  isNotFoundPathError,
   isPathInside,
   normalizeWindowsPathForComparison,
+  normalizeWindowsPathPreservingCase,
 } from "./path-guards.js";
 
 function setPlatform(platform: NodeJS.Platform): void {
@@ -25,14 +25,33 @@ describe("normalizeWindowsPathForComparison", () => {
   });
 });
 
-describe("node path error helpers", () => {
+describe("normalizeWindowsPathPreservingCase", () => {
+  // Callers create files from paths derived off this, so case must survive. The
+  // equivalence case below pins that case is the *only* thing that differs from the
+  // comparison variant; these rows pin the concrete shapes.
   it.each([
-    [{ code: "ENOENT" }, true],
-    [{ code: "ENOTDIR" }, true],
-    [{ code: "EACCES" }, false],
-    [{ code: 404 }, false],
-  ])("classifies not-found path error for %j", (value, expected) => {
-    expect(isNotFoundPathError(value)).toBe(expected);
+    ["\\\\?\\C:\\Users\\Peter/Repo", "C:\\Users\\Peter\\Repo"],
+    ["\\\\?\\UNC\\Server\\Share\\Folder", "\\\\Server\\Share\\Folder"],
+    ["\\\\?\\unc\\Server\\Share\\Folder", "\\\\Server\\Share\\Folder"],
+    ["C:\\Users\\User\\OpenClaw\\src/Components", "C:\\Users\\User\\OpenClaw\\src\\Components"],
+    ["C:\\Users\\User\\OpenClaw  ", "C:\\Users\\User\\OpenClaw"],
+  ])("normalizes windows path %s without lowercasing", (input, expected) => {
+    expect(normalizeWindowsPathPreservingCase(input)).toBe(expected);
+  });
+
+  it("matches the comparison variant except for case", () => {
+    for (const input of [
+      "\\\\?\\C:\\Users\\Peter/Repo",
+      "\\\\?\\UNC\\Server\\Share\\Folder",
+      "\\\\?\\unc\\Server\\Share\\Folder",
+      "C:\\Users\\User\\OpenClaw\\src/Components",
+      "C:\\Users\\User\\OpenClaw  ",
+      "  C:\\Users\\User\\OpenClaw  ",
+    ]) {
+      expect(normalizeWindowsPathPreservingCase(input).toLowerCase()).toBe(
+        normalizeWindowsPathForComparison(input),
+      );
+    }
   });
 });
 

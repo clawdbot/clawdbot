@@ -6,14 +6,16 @@ import { scenarioMatchesQaProviderLane } from "./scenario-lane.js";
 import { readQaScorecardTaxonomyReport } from "./scorecard-taxonomy.js";
 
 const QA_SMOKE_PROFILE = "smoke-ci";
-const QA_SMOKE_CI_PARTS = ["profile-1", "profile-2"] as const;
+// Four parts keep each smoke job near the fixed setup cost (~1min) instead of
+// serializing ~4min of scenarios into one job that owns the PR wall clock.
+const QA_SMOKE_CI_PARTS = ["profile-1", "profile-2", "profile-3", "profile-4"] as const;
 const QA_SMOKE_CI_CHANNELS = ["matrix", OPENCLAW_CRABLINE_DEFAULT_CHANNEL] as const;
 const QA_SMOKE_CI_SCENARIO_IDS = new Set([
   "control-ui-chat-flow-playwright",
   "system-agent-ring-zero-setup",
   "dreaming-shadow-trial-report",
   "gateway-smoke",
-  "luna-thinking-visibility-switch",
+  "model-switch-follow-up",
   "group-visible-reply-tool",
   "long-running-release-audit",
   "matrix-restart-resume",
@@ -103,22 +105,31 @@ export function createQaSmokeCiPart(partId: string): QaSmokeCiPart {
       (left, right) =>
         estimateScenarioCost(right) - estimateScenarioCost(left) || left.id.localeCompare(right.id),
     );
-  const partitions: [
-    { cost: number; scenarios: typeof scenarios },
-    { cost: number; scenarios: typeof scenarios },
-  ] = [
-    { cost: 0, scenarios: [] },
-    { cost: 0, scenarios: [] },
-  ];
+  const partitions = QA_SMOKE_CI_PARTS.map(() => ({
+    cost: 0,
+    scenarios: [] as typeof scenarios,
+  }));
+  const firstPartition = partitions[0];
+  if (!firstPartition) {
+    throw new Error(`${QA_SMOKE_PROFILE} declares no CI profile parts.`);
+  }
   for (const scenario of defaultChannelScenarios) {
-    const partition = partitions[0].cost <= partitions[1].cost ? partitions[0] : partitions[1];
+    const partition = partitions.reduce(
+      (lightest, candidate) => (candidate.cost < lightest.cost ? candidate : lightest),
+      firstPartition,
+    );
     partition.scenarios.push(scenario);
     partition.cost += estimateScenarioCost(scenario);
   }
 
-  const matrixPartIndex = 1;
+  // The matrix channel run rides on the last part so the greedy cost balance
+  // above stays undisturbed for the shared default-channel scenarios.
+  const matrixPartIndex = QA_SMOKE_CI_PARTS.length - 1;
   const partIndex = QA_SMOKE_CI_PARTS.indexOf(partId);
-  const selectedPartition = partId === QA_SMOKE_CI_PARTS[0] ? partitions[0] : partitions[1];
+  const selectedPartition = partitions[partIndex];
+  if (!selectedPartition) {
+    throw new Error(`unknown QA smoke CI profile part: ${partId}`);
+  }
   const runs: QaSmokeCiRun[] = [
     {
       channel: OPENCLAW_CRABLINE_DEFAULT_CHANNEL,

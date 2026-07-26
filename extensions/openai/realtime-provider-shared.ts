@@ -70,7 +70,7 @@ export function captureOpenAIRealtimeWsClose(params: {
   });
 }
 
-export type OpenAIRealtimeClientSecretResult = {
+type OpenAIRealtimeClientSecretResult = {
   value: string;
   expiresAt?: number;
 };

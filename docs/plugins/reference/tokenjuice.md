@@ -16,7 +16,7 @@ Compacts exec and bash tool results with tokenjuice reducers.
 
 ## Surface
 
-contracts: agentToolResultMiddleware
+contracts: `agentToolResultMiddleware`
 
 ## Related docs
 

@@ -1,6 +1,8 @@
+// @vitest-environment node
 // Control UI tests cover skills behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   installFromClawHub,
   installSkill,
@@ -317,7 +319,7 @@ describe("loadSkills", () => {
     );
 
     const load = loadSkills(state);
-    await vi.waitFor(() => expect(state.skillsLoading).toBe(true));
+    await waitForFast(() => expect(state.skillsLoading).toBe(true));
     state.connected = false;
     expect(rejectStatus).toBeDefined();
     rejectStatus?.(new Error("gateway disconnected"));
@@ -440,8 +442,8 @@ describe("loadSkillCard", () => {
           disabled: false,
           blockedByAllowlist: false,
           eligible: true,
-          requirements: { bins: [], env: [], config: [], os: [] },
-          missing: { bins: [], env: [], config: [], os: [] },
+          requirements: { anyBins: [], bins: [], env: [], config: [], os: [] },
+          missing: { anyBins: [], bins: [], env: [], config: [], os: [] },
           configChecks: [],
           install: [],
           skillCard: {
@@ -493,8 +495,8 @@ describe("loadSkillCard", () => {
           disabled: false,
           blockedByAllowlist: false,
           eligible: true,
-          requirements: { bins: [], env: [], config: [], os: [] },
-          missing: { bins: [], env: [], config: [], os: [] },
+          requirements: { anyBins: [], bins: [], env: [], config: [], os: [] },
+          missing: { anyBins: [], bins: [], env: [], config: [], os: [] },
           configChecks: [],
           install: [],
           clawhub: {
@@ -700,7 +702,7 @@ describe("skill mutations", () => {
     const overlappingLoadAgents = vi.fn(async () => undefined);
 
     const refresh = refreshSkills(state, loadAgents);
-    await vi.waitFor(() => expect(state.skillOperation).toEqual({ kind: "refresh" }));
+    await waitForFast(() => expect(state.skillOperation).toEqual({ kind: "refresh" }));
     await refreshSkills(state, overlappingLoadAgents);
     await updateSkillEnabled(state, "github", true);
 
@@ -727,7 +729,7 @@ describe("skill mutations", () => {
     state.skillsAgentId = "alpha";
 
     const refresh = refreshSkills(state, async () => undefined);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     setSkillsAgentId(state, "beta");
     expectDefined(
       pending[0],
@@ -737,7 +739,7 @@ describe("skill mutations", () => {
       managedSkillsDir: "/tmp/skills",
       skills: [],
     });
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     expectDefined(
       pending[1],
       "beta status request",
@@ -836,7 +838,7 @@ describe("skill mutations", () => {
     state.skillEdits.github = "submitted-value";
 
     const first = fixture.start(state);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(1));
     expect(state.skillOperation).toEqual(fixture.expectedMutation);
 
     await fixture.blocked(state);
@@ -875,7 +877,7 @@ describe("skill mutations", () => {
     oldRequest.mockReturnValue(oldMutationResult.promise);
 
     const oldMutation = updateSkillEnabled(state, "github", true);
-    await vi.waitFor(() => expect(oldRequest).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(oldRequest).toHaveBeenCalledOnce());
 
     const currentMutationResult = createDeferred<unknown>();
     const currentRequest = vi.fn<TestRequest>((method) =>
@@ -892,7 +894,7 @@ describe("skill mutations", () => {
     state.skillOperation = null;
 
     const currentMutation = updateSkillEnabled(state, "calendar", true);
-    await vi.waitFor(() => expect(currentRequest).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(currentRequest).toHaveBeenCalledOnce());
     const currentOperation = state.skillOperation;
 
     oldMutationResult.resolve({});
@@ -947,7 +949,7 @@ describe("skill mutations", () => {
     expect(pendingRequests).toHaveLength(1);
 
     expectDefined(pendingRequests[0], "skills update request").resolve({});
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(pendingRequests).toHaveLength(2);
     });
     expectDefined(pendingRequests[1], "beta skills request after update").resolve({
@@ -983,7 +985,7 @@ describe("skill mutations", () => {
     state.skillsAgentId = "alpha";
 
     const mutation = updateSkillEnabled(state, "github", true);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     setSkillsAgentId(state, "beta");
     expect(rejectUpdate).toBeDefined();
     rejectUpdate?.(new Error("stale update failed"));
@@ -1161,7 +1163,7 @@ describe("skill mutations", () => {
       await Promise.resolve();
       setSkillsAgentId(state, "beta");
       queue.resolveNext({ message: "Installed" });
-      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+      await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
       queue.resolveNext({
         workspaceDir: "/tmp/beta-after-install",
         managedSkillsDir: "/tmp/skills",

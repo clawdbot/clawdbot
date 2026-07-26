@@ -24,6 +24,7 @@ import {
   resolveTelegramQaSenderId,
 } from "./crabline-provider-targets.js";
 import { QaSuiteInfraError } from "./errors.js";
+import { discardIgnoredResponseBody } from "./ignored-response-body.js";
 import {
   QaStateBackedTransportAdapter,
   waitForQaTransportOutboundSequence,
@@ -53,6 +54,37 @@ type QaCrablineTransportState = QaTransportState & {
   observeEvent: (event: unknown) => void;
   rememberProviderTarget: (providerTargetKey: string, qaTarget: string) => void;
 };
+
+function normalizeCrablineSignalGatewayConfig(config: OpenClawConfig): OpenClawConfig {
+  const signal = config.channels?.signal as unknown;
+  if (!isRecord(signal)) {
+    return config;
+  }
+  const httpUrl = readStringValue(signal.httpUrl);
+  if (!httpUrl) {
+    return config;
+  }
+
+  // Crabline still emits the retired Signal transport fields. Keep that dependency detail at
+  // this adapter boundary so the Gateway receives only the account-owned canonical shape.
+  const canonicalSignal = { ...signal };
+  delete canonicalSignal.apiMode;
+  delete canonicalSignal.autoStart;
+  delete canonicalSignal.httpUrl;
+  return {
+    ...config,
+    channels: {
+      ...config.channels,
+      signal: {
+        ...canonicalSignal,
+        transport: {
+          kind: "external-native",
+          url: httpUrl,
+        },
+      },
+    },
+  } as OpenClawConfig;
+}
 
 function formatLogicalQaTarget({ conversation, threadId }: QaBusInboundMessageInput) {
   const prefix = conversation.kind === "direct" ? "dm" : conversation.kind;
@@ -209,6 +241,7 @@ async function postCrablineInbound(params: {
   });
   try {
     if (!response.ok) {
+      await discardIgnoredResponseBody(response);
       throw new Error(
         `Crabline ${params.adapter.channel} inbound injection failed with HTTP ${response.status}.`,
       );
@@ -373,7 +406,11 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
   }
 
   createGatewayConfig = (params: { baseUrl: string }): QaTransportGatewayConfig => {
-    const config = this.#adapter.createGatewayConfig(params) as OpenClawConfig;
+    const rawConfig = this.#adapter.createGatewayConfig(params) as OpenClawConfig;
+    const config =
+      this.#selection.channel === "signal"
+        ? normalizeCrablineSignalGatewayConfig(rawConfig)
+        : rawConfig;
     if (this.#selection.channel !== "telegram") {
       return config as QaTransportGatewayConfig;
     }

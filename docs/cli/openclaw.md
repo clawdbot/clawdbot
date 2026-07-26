@@ -104,23 +104,43 @@ Doctor repairs are unavailable inside OpenClaw because they can rewrite the prov
 
 New agents inherit the live-verified default inference route. The agent ids `openclaw` and `crestodian` are reserved for the system agent and cannot be created as normal agents. The retired id remains blocked so an old config cannot claim it.
 
-`config set` and `config set-ref` cannot change inference-route state,
-including inference-provider credentials, top-level `auth.*`, model catalogs,
-CLI backends, default/per-agent model routes, agent params/tools, or root
-`tools.*`. Raw writes under `env.*`, `secrets.*`, `plugins.*`, and `$include`
-are also refused because they can replace credential resolution or provider
-activation. Gateway and channel auth remain normal config surfaces. Use typed plugin/channel workflows and
-`set default model <provider/model>` for an already
-configured route; it live-tests the route before saving it. To configure or
-repair provider/auth access, exit OpenClaw and run `openclaw onboard`.
+`config set` and `config set-ref` can change any setting a user can change,
+with a short human-only denylist: `$include`, `auth.*`, `env.*`, `models.*`,
+and `secrets.*` stay refused because they carry credential material,
+alternate-config inclusion, or the provider/catalog definitions that feed
+inference routing. Inference routing itself is also protected: default model
+routes (`agents.defaults` model/params/runtime fields) and the routing fields
+of whichever agent backs the active default route are refused, as are agent
+identity/topology fields (`id`, `agentDir`, `default`). Routing fields for
+other agents remain writable behind approval. Gateway and channel auth remain
+normal config surfaces. Use `set default model <provider/model>` for an
+already configured route; it live-tests the route before saving it. To
+configure or repair provider/auth access, exit OpenClaw and run
+`openclaw onboard`.
 
-Plugin uninstall is refused inside OpenClaw because removing a provider
-plugin could disable the inference route powering the session. Exit OpenClaw
-and run `openclaw plugins uninstall <id>` from a terminal.
+`plugins.entries.<id>.*` writes (enable/disable/config of installed plugins)
+are allowed unless that plugin backs the active inference route. Plugin
+install sources and load policy keep their trust boundary in the typed
+plugin-install workflow. Plugin uninstall of the route-backing plugin is
+refused for the same reason; exit OpenClaw and run
+`openclaw plugins uninstall <id>` from a terminal.
 
 Approval is given in your own words: unambiguous replies ("yes", "sure", "go ahead", "not now") resolve from a closed deterministic list. When the configured route supports a separate completion call, other replies can be classified from only your message and the pending proposal — never by the conversation model itself, which cannot self-approve. Unclassified or ambiguous replies keep the proposal pending and the conversation asks again.
 
-Applied writes are recorded in `~/.openclaw/audit/system-agent.jsonl`. Discovery is not audited; only applied operations and writes are.
+### Change history
+
+The Ask OpenClaw page can show recent applied system-agent operations, Doctor
+migrations, Settings and CLI config writes, and manual edits to
+`openclaw.json`. The config journal detects external edits while the Gateway
+is watching, during an OpenClaw-owned write, or at the next startup after an
+offline edit.
+
+History is stored in the `diagnostic_events` table of the shared
+`~/.openclaw/state/openclaw.sqlite` database, under the `system-agent-audit`
+and `config-audit` scopes. Each scope retains its latest 50,000 records.
+Discovery and read-only operations are not included. Secrets never appear in
+change history; config journal records contain changed paths rather than config
+values, and value comparison uses protected fingerprints.
 
 Channel setup can run as a hosted conversation until it reaches a secret. The
 local OpenClaw TUI does not accept sensitive wizard answers because terminal
@@ -160,7 +180,7 @@ setup workspace ~/Projects/work
 `setup` preserves the verified effective model. It does not configure or
 replace inference.
 
-If inference is missing or its live check fails, leave OpenClaw and run `openclaw onboard`. Guided onboarding detects configured models, API keys, and authenticated local CLIs, asks each candidate for a real reply, and persists only a passing route. OpenClaw starts immediately after that boundary and can then configure the workspace, Gateway, channels, agents, plugins, and other optional features.
+If inference is missing or its live check fails, leave OpenClaw and run `openclaw onboard`. Guided onboarding tries the configured model first, then authenticated subscription CLIs, API keys, and remaining supported CLIs; it asks each candidate for a real reply and persists only a passing route. OpenClaw starts immediately after that boundary and can then configure the workspace, Gateway, channels, agents, plugins, and other optional features.
 
 The macOS app skips this ladder entirely when it reaches a configured Gateway
 whose default agent already has a configured model; it opens the normal agent
@@ -283,34 +303,19 @@ Security contract for remote rescue:
 - Disabled when sandboxing is active for the agent/session; OpenClaw refuses remote rescue and points to local CLI repair.
 - Default effective state is `auto`: allow remote rescue only in trusted YOLO operation, where the runtime already has unsandboxed local authority (`tools.exec.security` resolves to `full` and `tools.exec.ask` resolves to `off`, with sandbox mode `off`).
 - Requires an explicit owner identity; no wildcard sender rules, open group policy, unauthenticated webhooks, or anonymous channels.
-- Owner DMs only by default; group/channel rescue needs explicit opt-in.
+- Rescue is limited to owner DMs.
 - Plugin search and list are read-only. Plugin install is always local-only (blocked in rescue, even when otherwise enabled) because it downloads executable code. Plugin uninstall is refused in both local OpenClaw and rescue; run `openclaw plugins uninstall <id>` from a terminal.
 - Remote rescue cannot open the local TUI or switch into an interactive agent session; use local `openclaw` for agent handoff.
 - Persistent writes still require approval, even in rescue mode.
+- Pending approvals are one-use. Any newer rescue command for the same account, channel, and sender revokes the older plan; failed execution also consumes approval, so resend the command to retry.
 - Every applied rescue operation is audited. Message-channel rescue records channel, account, sender, and source-address metadata; config-mutating operations also record config hashes before and after.
 - Secrets are never echoed. SecretRef inspection reports availability, not values.
 - If the Gateway is alive, rescue prefers Gateway typed operations; if it is dead, rescue uses only the minimal local repair surface that does not depend on the normal agent loop.
 
-Config shape:
-
-```jsonc
-{
-  "systemAgent": {
-    "rescue": {
-      "enabled": "auto",
-      "ownerDmOnly": true,
-      "pendingTtlMinutes": 15,
-    },
-  },
-}
-```
-
-- `enabled`: `"auto"` (default) allows rescue only when the effective runtime is YOLO and sandboxing is off; `false` never allows message-channel rescue; `true` explicitly allows rescue when owner/channel checks pass (still subject to the sandboxing denial).
-- `ownerDmOnly`: restrict rescue to owner direct messages. Default `true`.
-- `pendingTtlMinutes`: how long a pending rescue write stays open for `/openclaw yes` approval before expiring. Default `15`.
-
-`openclaw doctor --fix` migrates the legacy `crestodian` config block to
-`systemAgent`. Runtime reads only the canonical block.
+Rescue policy is built in: it is available only when the effective runtime is
+YOLO, sandboxing is off, and the request is an owner DM. Pending write approvals
+expire after 15 minutes. `openclaw doctor --fix` removes the retired
+`systemAgent` and `crestodian` config blocks.
 
 Remote rescue is covered by the Docker lane:
 

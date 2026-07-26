@@ -22,6 +22,8 @@ Plugin compatibility contracts are tracked in the core registry at
 - owner: `sdk`, `config`, `setup`, `channel`, `provider`, `plugin-execution`,
   `agent-runtime`, or `core`
 - introduction and deprecation dates when applicable
+- an exact removal date once the owning maintainer approves it; an omitted
+  `removeAfter` keeps a deprecated surface ineligible for removal
 - replacement guidance
 - docs, diagnostics, and tests that cover the old and new behavior
 
@@ -62,58 +64,50 @@ compatibility and mark it `active` instead.
 
 ## Current compatibility areas
 
-The registry currently tracks around 70 compatibility codes across these
-areas. New plugin code should use the replacement in each area and in the
-specific migration guide; existing plugins can keep using a compatibility
-path until docs, diagnostics, and release notes announce a removal window.
+The July 2026 sweep removed the expired root SDK, manifest, provider, runtime,
+registry-flag, and plugin-owned web-config aliases. Doctor migrations remain
+separately tracked so supported upgrade paths can still repair old config.
 
-- legacy broad SDK imports such as `openclaw/plugin-sdk/compat`
-- legacy hook-only plugin shapes and `before_agent_start`
-- legacy `api.on("deactivate", ...)` cleanup hook names while plugins
-  migrate to `gateway_stop`
-- legacy `activate(api)` plugin entrypoints while plugins migrate to
-  `register(api)`
-- legacy SDK aliases such as `openclaw/extension-api`,
-  `openclaw/plugin-sdk/channel-runtime`, `openclaw/plugin-sdk/command-auth`
-  status builders, `openclaw/plugin-sdk/test-utils` (replaced by focused
-  `openclaw/plugin-sdk/*` test subpaths), and the `ClawdbotConfig` /
-  `OpenClawSchemaType` type aliases
-- bundled plugin allowlist and enablement behavior
-- legacy provider/channel env-var manifest metadata
-- legacy provider plugin hooks and type aliases while providers move to
-  explicit catalog, auth, thinking, replay, and transport hooks
-- legacy runtime aliases such as `api.runtime.taskFlow`,
-  `api.runtime.subagent.getSession`, `api.runtime.stt`, and deprecated
-  `api.runtime.config.loadConfig()` / `api.runtime.config.writeConfigFile(...)`
-- WhatsApp `WebInboundMessage` flat callback fields (see below)
-- WhatsApp `WebInboundMessage` top-level admission fields (see below)
-- legacy memory-plugin split registration while memory plugins move to
-  `registerMemoryCapability`
-- legacy memory-specific embedding provider registration while embedding
-  providers move to `api.registerEmbeddingProvider(...)` and
-  `contracts.embeddingProviders`
-- legacy channel SDK helpers for native message schemas, mention gating,
-  inbound envelope formatting, and approval capability nesting
-- legacy channel route key and comparable-target helper aliases while
-  plugins move to `openclaw/plugin-sdk/channel-route`
-- activation hints being replaced by manifest contribution ownership
-- `setup-api` runtime fallback while setup descriptors move to cold
-  `setup.requiresRuntime: false` metadata
-- provider `discovery` hooks while provider catalog hooks move to
-  `catalog.run(...)`
-- channel `showConfigured` / `showInSetup` metadata while channel packages
-  move to `openclaw.channel.exposure`
-- legacy runtime-policy config keys while doctor migrates operators to
-  `agentRuntime`
-- generated bundled channel config metadata fallback while registry-first
-  `channelConfigs` metadata lands
-- persisted plugin registry disable and install-migration env flags while
-  repair flows migrate operators to `openclaw plugins registry --refresh`
-  and `openclaw doctor --fix`
-- legacy plugin-owned web search, web fetch, and x_search config paths
-  while doctor migrates them to `plugins.entries.<plugin>.config`
-- legacy `plugins.installs` authored config and bundled plugin load-path
-  aliases while install metadata moves into the state-managed plugin ledger
+The remaining dated compatibility areas are:
+
+- the August and September SDK subpath windows listed in the migration guide
+- `api.on("deactivate", ...)` and `api.on("subagent_spawning", ...)` hook aliases
+- memory-specific embedding registration and the beta.5 session-store bridge
+- WhatsApp inbound callback aliases described below
+- explicit channel target parsing and `openclaw/plugin-sdk/messaging-targets`
+- embedded Pi agent aliases
+- the shipped agent-harness SDK aliases, whose removal is pending a new
+  externally documented migration decision
+- the October 2026 SDK annotation families listed below
+
+Active, undated registry records cover supported behavior rather than removal
+debt, including activation hints, plugin capture, bundled plugin enablement,
+and the generated channel-config fallback.
+
+The annotation-only compatibility audit added these dated records. Their
+`removeAfter` date is an earliest review date, not permission to remove a
+surface while its stated reader or migration condition remains unmet.
+
+| Compatibility code                        | Removal condition                                                                                       | `removeAfter` |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------- |
+| `plugin-sdk-channel-setup-input-fields`   | Repeat the published-plugin artifact sweep and remove only fields with no reader.                       | 2026-10-01    |
+| `plugin-sdk-broad-runtime-barrels`        | Move bundled and indexed external consumers to focused SDK subpaths.                                    | 2026-10-01    |
+| `plugin-sdk-provider-owned-helper-shims`  | Move each deprecated provider helper to its provider-local API and prove no published reader remains.   | 2026-10-01    |
+| `message-presentation-legacy-bridges`     | Move reply producers and official channel packages to `MessagePresentation`.                            | 2026-10-01    |
+| `plugin-sdk-focused-compat-aliases`       | Prove every enumerated alias has no bundled or published reader.                                        | 2026-10-01    |
+| `agent-harness-terminal-result-aliases`   | Move harnesses to `terminal` and `visibleReplies`, then prove the legacy result fields are unread.      | 2026-10-01    |
+| `official-plugin-export-aliases`          | Move users of Google Meet testing, channel presentation, and Discord timeout exports to canonical APIs. | 2026-10-01    |
+| `memory-host-compatibility-aliases`       | Use canonical memory tables and prepared runtime config everywhere.                                     | 2026-10-01    |
+| `plugin-runtime-api-compat-aliases`       | Move flat plugin registration/runtime calls to their namespaced or focused replacements.                | 2026-10-01    |
+| `plugin-provider-manifest-compat-aliases` | Move kind/setup/catalog ownership to manifests and model-catalog registration.                          | 2026-10-01    |
+| `deprecated-session-store-beta5-api`      | End the v2026.7.x whole-store upgrade window, including package-root aliases.                           | 2026-10-12    |
+
+`pnpm plugins:boundary-report` reports `removal-pending` records separately
+from deprecated records. A due `removal-pending` record remains blocked until
+its reported migration condition is satisfied and its reader references are
+cleared; the existing `--fail-on-eligible-compat` gate continues to apply only
+to dated `deprecated` records. Reader references are surface-token matches for
+triage; use the published-artifact sweep before authorizing removal.
 
 ### WhatsApp inbound callback flat aliases
 

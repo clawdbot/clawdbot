@@ -23,7 +23,6 @@ const { createInboundBodyResult, inboundBodyMock } = vi.hoisted(() => {
       wasMentioned: false,
       effectiveWasMentioned: false,
       requireMention: false,
-      shouldSkip: false,
     },
     canDetectMention: true,
     shouldBypassMention: false,

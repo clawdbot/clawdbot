@@ -9,27 +9,29 @@ import {
   clearConfigSchemaResponseCacheForTests,
   configHandlers,
   loadConfigSchemaResponseForTests,
-  resolveConfigOpenCommand,
 } from "./config.js";
 import { createConfigHandlerHarness } from "./config.test-helpers.js";
 
-const { runExecMock, loadGatewayRuntimeConfigSchemaMock } = vi.hoisted(() => ({
-  runExecMock: vi.fn(),
+const { execOpenPathMock, loadGatewayRuntimeConfigSchemaMock } = vi.hoisted(() => ({
+  execOpenPathMock: vi.fn(),
   loadGatewayRuntimeConfigSchemaMock: vi.fn(() => ({
     schema: { type: "object" },
-    uiHints: undefined,
+    uiHints: undefined as Record<string, { advanced?: boolean }> | undefined,
     version: "test-schema",
   })),
 }));
 
-vi.mock("../../process/exec.js", () => ({ runExec: runExecMock }));
+vi.mock("./open-path.js", async () => {
+  const actual = await vi.importActual<typeof import("./open-path.js")>("./open-path.js");
+  return { ...actual, execOpenPath: execOpenPathMock };
+});
 
 vi.mock("../../config/runtime-schema.js", () => ({
   loadGatewayRuntimeConfigSchema: loadGatewayRuntimeConfigSchemaMock,
 }));
 
-function mockRunExecError(error: Error) {
-  runExecMock.mockRejectedValue(error);
+function mockOpenPathError(error: Error) {
+  execOpenPathMock.mockRejectedValue(error);
 }
 
 async function invokeConfigOpenFile() {
@@ -47,40 +49,12 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe("resolveConfigOpenCommand", () => {
-  it("uses open on macOS", () => {
-    expect(resolveConfigOpenCommand("/tmp/openclaw.json", "darwin")).toEqual({
-      command: "open",
-      args: ["/tmp/openclaw.json"],
-    });
-  });
-
-  it("uses xdg-open on Linux", () => {
-    expect(resolveConfigOpenCommand("/tmp/openclaw.json", "linux")).toEqual({
-      command: "xdg-open",
-      args: ["/tmp/openclaw.json"],
-    });
-  });
-
-  it("uses a quoted PowerShell FilePath on Windows", () => {
-    expect(resolveConfigOpenCommand(String.raw`C:\tmp\o'hai & calc.json`, "win32")).toEqual({
-      command: "powershell.exe",
-      args: [
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        String.raw`Start-Process -FilePath 'C:\tmp\o''hai & calc.json'`,
-      ],
-    });
-  });
-});
-
 describe("config.openFile", () => {
   it("opens the configured file without shell interpolation", async () => {
     await withEnvAsync({ OPENCLAW_CONFIG_PATH: "/tmp/config $(touch pwned).json" }, async () => {
-      runExecMock.mockImplementation(async (command: string, args: string[]) => {
-        expect(["open", "xdg-open", "powershell.exe"]).toContain(command);
-        expect(args).toEqual(["/tmp/config $(touch pwned).json"]);
+      execOpenPathMock.mockImplementation(async (command: { command: string; args: string[] }) => {
+        expect(["open", "xdg-open", "powershell.exe"]).toContain(command.command);
+        expect(command.args).toEqual(["/tmp/config $(touch pwned).json"]);
         return { stdout: "", stderr: "" };
       });
 
@@ -99,7 +73,7 @@ describe("config.openFile", () => {
 
   it("returns a detailed error and logs details when the opener fails", async () => {
     await withEnvAsync({ OPENCLAW_CONFIG_PATH: "/tmp/config.json" }, async () => {
-      mockRunExecError(Object.assign(new Error("spawn xdg-open ENOENT"), { code: "ENOENT" }));
+      mockOpenPathError(Object.assign(new Error("spawn xdg-open ENOENT"), { code: "ENOENT" }));
 
       const { respond, logGateway } = await invokeConfigOpenFile();
 
@@ -121,7 +95,7 @@ describe("config.openFile", () => {
   it("does not split surrogate pairs when truncating the failed config path", async () => {
     const pathPrefix = `/tmp/${"a".repeat(111)}`;
     await withEnvAsync({ OPENCLAW_CONFIG_PATH: `${pathPrefix}😀tail.json` }, async () => {
-      mockRunExecError(new Error("open failed"));
+      mockOpenPathError(new Error("open failed"));
 
       const { logGateway } = await invokeConfigOpenFile();
 
@@ -133,7 +107,7 @@ describe("config.openFile", () => {
 
   it("returns actionable headless environment error when xdg-open reports no method available", async () => {
     await withEnvAsync({ OPENCLAW_CONFIG_PATH: "/tmp/config.json" }, async () => {
-      mockRunExecError(new Error("xdg-open: no method available for opening '/tmp/config.json'"));
+      mockOpenPathError(new Error("xdg-open: no method available for opening '/tmp/config.json'"));
 
       const { respond, logGateway } = await invokeConfigOpenFile();
 
@@ -155,6 +129,27 @@ describe("config.openFile", () => {
 });
 
 describe("config schema response cache", () => {
+  it("returns resolved tier metadata through config.schema", async () => {
+    loadGatewayRuntimeConfigSchemaMock.mockReturnValueOnce({
+      schema: { type: "object" },
+      uiHints: { "gateway.port": { advanced: false } },
+      version: "test-schema",
+    });
+    const harness = createConfigHandlerHarness({ method: "config.schema" });
+    await expectDefined(
+      configHandlers["config.schema"],
+      'configHandlers["config.schema"] test invariant',
+    )(harness.options);
+
+    expect(harness.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        uiHints: { "gateway.port": { advanced: false } },
+      }),
+      undefined,
+    );
+  });
+
   it("reuses a recent schema build across burst config requests", () => {
     loadConfigSchemaResponseForTests();
     loadConfigSchemaResponseForTests();

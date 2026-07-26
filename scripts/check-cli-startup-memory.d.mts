@@ -9,6 +9,7 @@ export namespace testing {
   export { resolveDefaultLimitsMb };
   export { runCase };
   export { runStartupMemoryCheck };
+  export { sampleCount };
 }
 declare const cases: {
   id: string;
@@ -32,6 +33,7 @@ declare function readPositiveNumberEnv(
   env?: NodeJS.ProcessEnv,
 ): unknown;
 declare const repoRoot: string;
+declare const sampleCount: number;
 declare function resolveDefaultLimitsMb(platform?: NodeJS.Platform): {
   help: number;
   pluginsList: number;
@@ -47,6 +49,7 @@ declare function runCase(
   command: string;
   limitMb: unknown;
   maxRssMb: number | null;
+  rssSamplesMb?: number[];
   status: string;
   exitCode: unknown;
   signal: unknown;
@@ -63,6 +66,7 @@ declare function runStartupMemoryCheck(
     command: string;
     limitMb: unknown;
     maxRssMb: number | null;
+    rssSamplesMb?: number[];
     status: string;
     exitCode: unknown;
     signal: unknown;

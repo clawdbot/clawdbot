@@ -5,13 +5,13 @@ import path from "node:path";
 import { expectDefined } from "../../packages/normalization-core/src/expect.js";
 
 /** Rendered baseline artifact for the sessions/transcripts SQLite schema. */
-export type SqliteSessionSchemaBaselineRender = {
+type SqliteSessionSchemaBaselineRender = {
   /** Normalized SQL for the session, conversation, and transcript schema objects. */
   sql: string;
 };
 
 /** Result returned after writing or checking SQLite schema baseline artifacts. */
-export type SqliteSessionSchemaBaselineWriteResult = {
+type SqliteSessionSchemaBaselineWriteResult = {
   /** True when generated artifact content differs from disk. */
   changed: boolean;
   /** True when changed artifacts were actually written. */
@@ -27,13 +27,16 @@ const DEFAULT_SQL_OUTPUT = ".artifacts/sqlite-session-transcript-schema-baseline
 const DEFAULT_HASH_OUTPUT = "docs/.generated/sqlite-session-transcript-schema-baseline.sha256";
 
 const TARGET_TABLES = new Set([
-  "sessions",
-  "session_routes",
+  "session_nodes",
+  "session_windows",
+  "session_members",
   "conversations",
   "session_conversations",
-  "session_entries",
   "transcript_events",
+  "transcript_rewrite_watermarks",
   "transcript_event_identities",
+  "session_transcript_index_state",
+  "session_transcript_active_events",
 ]);
 
 function sha256(value: string): string {

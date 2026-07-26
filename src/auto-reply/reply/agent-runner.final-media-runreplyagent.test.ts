@@ -61,8 +61,12 @@ vi.mock("../../media/outbound-attachment.js", () => ({
     resolveOutboundAttachmentFromUrlMock(...args),
 }));
 
-vi.mock("./agent-runner-execution.js", () => ({
+vi.mock("./agent-runner-failure-reply.js", () => ({
+  buildEmptyInteractiveReplyPayload: vi.fn(() => undefined),
   buildKnownAgentRunFailureReplyPayload: vi.fn(() => undefined),
+}));
+
+vi.mock("./agent-runner-execution.js", () => ({
   runAgentTurnWithFallback: (...args: unknown[]) => runAgentTurnWithFallbackMock(...args),
 }));
 

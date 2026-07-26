@@ -283,7 +283,7 @@ describe("ollama embedding provider", () => {
           apiKey: { source: "env", provider: "default", id: "OLLAMA_API_KEY" },
         },
       }),
-    ).rejects.toThrow(/agents\.\*\.memorySearch\.remote\.apiKey: unresolved SecretRef/i);
+    ).rejects.toThrow(/memory\.search\.remote\.apiKey: unresolved SecretRef/i);
   });
 
   it("falls back to env key when provider apiKey is an unresolved SecretRef", async () => {
@@ -764,8 +764,8 @@ describe("ollama embedding provider", () => {
     expect(headers?.Authorization).toBeUndefined();
   });
 
-  it("includes outputDimensionality in the memory embedding cache identity", async () => {
-    const result = await ollamaMemoryEmbeddingProviderAdapter.create({
+  it("preserves the legacy identity only for the default Ollama endpoint", async () => {
+    const defaultEndpoint = await ollamaMemoryEmbeddingProviderAdapter.create({
       config: {} as OpenClawConfig,
       provider: "ollama",
       model: "nomic-embed-text",
@@ -773,12 +773,90 @@ describe("ollama embedding provider", () => {
       remote: { baseUrl: "http://127.0.0.1:11434" },
       outputDimensionality: 2,
     });
+    const customEndpoint = await ollamaMemoryEmbeddingProviderAdapter.create({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "nomic-embed-text",
+      fallback: "none",
+      remote: { baseUrl: "http://10.0.0.5:11434" },
+      outputDimensionality: 2,
+    });
 
-    expect(result.runtime?.cacheKeyData).toMatchObject({
+    expect(defaultEndpoint.runtime?.cacheKeyData).toEqual({
       provider: "ollama",
       model: "nomic-embed-text",
       outputDimensionality: 2,
     });
+    expect(customEndpoint.runtime?.cacheKeyData).toEqual({
+      provider: "ollama",
+      baseUrl: "http://10.0.0.5:11434",
+      model: "nomic-embed-text",
+      outputDimensionality: 2,
+    });
+  });
+
+  it("keys custom endpoints by non-secret headers while excluding credentials", async () => {
+    const fetchMock = mockEmbeddingFetch([1, 0]);
+
+    const result = await ollamaMemoryEmbeddingProviderAdapter.create({
+      config: {
+        models: {
+          providers: {
+            "ollama-cpu": {
+              api: "ollama",
+              baseUrl: "https://ollama-cpu.home.lab",
+              headers: {
+                "X-Ollama-Tenant": "tenant-a",
+                "X-Api-Key": "super-secret", // pragma: allowlist secret
+              },
+              models: [],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      provider: "ollama-cpu",
+      model: "qwen3-embedding:4b",
+      fallback: "none",
+    });
+
+    await result.provider!.embedQuery("hello");
+    expectEmbeddingFetch(fetchMock, "https://ollama-cpu.home.lab/api/embed", {
+      model: "qwen3-embedding:4b",
+      input:
+        "Instruct: Given a user query, retrieve relevant memory notes and documents\nQuery:hello",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Ollama-Tenant": "tenant-a",
+        "X-Api-Key": "super-secret", // pragma: allowlist secret
+      },
+    });
+    expect(result.runtime?.cacheKeyData).toMatchObject({
+      provider: "ollama-cpu",
+      baseUrl: "https://ollama-cpu.home.lab",
+      model: "qwen3-embedding:4b",
+      headersHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    });
+    expect(JSON.stringify(result.runtime?.cacheKeyData)).not.toContain("tenant-a");
+    expect(JSON.stringify(result.runtime?.cacheKeyData)).not.toContain("super-secret");
+
+    const otherTenant = await ollamaMemoryEmbeddingProviderAdapter.create({
+      config: {
+        models: {
+          providers: {
+            "ollama-cpu": {
+              api: "ollama",
+              baseUrl: "https://ollama-cpu.home.lab",
+              headers: { "X-Ollama-Tenant": "tenant-b" },
+              models: [],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      provider: "ollama-cpu",
+      model: "qwen3-embedding:4b",
+      fallback: "none",
+    });
+    expect(otherTenant.runtime?.cacheKeyData).not.toEqual(result.runtime?.cacheKeyData);
   });
 
   it("preserves configured provider aliases in the memory adapter", async () => {

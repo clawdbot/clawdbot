@@ -31,7 +31,3 @@ export function onTrustedMessageAuditEvent(listener: MessageAuditListener): () =
 export function hasTrustedMessageAuditListeners(): boolean {
   return listeners.size > 0;
 }
-
-export function resetMessageAuditEventsForTest(): void {
-  listeners.clear();
-}

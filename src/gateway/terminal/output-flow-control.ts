@@ -9,20 +9,20 @@ const INTERACTIVE_OUTPUT_WINDOW_MS = 100;
 
 type TerminalOutputControllerOptions = {
   backend: Pick<TerminalBackend, "pause" | "resume">;
-  getConnId: () => string | null;
+  getConnIds: () => readonly string[];
   getBufferedAmount: (connId: string) => number | undefined;
   record: (chunk: string) => void;
-  emit: (connId: string, data: string, seq: number) => void;
+  emit: (connIds: readonly string[], data: string, seq: number) => void;
   now?: () => number;
 };
 
-/** Couples PTY output batching to the owning WebSocket's send pressure. */
+/** Couples PTY output batching to the live recipient WebSockets' send pressure. */
 export class TerminalOutputController {
   private readonly backend: Pick<TerminalBackend, "pause" | "resume">;
-  private readonly getConnId: () => string | null;
+  private readonly getConnIds: () => readonly string[];
   private readonly getBufferedAmount: (connId: string) => number | undefined;
   private readonly record: (chunk: string) => void;
-  private readonly emit: (connId: string, data: string, seq: number) => void;
+  private readonly emit: (connIds: readonly string[], data: string, seq: number) => void;
   private readonly now: () => number;
   private readonly coalescer: TerminalOutputCoalescer;
   private endOffsetValue = 0;
@@ -33,7 +33,7 @@ export class TerminalOutputController {
 
   constructor(options: TerminalOutputControllerOptions) {
     this.backend = options.backend;
-    this.getConnId = options.getConnId;
+    this.getConnIds = options.getConnIds;
     this.getBufferedAmount = options.getBufferedAmount;
     this.record = options.record;
     this.emit = options.emit;
@@ -49,12 +49,12 @@ export class TerminalOutputController {
   push(chunk: string): void {
     this.record(chunk);
     this.endOffsetValue += chunk.length;
-    const connId = this.getConnId();
-    if (connId === null) {
+    const connIds = this.getConnIds();
+    if (connIds.length === 0) {
       return;
     }
     if (this.coalescer.isEmpty) {
-      this.reconcile(connId);
+      this.reconcile(connIds);
     }
     const interactive =
       Buffer.byteLength(chunk, "utf8") <= INTERACTIVE_OUTPUT_BYTES &&
@@ -64,6 +64,12 @@ export class TerminalOutputController {
 
   noteInput(): void {
     this.lastInputAtMs = this.now();
+  }
+
+  /** Flushes existing viewers, then aligns live frames after the attach snapshot. */
+  prepareViewerAttach(): void {
+    this.coalescer.flush();
+    this.emittedOffset = this.endOffsetValue;
   }
 
   resetOwnership(): void {
@@ -89,17 +95,17 @@ export class TerminalOutputController {
   }
 
   private emitBuffered(data: string): void {
-    const connId = this.getConnId();
-    if (connId === null) {
+    const connIds = this.getConnIds();
+    if (connIds.length === 0) {
       return;
     }
     this.emittedOffset += data.length;
-    this.emit(connId, data, this.emittedOffset);
-    this.reconcile(connId);
+    this.emit(connIds, data, this.emittedOffset);
+    this.reconcile(connIds);
   }
 
-  private reconcile(connId: string): void {
-    const bufferedAmount = this.getBufferedAmount(connId);
+  private reconcile(connIds: readonly string[]): void {
+    const bufferedAmount = this.maxBufferedAmount(connIds);
     if (bufferedAmount === undefined) {
       return;
     }
@@ -122,8 +128,7 @@ export class TerminalOutputController {
       return;
     }
     this.reassertTimer = setInterval(() => {
-      const connId = this.getConnId();
-      const bufferedAmount = connId === null ? undefined : this.getBufferedAmount(connId);
+      const bufferedAmount = this.maxBufferedAmount(this.getConnIds());
       if (bufferedAmount !== undefined) {
         if (bufferedAmount >= TERMINAL_OUTPUT_HIGH_WATER_BYTES) {
           this.desiredPaused = true;
@@ -141,6 +146,17 @@ export class TerminalOutputController {
       }
     }, TERMINAL_OUTPUT_REASSERT_MS);
     this.reassertTimer.unref?.();
+  }
+
+  private maxBufferedAmount(connIds: readonly string[]): number | undefined {
+    let maximum: number | undefined;
+    for (const connId of connIds) {
+      const amount = this.getBufferedAmount(connId);
+      if (amount !== undefined && (maximum === undefined || amount > maximum)) {
+        maximum = amount;
+      }
+    }
+    return maximum;
   }
 
   private tryPause(): void {

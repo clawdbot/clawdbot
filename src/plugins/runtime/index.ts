@@ -36,7 +36,8 @@ import { createRuntimeTaskFlow } from "./runtime-taskflow.js";
 import { createRuntimeTasks } from "./runtime-tasks.js";
 import type { CreatePluginRuntimeOptions, PluginRuntime } from "./types.js";
 
-const loadTtsRuntime = createLazyRuntimeModule(() => import("../../tts/tts.js"));
+const loadTtsRuntime = createLazyRuntimeModule(() => import("../../plugin-sdk/tts-runtime.js"));
+const loadTtsRequestRuntime = createLazyRuntimeModule(() => import("./runtime-tts-request.js"));
 const loadMediaUnderstandingRuntime = createLazyRuntimeModule(
   () => import("../../media-understanding/runtime.js"),
 );
@@ -62,7 +63,9 @@ function createRuntimeGateway(): PluginRuntime["gateway"] {
 
 function createRuntimeTts(): PluginRuntime["tts"] {
   const bindTtsRuntime = createLazyRuntimeMethodBinder(loadTtsRuntime);
+  const bindTtsRequestRuntime = createLazyRuntimeMethodBinder(loadTtsRequestRuntime);
   return {
+    prepareTtsRequest: bindTtsRequestRuntime((runtime) => runtime.prepareTtsRequest),
     textToSpeech: bindTtsRuntime((runtime) => runtime.textToSpeech),
     textToSpeechStream: bindTtsRuntime((runtime) => runtime.textToSpeechStream),
     textToSpeechTelephony: bindTtsRuntime((runtime) => runtime.textToSpeechTelephony),
@@ -176,7 +179,6 @@ function createUnavailableSubagentRuntime(): PluginRuntime["subagent"] {
     run: unavailable,
     waitForRun: unavailable,
     getSessionMessages: unavailable,
-    getSession: unavailable,
     deleteSession: unavailable,
   };
 }
@@ -305,7 +307,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
   const mediaUnderstanding = createRuntimeMediaUnderstandingFacade();
   const taskFlow = createRuntimeTaskFlow();
   const tasks = createRuntimeTasks({
-    legacyTaskFlow: taskFlow,
+    managedTaskFlow: taskFlow,
   });
   const agent = createRuntimeAgent();
   const runtime = {
@@ -333,25 +335,34 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     logging: createRuntimeLogging(),
     state: {
       resolveStateDir,
+      openBlobStore: () => {
+        throw new Error("openBlobStore is only available through the plugin runtime proxy.");
+      },
       openKeyedStore: () => {
         throw new Error("openKeyedStore is only available through the plugin runtime proxy.");
       },
       openSyncKeyedStore: () => {
         throw new Error("openSyncKeyedStore is only available through the plugin runtime proxy.");
       },
+      withLease: async () => {
+        throw new Error("withLease is only available through the plugin runtime proxy.");
+      },
       openChannelIngressQueue: () => {
         throw new Error(
           "openChannelIngressQueue is only available through the plugin runtime proxy.",
         );
       },
+      openChannelIngressDrain: () => {
+        throw new Error(
+          "openChannelIngressDrain is only available through the plugin runtime proxy.",
+        );
+      },
     },
     tasks,
-    taskFlow,
   } satisfies Omit<
     PluginRuntime,
     | "tts"
     | "mediaUnderstanding"
-    | "stt"
     | "modelAuth"
     | "imageGeneration"
     | "videoGeneration"
@@ -363,7 +374,6 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
         PluginRuntime,
         | "tts"
         | "mediaUnderstanding"
-        | "stt"
         | "modelAuth"
         | "imageGeneration"
         | "videoGeneration"
@@ -374,9 +384,6 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
 
   defineCachedValue(runtime, "tts", createRuntimeTts);
   defineCachedValue(runtime, "mediaUnderstanding", () => mediaUnderstanding);
-  defineCachedValue(runtime, "stt", () => ({
-    transcribeAudioFile: mediaUnderstanding.transcribeAudioFile,
-  }));
   defineCachedValue(runtime, "modelAuth", createRuntimeModelAuth);
   defineCachedValue(runtime, "imageGeneration", createRuntimeImageGeneration);
   defineCachedValue(runtime, "videoGeneration", createRuntimeVideoGeneration);

@@ -12,6 +12,7 @@ import type {
   MediaUnderstandingScopeConfig,
 } from "../config/types.tools.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { runtimeMediaModelSecretOwnerId } from "../secrets/runtime-media-secret-owner.js";
 import {
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_CHARS_BY_CAPABILITY,
@@ -21,6 +22,11 @@ import {
 import { resolveEffectiveMediaEntryCapabilities } from "./entry-capabilities.js";
 import { normalizeMediaUnderstandingChatType, resolveMediaUnderstandingScope } from "./scope.js";
 import type { MediaUnderstandingCapability } from "./types.js";
+
+export type ResolvedMediaModelEntry = {
+  entry: MediaUnderstandingModelConfig;
+  secretOwnerId?: string;
+};
 
 /** Default per-provider media-understanding runtime timeout in milliseconds. */
 const DEFAULT_MEDIA_RUNTIME_TIMEOUT_MS = 30_000;
@@ -110,13 +116,14 @@ export function resolveModelEntries(params: {
   capability: MediaUnderstandingCapability;
   config?: MediaUnderstandingConfig;
   providerRegistry: Map<string, { capabilities?: MediaUnderstandingCapability[] }>;
-}): MediaUnderstandingModelConfig[] {
+}): ResolvedMediaModelEntry[] {
   const { cfg, capability, config } = params;
   const sharedModels = cfg.tools?.media?.models ?? [];
-  const entries = [
-    ...(config?.models ?? []).map((entry) => ({ entry, source: "capability" as const })),
-    ...sharedModels.map((entry) => ({ entry, source: "shared" as const })),
-  ];
+  const entries = sharedModels.map((entry, index) => ({
+    entry,
+    source: "shared" as const,
+    secretOwnerId: runtimeMediaModelSecretOwnerId({ source: "shared", index }),
+  }));
   if (entries.length === 0) {
     return [];
   }
@@ -141,7 +148,31 @@ export function resolveModelEntries(params: {
       }
       return caps.includes(capability);
     })
-    .map(({ entry }) => entry);
+    .map(({ entry, secretOwnerId }) => ({ entry, secretOwnerId }))
+    .toSorted((left, right) => {
+      const preferred = config?.preferredModel?.trim();
+      if (!preferred) {
+        return 0;
+      }
+      return (
+        preferredMediaModelRank(right.entry, preferred) -
+        preferredMediaModelRank(left.entry, preferred)
+      );
+    });
+}
+
+function preferredMediaModelRank(entry: MediaUnderstandingModelConfig, preferred: string): number {
+  if (entry.type === "cli" || entry.command) {
+    return preferred === `cli:${entry.command ?? ""}` ? 2 : 0;
+  }
+  const model = entry.model?.trim();
+  if (!model) {
+    return preferred === `provider:${entry.provider?.trim() ?? ""}` ? 2 : 0;
+  }
+  if (preferred === `${entry.provider?.trim() ?? ""}/${model}`) {
+    return 2;
+  }
+  return preferred === model ? 1 : 0;
 }
 
 /** Resolves the bounded media-understanding task concurrency from config. */

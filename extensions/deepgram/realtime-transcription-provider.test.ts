@@ -5,10 +5,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type WebSocket from "ws";
 import { WebSocketServer } from "ws";
-import {
-  testing,
-  buildDeepgramRealtimeTranscriptionProvider,
-} from "./realtime-transcription-provider.js";
+import { buildDeepgramRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
 
 let cleanup: (() => Promise<void>) | undefined;
 
@@ -43,21 +40,6 @@ async function createDeepgramRealtimeServer(params: {
     });
   };
   return { baseUrl: `http://127.0.0.1:${port}/deepgram/v1` };
-}
-
-function buildTestRealtimeUrl(baseUrl: string): URL {
-  return new URL(
-    testing.toDeepgramRealtimeWsUrl({
-      apiKey: "dg-key",
-      baseUrl,
-      model: "nova-3",
-      providerConfig: {},
-      sampleRate: 8000,
-      encoding: "mulaw",
-      interimResults: true,
-      endpointingMs: 800,
-    }),
-  );
 }
 
 describe("buildDeepgramRealtimeTranscriptionProvider", () => {
@@ -98,24 +80,6 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
     });
   });
 
-  it("builds a Deepgram listen websocket URL", () => {
-    const url = testing.toDeepgramRealtimeWsUrl({
-      apiKey: "dg-key",
-      baseUrl: "https://api.deepgram.com/v1",
-      model: "nova-3",
-      providerConfig: {},
-      sampleRate: 8000,
-      encoding: "mulaw",
-      interimResults: true,
-      endpointingMs: 800,
-    });
-
-    expect(url).toContain("wss://api.deepgram.com/v1/listen?");
-    expect(url).toContain("model=nova-3");
-    expect(url).toContain("encoding=mulaw");
-    expect(url).toContain("sample_rate=8000");
-  });
-
   it("requires an API key when creating sessions", () => {
     vi.stubEnv("DEEPGRAM_API_KEY", "");
     const provider = buildDeepgramRealtimeTranscriptionProvider();
@@ -124,32 +88,17 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
     );
   });
 
-  it("returns the default when no value or env is set", () => {
-    vi.stubEnv("DEEPGRAM_BASE_URL", "");
-    expect(testing.normalizeDeepgramRealtimeBaseUrl(undefined)).toBe("https://api.deepgram.com/v1");
-    expect(testing.normalizeDeepgramRealtimeBaseUrl("   ")).toBe("https://api.deepgram.com/v1");
-  });
-
-  it.each([
-    ["http://localhost:8080/deepgram/v1", "ws:"],
-    ["https://custom.example.com/deepgram/v1", "wss:"],
-    ["ws://localhost:8080/deepgram/v1", "ws:"],
-    ["wss://custom.example.com:8443/deepgram/v1", "wss:"],
-  ])("maps or preserves %s as %s", (baseUrl, expectedProtocol) => {
-    const url = buildTestRealtimeUrl(baseUrl);
-    expect(url.protocol).toBe(expectedProtocol);
-    expect(url.pathname).toBe("/deepgram/v1/listen");
-  });
-
   it.each(["not a url", "ftp://files.example.com"])("rejects invalid endpoint %s", (baseUrl) => {
-    expect(() => testing.normalizeDeepgramRealtimeBaseUrl(baseUrl)).toThrow(
+    const provider = buildDeepgramRealtimeTranscriptionProvider();
+    expect(() => provider.createSession({ providerConfig: { apiKey: "dg-key", baseUrl } })).toThrow(
       /^Invalid Deepgram baseUrl:/,
     );
   });
 
   it("validates the environment override", () => {
     vi.stubEnv("DEEPGRAM_BASE_URL", "not a url");
-    expect(() => testing.normalizeDeepgramRealtimeBaseUrl()).toThrow(
+    const provider = buildDeepgramRealtimeTranscriptionProvider();
+    expect(() => provider.createSession({ providerConfig: { apiKey: "dg-key" } })).toThrow(
       "Invalid Deepgram baseUrl: value is not a valid URL",
     );
   });
@@ -157,8 +106,9 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
   it("does not echo the configured URL in validation errors", () => {
     const rawMarker = "configured-value-marker";
     const nonHttp = `ftp://files.example.com/${rawMarker}`;
+    const provider = buildDeepgramRealtimeTranscriptionProvider();
     try {
-      testing.normalizeDeepgramRealtimeBaseUrl(nonHttp);
+      provider.createSession({ providerConfig: { apiKey: "dg-key", baseUrl: nonHttp } });
       throw new Error("expected rejection");
     } catch (error) {
       const message = (error as Error).message;

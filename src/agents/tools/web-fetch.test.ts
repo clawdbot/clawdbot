@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { getToolTerminalPresentation } from "../tool-terminal-presentation.js";
-import { createWebFetchTool, sanitizeWebFetchUrl } from "./web-fetch.js";
+import { createWebFetchTool } from "./web-fetch.js";
+import { sanitizeWebFetchUrl } from "./web-fetch.test-support.js";
 
 describe("sanitizeWebFetchUrl", () => {
   it("removes whitespace between scheme and authority (reported bug)", () => {

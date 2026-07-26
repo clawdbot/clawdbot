@@ -11,8 +11,9 @@ import {
   emitSessionTranscriptUpdate,
   type InternalSessionTranscriptUpdate,
 } from "../sessions/transcript-events.js";
-import { createTaskRecord, resetTaskRegistryForTests } from "../tasks/task-registry.js";
+import { createTaskRecord } from "../tasks/task-registry.js";
 import { getTaskRegistryObservers } from "../tasks/task-registry.store.js";
+import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { installInMemoryTaskRegistryRuntime } from "../test-utils/task-registry-runtime.js";
 import {
   createChatRunState,
@@ -21,6 +22,13 @@ import {
   createToolEventRecipientRegistry,
 } from "./server-chat-state.js";
 import type { TaskEventPayload } from "./server-methods/task-summary.js";
+
+function waitForFast<T>(
+  callback: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
+}
 
 const warn = vi.fn();
 const mockLog: SubsystemLogger = {
@@ -42,6 +50,9 @@ const auditTestState = vi.hoisted(() => ({
   created: 0,
   recorded: 0,
   stopped: 0,
+}));
+const agentEventHandlerMocks = vi.hoisted(() => ({
+  create: vi.fn(),
 }));
 
 vi.mock("../audit/audit-config.js", () => ({
@@ -65,9 +76,9 @@ vi.mock("../audit/audit-recorder.js", () => ({
   },
 }));
 
-vi.mock("./server-chat.js", () => {
-  throw new Error("server-chat lazy load failure");
-});
+vi.mock("./server-chat.js", () => ({
+  createAgentEventHandler: (...args: unknown[]) => agentEventHandlerMocks.create(...args),
+}));
 
 vi.mock("./server-session-key.js", () => ({
   resolveSessionKeyForRun: () => "agent:main:main",
@@ -111,6 +122,9 @@ describe("startGatewayEventSubscriptions", () => {
     auditTestState.created = 0;
     auditTestState.recorded = 0;
     auditTestState.stopped = 0;
+    agentEventHandlerMocks.create.mockReset().mockImplementation(() => {
+      throw new Error("server-chat lazy load failure");
+    });
     installInMemoryTaskRegistryRuntime();
   });
 
@@ -128,7 +142,11 @@ describe("startGatewayEventSubscriptions", () => {
     unsubs = startGatewayEventSubscriptions(createParams());
 
     expect(auditTestState.created).toBe(1);
-    emitAgentAuditEvent({ runId: "enabled-audit", stream: "lifecycle", data: { phase: "start" } });
+    emitAgentAuditEvent({
+      runId: "enabled-audit",
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_000 },
+    });
     expect(auditTestState.recorded).toBe(1);
     await unsubs.agentUnsub();
     expect(auditTestState.stopped).toBe(1);
@@ -142,27 +160,48 @@ describe("startGatewayEventSubscriptions", () => {
     emitAgentAuditEvent({
       runId: "disabled-private",
       stream: "lifecycle",
-      data: { phase: "start" },
+      data: { phase: "start", startedAt: 1_000 },
     });
-    emitAgentEvent({ runId: "disabled-public", stream: "lifecycle", data: { phase: "start" } });
+    emitAgentEvent({
+      runId: "disabled-public",
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_000 },
+    });
     expect(auditTestState.recorded).toBe(0);
-    await vi.waitFor(() => expect(warn).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(warn).toHaveBeenCalledOnce());
     warn.mockClear();
     // Disabled wiring must still unsubscribe cleanly.
     await unsubs.agentUnsub();
     expect(auditTestState.stopped).toBe(1);
   });
 
-  it("logs lazy agent event module failures", async () => {
+  it("logs lazy agent event handler failures", async () => {
     unsubs = startGatewayEventSubscriptions(createParams());
 
-    emitAgentEvent({ runId: "run-1", stream: "lifecycle", data: { phase: "start" } });
+    emitAgentEvent({
+      runId: "run-1",
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_000 },
+    });
 
-    await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(1));
+    await waitForFast(() => expect(warn).toHaveBeenCalledTimes(1));
     expect(warn).toHaveBeenCalledWith(
       "Agent event dispatch failed",
       expect.objectContaining({ runId: "run-1", stream: "lifecycle" }),
     );
+  });
+
+  it("disposes a loaded agent event handler on unsubscribe", async () => {
+    const dispose = vi.fn();
+    const handler = Object.assign(vi.fn(), { dispose });
+    agentEventHandlerMocks.create.mockReturnValue(handler);
+    unsubs = startGatewayEventSubscriptions(createParams());
+
+    emitAgentEvent({ runId: "run-dispose", stream: "lifecycle", data: { phase: "error" } });
+    await waitForFast(() => expect(handler).toHaveBeenCalledOnce());
+
+    await unsubs.agentUnsub();
+    expect(dispose).toHaveBeenCalledOnce();
   });
 
   it("logs transcript handler failures", async () => {
@@ -173,7 +212,7 @@ describe("startGatewayEventSubscriptions", () => {
       sessionKey: "agent:main:main",
     } as InternalSessionTranscriptUpdate);
 
-    await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(1));
+    await waitForFast(() => expect(warn).toHaveBeenCalledTimes(1));
     expect(warn).toHaveBeenCalledWith(
       "Transcript update dispatch failed",
       expect.objectContaining({ sessionKey: "agent:main:main" }),
@@ -185,7 +224,7 @@ describe("startGatewayEventSubscriptions", () => {
 
     emitSessionLifecycleEvent({ sessionKey: "agent:main:main", reason: "created" });
 
-    await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(1));
+    await waitForFast(() => expect(warn).toHaveBeenCalledTimes(1));
     expect(warn).toHaveBeenCalledWith(
       "Lifecycle event dispatch failed",
       expect.objectContaining({ sessionKey: "agent:main:main" }),
@@ -195,7 +234,7 @@ describe("startGatewayEventSubscriptions", () => {
   it("broadcasts bounded public task summaries with ledger statuses", async () => {
     const broadcast = vi.fn<SubscriptionParams["broadcast"]>();
     unsubs = startGatewayEventSubscriptions({ ...createParams(), broadcast });
-    await vi.waitFor(() => expect(getTaskRegistryObservers()).not.toBeNull());
+    await waitForFast(() => expect(getTaskRegistryObservers()).not.toBeNull());
 
     const completed = createTaskRecord({
       runtime: "subagent",
@@ -242,7 +281,7 @@ describe("startGatewayEventSubscriptions", () => {
     expect(wireTerminalSummary?.length ?? 0).toBeLessThan(10_000);
 
     void unsubs?.taskUnsub();
-    await vi.waitFor(() => expect(getTaskRegistryObservers()).toBeNull());
+    await waitForFast(() => expect(getTaskRegistryObservers()).toBeNull());
     broadcast.mockClear();
     createTaskRecord({
       runtime: "cli",
@@ -263,7 +302,7 @@ describe("startGatewayEventSubscriptions", () => {
       ...createParams(),
       broadcast: staleBroadcast,
     });
-    await vi.waitFor(() => expect(getTaskRegistryObservers()).not.toBeNull());
+    await waitForFast(() => expect(getTaskRegistryObservers()).not.toBeNull());
     const staleObservers = getTaskRegistryObservers();
 
     const replacementBroadcast = vi.fn<SubscriptionParams["broadcast"]>();
@@ -271,7 +310,7 @@ describe("startGatewayEventSubscriptions", () => {
       ...createParams(),
       broadcast: replacementBroadcast,
     });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       const current = getTaskRegistryObservers();
       expect(current).not.toBeNull();
       expect(current).not.toBe(staleObservers);

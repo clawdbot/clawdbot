@@ -22,6 +22,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
+import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
 
 const CRON_WEBHOOK_TIMEOUT_MS = 10_000;
 
@@ -211,6 +212,7 @@ async function postCronWebhook(params: {
   }, CRON_WEBHOOK_TIMEOUT_MS);
 
   try {
+    assertSecretOwnerAvailable("capability", "cron-webhook");
     const result = await fetchWithSsrFGuard({
       url: params.webhookUrl,
       init: {
@@ -338,6 +340,10 @@ export function dispatchGatewayCronFinishedNotifications(params: {
 }): void {
   const webhookToken = normalizeOptionalString(params.webhookToken);
   const redactedWebhookEvent = redactCommandCronEventForExternalDelivery(params.evt, params.job);
+  const completionSummary =
+    params.job?.payload.kind === "script"
+      ? normalizeOptionalString(redactedWebhookEvent.summary)
+      : params.evt.summary;
   const webhookTargets = resolveCronWebhookTargets({
     delivery:
       params.job?.delivery && typeof params.job.delivery.mode === "string"
@@ -375,7 +381,9 @@ export function dispatchGatewayCronFinishedNotifications(params: {
     );
   }
 
-  if (params.evt.summary) {
+  // Script notify is carried as the completion summary, so its absence uses
+  // the same silent-summary suppression path as NO_REPLY output.
+  if (completionSummary) {
     for (const webhookTarget of webhookTargets) {
       const payload = buildCronFinishedWebhookPayload(redactedWebhookEvent);
       // Completion notification fanout is best-effort; the cron service has

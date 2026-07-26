@@ -3,10 +3,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   deleteCachedTelegramBotInfo,
   readCachedTelegramBotInfo,
-  setTelegramBotInfoCacheStoreForTest,
   writeCachedTelegramBotInfo,
 } from "./bot-info-cache.js";
 import type { TelegramBotInfo } from "./bot-info.js";
+import { setTelegramRuntime } from "./runtime.js";
+import { clearTelegramRuntimeForTest } from "./runtime.test-support.js";
+import type { TelegramRuntime } from "./runtime.types.js";
 
 const BOT_INFO_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
@@ -34,23 +36,29 @@ type BotInfoCacheValue = {
 
 function useMemoryStore() {
   const entries = new Map<string, BotInfoCacheValue>();
-  setTelegramBotInfoCacheStoreForTest({
-    async register(key, value) {
+  const store = {
+    async register(key: string, value: BotInfoCacheValue) {
       entries.set(key, value);
     },
-    async lookup(key) {
+    async lookup(key: string) {
       return entries.get(key);
     },
-    async delete(key) {
+    async delete(key: string) {
       return entries.delete(key);
     },
-  });
+  };
+  setTelegramRuntime({
+    state: {
+      openKeyedStore: (() => store) as unknown as TelegramRuntime["state"]["openKeyedStore"],
+    },
+    channel: {},
+  } as TelegramRuntime);
   return entries;
 }
 
 afterEach(() => {
   vi.unstubAllEnvs();
-  setTelegramBotInfoCacheStoreForTest(undefined);
+  clearTelegramRuntimeForTest();
 });
 
 describe("Telegram bot info cache", () => {

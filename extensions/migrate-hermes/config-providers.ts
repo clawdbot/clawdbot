@@ -18,7 +18,7 @@ import {
 import { childRecord, isRecord, readString, sanitizeName } from "./helpers.js";
 import { normalizeHermesCustomProviderId, resolveHermesConfiguredProviderId } from "./model.js";
 
-export type HermesProviderSecretBinding = {
+type HermesProviderSecretBinding = {
   envVar: string;
   provider: string;
 };

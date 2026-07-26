@@ -8,6 +8,7 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 
 const BROWSER_REQUEST_METHOD = "browser.request";
+const BROWSER_SCREENSHOT_FETCH_TIMEOUT_MS = 30_000;
 
 export type BrowserPanelTab = {
   /**
@@ -320,15 +321,26 @@ export async function fetchBrowserScreenshotDataUrl(params: {
   if (params.authToken) {
     headers.set("Authorization", `Bearer ${params.authToken}`);
   }
-  const res = await fetch(`${basePath}/__openclaw__/assistant-media?${search.toString()}`, {
-    method: "GET",
-    headers,
-    credentials: "same-origin",
-  });
-  if (!res.ok) {
-    throw new Error(`screenshot fetch failed (${res.status})`);
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(new DOMException("screenshot fetch timed out", "TimeoutError")),
+    BROWSER_SCREENSHOT_FETCH_TIMEOUT_MS,
+  );
+  let blob: Blob;
+  try {
+    const res = await fetch(`${basePath}/__openclaw__/assistant-media?${search.toString()}`, {
+      method: "GET",
+      headers,
+      credentials: "same-origin",
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      throw new Error(`screenshot fetch failed (${res.status})`);
+    }
+    blob = await res.blob();
+  } finally {
+    clearTimeout(timeout);
   }
-  const blob = await res.blob();
   return await new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.addEventListener("load", () => {

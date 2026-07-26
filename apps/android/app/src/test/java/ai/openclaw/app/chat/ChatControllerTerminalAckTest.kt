@@ -3,8 +3,11 @@ package ai.openclaw.app.chat
 import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -20,6 +23,172 @@ class ChatControllerTerminalAckTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
+  fun composerOwnerMustMatchBeforeSendAdmission() =
+    runTest {
+      val requestedMethods = mutableListOf<String>()
+      var defaultAgentId: String? = "main"
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, _ ->
+            requestedMethods += method
+            """{"runId":"run-started","status":"started"}"""
+          },
+          cacheScope = { ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1) },
+          currentDefaultAgentId = { defaultAgentId },
+        )
+      controller.handleGatewayEvent("health", null)
+      val ambiguousOwner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "main")
+      assertFalse(controller.canSendForOwner(ambiguousOwner))
+      assertFalse(
+        controller.sendMessageForOwnerAwaitAcceptance(
+          message = "unbound main alias",
+          thinkingLevel = "off",
+          attachments = emptyList(),
+          expectedOwner = ambiguousOwner,
+        ),
+      )
+      controller.prepareMainSessionKey("agent:main:node-test")
+      controller.handleGatewayEvent("health", null)
+      val owner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "agent:main:node-test")
+      assertTrue(controller.canSendForOwner(owner))
+      assertFalse(controller.canSendForOwner(owner.copy(gatewayStableId = "gateway-b")))
+
+      assertFalse(
+        controller.sendMessageForOwnerAwaitAcceptance(
+          message = "wrong gateway",
+          thinkingLevel = "off",
+          attachments = emptyList(),
+          expectedOwner = owner.copy(gatewayStableId = "gateway-b"),
+        ),
+      )
+      assertFalse(
+        controller.sendMessageForOwnerAwaitAcceptance(
+          message = "wrong session",
+          thinkingLevel = "off",
+          attachments = emptyList(),
+          expectedOwner = owner.copy(sessionKey = "agent:other:main", agentId = "other"),
+        ),
+      )
+      assertTrue(
+        controller.sendMessageForOwnerAwaitAcceptance(
+          message = "correct owner",
+          thinkingLevel = "off",
+          attachments = emptyList(),
+          expectedOwner = owner,
+        ),
+      )
+      assertEquals(1, requestedMethods.count { it == "chat.send" })
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun composerOwnerIsRecheckedAfterPendingSettingsComplete() =
+    runTest {
+      val settingsStarted = CompletableDeferred<Unit>()
+      val settingsGate = CompletableDeferred<Unit>()
+      var defaultAgentId: String? = "main"
+      var sendCount = 0
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, _ ->
+            when (method) {
+              "sessions.patch" -> {
+                settingsStarted.complete(Unit)
+                settingsGate.await()
+                "{}"
+              }
+              "chat.send" -> {
+                sendCount += 1
+                """{"runId":"run-started","status":"started"}"""
+              }
+              else -> "{}"
+            }
+          },
+          cacheScope = { ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1) },
+          currentDefaultAgentId = { defaultAgentId },
+        )
+      controller.prepareMainSessionKey("agent:main:node-test")
+      controller.handleGatewayEvent("health", null)
+      controller.setThinkingLevel("high")
+      settingsStarted.await()
+
+      val accepted =
+        async {
+          controller.sendMessageForOwnerAwaitAcceptance(
+            message = "stale after settings",
+            thinkingLevel = "high",
+            attachments = emptyList(),
+            expectedOwner =
+              ChatComposerOwner(
+                gatewayStableId = "gateway-a",
+                agentId = "main",
+                sessionKey = "agent:main:node-test",
+              ),
+          )
+        }
+      runCurrent()
+      controller.switchSession("agent:other:main")
+      settingsGate.complete(Unit)
+
+      assertFalse(accepted.await())
+      assertEquals(0, sendCount)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun unjournaledNotEnqueuedSendRemainsRejectedAfterOwnerChange() =
+    runTest {
+      val requestGate = CompletableDeferred<Unit>()
+      var defaultAgentId: String? = "main"
+      var defaultAgentRevision = 0L
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, _ ->
+            if (method == "chat.send") {
+              requestGate.await()
+              throw GatewayRequestNotEnqueued("not enqueued")
+            }
+            "{}"
+          },
+          cacheScope = { ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1) },
+          currentDefaultAgentId = { defaultAgentId },
+          currentDefaultAgentRevision = { defaultAgentRevision },
+        )
+      controller.prepareMainSessionKey("agent:main:node-test")
+      controller.handleGatewayEvent("health", null)
+
+      val accepted =
+        async {
+          controller.sendMessageForOwnerAwaitAcceptance(
+            message = "keep my draft",
+            thinkingLevel = "off",
+            attachments = emptyList(),
+            expectedOwner =
+              ChatComposerOwner(
+                gatewayStableId = "gateway-a",
+                agentId = "main",
+                sessionKey = "agent:main:node-test",
+              ),
+          )
+        }
+      runCurrent()
+      controller.switchSession("agent:other:main")
+      requestGate.complete(Unit)
+
+      assertFalse(accepted.await())
+      assertEquals(0, controller.pendingRunCount.value)
+      assertTrue(controller.messages.value.none { message -> message.content.any { it.text == "keep my draft" } })
+      assertNull(controller.errorText.value)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
   fun terminalTimeoutAckRemovesOptimisticUserEchoAndSurfacesFailedAcceptance() =
     runTest {
       var requestedMethod: String? = null
@@ -31,6 +200,7 @@ class ChatControllerTerminalAckTest {
             requestedMethod = method
             """{"runId":"run-timeout","status":"timeout"}"""
           },
+          currentDefaultAgentId = { "main" },
         )
       controller.handleGatewayEvent("health", null)
 
@@ -57,6 +227,7 @@ class ChatControllerTerminalAckTest {
           scope = this,
           json = json,
           requestGateway = { _, _ -> """{"runId":"run-started","status":"started"}""" },
+          currentDefaultAgentId = { "main" },
         )
       controller.handleGatewayEvent("health", null)
 
@@ -104,6 +275,7 @@ class ChatControllerTerminalAckTest {
               else -> "{}"
             }
           },
+          currentDefaultAgentId = { "main" },
         )
       controller.handleGatewayEvent("health", null)
 
@@ -150,6 +322,7 @@ class ChatControllerTerminalAckTest {
               else -> "{}"
             }
           },
+          currentDefaultAgentId = { "main" },
         )
       controller.handleGatewayEvent("health", null)
 
@@ -181,6 +354,7 @@ class ChatControllerTerminalAckTest {
           scope = this,
           json = json,
           requestGateway = { _, _ -> """{"runId":"run-error","status":"error"}""" },
+          currentDefaultAgentId = { "main" },
         )
       controller.handleGatewayEvent("health", null)
 
@@ -208,6 +382,7 @@ class ChatControllerTerminalAckTest {
           requestGateway = { _, _ ->
             throw GatewayRequestRejected(GatewaySession.ErrorShape("INVALID_REQUEST", "message rejected"))
           },
+          currentDefaultAgentId = { "main" },
         )
       controller.handleGatewayEvent("health", null)
 
@@ -228,6 +403,7 @@ class ChatControllerTerminalAckTest {
           scope = this,
           json = json,
           requestGateway = { _, _ -> throw GatewayRequestNotEnqueued("not connected") },
+          currentDefaultAgentId = { "main" },
         )
       controller.handleGatewayEvent("health", null)
 

@@ -1089,6 +1089,38 @@ describe("parseCliOutput", () => {
 });
 
 describe("createCliJsonlStreamingParser", () => {
+  it("surfaces codex-exec todo snapshots as typed plan updates", () => {
+    const plans: Array<{ steps: Array<{ step: string; status: string }> }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "codex", output: "jsonl", sessionIdFields: ["thread_id"] },
+      providerId: "codex-cli",
+      onAssistantDelta: () => {},
+      onPlanUpdate: (plan) => plans.push(plan),
+    });
+
+    parser.push(
+      `${JSON.stringify({
+        type: "item.updated",
+        item: {
+          type: "todo_list",
+          items: [
+            { text: "Inspect", completed: true },
+            { text: "Patch", completed: false },
+          ],
+        },
+      })}\n`,
+    );
+
+    expect(plans).toEqual([
+      {
+        steps: [
+          { step: "Inspect", status: "completed" },
+          { step: "Patch", status: "pending" },
+        ],
+      },
+    ]);
+  });
+
   it("streams Claude stream-json deltas for an explicit backend dialect", () => {
     const deltas: Array<{ text: string; delta: string; sessionId?: string }> = [];
     const sessionIds: string[] = [];
@@ -1196,33 +1228,6 @@ describe("createCliJsonlStreamingParser", () => {
       text: "hello world",
       sessionId: "session-stream",
       usage: undefined,
-    });
-  });
-
-  it("reports an output-limit error and ignores later chunks", () => {
-    const parser = createCliJsonlStreamingParser({
-      backend: {
-        command: "local-cli",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        reliability: { outputLimits: { maxTurnRawChars: 1024 } },
-      },
-      providerId: "local-cli",
-      onAssistantDelta: () => {},
-    });
-
-    parser.push("x".repeat(1025));
-    parser.push(`${JSON.stringify({ type: "result", result: "late" })}\n`);
-    parser.finish();
-
-    expect(parser.getErrorText()).toBe(
-      "CLI JSONL output exceeded 1024 characters; refusing to parse output.",
-    );
-    expect(parser.getOutput()).toEqual({
-      text: "",
-      sessionId: undefined,
-      usage: undefined,
-      errorText: "CLI JSONL output exceeded 1024 characters; refusing to parse output.",
     });
   });
 
@@ -1976,6 +1981,13 @@ describe("createCliJsonlStreamingParser", () => {
       input: 11,
       output: 6,
       cacheRead: 125,
+      cacheWrite: undefined,
+      total: undefined,
+    });
+    expect(output?.diagnosticUsage).toEqual({
+      input: 30,
+      output: 15,
+      cacheRead: 300,
       cacheWrite: undefined,
       total: undefined,
     });

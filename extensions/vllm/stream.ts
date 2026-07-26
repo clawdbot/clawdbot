@@ -76,7 +76,7 @@ export function createVllmQwenThinkingWrapper(params: {
   );
 }
 
-export function createVllmProviderThinkingWrapper(params: {
+function createVllmProviderThinkingWrapper(params: {
   baseStreamFn: StreamFn | undefined;
   qwenFormat?: VllmQwenThinkingFormat;
   thinkingLevel: VllmThinkingLevel;

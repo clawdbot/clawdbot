@@ -265,6 +265,42 @@ describe("buildPeakErrorHours", () => {
       { value: "30.00%", sub: "3 errors · 10 msgs" },
     ]);
   });
+
+  it("keeps zero-duration fallback sessions in their activity hour", () => {
+    const instant = Date.parse("2026-03-15T10:00:00.000Z");
+    const session: UsageSessionEntry = {
+      key: "instant-fallback-session",
+      updatedAt: instant,
+      usage: {
+        totalTokens: 100,
+        totalCost: 0.01,
+        input: 50,
+        output: 50,
+        cacheRead: 0,
+        cacheWrite: 0,
+        inputCost: 0,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 0,
+        firstActivity: instant,
+        lastActivity: instant,
+        messageCounts: {
+          total: 10,
+          user: 5,
+          assistant: 5,
+          toolCalls: 0,
+          toolResults: 0,
+          errors: 3,
+        },
+      },
+    } as unknown as UsageSessionEntry;
+
+    const result = buildPeakErrorHours([session], "utc");
+    expect(peakErrorSummaries(result)).toStrictEqual([
+      { value: "30.00%", sub: "3 errors · 10 msgs" },
+    ]);
+  });
 });
 
 describe("usage mosaic token buckets", () => {
@@ -363,6 +399,36 @@ describe("usage mosaic token buckets", () => {
 
     expect(sessionTouchesSelectedHours(session, [10], "utc")).toBe(true);
     expect(sessionTouchesSelectedHours(session, [11], "utc")).toBe(false);
+  });
+
+  it("renders zero-duration fallback sessions in their activity hour", () => {
+    const instant = Date.parse("2026-02-01T11:00:00.000Z");
+    const session = {
+      key: "instant-token-fallback-session",
+      updatedAt: instant,
+      usage: {
+        totalTokens: 10_000,
+        totalCost: 0,
+        input: 0,
+        output: 10_000,
+        cacheRead: 0,
+        cacheWrite: 0,
+        inputCost: 0,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 0,
+        firstActivity: instant,
+        lastActivity: instant,
+      },
+    } as unknown as UsageSessionEntry;
+    const container = document.createElement("div");
+    render(renderUsageMosaic([session], "utc", [], vi.fn()), container);
+
+    const cells = container.querySelectorAll<HTMLElement>(".usage-hour-cell");
+    expect(cells[11]?.title).toContain("10.0K");
+    expect(cells[10]?.title).toContain("0 tokens");
+    expect(container.querySelector(".usage-mosaic-total")?.textContent).toContain("10.0K");
   });
 
   it("preserves legacy session-span hour filtering when token buckets are absent", () => {

@@ -23,6 +23,12 @@ describe("createDiscordPluginBase", () => {
         defaultName: "status",
       }),
     ).toBe("status");
+    expect(
+      plugin.commands?.resolveNativeCommandName?.({
+        commandKey: "login",
+        defaultName: "login",
+      }),
+    ).toBe("login");
   });
 
   it("exposes security checks on the setup surface", () => {
@@ -87,14 +93,13 @@ describe("createDiscordPluginBase", () => {
 });
 
 describe("discordConfigAdapter", () => {
-  it("resolves top-level allowFrom before legacy dm.allowFrom", () => {
+  it("resolves canonical allowFrom", () => {
     const cfg = {
       channels: {
         discord: {
           accounts: {
             default: {
               allowFrom: ["123"],
-              dm: { allowFrom: ["456"] },
             },
           },
         },
@@ -104,7 +109,7 @@ describe("discordConfigAdapter", () => {
     expect(discordConfigAdapter.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual(["123"]);
   });
 
-  it("falls back to legacy dm.allowFrom", () => {
+  it("ignores retired nested dm.allowFrom", () => {
     const cfg = {
       channels: {
         discord: {
@@ -117,17 +122,17 @@ describe("discordConfigAdapter", () => {
       },
     } as OpenClawConfig;
 
-    expect(discordConfigAdapter.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual(["456"]);
+    expect(discordConfigAdapter.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual([]);
   });
 
-  it("prefers account legacy dm.allowFrom over inherited root allowFrom", () => {
+  it("prefers account allowFrom over inherited root allowFrom", () => {
     const cfg = {
       channels: {
         discord: {
           allowFrom: ["root"],
           accounts: {
             work: {
-              dm: { allowFrom: ["account-legacy"] },
+              allowFrom: ["account"],
             },
           },
         },
@@ -135,7 +140,7 @@ describe("discordConfigAdapter", () => {
     } as OpenClawConfig;
 
     expect(discordConfigAdapter.resolveAllowFrom?.({ cfg, accountId: "work" })).toEqual([
-      "account-legacy",
+      "account",
     ]);
   });
 

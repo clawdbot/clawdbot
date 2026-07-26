@@ -7,6 +7,7 @@ import process from "node:process";
 const ATTESTATION_REFERENCE_TYPE = "attestation-manifest";
 const EXPECTED_ATTESTATION_ARTIFACT_TYPE = "application/vnd.docker.attestation.manifest.v1+json";
 const REQUIRED_PREDICATES = ["https://spdx.dev/Document", "https://slsa.dev/provenance/v1"];
+const DOCKER_INSPECT_TIMEOUT_MS = 120_000;
 
 /**
  * Rewrites an image reference to use the provided digest.
@@ -37,6 +38,43 @@ function formatPlatform(platform) {
   return platform.variant
     ? `${platform.os}/${platform.architecture}/${platform.variant}`
     : `${platform.os}/${platform.architecture}`;
+}
+
+/** Verify required Docker attestations for every image reference. */
+export function verifyDockerAttestations(params) {
+  const {
+    imageRefs,
+    requiredPlatforms,
+    execFileSyncImpl = execFileSync,
+    log = console.log,
+  } = params;
+  const allErrors = [];
+  for (const imageRef of imageRefs) {
+    const index = parseJson(inspectRaw(imageRef, { execFileSyncImpl }), `${imageRef} index`);
+    const errors = collectDockerAttestationErrors({
+      imageRef,
+      index,
+      requiredPlatforms,
+      inspectAttestation(digest) {
+        return parseJson(
+          inspectRaw(imageRefForDigest(imageRef, digest), { execFileSyncImpl }),
+          `${imageRef} attestation ${digest}`,
+        );
+      },
+    });
+    if (errors.length === 0) {
+      log(
+        `Verified Docker attestations for ${imageRef}: ${requiredPlatforms
+          .map(formatPlatform)
+          .join(", ")}`,
+      );
+    }
+    allErrors.push(...errors);
+  }
+
+  if (allErrors.length > 0) {
+    throw new Error(allErrors.map((error) => `[docker-attestations] ${error}`).join("\n"));
+  }
 }
 
 function platformMatches(actual, expected) {
@@ -124,11 +162,14 @@ export function collectDockerAttestationErrors(params) {
   return errors;
 }
 
-function inspectRaw(imageRef) {
-  return execFileSync("docker", ["buildx", "imagetools", "inspect", "--raw", imageRef], {
+export function inspectRaw(imageRef, params = {}) {
+  const execFileSyncImpl = params.execFileSyncImpl ?? execFileSync;
+  return execFileSyncImpl("docker", ["buildx", "imagetools", "inspect", "--raw", imageRef], {
     encoding: "utf8",
+    killSignal: "SIGKILL",
     maxBuffer: 20 * 1024 * 1024,
     stdio: ["ignore", "pipe", "pipe"],
+    timeout: DOCKER_INSPECT_TIMEOUT_MS,
   });
 }
 
@@ -180,36 +221,10 @@ async function main() {
     throw new Error("At least one --platform is required.");
   }
 
-  const allErrors = [];
-  for (const imageRef of parsed.imageRefs) {
-    const index = parseJson(inspectRaw(imageRef), `${imageRef} index`);
-    const errors = collectDockerAttestationErrors({
-      imageRef,
-      index,
-      requiredPlatforms: parsed.requiredPlatforms,
-      inspectAttestation(digest) {
-        return parseJson(
-          inspectRaw(imageRefForDigest(imageRef, digest)),
-          `${imageRef} attestation ${digest}`,
-        );
-      },
-    });
-    if (errors.length === 0) {
-      console.log(
-        `Verified Docker attestations for ${imageRef}: ${parsed.requiredPlatforms
-          .map(formatPlatform)
-          .join(", ")}`,
-      );
-    }
-    allErrors.push(...errors);
-  }
-
-  if (allErrors.length > 0) {
-    for (const error of allErrors) {
-      console.error(`[docker-attestations] ${error}`);
-    }
-    process.exit(1);
-  }
+  verifyDockerAttestations({
+    imageRefs: parsed.imageRefs,
+    requiredPlatforms: parsed.requiredPlatforms,
+  });
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

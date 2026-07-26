@@ -7,7 +7,8 @@ type PolicyStrictnessKind =
   | "ordered-string"
   | "requires-true"
   | "requires-false"
-  | "exact-list";
+  | "exact-list"
+  | "routing-probes";
 
 type PolicyEmptyListSemantics = "disabled" | "meaningful";
 
@@ -16,8 +17,19 @@ export type PolicyScopeSelectorKind = "agentIds" | "channelIds";
 export type PolicyRuleMetadata = {
   readonly policyPath: readonly string[];
   readonly strictness: PolicyStrictnessKind;
-  readonly valueType: "boolean" | "channel-provider-deny-rules" | "string" | "string-list";
+  readonly valueType:
+    | "boolean"
+    | "channel-provider-deny-rules"
+    | "routing-probes"
+    | "string"
+    | "string-list";
   readonly checkIds: readonly (typeof POLICY_CHECK_IDS)[number][];
+  /**
+   * Evidence source of the runtime invariant that satisfies this rule unconditionally.
+   * Set only when `checkIds` is empty, so a rule can never enforce nothing without saying
+   * why; `metadata.test.ts` asserts the pairing and that policy state emits the source.
+   */
+  readonly satisfiedByInvariant?: string;
   readonly emptyList?: PolicyEmptyListSemantics;
   readonly allowedValues?: readonly string[];
   readonly caseSensitive?: boolean;
@@ -132,6 +144,24 @@ export const POLICY_RULE_METADATA = [
     strictness: "requires-false",
     valueType: "boolean",
     checkIds: [CHECK_IDS.policyPrivateNetworkAccess],
+  },
+  {
+    policyPath: ["routing", "requireBindings"],
+    strictness: "requires-true",
+    valueType: "boolean",
+    checkIds: [CHECK_IDS.policyRoutingBindingsRequired],
+  },
+  {
+    policyPath: ["routing", "requireConfiguredChannels"],
+    strictness: "requires-true",
+    valueType: "boolean",
+    checkIds: [CHECK_IDS.policyRoutingBindingChannelUnconfigured],
+  },
+  {
+    policyPath: ["routing", "probes"],
+    strictness: "routing-probes",
+    valueType: "routing-probes",
+    checkIds: [CHECK_IDS.policyRoutingAgentMismatch, CHECK_IDS.policyRoutingMatchKindMismatch],
   },
   {
     policyPath: ["ingress", "session", "requireDmScope"],
@@ -315,10 +345,14 @@ export const POLICY_RULE_METADATA = [
     scopeSelectors: ["channelIds"],
   },
   {
+    // Redaction is unconditional in src/logging/redact.ts, so no doctor check can fail for
+    // this rule. The key stays a policy contract: `openclaw policy compare` still enforces
+    // baseline strictness, and policy state records the invariant below as satisfied.
     policyPath: ["dataHandling", "sensitiveLogging", "requireRedaction"],
     strictness: "requires-true",
     valueType: "boolean",
-    checkIds: [CHECK_IDS.policyDataHandlingRedactionDisabled],
+    checkIds: [],
+    satisfiedByInvariant: "oc://openclaw.invariant/logging/redaction",
   },
   {
     policyPath: ["dataHandling", "telemetry", "denyContentCapture"],

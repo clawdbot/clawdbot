@@ -1,8 +1,17 @@
 // Runner entry guard tests cover malformed decision data formatting without
 // depending on provider execution.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
+import {
+  runtimeMediaModelSecretOwnerId,
+  runtimeMediaRequestSecretOwnerId,
+} from "../secrets/runtime-media-secret-owner.js";
 import { buildModelDecision, formatDecisionSummary, runProviderEntry } from "./runner.entries.js";
 import type { MediaUnderstandingDecision } from "./types.js";
+
+afterEach(() => {
+  setActiveDegradedSecretOwners([]);
+});
 
 describe("media-understanding formatDecisionSummary guards", () => {
   it("formats skipped summary when decision.attachments is undefined", () => {
@@ -120,4 +129,77 @@ describe("media-understanding missing provider errors", () => {
       );
     },
   );
+});
+
+describe("media-understanding SecretRef owner isolation", () => {
+  it("rejects only the configured media model whose owner is unavailable", async () => {
+    const entry = { provider: "openai", capabilities: ["audio" as const] };
+    const cfg = { tools: { media: { models: [entry], audio: {} } } };
+    const ownerId = runtimeMediaModelSecretOwnerId({
+      source: "shared",
+      index: 0,
+    });
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "capability",
+        ownerId,
+        state: "unavailable",
+        paths: ["tools.media.models.0.request.auth.token"],
+        refKeys: ["env:default:MISSING_MEDIA_VALUE"],
+        reason: "secret reference was not found",
+      },
+    ]);
+
+    type RunProviderEntryParams = Parameters<typeof runProviderEntry>[0];
+    await expect(
+      runProviderEntry({
+        capability: "audio",
+        entry,
+        cfg,
+        config: cfg.tools.media.audio,
+        secretOwnerId: ownerId,
+        ctx: {} as RunProviderEntryParams["ctx"],
+        attachmentIndex: 0,
+        cache: {} as RunProviderEntryParams["cache"],
+        providerRegistry: new Map(),
+      }),
+    ).rejects.toMatchObject({
+      code: "SECRET_SURFACE_UNAVAILABLE",
+      ownerKind: "capability",
+      ownerId,
+    });
+  });
+
+  it("keeps a model active when it overrides the unavailable request field", async () => {
+    const entry = {
+      provider: "unknown-provider",
+      capabilities: ["audio" as const],
+      request: { auth: { mode: "authorization-bearer" as const, token: "test-token" } },
+    };
+    const cfg = { tools: { media: { models: [entry], audio: {} } } };
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "capability",
+        ownerId: runtimeMediaRequestSecretOwnerId("audio"),
+        state: "unavailable",
+        paths: ["tools.media.audio.request.auth.token"],
+        refKeys: ["env:default:MISSING_MEDIA_DEFAULT_VALUE"],
+        reason: "secret reference was not found",
+      },
+    ]);
+
+    type RunProviderEntryParams = Parameters<typeof runProviderEntry>[0];
+    await expect(
+      runProviderEntry({
+        capability: "audio",
+        entry,
+        cfg,
+        config: cfg.tools.media.audio,
+        ctx: {} as RunProviderEntryParams["ctx"],
+        attachmentIndex: 0,
+        cache: {} as RunProviderEntryParams["cache"],
+        providerRegistry: new Map(),
+      }),
+    ).rejects.toThrow("Media provider not available: unknown-provider");
+  });
 });

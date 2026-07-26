@@ -4,8 +4,8 @@
     "onStartup": false
   },
   "channels": ["clickclack"],
-  "channelEnvVars": {
-    "clickclack": ["CLICKCLACK_BOT_TOKEN"]
+  "contracts": {
+    "tools": ["discussion"]
   },
   "configSchema": {
     "type": "object",

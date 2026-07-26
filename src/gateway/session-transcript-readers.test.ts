@@ -6,7 +6,10 @@ import {
   persistSessionTranscriptTurn,
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { readSessionMessagesAroundIdWithStatsAsync } from "./session-transcript-anchor-reader.js";
 import {
@@ -30,6 +33,8 @@ describe("session transcript reader facade", () => {
   });
 
   afterEach(() => {
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
     envSnapshot.restore();
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
@@ -273,8 +278,47 @@ describe("session transcript reader facade", () => {
     ]);
     await expect(
       readSessionMessagesAsync(scope, { mode: "recent", maxMessages: 1 }),
-    ).resolves.toMatchObject([{ content: "sqlite follow-up", __openclaw: { seq: 4 } }]);
+    ).resolves.toMatchObject([{ content: "sqlite follow-up", __openclaw: { seq: 3 } }]);
     await expect(readSessionMessageCountAsync(scope)).resolves.toBe(3);
+  });
+
+  test("promotes SQLite message idempotency into transcript metadata", async () => {
+    const sessionId = "reader-sqlite-idempotency";
+    const scope = {
+      agentId: "main",
+      sessionId,
+      sessionKey: `agent:main:${sessionId}`,
+      storePath,
+    };
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "sqlite-user-message",
+          message: {
+            role: "user",
+            content: "stable bubble",
+            idempotencyKey: "initial-send:user",
+          },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+
+    await expect(
+      readSessionMessagesAsync(scope, {
+        mode: "full",
+        reason: "sqlite idempotency metadata parity test",
+      }),
+    ).resolves.toMatchObject([
+      {
+        idempotencyKey: "initial-send:user",
+        __openclaw: {
+          id: "sqlite-user-message",
+          idempotencyKey: "initial-send:user",
+          seq: 1,
+        },
+      },
+    ]);
   });
 
   test("uses SQLite marker identity when only sessionFile is provided", async () => {
@@ -315,7 +359,7 @@ describe("session transcript reader facade", () => {
     ).resolves.toMatchObject([{ content: "marker scoped prompt" }]);
     await expect(
       readSessionMessageByIdAsync({ sessionFile: marker, sessionId }, "marker-message"),
-    ).resolves.toMatchObject({ found: true, seq: 2 });
+    ).resolves.toMatchObject({ found: true, seq: 1 });
   });
 
   test("projects SQLite transcript reads to the active branch", async () => {
@@ -346,6 +390,10 @@ describe("session transcript reader facade", () => {
       ],
       touchSessionEntry: false,
     });
+    await waitForSessionTranscriptIndexReconcile({
+      agentId: "main",
+      path: path.join(tempDir, "openclaw-agent.sqlite"),
+    });
 
     const messages = await readSessionMessagesAsync(scope, {
       mode: "full",
@@ -358,7 +406,7 @@ describe("session transcript reader facade", () => {
     ).toEqual(["root", "active"]);
     expect(
       messages.map((message) => (message as { __openclaw?: { seq?: number } })["__openclaw"]?.seq),
-    ).toEqual([2, 4]);
+    ).toEqual([1, 2]);
     await expect(readSessionMessageCountAsync(scope)).resolves.toBe(2);
   });
 
@@ -394,7 +442,7 @@ describe("session transcript reader facade", () => {
       page.messages.map(
         (message) => (message as { __openclaw?: { seq?: number } })["__openclaw"]?.seq,
       ),
-    ).toEqual([3, 4]);
+    ).toEqual([2, 3]);
   });
 
   test("honors agent ids when no store path or session file is provided", async () => {
@@ -416,7 +464,7 @@ describe("session transcript reader facade", () => {
     await expect(readSessionMessageCountAsync(scope)).resolves.toBe(1);
     await expect(readSessionMessageByIdAsync(scope, "agent-message")).resolves.toMatchObject({
       found: true,
-      seq: 2,
+      seq: 1,
     });
     await expect(
       readSessionMessagesAsync(scope, { mode: "full", reason: "facade agent scope test" }),

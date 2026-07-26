@@ -66,7 +66,6 @@ struct SettingsProTab: View {
     @State var defaultShareInstruction = ""
     @State var showQRScanner = false
     @State var scannerError: String?
-    @State var showLocationAccessDialog = false
     @State var pendingLocationMode: OpenClawLocationMode?
     @State var showResetOnboardingAlert = false
     @State var suppressCredentialPersist = false
@@ -86,11 +85,12 @@ struct SettingsProTab: View {
     @State var diagnosticsLastRunText = "Not run"
     @State var diagnosticsIssueCount: Int?
     @State var showTalkIssueDetails = false
+    @State var systemAgentChatStore = IOSSystemAgentChatStore()
     @State private var navigationPath: [SettingsRoute] = []
     let initialRoute: SettingsRoute?
     let directRoute: SettingsRoute?
     let acceptsGatewaySetupRequests: Bool
-    let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let headerSidebarAction: OpenClawSidebarHeaderAction?
     let ownsNavigationStack: Bool
     let navigateToRoute: ((SettingsRoute) -> Void)?
     let onRouteChange: ((SettingsRoute?) -> Void)?
@@ -102,7 +102,7 @@ struct SettingsProTab: View {
         initialRoute: SettingsRoute? = nil,
         directRoute: SettingsRoute? = nil,
         acceptsGatewaySetupRequests: Bool = false,
-        headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
+        headerSidebarAction: OpenClawSidebarHeaderAction? = nil,
         ownsNavigationStack: Bool = true,
         navigateToRoute: ((SettingsRoute) -> Void)? = nil,
         onRouteChange: ((SettingsRoute?) -> Void)? = nil,
@@ -113,7 +113,7 @@ struct SettingsProTab: View {
         self.initialRoute = initialRoute
         self.directRoute = directRoute
         self.acceptsGatewaySetupRequests = acceptsGatewaySetupRequests
-        self.headerLeadingAction = headerLeadingAction
+        self.headerSidebarAction = headerSidebarAction
         self.ownsNavigationStack = ownsNavigationStack
         self.navigateToRoute = navigateToRoute
         self.onRouteChange = onRouteChange
@@ -158,10 +158,10 @@ struct SettingsProTab: View {
             self.destination(for: route)
         }
         .toolbar {
-            if let headerLeadingAction {
-                ToolbarItem(placement: .topBarLeading) {
-                    OpenClawSidebarRevealButton(action: headerLeadingAction)
-                }
+            if let headerSidebarAction {
+                OpenClawSidebarToolbarItem(
+                    action: headerSidebarAction,
+                    placement: .topBarLeading)
             }
         }
     }
@@ -192,6 +192,9 @@ struct SettingsProTab: View {
                     self.applyPendingLocationModeIfAvailable()
                     self.refreshNotificationSettings()
                 }
+            }
+            .onChange(of: self.appModel.locationAuthorizationSnapshot) { _, _ in
+                self.refreshLocationPermissionSummary()
             }
             .onChange(of: self.locationModeRaw) { _, newValue in
                 self.handleLocationModeChange(newValue)
@@ -313,45 +316,20 @@ struct SettingsProTab: View {
                     .font(OpenClawType.subhead)
             }
             .confirmationDialog(
-                "Access Level",
-                isPresented: self.$showLocationAccessDialog,
+                String(
+                    format: String(localized: "Forget %@?"),
+                    self.pendingForgetGateway?.name ?? String(localized: "gateway")),
+                isPresented: Binding(
+                    get: { self.pendingForgetGateway != nil },
+                    set: {
+                        if !$0 {
+                            self.pendingForgetGateway = nil
+                        }
+                    }),
                 titleVisibility: .visible)
             {
-                Button {
-                    self.selectLocationAccessLevel(.whileUsing)
-                } label: {
-                    Text("While Using the App")
-                        .font(OpenClawType.subheadSemiBold)
-                }
-                Button {
-                    self.selectLocationAccessLevel(.always)
-                } label: {
-                    Text("Always")
-                        .font(OpenClawType.subheadSemiBold)
-                }
-                Button(role: .cancel) {} label: {
-                    Text("Cancel")
-                        .font(OpenClawType.subheadSemiBold)
-                }
-            } message: {
-                Text("Choose when OpenClaw may share this iPhone's location with gateway tools.")
-                    .font(OpenClawType.subhead)
-            }
-            .confirmationDialog(
-                    String(
-                        format: String(localized: "Forget %@?"),
-                        self.pendingForgetGateway?.name ?? String(localized: "gateway")),
-                    isPresented: Binding(
-                        get: { self.pendingForgetGateway != nil },
-                        set: {
-                            if !$0 {
-                                self.pendingForgetGateway = nil
-                            }
-                        }),
-                    titleVisibility: .visible)
-            {
                 Button(role: .destructive) {
-                    self.forgetPendingGateway()
+                    Task { await self.forgetPendingGateway() }
                 } label: {
                     Text("Forget Gateway")
                         .font(OpenClawType.subheadSemiBold)
@@ -362,16 +340,14 @@ struct SettingsProTab: View {
                     Text("Cancel")
                         .font(OpenClawType.subheadSemiBold)
                 }
-                } message: {
-                    // Keep the extraction key contiguous for the native localization inventory.
-                    // swiftlint:disable line_length
-                    Text(
-                        String(
-                            localized:
-                            "This removes saved credentials, device access, TLS trust, and cached chats for this gateway."))
-                        .font(OpenClawType.subhead)
-                    // swiftlint:enable line_length
-                }
+            } message: {
+                // Keep the extraction key contiguous for the native localization inventory.
+                Text(
+                    String(
+                        localized:
+                        "This removes saved credentials, device access, TLS trust, and cached chats for this gateway."))
+                    .font(OpenClawType.subhead)
+            }
     }
 
     private func applyGatewaySetupRequestIfNeeded() {

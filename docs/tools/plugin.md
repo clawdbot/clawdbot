@@ -289,6 +289,13 @@ serves your channels, not only a wrapper or supervisor.
 | `OPENCLAW_NIX_MODE=1` blocks lifecycle commands                | Confirm the install is managed by Nix                                                                                                      | Change plugin selection in the Nix source instead of using plugin mutator commands                      |
 | Dependency import fails at runtime                             | Check whether the plugin was installed through npm/git/ClawHub or loaded from a local path                                                 | Run `openclaw plugins update <id>`, reinstall the source, or install local plugin dependencies yourself |
 
+When an enabled managed plugin fails payload verification during Gateway
+startup, OpenClaw quarantines that exact installed plugin root for the boot and
+continues serving other plugins. `openclaw status --all`, `openclaw health`,
+and `openclaw doctor` report it as `configured-unavailable`. Fix or reinstall
+the plugin, then restart the Gateway. A healthy explicit `plugins.load.paths`
+override with the same plugin id is not quarantined by a stale broken install.
+
 When stale plugin config still names a no-longer-discoverable channel plugin,
 config validation downgrades that channel key to a warning instead of a hard
 failure, so Gateway startup can still serve every other channel. Run

@@ -17,9 +17,8 @@ describe("resolveSystemAgentRescuePolicy", () => {
     expect(decide({}).allowed).toBe(true);
   });
 
-  it("hard-denies rescue when sandboxing is active even if explicitly enabled", () => {
+  it("hard-denies rescue when sandboxing is active", () => {
     const decision = decide({
-      systemAgent: { rescue: { enabled: true } },
       agents: { defaults: { sandbox: { mode: "all" } } },
     });
     expect(decision.allowed).toBe(false);
@@ -31,7 +30,7 @@ describe("resolveSystemAgentRescuePolicy", () => {
 
   it("keeps auto rescue closed outside YOLO host posture", () => {
     const decision = decide({
-      tools: { exec: { security: "allowlist", ask: "on-miss" } },
+      tools: { exec: { security: "allowlist", ask: "always" } },
     });
     expect(decision.allowed).toBe(false);
     if (decision.allowed) {
@@ -56,10 +55,7 @@ describe("resolveSystemAgentRescuePolicy", () => {
     expect(notDirectMessageDecision.reason).toBe("not-direct-message");
   });
 
-  it("allows explicit group rescue when ownerDmOnly is disabled", () => {
-    expect(
-      decide({ systemAgent: { rescue: { ownerDmOnly: false } } }, { isDirectMessage: false })
-        .allowed,
-    ).toBe(true);
+  it("always limits rescue to owner direct messages", () => {
+    expect(decide({}, { isDirectMessage: false }).allowed).toBe(false);
   });
 });

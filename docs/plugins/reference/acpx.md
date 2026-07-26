@@ -24,8 +24,15 @@ skills
 
 The bundled runtime auto-detects Pi's session store on the Gateway and paired
 nodes. Stored sessions appear in the **Pi** sessions-sidebar group, with
-read-only transcript browsing from Pi's documented JSONL session format. The
-catalog honors project and global `settings.json` session directories plus
+transcript browsing from Pi's documented JSONL session format. Local rows also
+offer **Continue**, which creates an OpenClaw session whose first turn resumes
+the native Pi session through ACP. Pi retains the full model context from its
+session file, and the catalog viewer continues to show that history. The new
+OpenClaw transcript starts empty and records only subsequent turns. Paired-node
+rows remain view-only. Custom session directories outside the store scanned by
+`pi-acp` remain browse-only because the adapter cannot resume those files by id.
+
+The catalog honors project and global `settings.json` session directories plus
 `PI_CODING_AGENT_DIR` and `PI_CODING_AGENT_SESSION_DIR`. Relative paths resolve
 from the directory containing their `settings.json` file.
 

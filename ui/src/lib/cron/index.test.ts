@@ -1,5 +1,8 @@
+// @vitest-environment node
 // Control UI tests cover cron behavior.
 import { describe, expect, it, vi } from "vitest";
+import type { CronJob, CronRunsResult } from "../../api/types.ts";
+import { parseCronEveryMs } from "../../lib/cron/decimal.ts";
 import {
   addCronJob,
   cancelCronEdit,
@@ -16,6 +19,7 @@ import {
   startCronEdit,
   startCronClone,
   updateCronJobsFilter,
+  updateCronRunsFilter,
   validateCronForm,
   type CronState,
 } from "../../lib/cron/index.ts";
@@ -114,6 +118,16 @@ type EmptyCronListResponse = {
   hasMore: boolean;
   nextOffset: null;
 };
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
 
 describe("cron controller", () => {
   it("collects configured model suggestions from defaults and per-agent entries", () => {
@@ -717,11 +731,11 @@ describe("cron controller", () => {
       name: "edited job",
       description: "",
       agentId: null,
-      deleteAfterRun: false,
       schedule: { kind: "cron", expr: "0 8 * * *", staggerMs: 0 },
       payload: { kind: "systemEvent", text: "updated" },
       delivery: { mode: "none" },
     });
+    expect(requestPatch(updateCall)).not.toHaveProperty("deleteAfterRun");
     expect(state.cronEditingJobId).toBeNull();
   });
 
@@ -861,6 +875,56 @@ describe("cron controller", () => {
     expect(patch).not.toHaveProperty("payload");
   });
 
+  it("loads and preserves script payloads as read-only metadata edits", async () => {
+    const scriptJob = {
+      id: "job-script",
+      name: "Script",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "every" as const, everyMs: 600_000 },
+      sessionTarget: "isolated" as const,
+      wakeMode: "next-heartbeat" as const,
+      payload: {
+        kind: "script" as const,
+        script: "const result = await agent('check status')",
+        toolBudget: 4,
+      },
+      delivery: { mode: "none" as const },
+      state: {},
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method === "cron.list") {
+        return { jobs: [scriptJob], total: 1, hasMore: false, nextOffset: null };
+      }
+      if (method === "cron.update") {
+        return { id: scriptJob.id };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1, nextWakeAtMs: null };
+      }
+      return {};
+    });
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+    });
+
+    await loadCronJobsPage(state);
+    expect(state.cronJobs).toEqual([scriptJob]);
+
+    startCronEdit(state, scriptJob);
+    expect(state.cronForm.payloadKind).toBe("script");
+    expect(state.cronForm.payloadLocked).toBe(true);
+    expect(state.cronForm.payloadText).toBe(scriptJob.payload.script);
+
+    state.cronForm.name = "Script renamed";
+    await addCronJob(state);
+
+    const patch = requestPatch(findRequestCall(request.mock.calls, "cron.update"));
+    expect(patch.name).toBe("Script renamed");
+    expect(patch).not.toHaveProperty("payload");
+  });
+
   it("preserves on-exit schedules when editing Control UI metadata", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "cron.update") {
@@ -900,6 +964,47 @@ describe("cron controller", () => {
     const updateCall = findRequestCall(request.mock.calls, "cron.update");
     const patch = requestPatch(updateCall);
     expect(patch.name).toBe("On exit renamed");
+    expect(patch).not.toHaveProperty("schedule");
+    expect(state.cronFieldErrors).toEqual({});
+  });
+
+  it("preserves stream schedules when editing Control UI metadata", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "cron.update") {
+        return { id: "job-stream" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [{ id: "job-stream" }] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1, nextWakeAtMs: null };
+      }
+      return {};
+    });
+    const job = {
+      id: "job-stream",
+      name: "Stream",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "stream" as const, command: ["node", "events.mjs"] },
+      sessionTarget: "isolated" as const,
+      wakeMode: "next-heartbeat" as const,
+      payload: { kind: "agentTurn" as const, message: "report" },
+      delivery: { mode: "none" as const },
+      state: {},
+    };
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronJobs: [job],
+    });
+
+    startCronEdit(state, job);
+    state.cronForm.name = "Stream renamed";
+    await addCronJob(state);
+
+    const patch = requestPatch(findRequestCall(request.mock.calls, "cron.update"));
+    expect(patch.name).toBe("Stream renamed");
     expect(patch).not.toHaveProperty("schedule");
     expect(state.cronFieldErrors).toEqual({});
   });
@@ -1368,6 +1473,102 @@ describe("cron controller", () => {
     ).not.toHaveProperty("cooldownMs");
   });
 
+  it("clears persisted failure alert routing fields when their edit inputs are blanked", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "cron.update") {
+        return { id: "job-clear-alert-fields" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [{ id: "job-clear-alert-fields" }] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1, nextWakeAtMs: null };
+      }
+      return {};
+    });
+    const job = {
+      id: "job-clear-alert-fields",
+      name: "Clear failure alert fields",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "cron" as const, expr: "0 * * * *" },
+      sessionTarget: "isolated" as const,
+      wakeMode: "next-heartbeat" as const,
+      payload: { kind: "agentTurn" as const, message: "run" },
+      delivery: { mode: "announce" as const },
+      failureAlert: {
+        after: 2,
+        channel: "telegram",
+        to: "123456",
+        cooldownMs: 60_000,
+        accountId: "bot-a",
+      },
+      state: {},
+    };
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronJobs: [job],
+    });
+
+    startCronEdit(state, job);
+    state.cronForm.failureAlertAfter = "";
+    state.cronForm.failureAlertTo = "";
+    state.cronForm.failureAlertCooldownSeconds = "";
+    state.cronForm.failureAlertAccountId = "";
+    await addCronJob(state);
+
+    const updateCall = findRequestCall(request.mock.calls, "cron.update");
+    expectRecordFields(requireRecord(requestPatch(updateCall).failureAlert, "failureAlert"), {
+      after: null,
+      to: null,
+      cooldownMs: null,
+      accountId: null,
+    });
+    // oxlint-disable-next-line unicorn/prefer-structured-clone -- verify the websocket JSON wire shape
+    const serializedPayload = JSON.parse(JSON.stringify(requestPayload(updateCall))) as unknown;
+    expectRecordFields(
+      requireRecord(
+        requireRecord(requireRecord(serializedPayload, "payload").patch, "patch").failureAlert,
+        "failureAlert",
+      ),
+      { after: null, to: null, cooldownMs: null, accountId: null },
+    );
+  });
+
+  it("clears a persisted failure alert override when switching back to inherit", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "cron.update") {
+        return { id: "job-inherit-alert" };
+      }
+      return {};
+    });
+    const job = {
+      id: "job-inherit-alert",
+      name: "Inherit failure alerts",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "cron" as const, expr: "0 * * * *" },
+      sessionTarget: "isolated" as const,
+      wakeMode: "next-heartbeat" as const,
+      payload: { kind: "agentTurn" as const, message: "run" },
+      failureAlert: { after: 2, channel: "telegram" },
+      state: {},
+    };
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronJobs: [job],
+    });
+
+    startCronEdit(state, job);
+    state.cronForm.failureAlertMode = "inherit";
+    await addCronJob(state);
+
+    const updateCall = findRequestCall(request.mock.calls, "cron.update");
+    expect(requestPatch(updateCall).failureAlert).toBeNull();
+  });
+
   it("includes failureAlert=false when disabled per job", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "cron.update") {
@@ -1485,6 +1686,85 @@ describe("cron controller", () => {
     expect(errors.timeoutSeconds).toBe("cron.errors.timeoutInvalid");
     expect(errors.deliveryTo).toBe("cron.errors.webhookUrlInvalid");
   });
+
+  it.each(["0x10", "1e3", "+1", String(Number.MAX_SAFE_INTEGER), "0.000001"])(
+    "rejects invalid recurring amounts before submit: %s",
+    async (everyAmount) => {
+      const request = vi.fn(async (method: string) => {
+        if (method === "cron.add") {
+          return { id: "job-nondecimal" };
+        }
+        if (method === "cron.list") {
+          return { jobs: [] };
+        }
+        if (method === "cron.status") {
+          return { enabled: true, jobs: 0, nextWakeAtMs: null };
+        }
+        return {};
+      });
+      const state = createState({
+        client: { request } as unknown as CronState["client"],
+        cronForm: {
+          ...DEFAULT_CRON_FORM,
+          name: "decimal interval",
+          everyAmount,
+          payloadText: "run",
+          deliveryMode: "none",
+        },
+      });
+
+      const saved = await addCronJob(state);
+
+      expect(saved.saved).toBe(false);
+      expect(state.cronFieldErrors.everyAmount).toBe("cron.errors.everyAmountInvalid");
+      expect(request).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["1.5", "minutes", 90_000],
+    ["4.1", "minutes", 246_000],
+    ["0.1", "hours", 360_000],
+    ["0.000125", "hours", 450],
+    ["0.1", "days", 8_640_000],
+    ["0.0009765625", "days", 84_375],
+  ] as const)(
+    "converts %s %s to safe integer milliseconds",
+    async (everyAmount, everyUnit, expectedEveryMs) => {
+      const request = vi.fn(async (method: string) => {
+        if (method === "cron.add") {
+          return { id: "job-decimal" };
+        }
+        if (method === "cron.list") {
+          return { jobs: [] };
+        }
+        if (method === "cron.status") {
+          return { enabled: true, jobs: 0, nextWakeAtMs: null };
+        }
+        return {};
+      });
+      const state = createState({
+        client: { request } as unknown as CronState["client"],
+        cronForm: {
+          ...DEFAULT_CRON_FORM,
+          name: "decimal interval",
+          everyAmount,
+          everyUnit,
+          payloadText: "run",
+          deliveryMode: "none",
+        },
+      });
+
+      const saved = await addCronJob(state);
+
+      expect(saved.saved).toBe(true);
+      const addCall = findRequestCall(request.mock.calls, "cron.add");
+      expect(requestPayload(addCall).schedule).toEqual({
+        kind: "every",
+        everyMs: expectedEveryMs,
+      });
+    },
+  );
 
   it("does not require cron expression fields for on-exit schedules", () => {
     const errors = validateCronForm({
@@ -1889,6 +2169,206 @@ describe("cron controller", () => {
     expect(state.cronRuns[1]?.summary).toBe("older");
   });
 
+  it("keeps the newest filtered run history when an older overview request finishes last", async () => {
+    const olderOverview = createDeferred<CronRunsResult>();
+    const currentEntry = { ts: 2, jobId: "fresh-job", status: "ok" as const, summary: "fresh" };
+    const request = vi
+      .fn()
+      .mockImplementationOnce(() => olderOverview.promise)
+      .mockResolvedValueOnce({
+        entries: [currentEntry],
+        total: 1,
+        hasMore: false,
+        nextOffset: null,
+      });
+    const state = createState({ client: { request } as unknown as CronState["client"] });
+
+    const olderLoad = loadCronRuns(state, null);
+    updateCronRunsFilter(state, { cronRunsQuery: "fresh" });
+    await expect(loadCronRuns(state, null)).resolves.toBe("ok");
+    expect(state.cronRuns).toEqual([currentEntry]);
+
+    olderOverview.resolve({
+      entries: [{ ts: 1, jobId: "stale-job", status: "ok", summary: "stale" }],
+      total: 8,
+      hasMore: true,
+      nextOffset: 1,
+    });
+
+    await expect(olderLoad).resolves.toBe("skipped");
+    expect(state.cronRuns).toEqual([currentEntry]);
+    expect(state.cronRunsTotal).toBe(1);
+    expect(state.cronRunsHasMore).toBe(false);
+    expect(state.cronRunsNextOffset).toBeNull();
+  });
+
+  it("does not let a deferred overview replace a newly selected job's run history", async () => {
+    const olderOverview = createDeferred<CronRunsResult>();
+    const selectedEntry = {
+      ts: 2,
+      jobId: "selected-job",
+      status: "ok" as const,
+      summary: "selected history",
+    };
+    const request = vi
+      .fn()
+      .mockImplementationOnce(() => olderOverview.promise)
+      .mockResolvedValueOnce({
+        entries: [selectedEntry],
+        total: 1,
+        hasMore: false,
+        nextOffset: null,
+      });
+    const state = createState({ client: { request } as unknown as CronState["client"] });
+
+    const olderLoad = loadCronRuns(state, null);
+    updateCronRunsFilter(state, { cronRunsScope: "job" });
+    state.cronRunsJobId = "selected-job";
+    await expect(loadCronRuns(state, "selected-job")).resolves.toBe("ok");
+
+    olderOverview.resolve({
+      entries: [{ ts: 1, jobId: "other-job", status: "ok", summary: "wrong task" }],
+      total: 1,
+      hasMore: false,
+      nextOffset: null,
+    });
+
+    await expect(olderLoad).resolves.toBe("skipped");
+    expect(state.cronRunsJobId).toBe("selected-job");
+    expect(state.cronRuns).toEqual([selectedEntry]);
+  });
+
+  it("does not let a deferred selected job replace the current overview", async () => {
+    const olderJobHistory = createDeferred<CronRunsResult>();
+    const overviewEntry = {
+      ts: 2,
+      jobId: "overview-job",
+      status: "ok" as const,
+      summary: "current overview",
+    };
+    const request = vi
+      .fn()
+      .mockImplementationOnce(() => olderJobHistory.promise)
+      .mockResolvedValueOnce({
+        entries: [overviewEntry],
+        total: 1,
+        hasMore: false,
+        nextOffset: null,
+      });
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronRunsScope: "job",
+      cronRunsJobId: "selected-job",
+    });
+
+    const olderLoad = loadCronRuns(state, "selected-job");
+    updateCronRunsFilter(state, { cronRunsScope: "all" });
+    state.cronRunsJobId = null;
+    await expect(loadCronRuns(state, null)).resolves.toBe("ok");
+
+    olderJobHistory.resolve({
+      entries: [{ ts: 1, jobId: "selected-job", status: "ok", summary: "stale task" }],
+      total: 1,
+      hasMore: false,
+      nextOffset: null,
+    });
+
+    await expect(olderLoad).resolves.toBe("skipped");
+    expect(state.cronRunsJobId).toBeNull();
+    expect(state.cronRuns).toEqual([overviewEntry]);
+  });
+
+  it("drops an older paginated response after run-history filters are replaced", async () => {
+    const olderPage = createDeferred<CronRunsResult>();
+    const currentEntry = {
+      ts: 3,
+      jobId: "filtered-job",
+      status: "error" as const,
+      summary: "filtered result",
+    };
+    const request = vi
+      .fn()
+      .mockImplementationOnce(() => olderPage.promise)
+      .mockResolvedValueOnce({
+        entries: [currentEntry],
+        total: 1,
+        hasMore: false,
+        nextOffset: null,
+      });
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronRuns: [{ ts: 2, jobId: "previous-job", status: "ok", summary: "previous" }],
+      cronRunsHasMore: true,
+      cronRunsNextOffset: 1,
+    });
+
+    const olderLoad = loadCronRuns(state, null, { append: true });
+    expect(state.cronRunsLoadingMore).toBe(true);
+    updateCronRunsFilter(state, { cronRunsStatuses: ["error"] });
+    await expect(loadCronRuns(state, null)).resolves.toBe("ok");
+    expect(state.cronRunsLoadingMore).toBe(false);
+
+    olderPage.resolve({
+      entries: [{ ts: 1, jobId: "stale-job", status: "ok", summary: "stale older page" }],
+      total: 9,
+      hasMore: true,
+      nextOffset: 2,
+    });
+
+    await expect(olderLoad).resolves.toBe("skipped");
+    expect(state.cronRuns).toEqual([currentEntry]);
+    expect(state.cronRunsTotal).toBe(1);
+    expect(state.cronRunsHasMore).toBe(false);
+    expect(state.cronRunsLoadingMore).toBe(false);
+  });
+
+  it("ignores a stale run-history failure after the current request succeeds", async () => {
+    const olderFailure = createDeferred<CronRunsResult>();
+    const currentEntry = { ts: 2, jobId: "fresh-job", status: "ok" as const, summary: "fresh" };
+    const request = vi
+      .fn()
+      .mockImplementationOnce(() => olderFailure.promise)
+      .mockResolvedValueOnce({
+        entries: [currentEntry],
+        total: 1,
+        hasMore: false,
+        nextOffset: null,
+      });
+    const state = createState({ client: { request } as unknown as CronState["client"] });
+
+    const olderLoad = loadCronRuns(state, null);
+    await expect(loadCronRuns(state, null)).resolves.toBe("ok");
+    olderFailure.reject(new Error("stale cron history unavailable"));
+
+    await expect(olderLoad).resolves.toBe("skipped");
+    expect(state.cronRuns).toEqual([currentEntry]);
+    expect(state.cronError).toBeNull();
+  });
+
+  it("preserves the current run-history failure when an older response later succeeds", async () => {
+    const olderOverview = createDeferred<CronRunsResult>();
+    const request = vi
+      .fn()
+      .mockImplementationOnce(() => olderOverview.promise)
+      .mockRejectedValueOnce(new Error("current cron history unavailable"));
+    const state = createState({ client: { request } as unknown as CronState["client"] });
+
+    const olderLoad = loadCronRuns(state, null);
+    await expect(loadCronRuns(state, null)).resolves.toBe("error");
+    expect(state.cronError).toBe("Error: current cron history unavailable");
+
+    olderOverview.resolve({
+      entries: [{ ts: 1, jobId: "stale-job", status: "ok", summary: "stale" }],
+      total: 1,
+      hasMore: false,
+      nextOffset: null,
+    });
+
+    await expect(olderLoad).resolves.toBe("skipped");
+    expect(state.cronRuns).toEqual([]);
+    expect(state.cronError).toBe("Error: current cron history unavailable");
+  });
+
   it("scopes jobs and run history requests to the selected agent", async () => {
     const request = vi.fn(async (method: string) =>
       method === "cron.runs"
@@ -2002,6 +2482,135 @@ describe("cron controller", () => {
       "cron.runs",
       expect.objectContaining({ id: "job-invalid" }),
     );
+  });
+});
+
+describe("cron every-interval lossless round-trip", () => {
+  function everyJob(everyMs: number): CronJob {
+    return {
+      id: "job-interval",
+      name: "Interval",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "every", everyMs },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "tick" },
+      delivery: { mode: "none" },
+      state: {},
+    } as unknown as CronJob;
+  }
+
+  function captureUpdateState(job: CronJob) {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "cron.update") {
+        return { id: job.id };
+      }
+      if (method === "cron.list") {
+        return { jobs: [{ id: job.id }] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1, nextWakeAtMs: null };
+      }
+      return {};
+    });
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronJobs: [job],
+    });
+    return { request, state };
+  }
+
+  // Each everyMs the editable form must reproduce exactly: reading a job into the
+  // form and rebuilding the schedule may never change the cadence. Legal everyMs
+  // spans 1ms..MAX_SAFE_INTEGER (gateway schema minimum 1, no sub-minute floor).
+  const cases: ReadonlyArray<{ everyMs: number; amount: string; unit: string }> = [
+    { everyMs: 1, amount: "0.001", unit: "seconds" },
+    { everyMs: 450, amount: "0.45", unit: "seconds" },
+    { everyMs: 1_000, amount: "1", unit: "seconds" },
+    { everyMs: 30_000, amount: "30", unit: "seconds" },
+    { everyMs: 90_000, amount: "90", unit: "seconds" },
+    { everyMs: 246_000, amount: "246", unit: "seconds" },
+    { everyMs: 60_000, amount: "1", unit: "minutes" },
+    { everyMs: 7_200_000, amount: "2", unit: "hours" },
+    { everyMs: 86_400_000, amount: "1", unit: "days" },
+    { everyMs: Number.MAX_SAFE_INTEGER, amount: "9007199254740.991", unit: "seconds" },
+  ];
+
+  it("reads every job back into the most natural exact unit", () => {
+    for (const { everyMs, amount, unit } of cases) {
+      const state = createState();
+      startCronEdit(state, everyJob(everyMs));
+      expect(state.cronForm.everyUnit).toBe(unit);
+      expect(state.cronForm.everyAmount).toBe(amount);
+      // The rebuilt millisecond value must equal the original, not a rounded one.
+      expect(parseCronEveryMs(state.cronForm.everyAmount, state.cronForm.everyUnit)).toBe(everyMs);
+    }
+  });
+
+  it("keeps everyMs unchanged on a metadata-only edit", async () => {
+    for (const everyMs of [30_000, 90_000, 450, Number.MAX_SAFE_INTEGER]) {
+      const { request, state } = captureUpdateState(everyJob(everyMs));
+      startCronEdit(state, state.cronJobs[0] as CronJob);
+      state.cronForm.name = "Renamed only";
+      await addCronJob(state);
+
+      const updateCall = findRequestCall(request.mock.calls, "cron.update");
+      const patch = requestPatch(updateCall);
+      expect(patch.schedule).toEqual({ kind: "every", everyMs });
+    }
+  });
+
+  it("sends the edited interval when the seconds unit is changed", async () => {
+    const wholeSeconds = captureUpdateState(everyJob(60_000));
+    startCronEdit(wholeSeconds.state, wholeSeconds.state.cronJobs[0] as CronJob);
+    wholeSeconds.state.cronForm.everyUnit = "seconds";
+    wholeSeconds.state.cronForm.everyAmount = "45";
+    await addCronJob(wholeSeconds.state);
+    expect(
+      requestPatch(findRequestCall(wholeSeconds.request.mock.calls, "cron.update")).schedule,
+    ).toEqual({ kind: "every", everyMs: 45_000 });
+
+    const subSecond = captureUpdateState(everyJob(60_000));
+    startCronEdit(subSecond.state, subSecond.state.cronJobs[0] as CronJob);
+    subSecond.state.cronForm.everyUnit = "seconds";
+    subSecond.state.cronForm.everyAmount = "0.45";
+    await addCronJob(subSecond.state);
+    expect(
+      requestPatch(findRequestCall(subSecond.request.mock.calls, "cron.update")).schedule,
+    ).toEqual({ kind: "every", everyMs: 450 });
+  });
+
+  it("clones a sub-minute job without rounding its interval", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "cron.add") {
+        return { id: "job-clone" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 0, nextWakeAtMs: null };
+      }
+      return {};
+    });
+    const sourceJob = everyJob(30_000);
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronJobs: [sourceJob],
+    });
+
+    startCronClone(state, sourceJob);
+    expect(state.cronForm.everyUnit).toBe("seconds");
+    expect(state.cronForm.everyAmount).toBe("30");
+    await addCronJob(state);
+
+    const addCall = findRequestCall(request.mock.calls, "cron.add");
+    expect((addCall[1] as { schedule?: unknown }).schedule).toEqual({
+      kind: "every",
+      everyMs: 30_000,
+    });
   });
 });
 

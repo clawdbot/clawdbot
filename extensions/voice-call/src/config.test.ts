@@ -54,6 +54,8 @@ describe("validateProviderConfig", () => {
     delete process.env.TELNYX_PUBLIC_KEY;
     delete process.env.PLIVO_AUTH_ID;
     delete process.env.PLIVO_AUTH_TOKEN;
+    delete process.env.NGROK_AUTHTOKEN;
+    delete process.env.NGROK_DOMAIN;
   };
 
   beforeEach(() => {
@@ -98,6 +100,66 @@ describe("validateProviderConfig", () => {
         }
         const fromEnv = resolveVoiceCallConfig(createBaseConfig(provider));
         expect(validateProviderConfig(fromEnv)).toEqual({ valid: true, errors: [] });
+      }
+    });
+
+    it("ignores blank provider and tunnel environment values", () => {
+      for (const provider of ["twilio", "telnyx", "plivo"] as const) {
+        clearProviderEnv();
+        process.env.TWILIO_ACCOUNT_SID = "   ";
+        process.env.TWILIO_AUTH_TOKEN = "   ";
+        process.env.TWILIO_FROM_NUMBER = "   ";
+        process.env.TELNYX_API_KEY = "   ";
+        process.env.TELNYX_CONNECTION_ID = "   ";
+        process.env.TELNYX_PUBLIC_KEY = "   ";
+        process.env.PLIVO_AUTH_ID = "   ";
+        process.env.PLIVO_AUTH_TOKEN = "   ";
+        process.env.NGROK_AUTHTOKEN = "   ";
+        process.env.NGROK_DOMAIN = "   ";
+
+        const config = resolveVoiceCallConfig({
+          ...createBaseConfig(provider),
+          fromNumber: undefined,
+          tunnel: { provider: "ngrok" },
+        });
+        const result = validateProviderConfig(config);
+
+        expect(result.valid).toBe(false);
+        expect(config.tunnel.ngrokAuthToken).toBeUndefined();
+        expect(config.tunnel.ngrokDomain).toBeUndefined();
+        if (provider === "twilio") {
+          expect(config.fromNumber).toBeUndefined();
+          expect(config.twilio?.accountSid).toBeUndefined();
+          expect(config.twilio?.authToken).toBeUndefined();
+          expect(result.errors).toContain(
+            "plugins.entries.voice-call.config.twilio.accountSid is required (or set TWILIO_ACCOUNT_SID env)",
+          );
+          expect(result.errors).toContain(
+            "plugins.entries.voice-call.config.twilio.authToken is required (or set TWILIO_AUTH_TOKEN env)",
+          );
+          expect(result.errors).toContain(
+            "plugins.entries.voice-call.config.fromNumber is required (or set TWILIO_FROM_NUMBER env)",
+          );
+        } else if (provider === "telnyx") {
+          expect(config.telnyx?.apiKey).toBeUndefined();
+          expect(config.telnyx?.connectionId).toBeUndefined();
+          expect(config.telnyx?.publicKey).toBeUndefined();
+          expect(result.errors).toContain(
+            "plugins.entries.voice-call.config.telnyx.apiKey is required (or set TELNYX_API_KEY env)",
+          );
+          expect(result.errors).toContain(
+            "plugins.entries.voice-call.config.telnyx.connectionId is required (or set TELNYX_CONNECTION_ID env)",
+          );
+        } else {
+          expect(config.plivo?.authId).toBeUndefined();
+          expect(config.plivo?.authToken).toBeUndefined();
+          expect(result.errors).toContain(
+            "plugins.entries.voice-call.config.plivo.authId is required (or set PLIVO_AUTH_ID env)",
+          );
+          expect(result.errors).toContain(
+            "plugins.entries.voice-call.config.plivo.authToken is required (or set PLIVO_AUTH_TOKEN env)",
+          );
+        }
       }
     });
   });

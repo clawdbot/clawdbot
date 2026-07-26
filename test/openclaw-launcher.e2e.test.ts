@@ -88,7 +88,7 @@ async function waitForJsonFile<T>(filePath: string, timeoutMs: number): Promise<
     } catch (error) {
       lastError = error;
       await new Promise((resolve) => {
-        setTimeout(resolve, 25);
+        setTimeout(resolve, 5);
       });
     }
   }
@@ -863,6 +863,55 @@ describe("openclaw launcher", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32").each([
+    { signal: "SIGINT" as const, exitCode: 130 },
+    { signal: "SIGTERM" as const, exitCode: 143 },
+  ])("exits $exitCode when the respawn child terminates from $signal", async (testCase) => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    await addGitMarker(fixtureRoot);
+    const childInfoPath = path.join(fixtureRoot, "child-info.json");
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "entry.js"),
+      [
+        'import { writeFileSync } from "node:fs";',
+        `writeFileSync(${JSON.stringify(childInfoPath)}, JSON.stringify({ pid: process.pid }) + "\\n");`,
+        'process.title = "openclaw-launcher-default-signal-test-child";',
+        "setInterval(() => {}, 1000);",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const launcher = spawn(process.execPath, [path.join(fixtureRoot, "openclaw.mjs")], {
+      cwd: fixtureRoot,
+      env: launcherEnv({
+        NODE_COMPILE_CACHE: path.join(fixtureRoot, ".node-compile-cache"),
+      }),
+      stdio: "ignore",
+    });
+    let respawnChildPid: number | undefined;
+
+    try {
+      const childInfo = await waitForJsonFile<{ pid: number }>(childInfoPath, 5000);
+      respawnChildPid = childInfo.pid;
+
+      launcher.kill(testCase.signal);
+
+      await expect(waitForProcessExit(launcher, "launcher", 5000)).resolves.toEqual({
+        code: testCase.exitCode,
+        signal: null,
+      });
+      expect(isProcessAlive(respawnChildPid)).toBe(false);
+    } finally {
+      if (isProcessAlive(respawnChildPid)) {
+        process.kill(respawnChildPid!, "SIGKILL");
+      }
+      if (isProcessAlive(launcher.pid)) {
+        process.kill(launcher.pid!, "SIGKILL");
+      }
+    }
+  });
+
   it.runIf(process.platform !== "win32")(
     "exits after SIGTERM when the respawn child ignores the forwarded signal",
     async () => {
@@ -873,9 +922,9 @@ describe("openclaw launcher", () => {
         path.join(fixtureRoot, "dist", "entry.js"),
         [
           'import { writeFileSync } from "node:fs";',
-          `writeFileSync(${JSON.stringify(childInfoPath)}, JSON.stringify({ pid: process.pid }) + "\\n");`,
           'process.title = "openclaw-launcher-sigterm-ignore-test-child";',
           'process.on("SIGTERM", () => {});',
+          `writeFileSync(${JSON.stringify(childInfoPath)}, JSON.stringify({ pid: process.pid }) + "\\n");`,
           "setInterval(() => {}, 1000);",
           "",
         ].join("\n"),
@@ -952,6 +1001,34 @@ describe("openclaw launcher", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toBe("cache:enabled;respawn:0");
   });
+
+  it.runIf(process.platform !== "win32")(
+    "does not respawn native hook relays for packaged compile-cache scoping",
+    async () => {
+      const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+      await fs.writeFile(path.join(fixtureRoot, "package.json"), '{"version":"2026.4.29"}\n');
+      await fs.writeFile(
+        path.join(fixtureRoot, "dist", "entry.js"),
+        'process.stdout.write(process.env.OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED ?? "0");\n',
+        "utf8",
+      );
+
+      const result = spawnSync(
+        process.execPath,
+        [path.join(fixtureRoot, "openclaw.mjs"), "hooks", "relay"],
+        {
+          cwd: fixtureRoot,
+          env: launcherEnv({
+            NODE_COMPILE_CACHE: path.join(fixtureRoot, ".node-compile-cache"),
+          }),
+          encoding: "utf8",
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe("0");
+    },
+  );
 
   it("scopes packaged launcher compile cache inside configured cache roots", async () => {
     const fixtureRoot = await makeLauncherFixture(fixtureRoots);

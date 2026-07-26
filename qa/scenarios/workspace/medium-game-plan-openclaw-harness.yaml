@@ -5,14 +5,14 @@ scenario:
   surface: workspace
   coverage:
     primary:
-      - workspace.planning
+      - agent-runtime.external-harness-selection-planning
     secondary:
-      - agents.openclaw-harness
+      - agent-runtime.external-harness-selection-openclaw-harness
   objective: Verify GPT-5.6 Luna can use the OpenClaw harness to plan and build a medium-complex self-contained browser game.
   successCriteria:
     - A live-frontier run fails fast unless the selected primary model is openai/gpt-5.6-luna.
     - The scenario forces the embedded OpenClaw harness before the build turn.
-    - The prompt explicitly asks the agent to enter plan mode before editing.
+    - The OpenClaw harness records a successful `update_plan` tool call before the artifact assertion passes.
     - The agent writes a self-contained HTML game with a canvas loop, controls, scoring, waves, pause, and restart.
   docsRefs:
     - docs/plugins/sdk-agent-harness.md
@@ -21,11 +21,13 @@ scenario:
   codeRefs:
     - src/agents/harness/selection.ts
     - src/agents/harness/builtin-openclaw.ts
-    - extensions/qa-lab/src/suite.ts
+    - extensions/qa-lab/src/suite-runtime-agent-session.ts
   execution:
     kind: flow
+    runtime: openclaw
     summary: Run with `pnpm openclaw qa suite --provider-mode live-frontier --model openai/gpt-5.6-luna --alt-model openai/gpt-5.6-luna --fast --thinking medium --scenario medium-game-plan-openclaw-harness`.
     config:
+      requiredProviderMode: live-frontier
       requiredProvider: openai
       requiredModel: gpt-5.6-luna
       harnessRuntime: openclaw
@@ -33,7 +35,7 @@ scenario:
       gameTitle: Star Garden Defenders
       minBytes: 5000
       buildPrompt: |-
-        Enter plan mode first and write a short implementation plan before editing.
+        Call update_plan with a short implementation plan before editing.
 
         Then build a medium-complex, self-contained browser game at ./star-garden-defenders-openclaw.html.
 
@@ -43,7 +45,8 @@ scenario:
         - canvas-based arcade loop with requestAnimationFrame
         - keyboard controls and mouse or pointer support
         - player movement, enemy waves, collectibles or power-ups, collision handling
-        - score, lives or health, wave number, pause, restart, and game-over state
+        - score, lives or health, wave number, pause, and game-over state
+        - a visible Restart control wired to a restartGame function
         - polished inline CSS and clear on-screen controls
         - after writing the file, reply with the filename and the main systems implemented
 
@@ -55,102 +58,96 @@ flow:
           value:
             expr: splitModelRef(env.primaryModel)
         - assert:
-            expr: "env.providerMode !== 'live-frontier' || selected?.provider === config.requiredProvider"
+            expr: "selected?.provider === config.requiredProvider"
             message:
               expr: "`expected live primary provider ${config.requiredProvider}, got ${env.primaryModel}`"
         - assert:
-            expr: "env.providerMode !== 'live-frontier' || selected?.model === config.requiredModel"
+            expr: "selected?.model === config.requiredModel"
             message:
               expr: "`expected live primary model ${config.requiredModel}, got ${env.primaryModel}`"
-        - if:
-            expr: "env.providerMode !== 'live-frontier'"
-            then:
-              - assert: "true"
-            else:
-              - call: patchConfig
-                saveAs: patchResult
-                args:
-                  - env:
-                      ref: env
-                    patch:
-                      agents:
-                        defaults:
-                          models:
-                            expr: "({ [env.primaryModel]: { agentRuntime: { id: config.harnessRuntime } } })"
-              - call: waitForGatewayHealthy
-                args:
-                  - ref: env
-                  - 60000
-              - call: waitForQaChannelReady
-                args:
-                  - ref: env
-                  - 60000
-              - call: readConfigSnapshot
-                saveAs: snapshot
-                args:
-                  - ref: env
-              - assert:
-                  expr: "snapshot.config.agents?.defaults?.models?.[env.primaryModel]?.agentRuntime?.id === config.harnessRuntime"
-                  message:
-                    expr: "`expected ${env.primaryModel} agentRuntime.id=${config.harnessRuntime}, got ${JSON.stringify(snapshot.config.agents?.defaults?.models?.[env.primaryModel]?.agentRuntime)}`"
-      detailsExpr: "env.providerMode === 'live-frontier' ? `provider=${selected?.provider} model=${selected?.model} runtime=${snapshot.config.agents?.defaults?.models?.[env.primaryModel]?.agentRuntime?.id}` : `mock mode: parsed ${scenario.id}`"
+        - assert:
+            expr: "env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME === config.harnessRuntime"
+            message:
+              expr: "`expected suite runtime ${config.harnessRuntime}, got ${env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME}`"
+      detailsExpr: "`provider=${selected?.provider} model=${selected?.model} runtime=${env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME}`"
     - name: builds the medium game artifact
       actions:
-        - if:
-            expr: "env.providerMode !== 'live-frontier'"
-            then:
-              - assert: "true"
-            else:
-              - call: reset
-              - call: runAgentPrompt
-                args:
-                  - ref: env
-                  - sessionKey: agent:qa:medium-game-openclaw
-                    message:
-                      expr: config.buildPrompt
-                    provider:
-                      expr: selected?.provider
-                    model:
-                      expr: selected?.model
-                    timeoutMs:
-                      expr: resolveQaLiveTurnTimeoutMs(env, 420000, env.primaryModel)
-              - call: waitForOutboundMessage
-                saveAs: outbound
-                args:
-                  - ref: state
-                  - lambda:
-                      params: [candidate]
-                      expr: "candidate.conversation.id === 'qa-operator' && candidate.text.includes(config.artifactFile)"
-                  - expr: resolveQaLiveTurnTimeoutMs(env, 60000, env.primaryModel)
-              - set: artifactPath
-                value:
-                  expr: "path.join(env.gateway.workspaceDir, config.artifactFile)"
-              - call: waitForCondition
-                saveAs: artifact
-                args:
-                  - lambda:
-                      async: true
-                      expr: "((await fs.readFile(artifactPath, 'utf8').catch(() => '')).includes(config.gameTitle) ? await fs.readFile(artifactPath, 'utf8').catch(() => '') : undefined)"
-                  - expr: resolveQaLiveTurnTimeoutMs(env, 60000, env.primaryModel)
-                  - 500
-              - set: artifactLower
-                value:
-                  expr: normalizeLowercaseStringOrEmpty(artifact)
-              - assert:
-                  expr: "artifact.length >= config.minBytes"
-                  message:
-                    expr: "`expected medium game artifact >= ${config.minBytes} bytes, got ${artifact.length}`"
-              - assert:
-                  expr: "artifactLower.includes('star garden defenders') && artifactLower.includes('<canvas') && artifactLower.includes('requestanimationframe')"
-                  message: missing title, canvas, or animation loop
-              - assert:
-                  expr: "artifactLower.includes('keydown') || artifactLower.includes('keyup')"
-                  message: missing keyboard controls
-              - assert:
-                  expr: "artifactLower.includes('score') && artifactLower.includes('wave') && artifactLower.includes('pause') && artifactLower.includes('restart')"
-                  message: missing score, wave, pause, or restart systems
-              - assert:
-                  expr: "outbound.text.includes(config.artifactFile)"
-                  message:
-                    expr: "`final reply did not mention ${config.artifactFile}: ${outbound.text}`"
-      detailsExpr: "env.providerMode !== 'live-frontier' ? 'mock mode: skipped live medium-game build' : `${config.artifactFile} bytes=${artifact.length}`"
+        - call: reset
+        - call: readSessionTranscriptSummary
+          saveAs: transcriptBefore
+          args:
+            - ref: env
+            - agent:qa:medium-game-openclaw
+            - allowEmpty: true
+        - call: runAgentPrompt
+          saveAs: turn
+          args:
+            - ref: env
+            - sessionKey: agent:qa:medium-game-openclaw
+              message:
+                expr: config.buildPrompt
+              provider:
+                expr: selected?.provider
+              model:
+                expr: selected?.model
+              timeoutMs:
+                expr: resolveQaLiveTurnTimeoutMs(env, 420000, env.primaryModel)
+        - call: waitForOutboundMessage
+          saveAs: outbound
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.conversation.id === 'qa-operator' && candidate.text.includes(config.artifactFile)"
+            - expr: resolveQaLiveTurnTimeoutMs(env, 60000, env.primaryModel)
+        - call: readSessionTranscriptSummary
+          saveAs: transcript
+          args:
+            - ref: env
+            - agent:qa:medium-game-openclaw
+            - afterEventCursor:
+                expr: transcriptBefore.eventCursor
+        - assert:
+            expr: "(transcript.successfulToolCallCounts.update_plan ?? 0) > 0"
+            message: missing OpenClaw update_plan signal
+        - set: artifactPath
+          value:
+            expr: "path.join(env.gateway.workspaceDir, config.artifactFile)"
+        - call: waitForCondition
+          saveAs: artifact
+          args:
+            - lambda:
+                async: true
+                expr: "((await fs.readFile(artifactPath, 'utf8').catch(() => '')).includes(config.gameTitle) ? await fs.readFile(artifactPath, 'utf8').catch(() => '') : undefined)"
+            - expr: resolveQaLiveTurnTimeoutMs(env, 60000, env.primaryModel)
+            - 500
+        - set: artifactLower
+          value:
+            expr: normalizeLowercaseStringOrEmpty(artifact)
+        - assert:
+            expr: "artifact.length >= config.minBytes"
+            message:
+              expr: "`expected medium game artifact >= ${config.minBytes} bytes, got ${artifact.length}`"
+        - assert:
+            expr: "artifactLower.includes('star garden defenders') && artifactLower.includes('<canvas') && artifactLower.includes('requestanimationframe')"
+            message: missing title, canvas, or animation loop
+        - assert:
+            expr: "artifactLower.includes('keydown') || artifactLower.includes('keyup')"
+            message: missing keyboard controls
+        - assert:
+            expr: "artifactLower.includes('score')"
+            message: missing score system
+        - assert:
+            expr: "artifactLower.includes('wave')"
+            message: missing wave system
+        - assert:
+            expr: "artifactLower.includes('pause')"
+            message: missing pause system
+        - assert:
+            expr: "artifactLower.includes('restart') || artifactLower.includes('resetgame')"
+            message: missing restart system
+        - assert:
+            expr: "outbound.text.includes(config.artifactFile)"
+            message:
+              expr: "`final reply did not mention ${config.artifactFile}: ${outbound.text}`"
+      detailsExpr: "`provider=${selected?.provider} model=${selected?.model} runtime=${config.harnessRuntime} agentRun=${turn.started.runId} appServerTurn=n/a planSignal=update_plan:success:${transcript.successfulToolCallCounts.update_plan ?? 0} artifact=${artifactPath} bytes=${artifact.length} visibleReply=${JSON.stringify(outbound.text)}`"

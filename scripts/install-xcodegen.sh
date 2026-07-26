@@ -7,8 +7,8 @@ if [[ "$#" -ne 1 ]]; then
   exit 2
 fi
 
-readonly xcodegen_version="2.45.4"
-readonly xcodegen_checksum="090ec29491aad50aec10631bf6e62253fed733c50f3aab0f5ffc86bc170bdbef"
+readonly xcodegen_version="2.46.0"
+readonly xcodegen_checksum="4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806"
 
 install_dir="$1"
 temp_dir="$(mktemp -d)"
@@ -17,7 +17,11 @@ trap 'rm -rf "$temp_dir"' EXIT
 archive="$temp_dir/xcodegen.zip"
 extract_dir="$temp_dir/extract"
 
-curl --fail --location --silent --show-error --retry 3 \
+# Bound individual transfers and the retry window. curl resets --max-time for
+# each retry, while a started retry can outlive --retry-max-time.
+curl --fail --location --silent --show-error \
+  --connect-timeout 10 --max-time 120 \
+  --retry 3 --retry-max-time 120 \
   --output "$archive" \
   "https://github.com/yonaskolb/XcodeGen/releases/download/$xcodegen_version/xcodegen.zip"
 if [[ "$(shasum -a 256 "$archive" | awk '{print $1}')" != "$xcodegen_checksum" ]]; then

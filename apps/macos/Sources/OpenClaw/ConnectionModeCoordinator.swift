@@ -7,10 +7,13 @@ final class ConnectionModeCoordinator {
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "connection")
     private var lastMode: AppState.ConnectionMode?
+    private var applyGeneration: UInt64 = 0
 
     /// Apply the requested connection mode by starting/stopping local gateway,
     /// managing the control-channel SSH tunnel, and cleaning up chat windows/panels.
     func apply(mode: AppState.ConnectionMode, paused: Bool) async {
+        self.applyGeneration &+= 1
+        let applyGeneration = self.applyGeneration
         if let lastMode = self.lastMode, lastMode != mode {
             GatewayProcessManager.shared.clearLastFailure()
             NodesStore.shared.lastError = nil
@@ -29,19 +32,29 @@ final class ConnectionModeCoordinator {
 
         case .local:
             _ = await NodeServiceManager.stop()
+            guard self.applyGeneration == applyGeneration else { return }
             NodesStore.shared.lastError = nil
             await RemoteTunnelManager.shared.stopAll()
+            guard self.applyGeneration == applyGeneration else { return }
             WebChatManager.shared.resetTunnels()
             let shouldStart = GatewayAutostartPolicy.shouldStartGateway(mode: .local, paused: paused)
             if shouldStart {
                 GatewayProcessManager.shared.setActive(true)
+                await GatewayProcessManager.shared.waitForStartupAttempt()
+                guard self.applyGeneration == applyGeneration else { return }
+                var launchAgentInstalled = false
                 if GatewayAutostartPolicy.shouldEnsureLaunchAgent(
                     mode: .local,
                     paused: paused)
                 {
-                    Task { await GatewayProcessManager.shared.ensureLaunchAgentEnabledIfNeeded() }
+                    launchAgentInstalled = await GatewayProcessManager.shared.ensureLaunchAgentEnabledIfNeeded()
                 }
-                _ = await GatewayProcessManager.shared.waitForGatewayReady()
+                guard self.applyGeneration == applyGeneration else { return }
+                // Always finish the generation-aware health audit after persistence work. A newer
+                // inactive lifecycle makes this return false without touching its repair marker.
+                _ = await GatewayProcessManager.shared.waitForGatewayReady(
+                    launchAgentInstalled: launchAgentInstalled)
+                guard self.applyGeneration == applyGeneration else { return }
             } else {
                 GatewayProcessManager.shared.stop()
             }

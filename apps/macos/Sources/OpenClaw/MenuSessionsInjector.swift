@@ -325,7 +325,7 @@ extension MenuSessionsInjector {
 
             if rows.isEmpty {
                 menu.insertItem(
-                    self.makeMessageItem(text: "No active sessions", symbolName: "minus", width: width),
+                    self.makeMessageItem(text: "No active threads", symbolName: "minus", width: width),
                     at: cursor)
                 cursor += 1
             } else {
@@ -348,7 +348,7 @@ extension MenuSessionsInjector {
             headerItem.tag = self.tag
             headerItem.isEnabled = false
             let statusText = isConnected
-                ? (self.cachedErrorText ?? "Loading sessions…")
+                ? (self.cachedErrorText ?? "Loading threads…")
                 : self.controlChannelStatusText(for: channelState)
             headerItem.view = self.makeHostedView(
                 rootView: AnyView(MenuSessionsHeaderView(
@@ -362,7 +362,7 @@ extension MenuSessionsInjector {
             if !isConnected {
                 menu.insertItem(
                     self.makeMessageItem(
-                        text: "Connect the gateway to see sessions",
+                        text: "Connect the gateway to see threads",
                         symbolName: "bolt.slash",
                         width: width),
                     at: cursor)
@@ -405,8 +405,8 @@ extension MenuSessionsInjector {
     }
 
     private func sessionsSubtitle(count: Int) -> String {
-        if count == 1 { return "1 session · 24h" }
-        return "\(count) sessions · 24h"
+        if count == 1 { return "1 thread · 24h" }
+        return "\(count) threads · 24h"
     }
 
     private func insertUsageSection(into menu: NSMenu, at cursor: Int, width: CGFloat) -> Int {
@@ -535,7 +535,7 @@ extension MenuSessionsInjector {
     private func controlChannelStatusText(for state: ControlChannel.ConnectionState) -> String {
         switch state {
         case .connected:
-            "Loading sessions…"
+            "Loading threads…"
         case .connecting:
             "Connecting…"
         case let .degraded(message):
@@ -816,10 +816,10 @@ extension MenuSessionsInjector {
             case .gatewayUnavailable:
                 return "No connection to gateway"
             case .decodeFailed:
-                return "Sessions unavailable"
+                return "Threads unavailable"
             }
         }
-        return "Sessions unavailable"
+        return "Threads unavailable"
     }
 
     private static func menuStatusText(_ text: String) -> String {

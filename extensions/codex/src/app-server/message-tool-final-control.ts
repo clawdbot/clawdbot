@@ -45,7 +45,7 @@ function addCodexMessageToolOnlyFinalParameter(parameters: unknown): unknown {
       final: {
         type: "boolean",
         description:
-          "Set true only when this message is intended to complete the reply to the current source conversation. OpenClaw stops after confirming delivery.",
+          "Set false for progress or true to complete the current source reply. If omitted, OpenClaw continues and resolves the latest omitted source reply when the turn ends.",
       },
     },
   };

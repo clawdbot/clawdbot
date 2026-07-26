@@ -7,12 +7,14 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { normalizeDirectChatIdentifier } from "./chat-context.js";
 import { runIMessageCliJsonCommand } from "./cli-output.js";
 import { createIMessageRpcClient } from "./client.js";
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
+import { authorizeIMessageResourceReference } from "./message-resource.js";
 import {
-  normalizeDirectChatIdentifier,
   resolveIMessageMessageId as resolveIMessageMessageIdImpl,
+  type IMessageChatContext,
 } from "./monitor-reply-cache.js";
 import type { IMessageTarget } from "./targets.js";
 
@@ -198,6 +200,19 @@ async function withTempFile<T>(input: TempFileInput, fn: (path: string) => Promi
 
 export const imessageActionsRuntime = {
   resolveIMessageMessageId: resolveIMessageMessageIdImpl,
+
+  authorizeMessageReference(params: {
+    accountId: string;
+    chatContext: IMessageChatContext;
+    cliPath: string;
+    dbPath?: string;
+    hasExclusiveLocalDatabase: boolean;
+    remoteHost?: string;
+    messageId: string;
+    conversationReadOrigin?: string;
+  }): void {
+    authorizeIMessageResourceReference(params);
+  },
 
   async resolveChatGuidForTarget(params: {
     target: Extract<IMessageTarget, { kind: "chat_id" | "chat_identifier" }>;

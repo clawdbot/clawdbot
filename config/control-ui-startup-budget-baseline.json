@@ -1,0 +1,5 @@
+{
+  "startupJsGzipBytes": 321325,
+  "reason": "Account for the current Control UI startup chunk set after session hydration scoping",
+  "updatedAt": "2026-07-26"
+}

@@ -27,6 +27,8 @@ export default defineSingleProviderPluginEntry({
     ],
     catalog: {
       buildProvider: buildQianfanProvider,
+      buildStaticProvider: buildQianfanProvider,
+      liveModelDiscovery: true,
     },
   },
 });

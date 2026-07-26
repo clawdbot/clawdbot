@@ -26,12 +26,13 @@ describe("applyGatewayLaneConcurrency", () => {
     vi.useRealTimers();
     // Gateway startup drains the process-global suspension cleanup state.
     // Reset between tests so lane assertions only see this test's setup.
-    const { testing } = await import("../agents/session-suspension.js");
-    testing.resetSessionSuspensionStateForTest();
+    const { resetSessionSuspensionStateForTest } =
+      await import("../agents/session-suspension.test-support.js");
+    resetSessionSuspensionStateForTest();
     resetCommandQueueStateForTest();
   });
 
-  it("uses the higher cron default when maxConcurrentRuns is unset", async () => {
+  it("uses the built-in cron concurrency", async () => {
     applyConfigLaneConcurrency({} as OpenClawConfig);
 
     let activeRuns = 0;
@@ -69,49 +70,8 @@ describe("applyGatewayLaneConcurrency", () => {
     }
   });
 
-  it("applies cron maxConcurrentRuns to the cron-nested lane used by cron agent turns", async () => {
-    applyConfigLaneConcurrency({ cron: { maxConcurrentRuns: 2 } } as OpenClawConfig);
-
-    let activeRuns = 0;
-    let peakActiveRuns = 0;
-    const bothRunsStarted = createDeferred();
-    const releaseRuns = createDeferred();
-
-    const run = async () => {
-      activeRuns += 1;
-      peakActiveRuns = Math.max(peakActiveRuns, activeRuns);
-      if (peakActiveRuns >= 2) {
-        bothRunsStarted.resolve();
-      }
-      try {
-        await releaseRuns.promise;
-      } finally {
-        activeRuns -= 1;
-      }
-    };
-
-    const first = enqueueCommandInLane(CommandLane.CronNested, run, { warnAfterMs: 10_000 });
-    const second = enqueueCommandInLane(CommandLane.CronNested, run, { warnAfterMs: 10_000 });
-    const timeout = setTimeout(() => {
-      bothRunsStarted.reject(
-        new Error("timed out waiting for nested cron work to run in parallel"),
-      );
-    }, 250);
-
-    try {
-      await bothRunsStarted.promise;
-      expect(peakActiveRuns).toBe(2);
-    } finally {
-      clearTimeout(timeout);
-      releaseRuns.resolve();
-      await Promise.all([first, second]);
-    }
-  });
-
   it("keeps the shared nested lane at its default concurrency", async () => {
-    applyConfigLaneConcurrency({ cron: { maxConcurrentRuns: 2 } } as OpenClawConfig, {
-      gatewayStart: true,
-    });
+    applyConfigLaneConcurrency({} as OpenClawConfig, { gatewayStart: true });
 
     let startedRuns = 0;
     const releaseRuns = createDeferred();
@@ -168,8 +128,9 @@ describe("applyGatewayLaneConcurrency", () => {
   });
 
   it("does not resume cleanup-held built-in lanes during live config publication", async () => {
-    const { testing } = await import("../agents/session-suspension.js");
-    testing.seedClearedLaneResumeForTest(CommandLane.Main, {
+    const { seedClearedLaneResumeForTest } =
+      await import("../agents/session-suspension.test-support.js");
+    seedClearedLaneResumeForTest(CommandLane.Main, {
       resumeConcurrency: 3,
       resumeAtMs: Date.now() + 100,
     });
@@ -197,8 +158,9 @@ describe("applyGatewayLaneConcurrency", () => {
   it("does not resume an unexpired shared nested lane during gateway startup", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
-    const { testing } = await import("../agents/session-suspension.js");
-    testing.seedClearedLaneResumeForTest(CommandLane.Nested, {
+    const { seedClearedLaneResumeForTest } =
+      await import("../agents/session-suspension.test-support.js");
+    seedClearedLaneResumeForTest(CommandLane.Nested, {
       resumeConcurrency: 1,
       resumeAtMs: 1_100,
     });

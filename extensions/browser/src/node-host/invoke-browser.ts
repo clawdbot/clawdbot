@@ -64,7 +64,7 @@ async function ensureBrowserControlService(): Promise<void> {
   if (browserControlReady) {
     return browserControlReady;
   }
-  browserControlReady = (async () => {
+  const startup = (async () => {
     const cfg = loadBrowserConfigForRuntimeRefresh();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
     if (!resolved.enabled) {
@@ -75,7 +75,15 @@ async function ensureBrowserControlService(): Promise<void> {
       throw new Error("browser control disabled");
     }
   })();
-  return browserControlReady;
+  const sharedStartup = startup.catch((error: unknown) => {
+    // A failed attempt must not poison later calls or clear a newer shared startup.
+    if (browserControlReady === sharedStartup) {
+      browserControlReady = null;
+    }
+    throw error;
+  });
+  browserControlReady = sharedStartup;
+  return sharedStartup;
 }
 
 function isProfileAllowed(params: { allowProfiles: string[]; profile?: string | null }) {
@@ -143,6 +151,7 @@ function isWsBackedBrowserProxyPath(path: string): boolean {
   return (
     path === "/act" ||
     path === "/download" ||
+    path === "/extract" ||
     path === "/navigate" ||
     path === "/pdf" ||
     path === "/screenshot" ||

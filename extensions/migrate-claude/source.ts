@@ -12,7 +12,7 @@ type ClaudeArchivePath = {
   relativePath: string;
 };
 
-export type ClaudeAutoMemorySource = {
+type ClaudeAutoMemorySource = {
   id: string;
   label: string;
   path: string;
@@ -53,7 +53,10 @@ const HOME_ARCHIVE_DIRS = ["projects", "cache", "plans"] as const;
 const PROJECT_ARCHIVE_FILES = [".claude/scheduled_tasks.json"] as const;
 
 function defaultClaudeHome(): string {
-  return path.join(os.homedir(), ".claude");
+  // Preserve a nonempty CLAUDE_CONFIG_DIR verbatim (only an empty value is
+  // unset); trimming would change valid paths whose bytes include spaces.
+  const configuredDir = process.env.CLAUDE_CONFIG_DIR;
+  return configuredDir ? resolveHomePath(configuredDir) : path.join(os.homedir(), ".claude");
 }
 
 function defaultDesktopConfig(): string {
@@ -102,6 +105,23 @@ async function readMemoryDir(dir: string): Promise<Dirent[]> {
   }
 }
 
+async function isConfiguredAutoMemoryDirectory(dir: string): Promise<boolean> {
+  try {
+    return (await fs.stat(dir)).isDirectory();
+  } catch (error) {
+    const code =
+      error && typeof error === "object" && "code" in error
+        ? String((error as { code?: unknown }).code)
+        : undefined;
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return false;
+    }
+    throw new Error(`Unable to access configured Claude Code auto-memory directory: ${dir}`, {
+      cause: error,
+    });
+  }
+}
+
 async function probeMarkdownFiles(root: string): Promise<"found" | "absent" | "truncated"> {
   const pending = [root];
   let visited = 0;
@@ -135,7 +155,7 @@ async function discoverAutoMemorySources(params: {
   homeProjectsDir?: string;
   userSettingsPath?: string;
 }): Promise<ClaudeAutoMemorySource[]> {
-  const candidates: Array<{ label: string; path: string }> = [];
+  const candidates: Array<{ configured?: boolean; label: string; path: string }> = [];
   if (params.homeProjectsDir) {
     for (const entry of await safeReadDir(params.homeProjectsDir)) {
       if (!entry.isDirectory()) {
@@ -151,15 +171,16 @@ async function discoverAutoMemorySources(params: {
   const customDirectory = userSettings.autoMemoryDirectory;
   if (typeof customDirectory === "string" && customDirectory.trim()) {
     const configuredPath = customDirectory.trim();
-    if (
-      !path.isAbsolute(configuredPath) &&
-      configuredPath !== "~" &&
-      !configuredPath.startsWith("~/")
-    ) {
+    // Bare ~ would select the whole home tree; Claude only permits absolute or ~/-prefixed paths.
+    if (!path.isAbsolute(configuredPath) && !configuredPath.startsWith("~/")) {
       throw new Error("Claude autoMemoryDirectory must be absolute or start with ~/.");
     }
     const customPath = resolveHomePath(configuredPath);
-    candidates.push({ label: path.basename(customPath) || "custom", path: customPath });
+    candidates.push({
+      configured: true,
+      label: path.basename(customPath) || "custom",
+      path: customPath,
+    });
   }
   if (path.basename(params.root) === "memory") {
     candidates.push({
@@ -171,7 +192,10 @@ async function discoverAutoMemorySources(params: {
   const seen = new Set<string>();
   const sources: ClaudeAutoMemorySource[] = [];
   for (const candidate of candidates) {
-    if (!(await isDirectory(candidate.path))) {
+    const directoryExists = candidate.configured
+      ? await isConfiguredAutoMemoryDirectory(candidate.path)
+      : await isDirectory(candidate.path);
+    if (!directoryExists) {
       continue;
     }
     // A capped discovery probe must remain conservative: planning performs the
@@ -196,7 +220,12 @@ async function discoverAutoMemorySources(params: {
 export async function discoverClaudeSource(input?: string): Promise<ClaudeSource> {
   const explicitInput = Boolean(input?.trim());
   const root = resolveHomePath(input?.trim() || defaultClaudeHome());
-  const rootIsHome = path.basename(root) === ".claude";
+  // Home detection stays on unambiguous signals only: the `.claude` basename or
+  // the resolved default (which honors CLAUDE_CONFIG_DIR). An explicit `--from`
+  // is treated as a project root otherwise — inferring a relocated home from
+  // generic markers like `projects/` or `settings.json` misreads ordinary repos.
+  const rootIsHome =
+    path.basename(root) === ".claude" || (!explicitInput && root === defaultClaudeHome());
   const inspectGlobal = !explicitInput || rootIsHome;
   const homeDir = inspectGlobal ? (rootIsHome ? root : defaultClaudeHome()) : undefined;
   const projectDir = rootIsHome ? undefined : root;

@@ -12,6 +12,7 @@ import {
   resetGatewayWorkAdmission,
   rollbackGatewayRestartSignalFence,
   runWithGatewayIndependentRootWorkContinuation,
+  runOutsideGatewayRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
   waitForActiveGatewayRootWork,
@@ -134,6 +135,24 @@ it("retains an admitted request root across its handler return", async () => {
   releaseContinuation();
   releaseContinuation();
   expect(getActiveGatewayRootWorkCount()).toBe(0);
+});
+
+it("does not retire process-lifetime work with the request that started it", async () => {
+  let releaseChild = () => {};
+  const childGate = new Promise<void>((resolve) => {
+    releaseChild = resolve;
+  });
+  let child: Promise<boolean> | undefined;
+
+  await runWithGatewayRootWorkAdmissionForTest(async () => {
+    child = runOutsideGatewayRootWorkAdmission(async () => {
+      await childGate;
+      return isGatewaySubordinateWorkAdmissionClosed();
+    });
+  });
+
+  releaseChild();
+  await expect(child).resolves.toBe(false);
 });
 
 it("runs an admitted continuation when restart drain wins the handoff race", async () => {

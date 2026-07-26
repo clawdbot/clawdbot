@@ -431,6 +431,59 @@ describe("resolveSelectedClawHubPublishablePluginPackages", () => {
 });
 
 describe("collectPluginClawHubReleasePlan", () => {
+  it("bounds parallel ClawHub package-state reads and preserves plan order", async () => {
+    const extraExtensionIds = Array.from({ length: 11 }, (_, index) => `demo-${index + 2}`);
+    const repoDir = createTempPluginRepo({ extraExtensionIds });
+    const packageNames = ["demo-plugin", ...extraExtensionIds].map(
+      (extensionId) => `@openclaw/${extensionId}`,
+    );
+    const baseFetch = createClawHubPlanFetch({
+      packages: Object.fromEntries(
+        packageNames.map((packageName) => [packageName, { status: 200 }]),
+      ),
+      trustedPublishers: Object.fromEntries(
+        packageNames.map((packageName) => [
+          packageName,
+          {
+            status: 200,
+            body: {
+              trustedPublisher: {
+                repository: "openclaw/openclaw",
+                workflowFilename: "plugin-clawhub-release.yml",
+              },
+            },
+          },
+        ]),
+      ),
+      versions: Object.fromEntries(
+        packageNames.map((packageName) => [`${packageName}@2026.4.1`, 404]),
+      ),
+    }).fetchImpl;
+    let activeRequests = 0;
+    let maxActiveRequests = 0;
+    const fetchImpl: typeof fetch = async (...args) => {
+      activeRequests += 1;
+      maxActiveRequests = Math.max(maxActiveRequests, activeRequests);
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return await baseFetch(...args);
+      } finally {
+        activeRequests -= 1;
+      }
+    };
+
+    const plan = await collectPluginClawHubReleasePlan({
+      rootDir: repoDir,
+      selectionMode: "all-publishable",
+      fetchImpl,
+      registryBaseUrl: "https://clawhub.ai",
+    });
+
+    expect(maxActiveRequests).toBe(8);
+    expect(plan.all.map((plugin) => plugin.packageName)).toEqual(packageNames.toSorted());
+    expect(plan.candidates.map((plugin) => plugin.packageName)).toEqual(packageNames.toSorted());
+  });
+
   it("rejects stale required dependencies before querying ClawHub", async () => {
     const repoDir = createTempPluginRepo({
       requiredLatestDependencyVersion: "1.2.3",
@@ -793,6 +846,35 @@ describe("collectPluginClawHubReleasePlan", () => {
     );
     expect(packageRequests).toBe(4);
   });
+
+  it.each([
+    {
+      caseName: "drops a split surrogate pair",
+      responseBody: `${"x".repeat(399)}\u{1f600}tail`,
+      expectedDetail: `${"x".repeat(399)}...`,
+    },
+    {
+      caseName: "preserves a complete surrogate pair",
+      responseBody: `${"x".repeat(398)}\u{1f600}tail`,
+      expectedDetail: `${"x".repeat(398)}\u{1f600}...`,
+    },
+  ])(
+    "keeps ClawHub error truncation UTF-16 safe: $caseName",
+    async ({ responseBody, expectedDetail }) => {
+      const repoDir = createTempPluginRepo();
+      await expect(
+        collectPluginClawHubReleasePlan({
+          rootDir: repoDir,
+          selection: ["@openclaw/demo-plugin"],
+          registryBaseUrl: "https://clawhub.ai",
+          fetchImpl: async () => new Response(responseBody, { status: 503 }),
+          sleep: async () => {},
+        }),
+      ).rejects.toThrow(
+        `Failed to query ClawHub package @openclaw/demo-plugin: 503 ${expectedDetail}`,
+      );
+    },
+  );
 
   it("honors an HTTP-date Retry-After header", async () => {
     const repoDir = createTempPluginRepo();
@@ -1202,6 +1284,7 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
 
     const plan = await buildOpenClawReleaseClawHubPlan(
       {
+        bootstrapWorkflowRef: `release-publish/${"d".repeat(12)}-12345`,
         bootstrapWorkflowSha: "d".repeat(40),
         releaseTag: "v2026.4.1-beta.1",
         releaseSha: "a".repeat(40),
@@ -1235,7 +1318,7 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
     });
     expect(plan.bootstrap).toEqual({
       workflow: "plugin-clawhub-new.yml",
-      ref: "main",
+      ref: `release-publish/${"d".repeat(12)}-12345`,
       shouldDispatch: true,
       packages: ["@openclaw/demo-two", "@openclaw/demo-three"],
       inputs: {
@@ -1289,6 +1372,7 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
 
     const plan = await buildOpenClawReleaseClawHubPlan(
       {
+        bootstrapWorkflowRef: `release-publish/${"d".repeat(12)}-12345`,
         bootstrapWorkflowSha: "d".repeat(40),
         releaseTag: "v2026.4.1-beta.1",
         releaseSha: "b".repeat(40),
@@ -1308,7 +1392,7 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
     expect(plan.normal.shouldDispatch).toBe(false);
     expect(plan.bootstrap).toMatchObject({
       workflow: "plugin-clawhub-new.yml",
-      ref: "main",
+      ref: `release-publish/${"d".repeat(12)}-12345`,
       shouldDispatch: true,
       packages: ["@openclaw/demo-plugin"],
       inputs: {
@@ -1333,6 +1417,8 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
   it("rejects incompatible all-publishable plugin selection args", () => {
     expect(() =>
       parseOpenClawReleaseClawHubPlanArgs([
+        "--bootstrap-workflow-ref",
+        `release-publish/${"d".repeat(12)}-12345`,
         "--bootstrap-workflow-sha",
         "d".repeat(40),
         "--release-tag",
@@ -1355,6 +1441,8 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
 
   it("requires an exact lowercase release SHA for bootstrap targeting", () => {
     const baseArgs = [
+      "--bootstrap-workflow-ref",
+      `release-publish/${"d".repeat(12)}-12345`,
       "--bootstrap-workflow-sha",
       "d".repeat(40),
       "--release-tag",
@@ -1376,6 +1464,8 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
 
   it("requires an exact parent release run attempt for bootstrap approval binding", () => {
     const args = [
+      "--bootstrap-workflow-ref",
+      `release-publish/${"d".repeat(12)}-12345`,
       "--bootstrap-workflow-sha",
       "d".repeat(40),
       "--release-tag",

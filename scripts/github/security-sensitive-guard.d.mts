@@ -62,7 +62,12 @@ export function findTrustedSecuritySensitiveGuardActor(options: {
 }): Promise<{ login: string; reason: string } | null>;
 export function githubApi(
   token: string,
-  options?: { fetchImpl?: typeof fetch; responseMaxBodyBytes?: number; timeoutMs?: number },
+  options?: {
+    fetchImpl?: typeof fetch;
+    responseMaxBodyBytes?: number;
+    retryDelaysMs?: readonly number[];
+    timeoutMs?: number;
+  },
 ): { request(path: string, options?: Record<string, unknown>): Promise<unknown> };
 export function readBoundedGitHubErrorText(
   response: Response,

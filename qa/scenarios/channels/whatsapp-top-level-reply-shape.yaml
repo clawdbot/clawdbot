@@ -1,0 +1,19 @@
+title: WhatsApp DM top-level reply shape
+scenario:
+  id: whatsapp-top-level-reply-shape
+  surface: channels
+  coverage:
+    primary:
+      - whatsapp.outbound-text-sends
+  execution:
+    profiles: { "whatsapp:default": 2, "whatsapp:mock-default": 6 }
+    kind: flow
+    channel: whatsapp
+    timeoutMs: 60000
+    retryCount: 1
+    suiteIsolation: isolated
+    config: { whatsappScenarioId: whatsapp-top-level-reply-shape }
+flow:
+  module: ./live-transports/whatsapp/scenario-runtime.js
+  call: runWhatsAppTopLevelReplyShapeScenario
+  args: [{ expr: whatsappScenarioContext }]

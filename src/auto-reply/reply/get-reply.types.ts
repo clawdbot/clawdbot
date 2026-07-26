@@ -4,6 +4,8 @@ import type { ReplyOptionsWithHeartbeatRunScope } from "../../infra/heartbeat-ru
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
+import type { QueueMode } from "./queue/types.js";
+import type { ReplyOperation } from "./reply-run-registry.js";
 
 export type ReplySessionBinding = {
   sessionKey?: string;
@@ -21,6 +23,10 @@ type InternalReplySessionOptions = {
   sessionPromptSourceReplyDeliveryMode?: GetReplyOptions["sourceReplyDeliveryMode"];
   /** Marks when this reply is waiting to own its session's reply lane. */
   onReplyAdmissionWaitChange?: (waiting: boolean) => void;
+  /** Overrides persisted queue mode for this reply only. */
+  queueModeOverride?: QueueMode;
+  /** Dispatch-owned operation used to defer hooks until durable run admission. */
+  replyOperation?: ReplyOperation;
 };
 
 export type InternalGetReplyOptions = GetReplyOptions &

@@ -20,7 +20,9 @@ import {
   type PersistedUserTurnMessage,
   type UserTurnTranscriptRecorder,
 } from "../sessions/user-turn-transcript.js";
+import type { EmbeddedRunTrigger } from "./embedded-agent-runner/run/params.js";
 import { resolveLiveToolResultMaxChars } from "./embedded-agent-runner/tool-result-truncation.js";
+import { projectAgentHarnessTranscriptMessageForDisplay } from "./harness/transcript-visibility.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 import type { SessionManager } from "./sessions/index.js";
@@ -50,10 +52,13 @@ export function guardSessionManager(
     allowSyntheticToolResults?: boolean;
     missingToolResultText?: string;
     allowedToolNames?: Iterable<string>;
+    trigger?: EmbeddedRunTrigger;
     preparedUserTurnMessage?: PersistedUserTurnMessage;
     suppressNextUserMessagePersistence?: boolean;
     suppressTranscriptOnlyAssistantPersistence?: boolean;
     suppressAssistantErrorPersistence?: boolean;
+    /** Finalization keeps core redaction but must not run plugin write hooks. */
+    skipBeforeMessageWriteHooks?: boolean;
     onUserMessagePersisted?: (
       message: Extract<AgentMessage, { role: "user" }>,
       runtimeMessage: Extract<AgentMessage, { role: "user" }> | undefined,
@@ -93,7 +98,7 @@ export function guardSessionManager(
     const runtimeUserMessage = runtimeUserMessageByPersistedMessage.get(event.message);
     let message = event.message;
     let changed = false;
-    if (hookRunner?.hasHooks("before_message_write")) {
+    if (!opts?.skipBeforeMessageWriteHooks && hookRunner?.hasHooks("before_message_write")) {
       const result = hookRunner.runBeforeMessageWrite(event, {
         agentId: opts?.agentId,
         sessionKey: opts?.sessionKey,
@@ -115,6 +120,14 @@ export function guardSessionManager(
     const redacted = redactTranscriptMessage(message, opts?.config);
     if (redacted !== message) {
       message = redacted;
+      changed = true;
+    }
+    const projectedMessage = projectAgentHarnessTranscriptMessageForDisplay({
+      hidden: opts?.trigger === "memory",
+      message,
+    });
+    if (projectedMessage !== message) {
+      message = projectedMessage;
       changed = true;
     }
     if (message.role !== "user" && queuedUserTurnTranscriptRecorder) {
@@ -193,8 +206,6 @@ export function guardSessionManager(
       typeof opts?.contextWindowTokens === "number"
         ? resolveLiveToolResultMaxChars({
             contextWindowTokens: opts.contextWindowTokens,
-            cfg: opts.config,
-            agentId: opts.agentId,
           })
         : undefined,
     suppressNextUserMessagePersistence: opts?.suppressNextUserMessagePersistence,

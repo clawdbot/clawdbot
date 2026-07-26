@@ -19,9 +19,6 @@ import { isSingleUseReplyToMode } from "./reply-reference.js";
 type ReplyToModeChannelConfig = {
   replyToMode?: ReplyToMode;
   replyToModeByChatType?: Partial<Record<"direct" | "group" | "channel", ReplyToMode>>;
-  dm?: {
-    replyToMode?: ReplyToMode;
-  };
 };
 
 function normalizeReplyToModeChatType(
@@ -50,12 +47,6 @@ function resolveConfiguredReplyToMode(
     const scopedMode = channelConfig?.replyToModeByChatType?.[normalizedChatType];
     if (scopedMode !== undefined) {
       return scopedMode;
-    }
-  }
-  if (normalizedChatType === "direct") {
-    const legacyDirectMode = channelConfig?.dm?.replyToMode;
-    if (legacyDirectMode !== undefined) {
-      return legacyDirectMode;
     }
   }
   return channelConfig?.replyToMode ?? "all";

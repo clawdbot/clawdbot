@@ -495,10 +495,19 @@ function referenceLabelsIn(text) {
 
 export function renderContributionRecordEntry(entry) {
   const references = [];
-  appendUnique(references, referenceLabelsIn(entry.title));
+  const linkedIssueNumbers = new Set(entry.linkedIssues.map((issue) => issue.number));
   appendUnique(
     references,
-    (entry.priorReferences ?? []).map((number) => `#${number}`),
+    referenceLabelsIn(entry.title).filter(
+      (reference) =>
+        !reference.startsWith("#") || linkedIssueNumbers.has(Number(reference.slice(1))),
+    ),
+  );
+  appendUnique(
+    references,
+    (entry.priorReferences ?? [])
+      .filter((number) => linkedIssueNumbers.has(number))
+      .map((number) => `#${number}`),
   );
   appendUnique(references, entry.externalReferences ?? []);
   for (const issue of entry.linkedIssues) {
@@ -791,6 +800,7 @@ export function renderedContributionRecordReferences(record, writeLedger) {
 export function contaminatingPullRequestReferences({
   noteReferences,
   recordedReferences,
+  excludedRecordedReferences = new Set(),
   sourcePullRequests,
   sourceReferences,
   seededPullRequests,
@@ -802,7 +812,10 @@ export function contaminatingPullRequestReferences({
       allowed.add(number);
     }
   }
-  return [...new Set([...noteReferences, ...recordedReferences])].filter(
+  const effectiveRecordedReferences = recordedReferences.filter(
+    (number) => !excludedRecordedReferences.has(number),
+  );
+  return [...new Set([...noteReferences, ...effectiveRecordedReferences])].filter(
     (number) => nodes.get(number)?.__typename === "PullRequest" && !allowed.has(number),
   );
 }
@@ -2205,11 +2218,7 @@ export function ledgerChecks(section, pullRequests, nodes, directCommits, shippe
       }
     }
     const expectedReferences = [];
-    appendUnique(expectedReferences, referenceLabelsIn(entry.title));
-    appendUnique(
-      expectedReferences,
-      entry.priorReferences.map((number) => `#${number}`),
-    );
+    appendUnique(expectedReferences, externalReferencesIn(entry.title));
     appendUnique(expectedReferences, entry.externalReferences);
     appendUnique(
       expectedReferences,
@@ -2316,7 +2325,7 @@ function manifestFor(options, source, ledger, directCommitRecords) {
       editorialEligible: entry.editorialEligible,
       thanks: entry.thanks,
       externalReferences: entry.externalReferences,
-      relatedReferences: [...new Set([...entry.priorReferences, ...referencesIn(entry.title)])],
+      relatedReferences: [...new Set(entry.linkedIssues.map((issue) => issue.number))],
       linkedIssues: entry.linkedIssues.map((issue) => ({
         number: issue.number,
         title: issue.title,
@@ -2448,6 +2457,7 @@ function main() {
   const contamination = contaminatingPullRequestReferences({
     noteReferences,
     recordedReferences: effectiveRenderedRecordReferences,
+    excludedRecordedReferences,
     sourcePullRequests: source.pullRequests,
     sourceReferences: source.references,
     seededPullRequests: new Set(priorRecord.pullRequests.keys()),

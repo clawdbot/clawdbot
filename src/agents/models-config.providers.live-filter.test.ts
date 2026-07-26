@@ -4,7 +4,7 @@ import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata
 import {
   resolvePluginMetadataProviderOwnersForTest,
   resolveProviderDiscoveryFilterForTest,
-} from "./models-config.providers.implicit.js";
+} from "./models-config.providers.implicit.test-support.js";
 
 function liveFilterEnv(overrides: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   // VITEST enables the live-filter parsing path without requiring real live creds.

@@ -1,5 +1,4 @@
 // Mattermost tests cover monitor plugin behavior.
-import { createClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import { resolveMattermostAccount } from "./accounts.js";
@@ -17,13 +16,7 @@ import {
   shouldUpdateMattermostDraftToolProgress,
 } from "./monitor-context.js";
 import { deliverMattermostReplyWithDraftPreview } from "./monitor-draft-delivery.js";
-import { evaluateMattermostMentionGate } from "./monitor-gating.js";
-import { processMattermostReplayGuardedPost } from "./monitor-replay.js";
-
-type MattermostMentionGateInput = Parameters<typeof evaluateMattermostMentionGate>[0];
-type MattermostRequireMentionResolverInput = Parameters<
-  MattermostMentionGateInput["resolveRequireMention"]
->[0];
+import { buildMattermostInboundMediaPayload } from "./monitor-resources.js";
 
 function resolveMattermostEffectiveReplyToId(params: {
   kind: "direct" | "group" | "channel";
@@ -35,32 +28,6 @@ function resolveMattermostEffectiveReplyToId(params: {
     baseSessionKey: "agent:main:mattermost:test",
     ...params,
   }).effectiveReplyToId;
-}
-
-function resolveRequireMentionForTest(params: MattermostRequireMentionResolverInput): boolean {
-  const root = params.cfg.channels?.mattermost;
-  const accountGroups = (
-    root?.accounts?.[params.accountId] as
-      | { groups?: Record<string, { requireMention?: boolean }> }
-      | undefined
-  )?.groups;
-  const groups = accountGroups ?? root?.groups;
-  const typedGroups = groups as Record<string, { requireMention?: boolean }> | undefined;
-  const groupConfig = params.groupId ? typedGroups?.[params.groupId] : undefined;
-  const defaultGroupConfig = typedGroups?.["*"];
-  const configMention =
-    typeof groupConfig?.requireMention === "boolean"
-      ? groupConfig.requireMention
-      : typeof defaultGroupConfig?.requireMention === "boolean"
-        ? defaultGroupConfig.requireMention
-        : undefined;
-  if (typeof configMention === "boolean") {
-    return configMention;
-  }
-  if (typeof params.requireMentionOverride === "boolean") {
-    return params.requireMentionOverride;
-  }
-  return true;
 }
 
 const updateMattermostPostSpy = vi.spyOn(clientModule, "updateMattermostPost");
@@ -92,27 +59,41 @@ beforeEach(() => {
   updateMattermostPostSpy.mockResolvedValue({ id: "patched" } as never);
 });
 
-function evaluateMentionGateForMessage(params: { cfg: OpenClawConfig; threadRootId?: string }) {
-  const account = resolveMattermostAccount({ cfg: params.cfg, accountId: "default" });
-  const resolver = vi.fn(resolveRequireMentionForTest);
-  const input: MattermostMentionGateInput = {
-    kind: "channel",
-    cfg: params.cfg,
-    accountId: account.accountId,
-    channelId: "chan-1",
-    threadRootId: params.threadRootId,
-    requireMentionOverride: account.requireMention,
-    resolveRequireMention: resolver,
-    wasMentioned: false,
-    isControlCommand: false,
-    commandAuthorized: false,
-    oncharEnabled: false,
-    oncharTriggered: false,
-    canDetectMention: true,
-  };
-  const decision = evaluateMattermostMentionGate(input);
-  return { account, resolver, decision };
-}
+describe("buildMattermostInboundMediaPayload", () => {
+  it("keeps a failed attachment kind aligned with a successful path", () => {
+    expect(
+      buildMattermostInboundMediaPayload([
+        { path: "/tmp/image.png", contentType: "image/png", kind: "image" },
+        { kind: "audio" },
+      ]),
+    ).toEqual({
+      MediaPath: "/tmp/image.png",
+      MediaUrl: "/tmp/image.png",
+      MediaType: "image/png",
+      MediaPaths: ["/tmp/image.png", ""],
+      MediaUrls: ["/tmp/image.png", ""],
+      MediaTypes: ["image/png", "audio"],
+      MediaTranscribedIndexes: undefined,
+    });
+  });
+
+  it("keeps total failures as type-only media facts", () => {
+    expect(
+      buildMattermostInboundMediaPayload([
+        { kind: "video" },
+        { contentType: "application/pdf", kind: "document" },
+      ]),
+    ).toEqual({
+      MediaPath: undefined,
+      MediaUrl: undefined,
+      MediaType: "video",
+      MediaPaths: undefined,
+      MediaUrls: undefined,
+      MediaTypes: ["video", "application/pdf"],
+      MediaTranscribedIndexes: undefined,
+    });
+  });
+});
 
 function mockCall(mock: { mock: { calls: unknown[][] } }, index: number, label: string): unknown[] {
   const resolvedIndex = index < 0 ? mock.mock.calls.length + index : index;
@@ -122,76 +103,6 @@ function mockCall(mock: { mock: { calls: unknown[][] } }, index: number, label: 
   }
   return call;
 }
-
-function mockCallArg(
-  mock: { mock: { calls: unknown[][] } },
-  index: number,
-  label: string,
-): unknown {
-  return mockCall(mock, index, label)[0];
-}
-
-describe("mattermost mention gating", () => {
-  it("accepts unmentioned root channel posts in onmessage mode", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        mattermost: {
-          chatmode: "onmessage",
-          groupPolicy: "open",
-        },
-      },
-    };
-    const { resolver, decision } = evaluateMentionGateForMessage({ cfg });
-    expect(decision.dropReason).toBeNull();
-    expect(decision.shouldRequireMention).toBe(false);
-    expect(resolver).toHaveBeenCalledTimes(1);
-    const resolverCall = mockCallArg(resolver, 0, "resolveRequireMention");
-    expect(resolverCall).toStrictEqual({
-      cfg,
-      channel: "mattermost",
-      accountId: "default",
-      groupId: "chan-1",
-      requireMentionOverride: false,
-    });
-  });
-
-  it("accepts unmentioned thread replies in onmessage mode", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        mattermost: {
-          chatmode: "onmessage",
-          groupPolicy: "open",
-        },
-      },
-    };
-    const { resolver, decision } = evaluateMentionGateForMessage({
-      cfg,
-      threadRootId: "thread-root-1",
-    });
-    expect(decision.dropReason).toBeNull();
-    expect(decision.shouldRequireMention).toBe(false);
-    const resolverCall = mockCallArg(resolver, -1, "resolveRequireMention") as {
-      groupId?: string;
-    };
-    expect(resolverCall.groupId).toBe("chan-1");
-    expect(resolverCall.groupId).not.toBe("thread-root-1");
-  });
-
-  it("rejects unmentioned channel posts in oncall mode", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        mattermost: {
-          chatmode: "oncall",
-          groupPolicy: "open",
-        },
-      },
-    };
-    const { decision, account } = evaluateMentionGateForMessage({ cfg });
-    expect(account.requireMention).toBe(true);
-    expect(decision.shouldRequireMention).toBe(true);
-    expect(decision.dropReason).toBe("missing-mention");
-  });
-});
 
 describe("resolveMattermostReplyRootId with block streaming payloads", () => {
   it("uses threadRootId for block-streamed payloads with replyToId", () => {
@@ -954,67 +865,6 @@ describe("resolveMattermostPendingHistoryKey", () => {
         sessionKey: "agent:main:mattermost:channel:chan-1:thread:post-123",
       }),
     ).toBe("agent:main:mattermost:channel:chan-1:thread:post-123");
-  });
-});
-
-describe("processMattermostReplayGuardedPost", () => {
-  it("skips duplicate message batches after a successful commit", async () => {
-    const replayGuard = createClaimableDedupe({
-      ttlMs: 10_000,
-      memoryMaxSize: 100,
-    });
-    const handlePost = vi.fn(async () => undefined);
-
-    await expect(
-      processMattermostReplayGuardedPost({
-        replayGuard,
-        accountId: "acct",
-        messageIds: ["post-1"],
-        handlePost,
-      }),
-    ).resolves.toBe("processed");
-    await expect(
-      processMattermostReplayGuardedPost({
-        replayGuard,
-        accountId: "acct",
-        messageIds: ["post-1"],
-        handlePost,
-      }),
-    ).resolves.toBe("duplicate");
-
-    expect(handlePost).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps replay committed after a non-retryable failure", async () => {
-    const replayGuard = createClaimableDedupe({
-      ttlMs: 10_000,
-      memoryMaxSize: 100,
-    });
-    const visibleSideEffect = vi.fn();
-    const handlePost = vi.fn(async () => {
-      visibleSideEffect();
-      throw new Error("post-send failure");
-    });
-
-    await expect(
-      processMattermostReplayGuardedPost({
-        replayGuard,
-        accountId: "acct",
-        messageIds: ["post-3"],
-        handlePost,
-      }),
-    ).rejects.toThrow("post-send failure");
-    await expect(
-      processMattermostReplayGuardedPost({
-        replayGuard,
-        accountId: "acct",
-        messageIds: ["post-3"],
-        handlePost,
-      }),
-    ).resolves.toBe("duplicate");
-
-    expect(handlePost).toHaveBeenCalledTimes(1);
-    expect(visibleSideEffect).toHaveBeenCalledTimes(1);
   });
 });
 

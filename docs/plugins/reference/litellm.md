@@ -16,7 +16,7 @@ Adds LiteLLM model provider support to OpenClaw.
 
 ## Surface
 
-providers: litellm; contracts: imageGenerationProviders
+providers: `litellm`; contracts: `imageGenerationProviders`
 
 ## Related docs
 

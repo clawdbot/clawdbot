@@ -11,19 +11,21 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import {
-  clearPluginStateStoreForTests,
   closePluginStateDatabase,
   createCorePluginStateSyncKeyedStore,
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
+  pluginStateEntriesInKeyRange,
+  registerPluginStateSyncSequencedJournalEntry,
   resetPluginStateStoreForTests,
   sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.js";
 import {
+  clearPluginStateStoreForTests,
   probePluginStateStore,
+  seedPluginStateEntriesForTests,
   setMaxPluginStateEntriesPerPluginForTests,
-} from "./plugin-state-store.sqlite.js";
-import { seedPluginStateEntriesForTests } from "./plugin-state-store.test-helpers.js";
+} from "./plugin-state-store.test-helpers.js";
 import { PluginStateStoreError } from "./plugin-state-store.types.js";
 
 let testState: OpenClawTestState | undefined;
@@ -100,6 +102,29 @@ describe("plugin state keyed store", () => {
       expect(store.entries()).toMatchObject([{ key: "interaction:1", value: { count: 1 } }]);
       expect(store.consume("interaction:1")).toEqual({ count: 1 });
       expect(store.lookup("interaction:1")).toBeUndefined();
+    });
+  });
+
+  it("reads a bounded sortable key range without scanning sibling keys", async () => {
+    await withPluginStateTestState(async () => {
+      const store = createPluginStateSyncKeyedStore<{ count: number }>("memory-core", {
+        namespace: "events",
+        maxEntries: 10,
+      });
+      store.register("workspace:event:0001", { count: 1 });
+      store.register("workspace:event:0002", { count: 2 });
+      store.register("workspace:other:0003", { count: 3 });
+
+      expect(
+        pluginStateEntriesInKeyRange({
+          pluginId: "memory-core",
+          namespace: "events",
+          keyStartInclusive: "workspace:event:",
+          keyEndExclusive: "workspace:event;",
+          limit: 1,
+          order: "desc",
+        }),
+      ).toMatchObject([{ key: "workspace:event:0002", value: { count: 2 } }]);
     });
   });
 
@@ -250,6 +275,24 @@ describe("plugin state keyed store", () => {
         expect.objectContaining({ key: "second", value: 2 }),
         expect.objectContaining({ key: "first", value: 10 }),
       ]);
+    });
+  });
+
+  it("deletes an entry only when the current value matches", async () => {
+    await withPluginStateTestState(async () => {
+      const store = createPluginStateKeyedStore<{ version: number }>("device-pair", {
+        namespace: "notify-subscribers",
+        maxEntries: 10,
+      });
+      await store.register("chat", { version: 1 });
+      if (!store.deleteIf) {
+        throw new Error("plugin state conditional delete unavailable");
+      }
+
+      await expect(store.deleteIf("chat", (current) => current.version === 2)).resolves.toBe(false);
+      await expect(store.lookup("chat")).resolves.toEqual({ version: 1 });
+      await expect(store.deleteIf("chat", (current) => current.version === 1)).resolves.toBe(true);
+      await expect(store.lookup("chat")).resolves.toBeUndefined();
     });
   });
 
@@ -516,6 +559,74 @@ describe("plugin state keyed store", () => {
       });
       await expect(messageStore.entries()).resolves.toHaveLength(maxPluginEntries - 11);
       await expect(topicStore.entries()).resolves.toHaveLength(11);
+    });
+  });
+
+  it("sheds sequenced journal rows without evicting durable sibling state", async () => {
+    await withPluginStateTestState(async () => {
+      const maxPluginEntries = 40;
+      setMaxPluginStateEntriesPerPluginForTests(maxPluginEntries);
+      seedPluginStateEntriesForTests([
+        ...Array.from({ length: maxPluginEntries - 3 }, (_, entryIndex) => ({
+          pluginId: "memory-core",
+          namespace: "durable-state",
+          key: `durable-${entryIndex}`,
+          value: { entryIndex },
+        })),
+        {
+          pluginId: "memory-core",
+          namespace: "memory-host.event-migration-checkpoints",
+          key: "generation",
+          value: { kind: "raw-checkpoint" },
+        },
+        {
+          pluginId: "memory-core",
+          namespace: "memory-host.event-cursors",
+          key: "workspace",
+          value: { kind: "cursor", lastSequence: 1 },
+        },
+        {
+          pluginId: "memory-core",
+          namespace: "memory-host.events",
+          key: "event-1",
+          value: { sequence: 1 },
+        },
+      ]);
+
+      expect(
+        registerPluginStateSyncSequencedJournalEntry({
+          pluginId: "memory-core",
+          cursorOptions: {
+            namespace: "memory-host.event-cursors",
+            maxEntries: 1_000,
+          },
+          cursorKey: "workspace",
+          journalOptions: { namespace: "memory-host.events", maxEntries: 10_000 },
+          initialSequence: 0,
+          journalKey: (sequence) => `event-${sequence}`,
+          journalValue: (sequence) => ({ sequence }),
+        }),
+      ).toBe(2);
+
+      const durable = createPluginStateKeyedStore("memory-core", {
+        namespace: "durable-state",
+        maxEntries: maxPluginEntries,
+      });
+      const checkpoints = createPluginStateKeyedStore("memory-core", {
+        namespace: "memory-host.event-migration-checkpoints",
+        maxEntries: 10_000,
+        overflowPolicy: "reject-new",
+      });
+      const journal = createPluginStateKeyedStore("memory-core", {
+        namespace: "memory-host.events",
+        maxEntries: 10_000,
+      });
+      await expect(durable.lookup("durable-0")).resolves.toEqual({ entryIndex: 0 });
+      await expect(checkpoints.lookup("generation")).resolves.toEqual({
+        kind: "raw-checkpoint",
+      });
+      await expect(journal.lookup("event-1")).resolves.toBeUndefined();
+      await expect(journal.lookup("event-2")).resolves.toEqual({ sequence: 2 });
     });
   });
 

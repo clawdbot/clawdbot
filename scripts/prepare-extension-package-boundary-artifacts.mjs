@@ -2,10 +2,16 @@
 // boundary imports resolve through public package surfaces.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path, { resolve } from "node:path";
-import { isLocalCheckEnabled } from "./lib/local-heavy-check-runtime.mjs";
+import { pathToFileURL } from "node:url";
+import {
+  ensureRepoToolNodeModulesLink,
+  isLocalCheckEnabled,
+  resolveRepoToolBinPath,
+} from "./lib/local-heavy-check-runtime.mjs";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
-import { pluginSdkEntrypoints, publicPluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mjs";
+import { pluginSdkEntrypoints, productionPluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mjs";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
@@ -30,6 +36,17 @@ let nodeStepParentSignalForwardersInstalled = false;
 let exitingAfterParentSignal = false;
 let parentSignalExitCode = 1;
 let parentSignalExitTimer;
+
+/** Resolve tsx's loader through the selected checkout toolchain. */
+export function resolveTsxImportSpecifier({
+  resolveTool = resolveRepoToolBinPath,
+  createRequireFrom = createRequire,
+  ensureToolchain = ensureRepoToolNodeModulesLink,
+} = {}) {
+  const tsxBinPath = resolveTool("tsx");
+  ensureToolchain(tsxBinPath);
+  return pathToFileURL(createRequireFrom(tsxBinPath).resolve("tsx")).href;
+}
 
 function listPackageDtsOutputsFromExports({ packageDir, outputPrefix }) {
   const packageJson = JSON.parse(
@@ -81,6 +98,7 @@ function listSourceDtsOutputs({ sourceDir, outputPrefix }) {
 const PLUGIN_SDK_TYPE_INPUTS = [
   "tsconfig.json",
   "src/plugin-sdk",
+  "src/plugins/provider-runtime-model.types.ts",
   "src/plugins/types.ts",
   "src/auto-reply",
   "packages/ai/src",
@@ -256,6 +274,13 @@ const QA_CHANNEL_DTS_INPUTS = [
 ];
 const QA_CHANNEL_DTS_STAMP = "dist/plugin-sdk/extensions/qa-channel/.boundary-dts.stamp";
 const QA_CHANNEL_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/qa-channel/api.d.ts"];
+const MATRIX_DTS_INPUTS = [
+  "extensions/matrix/test-api.ts",
+  "extensions/matrix/src",
+  "extensions/matrix/tsconfig.json",
+];
+const MATRIX_DTS_STAMP = "dist/plugin-sdk/extensions/matrix/.boundary-dts.stamp";
+const MATRIX_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/matrix/test-api.d.ts"];
 const DISCORD_DTS_INPUTS = [
   "extensions/discord/api.ts",
   "extensions/discord/src/api.ts",
@@ -286,21 +311,18 @@ const ENTRY_SHIMS_INPUTS = [
   "scripts/lib/plugin-sdk-entrypoints.json",
   "scripts/lib/plugin-sdk-entries.mjs",
 ];
-const ENTRY_SHIM_RUNTIME_OUTPUTS = ["dist/plugin-sdk/webhook-path.js"];
-
 /**
  * Lists entry-shim artifacts written by scripts/write-plugin-sdk-entry-dts.ts.
  */
 export function resolveBoundaryEntryShimRequiredOutputs(env = process.env) {
   const entries =
-    env.OPENCLAW_BUILD_PRIVATE_QA === "1" ? pluginSdkEntrypoints : publicPluginSdkEntrypoints;
-  return [
-    ...entries.flatMap((entry) => [
+    env.OPENCLAW_BUILD_PRIVATE_QA === "1" ? pluginSdkEntrypoints : productionPluginSdkEntrypoints;
+  return entries
+    .flatMap((entry) => [
       `dist/plugin-sdk/${entry}.d.ts`,
       `packages/plugin-sdk/dist/src/plugin-sdk/${entry}.d.ts`,
-    ]),
-    ...ENTRY_SHIM_RUNTIME_OUTPUTS,
-  ].toSorted((a, b) => a.localeCompare(b));
+    ])
+    .toSorted((a, b) => a.localeCompare(b));
 }
 
 function isRelevantTypeInput(filePath) {
@@ -742,6 +764,12 @@ async function main(argv = process.argv.slice(2)) {
         outputPaths: [QA_CHANNEL_DTS_STAMP, ...QA_CHANNEL_DTS_REQUIRED_OUTPUTS],
         includeFile: isRelevantTypeInput,
       }) && !hasMissingOutput(QA_CHANNEL_DTS_REQUIRED_OUTPUTS);
+    const matrixDtsFresh =
+      isArtifactSetFresh({
+        inputPaths: MATRIX_DTS_INPUTS,
+        outputPaths: [MATRIX_DTS_STAMP, ...MATRIX_DTS_REQUIRED_OUTPUTS],
+        includeFile: isRelevantTypeInput,
+      }) && !hasMissingOutput(MATRIX_DTS_REQUIRED_OUTPUTS);
     const discordDtsFresh =
       isArtifactSetFresh({
         inputPaths: DISCORD_DTS_INPUTS,
@@ -832,6 +860,37 @@ async function main(argv = process.argv.slice(2)) {
         });
       } else {
         process.stdout.write("[qa-channel boundary dts] fresh; skipping\n");
+      }
+      if (!matrixDtsFresh) {
+        removeIncrementalStateForMissingOutput({
+          outputPaths: MATRIX_DTS_REQUIRED_OUTPUTS,
+          tsBuildInfoPath: "dist/plugin-sdk/extensions/matrix/.tsbuildinfo",
+        });
+        dependentSteps.push({
+          label: "matrix boundary dts",
+          args: [
+            runTsgoScript,
+            "-p",
+            "extensions/matrix/tsconfig.json",
+            "--declaration",
+            "true",
+            "--emitDeclarationOnly",
+            "true",
+            "--noEmit",
+            "false",
+            "--outDir",
+            "dist/plugin-sdk/extensions/matrix",
+            "--rootDir",
+            "extensions/matrix",
+            "--tsBuildInfoFile",
+            "dist/plugin-sdk/extensions/matrix/.tsbuildinfo",
+          ],
+          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
+          timeoutMs: 300_000,
+          stampPath: MATRIX_DTS_STAMP,
+        });
+      } else {
+        process.stdout.write("[matrix boundary dts] fresh; skipping\n");
       }
       if (!discordDtsFresh) {
         removeIncrementalStateForMissingOutput({
@@ -971,7 +1030,11 @@ async function main(argv = process.argv.slice(2)) {
     if (mode === "all" && (!entryShimsFresh || prerequisiteSteps.length > 0)) {
       await runNodeStep(
         "plugin-sdk boundary root shims",
-        ["--import", "tsx", resolve(repoRoot, "scripts/write-plugin-sdk-entry-dts.ts")],
+        [
+          "--import",
+          resolveTsxImportSpecifier(),
+          resolve(repoRoot, "scripts/write-plugin-sdk-entry-dts.ts"),
+        ],
         ROOT_SHIMS_TIMEOUT_MS,
         { env: { NODE_OPTIONS: ROOT_SHIMS_NODE_OPTIONS } },
       );

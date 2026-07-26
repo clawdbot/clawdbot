@@ -17,10 +17,7 @@ import {
   resolveChannelSetupEntries,
   shouldShowChannelInSetup,
 } from "../commands/channel-setup/discovery.js";
-import {
-  ensureChannelSetupPluginInstalled,
-  loadChannelSetupPluginRegistrySnapshotForChannel,
-} from "../commands/channel-setup/plugin-install.js";
+import { loadChannelSetupPluginRegistrySnapshotForChannel } from "../commands/channel-setup/plugin-install.js";
 import { resolveChannelSetupWizardAdapterForPlugin } from "../commands/channel-setup/registry.js";
 import {
   getTrustedChannelPluginCatalogEntry,
@@ -37,10 +34,14 @@ import type { RuntimeEnv } from "../runtime.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import {
+  ensureChannelSetupPluginInstalledWithNavigation as runPluginInstallWithNavigation,
+  runScopedChannelStep as runNavigationScope,
+} from "./channel-setup-navigation.js";
+import {
+  formatAccountLabel,
   maybeConfigureDmPolicies,
   promptConfiguredAction,
   promptRemovalAccountId,
-  formatAccountLabel,
 } from "./channel-setup.prompts.js";
 import {
   collectChannelStatus,
@@ -126,7 +127,6 @@ export async function setupChannels(
   const rememberScopedPlugin = (plugin: ChannelSetupPlugin) => {
     const channel = plugin.id;
     scopedPluginsById.set(channel, plugin);
-    options?.onResolvedPlugin?.(channel, plugin);
   };
   const activePluginsById = new Map<ChannelChoice, ChannelSetupPlugin>();
   const rememberActivePlugin = (plugin: ChannelSetupPlugin) => {
@@ -424,6 +424,10 @@ export async function setupChannels(
   const applySetupResult = async (channel: ChannelChoice, result: ChannelSetupResult) => {
     const previousCfg = next;
     next = result.cfg;
+    const plugin = getVisibleChannelPlugin(channel);
+    if (plugin) {
+      options?.onResolvedPlugin?.(channel, plugin);
+    }
     const adapter = getVisibleSetupFlowAdapter(channel);
     if (result.accountId) {
       recordAccount(channel, result.accountId);
@@ -451,8 +455,22 @@ export async function setupChannels(
     await applySetupResult(channel, result);
     return true;
   };
+  const runScopedChannelStep = async <T>(
+    runner: (prompter: WizardPrompter, options: SetupChannelsOptions) => Promise<T>,
+    onPersistentEffect?: () => void,
+  ) =>
+    await runNavigationScope({
+      prompter,
+      options,
+      runner,
+      ...(onPersistentEffect ? { onPersistentEffect } : {}),
+    });
 
-  const configureChannel = async (channel: ChannelChoice) => {
+  const configureChannel = async (
+    channel: ChannelChoice,
+    setupPrompter: WizardPrompter,
+    setupOptions: SetupChannelsOptions,
+  ) => {
     if (scopedPluginsById.has(channel)) {
       await loadScopedChannelPlugin(channel, undefined, {
         forceReload: true,
@@ -473,8 +491,8 @@ export async function setupChannels(
     const result = await adapter.configure({
       cfg: next,
       runtime,
-      prompter,
-      options,
+      prompter: setupPrompter,
+      options: setupOptions,
       accountOverrides,
       shouldPromptAccountIds,
       forceAllowFrom: forceAllowFromChannels.has(channel),
@@ -482,50 +500,52 @@ export async function setupChannels(
     await applySetupResult(channel, result);
   };
 
-  const handleConfiguredChannel = async (channel: ChannelChoice, label: string) => {
+  const handleConfiguredChannel = async (
+    channel: ChannelChoice,
+    label: string,
+    setupPrompter: WizardPrompter,
+    setupOptions: SetupChannelsOptions,
+  ) => {
     const plugin = getVisibleChannelPlugin(channel);
     const adapter = getVisibleSetupFlowAdapter(channel);
     if (adapter?.configureWhenConfigured) {
       const custom = await adapter.configureWhenConfigured({
         cfg: next,
         runtime,
-        prompter,
-        options,
+        prompter: setupPrompter,
+        options: setupOptions,
         accountOverrides,
         shouldPromptAccountIds,
         forceAllowFrom: forceAllowFromChannels.has(channel),
         configured: true,
         label,
       });
-      if (!(await applyCustomSetupResult(channel, custom))) {
-        return;
-      }
+      await applyCustomSetupResult(channel, custom);
       return;
     }
+
     const supportsDisable = Boolean(
-      options?.allowDisable && (plugin?.config.setAccountEnabled || adapter?.disable),
+      setupOptions.allowDisable && (plugin?.config.setAccountEnabled || adapter?.disable),
     );
-    const supportsDelete = Boolean(options?.allowDisable && plugin?.config.deleteAccount);
+    const supportsDelete = Boolean(setupOptions.allowDisable && plugin?.config.deleteAccount);
     const action = await promptConfiguredAction({
-      prompter,
+      prompter: setupPrompter,
       label,
       supportsDisable,
       supportsDelete,
     });
-
     if (action === "skip") {
       return;
     }
     if (action === "update") {
-      await configureChannel(channel);
+      await configureChannel(channel, setupPrompter, setupOptions);
       return;
     }
-    if (!options?.allowDisable) {
+    if (!setupOptions.allowDisable) {
       return;
     }
-
     if (action === "delete" && !supportsDelete) {
-      await prompter.note(
+      await setupPrompter.note(
         t("wizard.channels.configuredDeleteUnsupported", { label }),
         t("wizard.channels.removeTitle"),
       );
@@ -539,7 +559,7 @@ export async function setupChannels(
     const accountId = shouldPromptAccount
       ? await promptRemovalAccountId({
           cfg: next,
-          prompter,
+          prompter: setupPrompter,
           label,
           channel,
           plugin,
@@ -551,7 +571,7 @@ export async function setupChannels(
     const accountLabel = formatAccountLabel(resolvedAccountId);
 
     if (action === "delete") {
-      const confirmed = await prompter.confirm({
+      const confirmed = await setupPrompter.confirm({
         message: t("wizard.channels.deleteAccount", { label, account: accountLabel }),
         initialValue: false,
       });
@@ -577,9 +597,29 @@ export async function setupChannels(
     await refreshStatus(channel);
   };
 
+  const ensureChannelSetupPluginInstalledWithNavigation = async (
+    install: Parameters<typeof runPluginInstallWithNavigation>[0]["install"],
+  ) => await runPluginInstallWithNavigation({ install, prompter, options });
+
   const handleChannelChoice = async (
     channel: ChannelChoice,
   ): Promise<"done" | "retry_selection"> => {
+    const cfgBeforeChoice = next;
+    let cfgOnBack = cfgBeforeChoice;
+    const scopedPluginsBeforeChoice = new Map(scopedPluginsById);
+    const statusBeforeChoice = new Map(statusByChannel);
+    const returnToSelection = (): "retry_selection" => {
+      next = cfgOnBack;
+      scopedPluginsById.clear();
+      for (const [id, plugin] of scopedPluginsBeforeChoice) {
+        scopedPluginsById.set(id, plugin);
+      }
+      statusByChannel.clear();
+      for (const [id, status] of statusBeforeChoice) {
+        statusByChannel.set(id, status);
+      }
+      return "retry_selection";
+    };
     const { catalogById, installedCatalogById } = getChannelEntries();
     const catalogEntry = catalogById.get(channel);
     const installedCatalogEntry = installedCatalogById.get(channel);
@@ -598,20 +638,23 @@ export async function setupChannels(
     }
     if (catalogEntry) {
       const workspaceDir = resolveWorkspaceDir();
-      const result = await ensureChannelSetupPluginInstalled({
+      const installOutcome = await ensureChannelSetupPluginInstalledWithNavigation({
         cfg: next,
         entry: catalogEntry,
-        prompter,
         runtime,
         workspaceDir,
         autoConfirmSingleSource: true,
-        ...(options?.beforePersistentEffect
-          ? { beforePersistentEffect: options.beforePersistentEffect }
-          : {}),
       });
+      if (installOutcome.status === "back") {
+        return returnToSelection();
+      }
+      const result = installOutcome.value;
       next = result.cfg;
       if (!result.installed) {
         return "retry_selection";
+      }
+      if (installOutcome.persistentEffectStarted) {
+        cfgOnBack = next;
       }
       await loadScopedChannelPlugin(channel, result.pluginId ?? catalogEntry.pluginId);
       await refreshStatus(channel);
@@ -638,20 +681,23 @@ export async function setupChannels(
           return "done";
         }
         const workspaceDir = resolveWorkspaceDir();
-        const result = await ensureChannelSetupPluginInstalled({
+        const installOutcome = await ensureChannelSetupPluginInstalledWithNavigation({
           cfg: next,
           entry: installedCatalogEntry,
-          prompter,
           runtime,
           workspaceDir,
           autoConfirmSingleSource: true,
-          ...(options?.beforePersistentEffect
-            ? { beforePersistentEffect: options.beforePersistentEffect }
-            : {}),
         });
+        if (installOutcome.status === "back") {
+          return returnToSelection();
+        }
+        const result = installOutcome.value;
         next = result.cfg;
         if (!result.installed) {
           return "retry_selection";
+        }
+        if (installOutcome.persistentEffectStarted) {
+          cfgOnBack = next;
         }
         plugin = await loadScopedChannelPlugin(
           channel,
@@ -696,20 +742,23 @@ export async function setupChannels(
           return "done";
         }
         const workspaceDir = resolveWorkspaceDir();
-        const result = await ensureChannelSetupPluginInstalled({
+        const installOutcome = await ensureChannelSetupPluginInstalledWithNavigation({
           cfg: next,
           entry: fallbackCatalogEntry,
-          prompter,
           runtime,
           workspaceDir,
           autoConfirmSingleSource: true,
-          ...(options?.beforePersistentEffect
-            ? { beforePersistentEffect: options.beforePersistentEffect }
-            : {}),
         });
+        if (installOutcome.status === "back") {
+          return returnToSelection();
+        }
+        const result = installOutcome.value;
         next = result.cfg;
         if (!result.installed) {
           return "retry_selection";
+        }
+        if (installOutcome.persistentEffectStarted) {
+          cfgOnBack = next;
         }
         await loadScopedChannelPlugin(channel, result.pluginId ?? fallbackCatalogEntry.pluginId);
         await refreshStatus(channel);
@@ -726,28 +775,48 @@ export async function setupChannels(
     const label = plugin?.meta.label ?? catalogEntry?.meta.label ?? channel;
     const status = statusByChannel.get(channel);
     const configured = status?.configured ?? false;
-    if (adapter?.configureInteractive) {
-      const custom = await adapter.configureInteractive({
-        cfg: next,
-        runtime,
-        prompter,
-        options,
-        accountOverrides,
-        shouldPromptAccountIds,
-        forceAllowFrom: forceAllowFromChannels.has(channel),
-        configured,
-        label,
-      });
+    const configureInteractive = adapter?.configureInteractive;
+    if (configureInteractive) {
+      const outcome = await runScopedChannelStep(
+        async (scopedPrompter, scopedOptions) =>
+          await configureInteractive({
+            cfg: next,
+            runtime,
+            prompter: scopedPrompter,
+            options: scopedOptions,
+            accountOverrides,
+            shouldPromptAccountIds,
+            forceAllowFrom: forceAllowFromChannels.has(channel),
+            configured,
+            label,
+          }),
+      );
+      if (outcome.status === "back") {
+        return returnToSelection();
+      }
+      const custom = outcome.value;
       if (!(await applyCustomSetupResult(channel, custom))) {
         return "done";
       }
       return "done";
     }
     if (configured) {
-      await handleConfiguredChannel(channel, label);
+      const outcome = await runScopedChannelStep(
+        async (scopedPrompter, scopedOptions) =>
+          await handleConfiguredChannel(channel, label, scopedPrompter, scopedOptions),
+      );
+      if (outcome.status === "back") {
+        return returnToSelection();
+      }
       return "done";
     }
-    await configureChannel(channel);
+    const outcome = await runScopedChannelStep(
+      async (scopedPrompter, scopedOptions) =>
+        await configureChannel(channel, scopedPrompter, scopedOptions),
+    );
+    if (outcome.status === "back") {
+      return returnToSelection();
+    }
     return "done";
   };
 

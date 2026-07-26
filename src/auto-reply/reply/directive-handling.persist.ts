@@ -152,6 +152,7 @@ export async function persistInlineDirectives(params: {
         allowedModelKeys,
         allowedModelCatalog: params.modelCatalog ?? [],
         provider,
+        agentId: activeAgentId,
       })
     : undefined;
   const modelRuntimeResolution = modelResolution?.modelSelection

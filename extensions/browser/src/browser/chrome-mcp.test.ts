@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ChromeMcpDocumentUnavailableError,
@@ -42,6 +43,10 @@ type ToolCallMock = {
     calls: Array<[ToolCall, unknown?, { signal?: AbortSignal; timeout?: number }?]>;
   };
 };
+
+function waitForChromeMcpState<T>(assertion: () => T | Promise<T>): Promise<T> {
+  return vi.waitFor(assertion, { interval: 1 });
+}
 
 function createSdkTimeoutCallTool() {
   return vi.fn(
@@ -1463,10 +1468,12 @@ describe("chrome MCP page parsing", () => {
     const user = "browser-user";
     const password = "browser-password-1234567890"; // pragma: allowlist secret
     const cdpUrl = `wss://${user}:${password}@browserless.example/chrome?token=${secretToken}`;
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chrome-mcp-test-"));
-    const configPath = path.join(tempDir, "openclaw.json");
-    await fs.writeFile(configPath, JSON.stringify({ logging: { redactSensitive: "off" } }));
-    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+    const openClawState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-chrome-mcp-test-",
+    });
+    await openClawState.writeConfig({ logging: { redactSensitive: "off" } });
+    const tempDir = openClawState.root;
     const fakeMcpCommand = path.join(tempDir, "fake-mcp.mjs");
     await fs.writeFile(
       fakeMcpCommand,
@@ -1501,7 +1508,7 @@ describe("chrome MCP page parsing", () => {
     } catch (err) {
       message = err instanceof Error ? err.message : String(err);
     } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
+      await openClawState.cleanup();
     }
 
     expect(message).toContain("Chrome MCP existing-session attach failed");
@@ -1590,10 +1597,19 @@ describe("chrome MCP page parsing", () => {
       title: "",
       url: "https://example.com/",
       type: "page",
+      ownership: {
+        status: "non-durable",
+        reason: "explicit-cdp-url-required",
+      },
     });
     const calls = (session.client.callTool as unknown as ToolCallMock).mock.calls;
-    expect(calls.map(([call]) => call.name)).toEqual(["new_page", "navigate_page", "list_pages"]);
-    expect(calls[2]?.[2]?.timeout).toBe(25_000);
+    expect(calls.map(([call]) => call.name)).toEqual([
+      "list_pages",
+      "new_page",
+      "navigate_page",
+      "list_pages",
+    ]);
+    expect(calls[3]?.[2]?.timeout).toBe(25_000);
   });
 
   it("opens about:blank directly without an extra navigate", async () => {
@@ -1608,6 +1624,10 @@ describe("chrome MCP page parsing", () => {
       title: "",
       url: "about:blank",
       type: "page",
+      ownership: {
+        status: "non-durable",
+        reason: "explicit-cdp-url-required",
+      },
     });
     expect(session.client["callTool"]).toHaveBeenCalledWith({
       name: "new_page",
@@ -1615,7 +1635,7 @@ describe("chrome MCP page parsing", () => {
     });
     const callToolMock = session.client["callTool"] as unknown as ToolCallMock;
     const callNames = callToolMock.mock.calls.map(([call]) => call.name);
-    expect(callNames).toEqual(["new_page"]);
+    expect(callNames).toEqual(["list_pages", "new_page"]);
   });
 
   it("preserves unrelated targets and refs when new_page returns only the created page", async () => {
@@ -1663,7 +1683,7 @@ describe("chrome MCP page parsing", () => {
     const calls = (session.client.callTool as unknown as ToolCallMock).mock.calls.map(
       ([call]) => call.name,
     );
-    expect(calls).toEqual(["list_pages", "take_snapshot", "new_page", "click"]);
+    expect(calls).toEqual(["list_pages", "take_snapshot", "list_pages", "new_page", "click"]);
   });
 
   it("parses evaluate_script text responses when structuredContent is missing", async () => {
@@ -1929,12 +1949,12 @@ describe("chrome MCP page parsing", () => {
     });
     const tabsExpectation = expect(tabsPromise).rejects.toThrow(/caller cancelled/);
 
-    await vi.waitFor(() => expect(factoryCalls).toBe(1));
+    await waitForChromeMcpState(() => expect(factoryCalls).toBe(1));
     ctrl.abort(new Error("caller cancelled"));
     releaseFactory();
 
     await tabsExpectation;
-    await vi.waitFor(() => expect(closeMock).toHaveBeenCalledTimes(1));
+    await waitForChromeMcpState(() => expect(closeMock).toHaveBeenCalledTimes(1));
     expect(factoryCalls).toBe(1);
   });
 
@@ -1973,7 +1993,7 @@ describe("chrome MCP page parsing", () => {
     const ctrl = new AbortController();
     const tabsPromise = listChromeMcpTabs("chrome-live", undefined, { signal: ctrl.signal });
     const tabsExpectation = expect(tabsPromise).rejects.toThrow("caller cancelled");
-    await vi.waitFor(() => expect(factoryCalls).toBe(1));
+    await waitForChromeMcpState(() => expect(factoryCalls).toBe(1));
     ctrl.abort(new Error("caller cancelled"));
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
@@ -2016,7 +2036,7 @@ describe("chrome MCP page parsing", () => {
     const ctrl = new AbortController();
     const aborted = listChromeMcpTabs("chrome-live", undefined, { signal: ctrl.signal });
     const abortedExpectation = expect(aborted).rejects.toThrow("pending cleanup failed");
-    await vi.waitFor(() => expect(factoryCalls).toBe(1));
+    await waitForChromeMcpState(() => expect(factoryCalls).toBe(1));
     ctrl.abort(new Error("caller cancelled"));
 
     const blockedReplacement = listChromeMcpTabs("chrome-live");
@@ -2064,7 +2084,7 @@ describe("chrome MCP page parsing", () => {
     });
     const abortedTabsExpectation = expect(abortedTabsPromise).rejects.toThrow(/caller cancelled/);
 
-    await vi.waitFor(() => expect(factoryCalls).toBe(1));
+    await waitForChromeMcpState(() => expect(factoryCalls).toBe(1));
     ctrl.abort(new Error("caller cancelled"));
 
     const tabsPromise = listChromeMcpTabs("chrome-live");
@@ -2074,8 +2094,8 @@ describe("chrome MCP page parsing", () => {
     expect(factoryCalls).toBe(1);
     releaseFactories[0]?.();
     await abortedTabsExpectation;
-    await vi.waitFor(() => expect(closeMocks[0]).toHaveBeenCalledTimes(1));
-    await vi.waitFor(() => expect(factoryCalls).toBe(2));
+    await waitForChromeMcpState(() => expect(closeMocks[0]).toHaveBeenCalledTimes(1));
+    await waitForChromeMcpState(() => expect(factoryCalls).toBe(2));
     releaseFactories[1]?.();
 
     await expect(tabsPromise).resolves.toHaveLength(2);
@@ -2113,10 +2133,10 @@ describe("chrome MCP page parsing", () => {
     const ctrl = new AbortController();
     const cancelled = listChromeMcpTabs("chrome-live", undefined, { signal: ctrl.signal });
     const cancelledExpectation = expect(cancelled).rejects.toThrow("caller cancelled");
-    await vi.waitFor(() => expect(factoryCalls).toBe(1));
+    await waitForChromeMcpState(() => expect(factoryCalls).toBe(1));
     ctrl.abort(new Error("caller cancelled"));
     releaseFactory();
-    await vi.waitFor(() => expect(closeMocks[0]).toHaveBeenCalledOnce());
+    await waitForChromeMcpState(() => expect(closeMocks[0]).toHaveBeenCalledOnce());
 
     const probe = ensureChromeMcpAvailable("chrome-live", undefined, { ephemeral: true });
     await new Promise<void>((resolve) => {
@@ -2157,12 +2177,12 @@ describe("chrome MCP page parsing", () => {
     });
     const tabsExpectation = expect(tabsPromise).rejects.toThrow(/caller cancelled/);
 
-    await vi.waitFor(() => expect(factoryCalls).toBe(1));
+    await waitForChromeMcpState(() => expect(factoryCalls).toBe(1));
     ctrl.abort(new Error("caller cancelled"));
     releaseReady();
 
     await tabsExpectation;
-    await vi.waitFor(() => expect(closeMock).toHaveBeenCalledTimes(1));
+    await waitForChromeMcpState(() => expect(closeMock).toHaveBeenCalledTimes(1));
   });
 
   it("waits for last-waiter cleanup before starting a replacement session", async () => {
@@ -2200,9 +2220,9 @@ describe("chrome MCP page parsing", () => {
     });
     const abortedTabsExpectation = expect(abortedTabsPromise).rejects.toThrow(/caller cancelled/);
 
-    await vi.waitFor(() => expect(factoryCalls).toBe(1));
+    await waitForChromeMcpState(() => expect(factoryCalls).toBe(1));
     ctrl.abort(new Error("caller cancelled"));
-    await vi.waitFor(() => expect(closeMocks[0]).toHaveBeenCalledTimes(1));
+    await waitForChromeMcpState(() => expect(closeMocks[0]).toHaveBeenCalledTimes(1));
 
     const tabsPromise = listChromeMcpTabs("chrome-live");
     await new Promise<void>((resolve) => {
@@ -2212,7 +2232,7 @@ describe("chrome MCP page parsing", () => {
 
     releaseFirstClose();
     await abortedTabsExpectation;
-    await vi.waitFor(() => expect(factoryCalls).toBe(2));
+    await waitForChromeMcpState(() => expect(factoryCalls).toBe(2));
     await expect(tabsPromise).resolves.toHaveLength(2);
     expect(closeMocks[1]).not.toHaveBeenCalled();
   });
@@ -2245,13 +2265,13 @@ describe("chrome MCP page parsing", () => {
     const abortedTabsExpectation =
       expect(abortedTabsPromise).rejects.toThrow(/first caller cancelled/);
 
-    await vi.waitFor(() => expect(factoryCalls).toBe(1));
-    await vi.waitFor(() => expect(readyThen).toHaveBeenCalledTimes(1));
+    await waitForChromeMcpState(() => expect(factoryCalls).toBe(1));
+    await waitForChromeMcpState(() => expect(readyThen).toHaveBeenCalledTimes(1));
     const keptCtrl = new AbortController();
     const tabsPromise = listChromeMcpTabs("chrome-live", undefined, {
       signal: keptCtrl.signal,
     });
-    await vi.waitFor(() => expect(readyThen).toHaveBeenCalledTimes(2));
+    await waitForChromeMcpState(() => expect(readyThen).toHaveBeenCalledTimes(2));
     ctrl.abort(new Error("first caller cancelled"));
     releaseReady();
 
@@ -2295,8 +2315,8 @@ describe("chrome MCP page parsing", () => {
     });
     const firstTabsExpectation = expect(firstTabsPromise).rejects.toThrow(/first waiter cancelled/);
 
-    await vi.waitFor(() => expect(factoryCalls).toBe(1));
-    await vi.waitFor(() => expect(firstReadyThen).toHaveBeenCalledTimes(1));
+    await waitForChromeMcpState(() => expect(factoryCalls).toBe(1));
+    await waitForChromeMcpState(() => expect(firstReadyThen).toHaveBeenCalledTimes(1));
     if (!firstSession) {
       throw new Error("Expected first Chrome MCP session to be created");
     }
@@ -2306,13 +2326,13 @@ describe("chrome MCP page parsing", () => {
     const siblingTabsPromise = listChromeMcpTabs("chrome-live");
     ctrl.abort(new Error("first waiter cancelled"));
     releaseFirstReady();
-    await vi.waitFor(() => expect(factoryCalls).toBe(2));
+    await waitForChromeMcpState(() => expect(factoryCalls).toBe(2));
     const [tabs, siblingTabs] = await Promise.all([tabsPromise, siblingTabsPromise]);
     expect(tabs).toHaveLength(2);
     expect(siblingTabs).toHaveLength(2);
 
     await firstTabsExpectation;
-    await vi.waitFor(() => expect(closeMocks[0]).toHaveBeenCalledTimes(1));
+    await waitForChromeMcpState(() => expect(closeMocks[0]).toHaveBeenCalledTimes(1));
     expect(closeMocks[1]).not.toHaveBeenCalled();
   });
 
@@ -2337,7 +2357,7 @@ describe("chrome MCP page parsing", () => {
     await expect(listChromeMcpTabs("chrome-live")).rejects.toThrow(/startup failed/);
 
     expect(factoryCalls).toBe(1);
-    await vi.waitFor(() => expect(closeMock).toHaveBeenCalledTimes(1));
+    await waitForChromeMcpState(() => expect(closeMock).toHaveBeenCalledTimes(1));
   });
 
   it("bounds retries when ready sessions keep losing their transport", async () => {
@@ -2359,8 +2379,8 @@ describe("chrome MCP page parsing", () => {
     );
 
     expect(factoryCalls).toBe(2);
-    await vi.waitFor(() => expect(closeMocks[0]).toHaveBeenCalled());
-    await vi.waitFor(() => expect(closeMocks[1]).toHaveBeenCalled());
+    await waitForChromeMcpState(() => expect(closeMocks[0]).toHaveBeenCalled());
+    await waitForChromeMcpState(() => expect(closeMocks[1]).toHaveBeenCalled());
   });
 
   it("does not reuse a stale ready-pending session for ephemeral probes", async () => {
@@ -2397,8 +2417,8 @@ describe("chrome MCP page parsing", () => {
     const firstAvailableExpectation =
       expect(firstAvailablePromise).rejects.toThrow(/first waiter cancelled/);
 
-    await vi.waitFor(() => expect(factoryCalls).toBe(1));
-    await vi.waitFor(() => expect(firstReadyThen).toHaveBeenCalledTimes(1));
+    await waitForChromeMcpState(() => expect(factoryCalls).toBe(1));
+    await waitForChromeMcpState(() => expect(firstReadyThen).toHaveBeenCalledTimes(1));
     if (!firstSession) {
       throw new Error("Expected first Chrome MCP session to be created");
     }
@@ -2411,10 +2431,10 @@ describe("chrome MCP page parsing", () => {
     releaseFirstReady();
     await expect(availablePromise).resolves.toBeUndefined();
     expect(factoryCalls).toBe(2);
-    await vi.waitFor(() => expect(closeMocks[1]).toHaveBeenCalledTimes(1));
+    await waitForChromeMcpState(() => expect(closeMocks[1]).toHaveBeenCalledTimes(1));
 
     await firstAvailableExpectation;
-    await vi.waitFor(() => expect(closeMocks[0]).toHaveBeenCalledTimes(1));
+    await waitForChromeMcpState(() => expect(closeMocks[0]).toHaveBeenCalledTimes(1));
   });
 
   it("does not let ephemeral probes persist canceled pending attaches", async () => {
@@ -2449,8 +2469,8 @@ describe("chrome MCP page parsing", () => {
     const firstAvailableExpectation =
       expect(firstAvailablePromise).rejects.toThrow(/first waiter cancelled/);
 
-    await vi.waitFor(() => expect(factoryCalls).toBe(1));
-    await vi.waitFor(() => expect(firstReadyThen).toHaveBeenCalledTimes(1));
+    await waitForChromeMcpState(() => expect(factoryCalls).toBe(1));
+    await waitForChromeMcpState(() => expect(firstReadyThen).toHaveBeenCalledTimes(1));
 
     await expect(
       ensureChromeMcpAvailable("chrome-live", undefined, {
@@ -2459,12 +2479,12 @@ describe("chrome MCP page parsing", () => {
     ).resolves.toBeUndefined();
     expect(factoryCalls).toBe(2);
     expect(firstReadyThen).toHaveBeenCalledTimes(1);
-    await vi.waitFor(() => expect(closeMocks[1]).toHaveBeenCalledTimes(1));
+    await waitForChromeMcpState(() => expect(closeMocks[1]).toHaveBeenCalledTimes(1));
 
     ctrl.abort(new Error("first waiter cancelled"));
     releaseFirstReady();
     await firstAvailableExpectation;
-    await vi.waitFor(() => expect(closeMocks[0]).toHaveBeenCalledTimes(1));
+    await waitForChromeMcpState(() => expect(closeMocks[0]).toHaveBeenCalledTimes(1));
 
     await expect(listChromeMcpTabs("chrome-live")).resolves.toHaveLength(2);
     expect(factoryCalls).toBe(3);
@@ -2504,8 +2524,8 @@ describe("chrome MCP page parsing", () => {
       signal: keptCtrl.signal,
     });
 
-    await vi.waitFor(() => expect(factoryCalls).toBe(1));
-    await vi.waitFor(() => expect(firstReadyThen).toHaveBeenCalledTimes(2));
+    await waitForChromeMcpState(() => expect(factoryCalls).toBe(1));
+    await waitForChromeMcpState(() => expect(firstReadyThen).toHaveBeenCalledTimes(2));
     await timedOutTabsExpectation;
 
     const laterTabsPromise = listChromeMcpTabs("chrome-live");
@@ -2539,7 +2559,7 @@ describe("chrome MCP page parsing", () => {
         timeoutMs: 1,
       }),
     ).rejects.toThrow(/timed out/);
-    await vi.waitFor(() => expect(closeMocks[0]).toHaveBeenCalledTimes(1));
+    await waitForChromeMcpState(() => expect(closeMocks[0]).toHaveBeenCalledTimes(1));
 
     await expect(listChromeMcpTabs("chrome-live")).resolves.toHaveLength(2);
     expect(factoryCalls).toBe(2);
@@ -3032,7 +3052,7 @@ describe("chrome MCP page parsing", () => {
       ephemeral: true,
       signal: ctrl.signal,
     });
-    await vi.waitFor(() => expect(factory).toHaveBeenCalledOnce());
+    await waitForChromeMcpState(() => expect(factory).toHaveBeenCalledOnce());
     ctrl.abort(new Error("status budget exhausted"));
 
     await expect(promise).rejects.toThrow(/status budget exhausted/);

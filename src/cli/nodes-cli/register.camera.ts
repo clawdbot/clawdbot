@@ -118,8 +118,8 @@ export function registerNodesCameraCommands(nodes: Command) {
       .option("--facing <front|back|both>", "Camera facing", "both")
       .option("--device-id <id>", "Camera device id (from nodes camera list)")
       .option("--max-width <px>", "Max width in px (optional)")
-      .option("--quality <0-1>", "JPEG quality (default 0.9)")
-      .option("--delay-ms <ms>", "Delay before capture in ms (macOS default 2000)")
+      .option("--quality <0-1>", "JPEG quality (optional; platform-specific default)")
+      .option("--delay-ms <ms>", "Delay before capture in ms (optional; platform-specific default)")
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 20000)", "20000")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("camera snap", async () => {

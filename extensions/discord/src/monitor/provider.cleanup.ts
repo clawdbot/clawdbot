@@ -8,8 +8,8 @@ type EventEmitterLike = {
   removeListener(event: string, listener: (...args: unknown[]) => void): unknown;
 };
 
-export function cleanupDiscordProviderStartup(params: {
-  deactivateMessageHandler?: () => void;
+export async function cleanupDiscordProviderStartup(params: {
+  deactivateMessageHandler?: () => void | Promise<void>;
   autoPresenceController?: { stop: () => void } | null;
   setStatus?: DiscordMonitorStatusSink;
   onEarlyGatewayDebug?: ((msg: unknown) => void) | undefined;
@@ -20,7 +20,7 @@ export function cleanupDiscordProviderStartup(params: {
   threadBindings: ThreadBindingManager;
   runtime: RuntimeEnv;
 }) {
-  params.deactivateMessageHandler?.();
+  await params.deactivateMessageHandler?.();
   params.autoPresenceController?.stop();
   params.setStatus?.({ connected: false });
   if (params.onEarlyGatewayDebug) {

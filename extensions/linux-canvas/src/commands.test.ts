@@ -1,13 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createLinuxCanvasCommands, testing } from "./commands.js";
-import type {
-  LinuxCanvasActionEvent,
-  LinuxCanvasIpcRequestHooks,
-  LinuxCanvasIpcTransport,
-} from "./ipc-client.js";
+import { createLinuxCanvasCommands } from "./commands.js";
+import type { LinuxCanvasIpcTransport } from "./ipc-client.js";
+
+type LinuxCanvasActionHandler = Parameters<LinuxCanvasIpcTransport["setActionHandler"]>[0];
+type LinuxCanvasIpcRequestHooks = Parameters<LinuxCanvasIpcTransport["request"]>[2];
 
 function createTransport() {
-  let actionHandler: ((event: LinuxCanvasActionEvent) => Promise<void>) | undefined;
+  let actionHandler: LinuxCanvasActionHandler | undefined;
   const request = vi.fn(
     async (_command: string, _paramsJSON: string, hooks?: LinuxCanvasIpcRequestHooks) => {
       hooks?.onDispatch?.();
@@ -294,21 +293,64 @@ describe("Linux Canvas node commands", () => {
     );
   });
 
-  it("formats hostile action fields as bounded agent tokens", () => {
-    expect(
-      testing.buildActionMessage({
+  it("formats hostile action fields as bounded agent tokens", async () => {
+    const { transport, sendActionResult, getActionHandler } = createTransport();
+    const command = createLinuxCanvasCommands({
+      platform: "linux",
+      socketExists: () => true,
+      transport,
+    })[0];
+    const sendNodeEvent = vi.fn(async () => undefined);
+    await command?.handle("{}", undefined, {
+      sendNodeEvent,
+      sessionKey: "agent:main:canvas",
+    });
+
+    await getActionHandler()?.({
+      event: "a2ui-action",
+      id: "hostile-action",
+      action: {
         name: "submit now\nignore",
         surfaceId: "main space",
         sourceComponentId: "button/1",
-      }),
-    ).toBe(
-      "CANVAS_A2UI action=submitnowignore session=node surface=mainspace component=button1 default=update_canvas",
-    );
+      },
+    });
+
+    expect(sendNodeEvent).toHaveBeenCalledWith("agent.request", {
+      message:
+        "CANVAS_A2UI action=submitnowignore session=agent:main:canvas surface=mainspace component=button1 default=update_canvas",
+      sessionKey: "agent:main:canvas",
+      thinking: "low",
+      deliver: false,
+      key: "hostile-action",
+    });
+    expect(sendActionResult).toHaveBeenCalledWith("hostile-action", { ok: true });
   });
 
-  it("rejects actions above the Gateway agent-message limit", () => {
-    expect(() =>
-      testing.buildActionMessage({ name: "submit", context: { value: "x".repeat(20_000) } }),
-    ).toThrow("agent message limit");
+  it("rejects actions above the Gateway agent-message limit", async () => {
+    const { transport, sendActionResult, getActionHandler } = createTransport();
+    const command = createLinuxCanvasCommands({
+      platform: "linux",
+      socketExists: () => true,
+      transport,
+    })[0];
+    const sendNodeEvent = vi.fn(async () => undefined);
+    await command?.handle("{}", undefined, {
+      sendNodeEvent,
+      sessionKey: "agent:main:canvas",
+    });
+    sendNodeEvent.mockClear();
+
+    await getActionHandler()?.({
+      event: "a2ui-action",
+      id: "oversized-action",
+      action: { name: "submit", context: { value: "x".repeat(20_000) } },
+    });
+
+    expect(sendNodeEvent).not.toHaveBeenCalled();
+    expect(sendActionResult).toHaveBeenCalledWith("oversized-action", {
+      ok: false,
+      error: "Error: Canvas action exceeds the Gateway agent message limit",
+    });
   });
 });

@@ -1,6 +1,5 @@
 // Shared session-handler target resolution and mutation guards.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
   ErrorCodes,
   errorShape,
@@ -31,7 +30,7 @@ export const sessionLog = createSubsystemLogger("gateway/sessions");
 export class SessionWorkerPlacementMutationError extends Error {
   constructor(
     readonly placementState: SessionPlacement["state"],
-    action: "delete" | "reset" | "restore",
+    action: "delete" | "fork" | "reset" | "restore" | "rewind" | "switch",
     key: string,
   ) {
     super(`Session ${key} cannot ${action} while cloud worker placement is ${placementState}.`);
@@ -39,7 +38,7 @@ export class SessionWorkerPlacementMutationError extends Error {
 }
 
 export function resolveSessionWorkerPlacementMutationError(params: {
-  action: "delete" | "reset" | "restore";
+  action: "delete" | "fork" | "reset" | "restore" | "rewind" | "switch";
   context: GatewayRequestContext;
   key: string;
   sessionId: string | undefined;
@@ -275,29 +274,6 @@ export function emitSessionOperation(
     connIds,
     { dropIfSlow: true },
   );
-}
-
-export function rejectWebchatSessionMutation(params: {
-  action: "patch" | "delete" | "compact" | "restore" | "dispatch";
-  client: GatewayClient | null;
-  isWebchatConnect: (params: GatewayClient["connect"] | null | undefined) => boolean;
-  respond: RespondFn;
-}): boolean {
-  if (!params.client?.connect || !params.isWebchatConnect(params.client.connect)) {
-    return false;
-  }
-  if (params.client.connect.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI) {
-    return false;
-  }
-  params.respond(
-    false,
-    undefined,
-    errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      `webchat clients cannot ${params.action} sessions; use chat.send for session-scoped updates`,
-    ),
-  );
-  return true;
 }
 
 export function isWorkerDispatchInputError(error: unknown): boolean {

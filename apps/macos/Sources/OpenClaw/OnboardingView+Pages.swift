@@ -16,8 +16,10 @@ extension OnboardingView {
             self.cliPage()
         case 3:
             self.aiSetupPage(contentHeight: contentHeight)
+        case 4:
+            self.memoryImportPage(contentHeight: contentHeight)
         case 5:
-            self.permissionsPage(contentHeight: contentHeight)
+            self.permissionsPage()
         case 9:
             self.readyPage()
         default:
@@ -710,41 +712,41 @@ extension OnboardingView {
         .buttonStyle(.plain)
     }
 
-    func permissionsPage(contentHeight: CGFloat) -> some View {
-        // Fixed layout (no ScrollView): sorted by importance and sized so all
-        // permissions stay visible at once — no scrollbars during onboarding.
-        VStack(spacing: 12) {
-            HStack(spacing: 8) {
-                Text("Grant permissions")
-                    .font(.largeTitle.weight(.semibold))
-                if self.isRequesting {
-                    ProgressView()
-                        .controlSize(.small)
+    func permissionsPage() -> some View {
+        onboardingPage {
+            VStack(spacing: 12) {
+                // Keep intro and rows in one document so short windows can reveal every permission.
+                HStack(spacing: 8) {
+                    Text("Grant permissions")
+                        .font(.largeTitle.weight(.semibold))
+                    if self.isRequesting {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
                 }
-            }
-            Text(
-                "These macOS permissions let OpenClaw automate apps and capture context on this Mac. " +
-                    "Status updates automatically.")
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 520)
-                .fixedSize(horizontal: false, vertical: true)
+                Text(
+                    "These macOS permissions let OpenClaw automate apps and capture context on this Mac. " +
+                        "Status updates automatically.")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 520)
+                    .fixedSize(horizontal: false, vertical: true)
 
-            self.onboardingCard(spacing: 4, padding: 12) {
-                ForEach(Capability.importanceOrdered, id: \.self) { cap in
-                    PermissionRow(
-                        capability: cap,
-                        status: self.permissionMonitor.status[cap] ?? false,
-                        compact: true)
-                    {
-                        Task { await self.request(cap) }
+                self.onboardingCard(spacing: 4, padding: 12) {
+                    ForEach(Capability.importanceOrdered, id: \.self) { cap in
+                        PermissionRow(
+                            capability: cap,
+                            status: self.permissionMonitor.status[cap] ?? .notGranted,
+                            compact: true)
+                        {
+                            Task { await self.request(cap) }
+                        }
                     }
                 }
             }
         }
-        .padding(.horizontal, 28)
-        .frame(width: self.pageWidth, height: contentHeight, alignment: .top)
+        // The root onboarding layout keeps navigation outside this scrollable document.
     }
 
     func cliPage() -> some View {
@@ -913,7 +915,7 @@ extension OnboardingView {
                 }
                 self.featureRow(
                     title: "Open the menu bar panel",
-                    subtitle: "Click the OpenClaw menu bar icon for quick chat and status.",
+                    subtitle: "Click the OpenClaw menu bar icon for the compact chat panel and status.",
                     systemImage: "bubble.left.and.bubble.right")
                 self.featureActionRow(
                     title: "Connect Discord, Slack, Telegram, WhatsApp, …",
@@ -929,7 +931,7 @@ extension OnboardingView {
                     systemImage: "waveform.circle")
                 self.featureRow(
                     title: "Use the panel + Canvas",
-                    subtitle: "Open the menu bar panel for quick chat; the agent can show previews " +
+                    subtitle: "Open the compact chat panel; the agent can show previews " +
                         "and richer visuals in Canvas.",
                     systemImage: "rectangle.inset.filled.and.person.filled")
                 self.featureActionRow(

@@ -18,7 +18,6 @@ import type {
   Api,
   AssistantMessage,
   Context,
-  ImageContent,
   Model,
   SimpleStreamOptions,
   StopReason,
@@ -31,9 +30,14 @@ import type {
   StreamOptions,
 } from "../types.js";
 import type { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { formatProviderError } from "../utils/provider-error.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
-import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
+import {
+  describeToolResultMediaPlaceholder,
+  extractToolResultText,
+  isImageWithMediaPayload,
+} from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
 type GoogleApiType = "google-generative-ai" | "google-vertex";
@@ -92,7 +96,7 @@ function isThinkingPart(part: Pick<Part, "thought" | "thoughtSignature">): boole
  * a signature from being overwritten with `undefined` within the same streamed block.
  * @internal Directly tested provider implementation detail.
  */
-export function retainThoughtSignature(
+function retainThoughtSignature(
   existing: string | undefined,
   incoming: string | undefined,
 ): string | undefined {
@@ -129,7 +133,7 @@ function resolveThoughtSignature(
  * Models via Google APIs that require explicit tool call IDs in function calls/responses.
  * @internal Directly tested provider implementation detail.
  */
-export function requiresToolCallId(modelId: string): boolean {
+function requiresToolCallId(modelId: string): boolean {
   return modelId.startsWith("claude-") || modelId.startsWith("gpt-oss-");
 }
 
@@ -277,7 +281,7 @@ export function convertMessages<T extends GoogleApiType>(
       // Extract text and image content
       const textResult = extractToolResultText(msg.content);
       const imageContent = model.input.includes("image")
-        ? msg.content.filter((c): c is ImageContent => c.type === "image")
+        ? msg.content.filter(isImageWithMediaPayload)
         : [];
 
       const hasText = textResult.length > 0;
@@ -396,7 +400,7 @@ export function convertTools(
  * Map tool choice string to Gemini FunctionCallingConfigMode.
  * @internal Directly tested provider implementation detail.
  */
-export function mapToolChoice(choice: string): FunctionCallingConfigMode {
+function mapToolChoice(choice: string): FunctionCallingConfigMode {
   switch (choice) {
     case "auto":
       return FunctionCallingConfigMode.AUTO;
@@ -466,7 +470,7 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
       }
     }
     output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-    output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+    output.errorMessage = formatProviderError(error);
     stream.push({ type: "error", reason: output.stopReason, error: output });
     stream.end();
   }
@@ -604,7 +608,7 @@ export function getDisabledGoogleThinkingConfig<T extends GoogleApiType>(
 }
 
 /** @internal Directly tested provider implementation detail. */
-export function isGemma4Model<T extends GoogleApiType>(model: Model<T>): boolean {
+function isGemma4Model<T extends GoogleApiType>(model: Model<T>): boolean {
   return /gemma-?4/.test(model.id.toLowerCase());
 }
 
@@ -701,7 +705,7 @@ function getGoogleBudget<T extends GoogleApiType>(
  * Map Gemini FinishReason to our StopReason.
  * @internal Directly tested provider implementation detail.
  */
-export function mapStopReason(reason: FinishReason): StopReason {
+function mapStopReason(reason: FinishReason): StopReason {
   switch (reason) {
     case FinishReason.STOP:
       return "stop";

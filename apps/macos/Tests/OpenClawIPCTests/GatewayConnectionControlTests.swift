@@ -14,7 +14,7 @@ private func makeGatewayGenerationSnapshot(version: String) -> HelloOk {
         features: [:],
         snapshot: Snapshot(
             presence: [],
-            health: OpenClawProtocol.AnyCodable([String: OpenClawProtocol.AnyCodable]()),
+            health: [String: OpenClawProtocol.AnyCodable](),
             stateversion: StateVersion(presence: 0, health: 0),
             uptimems: 0,
             configpath: nil,
@@ -133,6 +133,27 @@ private final class WebSocketMessageRecorder: @unchecked Sendable {
     }
 }
 
+private final class GatewayConnectionEndpointSource: @unchecked Sendable {
+    private let lock = NSLock()
+    private var endpoint: GatewayConnection.EndpointSnapshot
+
+    init(endpoint: GatewayConnection.EndpointSnapshot) {
+        self.endpoint = endpoint
+    }
+
+    func setEndpoint(_ endpoint: GatewayConnection.EndpointSnapshot) {
+        lock.lock()
+        self.endpoint = endpoint
+        lock.unlock()
+    }
+
+    func snapshot() -> GatewayConnection.EndpointSnapshot {
+        lock.lock()
+        defer { self.lock.unlock() }
+        return endpoint
+    }
+}
+
 private final class GatewayConnectionRouteConfigSource: @unchecked Sendable {
     private let lock = NSLock()
     private var url: URL
@@ -235,6 +256,78 @@ private func makeTestGatewayConnection() -> (GatewayConnection, FakeWebSocketSes
 }
 
 @Suite(.serialized) struct GatewayConnectionControlTests {
+    @Test func `operator widget capability refresh is shared and retained`() async throws {
+        let rawOldSurface = "http://127.0.0.1:18789/__openclaw__/cap/old-token"
+        let rawNewSurface = "http://127.0.0.1:18789/__openclaw__/cap/new-token"
+        let oldSurface = "https://gateway.example.invalid:9443/__openclaw__/cap/old-token"
+        let newSurface = "https://gateway.example.invalid:9443/__openclaw__/cap/new-token"
+        let recorder = WebSocketMessageRecorder()
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(
+                sendHook: { task, message, sendIndex in
+                    recorder.append(message)
+                    guard sendIndex > 0,
+                          let data = Self.messageData(message),
+                          let frame = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                          let method = frame["method"] as? String,
+                          let id = frame["id"] as? String
+                    else { return }
+                    if method == "plugin.surface.refresh" {
+                        let response = """
+                        {
+                          "type": "res",
+                          "id": "\(id)",
+                          "ok": true,
+                          "payload": {
+                            "surface": "canvas",
+                            "pluginSurfaceUrls": { "canvas": "\(rawNewSurface)" }
+                          }
+                        }
+                        """
+                        task.emitReceiveSuccess(.data(Data(response.utf8)))
+                    } else {
+                        task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+                    }
+                },
+                receiveHook: { task, receiveIndex in
+                    if receiveIndex == 0 {
+                        return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                    }
+                    let id = task.snapshotConnectRequestID() ?? "connect"
+                    return .data(GatewayWebSocketTestSupport.connectOkData(
+                        id: id,
+                        canvasPluginSurfaceURL: rawOldSurface))
+                })
+        })
+        let connection = GatewayConnection(
+            configProvider: {
+                (
+                    url: URL(string: "wss://gateway.example.invalid:9443")!,
+                    token: "test-token-placeholder",
+                    password: nil)
+            },
+            sessionBox: WebSocketSessionBox(session: session))
+
+        try await connection.refresh()
+        _ = try await connection.acquireServerLease()
+        #expect(await connection.canvasPluginSurfaceUrl() == oldSurface)
+        async let first = connection.refreshCanvasPluginSurfaceRoute(replacing: oldSurface)
+        async let second = connection.refreshCanvasPluginSurfaceRoute(replacing: oldSurface)
+        let routes = await (first, second)
+
+        #expect(routes.0?.url == newSurface)
+        #expect(routes.1?.url == newSurface)
+        #expect(await connection.canvasPluginSurfaceUrl() == newSurface)
+        let refreshCount = recorder.snapshot().count { message in
+            guard let data = Self.messageData(message),
+                  let frame = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { return false }
+            return frame["method"] as? String == "plugin.surface.refresh"
+        }
+        #expect(refreshCount == 1)
+        await connection.shutdown()
+    }
+
     @Test func `wizard not found means cancellation already reached a terminal session`() {
         let notFound = GatewayResponseError(
             method: "wizard.cancel",
@@ -252,6 +345,43 @@ private func makeTestGatewayConnection() -> (GatewayConnection, FakeWebSocketSes
         #expect(GatewayConnection.wizardCancellationOutcome(after: notFound) == .absent)
         #expect(GatewayConnection.wizardCancellationOutcome(after: locked) == .unresolved)
         #expect(GatewayConnection.wizardCancellationOutcome(after: URLError(.timedOut)) == .unresolved)
+    }
+
+    @Test func `operator connection rebuilds when direct TLS pin changes`() async throws {
+        let url = try #require(URL(string: "wss://gateway.example.invalid"))
+        let firstFingerprint = String(repeating: "a", count: 64)
+        let secondFingerprint = String(repeating: "b", count: 64)
+        let firstTLS = try #require(GatewayTLSRoute.resolve(
+            url: url,
+            connectionMode: .remote,
+            configuredFingerprint: firstFingerprint,
+            storedFingerprint: nil))
+        let secondTLS = try #require(GatewayTLSRoute.resolve(
+            url: url,
+            connectionMode: .remote,
+            configuredFingerprint: secondFingerprint,
+            storedFingerprint: nil))
+        let source = GatewayConnectionEndpointSource(endpoint: GatewayConnection.EndpointSnapshot(
+            config: (url: url, token: "token", password: nil),
+            tls: firstTLS,
+            routeAuthority: nil,
+            revision: 1))
+        let connection = GatewayConnection(endpointProvider: { source.snapshot() })
+
+        try await connection.refresh()
+        let firstGeneration = await connection._test_routeGeneration()
+        #expect(await connection.configuredTLSFingerprintSHA256() == firstFingerprint)
+
+        source.setEndpoint(GatewayConnection.EndpointSnapshot(
+            config: (url: url, token: "token", password: nil),
+            tls: secondTLS,
+            routeAuthority: nil,
+            revision: 2))
+        try await connection.refresh()
+
+        #expect(await connection._test_routeGeneration() > firstGeneration)
+        #expect(await connection.configuredTLSFingerprintSHA256() == secondFingerprint)
+        await connection.shutdown()
     }
 
     @Test func `direct endpoint never receives another route device token`() async throws {

@@ -79,7 +79,13 @@ export function broadcastChatFinal(params: {
     state: "final" as const,
     message: projectChatDisplayMessage(params.message),
   };
-  params.context.broadcast("chat", payload);
+  params.context.broadcast("chat", payload, {
+    sessionKeys: resolveGlobalAwareNodeChatDeliveryKeys({
+      cfg: params.context.getRuntimeConfig?.() ?? ({} as OpenClawConfig),
+      sessionKey: params.sessionKey,
+      agentId: payloadAgentId,
+    }),
+  });
   sendGlobalAwareNodeChatPayload({
     context: params.context,
     sessionKey: params.sessionKey,
@@ -114,7 +120,13 @@ export function broadcastSideResult(params: {
     ...(payloadAgentId ? { agentId: payloadAgentId } : {}),
     seq,
   };
-  params.context.broadcast("chat.side_result", payload);
+  params.context.broadcast("chat.side_result", payload, {
+    sessionKeys: resolveGlobalAwareNodeChatDeliveryKeys({
+      cfg: params.context.getRuntimeConfig?.() ?? ({} as OpenClawConfig),
+      sessionKey: params.payload.sessionKey,
+      agentId: payloadAgentId,
+    }),
+  });
   sendGlobalAwareNodeChatPayload({
     context: params.context,
     sessionKey: params.payload.sessionKey,
@@ -133,7 +145,6 @@ export function broadcastChatError(params: {
 }): void {
   const seq = nextChatSeq(params.context, params.runId);
   const payloadAgentId = params.sessionKey === "global" ? params.agentId : undefined;
-  const errorText = params.errorMessage?.trim();
   const payload = {
     runId: params.runId,
     sessionKey: params.sessionKey,
@@ -141,25 +152,14 @@ export function broadcastChatError(params: {
     seq,
     state: "error" as const,
     errorMessage: params.errorMessage,
-    ...(errorText
-      ? {
-          message: {
-            role: "assistant",
-            content: [
-              {
-                type: "text",
-                text:
-                  errorText.startsWith("⚠️") || errorText.startsWith("Error:")
-                    ? errorText
-                    : `Error: ${errorText}`,
-              },
-            ],
-            timestamp: Date.now(),
-          },
-        }
-      : {}),
   };
-  params.context.broadcast("chat", payload);
+  params.context.broadcast("chat", payload, {
+    sessionKeys: resolveGlobalAwareNodeChatDeliveryKeys({
+      cfg: params.context.getRuntimeConfig?.() ?? ({} as OpenClawConfig),
+      sessionKey: params.sessionKey,
+      agentId: payloadAgentId,
+    }),
+  });
   sendGlobalAwareNodeChatPayload({
     context: params.context,
     sessionKey: params.sessionKey,

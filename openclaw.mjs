@@ -82,6 +82,7 @@ const isSourceCheckoutLauncher = () =>
 const isNodeCompileCacheDisabled = () => process.env.NODE_DISABLE_COMPILE_CACHE !== undefined;
 const isNodeCompileCacheRequested = () =>
   Boolean(process.env.NODE_COMPILE_CACHE) && !isNodeCompileCacheDisabled();
+const isNativeHookRelayInvocation = (argv) => argv[2] === "hooks" && argv[3] === "relay";
 const sanitizeCompileCachePathSegment = (value) => {
   const normalized = value.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
   return normalized.length > 0 ? normalized : "unknown";
@@ -139,6 +140,8 @@ const runRespawnedChild = (command, args, env) => {
   let signalExitTimer = null;
   let signalForceKillTimer = null;
   let signalHardExitTimer = null;
+  let firstForwardedSignal = null;
+  let hardKillBackstopStarted = false;
   const detach = () => {
     for (const [signal, listener] of listeners) {
       process.off(signal, listener);
@@ -171,6 +174,7 @@ const runRespawnedChild = (command, args, env) => {
       // Best-effort shutdown fallback.
     }
     signalForceKillTimer = setTimeout(() => {
+      hardKillBackstopStarted = true;
       forceKillChild();
       signalHardExitTimer = setTimeout(() => {
         process.exit(1);
@@ -179,7 +183,8 @@ const runRespawnedChild = (command, args, env) => {
     }, respawnSignalForceKillGraceMs);
     signalForceKillTimer.unref?.();
   };
-  const scheduleParentExit = () => {
+  const scheduleParentExit = (signal) => {
+    firstForwardedSignal ??= signal;
     if (signalExitTimer) {
       return;
     }
@@ -195,7 +200,7 @@ const runRespawnedChild = (command, args, env) => {
       } catch {
         // Best-effort signal forwarding.
       }
-      scheduleParentExit();
+      scheduleParentExit(signal);
     };
     try {
       process.on(signal, listener);
@@ -207,7 +212,15 @@ const runRespawnedChild = (command, args, env) => {
   child.once("exit", (code, signal) => {
     detach();
     if (signal) {
-      process.exit(1);
+      const forwardedSignalExitCode =
+        !hardKillBackstopStarted && signal === firstForwardedSignal
+          ? signal === "SIGINT"
+            ? 130
+            : signal === "SIGTERM"
+              ? 143
+              : undefined
+          : undefined;
+      process.exit(forwardedSignalExitCode ?? 1);
     }
     process.exit(code ?? 1);
   });
@@ -273,8 +286,11 @@ const respawnWithPackagedCompileCacheIfNeeded = () => {
   );
 };
 
+// Codex owns the relay timeout by PID. Keep the launcher as that exact process
+// so a timeout cannot strand a compile-cache respawn child.
 const waitingForCompileCacheRespawn =
-  respawnWithoutCompileCacheIfNeeded() || respawnWithPackagedCompileCacheIfNeeded();
+  !(process.platform !== "win32" && isNativeHookRelayInvocation(process.argv)) &&
+  (respawnWithoutCompileCacheIfNeeded() || respawnWithPackagedCompileCacheIfNeeded());
 
 // https://nodejs.org/api/module.html#module-compile-cache
 if (

@@ -1,7 +1,6 @@
 // Github Copilot plugin module implements login behavior.
 import { intro, note, outro, spinner } from "@clack/prompts";
 import { stylePromptTitle } from "openclaw/plugin-sdk/cli-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { logConfigUpdated, updateConfig } from "openclaw/plugin-sdk/config-mutation";
 import {
   resolveExpiresAtMsFromDurationMs,
@@ -18,10 +17,16 @@ import {
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
-import { PUBLIC_GITHUB_COPILOT_DOMAIN, resolveGithubCopilotDomain } from "./domain.js";
+import {
+  PUBLIC_GITHUB_COPILOT_DOMAIN,
+  resolveGithubCopilotDomain,
+  withGithubCopilotDomainConfig,
+} from "./domain.js";
 
 const CLIENT_ID = "Iv1.b507a08c87ecfe98";
 const GITHUB_DEVICE_FLOW_REQUEST_TIMEOUT_MS = 30_000;
+const GITHUB_DEVICE_FLOW_DEFAULT_INTERVAL_MS = 5_000;
+const GITHUB_DEVICE_FLOW_SLOW_DOWN_INCREMENT_MS = 5_000;
 // Data-residency GitHub Enterprise support: the device flow, token exchange, and
 // completions endpoints all live under the tenant host (e.g. "acme.ghe.com")
 // instead of github.com. The host is threaded in from the selected auth flow so
@@ -52,6 +57,7 @@ type DeviceTokenResponse =
       error: string;
       error_description?: string;
       error_uri?: string;
+      interval?: unknown;
     };
 
 const GITHUB_DEVICE_ACCESS_DENIED = Symbol("github-device-access-denied");
@@ -66,14 +72,6 @@ class GitHubDeviceFlowError extends Error {
     this.kind = kind;
     this.name = "GitHubDeviceFlowError";
   }
-}
-
-let githubDeviceFlowFetchGuard = fetchWithSsrFGuard;
-
-export function setGitHubCopilotDeviceFlowFetchGuardForTesting(
-  impl: typeof fetchWithSsrFGuard | null,
-): void {
-  githubDeviceFlowFetchGuard = impl ?? fetchWithSsrFGuard;
 }
 
 async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
@@ -105,7 +103,10 @@ function parseDeviceCodeResponse(
   issuedAt: number,
 ): DeviceCodeResponse {
   const expiresInMs = positiveSecondsToSafeMilliseconds(value.expires_in);
-  const intervalMs = nonNegativeSecondsToSafeMilliseconds(value.interval);
+  const intervalMs =
+    value.interval === undefined
+      ? GITHUB_DEVICE_FLOW_DEFAULT_INTERVAL_MS
+      : nonNegativeSecondsToSafeMilliseconds(value.interval);
   const expiresAt =
     expiresInMs === undefined
       ? undefined
@@ -142,7 +143,7 @@ async function postGitHubDeviceFlowForm(params: {
   domain: string;
   signal?: AbortSignal;
 }): Promise<Record<string, unknown>> {
-  const { response, release } = await githubDeviceFlowFetchGuard({
+  const { response, release } = await fetchWithSsrFGuard({
     url: params.url,
     init: {
       method: "POST",
@@ -204,7 +205,13 @@ async function pollForAccessToken(params: {
     grant_type: "urn:ietf:params:oauth:grant-type:device_code",
   });
 
+  let intervalMs = params.intervalMs;
   while (Date.now() < params.expiresAt) {
+    await sleepGitHubDevicePollDelay(intervalMs, params.expiresAt, params.signal);
+    if (Date.now() >= params.expiresAt) {
+      break;
+    }
+
     const json = (await postGitHubDeviceFlowForm({
       url: accessTokenUrl(params.domain),
       body: bodyBase,
@@ -212,17 +219,21 @@ async function pollForAccessToken(params: {
       domain: params.domain,
       ...(params.signal ? { signal: params.signal } : {}),
     })) as DeviceTokenResponse;
-    if ("access_token" in json && typeof json.access_token === "string") {
-      return json.access_token;
+    if ("access_token" in json) {
+      if (typeof json.access_token === "string") {
+        return json.access_token;
+      }
+      throw new Error("GitHub device flow returned an invalid access token");
     }
 
-    const err = "error" in json ? json.error : "unknown";
+    const err = json.error;
     if (err === "authorization_pending") {
-      await sleepGitHubDevicePollDelay(params.intervalMs, params.expiresAt, params.signal);
       continue;
     }
     if (err === "slow_down") {
-      await sleepGitHubDevicePollDelay(params.intervalMs + 2000, params.expiresAt, params.signal);
+      intervalMs =
+        positiveSecondsToSafeMilliseconds(json.interval) ??
+        Math.min(Number.MAX_SAFE_INTEGER, intervalMs + GITHUB_DEVICE_FLOW_SLOW_DOWN_INCREMENT_MS);
       continue;
     }
     if (err === "expired_token") {
@@ -355,46 +366,6 @@ export async function runGitHubCopilotDeviceFlow(
     }
     throw err;
   }
-}
-
-// The shortcut login mints its token against the resolved domain, so the same
-// domain must land in persisted config: a tenant token with no stored
-// githubDomain would silently route to github.com (and 401) once
-// COPILOT_GITHUB_DOMAIN is unset. Mirrors the enterprise auth method's
-// persist-on-tenant / clear-on-public behavior.
-export function withGithubCopilotDomainConfig(cfg: OpenClawConfig, domain: string): OpenClawConfig {
-  // Normalize the optional layers to concrete objects before spreading:
-  // spreading a possibly-undefined object widens every optional property to
-  // `T | undefined`, which exactOptionalPropertyTypes rejects.
-  const models: NonNullable<OpenClawConfig["models"]> = cfg.models ?? {};
-  const providers: NonNullable<typeof models.providers> = models.providers ?? {};
-  const provider = providers["github-copilot"];
-  const params = provider?.params;
-  const isDefault = domain === PUBLIC_GITHUB_COPILOT_DOMAIN;
-  if (isDefault && !(params && "githubDomain" in params)) {
-    return cfg;
-  }
-  const nextParams: Record<string, unknown> = { ...params };
-  if (isDefault) {
-    delete nextParams.githubDomain;
-  } else {
-    nextParams.githubDomain = domain;
-  }
-  const nextProviders = { ...providers };
-  if (provider) {
-    nextProviders["github-copilot"] = { ...provider, params: nextParams };
-  } else {
-    // Source config accepts partial provider inputs; catalog materialization
-    // supplies baseUrl/models before runtime consumption.
-    Object.assign(nextProviders, { "github-copilot": { params: nextParams } });
-  }
-  return {
-    ...cfg,
-    models: {
-      ...models,
-      providers: nextProviders,
-    },
-  };
 }
 
 export async function githubCopilotLoginCommand(

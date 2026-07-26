@@ -1,17 +1,28 @@
 // Msteams tests cover sent message cache plugin behavior.
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { setMSTeamsRuntime } from "./runtime.js";
-import {
-  clearMSTeamsSentMessageCache,
-  recordMSTeamsSentMessage,
-  wasMSTeamsMessageSentWithPersistence,
-} from "./sent-message-cache.js";
+import { resolveGlobalDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const TTL_MS = 24 * 60 * 60 * 1000;
+const sentMessageMemory = resolveGlobalDedupeCache(Symbol.for("openclaw.msteamsSentMessages"), {
+  ttlMs: TTL_MS,
+  maxSize: 20_000,
+});
+
+let setMSTeamsRuntime: typeof import("./runtime.js").setMSTeamsRuntime;
+let recordMSTeamsSentMessage: typeof import("./sent-message-cache.js").recordMSTeamsSentMessage;
+let wasMSTeamsMessageSentWithPersistence: typeof import("./sent-message-cache.js").wasMSTeamsMessageSentWithPersistence;
 
 describe("msteams sent message cache", () => {
+  beforeEach(async () => {
+    sentMessageMemory.clear();
+    vi.resetModules();
+    ({ setMSTeamsRuntime } = await import("./runtime.js"));
+    ({ recordMSTeamsSentMessage, wasMSTeamsMessageSentWithPersistence } =
+      await import("./sent-message-cache.js"));
+  });
+
   afterEach(() => {
-    clearMSTeamsSentMessageCache();
+    sentMessageMemory.clear();
     vi.restoreAllMocks();
   });
 
@@ -47,11 +58,11 @@ describe("msteams sent message cache", () => {
     await vi.waitFor(() => expect(register).toHaveBeenCalledTimes(1));
     expect(register).toHaveBeenCalledWith("conv-1:msg-2", { sentAt: 1_234_567 });
 
-    clearMSTeamsSentMessageCache();
+    sentMessageMemory.clear();
     await expect(
       wasMSTeamsMessageSentWithPersistence({ conversationId: "conv-1", messageId: "msg-2" }),
     ).resolves.toBe(true);
-    expect(openKeyedStore).toHaveBeenCalledTimes(2);
+    expect(openKeyedStore).toHaveBeenCalledTimes(1);
     expect(lookup).toHaveBeenCalledWith("conv-1:msg-2");
 
     lookup.mockClear();

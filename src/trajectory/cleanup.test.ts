@@ -1,7 +1,8 @@
 // Trajectory cleanup tests cover retention pruning of trajectory artifacts.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
@@ -131,14 +132,31 @@ describe("trajectory cleanup", () => {
 
       const pointerPath = resolveTrajectoryPointerFilePath(sessionFile);
       await fs.writeFile(pointerPath, pointerFile(sessionId, safeExternalRuntime), "utf8");
-      await removeSessionTrajectoryArtifacts({
-        sessionId,
-        sessionFile,
-        storePath,
-        restrictToStoreDir: true,
-      });
+      const realReadSync = fsSync.readSync.bind(fsSync);
+      let shortReadCalls = 0;
+      const readSpy = vi.spyOn(fsSync, "readSync").mockImplementation(((
+        fd: number,
+        buffer: NodeJS.ArrayBufferView,
+        offset: number,
+        length: number,
+        position: fsSync.ReadPosition | null,
+      ) => {
+        shortReadCalls += 1;
+        return realReadSync(fd, buffer, offset, Math.min(length, 16), position);
+      }) as typeof fsSync.readSync);
+      try {
+        await removeSessionTrajectoryArtifacts({
+          sessionId,
+          sessionFile,
+          storePath,
+          restrictToStoreDir: true,
+        });
+      } finally {
+        readSpy.mockRestore();
+      }
 
       await expectPathMissing(safeExternalRuntime);
+      expect(shortReadCalls).toBeGreaterThan(1);
       await expectPathMissing(pointerPath);
 
       await fs.writeFile(pointerPath, pointerFile(sessionId, unsafeExternalRuntime), "utf8");
@@ -150,6 +168,36 @@ describe("trajectory cleanup", () => {
       });
 
       expect((await fs.stat(unsafeExternalRuntime)).isFile()).toBe(true);
+    });
+  });
+
+  it("ignores oversized trajectory pointers while still removing the sidecar", async () => {
+    await withTempDir({ prefix: "openclaw-trajectory-cleanup-" }, async (dir) => {
+      const sessionId = "session-oversized-pointer";
+      const sessionsDir = path.join(dir, "sessions");
+      const storePath = path.join(sessionsDir, "sessions.json");
+      const sessionFile = path.join(sessionsDir, `${sessionId}.jsonl`);
+      const externalRuntime = path.join(dir, "external", `${sessionId}.jsonl`);
+      const pointerPath = resolveTrajectoryPointerFilePath(sessionFile);
+      await fs.mkdir(sessionsDir, { recursive: true });
+      await fs.mkdir(path.dirname(externalRuntime), { recursive: true });
+      await fs.writeFile(externalRuntime, runtimeEvent(sessionId), "utf8");
+      await fs.writeFile(
+        pointerPath,
+        `${pointerFile(sessionId, externalRuntime)}${" ".repeat(64 * 1024)}`,
+        "utf8",
+      );
+
+      const removed = await removeSessionTrajectoryArtifacts({
+        sessionId,
+        sessionFile,
+        storePath,
+        restrictToStoreDir: true,
+      });
+
+      expect(removed).toEqual([{ kind: "pointer", path: pointerPath }]);
+      expect((await fs.stat(externalRuntime)).isFile()).toBe(true);
+      await expectPathMissing(pointerPath);
     });
   });
 });

@@ -11,6 +11,20 @@ type Rule = {
 
 const RULES: Rule[] = [
   {
+    label: "deprecated channel runtime",
+    pattern:
+      /\.channel\.(?:reply\.(?:createReplyDispatcherWithTyping|resolveHumanDelayConfig|dispatchReplyFromConfig|finalizeInboundContext|formatInboundEnvelope)|session\.(?:resolveStorePath|recordInboundSession)|inbound\.(?:runPreparedReply|dispatchReply)|media\.fetchRemoteMedia)\b/u,
+  },
+  {
+    label: "caller-owned prepared channel dispatch",
+    pattern: /\b(?:runDispatch|onPreDispatchFailure)\b/u,
+  },
+  {
+    label: "caller-owned reply dispatcher lifecycle",
+    pattern:
+      /\b(?:createReplyDispatcherWithTyping|dispatchInboundMessage(?:WithBufferedDispatcher|WithDispatcher)?|dispatchReplyFromConfigWithSettledDispatcher|settleReplyDispatcher)\s*\(/u,
+  },
+  {
     label: "deprecated channel ingress resolver aliases",
     pattern:
       /\b(?:resolved|result|directResolved|groupResolved)\.(?:legacyAccess|senderReasonCode|commandAuthorized|shouldBlockControlCommand)\b/u,
@@ -18,15 +32,6 @@ const RULES: Rule[] = [
   {
     label: "inline deprecated channel ingress legacyAccess projection",
     pattern: /\)\.legacyAccess\b/u,
-  },
-  {
-    label: "low-level compatibility ingress resolver",
-    pattern: /\bresolveChannelIngressAccess\b/u,
-  },
-  {
-    label: "deprecated channel ingress compatibility projection",
-    pattern:
-      /\b(?:findChannelIngressSenderReasonCode|formatChannelIngressPolicyReason|mapChannelIngressReasonCodeToDmGroupAccessReason|projectChannelIngressDmGroupAccess|projectChannelIngressSenderGroupAccess)\b/u,
   },
   {
     label: "deprecated pairing-store access helper",
@@ -56,10 +61,6 @@ const RULES: Rule[] = [
   {
     label: "deprecated command auth SDK facade",
     pattern: /from\s+["']openclaw\/plugin-sdk\/command-auth["']/u,
-  },
-  {
-    label: "deprecated AccessFacts command authorizers",
-    pattern: /\bcommands\.authorizers\b/u,
   },
 ];
 
@@ -98,7 +99,7 @@ function main() {
 
   if (offenders.length > 0) {
     console.error(
-      "Bundled plugin production code must use modern channel access results, not deprecated compatibility seams.",
+      "Bundled plugin production code must use modern channel runtime and access seams.",
     );
     for (const offender of offenders) {
       console.error(`- ${offender.file}:${offender.line}: ${offender.label}: ${offender.text}`);
@@ -106,7 +107,9 @@ function main() {
     process.exit(1);
   }
 
-  console.log("OK: bundled plugin production code avoids deprecated channel access seams.");
+  console.log(
+    "OK: bundled plugin production code avoids deprecated channel runtime and access seams.",
+  );
 }
 
 main();

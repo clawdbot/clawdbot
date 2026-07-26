@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import type { SessionCompactionCheckpoint } from "../config/sessions.js";
+import { readSessionArchiveContentSync } from "../config/sessions/archive-compression.js";
 import {
   appendTranscriptMessage,
   appendTranscriptEvent,
@@ -17,6 +18,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import {
   beginSessionWorkAdmission,
+  isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
@@ -34,7 +36,7 @@ import {
   sessionStoreEntry,
   createCheckpointFixture,
   directSessionReq,
-  expectSessionQueueCleanup,
+  expectNoSessionQueueCleanup,
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
@@ -283,7 +285,6 @@ test("sessions.compaction.* lists checkpoints and branches or restores from comp
   expect(checkpoint.payload?.checkpoint.preCompaction.sessionFile).toBeUndefined();
 
   const sessionManagerOpenSpy = vi.spyOn(SessionManager, "open");
-  const sessionManagerForkFromSpy = vi.spyOn(SessionManager, "forkFrom");
   let branched: Awaited<
     ReturnType<
       typeof rpcReq<{
@@ -317,10 +318,8 @@ test("sessions.compaction.* lists checkpoints and branches or restores from comp
       checkpointId: "checkpoint-1",
     });
     expect(sessionManagerOpenSpy).not.toHaveBeenCalled();
-    expect(sessionManagerForkFromSpy).not.toHaveBeenCalled();
   } finally {
     sessionManagerOpenSpy.mockRestore();
-    sessionManagerForkFromSpy.mockRestore();
   }
   expect(branched.ok).toBe(true);
   expect(branched.payload?.sourceKey).toBe("agent:main:main");
@@ -349,7 +348,6 @@ test("sessions.compaction.* lists checkpoints and branches or restores from comp
   expect(branchedEntry?.compactionCheckpoints).toBeUndefined();
 
   const restoreSessionManagerOpenSpy = vi.spyOn(SessionManager, "open");
-  const restoreSessionManagerForkFromSpy = vi.spyOn(SessionManager, "forkFrom");
   let restored: Awaited<
     ReturnType<
       typeof rpcReq<{
@@ -383,10 +381,8 @@ test("sessions.compaction.* lists checkpoints and branches or restores from comp
       checkpointId: "checkpoint-1",
     });
     expect(restoreSessionManagerOpenSpy).not.toHaveBeenCalled();
-    expect(restoreSessionManagerForkFromSpy).not.toHaveBeenCalled();
   } finally {
     restoreSessionManagerOpenSpy.mockRestore();
-    restoreSessionManagerForkFromSpy.mockRestore();
   }
   expect(restored.ok).toBe(true);
   expect(restored.payload?.key).toBe("agent:main:main");
@@ -585,6 +581,10 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
     message: { role: "user", content: "hello", timestamp: 1 },
     now: Date.parse("2026-06-19T12:00:01.000Z"),
   });
+  await appendTranscriptMessage(sessionScope, {
+    message: { role: "user", content: "follow-up", timestamp: 2 },
+    now: Date.parse("2026-06-19T12:00:02.000Z"),
+  });
   embeddedRunMock.compactEmbeddedAgentSession.mockImplementationOnce(async (params) => {
     const call = params as {
       sessionTarget?: {
@@ -609,7 +609,7 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
       storePath: call.sessionTarget.storePath,
     };
     const rows = await loadTranscriptEvents(targetScope);
-    expect(rows).toHaveLength(2);
+    expect(rows).toHaveLength(3);
     await appendTranscriptEvent(targetScope, {
       type: "compaction",
       id: "compact-1",
@@ -753,7 +753,7 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
   expect(compactionCall.trigger).toBe("manual");
 
   const sqliteRows = await loadTranscriptEvents(sessionScope);
-  expect(sqliteRows).toHaveLength(3);
+  expect(sqliteRows).toHaveLength(4);
   expect(sqliteRows.at(-1)).toMatchObject({
     type: "compaction",
     summary: "summary",
@@ -956,7 +956,7 @@ test("sessions.compact emits a terminal operation event when persistence fails",
     sessionId,
     sessionKey: "agent:main:main",
     storePath,
-    totalLines: 2,
+    totalLines: 3,
   });
   const compaction = createDeferred<{
     ok: true;
@@ -1016,7 +1016,7 @@ test("sessions.compact rejects stale terminal persistence after the session chan
     sessionId: "sess-compact-old",
     sessionKey: "agent:main:main",
     storePath,
-    totalLines: 2,
+    totalLines: 3,
   });
   const compaction = createDeferred<{
     ok: true;
@@ -1075,7 +1075,7 @@ test("sessions.reset waits for terminal compaction before replacing the session"
     sessionId: "sess-compact-reset",
     sessionKey: "agent:main:main",
     storePath,
-    totalLines: 2,
+    totalLines: 3,
   });
   const compaction = createDeferred<{
     ok: true;
@@ -1120,7 +1120,7 @@ test("sessions.reset waits for terminal compaction before replacing the session"
   expect(reset.ok).toBe(true);
   const resetSessionId = reset.payload?.entry.sessionId;
   expect(resetSessionId).toBeTruthy();
-  expect(resetSessionId).not.toBe("sess-compact-reset");
+  expect(resetSessionId).toBe("sess-compact-reset");
   const resetEntry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
   expect(resetEntry?.sessionId).toBe(resetSessionId);
   ws.close();
@@ -1150,7 +1150,7 @@ test("sessions.compaction.restore waits for terminal compaction before replacing
     sessionId: fixture.sessionId,
     sessionKey: "agent:main:main",
     storePath,
-    totalLines: 2,
+    totalLines: 3,
   });
   const compaction = createDeferred<{
     ok: true;
@@ -1282,7 +1282,7 @@ test("sessions.compact blocks new work admission through terminal persistence", 
     sessionId,
     sessionKey: "agent:main:main",
     storePath,
-    totalLines: 2,
+    totalLines: 3,
   });
   const compaction = createDeferred<{
     ok: true;
@@ -1336,7 +1336,56 @@ test("sessions.compact blocks new work admission through terminal persistence", 
   ws.close();
 });
 
-test("sessions.compact clears queued work before draining an active admission", async () => {
+test("sessions.compact returns a no-op without interrupting an active admission", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionId = "sess-compact-noop-active";
+  await seedSessionEntry({
+    entry: sessionStoreEntry(sessionId),
+    sessionKey: "agent:main:main",
+    storePath,
+  });
+  await seedTranscriptRows({
+    sessionId,
+    sessionKey: "agent:main:main",
+    storePath,
+    totalLines: 2,
+  });
+
+  let interrupted = false;
+  const admission = await beginSessionWorkAdmission({
+    scope: storePath,
+    identities: ["main", "agent:main:main", sessionId],
+    assertAllowed: () => {},
+    onInterrupt: () => {
+      interrupted = true;
+    },
+  });
+
+  const { ws } = await openClient();
+  try {
+    const compacted = await rpcReq<{
+      ok: boolean;
+      compacted: boolean;
+      reason?: string;
+    }>(ws, "sessions.compact", { key: "main" });
+
+    expect(compacted.ok).toBe(true);
+    expect(compacted.payload).toMatchObject({
+      ok: false,
+      compacted: false,
+      reason: "Nothing to compact (session too small)",
+    });
+    expect(interrupted).toBe(false);
+    expect(isSessionWorkAdmissionActive(storePath, [sessionId])).toBe(true);
+    expect(embeddedRunMock.compactEmbeddedAgentSession).not.toHaveBeenCalled();
+    expectNoSessionQueueCleanup();
+  } finally {
+    admission.release();
+    ws.close();
+  }
+});
+
+test("sessions.compact refuses real compaction without interrupting an active admission", async () => {
   const { storePath } = await createSessionStoreDir();
   const sessionId = "sess-compact-queued-work";
   await seedSessionEntry({
@@ -1348,7 +1397,7 @@ test("sessions.compact clears queued work before draining an active admission", 
     sessionId,
     sessionKey: "agent:main:main",
     storePath,
-    totalLines: 2,
+    totalLines: 3,
   });
   embeddedRunMock.compactEmbeddedAgentSession.mockResolvedValueOnce({
     ok: true,
@@ -1361,25 +1410,76 @@ test("sessions.compact clears queued work before draining an active admission", 
     },
   });
 
-  let releaseAdmission = () => {};
+  let interrupted = false;
   const admission = await beginSessionWorkAdmission({
     scope: storePath,
     identities: ["main", "agent:main:main", sessionId],
     assertAllowed: () => {},
-    onInterrupt: () => releaseAdmission(),
+    onInterrupt: () => {
+      interrupted = true;
+    },
   });
-  releaseAdmission = admission.release;
 
   const { ws } = await openClient();
   try {
     const compacted = await rpcReq(ws, "sessions.compact", { key: "main" });
 
-    expect(compacted.ok).toBe(true);
-    expectSessionQueueCleanup(["main", "agent:main:main", sessionId]);
+    expect(compacted.ok).toBe(false);
+    expect(compacted.error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("has an active run"),
+    });
+    expect(interrupted).toBe(false);
+    expect(isSessionWorkAdmissionActive(storePath, [sessionId])).toBe(true);
+    expect(embeddedRunMock.compactEmbeddedAgentSession).not.toHaveBeenCalled();
+    expectNoSessionQueueCleanup();
   } finally {
     admission.release();
     ws.close();
   }
+});
+
+test("sessions.compact refuses real compaction while a worker inference owns the session", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionId = "sess-compact-worker-inference";
+  await seedSessionEntry({
+    entry: sessionStoreEntry(sessionId),
+    sessionKey: "agent:main:main",
+    storePath,
+  });
+  await seedTranscriptRows({
+    sessionId,
+    sessionKey: "agent:main:main",
+    storePath,
+    totalLines: 3,
+  });
+  const hasInferenceForSession = vi.fn(
+    (candidateSessionId: string) => candidateSessionId === sessionId,
+  );
+  const runtimeConfig = {
+    agents: { list: [{ id: "main", default: true }] },
+    session: { store: storePath },
+  };
+
+  const compacted = await directSessionReq(
+    "sessions.compact",
+    { key: "main" },
+    {
+      context: {
+        getRuntimeConfig: () => runtimeConfig,
+        workerEnvironmentService: { hasInferenceForSession },
+      },
+    },
+  );
+
+  expect(compacted.ok, JSON.stringify(compacted)).toBe(false);
+  expect(compacted.error).toMatchObject({
+    code: "INVALID_REQUEST",
+    message: expect.stringContaining("has an active run"),
+  });
+  expect(hasInferenceForSession).toHaveBeenCalledWith(sessionId);
+  expect(embeddedRunMock.compactEmbeddedAgentSession).not.toHaveBeenCalled();
+  expectNoSessionQueueCleanup();
 });
 
 test("sessions.patch rejects archive while terminal compaction owns the session", async () => {
@@ -1394,7 +1494,7 @@ test("sessions.patch rejects archive while terminal compaction owns the session"
     sessionId: "sess-compact-archive",
     sessionKey,
     storePath,
-    totalLines: 2,
+    totalLines: 3,
   });
   const compaction = createDeferred<{
     ok: true;
@@ -1431,7 +1531,7 @@ test("sessions.patch rejects archive while terminal compaction owns the session"
   ws.close();
 });
 
-test("sessions.compact maxLines trims SQLite transcript rows and returns an archive marker", async () => {
+test("sessions.compact maxLines trims SQLite transcript rows and archives the full pre-compaction transcript", async () => {
   const { dir, storePath } = await createSessionStoreDir();
   await seedSessionEntry({
     entry: sessionStoreEntry("sess-main"),
@@ -1444,6 +1544,12 @@ test("sessions.compact maxLines trims SQLite transcript rows and returns an arch
     storePath,
     totalLines: 500,
   });
+  const original = await loadTranscriptRows({
+    sessionId: "sess-main",
+    sessionKey: "agent:main:main",
+    storePath,
+  });
+  expect(original).toHaveLength(500);
 
   const { ws } = await openClient();
   const compacted = await rpcReq<{
@@ -1472,7 +1578,15 @@ test("sessions.compact maxLines trims SQLite transcript rows and returns an arch
   expect(retained.at(-1)).toMatchObject({
     message: { content: "line-498" },
   });
-  expect(compacted.payload?.archived).toContain(`sqlite:main:sess-main:${storePath}.bak.`);
+  const archived = compacted.payload?.archived ?? "";
+  expect(path.basename(archived)).toMatch(/^sess-main\.jsonl\.bak\.\d{4}-\d{2}-\d{2}T/);
+  expect(await fs.realpath(path.dirname(archived))).toBe(await fs.realpath(dir));
+  await expect(fs.stat(archived)).resolves.toMatchObject({ mode: expect.any(Number) });
+  const archivedEvents = readSessionArchiveContentSync(archived)
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+  expect(archivedEvents).toEqual(original);
   await expect(fs.readdir(dir)).resolves.not.toContain("sess-main.jsonl");
 
   // No active run present, so the interrupt guard short-circuits without aborting.
@@ -1482,8 +1596,8 @@ test("sessions.compact maxLines trims SQLite transcript rows and returns an arch
   ws.close();
 });
 
-test("sessions.compact maxLines interrupts an active run before trimming rows", async () => {
-  const { storePath } = await createSessionStoreDir();
+test("sessions.compact maxLines refuses an active run without trimming rows", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
   await seedSessionEntry({
     entry: sessionStoreEntry("sess-main"),
     sessionKey: "agent:main:main",
@@ -1499,31 +1613,21 @@ test("sessions.compact maxLines interrupts an active run before trimming rows", 
   const { ws } = await openClient();
   // Simulate an embedded agent run actively appending to this session transcript.
   embeddedRunMock.activeIds.add("sess-main");
-  embeddedRunMock.waitResults.set("sess-main", true);
 
-  const compacted = await rpcReq<{
-    ok: true;
-    compacted: boolean;
-    kept?: number;
-  }>(ws, "sessions.compact", { key: "main", maxLines: 50 });
+  const compacted = await rpcReq(ws, "sessions.compact", { key: "main", maxLines: 50 });
 
-  // Regression for the ClawSweeper finding: the maxLines trim branch must run
-  // the same active-run interrupt guard as the LLM-summarize branch before it
-  // replaces transcript rows, so an active runner cannot keep appending stale rows.
-  expect(embeddedRunMock.abortCalls).toEqual(["sess-main"]);
-  expect(embeddedRunMock.waitCalls).toEqual(["sess-main"]);
-
-  // The guard ran first; row trimming still completed deterministically afterwards.
-  expect(compacted.ok).toBe(true);
-  expect(compacted.payload?.compacted).toBe(true);
-  expect(compacted.payload?.kept).toBe(50);
+  expect(compacted.ok).toBe(false);
+  expect(compacted.error?.message).toContain("has an active run");
+  expect(embeddedRunMock.abortCalls).toEqual([]);
+  expect(embeddedRunMock.waitCalls).toEqual([]);
   await expect(
     loadTranscriptRows({
       sessionId: "sess-main",
       sessionKey: "agent:main:main",
       storePath,
     }),
-  ).resolves.toHaveLength(50);
+  ).resolves.toHaveLength(500);
+  expect((await fs.readdir(dir)).some((name) => name.includes(".bak"))).toBe(false);
 
   ws.close();
 });
@@ -1584,50 +1688,6 @@ test("sessions.compact maxLines does not interrupt an active run when no transcr
   expect(compacted.payload?.reason).toBe("no transcript");
   expect(embeddedRunMock.abortCalls).toEqual([]);
   expect(embeddedRunMock.waitCalls).toEqual([]);
-
-  ws.close();
-});
-
-test("sessions.compact maxLines aborts without trimming rows when an active run cannot be interrupted", async () => {
-  const { dir, storePath } = await createSessionStoreDir();
-  await seedSessionEntry({
-    entry: sessionStoreEntry("sess-main"),
-    sessionKey: "agent:main:main",
-    storePath,
-  });
-  await seedTranscriptRows({
-    sessionId: "sess-main",
-    sessionKey: "agent:main:main",
-    storePath,
-    totalLines: 500,
-  });
-
-  const { ws } = await openClient();
-  // Active embedded run that fails to end within the interrupt window.
-  embeddedRunMock.activeIds.add("sess-main");
-  embeddedRunMock.waitResults.set("sess-main", false);
-
-  const compacted = await rpcReq<{ ok: boolean }>(ws, "sessions.compact", {
-    key: "main",
-    maxLines: 50,
-  });
-
-  // Order proof: the guard ran first and failed, so the RPC errors out before
-  // replacing rows. If the guard ran after trimming, the transcript would
-  // already be 50 rows here. It is still 500 with no archive marker file.
-  expect(compacted.ok).toBe(false);
-  expect(embeddedRunMock.abortCalls).toEqual(["sess-main"]);
-  expect(embeddedRunMock.waitCalls).toEqual(["sess-main"]);
-
-  await expect(
-    loadTranscriptRows({
-      sessionId: "sess-main",
-      sessionKey: "agent:main:main",
-      storePath,
-    }),
-  ).resolves.toHaveLength(500);
-  const dirEntries = await fs.readdir(dir);
-  expect(dirEntries.some((name) => name.includes(".bak"))).toBe(false);
 
   ws.close();
 });

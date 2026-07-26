@@ -6,14 +6,12 @@ import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { clearPresences, setPresence } from "../monitor/presence-cache.js";
 import { DiscordThreadInitialMessageError } from "../send.js";
-import { discordGuildActionRuntime, handleDiscordGuildAction } from "./runtime.guild.js";
+import { discordGuildActionRuntime, discordModerationActionRuntime } from "./runtime-deps.js";
+import { handleDiscordGuildAction } from "./runtime.guild.js";
 import { handleDiscordAction } from "./runtime.js";
 import { handleDiscordMessagingAction } from "./runtime.messaging.js";
 import { discordMessagingActionRuntime } from "./runtime.messaging.runtime.js";
-import {
-  discordModerationActionRuntime,
-  handleDiscordModerationAction,
-} from "./runtime.moderation.js";
+import { handleDiscordModerationAction } from "./runtime.moderation.js";
 
 const originalDiscordMessagingActionRuntime = { ...discordMessagingActionRuntime };
 const originalDiscordGuildActionRuntime = { ...discordGuildActionRuntime };
@@ -913,7 +911,8 @@ describe("handleDiscordMessagingAction", () => {
               qa: {
                 token: "token",
                 groupPolicy: "open",
-                dm: { enabled: false, policy: "disabled" },
+                dm: { enabled: false },
+                dmPolicy: "disabled",
                 guilds: {
                   "111": {
                     channels: {
@@ -938,7 +937,8 @@ describe("handleDiscordMessagingAction", () => {
           discord: {
             token: "token",
             groupPolicy: "open",
-            dm: { enabled: true, policy: "pairing", groupEnabled: false },
+            dm: { enabled: true, groupEnabled: false },
+            dmPolicy: "pairing",
           },
         },
       } as OpenClawConfig,
@@ -955,9 +955,9 @@ describe("handleDiscordMessagingAction", () => {
           discord: {
             token: "token",
             groupPolicy: "open",
+            dmPolicy: "pairing",
             dm: {
               enabled: true,
-              policy: "pairing",
               groupEnabled: true,
               groupChannels: ["allowed-group"],
             },
@@ -997,9 +997,9 @@ describe("handleDiscordMessagingAction", () => {
         discord: {
           token: "token",
           groupPolicy: "disabled",
+          dmPolicy: "disabled",
           dm: {
             enabled: false,
-            policy: "disabled",
             groupEnabled: true,
             groupChannels: ["allowed-group"],
           },
@@ -1029,7 +1029,8 @@ describe("handleDiscordMessagingAction", () => {
         discord: {
           token: "token",
           groupPolicy: "disabled",
-          dm: { enabled: true, policy: "pairing" },
+          dm: { enabled: true },
+          dmPolicy: "pairing",
         },
       },
     } as OpenClawConfig;
@@ -1053,9 +1054,9 @@ describe("handleDiscordMessagingAction", () => {
         discord: {
           token: "token",
           groupPolicy: "open",
+          dmPolicy: "pairing",
           dm: {
             enabled: true,
-            policy: "pairing",
             groupEnabled: false,
           },
         },
@@ -1081,7 +1082,8 @@ describe("handleDiscordMessagingAction", () => {
         discord: {
           token: "token",
           groupPolicy: "open",
-          dm: { enabled: true, policy: "pairing" },
+          dm: { enabled: true },
+          dmPolicy: "pairing",
           guilds: {
             "111": {
               channels: {
@@ -1250,9 +1252,11 @@ describe("handleDiscordMessagingAction", () => {
       enableAllActions,
     );
     const payload = result.details as {
+      channelId?: string;
       messages: Array<{ timestampMs?: number; timestampUtc?: string }>;
     };
 
+    expect(payload.channelId).toBe("C1");
     const expectedMs = Date.parse("2026-01-15T10:00:00.000Z");
     const message = expectDefined(payload.messages[0], "Discord message result");
     expect(message.timestampMs).toBe(expectedMs);
@@ -2402,6 +2406,22 @@ describe("handleDiscordMessagingAction", () => {
       },
       { cfg: DISCORD_TEST_CFG },
     );
+  });
+
+  it("rejects invalid autoArchiveMinutes before Discord thread create", async () => {
+    createThreadDiscord.mockClear();
+    await expect(
+      handleMessagingAction(
+        "threadCreate",
+        {
+          channelId: "C1",
+          name: "thread",
+          autoArchiveMinutes: 999,
+        },
+        enableAllActions,
+      ),
+    ).rejects.toThrow("autoArchiveMinutes must be one of 60, 1440, 4320, or 10080 minutes");
+    expect(createThreadDiscord).not.toHaveBeenCalled();
   });
 
   it("returns partial success when Discord creates the thread but initial message send fails", async () => {

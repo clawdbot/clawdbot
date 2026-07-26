@@ -7,59 +7,22 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { TuiResult } from "../tui/tui-types.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { isReservedSystemAgentId } from "./agent-id.js";
+import type { SystemAgentOperation } from "./operation-types.js";
 import type { SystemAgentOverview } from "./overview.js";
 import { validateSystemAgentPluginInstallSpec } from "./plugin-install.js";
 
 type SystemAgentOverviewLoader = () => Promise<SystemAgentOverview>;
 type SystemAgentOverviewFormatter = (overview: SystemAgentOverview) => string;
 
-/** Parsed OpenClaw operation before approval/execution. */
-export type SystemAgentOperation =
-  | { kind: "none"; message: string }
-  | { kind: "overview" }
-  | { kind: "doctor" }
-  | { kind: "doctor-fix" }
-  | { kind: "status" }
-  | { kind: "health" }
-  | { kind: "config-validate" }
-  | { kind: "config-get"; path: string }
-  | { kind: "config-schema"; path?: string }
-  | { kind: "config-set"; path: string; value: string }
-  | {
-      kind: "config-set-ref";
-      path: string;
-      source: "env" | "file" | "exec";
-      id: string;
-      provider?: string;
-    }
-  | { kind: "setup"; workspace?: string; model?: string }
-  | { kind: "model-setup"; workspace?: string }
-  | { kind: "channel-list" }
-  | { kind: "channel-info"; channel: string }
-  | { kind: "channel-setup"; channel: string }
-  | {
-      kind: "open-setup";
-      target: "guided" | "classic" | "channels";
-      channel?: string;
-    }
-  | { kind: "gateway-status" }
-  | { kind: "gateway-start" }
-  | { kind: "gateway-stop" }
-  | { kind: "gateway-restart" }
-  | { kind: "agents" }
-  | { kind: "models" }
-  | { kind: "plugin-list" }
-  | { kind: "plugin-search"; query: string }
-  | { kind: "plugin-install"; spec: string }
-  | { kind: "plugin-uninstall"; pluginId: string }
-  | { kind: "audit" }
-  | { kind: "create-agent"; agentId: string; workspace?: string; model?: string }
-  | { kind: "open-tui"; agentId?: string; workspace?: string }
-  | { kind: "set-default-model"; model: string };
+export type { SystemAgentOperation };
 
 /** Result returned by the operation executor. */
 export type SystemAgentOperationResult = {
   applied: boolean;
+  /** Creation created or preserved BOOTSTRAP.md for the agent's first turn. */
+  bootstrapPending?: boolean;
+  /** Agent created by this operation, when applicable. */
+  agentId?: string;
   exitsInteractive?: boolean;
   message?: string;
   nextInput?: string;
@@ -76,17 +39,7 @@ export type SystemAgentCommandDeps = {
   resolveApiKeyForProvider?: typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
   formatOverview?: SystemAgentOverviewFormatter;
   loadOverview?: SystemAgentOverviewLoader;
-  runAgentsAdd?: (
-    opts: {
-      name?: string;
-      workspace?: string;
-      model?: string;
-      nonInteractive?: boolean;
-      json?: boolean;
-    },
-    runtime: RuntimeEnv,
-    params?: { hasFlags?: boolean },
-  ) => Promise<void>;
+  createAgent?: typeof import("../agents/agent-create.js").createAgent;
   runConfigSet?: (opts: {
     path?: string;
     value?: string;
@@ -105,6 +58,7 @@ export type SystemAgentCommandDeps = {
     session?: string;
     deliver?: boolean;
     historyLimit?: number;
+    message?: string;
   }) => Promise<TuiResult | void>;
   /** Where setup side effects run; the gateway surface never manages its own daemon. */
   setupSurface?: "cli" | "gateway";
@@ -153,7 +107,8 @@ const TALK_AGENT_RE = new RegExp(
   String.raw`^(?:talk\s+to|switch\s+to|open|enter)\s+(?:(?:my|the)\s+)?(?:(?<agent>[a-z0-9_-]+)\s+)?agent(?:\s+(?:for|in|workspace)\s+(?<workspace>${ARG_WORD}))?$`,
   "i",
 );
-const SET_MODEL_RE = /^(?:set|configure|use)\s+(?:the\s+)?(?:default\s+)?models?\s+(?<model>\S+)$/i;
+const SET_MODEL_RE =
+  /^(?:set|configure|use)\s+(?:the\s+)?(?:default\s+)?models?\s+(?<model>\S+)(?:\s+for\s+agent\s+(?<agent>\S+))?$/i;
 const GATEWAY_RE =
   /^(?:gateway\s+(?<sub>status|start|stop|restart)|(?<verb>start|stop|restart)\s+(?:the\s+)?gateway)$/i;
 const PLUGIN_LIST_RE = /^(?:(?:plugins?|clawhub)\s+list|list\s+plugins?)$/i;
@@ -358,7 +313,12 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
   }
   const setModelMatch = trimmed.match(SET_MODEL_RE);
   if (setModelMatch?.groups?.model) {
-    return { kind: "set-default-model", model: setModelMatch.groups.model };
+    const agent = setModelMatch.groups.agent?.trim();
+    return {
+      kind: "set-default-model",
+      model: setModelMatch.groups.model,
+      ...(agent ? { agentId: normalizeAgentId(agent) } : {}),
+    };
   }
   return { kind: "none", message: NO_MATCH_MESSAGE };
 }
@@ -401,6 +361,7 @@ export function isPersistentSystemAgentOperation(operation: SystemAgentOperation
     operation.kind === "config-set-ref" ||
     operation.kind === "setup" ||
     operation.kind === "plugin-install" ||
+    operation.kind === "plugin-uninstall" ||
     (operation.kind === "create-agent" &&
       !operation.model?.trim() &&
       !isReservedSystemAgentId(operation.agentId)) ||
@@ -414,7 +375,9 @@ export function isPersistentSystemAgentOperation(operation: SystemAgentOperation
 export function describeSystemAgentPersistentOperation(operation: SystemAgentOperation): string {
   switch (operation.kind) {
     case "set-default-model":
-      return `set agents.defaults.model.primary to ${operation.model}`;
+      return operation.agentId
+        ? `set agent ${operation.agentId}'s model to ${operation.model}`
+        : `set agents.defaults.model.primary to ${operation.model}`;
     case "config-set":
       return `set config ${operation.path} to ${formatConfigSetValueForPlan(operation.path, operation.value)}`;
     case "config-set-ref":

@@ -7,11 +7,16 @@ import {
   testing as sessionBindingTesting,
   registerSessionBindingAdapter,
 } from "openclaw/plugin-sdk/session-binding-runtime";
-import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  deliveryContextFromSession,
+  getSessionEntry,
+  normalizeSessionDeliveryState,
+  sessionDeliveryOrigin,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "../send/types.js";
-import { createMatrixRoomMessageHandler, MatrixRetryableInboundError } from "./handler.js";
 import {
   createMatrixHandlerTestHarness,
   createMatrixReactionEvent,
@@ -66,6 +71,13 @@ vi.mock("./replies.js", () => ({
   deliverMatrixReplies: deliverMatrixRepliesMock,
 }));
 
+function waitForMatrixState<T>(
+  assertion: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+): Promise<T> {
+  return vi.waitFor(assertion, { interval: 1, ...options });
+}
+
 async function writeMatrixSessionMeta(
   storePath: string,
   sessionKey: string,
@@ -81,22 +93,22 @@ async function writeMatrixSessionMeta(
     sessionId: `sess-${sessionKey}`,
     updatedAt: Date.now(),
   };
-  const existingOrigin =
-    typeof existing.origin === "object" && existing.origin !== null
-      ? (existing.origin as Record<string, unknown>)
-      : {};
+  const existingOrigin = sessionDeliveryOrigin(existing) ?? {};
   await upsertSessionEntry({
     storePath,
     sessionKey,
     entry: {
       ...existing,
-      origin: {
-        ...existingOrigin,
-        provider: "matrix",
-        surface: "matrix",
-        accountId: "ops",
-        ...origin,
-      },
+      delivery: normalizeSessionDeliveryState({
+        context: deliveryContextFromSession(existing),
+        origin: {
+          ...existingOrigin,
+          provider: "matrix",
+          surface: "matrix",
+          accountId: "ops",
+          ...origin,
+        },
+      }),
     },
   });
 }
@@ -527,6 +539,10 @@ describe("matrix monitor handler pairing account scope", () => {
       getMemberDisplayName: async () => "sender",
       dropPreStartupMessages: true,
       needsRoomAliasesForConfig: false,
+      dispatchInboundMessage: async () => ({
+        queuedFinal: true,
+        counts: { final: 1, block: 0, tool: 0 },
+      }),
     });
 
     await handler(
@@ -580,12 +596,12 @@ describe("matrix monitor handler pairing account scope", () => {
   });
 
   it("does not enqueue delivered text messages into system events", async () => {
-    const dispatchReplyFromConfig = vi.fn(async () => ({
+    const dispatchInboundMessage = vi.fn(async () => ({
       queuedFinal: true,
       counts: { final: 1, block: 0, tool: 0 },
     }));
     const { handler, enqueueSystemEvent } = createMatrixHandlerTestHarness({
-      dispatchReplyFromConfig,
+      dispatchInboundMessage,
       isDirectMessage: true,
       getMemberDisplayName: async () => "sender",
     });
@@ -599,7 +615,7 @@ describe("matrix monitor handler pairing account scope", () => {
       }),
     );
 
-    expect(dispatchReplyFromConfig).toHaveBeenCalled();
+    expect(dispatchInboundMessage).toHaveBeenCalled();
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
@@ -855,8 +871,8 @@ describe("matrix monitor handler pairing account scope", () => {
     const hasControlCommand = vi.fn((text?: string) => text === "/new");
     const { handler, finalizeInboundContext, recordInboundSession } =
       createMatrixHandlerTestHarness({
-        cfg: { commands: { useAccessGroups: false } },
         isDirectMessage: false,
+        groupAllowFrom: ["@user:example.org"],
         mentionRegexes: [],
         shouldHandleTextCommands: () => true,
         hasControlCommand,
@@ -868,21 +884,43 @@ describe("matrix monitor handler pairing account scope", () => {
       createMatrixTextMessageEvent({
         eventId: "$mxid-command",
         body: "@bot:example.org /new",
+        mentions: { user_ids: ["@bot:example.org"] },
       }),
     );
 
     expect(callArg(hasControlCommand, 0, 0, "control command")).toBe("/new");
     requireRecord(callArg(hasControlCommand, 0, 1, "control command"), "control command context");
-    const context = requireRecord(
-      callArg(finalizeInboundContext, 0, 0, "finalized context"),
-      "finalized context",
-    );
-    expect(context.RawBody).toBe("@bot:example.org /new");
-    expect(context.CommandBody).toBe("/new");
-    expect(context.BodyForAgent).toBe("@bot:example.org /new");
-    expect(context.BodyForCommands).toBe("/new");
-    expect(recordInboundSession).toHaveBeenCalled();
+    expect(finalizeInboundContext).not.toHaveBeenCalled();
+    expect(recordInboundSession).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { body: "hello", isControlCommand: false, expectedDispatches: 0 },
+    { body: "/new", isControlCommand: true, expectedDispatches: 1 },
+  ])(
+    "keeps require-mention decision for unmentioned room text $body",
+    async ({ body, isControlCommand, expectedDispatches }) => {
+      const { handler, finalizeInboundContext } = createMatrixHandlerTestHarness({
+        cfg: { channels: { matrix: { groupAllowFrom: ["@user:example.org"] } } },
+        isDirectMessage: false,
+        groupAllowFrom: ["@user:example.org"],
+        mentionRegexes: [],
+        shouldHandleTextCommands: () => true,
+        hasControlCommand: (text?: string) => isControlCommand && text === body,
+        getMemberDisplayName: async () => "sender",
+      });
+
+      await handler(
+        "!room:example.org",
+        createMatrixTextMessageEvent({
+          eventId: `$unmentioned-${isControlCommand ? "command" : "text"}`,
+          body,
+        }),
+      );
+
+      expect(finalizeInboundContext).toHaveBeenCalledTimes(expectedDispatches);
+    },
+  );
 
   it("processes room messages mentioned via displayName in formatted_body", async () => {
     const recordInboundSession = vi.fn(async () => {});
@@ -1248,7 +1286,7 @@ describe("matrix monitor handler pairing account scope", () => {
       resolveNotice = resolve;
     });
     const sendNotice = vi.fn(() => noticeSent);
-    const dispatchReplyFromConfig = vi.fn(async () => ({
+    const dispatchInboundMessage = vi.fn(async () => ({
       counts: { block: 0, final: 0, tool: 0 },
       queuedFinal: false,
     }));
@@ -1262,7 +1300,7 @@ describe("matrix monitor handler pairing account scope", () => {
       });
 
       const { handler } = createMatrixHandlerTestHarness({
-        dispatchReplyFromConfig,
+        dispatchInboundMessage,
         isDirectMessage: true,
         resolveStorePath: () => storePath,
         client: {
@@ -1278,15 +1316,15 @@ describe("matrix monitor handler pairing account scope", () => {
         }),
       );
 
-      await vi.waitFor(() => {
+      await waitForMatrixState(() => {
         expect(sendNotice).toHaveBeenCalledTimes(1);
       });
-      expect(dispatchReplyFromConfig).not.toHaveBeenCalled();
+      expect(dispatchInboundMessage).not.toHaveBeenCalled();
 
       resolveNotice?.("$notice");
       await handled;
 
-      expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+      expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
@@ -1474,11 +1512,13 @@ describe("matrix monitor handler pairing account scope", () => {
       entry: {
         sessionId: "sess-main",
         updatedAt: Date.now(),
-        deliveryContext: {
-          channel: "matrix",
-          to: "room:!other:example.org",
-          accountId: "ops",
-        },
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            channel: "matrix",
+            to: "room:!other:example.org",
+            accountId: "ops",
+          },
+        }),
       },
     });
     const sendNotice = vi.fn(async () => "$notice");
@@ -1519,11 +1559,13 @@ describe("matrix monitor handler pairing account scope", () => {
       entry: {
         sessionId: "sess-bound",
         updatedAt: Date.now(),
-        deliveryContext: {
-          channel: "matrix",
-          to: "room:!other:example.org",
-          accountId: "ops",
-        },
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            channel: "matrix",
+            to: "room:!other:example.org",
+            accountId: "ops",
+          },
+        }),
       },
     });
     const sendNotice = vi.fn(async () => "$notice");
@@ -1586,7 +1628,7 @@ describe("matrix monitor handler pairing account scope", () => {
         altAliases: ["#alt:example.org"],
       }),
       getMemberDisplayName: async () => "sender",
-      dispatchReplyFromConfig: async () => ({
+      dispatchInboundMessage: async () => ({
         queuedFinal: false,
         counts: { final: 0, block: 0, tool: 0 },
       }),
@@ -1728,121 +1770,13 @@ describe("matrix monitor handler pairing account scope", () => {
 
   it("does not enqueue system events for delivered text replies", async () => {
     const enqueueSystemEvent = vi.fn();
-
-    const handler = createMatrixRoomMessageHandler({
-      client: {
-        getUserId: async () => "@bot:example.org",
-      } as never,
-      core: {
-        channel: {
-          pairing: {
-            readAllowFromStore: async () => [] as string[],
-            upsertPairingRequest: async () => ({ code: "ABCDEFGH", created: false }),
-            buildPairingReply: () => "pairing",
-          },
-          commands: {
-            shouldHandleTextCommands: () => false,
-          },
-          text: {
-            hasControlCommand: () => false,
-            resolveMarkdownTableMode: () => "preserve",
-          },
-          routing: {
-            resolveAgentRoute: () => ({
-              agentId: "ops",
-              channel: "matrix",
-              accountId: "ops",
-              sessionKey: "agent:ops:main",
-              mainSessionKey: "agent:ops:main",
-              matchedBy: "binding.account",
-            }),
-          },
-          mentions: {
-            buildMentionRegexes: () => [],
-          },
-          session: {
-            resolveStorePath: () => "/tmp/session-store",
-            readSessionUpdatedAt: () => undefined,
-            recordInboundSession: vi.fn(async () => {}),
-          },
-          reply: {
-            resolveEnvelopeFormatOptions: () => ({}),
-            formatAgentEnvelope: ({ body }: { body: string }) => body,
-            finalizeInboundContext: (ctx: unknown) => ctx,
-            createReplyDispatcherWithTyping: () => ({
-              dispatcher: {},
-              replyOptions: {},
-              markDispatchIdle: () => {},
-              markRunComplete: () => {},
-            }),
-            resolveHumanDelayConfig: () => undefined,
-            dispatchReplyFromConfig: async () => ({
-              queuedFinal: true,
-              counts: { final: 1, block: 0, tool: 0 },
-            }),
-            withReplyDispatcher: async <T>({
-              dispatcher,
-              run,
-              onSettled,
-            }: {
-              dispatcher: {
-                markComplete?: () => void;
-                waitForIdle?: () => Promise<void>;
-              };
-              run: () => Promise<T>;
-              onSettled?: () => void | Promise<void>;
-            }) => {
-              try {
-                return await run();
-              } finally {
-                dispatcher.markComplete?.();
-                try {
-                  await dispatcher.waitForIdle?.();
-                } finally {
-                  await onSettled?.();
-                }
-              }
-            },
-          },
-          reactions: {
-            shouldAckReaction: () => false,
-          },
-        },
-        system: {
-          enqueueSystemEvent,
-        },
-      } as never,
-      cfg: {} as never,
-      accountId: "ops",
-      runtime: {
-        error: () => {},
-      } as never,
-      logger: {
-        info: () => {},
-        warn: () => {},
-      } as never,
-      logVerboseMessage: () => {},
-      allowFrom: [],
-      groupPolicy: "open",
-      replyToMode: "off",
-      threadReplies: "inbound",
-      streaming: "off",
-      previewToolProgressEnabled: false,
-      blockStreamingEnabled: false,
-      dmEnabled: true,
-      dmPolicy: "open",
-      textLimit: 8_000,
-      mediaMaxBytes: 10_000_000,
-      historyLimit: 0,
-      startupMs: 0,
-      startupGraceMs: 0,
-      directTracker: {
-        isDirectMessage: async () => false,
-      },
-      dropPreStartupMessages: true,
-      getRoomInfo: async () => ({ altAliases: [] }),
-      getMemberDisplayName: async () => "sender",
-      needsRoomAliasesForConfig: false,
+    const { handler } = createMatrixHandlerTestHarness({
+      enqueueSystemEvent,
+      isDirectMessage: false,
+      dispatchInboundMessage: async () => ({
+        queuedFinal: true,
+        counts: { final: 1, block: 0, tool: 0 },
+      }),
     });
 
     await handler(
@@ -2150,7 +2084,7 @@ describe("matrix monitor handler pairing account scope", () => {
 describe("matrix monitor handler live allowlist reload", () => {
   type MatrixHandler = ReturnType<typeof createMatrixHandlerTestHarness>["handler"];
 
-  const createDispatchReplyFromConfig = () =>
+  const createDispatchInboundMessage = () =>
     vi.fn(async () => ({
       queuedFinal: false,
       counts: { final: 0, block: 0, tool: 0 },
@@ -2195,7 +2129,7 @@ describe("matrix monitor handler live allowlist reload", () => {
     ).length;
 
   it("accepts a DM sender added to live dm.allowFrom", async () => {
-    const dispatchReplyFromConfig = createDispatchReplyFromConfig();
+    const dispatchInboundMessage = createDispatchInboundMessage();
     const cfg = {
       channels: {
         matrix: {
@@ -2209,7 +2143,7 @@ describe("matrix monitor handler live allowlist reload", () => {
       isDirectMessage: true,
       allowFrom: [],
       allowFromResolvedEntries: [],
-      dispatchReplyFromConfig,
+      dispatchInboundMessage,
     });
 
     await sendLiveAllowlistMessage(handler, {
@@ -2217,7 +2151,7 @@ describe("matrix monitor handler live allowlist reload", () => {
       sender: "@alice:example.org",
       body: "hello",
     });
-    expect(dispatchReplyFromConfig).not.toHaveBeenCalled();
+    expect(dispatchInboundMessage).not.toHaveBeenCalled();
 
     cfg.channels.matrix.dm.allowFrom = ["@alice:example.org"];
     await sendLiveAllowlistMessage(handler, {
@@ -2226,11 +2160,11 @@ describe("matrix monitor handler live allowlist reload", () => {
       body: "hello again",
     });
 
-    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
   });
 
   it("blocks a DM sender removed from live dm.allowFrom", async () => {
-    const dispatchReplyFromConfig = createDispatchReplyFromConfig();
+    const dispatchInboundMessage = createDispatchInboundMessage();
     const cfg = {
       channels: {
         matrix: {
@@ -2244,7 +2178,7 @@ describe("matrix monitor handler live allowlist reload", () => {
       isDirectMessage: true,
       allowFrom: ["@alice:example.org"],
       allowFromResolvedEntries: [{ input: "@alice:example.org", id: "@alice:example.org" }],
-      dispatchReplyFromConfig,
+      dispatchInboundMessage,
     });
 
     await sendLiveAllowlistMessage(handler, {
@@ -2252,7 +2186,7 @@ describe("matrix monitor handler live allowlist reload", () => {
       sender: "@alice:example.org",
       body: "hello",
     });
-    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
 
     cfg.channels.matrix.dm.allowFrom = [];
     await sendLiveAllowlistMessage(handler, {
@@ -2261,11 +2195,11 @@ describe("matrix monitor handler live allowlist reload", () => {
       body: "hello again",
     });
 
-    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
   });
 
   it("blocks a DM sender after live wildcard removal", async () => {
-    const dispatchReplyFromConfig = createDispatchReplyFromConfig();
+    const dispatchInboundMessage = createDispatchInboundMessage();
     const cfg = {
       channels: {
         matrix: {
@@ -2279,7 +2213,7 @@ describe("matrix monitor handler live allowlist reload", () => {
       isDirectMessage: true,
       allowFrom: ["*"],
       allowFromResolvedEntries: [],
-      dispatchReplyFromConfig,
+      dispatchInboundMessage,
     });
 
     await sendLiveAllowlistMessage(handler, {
@@ -2287,7 +2221,7 @@ describe("matrix monitor handler live allowlist reload", () => {
       sender: "@alice:example.org",
       body: "hello",
     });
-    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
 
     cfg.channels.matrix.dm.allowFrom = [];
     await sendLiveAllowlistMessage(handler, {
@@ -2296,11 +2230,11 @@ describe("matrix monitor handler live allowlist reload", () => {
       body: "hello again",
     });
 
-    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
   });
 
   it("uses account-scoped live dm.allowFrom overrides", async () => {
-    const dispatchReplyFromConfig = createDispatchReplyFromConfig();
+    const dispatchInboundMessage = createDispatchInboundMessage();
     const cfg = {
       channels: {
         matrix: {
@@ -2320,7 +2254,7 @@ describe("matrix monitor handler live allowlist reload", () => {
       isDirectMessage: true,
       allowFrom: ["@alice:example.org"],
       allowFromResolvedEntries: [{ input: "@alice:example.org", id: "@alice:example.org" }],
-      dispatchReplyFromConfig,
+      dispatchInboundMessage,
     });
 
     await sendLiveAllowlistMessage(handler, {
@@ -2328,7 +2262,7 @@ describe("matrix monitor handler live allowlist reload", () => {
       sender: "@alice:example.org",
       body: "hello",
     });
-    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
 
     cfg.channels.matrix.accounts.ops.dm.allowFrom = [];
     await sendLiveAllowlistMessage(handler, {
@@ -2337,11 +2271,11 @@ describe("matrix monitor handler live allowlist reload", () => {
       body: "hello again",
     });
 
-    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
   });
 
   it("keeps startup-resolved display names only while the raw input remains configured", async () => {
-    const dispatchReplyFromConfig = createDispatchReplyFromConfig();
+    const dispatchInboundMessage = createDispatchInboundMessage();
     const cfg = {
       channels: {
         matrix: {
@@ -2356,7 +2290,7 @@ describe("matrix monitor handler live allowlist reload", () => {
       isDirectMessage: true,
       allowFrom: ["@alice:example.org"],
       allowFromResolvedEntries: [{ input: "Alice", id: "@alice:example.org" }],
-      dispatchReplyFromConfig,
+      dispatchInboundMessage,
     });
 
     await sendLiveAllowlistMessage(handler, {
@@ -2364,7 +2298,7 @@ describe("matrix monitor handler live allowlist reload", () => {
       sender: "@alice:example.org",
       body: "hello",
     });
-    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
 
     cfg.channels.matrix.dm.allowFrom = [];
     await sendLiveAllowlistMessage(handler, {
@@ -2373,11 +2307,11 @@ describe("matrix monitor handler live allowlist reload", () => {
       body: "hello again",
     });
 
-    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
   });
 
   it("accepts a DM sender added as a live-resolved display name", async () => {
-    const dispatchReplyFromConfig = createDispatchReplyFromConfig();
+    const dispatchInboundMessage = createDispatchInboundMessage();
     const resolveLiveUserAllowlist = vi.fn(
       async (params: { entries?: ReadonlyArray<string | number> }) => {
         const entries = (params.entries ?? []).map(String);
@@ -2398,7 +2332,7 @@ describe("matrix monitor handler live allowlist reload", () => {
       isDirectMessage: true,
       allowFrom: [],
       allowFromResolvedEntries: [],
-      dispatchReplyFromConfig,
+      dispatchInboundMessage,
       resolveLiveUserAllowlist,
     });
 
@@ -2407,7 +2341,7 @@ describe("matrix monitor handler live allowlist reload", () => {
       sender: "@alice:example.org",
       body: "hello",
     });
-    expect(dispatchReplyFromConfig).not.toHaveBeenCalled();
+    expect(dispatchInboundMessage).not.toHaveBeenCalled();
 
     cfg.channels.matrix.dm.allowFrom = ["Alice"];
     await sendLiveAllowlistMessage(handler, {
@@ -2422,11 +2356,11 @@ describe("matrix monitor handler live allowlist reload", () => {
     );
     expect(liveAllowlistRequest.accountId).toBe("ops");
     expect(liveAllowlistRequest.entries).toEqual(["Alice"]);
-    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
   });
 
   it("refreshes cached live display-name allowlists when name matching is disabled", async () => {
-    const dispatchReplyFromConfig = createDispatchReplyFromConfig();
+    const dispatchInboundMessage = createDispatchInboundMessage();
     const resolveLiveUserAllowlist = vi.fn(async (params: LiveNameMatchingResolveParams) =>
       isLiveNameMatchingEnabled(params.cfg) ? ["@alice:example.org"] : [],
     );
@@ -2444,7 +2378,7 @@ describe("matrix monitor handler live allowlist reload", () => {
       isDirectMessage: true,
       allowFrom: [],
       allowFromResolvedEntries: [],
-      dispatchReplyFromConfig,
+      dispatchInboundMessage,
       resolveLiveUserAllowlist,
     });
 
@@ -2453,7 +2387,7 @@ describe("matrix monitor handler live allowlist reload", () => {
       sender: "@alice:example.org",
       body: "hello",
     });
-    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
 
     cfg.channels.matrix.dangerouslyAllowNameMatching = false;
     await sendLiveAllowlistMessage(handler, {
@@ -2465,11 +2399,11 @@ describe("matrix monitor handler live allowlist reload", () => {
     expect(countLiveAllowlistCallsForEntries(resolveLiveUserAllowlist.mock.calls, ["Alice"])).toBe(
       2,
     );
-    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
   });
 
   it("refreshes cached live display-name allowlists when name matching is enabled", async () => {
-    const dispatchReplyFromConfig = createDispatchReplyFromConfig();
+    const dispatchInboundMessage = createDispatchInboundMessage();
     const resolveLiveUserAllowlist = vi.fn(async (params: LiveNameMatchingResolveParams) =>
       isLiveNameMatchingEnabled(params.cfg) ? ["@alice:example.org"] : [],
     );
@@ -2487,7 +2421,7 @@ describe("matrix monitor handler live allowlist reload", () => {
       isDirectMessage: true,
       allowFrom: [],
       allowFromResolvedEntries: [],
-      dispatchReplyFromConfig,
+      dispatchInboundMessage,
       resolveLiveUserAllowlist,
     });
 
@@ -2496,7 +2430,7 @@ describe("matrix monitor handler live allowlist reload", () => {
       sender: "@alice:example.org",
       body: "hello",
     });
-    expect(dispatchReplyFromConfig).not.toHaveBeenCalled();
+    expect(dispatchInboundMessage).not.toHaveBeenCalled();
 
     cfg.channels.matrix.dangerouslyAllowNameMatching = true;
     await sendLiveAllowlistMessage(handler, {
@@ -2508,11 +2442,11 @@ describe("matrix monitor handler live allowlist reload", () => {
     expect(countLiveAllowlistCallsForEntries(resolveLiveUserAllowlist.mock.calls, ["Alice"])).toBe(
       2,
     );
-    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
   });
 
   it("blocks a room sender removed from live groupAllowFrom while the group list remains configured", async () => {
-    const dispatchReplyFromConfig = createDispatchReplyFromConfig();
+    const dispatchInboundMessage = createDispatchInboundMessage();
     const cfg = {
       channels: {
         matrix: {
@@ -2530,7 +2464,7 @@ describe("matrix monitor handler live allowlist reload", () => {
         { input: "@alice:example.org", id: "@alice:example.org" },
         { input: "@bob:example.org", id: "@bob:example.org" },
       ],
-      dispatchReplyFromConfig,
+      dispatchInboundMessage,
     });
 
     await sendLiveAllowlistMessage(handler, {
@@ -2540,7 +2474,7 @@ describe("matrix monitor handler live allowlist reload", () => {
       body: "@room hello",
       mentions: { room: true },
     });
-    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
 
     cfg.channels.matrix.groupAllowFrom = ["@bob:example.org"];
     await sendLiveAllowlistMessage(handler, {
@@ -2551,20 +2485,18 @@ describe("matrix monitor handler live allowlist reload", () => {
       mentions: { room: true },
     });
 
-    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
   });
 });
 
 describe("matrix monitor handler durable inbound dedupe", () => {
   it("skips replayed inbound events before session recording", async () => {
     const inboundDeduper = {
-      claimEvent: vi.fn(async () => false),
-      commitEvent: vi.fn(async () => undefined),
-      releaseEvent: vi.fn(),
+      claim: vi.fn(async () => ({ kind: "duplicate" as const })),
     };
     const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
       inboundDeduper,
-      dispatchReplyFromConfig: vi.fn(async () => ({
+      dispatchInboundMessage: vi.fn(async () => ({
         queuedFinal: true,
         counts: { final: 1, block: 0, tool: 0 },
       })),
@@ -2578,33 +2510,35 @@ describe("matrix monitor handler durable inbound dedupe", () => {
       }),
     );
 
-    expect(inboundDeduper.claimEvent).toHaveBeenCalledWith({
+    expect(inboundDeduper.claim).toHaveBeenCalledWith({
       roomId: "!room:example.org",
       eventId: "$dup",
     });
     expect(recordInboundSession).not.toHaveBeenCalled();
-    expect(inboundDeduper.commitEvent).not.toHaveBeenCalled();
-    expect(inboundDeduper.releaseEvent).not.toHaveBeenCalled();
   });
 
   it("commits inbound events only after queued replies finish delivering", async () => {
     const callOrder: string[] = [];
+    const commit = vi.fn(async () => {
+      callOrder.push("commit");
+      return true;
+    });
+    const release = vi.fn(() => {
+      callOrder.push("release");
+    });
     const inboundDeduper = {
-      claimEvent: vi.fn(async () => {
+      claim: vi.fn(async () => {
         callOrder.push("claim");
-        return true;
-      }),
-      commitEvent: vi.fn(async () => {
-        callOrder.push("commit");
-      }),
-      releaseEvent: vi.fn(() => {
-        callOrder.push("release");
+        return {
+          kind: "claimed" as const,
+          handle: { keys: ["test"] as const, commit, release },
+        };
       }),
     };
     const recordInboundSession = vi.fn(async () => {
       callOrder.push("record");
     });
-    const dispatchReplyFromConfig = vi.fn(async () => {
+    const dispatchInboundMessage = vi.fn(async () => {
       callOrder.push("dispatch");
       return {
         queuedFinal: true,
@@ -2614,7 +2548,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
     const { handler } = createMatrixHandlerTestHarness({
       inboundDeduper,
       recordInboundSession,
-      dispatchReplyFromConfig,
+      dispatchInboundMessage,
       createReplyDispatcherWithTyping: () => ({
         dispatcher: {
           markComplete: () => {
@@ -2646,20 +2580,23 @@ describe("matrix monitor handler durable inbound dedupe", () => {
       "claim",
       "record",
       "dispatch",
-      "run-complete",
       "mark-complete",
       "wait-for-idle",
+      "run-complete",
       "dispatch-idle",
       "commit",
     ]);
-    expect(inboundDeduper.releaseEvent).not.toHaveBeenCalled();
+    expect(release).not.toHaveBeenCalled();
   });
 
   it("commits a claimed event when bot loop protection suppresses dispatch", async () => {
+    const commit = vi.fn(async () => true);
+    const release = vi.fn();
     const inboundDeduper = {
-      claimEvent: vi.fn(async () => true),
-      commitEvent: vi.fn(async () => undefined),
-      releaseEvent: vi.fn(),
+      claim: vi.fn(async () => ({
+        kind: "claimed" as const,
+        handle: { keys: ["test"] as const, commit, release },
+      })),
     };
     const runPrepared = vi.fn(
       async (turn: { ctxPayload: Record<string, unknown>; routeSessionKey: string }) => ({
@@ -2690,18 +2627,18 @@ describe("matrix monitor handler durable inbound dedupe", () => {
     );
 
     expect(recordInboundSession).not.toHaveBeenCalled();
-    expect(inboundDeduper.commitEvent).toHaveBeenCalledWith({
-      roomId: "!room:example.org",
-      eventId: "$bot-loop-drop",
-    });
-    expect(inboundDeduper.releaseEvent).not.toHaveBeenCalled();
+    expect(commit).toHaveBeenCalledOnce();
+    expect(release).not.toHaveBeenCalled();
   });
 
   it("releases a claimed event when reply dispatch fails before completion", async () => {
+    const commit = vi.fn(async () => true);
+    const release = vi.fn();
     const inboundDeduper = {
-      claimEvent: vi.fn(async () => true),
-      commitEvent: vi.fn(async () => undefined),
-      releaseEvent: vi.fn(),
+      claim: vi.fn(async () => ({
+        kind: "claimed" as const,
+        handle: { keys: ["test"] as const, commit, release },
+      })),
     };
     const runtime = {
       error: vi.fn(),
@@ -2712,7 +2649,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
       recordInboundSession: vi.fn(async () => {
         throw new Error("disk failed");
       }),
-      dispatchReplyFromConfig: vi.fn(async () => ({
+      dispatchInboundMessage: vi.fn(async () => ({
         queuedFinal: true,
         counts: { final: 1, block: 0, tool: 0 },
       })),
@@ -2726,19 +2663,19 @@ describe("matrix monitor handler durable inbound dedupe", () => {
       }),
     );
 
-    expect(inboundDeduper.commitEvent).not.toHaveBeenCalled();
-    expect(inboundDeduper.releaseEvent).toHaveBeenCalledWith({
-      roomId: "!room:example.org",
-      eventId: "$release-on-error",
-    });
+    expect(commit).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledOnce();
     expectRuntimeErrorContaining(runtime.error, "matrix handler failed");
   });
 
   it("keeps replay committed when queued final delivery fails after a generic error", async () => {
+    const commit = vi.fn(async () => true);
+    const release = vi.fn();
     const inboundDeduper = {
-      claimEvent: vi.fn(async () => true),
-      commitEvent: vi.fn(async () => undefined),
-      releaseEvent: vi.fn(),
+      claim: vi.fn(async () => ({
+        kind: "claimed" as const,
+        handle: { keys: ["test"] as const, commit, release },
+      })),
     };
     const runtime = {
       error: vi.fn(),
@@ -2746,7 +2683,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
     const { handler } = createMatrixHandlerTestHarness({
       inboundDeduper,
       runtime: runtime as never,
-      dispatchReplyFromConfig: vi.fn(async () => ({
+      dispatchInboundMessage: vi.fn(async () => ({
         queuedFinal: true,
         counts: { final: 1, block: 0, tool: 0 },
       })),
@@ -2771,21 +2708,21 @@ describe("matrix monitor handler durable inbound dedupe", () => {
       }),
     );
 
-    expect(inboundDeduper.commitEvent).toHaveBeenCalledWith({
-      roomId: "!room:example.org",
-      eventId: "$release-on-final-delivery-error",
-    });
-    expect(inboundDeduper.releaseEvent).not.toHaveBeenCalled();
+    expect(commit).toHaveBeenCalledOnce();
+    expect(release).not.toHaveBeenCalled();
     expectRuntimeErrorContaining(runtime.error, "matrix final reply failed");
   });
 
   it.each(["tool", "block"] as const)(
     "keeps replay committed when queued %s delivery fails after a generic error and no final reply exists",
     async (kind) => {
+      const commit = vi.fn(async () => true);
+      const release = vi.fn();
       const inboundDeduper = {
-        claimEvent: vi.fn(async () => true),
-        commitEvent: vi.fn(async () => undefined),
-        releaseEvent: vi.fn(),
+        claim: vi.fn(async () => ({
+          kind: "claimed" as const,
+          handle: { keys: ["test"] as const, commit, release },
+        })),
       };
       const runtime = {
         error: vi.fn(),
@@ -2793,7 +2730,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
       const { handler } = createMatrixHandlerTestHarness({
         inboundDeduper,
         runtime: runtime as never,
-        dispatchReplyFromConfig: vi.fn(async () => ({
+        dispatchInboundMessage: vi.fn(async () => ({
           queuedFinal: false,
           counts: {
             final: 0,
@@ -2822,118 +2759,28 @@ describe("matrix monitor handler durable inbound dedupe", () => {
         }),
       );
 
-      expect(inboundDeduper.commitEvent).toHaveBeenCalledWith({
-        roomId: "!room:example.org",
-        eventId: `$release-on-${kind}-delivery-error`,
-      });
-      expect(inboundDeduper.releaseEvent).not.toHaveBeenCalled();
+      expect(commit).toHaveBeenCalledOnce();
+      expect(release).not.toHaveBeenCalled();
       expectRuntimeErrorContaining(runtime.error, `matrix ${kind} reply failed`);
-    },
-  );
-
-  it("releases a claimed event when queued final delivery fails with an explicit retryable error", async () => {
-    const inboundDeduper = {
-      claimEvent: vi.fn(async () => true),
-      commitEvent: vi.fn(async () => undefined),
-      releaseEvent: vi.fn(),
-    };
-    const runtime = {
-      error: vi.fn(),
-    };
-    const { handler } = createMatrixHandlerTestHarness({
-      inboundDeduper,
-      runtime: runtime as never,
-      dispatchReplyFromConfig: vi.fn(async () => ({
-        queuedFinal: true,
-        counts: { final: 1, block: 0, tool: 0 },
-      })),
-      createReplyDispatcherWithTyping: (params) => ({
-        dispatcher: {
-          markComplete: () => {},
-          waitForIdle: async () => {
-            params?.onError?.(new MatrixRetryableInboundError("retry send"), { kind: "final" });
-          },
-        },
-        replyOptions: {},
-        markDispatchIdle: () => {},
-        markRunComplete: () => {},
-      }),
-    });
-
-    await handler(
-      "!room:example.org",
-      createMatrixTextMessageEvent({
-        eventId: "$retryable-final-delivery-error",
-        body: "hello",
-      }),
-    );
-
-    expect(inboundDeduper.commitEvent).not.toHaveBeenCalled();
-    expect(inboundDeduper.releaseEvent).toHaveBeenCalledWith({
-      roomId: "!room:example.org",
-      eventId: "$retryable-final-delivery-error",
-    });
-  });
-
-  it.each(["tool", "block"] as const)(
-    "releases a claimed event when queued %s delivery fails with an explicit retryable error and no final reply exists",
-    async (kind) => {
-      const inboundDeduper = {
-        claimEvent: vi.fn(async () => true),
-        commitEvent: vi.fn(async () => undefined),
-        releaseEvent: vi.fn(),
-      };
-      const { handler } = createMatrixHandlerTestHarness({
-        inboundDeduper,
-        dispatchReplyFromConfig: vi.fn(async () => ({
-          queuedFinal: false,
-          counts: {
-            final: 0,
-            block: kind === "block" ? 1 : 0,
-            tool: kind === "tool" ? 1 : 0,
-          },
-        })),
-        createReplyDispatcherWithTyping: (params) => ({
-          dispatcher: {
-            markComplete: () => {},
-            waitForIdle: async () => {
-              params?.onError?.(new MatrixRetryableInboundError("retry send"), { kind });
-            },
-          },
-          replyOptions: {},
-          markDispatchIdle: () => {},
-          markRunComplete: () => {},
-        }),
-      });
-
-      await handler(
-        "!room:example.org",
-        createMatrixTextMessageEvent({
-          eventId: `$retryable-${kind}-delivery-error`,
-          body: "hello",
-        }),
-      );
-
-      expect(inboundDeduper.commitEvent).not.toHaveBeenCalled();
-      expect(inboundDeduper.releaseEvent).toHaveBeenCalledWith({
-        roomId: "!room:example.org",
-        eventId: `$retryable-${kind}-delivery-error`,
-      });
     },
   );
 
   it("commits a claimed event when dispatch completes without a final reply", async () => {
     const callOrder: string[] = [];
+    const commit = vi.fn(async () => {
+      callOrder.push("commit");
+      return true;
+    });
+    const release = vi.fn(() => {
+      callOrder.push("release");
+    });
     const inboundDeduper = {
-      claimEvent: vi.fn(async () => {
+      claim: vi.fn(async () => {
         callOrder.push("claim");
-        return true;
-      }),
-      commitEvent: vi.fn(async () => {
-        callOrder.push("commit");
-      }),
-      releaseEvent: vi.fn(() => {
-        callOrder.push("release");
+        return {
+          kind: "claimed" as const,
+          handle: { keys: ["test"] as const, commit, release },
+        };
       }),
     };
     const { handler } = createMatrixHandlerTestHarness({
@@ -2941,7 +2788,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
       recordInboundSession: vi.fn(async () => {
         callOrder.push("record");
       }),
-      dispatchReplyFromConfig: vi.fn(async () => {
+      dispatchInboundMessage: vi.fn(async () => {
         callOrder.push("dispatch");
         return {
           queuedFinal: false,
@@ -2959,7 +2806,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
     );
 
     expect(callOrder).toEqual(["claim", "record", "dispatch", "commit"]);
-    expect(inboundDeduper.releaseEvent).not.toHaveBeenCalled();
+    expect(release).not.toHaveBeenCalled();
   });
 });
 
@@ -2988,6 +2835,7 @@ describe("matrix monitor handler draft streaming", () => {
       context?: { assistantMessageIndex?: number },
     ) => Promise<void> | void;
     onAssistantMessageStart?: () => void;
+    onQueuedFollowupAdmitted?: () => Promise<void> | void;
     suppressDefaultToolProgressMessages?: boolean;
     onToolStart?: (payload: {
       itemId?: string;
@@ -3011,7 +2859,7 @@ describe("matrix monitor handler draft streaming", () => {
     onPlanUpdate?: (payload: {
       phase: string;
       explanation?: string;
-      steps?: string[];
+      steps?: Array<{ step: string; status: "pending" | "in_progress" | "completed" }>;
     }) => Promise<void>;
     onApprovalEvent?: (payload: { phase: string; command?: string }) => Promise<void>;
     onCommandOutput?: (payload: {
@@ -3090,22 +2938,13 @@ describe("matrix monitor handler draft streaming", () => {
           markRunComplete: () => {},
         };
       },
-      dispatchReplyFromConfig: vi.fn(async (args: { replyOptions?: ReplyOpts }) => {
+      dispatchInboundMessage: vi.fn(async (args: { replyOptions?: ReplyOpts }) => {
         capturedReplyOpts = args?.replyOptions;
         notifyCaptured();
         // Block until the test is done exercising callbacks.
         await runGate;
         return { queuedFinal: true, counts: { final: 1, block: 0, tool: 0 } };
       }) as never,
-      withReplyDispatcher: async <T>(params: {
-        dispatcher: { markComplete?: () => void; waitForIdle?: () => Promise<void> };
-        run: () => Promise<T>;
-        onSettled?: () => void | Promise<void>;
-      }) => {
-        const result = await params.run();
-        await params.onSettled?.();
-        return result;
-      },
     });
 
     const dispatch = async () => {
@@ -3135,7 +2974,7 @@ describe("matrix monitor handler draft streaming", () => {
     const { deliver, opts, finish } = await dispatch();
 
     opts.onPartialReply?.({ text: "Single block" });
-    await vi.waitFor(() => {
+    await waitForMatrixState(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
 
@@ -3158,7 +2997,7 @@ describe("matrix monitor handler draft streaming", () => {
     expect(opts.suppressDefaultToolProgressMessages).toBe(true);
     await opts.onToolStart?.({ name: "read_file" });
 
-    await vi.waitFor(() => {
+    await waitForMatrixState(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
     expect(singleTextMessageBody()).toMatch(/\n`🧩 Read File`$/);
@@ -3169,6 +3008,52 @@ describe("matrix monitor handler draft streaming", () => {
     expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
     expect(redactEventMock).not.toHaveBeenCalled();
     await finish();
+  });
+
+  it("replaces Matrix plan snapshots and keeps the explanation", async () => {
+    vi.useFakeTimers();
+    let finish: (() => Promise<void>) | undefined;
+    try {
+      const { dispatch } = createStreamingHarness({
+        streaming: "progress",
+        previewToolProgressEnabled: true,
+        accountConfig: {
+          streaming: { mode: "progress", progress: { label: false } },
+        } as never,
+      });
+      const streaming = await dispatch();
+      const { opts } = streaming;
+      finish = streaming.finish;
+
+      await opts.onPlanUpdate?.({
+        phase: "update",
+        explanation: "Initial plan",
+        steps: [{ step: "Inspect", status: "in_progress" }],
+      });
+      await waitForMatrixState(() => {
+        expect(singleTextMessageBody()).toBe("`Initial plan`\n\n`▸ Inspect`");
+      });
+
+      await opts.onPlanUpdate?.({
+        phase: "update",
+        explanation: "Revised plan",
+        steps: [
+          { step: "Inspect", status: "completed" },
+          { step: "Patch", status: "in_progress" },
+        ],
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(editMessageMatrixMock).toHaveBeenCalled();
+      expect(lastCallArg(editMessageMatrixMock, 2, "Matrix plan edit body")).toBe(
+        "`Revised plan`\n\n`✅ Inspect`\n`▸ Patch`",
+      );
+    } finally {
+      try {
+        await finish?.();
+      } finally {
+        vi.useRealTimers();
+      }
+    }
   });
 
   it("uses resolved Matrix account progress maxLines for draft text", async () => {
@@ -3406,7 +3291,7 @@ describe("matrix monitor handler draft streaming", () => {
       progressText: "@room ping @alice:example.org [label](https://example.org)",
     });
 
-    await vi.waitFor(() => {
+    await waitForMatrixState(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
     expect(singleTextMessageBody()).toMatch(
@@ -3466,7 +3351,7 @@ describe("matrix monitor handler draft streaming", () => {
     const { deliver, opts, finish } = await dispatch();
 
     opts.onPartialReply?.({ text: "Single block" });
-    await vi.waitFor(() => {
+    await waitForMatrixState(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
 
@@ -3496,7 +3381,7 @@ describe("matrix monitor handler draft streaming", () => {
     const { deliver, opts, finish } = await dispatch();
 
     opts.onPartialReply?.({ text: "hello @alice:example.org" });
-    await vi.waitFor(() => {
+    await waitForMatrixState(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
 
@@ -3522,7 +3407,7 @@ describe("matrix monitor handler draft streaming", () => {
     const { deliver, opts, finish } = await dispatch();
 
     opts.onPartialReply?.({ text: "hello @alice:example.org" });
-    await vi.waitFor(() => {
+    await waitForMatrixState(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
 
@@ -3548,7 +3433,7 @@ describe("matrix monitor handler draft streaming", () => {
     const { deliver, opts, finish } = await dispatch();
 
     opts.onPartialReply?.({ text: "Spoken answer" });
-    await vi.waitFor(() => {
+    await waitForMatrixState(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
 
@@ -3589,7 +3474,7 @@ describe("matrix monitor handler draft streaming", () => {
     const { deliver, opts, finish } = await dispatch();
 
     opts.onPartialReply?.({ text: "Spoken answer" });
-    await vi.waitFor(() => {
+    await waitForMatrixState(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
 
@@ -3708,7 +3593,7 @@ describe("matrix monitor handler draft streaming", () => {
     const { deliver, opts, finish } = await dispatch();
 
     opts.onPartialReply?.({ text: "Single" });
-    await vi.waitFor(() => {
+    await waitForMatrixState(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
 
@@ -3726,7 +3611,7 @@ describe("matrix monitor handler draft streaming", () => {
     const { deliver, opts, finish } = await dispatch();
 
     opts.onPartialReply?.({ text: "Block one" });
-    await vi.waitFor(() => {
+    await waitForMatrixState(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
 
@@ -3743,7 +3628,7 @@ describe("matrix monitor handler draft streaming", () => {
       roomId: "!room",
     });
     opts.onPartialReply?.({ text: "Block two" });
-    await vi.waitFor(() => {
+    await waitForMatrixState(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(2);
     });
 
@@ -3760,7 +3645,7 @@ describe("matrix monitor handler draft streaming", () => {
     const { deliver, opts, finish } = await dispatch();
 
     opts.onPartialReply?.({ text: "Alpha" });
-    await vi.waitFor(() => {
+    await waitForMatrixState(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
 
@@ -3779,7 +3664,7 @@ describe("matrix monitor handler draft streaming", () => {
 
     await deliver({ text: "Alpha" }, { kind: "block" });
 
-    await vi.waitFor(() => {
+    await waitForMatrixState(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(2);
     });
     expect(singleTextMessageBody(1)).toBe("Beta");
@@ -3793,7 +3678,7 @@ describe("matrix monitor handler draft streaming", () => {
     const { deliver, opts, finish } = await dispatch();
 
     opts.onPartialReply?.({ text: "Alpha" });
-    await vi.waitFor(
+    await waitForMatrixState(
       () => {
         expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
       },
@@ -3801,7 +3686,7 @@ describe("matrix monitor handler draft streaming", () => {
     );
 
     opts.onPartialReply?.({ text: "AlphaBeta" });
-    await vi.waitFor(
+    await waitForMatrixState(
       () => {
         expectMatrixEdit("!room:example.org", "$draft1", "AlphaBeta");
       },
@@ -3818,7 +3703,7 @@ describe("matrix monitor handler draft streaming", () => {
     });
     await deliver({ text: "Alpha" }, { kind: "block" });
 
-    await vi.waitFor(
+    await waitForMatrixState(
       () => {
         expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
       },
@@ -3836,7 +3721,7 @@ describe("matrix monitor handler draft streaming", () => {
     const { deliver, opts, finish } = await dispatch();
 
     opts.onPartialReply?.({ text: "Hello" });
-    await vi.waitFor(() => {
+    await waitForMatrixState(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
 
@@ -3855,7 +3740,7 @@ describe("matrix monitor handler draft streaming", () => {
       const { deliver, opts, finish } = await dispatch();
 
       opts.onPartialReply?.({ text: "Hello" });
-      await vi.waitFor(() => {
+      await waitForMatrixState(() => {
         expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
       });
 
@@ -3874,13 +3759,73 @@ describe("matrix monitor handler draft streaming", () => {
     }
   });
 
+  it("starts a fresh Matrix draft for queued followups after the primary final", async () => {
+    vi.useFakeTimers();
+    try {
+      const { dispatch } = createStreamingHarness();
+      const { deliver, opts, finish } = await dispatch();
+
+      opts.onPartialReply?.({ text: "Primary answer" });
+      await waitForMatrixState(() => {
+        expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+      });
+
+      await deliver({ text: "Primary answer" }, { kind: "final" });
+
+      sendSingleTextMessageMatrixMock.mockClear();
+      sendSingleTextMessageMatrixMock.mockResolvedValue({ messageId: "$draft2", roomId: "!room" });
+
+      await opts.onQueuedFollowupAdmitted?.();
+      opts.onPartialReply?.({ text: "Queued followup answer" });
+      await vi.advanceTimersByTimeAsync(50);
+
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+      expect(singleTextMessageBody()).toBe("Queued followup answer");
+      await finish();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("starts fresh progress drafts for queued followups after the primary final", async () => {
+    vi.useFakeTimers();
+    try {
+      const { dispatch } = createStreamingHarness({
+        streaming: "progress",
+        previewToolProgressEnabled: true,
+      });
+      const { deliver, opts, finish } = await dispatch();
+
+      await opts.onToolStart?.({ name: "read_file" });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+
+      await deliver({ text: "Primary answer" }, { kind: "final" });
+
+      sendSingleTextMessageMatrixMock.mockClear();
+      sendSingleTextMessageMatrixMock.mockResolvedValue({ messageId: "$draft2", roomId: "!room" });
+
+      await opts.onQueuedFollowupAdmitted?.();
+      await opts.onToolStart?.({ name: "exec" });
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+      expect(singleTextMessageBody()).toMatch(/`🛠️ Exec`$/);
+      await finish();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("resets draft block offsets on assistant message start", async () => {
     const { dispatch } = createStreamingHarness();
     const { deliver, opts, finish } = await dispatch();
 
     // Block 1: stream and deliver.
     opts.onPartialReply?.({ text: "Block one" });
-    await vi.waitFor(() => {
+    await waitForMatrixState(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
     await deliver({ text: "Block one" }, { kind: "block" });
@@ -3896,7 +3841,7 @@ describe("matrix monitor handler draft streaming", () => {
     sendSingleTextMessageMatrixMock.mockResolvedValue({ messageId: "$draft2", roomId: "!room" });
 
     opts.onPartialReply?.({ text: "Block two" });
-    await vi.waitFor(() => {
+    await waitForMatrixState(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
 
@@ -3911,7 +3856,7 @@ describe("matrix monitor handler draft streaming", () => {
     const { deliver, opts, finish } = await dispatch();
 
     opts.onPartialReply?.({ text: "Alpha" });
-    await vi.waitFor(() => {
+    await waitForMatrixState(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
 
@@ -3919,7 +3864,7 @@ describe("matrix monitor handler draft streaming", () => {
     opts.onAssistantMessageStart?.();
     opts.onPartialReply?.({ text: "Beta" });
 
-    await vi.waitFor(() => {
+    await waitForMatrixState(() => {
       expectMatrixEdit("!room:example.org", "$draft1", "Beta");
     });
 
@@ -3934,7 +3879,7 @@ describe("matrix monitor handler draft streaming", () => {
     expectMatrixEdit("!room:example.org", "$draft1", "Alpha");
     expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
     expect(redactEventMock).not.toHaveBeenCalled();
-    await vi.waitFor(() => {
+    await waitForMatrixState(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
     expect(singleTextMessageBody()).toBe("Beta");
@@ -3952,7 +3897,7 @@ describe("matrix monitor handler draft streaming", () => {
 
     opts.onAssistantMessageStart?.();
     opts.onPartialReply?.({ text: "Alpha" });
-    await vi.waitFor(() => {
+    await waitForMatrixState(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
 
@@ -3960,7 +3905,7 @@ describe("matrix monitor handler draft streaming", () => {
     await opts.onBlockReplyQueued?.({ text: "Alpha" }, { assistantMessageIndex: 1 });
     opts.onPartialReply?.({ text: "Beta" });
 
-    await vi.waitFor(() => {
+    await waitForMatrixState(() => {
       expectMatrixEdit("!room:example.org", "$draft1", "Beta");
     });
 
@@ -3975,7 +3920,7 @@ describe("matrix monitor handler draft streaming", () => {
     expectMatrixEdit("!room:example.org", "$draft1", "Alpha");
     expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
     expect(redactEventMock).not.toHaveBeenCalled();
-    await vi.waitFor(() => {
+    await waitForMatrixState(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
     expect(singleTextMessageBody()).toBe("Beta");
@@ -3992,7 +3937,7 @@ describe("matrix monitor handler draft streaming", () => {
     const { deliver, opts, finish } = await dispatch();
 
     opts.onPartialReply?.({ text: "Alpha" });
-    await vi.waitFor(() => {
+    await waitForMatrixState(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
     expect(singleTextMessageBody()).toBe("Alpha");
@@ -4013,7 +3958,7 @@ describe("matrix monitor handler draft streaming", () => {
     });
     await deliver({ text: "Alpha" }, { kind: "block" });
 
-    await vi.waitFor(() => {
+    await waitForMatrixState(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
     expect(singleTextMessageBody()).toBe("Beta");
@@ -4027,7 +3972,7 @@ describe("matrix monitor handler draft streaming", () => {
     });
     await deliver({ text: "Beta" }, { kind: "block" });
 
-    await vi.waitFor(() => {
+    await waitForMatrixState(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
     expect(singleTextMessageBody()).toBe("Gamma");
@@ -4057,24 +4002,15 @@ describe("matrix monitor handler draft streaming", () => {
           markDispatchIdle: () => {},
           markRunComplete: () => {},
         }),
-        dispatchReplyFromConfig: vi.fn(async (args: { replyOptions?: ReplyOpts }) => {
+        dispatchInboundMessage: vi.fn(async (args: { replyOptions?: ReplyOpts }) => {
           capturedReplyOpts = args?.replyOptions;
           // Simulate streaming then model error.
           capturedReplyOpts?.onPartialReply?.({ text: "partial" });
-          await vi.waitFor(() => {
+          await waitForMatrixState(() => {
             expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
           });
           throw new Error("model timeout");
         }) as never,
-        withReplyDispatcher: async <T>(params: {
-          dispatcher: { markComplete?: () => void; waitForIdle?: () => Promise<void> };
-          run: () => Promise<T>;
-          onSettled?: () => void | Promise<void>;
-        }) => {
-          const result = await params.run();
-          await params.onSettled?.();
-          return result;
-        },
       });
 
       // Handler should not throw (outer catch absorbs it).
@@ -4115,23 +4051,14 @@ describe("matrix monitor handler draft streaming", () => {
         markDispatchIdle: () => {},
         markRunComplete: () => {},
       }),
-      dispatchReplyFromConfig: vi.fn(async (args: { replyOptions?: ReplyOpts }) => {
+      dispatchInboundMessage: vi.fn(async (args: { replyOptions?: ReplyOpts }) => {
         capturedReplyOpts = args?.replyOptions;
         capturedReplyOpts?.onPartialReply?.({ text: "partial" });
-        await vi.waitFor(() => {
+        await waitForMatrixState(() => {
           expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
         });
         throw new Error("model timeout");
       }) as never,
-      withReplyDispatcher: async <T>(params: {
-        dispatcher: { markComplete?: () => void; waitForIdle?: () => Promise<void> };
-        run: () => Promise<T>;
-        onSettled?: () => void | Promise<void>;
-      }) => {
-        const result = await params.run();
-        await params.onSettled?.();
-        return result;
-      },
     });
 
     await handler(
@@ -4147,7 +4074,7 @@ describe("matrix monitor handler draft streaming", () => {
     const { deliver, opts, finish } = await dispatch();
 
     opts.onPartialReply?.({ text: "Partial reply" });
-    await vi.waitFor(() => {
+    await waitForMatrixState(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
 
@@ -4168,7 +4095,7 @@ describe("matrix monitor handler draft streaming", () => {
     const { deliver, opts, finish } = await dispatch();
 
     opts.onPartialReply?.({ text: "Streaming" });
-    await vi.waitFor(() => {
+    await waitForMatrixState(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
 
@@ -4188,7 +4115,7 @@ describe("matrix monitor handler draft streaming", () => {
 
     // Simulate streaming: partial reply creates draft message.
     opts.onPartialReply?.({ text: "Partial reply" });
-    await vi.waitFor(() => {
+    await waitForMatrixState(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
 
@@ -4215,7 +4142,7 @@ describe("matrix monitor handler draft streaming", () => {
     opts.onAssistantMessageStart?.();
 
     opts.onPartialReply?.({ text: "Partial reply" });
-    await vi.waitFor(() => {
+    await waitForMatrixState(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
 
@@ -4233,7 +4160,7 @@ describe("matrix monitor handler draft streaming", () => {
     const { deliver, opts, finish } = await dispatch();
 
     opts.onPartialReply?.({ text: "Partial reply" });
-    await vi.waitFor(() => {
+    await waitForMatrixState(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
 
@@ -4277,7 +4204,7 @@ describe("matrix monitor handler draft streaming", () => {
     const { deliver, opts, finish } = await dispatch();
 
     opts.onPartialReply?.({ text: "Partial reply" });
-    await vi.waitFor(() => {
+    await waitForMatrixState(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
 
@@ -4295,7 +4222,7 @@ describe("matrix monitor handler draft streaming", () => {
     const { deliver, opts, finish } = await dispatch();
 
     opts.onPartialReply?.({ text: "screenshot ready" });
-    await vi.waitFor(() => {
+    await waitForMatrixState(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
 
@@ -4320,7 +4247,7 @@ describe("matrix monitor handler draft streaming", () => {
     const { deliver, opts, finish } = await dispatch();
 
     opts.onPartialReply?.({ text: "screenshot ready" });
-    await vi.waitFor(() => {
+    await waitForMatrixState(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
 
@@ -4344,7 +4271,7 @@ describe("matrix monitor handler draft streaming", () => {
     const { deliver, opts, finish } = await dispatch();
 
     opts.onPartialReply?.({ text: "@room screenshot ready" });
-    await vi.waitFor(() => {
+    await waitForMatrixState(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
 
@@ -4376,7 +4303,7 @@ describe("matrix monitor handler draft streaming", () => {
     const { deliver, opts, finish } = await dispatch();
 
     opts.onPartialReply?.({ text: "1234" });
-    await vi.waitFor(() => {
+    await waitForMatrixState(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
 
@@ -4407,7 +4334,7 @@ describe("matrix monitor handler block streaming config", () => {
 
     const { handler } = createMatrixHandlerTestHarness({
       streaming: "off",
-      dispatchReplyFromConfig: vi.fn(
+      dispatchInboundMessage: vi.fn(
         async (args: { replyOptions?: { disableBlockStreaming?: boolean } }) => {
           capturedDisableBlockStreaming = args.replyOptions?.disableBlockStreaming;
           return { queuedFinal: false, counts: { final: 0, block: 0, tool: 0 } };
@@ -4428,7 +4355,7 @@ describe("matrix monitor handler block streaming config", () => {
 
     const { handler } = createMatrixHandlerTestHarness({
       streaming: "partial",
-      dispatchReplyFromConfig: vi.fn(
+      dispatchInboundMessage: vi.fn(
         async (args: { replyOptions?: { disableBlockStreaming?: boolean } }) => {
           capturedDisableBlockStreaming = args.replyOptions?.disableBlockStreaming;
           return { queuedFinal: false, counts: { final: 0, block: 0, tool: 0 } };
@@ -4449,7 +4376,7 @@ describe("matrix monitor handler block streaming config", () => {
 
     const { handler } = createMatrixHandlerTestHarness({
       streaming: "quiet",
-      dispatchReplyFromConfig: vi.fn(
+      dispatchInboundMessage: vi.fn(
         async (args: { replyOptions?: { disableBlockStreaming?: boolean } }) => {
           capturedDisableBlockStreaming = args.replyOptions?.disableBlockStreaming;
           return { queuedFinal: false, counts: { final: 0, block: 0, tool: 0 } };
@@ -4471,7 +4398,7 @@ describe("matrix monitor handler block streaming config", () => {
     const { handler } = createMatrixHandlerTestHarness({
       streaming: "partial",
       blockStreamingEnabled: true,
-      dispatchReplyFromConfig: vi.fn(
+      dispatchInboundMessage: vi.fn(
         async (args: { replyOptions?: { disableBlockStreaming?: boolean } }) => {
           capturedDisableBlockStreaming = args.replyOptions?.disableBlockStreaming;
           return { queuedFinal: false, counts: { final: 0, block: 0, tool: 0 } };
@@ -4493,7 +4420,7 @@ describe("matrix monitor handler block streaming config", () => {
     const { handler } = createMatrixHandlerTestHarness({
       streaming: "off",
       blockStreamingEnabled: true,
-      dispatchReplyFromConfig: vi.fn(
+      dispatchInboundMessage: vi.fn(
         async (args: { replyOptions?: { disableBlockStreaming?: boolean } }) => {
           capturedDisableBlockStreaming = args.replyOptions?.disableBlockStreaming;
           return { queuedFinal: false, counts: { final: 0, block: 0, tool: 0 } };

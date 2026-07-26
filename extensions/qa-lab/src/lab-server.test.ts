@@ -1,5 +1,5 @@
 // Qa Lab tests cover lab server plugin behavior.
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import fs, { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -14,7 +14,7 @@ const qaChannelMock = vi.hoisted(() => ({
   startAccount: vi.fn(),
 }));
 
-vi.mock("./runtime-api.js", () => ({
+vi.mock("openclaw/plugin-sdk/qa-channel", () => ({
   qaChannelPlugin: {
     config: {
       resolveAccount: qaChannelMock.resolveAccount,
@@ -600,6 +600,113 @@ describe("qa-lab server", () => {
     outsideUrl.searchParams.set("artifactPath", outsideArtifact);
     const outsideResponse = await fetchWithRetry(outsideUrl.toString());
     expect(outsideResponse.status).toBe(404);
+  });
+
+  it("preserves UTF-8 at the evidence preview byte boundary", async () => {
+    const repoRoot = await createQaLabRepoRootFixture();
+    const evidenceDir = path.join(repoRoot, ".artifacts", "qa-e2e", "utf8-preview");
+    const previewBytes = 12 * 1024;
+    const shortReadBytes = 1024;
+    const readBoundaryPrefix = "a".repeat(shortReadBytes - 1);
+    const readBoundaryText = `${readBoundaryPrefix}😀tail`;
+    const splitPrefix = "a".repeat(previewBytes - 1);
+    const completePrefix = "a".repeat(previewBytes - Buffer.byteLength("😀"));
+    await mkdir(evidenceDir, { recursive: true });
+    await writeFile(path.join(evidenceDir, "short-read.log"), readBoundaryText, "utf8");
+    await writeFile(path.join(evidenceDir, "split.log"), `${splitPrefix}😀tail`, "utf8");
+    await writeFile(path.join(evidenceDir, "complete.log"), `${completePrefix}😀tail`, "utf8");
+    await writeFile(
+      path.join(evidenceDir, "qa-evidence.json"),
+      `${JSON.stringify(
+        {
+          kind: "openclaw.qa.evidence-summary",
+          schemaVersion: 2,
+          generatedAt: "2026-07-16T00:00:00.000Z",
+          evidenceMode: "full",
+          entries: [
+            {
+              test: {
+                kind: "vitest-test",
+                id: "qa-lab.utf8-preview-boundary",
+                title: "UTF-8 preview boundary",
+              },
+              coverage: [{ id: "qa.evidence-preview", role: "primary" }],
+              execution: {
+                runner: "vitest",
+                environment: {
+                  ref: "utf8-preview-test",
+                  os: process.platform,
+                  nodeVersion: process.version,
+                },
+                provider: {
+                  id: "mock-openai",
+                  live: false,
+                  model: { name: "mock-openai/gpt-5.6-luna", ref: "mock-openai/gpt-5.6-luna" },
+                },
+                packageSource: { kind: "source-checkout" },
+                artifacts: [
+                  { kind: "log", path: "short-read.log", source: "vitest" },
+                  { kind: "log", path: "split.log", source: "vitest" },
+                  { kind: "log", path: "complete.log", source: "vitest" },
+                ],
+              },
+              result: { status: "pass" },
+            },
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const realOpen = fs.open;
+    const readPositions = new Map<string, number[]>();
+    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+      const handle = await realOpen(filePath, flags, mode);
+      const realRead = handle.read.bind(handle);
+      const artifactName = path.basename(filePath.toString());
+      Object.defineProperty(handle, "read", {
+        configurable: true,
+        value: async (buffer: Buffer, offset: number, length: number, position: number) => {
+          const positions = readPositions.get(artifactName) ?? [];
+          positions.push(position);
+          readPositions.set(artifactName, positions);
+          return await realRead(buffer, offset, Math.min(length, shortReadBytes), position);
+        },
+      });
+      return handle;
+    });
+    cleanups.push(async () => {
+      openSpy.mockRestore();
+    });
+
+    const lab = await startQaLabServerForTest({
+      host: "127.0.0.1",
+      port: 0,
+      repoRoot,
+    });
+    cleanups.push(async () => {
+      await lab.stop();
+    });
+    const evidenceUrl = new URL("/api/evidence", lab.baseUrl);
+    evidenceUrl.searchParams.set("path", ".artifacts/qa-e2e/utf8-preview/qa-evidence.json");
+
+    const response = await fetchWithRetry(evidenceUrl.toString());
+    expect(response.status).toBe(200);
+    const payload = (await response.json()) as {
+      evidence: { entries: Array<{ artifacts: Array<{ path: string; preview: string | null }> }> };
+    };
+    const artifacts = payload.evidence.entries[0]?.artifacts ?? [];
+    const shortRead = artifacts.find((artifact) => artifact.path.endsWith("short-read.log"));
+    const split = artifacts.find((artifact) => artifact.path.endsWith("split.log"));
+    const complete = artifacts.find((artifact) => artifact.path.endsWith("complete.log"));
+    expect(shortRead?.preview).toBe(readBoundaryText);
+    expect(split?.preview).toBe(splitPrefix);
+    expect(complete?.preview).toBe(`${completePrefix}😀`);
+    expect(readPositions.get("short-read.log")?.slice(0, 2)).toEqual([0, shortReadBytes]);
+    expect(readPositions.get("short-read.log")?.at(-1)).toBe(Buffer.byteLength(readBoundaryText));
+    expect(JSON.stringify(payload)).not.toContain("�");
   });
 
   it("returns controlled errors for malformed JSON body reads", async () => {

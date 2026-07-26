@@ -1,9 +1,10 @@
 // Gh Read script supports OpenClaw repository automation.
 import { spawnSync } from "node:child_process";
 import { createPrivateKey, createSign } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { readSecretFileSync } from "@openclaw/fs-safe/secret";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { truncateUtf16Safe } from "../packages/normalization-core/src/utf16-slice.js";
 import { readBoundedResponseText } from "./lib/bounded-response.ts";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
 import {
@@ -21,6 +22,7 @@ const API_VERSION = "2022-11-28";
 const DEFAULT_GITHUB_FETCH_TIMEOUT_MS = 30_000;
 const GITHUB_ERROR_BODY_MAX_CHARS = 4096;
 const GITHUB_JSON_BODY_MAX_BYTES = 1024 * 1024;
+const GITHUB_APP_PRIVATE_KEY_MAX_BYTES = 64 * 1024;
 const DEFAULT_READ_PERMISSION_KEYS = [
   "actions",
   "checks",
@@ -237,7 +239,7 @@ export async function readBoundedGitHubErrorText(
 
       text += decoder.decode(value, { stream: true });
       if (text.length > maxChars) {
-        text = text.slice(0, maxChars);
+        text = truncateUtf16Safe(text, maxChars);
         truncated = true;
         break;
       }
@@ -352,6 +354,13 @@ async function createInstallationToken(
   return tokenResponse.token;
 }
 
+export function readGitHubAppPrivateKey(filePath: string): string {
+  return readSecretFileSync(filePath, "GitHub App private key", {
+    maxBytes: GITHUB_APP_PRIVATE_KEY_MAX_BYTES,
+    rejectHardlinks: false,
+  });
+}
+
 async function main() {
   if (process.argv.length <= 2) {
     fail(
@@ -362,7 +371,7 @@ async function main() {
   const ghArgs = process.argv.slice(2);
   const appId = readRequiredEnv(APP_ID_ENV);
   const privateKeyPath = readRequiredEnv(KEY_FILE_ENV);
-  const privateKeyPem = readFileSync(privateKeyPath, "utf8");
+  const privateKeyPem = readGitHubAppPrivateKey(privateKeyPath);
   const repo = resolveRepo(ghArgs);
   const appJwt = createAppJwt(appId, privateKeyPem);
   const installation = await resolveInstallation(appJwt, repo);

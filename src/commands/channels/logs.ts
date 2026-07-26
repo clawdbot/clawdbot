@@ -3,9 +3,10 @@ import fs from "node:fs/promises";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { normalizeChannelId as normalizeBundledChannelId } from "../../channels/registry.js";
+import { readFileWindowFully } from "../../infra/file-read.js";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { getResolvedLoggerSettings } from "../../logging.js";
-import { readLogWindowFully, resolveLogFile } from "../../logging/log-tail.js";
+import { resolveLogFile } from "../../logging/log-tail.js";
 import { parseLogLine } from "../../logging/parse-log-line.js";
 import { listManifestChannelContributionIds } from "../../plugins/manifest-contribution-ids.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
@@ -87,7 +88,7 @@ async function readTailLines(file: string, limit: number): Promise<string[]> {
       return [];
     }
     const buffer = Buffer.alloc(length);
-    const bytesRead = await readLogWindowFully(handle, buffer, start);
+    const bytesRead = await readFileWindowFully(handle, buffer, start);
     const text = buffer.toString("utf8", 0, bytesRead);
     let lines = text.split("\n");
     if (start > 0 && prefix !== "\n") {

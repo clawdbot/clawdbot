@@ -11,11 +11,19 @@ import { Type, type TSchema } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import {
   isToolWrappedWithBeforeToolCallHook,
-  testing as beforeToolCallTesting,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import { normalizeToolParameters } from "./agent-tools.schema.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import {
+  BEFORE_TOOL_CALL_HOOK_CONTEXT,
+  BEFORE_TOOL_CALL_SOURCE_TOOL,
+} from "./before-tool-call-metadata.js";
+
+const beforeToolCallTesting = {
+  BEFORE_TOOL_CALL_HOOK_CONTEXT,
+  BEFORE_TOOL_CALL_SOURCE_TOOL,
+};
 
 const TEST_USAGE = {
   input: 0,

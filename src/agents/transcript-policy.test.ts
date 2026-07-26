@@ -395,6 +395,8 @@ describe("resolveTranscriptPolicy", () => {
     "kimi-for-coding",
     "moonshotai/kimi-k2.6",
     "moonshot/kimi-k2.7-code",
+    "moonshot/kimi-k2.7-code-highspeed",
+    "moonshot/kimi-k3",
     "kimi-k2-thinking",
     "hf:moonshotai/kimi-k2-thinking",
     "xiaomi/mimo-v2.6-pro",

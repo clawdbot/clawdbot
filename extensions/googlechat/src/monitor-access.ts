@@ -21,6 +21,7 @@ import {
 } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { sendGoogleChatMessage } from "./api.js";
+import { buildGoogleChatGroupPolicyScope } from "./group-policy.js";
 import type { GoogleChatCoreRuntime } from "./monitor-types.js";
 import type { GoogleChatAnnotation, GoogleChatMessage, GoogleChatSpace } from "./types.js";
 
@@ -100,8 +101,15 @@ function resolveGoogleChatGroupConfig(params: {
   if (keys.length === 0) {
     return { entry: undefined, allowlistConfigured: false, deprecatedNameMatch: false };
   }
-  const entry = entries[groupId];
+  const { "*": fallback, ...scopes } = entries;
+  const scope = buildGoogleChatGroupPolicyScope({
+    tree: { defaults: fallback, scopes },
+    groupId,
+  });
+  const entry = scope.matchKey ? entries[scope.matchKey] : undefined;
   const normalizedGroupName = normalizeLowercaseStringOrEmpty(groupName ?? "");
+  // Mutable display-name keys deliberately block wildcard selection when no stable id matches.
+  // The canonical scope owns exact/wildcard lookup; this monitor-only guard owns deprecation.
   const deprecatedNameMatch =
     !entry &&
     Boolean(
@@ -116,7 +124,6 @@ function resolveGoogleChatGroupConfig(params: {
         );
       }),
     );
-  const fallback = entries["*"];
   return {
     entry: deprecatedNameMatch ? undefined : (entry ?? fallback),
     allowlistConfigured: true,
@@ -257,8 +264,8 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
   const groupEntry = groupConfigResolved.entry;
   const groupUsers = groupEntry?.users ?? account.config.groupAllowFrom ?? [];
   let effectiveWasMentioned: boolean | undefined;
-  const dmPolicy = account.config.dm?.policy ?? "pairing";
-  const rawConfigAllowFrom = normalizeStringEntries(account.config.dm?.allowFrom);
+  const dmPolicy = account.config.dmPolicy ?? "pairing";
+  const rawConfigAllowFrom = normalizeStringEntries(account.config.allowFrom);
   const shouldComputeAuth = core.channel.commands.shouldComputeCommandAuthorized(rawBody, config);
   const groupActivation = (() => {
     if (!isGroup) {

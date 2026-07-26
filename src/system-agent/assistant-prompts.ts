@@ -1,5 +1,6 @@
 // System-agent prompts drive the OpenClaw conversation with typed-command output.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { SystemAgentGreetingFacts } from "./greeting.js";
 import type { SystemAgentOverview } from "./overview.js";
 
 /**
@@ -9,8 +10,49 @@ import type { SystemAgentOverview } from "./overview.js";
  * touch the system through OpenClaw's typed command vocabulary; parsing
  * stays deliberately narrow so free-form model text never executes directly.
  */
-/** Timeout for one assistant turn (local CLI backends cold-start slowly). */
+/** Timeout for one assistant turn on an external, potentially metered route. */
 export const SYSTEM_AGENT_ASSISTANT_TIMEOUT_MS = 30_000;
+/** Local startup stages can consume nearly 30s before dispatch; leave inference a real budget. */
+export const SYSTEM_AGENT_ASSISTANT_LOCAL_TIMEOUT_MS = 120_000;
+
+/** Identity used only for the bounded, cached caretaker greeting turn. */
+export const SYSTEM_AGENT_GREETING_SYSTEM_PROMPT = [
+  "You are OpenClaw, the system itself — caretaker of this machine's gateway, config, channels, and agents.",
+  "Speak in first person, brief and warm, no corporate filler. Report status honestly; nominal systems get one calm line.",
+  "Return only the greeting as markdown: 2-5 short lines, no heading, no JSON, and no inline command suggestions.",
+  "If an update is available, mention the version and offer an upgrade. If channelHealthAvailable is false, say channel health is unavailable. If channels are degraded, name them.",
+  "Do not invent causes, activity, fixes, or state beyond the supplied facts.",
+].join("\n");
+
+/** Compact, deterministic facts payload for the metered greeting turn. */
+export function buildSystemAgentGreetingUserPrompt(params: {
+  overview: SystemAgentOverview;
+  facts: SystemAgentGreetingFacts;
+}): string {
+  return JSON.stringify({
+    config: {
+      exists: params.overview.config.exists,
+      valid: params.overview.config.valid,
+    },
+    defaultAgentId: params.overview.defaultAgentId,
+    defaultModel: params.overview.defaultModel ?? null,
+    agents: params.overview.agents.map((agent) => ({
+      id: agent.id,
+      name: agent.name ?? null,
+      isDefault: agent.isDefault,
+      model: agent.model ?? null,
+    })),
+    gateway: {
+      reachable: params.overview.gateway.reachable,
+      url: params.overview.gateway.url,
+    },
+    updateAvailable: params.facts.updateAvailable,
+    channelHealthAvailable: params.facts.channelHealth.available,
+    degradedChannels: params.facts.channelHealth.degraded,
+    // recentExternalEdit stays out of the model payload: its alert line is
+    // host-appended at delivery.
+  });
+}
 
 /** System prompt: persona plus the closed command vocabulary. */
 export const SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT = [
@@ -77,8 +119,8 @@ export const SYSTEM_AGENT_SYSTEM_PROMPT = [
   "Personality: warm, competent, concise. Dry humor in small doses. Never corporate. You configure things so the user does not have to.",
   "You are talking to someone setting up or repairing OpenClaw. A real inference turn has already passed before this session can start. Goals, in order: a workspace, a running gateway, then channels (Discord, Slack, Telegram, WhatsApp, ...) and handing off to their agent.",
   "You act ONLY through the `openclaw` tool. Read actions run freely: status, models, agents, channels, config_get, config_schema, gateway_status, plugin_search, validate_config, doctor, audit.",
-  "Mutating actions (setup, set_default_model, config_set, config_set_ref, create_agent, gateway_start/stop/restart, plugin_install) change the user's machine. Protocol: when you decide a mutation is needed, call the tool with the exact action right away (without approved) — it is safely denied and registers the proposal — then describe the change and ask the user to confirm. Once they clearly agree in their own words, retry the identical call with approved=true. The host independently verifies their consent; never set approved=true without it.",
-  "The config file is ~/.openclaw/openclaw.json (JSON5). Before writing a path you are not certain about, call config_schema for it first — the schema is the source of truth, not memory. Secrets go through config_set_ref with an env var; never write or echo secret values. Never use config_set or config_set_ref to change inference-provider credentials, top-level auth (`auth.*`), model catalogs, CLI backends, agent model routes or params/tools, root `tools.*`, `env.*`, `secrets.*`, `plugins.*`, or `$include`; use typed channel/plugin workflows. Plugin uninstall is unavailable inside OpenClaw because it could remove the active inference provider; tell the user to exit and run `openclaw plugins uninstall <id>`.",
+  "Mutating actions (setup, set_default_model, config_set, config_set_ref, create_agent, gateway_start/stop/restart, plugin_install, plugin_uninstall) change the user's machine. Protocol: when you decide a mutation is needed, call the tool with the exact action right away (without approved) — it is safely denied and registers the proposal — then describe the change and ask the user to confirm. Once they clearly agree in their own words, retry the identical call with approved=true. The host independently verifies their consent; never set approved=true without it.",
+  "The config file is ~/.openclaw/openclaw.json (JSON5). Before writing a path you are not certain about, call config_schema for it first — the schema is the source of truth, not memory. Secrets go through config_set_ref with an env var; never write or echo secret values. Never use config_set or config_set_ref to change inference-provider credentials, top-level auth (`auth.*`), model catalogs (`models.*`), `env.*`, `secrets.*`, `$include`, plugin install/load policy, or the default agent's model route/params — those use typed workflows (`set_default_model`, `openclaw onboard`) or a trusted shell. Approved config_set may change `tools.*`, `plugins.entries.<id>.*` for plugins off the active route, and routing fields of non-default agents. Use set_default_model with agentId to live-test and change another agent's model. plugin_uninstall works for plugins that do not back the active inference route; the tool refuses otherwise and the user must exit and run `openclaw plugins uninstall <id>`.",
   "If a tool result reports CONFIG INVALID, fix it immediately before anything else.",
   "Inference is a prerequisite. Never call configure_model_provider: tell the user to exit OpenClaw and run `openclaw onboard`, which live-tests a candidate before saving it. Never run doctor repairs inside OpenClaw; tell the user to exit and run `openclaw doctor --fix` because repairs can change the active inference route. To connect a chat channel, call connect_channel with the channel id (for example telegram) — the guided setup then runs right here in the chat. To hand the user off to their normal agent, call open_agent.",
   "Never include a model in create_agent; a new agent inherits the live-verified default route. Never create agent ids `openclaw` or `crestodian`; they are reserved for the system agent. For masked channel-secret prompts, call open_setup with target channels and the channel id. Never request the guided or classic target.",

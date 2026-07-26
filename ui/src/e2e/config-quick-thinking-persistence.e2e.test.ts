@@ -37,7 +37,7 @@ function requestRaw(request: MockGatewayRequest): Record<string, unknown> {
   return JSON.parse(String((params as Record<string, unknown>).raw)) as Record<string, unknown>;
 }
 
-describeControlUiE2e("Control UI Quick Config thinking persistence mocked Gateway E2E", () => {
+describeControlUiE2e("Control UI General settings thinking persistence mocked Gateway E2E", () => {
   beforeAll(async () => {
     if (!chromiumAvailable) {
       throw new Error(
@@ -51,6 +51,70 @@ describeControlUiE2e("Control UI Quick Config thinking persistence mocked Gatewa
   afterAll(async () => {
     await browser?.close();
     await server?.close();
+  });
+
+  it.each([
+    {
+      name: "a string model",
+      model: "openai/gpt-5.4",
+      expected: "openai/gpt-5.4",
+    },
+    {
+      name: "an object model with fallbacks",
+      model: {
+        primary: "openai/gpt-5.4",
+        fallbacks: ["anthropic/claude-sonnet-4-6"],
+      },
+      expected: "openai/gpt-5.4",
+    },
+    {
+      name: "an object model without fallbacks",
+      model: { primary: "anthropic/claude-sonnet-4-6" },
+      expected: "anthropic/claude-sonnet-4-6",
+    },
+    {
+      name: "a fallbacks-only model",
+      model: { fallbacks: ["anthropic/claude-sonnet-4-6"] },
+      expected: "default",
+    },
+    {
+      name: "a model without a valid primary",
+      model: { primary: 42, fallbacks: ["anthropic/claude-sonnet-4-6"] },
+      expected: "default",
+    },
+  ])("displays the configured primary for $name", async ({ model, expected }) => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const config = { agents: { defaults: { model, thinkingDefault: "low" } } };
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "config.get": {
+          config,
+          hash: "general-model-primary-hash",
+          issues: [],
+          raw: JSON.stringify(config),
+          valid: true,
+        },
+      },
+    });
+
+    try {
+      const response = await page.goto(`${server.baseUrl}settings/general`);
+      expect(response?.status()).toBe(200);
+
+      const modelValue = page
+        .locator("#settings-general-model .settings-row")
+        .filter({ hasText: "Model" })
+        .locator(".settings-row__value");
+      await expect.poll(async () => modelValue.textContent()).toBe(expected);
+      expect(await gateway.getRequests("config.set")).toHaveLength(0);
+    } finally {
+      await context.close();
+    }
   });
 
   it("reads and writes only agents.defaults.thinkingDefault", async () => {

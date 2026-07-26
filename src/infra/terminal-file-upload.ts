@@ -6,7 +6,7 @@ import {
   MAX_TERMINAL_UPLOAD_BASE64_LENGTH,
   MAX_TERMINAL_UPLOAD_BYTES,
   terminalUploadDecodedSize,
-} from "../../packages/gateway-protocol/src/terminal-upload-constants.js";
+} from "../../packages/gateway-protocol/src/schema/terminal-constants.js";
 import { logWarn } from "../logger.js";
 
 const TERMINAL_UPLOAD_PREFIX = "openclaw-terminal-upload-";

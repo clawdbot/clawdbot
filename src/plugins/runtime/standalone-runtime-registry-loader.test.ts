@@ -1,6 +1,9 @@
 // Standalone runtime registry loader tests cover registry loading outside gateway startup.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearPluginLoaderCache } from "../loader.test-fixtures.js";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  cleanupPluginLoaderFixturesForTest,
+  clearPluginLoaderCache,
+} from "../loader.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import type { PluginRegistry } from "../registry-types.js";
 import {
@@ -43,6 +46,10 @@ beforeEach(() => {
 afterEach(() => {
   clearPluginLoaderCache();
   resetPluginRuntimeStateForTest();
+});
+
+afterAll(() => {
+  cleanupPluginLoaderFixturesForTest();
 });
 
 describe("ensureStandaloneRuntimePluginRegistryLoaded tool-discovery installs", () => {

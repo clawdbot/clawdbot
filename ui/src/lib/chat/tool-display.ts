@@ -182,6 +182,16 @@ function sanitizeCanvasEntryUrl(
   }
 }
 
+/**
+ * True when the preview entry URL points at a hosted Canvas document rather
+ * than an externally allowed embed URL. Prompt authority (widget sendPrompt)
+ * is granted only to internal Canvas documents.
+ */
+export function isInternalCanvasEntryUrl(entryUrl: string | undefined): boolean {
+  const rawEntryUrl = entryUrl?.trim();
+  return Boolean(rawEntryUrl && sanitizeCanvasEntryUrl(rawEntryUrl, false));
+}
+
 export function resolveCanvasIframeUrl(
   entryUrl: string | undefined,
   canvasPluginSurfaceUrl?: string | null,

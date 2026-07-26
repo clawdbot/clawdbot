@@ -102,7 +102,10 @@ export function createCommandTerminationController(params: {
         startWindowsTermination(childPid, true);
         return true;
       }
-      terminateProcessTree(childPid, { graceMs: COMMAND_PROCESS_TREE_KILL_GRACE_MS });
+      terminateProcessTree(childPid, {
+        graceMs: COMMAND_PROCESS_TREE_KILL_GRACE_MS,
+        detached: true,
+      });
       return false;
     }
     if (!directChildAlive) {
@@ -136,7 +139,7 @@ export function createCommandTerminationController(params: {
       });
     }
     if (process.platform !== "win32") {
-      terminateProcessTree(params.child.pid, { force: true });
+      terminateProcessTree(params.child.pid, { force: true, detached: true });
     }
   };
 

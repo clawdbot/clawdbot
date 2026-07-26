@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
+import openAIPlugin from "../openai/index.js";
 import { createCodexAppServerAgentHarness } from "./harness.js";
 import plugin from "./index.js";
 import {
@@ -45,15 +46,36 @@ function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex
 }
 
 describe("codex plugin", () => {
-  it("is opt-in by default", () => {
+  it("is opt-in and does not advertise a text provider", () => {
     const manifest = JSON.parse(
       fs.readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
-    ) as { enabledByDefault?: unknown };
+    ) as { enabledByDefault?: unknown; providers?: unknown };
 
     expect(manifest.enabledByDefault).toBeUndefined();
+    expect(manifest.providers).toBeUndefined();
   });
 
-  it("registers the codex provider, agent harness, native thread tool, and hosted web search", () => {
+  it("does not open plugin state while registering with the base runtime", () => {
+    const openSyncKeyedStore = vi.fn(() => {
+      throw new Error("openSyncKeyedStore is only available through the plugin runtime proxy");
+    });
+
+    expect(() =>
+      plugin.register(
+        createTestPluginApi({
+          id: "codex",
+          name: "Codex",
+          source: "test",
+          config: {},
+          pluginConfig: {},
+          runtime: { state: { openSyncKeyedStore } } as never,
+        }),
+      ),
+    ).not.toThrow();
+    expect(openSyncKeyedStore).not.toHaveBeenCalled();
+  });
+
+  it("registers the agent harness, native thread tool, and hosted web search", () => {
     const registerAgentHarness = vi.fn();
     const registerCommand = vi.fn();
     const registerMediaUnderstandingProvider = vi.fn();
@@ -86,7 +108,6 @@ describe("codex plugin", () => {
       }),
     );
 
-    const providerRegistration = mockCallArg(registerProvider) as Record<string, unknown>;
     const agentHarnessRegistration = mockCallArg(registerAgentHarness) as Record<string, unknown>;
     const mediaProviderRegistration = mockCallArg(registerMediaUnderstandingProvider) as
       | Record<string, unknown>
@@ -96,14 +117,14 @@ describe("codex plugin", () => {
       | [unknown]
       | undefined;
 
-    expect(providerRegistration.id).toBe("codex");
-    expect(providerRegistration.label).toBe("Codex");
+    expect(registerProvider).not.toHaveBeenCalled();
     expect(agentHarnessRegistration.id).toBe("codex");
     expect(agentHarnessRegistration.label).toBe("Codex agent harness");
     expect(agentHarnessRegistration.deliveryDefaults).toEqual({
-      sourceVisibleReplies: "message_tool",
+      visibleReplies: "message_tool",
     });
     expect(typeof agentHarnessRegistration.dispose).toBe("function");
+    expect(typeof agentHarnessRegistration.fetchUsageSnapshot).toBe("function");
     expect(mediaProviderRegistration?.id).toBe("codex");
     expect(mediaProviderRegistration?.capabilities).toEqual(["image"]);
     expect(mediaProviderRegistration?.defaultModels).toEqual({ image: "gpt-5.6-sol" });
@@ -164,7 +185,7 @@ describe("codex plugin", () => {
     );
 
     expect(registerAgentHarness).toHaveBeenCalledOnce();
-    expect(registerProvider).toHaveBeenCalledOnce();
+    expect(registerProvider).not.toHaveBeenCalled();
     const nodeCommands = registerNodeHostCommand.mock.calls.map(
       ([command]) => (command as { command: string }).command,
     );
@@ -172,6 +193,34 @@ describe("codex plugin", () => {
     expect(nodeCommands).not.toContain("codex.appServer.threads.list.v1");
     expect(nodeCommands).not.toContain("codex.appServer.thread.turns.list.v1");
     expect(registerSessionCatalog).not.toHaveBeenCalled();
+  });
+
+  it("leaves OpenAI as the only text provider when both plugins register", () => {
+    const providers: Array<{ id: string }> = [];
+    const registerProvider = (provider: { id: string }) => providers.push(provider);
+    openAIPlugin.register(
+      createTestPluginApi({
+        id: "openai",
+        name: "OpenAI Provider",
+        source: "test",
+        config: {},
+        runtime: {} as never,
+        registerProvider,
+      }),
+    );
+    plugin.register(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: {},
+        runtime: createCodexTestRuntime(),
+        registerProvider,
+      }),
+    );
+
+    expect(providers.map((provider) => provider.id)).toEqual(["openai"]);
   });
 
   it("registers the five shipped supervision tools only when supervision is enabled", () => {
@@ -362,8 +411,7 @@ describe("codex plugin", () => {
     delete (api as { onConversationBindingResolved?: unknown }).onConversationBindingResolved;
 
     plugin.register(api);
-    expect(registerProvider).toHaveBeenCalledTimes(1);
-    expect((mockCallArg(registerProvider) as { id?: string } | undefined)?.id).toBe("codex");
+    expect(registerProvider).not.toHaveBeenCalled();
   });
 
   it("claims the Codex routing providers by default", () => {
@@ -371,7 +419,7 @@ describe("codex plugin", () => {
       bindingStore: testCodexAppServerBindingStore,
     });
 
-    expect(harness.deliveryDefaults?.sourceVisibleReplies).toBe("message_tool");
+    expect(harness.deliveryDefaults?.visibleReplies).toBe("message_tool");
     expect(
       harness.supports({ provider: "codex", modelId: "gpt-5.4", requestedRuntime: "auto" })
         .supported,
@@ -412,7 +460,13 @@ describe("codex plugin", () => {
     );
     const sessionEnd = on.mock.calls.find(([name]) => name === "session_end")?.[1] as
       | ((
-          event: { sessionId: string; sessionKey?: string; reason?: string },
+          event: {
+            sessionId: string;
+            sessionKey?: string;
+            reason?: string;
+            nextSessionId?: string;
+            nextSessionKey?: string;
+          },
           ctx: { agentId?: string; sessionId: string; sessionKey?: string },
         ) => Promise<void>)
       | undefined;
@@ -446,6 +500,62 @@ describe("codex plugin", () => {
       );
       await expect(bindingStore.read(identity)).resolves.toBeUndefined();
     }
+
+    // Cross-key handoff (e.g. dashboard "New Chat"/fork): the parent's still-live
+    // binding must survive because the successor lives under a different key and
+    // owns its own Codex thread. Use a fresh parent key (session-1 above is now
+    // permanently retired). See #106778.
+    const parent = sessionBindingIdentity({
+      agentId: "worker",
+      sessionId: "parent-1",
+      sessionKey: "agent:worker:parent-1",
+    });
+    await bindingStore.mutate(parent, {
+      kind: "set",
+      binding: { threadId: "thread-parent", cwd: "/repo" },
+    });
+    await sessionEnd(
+      {
+        sessionId: "parent-1",
+        sessionKey: "agent:worker:parent-1",
+        reason: "new",
+        nextSessionId: "child-1",
+        nextSessionKey: "agent:worker:dashboard:child-1",
+      },
+      { agentId: "worker", sessionId: "parent-1" },
+    );
+    await expect(bindingStore.read(parent)).resolves.toMatchObject({ threadId: "thread-parent" });
+
+    // A same-key replacement that still names the successor id (physical rollover)
+    // has no distinct nextSessionKey, so it retires as before.
+    await sessionEnd(
+      {
+        sessionId: "parent-1",
+        sessionKey: "agent:worker:parent-1",
+        reason: "new",
+        nextSessionId: "parent-2",
+      },
+      { agentId: "worker", sessionId: "parent-1" },
+    );
+    await expect(bindingStore.read(parent)).resolves.toBeUndefined();
+
+    // Unknown current key: a handoff cannot be proven, so a successor key alone
+    // must not skip cleanup — the conservative path retires as before #106778.
+    const keyless = sessionBindingIdentity({ agentId: "worker", sessionId: "keyless-1" });
+    await bindingStore.mutate(keyless, {
+      kind: "set",
+      binding: { threadId: "thread-keyless", cwd: "/repo" },
+    });
+    await sessionEnd(
+      {
+        sessionId: "keyless-1",
+        reason: "new",
+        nextSessionId: "child-2",
+        nextSessionKey: "agent:worker:dashboard:child-2",
+      },
+      { agentId: "worker", sessionId: "keyless-1" },
+    );
+    await expect(bindingStore.read(keyless)).resolves.toBeUndefined();
   });
 
   it("adopts compaction successors before delayed lifecycle cleanup", async () => {

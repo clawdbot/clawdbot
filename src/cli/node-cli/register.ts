@@ -65,6 +65,8 @@ export function registerNodeCli(program: Command) {
     .option("--tls-fingerprint <sha256>", "Expected TLS certificate fingerprint (sha256)")
     .option("--node-id <id>", "Override the generated node instance id")
     .option("--display-name <name>", "Override node display name")
+    .option("--share-installed-apps", "Share installed macOS applications with the Gateway")
+    .option("--no-share-installed-apps", "Disable installed application sharing")
     .action(async (opts) => {
       const existing = await loadNodeHostConfig();
       const host =
@@ -101,6 +103,7 @@ export function registerNodeCli(program: Command) {
           (explicitContextPath || retargetedGateway ? undefined : existing?.gateway?.contextPath),
         nodeId: opts.nodeId,
         displayName: opts.displayName,
+        installedAppsSharing: opts.shareInstalledApps,
       });
     });
 
@@ -130,6 +133,8 @@ export function registerNodeCli(program: Command) {
     .option("--tls-fingerprint <sha256>", "Expected TLS certificate fingerprint (sha256)")
     .option("--node-id <id>", "Override the generated node instance id")
     .option("--display-name <name>", "Override node display name")
+    .option("--share-installed-apps", "Share installed macOS applications with the Gateway")
+    .option("--no-share-installed-apps", "Disable installed application sharing")
     .option("--runtime <runtime>", "Service runtime (node). Default: node")
     .option("--force", "Reinstall/overwrite if already installed", false)
     .option("--json", "Output JSON", false)

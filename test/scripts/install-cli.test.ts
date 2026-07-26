@@ -41,6 +41,27 @@ function linkRequiredShellTools(bin: string) {
 describe("install-cli.sh", () => {
   const script = readFileSync(SCRIPT_PATH, "utf8");
 
+  it("bounds stalled curl downloads and propagates timeout failures", () => {
+    const result = runInstallCliShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      curl() {
+        printf 'curl=%s\n' "$*"
+        return 28
+      }
+      DOWNLOADER=curl
+      set +e
+      download_file "https://example.invalid/node.tar.gz" "/tmp/node.tar.gz"
+      printf 'status=%s\n' "$?"
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("--speed-limit 1 --speed-time 30");
+    expect(result.stdout).not.toContain("--connect-timeout");
+    expect(result.stdout).toContain("--retry 3 --retry-delay 1 --retry-connrefused");
+    expect(result.stdout).toContain("status=28");
+  });
+
   it("does not clean an unrelated legacy checkout during the default npm install", () => {
     const main = script.slice(script.indexOf("\nmain() {"));
     expect(main).not.toContain("cleanup_legacy_submodules");
@@ -620,6 +641,81 @@ describe("install-cli.sh", () => {
     }
   });
 
+  it("skips PATH Node runtimes whose npm command cannot start", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-broken-npm-"));
+    const badBin = join(tmp, "bad-bin");
+    const goodBin = join(tmp, "good-bin");
+    const prefix = join(tmp, "prefix");
+    const badNpmLog = join(tmp, "bad-npm.log");
+    const goodNpmLog = join(tmp, "good-npm.log");
+    const goodNodeLog = join(tmp, "good-node.log");
+    const badNode = join(badBin, "node");
+    const badNpm = join(badBin, "npm");
+    const goodNode = join(goodBin, "node");
+    const goodNpm = join(goodBin, "npm");
+
+    mkdirSync(badBin, { recursive: true });
+    mkdirSync(goodBin, { recursive: true });
+    symlinkSync(process.execPath, badNode);
+    writeFileSync(
+      goodNode,
+      [
+        "#!/bin/bash",
+        'printf "%s\\n" "$*" >> "$GOOD_NODE_LOG"',
+        `exec ${JSON.stringify(process.execPath)} "$@"`,
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      badNpm,
+      ["#!/bin/bash", 'printf "%s\\n" "$*" >> "$BAD_NPM_LOG"', "exit 42", ""].join("\n"),
+    );
+    writeFileSync(
+      goodNpm,
+      [
+        "#!/usr/bin/env node",
+        'require("node:fs").appendFileSync(',
+        "  process.env.GOOD_NPM_LOG,",
+        '  `${process.argv.slice(2).join(" ")}\\n`,',
+        ");",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(badNpm, 0o755);
+    chmodSync(goodNode, 0o755);
+    chmodSync(goodNpm, 0o755);
+
+    try {
+      const result = runInstallCliShell(
+        [
+          "set -euo pipefail",
+          `cd ${JSON.stringify(process.cwd())}`,
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `export PATH=${JSON.stringify(`${badBin}:${goodBin}:${process.env.PATH ?? ""}`)}`,
+          `PREFIX=${JSON.stringify(prefix)}`,
+          "try_link_usable_node_runtime_from_path",
+        ].join("\n"),
+        {
+          BAD_NPM_LOG: badNpmLog,
+          GOOD_NPM_LOG: goodNpmLog,
+          GOOD_NODE_LOG: goodNodeLog,
+        },
+      );
+
+      expect(result.status).toBe(0);
+      const nodeLink = join(prefix, "tools", "node-v24.15.0", "bin", "node");
+      const npmLink = join(prefix, "tools", "node-v24.15.0", "bin", "npm");
+      expect(readFileSync(badNpmLog, "utf8")).toBe("--version\n");
+      expect(readFileSync(goodNpmLog, "utf8")).toBe("--version\n");
+      expect(readFileSync(goodNodeLog, "utf8")).toContain("npm --version");
+      expect(lstatSync(nodeLink).isSymbolicLink()).toBe(true);
+      expect(readlinkSync(nodeLink)).toBe(goodNode);
+      expect(readlinkSync(npmLink)).toBe(goodNpm);
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
   it("rejects Alpine/musl Node packages below the requested runtime floor", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-alpine-old-node-"));
     const bin = join(tmp, "bin");
@@ -680,7 +776,7 @@ describe("install-cli.sh", () => {
       expect(result.status).toBe(1);
       expect(readFileSync(apkLog, "utf8")).toContain("add --no-cache nodejs npm");
       expect(result.stdout).toContain(
-        "Alpine Node package must provide Node >= 22.22.3 with WAL-reset-safe SQLite",
+        "Alpine Node package must provide Node >= 22.22.3 with WAL-reset-safe SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x",
       );
       expect(result.stdout).toContain("found Node v22.18.0, SQLite unavailable");
     } finally {
@@ -983,12 +1079,21 @@ describe("install-cli.sh", () => {
     }
   });
 
-  it("does not emit --before when default global npmrc config contains min-release-age", () => {
-    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-global-npmrc-"));
+  it.each([
+    {
+      name: "does not emit --before when default global npmrc config contains min-release-age",
+      source: "global" as const,
+    },
+    {
+      name: "does not emit --before when builtin npmrc config contains min-release-age",
+      source: "builtin" as const,
+    },
+  ])("$name", ({ source }) => {
+    const tmp = mkdtempSync(join(tmpdir(), `openclaw-install-cli-${source}-npmrc-`));
     const bin = join(tmp, "bin");
     const home = join(tmp, "home");
     const prefix = join(tmp, "prefix");
-    const npmrc = join(prefix, "etc", "npmrc");
+    const npmrc = source === "global" ? join(prefix, "etc", "npmrc") : join(tmp, "npmrc");
     const calls = join(tmp, "npm-calls.txt");
     const installArgs = join(tmp, "npm-install-args.txt");
     const installPrefix = join(tmp, "install-prefix");
@@ -996,84 +1101,9 @@ describe("install-cli.sh", () => {
     mkdirSync(bin, { recursive: true });
     mkdirSync(home, { recursive: true });
     mkdirSync(nodeDir, { recursive: true });
-    mkdirSync(join(prefix, "etc"), { recursive: true });
-    writeFileSync(npmrc, "min-release-age=7\n");
-    const fakeNpm = join(bin, "npm");
-    writeFileSync(
-      fakeNpm,
-      [
-        "#!/bin/bash",
-        'printf "%s\\n" "$*" >> "$NPM_FAKE_CALLS"',
-        'if [[ "$1" == "config" && "$2" == "get" ]]; then',
-        '  if [[ "$3" == "min-release-age" ]]; then',
-        "    printf 'null\\n'",
-        "    exit 0",
-        "  fi",
-        '  if [[ "$3" == "globalconfig" ]]; then',
-        '    printf "%s\\n" "$NPM_FAKE_GLOBALCONFIG"',
-        "    exit 0",
-        "  fi",
-        '  if [[ "$3" == "before" ]]; then',
-        "    printf '2026-01-01T00:00:00.000Z\\n'",
-        "    exit 0",
-        "  fi",
-        "fi",
-        'printf "%s\\n" "$@" > "$NPM_FAKE_INSTALL_ARGS"',
-        "exit 0",
-        "",
-      ].join("\n"),
-    );
-    chmodSync(fakeNpm, 0o755);
-
-    try {
-      const result = runInstallCliShell(
-        [
-          "set -euo pipefail",
-          `cd ${JSON.stringify(process.cwd())}`,
-          `source ${JSON.stringify(SCRIPT_PATH)}`,
-          `npm_bin() { printf '%s\\n' ${JSON.stringify(fakeNpm)}; }`,
-          `node_dir() { printf '%s\\n' ${JSON.stringify(nodeDir)}; }`,
-          "emit_json() { :; }",
-          "log() { :; }",
-          `PREFIX=${JSON.stringify(installPrefix)}`,
-          "SET_NPM_PREFIX=0",
-          "OPENCLAW_VERSION=1.2.3",
-          "install_openclaw",
-        ].join("\n"),
-        {
-          HOME: home,
-          NPM_CONFIG_GLOBALCONFIG: undefined,
-          NPM_CONFIG_PREFIX: undefined,
-          npm_config_globalconfig: undefined,
-          npm_config_prefix: undefined,
-          NPM_FAKE_CALLS: calls,
-          NPM_FAKE_GLOBALCONFIG: npmrc,
-          NPM_FAKE_INSTALL_ARGS: installArgs,
-          PATH: `${bin}:${process.env.PATH}`,
-        },
-      );
-
-      expect(result.status).toBe(0);
-      expect(readFileSync(installArgs, "utf8")).toContain("--min-release-age=0\n");
-      expect(readFileSync(installArgs, "utf8")).not.toContain("--before=");
-      expect(readFileSync(calls, "utf8")).not.toContain("config get before");
-    } finally {
-      rmSync(tmp, { force: true, recursive: true });
+    if (source === "global") {
+      mkdirSync(join(prefix, "etc"), { recursive: true });
     }
-  });
-
-  it("does not emit --before when builtin npmrc config contains min-release-age", () => {
-    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-builtin-npmrc-"));
-    const bin = join(tmp, "bin");
-    const home = join(tmp, "home");
-    const npmrc = join(tmp, "npmrc");
-    const calls = join(tmp, "npm-calls.txt");
-    const installArgs = join(tmp, "npm-install-args.txt");
-    const installPrefix = join(tmp, "install-prefix");
-    const nodeDir = join(tmp, "node");
-    mkdirSync(bin, { recursive: true });
-    mkdirSync(home, { recursive: true });
-    mkdirSync(nodeDir, { recursive: true });
     writeFileSync(npmrc, "min-release-age=7\n");
     const fakeNpm = join(bin, "npm");
     writeFileSync(
@@ -1124,7 +1154,7 @@ describe("install-cli.sh", () => {
           npm_config_globalconfig: undefined,
           npm_config_prefix: undefined,
           NPM_FAKE_CALLS: calls,
-          NPM_FAKE_GLOBALCONFIG: join(tmp, "missing-global-npmrc"),
+          NPM_FAKE_GLOBALCONFIG: source === "global" ? npmrc : join(tmp, "missing-global-npmrc"),
           NPM_FAKE_INSTALL_ARGS: installArgs,
           PATH: `${bin}:${process.env.PATH}`,
         },

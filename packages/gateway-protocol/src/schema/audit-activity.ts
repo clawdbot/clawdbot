@@ -5,7 +5,7 @@ import { NonEmptyString } from "./primitives.js";
 
 const AuditActivitySchemaVersionV1Schema = Type.Integer({ minimum: 1, maximum: 1 });
 
-export const AuditActivityStatusV1Schema: TSchema = Type.Union([
+const AuditActivityStatusV1Schema: TSchema = Type.Union([
   Type.Literal("started"),
   Type.Literal("succeeded"),
   Type.Literal("failed"),
@@ -15,13 +15,13 @@ export const AuditActivityStatusV1Schema: TSchema = Type.Union([
   Type.Literal("unknown"),
 ]);
 
-export const AuditActivityKindV1Schema: TSchema = Type.Union([
+const AuditActivityKindV1Schema: TSchema = Type.Union([
   Type.Literal("agent_run"),
   Type.Literal("tool_action"),
   Type.Literal("message"),
 ]);
 
-export const AuditActivityDirectionV1Schema: TSchema = Type.Union([
+const AuditActivityDirectionV1Schema: TSchema = Type.Union([
   Type.Literal("inbound"),
   Type.Literal("outbound"),
 ]);

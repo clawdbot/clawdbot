@@ -19,6 +19,7 @@ import {
 } from "./bot/helpers.js";
 import { TelegramPairingStoreReadError } from "./bot/helpers.js";
 import type { TelegramContext, TelegramGetChat } from "./bot/types.js";
+import type { TelegramMessageDispatchReplayClaim } from "./message-dispatch-dedupe.js";
 
 export function registerTelegramMessageHandlers(
   { bot, opts, runtime, shouldSkipUpdate }: RegisterTelegramHandlerParams,
@@ -29,7 +30,7 @@ export function registerTelegramMessageHandlers(
   const {
     normalizePromptContextMinTimestampMs,
     promptContextBoundaryOptions,
-    releaseDispatchDedupeKeys,
+    releaseDispatchDedupeClaims,
     claimMessageDispatchDedupe,
     buildSyntheticContext,
     resolveTelegramSessionState,
@@ -122,7 +123,7 @@ export function registerTelegramMessageHandlers(
   };
 
   const handleInboundMessageLike = async (event: InboundTelegramEvent) => {
-    let dispatchDedupeKeys: string[] = [];
+    let dispatchDedupeClaims: TelegramMessageDispatchReplayClaim[] = [];
     try {
       if (shouldSkipUpdate(event.ctxForDedupe)) {
         return;
@@ -177,7 +178,7 @@ export function registerTelegramMessageHandlers(
       if (!dispatchDedupe.process) {
         return;
       }
-      dispatchDedupeKeys = dispatchDedupe.keys;
+      dispatchDedupeClaims = dispatchDedupe.claims;
       await recordMessageForReplyChain(
         event.msg,
         resolvedThreadId ?? dmThreadId,
@@ -201,11 +202,11 @@ export function registerTelegramMessageHandlers(
         topicConfig,
         sendOversizeWarning: event.sendOversizeWarning,
         oversizeLogMessage: event.oversizeLogMessage,
-        dispatchDedupeKeys,
+        dispatchDedupeClaims,
         ...promptContextBoundaryOptions(promptContextMinTimestampMs, promptContextAmbientWatermark),
       });
     } catch (err) {
-      releaseDispatchDedupeKeys(dispatchDedupeKeys, err);
+      releaseDispatchDedupeClaims(dispatchDedupeClaims, err);
       runtime.error?.(danger(`${event.errorMessage}: ${String(err)}`));
       const spooledReplay = isTelegramSpooledReplayUpdate(event.ctx.update);
       if (err instanceof TelegramPairingStoreReadError || spooledReplay) {

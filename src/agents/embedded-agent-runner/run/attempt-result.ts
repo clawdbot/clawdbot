@@ -8,6 +8,7 @@ import {
   buildAgentHookContextIdentityFields,
 } from "../../../plugins/hook-agent-context.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { createCacheTrace } from "../../cache-trace.js";
 import { isCloudCodeAssistFormatError } from "../../embedded-agent-helpers.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
@@ -41,15 +42,7 @@ export type EmbeddedAttemptClientToolCallSlot = {
 
 type EmbeddedAttemptResultState = Pick<
   EmbeddedRunAttemptResult,
-  | "aborted"
-  | "externalAbort"
-  | "timedOut"
-  | "idleTimedOut"
-  | "timedOutDuringCompaction"
-  | "timedOutDuringToolExecution"
-  | "timedOutByRunBudget"
-  | "promptError"
-  | "promptErrorSource"
+  | "terminal"
   | "preflightRecovery"
   | "sessionIdUsed"
   | "sessionFileUsed"
@@ -59,6 +52,7 @@ type EmbeddedAttemptResultState = Pick<
   | "beforeAgentFinalizeRevisionReason"
   | "lastAssistant"
   | "currentAttemptAssistant"
+  | "currentAttemptCompletedAssistant"
   | "attemptUsage"
   | "promptCache"
   | "contextBudgetStatus"
@@ -150,6 +144,7 @@ export function completeEmbeddedAttemptResult(
   input: CompleteEmbeddedAttemptResultInput,
 ): EmbeddedRunAttemptResult {
   const { attempt, state, subscription } = input;
+  const terminal = projectAgentRunAttemptTerminal(state.terminal);
   const {
     assistantTexts,
     didSendDeterministicApprovalPrompt,
@@ -161,6 +156,7 @@ export function completeEmbeddedAttemptResult(
     getLastAssistantTextMessageIndex,
     getLastCompactionTokensAfter,
     getLastToolError,
+    getLatestMcpAppChannelView,
     getMessagingToolSentMediaUrls,
     getMessagingToolSentTargets,
     getMessagingToolSentTexts,
@@ -215,8 +211,9 @@ export function completeEmbeddedAttemptResult(
   }
 
   if (
+    attempt.operation !== "settled-tool-finalization" &&
     input.hookRunner?.hasHooks("llm_output") &&
-    shouldRunLlmOutputHooksForAttempt({ promptErrorSource: state.promptErrorSource })
+    shouldRunLlmOutputHooksForAttempt({ promptErrorSource: terminal.promptErrorSource })
   ) {
     input.hookRunner
       .runLlmOutput(
@@ -332,8 +329,8 @@ export function completeEmbeddedAttemptResult(
   const silentToolResultReplyPayload = resolveSilentToolResultReplyPayload({
     isCronTrigger: attempt.trigger === "cron",
     payloadCount: pendingToolMediaPayloadCount,
-    aborted: state.aborted,
-    timedOut: state.timedOut,
+    aborted: terminal.aborted,
+    timedOut: terminal.timedOut,
     attempt: {
       clientToolCalls,
       yieldDetected: state.yieldDetected,
@@ -351,8 +348,8 @@ export function completeEmbeddedAttemptResult(
   const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
     allowEmptyAssistantReplyAsSilent: attempt.allowEmptyAssistantReplyAsSilent,
     payloadCount: 0,
-    aborted: state.aborted,
-    timedOut: state.timedOut,
+    aborted: terminal.aborted,
+    timedOut: terminal.timedOut,
     attempt: {
       assistantTexts,
       clientToolCalls,
@@ -367,10 +364,10 @@ export function completeEmbeddedAttemptResult(
       lastToolError,
       lastAssistant: state.lastAssistant,
       itemLifecycle: getItemLifecycle(),
+      messagesSnapshot: state.messagesSnapshot,
       toolMetas: toolMetasNormalized,
       replayMetadata,
-      promptErrorSource: state.promptErrorSource,
-      timedOutDuringCompaction: state.timedOutDuringCompaction,
+      terminal: state.terminal,
     },
   });
   const result: EmbeddedRunAttemptResult = {
@@ -382,6 +379,7 @@ export function completeEmbeddedAttemptResult(
     bootstrapPromptWarningSignaturesSeen: input.bootstrapPromptWarning.warningSignaturesSeen,
     bootstrapPromptWarningSignature: input.bootstrapPromptWarning.signature,
     assistantTexts,
+    latestMcpAppChannelView: getLatestMcpAppChannelView(),
     lastAssistantTextMessageIndex: getLastAssistantTextMessageIndex(),
     toolMetas: toolMetasNormalized,
     acceptedSessionSpawns,

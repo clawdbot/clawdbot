@@ -43,11 +43,15 @@ describe("enforceChatHistoryFinalBudget", () => {
       role: "assistant",
       timestamp: 1,
       content: [{ type: "text", text: "y".repeat(4000) }],
-      __openclaw: { id: "abc", seq: 7 },
+      __openclaw: { id: "abc", seq: 7, turnBoundary: true },
     };
     const result = enforceChatHistoryFinalBudget({ messages: [last], maxBytes: 2_000 });
     expect(result.messages).toHaveLength(1);
     expect(firstText(result.messages)).toContain("chat.history omitted: message too large");
+    expect(
+      (result.messages[0] as { __openclaw?: { turnBoundary?: boolean } })["__openclaw"]
+        ?.turnBoundary,
+    ).toBe(true);
     // The placeholder is a new object, not the oversized original.
     expect(result.messages[0]).not.toBe(last);
   });

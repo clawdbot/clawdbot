@@ -2,7 +2,8 @@
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { expect } from "vitest";
-import { buildOpenAICompletionsParams, testing } from "./openai-transport-stream.js";
+import { buildOpenAICompletionsParams } from "./openai-transport-stream.js";
+import { testing } from "./openai-transport-stream.test-support.js";
 
 export const {
   buildOpenAIResponsesParams,
@@ -14,7 +15,7 @@ export type OpenAICompletionsOutput = Parameters<typeof testing.processOpenAICom
 
 export type OpenAIResponsesOutput = Parameters<typeof testing.processResponsesStream>[1];
 
-export type ResponsesApi = Extract<
+type ResponsesApi = Extract<
   Api,
   "openai-responses" | "openai-chatgpt-responses" | "azure-openai-responses"
 >;

@@ -633,6 +633,5 @@ export {
   detectCommandDiagnosticFailure,
   discoverBundledPluginManifests,
   readQaSuiteSummary,
-  schemaHasRequiredFields,
   selectPluginEntries,
 };

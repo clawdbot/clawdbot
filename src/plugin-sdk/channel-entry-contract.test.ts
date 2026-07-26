@@ -248,7 +248,7 @@ async function expectBuiltArtifactNodeRequireFastPath(
   scope: string,
   artifactRoot = "dist",
 ): Promise<void> {
-  vi.stubEnv("OPENCLAW_PLUGIN_LOAD_PROFILE", "1");
+  vi.stubEnv("OPENCLAW_DIAGNOSTICS", "plugin.load-profile");
   const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
   try {
@@ -302,17 +302,11 @@ function runCompiledEsmSidecarFastPathProbe(): SpawnSyncReturns<string> {
     type: "module",
     bin: { openclaw: "./openclaw.mjs" },
     exports: {
-      "./plugin-sdk": "./dist/plugin-sdk/root-alias.cjs",
       "./plugin-sdk/channel-outbound": "./dist/plugin-sdk/channel-outbound.js",
     },
   });
   fs.writeFileSync(path.join(tempRoot, "openclaw.mjs"), "#!/usr/bin/env node\n", "utf8");
   fs.mkdirSync(path.join(tempRoot, "dist", "plugin-sdk"), { recursive: true });
-  fs.writeFileSync(
-    path.join(tempRoot, "dist", "plugin-sdk", "root-alias.cjs"),
-    "module.exports = {};\n",
-    "utf8",
-  );
   fs.writeFileSync(
     path.join(tempRoot, "dist", "plugin-sdk", "channel-outbound.js"),
     'export const defineChannelMessageAdapter = () => "adapter";\n',
@@ -346,7 +340,7 @@ function runCompiledEsmSidecarFastPathProbe(): SpawnSyncReturns<string> {
   return spawnSync(process.execPath, ["--import", "tsx", probePath], {
     cwd: process.cwd(),
     encoding: "utf8",
-    env: { ...process.env, OPENCLAW_PLUGIN_LOAD_PROFILE: "1" },
+    env: { ...process.env, OPENCLAW_DIAGNOSTICS: "plugin.load-profile" },
   });
 }
 
@@ -463,7 +457,7 @@ describe("loadBundledEntryExportSync", () => {
     const channelEntryContract = await importFreshModule<
       typeof import("./channel-entry-contract.js")
     >(import.meta.url, "./channel-entry-contract.js?scope=native-esm-race-fallback");
-    const tempRoot = tempDirs.make("openclaw-channel-entry-contract-");
+    const tempRoot = fs.realpathSync(tempDirs.make("openclaw-channel-entry-contract-"));
     const pluginRoot = path.join(tempRoot, "dist", "extensions", "whatsapp");
     fs.mkdirSync(pluginRoot, { recursive: true });
     const importerPath = path.join(pluginRoot, "setup-entry.js");

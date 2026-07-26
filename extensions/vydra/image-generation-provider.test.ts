@@ -1,5 +1,5 @@
 // Vydra tests cover image generation provider plugin behavior.
-import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-env";
+import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildVydraImageGenerationProvider } from "./image-generation-provider.js";
 import {
@@ -116,13 +116,17 @@ describe("vydra image-generation provider", () => {
     ).rejects.toThrow("vydra.image-generation: JSON response exceeds 16777216 bytes");
   });
 
-  it("passes request SSRF policy to the image creation request", async () => {
+  it("passes request SSRF policy through image creation, polling, and download", async () => {
     stubVydraApiKey();
     const fetchMock = stubFetch(
       jsonResponse({
         jobId: "job-123",
+        status: "queued",
+      }),
+      jsonResponse({
+        jobId: "job-123",
         status: "completed",
-        imageUrl: "https://cdn.vydra.ai/generated/test.png",
+        imageUrl: "https://198.18.0.11/generated/test.png",
       }),
       binaryResponse("png-data", "image/png"),
     );
@@ -137,6 +141,7 @@ describe("vydra image-generation provider", () => {
           providers: {
             vydra: {
               baseUrl: "https://198.18.0.10/api/v1",
+              request: { headers: { "X-Vydra-Policy": "cross-origin" } },
             },
           },
         },
@@ -147,6 +152,15 @@ describe("vydra image-generation provider", () => {
     const createCall = fetchCall(fetchMock);
     expect(createCall[0]).toBe("https://198.18.0.10/api/v1/models/grok-imagine");
     expect(createCall[1].method).toBe("POST");
+    expect(new Headers(createCall[1].headers).get("x-vydra-policy")).toBe("cross-origin");
+    const pollCall = fetchCall(fetchMock, 1);
+    expect(pollCall[0]).toBe("https://198.18.0.10/api/v1/jobs/job-123");
+    expect(new Headers(pollCall[1].headers).get("x-vydra-policy")).toBe("cross-origin");
+    const downloadCall = fetchCall(fetchMock, 2);
+    expect(downloadCall[0]).toBe("https://198.18.0.11/generated/test.png");
+    const downloadHeaders = new Headers(downloadCall[1].headers);
+    expect(downloadHeaders.get("authorization")).toBeNull();
+    expect(downloadHeaders.get("x-vydra-policy")).toBeNull();
   });
 
   it("polls jobs when the create response is not completed yet", async () => {
@@ -156,7 +170,7 @@ describe("vydra image-generation provider", () => {
       jsonResponse({
         jobId: "job-456",
         status: "completed",
-        resultUrls: ["https://cdn.vydra.ai/generated/polled.png"],
+        resultUrls: ["https://www.vydra.ai/generated/polled.png"],
       }),
       binaryResponse("png-data", "image/png"),
     );
@@ -166,12 +180,26 @@ describe("vydra image-generation provider", () => {
       provider: "vydra",
       model: "grok-imagine",
       prompt: "draw a cat",
-      cfg: {},
+      cfg: {
+        models: {
+          providers: {
+            vydra: {
+              baseUrl: "https://www.vydra.ai/api/v1",
+              models: [],
+              request: { headers: { "X-Vydra-Policy": "same-origin" } },
+            },
+          },
+        },
+      },
     });
 
     const pollCall = fetchCall(fetchMock, 1);
     expect(pollCall[0]).toBe("https://www.vydra.ai/api/v1/jobs/job-456");
     expect(pollCall[1].method).toBe("GET");
+    expect(new Headers(pollCall[1].headers).get("x-vydra-policy")).toBe("same-origin");
+    const downloadHeaders = new Headers(fetchCall(fetchMock, 2)[1].headers);
+    expect(downloadHeaders.get("authorization")).toBe("Bearer vydra-test-key");
+    expect(downloadHeaders.get("x-vydra-policy")).toBe("same-origin");
   });
 
   it("rejects job poll JSON responses that exceed the provider cap", async () => {
@@ -186,6 +214,6 @@ describe("vydra image-generation provider", () => {
         prompt: "draw a cat",
         cfg: {},
       }),
-    ).rejects.toThrow("Vydra job status: JSON response exceeds 16777216 bytes");
+    ).rejects.toThrow("Vydra job status request failed: JSON response exceeds 16777216 bytes");
   });
 });

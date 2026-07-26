@@ -1,5 +1,6 @@
 // Minimax provider module implements model/runtime integration.
 import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -33,7 +34,6 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_OPERATION_TIMEOUT_MS = 1_200_000;
 const POLL_INTERVAL_MS = 10_000;
 const MAX_POLL_ATTEMPTS = 120;
-const DEFAULT_GENERATED_VIDEO_MAX_BYTES = 16 * 1024 * 1024;
 const MINIMAX_MODEL_ALLOWED_DURATIONS: Readonly<Record<string, readonly number[]>> = {
   "MiniMax-Hailuo-2.3": [6, 10],
   "MiniMax-Hailuo-02": [6, 10],
@@ -94,14 +94,6 @@ function resolveMinimaxVideoBaseUrl(
   } catch {
     return DEFAULT_MINIMAX_VIDEO_BASE_URL;
   }
-}
-
-function resolveGeneratedVideoMaxBytes(req: VideoGenerationRequest): number {
-  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * 1024 * 1024);
-  }
-  return DEFAULT_GENERATED_VIDEO_MAX_BYTES;
 }
 
 function assertMinimaxBaseResp(baseResp: MinimaxBaseResp | undefined, context: string): void {
@@ -248,6 +240,10 @@ async function pollMinimaxVideo(params: {
     timeoutMs: params.timeoutMs,
     label: `MiniMax video generation task ${params.taskId}`,
   });
+  const resolveTimeoutMs = createProviderOperationTimeoutResolver({
+    deadline,
+    defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+  });
   for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
     const url = new URL(`${params.baseUrl}/v1/query/video_generation`);
     url.searchParams.set("task_id", params.taskId);
@@ -258,10 +254,7 @@ async function pollMinimaxVideo(params: {
         method: "GET",
         headers: params.headers,
       },
-      timeoutMs: createProviderOperationTimeoutResolver({
-        deadline,
-        defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-      }),
+      timeoutMs: resolveTimeoutMs,
       fetchFn: params.fetchFn,
       requestFailedMessage: "MiniMax video status request failed",
       policy: params.policy,
@@ -271,6 +264,11 @@ async function pollMinimaxVideo(params: {
       payload = await readProviderJsonResponse<MinimaxQueryResponse>(
         response,
         "MiniMax video generation failed",
+        {
+          timeoutMs: resolveTimeoutMs,
+          onTimeout: ({ timeoutMs }) =>
+            new Error(`MiniMax video generation timed out after ${timeoutMs}ms`),
+        },
       );
     } finally {
       await release();
@@ -299,11 +297,19 @@ async function downloadVideoFromUrl(params: {
   maxBytes: number;
   policy: MinimaxRequestPolicy;
 }): Promise<GeneratedVideoAsset> {
+  const deadline = createProviderOperationDeadline({
+    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    label: "MiniMax generated video download",
+  });
+  const timeoutMs = createProviderOperationTimeoutResolver({
+    deadline,
+    defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+  });
   const { response, release } = await fetchMinimaxResponse({
     stage: "download",
     url: params.url,
     init: { method: "GET" },
-    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    timeoutMs,
     fetchFn: params.fetchFn,
     requestFailedMessage: "MiniMax generated video download failed",
     policy: params.policy,
@@ -311,6 +317,11 @@ async function downloadVideoFromUrl(params: {
   try {
     const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
     const buffer = await readResponseWithLimit(response, params.maxBytes, {
+      timeoutMs,
+      onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
+        new Error(
+          `MiniMax generated video download timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`,
+        ),
       onOverflow: ({ maxBytes }) =>
         new Error(`MiniMax generated video download exceeds ${maxBytes} bytes`),
     });
@@ -335,6 +346,14 @@ async function downloadVideoFromFileId(params: {
 }): Promise<GeneratedVideoAsset> {
   const url = new URL(`${params.baseUrl}/v1/files/retrieve`);
   url.searchParams.set("file_id", params.fileId);
+  const metadataDeadline = createProviderOperationDeadline({
+    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    label: "MiniMax generated video metadata",
+  });
+  const metadataTimeoutMs = createProviderOperationTimeoutResolver({
+    deadline: metadataDeadline,
+    defaultTimeoutMs: metadataDeadline.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+  });
   const { response: metadataResponse, release: releaseMetadata } = await fetchMinimaxResponse({
     stage: "download",
     url: url.toString(),
@@ -342,7 +361,7 @@ async function downloadVideoFromFileId(params: {
       method: "GET",
       headers: params.headers,
     },
-    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    timeoutMs: metadataTimeoutMs,
     fetchFn: params.fetchFn,
     requestFailedMessage: "MiniMax generated video metadata request failed",
     policy: params.policy,
@@ -352,6 +371,13 @@ async function downloadVideoFromFileId(params: {
     metadata = await readProviderJsonResponse<MinimaxFileRetrieveResponse>(
       metadataResponse,
       "MiniMax generated video metadata",
+      {
+        timeoutMs: metadataTimeoutMs,
+        onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
+          new Error(
+            `MiniMax generated video metadata timed out after ${metadataDeadline.timeoutMs ?? bodyTimeoutMs}ms`,
+          ),
+      },
     );
   } finally {
     await releaseMetadata();
@@ -361,11 +387,19 @@ async function downloadVideoFromFileId(params: {
   if (!downloadUrl) {
     throw new Error("MiniMax generated video metadata missing download_url");
   }
+  const deadline = createProviderOperationDeadline({
+    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    label: "MiniMax generated video download",
+  });
+  const timeoutMs = createProviderOperationTimeoutResolver({
+    deadline,
+    defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+  });
   const { response, release } = await fetchMinimaxResponse({
     stage: "download",
     url: downloadUrl,
     init: { method: "GET" },
-    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    timeoutMs,
     fetchFn: params.fetchFn,
     requestFailedMessage: "MiniMax generated video download failed",
     policy: params.policy,
@@ -373,6 +407,11 @@ async function downloadVideoFromFileId(params: {
   try {
     const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
     const buffer = await readResponseWithLimit(response, params.maxBytes, {
+      timeoutMs,
+      onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
+        new Error(
+          `MiniMax generated video download timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`,
+        ),
       onOverflow: ({ maxBytes }) =>
         new Error(`MiniMax generated video download exceeds ${maxBytes} bytes`),
     });
@@ -523,6 +562,7 @@ function buildMinimaxVideoProvider(providerId: string): VideoGenerationProvider 
         });
         const videoUrl = normalizeOptionalString(completed.video_url);
         const fileId = normalizeOptionalString(completed.file_id);
+        const maxVideoBytes = resolveGeneratedMediaMaxBytes(req.cfg, "video");
         const video = videoUrl
           ? await downloadVideoFromUrl({
               url: videoUrl,
@@ -531,7 +571,7 @@ function buildMinimaxVideoProvider(providerId: string): VideoGenerationProvider 
                 defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
               }),
               fetchFn,
-              maxBytes: resolveGeneratedVideoMaxBytes(req),
+              maxBytes: maxVideoBytes,
               policy: requestPolicy,
             })
           : fileId
@@ -544,7 +584,7 @@ function buildMinimaxVideoProvider(providerId: string): VideoGenerationProvider 
                 }),
                 baseUrl,
                 fetchFn,
-                maxBytes: resolveGeneratedVideoMaxBytes(req),
+                maxBytes: maxVideoBytes,
                 policy: requestPolicy,
               })
             : (() => {

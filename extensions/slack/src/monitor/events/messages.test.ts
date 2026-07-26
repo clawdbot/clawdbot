@@ -7,6 +7,8 @@ import {
   type SlackSystemEventTestOverrides,
 } from "./system-event-test-harness.js";
 
+const SLACK_INGRESS_LIFECYCLE_CONTEXT_KEY = "openclawIngressLifecycle";
+
 const { messageQueueMock, messageAllowMock, inboundInfoSpy } = vi.hoisted(() => ({
   messageQueueMock: vi.fn(),
   messageAllowMock: vi.fn(),
@@ -241,6 +243,47 @@ async function runMessageCase(input: MessageCase = {}): Promise<void> {
 }
 
 describe("registerSlackMessageEvents", () => {
+  it("forwards durable ingress ownership and propagates dispatch failure", async () => {
+    const harness = createSlackSystemEventTestHarness();
+    const dispatchError = new Error("transient dispatch failure");
+    const handleSlackMessage = vi.fn(async () => {
+      throw dispatchError;
+    });
+    registerSlackMessageEvents({ ctx: harness.ctx, handleSlackMessage });
+    const handler = requireMessageHandler(harness.getHandler("message") as MessageHandler | null);
+    const turnAdoptionLifecycle = {
+      admission: "exclusive",
+      abortSignal: new AbortController().signal,
+      onAdopted: vi.fn(),
+      onDeferred: vi.fn(),
+      onAbandoned: vi.fn(),
+    };
+
+    await expect(
+      handler({
+        event: {
+          type: "message",
+          channel: "D1",
+          channel_type: "im",
+          user: "U1",
+          text: "hello",
+          ts: "123.456",
+        },
+        body: {},
+        context: { [SLACK_INGRESS_LIFECYCLE_CONTEXT_KEY]: turnAdoptionLifecycle },
+      }),
+    ).rejects.toBe(dispatchError);
+
+    expect(handleSlackMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "D1", ts: "123.456" }),
+      expect.objectContaining({
+        source: "message",
+        awaitDispatch: true,
+        turnAdoptionLifecycle,
+      }),
+    );
+  });
+
   it("accepts two org workspaces and preserves each listener scope", async () => {
     const { handler, handleSlackMessage } = createEnterpriseHandlers("message");
     const clients = [{ id: "one" }, { id: "two" }];

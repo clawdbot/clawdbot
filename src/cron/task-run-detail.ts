@@ -170,6 +170,7 @@ export function cronRunLogEntryToTaskDetail(
   options: {
     storeKey: string;
     triggerEval?: { fired: boolean; stateChanged: boolean; state?: unknown };
+    scriptResult?: { scriptStateChanged?: boolean; scriptState?: unknown };
   },
 ): JsonValue {
   const detail = toJsonValue({
@@ -196,6 +197,11 @@ export function cronRunLogEntryToTaskDetail(
       options.triggerEval?.fired === true && options.triggerEval.stateChanged
         ? options.triggerEval.state
         : undefined,
+    scriptStateChanged: options.scriptResult?.scriptStateChanged === true ? true : undefined,
+    scriptState:
+      options.scriptResult?.scriptStateChanged === true
+        ? options.scriptResult.scriptState
+        : undefined,
     model: entry.model,
     provider: entry.provider,
     usage: entry.usage,
@@ -208,6 +214,13 @@ export function cronTaskRecordStoreKey(task: TaskRecord): string | undefined {
   return isJsonObject(task.detail) && typeof task.detail.storeKey === "string"
     ? task.detail.storeKey
     : undefined;
+}
+
+/** Keeps history projection, recovery, and retention on one task-row timestamp. */
+export function resolveCronTaskRecordTimestamp(
+  task: Pick<TaskRecord, "endedAt" | "lastEventAt" | "createdAt">,
+): number {
+  return task.endedAt ?? task.lastEventAt ?? task.createdAt;
 }
 
 /** Reads internal trigger recovery data without adding it to run-history responses. */
@@ -223,6 +236,19 @@ export function cronTaskRecordToTriggerEval(
     ...(task.detail.triggerStateChanged === true && "triggerState" in task.detail
       ? { state: task.detail.triggerState }
       : {}),
+  };
+}
+
+/** Reads internal payload-script recovery data without exposing it in run history. */
+export function cronTaskRecordToScriptRunResult(
+  task: TaskRecord,
+): { scriptStateChanged: true; scriptState?: JsonValue } | undefined {
+  if (!isJsonObject(task.detail) || task.detail.scriptStateChanged !== true) {
+    return undefined;
+  }
+  return {
+    scriptStateChanged: true,
+    ...(Object.hasOwn(task.detail, "scriptState") ? { scriptState: task.detail.scriptState } : {}),
   };
 }
 
@@ -250,7 +276,7 @@ export function cronTaskRecordToRunLogEntry(task: TaskRecord): CronRunLogEntry |
   const entry = parseCronRunLogEntryObject(
     {
       ...wireDetail,
-      ts: task.endedAt ?? task.lastEventAt ?? task.createdAt,
+      ts: resolveCronTaskRecordTimestamp(task),
       jobId: task.sourceId,
       action: "finished",
       status: isCronRunStatus(task.detail.status) ? task.detail.status : undefined,

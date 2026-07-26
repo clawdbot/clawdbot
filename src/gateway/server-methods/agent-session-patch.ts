@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveTrustedGroupId } from "../../agents/agent-tools.policy.js";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
+import { buildMainSessionRecoveryClearPatch } from "../../agents/main-session-recovery-clear.js";
 import {
   evaluateSessionFreshness,
   hasTerminalMainSessionTranscriptNewerThanRegistrySync,
@@ -12,11 +13,14 @@ import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.j
 import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  deliveryContextFromSession,
   mergeDeliveryContext,
-  normalizeSessionDeliveryFields,
+  normalizeSessionDeliveryState,
+  sessionDeliveryOrigin,
+  sessionDeliveryRoute,
   type DeliveryContext,
 } from "../../utils/delivery-context.shared.js";
-import { canonicalizeSpawnedByForAgent, loadSessionEntry } from "../session-utils.js";
+import { canonicalizeSpawnedByForAgent, loadSessionEntryReadOnly } from "../session-utils.js";
 import {
   normalizeTrustedGroupMetadata,
   requestGroupMatchesTrusted,
@@ -47,7 +51,6 @@ export function buildAgentSessionPatch(params: {
   normalizedSpawned: { groupId?: string; groupChannel?: string; groupSpace?: string };
   requestDeliveryHint: DeliveryContext | undefined;
   requestLabel?: string;
-  recipientChannel?: string;
   pluginOwnerId?: string;
   expectedExistingSessionId?: string;
   hasRestoredCronContinuation: boolean;
@@ -72,7 +75,7 @@ export function buildAgentSessionPatch(params: {
     (!storedGroup.groupId || !storedGroup.groupChannel || !storedGroup.groupSpace)
   ) {
     try {
-      const parentEntry = loadSessionEntry(freshSpawnedBy)?.entry;
+      const parentEntry = loadSessionEntryReadOnly(freshSpawnedBy)?.entry;
       inheritedGroup = normalizeTrustedGroupMetadata({
         groupId: parentEntry?.groupId,
         groupChannel: parentEntry?.groupChannel,
@@ -113,17 +116,16 @@ export function buildAgentSessionPatch(params: {
           (trustRequestSelectors ? params.normalizedSpawned.groupSpace : undefined),
       };
 
-  const deliveryFields = normalizeSessionDeliveryFields(params.freshEntry);
   const effectiveDelivery = mergeDeliveryContext(
-    deliveryFields.deliveryContext,
+    deliveryContextFromSession(params.freshEntry),
     params.requestDeliveryHint,
   );
-  const effectiveDeliveryFields = normalizeSessionDeliveryFields({
-    route: deliveryFields.route,
-    deliveryContext: effectiveDelivery,
+  const delivery = normalizeSessionDeliveryState({
+    route: sessionDeliveryRoute(params.freshEntry),
+    context: effectiveDelivery,
+    origin: sessionDeliveryOrigin(params.freshEntry),
   });
   const labelValue = normalizeOptionalString(params.requestLabel) || params.freshEntry?.label;
-  const channelValue = params.freshEntry?.channel ?? params.recipientChannel?.trim();
   const freshSessionRotatedSinceLoad = Boolean(
     params.initialEntry?.sessionId &&
     params.freshEntry?.sessionId &&
@@ -201,28 +203,25 @@ export function buildAgentSessionPatch(params: {
     freshRecoverableTerminalSession &&
     !freshSessionRotatedSinceLoad &&
     patchSessionId === params.freshEntry?.sessionId;
+  const automaticRecoveryClearPatch = shouldClearRotatedState
+    ? buildMainSessionRecoveryClearPatch(params.freshEntry)
+    : {};
   const patch: Partial<SessionEntry> = {
     sessionId: patchSessionId,
     updatedAt: params.now,
     ...(freshIsNewSession && !freshSessionRotatedSinceLoad ? { sessionStartedAt: params.now } : {}),
-    ...(params.touchInteraction ? { lastInteractionAt: params.now } : {}),
-    ...(effectiveDeliveryFields.route ? { route: effectiveDeliveryFields.route } : {}),
-    ...(effectiveDeliveryFields.deliveryContext
-      ? { deliveryContext: effectiveDeliveryFields.deliveryContext }
+    ...(params.touchInteraction
+      ? {
+          lastInteractionAt: params.now,
+          // Clear at human-turn admission, before the model may declare a new
+          // status. Later lifecycle writes must not erase a same-turn declaration.
+          agentStatus: undefined,
+        }
       : {}),
-    ...(effectiveDeliveryFields.lastChannel
-      ? { lastChannel: effectiveDeliveryFields.lastChannel }
-      : {}),
-    ...(effectiveDeliveryFields.lastTo ? { lastTo: effectiveDeliveryFields.lastTo } : {}),
-    ...(effectiveDeliveryFields.lastAccountId
-      ? { lastAccountId: effectiveDeliveryFields.lastAccountId }
-      : {}),
-    ...(effectiveDeliveryFields.lastThreadId != null
-      ? { lastThreadId: effectiveDeliveryFields.lastThreadId }
-      : {}),
+    ...automaticRecoveryClearPatch,
+    delivery,
     ...(labelValue ? { label: labelValue } : {}),
     ...(freshSpawnedBy ? { spawnedBy: freshSpawnedBy } : {}),
-    ...(channelValue ? { channel: channelValue } : {}),
     groupId: nextGroup.groupId,
     groupChannel: nextGroup.groupChannel,
     space: nextGroup.groupSpace,

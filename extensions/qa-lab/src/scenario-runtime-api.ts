@@ -98,7 +98,6 @@ type QaScenarioRuntimeDeps = {
   liveTurnTimeoutMs: QaScenarioRuntimeFunction;
   resolveQaLiveTurnTimeoutMs: QaScenarioRuntimeFunction;
   splitModelRef: QaScenarioRuntimeFunction;
-  qaChannelPlugin: unknown;
   hasDiscoveryLabels: QaScenarioRuntimeFunction;
   reportsDiscoveryScopeLeak: QaScenarioRuntimeFunction;
   reportsMissingDiscoveryFiles: QaScenarioRuntimeFunction;
@@ -195,7 +194,6 @@ type QaScenarioRuntimeApi<
   liveTurnTimeoutMs: TDeps["liveTurnTimeoutMs"];
   resolveQaLiveTurnTimeoutMs: TDeps["resolveQaLiveTurnTimeoutMs"];
   splitModelRef: TDeps["splitModelRef"];
-  qaChannelPlugin: unknown;
   hasDiscoveryLabels: TDeps["hasDiscoveryLabels"];
   reportsDiscoveryScopeLeak: TDeps["reportsDiscoveryScopeLeak"];
   reportsMissingDiscoveryFiles: TDeps["reportsMissingDiscoveryFiles"];
@@ -309,7 +307,6 @@ export function createQaScenarioRuntimeApi<
     liveTurnTimeoutMs: params.deps.liveTurnTimeoutMs,
     resolveQaLiveTurnTimeoutMs: params.deps.resolveQaLiveTurnTimeoutMs,
     splitModelRef: params.deps.splitModelRef,
-    qaChannelPlugin: params.deps.qaChannelPlugin,
     hasDiscoveryLabels: params.deps.hasDiscoveryLabels,
     reportsDiscoveryScopeLeak: params.deps.reportsDiscoveryScopeLeak,
     reportsMissingDiscoveryFiles: params.deps.reportsMissingDiscoveryFiles,

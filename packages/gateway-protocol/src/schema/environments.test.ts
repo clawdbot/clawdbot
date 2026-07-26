@@ -68,7 +68,7 @@ describe("worker environment protocol schemas", () => {
     ).toBe(false);
     expect(validateEnvironmentsDestroyParams({ environmentId: "" })).toBe(false);
     expect(validateEnvironmentsDestroyParams({ environmentId: "environment-1", force: true })).toBe(
-      false,
+      true,
     );
   });
 

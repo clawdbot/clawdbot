@@ -240,7 +240,6 @@ function createConfigObserveAuditAppendParams(
   params: ConfigObserveAuditRecordParams,
 ) {
   return {
-    fs: deps.fs,
     env: deps.env,
     homedir: deps.homedir,
     record: createConfigObserveAuditRecord(params),
@@ -943,10 +942,9 @@ export async function recoverConfigFromLastKnownGood(params: {
     stat: stat as ConfigStatMetadataSource,
     observedAt: now,
   });
-  const clobberedPath = await persistBoundedClobberedConfigSnapshot({
+  const clobberedPath = await preserveConfigSnapshotAsClobbered({
     deps,
-    configPath: snapshot.path,
-    raw: snapshot.raw,
+    snapshot,
     observedAt: now,
   });
   await deps.fs.promises.writeFile(snapshot.path, backupRaw, {
@@ -986,5 +984,21 @@ export async function recoverConfigFromLastKnownGood(params: {
     }),
   );
   return true;
+}
+
+export async function preserveConfigSnapshotAsClobbered(params: {
+  deps: ObserveRecoveryDeps;
+  snapshot: ConfigFileSnapshot;
+  observedAt?: string;
+}): Promise<string | null> {
+  if (!params.snapshot.exists || typeof params.snapshot.raw !== "string") {
+    return null;
+  }
+  return await persistBoundedClobberedConfigSnapshot({
+    deps: params.deps,
+    configPath: params.snapshot.path,
+    raw: params.snapshot.raw,
+    observedAt: params.observedAt ?? new Date().toISOString(),
+  });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

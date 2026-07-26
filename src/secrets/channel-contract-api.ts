@@ -2,7 +2,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  listAgentEntries,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { shouldRejectHardlinkedPluginFiles } from "../plugins/hardlink-policy.js";
@@ -156,14 +160,15 @@ function listChannelSecretContractRecords(params: {
   env: NodeJS.ProcessEnv;
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
 }): PluginManifestRecord[] {
-  const workspaceDir = resolveAgentWorkspaceDir(
-    params.config,
-    resolveDefaultAgentId(params.config),
-    params.env,
-  );
+  // Static target-registry compilation intentionally has no runtime config.
+  // External plugin discovery can proceed without a workspace scan in that case.
+  const workspaceDir =
+    listAgentEntries(params.config).length > 0
+      ? resolveAgentWorkspaceDir(params.config, resolveDefaultAgentId(params.config), params.env)
+      : undefined;
   const snapshot = loadPluginMetadataSnapshot({
     config: params.config,
-    workspaceDir,
+    ...(workspaceDir ? { workspaceDir } : {}),
     env: params.env,
   });
   return snapshot.plugins

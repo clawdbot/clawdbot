@@ -37,6 +37,14 @@ const WORKBOARD_ENGINE_MODELS = {
 } as const;
 const WORKBOARD_SESSION_LABEL_MAX_CHARS = 512;
 
+function engineModel(engine: WorkboardExecutionEngine | null | undefined): string | undefined {
+  return engine === "codex"
+    ? WORKBOARD_ENGINE_MODELS.codex
+    : engine === "claude"
+      ? WORKBOARD_ENGINE_MODELS.claude
+      : undefined;
+}
+
 function buildCardPrompt(card: WorkboardCard): string {
   const lines = [`Work on this OpenClaw Workboard card: ${card.title}`];
   if (card.notes?.trim()) {
@@ -116,15 +124,16 @@ function buildWorkboardExecution(params: {
   status: WorkboardExecutionStatus;
 }): WorkboardExecution {
   const now = Date.now();
+  const model = engineModel(params.engine);
   return {
-    id: params.card.execution?.id ?? `${params.card.id}:${params.engine}`,
+    id: params.card.execution?.id ?? `${params.card.id}:agent-session`,
     kind: "agent-session",
     engine: params.engine,
     mode: params.mode,
     status: params.status,
-    model: WORKBOARD_ENGINE_MODELS[params.engine],
     startedAt: now,
     updatedAt: now,
+    ...(model ? { model } : {}),
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.runId ? { runId: params.runId } : {}),
   };
@@ -228,6 +237,7 @@ export async function startWorkboardCard(params: {
   }
   const engine = params.engine;
   const mode = params.mode ?? "autonomous";
+  const model = engineModel(engine);
   state.error = null;
   if (mode === "autonomous" && isScheduledForLater(params.card)) {
     state.error = "Scheduled cards cannot start before their scheduled time.";
@@ -265,7 +275,7 @@ export async function startWorkboardCard(params: {
             sessionKey: buildCardTaskSessionKey(card),
             ...(card.agentId ? { agentId: card.agentId } : {}),
             label: buildCardSessionLabel(card),
-            ...(engine ? { model: WORKBOARD_ENGINE_MODELS[engine] } : {}),
+            ...(model ? { model } : {}),
             message: buildCardPrompt(card),
             deliver: false,
             bootstrapContextMode: "lightweight",
@@ -274,7 +284,7 @@ export async function startWorkboardCard(params: {
         : await requestSessionCreate(params.client, {
             ...(card.agentId ? { agentId: card.agentId } : {}),
             label: buildCardSessionLabel(card),
-            ...(engine ? { model: WORKBOARD_ENGINE_MODELS[engine] } : {}),
+            ...(model ? { model } : {}),
           });
     const sessionKey =
       isRecord(created) && typeof created.sessionKey === "string" && created.sessionKey.trim()

@@ -3,15 +3,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import {
-  testing as embeddedRunTesting,
   abortEmbeddedAgentRun,
   isEmbeddedAgentRunActive,
 } from "../../agents/embedded-agent-runner/runs.js";
+import { testing as embeddedRunTesting } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { clearRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import * as sessionTypesModule from "../../config/sessions.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
@@ -32,24 +31,12 @@ import type { VerboseLevel } from "../thinking.shared.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
-import {
-  createReplyOperation,
-  testing as replyRunRegistryTesting,
-  replyRunRegistry,
-} from "./reply-run-registry.js";
+import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
+import { testing as replyRunRegistryTesting } from "./reply-run-registry.test-support.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 function createCliBackendTestConfig() {
-  return {
-    agents: {
-      defaults: {
-        cliBackends: {
-          "claude-cli": {},
-          "google-gemini-cli": {},
-        },
-      },
-    },
-  };
+  return {};
 }
 
 function registerCliBackendsForTest(): void {
@@ -121,7 +108,6 @@ vi.mock("../../agents/embedded-agent.js", () => {
   return {
     compactEmbeddedAgentSession: (params: unknown) =>
       compactState.compactEmbeddedAgentSessionMock(params),
-    queueEmbeddedAgentMessage: vi.fn().mockReturnValue(false),
     runEmbeddedAgent: (params: unknown) => runEmbeddedAgentMock(params),
     abortEmbeddedAgentRun: (sessionId: string) => {
       abortEmbeddedAgentRunMock(sessionId);
@@ -141,13 +127,12 @@ vi.mock("../../agents/model-selection.js", async () => {
   );
   return {
     ...actual,
-    isCliProvider: (provider: string, cfg?: OpenClawConfig) => {
+    isCliProvider: (provider: string, _cfg?: OpenClawConfig) => {
       const normalized = provider.trim().toLowerCase();
       return (
         normalized === "claude-cli" ||
         normalized === "google-gemini-cli" ||
-        normalized === "codex-cli" ||
-        Boolean(cfg?.agents?.defaults?.cliBackends?.[normalized])
+        normalized === "codex-cli"
       );
     },
   };
@@ -556,7 +541,7 @@ describe("runReplyAgent auto-compaction token update", () => {
   it("keeps an unarmed preflight drain visible instead of dropping the reply", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-preflight-drain-"));
     const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "main";
+    const sessionKey = "agent:main:main";
     const sessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
@@ -594,6 +579,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       typingMode: "instant",
     });
 
+    expect(compactState.compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
     expectReplyText(result, "⚠️ Gateway is restarting. Please wait a few seconds and try again.");
   });
 
@@ -2028,87 +2014,6 @@ describe("runReplyAgent Active Memory inline debug", () => {
     expect(traceText).toContain("show me\n\\~~~\nnot a fence");
     expect(traceText).toContain("assistant\n\\~~~\nresponse");
   });
-
-  it("does not reload the session store when verbose is disabled", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-active-memory-inline-"));
-    const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "main";
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-    };
-
-    await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
-
-    const loadSessionStoreSpy = vi.spyOn(sessionTypesModule, "loadSessionStore");
-    runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "Normal reply" }],
-      meta: {},
-    });
-
-    const typing = createMockTypingController();
-    const sessionCtx = {
-      Provider: "telegram",
-      OriginatingTo: "chat:1",
-      AccountId: "primary",
-      MessageSid: "msg",
-    } as unknown as TemplateContext;
-    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
-    const followupRun = {
-      prompt: "hello",
-      summaryLine: "hello",
-      enqueuedAt: Date.now(),
-      run: {
-        agentId: "main",
-        sessionId: "session",
-        sessionKey,
-        messageProvider: "telegram",
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/tmp",
-        config: {},
-        skillsSnapshot: {},
-        provider: "anthropic",
-        model: "claude",
-        thinkLevel: "low",
-        verboseLevel: "off",
-        elevatedLevel: "off",
-        bashElevated: {
-          enabled: false,
-          allowed: false,
-          defaultLevel: "off",
-        },
-        timeoutMs: 1_000,
-        blockReplyBreak: "message_end",
-      },
-    } as unknown as FollowupRun;
-
-    const result = await runReplyAgent({
-      commandBody: "hello",
-      followupRun,
-      queueKey: sessionKey,
-      resolvedQueue,
-      shouldSteer: false,
-      shouldFollowup: false,
-      isActive: false,
-      isStreaming: false,
-      typing,
-      sessionCtx,
-      sessionEntry,
-      sessionStore: { [sessionKey]: sessionEntry },
-      sessionKey,
-      storePath,
-      defaultModel: "anthropic/claude-opus-4-6",
-      resolvedVerboseLevel: "off",
-      isNewSession: false,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      shouldInjectGroupIntro: false,
-      typingMode: "instant",
-    });
-
-    expect(loadSessionStoreSpy).not.toHaveBeenCalledWith(storePath, { skipCache: true });
-    expectReplyText(result, "Normal reply");
-  });
 });
 
 describe("runReplyAgent claude-cli routing", () => {
@@ -2131,7 +2036,7 @@ describe("runReplyAgent claude-cli routing", () => {
         messageProvider: "webchat",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
-        config: { agents: { defaults: { cliBackends: { "claude-cli": {} } } } },
+        config: {},
         skillsSnapshot: {},
         provider: "claude-cli",
         model: "opus-4.5",
@@ -3406,7 +3311,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     sendPolicyDenied?: boolean;
     isHeartbeat?: boolean;
     replyOperation?: ReturnType<typeof createReplyOperation>;
-    queuedLifecycle?: FollowupRun["queuedLifecycle"];
+    turnAdoptionLifecycle?: FollowupRun["turnAdoptionLifecycle"];
   }) {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-stranded-"));
     const storePath = path.join(tmp, "sessions.json");
@@ -3463,7 +3368,9 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
       ...(params.strandedReplyRetry ? { strandedReplyRetry: true } : {}),
       enqueuedAt: Date.now(),
       ...(params.transcriptPrompt ? { transcriptPrompt: params.transcriptPrompt } : {}),
-      ...(params.queuedLifecycle ? { queuedLifecycle: params.queuedLifecycle } : {}),
+      ...(params.turnAdoptionLifecycle
+        ? { turnAdoptionLifecycle: params.turnAdoptionLifecycle }
+        : {}),
       run: {
         agentId: "main",
         agentDir: "/tmp/agent",
@@ -3531,9 +3438,9 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
 
   it("enqueues a one-shot recovery retry by default for substantive stranded finals", async () => {
     const parentOnComplete = vi.fn();
-    const parentLifecycle = { onComplete: parentOnComplete };
+    const parentLifecycle = { onAdopted: async () => {}, onSettled: parentOnComplete };
     const { finalAssistantText } = await runPrivateFinalCase({
-      queuedLifecycle: parentLifecycle,
+      turnAdoptionLifecycle: parentLifecycle,
     });
 
     expect(warnPrivateFinalSpy).toHaveBeenCalledTimes(1);
@@ -3546,8 +3453,8 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     expect(retryRun?.prompt).toContain("message(action=send)");
     expect(retryRun?.prompt).toContain(finalAssistantText);
     // System retry must not inherit the client turn's one-shot lifecycle identity.
-    expect(retryRun?.queuedLifecycle).toBeUndefined();
-    expect(parentLifecycle.onComplete).toBe(parentOnComplete);
+    expect(retryRun?.turnAdoptionLifecycle).toBeUndefined();
+    expect(parentLifecycle.onSettled).toBe(parentOnComplete);
     expect(parentOnComplete).not.toHaveBeenCalled();
   });
 

@@ -4,23 +4,17 @@ import {
   GroupPolicySchema,
   MarkdownConfigSchema,
   ReplyRuntimeConfigSchemaShape,
-  ToolPolicySchema,
+  buildGroupEntrySchema,
+  buildMultiAccountChannelSchema,
   requireOpenAllowFrom,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { requireChannelOpenAllowFrom } from "openclaw/plugin-sdk/extension-shared";
 import { z } from "zod";
 import { buildSecretInputSchema } from "./secret-input.js";
 
-const NextcloudTalkRoomSchema = z
-  .object({
-    requireMention: z.boolean().optional(),
-    tools: ToolPolicySchema,
-    skills: z.array(z.string()).optional(),
-    enabled: z.boolean().optional(),
-    allowFrom: z.array(z.string()).optional(),
-    systemPrompt: z.string().optional(),
-  })
-  .strict();
+const NextcloudTalkRoomSchema = buildGroupEntrySchema({
+  allowFrom: z.array(z.string()).optional(),
+}).omit({ toolsBySender: true });
 
 const NextcloudTalkNetworkSchema = z
   .object({
@@ -56,25 +50,18 @@ const NextcloudTalkAccountSchemaBase = z
   })
   .strict();
 
-const NextcloudTalkAccountSchema = NextcloudTalkAccountSchemaBase.superRefine((value, ctx) => {
-  requireChannelOpenAllowFrom({
-    channel: "nextcloud-talk",
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-    requireOpenAllowFrom,
-  });
-});
-
-export const NextcloudTalkConfigSchema = NextcloudTalkAccountSchemaBase.extend({
-  accounts: z.record(z.string(), NextcloudTalkAccountSchema.optional()).optional(),
-  defaultAccount: z.string().optional(),
-}).superRefine((value, ctx) => {
-  requireChannelOpenAllowFrom({
-    channel: "nextcloud-talk",
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-    requireOpenAllowFrom,
-  });
-});
+export const NextcloudTalkConfigSchema = buildMultiAccountChannelSchema(
+  NextcloudTalkAccountSchemaBase,
+  {
+    optionalAccount: true,
+    refine: (value, ctx) => {
+      requireChannelOpenAllowFrom({
+        channel: "nextcloud-talk",
+        policy: value.dmPolicy,
+        allowFrom: value.allowFrom,
+        ctx,
+        requireOpenAllowFrom,
+      });
+    },
+  },
+);

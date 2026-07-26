@@ -91,6 +91,26 @@ describe("path-string and traversal caps", () => {
     );
   });
 
+  it("rejects multibyte paths above MAX_PATH_LENGTH bytes", () => {
+    const multibyteFile = "界".repeat(1400);
+    const oversizedPath = `oc://${multibyteFile}`;
+    const pathBytes = Buffer.byteLength(oversizedPath, "utf8");
+
+    expect(oversizedPath.length).toBeLessThan(PATH_LENGTH_LIMIT);
+    expect(pathBytes).toBeGreaterThan(PATH_LENGTH_LIMIT);
+    expect(() => parseOcPath(oversizedPath)).toThrow(`length: ${pathBytes}`);
+    expect(() => formatOcPath({ file: multibyteFile })).toThrow(`length: ${pathBytes}`);
+  });
+
+  it("accepts multibyte paths exactly at MAX_PATH_LENGTH bytes", () => {
+    const multibyteFile = `${"界".repeat(1363)}ab`;
+    const exactPath = `oc://${multibyteFile}`;
+
+    expect(Buffer.byteLength(exactPath, "utf8")).toBe(PATH_LENGTH_LIMIT);
+    expect(parseOcPath(exactPath)).toEqual({ file: multibyteFile });
+    expect(formatOcPath({ file: multibyteFile })).toBe(exactPath);
+  });
+
   it("keeps overlong parse input UTF-16 safe", () => {
     const prefix = `oc://${"a".repeat(74)}`;
     expectUtf16SafeLimitError(
@@ -101,9 +121,16 @@ describe("path-string and traversal caps", () => {
 
   it("keeps post-NFC overlong parse input UTF-16 safe", () => {
     const prefix = `oc://${"a".repeat(74)}`;
-    const input = `${prefix}😀${"\u0344".repeat(PATH_LENGTH_LIMIT - prefix.length - 2)}`;
-    expect(input).toHaveLength(PATH_LENGTH_LIMIT);
-    expect(input.normalize("NFC").length).toBeGreaterThan(PATH_LENGTH_LIMIT);
+    const prefixBytes = Buffer.byteLength(prefix, "utf8");
+    const emoji = "😀";
+    const emojiBytes = Buffer.byteLength(emoji, "utf8");
+    const expandingCombiningMark = "\u0344";
+    const markBytes = Buffer.byteLength(expandingCombiningMark, "utf8");
+    const markCount = Math.floor((PATH_LENGTH_LIMIT - prefixBytes - emojiBytes) / markBytes);
+    const input = `${prefix}${emoji}${expandingCombiningMark.repeat(markCount)}`;
+
+    expect(Buffer.byteLength(input, "utf8")).toBeLessThanOrEqual(PATH_LENGTH_LIMIT);
+    expect(Buffer.byteLength(input.normalize("NFC"), "utf8")).toBeGreaterThan(PATH_LENGTH_LIMIT);
 
     expectUtf16SafeLimitError(() => parseOcPath(input), `${prefix}…`);
   });

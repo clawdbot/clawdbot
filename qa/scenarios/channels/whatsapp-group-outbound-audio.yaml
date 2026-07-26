@@ -1,0 +1,19 @@
+title: WhatsApp direct Gateway send delivers audio to a group
+scenario:
+  id: whatsapp-group-outbound-audio
+  surface: channels
+  coverage:
+    primary:
+      - whatsapp.outbound-audio
+  execution:
+    profiles: { "whatsapp:mock-default": 22 }
+    kind: flow
+    channel: whatsapp
+    timeoutMs: 90000
+    retryCount: 1
+    suiteIsolation: isolated
+    config: { whatsappScenarioId: whatsapp-group-outbound-audio }
+flow:
+  module: ./live-transports/whatsapp/scenario-runtime.js
+  call: runWhatsAppGroupOutboundAudioScenario
+  args: [{ expr: whatsappScenarioContext }]

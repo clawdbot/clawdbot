@@ -47,18 +47,20 @@ type EnvVarSanitizationResult = {
   warnings: string[];
 };
 
-export type EnvSanitizationOptions = {
+type EnvSanitizationOptions = {
   strictMode?: boolean;
   customBlockedPatterns?: ReadonlyArray<RegExp>;
   customAllowedPatterns?: ReadonlyArray<RegExp>;
 };
+
+const MAX_ENV_VAR_VALUE_BYTES = 32768;
 
 /** Returns a warning or block reason for environment values that look unsafe to forward. */
 export function validateEnvVarValue(value: string): string | undefined {
   if (value.includes("\0")) {
     return "Contains null bytes";
   }
-  if (value.length > 32768) {
+  if (Buffer.byteLength(value, "utf8") > MAX_ENV_VAR_VALUE_BYTES) {
     return "Value exceeds maximum length";
   }
   if (/^[A-Za-z0-9+/=]{80,}$/.test(value)) {

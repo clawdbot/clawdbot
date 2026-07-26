@@ -4,9 +4,9 @@
  * Completion handoff and requester-visible replies use this to choose between
  * steering a subagent and directly delivering a message, with phase evidence.
  */
-type SubagentDeliveryPath = "steered" | "direct" | "none";
+type SubagentDeliveryPath = "steered" | "direct" | "queued" | "none";
 /** Stable reasons an announcement delivery can fail without throwing. */
-export type SubagentAnnounceDeliveryFailureReason =
+type SubagentAnnounceDeliveryFailureReason =
   | "completion_handoff_pending"
   | "completion_handoff_unavailable"
   | "generated_media_missing"
@@ -27,6 +27,7 @@ export type SubagentAnnounceDeliveryResult = {
   reason?: SubagentAnnounceDeliveryFailureReason;
   error?: string;
   terminal?: boolean;
+  missingMediaUrls?: string[];
   phases?: SubagentAnnounceDispatchPhaseResult[];
 };
 

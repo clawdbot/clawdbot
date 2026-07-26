@@ -4,7 +4,7 @@
 
 /** Tab group shown to the user; membership == what the agent may touch. */
 export const OPENCLAW_TAB_GROUP_TITLE = "OpenClaw";
-export const EXTENSION_RELAY_PROTOCOL = "openclaw-extension-relay";
+const EXTENSION_RELAY_PROTOCOL = "openclaw-extension-relay";
 const EXTENSION_RELAY_TOKEN_PROTOCOL_PREFIX = "openclaw-extension-token.";
 
 const CHROME_GROUP_COLORS = {
@@ -21,8 +21,9 @@ const CHROME_GROUP_COLORS = {
 
 /**
  * Parse a pairing string printed by `openclaw browser extension pair`.
- * Shape: ws://127.0.0.1:<port>/extension#<token>
- * Returns { relayUrl, token } or null when malformed.
+ * Shape: ws://127.0.0.1:<port>/extension?gateway=<url>#<token>
+ * The additive gateway hint is not a credential; old extensions safely pass
+ * it through to the relay while new extensions remove it before connecting.
  */
 export function parsePairingString(raw) {
   const trimmed = String(raw ?? "").trim();
@@ -47,7 +48,16 @@ export function parsePairingString(raw) {
   if (!parsed.pathname.endsWith("/extension")) {
     return null;
   }
-  return { relayUrl, token };
+  const gatewayUrl = parsed.searchParams.get("gateway")?.trim() || undefined;
+  parsed.searchParams.delete("gateway");
+  if ([...parsed.searchParams].length > 0) {
+    return null;
+  }
+  return {
+    relayUrl: parsed.toString(),
+    token,
+    ...(gatewayUrl ? { gatewayUrl } : {}),
+  };
 }
 
 /** Build WebSocket subprotocols without putting the relay secret in the request URL. */

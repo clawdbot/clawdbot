@@ -1,6 +1,8 @@
 // Covers approval resolution over the gateway client.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveApprovalOverGateway } from "./approval-gateway-resolver.js";
+import { withGatewayNativeApprovalRuntime } from "./approval-gateway-runtime-context.js";
+import type { GatewayNativeApprovalRuntime } from "./approval-gateway-runtime.types.js";
 
 const hoisted = vi.hoisted(() => ({
   withOperatorApprovalsGatewayClient: vi.fn(),
@@ -89,6 +91,37 @@ describe("resolveApprovalOverGateway", () => {
       kind: "plugin",
       decision: "deny",
     });
+  });
+
+  it("uses the channel task's owning Gateway principal without opening a client", async () => {
+    const request = vi.fn(async () => ({ applied: true, approval: recordedApproval }));
+    const result = await withGatewayNativeApprovalRuntime(
+      {
+        request: request as GatewayNativeApprovalRuntime["request"],
+        requestRoute: vi.fn(),
+        routeCoordinator: {} as never,
+        subscribe: vi.fn(),
+      },
+      async () =>
+        await resolveApprovalOverGateway({
+          cfg: {} as never,
+          approvalId: "approval-1",
+          approvalKind: "exec",
+          decision: "deny",
+        }),
+    );
+
+    expect(request).toHaveBeenCalledWith(
+      "approval.resolve",
+      {
+        id: "approval-1",
+        kind: "exec",
+        decision: "deny",
+      },
+      { clientDisplayName: "Approval (unknown)" },
+    );
+    expect(result).toEqual({ applied: true, approval: recordedApproval });
+    expect(hoisted.withOperatorApprovalsGatewayClient).not.toHaveBeenCalled();
   });
 
   it("preserves protocol-valid boundary whitespace in canonical approval ids", async () => {

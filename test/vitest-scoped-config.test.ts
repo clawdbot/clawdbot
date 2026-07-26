@@ -643,7 +643,7 @@ describe("scoped vitest configs", () => {
     );
   });
 
-  it("isolates media task status suites from conflicting task-runtime mocks", () => {
+  it("isolates agent suites with conflicting shared-module mocks", () => {
     const sharedConfig = requireTestConfig(defaultAgentsCoreConfig);
     const isolatedConfig = requireTestConfig(defaultAgentsCoreIsolatedConfig);
 
@@ -866,6 +866,11 @@ describe("scoped vitest configs", () => {
   it("normalizes memory extension include patterns relative to the scoped dir", () => {
     const testConfig = requireTestConfig(defaultExtensionMemoryConfig);
     expect(testConfig.dir).toBe(path.join(process.cwd(), "extensions"));
+    expect(normalizeConfigPaths(testConfig.setupFiles)).toEqual([
+      "test/setup.ts",
+      "test/setup.extensions.ts",
+      "test/setup-openclaw-runtime.ts",
+    ]);
     expect(testConfig.include).toEqual([
       "memory-core/**/*.test.ts",
       "memory-lancedb/**/*.test.ts",

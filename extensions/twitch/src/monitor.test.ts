@@ -4,8 +4,11 @@ import type { TwitchChatMessage } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   checkAccess: vi.fn(async () => ({ allowed: true })),
+  createIngress: vi.fn(),
   getClient: vi.fn(async () => ({})),
   getRuntime: vi.fn(),
+  ingressStart: vi.fn(),
+  ingressStop: vi.fn(async () => undefined),
   onMessage: vi.fn(),
   runInbound: vi.fn(),
   sendMessage: vi.fn(),
@@ -28,6 +31,10 @@ vi.mock("./runtime.js", () => ({
   getTwitchRuntime: mocks.getRuntime,
 }));
 
+vi.mock("./twitch-ingress.js", () => ({
+  createTwitchIngress: mocks.createIngress,
+}));
+
 import { monitorTwitchProvider } from "./monitor.js";
 
 type InboundRunInput = {
@@ -47,6 +54,32 @@ describe("monitorTwitchProvider", () => {
     vi.clearAllMocks();
     mocks.getClient.mockResolvedValue({});
     mocks.sendMessage.mockResolvedValue({ ok: true, messageId: "message-id" });
+    mocks.createIngress.mockImplementation(
+      (options: {
+        deliver: (
+          message: TwitchChatMessage,
+          lifecycle: {
+            admission: "exclusive";
+            abortSignal: AbortSignal;
+            onAdopted: () => Promise<void>;
+            onDeferred: () => void;
+            onAbandoned: () => Promise<void>;
+          },
+        ) => Promise<void>;
+      }) => ({
+        accept: async (message: TwitchChatMessage) => {
+          await options.deliver(message, {
+            admission: "exclusive",
+            abortSignal: new AbortController().signal,
+            onAdopted: async () => undefined,
+            onDeferred: () => undefined,
+            onAbandoned: async () => undefined,
+          });
+        },
+        start: mocks.ingressStart,
+        stop: mocks.ingressStop,
+      }),
+    );
     mocks.runInbound.mockImplementation(async (input: InboundRunInput) => {
       const ingested = input.adapter.ingest(input.raw);
       const turn = await input.adapter.resolveTurn(ingested);
@@ -108,6 +141,7 @@ describe("monitorTwitchProvider", () => {
     });
 
     onMessage?.({
+      id: "message-1",
       username: "viewer",
       userId: "viewer-1",
       message: "hello bot",
@@ -124,7 +158,8 @@ describe("monitorTwitchProvider", () => {
       );
     });
 
-    monitor.stop();
+    await monitor.stop();
     expect(mocks.unregister).toHaveBeenCalledOnce();
+    expect(mocks.ingressStop).toHaveBeenCalledOnce();
   });
 });

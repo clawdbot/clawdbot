@@ -1,6 +1,4 @@
-/**
- * iOS gateway client-id classification tests.
- */
+/** Native-app gateway client-id classification tests. */
 import { describe, expect, test } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
@@ -28,6 +26,7 @@ function makeConnectParams(clientId: string) {
 
 describe("connect params client id validation", () => {
   test.each([
+    GATEWAY_CLIENT_IDS.LINUX_APP,
     GATEWAY_CLIENT_IDS.IOS_APP,
     GATEWAY_CLIENT_IDS.WATCHOS_APP,
     GATEWAY_CLIENT_IDS.ANDROID_APP,

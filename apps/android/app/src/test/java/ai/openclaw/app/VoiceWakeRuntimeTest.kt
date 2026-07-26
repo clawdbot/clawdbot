@@ -197,6 +197,27 @@ class VoiceWakeRuntimeTest {
     runtime.releaseVoiceNoteMic()
   }
 
+  @Test
+  fun dictationAndVoiceNoteCannotShareTheMicrophone() {
+    val runtime = createTestRuntime()
+
+    assertTrue(runtime.tryAcquireDictationMic())
+    assertFalse(runtime.tryAcquireVoiceNoteMic())
+    assertFalse(runtime.setCameraAudioCaptureActive(true))
+
+    runtime.releaseDictationMic()
+    assertTrue(runtime.tryAcquireVoiceNoteMic())
+    assertFalse(runtime.tryAcquireDictationMic())
+
+    runtime.releaseVoiceNoteMic()
+    assertTrue(runtime.tryAcquireDictationMic())
+    runtime.releaseDictationMic()
+
+    assertTrue(runtime.setCameraAudioCaptureActive(true))
+    assertFalse(runtime.tryAcquireDictationMic())
+    assertTrue(runtime.setCameraAudioCaptureActive(false))
+  }
+
   private fun createTestRuntime(): NodeRuntime {
     val app = RuntimeEnvironment.getApplication()
     val securePrefs =

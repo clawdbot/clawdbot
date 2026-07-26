@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
 import { resolveStateDir } from "../../config/paths.js";
-import { isExactSemverVersion } from "../../infra/npm-registry-spec.js";
+import { isExactSemverVersion, resolveNpmJsonEntries } from "../../infra/npm-registry-spec.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { VERSION } from "../../version.js";
@@ -116,6 +116,12 @@ function parseNpmPackageIdentity(value: unknown): NpmPackageIdentity | undefined
   return name && version && integrity ? { name, version, integrity, filename } : undefined;
 }
 
+// Single-spec view/pack proofs return exactly one entry; npm 12 shape drift is
+// normalized by the shared resolver so identity verification survives upgrades.
+function unwrapNpmJsonEntry(value: unknown): unknown {
+  return resolveNpmJsonEntries(value)[0];
+}
+
 async function runNpmProofCommand(params: {
   argv: string[];
   cwd: string;
@@ -175,21 +181,23 @@ async function verifyPublishedNpmRelease(params: {
   const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-worker-npm-proof-"));
   try {
     const published = parseNpmPackageIdentity(
-      await runNpmProofCommand({
-        argv: [
-          "npm",
-          "view",
-          `openclaw@${params.version}`,
-          "name",
-          "version",
-          "dist.integrity",
-          "--json",
-          `--registry=${OPENCLAW_NPM_REGISTRY}`,
-        ],
-        cwd: temporaryRoot,
-        failureMessage: `OpenClaw ${params.version} is not published; use the worker bundle install`,
-        runCommand,
-      }),
+      unwrapNpmJsonEntry(
+        await runNpmProofCommand({
+          argv: [
+            "npm",
+            "view",
+            `openclaw@${params.version}`,
+            "name",
+            "version",
+            "dist.integrity",
+            "--json",
+            `--registry=${OPENCLAW_NPM_REGISTRY}`,
+          ],
+          cwd: temporaryRoot,
+          failureMessage: `OpenClaw ${params.version} is not published; use the worker bundle install`,
+          runCommand,
+        }),
+      ),
     );
     if (
       published?.name !== "openclaw" ||
@@ -216,7 +224,7 @@ async function verifyPublishedNpmRelease(params: {
         "Unable to verify the installed OpenClaw package; use the worker bundle install",
       runCommand,
     });
-    const packed = Array.isArray(packedValue) ? parseNpmPackageIdentity(packedValue[0]) : undefined;
+    const packed = parseNpmPackageIdentity(unwrapNpmJsonEntry(packedValue));
     if (!packed?.filename || path.basename(packed.filename) !== packed.filename) {
       throw new Error("npm pack returned incomplete worker package metadata");
     }

@@ -13,6 +13,7 @@ import type {
   WorkboardKeyedStore,
 } from "./persistence-types.js";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
+import { normalizeExecution } from "./store-normalizers.js";
 import { WorkboardStore } from "./store.js";
 
 function createMemoryStore<T = PersistedWorkboardCard>(options?: {
@@ -163,6 +164,18 @@ describe("WorkboardStore", () => {
           updatedAt: 2,
         },
       });
+      const unresolvedRuntimeCard = await store.create({
+        title: "Persist unresolved runtime",
+        boardId: board.id,
+        execution: {
+          id: "exec-unresolved",
+          kind: "agent-session",
+          mode: "autonomous",
+          status: "running",
+          startedAt: 3,
+          updatedAt: 4,
+        },
+      });
       await store.addComment(card.id, { body: "round trip" });
       const attached = await store.addAttachment(card.id, {
         fileName: "proof.txt",
@@ -197,6 +210,22 @@ describe("WorkboardStore", () => {
       expect(rawDb.prepare("PRAGMA journal_mode").get()).toMatchObject({
         journal_mode: "wal",
       });
+      expect(
+        rawDb
+          .prepare(
+            `SELECT name FROM pragma_table_list
+             WHERE schema = 'main'
+               AND type = 'table'
+               AND name NOT LIKE 'sqlite_%'
+               AND strict <> 1`,
+          )
+          .all(),
+      ).toEqual([]);
+      expect(() =>
+        rawDb
+          .prepare("INSERT INTO workboard_attachment_blobs (attachment_id, content) VALUES (?, ?)")
+          .run("wrong-type", "text-not-blob"),
+      ).toThrow();
       rawDb.close();
 
       const reopenedStores = createWorkboardSqliteStores({ dbPath });
@@ -225,6 +254,14 @@ describe("WorkboardStore", () => {
           ]),
         },
       });
+      const reopenedUnresolvedRuntimeCard = await reopened.get(unresolvedRuntimeCard.id);
+      expect(reopenedUnresolvedRuntimeCard?.execution).toMatchObject({
+        id: "exec-unresolved",
+        mode: "autonomous",
+        status: "running",
+      });
+      expect(reopenedUnresolvedRuntimeCard?.execution).not.toHaveProperty("engine");
+      expect(reopenedUnresolvedRuntimeCard?.execution).not.toHaveProperty("model");
       expect(await reopened.getAttachment(attachmentId ?? "")).toMatchObject({
         contentBase64: Buffer.from("ok").toString("base64"),
       });
@@ -234,6 +271,70 @@ describe("WorkboardStore", () => {
         subscriptions: [expect.objectContaining({ id: subscription.id })],
       });
       reopenedStores.close();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("migrates a version 2 workboard table to STRICT without losing rows", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-strict-migration-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const initialized = createWorkboardSqliteStores({ dbPath });
+    initialized.close();
+    const legacy = new DatabaseSync(dbPath);
+    try {
+      legacy.exec(`
+        INSERT INTO workboard_boards (
+          id, name, description, icon, color, default_workspace_json, orchestration_json,
+          created_at, updated_at, archived_at
+        ) VALUES ('legacy', 'Legacy board', NULL, NULL, NULL, NULL, NULL, 1, 2, NULL);
+        ALTER TABLE workboard_boards RENAME TO workboard_boards_strict;
+        CREATE TABLE workboard_boards (
+          id TEXT PRIMARY KEY,
+          name TEXT,
+          description TEXT,
+          icon TEXT,
+          color TEXT,
+          default_workspace_json TEXT,
+          orchestration_json TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          archived_at INTEGER
+        );
+        INSERT INTO workboard_boards SELECT * FROM workboard_boards_strict;
+        DROP TABLE workboard_boards_strict;
+        DELETE FROM workboard_schema_migrations WHERE id = 'schema-3';
+        INSERT OR IGNORE INTO workboard_schema_migrations (id, applied_at)
+        VALUES ('schema-2', 1);
+      `);
+    } finally {
+      legacy.close();
+    }
+
+    try {
+      const migratedStores = createWorkboardSqliteStores({ dbPath });
+      try {
+        await expect(migratedStores.boards.lookup("legacy")).resolves.toMatchObject({
+          board: { id: "legacy", name: "Legacy board" },
+        });
+      } finally {
+        migratedStores.close();
+      }
+      const migrated = new DatabaseSync(dbPath, { readOnly: true });
+      try {
+        expect(
+          migrated
+            .prepare("SELECT strict FROM pragma_table_list WHERE name = 'workboard_boards'")
+            .get(),
+        ).toEqual({ strict: 1 });
+        expect(
+          migrated
+            .prepare("SELECT 1 AS found FROM workboard_schema_migrations WHERE id = 'schema-3'")
+            .get(),
+        ).toEqual({ found: 1 });
+      } finally {
+        migrated.close();
+      }
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -286,6 +387,44 @@ describe("WorkboardStore", () => {
     expect(card.metadata).toBeUndefined();
     const entry = await keyed.lookup(card.id);
     expect(Object.hasOwn(entry?.card ?? {}, "metadata")).toBe(false);
+  });
+
+  it("preserves open execution engine identifiers without rewriting historical labels", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const runtimeCard = await store.create({
+      title: "Runtime identity",
+      execution: {
+        id: "exec-runtime",
+        kind: "agent-session",
+        engine: "claude-cli",
+        mode: "autonomous",
+        status: "running",
+        model: "anthropic/claude-sonnet-4-6",
+        startedAt: 1,
+        updatedAt: 1,
+      },
+    });
+    const historicalCard = await store.create({
+      title: "Historical identity",
+      execution: {
+        id: "exec-historical",
+        kind: "agent-session",
+        engine: "codex",
+        mode: "autonomous",
+        status: "running",
+        model: "default",
+        startedAt: 1,
+        updatedAt: 1,
+      },
+    });
+
+    expect(runtimeCard.execution?.engine).toBe("claude-cli");
+    expect(runtimeCard.metadata?.attempts?.[0]?.engine).toBe("claude-cli");
+    expect(historicalCard.execution?.engine).toBe("codex");
+  });
+
+  it("rejects empty execution records instead of fabricating lifecycle state", () => {
+    expect(normalizeExecution({})).toBeUndefined();
   });
 
   it("preserves explicit zero positions", async () => {
@@ -869,6 +1008,206 @@ describe("WorkboardStore", () => {
     const restored = await store.archive(card.id, false);
     expect(restored.metadata?.archivedAt).toBeUndefined();
     expect(restored.events?.at(-1)).toMatchObject({ kind: "unarchived" });
+  });
+
+  it("resolves matching unknown proof on completion without duplicating it", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      const store = new WorkboardStore(createMemoryStore());
+      const card = await store.create({ title: "Resolve worker proof", status: "running" });
+      const claimed = await store.claim(card.id, { ownerId: "main", token: "token-1" });
+      const proofInput = {
+        label: "Haiku syllable check",
+        command: "review poem",
+        note: "Checked each line.",
+      };
+      const pending = await store.addProof(claimed.card.id, proofInput, {
+        ownerId: "main",
+        token: "token-1",
+      });
+
+      vi.setSystemTime(6_000);
+      const completed = await store.complete(claimed.card.id, {
+        ownerId: "main",
+        token: "token-1",
+        summary: "Poem complete.",
+        proofId: pending.metadata?.proof?.[0]?.id,
+        proof: { ...proofInput, status: "passed" },
+      });
+
+      expect(completed.metadata?.proof).toEqual([
+        {
+          ...pending.metadata?.proof?.[0],
+          status: "passed",
+        },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retains the correlated proof when metadata budget trimming is required", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Keep proof under metadata pressure",
+      status: "running",
+      metadata: {
+        artifacts: Array.from({ length: 12 }, (_, index) => ({
+          id: `artifact-${index}`,
+          createdAt: index + 1,
+          url: `https://example.com/${index}/${"x".repeat(1900)}`,
+        })),
+      },
+    });
+    const claimed = await store.claim(card.id, { ownerId: "main", token: "token-1" });
+    const artifactCountBefore = claimed.card.metadata?.artifacts?.length ?? 0;
+    expect(artifactCountBefore).toBeGreaterThan(5);
+
+    const proofInput = {
+      command: "pnpm test extensions/workboard",
+      note: "y".repeat(1800),
+    };
+    const pending = await store.addProof(card.id, proofInput, {
+      ownerId: "main",
+      token: "token-1",
+    });
+    const pendingProof = pending.metadata?.proof?.at(-1);
+    expect(pendingProof).toMatchObject({ status: "unknown", command: proofInput.command });
+    expect(pending.metadata?.artifacts?.length ?? 0).toBeLessThan(artifactCountBefore);
+    expect(Buffer.byteLength(JSON.stringify(pending.metadata), "utf8")).toBeLessThanOrEqual(
+      24 * 1024,
+    );
+
+    const completed = await store.complete(card.id, {
+      ownerId: "main",
+      token: "token-1",
+      summary: "Proof survived metadata trimming.",
+      proofId: pendingProof?.id,
+      proof: { ...proofInput, status: "passed" },
+    });
+
+    expect(completed.metadata?.proof).toEqual([{ ...pendingProof, status: "passed" }]);
+    expect(Buffer.byteLength(JSON.stringify(completed.metadata), "utf8")).toBeLessThanOrEqual(
+      24 * 1024,
+    );
+  });
+
+  it("keeps identical completion proof append-only without an explicit proof id", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const proofInput = { command: "pnpm test extensions/workboard", note: "94 tests" };
+    const card = await store.create({
+      title: "Preserve historical proof",
+      metadata: {
+        proof: [{ id: "proof-unknown", status: "unknown", createdAt: 1_000, ...proofInput }],
+      },
+    });
+
+    const failed = await store.complete(card.id, {
+      summary: "A later run failed.",
+      proof: { ...proofInput, status: "failed" },
+    });
+
+    expect(failed.metadata?.proof?.map((entry) => [entry.id, entry.status])).toEqual([
+      ["proof-unknown", "unknown"],
+      [expect.any(String), "failed"],
+    ]);
+  });
+
+  it("resolves only the explicitly correlated proof across identical retries", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const proofInput = { command: "review poem", note: "Checked each line." };
+    const card = await store.create({
+      title: "Keep unresolved proof history",
+      metadata: {
+        proof: [
+          { id: "proof-older", status: "unknown", createdAt: 1_000, ...proofInput },
+          { id: "proof-latest", status: "unknown", createdAt: 2_000, ...proofInput },
+        ],
+      },
+    });
+
+    const completed = await store.complete(card.id, {
+      summary: "Latest check passed.",
+      proofId: "proof-latest",
+      proof: { ...proofInput, status: "passed" },
+    });
+
+    expect(completed.metadata?.proof?.map((entry) => [entry.id, entry.status])).toEqual([
+      ["proof-older", "unknown"],
+      ["proof-latest", "passed"],
+    ]);
+  });
+
+  it("reuses an explicitly correlated terminal proof with the same status", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const proof = {
+      id: "proof-passed",
+      status: "passed" as const,
+      createdAt: 1_000,
+      command: "pnpm test extensions/workboard",
+    };
+    const card = await store.create({
+      title: "Reuse terminal proof",
+      metadata: { proof: [proof] },
+    });
+
+    const completed = await store.complete(card.id, {
+      summary: "Already passed.",
+      proofId: proof.id,
+      proof: { status: "passed", command: proof.command },
+    });
+
+    expect(completed.metadata?.proof).toEqual([proof]);
+  });
+
+  it("rejects an explicitly correlated terminal proof with a different status", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Reject terminal status rewrite",
+      metadata: {
+        proof: [{ id: "proof-passed", status: "passed", createdAt: 1_000 }],
+      },
+    });
+
+    await expect(
+      store.complete(card.id, {
+        proofId: "proof-passed",
+        proof: { status: "failed" },
+      }),
+    ).rejects.toThrow("completion proof status does not match existing proof: proof-passed");
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      status: "todo",
+      metadata: { proof: [{ id: "proof-passed", status: "passed" }] },
+    });
+  });
+
+  it("rejects a completion proof id when its evidence does not match", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Reject mismatched proof",
+      metadata: {
+        proof: [
+          {
+            id: "proof-pending",
+            status: "unknown",
+            createdAt: 1_000,
+            command: "pnpm test extensions/workboard",
+          },
+        ],
+      },
+    });
+
+    await expect(
+      store.complete(card.id, {
+        proofId: "proof-pending",
+        proof: { status: "passed", command: "pnpm test extensions/other" },
+      }),
+    ).rejects.toThrow("completion proof does not match pending proof: proof-pending");
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      status: "todo",
+      metadata: { proof: [{ id: "proof-pending", status: "unknown" }] },
+    });
   });
 
   it("stores attachments in the plugin kv namespace and adds worker context", async () => {

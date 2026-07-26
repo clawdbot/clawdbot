@@ -698,7 +698,7 @@ async function fetchWithSsrFGuardInternal(
           throw new Error("Redirect loop detected");
         }
         visited.add(nextVisitKey);
-        void response.body?.cancel();
+        void response.body?.cancel().catch(() => undefined);
         await closeDispatcher(dispatcher);
         currentUrl = nextUrl;
         continue;

@@ -3,15 +3,8 @@ import type {
   WhatsAppQaDriverObservedMessage,
   WhatsAppQaDriverSession,
 } from "@openclaw/whatsapp/api.js";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { startQaGatewayChild } from "../../gateway-child.js";
-import type { QaProviderMode } from "../../run-config.js";
-import type {
-  acquireQaCredentialLease,
-  startQaCredentialLeaseHeartbeat,
-} from "../shared/credential-lease.runtime.js";
-import type { LiveTransportScenarioDefinition } from "../shared/live-transport-scenarios.js";
 
 export type WhatsAppQaRuntimeEnv = {
   driverAuthArchiveBase64: string;
@@ -70,7 +63,7 @@ export function toWhatsAppQaError(error: unknown): Error {
   return error instanceof Error ? error : new Error(formatErrorMessage(error));
 }
 
-export const WHATSAPP_QA_SCENARIO_POSTURES = {
+const WHATSAPP_QA_SCENARIO_POSTURES = {
   "whatsapp-agent-message-action-react": "user-path",
   "whatsapp-agent-message-action-upload-file": "user-path",
   "whatsapp-approval-exec-deny-native": "native-approval",
@@ -267,19 +260,15 @@ export type WhatsAppQaConfigOverrides = {
   groupPolicy?: "allowlist" | "disabled" | "open";
   inboundDebounceMs?: number;
   replyToMode?: "all" | "batched" | "first" | "off";
-  statusReactions?:
-    | boolean
-    | {
-        removeAckAfterReply?: boolean;
-        timing?: NonNullable<NonNullable<OpenClawConfig["messages"]>["statusReactions"]>["timing"];
-      };
+  statusReactions?: boolean;
 };
 
-export type WhatsAppQaScenarioDefinition = LiveTransportScenarioDefinition<WhatsAppQaScenarioId> & {
+export type WhatsAppQaScenarioDefinition = {
+  id: WhatsAppQaScenarioId;
+  title: string;
+  timeoutMs: number;
   buildRun: () => WhatsAppQaScenarioRun;
   configOverrides?: WhatsAppQaConfigOverrides;
-  defaultEnabled?: boolean;
-  defaultProviderModes?: readonly QaProviderMode[];
   requiresGroupJid?: boolean;
   requiredPluginIds?: readonly string[];
 };
@@ -290,31 +279,6 @@ export interface WhatsAppObservedMessage extends WhatsAppQaDriverObservedMessage
   scenarioId?: string;
   scenarioTitle?: string;
 }
-
-export type WhatsAppObservedMessageArtifact = {
-  approvalState?: "pending" | "resolved";
-  fromPhoneE164?: string | null;
-  hasMedia?: boolean;
-  kind?: WhatsAppQaDriverObservedMessage["kind"];
-  matchedScenario?: boolean;
-  mediaFileName?: string;
-  mediaType?: string;
-  messageId?: string;
-  observedAt: string;
-  poll?: WhatsAppQaDriverObservedMessage["poll"];
-  quoted?: WhatsAppQaDriverObservedMessage["quoted"];
-  reaction?: WhatsAppObservedReactionArtifact;
-  scenarioId?: string;
-  scenarioTitle?: string;
-  text?: string;
-};
-
-export type WhatsAppObservedReactionArtifact = {
-  emoji?: string;
-  fromMe?: boolean;
-  messageId?: string;
-  participant?: string;
-};
 
 export type WhatsAppQaScenarioResult = {
   details: string;
@@ -329,7 +293,6 @@ export type WhatsAppQaScenarioResult = {
     responseObservedAt: string;
     source: "approval-request-to-resolution" | "request-to-observed-message";
   };
-  standardId?: string;
   status: "fail" | "pass" | "skip";
   title: string;
 };
@@ -338,36 +301,6 @@ export function buildWhatsAppQaScenarioResultBase(scenario: WhatsAppQaScenarioDe
   return {
     id: scenario.id,
     title: scenario.title,
-    standardId: scenario.standardId,
     posture: WHATSAPP_QA_SCENARIO_POSTURES[scenario.id],
   };
 }
-
-export function toWhatsAppLiveTransportEvidenceChecks(
-  scenarioResults: readonly WhatsAppQaScenarioResult[],
-) {
-  return scenarioResults.map(({ standardId, ...check }) => ({
-    ...check,
-    coverageIds: standardId ? [`channels.whatsapp.${standardId}`] : undefined,
-  }));
-}
-
-export type WhatsAppQaRunResult = {
-  gatewayDebugDirPath?: string;
-  observedMessagesPath: string;
-  outputDir: string;
-  reportPath: string;
-  scenarios: WhatsAppQaScenarioResult[];
-  summaryPath: string;
-};
-
-export type WhatsAppCredentialLease = Awaited<
-  ReturnType<typeof acquireQaCredentialLease<WhatsAppQaRuntimeEnv>>
->;
-export type WhatsAppCredentialHeartbeat = ReturnType<typeof startQaCredentialLeaseHeartbeat>;
-export type WhatsAppQaPreScenarioPhase =
-  | "auth archive unpack"
-  | "credential heartbeat start"
-  | "credential lease acquisition"
-  | "driver session start"
-  | "scenario execution";

@@ -15,6 +15,7 @@ import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { hasModelExtraParams } from "../model-extra-params.js";
 import { canonicalizeProviderModelId } from "../provider-model-route.js";
 import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
+import { resolveAgentHarnessAutoSelectionHint } from "./auto-selection.js";
 import { listRegisteredAgentHarnesses } from "./registry.js";
 import type {
   AgentHarness,
@@ -215,12 +216,26 @@ export function resolveAutoAgentHarnessId(params: {
   agentId?: string;
   sessionKey?: string;
 }): string | undefined {
+  const registeredHarnesses = listRegisteredAgentHarnesses();
+  if (registeredHarnesses.length === 0) {
+    return undefined;
+  }
+  const candidates = registeredHarnesses.map(({ harness }) => ({
+    harness,
+    support: resolveAgentHarnessAutoSelectionHint({ harness, provider: params.provider }),
+  }));
+  if (candidates.every((entry) => entry.support !== undefined)) {
+    return undefined;
+  }
   const supportContext = buildAgentHarnessSupportContext({
     ...params,
     requestedRuntime: "auto",
   });
-  return listRegisteredAgentHarnesses()
-    .map(({ harness }) => ({ harness, support: harness.supports(supportContext) }))
+  return candidates
+    .map(({ harness, support }) => ({
+      harness,
+      support: support ?? harness.supports(supportContext),
+    }))
     .filter(isSupportedHarness)
     .toSorted(compareHarnessSupport)[0]?.harness.id;
 }

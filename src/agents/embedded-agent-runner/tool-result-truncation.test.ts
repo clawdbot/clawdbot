@@ -20,6 +20,10 @@ import type { SessionEntry as SessionStoreEntry } from "../../config/sessions/ty
 import { onInternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { formatFullOutputFooter } from "../sessions/tools/tool-contracts.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
+import {
+  calculateMaxToolResultCharsWithCap,
+  resolveAutoLiveToolResultMaxChars,
+} from "../tool-result-limits.js";
 import { buildRuntimeContextCustomMessage } from "./run/runtime-context-prompt.js";
 import {
   clearEmbeddedSessionPromptStates,
@@ -28,8 +32,6 @@ import {
 } from "./session-prompt-state.js";
 
 let truncateToolResultMessage: typeof import("./tool-result-truncation.js").truncateToolResultMessage;
-let calculateMaxToolResultCharsWithCap: typeof import("./tool-result-truncation.js").calculateMaxToolResultCharsWithCap;
-let resolveAutoLiveToolResultMaxChars: typeof import("./tool-result-truncation.js").resolveAutoLiveToolResultMaxChars;
 let truncateOversizedToolResultsInMessages: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInMessages;
 let truncateOversizedToolResultsInActiveTarget: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInActiveTarget;
 let sessionLikelyHasOversizedToolResults: typeof import("./tool-result-truncation.js").sessionLikelyHasOversizedToolResults;
@@ -37,6 +39,7 @@ let estimateToolResultReductionPotential: typeof import("./tool-result-truncatio
 let DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS: typeof import("./tool-result-truncation.js").DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
 let resolveLiveToolResultMaxChars: typeof import("./tool-result-truncation.js").resolveLiveToolResultMaxChars;
 let resolveLiveToolResultAggregateMaxChars: typeof import("./tool-result-truncation.js").resolveLiveToolResultAggregateMaxChars;
+let toolResultWarningDedupe: typeof import("./tool-result-truncation.js").toolResultWarningDedupe;
 let tmpDir: string | undefined;
 
 async function loadFreshToolResultTruncationModuleForTest() {
@@ -44,8 +47,6 @@ async function loadFreshToolResultTruncationModuleForTest() {
   // across persisted-session and live-truncation tests.
   ({
     truncateToolResultMessage,
-    calculateMaxToolResultCharsWithCap,
-    resolveAutoLiveToolResultMaxChars,
     truncateOversizedToolResultsInMessages,
     truncateOversizedToolResultsInActiveTarget,
     sessionLikelyHasOversizedToolResults,
@@ -53,6 +54,7 @@ async function loadFreshToolResultTruncationModuleForTest() {
     DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
     resolveLiveToolResultMaxChars,
     resolveLiveToolResultAggregateMaxChars,
+    toolResultWarningDedupe,
   } = await import("./tool-result-truncation.js"));
 }
 
@@ -74,6 +76,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  toolResultWarningDedupe.promptPressure.clear();
+  toolResultWarningDedupe.sessionRecovery.clear();
   clearEmbeddedSessionPromptStates(["session-99495", "session-99495-shrink"]);
   if (tmpDir) {
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
@@ -94,6 +98,28 @@ function makeToolResult(text: string, toolCallId = "call_1", details?: unknown):
     timestamp: nextTimestamp(),
   };
 }
+
+describe("tool-result warning dedupe", () => {
+  const warningDedupeLimit = 1_024;
+
+  it.each([
+    ["prompt pressure", () => toolResultWarningDedupe.promptPressure],
+    ["session recovery", () => toolResultWarningDedupe.sessionRecovery],
+  ])("bounds and evicts the oldest %s warning keys", (_name, getCache) => {
+    const cache = getCache();
+
+    for (let index = 0; index <= warningDedupeLimit; index += 1) {
+      expect(cache.check(`session-${index}`)).toBe(false);
+    }
+
+    expect(cache.size()).toBe(warningDedupeLimit);
+    expect(cache.peek("session-0")).toBe(false);
+    expect(cache.peek("session-1")).toBe(true);
+    expect(cache.peek(`session-${warningDedupeLimit}`)).toBe(true);
+    expect(cache.check("session-0")).toBe(false);
+    expect(cache.check(`session-${warningDedupeLimit}`)).toBe(true);
+  });
+});
 
 function textWithFullOutputFooter(text: string, fullOutputPath: string): string {
   return `${text}\n\n[Showing truncated output. ${formatFullOutputFooter(fullOutputPath)}]`;
@@ -388,24 +414,6 @@ describe("calculateMaxToolResultChars", () => {
   it("supports a higher configured hard cap", () => {
     const result = calculateMaxToolResultCharsWithCap(128_000, 32_000);
     expect(result).toBe(32_000);
-  });
-
-  it("resolves per-agent tool-result cap overrides", () => {
-    const result = resolveLiveToolResultMaxChars({
-      contextWindowTokens: 128_000,
-      cfg: {
-        agents: {
-          defaults: {
-            contextLimits: {
-              toolResultMaxChars: 24_000,
-            },
-          },
-          list: [{ id: "writer" }],
-        },
-      },
-      agentId: "writer",
-    });
-    expect(result).toBe(24_000);
   });
 
   it.each([
@@ -1090,9 +1098,11 @@ describe("truncateOversizedToolResultsInMessages", () => {
     await fs.writeFile(spillPath, "partial web output", { mode: 0o600 });
     const messages: AgentMessage[] = [
       makeToolResult(textWithFullOutputFooter("a".repeat(100), spillPath), "partial_spill_1", {
-        fullOutputPath: spillPath,
-        spilledChars: 2_000_000,
-        spillTruncated: true,
+        spill: {
+          path: spillPath,
+          chars: 2_000_000,
+          truncated: true,
+        },
       }),
       makeToolResult("b".repeat(100), "partial_spill_2"),
       makeToolResult("c".repeat(100), "partial_spill_3"),

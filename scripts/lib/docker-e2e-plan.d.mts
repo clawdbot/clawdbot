@@ -18,6 +18,7 @@ export type DockerE2ePlanLane = {
 };
 
 export type DockerE2ePlanOptions = {
+  allowFrozenTargetScenarioOmissions?: boolean;
   includeOpenWebUI: boolean;
   liveMode: "all" | "only" | "skip";
   liveRetries: number;
@@ -30,6 +31,7 @@ export type DockerE2ePlanOptions = {
   timingStore?: unknown;
   upgradeSurvivorBaselines?: string;
   upgradeSurvivorScenarios?: string;
+  upgradeSurvivorTargetRoot?: string;
 };
 
 export type DockerE2ePlan = {
@@ -39,6 +41,7 @@ export type DockerE2ePlan = {
   includeOpenWebUI: boolean;
   lanes: DockerE2ePlanLane[];
   mainLanes: DockerE2ePlanLane[];
+  omittedUnsupportedLanes: string[];
   needs: {
     bareImage: boolean;
     e2eImage: boolean;
@@ -56,7 +59,6 @@ export type DockerE2ePlan = {
 export const DEFAULT_LIVE_RETRIES: number;
 export const DEFAULT_E2E_BARE_IMAGE: string;
 export const DEFAULT_E2E_FUNCTIONAL_IMAGE: string;
-export const DEFAULT_E2E_IMAGE: string;
 export const DEFAULT_PARALLELISM: number;
 export const DEFAULT_PROFILE: string;
 export const DEFAULT_RESOURCE_LIMITS: Record<string, number>;
@@ -78,6 +80,7 @@ export function lanesNeedE2eImageKind(
 export function lanesNeedOpenClawPackage(poolLanes: DockerE2eLane[]): boolean;
 export function findLaneByName(name: string): DockerE2eLane | undefined;
 export function resolveDockerE2ePlan(options: DockerE2ePlanOptions): {
+  omittedUnsupportedLaneNames: string[];
   orderedLanes: DockerE2eLane[];
   orderedTailLanes: DockerE2eLane[];
   plan: DockerE2ePlan;

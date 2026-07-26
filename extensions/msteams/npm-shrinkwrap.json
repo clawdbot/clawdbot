@@ -9,10 +9,11 @@
       "version": "2026.7.2",
       "dependencies": {
         "@azure/identity": "4.13.1",
-        "@microsoft/teams.api": "2.0.13",
-        "@microsoft/teams.apps": "2.0.13",
+        "@microsoft/teams.api": "2.0.14",
+        "@microsoft/teams.apps": "2.0.14",
         "express": "5.2.1",
-        "typebox": "1.3.3"
+        "typebox": "1.3.6",
+        "zod": "4.4.3"
       },
       "peerDependencies": {
         "openclaw": ">=2026.7.2"
@@ -24,21 +25,21 @@
       }
     },
     "node_modules/@azure/abort-controller": {
-      "version": "2.1.2",
-      "resolved": "https://registry.npmjs.org/@azure/abort-controller/-/abort-controller-2.1.2.tgz",
-      "integrity": "sha512-nBrLsEWm4J2u5LpAPjxADTlq3trDgVZZXHNKabeXZtpq3d3AbN/KGO82R87rdDz5/lYB024rtEf10/q0urNgsA==",
+      "version": "2.2.0",
+      "resolved": "https://registry.npmjs.org/@azure/abort-controller/-/abort-controller-2.2.0.tgz",
+      "integrity": "sha512-fNAjWnA/nZ2jz31kxR/AqRaUT8ewHBw/WuBIosK0moMy1C9e5ValbDfFdIxJzVOOYaYkV/b2F1S4H/aHiqfVQg==",
       "license": "MIT",
       "dependencies": {
         "tslib": "^2.6.2"
       },
       "engines": {
-        "node": ">=18.0.0"
+        "node": ">=22.0.0"
       }
     },
     "node_modules/@azure/core-auth": {
-      "version": "1.10.1",
-      "resolved": "https://registry.npmjs.org/@azure/core-auth/-/core-auth-1.10.1.tgz",
-      "integrity": "sha512-ykRMW8PjVAn+RS6ww5cmK9U2CyH9p4Q88YJwvUslfuMmN98w/2rdGRLPqJYObapBCdzBVeDgYWdJnFPFb7qzpg==",
+      "version": "1.11.0",
+      "resolved": "https://registry.npmjs.org/@azure/core-auth/-/core-auth-1.11.0.tgz",
+      "integrity": "sha512-IUZydyTUkDnYdstOW9pFOOUQlBjAepK5teihDE3x6yxsPJs/hsAaaYpeGxdxrgtOiJbBKSjKW7MDk7AEhb4LRg==",
       "license": "MIT",
       "dependencies": {
         "@azure/abort-controller": "^2.1.2",
@@ -46,13 +47,13 @@
         "tslib": "^2.6.2"
       },
       "engines": {
-        "node": ">=20.0.0"
+        "node": ">=22.0.0"
       }
     },
     "node_modules/@azure/core-client": {
-      "version": "1.10.2",
-      "resolved": "https://registry.npmjs.org/@azure/core-client/-/core-client-1.10.2.tgz",
-      "integrity": "sha512-1D2LpsU7y9xrqKjdIbsB7PlrRePw0xsVV8p+AKTlzITrWmscajryfJCdDJB/oGwvDI5HmRo04eMMADB67uwAwQ==",
+      "version": "1.11.0",
+      "resolved": "https://registry.npmjs.org/@azure/core-client/-/core-client-1.11.0.tgz",
+      "integrity": "sha512-JjQWO6akOck45PH/XBrxzsQGAiKrfFl4m5iggJ0ItMIz5omRufOXWpqCPpdjKN3vKDzlSUvFjaMb7Zwf0gvAdA==",
       "license": "MIT",
       "dependencies": {
         "@azure/abort-controller": "^2.1.2",
@@ -64,13 +65,13 @@
         "tslib": "^2.6.2"
       },
       "engines": {
-        "node": ">=20.0.0"
+        "node": ">=22.0.0"
       }
     },
     "node_modules/@azure/core-rest-pipeline": {
-      "version": "1.24.0",
-      "resolved": "https://registry.npmjs.org/@azure/core-rest-pipeline/-/core-rest-pipeline-1.24.0.tgz",
-      "integrity": "sha512-PpLsoDQ3AMmKZ0VU+0GrmqMxgp/sExjlVm4R+nLWngeoEGAzOIPVifaxKGU5gMv+nWELUoHfvrolWD+ZS/nFJg==",
+      "version": "1.25.0",
+      "resolved": "https://registry.npmjs.org/@azure/core-rest-pipeline/-/core-rest-pipeline-1.25.0.tgz",
+      "integrity": "sha512-bMs8ekJLjX8wPV+9IPBges1SLPyuDtE9g5gLDWOpxzKcoOFQnpLGkbcT1tdw3FaAmDS1gnPmMmJ6y/T5B96kIA==",
       "license": "MIT",
       "dependencies": {
         "@azure/abort-controller": "^2.1.2",
@@ -82,25 +83,25 @@
         "tslib": "^2.6.2"
       },
       "engines": {
-        "node": ">=20.0.0"
+        "node": ">=22.0.0"
       }
     },
     "node_modules/@azure/core-tracing": {
-      "version": "1.3.1",
-      "resolved": "https://registry.npmjs.org/@azure/core-tracing/-/core-tracing-1.3.1.tgz",
-      "integrity": "sha512-9MWKevR7Hz8kNzzPLfX4EAtGM2b8mr50HPDBvio96bURP/9C+HjdH3sBlLSNNrvRAr5/k/svoH457gB5IKpmwQ==",
+      "version": "1.4.0",
+      "resolved": "https://registry.npmjs.org/@azure/core-tracing/-/core-tracing-1.4.0.tgz",
+      "integrity": "sha512-eGwxD0AtncrxeBM4tG8R55Pc3rdX1hNW2WibJAgYpCVA6E93mvvVH+LcssoVjOBrSKWS55yEIHsk0X8ctHmfOQ==",
       "license": "MIT",
       "dependencies": {
         "tslib": "^2.6.2"
       },
       "engines": {
-        "node": ">=20.0.0"
+        "node": ">=22.0.0"
       }
     },
     "node_modules/@azure/core-util": {
-      "version": "1.13.1",
-      "resolved": "https://registry.npmjs.org/@azure/core-util/-/core-util-1.13.1.tgz",
-      "integrity": "sha512-XPArKLzsvl0Hf0CaGyKHUyVgF7oDnhKoP85Xv6M4StF/1AhfORhZudHtOyf2s+FcbuQ9dPRAjB8J2KvRRMUK2A==",
+      "version": "1.14.0",
+      "resolved": "https://registry.npmjs.org/@azure/core-util/-/core-util-1.14.0.tgz",
+      "integrity": "sha512-9n2pWK61veAuN0V20t9lOuoV4CFMdyAZ1ygZzvBGk/pBBJRib/PjL9PLXa/aI2CcPpyHfqVsxxqLCYl6uZlfDw==",
       "license": "MIT",
       "dependencies": {
         "@azure/abort-controller": "^2.1.2",
@@ -108,7 +109,7 @@
         "tslib": "^2.6.2"
       },
       "engines": {
-        "node": ">=20.0.0"
+        "node": ">=22.0.0"
       }
     },
     "node_modules/@azure/identity": {
@@ -134,46 +135,46 @@
       }
     },
     "node_modules/@azure/logger": {
-      "version": "1.3.0",
-      "resolved": "https://registry.npmjs.org/@azure/logger/-/logger-1.3.0.tgz",
-      "integrity": "sha512-fCqPIfOcLE+CGqGPd66c8bZpwAji98tZ4JI9i/mlTNTlsIWslCfpg48s/ypyLxZTump5sypjrKn2/kY7q8oAbA==",
+      "version": "1.4.0",
+      "resolved": "https://registry.npmjs.org/@azure/logger/-/logger-1.4.0.tgz",
+      "integrity": "sha512-rbAE25KUfjU/s3XHUdJgceoCP5dEOpMx85J04kF+QMdta73XkuG9JGHHinch+XIoKpBdqljin+KqURpJriSzLA==",
       "license": "MIT",
       "dependencies": {
         "@typespec/ts-http-runtime": "^0.3.0",
         "tslib": "^2.6.2"
       },
       "engines": {
-        "node": ">=20.0.0"
+        "node": ">=22.0.0"
       }
     },
     "node_modules/@azure/msal-browser": {
-      "version": "5.16.0",
-      "resolved": "https://registry.npmjs.org/@azure/msal-browser/-/msal-browser-5.16.0.tgz",
-      "integrity": "sha512-Wc75FGnQgYpsm5jsOqn1H8AXsh8vXruA6vwip1nhjrJxwby7juxKAIVLr7csepmHiwdZGr6EwI5BlSc3PizEtQ==",
+      "version": "5.17.1",
+      "resolved": "https://registry.npmjs.org/@azure/msal-browser/-/msal-browser-5.17.1.tgz",
+      "integrity": "sha512-zBhRGzABKSI7hfWh5EaZmril5ybZ7imBN1qEZl5sDTaelr+l8SnPjZO50Q4dnKnm347YPIlBMSnXKZyh3Yu5DQ==",
       "license": "MIT",
       "dependencies": {
-        "@azure/msal-common": "16.11.0"
+        "@azure/msal-common": "16.11.2"
       },
       "engines": {
         "node": ">=0.8.0"
       }
     },
     "node_modules/@azure/msal-common": {
-      "version": "16.11.0",
-      "resolved": "https://registry.npmjs.org/@azure/msal-common/-/msal-common-16.11.0.tgz",
-      "integrity": "sha512-UikJOtMwkFpZNzTH6Dqk8UTUPbow15zH3e0UjGYZy69lYENW/S05gMLhbxI2eonz66uALhIljvhsSMEb6+O30g==",
+      "version": "16.11.2",
+      "resolved": "https://registry.npmjs.org/@azure/msal-common/-/msal-common-16.11.2.tgz",
+      "integrity": "sha512-yDhtBOGDCdK9ipQ9g3+wmlMEPnZx2pXaDicDd9jYyR1L+7lEbvEohTDmF5qejZDutZY3m9pWPxeYxzNC701A2w==",
       "license": "MIT",
       "engines": {
         "node": ">=0.8.0"
       }
     },
     "node_modules/@azure/msal-node": {
-      "version": "5.3.1",
-      "resolved": "https://registry.npmjs.org/@azure/msal-node/-/msal-node-5.3.1.tgz",
-      "integrity": "sha512-sqqv3L1UOI4KDXonNtbxPYUgbSWVXqxvmmb6BUw9n4P/UXgG+cVur3dLWQN4Cz7qQ+UJROCCxMXlksm7gIq0Sw==",
+      "version": "5.4.1",
+      "resolved": "https://registry.npmjs.org/@azure/msal-node/-/msal-node-5.4.1.tgz",
+      "integrity": "sha512-yqgoyOIMCH7TNaSLMBTP+4LUlbMMf1zgC8nzOFG95lmW82CmsAEtUT0J93e4BdqDcnX5qle/9X+yb7A8Mw9M0g==",
       "license": "MIT",
       "dependencies": {
-        "@azure/msal-common": "16.11.0",
+        "@azure/msal-common": "16.11.2",
         "jsonwebtoken": "^9.0.0"
       },
       "engines": {
@@ -181,13 +182,13 @@
       }
     },
     "node_modules/@microsoft/teams.api": {
-      "version": "2.0.13",
-      "resolved": "https://registry.npmjs.org/@microsoft/teams.api/-/teams.api-2.0.13.tgz",
-      "integrity": "sha512-PUbCxZhBLiRPchWeZNcgsXxBGY7lGJrLwqin9I+n+ND9iCwSTtDf9kzhvIWQSPXgxViK8znmKQshSguf1JRz3Q==",
+      "version": "2.0.14",
+      "resolved": "https://registry.npmjs.org/@microsoft/teams.api/-/teams.api-2.0.14.tgz",
+      "integrity": "sha512-mEHBgs7yklydQWTlfGFok5i7np2WxOKS3j6aMgRH0HVfiLqenPjGm0NAWKR/Hg29n9ODtGZZeuIXNCwIYQ8syA==",
       "license": "MIT",
       "dependencies": {
-        "@microsoft/teams.cards": "2.0.13",
-        "@microsoft/teams.common": "2.0.13",
+        "@microsoft/teams.cards": "2.0.14",
+        "@microsoft/teams.common": "2.0.14",
         "jwt-decode": "^4.0.0",
         "qs": "^6.15.2"
       },
@@ -196,15 +197,15 @@
       }
     },
     "node_modules/@microsoft/teams.apps": {
-      "version": "2.0.13",
-      "resolved": "https://registry.npmjs.org/@microsoft/teams.apps/-/teams.apps-2.0.13.tgz",
-      "integrity": "sha512-md8DmJhu+TuMlNu5i9mU0yflZuXEvbyDkZq+DcYABM5xZcj0PTSAtTMcVqW+cdbBz/KYquix6YGWdcV9KOFl/g==",
+      "version": "2.0.14",
+      "resolved": "https://registry.npmjs.org/@microsoft/teams.apps/-/teams.apps-2.0.14.tgz",
+      "integrity": "sha512-7re8a3pnAUSD5rAGlWbKQd07XtQJwyuZ4rI7EWyqBQT2iLhqUU1r4jtq3jQFpfov7xhADVV+oExCc7IbNyYuGw==",
       "license": "MIT",
       "dependencies": {
         "@azure/msal-node": "^5.2.2",
-        "@microsoft/teams.api": "2.0.13",
-        "@microsoft/teams.common": "2.0.13",
-        "@microsoft/teams.graph": "2.0.13",
+        "@microsoft/teams.api": "2.0.14",
+        "@microsoft/teams.common": "2.0.14",
+        "@microsoft/teams.graph": "2.0.14",
         "axios": "^1.15.2",
         "cors": "^2.8.5",
         "express": "^5.0.0",
@@ -217,18 +218,18 @@
       }
     },
     "node_modules/@microsoft/teams.cards": {
-      "version": "2.0.13",
-      "resolved": "https://registry.npmjs.org/@microsoft/teams.cards/-/teams.cards-2.0.13.tgz",
-      "integrity": "sha512-eeXWvPTSQQZDeByVQOf9QTSfxnB0UvYBoAzgD2X+n+Q7nbsNBhId8nm0oipTF8E0uTp4i9iEb/5m9UkP/fmz6Q==",
+      "version": "2.0.14",
+      "resolved": "https://registry.npmjs.org/@microsoft/teams.cards/-/teams.cards-2.0.14.tgz",
+      "integrity": "sha512-qrWnjJVgMPO8vvbLEiTeBLrrRLsr4rletQnuP9fPMXTTcrNx+Dh0gYWtQAOBvpoAuFo5tTXR/waNFNUm8IZtBw==",
       "license": "MIT",
       "engines": {
         "node": ">=20"
       }
     },
     "node_modules/@microsoft/teams.common": {
-      "version": "2.0.13",
-      "resolved": "https://registry.npmjs.org/@microsoft/teams.common/-/teams.common-2.0.13.tgz",
-      "integrity": "sha512-zDeKZBAsTCjvPCcAmMUpcttyAkQTSV78m3cG3hVYgHmkSupHd4z+pcCOHEw/Tto8gH346622KT7nj2Ar2cT2fg==",
+      "version": "2.0.14",
+      "resolved": "https://registry.npmjs.org/@microsoft/teams.common/-/teams.common-2.0.14.tgz",
+      "integrity": "sha512-cjf3b/2sr5RqqiOaDuogJQ9fUNRZjDSh9eBEAv6NqkigNNLLjDgEgEl5lLoJsPp4usvc3drwFkx6HayuEbT7vA==",
       "license": "MIT",
       "dependencies": {
         "axios": "^1.15.2"
@@ -238,12 +239,12 @@
       }
     },
     "node_modules/@microsoft/teams.graph": {
-      "version": "2.0.13",
-      "resolved": "https://registry.npmjs.org/@microsoft/teams.graph/-/teams.graph-2.0.13.tgz",
-      "integrity": "sha512-df3lCP9UmU60hXOm9zMr/GTEzZZhovL2mj9uFizjCEP6u9pQsaTN+0ldHn44FOyHtn5M6x9fUlBxIOiu4VOg9Q==",
+      "version": "2.0.14",
+      "resolved": "https://registry.npmjs.org/@microsoft/teams.graph/-/teams.graph-2.0.14.tgz",
+      "integrity": "sha512-PufhROXKhsC/h6ZKuquPzvNBB1Q9lHHu//vZGfRj3yD+hgtQkEz2YzXZDYC3h0bDN4ej2KtvkDGrsovqrnU0cQ==",
       "license": "MIT",
       "dependencies": {
-        "@microsoft/teams.common": "2.0.13",
+        "@microsoft/teams.common": "2.0.14",
         "qs": "^6.15.2"
       },
       "engines": {
@@ -267,18 +268,18 @@
       "license": "MIT"
     },
     "node_modules/@types/node": {
-      "version": "26.1.0",
-      "resolved": "https://registry.npmjs.org/@types/node/-/node-26.1.0.tgz",
-      "integrity": "sha512-O0A1G3xPGy4w7AgQdAQYUlQ+BKk2Oovw8eRpofyp5KdBZULnbe+WqaOVNrm705SHphCiG4XHsACrSmPu1f+Kgw==",
+      "version": "26.1.1",
+      "resolved": "https://registry.npmjs.org/@types/node/-/node-26.1.1.tgz",
+      "integrity": "sha512-nxAkRSVkN1Y0JC1W8ky/fTfkGsMmcrRsbx+3XoZE+rMOX71kLYTV7fLXpqud1GpbpP5TuffXFqfX7fH2GgZREw==",
       "license": "MIT",
       "dependencies": {
         "undici-types": "~8.3.0"
       }
     },
     "node_modules/@typespec/ts-http-runtime": {
-      "version": "0.3.6",
-      "resolved": "https://registry.npmjs.org/@typespec/ts-http-runtime/-/ts-http-runtime-0.3.6.tgz",
-      "integrity": "sha512-jIXhD0eWQ1JA6ln/5Dltyx22UxWNrw0hZmhy2rlv6m6KgF7kplHx3g0fzi09lNmTJQRR91OlemYp3xFnvDK9og==",
+      "version": "0.3.7",
+      "resolved": "https://registry.npmjs.org/@typespec/ts-http-runtime/-/ts-http-runtime-0.3.7.tgz",
+      "integrity": "sha512-JVUD8X2tfDMWjcjLs4yVxxVrS8yR5vnh386GAXT9Qj79nBxxXSaHFQZg5FweLmT8HlPQ3kii6noUB+Z9RN7DvQ==",
       "license": "MIT",
       "dependencies": {
         "http-proxy-agent": "^7.0.0",
@@ -286,7 +287,7 @@
         "tslib": "^2.6.2"
       },
       "engines": {
-        "node": ">=20.0.0"
+        "node": ">=22.0.0"
       }
     },
     "node_modules/accepts": {
@@ -318,14 +319,40 @@
       "license": "MIT"
     },
     "node_modules/axios": {
-      "version": "1.16.0",
-      "resolved": "https://registry.npmjs.org/axios/-/axios-1.16.0.tgz",
-      "integrity": "sha512-6hp5CwvTPlN2A31g5dxnwAX0orzM7pmCRDLnZSX772mv8WDqICwFjowHuPs04Mc8deIld1+ejhtaMn5vp6b+1w==",
+      "version": "1.18.1",
+      "resolved": "https://registry.npmjs.org/axios/-/axios-1.18.1.tgz",
+      "integrity": "sha512-3nTvFlvpn9Zu/RkHUqtc7/+al4UpRW5az71ap5zccp6e8RAYEzhMTecX8Dz1wWDYrPpUoB1HAQEGEAEvUr7S9g==",
       "license": "MIT",
       "dependencies": {
         "follow-redirects": "^1.16.0",
         "form-data": "^4.0.5",
+        "https-proxy-agent": "^5.0.1",
         "proxy-from-env": "^2.1.0"
+      }
+    },
+    "node_modules/axios/node_modules/agent-base": {
+      "version": "6.0.2",
+      "resolved": "https://registry.npmjs.org/agent-base/-/agent-base-6.0.2.tgz",
+      "integrity": "sha512-RZNwNclF7+MS/8bDg70amg32dyeZGZxiDuQmZxKLAlQjr3jGyLx+4Kkk58UO7D2QdgFIQCovuSuZESne6RG6XQ==",
+      "license": "MIT",
+      "dependencies": {
+        "debug": "4"
+      },
+      "engines": {
+        "node": ">= 6.0.0"
+      }
+    },
+    "node_modules/axios/node_modules/https-proxy-agent": {
+      "version": "5.0.1",
+      "resolved": "https://registry.npmjs.org/https-proxy-agent/-/https-proxy-agent-5.0.1.tgz",
+      "integrity": "sha512-dFcAjpTQFgoLMzC2VwU+C/CbS7uRL0lWmxDITmqm7C+7F0Odmj6s9l6alZc6AELXhrnggM2CeWSXHGOdX2YtwA==",
+      "license": "MIT",
+      "dependencies": {
+        "agent-base": "6",
+        "debug": "4"
+      },
+      "engines": {
+        "node": ">= 6"
       }
     },
     "node_modules/body-parser": {
@@ -950,9 +977,9 @@
       }
     },
     "node_modules/iconv-lite": {
-      "version": "0.7.2",
-      "resolved": "https://registry.npmjs.org/iconv-lite/-/iconv-lite-0.7.2.tgz",
-      "integrity": "sha512-im9DjEDQ55s9fL4EYzOAv0yMqmMBSZp6G0VvFyTMPKWxiSBHUj9NW/qqLmXUwXrrM7AvqSlTCfvqRb0cM8yYqw==",
+      "version": "0.7.3",
+      "resolved": "https://registry.npmjs.org/iconv-lite/-/iconv-lite-0.7.3.tgz",
+      "integrity": "sha512-IKXpvIzjnC9XTAUbVBcMfGS0EPaIXtW6v+zr+RRp+hqULEpo0owZax6wyRwPOJbWbzjYspQwusTsfVr0ifh4uQ==",
       "license": "MIT",
       "dependencies": {
         "safer-buffer": ">= 2.1.2 < 3.0.0"
@@ -1326,9 +1353,9 @@
       }
     },
     "node_modules/path-to-regexp": {
-      "version": "8.4.0",
-      "resolved": "https://registry.npmjs.org/path-to-regexp/-/path-to-regexp-8.4.0.tgz",
-      "integrity": "sha512-PuseHIvAnz3bjrM2rGJtSgo1zjgxapTLZ7x2pjhzWwlp4SJQgK3f3iZIQwkpEnBaKz6seKBADpM4B4ySkuYypg==",
+      "version": "8.4.2",
+      "resolved": "https://registry.npmjs.org/path-to-regexp/-/path-to-regexp-8.4.2.tgz",
+      "integrity": "sha512-qRcuIdP69NPm4qbACK+aDogI5CBDMi1jKe0ry5rSQJz8JVLsC7jV8XpiJjGRLLol3N+R5ihGYcrPLTno6pAdBA==",
       "license": "MIT",
       "funding": {
         "type": "opencollective",
@@ -1358,12 +1385,13 @@
       }
     },
     "node_modules/qs": {
-      "version": "6.15.2",
-      "resolved": "https://registry.npmjs.org/qs/-/qs-6.15.2.tgz",
-      "integrity": "sha512-Rzq0KEyX/w/tEybncDgdkZrJgVUsUMk3xjh3t5bv3S1HTAtg+uOYt72+ZfwiQwKdysThkTBdL/rTi6HDmX9Ddw==",
+      "version": "6.15.3",
+      "resolved": "https://registry.npmjs.org/qs/-/qs-6.15.3.tgz",
+      "integrity": "sha512-O9gl3zCl5h5blw1KGUzQKhA5oUXSl8rwUIM5o0S3nCXMliSvy5Dzx7/DJcI+SwgICv+IneSZwhBh1oSyEHA71A==",
       "license": "BSD-3-Clause",
       "dependencies": {
-        "side-channel": "^1.1.0"
+        "es-define-property": "^1.0.1",
+        "side-channel": "^1.1.1"
       },
       "engines": {
         "node": ">=0.6"
@@ -1651,9 +1679,9 @@
       }
     },
     "node_modules/typebox": {
-      "version": "1.3.3",
-      "resolved": "https://registry.npmjs.org/typebox/-/typebox-1.3.3.tgz",
-      "integrity": "sha512-URXGUE31PJDQC+PtRMJeLdF4kmmOdFoVPikPCtV2oOIhUpNpppEdIz7W8bH8cFYPYHdDpaRvqwdegMTmHliudg==",
+      "version": "1.3.6",
+      "resolved": "https://registry.npmjs.org/typebox/-/typebox-1.3.6.tgz",
+      "integrity": "sha512-Sc8RA0NCMEFmApHNU9ZMzqcpQj46She44J8ffpLM/bdhLNUZKq7DJumcLcsFx1gRmDfQPgCgOmFFJ7rcnfWNyA==",
       "license": "MIT"
     },
     "node_modules/undici-types": {
@@ -1706,6 +1734,15 @@
       "resolved": "https://registry.npmjs.org/yallist/-/yallist-4.0.0.tgz",
       "integrity": "sha512-3wdGidZyq5PB084XLES5TpOSRA3wjXAlIWMhum2kRcv/41Sn2emQ0dycQW4uZXLejwKvg6EsvbdlVL+FYEct7A==",
       "license": "ISC"
+    },
+    "node_modules/zod": {
+      "version": "4.4.3",
+      "resolved": "https://registry.npmjs.org/zod/-/zod-4.4.3.tgz",
+      "integrity": "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==",
+      "license": "MIT",
+      "funding": {
+        "url": "https://github.com/sponsors/colinhacks"
+      }
     }
   }
 }

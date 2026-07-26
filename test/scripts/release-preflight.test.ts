@@ -17,6 +17,8 @@ const CHECK_COMMANDS = [
   "pnpm plugin-sdk:check-exports",
   "pnpm plugin-sdk:api:check",
   "pnpm plugin-sdk:surface:check",
+  "pnpm ui:i18n:check",
+  "pnpm native:i18n:check",
 ];
 const FIX_COMMANDS = [
   "node --import tsx scripts/sync-plugin-versions.ts",
@@ -27,6 +29,7 @@ const FIX_COMMANDS = [
   "pnpm config:docs:gen",
   "pnpm plugin-sdk:sync-exports",
   "pnpm plugin-sdk:api:gen",
+  "pnpm ui:i18n:sync",
 ];
 
 const tempDirs = new Set<string>();
@@ -208,9 +211,12 @@ describe("scripts/release-preflight.mjs", () => {
         "node --import tsx scripts/sync-plugin-versions.ts",
         "node scripts/generate-npm-shrinkwrap.mjs --changed",
         "node scripts/generate-plugin-inventory-doc.mjs --write",
+        "pnpm ui:i18n:sync",
         "node --import tsx scripts/sync-plugin-versions.ts --check",
         "node scripts/generate-npm-shrinkwrap.mjs --all --check",
         "node scripts/generate-plugin-inventory-doc.mjs --check",
+        "pnpm ui:i18n:check",
+        "pnpm native:i18n:check",
       ].toSorted(),
     );
     expect(result.stdout).toContain("(version, jobs=4)");

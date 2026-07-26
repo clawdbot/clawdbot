@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Insertable, Selectable } from "kysely";
 import type {
   WorkerTranscriptCommitErrorReason,
@@ -82,10 +83,6 @@ function normalizeRequestHash(value: unknown): string {
     throw new Error("Worker transcript commit request hash must be lowercase SHA-256 hex");
   }
   return value;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isNonEmptyStringArray(value: unknown): value is string[] {

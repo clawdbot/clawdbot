@@ -26,18 +26,8 @@ export type SecretRefCredentialMatrixDocument = {
 export function buildSecretRefCredentialMatrix(): SecretRefCredentialMatrixDocument {
   const entriesByKey = new Map<string, CredentialMatrixEntry>();
   for (const entry of getSecretTargetRegistry({ sourceTree: true })) {
-    const isCanonicalFirecrawlWebFetchEntry =
-      entry.id === "plugins.entries.firecrawl.config.webFetch.apiKey";
-    // Firecrawl web fetch moved to the plugin-owned path, but matrix docs keep the public
-    // tools.web.fetch.firecrawl path as the canonical operator-facing surface.
-    const canonicalId = isCanonicalFirecrawlWebFetchEntry
-      ? "tools.web.fetch.firecrawl.apiKey"
-      : entry.id;
-    const canonicalPath = isCanonicalFirecrawlWebFetchEntry
-      ? "tools.web.fetch.firecrawl.apiKey"
-      : entry.pathPattern;
     const matrixEntry = Object.assign(
-      { id: canonicalId, configFile: entry.configFile, path: canonicalPath },
+      { id: entry.id, configFile: entry.configFile, path: entry.pathPattern },
       entry.refPathPattern ? { refPath: entry.refPathPattern } : {},
       entry.authProfileType ? { when: { type: entry.authProfileType } } : {},
       { secretShape: entry.secretShape, optIn: true as const },

@@ -5,6 +5,7 @@ import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import type { APIVoiceState, Client } from "../internal/discord.js";
 import {
   collectDiscordVoiceParticipants,
+  countDiscordVoiceHumanParticipants,
   formatDiscordVoiceParticipantStateLine,
   formatDiscordVoiceParticipantStateLines,
   listDiscordVoiceParticipantStates,
@@ -108,6 +109,21 @@ export class DiscordVoiceMembershipTracker {
     logger.info(
       `discord voice: participant session-ended event queued guild=${entry.guildId} channel=${entry.channelId} supervisorSession=${entry.route.sessionKey}`,
     );
+  }
+
+  countHumanParticipants(entry: VoiceSessionEntry, botUserId?: string): number {
+    const state = this.states.get(entry);
+    const voiceStates =
+      listDiscordVoiceParticipantStates({
+        client: this.client,
+        guildId: entry.guildId,
+        channelId: entry.channelId,
+      }) ?? [];
+    return countDiscordVoiceHumanParticipants({
+      states: voiceStates,
+      botUserId: state?.botUserId ?? botUserId,
+      additionalUserIds: state?.inferredUserIds,
+    });
   }
 
   notePresent(entry: VoiceSessionEntry, userId: string): void {

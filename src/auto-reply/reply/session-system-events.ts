@@ -63,7 +63,7 @@ function compactSystemEvent(line: string): string | null {
 }
 
 function resolveSystemEventTimezone(cfg: OpenClawConfig) {
-  const raw = normalizeOptionalString(cfg.agents?.defaults?.envelopeTimezone);
+  const raw = normalizeOptionalString(cfg.agents?.defaults?.userTimezone);
   if (!raw) {
     return { mode: "local" as const };
   }

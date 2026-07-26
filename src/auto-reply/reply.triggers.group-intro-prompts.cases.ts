@@ -1,6 +1,8 @@
 /** Reusable group-intro prompt assertions shared by auto-reply trigger tests. */
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { makeCfg } from "../../test/helpers/auto-reply/trigger-handling-test-harness.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { buildGroupChatContext, buildGroupIntro } from "./reply/groups.js";
 
 type GetReplyFromConfig = typeof import("./reply.js").getReplyFromConfig;
@@ -8,6 +10,25 @@ type InboundMessage = Parameters<GetReplyFromConfig>[0];
 
 export function registerGroupIntroPromptCases(): void {
   describe("group intro prompts", () => {
+    beforeEach(() => {
+      resetPluginRuntimeStateForTest();
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "telegram",
+            source: "test",
+            plugin: {
+              ...createChannelTestPluginBase({ id: "telegram" }),
+              messaging: { defaultMarkdownTableMode: "block" },
+            },
+          },
+        ]),
+      );
+    });
+    afterEach(() => {
+      resetPluginRuntimeStateForTest();
+    });
+
     type GroupIntroCase = {
       name: string;
       message: InboundMessage;

@@ -1,9 +1,8 @@
 // Configures SQLite WAL and related pragmas for local stores.
-import childProcess from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { expectDefined } from "@openclaw/normalization-core";
+import type { Result } from "@openclaw/normalization-core/result";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { isSqliteLockError } from "./sqlite-transaction.js";
 
@@ -11,6 +10,10 @@ import { isSqliteLockError } from "./sqlite-transaction.js";
 // checkpoints so state databases do not accumulate unbounded WAL files.
 const DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES = 1000;
 const DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS = 30 * 60 * 1000;
+// SQLite applies this ceiling when a fully checkpointed WAL resets on the next
+// commit. Keep it well above the usual ~4 MiB autocheckpoint window so only
+// pathological high-water marks pay the truncation cost.
+const DEFAULT_SQLITE_WAL_JOURNAL_SIZE_LIMIT_BYTES = 64 * 1024 * 1024;
 // 512 pages (~2MB at 4KB pages) per periodic pass keeps page release strictly
 // bounded so maintenance can never behave like a blocking full VACUUM.
 const INCREMENTAL_VACUUM_MAX_PAGES_PER_PASS = 512;
@@ -19,6 +22,8 @@ const LINUX_SMB_SUPER_MAGIC = 0x517b;
 const LINUX_CIFS_SUPER_MAGIC = 0xff534d42;
 const LINUX_SMB2_SUPER_MAGIC = 0xfe534d42;
 const PROC_MOUNTINFO_PATH = "/proc/self/mountinfo";
+// Filesystem classification runs during database open, so never let the fallback probe stall it.
+const MOUNT_COMMAND_TIMEOUT_MS = 1_000;
 const NETWORK_FILESYSTEM_TYPES = new Set(["cifs", "smbfs", "smb2", "smb3"]);
 const JOURNAL_MODE_RETRY_INTERVAL_MS = 10;
 const JOURNAL_MODE_RETRY_SLEEP = new Int32Array(new SharedArrayBuffer(4));
@@ -33,7 +38,7 @@ type MountEntry = { mountPoint: string; fsType: string; source?: string };
 
 export type SqliteWalMaintenance = {
   checkpoint: () => boolean;
-  close: () => boolean;
+  close: (options?: { checkpointMode?: SqliteWalCheckpointMode }) => boolean;
 };
 
 /** Options controlling WAL autocheckpoint and periodic checkpoint behavior. */
@@ -145,36 +150,57 @@ function parseMountCommandEntries(contents: string): MountEntry[] {
   for (const line of contents.split("\n")) {
     const linuxMatch = /^(.+) on (.+) type ([^,\s)]+) \(/.exec(line);
     if (linuxMatch) {
-      entries.push({
-        source: linuxMatch[1],
-        mountPoint: expectDefined(linuxMatch[2], "linux match capture group 2"),
-        fsType: expectDefined(linuxMatch[3], "linux match capture group 3"),
-      });
+      const source = linuxMatch[1];
+      const mountPoint = linuxMatch[2];
+      const fsType = linuxMatch[3];
+      if (source && mountPoint && fsType) {
+        entries.push({ source, mountPoint, fsType });
+      }
       continue;
     }
     const bsdMatch = /^(.+) on (.+) \(([^,\s)]+)/.exec(line);
     if (bsdMatch) {
-      entries.push({
-        source: bsdMatch[1],
-        mountPoint: expectDefined(bsdMatch[2], "bsd match capture group 2"),
-        fsType: expectDefined(bsdMatch[3], "bsd match capture group 3"),
-      });
+      const source = bsdMatch[1];
+      const mountPoint = bsdMatch[2];
+      const fsType = bsdMatch[3];
+      if (source && mountPoint && fsType) {
+        entries.push({ source, mountPoint, fsType });
+      }
     }
   }
   return entries;
 }
 
-function readMountEntries(): MountEntry[] {
+function isMountCommandTimeout(error: unknown): boolean {
+  return (
+    error !== null && typeof error === "object" && "code" in error && error.code === "ETIMEDOUT"
+  );
+}
+
+function readMountEntries(): Result<MountEntry[], "timeout"> {
   try {
-    return parseProcMountInfoEntries(fs.readFileSync(PROC_MOUNTINFO_PATH, "utf8"));
+    return {
+      ok: true,
+      value: parseProcMountInfoEntries(fs.readFileSync(PROC_MOUNTINFO_PATH, "utf8")),
+    };
   } catch {
     // macOS/BSD expose filesystem type names in `mount` output instead of
     // Linux superblock magic, so keep this fallback for named filesystem types.
   }
   try {
-    return parseMountCommandEntries(String(childProcess.execFileSync("mount", [])));
-  } catch {
-    return [];
+    return {
+      ok: true,
+      value: parseMountCommandEntries(
+        String(
+          process.getBuiltinModule("node:child_process").execFileSync("mount", [], {
+            killSignal: "SIGKILL",
+            timeout: MOUNT_COMMAND_TIMEOUT_MS,
+          }),
+        ),
+      ),
+    };
+  } catch (error) {
+    return isMountCommandTimeout(error) ? { ok: false, error: "timeout" } : { ok: true, value: [] };
   }
 }
 
@@ -228,9 +254,12 @@ function resolveMountEntryJournalPolicy(
 function combineMountEntryJournalPolicies(
   targetPaths: readonly string[],
 ): SqliteFilesystemJournalPolicy {
-  const mountEntries = readMountEntries();
+  const mountResult = readMountEntries();
+  if (!mountResult.ok) {
+    return "rollback";
+  }
   const policies = new Set(
-    targetPaths.map((targetPath) => resolveMountEntryJournalPolicy(targetPath, mountEntries)),
+    targetPaths.map((targetPath) => resolveMountEntryJournalPolicy(targetPath, mountResult.value)),
   );
   if (policies.has("unsupported")) {
     return "unsupported";
@@ -300,6 +329,15 @@ function readJournalModeResult(row: unknown): string | null {
   return typeof value === "string" ? value.toLowerCase() : null;
 }
 
+function hasInMemoryMainDatabase(db: DatabaseSync): boolean {
+  const rows = db.prepare("PRAGMA database_list;").all() as Array<{
+    file?: unknown;
+    name?: unknown;
+  }>;
+  const main = rows.find((row) => row.name === "main");
+  return main?.file === "";
+}
+
 function readCheckpointBusyResult(row: unknown): boolean {
   if (!row || typeof row !== "object") {
     return false;
@@ -322,14 +360,31 @@ function requireRollbackJournalMode(db: DatabaseSync, options: SqliteWalMaintena
   }
 }
 
-function enableWalJournalMode(db: DatabaseSync, retryTimeoutMs: number): void {
+function enableWalJournalMode(
+  db: DatabaseSync,
+  retryTimeoutMs: number,
+  options: SqliteWalMaintenanceOptions,
+): boolean {
   const deadline = Date.now() + retryTimeoutMs;
   let restoreBusyTimeout = false;
   try {
     while (true) {
       try {
         db.exec("PRAGMA journal_mode = WAL;");
-        return;
+        const journalMode = readJournalModeResult(db.prepare("PRAGMA journal_mode;").get());
+        if (journalMode === "wal") {
+          return true;
+        }
+        // SQLite's in-memory databases cannot use WAL and correctly retain
+        // journal_mode=memory. They have no sidecars or checkpoint work.
+        if (journalMode === "memory" && hasInMemoryMainDatabase(db)) {
+          return false;
+        }
+        const label = options.databaseLabel ?? "sqlite database";
+        const location = options.databasePath ? ` at ${options.databasePath}` : "";
+        throw new Error(
+          `${label}${location} could not enable WAL; SQLite kept journal_mode=${journalMode ?? "unknown"}.`,
+        );
       } catch (error) {
         const remainingMs = deadline - Date.now();
         if (!isSqliteLockError(error) || remainingMs <= 0) {
@@ -408,9 +463,15 @@ export function configureSqliteWalMaintenance(
       close: () => true,
     };
   }
-  enableWalJournalMode(db, busyTimeoutMs);
+  if (!enableWalJournalMode(db, busyTimeoutMs, options)) {
+    return {
+      checkpoint: () => true,
+      close: () => true,
+    };
+  }
   enableMacosCheckpointFullfsync(db);
   db.exec(`PRAGMA wal_autocheckpoint = ${autoCheckpointPages};`);
+  db.exec(`PRAGMA journal_size_limit = ${DEFAULT_SQLITE_WAL_JOURNAL_SIZE_LIMIT_BYTES};`);
 
   const runCheckpoint = (mode: SqliteWalCheckpointMode): boolean => {
     try {
@@ -452,12 +513,15 @@ export function configureSqliteWalMaintenance(
 
   return {
     checkpoint,
-    close: () => {
+    close: (closeOptions) => {
       if (timer) {
         clearInterval(timer);
         timer = null;
       }
-      return checkpoint();
+      // Cache eviction passes PASSIVE: a TRUNCATE close-checkpoint waits on
+      // readers and has starved the event loop for seconds under fleet churn.
+      // Orderly dispose/delete keeps TRUNCATE so sidecars are flushed for unlink.
+      return runCheckpoint(closeOptions?.checkpointMode ?? checkpointMode);
     },
   };
 }

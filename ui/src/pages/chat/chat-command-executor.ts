@@ -108,9 +108,9 @@ export async function executeSlashCommand(
     case "help":
       return executeHelp();
     case "new":
-      return { content: "Starting new session...", action: "new-session" };
+      return { content: "Starting new thread...", action: "new-session" };
     case "reset":
-      return { content: "Resetting session...", action: "reset" };
+      return { content: "Resetting thread...", action: "reset" };
     case "stop":
       return { content: "Stopping current run...", action: "stop" };
     case "clear":
@@ -126,7 +126,7 @@ export async function executeSlashCommand(
     case "verbose":
       return await executeVerbose(client, sessionKey, args, context);
     case "export-session":
-      return { content: "Exporting session...", action: "export" };
+      return { content: "Exporting thread...", action: "export" };
     case "usage":
       return await executeUsage(sessionKey, context);
     case "agents":
@@ -441,7 +441,7 @@ async function executeUsage(
     const sessions = await listSessions(context);
     const session = resolveCurrentSession(sessions, sessionKey);
     if (!session) {
-      return { content: "No active session." };
+      return { content: "No active thread." };
     }
     const hasInputTokens = Number.isFinite(session.inputTokens);
     const hasOutputTokens = Number.isFinite(session.outputTokens);
@@ -463,7 +463,7 @@ async function executeUsage(
         : `${totalTokensFresh ? "" : "~"}${formatCompactTokenCount(cumulativeTotal)}`;
 
     const lines = [
-      "**Session Usage**",
+      "**Thread Usage**",
       `Input: **${formatCompactTokenCount(input)}** tokens`,
       `Output: **${formatCompactTokenCount(output)}** tokens`,
       `Total: **${totalDisplay}** tokens`,
@@ -738,6 +738,7 @@ async function executeSteer(
         ...selectedGlobalScope(resolved.key, context),
         message: resolved.message,
         deliver: false,
+        queueMode: "steer",
         idempotencyKey: generateUUID(),
       }),
     );

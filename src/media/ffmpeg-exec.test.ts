@@ -1,11 +1,6 @@
 // FFmpeg exec tests cover command execution wrappers and error mapping.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  parseFfprobeCodecAndSampleRate,
-  parseFfprobeCsvFields,
-  resolveFfmpegBin,
-  runFfprobe,
-} from "./ffmpeg-exec.js";
+import { parseFfprobeCodecAndSampleRate, resolveFfmpegBin, runFfprobe } from "./ffmpeg-exec.js";
 
 const { runExecMock, resolveSystemBinMock } = vi.hoisted(() => ({
   runExecMock: vi.fn(),
@@ -24,19 +19,6 @@ beforeEach(() => {
   runExecMock.mockReset();
   resolveSystemBinMock.mockReset();
   resolveSystemBinMock.mockReturnValue("/usr/bin/ffprobe");
-});
-
-describe("parseFfprobeCsvFields", () => {
-  function expectParsedFfprobeCsvCase(input: string, fieldCount: number, expected: string[]) {
-    expect(parseFfprobeCsvFields(input, fieldCount)).toEqual(expected);
-  }
-
-  it.each([
-    { input: "opus,\n48000\n", fieldCount: 2, expected: ["opus", "48000"] },
-    { input: "opus,48000,stereo\n", fieldCount: 3, expected: ["opus", "48000", "stereo"] },
-  ] as const)("splits ffprobe csv output %#", ({ input, fieldCount, expected }) => {
-    expectParsedFfprobeCsvCase(input, fieldCount, [...expected]);
-  });
 });
 
 describe("parseFfprobeCodecAndSampleRate", () => {

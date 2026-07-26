@@ -1,5 +1,6 @@
 // Sessions command tests cover listing, details, filtering, and transcript display behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import {
   cleanupStore,
   makeRuntime,
@@ -15,7 +16,8 @@ process.env.FORCE_COLOR = "0";
 
 mockSessionsConfig();
 
-import { sessionsCommand, testing } from "./sessions.js";
+import { sessionsCommand } from "./sessions.js";
+import { testing } from "./sessions.test-support.js";
 
 describe("sessionsCommand", () => {
   beforeEach(() => {
@@ -181,6 +183,28 @@ describe("sessionsCommand", () => {
     expect(group?.totalTokensFresh).toBe(false);
   });
 
+  it("reports the SQLite database for the store and SQLite-backed sessionFile", async () => {
+    const store = await writeStore({
+      main: {
+        sessionId: "abc123",
+        sessionFile: "sqlite:main:abc123:/tmp/openclaw/agents/main/sessions/sessions.json",
+        updatedAt: Date.now() - 10 * 60_000,
+        model: "test:opus",
+      },
+    });
+
+    const payload = await runSessionsJson<{
+      path?: string;
+      sessions?: Array<{ key: string; sessionFile?: string }>;
+    }>(sessionsCommand, store);
+
+    expect(payload.path).toMatch(/openclaw-agent\.sqlite$/u);
+    expect(payload.path).not.toContain("sessions.json");
+    expect(payload.sessions?.find((row) => row.key === "main")?.sessionFile).toBe(
+      "sqlite:main:abc123:/tmp/openclaw/agents/main/agent/openclaw-agent.sqlite",
+    );
+  });
+
   it("exports subagent lineage metadata in JSON output", async () => {
     const store = await writeStore({
       "agent:child:main": {
@@ -294,12 +318,14 @@ describe("sessionsCommand", () => {
         "agent:main:main": {
           sessionId: "telegram-main",
           updatedAt: Date.now() - 60_000,
-          origin: {
-            provider: "telegram",
-            chatType: "direct",
-            to: "telegram:42",
-            accountId: "default",
-          },
+          delivery: normalizeSessionDeliveryState({
+            origin: {
+              provider: "telegram",
+              chatType: "direct",
+              to: "telegram:42",
+              accountId: "default",
+            },
+          }),
         },
       },
       "sessions-runtime-policy-alias",

@@ -1,5 +1,5 @@
 // Openai tests cover openai chatgpt device code plugin behavior.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveCodexAccessTokenExpiry } from "./openai-chatgpt-auth-identity.js";
 import { loginOpenAICodexDeviceCode } from "./openai-chatgpt-device-code.js";
 
@@ -48,7 +48,139 @@ function fetchCall(fetchMock: ReturnType<typeof vi.fn<typeof fetch>>, index: num
   return call;
 }
 
+function waitForFetchAbort(init?: RequestInit): Promise<Response> {
+  const signal = init?.signal;
+  if (!signal) {
+    return Promise.reject(new Error("expected fetch signal"));
+  }
+  return new Promise((_resolve, reject) => {
+    const rejectWithReason = () =>
+      reject(signal.reason instanceof Error ? signal.reason : new Error("request aborted"));
+    if (signal.aborted) {
+      rejectWithReason();
+      return;
+    }
+    signal.addEventListener("abort", rejectWithReason, { once: true });
+  });
+}
+
+function createBodyThatStallsUntilAbort(init?: RequestInit): Response {
+  const signal = init?.signal;
+  if (!signal) {
+    throw new Error("expected fetch signal");
+  }
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        const fail = () => controller.error(signal.reason);
+        if (signal.aborted) {
+          fail();
+          return;
+        }
+        signal.addEventListener("abort", fail, { once: true });
+      },
+    }),
+    { status: 200, headers: { "Content-Type": "application/json" } },
+  );
+}
+
 describe("loginOpenAICodexDeviceCode", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+  });
+
+  it("times out while waiting for device-code response headers", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn<typeof fetch>((_input, init) => waitForFetchAbort(init));
+
+    const login = loginOpenAICodexDeviceCode({
+      fetchFn: fetchMock,
+      onVerification: async () => {},
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchCall(fetchMock, 0)[1]?.signal).toBeInstanceOf(AbortSignal);
+    const rejected = expect(login).rejects.toThrow(
+      "OpenAI device code user code request timed out after 30000ms",
+    );
+    await vi.advanceTimersByTimeAsync(30_000);
+    await rejected;
+  });
+
+  it("keeps the request timeout active while reading the response body", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn<typeof fetch>(async (_input, init) =>
+      createBodyThatStallsUntilAbort(init),
+    );
+
+    const login = loginOpenAICodexDeviceCode({
+      fetchFn: fetchMock,
+      onVerification: async () => {},
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const rejected = expect(login).rejects.toThrow(
+      "OpenAI device code user code request timed out after 30000ms",
+    );
+    await vi.advanceTimersByTimeAsync(30_000);
+    await rejected;
+  });
+
+  it("still honors caller cancellation during an active device-code request", async () => {
+    const callerController = new AbortController();
+    const fetchMock = vi.fn<typeof fetch>((_input, init) => waitForFetchAbort(init));
+
+    const login = loginOpenAICodexDeviceCode({
+      fetchFn: fetchMock,
+      onVerification: async () => {},
+      signal: callerController.signal,
+    });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+
+    callerController.abort(new Error("cancelled by caller"));
+    await expect(login).rejects.toThrow("cancelled by caller");
+  });
+
+  it("routes device-code auth through a configured HTTPS proxy", async () => {
+    vi.stubEnv("https_proxy", "http://127.0.0.1:7897");
+    vi.stubEnv("no_proxy", "");
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 503 }));
+
+    await expect(
+      loginOpenAICodexDeviceCode({
+        fetchFn: fetchMock,
+        onVerification: async () => {},
+      }),
+    ).rejects.toThrow("OpenAI device code request failed: HTTP 503");
+
+    const requestInit = fetchCall(fetchMock, 0)[1] as
+      | (RequestInit & { dispatcher?: { constructor?: { name?: string } } })
+      | undefined;
+    expect(requestInit?.dispatcher?.constructor?.name).toContain("EnvHttpProxyAgent");
+  });
+
+  it("keeps strict guarded fetch when NO_PROXY bypasses OpenAI auth", async () => {
+    vi.stubEnv("https_proxy", "http://127.0.0.1:7897");
+    vi.stubEnv("no_proxy", "auth.openai.com");
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 503 }));
+
+    await expect(
+      loginOpenAICodexDeviceCode({
+        fetchFn: fetchMock,
+        onVerification: async () => {},
+      }),
+    ).rejects.toThrow("OpenAI device code request failed: HTTP 503");
+
+    const requestInit = fetchCall(fetchMock, 0)[1] as
+      | (RequestInit & { dispatcher?: unknown })
+      | undefined;
+    expect(requestInit?.dispatcher).toBeUndefined();
+  });
+
   it("requests a device code, polls for authorization, and exchanges OAuth tokens", async () => {
     vi.useFakeTimers();
     vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
@@ -108,6 +240,7 @@ describe("loginOpenAICodexDeviceCode", () => {
       const userCodeRequest = fetchCall(fetchMock, 0);
       expect(userCodeRequest[0]).toBe("https://auth.openai.com/api/accounts/deviceauth/usercode");
       expect(userCodeRequest[1]?.method).toBe("POST");
+      expect(userCodeRequest[1]?.signal).toBeInstanceOf(AbortSignal);
       expect(userCodeRequest[1]?.headers).toEqual({
         "Content-Type": "application/json",
         originator: "openclaw",
@@ -118,6 +251,7 @@ describe("loginOpenAICodexDeviceCode", () => {
       const deviceTokenRequest = fetchCall(fetchMock, 1);
       expect(deviceTokenRequest[0]).toBe("https://auth.openai.com/api/accounts/deviceauth/token");
       expect(deviceTokenRequest[1]?.method).toBe("POST");
+      expect(deviceTokenRequest[1]?.signal).toBeInstanceOf(AbortSignal);
       expect(deviceTokenRequest[1]?.headers).toEqual({
         "Content-Type": "application/json",
         originator: "openclaw",
@@ -128,6 +262,7 @@ describe("loginOpenAICodexDeviceCode", () => {
       const oauthTokenRequest = fetchCall(fetchMock, 3);
       expect(oauthTokenRequest[0]).toBe("https://auth.openai.com/oauth/token");
       expect(oauthTokenRequest[1]?.method).toBe("POST");
+      expect(oauthTokenRequest[1]?.signal).toBeInstanceOf(AbortSignal);
       expect(oauthTokenRequest[1]?.headers).toEqual({
         "Content-Type": "application/x-www-form-urlencoded",
         originator: "openclaw",
@@ -151,6 +286,55 @@ describe("loginOpenAICodexDeviceCode", () => {
       vi.useRealTimers();
       vi.unstubAllEnvs();
     }
+  });
+
+  it("retries a timed-out authorization poll within the overall device deadline", async () => {
+    vi.useFakeTimers();
+    const accessToken = createJwt({
+      exp: Math.floor(Date.now() / 1000) + 600,
+    });
+    let pollAttempts = 0;
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.endsWith("/api/accounts/deviceauth/usercode")) {
+        return createJsonResponse({
+          device_auth_id: "device-auth-123",
+          user_code: "CODE-12345",
+          interval: "0",
+        });
+      }
+      if (url.endsWith("/api/accounts/deviceauth/token")) {
+        pollAttempts += 1;
+        if (pollAttempts === 1) {
+          return await waitForFetchAbort(init);
+        }
+        return createJsonResponse({
+          authorization_code: "authorization-code-123",
+          code_verifier: "code-verifier-123",
+        });
+      }
+      if (url.endsWith("/oauth/token")) {
+        return createJsonResponse({
+          access_token: accessToken,
+          refresh_token: "refresh-token-123",
+          expires_in: 600,
+        });
+      }
+      throw new Error(`unexpected OpenAI device-code URL: ${url}`);
+    });
+
+    const login = loginOpenAICodexDeviceCode({
+      fetchFn: fetchMock,
+      onVerification: async () => {},
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pollAttempts).toBe(1);
+
+    const resolved = expect(login).resolves.toMatchObject({ refresh: "refresh-token-123" });
+    await vi.advanceTimersByTimeAsync(30_000);
+    await resolved;
+    expect(pollAttempts).toBe(2);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
   it("aborts device-code polling without another request", async () => {

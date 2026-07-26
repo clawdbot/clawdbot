@@ -40,7 +40,12 @@ describe("POSIX process tree metrics", () => {
     expect(readProcessTreeCpuMs(102)).toBe(62_000);
     expect(readProcessTreeCpuMs(103)).toBe(3_723_450);
     expect(readProcessTreeCpuMs(104)).toBe(93_784_500);
-    expect(spawnSyncMock.mock.calls[0]?.slice(0, 2)).toEqual(["ps", ["-eo", "pid=,ppid=,time="]]);
+    expect(spawnSyncMock).toHaveBeenCalledWith("ps", ["-eo", "pid=,ppid=,time="], {
+      encoding: "utf8",
+      killSignal: "SIGKILL",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5_000,
+    });
   });
 
   it("rejects malformed ps CPU time strings", () => {
@@ -69,7 +74,12 @@ describe("POSIX process tree metrics", () => {
 
     expect(readProcessTreeRssBytes(100)).toBe(1_048_576);
     expect(readProcessTreeRssBytes(101)).toBe(1_536);
-    expect(spawnSyncMock.mock.calls[0]?.slice(0, 2)).toEqual(["ps", ["-eo", "pid=,ppid=,rss="]]);
+    expect(spawnSyncMock).toHaveBeenCalledWith("ps", ["-eo", "pid=,ppid=,rss="], {
+      encoding: "utf8",
+      killSignal: "SIGKILL",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5_000,
+    });
   });
 
   it("rejects malformed ps RSS values", () => {

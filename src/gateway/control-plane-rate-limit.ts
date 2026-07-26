@@ -3,13 +3,13 @@
 import { normalizeControlPlaneIdentityPart } from "./control-plane-identity.js";
 import type { GatewayClient } from "./server-methods/types.js";
 
-const CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS = 3;
-const CONTROL_PLANE_RATE_LIMIT_WINDOW_MS = 60_000;
+export const CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS = 30;
+export const CONTROL_PLANE_RATE_LIMIT_WINDOW_MS = 60_000;
 const CONTROL_PLANE_BUCKET_MAX_STALE_MS = 5 * 60_000;
 /** Hard cap to prevent memory DoS from rapid unique-key injection (CWE-400). */
 const CONTROL_PLANE_BUCKET_MAX_ENTRIES = 10_000;
 
-/** Sliding-window counter keyed by device/IP identity for write-side control RPCs. */
+/** Sliding-window counter keyed by method and device/IP identity for write-side control RPCs. */
 type Bucket = {
   count: number;
   windowStartMs: number;
@@ -34,6 +34,7 @@ function resolveControlPlaneRateLimitKey(client: GatewayClient | null): string {
 /** Consumes one write budget unit and reports retry state for gateway error responses. */
 export function consumeControlPlaneWriteBudget(params: {
   client: GatewayClient | null;
+  method: string;
   nowMs?: number;
 }): {
   allowed: boolean;
@@ -42,7 +43,7 @@ export function consumeControlPlaneWriteBudget(params: {
   key: string;
 } {
   const nowMs = params.nowMs ?? Date.now();
-  const key = resolveControlPlaneRateLimitKey(params.client);
+  const key = `${params.method}|${resolveControlPlaneRateLimitKey(params.client)}`;
   const bucket = controlPlaneBuckets.get(key);
 
   if (!bucket || nowMs - bucket.windowStartMs >= CONTROL_PLANE_RATE_LIMIT_WINDOW_MS) {

@@ -7,7 +7,7 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import type { SessionEntry } from "./types.js";
 
-type SessionStatusDatabase = Pick<OpenClawAgentKyselyDatabase, "session_entries">;
+type SessionStatusDatabase = Pick<OpenClawAgentKyselyDatabase, "session_nodes">;
 
 export function normalizeSqliteStatus(value: unknown): SessionEntryStatus | null {
   return value === "running" ||
@@ -22,9 +22,11 @@ export function normalizeSqliteStatus(value: unknown): SessionEntryStatus | null
 export function parseSqliteSessionEntryJson(row: { entry_json: string }): SessionEntry | null {
   try {
     const parsed = JSON.parse(row.entry_json) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as SessionEntry)
-      : null;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    const entry = parsed as Partial<SessionEntry>;
+    return typeof entry.sessionId === "string" ? (entry as SessionEntry) : null;
   } catch {
     return null;
   }
@@ -42,8 +44,8 @@ export function readSqliteSessionEntriesByStatus(
   }
   const db = getNodeSqliteKysely<SessionStatusDatabase>(database.db);
   let query = db
-    .selectFrom("session_entries")
-    .select(["session_key", "entry_json", "session_id", "updated_at"])
+    .selectFrom("session_nodes")
+    .select(["session_key", "entry_json", "current_session_id", "updated_at"])
     .where("status", "in", selectedStatuses);
   if (selectedSessionKeys) {
     query = query.where("session_key", "in", selectedSessionKeys);

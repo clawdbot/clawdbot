@@ -45,11 +45,6 @@ function recordArgsHash(toolName: string, params: unknown): string {
 
 const enabledLoopDetectionConfig: ToolLoopDetectionConfig = { enabled: true };
 
-const shortHistoryLoopConfig: ToolLoopDetectionConfig = {
-  enabled: true,
-  historySize: 4,
-};
-
 function recordSuccessfulCall(
   state: SessionState,
   toolName: string,
@@ -310,17 +305,6 @@ describe("tool-loop-detection", () => {
 
       expect(state.toolCallHistory?.[0]?.runId).toBe("run-1");
     });
-
-    it("respects configured historySize", () => {
-      const state = createState();
-
-      for (let i = 0; i < 10; i += 1) {
-        recordToolCall(state, "tool", { iteration: i }, `call-${i}`, shortHistoryLoopConfig);
-      }
-
-      expect(state.toolCallHistory).toHaveLength(4);
-      expect(state.toolCallHistory?.[0]?.argsHash).toBe(recordArgsHash("tool", { iteration: 6 }));
-    });
   });
 
   describe("detectToolCallLoop", () => {
@@ -443,73 +427,6 @@ describe("tool-loop-detection", () => {
       }
     });
 
-    it("applies custom thresholds when detection is enabled", () => {
-      const state = createState();
-      const { params, result } = createNoProgressPollFixture("sess-custom");
-      const config: ToolLoopDetectionConfig = {
-        enabled: true,
-        warningThreshold: 2,
-        criticalThreshold: 4,
-        detectors: {
-          genericRepeat: false,
-          knownPollNoProgress: true,
-          pingPong: false,
-        },
-      };
-
-      recordRepeatedSuccessfulCalls({
-        state,
-        toolName: "process",
-        toolParams: params,
-        result,
-        count: 2,
-      });
-      const warningResult = detectToolCallLoop(state, "process", params, config);
-      expect(warningResult.stuck).toBe(true);
-      if (warningResult.stuck) {
-        expect(warningResult.level).toBe("warning");
-      }
-
-      recordRepeatedSuccessfulCalls({
-        state,
-        toolName: "process",
-        toolParams: params,
-        result,
-        count: 2,
-        startIndex: 2,
-      });
-      const criticalResult = detectToolCallLoop(state, "process", params, config);
-      expect(criticalResult.stuck).toBe(true);
-      if (criticalResult.stuck) {
-        expect(criticalResult.level).toBe("critical");
-        expect(criticalResult.detector).toBe("known_poll_no_progress");
-      }
-    });
-
-    it("can disable specific detectors", () => {
-      const state = createState();
-      const { params, result } = createNoProgressPollFixture("sess-no-detectors");
-      const config: ToolLoopDetectionConfig = {
-        enabled: true,
-        detectors: {
-          genericRepeat: false,
-          knownPollNoProgress: false,
-          pingPong: false,
-        },
-      };
-
-      recordRepeatedSuccessfulCalls({
-        state,
-        toolName: "process",
-        toolParams: params,
-        result,
-        count: CRITICAL_THRESHOLD,
-      });
-
-      const loopResult = detectToolCallLoop(state, "process", params, config);
-      expect(loopResult.stuck).toBe(false);
-    });
-
     it("warns for known polling no-progress loops", () => {
       const { params, result } = createNoProgressPollFixture("sess-1");
       const loopResult = detectLoopAfterRepeatedCalls({
@@ -565,10 +482,7 @@ describe("tool-loop-detection", () => {
         toolParams: fixture.params,
         result: fixture.result,
         count: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
-        config: {
-          enabled: true,
-          detectors: { genericRepeat: false, knownPollNoProgress: true, pingPong: true },
-        },
+        config: enabledLoopDetectionConfig,
       });
       expect(loopResult.stuck).toBe(true);
       if (loopResult.stuck) {
@@ -866,7 +780,7 @@ describe("tool-loop-detection", () => {
 
     it("returns the recorded call when a pre-recorded tool call receives its result", () => {
       const state = createState();
-      const params = { action: "lookup", path: "cron.maxConcurrentRuns" };
+      const params = { action: "lookup", path: "cron.enabled" };
 
       recordToolCall(state, "gateway", params, "call-1");
 

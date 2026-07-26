@@ -17,6 +17,7 @@ import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-co
 import {
   getDiagnosticSessionActivitySnapshot,
   resetDiagnosticRunActivityForTest,
+  startDiagnosticRunActivityTracking,
 } from "../../../logging/diagnostic-run-activity.js";
 import {
   initializeGlobalHookRunner,
@@ -140,6 +141,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
   beforeEach(() => {
     resetDiagnosticEventsForTest();
     resetDiagnosticRunActivityForTest();
+    startDiagnosticRunActivityTracking();
     resetGlobalHookRunner();
   });
 
@@ -215,6 +217,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expect(startedEvent.model).toBe("gpt-5.4");
     expect(startedEvent.api).toBe("openai-responses");
     expect(startedEvent.transport).toBe("http");
+    expect(startedEvent.observationUnit).toBe("request");
     expect(events[0]?.trace?.parentSpanId).toBe("00f067aa0ba902b7");
     const completedEvent = getEvent(events, 1);
     expect(completedEvent.type).toBe("model.call.completed");
@@ -1214,6 +1217,44 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expect(Object.isFrozen(startedCtx)).toBe(true);
     expect(Object.isFrozen(startedCtx.trace)).toBe(true);
     expect(JSON.stringify([started.mock.calls, ended.mock.calls])).not.toContain(secretChunk);
+  });
+
+  it("keeps core model-call diagnostics while suppressing finalization plugin hooks", async () => {
+    const started = vi.fn();
+    const ended = vi.fn();
+    const { registry } = createHookRunnerWithRegistry([
+      { hookName: "model_call_started", handler: started },
+      { hookName: "model_call_ended", handler: ended },
+    ]);
+    initializeGlobalHookRunner(registry);
+    async function* stream() {
+      yield { type: "text", text: "final answer" };
+    }
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => stream()) as unknown as StreamFn,
+      {
+        runId: "run-finalization",
+        provider: "openai",
+        model: "gpt-5.4",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-finalization",
+        suppressPluginHooks: true,
+      },
+    );
+
+    const events = await collectModelCallEvents(async () => {
+      await drain(wrapped({} as never, {} as never, {} as never) as AsyncIterable<unknown>);
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(events.map((event) => event.type)).toEqual([
+      "model.call.started",
+      "model.call.completed",
+    ]);
+    expect(started).not.toHaveBeenCalled();
+    expect(ended).not.toHaveBeenCalled();
   });
 
   it("emits completed events when stream consumption stops early", async () => {

@@ -6,7 +6,7 @@ metadata:
     "openclaw":
       {
         "emoji": "📊",
-        "os": ["darwin"],
+        "os": ["darwin", "linux"],
         "requires": { "bins": ["codexbar"] },
         "install":
           [
@@ -15,7 +15,7 @@ metadata:
               "kind": "brew",
               "formula": "steipete/tap/codexbar",
               "bins": ["codexbar"],
-              "label": "Install CodexBar (brew cask)",
+              "label": "Install CodexBar CLI (Homebrew)",
             },
           ],
       },
@@ -28,7 +28,7 @@ metadata:
 
 Get per-model usage cost from CodexBar's local cost logs. Supports "current model" (most recent daily entry) or "all models" summaries for Codex or Claude.
 
-Live CodexBar CLI invocation is currently documented for macOS only. The bundled Python summarizer is portable: if you already have exported CodexBar JSON, `--input` mode works anywhere Python is available.
+CodexBar ships CLI builds for macOS and Linux. When `codexbar` is on `PATH`, the skill reads local usage directly; the bundled Python summarizer also accepts exported CodexBar JSON through `--input` anywhere Python is available.
 
 ## Quick start
 
@@ -51,8 +51,8 @@ python {baseDir}/scripts/model_usage.py --provider claude --mode all --format js
 ## Inputs
 
 - Default: runs `codexbar cost --format json --provider <codex|claude>`.
-- macOS: use the bundled CodexBar CLI install path above for live local usage reads.
-- Linux/other platforms: use `--input` with exported CodexBar JSON until this skill documents a supported local CodexBar install path for that platform.
+- macOS and Linux: use the bundled Homebrew formula installer above for live local usage reads. Linux users can also use CodexBar's [AUR package](https://aur.archlinux.org/packages/codexbar-cli) or [official release tarballs](https://github.com/steipete/CodexBar/releases).
+- Other platforms: use `--input` with exported CodexBar JSON.
 - File or stdin:
 
 ```bash

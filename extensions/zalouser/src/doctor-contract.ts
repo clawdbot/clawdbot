@@ -4,14 +4,11 @@ import type {
   ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-
-type ZalouserChannelsConfig = NonNullable<OpenClawConfig["channels"]>;
-
-function asObjectRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
+import {
+  asObjectRecord,
+  hasLegacyAccountStreamingAliases,
+  normalizeChannelConfigEntries,
+} from "openclaw/plugin-sdk/runtime-doctor";
 
 function hasLegacyZalouserGroupAllowAlias(value: unknown): boolean {
   const group = asObjectRecord(value);
@@ -23,17 +20,6 @@ function hasLegacyZalouserGroupAllowAliases(value: unknown): boolean {
   return Boolean(
     groups && Object.values(groups).some((group) => hasLegacyZalouserGroupAllowAlias(group)),
   );
-}
-
-function hasLegacyZalouserAccountGroupAllowAliases(value: unknown): boolean {
-  const accounts = asObjectRecord(value);
-  if (!accounts) {
-    return false;
-  }
-  return Object.values(accounts).some((account) => {
-    const accountRecord = asObjectRecord(account);
-    return Boolean(accountRecord && hasLegacyZalouserGroupAllowAliases(accountRecord.groups));
-  });
 }
 
 function normalizeZalouserGroupAllowAliases(params: {
@@ -62,77 +48,23 @@ function normalizeZalouserGroupAllowAliases(params: {
   return { groups: nextGroups, changed };
 }
 
-function normalizeZalouserCompatibilityConfig(cfg: OpenClawConfig): ChannelDoctorConfigMutation {
-  const channels = asObjectRecord(cfg.channels);
-  const zalouser = asObjectRecord(channels?.zalouser);
-  if (!zalouser) {
-    return { config: cfg, changes: [] };
+function normalizeZalouserEntry(params: {
+  entry: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+}): { entry: Record<string, unknown>; changed: boolean } {
+  const groups = asObjectRecord(params.entry.groups);
+  if (!groups) {
+    return { entry: params.entry, changed: false };
   }
-
-  const changes: string[] = [];
-  let updatedZalouser: Record<string, unknown> = zalouser;
-  let changed = false;
-
-  const groups = asObjectRecord(updatedZalouser.groups);
-  if (groups) {
-    const normalized = normalizeZalouserGroupAllowAliases({
-      groups,
-      pathPrefix: "channels.zalouser.groups",
-      changes,
-    });
-    if (normalized.changed) {
-      updatedZalouser = { ...updatedZalouser, groups: normalized.groups };
-      changed = true;
-    }
-  }
-
-  const accounts = asObjectRecord(updatedZalouser.accounts);
-  if (accounts) {
-    let accountsChanged = false;
-    const nextAccounts: Record<string, unknown> = { ...accounts };
-    for (const [accountId, accountValue] of Object.entries(accounts)) {
-      const account = asObjectRecord(accountValue);
-      if (!account) {
-        continue;
-      }
-      const accountGroups = asObjectRecord(account.groups);
-      if (!accountGroups) {
-        continue;
-      }
-      const normalized = normalizeZalouserGroupAllowAliases({
-        groups: accountGroups,
-        pathPrefix: `channels.zalouser.accounts.${accountId}.groups`,
-        changes,
-      });
-      if (!normalized.changed) {
-        continue;
-      }
-      nextAccounts[accountId] = {
-        ...account,
-        groups: normalized.groups,
-      };
-      accountsChanged = true;
-    }
-    if (accountsChanged) {
-      updatedZalouser = { ...updatedZalouser, accounts: nextAccounts };
-      changed = true;
-    }
-  }
-
-  if (!changed) {
-    return { config: cfg, changes: [] };
-  }
-
-  return {
-    config: {
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        zalouser: updatedZalouser as ZalouserChannelsConfig["zalouser"],
-      },
-    },
-    changes,
-  };
+  const normalized = normalizeZalouserGroupAllowAliases({
+    groups,
+    pathPrefix: `${params.pathPrefix}.groups`,
+    changes: params.changes,
+  });
+  return normalized.changed
+    ? { entry: { ...params.entry, groups: normalized.groups }, changed: true }
+    : { entry: params.entry, changed: false };
 }
 
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
@@ -146,12 +78,19 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
     path: ["channels", "zalouser", "accounts"],
     message:
       'channels.zalouser.accounts.<id>.groups.<id>.allow is legacy; use channels.zalouser.accounts.<id>.groups.<id>.enabled instead. Run "openclaw doctor --fix".',
-    match: hasLegacyZalouserAccountGroupAllowAliases,
+    match: (value) =>
+      hasLegacyAccountStreamingAliases(value, (account) =>
+        hasLegacyZalouserGroupAllowAliases(asObjectRecord(account)?.groups),
+      ),
   },
 ];
 
 export function normalizeCompatibilityConfig(params: {
   cfg: OpenClawConfig;
 }): ChannelDoctorConfigMutation {
-  return normalizeZalouserCompatibilityConfig(params.cfg);
+  return normalizeChannelConfigEntries({
+    cfg: params.cfg,
+    channelId: "zalouser",
+    normalizeEntry: normalizeZalouserEntry,
+  });
 }

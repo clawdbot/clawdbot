@@ -4,6 +4,16 @@
   "glossaryHash": "47cf80de6cebb6ba1ac7a0bfd60e96de12a8611785bae9ca4f82c14912db9bd1",
   "entries": [
     {
+      "id": "native.android.8a2fec00ed1d71b5",
+      "source": "I can check Gateway status, repair configuration, change models, or connect channels.",
+      "translated": "我可以检查 Gateway 状态、修复配置、更换模型或连接频道。"
+    },
+    {
+      "id": "native.android.53ec61863e575d82",
+      "source": "I’ll keep this conversation separate from ordinary agent chat.",
+      "translated": "我会将此对话与普通的智能体聊天分开保存。"
+    },
+    {
       "id": "native.android.85cc8de945e3929c",
       "source": "OpenClaw translations · $languageTag",
       "translated": "OpenClaw 翻译 · $languageTag"
@@ -77,6 +87,21 @@
       "id": "native.android.2cd9aa29e06cf1cc",
       "source": "Command",
       "translated": "命令"
+    },
+    {
+      "id": "native.android.83c33792ce758e6b",
+      "source": "Timeout ${it}s",
+      "translated": "超时 ${it} 秒"
+    },
+    {
+      "id": "native.android.bb754576303ae39a",
+      "source": "$it tools",
+      "translated": "$it 个工具"
+    },
+    {
+      "id": "native.android.43528ba5a11e44fd",
+      "source": "Script",
+      "translated": "脚本"
     },
     {
       "id": "native.android.09e08fc62e2902fc",
@@ -459,6 +484,21 @@
       "translated": "无法处理批准。请刷新后重试。"
     },
     {
+      "id": "native.android.ab7de09b2e9bafd2",
+      "source": "Device approved.",
+      "translated": "设备已批准。"
+    },
+    {
+      "id": "native.android.0f3b1e2ce6f0aed5",
+      "source": "Pairing request rejected.",
+      "translated": "配对请求已拒绝。"
+    },
+    {
+      "id": "native.android.e98062fe81b36c4a",
+      "source": "Paired device removed.",
+      "translated": "已移除配对设备。"
+    },
+    {
       "id": "native.android.5cf2b6b55ea97b67",
       "source": "Proposal applied.",
       "translated": "提案已应用。"
@@ -804,6 +844,11 @@
       "translated": "连接 Gateway 以更新 Skill Workshop 提案。"
     },
     {
+      "id": "native.android.9481b642ee32ed95",
+      "source": "Could not verify the device pairing change. Refresh and try again.",
+      "translated": "无法验证设备配对变更。请刷新后重试。"
+    },
+    {
       "id": "native.android.21445608d791c302",
       "source": "Connected",
       "translated": "已连接"
@@ -1104,11 +1149,6 @@
       "translated": "无法准备待发送的附件。"
     },
     {
-      "id": "native.android.0b29275eefad9863",
-      "source": "Could not queue message for later delivery.",
-      "translated": "无法将消息加入队列以供稍后发送。"
-    },
-    {
       "id": "native.android.c3899241029d152c",
       "source": "Offline queue is full ($OUTBOX_MAX_QUEUED messages); delete queued items first.",
       "translated": "离线队列已满（$OUTBOX_MAX_QUEUED 条消息）；请先删除队列中的项目。"
@@ -1127,6 +1167,11 @@
       "id": "native.android.84af66e78ec02fa3",
       "source": "Gateway health not OK; cannot send",
       "translated": "Gateway 运行状况异常；无法发送"
+    },
+    {
+      "id": "native.android.0b29275eefad9863",
+      "source": "Could not queue message for later delivery.",
+      "translated": "无法将消息加入队列以供稍后发送。"
     },
     {
       "id": "native.android.8c2ff49af3e78aee",
@@ -1189,9 +1234,24 @@
       "translated": "OpenClaw 活跃"
     },
     {
-      "id": "native.android.f7a4f3bbcb0b2090",
-      "source": "${firstLine.take(157)}…",
-      "translated": "${firstLine.take(157)}…"
+      "id": "native.android.2aa3ad1a12683954",
+      "source": "Skip for now",
+      "translated": "暂时跳过"
+    },
+    {
+      "id": "native.android.9fa262fa4e057a3b",
+      "source": "<redacted secret>",
+      "translated": "<redacted secret>"
+    },
+    {
+      "id": "native.android.e1a8681198e91766",
+      "source": "OpenClaw request failed.",
+      "translated": "OpenClaw 请求失败。"
+    },
+    {
+      "id": "native.android.a71a93ec69cee4d9",
+      "source": "The Gateway connection changed. Restart OpenClaw to reconnect.",
+      "translated": "Gateway 连接已更改。请重启 OpenClaw 以重新连接。"
     },
     {
       "id": "native.android.356609f717b92350",
@@ -1414,8 +1474,8 @@
       "translated": "与 OpenClaw 交谈或向其听写"
     },
     {
-      "id": "native.android.5876e15e5e92fd45",
-      "source": "Browse Sessions",
+      "id": "native.android.e2cf5a38587382cb",
+      "source": "Browse Threads",
       "translated": "浏览会话"
     },
     {
@@ -1469,24 +1529,24 @@
       "translated": "未找到操作"
     },
     {
-      "id": "native.android.48ad0ae0e930e02b",
-      "source": "Try Chat, Voice, Sessions, Providers, or Settings.",
-      "translated": "尝试聊天、语音、会话、提供商或设置。"
+      "id": "native.android.bc70a4ac965b82ba",
+      "source": "Try Chat, Voice, Threads, Providers, or Settings.",
+      "translated": "试试聊天、语音、会话、提供商或设置。"
     },
     {
-      "id": "native.android.d4fbd1ee4f55a5db",
-      "source": "Sessions",
+      "id": "native.android.670121e54dbe286f",
+      "source": "Threads",
       "translated": "会话"
     },
     {
-      "id": "native.android.207c2170504e99e6",
-      "source": "Connect the Gateway to search sessions.",
+      "id": "native.android.d38be650b1bce4a0",
+      "source": "Connect the Gateway to search threads.",
       "translated": "连接 Gateway 以搜索会话。"
     },
     {
-      "id": "native.android.25d2c2d792c952fe",
-      "source": "No matching sessions yet.",
-      "translated": "尚无匹配的会话。"
+      "id": "native.android.3d7754721f776ef8",
+      "source": "No matching threads yet.",
+      "translated": "暂无匹配的会话。"
     },
     {
       "id": "native.android.1d009aa9b54d689d",
@@ -1494,13 +1554,13 @@
       "translated": "助手正在工作"
     },
     {
-      "id": "native.android.8f8384286317f5c9",
-      "source": "OpenClaw session",
+      "id": "native.android.9a839f6e3e05a744",
+      "source": "OpenClaw thread",
       "translated": "OpenClaw 会话"
     },
     {
-      "id": "native.android.15799e57704b20c6",
-      "source": "Open session",
+      "id": "native.android.d83f82a1e4a5ed99",
+      "source": "Open thread",
       "translated": "打开会话"
     },
     {
@@ -1524,8 +1584,8 @@
       "translated": "没有就绪的提供方"
     },
     {
-      "id": "native.android.73e6ab1a168fd381",
-      "source": "Main session",
+      "id": "native.android.8a1c5365c0538908",
+      "source": "Main thread",
       "translated": "主会话"
     },
     {
@@ -1547,6 +1607,11 @@
       "id": "native.android.28416620013afa41",
       "source": "${days}d",
       "translated": "${days}天"
+    },
+    {
+      "id": "native.android.936714892af1b0f9",
+      "source": ":${uri.port}",
+      "translated": ":${uri.port}"
     },
     {
       "id": "native.android.c4a902430c22030c",
@@ -1824,6 +1889,16 @@
       "translated": "Gateway 可以更改此路径，但无法清除现有路径。"
     },
     {
+      "id": "native.android.d9c4873f21d6d410",
+      "source": "Script",
+      "translated": "脚本"
+    },
+    {
+      "id": "native.android.79ac1e41ef639f65",
+      "source": "Script payloads are preserved unchanged. Use the CLI to edit this script.",
+      "translated": "脚本载荷将保持不变。请使用 CLI 编辑此脚本。"
+    },
+    {
       "id": "native.android.b0de849068a82211",
       "source": "Recent Runs",
       "translated": "最近运行"
@@ -1882,6 +1957,11 @@
       "id": "native.android.09bb59bcf0c7e009",
       "source": "Command",
       "translated": "命令"
+    },
+    {
+      "id": "native.android.2e2395bd65d3a411",
+      "source": "Script · read-only",
+      "translated": "脚本 · 只读"
     },
     {
       "id": "native.android.54465889774765e9",
@@ -2434,6 +2514,91 @@
       "translated": "已配对设备"
     },
     {
+      "id": "native.android.8c6f23f9b2a2f5c3",
+      "source": "Approve device?",
+      "translated": "批准设备？"
+    },
+    {
+      "id": "native.android.61e56e7c2425c765",
+      "source": "Reject pairing request?",
+      "translated": "拒绝配对请求？"
+    },
+    {
+      "id": "native.android.a233e379d3281626",
+      "source": "Remove paired device?",
+      "translated": "移除配对设备？"
+    },
+    {
+      "id": "native.android.84789f373ff7e379",
+      "source": "Verify this requesting device before granting access.",
+      "translated": "授予访问权限前，请验证发出请求的设备。"
+    },
+    {
+      "id": "native.android.80f2666384538867",
+      "source": "$label: $value",
+      "translated": "$label：$value"
+    },
+    {
+      "id": "native.android.857fc6dbd43c147c",
+      "source": "Reject the pairing request from this device?",
+      "translated": "拒绝来自此设备的配对请求？"
+    },
+    {
+      "id": "native.android.a0cb7097dac32274",
+      "source": "This device will lose its trusted Gateway access.",
+      "translated": "此设备将失去其受信任的 Gateway 访问权限。"
+    },
+    {
+      "id": "native.android.d62bd835e46f047f",
+      "source": "Cancel",
+      "translated": "取消"
+    },
+    {
+      "id": "native.android.54bc27d84e77fdeb",
+      "source": "Name",
+      "translated": "名称"
+    },
+    {
+      "id": "native.android.549fcca19ab575e8",
+      "source": "Device ID",
+      "translated": "设备 ID"
+    },
+    {
+      "id": "native.android.0a2b46e9ba9a43a7",
+      "source": "Public key",
+      "translated": "公钥"
+    },
+    {
+      "id": "native.android.3029d9b112d91460",
+      "source": "Platform",
+      "translated": "平台"
+    },
+    {
+      "id": "native.android.34495d4163dd2b0d",
+      "source": "Client",
+      "translated": "客户端"
+    },
+    {
+      "id": "native.android.9d5173f45aa99bc9",
+      "source": "Origin",
+      "translated": "来源"
+    },
+    {
+      "id": "native.android.1690971a387e62fa",
+      "source": "Remote IP",
+      "translated": "远程 IP"
+    },
+    {
+      "id": "native.android.e478d6d87813a30a",
+      "source": "Roles",
+      "translated": "角色"
+    },
+    {
+      "id": "native.android.d390e77c38097584",
+      "source": "Scopes",
+      "translated": "权限范围"
+    },
+    {
       "id": "native.android.f87fa5da40b7f94f",
       "source": "New device",
       "translated": "新设备"
@@ -2449,9 +2614,24 @@
       "translated": "审核"
     },
     {
+      "id": "native.android.caa6c7dea18d5127",
+      "source": "Reject",
+      "translated": "拒绝"
+    },
+    {
+      "id": "native.android.ef8a2c38eba42e89",
+      "source": "Approve",
+      "translated": "批准"
+    },
+    {
       "id": "native.android.36735662df3e8ab2",
       "source": "Paired device",
       "translated": "已配对设备"
+    },
+    {
+      "id": "native.android.ce8e5c5a934ed2aa",
+      "source": "Remove",
+      "translated": "移除"
     },
     {
       "id": "native.android.e274308654ddc04b",
@@ -2509,9 +2689,9 @@
       "translated": "功能未批准"
     },
     {
-      "id": "native.android.13024ff403917bfe",
-      "source": "This gateway sign-in can list connected nodes, but it cannot approve new phone pairing. Pair new phones from a gateway admin session. Node capability approval is separate and still uses nodes approve <request id>.",
-      "translated": "此 Gateway 登录会话可以列出已连接的节点，但无法批准新的手机配对。请通过 Gateway 管理员会话配对新手机。节点功能批准是独立的，仍需使用 nodes approve <request id>。"
+      "id": "native.android.8b55ed05cd70b8d9",
+      "source": "Device pairing actions are unavailable in this Gateway session. Run openclaw devices list on the Gateway host and manage the request there. Node capability approval is separate and still uses nodes approve <request id>.",
+      "translated": "此 Gateway 会话中无法执行设备配对操作。请在 Gateway 主机上运行 openclaw devices list，并在那里处理请求。节点能力批准是独立操作，仍需使用 nodes approve <request id>。"
     },
     {
       "id": "native.android.0d8e9ede9c229b8e",
@@ -2609,9 +2789,29 @@
       "translated": "无法启动相机。请从图库中选择二维码图片，或手动输入设置代码。"
     },
     {
+      "id": "native.android.7a18be21a62739bf",
+      "source": "The gateway certificate could not be read automatically. Paste the SHA-256 fingerprint obtained on the gateway host.",
+      "translated": "无法自动读取 Gateway 证书。请粘贴在 Gateway 主机上获取的 SHA-256 指纹。"
+    },
+    {
+      "id": "native.android.aa489429ad39aa39",
+      "source": "This gateway now presents a certificate trusted by this device.",
+      "translated": "此 Gateway 现在提供的证书已受此设备信任。"
+    },
+    {
+      "id": "native.android.b3db82f1162808ad",
+      "source": "SHA-256 fingerprint",
+      "translated": "SHA-256 指纹"
+    },
+    {
       "id": "native.android.9ac2d4498b17d478",
       "source": "Trust",
       "translated": "信任"
+    },
+    {
+      "id": "native.android.09245320d3878458",
+      "source": "Use system trust",
+      "translated": "使用系统信任"
     },
     {
       "id": "native.android.e26ee07a1d1911be",
@@ -3544,13 +3744,33 @@
       "translated": "${tokens / 1_000}k"
     },
     {
-      "id": "native.android.0e3157c15c56944f",
-      "source": "Sessions",
+      "id": "native.android.ae8ffaf0304344ff",
+      "source": "Back",
+      "translated": "返回"
+    },
+    {
+      "id": "native.android.09fa98489fd0881b",
+      "source": "Dashboard",
+      "translated": "仪表盘"
+    },
+    {
+      "id": "native.android.285be3399daf82ee",
+      "source": "Dashboard needs a connected gateway",
+      "translated": "仪表盘需要连接 Gateway"
+    },
+    {
+      "id": "native.android.a1881da010cb4b9f",
+      "source": "Connect to your gateway to open this session dashboard.",
+      "translated": "连接到您的 Gateway 以打开此会话仪表盘。"
+    },
+    {
+      "id": "native.android.a5845742daecb4ba",
+      "source": "Threads",
       "translated": "会话"
     },
     {
-      "id": "native.android.70f5d0507d34b5c8",
-      "source": "Focus session search",
+      "id": "native.android.439b324280869527",
+      "source": "Focus thread search",
       "translated": "聚焦会话搜索"
     },
     {
@@ -3564,13 +3784,13 @@
       "translated": "已归档"
     },
     {
-      "id": "native.android.b9cf34c137e4cf03",
-      "source": "Search sessions",
+      "id": "native.android.03981341841b04ac",
+      "source": "Search threads",
       "translated": "搜索会话"
     },
     {
-      "id": "native.android.10cb26723e9990fc",
-      "source": "Clear session search",
+      "id": "native.android.99570c528a41fa72",
+      "source": "Clear thread search",
       "translated": "清除会话搜索"
     },
     {
@@ -3589,8 +3809,8 @@
       "translated": "最早优先"
     },
     {
-      "id": "native.android.c6bf8751e2a7f5c7",
-      "source": "Toggle session layout",
+      "id": "native.android.fd67be543e321cc9",
+      "source": "Toggle thread layout",
       "translated": "切换会话布局"
     },
     {
@@ -3604,13 +3824,13 @@
       "translated": "布局：详细"
     },
     {
-      "id": "native.android.69b79a3c2c987cd4",
-      "source": "Searching sessions",
+      "id": "native.android.ebd17565e0ffd8eb",
+      "source": "Searching threads",
       "translated": "正在搜索会话"
     },
     {
-      "id": "native.android.dd587d341af44212",
-      "source": "No matching sessions",
+      "id": "native.android.472d46ae8669f860",
+      "source": "No matching threads",
       "translated": "没有匹配的会话"
     },
     {
@@ -3629,18 +3849,18 @@
       "translated": "开始聊天"
     },
     {
-      "id": "native.android.f10d4df7cbc6df4f",
-      "source": "Current session",
+      "id": "native.android.ff81ad1bee00d384",
+      "source": "Current thread",
       "translated": "当前会话"
     },
     {
-      "id": "native.android.8f0482425838ae64",
-      "source": "OpenClaw session",
+      "id": "native.android.fc145645b9620e57",
+      "source": "OpenClaw thread",
       "translated": "OpenClaw 会话"
     },
     {
-      "id": "native.android.786774c8a76e50d7",
-      "source": "Rename session",
+      "id": "native.android.71cbb8dde8bf138b",
+      "source": "Rename thread",
       "translated": "重命名会话"
     },
     {
@@ -3669,19 +3889,19 @@
       "translated": "删除分组？"
     },
     {
-      "id": "native.android.3455fc2f77d564e3",
-      "source": "Sessions in \"$group\" are kept and move back to Ungrouped.",
-      "translated": "“$group”中的会话将被保留并移回未分组。"
+      "id": "native.android.691e92cfe5cf106e",
+      "source": "Threads in \"$group\" are kept and move back to Ungrouped.",
+      "translated": "“$group”中的会话将被保留并移回“未分组”。"
     },
     {
-      "id": "native.android.4805fb9d6623e8c0",
-      "source": "Delete session?",
+      "id": "native.android.d87a8217ab56999b",
+      "source": "Delete thread?",
       "translated": "删除会话？"
     },
     {
-      "id": "native.android.0c3283a2b2445eae",
-      "source": "This permanently deletes the session and its transcript.",
-      "translated": "这将永久删除该会话及其转录内容。"
+      "id": "native.android.930de97ff47113a8",
+      "source": "This permanently deletes the thread and its transcript.",
+      "translated": "这将永久删除该对话线程及其记录。"
     },
     {
       "id": "native.android.807ba5c6699af2f1",
@@ -3804,19 +4024,19 @@
       "translated": "未分组"
     },
     {
-      "id": "native.android.db243d71d056afa4",
-      "source": "No sessions yet",
-      "translated": "还没有会话"
+      "id": "native.android.8e21a70428def6e0",
+      "source": "No threads yet",
+      "translated": "暂无对话线程"
     },
     {
-      "id": "native.android.5b4eee6a8092925e",
-      "source": "No current session",
-      "translated": "没有当前会话"
+      "id": "native.android.cda4c5ad8b17e394",
+      "source": "No current thread",
+      "translated": "暂无当前对话线程"
     },
     {
-      "id": "native.android.acbcc9c9ea53d8c0",
-      "source": "No archived sessions",
-      "translated": "没有已归档会话"
+      "id": "native.android.be84f061047aa2da",
+      "source": "No archived threads",
+      "translated": "暂无已归档的对话线程"
     },
     {
       "id": "native.android.0a38a1167c6b6941",
@@ -3824,14 +4044,14 @@
       "translated": "开始新的对话后，它会显示在这里。"
     },
     {
-      "id": "native.android.56fcd605dc7be3c0",
-      "source": "Open Chat to start or resume the current session.",
-      "translated": "打开聊天以开始或继续当前会话。"
+      "id": "native.android.f289d03e1d3eee98",
+      "source": "Open Chat to start or resume the current thread.",
+      "translated": "打开聊天以开始或继续当前对话线程。"
     },
     {
-      "id": "native.android.085515989f8a2022",
-      "source": "Archived sessions will show up here.",
-      "translated": "已归档的会话将显示在这里。"
+      "id": "native.android.504b71386e76c6ae",
+      "source": "Archived threads will show up here.",
+      "translated": "已归档的对话线程将显示在此处。"
     },
     {
       "id": "native.android.2261a31153cec409",
@@ -3854,9 +4074,9 @@
       "translated": "${days}天"
     },
     {
-      "id": "native.android.3d4fa07acbc015c5",
-      "source": "Main session",
-      "translated": "主会话"
+      "id": "native.android.ee4c727cdafbe963",
+      "source": "Main thread",
+      "translated": "主对话线程"
     },
     {
       "id": "native.android.dcb7d5956029bbc4",
@@ -3994,9 +4214,9 @@
       "translated": "Gateway 待处理"
     },
     {
-      "id": "native.android.2d8d049afe99f751",
-      "source": "Session Activity",
-      "translated": "会话活动"
+      "id": "native.android.da78209effb11cfd",
+      "source": "Thread Activity",
+      "translated": "对话线程活动"
     },
     {
       "id": "native.android.5d53e328e4deb444",
@@ -4039,14 +4259,14 @@
       "translated": "当此手机连接时，Exec 批准请求将显示在此处。"
     },
     {
-      "id": "native.android.dc3e7ca5a491103a",
-      "source": "Session activity",
-      "translated": "会话活动"
+      "id": "native.android.f615712dfb56319a",
+      "source": "Thread activity",
+      "translated": "对话线程活动"
     },
     {
-      "id": "native.android.8551e02b060bd7d8",
-      "source": "Chat tool calls waiting in the active session remain visible here.",
-      "translated": "活动会话中等待处理的聊天工具调用会保留显示在此处。"
+      "id": "native.android.6c93973c13db43ae",
+      "source": "Chat tool calls waiting in the active thread remain visible here.",
+      "translated": "当前对话线程中等待处理的聊天工具调用仍会显示在此处。"
     },
     {
       "id": "native.android.fea93eda5bf97d9e",
@@ -4159,6 +4379,11 @@
       "translated": "Talk Provider 设置"
     },
     {
+      "id": "native.android.23b638094c34b916",
+      "source": "Microphone",
+      "translated": "麦克风"
+    },
+    {
       "id": "native.android.98a8bbb2b1f382e6",
       "source": "Audio Test",
       "translated": "音频测试"
@@ -4202,6 +4427,66 @@
       "id": "native.android.05bd460309ac6db6",
       "source": "Done",
       "translated": "完成"
+    },
+    {
+      "id": "native.android.8d9ecdfdd916b780",
+      "source": "Automatic",
+      "translated": "自动"
+    },
+    {
+      "id": "native.android.c1626a6700a570f6",
+      "source": "Preferred microphone unavailable; using automatic routing.",
+      "translated": "首选麦克风不可用；正在使用自动路由。"
+    },
+    {
+      "id": "native.android.820bc5d0ce571d8b",
+      "source": "Prioritizes connected Bluetooth microphones.",
+      "translated": "优先使用已连接的蓝牙麦克风。"
+    },
+    {
+      "id": "native.android.11e48038d5e8bff6",
+      "source": "Preferred microphone",
+      "translated": "首选麦克风"
+    },
+    {
+      "id": "native.android.eaa4d7563a46d307",
+      "source": "Unavailable",
+      "translated": "不可用"
+    },
+    {
+      "id": "native.android.9f5ebf17eb405ba8",
+      "source": "Next session",
+      "translated": "下次会话"
+    },
+    {
+      "id": "native.android.8c4e91f53928efb2",
+      "source": "Built-in microphone",
+      "translated": "内置麦克风"
+    },
+    {
+      "id": "native.android.14b613cb6e2446b4",
+      "source": "Bluetooth microphone",
+      "translated": "蓝牙麦克风"
+    },
+    {
+      "id": "native.android.c885247b2d7ce271",
+      "source": "Bluetooth LE microphone",
+      "translated": "Bluetooth LE 麦克风"
+    },
+    {
+      "id": "native.android.b6a4e674c5fb441a",
+      "source": "Wired headset microphone",
+      "translated": "有线耳机麦克风"
+    },
+    {
+      "id": "native.android.9c8becb3b0fb5a90",
+      "source": "USB microphone",
+      "translated": "USB 麦克风"
+    },
+    {
+      "id": "native.android.ba46258fadec7a39",
+      "source": "External microphone",
+      "translated": "外接麦克风"
     },
     {
       "id": "native.android.60cf67eb5ec46ea0",
@@ -4939,9 +5224,9 @@
       "translated": "检查"
     },
     {
-      "id": "native.android.5a540761383fa474",
-      "source": "OpenClaw turns this phone into a clean mobile command surface for sessions, voice, providers, and Gateway.",
-      "translated": "OpenClaw 将此手机变成一个简洁的移动命令界面，用于管理会话、语音、提供商和 Gateway。"
+      "id": "native.android.c971506716c96e91",
+      "source": "OpenClaw turns this phone into a clean mobile command surface for threads, voice, providers, and Gateway.",
+      "translated": "OpenClaw 将此手机变成简洁的移动命令界面，用于管理会话、语音、提供商和 Gateway。"
     },
     {
       "id": "native.android.3a3bea53e6a6ada7",
@@ -5304,6 +5589,11 @@
       "translated": "命令"
     },
     {
+      "id": "native.android.8aed9c94ef7f917f",
+      "source": "Script",
+      "translated": "脚本"
+    },
+    {
       "id": "native.android.f36439e78187c554",
       "source": "Payload Text",
       "translated": "负载文本"
@@ -5374,9 +5664,34 @@
       "translated": "首页"
     },
     {
+      "id": "native.android.d5b302e1a7695a7a",
+      "source": "Dashboard",
+      "translated": "仪表盘"
+    },
+    {
       "id": "native.android.30d8b822fa68d6c4",
       "source": "Close Canvas",
       "translated": "关闭 Canvas"
+    },
+    {
+      "id": "native.android.846fe5afd08b8089",
+      "source": "The gateway certificate could not be read automatically. Paste the SHA-256 fingerprint obtained on the gateway host.",
+      "translated": "无法自动读取 Gateway 证书。请粘贴在 Gateway 主机上获取的 SHA-256 指纹。"
+    },
+    {
+      "id": "native.android.b263dca13f55dad9",
+      "source": "This gateway now presents a certificate trusted by this device.",
+      "translated": "此 Gateway 现在提供的证书已受此设备信任。"
+    },
+    {
+      "id": "native.android.dca0f8814b658170",
+      "source": "SHA-256 fingerprint",
+      "translated": "SHA-256 指纹"
+    },
+    {
+      "id": "native.android.bb5d50fcdd5ebafe",
+      "source": "Use system trust",
+      "translated": "使用系统信任"
     },
     {
       "id": "native.android.3d83e0755437a5f9",
@@ -5469,9 +5784,9 @@
       "translated": "对话设置"
     },
     {
-      "id": "native.android.73f07a5d54915259",
-      "source": "Recent Sessions",
-      "translated": "最近会话"
+      "id": "native.android.36f78c8c85dc283f",
+      "source": "Recent Threads",
+      "translated": "最近的会话"
     },
     {
       "id": "native.android.e7e2862bffbd0706",
@@ -5529,14 +5844,14 @@
       "translated": "${nodeOnlinePercent(onlineNodes = onlineNodes, nodeCount = nodeCount)}% 在线"
     },
     {
-      "id": "native.android.16c3425d3a594481",
-      "source": "Sessions",
+      "id": "native.android.57177017a6a93826",
+      "source": "Threads",
       "translated": "会话"
     },
     {
-      "id": "native.android.a5c0f8b3112aa58c",
-      "source": "No recent sessions",
-      "translated": "没有最近会话"
+      "id": "native.android.43320b54a68b00a1",
+      "source": "No recent threads",
+      "translated": "没有最近的会话"
     },
     {
       "id": "native.android.7178756ffe9e4c72",
@@ -5574,14 +5889,14 @@
       "translated": "工作中 · $pendingRunCount 个活跃运行"
     },
     {
-      "id": "native.android.2c89da708b12a522",
-      "source": "Monitoring · 1 session",
-      "translated": "监控中 · 1 个会话"
+      "id": "native.android.e24db059480f1e6a",
+      "source": "Monitoring · 1 thread",
+      "translated": "正在监控 · 1 个会话"
     },
     {
-      "id": "native.android.8b6ee382dcb64e1f",
-      "source": "Monitoring · $sessionCount sessions",
-      "translated": "监控中 · $sessionCount 个会话"
+      "id": "native.android.5a475f37d80e02bc",
+      "source": "Monitoring · $sessionCount threads",
+      "translated": "正在监控 · $sessionCount 个会话"
     },
     {
       "id": "native.android.50f3b7af0428311c",
@@ -5592,11 +5907,6 @@
       "id": "native.android.2e35dbe0b1999368",
       "source": "Monitoring · $cronJobCount scheduled jobs",
       "translated": "监控中 · $cronJobCount 个计划任务"
-    },
-    {
-      "id": "native.android.4f369a09c8731092",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
     },
     {
       "id": "native.android.b5ee8fce135f41e6",
@@ -5614,8 +5924,8 @@
       "translated": "提供商"
     },
     {
-      "id": "native.android.a65477861c7203aa",
-      "source": "Open session",
+      "id": "native.android.358c5e0e838d5423",
+      "source": "Open thread",
       "translated": "打开会话"
     },
     {
@@ -5662,6 +5972,16 @@
       "id": "native.android.7b1f86aeacad732c",
       "source": "Load from gateway",
       "translated": "从 Gateway 加载"
+    },
+    {
+      "id": "native.android.4f369a09c8731092",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.android.4878165188c0310c",
+      "source": "Setup, status, and repair",
+      "translated": "设置、状态和修复"
     },
     {
       "id": "native.android.c6997ee4400492f6",
@@ -6039,8 +6359,8 @@
       "translated": "${days}天"
     },
     {
-      "id": "native.android.22d755834386db07",
-      "source": "Main session",
+      "id": "native.android.28a1a1acc5a0959f",
+      "source": "Main thread",
       "translated": "主会话"
     },
     {
@@ -6619,6 +6939,106 @@
       "translated": "技能"
     },
     {
+      "id": "native.android.9ee4764599e5979c",
+      "source": "Back",
+      "translated": "返回"
+    },
+    {
+      "id": "native.android.4b2c29c94377f235",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.android.7a7da7d8f8613d33",
+      "source": "Gateway Required",
+      "translated": "需要 Gateway"
+    },
+    {
+      "id": "native.android.aebc338b09b0a24d",
+      "source": "Full Access Required",
+      "translated": "需要完全访问权限"
+    },
+    {
+      "id": "native.android.69e0b2ce76a5ff7a",
+      "source": "Checking Gateway",
+      "translated": "正在检查 Gateway"
+    },
+    {
+      "id": "native.android.93c293872c6deb49",
+      "source": "Gateway Update Required",
+      "translated": "需要更新 Gateway"
+    },
+    {
+      "id": "native.android.06e5bfbad4b42e3b",
+      "source": "Connect this phone to a Gateway before opening OpenClaw.",
+      "translated": "在打开 OpenClaw 之前，请将此手机连接到 Gateway。"
+    },
+    {
+      "id": "native.android.44cca3625b125c19",
+      "source": "Reconnect with operator.admin access to review and change Gateway settings.",
+      "translated": "使用 operator.admin 权限重新连接，以查看和更改 Gateway 设置。"
+    },
+    {
+      "id": "native.android.6089cc78ebd95573",
+      "source": "Checking whether this Gateway supports the OpenClaw settings assistant.",
+      "translated": "正在检查此 Gateway 是否支持 OpenClaw 设置助手。"
+    },
+    {
+      "id": "native.android.3c3a35369bc2f1f9",
+      "source": "Update this Gateway to use the OpenClaw settings assistant.",
+      "translated": "更新此 Gateway 以使用 OpenClaw 设置助手。"
+    },
+    {
+      "id": "native.android.41b7b9cd883e3e81",
+      "source": "OpenClaw is working…",
+      "translated": "OpenClaw 正在处理…"
+    },
+    {
+      "id": "native.android.072481856dd25c89",
+      "source": "Restart",
+      "translated": "重启"
+    },
+    {
+      "id": "native.android.25fcaa5f2ef2546e",
+      "source": "OpenClaw is ready to continue in your ordinary chat.",
+      "translated": "OpenClaw 已准备好在您的普通聊天中继续。"
+    },
+    {
+      "id": "native.android.88377fbc76395226",
+      "source": "Open Chat",
+      "translated": "打开聊天"
+    },
+    {
+      "id": "native.android.7d0cd72ff8d9c80c",
+      "source": "$label · $recommendation",
+      "translated": "$label · $recommendation"
+    },
+    {
+      "id": "native.android.3ca44882cf461305",
+      "source": "Recommended",
+      "translated": "推荐"
+    },
+    {
+      "id": "native.android.56968d3bbeb687f9",
+      "source": "Skip for now",
+      "translated": "暂时跳过"
+    },
+    {
+      "id": "native.android.6b255d7620170498",
+      "source": "Enter secret…",
+      "translated": "输入密钥…"
+    },
+    {
+      "id": "native.android.4753194a1f8c6c6b",
+      "source": "Reply to OpenClaw…",
+      "translated": "回复 OpenClaw…"
+    },
+    {
+      "id": "native.android.07d2609a561a43b0",
+      "source": "Send",
+      "translated": "发送"
+    },
+    {
       "id": "native.android.efc938b5cc23e079",
       "source": "Back",
       "translated": "返回"
@@ -6722,6 +7142,16 @@
       "id": "native.android.5d4f2992e2320c3e",
       "source": "Unmute",
       "translated": "取消静音"
+    },
+    {
+      "id": "native.android.cb608d82c5b3352a",
+      "source": "Back camera",
+      "translated": "后置摄像头"
+    },
+    {
+      "id": "native.android.e89a0e780eed2e1e",
+      "source": "Front camera",
+      "translated": "前置摄像头"
     },
     {
       "id": "native.android.d7ffaa41c514ba38",
@@ -7034,9 +7464,164 @@
       "translated": "无法解码此图像。"
     },
     {
+      "id": "native.android.e2004e8205154dd2",
+      "source": "Couldn’t load background tasks",
+      "translated": "无法加载后台任务"
+    },
+    {
+      "id": "native.android.bfa286f1b0a3c526",
+      "source": "Couldn’t load task details",
+      "translated": "无法加载任务详情"
+    },
+    {
+      "id": "native.android.6811e525782306c1",
+      "source": "Background tasks",
+      "translated": "后台任务"
+    },
+    {
+      "id": "native.android.754676bf2d2a50e7",
+      "source": "Refresh background tasks",
+      "translated": "刷新后台任务"
+    },
+    {
+      "id": "native.android.99e93f4520a61356",
+      "source": "No background tasks for this agent.",
+      "translated": "此代理没有后台任务。"
+    },
+    {
+      "id": "native.android.26f0aae060212535",
+      "source": "Finished",
+      "translated": "已结束"
+    },
+    {
+      "id": "native.android.6f4ef7e03dd153f5",
+      "source": "Back to background tasks",
+      "translated": "返回后台任务"
+    },
+    {
+      "id": "native.android.193a6c8583fe0dfb",
+      "source": "${statusLabel} · ${task.runtime}",
+      "translated": "${statusLabel} · ${task.runtime}"
+    },
+    {
+      "id": "native.android.c00ea0e2c7802a9f",
+      "source": "Prompt",
+      "translated": "提示词"
+    },
+    {
+      "id": "native.android.4cdf83cd30fac87e",
+      "source": "Prompt unavailable",
+      "translated": "提示词不可用"
+    },
+    {
+      "id": "native.android.a093c342398c1d62",
+      "source": "No output yet",
+      "translated": "暂无输出"
+    },
+    {
+      "id": "native.android.3adeec85d4a8e797",
+      "source": "Output",
+      "translated": "输出"
+    },
+    {
+      "id": "native.android.e378f4d3069dc5f4",
+      "source": "Queued",
+      "translated": "已排队"
+    },
+    {
+      "id": "native.android.7e4ab752e691e19a",
+      "source": "Running",
+      "translated": "运行中"
+    },
+    {
+      "id": "native.android.c3b1223090fc9f15",
+      "source": "Completed",
+      "translated": "已完成"
+    },
+    {
+      "id": "native.android.7a5134f615d03ff9",
+      "source": "Failed",
+      "translated": "失败"
+    },
+    {
       "id": "native.android.6384b9802cfdacfe",
       "source": "$text ",
       "translated": "$text "
+    },
+    {
+      "id": "native.android.d0d3975e637ca1a0",
+      "source": "Stop Dictation",
+      "translated": "停止听写"
+    },
+    {
+      "id": "native.android.6349fe65bab3c7f5",
+      "source": "Dictation",
+      "translated": "听写"
+    },
+    {
+      "id": "native.android.0a166c48e7cd6443",
+      "source": "On-device speech recognition is unavailable.",
+      "translated": "设备端语音识别不可用。"
+    },
+    {
+      "id": "native.android.2c4742b33e272b13",
+      "source": "Microphone permission is required.",
+      "translated": "需要麦克风权限。"
+    },
+    {
+      "id": "native.android.956057c06c3421af",
+      "source": "Recognizer busy",
+      "translated": "识别器正忙"
+    },
+    {
+      "id": "native.android.d33751c0ac92fe33",
+      "source": "Network error",
+      "translated": "网络错误"
+    },
+    {
+      "id": "native.android.53593582608e9873",
+      "source": "No matches",
+      "translated": "无匹配项"
+    },
+    {
+      "id": "native.android.ec1c1e50397faf58",
+      "source": "Speech recognition",
+      "translated": "语音识别"
+    },
+    {
+      "id": "native.android.5bbcfd75bf605de8",
+      "source": "Could not copy widget image",
+      "translated": "无法复制小组件图片"
+    },
+    {
+      "id": "native.android.43d98caa4a9fa44c",
+      "source": "Could not save widget image",
+      "translated": "无法保存小组件图片"
+    },
+    {
+      "id": "native.android.88e52d3ea4d2059a",
+      "source": "Widget image copied",
+      "translated": "已复制小组件图片"
+    },
+    {
+      "id": "native.android.04b164bc44c08e38",
+      "source": "Widget image saved to Downloads",
+      "translated": "小组件图片已保存到“下载”"
+    },
+    {
+      "id": "native.android.a29e724e9e3b5cc9",
+      "source": "Copy image",
+      "translated": "复制图片"
+    },
+    {
+      "id": "native.android.6b45a391b1289aa5",
+      "source": "Save image",
+      "translated": "保存图片"
+    },
+    {
+      "id": "native.android.d1712183ebf86197",
+      "source": "Widget unavailable",
+      "translated": "小组件不可用"
     },
     {
       "id": "native.android.cd2033b0a82a72dd",
@@ -7087,6 +7672,16 @@
       "id": "native.android.7b896902a024d85f",
       "source": "Reply",
       "translated": "回复"
+    },
+    {
+      "id": "native.android.6c07db7bdc4b43a4",
+      "source": "Rewind to here",
+      "translated": "回退到此处"
+    },
+    {
+      "id": "native.android.c824bdc38278a218",
+      "source": "Fork from here",
+      "translated": "从此处分叉"
     },
     {
       "id": "native.android.319b4a29df279bb3",
@@ -7144,9 +7739,14 @@
       "translated": "无可用预览"
     },
     {
-      "id": "native.android.a50e44d8f380f9ad",
-      "source": "Thinking...",
-      "translated": "正在思考..."
+      "id": "native.android.66aef4de5e07438f",
+      "source": "Working",
+      "translated": "正在处理"
+    },
+    {
+      "id": "native.android.6e7be1773c946de3",
+      "source": "· $phrase",
+      "translated": "· $phrase"
     },
     {
       "id": "native.android.ff4a092a02bd5d17",
@@ -7184,14 +7784,19 @@
       "translated": "已发送 — 正在确认送达…"
     },
     {
-      "id": "native.android.15d71d54c0ce946b",
-      "source": "Failed",
-      "translated": "失败"
+      "id": "native.android.ac5949efe3cfe48c",
+      "source": "Session branch changed; review and retry this message.",
+      "translated": "会话分支已更改；请检查并重试此消息。"
     },
     {
       "id": "native.android.6f734a7527ae9c5a",
       "source": "Failed — $it",
       "translated": "失败 — $it"
+    },
+    {
+      "id": "native.android.15d71d54c0ce946b",
+      "source": "Failed",
+      "translated": "失败"
     },
     {
       "id": "native.android.552a4d6f5110e6a3",
@@ -7264,6 +7869,51 @@
       "translated": "不支持的附件"
     },
     {
+      "id": "native.android.bf40f9f9a508155d",
+      "source": "Other answer",
+      "translated": "其他答案"
+    },
+    {
+      "id": "native.android.de591e6e2e440ecb",
+      "source": "Skip",
+      "translated": "跳过"
+    },
+    {
+      "id": "native.android.92dfa7979d04989c",
+      "source": "Submitting…",
+      "translated": "正在提交…"
+    },
+    {
+      "id": "native.android.fa81739f52e7697f",
+      "source": "Submit",
+      "translated": "提交"
+    },
+    {
+      "id": "native.android.7da074848cacfe4b",
+      "source": "Skipped",
+      "translated": "已跳过"
+    },
+    {
+      "id": "native.android.1a0e6b33059a63aa",
+      "source": "Expired",
+      "translated": "已过期"
+    },
+    {
+      "id": "native.android.86c8d6113d07ef82",
+      "source": "Unavailable",
+      "translated": "不可用"
+    },
+    {
+      "id": "native.android.f68cd7a84be4089e",
+      "source": "Answered",
+      "translated": "已回答"
+    },
+    {
+      "id": "native.android.a0dc883947c2f980",
+      "source": "Answered elsewhere",
+      "translated": "已在其他地方回答"
+    },
+    {
       "id": "native.android.118e8d239b18895e",
       "source": "Model",
       "translated": "模型"
@@ -7299,9 +7949,9 @@
       "translated": "离线"
     },
     {
-      "id": "native.android.6b0f8ea129bca167",
-      "source": "More new chat options",
-      "translated": "更多新聊天选项"
+      "id": "native.android.6c2e520fd54edeb4",
+      "source": "Chat actions",
+      "translated": "聊天操作"
     },
     {
       "id": "native.android.0066c3883e9eff15",
@@ -7309,13 +7959,33 @@
       "translated": "刷新聊天"
     },
     {
+      "id": "native.android.6966ae8bbad7347d",
+      "source": "Dashboard",
+      "translated": "仪表盘"
+    },
+    {
+      "id": "native.android.b57a1b542cff8f55",
+      "source": "Background tasks",
+      "translated": "后台任务"
+    },
+    {
       "id": "native.android.707eccff20a79f65",
       "source": "Chat",
       "translated": "聊天"
     },
     {
-      "id": "native.android.882cc14a58e7e105",
-      "source": "Loading session",
+      "id": "native.android.ec49cca2ed03f9f9",
+      "source": "Messages to recover",
+      "translated": "Messages to recover"
+    },
+    {
+      "id": "native.android.7983bb6667118aa1",
+      "source": "${item.count} message(s) need recovery. Re-enter anything you want to keep, then delete these rows.",
+      "translated": "${item.count} message(s) need recovery. Re-enter anything you want to keep, then delete these rows."
+    },
+    {
+      "id": "native.android.0c74bc30a994dd33",
+      "source": "Loading thread",
       "translated": "正在加载会话"
     },
     {
@@ -7359,14 +8029,14 @@
       "translated": "帮我了解最新进展"
     },
     {
-      "id": "native.android.1e5add56e48c99f9",
-      "source": "Summarize recent sessions and next steps.",
+      "id": "native.android.cf40df9739f78f27",
+      "source": "Summarize recent threads and next steps.",
       "translated": "总结最近的会话和后续步骤。"
     },
     {
-      "id": "native.android.06d515351bb79576",
-      "source": "Catch me up on my recent OpenClaw sessions and suggest next steps.",
-      "translated": "帮我了解最近 OpenClaw 会话的最新进展，并建议后续步骤。"
+      "id": "native.android.ebe49a8b8df80bd3",
+      "source": "Catch me up on my recent OpenClaw threads and suggest next steps.",
+      "translated": "帮我了解最近的 OpenClaw 会话，并建议后续步骤。"
     },
     {
       "id": "native.android.79f64f0b5ecaa07c",
@@ -7419,11 +8089,6 @@
       "translated": "OpenClaw"
     },
     {
-      "id": "native.android.e695e7b72d13e9e5",
-      "source": "Attachment",
-      "translated": "附件"
-    },
-    {
       "id": "native.android.5aafbef3744d86f3",
       "source": "Preparing audio…",
       "translated": "正在准备音频…"
@@ -7432,6 +8097,16 @@
       "id": "native.android.d7919c440a82f426",
       "source": "Speaking…",
       "translated": "正在朗读…"
+    },
+    {
+      "id": "native.android.bd78ce1e86e900b3",
+      "source": "Close",
+      "translated": "关闭"
+    },
+    {
+      "id": "native.android.b686b1bc61494ee2",
+      "source": "View all",
+      "translated": "查看全部"
     },
     {
       "id": "native.android.781f84dfaf7da9d6",
@@ -7449,14 +8124,19 @@
       "translated": "+${toolCalls.size - 4} 个更多"
     },
     {
-      "id": "native.android.7e0aea1dca378135",
-      "source": "Thinking",
-      "translated": "正在思考"
+      "id": "native.android.22d747642a3887cd",
+      "source": "$completedCount/${steps.size}",
+      "translated": "$completedCount/${steps.size}"
     },
     {
-      "id": "native.android.98a0d4d5bba788c4",
-      "source": "OpenClaw is preparing a response.",
-      "translated": "OpenClaw 正在准备回复。"
+      "id": "native.android.5d9378441e3bb86e",
+      "source": "Collapse plan checklist",
+      "translated": "收起计划清单"
+    },
+    {
+      "id": "native.android.cc46adc71637695d",
+      "source": "Expand plan checklist",
+      "translated": "展开计划清单"
     },
     {
       "id": "native.android.f3806d79e43f568f",
@@ -7467,6 +8147,31 @@
       "id": "native.android.76d574acfac94fee",
       "source": "Stop",
       "translated": "停止"
+    },
+    {
+      "id": "native.android.be42506226307680",
+      "source": "Switch branch",
+      "translated": "切换分支"
+    },
+    {
+      "id": "native.android.39ea147abba2af8a",
+      "source": "Untitled branch",
+      "translated": "未命名分支"
+    },
+    {
+      "id": "native.android.4e2cbf557e2e3cd6",
+      "source": "Current branch",
+      "translated": "当前分支"
+    },
+    {
+      "id": "native.android.d79a4188788ccf49",
+      "source": "Messages: $count",
+      "translated": "消息：$count"
+    },
+    {
+      "id": "native.android.76e548dffafc9de9",
+      "source": "$count · $updated",
+      "translated": "$count · $updated"
     },
     {
       "id": "native.android.2cb3ec7379426dfe",
@@ -7514,14 +8219,24 @@
       "translated": "附加图片"
     },
     {
+      "id": "native.android.e695e7b72d13e9e5",
+      "source": "Attachment",
+      "translated": "附件"
+    },
+    {
       "id": "native.android.f1d69eb66c5dfa39",
       "source": "Message OpenClaw",
       "translated": "向 OpenClaw 发送消息"
     },
     {
-      "id": "native.android.97602a28629a331f",
-      "source": "Open voice",
-      "translated": "打开语音"
+      "id": "native.android.9b42791ed9da90d3",
+      "source": "End Talk",
+      "translated": "结束对话"
+    },
+    {
+      "id": "native.android.1d55fe6bab0d3f74",
+      "source": "Start Talk",
+      "translated": "开始语音对话"
     },
     {
       "id": "native.android.6f4dc5330b262dea",
@@ -7629,6 +8344,146 @@
       "translated": "最高"
     },
     {
+      "id": "native.android.c2dc3a65302976c0",
+      "source": "1 token",
+      "translated": "1 个 token"
+    },
+    {
+      "id": "native.android.e7059e3a756908c4",
+      "source": "$count tokens",
+      "translated": "$count 个 token"
+    },
+    {
+      "id": "native.android.c32ff602fa622e4b",
+      "source": "Done in $duration",
+      "translated": "已完成，用时 $duration"
+    },
+    {
+      "id": "native.android.d2797e7488fe5021",
+      "source": "${decimal(count / 1_000_000.0)}M",
+      "translated": "${decimal(count / 1_000_000.0)}M"
+    },
+    {
+      "id": "native.android.4206e3e68c56767a",
+      "source": "${thousands}k",
+      "translated": "${thousands}k"
+    },
+    {
+      "id": "native.android.5e758e9851ded127",
+      "source": "${days}d",
+      "translated": "${days}天"
+    },
+    {
+      "id": "native.android.4fe67b5100cb91b1",
+      "source": "${hours}h",
+      "translated": "${hours}小时"
+    },
+    {
+      "id": "native.android.92a53292eaf7c63e",
+      "source": "${minutes}m",
+      "translated": "${minutes}分钟"
+    },
+    {
+      "id": "native.android.6d5683b5537bdbaf",
+      "source": "${seconds}s",
+      "translated": "${seconds}秒"
+    },
+    {
+      "id": "native.android.e2f387a31240c8a3",
+      "source": "Shelling",
+      "translated": "装壳中"
+    },
+    {
+      "id": "native.android.70a6de7c24baffb7",
+      "source": "Scuttling",
+      "translated": "疾行中"
+    },
+    {
+      "id": "native.android.0ed1354a65faa07e",
+      "source": "Clawing",
+      "translated": "挥螯中"
+    },
+    {
+      "id": "native.android.42d24b16fc658ed3",
+      "source": "Pinching",
+      "translated": "夹取中"
+    },
+    {
+      "id": "native.android.69d5b3ca23a7bec3",
+      "source": "Molting",
+      "translated": "蜕壳中"
+    },
+    {
+      "id": "native.android.80bfb2d6720f8dc5",
+      "source": "Bubbling",
+      "translated": "冒泡中"
+    },
+    {
+      "id": "native.android.e984f80d309c2d01",
+      "source": "Tiding",
+      "translated": "逐潮中"
+    },
+    {
+      "id": "native.android.60bb819ee08cbbc1",
+      "source": "Reefing",
+      "translated": "巡礁中"
+    },
+    {
+      "id": "native.android.7f465ae2654f0c25",
+      "source": "Cracking",
+      "translated": "破壳中"
+    },
+    {
+      "id": "native.android.cfc143346cf262c8",
+      "source": "Sifting",
+      "translated": "筛选中"
+    },
+    {
+      "id": "native.android.72b67956ab234898",
+      "source": "Brining",
+      "translated": "盐渍中"
+    },
+    {
+      "id": "native.android.3ecce1d21d8ab752",
+      "source": "Nautiling",
+      "translated": "鹦鹉螺化中"
+    },
+    {
+      "id": "native.android.305ed08fbb829753",
+      "source": "Krilling",
+      "translated": "磷虾化中"
+    },
+    {
+      "id": "native.android.c39933b1ec86d7a9",
+      "source": "Barnacling",
+      "translated": "附着"
+    },
+    {
+      "id": "native.android.32a8072679db94bb",
+      "source": "Lobstering",
+      "translated": "捕龙虾"
+    },
+    {
+      "id": "native.android.de205a44a6d159fb",
+      "source": "Tidepooling",
+      "translated": "探索潮池"
+    },
+    {
+      "id": "native.android.8d97a105339c7a20",
+      "source": "Pearling",
+      "translated": "采珠"
+    },
+    {
+      "id": "native.android.7bdb054d45ca1b23",
+      "source": "Snapping",
+      "translated": "咔嚓"
+    },
+    {
+      "id": "native.android.c2210ea40e357fcd",
+      "source": "Surfacing",
+      "translated": "浮出水面"
+    },
+    {
       "id": "native.android.3df4e24a0fc8810b",
       "source": "Preparing voice note…",
       "translated": "正在准备语音留言…"
@@ -7684,8 +8539,8 @@
       "translated": "已连接"
     },
     {
-      "id": "native.android.81931886b9caf3ab",
-      "source": "Sessions",
+      "id": "native.android.6cf5d6fa8a4186d5",
+      "source": "Threads",
       "translated": "会话"
     },
     {
@@ -7854,11 +8709,6 @@
       "translated": "语音识别器不可用"
     },
     {
-      "id": "native.android.0faf9df3e5f708df",
-      "source": "Listening (PTT)",
-      "translated": "正在聆听（按住说话）"
-    },
-    {
       "id": "native.android.47a59f8798682ea0",
       "source": "Ready",
       "translated": "就绪"
@@ -7932,6 +8782,11 @@
       "id": "native.android.92409eac33327a8d",
       "source": "Speaking…",
       "translated": "正在朗读…"
+    },
+    {
+      "id": "native.android.0faf9df3e5f708df",
+      "source": "Listening (PTT)",
+      "translated": "正在聆听（按住说话）"
     },
     {
       "id": "native.android.d1a7db2c16fd6d09",
@@ -8149,14 +9004,639 @@
       "translated": "已复制构建时间戳"
     },
     {
-      "id": "native.apple.8f741d09cc1d5495",
-      "source": "OpenClaw Activity",
-      "translated": "OpenClaw 活动"
+      "id": "native.android.522a27f673db3ea7",
+      "source": "Observed nodes: $count",
+      "translated": "已观察到的节点：$count"
+    },
+    {
+      "id": "native.android.db6c0a629047ec45",
+      "source": "Observing…",
+      "translated": "正在观察…"
+    },
+    {
+      "id": "native.android.dae7cd6ba0f54d14",
+      "source": "Observing in ${remaining}s — switch to the target app",
+      "translated": "将在 ${remaining} 秒后观察——请切换到目标应用"
+    },
+    {
+      "id": "native.android.a57da8b7813642c5",
+      "source": "unknown",
+      "translated": "未知"
+    },
+    {
+      "id": "native.android.c3bf7f7fca67def2",
+      "source": "Accessibility executor",
+      "translated": "无障碍执行器"
+    },
+    {
+      "id": "native.android.3be1e4745a17f488",
+      "source": "Service connected",
+      "translated": "服务已连接"
+    },
+    {
+      "id": "native.android.cc9389562c8b2c59",
+      "source": "Service disabled",
+      "translated": "服务已禁用"
+    },
+    {
+      "id": "native.android.137a6854a7a38355",
+      "source": "Open settings",
+      "translated": "打开设置"
+    },
+    {
+      "id": "native.android.21324b63c1100d44",
+      "source": "Observe",
+      "translated": "观察"
+    },
+    {
+      "id": "native.android.060ac865b282278b",
+      "source": "Observe in 3s",
+      "translated": "3 秒后观察"
+    },
+    {
+      "id": "native.android.e2d3ac19479204af",
+      "source": "Back",
+      "translated": "返回"
+    },
+    {
+      "id": "native.android.d60b8ecd62fc0d80",
+      "source": "Home",
+      "translated": "主屏幕"
+    },
+    {
+      "id": "native.android.3fce53a0ad295cf0",
+      "source": "Recents",
+      "translated": "最近任务"
+    },
+    {
+      "id": "native.android.6b32ca413d180a5d",
+      "source": "Snapshot: $snapshotLabel",
+      "translated": "快照：$snapshotLabel"
+    },
+    {
+      "id": "native.android.8f5985122be4fc64",
+      "source": "Packages: snapshot=$snapshotPackage foreground=$foregroundPackage",
+      "translated": "软件包：snapshot=$snapshotPackage foreground=$foregroundPackage"
+    },
+    {
+      "id": "native.android.73c790b2ef43795b",
+      "source": "No action result",
+      "translated": "无操作结果"
+    },
+    {
+      "id": "native.android.7cef45c1a4398242",
+      "source": "Selected $reference",
+      "translated": "已选择 $reference"
+    },
+    {
+      "id": "native.android.080308b933291f72",
+      "source": "Node actions run only when the target app is foreground (validated via the remote path). Global actions and same-app actions work here.",
+      "translated": "节点操作仅在目标应用处于前台时运行（通过远程路径验证）。全局操作和同应用操作可在此处运行。"
+    },
+    {
+      "id": "native.android.7904ab3dbc7630d6",
+      "source": "Activate",
+      "translated": "激活"
+    },
+    {
+      "id": "native.android.720bad3536516e4c",
+      "source": "Scroll forward",
+      "translated": "向前滚动"
+    },
+    {
+      "id": "native.android.a9d246ec2201f652",
+      "source": "Scroll back",
+      "translated": "向后滚动"
+    },
+    {
+      "id": "native.android.d5d6c692bf76ab30",
+      "source": "Text",
+      "translated": "文本"
+    },
+    {
+      "id": "native.android.b807999e8142fb16",
+      "source": "Set text",
+      "translated": "设置文本"
+    },
+    {
+      "id": "native.android.234771b574070dbd",
+      "source": "$reference  $role",
+      "translated": "$reference  $role"
+    },
+    {
+      "id": "native.android.08bf43b43713bc39",
+      "source": "text: $value",
+      "translated": "text: $value"
+    },
+    {
+      "id": "native.android.b9b90cd213056618",
+      "source": "description: $value",
+      "translated": "description: $value"
+    },
+    {
+      "id": "native.android.b2932adead8a9404",
+      "source": "bounds: $value",
+      "translated": "bounds: $value"
+    },
+    {
+      "id": "native.android.96941ff341555a3c",
+      "source": "actions: $value",
+      "translated": "actions: $value"
+    },
+    {
+      "id": "native.android.595a568daf3c9686",
+      "source": "none",
+      "translated": "无"
+    },
+    {
+      "id": "native.android.1bacd6da6858db46",
+      "source": "Control other apps",
+      "translated": "控制其他应用"
+    },
+    {
+      "id": "native.android.7bb0d8ca016a7496",
+      "source": "Shown in Android Accessibility settings.",
+      "translated": "显示在 Android 无障碍设置中。"
+    },
+    {
+      "id": "native.android.499618d59ec50110",
+      "source": "Other apps stay untouched.",
+      "translated": "其他应用不受影响。"
+    },
+    {
+      "id": "native.android.8132ebc5e9beff1a",
+      "source": "Allow control of other apps?",
+      "translated": "允许控制其他应用？"
+    },
+    {
+      "id": "native.android.16d2abc828935351",
+      "source": "Enabling lets OpenClaw observe and control other apps' screens when armed. Android accessibility access is required.",
+      "translated": "启用后，OpenClaw 在激活时可以观察和控制其他应用的屏幕。需要 Android 无障碍访问权限。"
+    },
+    {
+      "id": "native.android.2762510a90e577a3",
+      "source": "Enable and Open Settings",
+      "translated": "启用并打开设置"
+    },
+    {
+      "id": "native.android.9f278b579e510dda",
+      "source": "Not Now",
+      "translated": "暂不"
+    },
+    {
+      "id": "native.android.b3cae8c7b0ac2222",
+      "source": "OpenClaw UI control",
+      "translated": "OpenClaw UI 控制"
+    },
+    {
+      "id": "native.android.d980d910a3466dc2",
+      "source": "Developer UI observation and control",
+      "translated": "开发者 UI 观察与控制"
+    },
+    {
+      "id": "native.android.7f56eb025a774101",
+      "source": "Allows the third-party OpenClaw build to inspect and control the active app during local development.",
+      "translated": "允许第三方 OpenClaw 构建在本地开发期间检查和控制当前应用。"
+    },
+    {
+      "id": "native.android.e1c713595c555f5f",
+      "source": "OpenClaw Accessibility Developer",
+      "translated": "OpenClaw 无障碍开发者"
+    },
+    {
+      "id": "native.android.342644995c7fa39d",
+      "source": "Chat",
+      "translated": "聊天"
+    },
+    {
+      "id": "native.android.f08059cbbd74d290",
+      "source": "Session",
+      "translated": "会话"
+    },
+    {
+      "id": "native.android.14c9261466ef05af",
+      "source": "Model",
+      "translated": "模型"
+    },
+    {
+      "id": "native.android.15cab72e6f01fd53",
+      "source": "Previous %1$s",
+      "translated": "上一个 %1$s"
+    },
+    {
+      "id": "native.android.3d3306e0ee9e21ee",
+      "source": "Next %1$s",
+      "translated": "下一个 %1$s"
+    },
+    {
+      "id": "native.android.27f269e3449860eb",
+      "source": "Controls",
+      "translated": "控制"
+    },
+    {
+      "id": "native.android.162045314bf6d856",
+      "source": "Talk",
+      "translated": "说话"
+    },
+    {
+      "id": "native.android.1e47fb0c88ffb1bd",
+      "source": "Watch audio failed",
+      "translated": "手表音频失败"
+    },
+    {
+      "id": "native.android.64e07fdfab3f96c5",
+      "source": "Dictate",
+      "translated": "听写"
+    },
+    {
+      "id": "native.android.aa64f5544405ffed",
+      "source": "Live",
+      "translated": "实时"
+    },
+    {
+      "id": "native.android.5d4de99dd6fd6764",
+      "source": "Thread",
+      "translated": "对话串"
+    },
+    {
+      "id": "native.android.4863e4958bf9a886",
+      "source": "← Swipe →",
+      "translated": "← 滑动 →"
+    },
+    {
+      "id": "native.android.01979a7d84755f0e",
+      "source": "Hold",
+      "translated": "按住"
+    },
+    {
+      "id": "native.android.149e4509c9152931",
+      "source": "Tap",
+      "translated": "点按"
+    },
+    {
+      "id": "native.android.9f7fe0147a0b571a",
+      "source": "Double tap",
+      "translated": "双击"
+    },
+    {
+      "id": "native.android.65caac394b5e4871",
+      "source": "Start Live to see the conversation here.",
+      "translated": "启动实时模式后，即可在此处查看对话。"
+    },
+    {
+      "id": "native.android.80256ef5841e2f92",
+      "source": "New",
+      "translated": "新建"
+    },
+    {
+      "id": "native.android.3091f3e818e51d8a",
+      "source": "Type",
+      "translated": "输入"
+    },
+    {
+      "id": "native.android.d6940b2883503ea3",
+      "source": "Message",
+      "translated": "消息"
+    },
+    {
+      "id": "native.android.e9035dd5aded082a",
+      "source": "Message agent",
+      "translated": "向智能体发送消息"
+    },
+    {
+      "id": "native.android.66f9ad9c9cd1a92c",
+      "source": "Send",
+      "translated": "发送"
+    },
+    {
+      "id": "native.android.aed54d9c5e90b843",
+      "source": "Speak to your agent",
+      "translated": "与智能体对话"
+    },
+    {
+      "id": "native.android.30aa9dbcae2ce3c1",
+      "source": "Stop speaking",
+      "translated": "停止朗读"
+    },
+    {
+      "id": "native.android.5c8f30c24360b983",
+      "source": "Speak latest reply",
+      "translated": "朗读最新回复"
+    },
+    {
+      "id": "native.android.e283a10e79578d3f",
+      "source": "Speaking",
+      "translated": "正在朗读"
+    },
+    {
+      "id": "native.android.0b19cfb5411358fa",
+      "source": "Listening",
+      "translated": "正在聆听"
+    },
+    {
+      "id": "native.android.e40bdbd8bfc185e6",
+      "source": "Connecting",
+      "translated": "正在连接"
+    },
+    {
+      "id": "native.android.42ac9ae6e2a24424",
+      "source": "Thinking",
+      "translated": "正在思考"
+    },
+    {
+      "id": "native.android.e87b09e74f59ca70",
+      "source": "Typing",
+      "translated": "正在输入"
+    },
+    {
+      "id": "native.android.5357284dcb751316",
+      "source": "Sending",
+      "translated": "正在发送"
+    },
+    {
+      "id": "native.android.df216228910e6a31",
+      "source": "Agent working",
+      "translated": "智能体正在工作"
+    },
+    {
+      "id": "native.android.0ab95b2723a4b400",
+      "source": "Error",
+      "translated": "错误"
+    },
+    {
+      "id": "native.android.6f790004e204e002",
+      "source": "Ready",
+      "translated": "就绪"
+    },
+    {
+      "id": "native.android.40984724c43be3ab",
+      "source": "You",
+      "translated": "你"
+    },
+    {
+      "id": "native.android.4aaf8fd6103ce61d",
+      "source": "Agent",
+      "translated": "智能体"
+    },
+    {
+      "id": "native.android.c09b4d37b7750d4a",
+      "source": "System",
+      "translated": "系统"
+    },
+    {
+      "id": "native.android.beff51b9bde563db",
+      "source": "Start a conversation",
+      "translated": "开始对话"
+    },
+    {
+      "id": "native.android.b8de3221042b2fd3",
+      "source": "Talk or type on your watch. The paired phone sends the message through its authenticated OpenClaw session.",
+      "translated": "在手表上说话或输入文字。已配对的手机会通过其已认证的 OpenClaw 会话发送消息。"
+    },
+    {
+      "id": "native.android.44c6bb3c4c7b61ae",
+      "source": "Current session",
+      "translated": "当前会话"
+    },
+    {
+      "id": "native.android.29e0ff4871a97d3a",
+      "source": "Appearance",
+      "translated": "外观"
+    },
+    {
+      "id": "native.android.f54dda8777a206c0",
+      "source": "Dark",
+      "translated": "深色"
+    },
+    {
+      "id": "native.android.7709ce559ece7079",
+      "source": "Light",
+      "translated": "浅色"
+    },
+    {
+      "id": "native.android.bad64c6d810dd968",
+      "source": "Speak replies automatically",
+      "translated": "自动朗读回复"
+    },
+    {
+      "id": "native.android.bf13ece69b6f9e6d",
+      "source": "Reply alerts",
+      "translated": "回复提醒"
+    },
+    {
+      "id": "native.android.ab451b22b15fef6a",
+      "source": "Enable alerts",
+      "translated": "启用提醒"
+    },
+    {
+      "id": "native.android.2ac0bfe2c63028e6",
+      "source": "Abort run",
+      "translated": "中止运行"
+    },
+    {
+      "id": "native.android.1c8ec9bc7a542592",
+      "source": "Open notification settings",
+      "translated": "打开通知设置"
+    },
+    {
+      "id": "native.android.cac22bf83ae5e538",
+      "source": "On",
+      "translated": "开"
+    },
+    {
+      "id": "native.android.8b2c37db3d4bfe78",
+      "source": "Off",
+      "translated": "关"
+    },
+    {
+      "id": "native.android.dcf724e915521154",
+      "source": "Connection",
+      "translated": "连接"
+    },
+    {
+      "id": "native.android.d6576b5ea12e6635",
+      "source": "Gateway",
+      "translated": "Gateway"
+    },
+    {
+      "id": "native.android.5af2a90d687d5ded",
+      "source": "Security",
+      "translated": "安全"
+    },
+    {
+      "id": "native.android.bfa2a9759e56e431",
+      "source": "Phone-controlled",
+      "translated": "由手机控制"
+    },
+    {
+      "id": "native.android.9d53b66d3444d63f",
+      "source": "Gateway credentials and identity stay on the paired phone. The watch only uses the Wear Data Layer.",
+      "translated": "Gateway 凭据和身份信息保留在已配对的手机上。手表仅使用 Wear Data Layer。"
+    },
+    {
+      "id": "native.android.e4e15149f5634729",
+      "source": "Checking phone",
+      "translated": "正在检查手机"
+    },
+    {
+      "id": "native.android.c1b0408a3b9a7855",
+      "source": "Reading agents, sessions, and chat",
+      "translated": "正在读取智能体、会话和聊天"
+    },
+    {
+      "id": "native.android.b6cb3ef2de0a91a1",
+      "source": "Phone ready",
+      "translated": "手机已就绪"
+    },
+    {
+      "id": "native.android.71511621861ee1f8",
+      "source": "Gateway connected",
+      "translated": "Gateway 已连接"
+    },
+    {
+      "id": "native.android.e8a185d4eb48abe2",
+      "source": "Gateway offline",
+      "translated": "Gateway 离线"
+    },
+    {
+      "id": "native.android.5d98a2a8a4f1f793",
+      "source": "Reconnect the Gateway in OpenClaw on the paired phone.",
+      "translated": "请在已配对手机的 OpenClaw 中重新连接 Gateway。"
+    },
+    {
+      "id": "native.android.867011d568b0b0db",
+      "source": "Open OpenClaw on phone",
+      "translated": "在手机上打开 OpenClaw"
+    },
+    {
+      "id": "native.android.e70d812f3bc1bb40",
+      "source": "The watch never starts or authenticates the Gateway itself.",
+      "translated": "手表本身不会启动 Gateway，也不会对其进行身份验证。"
+    },
+    {
+      "id": "native.android.be82f33ff358e212",
+      "source": "Phone not reachable",
+      "translated": "无法连接手机"
+    },
+    {
+      "id": "native.android.d6c4dc6d15a4eaac",
+      "source": "Keep the paired phone nearby and install the matching OpenClaw app.",
+      "translated": "请将已配对的手机放在附近，并安装匹配的 OpenClaw 应用。"
+    },
+    {
+      "id": "native.android.bfebf63a2c96e9cd",
+      "source": "Selection no longer available",
+      "translated": "所选项目已不可用"
+    },
+    {
+      "id": "native.android.918aacdecf0e523b",
+      "source": "Action not accepted",
+      "translated": "操作未被接受"
+    },
+    {
+      "id": "native.android.375286e6dbb16606",
+      "source": "Something went wrong",
+      "translated": "出现错误"
+    },
+    {
+      "id": "native.android.e0e6d9ff3b7d8970",
+      "source": "Refresh the lists and try again.",
+      "translated": "请刷新列表后重试。"
+    },
+    {
+      "id": "native.android.e9849178994c7414",
+      "source": "Try again from the watch.",
+      "translated": "请在手表上重试。"
+    },
+    {
+      "id": "native.android.3d44911564ea1c5a",
+      "source": "Update required",
+      "translated": "需要更新"
+    },
+    {
+      "id": "native.android.ce39278848b1615d",
+      "source": "Update OpenClaw on both phone and watch.",
+      "translated": "请更新手机和手表上的 OpenClaw。"
+    },
+    {
+      "id": "native.android.b5d6a37fb96f38f1",
+      "source": "Refresh",
+      "translated": "刷新"
+    },
+    {
+      "id": "native.android.a64989382158df47",
+      "source": "Retry",
+      "translated": "重试"
+    },
+    {
+      "id": "native.android.6b973e2d4540f1dc",
+      "source": "OpenClaw replies",
+      "translated": "OpenClaw 回复"
+    },
+    {
+      "id": "native.android.daf75f1939c5048f",
+      "source": "Reply",
+      "translated": "回复"
+    },
+    {
+      "id": "native.android.2ab12cfd9399407c",
+      "source": "OpenClaw reply",
+      "translated": "OpenClaw 回复"
+    },
+    {
+      "id": "native.android.289456e2626dd0f4",
+      "source": "Reply not sent",
+      "translated": "回复未发送"
+    },
+    {
+      "id": "native.android.bda7ccc6e4728f23",
+      "source": "Phone unavailable. Tap Reply to try again.",
+      "translated": "手机不可用。点按“回复”重试。"
+    },
+    {
+      "id": "native.android.3ec65645eda5ded7",
+      "source": "Open OpenClaw to reply",
+      "translated": "打开 OpenClaw 进行回复"
+    },
+    {
+      "id": "native.android.7658464805a4b605",
+      "source": "Your preferred phone changed. Open the app to reload the session before replying.",
+      "translated": "您的首选手机已更改。回复前请打开应用以重新加载会话。"
+    },
+    {
+      "id": "native.android.6b2e913641d45f02",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.android.7c74dd9a2bf91d3a",
+      "source": "Open sessions and reply through your paired phone",
+      "translated": "打开会话并通过已配对的手机回复"
+    },
+    {
+      "id": "native.android.6c2e2515598de209",
+      "source": "OPEN",
+      "translated": "打开"
+    },
+    {
+      "id": "native.android.709aff840be1f167",
+      "source": "PHONE PROXY",
+      "translated": "手机代理"
+    },
+    {
+      "id": "native.apple.093081590556db7f",
+      "source": "OPENCLAW",
+      "translated": "OPENCLAW"
     },
     {
       "id": "native.apple.86d546e1f1247028",
       "source": "OpenClaw",
       "translated": "OpenClaw"
+    },
+    {
+      "id": "native.apple.9fd01bdb5a753f3e",
+      "source": "LIVE",
+      "translated": "LIVE"
     },
     {
       "id": "native.apple.417ac9273b5f63ca",
@@ -8179,6 +9659,36 @@
       "translated": "需要操作"
     },
     {
+      "id": "native.apple.275026f681242715",
+      "source": "Using %@",
+      "translated": "使用 %@"
+    },
+    {
+      "id": "native.apple.360d0d0fc0df9eb2",
+      "source": "Using a tool",
+      "translated": "使用工具"
+    },
+    {
+      "id": "native.apple.0d0ee660962ea840",
+      "source": "Listening",
+      "translated": "正在聆听"
+    },
+    {
+      "id": "native.apple.095ebf1496feb2ad",
+      "source": "Speaking",
+      "translated": "正在朗读"
+    },
+    {
+      "id": "native.apple.63c98d2ca6a5b09c",
+      "source": "Voice active",
+      "translated": "语音已开启"
+    },
+    {
+      "id": "native.apple.02470f4b5348f97c",
+      "source": "Paused",
+      "translated": "已暂停"
+    },
+    {
       "id": "native.apple.f2f3e6437fafcd1c",
       "source": "Connected",
       "translated": "已连接"
@@ -8187,11 +9697,6 @@
       "id": "native.apple.18d4f8a4eea7f930",
       "source": "Disconnected",
       "translated": "已断开连接"
-    },
-    {
-      "id": "native.apple.9168fcd110c3019a",
-      "source": "OpenClaw Share",
-      "translated": "OpenClaw 共享"
     },
     {
       "id": "native.apple.382fd936eaf238f7",
@@ -8217,6 +9722,26 @@
       "id": "native.apple.a811eb3e4d2174d5",
       "source": "that request",
       "translated": "该请求"
+    },
+    {
+      "id": "native.apple.91108e396155b531",
+      "source": "Dashboard",
+      "translated": "仪表板"
+    },
+    {
+      "id": "native.apple.8a315564807ba77d",
+      "source": "Done",
+      "translated": "完成"
+    },
+    {
+      "id": "native.apple.1a8ef1f77055764f",
+      "source": "Dashboard needs a connected gateway",
+      "translated": "仪表板需要已连接的 Gateway"
+    },
+    {
+      "id": "native.apple.0561fc7c6a99da55",
+      "source": "Connect to your gateway to open this session dashboard.",
+      "translated": "连接到您的 Gateway 以打开此会话仪表板。"
     },
     {
       "id": "native.apple.1696cec8c3c6a511",
@@ -10184,6 +11709,166 @@
       "translated": "确定"
     },
     {
+      "id": "native.apple.013dc12863bed23b",
+      "source": "Background task",
+      "translated": "后台任务"
+    },
+    {
+      "id": "native.apple.d33ca570a77c6d6f",
+      "source": "Queued",
+      "translated": "已排队"
+    },
+    {
+      "id": "native.apple.4e4498e6144974b7",
+      "source": "Completed",
+      "translated": "已完成"
+    },
+    {
+      "id": "native.apple.8773684d27996e83",
+      "source": "Failed",
+      "translated": "失败"
+    },
+    {
+      "id": "native.apple.92f69cf86443d64d",
+      "source": "Subagent",
+      "translated": "子代理"
+    },
+    {
+      "id": "native.apple.924830db78883b2d",
+      "source": "Cron",
+      "translated": "定时任务"
+    },
+    {
+      "id": "native.apple.d5433fcd3232cd16",
+      "source": "Task",
+      "translated": "任务"
+    },
+    {
+      "id": "native.apple.0b972513797e7385",
+      "source": "Loading background tasks…",
+      "translated": "正在加载后台任务…"
+    },
+    {
+      "id": "native.apple.fb3147cbc796dd3a",
+      "source": "Tasks for this agent will appear here.",
+      "translated": "此代理的任务将显示在此处。"
+    },
+    {
+      "id": "native.apple.336cf64ef5611816",
+      "source": "No running tasks",
+      "translated": "没有正在运行的任务"
+    },
+    {
+      "id": "native.apple.d5955a199881b73e",
+      "source": "Running",
+      "translated": "正在运行"
+    },
+    {
+      "id": "native.apple.a3c63b936f7f31a9",
+      "source": "No finished tasks",
+      "translated": "没有已完成的任务"
+    },
+    {
+      "id": "native.apple.889ef61e5911c728",
+      "source": "Finished",
+      "translated": "已完成"
+    },
+    {
+      "id": "native.apple.bb086e78b05fff33",
+      "source": "Background Tasks",
+      "translated": "后台任务"
+    },
+    {
+      "id": "native.apple.b109300cc5265643",
+      "source": "Refresh",
+      "translated": "刷新"
+    },
+    {
+      "id": "native.apple.51dd4026b0e770aa",
+      "source": "Prompt",
+      "translated": "提示词"
+    },
+    {
+      "id": "native.apple.e3268d00448fe1e3",
+      "source": "Loading…",
+      "translated": "正在加载…"
+    },
+    {
+      "id": "native.apple.56b9f7324f04a28d",
+      "source": "Prompt unavailable.",
+      "translated": "提示词不可用。"
+    },
+    {
+      "id": "native.apple.f8ed60c4d4b277ed",
+      "source": "Output",
+      "translated": "输出"
+    },
+    {
+      "id": "native.apple.f4545f1ff911f4e2",
+      "source": "No output yet.",
+      "translated": "暂无输出。"
+    },
+    {
+      "id": "native.apple.e2c229b2828a7152",
+      "source": "Task Details",
+      "translated": "任务详情"
+    },
+    {
+      "id": "native.apple.29cacb53ea5e77fc",
+      "source": "Pinned",
+      "translated": "已固定"
+    },
+    {
+      "id": "native.apple.940062cfdce9211b",
+      "source": "Recent",
+      "translated": "最近"
+    },
+    {
+      "id": "native.apple.a0980128426308a9",
+      "source": "Model",
+      "translated": "模型"
+    },
+    {
+      "id": "native.apple.9520e60f21535dde",
+      "source": "Thinking",
+      "translated": "思考"
+    },
+    {
+      "id": "native.apple.8b321f3ffce97429",
+      "source": "Fast",
+      "translated": "快速"
+    },
+    {
+      "id": "native.apple.989b70d64e328d55",
+      "source": "Default (inherited)",
+      "translated": "默认（继承）"
+    },
+    {
+      "id": "native.apple.f4114e73b07eb9ae",
+      "source": "Off",
+      "translated": "关闭"
+    },
+    {
+      "id": "native.apple.7ed231b28d16312f",
+      "source": "On",
+      "translated": "开启"
+    },
+    {
+      "id": "native.apple.412a74802320a037",
+      "source": "Full",
+      "translated": "完整"
+    },
+    {
+      "id": "native.apple.299f21a2071ff9fc",
+      "source": "Verbosity",
+      "translated": "详细程度"
+    },
+    {
+      "id": "native.apple.faf0ef05e1496de7",
+      "source": "Default",
+      "translated": "默认"
+    },
+    {
       "id": "native.apple.e5524d5756a62744",
       "source": "Unable to Export Transcript",
       "translated": "无法导出转录"
@@ -10204,14 +11889,39 @@
       "translated": "你想处理什么？"
     },
     {
-      "id": "native.apple.32179ce0b6d4543f",
+      "id": "native.apple.ed7f703a8809b564",
       "source": "The session attaches once the gateway is ready.",
-      "translated": "Gateway 准备就绪后，会话将会附加。"
+      "translated": "Gateway 准备就绪后，便会连接会话。"
+    },
+    {
+      "id": "native.apple.02611ddddef7295a",
+      "source": "Collapsed",
+      "translated": "已收起"
+    },
+    {
+      "id": "native.apple.1f4911f4a05230b5",
+      "source": "Expanded",
+      "translated": "已展开"
     },
     {
       "id": "native.apple.d19c9577e0fdfea7",
       "source": "Opens Settings / Gateway",
       "translated": "打开“设置”/“Gateway”"
+    },
+    {
+      "id": "native.apple.b59e690104ae3e24",
+      "source": "Hides the gateway status label",
+      "translated": "隐藏网关状态标签"
+    },
+    {
+      "id": "native.apple.5fcf9d462463dd27",
+      "source": "Shows the full gateway status label",
+      "translated": "显示完整网关状态标签"
+    },
+    {
+      "id": "native.apple.592b1e673e42df50",
+      "source": "Voice off",
+      "translated": "语音已关闭"
     },
     {
       "id": "native.apple.7c87384c7d1370e1",
@@ -10224,9 +11934,39 @@
       "translated": "在 Worktree 中新建聊天"
     },
     {
+      "id": "native.apple.ce6ebe91fc597015",
+      "source": "New Session Options…",
+      "translated": "新会话选项…"
+    },
+    {
+      "id": "native.apple.a1b0d289758e2213",
+      "source": "Sessions…",
+      "translated": "会话…"
+    },
+    {
+      "id": "native.apple.38fb02182bd2430c",
+      "source": "Dashboard",
+      "translated": "仪表板"
+    },
+    {
+      "id": "native.apple.17c13312e7532c89",
+      "source": "Background Tasks",
+      "translated": "后台任务"
+    },
+    {
       "id": "native.apple.ced228bb4d20a726",
       "source": "Export Transcript",
       "translated": "导出转录"
+    },
+    {
+      "id": "native.apple.d510e012c91b24ed",
+      "source": "Gateway Settings",
+      "translated": "网关设置"
+    },
+    {
+      "id": "native.apple.f26cef22f417abb4",
+      "source": "Show reasoning & tool activity",
+      "translated": "显示推理和工具活动"
     },
     {
       "id": "native.apple.940e1f943750c94b",
@@ -10369,12 +12109,12 @@
       "translated": "创建"
     },
     {
-      "id": "native.apple.f488b9caf6e51ac3",
+      "id": "native.apple.e7382c53c7dd48f7",
       "source": "Delete Session?",
       "translated": "删除会话？"
     },
     {
-      "id": "native.apple.8634b17be9b111bc",
+      "id": "native.apple.702fd8b48da56065",
       "source": "Delete Session",
       "translated": "删除会话"
     },
@@ -10384,9 +12124,9 @@
       "translated": "取消"
     },
     {
-      "id": "native.apple.4a9568ac9b18d8d3",
+      "id": "native.apple.61f3f19ea24c6012",
       "source": "This permanently deletes the session and its transcript.",
-      "translated": "这将永久删除该会话及其转录内容。"
+      "translated": "这将永久删除该会话及其记录。"
     },
     {
       "id": "native.apple.0965d8d2429c3b9f",
@@ -10414,7 +12154,7 @@
       "translated": "新建组"
     },
     {
-      "id": "native.apple.5bccdc23a1640895",
+      "id": "native.apple.cd368674179237a0",
       "source": "Rename Session",
       "translated": "重命名会话"
     },
@@ -10424,7 +12164,7 @@
       "translated": "组名称"
     },
     {
-      "id": "native.apple.af789b2d2fda0f67",
+      "id": "native.apple.8b54306971cfa8c9",
       "source": "Session name",
       "translated": "会话名称"
     },
@@ -10432,6 +12172,46 @@
       "id": "native.apple.e8018adcccaa2a4d",
       "source": "View More",
       "translated": "查看更多"
+    },
+    {
+      "id": "native.apple.e3ef1aa93156bd67",
+      "source": "Live",
+      "translated": "实时"
+    },
+    {
+      "id": "native.apple.bdfc040fb974b4aa",
+      "source": "Unread",
+      "translated": "未读"
+    },
+    {
+      "id": "native.apple.6f94924c0a736fcf",
+      "source": "Tokens",
+      "translated": "Token"
+    },
+    {
+      "id": "native.apple.bec8b61a3a29b59a",
+      "source": "Opens Sessions",
+      "translated": "打开会话"
+    },
+    {
+      "id": "native.apple.69279daa342241c1",
+      "source": "Pending approvals",
+      "translated": "待处理审批"
+    },
+    {
+      "id": "native.apple.48af1bbb4fd06321",
+      "source": "Automation issues",
+      "translated": "自动化问题"
+    },
+    {
+      "id": "native.apple.3e4f2dd3a0d41b97",
+      "source": "31-day usage",
+      "translated": "31 天用量"
+    },
+    {
+      "id": "native.apple.c334a60ae7b4d508",
+      "source": "Opens Usage",
+      "translated": "打开用量"
     },
     {
       "id": "native.apple.65fb4d9ce6e5bbda",
@@ -10464,14 +12244,14 @@
       "translated": "智能体"
     },
     {
-      "id": "native.apple.a3bde8045fe9224a",
+      "id": "native.apple.789d5d0790fd18ca",
       "source": "Agent session",
-      "translated": "智能体会话"
+      "translated": "代理会话"
     },
     {
-      "id": "native.apple.27f775de30b37ff8",
+      "id": "native.apple.ee45dce4a2e44737",
       "source": "Recent sessions",
-      "translated": "最近会话"
+      "translated": "最近的会话"
     },
     {
       "id": "native.apple.9161ca3c61de6cc7",
@@ -10479,9 +12259,9 @@
       "translated": "Gateway 离线"
     },
     {
-      "id": "native.apple.28c97cf23665ee01",
+      "id": "native.apple.c97e0382e578a2f7",
       "source": "No recent sessions",
-      "translated": "没有最近会话"
+      "translated": "没有最近的会话"
     },
     {
       "id": "native.apple.79937d7781fb65ae",
@@ -10539,6 +12319,11 @@
       "translated": "直接聊天"
     },
     {
+      "id": "native.apple.7a39e0991fa3cd53",
+      "source": "just now",
+      "translated": "刚刚"
+    },
+    {
       "id": "native.apple.dbd48d25920f342b",
       "source": "%@ on %@",
       "translated": "%@（位于 %@）"
@@ -10579,12 +12364,12 @@
       "translated": "取消"
     },
     {
-      "id": "native.apple.9f2fd65953013b7c",
+      "id": "native.apple.7a6511a467e34f69",
       "source": "Sessions",
       "translated": "会话"
     },
     {
-      "id": "native.apple.0422818cc95d5071",
+      "id": "native.apple.e6b8913014b64f0a",
       "source": "Archived sessions",
       "translated": "已归档的会话"
     },
@@ -10594,17 +12379,17 @@
       "translated": "显示已归档"
     },
     {
-      "id": "native.apple.b272115c83f7ef58",
+      "id": "native.apple.119433782518f199",
       "source": "Sessions unavailable",
       "translated": "会话不可用"
     },
     {
-      "id": "native.apple.54f8260c9b863087",
+      "id": "native.apple.9882fbadac3bea03",
       "source": "Loading archived sessions",
       "translated": "正在加载已归档的会话"
     },
     {
-      "id": "native.apple.9b305868873dade2",
+      "id": "native.apple.16dca1cfac8a571b",
       "source": "Loading recent sessions",
       "translated": "正在加载最近的会话"
     },
@@ -10614,12 +12399,12 @@
       "translated": "^[\\(count) 个会话](inflect: true)"
     },
     {
-      "id": "native.apple.1f4501a6bf2bae4c",
+      "id": "native.apple.a0b4091bf77d4060",
       "source": "No archived sessions",
       "translated": "没有已归档的会话"
     },
     {
-      "id": "native.apple.2a1ba7a5e1979c9e",
+      "id": "native.apple.acfdf5c72e289736",
       "source": "Archived sessions will appear here.",
       "translated": "已归档的会话将显示在此处。"
     },
@@ -10704,7 +12489,7 @@
       "translated": "共享入口"
     },
     {
-      "id": "native.apple.2360d25fe6ae9946",
+      "id": "native.apple.4c5b2ecf243cfbbc",
       "source": "Loading sessions",
       "translated": "正在加载会话"
     },
@@ -10714,19 +12499,19 @@
       "translated": "正在从 Gateway 获取最近活动。"
     },
     {
-      "id": "native.apple.c334f2e86702a7b8",
+      "id": "native.apple.c4479934c65c973c",
       "source": "Sessions unavailable",
       "translated": "会话不可用"
     },
     {
-      "id": "native.apple.6cc6efb7a03960b6",
+      "id": "native.apple.6e67b64954ba3002",
       "source": "No recent sessions",
-      "translated": "没有最近会话"
+      "translated": "没有最近的会话"
     },
     {
-      "id": "native.apple.08483af2d043bee6",
+      "id": "native.apple.5dce07848bec08b5",
       "source": "Session activity offline",
-      "translated": "会话活动离线"
+      "translated": "会话活动已离线"
     },
     {
       "id": "native.apple.e3586d8a603f67e0",
@@ -11184,7 +12969,7 @@
       "translated": "卡片"
     },
     {
-      "id": "native.apple.93eeaedb2ff61043",
+      "id": "native.apple.3edbccb7c14b693c",
       "source": "Open Session",
       "translated": "打开会话"
     },
@@ -11385,96 +13170,6 @@
     },
     {
       "id": "native.apple.1fc3cbd16076f75f",
-      "source": "Offline",
-      "translated": "离线"
-    },
-    {
-      "id": "native.apple.a2d8e7b4dba29764",
-      "source": "Control",
-      "translated": "控制"
-    },
-    {
-      "id": "native.apple.597471e86dda3d38",
-      "source": "Opens Settings / Gateway",
-      "translated": "打开设置 / Gateway"
-    },
-    {
-      "id": "native.apple.ed16c9793f468dcd",
-      "source": "Agent chat and recent work.",
-      "translated": "智能体聊天和近期工作。"
-    },
-    {
-      "id": "native.apple.a30d0a950d0a77aa",
-      "source": "Realtime voice and controls.",
-      "translated": "实时语音和控制。"
-    },
-    {
-      "id": "native.apple.a03e961ab14ba060",
-      "source": "Overview",
-      "translated": "概览"
-    },
-    {
-      "id": "native.apple.feb28c9cba676ba2",
-      "source": "Instances",
-      "translated": "实例"
-    },
-    {
-      "id": "native.apple.3f2726ccd1acd987",
-      "source": "Files",
-      "translated": "文件"
-    },
-    {
-      "id": "native.apple.614c9b40919fb103",
-      "source": "Dreaming",
-      "translated": "Dreaming"
-    },
-    {
-      "id": "native.apple.e2b5c2d7c5d461a3",
-      "source": "Usage",
-      "translated": "用量"
-    },
-    {
-      "id": "native.apple.f21bf1e3b5ec896c",
-      "source": "Automations",
-      "translated": "自动化"
-    },
-    {
-      "id": "native.apple.57587fec1ca582ec",
-      "source": "Default Agent",
-      "translated": "默认代理"
-    },
-    {
-      "id": "native.apple.e0e99a802f07cc68",
-      "source": "Gateway",
-      "translated": "Gateway"
-    },
-    {
-      "id": "native.apple.731e5fccde7cbc86",
-      "source": "Gateway %1$@, %2$@, %3$@",
-      "translated": "Gateway %1$@，%2$@，%3$@"
-    },
-    {
-      "id": "native.apple.ab0a315f69e3d5df",
-      "source": "Gateway %1$@, %2$@",
-      "translated": "Gateway %1$@，%2$@"
-    },
-    {
-      "id": "native.apple.01ad746119fbc27d",
-      "source": "Online",
-      "translated": "在线"
-    },
-    {
-      "id": "native.apple.e253ef19f6e53371",
-      "source": "Connecting",
-      "translated": "正在连接"
-    },
-    {
-      "id": "native.apple.6f28b07ebdc2b25d",
-      "source": "Attention",
-      "translated": "注意"
-    },
-    {
-      "id": "native.apple.1c931bcd1cd20334",
       "source": "Offline",
       "translated": "离线"
     },
@@ -11729,26 +13424,6 @@
       "translated": "确定"
     },
     {
-      "id": "native.apple.32230ecb2fbc2378",
-      "source": "Access Level",
-      "translated": "访问级别"
-    },
-    {
-      "id": "native.apple.7ed27029e9c313cc",
-      "source": "While Using the App",
-      "translated": "使用应用期间"
-    },
-    {
-      "id": "native.apple.b975064b240c9fd6",
-      "source": "Always",
-      "translated": "始终"
-    },
-    {
-      "id": "native.apple.756ff21ca904b2d8",
-      "source": "Choose when OpenClaw may share this iPhone's location with gateway tools.",
-      "translated": "选择 OpenClaw 何时可以与 gateway 工具共享此 iPhone 的位置。"
-    },
-    {
       "id": "native.apple.9515109ce97ec94e",
       "source": "Forget %@?",
       "translated": "忘记 %@？"
@@ -11952,6 +13627,11 @@
       "id": "native.apple.f330bd62f5b05c15",
       "source": "Gateway",
       "translated": "Gateway"
+    },
+    {
+      "id": "native.apple.2d878afa870cd7cc",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
     },
     {
       "id": "native.apple.b99af99847ac7823",
@@ -12279,9 +13959,24 @@
       "translated": "系统遵循此设备的外观设置。"
     },
     {
+      "id": "native.apple.6d48137a8f6a5e96",
+      "source": "Sidebar Agents",
+      "translated": "侧边栏智能体"
+    },
+    {
+      "id": "native.apple.69cccbdee0bb0b56",
+      "source": "How many agents the sidebar lists before the switcher menu.",
+      "translated": "侧边栏在切换菜单前列出的智能体数量。"
+    },
+    {
       "id": "native.apple.70eca66c79335a6e",
       "source": "Connection",
       "translated": "连接"
+    },
+    {
+      "id": "native.apple.fc49f9b63e160581",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
     },
     {
       "id": "native.apple.2c2cdafd79f8ba5b",
@@ -12604,11 +14299,6 @@
       "translated": "OpenClaw 感谢其在开源社区中的合作伙伴。"
     },
     {
-      "id": "native.apple.fc49f9b63e160581",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
-    },
-    {
       "id": "native.apple.eaa4fe72f3730f3f",
       "source": "Personal AI on your devices",
       "translated": "您设备上的个人 AI"
@@ -12659,6 +14349,16 @@
       "translated": "位置共享"
     },
     {
+      "id": "native.apple.29e2ea3e063e4553",
+      "source": "While Using the App",
+      "translated": "使用 App 期间"
+    },
+    {
+      "id": "native.apple.b7e8bf7dae32ab59",
+      "source": "Always",
+      "translated": "始终"
+    },
+    {
       "id": "native.apple.aadb749ebce75251",
       "source": "Access Level",
       "translated": "访问级别"
@@ -12679,7 +14379,7 @@
       "translated": "默认"
     },
     {
-      "id": "native.apple.3de045f17ea3c6d0",
+      "id": "native.apple.6805480889265026",
       "source": "Used for new Chat and Talk sessions.",
       "translated": "用于新的聊天和通话会话。"
     },
@@ -12719,14 +14419,24 @@
       "translated": "已配对的 Gateway"
     },
     {
-      "id": "native.apple.9a6bd720a544ec04",
-      "source": "Switch gateways without pairing again.",
-      "translated": "无需再次配对即可切换 gateway。"
+      "id": "native.apple.0c5dae9bc264aaa1",
+      "source": "Keep multiple gateways connected and switch which one is in focus.",
+      "translated": "保持多个 Gateway 连接，并切换当前聚焦的 Gateway。"
     },
     {
-      "id": "native.apple.5f33cfe2d21e6dc6",
-      "source": "Active Gateway",
-      "translated": "活动 Gateway"
+      "id": "native.apple.a1d2ffbfe64ef4ce",
+      "source": "Focused Gateway",
+      "translated": "当前聚焦的 Gateway"
+    },
+    {
+      "id": "native.apple.f819d2ea384fe6ed",
+      "source": "Disconnect Gateway",
+      "translated": "断开 Gateway"
+    },
+    {
+      "id": "native.apple.10d41627b8261536",
+      "source": "Keep Gateway Connected",
+      "translated": "保持 Gateway 连接"
     },
     {
       "id": "native.apple.4e1792b1044ec4a9",
@@ -12887,6 +14597,11 @@
       "id": "native.apple.ccb60c6b4d40b204",
       "source": "Run Share Self-Test",
       "translated": "运行分享自检"
+    },
+    {
+      "id": "native.apple.c2cab769e36ad25d",
+      "source": "Apple Health",
+      "translated": "Apple 健康"
     },
     {
       "id": "native.apple.dfbbe0f7c038894a",
@@ -13489,149 +15204,149 @@
       "translated": "ClawHub 未提供此技能的可安装版本。"
     },
     {
-      "id": "native.apple.798c3584ad95f8da",
-      "source": "Enable Talk",
-      "translated": "启用对话"
+      "id": "native.apple.0706fbaf1d690c8c",
+      "source": "I’ll keep this conversation separate from ordinary agent chat.",
+      "translated": "我会将此对话与普通的智能助手聊天分开。"
     },
     {
-      "id": "native.apple.c6e171128190d131",
-      "source": "Not Now",
-      "translated": "暂不"
+      "id": "native.apple.8904786f15a5e8c6",
+      "source": "I can check Gateway status, repair configuration, change models, or connect channels.",
+      "translated": "我可以检查 Gateway 状态、修复配置、更换模型或连接频道。"
     },
     {
-      "id": "native.apple.e4b15aef3c2e3da7",
-      "source": "Talk",
-      "translated": "通话"
+      "id": "native.apple.c541930fceee5dd7",
+      "source": "What should we look at first?",
+      "translated": "我们先看哪个？"
     },
     {
-      "id": "native.apple.ab3381742bdff650",
-      "source": "Conversation",
-      "translated": "对话"
+      "id": "native.apple.5877f7ad2a71eb89",
+      "source": "Check status",
+      "translated": "检查状态"
     },
     {
-      "id": "native.apple.7af100f6640c6a69",
-      "source": "Agent",
-      "translated": "智能体"
+      "id": "native.apple.16a0d6cf12b8dffb",
+      "source": "Review the Gateway and active services.",
+      "translated": "查看 Gateway 和活动服务。"
     },
     {
-      "id": "native.apple.49c4de60117b1a98",
-      "source": "Session",
-      "translated": "会话"
+      "id": "native.apple.0408526f52d7c028",
+      "source": "Review setup",
+      "translated": "查看设置"
     },
     {
-      "id": "native.apple.37c29d2506b955e9",
-      "source": "Runtime",
-      "translated": "运行时"
+      "id": "native.apple.ba578b311be24908",
+      "source": "Inspect models, channels, and configuration.",
+      "translated": "检查模型、渠道和配置。"
     },
     {
-      "id": "native.apple.13e0ad79b141576e",
-      "source": "Voice Mode",
-      "translated": "语音模式"
+      "id": "native.apple.1e1de0223a6380ef",
+      "source": "Gateway is not connected",
+      "translated": "Gateway 未连接"
     },
     {
-      "id": "native.apple.e8035b71bab833c7",
-      "source": "Configured",
-      "translated": "已配置"
+      "id": "native.apple.3c75d45619e216db",
+      "source": "<redacted secret>",
+      "translated": "<redacted secret>"
     },
     {
-      "id": "native.apple.1b2845ec89d20eef",
-      "source": "Active",
-      "translated": "活动"
+      "id": "native.apple.8aee90eb1e1061b9",
+      "source": "The Gateway connection changed. Restart OpenClaw to reconnect.",
+      "translated": "Gateway 连接已更改。请重启 OpenClaw 以重新连接。"
     },
     {
-      "id": "native.apple.a82c07df64d13b23",
-      "source": "Transport",
-      "translated": "传输"
+      "id": "native.apple.47bc765cd8464c1e",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
     },
     {
-      "id": "native.apple.384e097278f76954",
-      "source": "Last issue",
-      "translated": "上次问题"
+      "id": "native.apple.a791a671fb60b5f7",
+      "source": "OpenClaw is working…",
+      "translated": "OpenClaw 正在工作…"
     },
     {
-      "id": "native.apple.a6d8fc7bfd98836f",
-      "source": "Permission",
-      "translated": "权限"
+      "id": "native.apple.bd0e286399723c42",
+      "source": "Gateway Required",
+      "translated": "需要 Gateway"
     },
     {
-      "id": "native.apple.983bdcd5e3f1baa8",
-      "source": "Speech language",
-      "translated": "语音语言"
+      "id": "native.apple.7d707323fc24e456",
+      "source": "Full Access Required",
+      "translated": "需要完全访问权限"
     },
     {
-      "id": "native.apple.32e7fa2b1798e9c3",
-      "source": "Controls",
-      "translated": "控制"
+      "id": "native.apple.d37a3b497fc2b746",
+      "source": "Checking Gateway",
+      "translated": "正在检查 Gateway"
     },
     {
-      "id": "native.apple.0eb012a5d3d81b32",
-      "source": "Speakerphone",
-      "translated": "扬声器"
+      "id": "native.apple.55474e9051b8aabc",
+      "source": "Gateway Update Required",
+      "translated": "需要更新 Gateway"
     },
     {
-      "id": "native.apple.ef8699e2718346da",
-      "source": "Background listening",
-      "translated": "后台监听"
+      "id": "native.apple.441f1770a487a055",
+      "source": "Connect this iPhone to a Gateway before opening the OpenClaw settings assistant.",
+      "translated": "在打开 OpenClaw 设置助手之前，请将此 iPhone 连接到 Gateway。"
     },
     {
-      "id": "native.apple.1e6938a09b4fbe77",
-      "source": "Voice & Talk Settings",
-      "translated": "语音和通话设置"
+      "id": "native.apple.8e0a20f39742ff98",
+      "source": "Reconnect with operator.admin access to review and change Gateway settings.",
+      "translated": "使用 operator.admin 访问权限重新连接，以查看和更改 Gateway 设置。"
     },
     {
-      "id": "native.apple.c7a591fd5bb6687e",
-      "source": "Gateway approval is required before this phone can capture voice.",
-      "translated": "此手机需要获得 Gateway 批准后才能采集语音。"
+      "id": "native.apple.9115f5d67e36fd08",
+      "source": "Checking whether this Gateway supports the OpenClaw settings assistant.",
+      "translated": "正在检查此 Gateway 是否支持 OpenClaw 设置助手。"
     },
     {
-      "id": "native.apple.9d40e75e55ed39eb",
-      "source": "Voice is disabled in Apple Review demo mode.",
-      "translated": "Apple 审核演示模式下已禁用语音。"
+      "id": "native.apple.3a7955c72e7ab728",
+      "source": "Update this Gateway to use the OpenClaw settings assistant.",
+      "translated": "请更新此 Gateway 以使用 OpenClaw 设置助手。"
     },
     {
-      "id": "native.apple.3ef69bf916177799",
-      "source": "Connect to your gateway to start a voice conversation.",
-      "translated": "连接到 Gateway 以开始语音对话。"
+      "id": "native.apple.fd24248c00007ba3",
+      "source": "Restart",
+      "translated": "重启"
     },
     {
-      "id": "native.apple.ed03af7c68841a5d",
-      "source": "Open Voice settings after the gateway loads Talk configuration.",
-      "translated": "Gateway 加载 Talk 配置后，打开语音设置。"
+      "id": "native.apple.7ec6b261897ee62c",
+      "source": "OpenClaw is ready to continue in your ordinary chat.",
+      "translated": "OpenClaw 已准备好在你的普通聊天中继续。"
     },
     {
-      "id": "native.apple.883a251978601b96",
-      "source": "Routes voice to %@.",
-      "translated": "将语音路由到 %@。"
+      "id": "native.apple.ad820dd76c74e3f8",
+      "source": "Open Chat",
+      "translated": "打开聊天"
     },
     {
-      "id": "native.apple.877fb5c1abfaafa1",
-      "source": "Not loaded",
-      "translated": "Not loaded"
+      "id": "native.apple.1cfa800d32483cfd",
+      "source": "Enter secret",
+      "translated": "输入密钥"
     },
     {
-      "id": "native.apple.d3ccb092936551fc",
-      "source": "Not active",
-      "translated": "未启用"
+      "id": "native.apple.7efa99fdc895022e",
+      "source": "Enter secret…",
+      "translated": "输入密钥…"
     },
     {
-      "id": "native.apple.1620f7cb3deea133",
-      "source": "Open Gateway Settings",
-      "translated": "打开 Gateway 设置"
+      "id": "native.apple.e40e721e131e606e",
+      "source": "Reply to OpenClaw…",
+      "translated": "回复 OpenClaw…"
     },
     {
-      "id": "native.apple.3fd2706ef0f14fd2",
-      "source": "Open Voice Settings",
-      "translated": "打开语音设置"
+      "id": "native.apple.5b0adbb8a28011ab",
+      "source": "Send reply",
+      "translated": "发送回复"
     },
     {
-      "id": "native.apple.3cc9cd23a67db077",
-      "source": "Demo Mode Only",
-      "translated": "仅演示模式"
+      "id": "native.apple.16be123afdcc66c1",
+      "source": "Skip for now",
+      "translated": "暂时跳过"
     },
     {
-      "id": "native.apple.12c9d8231777366c",
-      "source": "Waiting for Approval",
-      "translated": "等待批准"
+      "id": "native.apple.441673bf8bef63c3",
+      "source": "Recommended",
+      "translated": "推荐"
     },
     {
       "id": "native.apple.dc57861a3ac5a08e",
@@ -13692,6 +15407,21 @@
       "id": "native.apple.cc304ba214b8a9df",
       "source": "Review this exec request before continuing. Your decision will be sent back to the gateway.",
       "translated": "继续前请审核此执行请求。您的决定将发送回 gateway。"
+    },
+    {
+      "id": "native.apple.d861d4796fad795b",
+      "source": "Plugin",
+      "translated": "插件"
+    },
+    {
+      "id": "native.apple.3e8bff33a33da259",
+      "source": "Tool",
+      "translated": "工具"
+    },
+    {
+      "id": "native.apple.0122ae27422ef135",
+      "source": "Severity",
+      "translated": "严重性"
     },
     {
       "id": "native.apple.1f2576ef69108e39",
@@ -13832,6 +15562,11 @@
       "id": "native.apple.f21a8e304b607dc8",
       "source": "Copy",
       "translated": "复制"
+    },
+    {
+      "id": "native.apple.7896bc893de41eae",
+      "source": "Reconnecting…",
+      "translated": "正在重新连接…"
     },
     {
       "id": "native.apple.760dbcb0180666e1",
@@ -14064,6 +15799,36 @@
       "translated": "不再显示"
     },
     {
+      "id": "native.apple.e80408b30ca670f4",
+      "source": "Apple Health Summaries",
+      "translated": "Apple 健康摘要"
+    },
+    {
+      "id": "native.apple.1d9253b4d79e1a6b",
+      "source": "Apple Health data is unavailable on this device.",
+      "translated": "此设备上无法使用 Apple 健康数据。"
+    },
+    {
+      "id": "native.apple.f332b4fb6215a12a",
+      "source": "Reads steps, sleep, resting heart rate, and workouts from Apple Health only when a summary is requested. Only the aggregate leaves this device through your Gateway to your configured AI provider; raw samples stay on this device and results may remain in chat history.",
+      "translated": "仅在请求摘要时从 Apple Health 读取步数、睡眠、静息心率和锻炼数据。只有汇总数据会通过您的 Gateway 离开此设备并发送至您配置的 AI 提供商；原始样本会保留在此设备上，结果可能会保留在聊天记录中。"
+    },
+    {
+      "id": "native.apple.279758eb7531d811",
+      "source": "Creates read-only summaries from the Apple Health app for steps, sleep, resting heart rate, and workouts. Only requested summaries leave this device through your Gateway to your configured AI provider; raw samples stay on this device.",
+      "translated": "根据 Apple 健康 App 中的步数、睡眠、静息心率和体能训练数据创建只读摘要。只有请求的摘要会通过您的 Gateway 离开此设备并发送至您配置的 AI 提供商；原始样本会保留在此设备上。"
+    },
+    {
+      "id": "native.apple.9e29919ede21527e",
+      "source": "Turn Off Summaries",
+      "translated": "关闭摘要"
+    },
+    {
+      "id": "native.apple.c229e9c6fa7bac3b",
+      "source": "Enable Apple Health Summaries",
+      "translated": "启用 Apple 健康摘要"
+    },
+    {
       "id": "native.apple.cf820096080f7031",
       "source": "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access.",
       "translated": "当你启用日历访问权限时，OpenClaw 会使用你的日历来显示事件和日程安排上下文。"
@@ -14109,14 +15874,14 @@
       "translated": "OpenClaw 可能会使用运动数据来支持设备感知的交互和自动化。"
     },
     {
-      "id": "native.apple.c86f7ba5b3762eb7",
-      "source": "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
-      "translated": "启用健康摘要后，OpenClaw 会读取步数、睡眠、静息心率和体能训练，以便与您配置的 AI 提供商共享请求的汇总数据。"
+      "id": "native.apple.1d3a6099d7e11895",
+      "source": "OpenClaw reads your steps, sleep, resting heart rate, and workouts from the Apple Health app to create summaries you request and send them through your Gateway to your configured AI provider.",
+      "translated": "OpenClaw 会从 Apple 健康 App 中读取您的步数、睡眠、静息心率和体能训练数据，以创建您请求的摘要，并通过您的 Gateway 将其发送至您配置的 AI 提供商。"
     },
     {
-      "id": "native.apple.89de9bad79f17038",
-      "source": "OpenClaw does not write or change Health data. Health Summaries read steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
-      "translated": "OpenClaw 不会写入或更改健康数据。健康摘要会读取步数、睡眠、静息心率和锻炼记录，以便与您配置的 AI 提供商共享所请求的汇总信息。"
+      "id": "native.apple.c90a204b3232c401",
+      "source": "OpenClaw does not write to the Apple Health app. It uses read-only data to create summaries you request and send them through your Gateway to your configured AI provider.",
+      "translated": "OpenClaw 不会向 Apple 健康 App 写入数据。它使用只读数据创建您请求的摘要，并通过您的 Gateway 将其发送至您配置的 AI 提供商。"
     },
     {
       "id": "native.apple.40ed4259ec869f1b",
@@ -14152,6 +15917,41 @@
       "id": "native.apple.8faaac6dab276c0a",
       "source": "Action required",
       "translated": "需要操作"
+    },
+    {
+      "id": "native.apple.7205f0822706cb55",
+      "source": "Listening",
+      "translated": "正在聆听"
+    },
+    {
+      "id": "native.apple.8b10cb1dc21e42af",
+      "source": "Listening (PTT)",
+      "translated": "正在聆听（按住说话）"
+    },
+    {
+      "id": "native.apple.939c7ec55636c67f",
+      "source": "Listening (Realtime)",
+      "translated": "正在聆听（实时）"
+    },
+    {
+      "id": "native.apple.86f203ebb2453d15",
+      "source": "Speaking…",
+      "translated": "正在朗读…"
+    },
+    {
+      "id": "native.apple.1e3ff6b56ae3828d",
+      "source": "Speaking (System)…",
+      "translated": "正在朗读（系统）…"
+    },
+    {
+      "id": "native.apple.37a5fedaefb8ebf3",
+      "source": "Generating voice…",
+      "translated": "正在生成语音…"
+    },
+    {
+      "id": "native.apple.47003f094346c660",
+      "source": "Ready",
+      "translated": "就绪"
     },
     {
       "id": "native.apple.cf0450b542893fb5",
@@ -14974,59 +16774,134 @@
       "translated": "unknown relay error"
     },
     {
-      "id": "native.apple.f2ea327bfea8b8e3",
-      "source": "Talk",
-      "translated": "对话"
-    },
-    {
-      "id": "native.apple.bda6cfa988e49a75",
-      "source": "Control",
-      "translated": "控制"
-    },
-    {
-      "id": "native.apple.3c80f5351055a5f3",
-      "source": "Agent",
-      "translated": "代理"
-    },
-    {
-      "id": "native.apple.22d107db5b905ef4",
-      "source": "Settings",
-      "translated": "设置"
-    },
-    {
-      "id": "native.apple.c23d35de8d70863f",
+      "id": "native.apple.8855710a55de2ed5",
       "source": "OpenClaw",
       "translated": "OpenClaw"
     },
     {
-      "id": "native.apple.9e781c0183b79a76",
-      "source": "OpenClaw %@",
-      "translated": "OpenClaw %@"
+      "id": "native.apple.7029e1235380a92c",
+      "source": "Settings",
+      "translated": "设置"
     },
     {
-      "id": "native.apple.f4eea6473f43388d",
+      "id": "native.apple.7042a7d70a7e5a20",
+      "source": "Hide Sidebar",
+      "translated": "隐藏侧边栏"
+    },
+    {
+      "id": "native.apple.e779847164babc29",
+      "source": "Selected",
+      "translated": "已选择"
+    },
+    {
+      "id": "native.apple.698c71602b569378",
+      "source": "More Agents",
+      "translated": "更多智能体"
+    },
+    {
+      "id": "native.apple.94772cbd85c42e6e",
+      "source": "Search sessions",
+      "translated": "搜索会话"
+    },
+    {
+      "id": "native.apple.38e1e910f0958067",
+      "source": "Clear session search",
+      "translated": "清除会话搜索"
+    },
+    {
+      "id": "native.apple.58248484e54174e3",
+      "source": "Loading sessions",
+      "translated": "正在加载会话"
+    },
+    {
+      "id": "native.apple.dfb5cbd55893c4e5",
+      "source": "No recent sessions",
+      "translated": "没有最近的会话"
+    },
+    {
+      "id": "native.apple.01a4c3f6192bb1a3",
+      "source": "Recent",
+      "translated": "最近"
+    },
+    {
+      "id": "native.apple.c0a4d120556df169",
+      "source": "All Sessions…",
+      "translated": "所有会话…"
+    },
+    {
+      "id": "native.apple.aa7c4ecffd2ba36a",
+      "source": "Edit Pages",
+      "translated": "编辑页面"
+    },
+    {
+      "id": "native.apple.4d724d2e5731583d",
+      "source": "Home",
+      "translated": "主页"
+    },
+    {
+      "id": "native.apple.3995f7f73d1ded5f",
+      "source": "Unread",
+      "translated": "未读"
+    },
+    {
+      "id": "native.apple.b4567540cbcaf944",
+      "source": "Attention",
+      "translated": "注意"
+    },
+    {
+      "id": "native.apple.14858678ae3f059f",
+      "source": "New Chat",
+      "translated": "新建聊天"
+    },
+    {
+      "id": "native.apple.9d87aa7e7862a607",
+      "source": "Connection",
+      "translated": "连接"
+    },
+    {
+      "id": "native.apple.7e7c47f471dd2c69",
       "source": "Online",
       "translated": "在线"
     },
     {
-      "id": "native.apple.9e2aea6088887f1f",
+      "id": "native.apple.02ff27780aad60aa",
       "source": "Connecting",
       "translated": "正在连接"
     },
     {
-      "id": "native.apple.3624978c7d43335a",
+      "id": "native.apple.b2d0754aab434ea3",
       "source": "Needs attention",
       "translated": "需要注意"
     },
     {
-      "id": "native.apple.7da053dd774cb201",
+      "id": "native.apple.342c72a01b0f4bb1",
       "source": "Offline",
       "translated": "离线"
     },
     {
-      "id": "native.apple.a4256b2ab523ee60",
-      "source": "Chat",
-      "translated": "聊天"
+      "id": "native.apple.9fc7dfa0dccea003",
+      "source": "Pinned pages stay in the sidebar. Home is always shown.",
+      "translated": "固定的页面会保留在边栏中。主页始终显示。"
+    },
+    {
+      "id": "native.apple.4bfe6dc45811d50f",
+      "source": "Pages",
+      "translated": "页面"
+    },
+    {
+      "id": "native.apple.422767686f219093",
+      "source": "Done",
+      "translated": "完成"
+    },
+    {
+      "id": "native.apple.e197e8708ad3b2c8",
+      "source": "Pinned",
+      "translated": "已固定"
+    },
+    {
+      "id": "native.apple.098013d7dd8cdfc7",
+      "source": "Not pinned",
+      "translated": "未固定"
     },
     {
       "id": "native.apple.64d7dc062ef4cc81",
@@ -15064,19 +16939,14 @@
       "translated": "自动化"
     },
     {
-      "id": "native.apple.20f4753fc51c5341",
-      "source": "Show Sidebar",
-      "translated": "显示侧边栏"
-    },
-    {
-      "id": "native.apple.bb0ea6d61a32c7c2",
-      "source": "Back to %@",
-      "translated": "返回 %@"
-    },
-    {
       "id": "native.apple.72fab75688479b3e",
       "source": "Hide Sidebar",
       "translated": "隐藏侧边栏"
+    },
+    {
+      "id": "native.apple.20f4753fc51c5341",
+      "source": "Show Sidebar",
+      "translated": "显示侧边栏"
     },
     {
       "id": "native.apple.8af43f59602ec0d8",
@@ -15114,11 +16984,6 @@
       "translated": "聊天"
     },
     {
-      "id": "native.apple.febca7528af94342",
-      "source": "Talk",
-      "translated": "对话"
-    },
-    {
       "id": "native.apple.e26bbe303d8a9544",
       "source": "Overview",
       "translated": "概览"
@@ -15149,7 +17014,7 @@
       "translated": "实例"
     },
     {
-      "id": "native.apple.3579cf2750470a22",
+      "id": "native.apple.e3e3ce1a79ebbd70",
       "source": "Sessions",
       "translated": "会话"
     },
@@ -15284,11 +17149,6 @@
       "translated": "仅添加"
     },
     {
-      "id": "native.apple.33df187e4402065a",
-      "source": "Health Summaries",
-      "translated": "健康摘要"
-    },
-    {
       "id": "native.apple.0b10201d7e452dc4",
       "source": "Allow",
       "translated": "允许"
@@ -15297,31 +17157,6 @@
       "id": "native.apple.3cb9ed2ae352f95c",
       "source": "Open Settings",
       "translated": "打开设置"
-    },
-    {
-      "id": "native.apple.3f902cdb4d4e9176",
-      "source": "Health data is unavailable on this device.",
-      "translated": "此设备无法使用健康数据。"
-    },
-    {
-      "id": "native.apple.33316ec020810816",
-      "source": "Shares only requested step, sleep, resting heart rate, and workout aggregates through your Gateway with your configured AI provider. Results may remain in chat history.",
-      "translated": "仅通过您的 Gateway 与已配置的 AI 提供商共享请求的步数、睡眠、静息心率和体能训练汇总数据。结果可能会保留在聊天记录中。"
-    },
-    {
-      "id": "native.apple.53fb25cb6e6aae6e",
-      "source": "Off by default. Enabling lets requested aggregates leave this iPhone through your Gateway and configured AI provider.",
-      "translated": "默认关闭。启用后，请求的汇总数据可通过您的 Gateway 和已配置的 AI 提供商离开此 iPhone。"
-    },
-    {
-      "id": "native.apple.6c2be9b001fb95b0",
-      "source": "Disable",
-      "translated": "停用"
-    },
-    {
-      "id": "native.apple.9eab20fbad55a0a9",
-      "source": "Enable & Share Summaries",
-      "translated": "启用并共享摘要"
     },
     {
       "id": "native.apple.d9f9a74e25431256",
@@ -15377,11 +17212,6 @@
       "id": "native.apple.0a687ce373931085",
       "source": "Open Gateway Settings",
       "translated": "打开 Gateway 设置"
-    },
-    {
-      "id": "native.apple.f90c1fb8880c70c0",
-      "source": "[\\(host)]",
-      "translated": "[\\(host)]"
     },
     {
       "id": "native.apple.3b21081fb5ce84ba",
@@ -15519,6 +17349,11 @@
       "translated": "正在请求权限…"
     },
     {
+      "id": "native.apple.198f59c97d7afe11",
+      "source": "Start failed: %@",
+      "translated": "启动失败：%@"
+    },
+    {
       "id": "native.apple.a1910b5c2e008b6c",
       "source": "Microphone permission denied",
       "translated": "麦克风权限被拒绝"
@@ -15527,11 +17362,6 @@
       "id": "native.apple.6a48b93f46ea3b08",
       "source": "Speech recognition",
       "translated": "语音识别"
-    },
-    {
-      "id": "native.apple.198f59c97d7afe11",
-      "source": "Start failed: %@",
-      "translated": "启动失败：%@"
     },
     {
       "id": "native.apple.c09f4e3bbef8177a",
@@ -15689,6 +17519,11 @@
       "translated": "OpenClaw 不可用"
     },
     {
+      "id": "native.apple.f4adf2762402e92a",
+      "source": "Confirmation needed",
+      "translated": "需要确认"
+    },
+    {
       "id": "native.apple.f703391677039fa3",
       "source": "iOS Speech + TTS",
       "translated": "iOS 语音识别 + TTS"
@@ -15744,66 +17579,6 @@
       "translated": "正在聆听（按住说话）"
     },
     {
-      "id": "native.apple.0189269b6a863dc2",
-      "source": "Request ID",
-      "translated": "请求 ID"
-    },
-    {
-      "id": "native.apple.f9d69f27f9d7f4de",
-      "source": "Sending...",
-      "translated": "正在发送..."
-    },
-    {
-      "id": "native.apple.0c5336129f70faed",
-      "source": "Retry",
-      "translated": "重试"
-    },
-    {
-      "id": "native.apple.7b23f0a89d3ad411",
-      "source": "Sending approval request",
-      "translated": "正在发送审批请求"
-    },
-    {
-      "id": "native.apple.55db7317a2542e51",
-      "source": "Approval sent",
-      "translated": "审批已发送"
-    },
-    {
-      "id": "native.apple.06330f62ab254a0e",
-      "source": "Could not request approval",
-      "translated": "无法请求审批"
-    },
-    {
-      "id": "native.apple.6580d3d1cdda682d",
-      "source": "Enable Talk",
-      "translated": "启用 Talk"
-    },
-    {
-      "id": "native.apple.abbfc1ba85a230b4",
-      "source": "Sending a new pairing request to your gateway...",
-      "translated": "正在向您的 gateway 发送新的配对请求..."
-    },
-    {
-      "id": "native.apple.2880deb53ea2fd86",
-      "source": "Approve this request on your gateway. Talk will start automatically when approval lands.",
-      "translated": "请在您的 gateway 上批准此请求。审批完成后，Talk 将自动启动。"
-    },
-    {
-      "id": "native.apple.80faa829f543c03c",
-      "source": "This device needs gateway approval before Talk can use realtime voice. Audio will go directly from this device to the voice provider.",
-      "translated": "This device needs gateway approval before Talk can use realtime voice. Audio will go directly from this device to the voice provider."
-    },
-    {
-      "id": "native.apple.88b0a2e2986fcebf",
-      "source": "Request Again",
-      "translated": "再次请求"
-    },
-    {
-      "id": "native.apple.5a3faae3472b4b86",
-      "source": "Send Approval Request",
-      "translated": "发送审批请求"
-    },
-    {
       "id": "native.apple.1065cfe92d7c1eb6",
       "source": "Asking OpenClaw",
       "translated": "正在询问 OpenClaw"
@@ -15812,6 +17587,16 @@
       "id": "native.apple.d2db26b3bb266491",
       "source": "Updating OpenClaw",
       "translated": "正在更新 OpenClaw"
+    },
+    {
+      "id": "native.apple.4b89dccea20c58fa",
+      "source": "Confirmation needed",
+      "translated": "需要确认"
+    },
+    {
+      "id": "native.apple.8a62f0e9416188e3",
+      "source": "OpenClaw unavailable",
+      "translated": "OpenClaw 不可用"
     },
     {
       "id": "native.apple.8a944b06087fe8ef",
@@ -15887,6 +17672,11 @@
       "id": "native.apple.00887489a998411e",
       "source": "%@ permission denied",
       "translated": "%@ 权限被拒绝"
+    },
+    {
+      "id": "native.apple.944004de80cfc8b7",
+      "source": "[\\(host)]",
+      "translated": "[\\(host)]"
     },
     {
       "id": "native.apple.12a4a51d251f65c0",
@@ -17809,6 +19599,16 @@
       "translated": "编辑"
     },
     {
+      "id": "native.apple.919c9d3727497989",
+      "source": "Edit automation",
+      "translated": "编辑自动化"
+    },
+    {
+      "id": "native.apple.3587c8ad6de422b3",
+      "source": "Command and script payloads are read-only in the macOS app",
+      "translated": "命令和脚本负载在 macOS App 中为只读"
+    },
+    {
       "id": "native.apple.04c710cf31471ebd",
       "source": "Schedule",
       "translated": "计划"
@@ -17894,11 +19694,6 @@
       "translated": "思考 \\(thinking)"
     },
     {
-      "id": "native.apple.a513a17d658a1aa2",
-      "source": "\\(timeoutSeconds)s",
-      "translated": "\\(timeoutSeconds)s"
-    },
-    {
       "id": "native.apple.41cd997805bd59e3",
       "source": "announce",
       "translated": "播报"
@@ -17907,6 +19702,26 @@
       "id": "native.apple.6e5597dd202288ee",
       "source": "no delivery",
       "translated": "未送达"
+    },
+    {
+      "id": "native.apple.c27e3019dfe8e877",
+      "source": "command · read-only",
+      "translated": "命令 · 只读"
+    },
+    {
+      "id": "native.apple.5e02b5f297de21b0",
+      "source": "script · read-only",
+      "translated": "脚本 · 只读"
+    },
+    {
+      "id": "native.apple.a513a17d658a1aa2",
+      "source": "\\(timeoutSeconds)s",
+      "translated": "\\(timeoutSeconds)s"
+    },
+    {
+      "id": "native.apple.b42d8e457b71b478",
+      "source": "\\(toolBudget) tools",
+      "translated": "\\(toolBudget) 个工具"
     },
     {
       "id": "native.apple.5eea57b14cab3876",
@@ -18484,6 +20299,121 @@
       "translated": "unknown error"
     },
     {
+      "id": "native.apple.e0b70da297ef8a61",
+      "source": "Remove Gateway?",
+      "translated": "移除 Gateway？"
+    },
+    {
+      "id": "native.apple.983c58888b89f27f",
+      "source": "Remove",
+      "translated": "移除"
+    },
+    {
+      "id": "native.apple.7b53872a9637b308",
+      "source": "\\(profile.name) and its saved credentials will be removed. Its open windows will close.",
+      "translated": "\\(profile.name) 及其保存的凭据将被移除。其打开的窗口将关闭。"
+    },
+    {
+      "id": "native.apple.a4d437ba492adc8b",
+      "source": "Gateway Error",
+      "translated": "Gateway 错误"
+    },
+    {
+      "id": "native.apple.33c3c61e0fb62195",
+      "source": "OK",
+      "translated": "好"
+    },
+    {
+      "id": "native.apple.bfd13b43b2fd425c",
+      "source": "Gateways",
+      "translated": "Gateways"
+    },
+    {
+      "id": "native.apple.1ff05976802ac6c9",
+      "source": "Save Gateway connections for chat windows. The primary Gateway under Connection still owns Mac integrations and Talk Mode.",
+      "translated": "保存用于聊天窗口的 Gateway 连接。“连接”下的主要 Gateway 仍负责 Mac 集成和对话模式。"
+    },
+    {
+      "id": "native.apple.7fdfccfafd3ff368",
+      "source": "Loading Gateways…",
+      "translated": "正在加载 Gateways…"
+    },
+    {
+      "id": "native.apple.593c7f1b06caf821",
+      "source": "No Gateways saved",
+      "translated": "未保存任何 Gateway"
+    },
+    {
+      "id": "native.apple.9053ce4456cc06f0",
+      "source": "Add a Gateway here, then use File → New Gateway Window… (⌘N) whenever you want another window for it.",
+      "translated": "在此添加 Gateway，之后需要为其打开另一个窗口时，可使用“文件”→“新建 Gateway 窗口…”（⌘N）。"
+    },
+    {
+      "id": "native.apple.5b3b79e66c434e33",
+      "source": "Saved Gateways",
+      "translated": "已保存的 Gateways"
+    },
+    {
+      "id": "native.apple.c49f6831863c8dae",
+      "source": "Open Window",
+      "translated": "打开窗口"
+    },
+    {
+      "id": "native.apple.3c90290e04c6dc5f",
+      "source": "Remove \\(profile.name)",
+      "translated": "移除 \\(profile.name)"
+    },
+    {
+      "id": "native.apple.98935e9c19760b62",
+      "source": "Add Gateway",
+      "translated": "添加 Gateway"
+    },
+    {
+      "id": "native.apple.fb5076533e3003a3",
+      "source": "Credentials are stored with this profile in your Mac Keychain.",
+      "translated": "凭据将随此配置文件存储在你的 Mac 钥匙串中。"
+    },
+    {
+      "id": "native.apple.a7ee8d846fd61525",
+      "source": "Name",
+      "translated": "名称"
+    },
+    {
+      "id": "native.apple.c65e3cdc3d2c9b36",
+      "source": "Studio",
+      "translated": "工作室"
+    },
+    {
+      "id": "native.apple.ce48afbb966a6933",
+      "source": "Gateway URL",
+      "translated": "Gateway URL"
+    },
+    {
+      "id": "native.apple.aeb21e4c3192125f",
+      "source": "wss://gateway.example.com",
+      "translated": "wss://gateway.example.com"
+    },
+    {
+      "id": "native.apple.f585ed08c1f6a65e",
+      "source": "Token",
+      "translated": "令牌"
+    },
+    {
+      "id": "native.apple.9a090d8a5c8fb7cb",
+      "source": "Password",
+      "translated": "密码"
+    },
+    {
+      "id": "native.apple.f3448df352fdd5d4",
+      "source": "Optional",
+      "translated": "可选"
+    },
+    {
+      "id": "native.apple.1f1c9084eb6a2982",
+      "source": "Cancel",
+      "translated": "取消"
+    },
+    {
       "id": "native.apple.7b5eaba753440639",
       "source": "General",
       "translated": "通用"
@@ -18532,6 +20462,26 @@
       "id": "native.apple.bdb0b9020356722a",
       "source": "Enable idle blinks and wiggles on the status icon.",
       "translated": "启用状态图标的空闲眨眼和摆动效果。"
+    },
+    {
+      "id": "native.apple.093df96ad9d52a40",
+      "source": "Quick Chat",
+      "translated": "快速聊天"
+    },
+    {
+      "id": "native.apple.a66e340b4e1bd972",
+      "source": "Show a floating composer for quick messages, summoned with a global shortcut.",
+      "translated": "显示一个用于快速发送消息的浮动编辑器，可通过全局快捷键呼出。"
+    },
+    {
+      "id": "native.apple.d908ab245711bbd2",
+      "source": "Quick Chat shortcut",
+      "translated": "快速聊天快捷键"
+    },
+    {
+      "id": "native.apple.94dd793cd7d7d555",
+      "source": "Global shortcut that opens a floating chat bar for the main thread.",
+      "translated": "用于打开主话题串浮动聊天栏的全局快捷键。"
     },
     {
       "id": "native.apple.a66c725f98bfa823",
@@ -19109,9 +21059,14 @@
       "translated": "严重"
     },
     {
-      "id": "native.apple.75102378a6775180",
-      "source": "New Session",
-      "translated": "新建会话"
+      "id": "native.apple.130664b1dd61cbbf",
+      "source": "New Gateway Window…",
+      "translated": "新建 Gateway 窗口…"
+    },
+    {
+      "id": "native.apple.13f96467014cf344",
+      "source": "New Thread",
+      "translated": "新建话题串"
     },
     {
       "id": "native.apple.185a1b27c9859cc0",
@@ -19217,6 +21172,11 @@
       "id": "native.apple.723e0d2283af1458",
       "source": "Open Chat",
       "translated": "打开聊天"
+    },
+    {
+      "id": "native.apple.22334935d637c907",
+      "source": "Quick Chat",
+      "translated": "快速聊天"
     },
     {
       "id": "native.apple.5e3cd7734f27f447",
@@ -19519,6 +21479,16 @@
       "translated": "下一步"
     },
     {
+      "id": "native.apple.3db546546fbaf38e",
+      "source": "OpenClaw is preparing a local model.",
+      "translated": "OpenClaw 正在准备本地模型。"
+    },
+    {
+      "id": "native.apple.c5992a23c991f948",
+      "source": "OpenClaw is completing provider sign-in.",
+      "translated": "OpenClaw 正在完成提供方登录。"
+    },
+    {
       "id": "native.apple.0f3c1c6f0672bed7",
       "source": "The Gateway setup request failed.",
       "translated": "Gateway 设置请求失败。"
@@ -19554,9 +21524,9 @@
       "translated": "OpenClaw 会在更改任何推理设置之前再次检查。"
     },
     {
-      "id": "native.apple.c7a02803addf11fa",
-      "source": "Checking for Claude Code, Codex, Gemini, and saved API keys.",
-      "translated": "正在检查 Claude Code、Codex、Gemini 和已保存的 API 密钥。"
+      "id": "native.apple.a0a8f45082d0ba99",
+      "source": "Checking CLI logins, saved API keys, and local model servers on the Gateway.",
+      "translated": "正在检查网关上的 CLI 登录、已保存的 API 密钥和本地模型服务器。"
     },
     {
       "id": "native.apple.0fd3e5267cdf8250",
@@ -19564,9 +21534,9 @@
       "translated": "无法在此 Gateway 上检查 AI 账户"
     },
     {
-      "id": "native.apple.0af61b95d249c351",
-      "source": "Couldn’t check this Mac for AI accounts",
-      "translated": "无法在此 Mac 上检查 AI 账户"
+      "id": "native.apple.82ba8c9a69fbb84b",
+      "source": "Couldn’t check this Gateway for AI access",
+      "translated": "无法检查此网关的 AI 访问权限"
     },
     {
       "id": "native.apple.ab05bb1569f89077",
@@ -19609,14 +21579,34 @@
       "translated": "复制设置详情"
     },
     {
-      "id": "native.apple.f5a157404f7a0eff",
-      "source": "No AI accounts found on this Mac",
-      "translated": "在此 Mac 上未找到 AI 账户"
+      "id": "native.apple.e0458fcb8c0536ea",
+      "source": "No usable AI access found on this Gateway",
+      "translated": "此网关上未找到可用的 AI 访问方式"
     },
     {
-      "id": "native.apple.76072d0308a553ca",
-      "source": "That’s fine — you can connect one with an API key or token. If you use Claude Code, Codex, or the Gemini CLI on this Mac, sign in there first and hit “Check again”.",
-      "translated": "没关系——你可以使用 API 密钥或令牌连接一个。如果你在此 Mac 上使用 Claude Code、Codex 或 Gemini CLI，请先在那里登录，然后点击“再次检查”。"
+      "id": "native.apple.1833f355381b12f3",
+      "source": "Connect a provider below with an API key or token, then check again.",
+      "translated": "使用 API 密钥或令牌连接下方的提供商，然后再次检查。"
+    },
+    {
+      "id": "native.apple.7345ff41fe96eaed",
+      "source": "Install one of these tools, then check again. You can also connect a provider below.",
+      "translated": "安装以下任一工具，然后再次检查。你也可以连接下方的提供商。"
+    },
+    {
+      "id": "native.apple.14b8c3e061779615",
+      "source": "Recommended installs",
+      "translated": "推荐安装"
+    },
+    {
+      "id": "native.apple.e2749739df556643",
+      "source": "Detected, but not auto-tested",
+      "translated": "已检测到，但未自动测试"
+    },
+    {
+      "id": "native.apple.5f604e17336ca8a7",
+      "source": "\\(candidate.label) — \\(candidate.detail)",
+      "translated": "\\(candidate.label) — \\(candidate.detail)"
     },
     {
       "id": "native.apple.5f28927fe23c11cb",
@@ -19632,6 +21622,21 @@
       "id": "native.apple.89790664bd5e0758",
       "source": "Check again",
       "translated": "再次检查"
+    },
+    {
+      "id": "native.apple.82148c7c60e4fb74",
+      "source": "Set up a local model",
+      "translated": "设置本地模型"
+    },
+    {
+      "id": "native.apple.506a932536c642c2",
+      "source": "Download or prepare a local model on this Gateway.",
+      "translated": "在此 Gateway 上下载或准备本地模型。"
+    },
+    {
+      "id": "native.apple.d31411a9f3c68c33",
+      "source": "Set up / Download model",
+      "translated": "设置 / 下载模型"
     },
     {
       "id": "native.apple.7fc409b6aaa6d3b9",
@@ -19664,6 +21669,11 @@
       "translated": "登录"
     },
     {
+      "id": "native.apple.b62dfd708d5cfb14",
+      "source": "The model is downloaded and prepared on this Gateway.",
+      "translated": "模型已在此 Gateway 上下载并准备就绪。"
+    },
+    {
       "id": "native.apple.869fe436119bb8a6",
       "source": "Credentials stay on this Gateway and are saved only after the live test succeeds.",
       "translated": "凭据仅保留在此 Gateway 上，且仅在实时测试成功后才会保存。"
@@ -19674,9 +21684,19 @@
       "translated": "打开登录页面…"
     },
     {
+      "id": "native.apple.91cd595c858a6ea7",
+      "source": "Starting local model setup…",
+      "translated": "正在启动本地模型设置…"
+    },
+    {
       "id": "native.apple.bb3352787887c424",
       "source": "Starting secure sign-in…",
       "translated": "正在启动安全登录…"
+    },
+    {
+      "id": "native.apple.ba9a46f1e6c4d477",
+      "source": "Model setup didn’t complete",
+      "translated": "模型设置未完成"
     },
     {
       "id": "native.apple.d7519516740bfc93",
@@ -19789,6 +21809,31 @@
       "translated": "复制错误"
     },
     {
+      "id": "native.apple.7dee24e5bf088dd5",
+      "source": "\\(incomplete) \\(Self.memoryNoun(incomplete)) could not be imported.",
+      "translated": "无法导入 \\(incomplete) 个\\(Self.memoryNoun(incomplete))。"
+    },
+    {
+      "id": "native.apple.84189c39ea5803c6",
+      "source": "The Gateway returned an inconsistent provider plan. Try planning again.",
+      "translated": "Gateway 返回的提供商计划不一致。请尝试重新规划。"
+    },
+    {
+      "id": "native.apple.4c9e75d64cbc5cc2",
+      "source": "The Gateway did not return a usable import plan. Try planning again.",
+      "translated": "Gateway 未返回可用的导入计划。请尝试重新规划。"
+    },
+    {
+      "id": "native.apple.2070bf43a67680ee",
+      "source": "The Gateway could not plan \\(plan.summary.errors) \\(Self.memoryNoun(plan.summary.errors)). Try again.",
+      "translated": "Gateway 无法规划 \\(plan.summary.errors) 个\\(Self.memoryNoun(plan.summary.errors))。请重试。"
+    },
+    {
+      "id": "native.apple.ba758aa97c24ffe6",
+      "source": "Wake up, my friend!",
+      "translated": "醒醒，我的朋友！"
+    },
+    {
       "id": "native.apple.1400567a01a8d7c0",
       "source": "<redacted secret>",
       "translated": "<已隐藏的密钥>"
@@ -19824,6 +21869,16 @@
       "translated": "回复 OpenClaw…（回复 yes 即可完成所有设置）"
     },
     {
+      "id": "native.apple.134b9ae1d8a543df",
+      "source": "Skip for now",
+      "translated": "暂时跳过"
+    },
+    {
+      "id": "native.apple.5435391fa338f227",
+      "source": "Recommended",
+      "translated": "推荐"
+    },
+    {
       "id": "native.apple.78d1ad73762a7ce8",
       "source": "Connect your AI",
       "translated": "连接你的 AI"
@@ -19832,6 +21887,106 @@
       "id": "native.apple.c8a2f8dc424fe447",
       "source": "Back",
       "translated": "返回"
+    },
+    {
+      "id": "native.apple.7ca0977d5f73356d",
+      "source": "Bring your memories along",
+      "translated": "带上你的记忆"
+    },
+    {
+      "id": "native.apple.b57ee4f83cff23f3",
+      "source": "OpenClaw can bring useful context from AI tools you already use into your new assistant.",
+      "translated": "OpenClaw 可以将你已在使用的 AI 工具中的有用上下文导入新助手。"
+    },
+    {
+      "id": "native.apple.46cab71d748860b8",
+      "source": "Looking for memories…",
+      "translated": "正在查找记忆…"
+    },
+    {
+      "id": "native.apple.c9e5f1aebe85e201",
+      "source": "Checking supported AI tools on this Mac.",
+      "translated": "正在检查此 Mac 上支持的 AI 工具。"
+    },
+    {
+      "id": "native.apple.77290f36f36f00e5",
+      "source": "No memories to import",
+      "translated": "没有可导入的记忆"
+    },
+    {
+      "id": "native.apple.e5cca7b9f082ace9",
+      "source": "You can import memories later from the dashboard.",
+      "translated": "你可以稍后从仪表板导入记忆。"
+    },
+    {
+      "id": "native.apple.963add2f12fd18cb",
+      "source": "Import memories",
+      "translated": "导入记忆"
+    },
+    {
+      "id": "native.apple.9db369e036a38a29",
+      "source": "Importing memories…",
+      "translated": "正在导入记忆…"
+    },
+    {
+      "id": "native.apple.71b8e38a5e7040ef",
+      "source": "Refresh plan",
+      "translated": "刷新计划"
+    },
+    {
+      "id": "native.apple.e87bec72cb9c9dbf",
+      "source": "Retry pending imports before refreshing the plan.",
+      "translated": "刷新计划前，请重试待处理的导入。"
+    },
+    {
+      "id": "native.apple.f678888102fded6e",
+      "source": "You can skip this and import later from the dashboard’s Memory import page.",
+      "translated": "你可以跳过此步骤，稍后从仪表板的记忆导入页面进行导入。"
+    },
+    {
+      "id": "native.apple.36108528c6acc448",
+      "source": "\\(provider.alreadyImportedCount) already imported",
+      "translated": "已导入 \\(provider.alreadyImportedCount) 个"
+    },
+    {
+      "id": "native.apple.9b3444de8c9b2acc",
+      "source": "Imported \\(result.migrated) \\(self.memoryLabel(result.migrated)).",
+      "translated": "已导入 \\(result.migrated) 个\\(self.memoryLabel(result.migrated))。"
+    },
+    {
+      "id": "native.apple.3252fea4dac8669a",
+      "source": "Couldn’t check for memories",
+      "translated": "无法检查记忆"
+    },
+    {
+      "id": "native.apple.d371deb696de9e6b",
+      "source": "Retry",
+      "translated": "重试"
+    },
+    {
+      "id": "native.apple.406ae454540725d0",
+      "source": "You can do this later from the dashboard’s Memory import page.",
+      "translated": "你可以稍后从仪表板的记忆导入页面执行此操作。"
+    },
+    {
+      "id": "native.apple.d1b5d99f67dae42e",
+      "source": "Your memories are ready",
+      "translated": "你的记忆已准备就绪"
+    },
+    {
+      "id": "native.apple.6dbe5b174271b62a",
+      "source": "Imported \\(imported) \\(self.memoryLabel(imported)) into OpenClaw.",
+      "translated": "已将 \\(imported) 条 \\(self.memoryLabel(imported)) 导入 OpenClaw。"
+    },
+    {
+      "id": "native.apple.d47b887f98e13e24",
+      "source": "\\(result.migrated) imported",
+      "translated": "已导入 \\(result.migrated) 条"
+    },
+    {
+      "id": "native.apple.6ac3d513f0ec5da7",
+      "source": "You can manage imported memories anytime from the dashboard.",
+      "translated": "你可以随时从仪表板管理已导入的记忆。"
     },
     {
       "id": "native.apple.ea8beaeecef15e54",
@@ -20184,9 +22339,9 @@
       "translated": "打开菜单栏面板"
     },
     {
-      "id": "native.apple.f99e39e248dbc8ed",
-      "source": "Click the OpenClaw menu bar icon for quick chat and status.",
-      "translated": "点击 OpenClaw 菜单栏图标，快速聊天并查看状态。"
+      "id": "native.apple.409bfb3a6e0f9f7c",
+      "source": "Click the OpenClaw menu bar icon for the compact chat panel and status.",
+      "translated": "点按 OpenClaw 菜单栏图标，打开紧凑型聊天面板并查看状态。"
     },
     {
       "id": "native.apple.1b6cfcf3be8765c2",
@@ -20219,9 +22374,9 @@
       "translated": "使用面板 + Canvas"
     },
     {
-      "id": "native.apple.774cf9fe7e3e289e",
-      "source": "Open the menu bar panel for quick chat; the agent can show previews and richer visuals in Canvas.",
-      "translated": "Open the menu bar panel for quick chat; the agent can show previews and richer visuals in Canvas."
+      "id": "native.apple.6022f5a79ed93235",
+      "source": "Open the compact chat panel; the agent can show previews and richer visuals in Canvas.",
+      "translated": "打开紧凑型聊天面板；智能体可在 Canvas 中显示预览和更丰富的视觉内容。"
     },
     {
       "id": "native.apple.9b44b38b75a868d8",
@@ -20374,6 +22529,26 @@
       "translated": "系统访问"
     },
     {
+      "id": "native.apple.fee0f3732a447f35",
+      "source": "Location",
+      "translated": "位置"
+    },
+    {
+      "id": "native.apple.c105a651c5f972b6",
+      "source": "Privacy",
+      "translated": "隐私"
+    },
+    {
+      "id": "native.apple.b98013fb799d4f3c",
+      "source": "Active computer detection",
+      "translated": "活跃电脑检测"
+    },
+    {
+      "id": "native.apple.870e09824984a9b2",
+      "source": "Share this Mac's idle duration so OpenClaw can identify the Mac you used most recently and route node alerts. Never sends keys, pointer positions, app names, or window titles. Requires Accessibility.",
+      "translated": "分享此 Mac 的空闲时长，以便 OpenClaw 识别您最近使用的 Mac 并路由节点提醒。绝不发送按键、指针位置、应用名称或窗口标题。需要“辅助功能”权限。"
+    },
+    {
       "id": "native.apple.89a4f5934df8268a",
       "source": "Setup",
       "translated": "设置"
@@ -20469,6 +22644,11 @@
       "translated": "刷新"
     },
     {
+      "id": "native.apple.326e187a6656d8d9",
+      "source": "Check",
+      "translated": "检查"
+    },
+    {
       "id": "native.apple.7b62187659c9925f",
       "source": "Grant",
       "translated": "授予"
@@ -20489,49 +22669,14 @@
       "translated": "请求访问权限"
     },
     {
-      "id": "native.apple.8d8386041799d2b0",
-      "source": "Automation (AppleScript)",
-      "translated": "自动化 (AppleScript)"
+      "id": "native.apple.5a5689d96828c424",
+      "source": "Status unavailable",
+      "translated": "状态不可用"
     },
     {
-      "id": "native.apple.bc935384479c2f48",
-      "source": "Notifications",
-      "translated": "通知"
-    },
-    {
-      "id": "native.apple.922a8b5e049ef146",
-      "source": "Accessibility",
-      "translated": "辅助功能"
-    },
-    {
-      "id": "native.apple.c2f2fac8ab1ef9c0",
-      "source": "Screen Recording",
-      "translated": "屏幕录制"
-    },
-    {
-      "id": "native.apple.5ec94fe5a6864de7",
-      "source": "Microphone",
-      "translated": "麦克风"
-    },
-    {
-      "id": "native.apple.b27a5cb9cffe05f0",
-      "source": "Speech Recognition",
-      "translated": "语音识别"
-    },
-    {
-      "id": "native.apple.3639c706ed77975c",
-      "source": "Camera",
-      "translated": "摄像头"
-    },
-    {
-      "id": "native.apple.fee0f3732a447f35",
-      "source": "Location",
-      "translated": "位置"
-    },
-    {
-      "id": "native.apple.4a4c10ca63e99590",
-      "source": "Control other apps (e.g. Terminal) for automation actions",
-      "translated": "控制其他 App（例如 Terminal）以执行自动化操作"
+      "id": "native.apple.2d263648f3916394",
+      "source": "Control Terminal for automation actions; other apps request access separately",
+      "translated": "控制 Terminal 以执行自动化操作；其他应用需单独请求访问权限"
     },
     {
       "id": "native.apple.5f7eb4234f63c4ad",
@@ -20549,14 +22694,14 @@
       "translated": "捕获屏幕以获取上下文或截图"
     },
     {
-      "id": "native.apple.b004145c37a470f8",
-      "source": "Allow Voice Wake and audio capture",
-      "translated": "允许语音唤醒和音频采集"
+      "id": "native.apple.45119f87d3069501",
+      "source": "Allow Voice Wake, push-to-talk, Talk Mode, and Quick Chat dictation",
+      "translated": "允许语音唤醒、按键说话、Talk Mode 和 Quick Chat 听写"
     },
     {
-      "id": "native.apple.7c8b825829b3924d",
-      "source": "Transcribe Voice Wake trigger phrases on-device",
-      "translated": "在设备端转录语音唤醒触发短语"
+      "id": "native.apple.33f1e220cc7d69e1",
+      "source": "Use Apple Speech; passive Voice Wake stays on-device",
+      "translated": "使用 Apple Speech；被动语音唤醒保持在设备本地"
     },
     {
       "id": "native.apple.37880f3b7ae6c259",
@@ -20584,36 +22729,6 @@
       "translated": "正在检查 Mac App 和 Gateway…"
     },
     {
-      "id": "native.apple.3a2e38e488490964",
-      "source": "The Mac app is updated. Gateway setup is not configured on this Mac.",
-      "translated": "Mac App 已更新。此 Mac 上尚未配置 Gateway。"
-    },
-    {
-      "id": "native.apple.3abafcfb64b362fb",
-      "source": "The Gateway could not be checked.",
-      "translated": "无法检查 Gateway。"
-    },
-    {
-      "id": "native.apple.00e3d2037782506c",
-      "source": "OpenClaw could not read the Gateway service ownership record. Retry after checking the Gateway LaunchAgent.",
-      "translated": "OpenClaw 无法读取 Gateway 服务所有权记录。请检查 Gateway LaunchAgent 后重试。"
-    },
-    {
-      "id": "native.apple.c4b8806a570dad31",
-      "source": "The Mac node could not be checked.",
-      "translated": "无法检查 Mac 节点。"
-    },
-    {
-      "id": "native.apple.0483bf19d612560b",
-      "source": "OpenClaw could not read the node service ownership record. Retry after checking the node LaunchAgent.",
-      "translated": "OpenClaw 无法读取节点服务所有权记录。请检查节点 LaunchAgent 后重试。"
-    },
-    {
-      "id": "native.apple.1c57b3fcc10eabe7",
-      "source": "The Mac app is updated. Gateway \\(found) is newer than app \\(required), so OpenClaw left it unchanged.",
-      "translated": "Mac App 已更新。Gateway \\(found) 比 App 所需的版本 \\(required) 更新，因此 OpenClaw 未对其进行更改。"
-    },
-    {
       "id": "native.apple.e9b1899627402a15",
       "source": "Gateway recovery failed.",
       "translated": "Gateway 恢复失败。"
@@ -20622,11 +22737,6 @@
       "id": "native.apple.91debe404bb7affc",
       "source": "The managed OpenClaw runtime could not be reinstalled.",
       "translated": "无法重新安装由 OpenClaw 管理的运行时。"
-    },
-    {
-      "id": "native.apple.3522be8112301d9f",
-      "source": "The Mac app is updated. This Gateway is managed separately, so OpenClaw left it unchanged.",
-      "translated": "Mac App 已更新。此 Gateway 由其他方式单独管理，因此 OpenClaw 未对其进行更改。"
     },
     {
       "id": "native.apple.1cc391ec928070c4",
@@ -20734,14 +22844,34 @@
       "translated": "OpenClaw 已安装更新，但无法验证 Gateway 连接。"
     },
     {
-      "id": "native.apple.8bf292892311882e",
-      "source": "Mac app updated",
-      "translated": "Mac 应用已更新"
+      "id": "native.apple.3abafcfb64b362fb",
+      "source": "The Gateway could not be checked.",
+      "translated": "无法检查 Gateway。"
+    },
+    {
+      "id": "native.apple.00e3d2037782506c",
+      "source": "OpenClaw could not read the Gateway service ownership record. Retry after checking the Gateway LaunchAgent.",
+      "translated": "OpenClaw 无法读取 Gateway 服务所有权记录。请检查 Gateway LaunchAgent 后重试。"
+    },
+    {
+      "id": "native.apple.c4b8806a570dad31",
+      "source": "The Mac node could not be checked.",
+      "translated": "无法检查 Mac 节点。"
+    },
+    {
+      "id": "native.apple.0483bf19d612560b",
+      "source": "OpenClaw could not read the node service ownership record. Retry after checking the node LaunchAgent.",
+      "translated": "OpenClaw 无法读取节点服务所有权记录。请检查节点 LaunchAgent 后重试。"
     },
     {
       "id": "native.apple.d0f712a2ed470a3e",
       "source": "Gateway update needs help",
       "translated": "Gateway 更新需要协助"
+    },
+    {
+      "id": "native.apple.e2ffc7753f75e1b8",
+      "source": "Update guide",
+      "translated": "更新指南"
     },
     {
       "id": "native.apple.3a6aaa0aa0be82e7",
@@ -20754,14 +22884,299 @@
       "translated": "重试"
     },
     {
-      "id": "native.apple.e2ffc7753f75e1b8",
-      "source": "Update guide",
-      "translated": "更新指南"
-    },
-    {
       "id": "native.apple.144b21229f65f2a4",
       "source": "Continue",
       "translated": "继续"
+    },
+    {
+      "id": "native.apple.237f02309f0b9aeb",
+      "source": "Microphone and speech recognition permission required.",
+      "translated": "需要麦克风和语音识别权限。"
+    },
+    {
+      "id": "native.apple.6f2679049010dae7",
+      "source": "Dictation stopped because speech recognition failed.",
+      "translated": "由于语音识别失败，听写已停止。"
+    },
+    {
+      "id": "native.apple.fd0469907ed8a50c",
+      "source": "Couldn't start dictation.",
+      "translated": "无法开始听写。"
+    },
+    {
+      "id": "native.apple.ec789bf13bcffb61",
+      "source": "No app is available to paste into.",
+      "translated": "没有可粘贴到的应用。"
+    },
+    {
+      "id": "native.apple.bd2b8e99eee923b4",
+      "source": "Choose another app before pasting.",
+      "translated": "请先选择其他应用再粘贴。"
+    },
+    {
+      "id": "native.apple.f7aeeb401f9a4cd1",
+      "source": "Accessibility permission is required to paste.",
+      "translated": "需要辅助功能权限才能粘贴。"
+    },
+    {
+      "id": "native.apple.14e9c9f41a9523c0",
+      "source": "Couldn't paste the reply.",
+      "translated": "无法粘贴回复。"
+    },
+    {
+      "id": "native.apple.0a4fcdf09c5e7b3f",
+      "source": "Capture Window…",
+      "translated": "截取窗口…"
+    },
+    {
+      "id": "native.apple.d7ac1580e29304af",
+      "source": "Capture Area…",
+      "translated": "截取区域…"
+    },
+    {
+      "id": "native.apple.33adb82aa3c53c00",
+      "source": "focused app",
+      "translated": "当前聚焦的应用"
+    },
+    {
+      "id": "native.apple.5d20c8bd1235a43c",
+      "source": "No focused application is available.",
+      "translated": "当前没有聚焦的应用。"
+    },
+    {
+      "id": "native.apple.3c1a2f1ac3b50de0",
+      "source": "Focused app",
+      "translated": "当前聚焦的应用"
+    },
+    {
+      "id": "native.apple.511248f39affffc4",
+      "source": "Focus another app before attaching its text.",
+      "translated": "请先聚焦另一个应用，再附加其中的文本。"
+    },
+    {
+      "id": "native.apple.1c94e8c0010021d9",
+      "source": "Accessibility access is required to attach text from \\(appName).",
+      "translated": "需要辅助功能访问权限才能附加来自 \\(appName) 的文本。"
+    },
+    {
+      "id": "native.apple.a3e3d4b0ab6e94d9",
+      "source": "No focused window is available in \\(appName).",
+      "translated": "\\(appName) 中没有当前聚焦的窗口。"
+    },
+    {
+      "id": "native.apple.a2a454a96a011397",
+      "source": "Focused Window",
+      "translated": "当前聚焦的窗口"
+    },
+    {
+      "id": "native.apple.67d183bf2f9e4c2c",
+      "source": "\\(appName) is not responding to Accessibility requests.",
+      "translated": "\\(appName) 未响应辅助功能请求。"
+    },
+    {
+      "id": "native.apple.2f56bc484453a456",
+      "source": "No readable text was found in \\(appName).",
+      "translated": "在 \\(appName) 中未找到可读取的文本。"
+    },
+    {
+      "id": "native.apple.507c2d9c7e94716f",
+      "source": "Allow OpenClaw to read text from \\(appName)",
+      "translated": "允许 OpenClaw 读取 \\(appName) 中的文本"
+    },
+    {
+      "id": "native.apple.c5313d544a833af0",
+      "source": "Attaching focused-window text uses macOS Accessibility access.",
+      "translated": "附加当前聚焦窗口中的文本需要 macOS 辅助功能访问权限。"
+    },
+    {
+      "id": "native.apple.e68aeef0995a7d00",
+      "source": "Grant Access",
+      "translated": "授予访问权限"
+    },
+    {
+      "id": "native.apple.43dd985a6d9ec004",
+      "source": "Cancel",
+      "translated": "取消"
+    },
+    {
+      "id": "native.apple.a8880557335b5a25",
+      "source": "focused app",
+      "translated": "当前聚焦的应用"
+    },
+    {
+      "id": "native.apple.6af15237e49bd0bd",
+      "source": "Couldn't capture that image.",
+      "translated": "无法截取该图像。"
+    },
+    {
+      "id": "native.apple.b31041aa0da3768c",
+      "source": "Screenshot: \\(label)",
+      "translated": "截图：\\(label)"
+    },
+    {
+      "id": "native.apple.72e5bffb7ee89f19",
+      "source": "Context from \\(context.appName) — \\(context.windowTitle)",
+      "translated": "来自 \\(context.appName) 的上下文 — \\(context.windowTitle)"
+    },
+    {
+      "id": "native.apple.d82159d749697338",
+      "source": "Auto",
+      "translated": "自动"
+    },
+    {
+      "id": "native.apple.4e02ff977e48dfcb",
+      "source": "\\(model) · \\(thinking)",
+      "translated": "\\(model) · \\(thinking)"
+    },
+    {
+      "id": "native.apple.07bd035ae7e799c5",
+      "source": "Selected reasoning is unavailable for this target.",
+      "translated": "所选推理模式不适用于此目标。"
+    },
+    {
+      "id": "native.apple.2eb721ed8bffe9aa",
+      "source": "Couldn't load model settings.",
+      "translated": "无法加载模型设置。"
+    },
+    {
+      "id": "native.apple.ef6f4c54f9cfac08",
+      "source": "Couldn't change the model.",
+      "translated": "无法更改模型。"
+    },
+    {
+      "id": "native.apple.82b81bd0670b0cef",
+      "source": "Model",
+      "translated": "模型"
+    },
+    {
+      "id": "native.apple.2eb4c724364c7583",
+      "source": "Session default",
+      "translated": "会话默认设置"
+    },
+    {
+      "id": "native.apple.9f1c4db792611774",
+      "source": "Reasoning",
+      "translated": "推理"
+    },
+    {
+      "id": "native.apple.25a01f61b4e33ece",
+      "source": "Auto",
+      "translated": "自动"
+    },
+    {
+      "id": "native.apple.b5524e37a230e571",
+      "source": "New message to \\(agentName)",
+      "translated": "发给 \\(agentName) 的新消息"
+    },
+    {
+      "id": "native.apple.b99799f97999f481",
+      "source": "Reply in \\(override.displayName)",
+      "translated": "在 \\(override.displayName) 中回复"
+    },
+    {
+      "id": "native.apple.b3700cf60f4520dc",
+      "source": "Message \\(self.model.agentDisplay.name)",
+      "translated": "给 \\(self.model.agentDisplay.name) 发消息"
+    },
+    {
+      "id": "native.apple.da0b9bd07a337bda",
+      "source": "Continue a recent conversation",
+      "translated": "继续最近的对话"
+    },
+    {
+      "id": "native.apple.c76e52d21bef75ba",
+      "source": "Attach text from \\(self.model.frontmostAppName)",
+      "translated": "附加来自 \\(self.model.frontmostAppName) 的文本"
+    },
+    {
+      "id": "native.apple.aedd7e9870c3579a",
+      "source": "Capture a screenshot",
+      "translated": "截取屏幕截图"
+    },
+    {
+      "id": "native.apple.136cef9f750d3803",
+      "source": "Send message",
+      "translated": "发送消息"
+    },
+    {
+      "id": "native.apple.b520a305b56a6387",
+      "source": "Choose model and reasoning",
+      "translated": "选择模型和推理模式"
+    },
+    {
+      "id": "native.apple.1dd50e6126da7179",
+      "source": "Model and reasoning",
+      "translated": "模型和推理模式"
+    },
+    {
+      "id": "native.apple.024725d220e79697",
+      "source": "Needs additional permissions",
+      "translated": "需要其他权限"
+    },
+    {
+      "id": "native.apple.84027c0f438c7aaa",
+      "source": "Grant",
+      "translated": "授予权限"
+    },
+    {
+      "id": "native.apple.a3332fa4db187973",
+      "source": "Not now",
+      "translated": "暂不"
+    },
+    {
+      "id": "native.apple.1962232c9bc52e12",
+      "source": "\\(context.appName) — \\(context.windowTitle) (\\(context.characterCount) chars)",
+      "translated": "\\(context.appName) — \\(context.windowTitle)（\\(context.characterCount) 个字符）"
+    },
+    {
+      "id": "native.apple.66ec93e9eefd9bd7",
+      "source": "Remove attached text context",
+      "translated": "移除附加的文本上下文"
+    },
+    {
+      "id": "native.apple.00b46fe92d9bb1d4",
+      "source": "Paste to \\(self.model.frontmostAppName)",
+      "translated": "粘贴到 \\(self.model.frontmostAppName)"
+    },
+    {
+      "id": "native.apple.d2aa2e60ec2f62d8",
+      "source": "Stop dictation",
+      "translated": "停止听写"
+    },
+    {
+      "id": "native.apple.8c4a27a4361d0572",
+      "source": "Start dictation",
+      "translated": "开始听写"
+    },
+    {
+      "id": "native.apple.88d0123c86b06144",
+      "source": "Allow OpenClaw to capture windows",
+      "translated": "允许 OpenClaw 捕获窗口"
+    },
+    {
+      "id": "native.apple.677c5733cd132aed",
+      "source": "Allow OpenClaw to capture a screen area",
+      "translated": "允许 OpenClaw 捕获屏幕区域"
+    },
+    {
+      "id": "native.apple.529a6fc5aeba03b0",
+      "source": "Sending a screenshot uses macOS Screen Recording access.",
+      "translated": "发送屏幕截图需要 macOS 屏幕录制权限。"
+    },
+    {
+      "id": "native.apple.615245bf05ed3234",
+      "source": "Grant Access",
+      "translated": "授予访问权限"
+    },
+    {
+      "id": "native.apple.2a64131ba32d175d",
+      "source": "Cancel",
+      "translated": "取消"
+    },
+    {
+      "id": "native.apple.6521871fc0ddc987",
+      "source": "Selected area",
+      "translated": "所选区域"
     },
     {
       "id": "native.apple.1eeca02c45d3db5a",
@@ -20919,14 +23334,14 @@
       "translated": "OpenClaw 使用本地网络，通过 LAN、Tailnet 或 SSH 连接到你的远程 OpenClaw Gateway。"
     },
     {
-      "id": "native.apple.5db9a976fd1c7fcb",
-      "source": "OpenClaw needs the mic for Voice Wake tests and agent audio capture.",
-      "translated": "OpenClaw 需要麦克风用于 Voice Wake 测试和代理音频捕获。"
+      "id": "native.apple.0fdd4a93f90c6f95",
+      "source": "OpenClaw uses the microphone for Voice Wake, push-to-talk, Talk Mode, Quick Chat dictation, and agent audio capture.",
+      "translated": "OpenClaw 使用麦克风进行语音唤醒、按键说话、Talk Mode、Quick Chat 听写和代理音频采集。"
     },
     {
-      "id": "native.apple.b7aba524ef867e7f",
-      "source": "OpenClaw uses speech recognition to detect your Voice Wake trigger phrase.",
-      "translated": "OpenClaw 使用语音识别来检测你的 Voice Wake 触发短语。"
+      "id": "native.apple.44701896858c9029",
+      "source": "OpenClaw uses Apple Speech for Voice Wake, push-to-talk, Talk Mode, and Quick Chat dictation. Voice Wake stays on-device.",
+      "translated": "OpenClaw 使用 Apple Speech 进行语音唤醒、按键说话、Talk Mode 和 Quick Chat 听写。语音唤醒保持在设备本地。"
     },
     {
       "id": "native.apple.2d5411b5cc54a93e",
@@ -21004,9 +23419,9 @@
       "translated": "没有最近消息"
     },
     {
-      "id": "native.apple.1ff8aec0044934c3",
-      "source": "Sessions",
-      "translated": "会话"
+      "id": "native.apple.3ec2afcbc298c673",
+      "source": "Threads",
+      "translated": "话题串"
     },
     {
       "id": "native.apple.74f66e96c112c3fa",
@@ -21014,9 +23429,9 @@
       "translated": "查看 CLI 为上下文和速率限制复用的已存储对话桶。"
     },
     {
-      "id": "native.apple.bab897f3252b134c",
-      "source": "No sessions yet. They appear after the first inbound message or heartbeat.",
-      "translated": "还没有会话。它们会在第一条入站消息或心跳之后显示。"
+      "id": "native.apple.14ccb32cd8ed1c81",
+      "source": "No threads yet. They appear after the first inbound message or heartbeat.",
+      "translated": "暂无话题串。收到第一条传入消息或心跳后，话题串将显示在此处。"
     },
     {
       "id": "native.apple.cebd5d2895976bee",
@@ -21064,6 +23479,11 @@
       "translated": "连接"
     },
     {
+      "id": "native.apple.1d96f676261a5a05",
+      "source": "Gateways",
+      "translated": "Gateway"
+    },
+    {
       "id": "native.apple.8c2b0262f3a5ebea",
       "source": "Permissions",
       "translated": "权限"
@@ -21099,9 +23519,9 @@
       "translated": "执行审批"
     },
     {
-      "id": "native.apple.64a6dc7d49e8fb57",
-      "source": "Sessions",
-      "translated": "会话"
+      "id": "native.apple.52e37e3a44ae516c",
+      "source": "Threads",
+      "translated": "话题串"
     },
     {
       "id": "native.apple.704924cd0704b5b5",
@@ -21579,34 +23999,34 @@
       "translated": "Agent 可以在此 Mac 上运行 Shell 命令，无需进行允许列表检查。"
     },
     {
-      "id": "native.apple.c8e6fc08f04b8d9f",
+      "id": "native.apple.5184684dc4a62edb",
       "source": "Block agent shell commands on this Mac.",
-      "translated": "阻止 Agent 在此 Mac 上运行 Shell 命令。"
+      "translated": "阻止代理在此 Mac 上执行 shell 命令。"
     },
     {
-      "id": "native.apple.e9371d48f629b039",
+      "id": "native.apple.bf1e546102919d3f",
       "source": "Allow trusted command patterns and handle misses with prompts.",
-      "translated": "允许受信任的命令模式，并通过提示处理未命中的情况。"
+      "translated": "允许受信任的命令模式，并在未匹配时提示确认。"
     },
     {
-      "id": "native.apple.935c981496e8689b",
+      "id": "native.apple.84214f3fae821163",
       "source": "Allow shell commands without checking the allowlist.",
-      "translated": "允许 Shell 命令，无需检查允许列表。"
+      "translated": "无需检查允许列表即可执行 shell 命令。"
     },
     {
-      "id": "native.apple.c494c0bb6a4182a2",
+      "id": "native.apple.d7404aa083ad6d58",
       "source": "Never show approval prompts.",
-      "translated": "永不显示批准提示。"
+      "translated": "永不显示审批提示。"
     },
     {
-      "id": "native.apple.c04df969fed1b2ca",
+      "id": "native.apple.093c3c01af530076",
       "source": "Ask only when a command is not trusted yet.",
-      "translated": "仅在命令尚未受信任时询问。"
+      "translated": "仅当命令尚未受信任时询问。"
     },
     {
-      "id": "native.apple.19950d3e6e99ee47",
+      "id": "native.apple.a5161a377e784404",
       "source": "Ask before every shell command.",
-      "translated": "在每个 Shell 命令前询问。"
+      "translated": "每次执行 shell 命令前都询问。"
     },
     {
       "id": "native.apple.b18215308bc4e7cf",
@@ -21784,9 +24204,14 @@
       "translated": "启用 Voice Wake"
     },
     {
-      "id": "native.apple.e992b45cdbccdd10",
-      "source": "Listen for a wake phrase before running voice commands. Recognition runs fully on-device.",
-      "translated": "在运行语音命令前监听唤醒短语。识别完全在设备端运行。"
+      "id": "native.apple.e2811fb1981c52f9",
+      "source": "Listen for a wake phrase before running voice commands. Wake-phrase recognition stays on this Mac.",
+      "translated": "在运行语音命令前监听唤醒短语。唤醒短语识别保持在此 Mac 本地。"
+    },
+    {
+      "id": "native.apple.8e55ed92eb632efa",
+      "source": "On-device recognition is unavailable for the selected language on this Mac.",
+      "translated": "此 Mac 上所选语言不支持设备端识别。"
     },
     {
       "id": "native.apple.475eb587a8accd92",
@@ -21949,6 +24374,11 @@
       "translated": "\\(self.friendlyName(for: current))（系统）"
     },
     {
+      "id": "native.apple.2565d77dbe6ce76b",
+      "source": "Voice Wake needs on-device recognition for its selected language. Push-to-talk and Talk Mode remain available.",
+      "translated": "语音唤醒需要为所选语言启用设备端识别。按键说话和对话模式仍然可用。"
+    },
+    {
       "id": "native.apple.79db41c7b941a50f",
       "source": "Additional languages",
       "translated": "其他语言"
@@ -21979,14 +24409,19 @@
       "translated": "移除触发词"
     },
     {
-      "id": "native.apple.65b2687f8f16f9b2",
-      "source": "Language \\(self.index + 2)",
-      "translated": "语言 \\(self.index + 2)"
+      "id": "native.apple.dd0278dbfd438cdb",
+      "source": "Language %lld",
+      "translated": "语言 %lld"
     },
     {
       "id": "native.apple.a767de022c4a06db",
       "source": "Fallback recognition language.",
       "translated": "备用识别语言。"
+    },
+    {
+      "id": "native.apple.65b2687f8f16f9b2",
+      "source": "Language \\(self.index + 2)",
+      "translated": "语言 \\(self.index + 2)"
     },
     {
       "id": "native.apple.cfab77826c9ac1d1",
@@ -22044,6 +24479,81 @@
       "translated": "检测到语音唤醒！"
     },
     {
+      "id": "native.apple.7dd4d4d2fc36ffce",
+      "source": "Could Not Open Gateway Window",
+      "translated": "无法打开 Gateway 窗口"
+    },
+    {
+      "id": "native.apple.93ad62dac611bdcd",
+      "source": "Talk mode uses the primary Gateway window",
+      "translated": "对话模式使用主 Gateway 窗口"
+    },
+    {
+      "id": "native.apple.282d11786f2f4c4b",
+      "source": "Talk mode off",
+      "translated": "对话模式已关闭"
+    },
+    {
+      "id": "native.apple.133d737c2b59e66d",
+      "source": "Talk mode paused",
+      "translated": "对话模式已暂停"
+    },
+    {
+      "id": "native.apple.c11a8fc78a7b2cf8",
+      "source": "Talk mode ready",
+      "translated": "对话模式已就绪"
+    },
+    {
+      "id": "native.apple.62a4d588f4259d54",
+      "source": "Listening",
+      "translated": "正在聆听"
+    },
+    {
+      "id": "native.apple.d602e6304c3ef523",
+      "source": "Thinking",
+      "translated": "正在思考"
+    },
+    {
+      "id": "native.apple.2328556b7443e453",
+      "source": "Speaking",
+      "translated": "正在说话"
+    },
+    {
+      "id": "native.apple.b42b8777035baf64",
+      "source": "What would you like to work on?",
+      "translated": "你想处理什么？"
+    },
+    {
+      "id": "native.apple.448dfe21a7f3a883",
+      "source": "Check OpenClaw status",
+      "translated": "检查 OpenClaw 状态"
+    },
+    {
+      "id": "native.apple.00f4977e0123ce7a",
+      "source": "Summarize the current OpenClaw status and tell me what needs attention.",
+      "translated": "总结 OpenClaw 的当前状态，并告诉我哪些方面需要关注。"
+    },
+    {
+      "id": "native.apple.9c1a9be47ac92727",
+      "source": "What can you do?",
+      "translated": "你能做什么？"
+    },
+    {
+      "id": "native.apple.5101b6cab56c0faf",
+      "source": "Show me what you can help with on this Mac right now.",
+      "translated": "告诉我你现在能在这台 Mac 上提供哪些帮助。"
+    },
+    {
+      "id": "native.apple.070fa91f6622e6cf",
+      "source": "Catch me up",
+      "translated": "帮我了解最新情况"
+    },
+    {
+      "id": "native.apple.fc4ce810900ec0b6",
+      "source": "Summarize what happened in my threads since yesterday.",
+      "translated": "总结自昨天以来我的话题串中发生的事情。"
+    },
+    {
       "id": "native.apple.c5d8bca2d78e1b9b",
       "source": " (local filtered)",
       "translated": "（本地已过滤）"
@@ -22094,14 +24604,99 @@
       "translated": "<\\(tag)"
     },
     {
+      "id": "native.apple.fc5931c1f0a6bbec",
+      "source": "Switch to back camera",
+      "translated": "切换到后置摄像头"
+    },
+    {
+      "id": "native.apple.cce3b539e31701c0",
+      "source": "Switch to front camera",
+      "translated": "切换到前置摄像头"
+    },
+    {
+      "id": "native.apple.f397daffdfd02ee0",
+      "source": "Flip camera",
+      "translated": "翻转摄像头"
+    },
+    {
+      "id": "native.apple.11f8de87ca3fcb11",
+      "source": "Stop",
+      "translated": "停止"
+    },
+    {
+      "id": "native.apple.7c92bec1c8a83e43",
+      "source": "Talk",
+      "translated": "说话"
+    },
+    {
+      "id": "native.apple.dae61543f9b416ca",
+      "source": "Start realtime chat",
+      "translated": "开始实时聊天"
+    },
+    {
+      "id": "native.apple.d376b015a90792a9",
+      "source": "Stop realtime chat",
+      "translated": "停止实时聊天"
+    },
+    {
+      "id": "native.apple.ac48dbe25ac4d40d",
+      "source": "Connecting...",
+      "translated": "正在连接..."
+    },
+    {
+      "id": "native.apple.ccce98756eb1dacd",
+      "source": "Gateway connected",
+      "translated": "Gateway 已连接"
+    },
+    {
       "id": "native.apple.03aca5cfee32f12d",
       "source": "Context %@%% used",
       "translated": "已使用上下文的 %@%%"
     },
     {
+      "id": "native.apple.e57eb66d14768bdb",
+      "source": "%@ (override)",
+      "translated": "%@（覆盖）"
+    },
+    {
       "id": "native.apple.510c6dfa05924ae2",
       "source": "Thinking",
       "translated": "正在思考"
+    },
+    {
+      "id": "native.apple.e47fcaaf47e5d6bc",
+      "source": "Full",
+      "translated": "完整"
+    },
+    {
+      "id": "native.apple.f434793807b778ce",
+      "source": "Verbosity",
+      "translated": "详细程度"
+    },
+    {
+      "id": "native.apple.d3426c54f223c4d8",
+      "source": "Default (inherited)",
+      "translated": "默认（继承）"
+    },
+    {
+      "id": "native.apple.575a78c2f3daf366",
+      "source": "On",
+      "translated": "开启"
+    },
+    {
+      "id": "native.apple.75bebec90215a705",
+      "source": "Off",
+      "translated": "关闭"
+    },
+    {
+      "id": "native.apple.17481e3865493e34",
+      "source": "Fast",
+      "translated": "快速"
+    },
+    {
+      "id": "native.apple.e5f91b8690e705e2",
+      "source": "Fast responses",
+      "translated": "快速响应"
     },
     {
       "id": "native.apple.745b004e0b5b6b80",
@@ -22114,14 +24709,14 @@
       "translated": "最近"
     },
     {
-      "id": "native.apple.aa321cf4820426ef",
-      "source": "Models",
-      "translated": "模型"
-    },
-    {
       "id": "native.apple.0fce9d743a640218",
       "source": "Model",
       "translated": "模型"
+    },
+    {
+      "id": "native.apple.6045352c168e07cb",
+      "source": "Default",
+      "translated": "默认"
     },
     {
       "id": "native.apple.75550b03f06d6abc",
@@ -22134,9 +24729,24 @@
       "translated": "取消固定模型"
     },
     {
-      "id": "native.apple.5dfc0700d8dff8de",
-      "source": "Session",
-      "translated": "会话"
+      "id": "native.apple.4edb66657f5aca1f",
+      "source": "Thread",
+      "translated": "话题串"
+    },
+    {
+      "id": "native.apple.02f0965fdca227b2",
+      "source": "Branches",
+      "translated": "分支"
+    },
+    {
+      "id": "native.apple.82ca9989fa432b38",
+      "source": "Untitled branch",
+      "translated": "未命名分支"
+    },
+    {
+      "id": "native.apple.8d0ae98818aa39e8",
+      "source": "^[\\(count) message](inflect: true)",
+      "translated": "^[\\(count) 条消息](inflect: true)"
     },
     {
       "id": "native.apple.284b2b94c272591d",
@@ -22147,26 +24757,6 @@
       "id": "native.apple.1963dfa3285cb715",
       "source": "Attachments",
       "translated": "附件"
-    },
-    {
-      "id": "native.apple.f8dda832ed76441d",
-      "source": "Voice note",
-      "translated": "语音消息"
-    },
-    {
-      "id": "native.apple.ee2c0d22f5861159",
-      "source": "Talk",
-      "translated": "对话"
-    },
-    {
-      "id": "native.apple.5d5041aefe6dfddd",
-      "source": "Start realtime chat",
-      "translated": "开始实时聊天"
-    },
-    {
-      "id": "native.apple.21a7d3a3386a2218",
-      "source": "Stop realtime chat",
-      "translated": "停止实时聊天"
     },
     {
       "id": "native.apple.88c2de261ddae511",
@@ -22212,16 +24802,6 @@
       "id": "native.apple.f4473f79bb87b2fd",
       "source": "Refresh",
       "translated": "刷新"
-    },
-    {
-      "id": "native.apple.6c984c0e3ed3a69e",
-      "source": "Connecting...",
-      "translated": "正在连接..."
-    },
-    {
-      "id": "native.apple.898849eb2bcb0b53",
-      "source": "Gateway connected",
-      "translated": "Gateway 已连接"
     },
     {
       "id": "native.apple.b6adfcd17a6e73d7",
@@ -22289,6 +24869,101 @@
       "translated": "已使用 %@ 个 token"
     },
     {
+      "id": "native.apple.ccfd6ae994d82449",
+      "source": "Loading full message…",
+      "translated": "正在加载完整消息…"
+    },
+    {
+      "id": "native.apple.669ad52de4a26b87",
+      "source": "Full message unavailable",
+      "translated": "完整消息不可用"
+    },
+    {
+      "id": "native.apple.6f79794ee74caf99",
+      "source": "Full Message",
+      "translated": "完整消息"
+    },
+    {
+      "id": "native.apple.d648251591db5dec",
+      "source": "Close",
+      "translated": "关闭"
+    },
+    {
+      "id": "native.apple.ba3963204bda5e84",
+      "source": "The full message is no longer available.",
+      "translated": "完整消息已不再可用。"
+    },
+    {
+      "id": "native.apple.8bb98bd86ae85c1c",
+      "source": "The full message has no readable text.",
+      "translated": "完整消息中没有可读文本。"
+    },
+    {
+      "id": "native.apple.2f43669d87c0e26d",
+      "source": "The full message could not be loaded.",
+      "translated": "无法加载完整消息。"
+    },
+    {
+      "id": "native.apple.2c865ac4a69645d3",
+      "source": "Widget unavailable",
+      "translated": "小组件不可用"
+    },
+    {
+      "id": "native.apple.d640691fd196f338",
+      "source": "Widget export failed",
+      "translated": "小组件导出失败"
+    },
+    {
+      "id": "native.apple.533c6e22a11e88de",
+      "source": "OK",
+      "translated": "好"
+    },
+    {
+      "id": "native.apple.e1fb28a2a9756402",
+      "source": "Copy image",
+      "translated": "复制图像"
+    },
+    {
+      "id": "native.apple.ebd7bc92e1b12235",
+      "source": "Save image…",
+      "translated": "存储图像…"
+    },
+    {
+      "id": "native.apple.742c46d4cf2db134",
+      "source": "Save image",
+      "translated": "存储图像"
+    },
+    {
+      "id": "native.apple.0589cce608418f90",
+      "source": "The widget image could not be captured.",
+      "translated": "无法截取小组件图像。"
+    },
+    {
+      "id": "native.apple.dfe24e827fdbe9c5",
+      "source": "The widget image could not be copied.",
+      "translated": "无法复制小组件图像。"
+    },
+    {
+      "id": "native.apple.9e611e3a80e71408",
+      "source": "The widget image could not be encoded as PNG.",
+      "translated": "无法将小组件图像编码为 PNG。"
+    },
+    {
+      "id": "native.apple.9a6e8afbe24a262b",
+      "source": "The widget image could not be saved.",
+      "translated": "无法存储小组件图像。"
+    },
+    {
+      "id": "native.apple.bf5924f1129e06d3",
+      "source": "List item",
+      "translated": "列表项"
+    },
+    {
+      "id": "native.apple.2a03f71557a5b659",
+      "source": "Item",
+      "translated": "项目"
+    },
+    {
       "id": "native.apple.769b7dcea4708c40",
       "source": "Image",
       "translated": "Image"
@@ -22304,9 +24979,24 @@
       "translated": "智能体头像"
     },
     {
-      "id": "native.apple.8509385953c19619",
-      "source": "\\(display.emoji) \\(display.title)",
-      "translated": "\\(display.emoji) \\(display.title)"
+      "id": "native.apple.9d4cffc5588d8730",
+      "source": "Show less",
+      "translated": "收起"
+    },
+    {
+      "id": "native.apple.b0b4af1981ac0818",
+      "source": "Show more",
+      "translated": "显示更多"
+    },
+    {
+      "id": "native.apple.29122616e14321b1",
+      "source": "Collapsed",
+      "translated": "已折叠"
+    },
+    {
+      "id": "native.apple.aa75dc50a6ff606c",
+      "source": "Expanded",
+      "translated": "已展开"
     },
     {
       "id": "native.apple.6426e369511b043c",
@@ -22317,16 +25007,6 @@
       "id": "native.apple.3c8c3679fd99c074",
       "source": "Voice note",
       "translated": "Voice note"
-    },
-    {
-      "id": "native.apple.aff6385b0a8dd0ac",
-      "source": "Show full output",
-      "translated": "显示完整输出"
-    },
-    {
-      "id": "native.apple.b9c78020ae8be34a",
-      "source": "Show less",
-      "translated": "显示较少内容"
     },
     {
       "id": "native.apple.e9914cfc93a514cb",
@@ -22354,9 +25034,524 @@
       "translated": "正在朗读，轻点以停止"
     },
     {
-      "id": "native.apple.6b18ea1d85b5d3a2",
-      "source": "Running tools…",
-      "translated": "正在运行工具…"
+      "id": "native.apple.51ef5e41f9124819",
+      "source": "Other",
+      "translated": "其他"
+    },
+    {
+      "id": "native.apple.3b932a47b4223a43",
+      "source": "Collapse plan",
+      "translated": "收起计划"
+    },
+    {
+      "id": "native.apple.b6b3b9af4c618060",
+      "source": "Expand plan",
+      "translated": "展开计划"
+    },
+    {
+      "id": "native.apple.ce899320a84d4086",
+      "source": "Answered",
+      "translated": "已回答"
+    },
+    {
+      "id": "native.apple.f019b6a07d5a33d8",
+      "source": "Answered elsewhere",
+      "translated": "已在其他地方回答"
+    },
+    {
+      "id": "native.apple.ebdedeffad570c43",
+      "source": "Skipped",
+      "translated": "已跳过"
+    },
+    {
+      "id": "native.apple.8dde2eaaf6b0dfa9",
+      "source": "Expired",
+      "translated": "已过期"
+    },
+    {
+      "id": "native.apple.6dff9e9194347f3b",
+      "source": "Unavailable",
+      "translated": "不可用"
+    },
+    {
+      "id": "native.apple.b34cd890366824f0",
+      "source": "Pending",
+      "translated": "待处理"
+    },
+    {
+      "id": "native.apple.b97da55b7e16e60c",
+      "source": "Question summary",
+      "translated": "问题摘要"
+    },
+    {
+      "id": "native.apple.da4494f9e875169d",
+      "source": "Other answer",
+      "translated": "其他答案"
+    },
+    {
+      "id": "native.apple.e9c3855562d8e4e9",
+      "source": "Not selected",
+      "translated": "未选择"
+    },
+    {
+      "id": "native.apple.bd4335213464d4be",
+      "source": "Selected",
+      "translated": "已选择"
+    },
+    {
+      "id": "native.apple.1bbbbfd1ad3842ce",
+      "source": "Skipping…",
+      "translated": "正在跳过…"
+    },
+    {
+      "id": "native.apple.14a4bf7b6b7d40dc",
+      "source": "Skip",
+      "translated": "跳过"
+    },
+    {
+      "id": "native.apple.6c1adc16e0a846e5",
+      "source": "Submitting…",
+      "translated": "正在提交…"
+    },
+    {
+      "id": "native.apple.e3095b651fc46b52",
+      "source": "Submit",
+      "translated": "提交"
+    },
+    {
+      "id": "native.apple.7cd6fb01b9f5d14a",
+      "source": "User",
+      "translated": "用户"
+    },
+    {
+      "id": "native.apple.9d0cba09d92ee669",
+      "source": "This thread cannot be archived while it is active or running.",
+      "translated": "此话题串处于活动或运行状态时无法归档。"
+    },
+    {
+      "id": "native.apple.8952a111a1075051",
+      "source": "The main thread cannot be deleted.",
+      "translated": "无法删除主话题串。"
+    },
+    {
+      "id": "native.apple.90d0ccf80ca28717",
+      "source": "Remove attachments or wait for delivery before archiving or deleting this thread.",
+      "translated": "请移除附件或等待附件发送完毕，然后再归档或删除此话题。"
+    },
+    {
+      "id": "native.apple.476b3862e0449857",
+      "source": "Running",
+      "translated": "运行中"
+    },
+    {
+      "id": "native.apple.83b41e41f428cffb",
+      "source": "Identity",
+      "translated": "身份"
+    },
+    {
+      "id": "native.apple.ba6710da42846eed",
+      "source": "Name",
+      "translated": "名称"
+    },
+    {
+      "id": "native.apple.bdb1928f7e63c4c6",
+      "source": "Key",
+      "translated": "密钥"
+    },
+    {
+      "id": "native.apple.7259d51423f8def0",
+      "source": "Copy session key",
+      "translated": "复制会话密钥"
+    },
+    {
+      "id": "native.apple.1494b638984ddca3",
+      "source": "Kind",
+      "translated": "类型"
+    },
+    {
+      "id": "native.apple.49cd6c21bdd0d8da",
+      "source": "Organization",
+      "translated": "组织"
+    },
+    {
+      "id": "native.apple.83e2ae5c4c7dbb94",
+      "source": "Group",
+      "translated": "群组"
+    },
+    {
+      "id": "native.apple.1ba465bfa16ed23b",
+      "source": "None",
+      "translated": "无"
+    },
+    {
+      "id": "native.apple.2c7c9e5dc8ad574e",
+      "source": "Pinned",
+      "translated": "已置顶"
+    },
+    {
+      "id": "native.apple.b0d3e265af9f562a",
+      "source": "Archived",
+      "translated": "已归档"
+    },
+    {
+      "id": "native.apple.de94ca2cf7d4d766",
+      "source": "Run",
+      "translated": "运行"
+    },
+    {
+      "id": "native.apple.f7a51dca3268b26c",
+      "source": "Status",
+      "translated": "状态"
+    },
+    {
+      "id": "native.apple.12678de5fa43321d",
+      "source": "Model",
+      "translated": "模型"
+    },
+    {
+      "id": "native.apple.8ec6bd6001df285d",
+      "source": "Provider",
+      "translated": "提供商"
+    },
+    {
+      "id": "native.apple.f43534cf1ee73605",
+      "source": "Runtime",
+      "translated": "运行时"
+    },
+    {
+      "id": "native.apple.f0775e602bbe75ed",
+      "source": "Run duration",
+      "translated": "运行时长"
+    },
+    {
+      "id": "native.apple.ecde91d89eab026b",
+      "source": "Worktree",
+      "translated": "工作树"
+    },
+    {
+      "id": "native.apple.1ef1698bb3ff7166",
+      "source": "ID",
+      "translated": "ID"
+    },
+    {
+      "id": "native.apple.69bc49f9663fa205",
+      "source": "Branch",
+      "translated": "分支"
+    },
+    {
+      "id": "native.apple.aa430e81e52e2354",
+      "source": "Repository root",
+      "translated": "仓库根目录"
+    },
+    {
+      "id": "native.apple.6e851b012a982d38",
+      "source": "Activity",
+      "translated": "活动"
+    },
+    {
+      "id": "native.apple.bf87c6fd92c9315a",
+      "source": "Updated",
+      "translated": "更新时间"
+    },
+    {
+      "id": "native.apple.dcb1734cba578b79",
+      "source": "Last activity",
+      "translated": "最近活动"
+    },
+    {
+      "id": "native.apple.58ca290e3f032865",
+      "source": "Last interaction",
+      "translated": "最近交互"
+    },
+    {
+      "id": "native.apple.7020bd521499f3b8",
+      "source": "Run started",
+      "translated": "运行开始时间"
+    },
+    {
+      "id": "native.apple.abb2b24d6378b605",
+      "source": "Run ended",
+      "translated": "运行结束时间"
+    },
+    {
+      "id": "native.apple.bbccb4c8db5cac12",
+      "source": "Thread Info",
+      "translated": "话题信息"
+    },
+    {
+      "id": "native.apple.e308b012d84b3b3e",
+      "source": "Groups",
+      "translated": "群组"
+    },
+    {
+      "id": "native.apple.6438f66cfcaefaf7",
+      "source": "Rename…",
+      "translated": "重命名…"
+    },
+    {
+      "id": "native.apple.58b0f1df4985b0d1",
+      "source": "Delete…",
+      "translated": "删除…"
+    },
+    {
+      "id": "native.apple.bc70cc0f0b882179",
+      "source": "No groups",
+      "translated": "无群组"
+    },
+    {
+      "id": "native.apple.cb3e1fa7783a35d2",
+      "source": "Create Group",
+      "translated": "创建群组"
+    },
+    {
+      "id": "native.apple.4ac72aeb70f107d8",
+      "source": "Add Group",
+      "translated": "添加群组"
+    },
+    {
+      "id": "native.apple.7b641fed5bace855",
+      "source": "Thread Groups",
+      "translated": "话题组"
+    },
+    {
+      "id": "native.apple.7777b2d2ec43ed59",
+      "source": "Done",
+      "translated": "完成"
+    },
+    {
+      "id": "native.apple.0b0149661cacfe36",
+      "source": "Rename Group",
+      "translated": "重命名群组"
+    },
+    {
+      "id": "native.apple.8cbd863aa4d0524f",
+      "source": "Group name",
+      "translated": "群组名称"
+    },
+    {
+      "id": "native.apple.6021088d5ed9c301",
+      "source": "Rename",
+      "translated": "重命名"
+    },
+    {
+      "id": "native.apple.e697417338a47751",
+      "source": "Cancel",
+      "translated": "取消"
+    },
+    {
+      "id": "native.apple.cc89328a14af7a23",
+      "source": "Delete “%@”?",
+      "translated": "删除“%@”？"
+    },
+    {
+      "id": "native.apple.4c09741db2e6c624",
+      "source": "Delete group?",
+      "translated": "删除群组？"
+    },
+    {
+      "id": "native.apple.ddb1bbbd3c1a9c5e",
+      "source": "Delete Group",
+      "translated": "删除群组"
+    },
+    {
+      "id": "native.apple.56401c79410a310d",
+      "source": "Threads in this group become ungrouped.",
+      "translated": "此组中的话题将变为未分组状态。"
+    },
+    {
+      "id": "native.apple.5aa6082d78027c5f",
+      "source": "Gateway changed. Close and reopen Groups to continue.",
+      "translated": "Gateway 已更改。请关闭并重新打开“群组”以继续。"
+    },
+    {
+      "id": "native.apple.bb4b44183929c881",
+      "source": "No agents are available on this gateway.",
+      "translated": "此 Gateway 上没有可用的代理。"
+    },
+    {
+      "id": "native.apple.2d96aa7d3d12f85b",
+      "source": "New Thread Options",
+      "translated": "新建话题选项"
+    },
+    {
+      "id": "native.apple.5b0cde807ccb4241",
+      "source": "Agent",
+      "translated": "代理"
+    },
+    {
+      "id": "native.apple.124a640f9620d9cd",
+      "source": "Create in a worktree",
+      "translated": "在工作树中创建"
+    },
+    {
+      "id": "native.apple.632ce245d5575fea",
+      "source": "Base ref (optional)",
+      "translated": "基础引用（可选）"
+    },
+    {
+      "id": "native.apple.fd81909fc9719a59",
+      "source": "Retry",
+      "translated": "重试"
+    },
+    {
+      "id": "native.apple.a085278be62286b2",
+      "source": "Create",
+      "translated": "创建"
+    },
+    {
+      "id": "native.apple.87ef57319d1ddc85",
+      "source": "The thread could not be created.",
+      "translated": "无法创建话题。"
+    },
+    {
+      "id": "native.apple.6bd91c435b69d638",
+      "source": "Search threads",
+      "translated": "搜索话题"
+    },
+    {
+      "id": "native.apple.6fde4bdf9d5b9191",
+      "source": "No Threads",
+      "translated": "没有话题"
+    },
+    {
+      "id": "native.apple.2d4ee298bdd1c05d",
+      "source": "No Results",
+      "translated": "没有结果"
+    },
+    {
+      "id": "native.apple.a02fd99740d29bd3",
+      "source": "New Thread",
+      "translated": "新建话题"
+    },
+    {
+      "id": "native.apple.b625801dd04b09f2",
+      "source": "New thread",
+      "translated": "新建话题"
+    },
+    {
+      "id": "native.apple.851be81fcc933608",
+      "source": "New thread options",
+      "translated": "新建话题选项"
+    },
+    {
+      "id": "native.apple.9ce8a4aba7b444b2",
+      "source": "Rename Thread",
+      "translated": "重命名话题"
+    },
+    {
+      "id": "native.apple.1dd067c44511c7f0",
+      "source": "Thread name",
+      "translated": "话题名称"
+    },
+    {
+      "id": "native.apple.6ec5a13c0e6c20d9",
+      "source": "Rename",
+      "translated": "重命名"
+    },
+    {
+      "id": "native.apple.4c76665d89af4bec",
+      "source": "Cancel",
+      "translated": "取消"
+    },
+    {
+      "id": "native.apple.618073d6ab3f2721",
+      "source": "Delete Thread",
+      "translated": "删除话题"
+    },
+    {
+      "id": "native.apple.10a5e72bba3cbccc",
+      "source": "The thread and its transcript are removed from the gateway.",
+      "translated": "该话题及其对话记录将从 Gateway 中移除。"
+    },
+    {
+      "id": "native.apple.90bcad5f067b4be1",
+      "source": "Delete “%@”?",
+      "translated": "删除“%@”？"
+    },
+    {
+      "id": "native.apple.ac71e3b2aa496a2c",
+      "source": "Thread running",
+      "translated": "话题正在运行"
+    },
+    {
+      "id": "native.apple.c775e87f997278b2",
+      "source": "Thread failed",
+      "translated": "话题运行失败"
+    },
+    {
+      "id": "native.apple.ac85292b16a7465f",
+      "source": "Unread",
+      "translated": "未读"
+    },
+    {
+      "id": "native.apple.f57a4b9c14d31867",
+      "source": "Get Info…",
+      "translated": "显示简介…"
+    },
+    {
+      "id": "native.apple.a174cb1027a9b881",
+      "source": "Rename…",
+      "translated": "重命名…"
+    },
+    {
+      "id": "native.apple.134d6bf84d58fb38",
+      "source": "Pin",
+      "translated": "置顶"
+    },
+    {
+      "id": "native.apple.e7815cc4ba359513",
+      "source": "Unpin",
+      "translated": "取消置顶"
+    },
+    {
+      "id": "native.apple.83f9f2db7eef6a19",
+      "source": "Fork",
+      "translated": "分支"
+    },
+    {
+      "id": "native.apple.235614194dc19df2",
+      "source": "Mark Read",
+      "translated": "标为已读"
+    },
+    {
+      "id": "native.apple.bc71f0d20b7f72a0",
+      "source": "Mark Unread",
+      "translated": "标为未读"
+    },
+    {
+      "id": "native.apple.c9e118f6aae18d97",
+      "source": "Archive",
+      "translated": "归档"
+    },
+    {
+      "id": "native.apple.10365a351a1b58b3",
+      "source": "Restore",
+      "translated": "恢复"
+    },
+    {
+      "id": "native.apple.660f63319b89bd8e",
+      "source": "Copy Session Key",
+      "translated": "复制会话密钥"
+    },
+    {
+      "id": "native.apple.f4998cfb572f23ff",
+      "source": "Delete Thread…",
+      "translated": "删除话题…"
+    },
+    {
+      "id": "native.apple.6a3425ea2811ff88",
+      "source": "Gateway connected",
+      "translated": "Gateway 已连接"
+    },
+    {
+      "id": "native.apple.e3958d1053259f1d",
+      "source": "Connecting…",
+      "translated": "正在连接…"
+    },
+    {
+      "id": "native.apple.8802e9576ffd0f65",
+      "source": "Retry thread groups",
+      "translated": "重试加载话题组"
     },
     {
       "id": "native.apple.63320b6d5138c0db",
@@ -22379,24 +25574,24 @@
       "translated": "范围"
     },
     {
-      "id": "native.apple.2c37581c7b88f741",
-      "source": "Search sessions",
-      "translated": "搜索会话"
+      "id": "native.apple.b313b80def4bda52",
+      "source": "Search threads",
+      "translated": "搜索话题"
     },
     {
-      "id": "native.apple.43be8a2336e42faf",
-      "source": "Sessions",
-      "translated": "会话"
+      "id": "native.apple.c0cc6acc36f413ce",
+      "source": "Threads",
+      "translated": "对话"
     },
     {
-      "id": "native.apple.0b379cdfcbd3247f",
-      "source": "Rename Session",
-      "translated": "重命名会话"
+      "id": "native.apple.854d3928fe5a557c",
+      "source": "Rename Thread",
+      "translated": "重命名对话"
     },
     {
-      "id": "native.apple.54b6fbd9e41db009",
-      "source": "Session name",
-      "translated": "会话名称"
+      "id": "native.apple.9d0d3f20096cc4da",
+      "source": "Thread name",
+      "translated": "对话名称"
     },
     {
       "id": "native.apple.833fe2915430c89d",
@@ -22404,24 +25599,84 @@
       "translated": "取消"
     },
     {
-      "id": "native.apple.b67eaecec1b423ac",
-      "source": "No archived sessions",
-      "translated": "没有已归档的会话"
+      "id": "native.apple.dc00eb94f33bae15",
+      "source": "Delete selected threads?",
+      "translated": "删除所选对话？"
     },
     {
-      "id": "native.apple.b2435a79abf0c794",
-      "source": "No sessions found",
-      "translated": "未找到会话"
+      "id": "native.apple.2053fc9f74dc3158",
+      "source": "Delete Threads",
+      "translated": "删除对话"
     },
     {
-      "id": "native.apple.05cb1fecc5844b69",
-      "source": "Pinned",
-      "translated": "已置顶"
+      "id": "native.apple.0970247871a834a0",
+      "source": "Each selected thread and its transcript will be removed from the gateway.",
+      "translated": "每个所选对话及其记录都将从 Gateway 中移除。"
+    },
+    {
+      "id": "native.apple.bf09df5e38a7a950",
+      "source": "Groups",
+      "translated": "群组"
+    },
+    {
+      "id": "native.apple.6f8acab2256728b5",
+      "source": "Manage thread groups",
+      "translated": "管理对话分组"
+    },
+    {
+      "id": "native.apple.185f4688f98e244e",
+      "source": "Done",
+      "translated": "完成"
+    },
+    {
+      "id": "native.apple.58133fc5791847e6",
+      "source": "Select",
+      "translated": "选择"
+    },
+    {
+      "id": "native.apple.692972314d04b184",
+      "source": "No archived threads",
+      "translated": "没有已归档的对话"
+    },
+    {
+      "id": "native.apple.d6a4b5711dcd26e7",
+      "source": "No threads found",
+      "translated": "未找到对话"
+    },
+    {
+      "id": "native.apple.f0e9d8f69c1d9190",
+      "source": "Restore",
+      "translated": "恢复"
+    },
+    {
+      "id": "native.apple.158cfa096c57bcb9",
+      "source": "Get Info…",
+      "translated": "显示简介…"
     },
     {
       "id": "native.apple.080fce25e4a9bb61",
       "source": "Rename",
       "translated": "重命名"
+    },
+    {
+      "id": "native.apple.6de479e9d780869a",
+      "source": "Fork",
+      "translated": "创建分支"
+    },
+    {
+      "id": "native.apple.1398a2f69867f22d",
+      "source": "Mark Read",
+      "translated": "标为已读"
+    },
+    {
+      "id": "native.apple.4f259c4409cfcc75",
+      "source": "Mark Unread",
+      "translated": "标为未读"
+    },
+    {
+      "id": "native.apple.05cb1fecc5844b69",
+      "source": "Pinned",
+      "translated": "已置顶"
     },
     {
       "id": "native.apple.d148288258094aa6",
@@ -22439,19 +25694,64 @@
       "translated": "归档"
     },
     {
-      "id": "native.apple.34b910911a05110e",
-      "source": "Unarchive",
-      "translated": "取消归档"
+      "id": "native.apple.b09b91392835fe58",
+      "source": "Delete",
+      "translated": "删除"
     },
     {
-      "id": "native.apple.c4e808a2ec8d49f5",
-      "source": "INSERT INTO cached_transcripts(gateway_id, session_key, agent_id, payload, updated_at)\nSELECT gateway_id, session_key, agent_id, payload, updated_at\nFROM cached_transcripts_pre_v3",
-      "translated": "INSERT INTO cached_transcripts(gateway_id, session_key, agent_id, payload, updated_at)\nSELECT gateway_id, session_key, agent_id, payload, updated_at\nFROM cached_transcripts_pre_v3"
+      "id": "native.apple.946b677d8dbf0f37",
+      "source": "Hide talk transcript",
+      "translated": "隐藏对话文字记录"
     },
     {
-      "id": "native.apple.4e7e29be3f05b828",
-      "source": "INSERT INTO cached_transcripts(gateway_id, session_key, agent_id, payload, updated_at)\nSELECT gateway_id, session_key, '', payload, updated_at\nFROM cached_transcripts_pre_v3\nWHERE lower(trim(session_key)) GLOB 'agent:*:*'",
-      "translated": "INSERT INTO cached_transcripts(gateway_id, session_key, agent_id, payload, updated_at)\nSELECT gateway_id, session_key, '', payload, updated_at\nFROM cached_transcripts_pre_v3\nWHERE lower(trim(session_key)) GLOB 'agent:*:*'"
+      "id": "native.apple.cb1d1c999a859927",
+      "source": "Show talk transcript",
+      "translated": "显示对话文字记录"
+    },
+    {
+      "id": "native.apple.e7beeef6043ffd2a",
+      "source": "System Default",
+      "translated": "系统默认"
+    },
+    {
+      "id": "native.apple.f390b84397c0d240",
+      "source": "Running",
+      "translated": "运行中"
+    },
+    {
+      "id": "native.apple.e2e7faa7c9c5c61f",
+      "source": "Collapse tool result",
+      "translated": "折叠工具结果"
+    },
+    {
+      "id": "native.apple.4e7850fe95fcd898",
+      "source": "Expand tool result",
+      "translated": "展开工具结果"
+    },
+    {
+      "id": "native.apple.d65ae0776d6b86ce",
+      "source": "Show less",
+      "translated": "收起"
+    },
+    {
+      "id": "native.apple.065f4da5ddaf14a1",
+      "source": "Show all %lld lines",
+      "translated": "显示全部 %lld 行"
+    },
+    {
+      "id": "native.apple.f80bb83a659d23f4",
+      "source": "Collapsed",
+      "translated": "已折叠"
+    },
+    {
+      "id": "native.apple.c83fc1ba73fd0776",
+      "source": "'queued', 'sending', 'awaiting_confirmation', 'failed'",
+      "translated": "'queued', 'sending', 'awaiting_confirmation', 'failed'"
+    },
+    {
+      "id": "native.apple.ee4ea4d701fa5d07",
+      "source": "'queued', 'sending', 'awaiting_confirmation'",
+      "translated": "'queued', 'sending', 'awaiting_confirmation'"
     },
     {
       "id": "native.apple.e743b1178c2fdec8",
@@ -22489,16 +25789,6 @@
       "translated": "聆听"
     },
     {
-      "id": "native.apple.fe9f30f12f1dcfaf",
-      "source": "Copy Message",
-      "translated": "复制消息"
-    },
-    {
-      "id": "native.apple.f84b674ad395b694",
-      "source": "Jump to latest",
-      "translated": "跳转到最新"
-    },
-    {
       "id": "native.apple.429d825201b2cb85",
       "source": "Jump to latest reply",
       "translated": "跳转到最新回复"
@@ -22509,6 +25799,41 @@
       "translated": "刷新"
     },
     {
+      "id": "native.apple.fe9f30f12f1dcfaf",
+      "source": "Copy Message",
+      "translated": "复制消息"
+    },
+    {
+      "id": "native.apple.90bc8a8045e7017e",
+      "source": "Open Full Message",
+      "translated": "打开完整消息"
+    },
+    {
+      "id": "native.apple.002bfcede229ad4b",
+      "source": "Rewind to Here",
+      "translated": "回退到此处"
+    },
+    {
+      "id": "native.apple.14df2e4997689fb3",
+      "source": "Fork from Here",
+      "translated": "从此处分支"
+    },
+    {
+      "id": "native.apple.b37ec7bd7dc1579a",
+      "source": "Reply",
+      "translated": "回复"
+    },
+    {
+      "id": "native.apple.8d80a6bb3d6e99b0",
+      "source": "You",
+      "translated": "你"
+    },
+    {
+      "id": "native.apple.3b44a67aa284886f",
+      "source": "Assistant",
+      "translated": "助手"
+    },
+    {
       "id": "native.apple.28c2691c03030434",
       "source": "Loading chat",
       "translated": "正在加载聊天"
@@ -22517,6 +25842,11 @@
       "id": "native.apple.5c481fea4eb3dc17",
       "source": "Dismiss",
       "translated": "关闭"
+    },
+    {
+      "id": "native.apple.3892b7f55d9d1f0a",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translated": "请移除附件或等待发送完成后再开始新聊天。"
     },
     {
       "id": "native.apple.92fe9093903eda3b",
@@ -22569,19 +25899,24 @@
       "translated": "路由更改后已排队"
     },
     {
+      "id": "native.apple.787047d0da6b8b9f",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translated": "请移除附件或等待发送完成后，再开始新聊天。"
+    },
+    {
+      "id": "native.apple.e0f045151c8d3137",
+      "source": "Gateway changed before the thread operation started.",
+      "translated": "Gateway 在对话操作开始前已发生更改。"
+    },
+    {
       "id": "native.apple.710c7bd117a7cc12",
       "source": "Remove attachments or wait for delivery to resolve before switching chats.",
       "translated": "请移除附件或等待发送完成后再切换聊天。"
     },
     {
-      "id": "native.apple.d93e6fe16ec1b0e5",
-      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
-      "translated": "请移除附件或等待发送完成后再开始新聊天。"
-    },
-    {
-      "id": "native.apple.87ba543b42696b92",
-      "source": "Clear this session's history?",
-      "translated": "清除此会话的历史记录？"
+      "id": "native.apple.0a5c4e15466c3acc",
+      "source": "Clear this thread's history?",
+      "translated": "清除此对话的历史记录？"
     },
     {
       "id": "native.apple.6192578088f1b100",
@@ -22594,9 +25929,39 @@
       "translated": "这将重置与 %@ 的对话。会话密钥保持不变。"
     },
     {
+      "id": "native.apple.67ac221dbe7179f0",
+      "source": "Rename Thread",
+      "translated": "重命名对话"
+    },
+    {
+      "id": "native.apple.cf0f7e049603f518",
+      "source": "Thread name",
+      "translated": "对话名称"
+    },
+    {
+      "id": "native.apple.8d636ca6b4764418",
+      "source": "Rename",
+      "translated": "重命名"
+    },
+    {
+      "id": "native.apple.32b4a79f1b889aa6",
+      "source": "Cancel",
+      "translated": "取消"
+    },
+    {
       "id": "native.apple.2ee7858b00a47c42",
       "source": "Export Transcript",
       "translated": "导出对话记录"
+    },
+    {
+      "id": "native.apple.c0ada47504425f23",
+      "source": "Threads",
+      "translated": "对话"
+    },
+    {
+      "id": "native.apple.c13dbe6b5c01e9bd",
+      "source": "%@ (override)",
+      "translated": "%@（覆盖）"
     },
     {
       "id": "native.apple.b1f10b5e9113881d",
@@ -22609,6 +25974,41 @@
       "translated": "思考级别"
     },
     {
+      "id": "native.apple.ca556b80c9adcae8",
+      "source": "Full",
+      "translated": "完整"
+    },
+    {
+      "id": "native.apple.1ae2d7073bba214b",
+      "source": "Verbosity",
+      "translated": "详细程度"
+    },
+    {
+      "id": "native.apple.b56645c4fa60fe23",
+      "source": "Default (inherited)",
+      "translated": "默认（继承）"
+    },
+    {
+      "id": "native.apple.17277ea10fd23846",
+      "source": "On",
+      "translated": "开启"
+    },
+    {
+      "id": "native.apple.8f2830ece961d651",
+      "source": "Off",
+      "translated": "关闭"
+    },
+    {
+      "id": "native.apple.0acac602f7cc68fc",
+      "source": "Fast",
+      "translated": "快速"
+    },
+    {
+      "id": "native.apple.16e00cf511074484",
+      "source": "Fast responses",
+      "translated": "快速响应"
+    },
+    {
       "id": "native.apple.17ea1ddec4a7b7a8",
       "source": "Pinned",
       "translated": "已固定"
@@ -22619,14 +26019,24 @@
       "translated": "最近"
     },
     {
-      "id": "native.apple.f41f892742244520",
-      "source": "Models",
-      "translated": "模型"
-    },
-    {
       "id": "native.apple.273aa7b9194a8d0d",
       "source": "Model",
       "translated": "模型"
+    },
+    {
+      "id": "native.apple.68c4c3dd439d182b",
+      "source": "Default",
+      "translated": "默认"
+    },
+    {
+      "id": "native.apple.1a765291943599e5",
+      "source": "New Thread",
+      "translated": "新建对话"
+    },
+    {
+      "id": "native.apple.c7a3a6d5e43dd98f",
+      "source": "New Thread Options…",
+      "translated": "新建对话选项…"
     },
     {
       "id": "native.apple.5361129a24118af6",
@@ -22634,79 +26044,19 @@
       "translated": "刷新"
     },
     {
-      "id": "native.apple.9b2ad72143b931bf",
-      "source": "Export Transcript…",
-      "translated": "导出对话记录…"
+      "id": "native.apple.0e710b81808e5dcf",
+      "source": "Threads…",
+      "translated": "对话…"
     },
     {
-      "id": "native.apple.4b24d792545e5086",
-      "source": "Clear History…",
-      "translated": "清除历史记录…"
+      "id": "native.apple.faad8f92b6bef166",
+      "source": "Rename Thread…",
+      "translated": "重命名对话…"
     },
     {
-      "id": "native.apple.920fe8a7a33f9e92",
-      "source": "Session",
-      "translated": "会话"
-    },
-    {
-      "id": "native.apple.185a401f78328b0f",
-      "source": "Session actions",
-      "translated": "会话操作"
-    },
-    {
-      "id": "native.apple.9f9dedf599b2619b",
-      "source": "Session cost %@",
-      "translated": "会话费用 %@"
-    },
-    {
-      "id": "native.apple.f0a4720df5f5f403",
-      "source": "Compact Session",
-      "translated": "压缩会话"
-    },
-    {
-      "id": "native.apple.0b9fc81ff2031799",
-      "source": "Search sessions",
-      "translated": "搜索会话"
-    },
-    {
-      "id": "native.apple.f10d5ccfd0530fec",
-      "source": "No Results",
-      "translated": "无结果"
-    },
-    {
-      "id": "native.apple.42b0ee4c8b3326b6",
-      "source": "No Sessions",
-      "translated": "无会话"
-    },
-    {
-      "id": "native.apple.eb58552e43c8dde2",
-      "source": "New Session",
-      "translated": "新建会话"
-    },
-    {
-      "id": "native.apple.247771e4350c006f",
-      "source": "New session",
-      "translated": "新建会话"
-    },
-    {
-      "id": "native.apple.d9a72d07e8d95d35",
-      "source": "Delete Session",
-      "translated": "删除会话"
-    },
-    {
-      "id": "native.apple.499537ec30a28ae0",
-      "source": "The session and its transcript are removed from the gateway.",
-      "translated": "会话及其转录记录已从 Gateway 中移除。"
-    },
-    {
-      "id": "native.apple.1bd1b747fd161df5",
-      "source": "Unread",
-      "translated": "未读"
-    },
-    {
-      "id": "native.apple.a8a2f4b248663f97",
-      "source": "Pin",
-      "translated": "置顶"
+      "id": "native.apple.23b61d6cd26ac112",
+      "source": "Fork",
+      "translated": "创建分支"
     },
     {
       "id": "native.apple.8768f9ed198edc54",
@@ -22714,24 +26064,244 @@
       "translated": "取消置顶"
     },
     {
+      "id": "native.apple.a8a2f4b248663f97",
+      "source": "Pin",
+      "translated": "置顶"
+    },
+    {
+      "id": "native.apple.e53f1d7e094dc542",
+      "source": "Mark Read",
+      "translated": "标为已读"
+    },
+    {
+      "id": "native.apple.99579b05ec001672",
+      "source": "Mark Unread",
+      "translated": "标为未读"
+    },
+    {
+      "id": "native.apple.b39c58e213137cc8",
+      "source": "Restore",
+      "translated": "恢复"
+    },
+    {
+      "id": "native.apple.6f5686f621b44307",
+      "source": "Archive",
+      "translated": "归档"
+    },
+    {
       "id": "native.apple.27ddbe5e4643b60f",
       "source": "Copy Session Key",
       "translated": "复制会话密钥"
     },
     {
-      "id": "native.apple.a994d072ab35cb35",
-      "source": "Delete Session…",
-      "translated": "删除会话…"
+      "id": "native.apple.9b2ad72143b931bf",
+      "source": "Export Transcript…",
+      "translated": "导出对话记录…"
     },
     {
-      "id": "native.apple.22d5ce71e22a7f73",
-      "source": "Connecting…",
-      "translated": "连接中…"
+      "id": "native.apple.ebb130189022c7ec",
+      "source": "Show Reasoning",
+      "translated": "显示推理过程"
     },
     {
-      "id": "native.apple.8d0606ab1a2c0f44",
-      "source": "Gateway connected",
-      "translated": "Gateway 已连接"
+      "id": "native.apple.d0dba9aad550fa6e",
+      "source": "Show Tool Activity",
+      "translated": "显示工具活动"
+    },
+    {
+      "id": "native.apple.4b24d792545e5086",
+      "source": "Clear History…",
+      "translated": "清除历史记录…"
+    },
+    {
+      "id": "native.apple.8b4f1c5107ea8a0e",
+      "source": "Thread",
+      "translated": "对话串"
+    },
+    {
+      "id": "native.apple.4d7750c9bf699469",
+      "source": "Thread actions",
+      "translated": "对话串操作"
+    },
+    {
+      "id": "native.apple.bb2f22cc43c97f8e",
+      "source": "Thread cost %@",
+      "translated": "对话串费用 %@"
+    },
+    {
+      "id": "native.apple.6239ced0b86e86f8",
+      "source": "Compact Thread",
+      "translated": "压缩对话串"
+    },
+    {
+      "id": "native.apple.fb7ba381b79044e1",
+      "source": "Shelling",
+      "translated": "披甲中"
+    },
+    {
+      "id": "native.apple.27d2c232c46158f8",
+      "source": "Scuttling",
+      "translated": "疾行中"
+    },
+    {
+      "id": "native.apple.146d26a76f1f661d",
+      "source": "Clawing",
+      "translated": "挥螯中"
+    },
+    {
+      "id": "native.apple.9e590066459c45cf",
+      "source": "Pinching",
+      "translated": "夹取中"
+    },
+    {
+      "id": "native.apple.98bce06ad906ac35",
+      "source": "Molting",
+      "translated": "蜕壳中"
+    },
+    {
+      "id": "native.apple.0a1991f9ac99e5b2",
+      "source": "Bubbling",
+      "translated": "冒泡中"
+    },
+    {
+      "id": "native.apple.693de3befb7eaf8a",
+      "source": "Tiding",
+      "translated": "逐浪中"
+    },
+    {
+      "id": "native.apple.3f77525b4b5bff6e",
+      "source": "Reefing",
+      "translated": "栖礁中"
+    },
+    {
+      "id": "native.apple.e8726dfe7fa3a577",
+      "source": "Cracking",
+      "translated": "破壳中"
+    },
+    {
+      "id": "native.apple.c861cd13f466af46",
+      "source": "Sifting",
+      "translated": "筛选中"
+    },
+    {
+      "id": "native.apple.c58b34716364e0ef",
+      "source": "Brining",
+      "translated": "盐渍中"
+    },
+    {
+      "id": "native.apple.f98d6769fad9ef63",
+      "source": "Nautiling",
+      "translated": "鹦鹉螺游弋中"
+    },
+    {
+      "id": "native.apple.40dbb800afe19da8",
+      "source": "Krilling",
+      "translated": "捕磷虾中"
+    },
+    {
+      "id": "native.apple.e92c5bb2e5342ce6",
+      "source": "Barnacling",
+      "translated": "藤壶附着中"
+    },
+    {
+      "id": "native.apple.2f27f7676f6a5406",
+      "source": "Lobstering",
+      "translated": "捕龙虾中"
+    },
+    {
+      "id": "native.apple.089a07837ab1cce7",
+      "source": "Tidepooling",
+      "translated": "探索潮池中"
+    },
+    {
+      "id": "native.apple.a17076dab69dac74",
+      "source": "Pearling",
+      "translated": "采珠中"
+    },
+    {
+      "id": "native.apple.5715a7bb435c57e8",
+      "source": "Snapping",
+      "translated": "啪嗒中"
+    },
+    {
+      "id": "native.apple.6fbcf8a03da3315a",
+      "source": "Surfacing",
+      "translated": "浮出水面中"
+    },
+    {
+      "id": "native.apple.578503dfeef25502",
+      "source": "Done in %@",
+      "translated": "已在 %@ 内完成"
+    },
+    {
+      "id": "native.apple.4fb1ae0d89560d73",
+      "source": "1 token",
+      "translated": "1 个 token"
+    },
+    {
+      "id": "native.apple.3f968fd475a91bb1",
+      "source": "%@ tokens",
+      "translated": "%@ 个 token"
+    },
+    {
+      "id": "native.apple.fa10740f9e272e83",
+      "source": "Voice note",
+      "translated": "语音消息"
+    },
+    {
+      "id": "native.apple.e4de5afc37981d6c",
+      "source": "Photo Library",
+      "translated": "照片图库"
+    },
+    {
+      "id": "native.apple.37c19a66626b21fa",
+      "source": "Camera",
+      "translated": "相机"
+    },
+    {
+      "id": "native.apple.333682684163ba6b",
+      "source": "Choose Image File",
+      "translated": "选择图片文件"
+    },
+    {
+      "id": "native.apple.534246792690968d",
+      "source": "Add attachment",
+      "translated": "添加附件"
+    },
+    {
+      "id": "native.apple.e33210feaa3da016",
+      "source": "Record Voice Note",
+      "translated": "录制语音留言"
+    },
+    {
+      "id": "native.apple.00f0e15858e38d19",
+      "source": "Dictate message",
+      "translated": "语音输入消息"
+    },
+    {
+      "id": "native.apple.96f20175f61a2b29",
+      "source": "Listening",
+      "translated": "正在聆听"
+    },
+    {
+      "id": "native.apple.eaa9047db6cfb67e",
+      "source": "Not listening",
+      "translated": "未在收听"
+    },
+    {
+      "id": "native.apple.4185df7a940f09ef",
+      "source": "Finish dictation",
+      "translated": "结束语音输入"
+    },
+    {
+      "id": "native.apple.95eeae0399fbc990",
+      "source": "Cancel",
+      "translated": "取消"
+    },
+    {
+      "id": "native.apple.5a0793d2827b9399",
+      "source": "Transcribe speech into the message",
+      "translated": "将语音转写到消息中。"
     },
     {
       "id": "native.apple.f74d150ce05205dd",
@@ -22822,6 +26392,36 @@
       "id": "native.apple.b737f84578f558eb",
       "source": "This device does not trust the TLS certificate presented by %@.",
       "translated": "此设备不信任 %@ 提供的 TLS 证书。"
+    },
+    {
+      "id": "native.apple.7bd4905348ab44b0",
+      "source": "Gateway certificate unavailable",
+      "translated": "Gateway 证书不可用"
+    },
+    {
+      "id": "native.apple.7493b8bf5dcaa05f",
+      "source": "OpenClaw could not securely save the TLS certificate pin for %@.",
+      "translated": "OpenClaw 无法安全保存 %@ 的 TLS 证书锁定。"
+    },
+    {
+      "id": "native.apple.9a4c4bd6b41420ae",
+      "source": "Retry",
+      "translated": "重试"
+    },
+    {
+      "id": "native.apple.957ce87193e74f59",
+      "source": "Gateway certificate is not trusted",
+      "translated": "Gateway 证书不受信任"
+    },
+    {
+      "id": "native.apple.ad21028cb2974851",
+      "source": "The TLS challenge came from a different host or port than the requested Gateway.",
+      "translated": "TLS 质询来自与所请求的 Gateway 不同的主机或端口。"
+    },
+    {
+      "id": "native.apple.2ace7dd34f4ca3a2",
+      "source": "Check certificate",
+      "translated": "检查证书"
     },
     {
       "id": "native.apple.a825441f646eb195",

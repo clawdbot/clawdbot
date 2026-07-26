@@ -2,11 +2,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "./errors.js";
 import { pathExists } from "./fs-safe.js";
 import { readPackageVersion } from "./package-json.js";
 import { movePathWithCopyFallback } from "./replace-file.js";
 import { trimLogTail } from "./restart-sentinel.js";
+import { parseSemver } from "./runtime-guard.js";
 import {
   PACKAGE_POST_INSTALL_DOCTOR_ADVISORY,
   UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
@@ -18,8 +20,11 @@ import {
   collectInstalledGlobalPackageErrors,
   globalInstallArgs,
   globalInstallFallbackArgs,
+  listActivePnpmIsolatedGlobalPackages,
+  readPackageManagerProbeValue,
   resolveNpmGlobalPrefixLayoutFromGlobalRoot,
   resolveNpmGlobalPrefixLayoutFromPrefix,
+  resolvePnpmIsolatedInstallOwner,
   resolvePnpmGlobalDirFromGlobalRoot,
   resolveExpectedInstalledVersionFromSpec,
   resolveGlobalInstallTarget,
@@ -73,6 +78,211 @@ type NpmBinShimBackup = {
 };
 
 const NPM_PACK_QUIET_FLAGS = ["--json", "--loglevel=error"] as const;
+const PACKAGE_INSTALL_GUARD_PATH = path.join("dist", "openclaw-install-guard");
+const PACKAGE_LIFECYCLE_PENDING_PATH = ".openclaw-lifecycle-pending";
+const PACKAGE_PREINSTALL_SCRIPT_PATH = path.join(
+  "scripts",
+  "preinstall-package-manager-warning.mjs",
+);
+
+async function resolveCanonicalPath(filePath: string): Promise<string> {
+  return path.resolve(await fs.realpath(filePath).catch(() => filePath));
+}
+
+async function runPnpmPreflightProbe(params: {
+  installTarget: ResolvedGlobalInstallTarget;
+  args: string[];
+  runCommand: CommandRunner;
+  timeoutMs: number;
+  env?: NodeJS.ProcessEnv;
+}): Promise<{
+  result: Awaited<ReturnType<CommandRunner>> | null;
+  failedStep: PackageUpdateStepResult | null;
+}> {
+  const startedAt = Date.now();
+  const argv = [params.installTarget.command, ...params.args];
+  const probeCwd = params.installTarget.globalRoot ?? undefined;
+  try {
+    // pnpm reads project packageManager/config for every command. Keep all
+    // ownership probes in one manager-owned context before mutation.
+    const result = await params.runCommand(argv, {
+      timeoutMs: params.timeoutMs,
+      env: params.env,
+      ...(probeCwd ? { cwd: probeCwd } : {}),
+    });
+    if (result.code === 0) {
+      return { result, failedStep: null };
+    }
+    return {
+      result: null,
+      failedStep: {
+        name: "pnpm isolated install preflight",
+        command: argv.join(" "),
+        cwd: probeCwd ?? process.cwd(),
+        durationMs: Date.now() - startedAt,
+        exitCode: result.code ?? 1,
+        stdoutTail: result.stdout || null,
+        stderrTail: result.stderr || `Unable to run ${argv.join(" ")}.`,
+      },
+    };
+  } catch (error) {
+    return {
+      result: null,
+      failedStep: {
+        name: "pnpm isolated install preflight",
+        command: argv.join(" "),
+        cwd: probeCwd ?? process.cwd(),
+        durationMs: Date.now() - startedAt,
+        exitCode: 1,
+        stdoutTail: null,
+        stderrTail: formatErrorMessage(error),
+      },
+    };
+  }
+}
+
+async function validatePnpmIsolatedUpdate(params: {
+  installTarget: ResolvedGlobalInstallTarget;
+  packageName: string;
+  runCommand: CommandRunner;
+  timeoutMs: number;
+  env?: NodeJS.ProcessEnv;
+}): Promise<{
+  globalBinDir: string | null;
+  failedStep: PackageUpdateStepResult | null;
+}> {
+  const owner = params.installTarget.pnpmIsolated;
+  if (!owner) {
+    return { globalBinDir: null, failedStep: null };
+  }
+  const activePackages = await listActivePnpmIsolatedGlobalPackages({
+    globalRoot: params.installTarget.globalRoot,
+    packageName: params.packageName,
+  });
+  const activePackageRoots = activePackages.map((entry) => entry.packageRoot);
+  const siblingPackages = [
+    ...new Set(
+      activePackages.flatMap((entry) =>
+        entry.packageNames.filter((name) => name !== params.packageName),
+      ),
+    ),
+  ].toSorted((a, b) => a.localeCompare(b));
+  if (siblingPackages.length > 0) {
+    return {
+      globalBinDir: null,
+      failedStep: {
+        name: "pnpm isolated install preflight",
+        command: `inspect ${params.installTarget.globalRoot ?? "pnpm install"}`,
+        cwd: params.installTarget.globalRoot ?? process.cwd(),
+        durationMs: 0,
+        exitCode: 1,
+        stdoutTail: null,
+        stderrTail: `OpenClaw shares a pnpm ${owner.layoutVersion} global install group with ${siblingPackages.join(", ")}. Automatic update stopped before mutation; update the group manually to preserve its sibling packages.`,
+      },
+    };
+  }
+
+  const invokingPackageRoot = params.installTarget.packageRoot;
+  const invokingInstallOwner = await resolvePnpmIsolatedInstallOwner(invokingPackageRoot);
+  const activeInstallOwners = await Promise.all(
+    activePackageRoots.map((packageRoot) => resolvePnpmIsolatedInstallOwner(packageRoot)),
+  );
+  const ownerMatchCount = invokingInstallOwner
+    ? activeInstallOwners.filter((installOwner) => installOwner === invokingInstallOwner).length
+    : 0;
+  if (!invokingPackageRoot || activePackageRoots.length !== 1 || ownerMatchCount !== 1) {
+    return {
+      globalBinDir: null,
+      failedStep: {
+        name: "pnpm isolated install preflight",
+        command: `inspect ${params.installTarget.globalRoot ?? "pnpm install"}`,
+        cwd: params.installTarget.globalRoot ?? process.cwd(),
+        durationMs: 0,
+        exitCode: 1,
+        stdoutTail: null,
+        stderrTail: `Expected exactly one active pnpm ${owner.layoutVersion} OpenClaw install owned by the invoking project; found ${activePackageRoots.length} active installs and ${ownerMatchCount} owner matches. Automatic update stopped before mutation.`,
+      },
+    };
+  }
+
+  const rootProbe = await runPnpmPreflightProbe({ ...params, args: ["root", "-g"] });
+  if (rootProbe.failedStep || !rootProbe.result) {
+    return {
+      globalBinDir: null,
+      failedStep: rootProbe.failedStep,
+    };
+  }
+  const reportedGlobalRoot = readPackageManagerProbeValue(rootProbe.result.stdout);
+  const expectedGlobalRoot = params.installTarget.globalRoot;
+  if (
+    !reportedGlobalRoot ||
+    !expectedGlobalRoot ||
+    (await resolveCanonicalPath(reportedGlobalRoot)) !==
+      (await resolveCanonicalPath(expectedGlobalRoot))
+  ) {
+    return {
+      globalBinDir: null,
+      failedStep: {
+        name: "pnpm isolated install preflight",
+        command: `${params.installTarget.command} root -g`,
+        cwd: expectedGlobalRoot ?? process.cwd(),
+        durationMs: 0,
+        exitCode: 1,
+        stdoutTail: rootProbe.result.stdout || null,
+        stderrTail: `The active pnpm command owns ${reportedGlobalRoot || "an unknown global root"}, not the invoking OpenClaw install at ${expectedGlobalRoot ?? "an unknown root"}. Automatic update stopped before mutation.`,
+      },
+    };
+  }
+
+  const binProbe = await runPnpmPreflightProbe({ ...params, args: ["bin", "-g"] });
+  const globalBinDir = binProbe.result
+    ? readPackageManagerProbeValue(binProbe.result.stdout) || null
+    : null;
+  if (binProbe.failedStep || !globalBinDir) {
+    return {
+      globalBinDir: null,
+      failedStep: binProbe.failedStep ?? {
+        name: "pnpm isolated install preflight",
+        command: `${params.installTarget.command} bin -g`,
+        cwd: expectedGlobalRoot,
+        durationMs: 0,
+        exitCode: 1,
+        stdoutTail: null,
+        stderrTail: "The owning pnpm command did not report its global bin directory.",
+      },
+    };
+  }
+
+  const versionProbe = await runPnpmPreflightProbe({ ...params, args: ["--version"] });
+  if (versionProbe.failedStep || !versionProbe.result) {
+    return {
+      globalBinDir: null,
+      failedStep: versionProbe.failedStep,
+    };
+  }
+  const reportedVersion = readPackageManagerProbeValue(versionProbe.result.stdout);
+  const version = parseSemver(reportedVersion);
+  if (version?.major !== owner.layoutVersion) {
+    return {
+      globalBinDir: null,
+      failedStep: {
+        name: "pnpm isolated install preflight",
+        command: `${params.installTarget.command} --version`,
+        cwd: expectedGlobalRoot,
+        durationMs: 0,
+        exitCode: 1,
+        stdoutTail: versionProbe.result.stdout || null,
+        stderrTail: `OpenClaw belongs to pnpm isolated layout v${owner.layoutVersion}, but the update command reports pnpm ${reportedVersion || "unknown"}. Use pnpm ${owner.layoutVersion} for this install or update it manually.`,
+      },
+    };
+  }
+
+  return {
+    globalBinDir,
+    failedStep: null,
+  };
+}
+const PACKAGE_POSTINSTALL_SCRIPT_PATH = path.join("scripts", "postinstall-bundled-plugins.mjs");
 
 function isBlockingPackageUpdateStep(step: PackageUpdateStepResult): boolean {
   return step.exitCode !== 0 && step.advisory === undefined;
@@ -234,6 +444,49 @@ function isNpmGitSourceInstallSpec(spec: string, packageName: string): boolean {
   );
 }
 
+function resolvePnpmInstallSpecFromCwd(
+  spec: string,
+  packageName: string,
+  sourceCwd: string,
+): string {
+  const trimmed = spec.trim();
+  const aliasPrefix = `${packageName.trim()}@`;
+  const hasAlias = trimmed.toLowerCase().startsWith(aliasPrefix.toLowerCase());
+  const targetSpec = hasAlias ? trimmed.slice(aliasPrefix.length).trim() : trimmed;
+  const restoreAlias = (target: string) => (hasAlias ? `${aliasPrefix}${target}` : target);
+  if (/^~[\\/]/u.test(targetSpec)) {
+    return spec;
+  }
+  const localProtocol = /^(file:|git\+file:|link:)(.*)$/iu.exec(targetSpec);
+  if (localProtocol) {
+    const protocol = localProtocol[1] ?? "";
+    const target = localProtocol[2]?.trim() ?? "";
+    const fragmentIndex = protocol.toLowerCase() === "git+file:" ? target.indexOf("#") : -1;
+    const targetPath = fragmentIndex >= 0 ? target.slice(0, fragmentIndex) : target;
+    const fragment = fragmentIndex >= 0 ? target.slice(fragmentIndex) : "";
+    if (
+      targetPath &&
+      !/^~[\\/]/u.test(targetPath) &&
+      !path.isAbsolute(targetPath) &&
+      !path.win32.isAbsolute(targetPath)
+    ) {
+      const windowsPath = /^[a-z]:[\\/]/iu.test(sourceCwd) || sourceCwd.startsWith("\\\\");
+      const resolvedTarget = (windowsPath ? path.win32 : path).resolve(sourceCwd, targetPath);
+      if (protocol.toLowerCase() === "git+file:") {
+        return restoreAlias(
+          `git+${pathToFileURL(resolvedTarget, { windows: windowsPath }).href}${fragment}`,
+        );
+      }
+      return restoreAlias(`${protocol}${resolvedTarget}`);
+    }
+    return spec;
+  }
+  // pnpm treats scheme-less tar-like values as registry names or tags. Only
+  // explicit dot paths are caller-relative and must move with the command cwd.
+  const isRelativePath = /^\.{1,2}(?:[\\/]|$)/u.test(targetSpec);
+  return isRelativePath ? restoreAlias(path.resolve(sourceCwd, targetSpec)) : spec;
+}
+
 async function createStagedNpmInstall(
   installTarget: ResolvedGlobalInstallTarget,
   packageName: string,
@@ -278,6 +531,7 @@ async function prepareNpmGitSourceInstallSpec(params: {
   installCwd?: string;
 }): Promise<{
   installSpec: string;
+  installCwd: string | null;
   packDir: string | null;
   steps: PackageUpdateStepResult[];
   failedStep: PackageUpdateStepResult | null;
@@ -286,7 +540,13 @@ async function prepareNpmGitSourceInstallSpec(params: {
     params.installTarget.manager !== "npm" ||
     !isNpmGitSourceInstallSpec(params.installSpec, params.packageName)
   ) {
-    return { installSpec: params.installSpec, packDir: null, steps: [], failedStep: null };
+    return {
+      installSpec: params.installSpec,
+      installCwd: params.installCwd ?? null,
+      packDir: null,
+      steps: [],
+      failedStep: null,
+    };
   }
 
   const packDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-pack-"));
@@ -307,6 +567,7 @@ async function prepareNpmGitSourceInstallSpec(params: {
   if (packStep.exitCode !== 0) {
     return {
       installSpec: params.installSpec,
+      installCwd: params.installCwd ?? null,
       packDir,
       steps: [packStep],
       failedStep: packStep,
@@ -326,6 +587,7 @@ async function prepareNpmGitSourceInstallSpec(params: {
     };
     return {
       installSpec: params.installSpec,
+      installCwd: params.installCwd ?? null,
       packDir,
       steps: [packStep, failedStep],
       failedStep,
@@ -334,6 +596,7 @@ async function prepareNpmGitSourceInstallSpec(params: {
 
   return {
     installSpec: tarball,
+    installCwd: packDir,
     packDir,
     steps: [packStep],
     failedStep: null,
@@ -575,13 +838,44 @@ export async function runGlobalPackageUpdateSteps(params: {
   afterVersion: string | null;
   failedStep: PackageUpdateStepResult | null;
 }> {
-  const installCwd = params.installCwd === undefined ? {} : { cwd: params.installCwd };
-  const installEnv = params.env === undefined ? {} : { env: params.env };
   let stagedInstall: StagedNpmInstall | null | undefined;
   let packedInstallDir: string | null = null;
 
   try {
-    const preparedInstall = await prepareStagedNpmInstall(params.installTarget, params.packageName);
+    const pnpmPreflight = await validatePnpmIsolatedUpdate({
+      installTarget: params.installTarget,
+      packageName: params.packageName,
+      runCommand: params.runCommand,
+      timeoutMs: params.timeoutMs,
+      env: params.env,
+    });
+    if (pnpmPreflight.failedStep) {
+      return {
+        steps: [pnpmPreflight.failedStep],
+        verifiedPackageRoot: params.packageRoot ?? params.installTarget.packageRoot,
+        afterVersion: null,
+        failedStep: pnpmPreflight.failedStep,
+      };
+    }
+    // Keep the preflight and mutation on the same pnpm executable. `pnpm bin -g`
+    // already verifies its reported bin is on PATH, so no PATH rewrite is needed.
+    const effectiveInstallEnv = params.env;
+    const installEnv = effectiveInstallEnv === undefined ? {} : { env: effectiveInstallEnv };
+    const resolvedInstallTarget =
+      params.installTarget.pnpmIsolated && pnpmPreflight.globalBinDir
+        ? {
+            ...params.installTarget,
+            pnpmIsolated: {
+              ...params.installTarget.pnpmIsolated,
+              globalBinDir: pnpmPreflight.globalBinDir,
+            },
+          }
+        : params.installTarget;
+
+    const preparedInstall = await prepareStagedNpmInstall(
+      resolvedInstallTarget,
+      params.packageName,
+    );
     stagedInstall = preparedInstall.stagedInstall;
     if (preparedInstall.failedStep) {
       return {
@@ -593,7 +887,7 @@ export async function runGlobalPackageUpdateSteps(params: {
     }
 
     const steps: PackageUpdateStepResult[] = [];
-    const installCommandTarget = stagedInstall?.installTarget ?? params.installTarget;
+    const installCommandTarget = stagedInstall?.installTarget ?? resolvedInstallTarget;
     const preparedSpec = await prepareNpmGitSourceInstallSpec({
       installTarget: installCommandTarget,
       installSpec: params.installSpec,
@@ -619,15 +913,28 @@ export async function runGlobalPackageUpdateSteps(params: {
       (installCommandTarget.manager === "pnpm"
         ? resolvePnpmGlobalDirFromGlobalRoot(installCommandTarget.globalRoot)
         : null);
+    // pnpm selects its version from cwd. Keep every pnpm mutation beside its
+    // detected global root, after preserving caller-relative package specs.
+    const pnpmMutationCwd =
+      installCommandTarget.manager === "pnpm" ? installCommandTarget.globalRoot : null;
+    const updateCwd = pnpmMutationCwd ?? preparedSpec.installCwd;
+    const updateInstallSpec = pnpmMutationCwd
+      ? resolvePnpmInstallSpecFromCwd(
+          preparedSpec.installSpec,
+          params.packageName,
+          preparedSpec.installCwd ?? process.cwd(),
+        )
+      : preparedSpec.installSpec;
     const updateStep = await params.runStep({
       name: "global update",
       argv: globalInstallArgs(
         installCommandTarget,
-        preparedSpec.installSpec,
+        updateInstallSpec,
         undefined,
         installLocation,
+        preparedSpec.installCwd,
       ),
-      ...installCwd,
+      ...(updateCwd ? { cwd: updateCwd } : {}),
       ...installEnv,
       timeoutMs: params.timeoutMs,
     });
@@ -657,12 +964,13 @@ export async function runGlobalPackageUpdateSteps(params: {
         preparedSpec.installSpec,
         undefined,
         stagedInstall?.prefix,
+        preparedSpec.installCwd,
       );
       if (fallbackArgv) {
         const fallbackStep = await params.runStep({
           name: "global update (omit optional)",
           argv: fallbackArgv,
-          ...installCwd,
+          ...(preparedSpec.installCwd ? { cwd: preparedSpec.installCwd } : {}),
           ...installEnv,
           timeoutMs: params.timeoutMs,
         });
@@ -674,7 +982,60 @@ export async function runGlobalPackageUpdateSteps(params: {
       }
     }
 
+    // pnpm 11 replaces an isolated global project with a new install directory.
+    // Resolve it again before verification so doctor and version checks inspect
+    // the package behind the refreshed global shim, not the removed old root.
+    const refreshedPnpmPackageRoot =
+      finalInstallStep.exitCode === 0 && !stagedInstall && params.installTarget.pnpmIsolated
+        ? await (async () => {
+            const activeRoots = (
+              await listActivePnpmIsolatedGlobalPackages({
+                globalRoot: params.installTarget.globalRoot,
+                packageName: params.packageName,
+              })
+            ).map((entry) => entry.packageRoot);
+            if (activeRoots.length !== 1 || !params.installTarget.packageRoot) {
+              return null;
+            }
+            const replacementRoot = activeRoots[0];
+            if (!replacementRoot) {
+              return null;
+            }
+            const [replacementOwner, previousOwner] = await Promise.all([
+              resolvePnpmIsolatedInstallOwner(replacementRoot),
+              resolvePnpmIsolatedInstallOwner(params.installTarget.packageRoot),
+            ]);
+            return replacementOwner && previousOwner && replacementOwner !== previousOwner
+              ? replacementRoot
+              : null;
+          })()
+        : null;
+    const pnpmReplacementMissing =
+      finalInstallStep.exitCode === 0 &&
+      !stagedInstall &&
+      params.installTarget.manager === "pnpm" &&
+      params.installTarget.pnpmIsolated !== undefined &&
+      params.installTarget.packageRoot !== null &&
+      refreshedPnpmPackageRoot === null;
+    if (pnpmReplacementMissing) {
+      const replacementStep: PackageUpdateStepResult = {
+        name: "global install verify",
+        command: `resolve pnpm replacement in ${params.installTarget.globalRoot ?? "unknown root"}`,
+        cwd: params.installTarget.globalRoot ?? process.cwd(),
+        durationMs: 0,
+        exitCode: 1,
+        stderrTail: "could not identify a unique active pnpm replacement package",
+      };
+      steps.push(replacementStep);
+      return {
+        steps,
+        verifiedPackageRoot: params.packageRoot ?? null,
+        afterVersion: null,
+        failedStep: replacementStep,
+      };
+    }
     const livePackageRoot =
+      refreshedPnpmPackageRoot ??
       params.installTarget.packageRoot ??
       params.packageRoot ??
       (
@@ -682,11 +1043,98 @@ export async function runGlobalPackageUpdateSteps(params: {
           manager: params.installTarget,
           runCommand: params.runCommand,
           timeoutMs: params.timeoutMs,
+          packageName: params.packageName,
         })
       ).packageRoot ??
       null;
     const verificationPackageRoot = stagedInstall?.packageRoot ?? livePackageRoot;
     let verifiedPackageRoot = livePackageRoot ?? verificationPackageRoot;
+
+    // Some pnpm releases accept --allow-build for global local-tar installs
+    // but still skip lifecycle scripts. Keep a marker outside dist because
+    // postinstall prunes the packed guard before the remaining work finishes.
+    if (
+      finalInstallStep.exitCode === 0 &&
+      !stagedInstall &&
+      params.installTarget.manager === "pnpm" &&
+      verificationPackageRoot
+    ) {
+      const installGuardPath = path.join(verificationPackageRoot, PACKAGE_INSTALL_GUARD_PATH);
+      const lifecyclePendingPath = path.join(
+        verificationPackageRoot,
+        PACKAGE_LIFECYCLE_PENDING_PATH,
+      );
+      const hasInstallGuard = await pathExists(installGuardPath);
+      const hasPendingLifecycle = await pathExists(lifecyclePendingPath);
+      if (hasInstallGuard || hasPendingLifecycle) {
+        if (!hasPendingLifecycle) {
+          try {
+            await fs.writeFile(lifecyclePendingPath, "pending\n", "utf8");
+          } catch (error) {
+            const markerStep: PackageUpdateStepResult = {
+              name: "pnpm package lifecycle marker",
+              command: `write ${lifecyclePendingPath}`,
+              cwd: verificationPackageRoot,
+              durationMs: 0,
+              exitCode: 1,
+              stderrTail: formatErrorMessage(error),
+            };
+            steps.push(markerStep);
+            return {
+              steps,
+              verifiedPackageRoot,
+              afterVersion: null,
+              failedStep: markerStep,
+            };
+          }
+        }
+
+        const lifecycleScripts = [
+          ...(hasInstallGuard
+            ? [["pnpm package preinstall", PACKAGE_PREINSTALL_SCRIPT_PATH] as const]
+            : []),
+          ["pnpm package postinstall", PACKAGE_POSTINSTALL_SCRIPT_PATH] as const,
+        ];
+        for (const [name, relativeScript] of lifecycleScripts) {
+          const lifecycleStep = await params.runStep({
+            name,
+            argv: [process.execPath, path.join(verificationPackageRoot, relativeScript)],
+            cwd: verificationPackageRoot,
+            env: effectiveInstallEnv,
+            timeoutMs: params.timeoutMs,
+          });
+          steps.push(lifecycleStep);
+          if (lifecycleStep.exitCode !== 0) {
+            return {
+              steps,
+              verifiedPackageRoot,
+              afterVersion: null,
+              failedStep: lifecycleStep,
+            };
+          }
+        }
+
+        try {
+          await fs.rm(lifecyclePendingPath);
+        } catch (error) {
+          const finalizeStep: PackageUpdateStepResult = {
+            name: "pnpm package lifecycle finalize",
+            command: `remove ${lifecyclePendingPath}`,
+            cwd: verificationPackageRoot,
+            durationMs: 0,
+            exitCode: 1,
+            stderrTail: formatErrorMessage(error),
+          };
+          steps.push(finalizeStep);
+          return {
+            steps,
+            verifiedPackageRoot,
+            afterVersion: null,
+            failedStep: finalizeStep,
+          };
+        }
+      }
+    }
 
     let afterVersion: string | null = null;
     if (finalInstallStep.exitCode === 0 && verificationPackageRoot) {

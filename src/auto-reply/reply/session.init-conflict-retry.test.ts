@@ -3,11 +3,18 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { finalizeInboundContext } from "./inbound-context.js";
 import {
   ReplySessionInitConflictError,
   runWithSessionInitConflictRetry,
 } from "./session-init-conflict-retry.js";
-import { initSessionState } from "./session.js";
+import { initSessionState as initSessionStateRaw } from "./session.js";
+
+const initSessionState = (
+  params: Omit<Parameters<typeof initSessionStateRaw>[0], "ctx"> & {
+    ctx: Record<string, unknown>;
+  },
+) => initSessionStateRaw({ ...params, ctx: finalizeInboundContext(params.ctx) });
 
 const commitConflictControl = vi.hoisted(() => ({
   abortController: undefined as AbortController | undefined,
@@ -74,6 +81,18 @@ describe("runWithSessionInitConflictRetry", () => {
     expect(state.calls).toBe(4);
   });
 
+  it("retries conflict messages rejected as strings", async () => {
+    const attempt = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(`reply session initialization conflicted for ${SESSION_KEY}`)
+      .mockResolvedValue("ok");
+
+    await expect(runWithSessionInitConflictRetry(attempt, { sleep: instantSleep })).resolves.toBe(
+      "ok",
+    );
+    expect(attempt).toHaveBeenCalledTimes(2);
+  });
+
   it("rethrows the conflict after exhausting all attempts", async () => {
     const { attempt, state } = conflictingAttempt(Number.POSITIVE_INFINITY);
     await expect(runWithSessionInitConflictRetry(attempt, { sleep: instantSleep })).rejects.toThrow(
@@ -88,6 +107,21 @@ describe("runWithSessionInitConflictRetry", () => {
       runWithSessionInitConflictRetry(attempt, { maxAttempts: 2, sleep: instantSleep }),
     ).rejects.toBeInstanceOf(ReplySessionInitConflictError);
     expect(state.calls).toBe(2);
+  });
+
+  it("executes an attempt after every caller-provided retry delay", async () => {
+    const { attempt, state } = conflictingAttempt(3);
+    const delays: number[] = [];
+    await expect(
+      runWithSessionInitConflictRetry(attempt, {
+        retryDelaysMs: [1, 2, 3],
+        sleep: async (ms) => {
+          delays.push(ms);
+        },
+      }),
+    ).resolves.toBe("ok");
+    expect(state.calls).toBe(4);
+    expect(delays).toEqual([1, 2, 3]);
   });
 
   it("does not retry non-conflict errors", async () => {

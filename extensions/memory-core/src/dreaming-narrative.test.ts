@@ -7,7 +7,7 @@ import {
   SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE,
 } from "openclaw/plugin-sdk/error-runtime";
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
-import * as memoryCoreHostRuntimeCoreModule from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { resolveStateDir } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import * as runtimeConfigSnapshotModule from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   listSessionEntries,
@@ -26,6 +26,8 @@ import {
   writeBackfillDiaryEntries,
 } from "./dreaming-narrative.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
+
+vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", { spy: true });
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
 const DREAMS_FILE_LOCKS_KEY = Symbol.for("openclaw.memoryCore.dreamingNarrative.fileLocks");
@@ -102,6 +104,7 @@ function readSessionStoreEntries(storePath: string): Record<string, SessionEntry
 
 async function seedDreamingTranscriptEvent(params: {
   sessionId: string;
+  sessionKey: string;
   storePath: string;
   timestampMs: number;
   runId?: string;
@@ -109,7 +112,7 @@ async function seedDreamingTranscriptEvent(params: {
   await appendSqliteSessionTranscriptEventForTest({
     agentId: "main",
     sessionId: params.sessionId,
-    sessionKey: `agent:main:dreaming-narrative-fixture:${params.sessionId}`,
+    sessionKey: params.sessionKey,
     storePath: params.storePath,
     event: {
       type: "metadata",
@@ -864,7 +867,8 @@ describe("generateAndAppendDreamNarrative", () => {
     const updatedAt = Date.now();
     await seedSessionStore(storePath, {
       "agent:main:dreaming-narrative-light-1": {
-        sessionId: "missing",
+        sessionId: "orphan",
+        sessionFile: orphanPath,
         updatedAt,
       },
       "agent:main:kept-session": {
@@ -884,12 +888,14 @@ describe("generateAndAppendDreamNarrative", () => {
     });
     await seedDreamingTranscriptEvent({
       sessionId: "orphan",
+      sessionKey: "agent:main:dreaming-narrative-light-1",
       storePath,
       timestampMs: Date.now() - 600_000,
       runId: "dreaming-narrative-light-123",
     });
     await seedDreamingTranscriptEvent({
       sessionId: "still-live",
+      sessionKey: "agent:main:kept-session",
       storePath,
       timestampMs: Date.now(),
       runId: "dreaming-narrative-light-keep",
@@ -906,7 +912,7 @@ describe("generateAndAppendDreamNarrative", () => {
       session: {},
     } as never);
     setNarrativeTestEnv(stateDir);
-    vi.spyOn(memoryCoreHostRuntimeCoreModule, "resolveStateDir").mockReturnValue(stateDir);
+    vi.mocked(resolveStateDir).mockReturnValue(stateDir);
 
     const subagent = createMockSubagent("The repository whispered of forgotten endpoints.");
     const logger = createMockLogger();
@@ -967,12 +973,14 @@ describe("generateAndAppendDreamNarrative", () => {
     });
     await seedDreamingTranscriptEvent({
       sessionId: "orphan-dreaming",
+      sessionKey: "agent:main:dreaming-narrative-deep-orphan",
       storePath,
       timestampMs: Date.now() - 600_000,
       runId: "dreaming-narrative-deep-orphan",
     });
     await seedDreamingTranscriptEvent({
       sessionId: "live-dreaming",
+      sessionKey: "agent:main:dreaming-narrative-deep-live",
       storePath,
       timestampMs: Date.now(),
       runId: "dreaming-narrative-deep-live",
@@ -989,7 +997,7 @@ describe("generateAndAppendDreamNarrative", () => {
       session: {},
     } as never);
     setNarrativeTestEnv(stateDir);
-    vi.spyOn(memoryCoreHostRuntimeCoreModule, "resolveStateDir").mockReturnValue(stateDir);
+    vi.mocked(resolveStateDir).mockReturnValue(stateDir);
 
     const subagent = createMockSubagent("A forgotten endpoint hummed in the dark.");
     const logger = createMockLogger();

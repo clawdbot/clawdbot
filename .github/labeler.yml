@@ -17,6 +17,10 @@
           - "docs/nodes/camera.md"
           - "docs/nodes/location-command.md"
           - "docs/platforms/linux.md"
+"plugin: cua-computer":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/cua-computer/**"
 "plugin: pixverse":
   - changed-files:
       - any-glob-to-any-file:
@@ -58,17 +62,24 @@
       - any-glob-to-any-file:
           - "extensions/google-meet/**"
           - "docs/plugins/google-meet.md"
+"plugin: teams-meetings":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/teams-meetings/**"
+          - "docs/plugins/teams-meetings.md"
+          - "docs/plugins/reference/teams-meetings.md"
+"plugin: zoom":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/zoom-meetings/**"
+          - "docs/plugins/zoom-meetings.md"
+          - "docs/plugins/reference/zoom-meetings.md"
 "plugin: workboard":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/workboard/**"
           - "docs/plugins/workboard.md"
           - "docs/plugins/reference/workboard.md"
-"plugin: workspaces":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/workspaces/**"
-          - "docs/web/workspaces.md"
 "plugin: migrate-hermes":
   - changed-files:
       - any-glob-to-any-file:
@@ -212,6 +223,11 @@
       - any-glob-to-any-file:
           - "apps/android/**"
           - "docs/platforms/android.md"
+"app: wearos":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "apps/android/wear/**"
+          - "apps/android/wear-shared/**"
 "app: ios":
   - changed-files:
       - any-glob-to-any-file:
@@ -411,6 +427,11 @@
       - any-glob-to-any-file:
           - "extensions/cerebras/**"
           - "docs/providers/cerebras.md"
+"extensions: baseten":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/baseten/**"
+          - "docs/providers/baseten.md"
 "extensions: clawrouter":
   - changed-files:
       - any-glob-to-any-file:

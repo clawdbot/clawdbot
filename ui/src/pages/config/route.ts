@@ -33,8 +33,11 @@ export const pages = [
   configPage("config", "/settings/general", ["/config"]),
   configPage("communications", "/settings/communications", ["/communications"]),
   configPage("appearance", "/settings/appearance", ["/appearance"]),
+  configPage("notifications", "/settings/notifications", []),
+  configPage("security", "/settings/security", []),
   configPage("automation", "/settings/automation", ["/automation"]),
   configPage("mcp", "/settings/mcp", ["/mcp"]),
   configPage("infrastructure", "/settings/infrastructure", ["/infrastructure"]),
   configPage("ai-agents", "/settings/ai-agents", ["/ai-agents"]),
+  configPage("advanced", "/settings/advanced", []),
 ] as const;

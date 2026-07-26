@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import reefChannelEntry from "../index.js";
-import { generateIdentity } from "../protocol/index.js";
-import { autonomyBudget, ReefChannelConfigSchema } from "./config-schema.js";
+import { reefPlugin } from "./channel.js";
+import { autonomyBudget, parseReefRelayUrl, ReefChannelConfigSchema } from "./config-schema.js";
 import { setActiveReef } from "./runtime.js";
 
 describe("Reef configuration boundary", () => {
@@ -9,8 +9,7 @@ describe("Reef configuration boundary", () => {
     expect(ReefChannelConfigSchema.parse({}).relayUrl).toBe("https://reefwire.ai");
   });
 
-  it("validates owner-controlled relay, guard model/policy/key reference, and pinned friend keys", () => {
-    const friend = generateIdentity();
+  it("validates owner-controlled relay, guard model, policy, and key reference", () => {
     const result = ReefChannelConfigSchema.safeParse({
       relayUrl: "https://relay.owner.example",
       handle: "owner",
@@ -23,14 +22,6 @@ describe("Reef configuration boundary", () => {
         timeoutMs: 5_000,
       },
       requestPolicy: "friends-of-friends",
-      friends: {
-        peer: {
-          autonomy: "extended",
-          ed25519PublicKey: friend.signing.publicKey,
-          x25519PublicKey: friend.encryption.publicKey,
-          keyEpoch: 2,
-        },
-      },
     });
 
     expect(result.success).toBe(true);
@@ -45,8 +36,29 @@ describe("Reef configuration boundary", () => {
         apiKeyEnv: "REEF_GUARD_API_KEY",
         policyVersion: "owner-policy-v2",
       },
-      friends: { peer: { keyEpoch: 2 } },
     });
+  });
+
+  it("accepts legacy trust snapshots but rejects retired policy fields", () => {
+    expect(ReefChannelConfigSchema.safeParse({ friends: { peer: { legacy: true } } }).success).toBe(
+      true,
+    );
+    for (const retired of [{ allowFrom: [] }, { dmPolicy: "pairing" }]) {
+      expect(ReefChannelConfigSchema.safeParse(retired).success).toBe(false);
+    }
+  });
+
+  it("accepts only origin-wide HTTP(S) relay endpoints", () => {
+    expect(parseReefRelayUrl("https://relay.example/")).toBe("https://relay.example");
+    for (const relayUrl of [
+      "https://relay.example/tenant",
+      "https://relay.example\\tenant",
+      "https://relay.example/?tenant=a",
+      "https://user@relay.example/",
+      "ftp://relay.example/",
+    ]) {
+      expect(ReefChannelConfigSchema.safeParse({ relayUrl }).success).toBe(false);
+    }
   });
 
   it("keeps config mutation off the agent message surface and gates owner commands", async () => {
@@ -65,8 +77,7 @@ describe("Reef configuration boundary", () => {
         request: vi.fn(),
         list: vi.fn(),
         remove: vi.fn(),
-        config: { friends: {} },
-        transport: { respondFriend: vi.fn() },
+        setAutonomy: vi.fn(),
       },
       reviews: { list: vi.fn(), decide: vi.fn() },
     } as never);
@@ -76,6 +87,33 @@ describe("Reef configuration boundary", () => {
       text: expect.stringContaining("Usage: /reef friend"),
     });
     expect(flowSend).not.toHaveBeenCalled();
+  });
+
+  it("keeps read-only account and security inspection safe before runtime setup", () => {
+    const cfg = {
+      channels: {
+        reef: {
+          handle: "owner",
+          email: "owner@example.com",
+          guard: {
+            provider: "anthropic" as const,
+            pinnedModel: "claude-test-2026-07-12",
+            apiKeyEnv: "REEF_GUARD_API_KEY",
+            policyVersion: "owner-policy-v2",
+            timeoutMs: 5_000,
+          },
+        },
+      },
+    };
+    const account = reefPlugin.config.resolveAccount(cfg, "default");
+
+    expect(reefPlugin.config.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual([]);
+    expect(reefPlugin.config.describeAccount?.(account, cfg)).toMatchObject({
+      extra: { friendCount: 0 },
+    });
+    expect(
+      reefPlugin.security?.resolveDmPolicy?.({ cfg, accountId: "default", account }),
+    ).toMatchObject({ policy: "pairing", allowFrom: [] });
   });
 });
 

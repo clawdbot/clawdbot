@@ -4,14 +4,8 @@
  * This module builds runtime plugin tools from config/options, delivery context,
  * auth profiles, and the current runtime config snapshot.
  */
-import { selectApplicableRuntimeConfig } from "../config/config.js";
-import {
-  getRuntimeConfigSnapshot,
-  getRuntimeConfigSourceSnapshot,
-} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginTools } from "../plugins/tools.js";
-import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { resolveApiKeyForProfile, resolveAuthProfileOrder } from "./auth-profiles.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { createNodePluginTools } from "./node-plugin-tools.js";
@@ -20,13 +14,12 @@ import {
   type OpenClawPluginToolOptions,
 } from "./openclaw-tools.plugin-context.js";
 import { applyPluginToolDeliveryDefaults } from "./plugin-tool-delivery-defaults.js";
+import { resolveAgentRuntimeToolConfig } from "./tool-runtime-config.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 type ResolveOpenClawPluginToolsOptions = OpenClawPluginToolOptions & {
   pluginToolAllowlist?: string[];
   pluginToolDenylist?: string[];
-  currentChannelId?: string;
-  currentMessagingTarget?: string;
   currentThreadTs?: string;
   currentMessageId?: string | number;
   sandboxRoot?: string;
@@ -38,29 +31,9 @@ type ResolveOpenClawPluginToolsOptions = OpenClawPluginToolOptions & {
   requireExplicitMessageTarget?: boolean;
   disableMessageTool?: boolean;
   disablePluginTools?: boolean;
+  clientCaps?: string[];
   authProfileStore?: AuthProfileStore;
 };
-
-function resolveApplicablePluginRuntimeConfig(
-  inputConfig?: OpenClawConfig,
-): OpenClawConfig | undefined {
-  const runtimeConfig = getRuntimeConfigSnapshot() ?? undefined;
-  if (!runtimeConfig) {
-    return inputConfig;
-  }
-  if (!inputConfig || inputConfig === runtimeConfig) {
-    return runtimeConfig;
-  }
-  const runtimeSourceConfig = getRuntimeConfigSourceSnapshot() ?? undefined;
-  if (!runtimeSourceConfig) {
-    return inputConfig;
-  }
-  return selectApplicableRuntimeConfig({
-    inputConfig,
-    runtimeConfig,
-    runtimeSourceConfig,
-  });
-}
 
 /** Resolves plugin tools for an agent run and applies delivery-context defaults. */
 export function resolveOpenClawPluginToolsForOptions(params: {
@@ -72,17 +45,10 @@ export function resolveOpenClawPluginToolsForOptions(params: {
     return [];
   }
 
-  const deliveryContext = normalizeDeliveryContext({
-    channel: params.options?.agentChannel,
-    to: params.options?.agentTo,
-    accountId: params.options?.agentAccountId,
-    threadId: params.options?.agentThreadId,
-  });
-
   const resolveCurrentRuntimeConfig = () => {
     // Re-resolve on demand so auth/profile lookups see the active runtime config
     // while tests can still inject a fixed resolvedConfig.
-    return resolveApplicablePluginRuntimeConfig(params.resolvedConfig ?? params.options?.config);
+    return resolveAgentRuntimeToolConfig(params.resolvedConfig ?? params.options?.config);
   };
   const authProfileStore = params.options?.authProfileStore;
   const resolveAuthProfileIdsForProvider = authProfileStore
@@ -127,6 +93,7 @@ export function resolveOpenClawPluginToolsForOptions(params: {
       ...(resolveApiKeyForProvider ? { resolveApiKeyForProvider } : {}),
     },
     existingToolNames,
+    clientCaps: params.options?.clientCaps,
     toolAllowlist: params.options?.pluginToolAllowlist,
     toolDenylist: params.options?.pluginToolDenylist,
     allowGatewaySubagentBinding: params.options?.allowGatewaySubagentBinding,
@@ -146,6 +113,6 @@ export function resolveOpenClawPluginToolsForOptions(params: {
 
   return applyPluginToolDeliveryDefaults({
     tools: pluginTools,
-    deliveryContext,
+    deliveryContext: pluginToolInputs.context.deliveryContext,
   });
 }

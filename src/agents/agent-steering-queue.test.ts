@@ -189,6 +189,30 @@ describe("agent steering queue", () => {
     });
   });
 
+  it("uses captured fallback output when a resumed completion returns NO_REPLY", () => {
+    const runs = runMap([
+      makeRun({
+        runId: "run-1",
+        delivery: {
+          status: "suspended",
+          payload: payload("run-1", {
+            frozenResultText: "NO_REPLY",
+            fallbackFrozenResultText: "findings captured before the wake",
+          }),
+        },
+      }),
+    ]);
+
+    const leased = leasePendingAgentSteeringItemsFromSubagentRuns({
+      runs,
+      requesterSessionKey,
+      leaseId: "lease-fallback",
+    });
+
+    expect(leased?.prompt).toContain("findings captured before the wake");
+    expect(leased?.prompt).not.toContain("NO_REPLY");
+  });
+
   it("bounds merged prompts and leaves overflow pending", () => {
     const runs = runMap(
       Array.from({ length: 6 }, (_, index) =>

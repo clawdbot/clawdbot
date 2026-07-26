@@ -10,6 +10,7 @@ import ai.openclaw.app.protocol.OpenClawCameraCommand
 import ai.openclaw.app.protocol.OpenClawCapability
 import ai.openclaw.app.protocol.OpenClawDeviceCommand
 import ai.openclaw.app.protocol.OpenClawLocationCommand
+import ai.openclaw.app.protocol.OpenClawMobileUiCommand
 import ai.openclaw.app.protocol.OpenClawMotionCommand
 import ai.openclaw.app.protocol.OpenClawPhotosCommand
 import ai.openclaw.app.protocol.OpenClawSmsCommand
@@ -433,12 +434,27 @@ class ConnectionManagerTest {
       listOf(
         "operator.admin",
         "operator.approvals",
+        "operator.questions",
         "operator.read",
         "operator.talk.secrets",
         "operator.write",
       ),
       options.scopes,
     )
+    assertEquals(
+      listOf(
+        ConnectionManager.AGENT_KIND_CLIENT_CAPABILITY,
+        ConnectionManager.INLINE_WIDGETS_CLIENT_CAPABILITY,
+      ),
+      options.caps,
+    )
+  }
+
+  @Test
+  fun buildOperatorConnectOptions_omitsInlineWidgetsWithoutIsolatedWebViews() {
+    val options = newManager(inlineWidgetsAvailable = false).buildOperatorConnectOptions()
+
+    assertEquals(listOf(ConnectionManager.AGENT_KIND_CLIENT_CAPABILITY), options.caps)
   }
 
   @Test
@@ -550,6 +566,19 @@ class ConnectionManagerTest {
   }
 
   @Test
+  fun buildNodeConnectOptions_advertisesMobileUiOnlyWhileAvailable() {
+    val unavailable = newManager(mobileUiAvailable = false).buildNodeConnectOptions()
+    val available = newManager(mobileUiAvailable = true).buildNodeConnectOptions()
+
+    assertFalse(unavailable.caps.contains(OpenClawCapability.MobileUI.rawValue))
+    assertFalse(unavailable.commands.contains(OpenClawMobileUiCommand.Observe.rawValue))
+    assertFalse(unavailable.commands.contains(OpenClawMobileUiCommand.Act.rawValue))
+    assertTrue(available.caps.contains(OpenClawCapability.MobileUI.rawValue))
+    assertTrue(available.commands.contains(OpenClawMobileUiCommand.Observe.rawValue))
+    assertTrue(available.commands.contains(OpenClawMobileUiCommand.Act.rawValue))
+  }
+
+  @Test
   fun buildNodeConnectOptions_advertisesDeviceAppsOnlyWhenUserOptedIn() {
     val disabled = newManager(installedAppsSharingEnabled = false).buildNodeConnectOptions()
     val enabled = newManager(installedAppsSharingEnabled = true).buildNodeConnectOptions()
@@ -619,6 +648,8 @@ class ConnectionManagerTest {
     installedAppsSharingEnabled: Boolean = false,
     voiceWakeEnabled: Boolean = false,
     voiceWakeAvailable: Boolean = true,
+    mobileUiAvailable: Boolean = false,
+    inlineWidgetsAvailable: Boolean = true,
   ): ConnectionManager {
     val context = RuntimeEnvironment.getApplication()
     context
@@ -646,6 +677,8 @@ class ConnectionManagerTest {
       photosAvailable = { photosAvailable },
       installedAppsSharingEnabled = { installedAppsSharingEnabled },
       voiceWakeAvailable = { voiceWakeAvailable },
+      mobileUiAvailable = { mobileUiAvailable },
+      inlineWidgetsAvailable = { inlineWidgetsAvailable },
       manualTls = { false },
     )
   }

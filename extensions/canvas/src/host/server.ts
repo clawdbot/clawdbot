@@ -219,28 +219,6 @@ async function prepareCanvasRoot(rootDir: string) {
   return rootReal;
 }
 
-/** Reads the owning document manifest to decide whether HTML gets a CSP sandbox header. */
-async function resolveDocumentCspSandbox(
-  rootReal: string,
-  realPath: string,
-): Promise<"scripts" | undefined> {
-  const relative = path.relative(rootReal, realPath);
-  const segments = relative.split(path.sep);
-  if (segments[0] !== "documents" || segments.length < 3) {
-    return undefined;
-  }
-  try {
-    const manifestRaw = await fs.readFile(
-      path.join(rootReal, segments[0], segments[1] ?? "", "manifest.json"),
-      "utf8",
-    );
-    const manifest = JSON.parse(manifestRaw) as { cspSandbox?: unknown };
-    return manifest.cspSandbox === "scripts" ? "scripts" : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 function resolveDefaultCanvasRoot(): string {
   return path.join(resolveStateDir(), "canvas");
 }
@@ -375,6 +353,11 @@ export async function createCanvasHostHandler(
         urlPath = urlPath === basePath ? "/" : urlPath.slice(basePath.length) || "/";
       }
 
+      // Core owns managed transcript documents; this host keeps only Canvas/A2UI files.
+      if (urlPath === "/documents" || urlPath.startsWith("/documents/")) {
+        return false;
+      }
+
       if (req.method !== "GET" && req.method !== "HEAD") {
         res.statusCode = 405;
         res.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -416,16 +399,6 @@ export async function createCanvasHostHandler(
       if (mime === "text/html") {
         const html = data.toString("utf8");
         res.setHeader("Content-Type", "text/html; charset=utf-8");
-        // Sandbox-marked documents (agent-authored widgets) must get an opaque
-        // origin even when navigated to directly; the iframe sandbox attribute
-        // only protects embedded views. Skips live reload: its bridge script is
-        // useless without same-origin access.
-        const cspSandbox = await resolveDocumentCspSandbox(rootReal, realPath);
-        if (cspSandbox) {
-          res.setHeader("Content-Security-Policy", "sandbox allow-scripts");
-          res.end(html);
-          return true;
-        }
         res.end(injectCanvasRuntime(html, { liveReload }));
         return true;
       }

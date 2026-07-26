@@ -16,7 +16,7 @@ OpenClaw Anthropic Vertex provider plugin for Claude models on Google Vertex AI.
 
 ## Surface
 
-providers: anthropic-vertex
+providers: `anthropic-vertex`
 
 <!-- openclaw-plugin-reference:manual-start -->
 

@@ -1,5 +1,6 @@
 // Interactive payload tests cover validation of interactive response payloads.
 import { describe, expect, it } from "vitest";
+import type { MessagePresentationAction } from "./payload.js";
 import {
   hasReplyChannelData,
   hasReplyContent,
@@ -287,6 +288,91 @@ describe("interactive payload helpers", () => {
     });
   });
 
+  it("requires a web-app target and preserves hosted widget ids", () => {
+    const normalized = normalizeMessagePresentation({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Hosted widget",
+              action: { type: "web-app", widgetId: " AAAAAAAAAAAAAAAAAAAAAA " },
+            },
+            {
+              label: "Hosted fallback",
+              action: {
+                type: "web-app",
+                widgetId: "BBBBBBBBBBBBBBBBBBBBBB",
+                url: " https://example.com/app ",
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(normalized).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Hosted widget",
+              action: { type: "web-app", widgetId: "AAAAAAAAAAAAAAAAAAAAAA" },
+            },
+            {
+              label: "Hosted fallback",
+              action: {
+                type: "web-app",
+                widgetId: "BBBBBBBBBBBBBBBBBBBBBB",
+                url: "https://example.com/app",
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const interactive = presentationToInteractiveReply(normalized!);
+    expect(interactive?.blocks[0]).toMatchObject({
+      type: "buttons",
+      buttons: [
+        {
+          label: "Hosted widget",
+          action: { type: "web-app", widgetId: "AAAAAAAAAAAAAAAAAAAAAA" },
+        },
+        {
+          label: "Hosted fallback",
+          action: {
+            type: "web-app",
+            widgetId: "BBBBBBBBBBBBBBBBBBBBBB",
+            url: "https://example.com/app",
+          },
+          webApp: { url: "https://example.com/app" },
+        },
+      ],
+    });
+    expect(interactive?.blocks[0]).not.toHaveProperty("buttons.0.webApp");
+    expect(renderMessagePresentationFallbackText({ presentation: normalized })).toBe(
+      "- Hosted widget\n- Hosted fallback: https://example.com/app",
+    );
+    expect(
+      resolveMessagePresentationButtonAction({
+        // Boundary input missing both url and widgetId; the union forbids this statically.
+        action: { type: "web-app" } as unknown as MessagePresentationAction,
+      }),
+    ).toBeUndefined();
+    expect(
+      normalizeMessagePresentation({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "Missing", action: { type: "web-app" } }],
+          },
+        ],
+      }),
+    ).toBeUndefined();
+  });
+
   it("resolves deprecated button inputs without overriding a canonical action", () => {
     expect(
       resolveMessagePresentationButtonAction({
@@ -410,6 +496,41 @@ describe("interactive payload helpers", () => {
     ).toEqual({
       blocks: [{ type: "buttons", buttons: [{ label: "Approve", action }] }],
     });
+  });
+
+  it("normalizes question actions without exposing their transport data", () => {
+    const action = {
+      type: "question" as const,
+      questionId: "ask_0123456789abcdef0123456789abcdef",
+      optionValue: "Production",
+    };
+    const presentation = normalizeMessagePresentation({
+      blocks: [{ type: "buttons", buttons: [{ label: "Production", action }] }],
+    });
+
+    expect(presentation).toEqual({
+      blocks: [{ type: "buttons", buttons: [{ label: "Production", action }] }],
+    });
+    expect(resolveMessagePresentationControlValue({ action })).toBeUndefined();
+    expect(renderMessagePresentationFallbackText({ presentation: presentation ?? undefined })).toBe(
+      "- Production",
+    );
+    expect(presentationToInteractiveReply(presentation ?? { blocks: [] })).toEqual({
+      blocks: [{ type: "buttons", buttons: [{ label: "Production", action }] }],
+    });
+  });
+
+  it.each([
+    { type: "Question", questionId: "ask_1", optionValue: "Yes" },
+    { type: "question", questionId: "", optionValue: "Yes" },
+    { type: "question", questionId: "ask_\ud800", optionValue: "Yes" },
+    { type: "question", questionId: "ask_1", optionValue: "   " },
+  ])("rejects malformed question action %#", (action) => {
+    expect(
+      normalizeMessagePresentation({
+        blocks: [{ type: "buttons", buttons: [{ label: "Yes", action }] }],
+      }),
+    ).toBeUndefined();
   });
 
   it("rejects malformed canonical actions instead of falling back to legacy fields", () => {

@@ -6,6 +6,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { QaProviderMode } from "../../extensions/qa-lab/src/run-config.ts";
+import type { QaSuiteRoundTripProbe } from "../../extensions/qa-lab/src/suite-round-trip.ts";
 
 function parseBoolean(value: string | undefined) {
   const normalized = value?.trim().toLowerCase();
@@ -53,24 +54,47 @@ function resolvePackageTelegramOutputDir(env: NodeJS.ProcessEnv, repoRoot: strin
   );
 }
 
-const DEFAULT_RTT_CHECK_ID = "telegram-mentioned-message-reply";
+const DEFAULT_RTT_CHECK_ID = "channel-canary";
 
 function resolveRttOptions(env: NodeJS.ProcessEnv, selectedScenarioIds: readonly string[] = []) {
   const explicitCheckIds = splitCsv(env.OPENCLAW_NPM_TELEGRAM_RTT_CHECKS);
+  const checkIds = explicitCheckIds.length > 0 ? explicitCheckIds : [DEFAULT_RTT_CHECK_ID];
+  const unknownCheckIds = checkIds.filter((checkId) => checkId !== DEFAULT_RTT_CHECK_ID);
+  if (unknownCheckIds.length > 0) {
+    throw new Error(`unknown Telegram QA RTT check: ${unknownCheckIds[0]}`);
+  }
   if (
     explicitCheckIds.length === 0 &&
     selectedScenarioIds.length > 0 &&
     !selectedScenarioIds.includes(DEFAULT_RTT_CHECK_ID)
   ) {
-    return {};
+    return undefined;
   }
-  const rttCount = parsePositiveIntegerEnv(env, "OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES") ?? 20;
+  const count = parsePositiveIntegerEnv(env, "OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES") ?? 20;
   return {
-    rttCount,
-    rttTimeoutMs: parsePositiveIntegerEnv(env, "OPENCLAW_NPM_TELEGRAM_RTT_TIMEOUT_MS"),
-    maxRttFailures:
-      parsePositiveIntegerEnv(env, "OPENCLAW_NPM_TELEGRAM_RTT_MAX_FAILURES") ?? rttCount,
-    rttCheckIds: explicitCheckIds,
+    scenarioId: DEFAULT_RTT_CHECK_ID,
+    count,
+    timeoutMs: parsePositiveIntegerEnv(env, "OPENCLAW_NPM_TELEGRAM_RTT_TIMEOUT_MS") ?? 30_000,
+    maxFailures: parsePositiveIntegerEnv(env, "OPENCLAW_NPM_TELEGRAM_RTT_MAX_FAILURES") ?? count,
+  };
+}
+
+function createRoundTripProbe(
+  options: ReturnType<typeof resolveRttOptions>,
+): QaSuiteRoundTripProbe | undefined {
+  if (!options) {
+    return undefined;
+  }
+  return {
+    ...options,
+    markerPrefix: "QA-TELEGRAM-RTT",
+    input: {
+      conversation: { id: "telegram-rtt-room", kind: "group" },
+      senderId: "qa-rtt-driver",
+      senderName: "QA RTT Driver",
+    },
+    textPrefix: "@openclaw Telegram RTT check. Reply exactly: ",
+    chainReplies: true,
   };
 }
 
@@ -117,8 +141,8 @@ async function resolveTrustedOpenClawCommand(
 }
 
 async function main() {
-  const { runTelegramQaLive } =
-    await import("../../extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime.ts");
+  const { runQaTelegramSuite } =
+    await import("../../extensions/qa-lab/src/live-transports/telegram/cli.runtime.ts");
   const rawSutOpenClawCommand = process.env.OPENCLAW_NPM_TELEGRAM_SUT_COMMAND?.trim();
   if (!rawSutOpenClawCommand) {
     throw new Error("Missing OPENCLAW_NPM_TELEGRAM_SUT_COMMAND.");
@@ -128,8 +152,9 @@ async function main() {
   const repoRoot = path.resolve(process.env.OPENCLAW_NPM_TELEGRAM_REPO_ROOT ?? process.cwd());
   const outputDir = resolvePackageTelegramOutputDir(process.env, repoRoot);
   const scenarioIds = splitCsv(process.env.OPENCLAW_NPM_TELEGRAM_SCENARIOS);
-  const result = await runTelegramQaLive({
-    env: process.env,
+  const result = await runQaTelegramSuite({
+    allowFailures: true,
+    failFast: true,
     repoRoot,
     outputDir,
     sutOpenClawCommand,
@@ -138,11 +163,14 @@ async function main() {
     alternateModel: process.env.OPENCLAW_NPM_TELEGRAM_ALT_MODEL,
     fastMode: parseBoolean(process.env.OPENCLAW_NPM_TELEGRAM_FAST),
     scenarioIds,
-    ...resolveRttOptions(process.env, scenarioIds),
+    roundTripProbe: createRoundTripProbe(resolveRttOptions(process.env, scenarioIds)),
     sutAccountId: process.env.OPENCLAW_NPM_TELEGRAM_SUT_ACCOUNT,
     credentialSource: resolveCredentialSource(process.env),
     credentialRole: resolveCredentialRole(process.env),
   });
+  if (!result) {
+    throw new Error("Package Telegram QA did not produce suite artifacts.");
+  }
 
   process.stdout.write(`Package Telegram QA report: ${result.reportPath}\n`);
   process.stdout.write(`Package Telegram QA summary: ${result.summaryPath}\n`);
@@ -180,6 +208,7 @@ export const testing = {
   resolvePackageTelegramOutputDir,
   resolveCredentialRole,
   resolveCredentialSource,
+  createRoundTripProbe,
   resolveRttOptions,
   resolveTrustedOpenClawCommand,
   shouldFailPackageTelegramRun,

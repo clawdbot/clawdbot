@@ -358,6 +358,352 @@ describe("CronService failure alerts", () => {
     await store.cleanup();
   });
 
+  it.each([
+    {
+      name: "uses a globally configured failure webhook destination",
+      globalAlert: {
+        enabled: true,
+        after: 1,
+        mode: "webhook" as const,
+        to: "https://alerts.example.test/cron-failures",
+      },
+      jobAlert: undefined,
+      expected: {
+        mode: "webhook",
+        to: "https://alerts.example.test/cron-failures",
+      },
+    },
+    {
+      name: "uses a globally configured failure announcement channel and target",
+      globalAlert: {
+        enabled: true,
+        after: 1,
+        mode: "announce" as const,
+        channel: "slack",
+        to: "slack:cron-alerts",
+      },
+      jobAlert: undefined,
+      expected: {
+        mode: "announce",
+        channel: "slack",
+        to: "slack:cron-alerts",
+      },
+    },
+    {
+      name: "preserves an explicit job failure webhook over the global destination",
+      globalAlert: {
+        enabled: true,
+        after: 1,
+        mode: "webhook" as const,
+        to: "https://alerts.example.test/global-failures",
+      },
+      jobAlert: {
+        mode: "webhook" as const,
+        to: "https://alerts.example.test/job-failures",
+      },
+      expected: {
+        mode: "webhook",
+        to: "https://alerts.example.test/job-failures",
+      },
+    },
+    {
+      name: "never reuses a global webhook URL as an overridden job chat target",
+      globalAlert: {
+        enabled: true,
+        after: 1,
+        mode: "webhook" as const,
+        to: "https://alerts.example.test/global-failures",
+      },
+      jobAlert: {
+        mode: "announce" as const,
+      },
+      expected: {
+        mode: "announce",
+        channel: "telegram",
+        to: "telegram:19098680",
+      },
+    },
+    {
+      name: "never reuses a global chat target after a job changes the failure channel",
+      globalAlert: {
+        enabled: true,
+        after: 1,
+        mode: "announce" as const,
+        channel: "slack",
+        to: "slack:cron-alerts",
+      },
+      jobAlert: {
+        mode: "announce" as const,
+        channel: "telegram",
+      },
+      expected: {
+        mode: "announce",
+        channel: "telegram",
+        to: "telegram:19098680",
+      },
+    },
+    {
+      name: "never reuses a global webhook channel after a job switches to chat",
+      globalAlert: {
+        enabled: true,
+        after: 1,
+        mode: "webhook" as const,
+        channel: "slack",
+        to: "https://alerts.example.test/global-failures",
+      },
+      jobAlert: {
+        mode: "announce" as const,
+      },
+      expected: {
+        mode: "announce",
+        channel: "telegram",
+        to: "telegram:19098680",
+      },
+    },
+    {
+      name: "never reuses a job chat target for a global channel-only alert",
+      globalAlert: {
+        enabled: true,
+        after: 1,
+        mode: "announce" as const,
+        channel: "slack",
+      },
+      jobAlert: undefined,
+      expected: {
+        mode: "announce",
+        channel: "slack",
+        to: undefined,
+      },
+    },
+    {
+      name: "preserves a global webhook URL when an unused job channel is set",
+      globalAlert: {
+        enabled: true,
+        after: 1,
+        mode: "webhook" as const,
+        to: "https://alerts.example.test/global-failures",
+      },
+      jobAlert: {
+        channel: "telegram",
+      },
+      expected: {
+        mode: "webhook",
+        to: "https://alerts.example.test/global-failures",
+      },
+    },
+  ])("$name", async ({ globalAlert, jobAlert, expected }) => {
+    const store = await makeStorePath();
+    const sendCronFailureAlert = vi.fn(async () => undefined);
+    const cron = createFailureAlertCron({
+      storePath: store.storePath,
+      cronConfig: { failureAlert: globalAlert },
+      runIsolatedAgentJob: vi.fn(async () => ({
+        status: "error" as const,
+        error: "temporary upstream error",
+      })),
+      sendCronFailureAlert,
+    });
+
+    await cron.start();
+    const job = await cron.add({
+      name: "globally routed failure alert",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "run report" },
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "telegram:19098680",
+      },
+      ...(jobAlert ? { failureAlert: jobAlert } : {}),
+    });
+
+    await cron.run(job.id, "force");
+
+    expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+    expectAlertFields(sendCronFailureAlert, expected);
+    expectAlertTextContaining(
+      sendCronFailureAlert,
+      'Cron job "globally routed failure alert" failed 1 times',
+    );
+
+    cron.stop();
+    await store.cleanup();
+  });
+
+  it.each([
+    {
+      name: "channel-shaped failure destination",
+      failureDestination: { channel: "slack", to: "#alerts" },
+    },
+    {
+      name: "webhook failure destination",
+      failureDestination: {
+        mode: "webhook" as const,
+        to: "https://alerts.example.test/job-failures",
+      },
+    },
+    {
+      name: "clear-only failure destination opt-out",
+      failureDestination: {
+        channel: undefined,
+        to: undefined,
+        accountId: undefined,
+        mode: undefined,
+      },
+    },
+  ])("does not duplicate an explicitly owned $name", async ({ failureDestination }) => {
+    const store = await makeStorePath();
+    const sendCronFailureAlert = vi.fn(async () => undefined);
+    const cron = createFailureAlertCron({
+      storePath: store.storePath,
+      cronConfig: {
+        failureAlert: {
+          enabled: true,
+          after: 1,
+          mode: "webhook",
+          to: "https://alerts.example.test/global-failures",
+        },
+      },
+      runIsolatedAgentJob: vi.fn(async () => ({
+        status: "error" as const,
+        error: "temporary upstream error",
+      })),
+      sendCronFailureAlert,
+    });
+
+    await cron.start();
+    const job = await cron.add({
+      name: "explicitly routed failure destination",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "run report" },
+      delivery: { mode: "none", failureDestination },
+    });
+
+    expect(job.delivery?.failureDestination).toBeDefined();
+    await cron.run(job.id, "force");
+
+    expect(sendCronFailureAlert).not.toHaveBeenCalled();
+
+    cron.stop();
+    await store.cleanup();
+  });
+
+  it("preserves explicit job alerts alongside an owned failure destination", async () => {
+    const store = await makeStorePath();
+    const sendCronFailureAlert = vi.fn(async () => undefined);
+    const cron = createFailureAlertCron({
+      storePath: store.storePath,
+      cronConfig: {
+        failureAlert: {
+          enabled: true,
+          after: 1,
+          mode: "webhook",
+          to: "https://alerts.example.test/global-failures",
+        },
+      },
+      runIsolatedAgentJob: vi.fn(async () => ({
+        status: "error" as const,
+        error: "temporary upstream error",
+      })),
+      sendCronFailureAlert,
+    });
+
+    await cron.start();
+    const job = await cron.add({
+      name: "explicit job alert with a failure destination",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "run report" },
+      delivery: {
+        mode: "none",
+        failureDestination: { channel: "slack", to: "#alerts" },
+      },
+      failureAlert: {
+        after: 1,
+        mode: "announce",
+        channel: "telegram",
+        to: "telegram:19098680",
+      },
+    });
+
+    await cron.run(job.id, "force");
+
+    expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+    expectAlertFields(sendCronFailureAlert, {
+      mode: "announce",
+      channel: "telegram",
+      to: "telegram:19098680",
+    });
+    expectAlertTextContaining(
+      sendCronFailureAlert,
+      'Cron job "explicit job alert with a failure destination" failed 1 times',
+    );
+
+    cron.stop();
+    await store.cleanup();
+  });
+
+  it("preserves global skipped alerts alongside an owned failure destination", async () => {
+    const store = await makeStorePath();
+    const sendCronFailureAlert = vi.fn(async () => undefined);
+    const cron = createFailureAlertCron({
+      storePath: store.storePath,
+      cronConfig: {
+        failureAlert: {
+          enabled: true,
+          after: 1,
+          includeSkipped: true,
+          mode: "announce",
+          channel: "telegram",
+          to: "telegram:19098680",
+        },
+      },
+      runIsolatedAgentJob: vi.fn(async () => ({
+        status: "skipped" as const,
+        error: "requests-in-flight",
+      })),
+      sendCronFailureAlert,
+    });
+
+    await cron.start();
+    const job = await cron.add({
+      name: "skipped job with a failure destination",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "run report" },
+      delivery: {
+        mode: "none",
+        failureDestination: { channel: "slack", to: "#alerts" },
+      },
+    });
+
+    await cron.run(job.id, "force");
+
+    expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+    expectAlertFields(sendCronFailureAlert, {
+      mode: "announce",
+      channel: "telegram",
+      to: "telegram:19098680",
+    });
+    expectAlertTextContaining(
+      sendCronFailureAlert,
+      'Cron job "skipped job with a failure destination" skipped 1 times',
+    );
+
+    cron.stop();
+    await store.cleanup();
+  });
+
   it("alerts for repeated skipped runs only when opted in", async () => {
     const store = await makeStorePath();
     const sendCronFailureAlert = vi.fn(async () => undefined);
@@ -498,6 +844,49 @@ describe("CronService failure alerts", () => {
       'Cron job "provider limit alert" failed 1 times\n' +
         "Cause: billing\n" +
         "Last error: 403 Key limit exceeded (monthly limit)",
+    );
+
+    cron.stop();
+    await store.cleanup();
+  });
+
+  it("does not reclassify permanent local script errors in failure alerts", async () => {
+    const store = await makeStorePath();
+    const sendCronFailureAlert = vi.fn(async () => undefined);
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      status: "error" as const,
+      error: "cron script failed after a tool side effect: request timed out",
+      errorClassification: { kind: "permanent" as const },
+    }));
+
+    const cron = createFailureAlertCron({
+      storePath: store.storePath,
+      cronConfig: {
+        failureAlert: {
+          enabled: true,
+          after: 1,
+        },
+      },
+      runIsolatedAgentJob,
+      sendCronFailureAlert,
+    });
+
+    await cron.start();
+    const job = await cron.add({
+      name: "permanent script alert",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "ping" },
+      delivery: { mode: "announce", channel: "telegram", to: "19098680" },
+    });
+
+    await cron.run(job.id, "force");
+    expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+    expect(alertCallArg(sendCronFailureAlert).text).toBe(
+      'Cron job "permanent script alert" failed 1 times\n' +
+        "Last error: cron script failed after a tool side effect: request timed out",
     );
 
     cron.stop();

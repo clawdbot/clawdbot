@@ -1,7 +1,7 @@
-// Detects and decodes Windows console output encodings.
+// Detects Windows console/OEM code pages and decodes console output encodings.
 import { spawnSync } from "node:child_process";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { getWindowsCmdExePath } from "./windows-install-roots.js";
+import { getWindowsCmdExePath, queryWindowsRegistryValue } from "./windows-install-roots.js";
 
 const WINDOWS_CODEPAGE_ENCODING_MAP: Record<number, string> = {
   65001: "utf-8",
@@ -21,9 +21,51 @@ const WINDOWS_CODEPAGE_ENCODING_MAP: Record<number, string> = {
   1257: "windows-1257",
   1258: "windows-1258",
 };
+const WINDOWS_ENCODING_PROBE_TIMEOUT_MS = 5_000;
+
+// Task Scheduler launchers use the system OEM page. Interactive consoles can
+// override it, so generated scripts also declare this page before their body.
+const WINDOWS_NLS_CODEPAGE_KEY = "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Nls\\CodePage";
+
+const WINDOWS_OEM_CODEPAGE_ENCODING_MAP: Record<number, string> = {
+  65001: "utf-8",
+  // These locales use the same ANSI/OEM identifier; labels match the ANSI map.
+  874: "windows-874",
+  932: "shift_jis",
+  936: "gbk",
+  949: "euc-kr",
+  950: "big5",
+  1258: "windows-1258",
+  // OEM-only single-byte pages used by windows-125x ANSI hosts, iconv-lite
+  // `cp###` labels. 864 is omitted: real CP864 repurposes ASCII 0x25 "%",
+  // which generated cmd scripts contain. Unsupported OEM pages fail closed.
+  437: "cp437",
+  720: "cp720",
+  737: "cp737",
+  775: "cp775",
+  850: "cp850",
+  852: "cp852",
+  855: "cp855",
+  857: "cp857",
+  858: "cp858",
+  860: "cp860",
+  861: "cp861",
+  862: "cp862",
+  863: "cp863",
+  865: "cp865",
+  866: "cp866",
+  869: "cp869",
+};
+const WINDOWS_OEM_ENCODING_CODEPAGE_MAP = new Map(
+  Object.entries(WINDOWS_OEM_CODEPAGE_ENCODING_MAP).map(([codePage, encoding]) => [
+    encoding,
+    Number.parseInt(codePage, 10),
+  ]),
+);
 
 let cachedWindowsConsoleEncoding: string | null | undefined;
 let cachedWindowsSystemEncoding: string | null | undefined;
+let cachedWindowsOemCodePage: number | null | undefined;
 
 /** Extracts a Windows console code page number from localized `chcp` output. */
 function parseWindowsCodePage(raw: string): number | null {
@@ -53,7 +95,9 @@ export function resolveWindowsConsoleEncoding(): string | null {
     const result = spawnSync(getWindowsCmdExePath(), ["/d", "/s", "/c", "chcp"], {
       windowsHide: true,
       encoding: "utf8",
+      killSignal: "SIGKILL",
       stdio: ["ignore", "pipe", "pipe"],
+      timeout: WINDOWS_ENCODING_PROBE_TIMEOUT_MS,
     });
     const raw = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
     const codePage = parseWindowsCodePage(raw);
@@ -80,7 +124,9 @@ function resolveWindowsSystemEncoding(): string | null {
       {
         windowsHide: true,
         encoding: "utf8",
+        killSignal: "SIGKILL",
         stdio: ["ignore", "pipe", "pipe"],
+        timeout: WINDOWS_ENCODING_PROBE_TIMEOUT_MS,
       },
     );
     const raw = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
@@ -91,6 +137,30 @@ function resolveWindowsSystemEncoding(): string | null {
     cachedWindowsSystemEncoding = null;
   }
   return cachedWindowsSystemEncoding;
+}
+
+/** Resolves and caches the boot-time Windows OEM encoding cmd.exe reads batch files with. */
+export function resolveWindowsOemEncoding(): string | null {
+  const codePage = resolveWindowsOemCodePage();
+  return codePage !== null ? (WINDOWS_OEM_CODEPAGE_ENCODING_MAP[codePage] ?? null) : null;
+}
+
+/** Resolves and caches the numeric boot-time Windows OEM code page. */
+export function resolveWindowsOemCodePage(): number | null {
+  if (process.platform !== "win32") {
+    return null;
+  }
+  if (cachedWindowsOemCodePage !== undefined) {
+    return cachedWindowsOemCodePage;
+  }
+  const raw = queryWindowsRegistryValue(WINDOWS_NLS_CODEPAGE_KEY, "OEMCP");
+  cachedWindowsOemCodePage = raw === null ? null : parseWindowsCodePage(raw);
+  return cachedWindowsOemCodePage;
+}
+
+/** Returns the numeric Windows OEM page for one resolver encoding label. */
+export function resolveWindowsOemCodePageForEncoding(encoding: string): number | null {
+  return WINDOWS_OEM_ENCODING_CODEPAGE_MAP.get(encoding) ?? null;
 }
 
 /** Decodes one complete subprocess output buffer, preferring valid UTF-8 before legacy code pages. */

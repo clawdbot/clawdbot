@@ -1,6 +1,6 @@
 // Audio transcode tests cover ffmpeg-backed audio conversion behavior.
 import { existsSync, realpathSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
@@ -103,6 +103,24 @@ describe("transcodeAudioBufferToOpus", () => {
       audioBuffer: Buffer.from("source"),
       inputExtension: "../bad",
     });
+  });
+
+  it("passes the maximum duration to ffmpeg when requested", async () => {
+    runFfmpegMock.mockImplementationOnce(async (args: string[]) => {
+      const outputPath = args.at(-1);
+      if (!outputPath) {
+        throw new Error("missing ffmpeg output path");
+      }
+      await writeFile(outputPath, Buffer.from("ogg-opus-output"));
+    });
+
+    await transcodeAudioBufferToOpus({
+      audioBuffer: Buffer.from("source-m4a"),
+      maxDurationSeconds: 300,
+    });
+
+    const ffmpegArgs = firstMockCall(runFfmpegMock, "runFfmpeg")[0] as string[];
+    expect(ffmpegArgs).toEqual(expect.arrayContaining(["-t", "300", "-c:a", "libopus"]));
   });
 
   it("keeps temp prefixes and output names inside the preferred temp root", async () => {

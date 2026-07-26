@@ -8,21 +8,26 @@ import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import { resolveGatewayLaunchAgentLabel } from "./constants.js";
+import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "./launchd-plist.js";
 import { renderPosixRestartLogSetup } from "./restart-logs.js";
 
 type LaunchdRestartHandoffMode = "kickstart" | "reload" | "start-after-exit";
 
-type LaunchdRestartHandoffResult = Result<number | undefined, string>;
+type LaunchdRestartHandoffResult = Result<Promise<boolean>, string>;
 
 type LaunchdRestartTarget = {
   domain: string;
-  label: string;
   plistPath: string;
   serviceTarget: string;
 };
 
-const START_AFTER_EXIT_PRINT_RETRY_COUNT = 15;
-const START_AFTER_EXIT_PRINT_RETRY_DELAY_SECONDS = 0.2;
+// The booted-out label stays registered until launchd finishes stopping the
+// old process. ExitTimeOut bounds that stop with SIGKILL, so the reload wait is
+// that ceiling plus teardown margin. A 3s poll could advance mid-stop and
+// strand the LaunchAgent (#110137).
+const RELOAD_BOOTOUT_WAIT_DELAY_SECONDS = 1;
+const RELOAD_BOOTOUT_WAIT_COUNT = LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS + 15;
+const RELOAD_BOOTSTRAP_RETRY_COUNT = 15;
 
 type LaunchdRestartLogEnv = {
   HOME?: string;
@@ -84,7 +89,6 @@ function resolveLaunchdRestartTarget(
   const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
   return {
     domain,
-    label,
     plistPath,
     serviceTarget: `${domain}/${label}`,
   };
@@ -97,9 +101,8 @@ function buildLaunchdRestartScript(
   // The detached shell waits for the caller before touching launchd so the
   // current gateway process can exit cleanly after scheduling the handoff.
   const waitForCallerPid = `wait_pid="$4"
-label="$5"
 ${renderPosixRestartLogSetup(restartLogEnv)}
-printf '[%s] openclaw restart attempt source=launchd-handoff mode=${mode} target=%s waitPid=%s\\n' "$(date -u +%FT%TZ)" "$service_target" "$wait_pid" >&2
+printf '[%s] openclaw restart attempt source=handoff mode=${mode} target=%s pid=%s interactive=0\\n' "$(date -u +%FT%TZ)" "$service_target" "$wait_pid" >&2
 if [ -n "$wait_pid" ] && [ "$wait_pid" -gt 1 ] 2>/dev/null; then
   while kill -0 "$wait_pid" >/dev/null 2>&1; do
     sleep 0.1
@@ -127,9 +130,9 @@ else
   fi
 fi
 if [ "$status" -eq 0 ]; then
-  printf '[%s] openclaw restart done source=launchd-handoff mode=${mode}\\n' "$(date -u +%FT%TZ)" >&2
+  printf '[%s] openclaw restart done source=handoff mode=${mode} interactive=0\\n' "$(date -u +%FT%TZ)" >&2
 else
-  printf '[%s] openclaw restart failed source=launchd-handoff mode=${mode} status=%s\\n' "$(date -u +%FT%TZ)" "$status" >&2
+  printf '[%s] openclaw restart failed source=handoff mode=${mode} status=%s interactive=0\\n' "$(date -u +%FT%TZ)" "$status" >&2
 fi
 exit "$status"
 `;
@@ -138,17 +141,47 @@ exit "$status"
   if (mode === "reload") {
     // Reloading is required after plist content changes; kickstart alone keeps
     // launchd's already-loaded stdout/stderr/stdin paths.
-    // After bootout we poll until launchd finishes the async unload before
-    // re-bootstrapping to avoid EIO (Bootstrap failed: 5) from the race.
-    // If bootstrap still fails, kickstart -k as a fallback to keep the service
-    // alive rather than leaving it deregistered.
-    const bootoutWaitLoop = `bootout_wait_count="${START_AFTER_EXIT_PRINT_RETRY_COUNT}"
+    // After bootout the label stays registered until launchd finishes its
+    // ExitTimeOut-bounded stop, so this poll must outlast that stop window.
+    // Bootstrapping early fails with EIO (Bootstrap failed: 5) and can leave
+    // the LaunchAgent deregistered (#110137).
+    const bootoutWaitLoop = `bootout_wait_count="${RELOAD_BOOTOUT_WAIT_COUNT}"
 while [ "$bootout_wait_count" -gt 0 ]; do
   if ! launchctl print "$service_target" >/dev/null 2>&1; then
     break
   fi
   bootout_wait_count=$((bootout_wait_count - 1))
-  sleep ${START_AFTER_EXIT_PRINT_RETRY_DELAY_SECONDS}
+  sleep ${RELOAD_BOOTOUT_WAIT_DELAY_SECONDS}
+done
+`;
+    // kickstart -k cannot succeed on a booted-out label, so it is only a valid
+    // fallback while the label is registered; otherwise retry bootstrap so the
+    // handoff never exits with the service deregistered (#110137).
+    const bootstrapRetryLoop = `bootstrap_retry_count="${RELOAD_BOOTSTRAP_RETRY_COUNT}"
+while :; do
+  if launchctl bootstrap "$domain" "$plist_path"; then
+    status=0
+    break
+  else
+    # Capture inside the else: after a completed if with a false condition,
+    # $? is 0, which would let exhausted retries report a successful restart.
+    status=$?
+  fi
+  if launchctl print "$service_target" >/dev/null 2>&1; then
+    if launchctl kickstart -k "$service_target"; then
+      status=0
+      break
+    else
+      # The pending bootout can finish between print and kickstart. Keep
+      # retrying bootstrap if that check-then-act race deregisters the label.
+      status=$?
+    fi
+  fi
+  bootstrap_retry_count=$((bootstrap_retry_count - 1))
+  if [ "$bootstrap_retry_count" -le 0 ]; then
+    break
+  fi
+  sleep ${RELOAD_BOOTOUT_WAIT_DELAY_SECONDS}
 done
 `;
     return `service_target="$1"
@@ -159,52 +192,40 @@ status=0
 launchctl enable "$service_target"
 launchctl bootout "$service_target" >/dev/null 2>&1 || true
 ${bootoutWaitLoop}
-if launchctl bootstrap "$domain" "$plist_path"; then
-  status=0
-else
-  status=$?
-  launchctl kickstart -k "$service_target"
-  status=$?
-fi
+${bootstrapRetryLoop}
 if [ "$status" -eq 0 ]; then
-  printf '[%s] openclaw restart done source=launchd-handoff mode=${mode}\\n' "$(date -u +%FT%TZ)" >&2
+  printf '[%s] openclaw restart done source=handoff mode=${mode} interactive=0\\n' "$(date -u +%FT%TZ)" >&2
 else
-  printf '[%s] openclaw restart failed source=launchd-handoff mode=${mode} status=%s\\n' "$(date -u +%FT%TZ)" "$status" >&2
+  printf '[%s] openclaw restart failed source=handoff mode=${mode} status=%s interactive=0\\n' "$(date -u +%FT%TZ)" "$status" >&2
 fi
 exit "$status"
 `;
   }
 
-  const verifyLaunchdReload = `print_retry_count="${START_AFTER_EXIT_PRINT_RETRY_COUNT}"
-while [ "$print_retry_count" -gt 0 ]; do
-  if launchctl print "$service_target" >/dev/null 2>&1; then
-    printf '[%s] openclaw restart done source=launchd-handoff mode=${mode} reason=launchd-auto-reload\\n' "$(date -u +%FT%TZ)" >&2
-    exit 0
-  fi
-  print_retry_count=$((print_retry_count - 1))
-  sleep ${START_AFTER_EXIT_PRINT_RETRY_DELAY_SECONDS}
-done
-`;
-
-  // Restart is explicit operator intent; undo any previous `launchctl disable`.
+  // Without -k, kickstart starts an inert service but leaves a KeepAlive
+  // replacement alone. This actively schedules relaunch without a second
+  // interruption when launchd wins the race after the caller exits.
   return `service_target="$1"
 domain="$2"
 plist_path="$3"
 ${waitForCallerPid}
-${verifyLaunchdReload}
 status=0
 launchctl enable "$service_target"
-if launchctl bootstrap "$domain" "$plist_path"; then
+if launchctl kickstart "$service_target"; then
   status=0
 else
   status=$?
-  launchctl kickstart -k "$service_target"
-  status=$?
+  if launchctl bootstrap "$domain" "$plist_path"; then
+    status=0
+  else
+    launchctl kickstart "$service_target"
+    status=$?
+  fi
 fi
 if [ "$status" -eq 0 ]; then
-  printf '[%s] openclaw restart done source=launchd-handoff mode=${mode}\\n' "$(date -u +%FT%TZ)" >&2
+  printf '[%s] openclaw restart done source=handoff mode=${mode} interactive=0\\n' "$(date -u +%FT%TZ)" >&2
 else
-  printf '[%s] openclaw restart failed source=launchd-handoff mode=${mode} status=%s\\n' "$(date -u +%FT%TZ)" "$status" >&2
+  printf '[%s] openclaw restart failed source=handoff mode=${mode} status=%s interactive=0\\n' "$(date -u +%FT%TZ)" "$status" >&2
 fi
 exit "$status"
 `;
@@ -236,7 +257,6 @@ export function scheduleDetachedLaunchdRestartHandoff(params: {
         target.domain,
         target.plistPath,
         String(waitForPid),
-        target.label,
       ],
       {
         detached: true,
@@ -244,8 +264,14 @@ export function scheduleDetachedLaunchdRestartHandoff(params: {
         env: restartEnv,
       },
     );
+    // Node reports OS-level spawn failures asynchronously. The caller must
+    // confirm this before exiting or a failed handoff can strand the gateway.
+    const spawned = new Promise<boolean>((resolve) => {
+      child.once("spawn", () => resolve(true));
+      child.once("error", () => resolve(false));
+    });
     child.unref();
-    return ok(child.pid ?? undefined);
+    return ok(spawned);
   } catch (error) {
     return err(formatErrorMessage(error));
   }

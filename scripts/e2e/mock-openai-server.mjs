@@ -289,6 +289,23 @@ function mcpCodeModeApiFileEvents(body, bodyText) {
   );
 }
 
+function mcpAppConformanceEvents(body, bodyText) {
+  const allText = collectText(body).join("\n");
+  if (!/mcp app conformance qa check/i.test(allText)) {
+    return null;
+  }
+  const toolOutput = collectFunctionCallOutputText(body);
+  if (!toolOutput) {
+    if (!hasDeclaredTool(bodyText, "fixture__show")) {
+      return null;
+    }
+    return toolCallEvents("fixture__show", {});
+  }
+  return /initial-result/.test(toolOutput)
+    ? responseEvents("MCP_APP_CONFORMANCE_READY")
+    : responseEvents("MCP_APP_CONFORMANCE_FAIL");
+}
+
 const server = http.createServer((req, res) => {
   void (async () => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -334,6 +351,11 @@ const server = http.createServer((req, res) => {
     }
 
     if (req.method === "POST" && url.pathname === "/v1/responses") {
+      const appEvents = mcpAppConformanceEvents(body, bodyText);
+      if (appEvents) {
+        writeResponsesEvents(res, body.stream, appEvents);
+        return;
+      }
       const codeModeEvents = mcpCodeModeApiFileEvents(body, bodyText);
       if (codeModeEvents) {
         writeResponsesEvents(res, body.stream, codeModeEvents);

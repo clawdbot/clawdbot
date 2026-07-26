@@ -18,10 +18,10 @@ const ArtifactQueryParamsProperties = {
 };
 
 /** Shared artifact filter payload used by list-style requests. */
-export const ArtifactQueryParamsSchema = closedObject(ArtifactQueryParamsProperties);
+const ArtifactQueryParamsSchema = closedObject(ArtifactQueryParamsProperties);
 
 /** Artifact lookup payload with a required artifact id plus optional scope filters. */
-export const ArtifactGetParamsSchema = closedObject({
+const ArtifactGetParamsSchema = closedObject({
   ...ArtifactQueryParamsProperties,
   artifactId: NonEmptyString,
 });

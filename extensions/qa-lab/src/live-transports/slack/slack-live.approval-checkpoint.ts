@@ -22,7 +22,7 @@ import {
 } from "./slack-live.contracts.js";
 import { buildSlackApprovalCheckpointMessage } from "./slack-live.observations.js";
 
-export function resolveSlackApprovalCheckpointConfig(env: NodeJS.ProcessEnv = process.env) {
+function resolveSlackApprovalCheckpointConfig(env: NodeJS.ProcessEnv = process.env) {
   const checkpointDir = env[SLACK_QA_APPROVAL_CHECKPOINT_DIR_ENV]?.trim();
   if (!checkpointDir) {
     return undefined;

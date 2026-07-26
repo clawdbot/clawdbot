@@ -31,14 +31,26 @@ import {
   refreshPluginRegistry,
   resolveManifestContractOwnerPluginId,
   resolveManifestContractPluginIds,
-  resolveManifestContractPluginIdsByCompatibilityRuntimePath,
   resolvePluginContributionOwners,
-  resolveProviderOwners,
 } from "./plugin-registry.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
-const DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV = "OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY";
+
+function resolveProviderOwners(
+  params: Omit<
+    Parameters<typeof resolvePluginContributionOwners>[0],
+    "contribution" | "matches"
+  > & { providerId: string },
+) {
+  const providerId = params.providerId.trim().toLowerCase();
+  const { providerId: _providerId, ...options } = params;
+  return resolvePluginContributionOwners({
+    ...options,
+    contribution: "providers",
+    matches: (candidate) => candidate.trim().toLowerCase() === providerId,
+  });
+}
 
 function listPluginRecords(params: { index: InstalledPluginIndex }) {
   return params.index.plugins;
@@ -109,7 +121,7 @@ function createCandidate(rootDir: string, pluginId = "demo"): PluginCandidate {
         webSearchProviders: [`${pluginId}-search`],
       },
       configContracts: {
-        compatibilityRuntimePaths: [`tools.web.search.${pluginId}-search.apiKey`],
+        compatibilityRuntimePaths: [`legacyProvider.${pluginId}-search.webhook`],
       },
     }),
     "utf8",
@@ -278,13 +290,6 @@ describe("plugin registry facade", () => {
         value: "demo-search",
       }),
     ).toBe("demo");
-    expect(
-      resolveManifestContractPluginIdsByCompatibilityRuntimePath({
-        index,
-        contract: "webSearchProviders",
-        path: "tools.web.search.demo-search.apiKey",
-      }),
-    ).toEqual(["demo"]);
   });
 
   it("keeps disabled records inspectable while excluding owners by default", () => {
@@ -948,26 +953,6 @@ describe("plugin registry facade", () => {
     expect(second.source).toBe("persisted");
     expectSnapshotPluginIds(first.snapshot, ["first"]);
     expectSnapshotPluginIds(second.snapshot, ["second-external"]);
-  });
-
-  it("falls back to the derived registry when persisted reads are disabled", async () => {
-    const stateDir = makeTempDir();
-    const rootDir = makeTempDir();
-    const candidate = createCandidate(rootDir);
-    await writePersistedInstalledPluginIndex(createIndex("persisted"), { stateDir });
-
-    const result = loadPluginRegistrySnapshotWithMetadata({
-      stateDir,
-      candidates: [candidate],
-      env: hermeticEnv({ [DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV]: "1" }),
-    });
-
-    expect(result.source).toBe("derived");
-    expectDiagnosticCodes(result.diagnostics, ["persisted-registry-disabled"]);
-    expect(String(requireRecord(result.diagnostics[0], "diagnostic").message)).toContain(
-      "deprecated break-glass compatibility switch",
-    );
-    expectSnapshotPluginIds(result.snapshot, ["demo"]);
   });
 
   it("derives a fresh registry without persisted install records when caller disables persisted reads", async () => {

@@ -2,6 +2,7 @@
 import { DatabaseSync } from "node:sqlite";
 import type { Generated } from "kysely";
 import { afterEach, describe, expect, it } from "vitest";
+import { withTestTimeout } from "../../test/helpers/promise.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   executeSqliteQuerySync,
@@ -89,15 +90,9 @@ describe("kysely sync helpers", () => {
 });
 
 async function expectCompileOnlyRejection(promise: Promise<unknown>): Promise<void> {
-  await expect(Promise.race([promise, timeoutAfter(500)])).rejects.toThrow(
-    /compile-only Kysely facade/,
-  );
-}
-
-function timeoutAfter(ms: number): Promise<never> {
-  return new Promise((_, reject) => {
-    setTimeout(() => reject(new Error("timed out waiting for compile-only rejection")), ms);
-  });
+  await expect(
+    withTestTimeout(promise, 500, "timed out waiting for compile-only rejection"),
+  ).rejects.toThrow(/compile-only Kysely facade/);
 }
 
 async function consumeStream<Row>(stream: AsyncIterableIterator<Row>): Promise<Row[]> {

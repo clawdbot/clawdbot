@@ -1,20 +1,17 @@
 // Control UI chat module implements heartbeat display behavior.
+import { escapeRegExp } from "../../../../src/shared/regexp.js";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 
 const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
 const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 export function stripHeartbeatTokenForDisplay(
   raw: string,
   maxAckChars = DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-): { shouldSkip: boolean } {
+): { shouldSkip: boolean; text: string } {
   let text = raw.trim();
   if (!text) {
-    return { shouldSkip: true };
+    return { shouldSkip: true, text: "" };
   }
   const strippedMarkup = text
     .replace(/<[^>]*>/g, " ")
@@ -22,7 +19,9 @@ export function stripHeartbeatTokenForDisplay(
     .replace(/^[*`~_]+/, "")
     .replace(/[*`~_]+$/, "");
   if (!text.includes(HEARTBEAT_TOKEN) && !strippedMarkup.includes(HEARTBEAT_TOKEN)) {
-    return { shouldSkip: false };
+    // strippedMarkup exists only to DETECT tokens hidden behind markup; without
+    // a token, returning it would corrupt legitimate angle-bracket prose.
+    return { shouldSkip: false, text };
   }
 
   const tokenAtEnd = new RegExp(`${escapeRegExp(HEARTBEAT_TOKEN)}[^\\w]{0,4}$`);
@@ -49,9 +48,9 @@ export function stripHeartbeatTokenForDisplay(
   }
 
   if (!didStrip) {
-    return { shouldSkip: false };
+    return { shouldSkip: false, text };
   }
-  return { shouldSkip: !text || text.length <= maxAckChars };
+  return { shouldSkip: !text || text.length <= maxAckChars, text };
 }
 
 function isHiddenDisplayBlockType(type: unknown): boolean {

@@ -595,6 +595,27 @@
   text-align: left;
 }
 
+/* Read-only script/command payload: a highlighted code block sized like the
+   textarea it replaces, scrollable and focusable so keyboard users can reach it.
+   `resize` needs an explicit height (not max-height) as the resize origin, so the
+   drag handle keeps working for long scripts the way the old textarea did. */
+.cron-payload-code {
+  margin: 0;
+  width: 100%;
+  height: 240px;
+  max-height: none;
+  min-height: 96px;
+  resize: vertical;
+  overflow: auto;
+  white-space: pre;
+  tab-size: 2;
+}
+
+.cron-payload-code:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .cron-inline-controls {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -903,7 +924,6 @@
   width: 16px;
   height: 16px;
   margin: 0;
-  accent-color: var(--accent);
 }
 
 /* Run entries: flat list separated by hairlines inside the group. */

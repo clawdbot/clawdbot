@@ -5,32 +5,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import pMap from "p-map";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { translateNativeEntries } from "./control-ui-i18n.ts";
+import { NATIVE_I18N_LOCALES } from "./native-i18n-locales.ts";
 
 type NativeI18nSurface = "android" | "apple";
 
-export const NATIVE_I18N_LOCALES = [
-  "zh-CN",
-  "zh-TW",
-  "pt-BR",
-  "de",
-  "es",
-  "ja-JP",
-  "ko",
-  "fr",
-  "hi",
-  "ar",
-  "it",
-  "tr",
-  "uk",
-  "id",
-  "pl",
-  "th",
-  "vi",
-  "nl",
-  "fa",
-  "ru",
-  "sv",
-] as const;
+export { NATIVE_I18N_LOCALES };
 
 export type NativeI18nEntry = {
   id: string;
@@ -68,7 +47,7 @@ type NativeLocaleSyncOptions = {
   translationsDir?: string;
 };
 type NativeI18nCommand = {
-  command: "check" | "sync";
+  command: "baseline" | "check" | "sync" | "verify";
   locale?: string;
   write: boolean;
 };
@@ -78,7 +57,12 @@ const ROOT = path.resolve(HERE, "..");
 const OUTPUT_PATH = path.join(ROOT, "apps", ".i18n", "native-source.json");
 const TRANSLATIONS_DIR = path.join(ROOT, "apps", ".i18n", "native");
 const SOURCE_ROOTS: Record<NativeI18nSurface, string[]> = {
-  android: [path.join(ROOT, "apps", "android", "app", "src", "main")],
+  android: [
+    path.join(ROOT, "apps", "android", "app", "src", "main"),
+    path.join(ROOT, "apps", "android", "app", "src", "play"),
+    path.join(ROOT, "apps", "android", "app", "src", "thirdParty"),
+    path.join(ROOT, "apps", "android", "wear", "src", "main", "res", "values"),
+  ],
   apple: [
     path.join(ROOT, "apps", "ios"),
     path.join(ROOT, "apps", "macos", "Sources"),
@@ -153,7 +137,7 @@ const ANDROID_WHEN_BRANCH_START = /(?:[^\n{}]+|\belse)\s*->\s*/gu;
 const ANDROID_RESOURCE_STRINGS = /<string\b([^>]*)>([\s\S]*?)<\/string>/gu;
 const ANDROID_RESOURCE_NAME = /\bname\s*=\s*"([^"]+)"/u;
 const ANDROID_RESOURCE_COLLECTIONS =
-  /<(?:string-array|plurals)\b[^>]*>([\s\S]*?)<\/(?:string-array|plurals)>/gu;
+  /<(?:string-array|plurals)\b([^>]*)>([\s\S]*?)<\/(?:string-array|plurals)>/gu;
 const ANDROID_RESOURCE_ITEMS = /<item\b[^>]*>([\s\S]*?)<\/item>/gu;
 const APPLE_NAMED_LITERALS =
   /\b([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(?:"""([\s\S]*?)"""|"((?:\\.|[^"\\])*)")/gu;
@@ -184,11 +168,45 @@ const APPLE_BUILTIN_UI_CALLS = new Set([
   "Toggle",
   "searchable",
 ]);
-const APPLE_PLIST_STRINGS = /<string>([\s\S]*?)<\/string>/gu;
+const APPLE_PLIST_KEYED_STRINGS = /<key>([^<]+)<\/key>\s*<string>([\s\S]*?)<\/string>/gu;
+// macOS uses this legacy privacy key instead of the *UsageDescription suffix.
+const APPLE_LOCALIZABLE_DESCRIPTION_KEYS = new Set(["NSScreenCaptureDescription"]);
 const GENERATED_PATH_RE = /(?:^|[\\/])(?:build|\.gradle|\.build|DerivedData)(?:$|[\\/])/u;
 const EXCLUDED_PATH_RE = /(?:^|[\\/])(?:Tests?|UITests?|test|Preview(?:s)?)(?:$|[\\/])/u;
 const EXCLUDED_FILE_RE = /(?:Tests?|UITests?|Previews?|Testing)\.(?:swift|kt|kts)$/u;
 const GENERATED_FILE_RE = /(?:^|[\\/])NativeStringResources\.kt$/u;
+// These files emit mobile.ui protocol evidence, not UI copy. Keep their text verbatim so
+// developer-screen diagnostics match the agent-facing action results and snapshot refs.
+const ANDROID_NATIVE_I18N_EXCLUDED_FILES = new Set([
+  path.join(
+    ROOT,
+    "apps",
+    "android",
+    "app",
+    "src",
+    "thirdParty",
+    "java",
+    "ai",
+    "openclaw",
+    "app",
+    "accessibility",
+    "AccessibilityActionExecutor.kt",
+  ),
+  path.join(
+    ROOT,
+    "apps",
+    "android",
+    "app",
+    "src",
+    "thirdParty",
+    "java",
+    "ai",
+    "openclaw",
+    "app",
+    "accessibility",
+    "AccessibilitySnapshotter.kt",
+  ),
+]);
 const BUILD_SETTING_RE = /\$\([A-Za-z0-9_.-]+\)/gu;
 const NATIVE_I18N_LOCALE_SET = new Set<string>(NATIVE_I18N_LOCALES);
 const ANDROID_LANGUAGE_PICKER_PATH =
@@ -212,6 +230,19 @@ function isAsciiAlphaNumeric(character: string): boolean {
     isAsciiUppercaseLetter(character) ||
     (character >= "0" && character <= "9")
   );
+}
+
+function decodeXml(value: string): string {
+  return value
+    .replaceAll("&quot;", '"')
+    .replaceAll("&apos;", "'")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&amp;", "&");
+}
+
+function isLocalizableApplePlistKey(key: string): boolean {
+  return key.endsWith("UsageDescription") || APPLE_LOCALIZABLE_DESCRIPTION_KEYS.has(key);
 }
 
 export function isConditionalBranchIdentifier(source: string): boolean {
@@ -1053,18 +1084,21 @@ export function extractNativeI18nCandidates(
       }
     }
     for (const collection of source.matchAll(ANDROID_RESOURCE_COLLECTIONS)) {
-      const body = collection[1];
-      if (!body) {
+      const attributes = collection[1] ?? "";
+      const body = collection[2];
+      if (!body || /\btranslatable\s*=\s*"false"/u.test(attributes)) {
         continue;
       }
       const bodyOffset = (collection.index ?? 0) + collection[0].indexOf(body);
       for (const item of body.matchAll(ANDROID_RESOURCE_ITEMS)) {
-        if (item[1]) {
+        const value = item[1]?.trim();
+        // Resource references inherit translatability from their target.
+        if (value && !value.startsWith("@")) {
           addCandidate(
             entries,
             surface,
             repoPath,
-            item[1],
+            value,
             "resource-item",
             lineNumber(source, bodyOffset + (item.index ?? 0)),
           );
@@ -1073,15 +1107,18 @@ export function extractNativeI18nCandidates(
     }
   }
   if (surface === "apple" && repoPath.endsWith(".plist")) {
-    for (const match of source.matchAll(APPLE_PLIST_STRINGS)) {
-      if (match[1]) {
+    for (const match of source.matchAll(APPLE_PLIST_KEYED_STRINGS)) {
+      const key = match[1];
+      const value = match[2];
+      if (key && isLocalizableApplePlistKey(key) && value) {
+        const valueOffset = (match.index ?? 0) + match[0].indexOf(value);
         addCandidate(
           entries,
           surface,
           repoPath,
-          match[1],
+          decodeXml(value),
           "plist-string",
-          lineNumber(source, match.index ?? 0),
+          lineNumber(source, valueOffset),
         );
       }
     }
@@ -1112,6 +1149,7 @@ async function walkFiles(root: string, surface: NativeI18nSurface): Promise<stri
       const allowed = surface === "apple" ? APPLE_EXTENSIONS : ANDROID_EXTENSIONS;
       return entry.isFile() &&
         (allowed.has(extension) || isAndroidValuesXml) &&
+        !ANDROID_NATIVE_I18N_EXCLUDED_FILES.has(fullPath) &&
         !EXCLUDED_FILE_RE.test(entry.name) &&
         !GENERATED_FILE_RE.test(fullPath)
         ? [fullPath]
@@ -1247,14 +1285,15 @@ function render(entries: NativeI18nEntry[]): string {
 }
 
 async function syncNativeI18n(options: {
-  checkOnly: boolean;
+  checkInventory: boolean;
+  checkLocales: boolean;
   write: boolean;
 }): Promise<NativeI18nEntry[]> {
   const currentInventory = await readNativeI18nInventory();
   const entries = await collectNativeI18nEntries(currentInventory.entries);
   const expected = render(entries);
   const current = currentInventory.raw;
-  if (options.checkOnly) {
+  if (options.checkLocales) {
     const findings = await checkNativeLocaleArtifacts(currentInventory.entries);
     for (const finding of findings) {
       process.stdout.write(`native-app-i18n: advisory=${JSON.stringify(finding)}\n`);
@@ -1262,11 +1301,11 @@ async function syncNativeI18n(options: {
     process.stdout.write(
       `native-app-i18n: locale-artifacts=${NATIVE_I18N_LOCALES.length} advisories=${findings.length}\n`,
     );
-    if (current !== expected) {
-      throw new Error(
-        "native app i18n inventory drift detected. Run `pnpm native:i18n:sync` and commit apps/.i18n/native-source.json.",
-      );
-    }
+  }
+  if (options.checkInventory && current !== expected) {
+    throw new Error(
+      "native app i18n inventory drift detected. Run `pnpm native:i18n:baseline` and commit apps/.i18n/native-source.json.",
+    );
   }
   if (current !== expected && options.write) {
     await mkdir(path.dirname(OUTPUT_PATH), { recursive: true });
@@ -1587,9 +1626,9 @@ export async function syncNativeLocale(
 
 export function parseNativeI18nCommand(argv: string[]): NativeI18nCommand {
   const [command, ...args] = argv;
-  if (command !== "check" && command !== "sync") {
+  if (command !== "baseline" && command !== "check" && command !== "sync" && command !== "verify") {
     throw new Error(
-      "usage: node --import tsx scripts/native-app-i18n.ts check|sync [--write] [--locale <code>]",
+      "usage: node --import tsx scripts/native-app-i18n.ts baseline --write|check|sync [--write] [--locale <code>]|verify",
     );
   }
   let locale: string | undefined;
@@ -1624,8 +1663,11 @@ export function parseNativeI18nCommand(argv: string[]): NativeI18nCommand {
       );
     }
   }
-  if (command === "check" && write) {
-    throw new Error("native i18n check does not accept `--write`");
+  if ((command === "check" || command === "verify") && write) {
+    throw new Error(`native i18n ${command} does not accept \`--write\``);
+  }
+  if (command === "baseline" && !write) {
+    throw new Error("native i18n baseline requires `--write`");
   }
   return { command, locale, write };
 }
@@ -1633,11 +1675,42 @@ export function parseNativeI18nCommand(argv: string[]): NativeI18nCommand {
 async function main() {
   const parsed = parseNativeI18nCommand(process.argv.slice(2));
   const entries = await syncNativeI18n({
-    checkOnly: parsed.command === "check",
-    write: parsed.command === "sync" && parsed.write,
+    checkInventory:
+      parsed.command === "check" || parsed.command === "verify" || parsed.locale !== undefined,
+    checkLocales: parsed.command === "check",
+    write:
+      (parsed.command === "baseline" || parsed.command === "sync") &&
+      parsed.write &&
+      parsed.locale === undefined,
   });
   if (parsed.locale) {
     await syncNativeLocale(parsed.locale, entries);
+  }
+  if (parsed.command === "verify" || parsed.command === "check") {
+    const android = await import("./android-app-i18n.ts");
+    const apple = await import("./apple-app-i18n.ts");
+    if (parsed.command === "verify") {
+      await android.verifyAndroidAppI18n();
+      await apple.verifyAppleAppI18n();
+    } else {
+      await android.checkAndroidAppI18n();
+      await apple.checkAppleAppI18n();
+    }
+  }
+  if (parsed.command === "sync" && parsed.write && !parsed.locale) {
+    // The inventory and native/*.json feed the generated Android/Apple app
+    // artifacts. Regenerate them once after a full sync; per-locale workers
+    // only update their independent translation artifact so their patches can
+    // be combined deterministically by the serialized finalizer.
+    const [{ syncAndroidAppI18n }, { syncAppleAppI18n }] = await Promise.all([
+      import("./android-app-i18n.ts"),
+      import("./apple-app-i18n.ts"),
+    ]);
+    await syncAndroidAppI18n();
+    const apple = await syncAppleAppI18n();
+    process.stdout.write(
+      `native-app-i18n: synced derived artifacts (android, Apple catalogs, ${apple.infoPlistFiles} InfoPlist files); contradictions=${apple.build.contradictions.length + apple.macosBuild.contradictions.length}\n`,
+    );
   }
 }
 

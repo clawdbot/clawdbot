@@ -6,6 +6,7 @@ import { SECTION_META } from "./config-form.meta.ts";
 import { renderNode } from "./config-form.node.ts";
 import { matchesConfigSectionSearch, parseConfigSearchQuery } from "./config-form.search.ts";
 import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared.ts";
+import { splitConfigSchemaByTier } from "./config-form.tiers.ts";
 import { renderSettingsEmpty, renderSettingsPage } from "./settings-ui.ts";
 
 type ConfigFormProps = {
@@ -18,8 +19,16 @@ type ConfigFormProps = {
   searchQuery?: string;
   activeSection?: string | null;
   activeSubsection?: string | null;
+  showAdvanced?: boolean;
+  forceAdvancedSection?: string | null;
+  /** Required: the collapsed-advanced ghost row's only action. Optional would
+   *  permit an inert "Show advanced" control that strands hidden settings. */
+  onShowAdvanced: () => void;
   /** Inline actions rendered next to the active section heading (e.g. env peek). */
   sectionActions?: TemplateResult;
+  /** Composite pages render custom rows above the form; an empty schema
+   *  section must stay silent there instead of claiming the page is empty. */
+  embedded?: boolean;
   revealSensitive?: boolean;
   isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
   onToggleSensitivePath?: (path: Array<string | number>) => void;
@@ -108,6 +117,9 @@ export function renderConfigForm(props: ConfigFormProps) {
   }
 
   if (filteredEntries.length === 0) {
+    if (props.embedded && !searchQuery) {
+      return nothing;
+    }
     return renderSettingsPage(
       renderSettingsEmpty(
         searchQuery
@@ -124,36 +136,79 @@ export function renderConfigForm(props: ConfigFormProps) {
     node: JsonSchema;
     nodeValue: unknown;
     path: Array<string | number>;
-  }) => html`
-    <section class="settings-section" id=${params.id}>
-      <div class="settings-section__header">
-        <h2 class="settings-section__heading">${params.label}</h2>
-        ${props.sectionActions
-          ? html`<div class="settings-section__actions">${props.sectionActions}</div>`
+  }) => {
+    const split = splitConfigSchemaByTier({
+      schema: params.node,
+      path: params.path.map(String),
+      hints: props.uiHints,
+    });
+    const revealAdvanced =
+      props.showAdvanced === true ||
+      props.forceAdvancedSection === params.path[0] ||
+      Boolean(searchQuery);
+    const renderTier = (node: JsonSchema) =>
+      renderNode({
+        schema: node,
+        value: params.nodeValue,
+        path: params.path,
+        hints: props.uiHints,
+        rawAvailable: props.rawAvailable ?? true,
+        unsupported,
+        disabled: props.disabled ?? false,
+        showLabel: false,
+        searchCriteria,
+        revealSensitive: props.revealSensitive ?? false,
+        isSensitivePathRevealed: props.isSensitivePathRevealed,
+        onToggleSensitivePath: props.onToggleSensitivePath,
+        onPatch: props.onPatch,
+      });
+    return html`
+      <section class="settings-section" id=${params.id}>
+        <div class="settings-section__header">
+          <h2 class="settings-section__heading">${params.label}</h2>
+          ${props.sectionActions
+            ? html`<div class="settings-section__actions">${props.sectionActions}</div>`
+            : nothing}
+        </div>
+        ${params.description
+          ? html`<p class="settings-section__desc">${params.description}</p>`
           : nothing}
-      </div>
-      ${params.description
-        ? html`<p class="settings-section__desc">${params.description}</p>`
-        : nothing}
-      <div class="settings-group">
-        ${renderNode({
-          schema: params.node,
-          value: params.nodeValue,
-          path: params.path,
-          hints: props.uiHints,
-          rawAvailable: props.rawAvailable ?? true,
-          unsupported,
-          disabled: props.disabled ?? false,
-          showLabel: false,
-          searchCriteria,
-          revealSensitive: props.revealSensitive ?? false,
-          isSensitivePathRevealed: props.isSensitivePathRevealed,
-          onToggleSensitivePath: props.onToggleSensitivePath,
-          onPatch: props.onPatch,
-        })}
-      </div>
-    </section>
-  `;
+        ${split.common
+          ? html`<div class="settings-group">${renderTier(split.common)}</div>`
+          : nothing}
+        ${split.advanced && split.advancedLeafCount > 0
+          ? revealAdvanced
+            ? html`
+                ${split.common
+                  ? html`<div class="config-advanced-divider">
+                      ${t("configForm.advancedDivider")}
+                    </div>`
+                  : nothing}
+                <div class="settings-group">${renderTier(split.advanced)}</div>
+              `
+            : html`
+                <button
+                  type="button"
+                  class="config-advanced-ghost"
+                  @click=${() => props.onShowAdvanced()}
+                >
+                  <span class="config-advanced-ghost__count">
+                    ${t(
+                      split.advancedLeafCount === 1
+                        ? "configForm.advancedHidden"
+                        : "configForm.advancedHiddenPlural",
+                      { count: String(split.advancedLeafCount) },
+                    )}
+                  </span>
+                  <span class="config-advanced-ghost__action">
+                    ${t("configForm.showAdvanced")}
+                  </span>
+                </button>
+              `
+          : nothing}
+      </section>
+    `;
+  };
 
   return renderSettingsPage(
     subsectionContext

@@ -16,7 +16,7 @@ OpenClaw Cohere provider plugin.
 
 ## Surface
 
-providers: cohere
+providers: `cohere`
 
 ## Related docs
 

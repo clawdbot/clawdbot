@@ -1,0 +1,36 @@
+title: Matrix image understanding attachment
+scenario:
+  id: matrix-room-image-understanding-attachment
+  surface: channels
+  coverage:
+    primary:
+      - media.image-summary-image-understanding
+    secondary:
+      - channels.inbound-media-normalization
+  docsRefs:
+    - docs/tools/media-overview.md
+  execution:
+    profiles: { "matrix:all": 51, "matrix:media": 0 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 60000
+    retryCount: 0
+    config:
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: false
+            key: media
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA Media Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-media.js
+  call: runImageUnderstandingAttachmentScenario
+  args:
+    - expr: "scenarioContext"

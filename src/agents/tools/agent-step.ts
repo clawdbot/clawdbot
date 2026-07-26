@@ -137,7 +137,7 @@ export async function runAgentStep(params: {
 }
 
 /** Test-only dependency overrides for gateway and in-process command execution. */
-export const testing = {
+const testing = {
   setDepsForTest(
     overrides?: Partial<{
       agentCommandFromIngress: AgentCommandRunner;
@@ -152,3 +152,9 @@ export const testing = {
       : defaultAgentStepDeps;
   },
 };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.agentStepTestApi")] = {
+    testing,
+  };
+}

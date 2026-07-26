@@ -31,13 +31,14 @@ import {
   requestDevicePairing,
   verifyDeviceToken,
 } from "../infra/device-pairing.js";
+import { captureAuthenticatedNodePairingState } from "../infra/node-pairing-state.js";
 import {
   approveNodePairing,
   beginNodePairingConnect,
   finalizeNodePairingCleanupClaim,
   releaseNodePairingCleanupClaim,
   requestNodePairing,
-  updatePairedNodeMetadata,
+  recordPairedNodeConnection,
   type RequestNodePairingResult,
 } from "../infra/node-pairing.js";
 import { isNodePairingSetupBootstrapProfile } from "../shared/device-bootstrap-profile.js";
@@ -439,7 +440,10 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
     },
   });
 
-  const getSession = (req: IncomingMessage, res: ServerResponse): WatchNodeSession | null => {
+  const getSession = async (
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<WatchNodeSession | null> => {
     const token = readBearerToken(req);
     const session = token ? sessionsByToken.get(token) : undefined;
     if (!session) {
@@ -448,6 +452,11 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
     }
     if (session.invalidatedReason) {
       closeSession(session, session.invalidatedReason);
+      sendUnauthorized(res);
+      return null;
+    }
+    if (!(await options.nodeRegistry.isConnectionCurrentPairingState(session.connId))) {
+      closeSession(session, "node pairing changed");
       sendUnauthorized(res);
       return null;
     }
@@ -801,6 +810,17 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         sendUnauthorized(res);
         return;
       }
+      const nodePairingState = await captureAuthenticatedNodePairingState({
+        nodeId: derivedDeviceId,
+        publicKey,
+        token: issuedDeviceToken,
+        baseDir: options.pairingBaseDir,
+      });
+      const nodePairingGeneration = nodePairingState?.generation;
+      if (!nodePairingState || !nodePairingGeneration) {
+        sendUnauthorized(res);
+        return;
+      }
       if (closed || responseLifecycle.isAborted()) {
         if (revokedBootstrapTokenRecord) {
           await restoreDeviceBootstrapToken({
@@ -846,7 +866,11 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         };
         const nodeSession = options.nodeRegistry.registerTransport(
           client,
-          { remoteIp: clientIp },
+          {
+            remoteIp: clientIp,
+            pairingIdentity: nodePairingState.identity.key,
+            pairingGeneration: nodePairingGeneration.key,
+          },
           createTransport(session),
         );
         sessionsByToken.set(session.token, session);
@@ -902,10 +926,11 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
             options.onError?.("watch node pending-pairing cleanup failed", error);
           }
         }
-        void updatePairedNodeMetadata(
+        void recordPairedNodeConnection(
           session.nodeId,
-          { lastConnectedAtMs: nodeSession.connectedAtMs },
+          nodeSession.connectedAtMs,
           options.pairingBaseDir,
+          nodePairingGeneration,
         ).catch((error: unknown) =>
           options.onError?.("watch node last-connect metadata update failed", error),
         );
@@ -933,7 +958,7 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
       sendMethodNotAllowed(res);
       return;
     }
-    const session = getSession(req, res);
+    const session = await getSession(req, res);
     if (!session) {
       return;
     }
@@ -969,12 +994,12 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
     });
   };
 
-  const handleDisconnect = (req: IncomingMessage, res: ServerResponse) => {
+  const handleDisconnect = async (req: IncomingMessage, res: ServerResponse) => {
     if ((req.method ?? "").toUpperCase() !== "POST") {
       sendMethodNotAllowed(res);
       return;
     }
-    const session = getSession(req, res);
+    const session = await getSession(req, res);
     if (!session) {
       return;
     }
@@ -987,7 +1012,7 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
       sendMethodNotAllowed(res);
       return;
     }
-    const session = getSession(req, res);
+    const session = await getSession(req, res);
     if (!session) {
       return;
     }
@@ -1005,6 +1030,13 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
           ...(typeof body.error.message === "string" ? { message: body.error.message } : {}),
         }
       : null;
+    // Body upload can yield long enough for an external pairing mutation.
+    // Recheck the exact HTTP transport before committing its invoke result.
+    if (!(await options.nodeRegistry.isConnectionCurrentPairingState(session.connId))) {
+      closeSession(session, "node pairing changed");
+      sendUnauthorized(res);
+      return;
+    }
     const accepted = options.nodeRegistry.handleInvokeResult({
       id: body.id,
       nodeId: session.nodeId,
@@ -1035,7 +1067,7 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         await handleConnect(req, res);
         return true;
       case DISCONNECT_PATH:
-        handleDisconnect(req, res);
+        await handleDisconnect(req, res);
         return true;
       case POLL_PATH:
         await handlePoll(req, res);

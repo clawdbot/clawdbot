@@ -9,7 +9,7 @@ import {
   type BootstrapMode,
 } from "../../bootstrap-mode.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import { normalizeUsage, type NormalizedUsage } from "../../usage.js";
+import { hasNonzeroUsage, normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import type { PromptCacheChange } from "../prompt-cache-observability.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 export {
@@ -139,6 +139,37 @@ export function findCurrentAttemptAssistantMessage(params: {
     .find((message): message is AssistantMessage => message.role === "assistant");
 }
 
+/** Finds the newest usable per-call usage without letting a zero-usage abort erase it. */
+function findLatestCurrentAttemptUsageSnapshot(params: {
+  messagesSnapshot: AgentMessage[];
+  prePromptMessageCount: number;
+}): { assistant: AssistantMessage; usage: NormalizedUsage } | undefined {
+  for (const message of params.messagesSnapshot
+    .slice(Math.max(0, params.prePromptMessageCount))
+    .toReversed()) {
+    if (message.role !== "assistant") {
+      continue;
+    }
+    const usage = normalizeUsage(message.usage);
+    if (hasNonzeroUsage(usage)) {
+      return { assistant: message, usage };
+    }
+  }
+  return undefined;
+}
+
+/** Prevents transcript fallback from crossing a compaction-owned context boundary. */
+export function findLatestUncompactedAttemptUsageSnapshot(params: {
+  messagesSnapshot: AgentMessage[];
+  prePromptMessageCount: number;
+  compactionOccurred: boolean;
+}): { assistant: AssistantMessage; usage: NormalizedUsage } | undefined {
+  if (params.compactionOccurred) {
+    return undefined;
+  }
+  return findLatestCurrentAttemptUsageSnapshot(params);
+}
+
 function parsePromptCacheTouchTimestamp(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
@@ -186,20 +217,18 @@ export function buildLoopPromptCacheInfo(params: {
   retention?: "none" | "short" | "long";
   fallbackLastCacheTouchAt?: number | null;
 }): EmbeddedRunAttemptResult["promptCache"] {
-  const currentAttemptAssistant = findCurrentAttemptAssistantMessage({
+  const latestUsageSnapshot = findLatestCurrentAttemptUsageSnapshot({
     messagesSnapshot: params.messagesSnapshot,
     prePromptMessageCount: params.prePromptMessageCount,
   });
-  // Normalize only the assistant produced by this attempt so older transcript
-  // usage does not masquerade as a fresh cache touch.
-  const lastCallUsage = normalizeUsage(currentAttemptAssistant?.usage);
+  const lastCallUsage = latestUsageSnapshot?.usage;
 
   return buildContextEnginePromptCacheInfo({
     retention: params.retention,
     lastCallUsage,
     lastCacheTouchAt: resolvePromptCacheTouchTimestamp({
       lastCallUsage,
-      assistantTimestamp: currentAttemptAssistant?.timestamp,
+      assistantTimestamp: latestUsageSnapshot?.assistant.timestamp,
       fallbackLastCacheTouchAt: params.fallbackLastCacheTouchAt,
     }),
   });

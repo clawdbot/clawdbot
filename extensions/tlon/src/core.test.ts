@@ -139,6 +139,17 @@ describe("tlon core", () => {
     });
   });
 
+  it("accepts implicit mention policy at root and account scope", () => {
+    expect(
+      parseTlonConfig({
+        implicitMentions: { threadParticipation: false },
+        accounts: {
+          primary: { implicitMentions: { replyToBot: false } },
+        },
+      }),
+    ).toMatchObject({ success: true });
+  });
+
   it("configures ship, auth, and discovery settings", async () => {
     const prompter = createTestWizardPrompter({
       text: vi.fn(async ({ message }: { message: string }) => {

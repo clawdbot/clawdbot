@@ -30,8 +30,6 @@ type TelegramBotInfoCacheStore = {
   delete(key: string): Promise<boolean>;
 };
 
-let botInfoCacheStoreForTest: TelegramBotInfoCacheStore | undefined;
-
 function fingerprintFromToken(botToken?: string): string | null {
   const trimmed = botToken?.trim();
   if (!trimmed) {
@@ -53,14 +51,11 @@ export function resolveTelegramBotInfoCachePath(
 }
 
 function openBotInfoCacheStore(): TelegramBotInfoCacheStore {
-  return (
-    botInfoCacheStoreForTest ??
-    getTelegramRuntime().state.openKeyedStore<TelegramBotInfoCacheState>({
-      namespace: TELEGRAM_BOT_INFO_CACHE_NAMESPACE,
-      maxEntries: TELEGRAM_BOT_INFO_CACHE_MAX_ENTRIES,
-      defaultTtlMs: TELEGRAM_BOT_INFO_CACHE_MAX_AGE_MS,
-    })
-  );
+  return getTelegramRuntime().state.openKeyedStore<TelegramBotInfoCacheState>({
+    namespace: TELEGRAM_BOT_INFO_CACHE_NAMESPACE,
+    maxEntries: TELEGRAM_BOT_INFO_CACHE_MAX_ENTRIES,
+    defaultTtlMs: TELEGRAM_BOT_INFO_CACHE_MAX_AGE_MS,
+  });
 }
 
 function parseCachedTelegramBotInfo(value: unknown) {
@@ -142,12 +137,6 @@ export async function writeCachedTelegramBotInfo(params: {
 
 export async function deleteCachedTelegramBotInfo(params: { accountId?: string }): Promise<void> {
   await openBotInfoCacheStore().delete(normalizeTelegramStateAccountId(params.accountId));
-}
-
-export function setTelegramBotInfoCacheStoreForTest(
-  store: TelegramBotInfoCacheStore | undefined,
-): void {
-  botInfoCacheStoreForTest = store;
 }
 
 export async function listTelegramLegacyBotInfoCacheEntries(params: {

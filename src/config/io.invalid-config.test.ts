@@ -1,8 +1,10 @@
 // Verifies invalid-config errors include stable codes and details.
 import { describe, expect, it, vi } from "vitest";
+import { createDedupeCache } from "../infra/dedupe.js";
 import {
   createInvalidConfigError,
   formatInvalidConfigDetails,
+  isDoctorRecoverableInvalidConfigError,
   isInvalidConfigError,
   throwInvalidConfig,
 } from "./io.invalid-config.js";
@@ -37,6 +39,14 @@ describe("config io invalid config formatting", () => {
     expect(err.code).toBe("INVALID_CONFIG");
     expect(err.details).toBe("- gateway.port: bad");
     expect(isInvalidConfigError(err)).toBe(true);
+    expect(isDoctorRecoverableInvalidConfigError(err)).toBe(true);
+    expect(
+      isDoctorRecoverableInvalidConfigError(
+        createInvalidConfigError("/tmp/openclaw.json", "manual repair", {
+          recovery: "manual",
+        }),
+      ),
+    ).toBe(false);
     expect(
       isInvalidConfigError(Object.assign(new Error(err.message), { code: "INVALID_CONFIG" })),
     ).toBe(true);
@@ -45,7 +55,7 @@ describe("config io invalid config formatting", () => {
 
   it("throws INVALID_CONFIG after logging the formatted details once per path", () => {
     const logger = { error: vi.fn() };
-    const loggedConfigPaths = new Set<string>();
+    const loggedConfigPaths = createDedupeCache({ ttlMs: 0, maxSize: 4096 });
     const throwInvalid = () =>
       throwInvalidConfig({
         configPath: "/tmp/openclaw.json",

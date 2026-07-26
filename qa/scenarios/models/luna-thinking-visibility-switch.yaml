@@ -5,9 +5,9 @@ scenario:
   surface: models
   coverage:
     primary:
-      - models.thinking
+      - agent-runtime.thinking
     secondary:
-      - runtime.reasoning-visibility
+      - agent-runtime.progress-visibility-reasoning-visibility
   objective: Verify GPT-5.6 Luna can switch from disabled thinking to medium thinking while reasoning display stays enabled.
   successCriteria:
     - Live runs target openai/gpt-5.6-luna.
@@ -29,7 +29,7 @@ scenario:
     kind: flow
     summary: Toggle reasoning display and GPT-5.6 Luna thinking between off/none and medium, then verify visible reasoning only on the medium turn.
     config:
-      requiredProvider: openai
+      liveProvider: openai
       requiredModel: gpt-5.6-luna
       offDirective: /think off
       maxDirective: /think medium
@@ -57,7 +57,7 @@ flow:
           value:
             expr: splitModelRef(env.primaryModel)
         - assert:
-            expr: "env.providerMode !== 'live-frontier' || (selected?.provider === config.requiredProvider && selected?.model === config.requiredModel)"
+            expr: "env.providerMode !== 'live-frontier' || (selected?.provider === config.liveProvider && selected?.model === config.requiredModel)"
             message:
               expr: "`expected live GPT-5.6 Luna, got ${env.primaryModel}`"
         - sendInbound:

@@ -343,9 +343,13 @@ export const handleLoginCommand: CommandHandler = async (params, allowTextComman
   return { shouldContinue: false, reply };
 };
 
-export const testing = {
+const commandsLoginTestApi = {
   clearActiveFlows() {
     activeCodexLoginFlows.clear();
   },
-  resolveCodexLoginProvider: codexChannelLoginRuntime.resolveProvider,
 };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.commandsLoginTestApi")] =
+    commandsLoginTestApi;
+}

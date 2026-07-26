@@ -4,7 +4,6 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { CliUsageError, parseSqliteReliabilityCli } from "./lib/sqlite-reliability-cli.js";
 import type { ReliabilityReport } from "./lib/sqlite-reliability-contract.js";
-import { runReliabilityStress } from "./lib/sqlite-reliability-runner.js";
 
 function printUsage(): void {
   console.log(`OpenClaw SQLite reliability stress proof
@@ -35,6 +34,24 @@ function printProofLines(report: ReliabilityReport): void {
   console.log(`SQLITE_RELIABILITY_RESTORES_VERIFIED=${report.restoresVerified}`);
   console.log(`SQLITE_RELIABILITY_WRITER_ROWS=${report.writer.rowsCommitted}`);
   console.log(
+    `SQLITE_RELIABILITY_CRASH_RECOVERY=${report.crashRecoveryProof.sourceRecovered && report.crashRecoveryProof.committedStatePreserved && report.crashRecoveryProof.writerRestarted ? "verified" : "missing"}`,
+  );
+  console.log(
+    `SQLITE_RELIABILITY_CRASH_EXIT_SIGNAL=${report.crashRecoveryProof.exit.signal ?? "none"}`,
+  );
+  console.log(
+    `SQLITE_RELIABILITY_PUBLICATION_INTERRUPTION=${report.publicationInterruptionProof.beforePublish.recoveryVerified && report.publicationInterruptionProof.afterPublish.targetVerifiedAfterCrash && report.publicationInterruptionProof.afterPublish.recoveryVerified ? "verified" : "missing"}`,
+  );
+  console.log(
+    `SQLITE_RELIABILITY_RESTORE_INTERRUPTION=${report.maintenanceProof.restoreInterruption.beforePublish.recoveryVerified && report.maintenanceProof.restoreInterruption.beforePublish.retryRestored && report.maintenanceProof.restoreInterruption.afterPublish.targetVerifiedAfterCrash && report.maintenanceProof.restoreInterruption.afterPublish.existingTargetPreserved ? "verified" : "missing"}`,
+  );
+  console.log(
+    `SQLITE_RELIABILITY_REPOSITORY_INTERRUPTION=${report.maintenanceProof.repositoryInterruption.beforePending.repositoryVerified && report.maintenanceProof.repositoryInterruption.beforePending.retryCreated && report.maintenanceProof.repositoryInterruption.pending.crashSnapshotVerifiedAfterCrash && report.maintenanceProof.repositoryInterruption.pending.crashSnapshotVisibleAfterCrash && report.maintenanceProof.repositoryInterruption.pending.incompleteEntries === 0 && report.maintenanceProof.repositoryInterruption.pending.retryCreated && report.maintenanceProof.repositoryInterruption.afterCommit.crashSnapshotVerifiedAfterCrash && report.maintenanceProof.repositoryInterruption.afterCommit.retryCreated ? "verified" : "missing"}`,
+  );
+  console.log(
+    `SQLITE_RELIABILITY_INDEX_REPAIR_INTERRUPTION=${report.indexRepairInterruptionProof.rollbackJournal.recoveryVerified && report.indexRepairInterruptionProof.wal.recoveryVerified ? "verified" : "missing"}`,
+  );
+  console.log(
     `SQLITE_RELIABILITY_WAL_SENTINEL=${report.transactionProof.committedWalSentinel ? "verified" : "missing"}`,
   );
   console.log(`SQLITE_RELIABILITY_HELD_BATCH=${report.transactionProof.heldBatch}`);
@@ -43,6 +60,9 @@ function printProofLines(report: ReliabilityReport): void {
   console.log(`SQLITE_RELIABILITY_SNAPSHOT_BYTES_MAX=${report.snapshotBytes.max}`);
   console.log(
     `SQLITE_RELIABILITY_COMPACT_RECLAIMED_BYTES=${report.maintenanceProof.compaction.reclaimedBytes}`,
+  );
+  console.log(
+    `SQLITE_RELIABILITY_VACUUM_INTERRUPTION=${report.maintenanceProof.vacuumInterruption.recoveryVerified ? "verified" : "missing"}`,
   );
   console.log(
     `SQLITE_RELIABILITY_POST_COMPACT_RESTORE=${report.maintenanceProof.postCompact.restoreVerified ? "verified" : "missing"}`,
@@ -63,6 +83,7 @@ async function main(argv: string[]): Promise<void> {
       return;
     }
     const { options } = cli;
+    const { runReliabilityStress } = await import("./lib/sqlite-reliability-runner.js");
     const report = await runReliabilityStress(options);
     if (options.output) {
       fs.mkdirSync(path.dirname(options.output), { recursive: true });

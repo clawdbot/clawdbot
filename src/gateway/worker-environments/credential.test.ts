@@ -1,8 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  isSecretValueRegisteredForRedaction,
-  resetSecretRedactionRegistryForTest,
-} from "../../logging/secret-redaction-registry.js";
+import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redaction-registry.js";
+import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
 import { createWorkerCredentialMaterial, hashWorkerCredential } from "./credential.js";
 
 afterEach(resetSecretRedactionRegistryForTest);

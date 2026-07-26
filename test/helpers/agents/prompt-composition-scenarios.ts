@@ -30,7 +30,7 @@ import { makeTempWorkspace, writeWorkspaceFile } from "../../../src/test-helpers
 // Prompt composition scenarios for system/body prompt stability tests.
 
 /** One turn in a prompt composition scenario. */
-export type PromptScenarioTurn = {
+type PromptScenarioTurn = {
   id: string;
   label: string;
   systemPrompt: string;
@@ -147,7 +147,7 @@ function buildAutoReplySystemPrompt(params: {
   groupSystemPrompt?: string;
 }) {
   const extraSystemPromptParts = [
-    buildInboundMetaSystemPrompt(params.sessionCtx),
+    buildInboundMetaSystemPrompt(params.sessionCtx, {}),
     params.sessionCtx.ChatType === "direct" || params.sessionCtx.ChatType === "dm"
       ? buildDirectChatContext({
           sessionCtx: params.sessionCtx,
@@ -569,6 +569,7 @@ async function createBootstrapWarningScenario(workspaceDir: string): Promise<Pro
         bootstrapMaxChars: 1_500,
         bootstrapTotalMaxChars: 2_200,
       },
+      entries: { main: { default: true } },
     },
   } satisfies OpenClawConfig;
   const largeAgents = "# AGENTS.md\n\n" + "Rules.\n".repeat(5_000);
@@ -699,14 +700,17 @@ async function createMaintenanceScenario(workspaceDir: string): Promise<PromptSc
   ].join("\n");
   const postCompactionSystemPrompt = buildSystemPrompt({
     workspaceDir,
-    extraSystemPrompt: buildInboundMetaSystemPrompt({
-      Provider: "slack",
-      Surface: "slack",
-      OriginatingChannel: "slack",
-      OriginatingTo: "D123",
-      AccountId: "A1",
-      ChatType: "direct",
-    }),
+    extraSystemPrompt: buildInboundMetaSystemPrompt(
+      {
+        Provider: "slack",
+        Surface: "slack",
+        OriginatingChannel: "slack",
+        OriginatingTo: "D123",
+        AccountId: "A1",
+        ChatType: "direct",
+      },
+      {},
+    ),
   });
   return {
     scenario: "maintenance-prompts",

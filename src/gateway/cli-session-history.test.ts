@@ -805,6 +805,27 @@ describe("cli session history", () => {
     });
   });
 
+  it("preserves repeated Claude messages with distinct external UUIDs", () => {
+    const importedMessages = [
+      "11111111-1111-4111-8111-111111111111",
+      "22222222-2222-4222-8222-222222222222",
+    ].map((externalId) => ({
+      role: "assistant",
+      content: "repeated Claude reply",
+      timestamp: Date.parse("2026-03-26T16:29:55.500Z"),
+      __openclaw: {
+        id: externalId,
+        importedFrom: "claude-cli",
+        externalId,
+        cliSessionId: "session-1",
+      },
+    }));
+
+    expect(mergeImportedChatHistoryMessages({ localMessages: [], importedMessages })).toEqual(
+      importedMessages,
+    );
+  });
+
   it("does not dedupe external ids from different imported sessions", () => {
     const localMessages = [
       {

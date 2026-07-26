@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { inferControlUiPublicAssetPath } from "../../app/public-assets.ts";
 import { t } from "../../i18n/index.ts";
+import { takeGraphemes } from "../../lib/graphemes.ts";
 
 /**
  * Cover art bundled at ui/public/plugin-art/<slug>.webp. The gateway CSP is
@@ -129,7 +130,6 @@ const PLUGIN_ART_SLUGS: ReadonlySet<string> = new Set([
   "portfolio-pulse",
   "qa-channel",
   "qa-lab",
-  "qa-matrix",
   "qianfan",
   "qqbot",
   "qwen",
@@ -225,7 +225,9 @@ export function pluginMonogram(name: string): string {
   }
   const first = expectDefined(words[0], "plugin monogram first word");
   const second = words[1];
-  const initials = second ? `${first.charAt(0)}${second.charAt(0)}` : first.slice(0, 2);
+  const initials = second
+    ? `${takeGraphemes(first, 1)}${takeGraphemes(second, 1)}`
+    : takeGraphemes(first, 2);
   return initials.toLocaleUpperCase();
 }
 

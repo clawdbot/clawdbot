@@ -63,8 +63,10 @@ describe("mcp connection resolver helpers", () => {
   });
 
   it("registers resolved header and signed-URL credentials for redaction", async () => {
-    const { isSecretValueRegisteredForRedaction, resetSecretRedactionRegistryForTest } =
+    const { isSecretValueRegisteredForRedaction } =
       await import("../logging/secret-redaction-registry.js");
+    const { resetSecretRedactionRegistryForTest } =
+      await import("../logging/secret-redaction-registry.test-support.js");
     resetSecretRedactionRegistryForTest();
     testing.setMcpServerConnectionResolversForTest([
       {

@@ -125,6 +125,7 @@ export function buildPluginToolDescriptorCacheKey(params: {
   ctx: OpenClawPluginToolContext;
   currentRuntimeConfig?: PluginLoadOptions["config"] | null;
   configCacheKeyMemo?: PluginToolDescriptorConfigCacheKeyMemo;
+  clientCaps?: readonly string[];
 }): string {
   return JSON.stringify({
     version: PLUGIN_TOOL_DESCRIPTOR_CACHE_VERSION,
@@ -133,6 +134,7 @@ export function buildPluginToolDescriptorCacheKey(params: {
     rootDir: params.rootDir ?? null,
     sourceFingerprint: sourceFingerprint(params.source),
     contractToolNames: [...params.contractToolNames].toSorted(),
+    clientCaps: [...(params.clientCaps ?? [])].toSorted(),
     context: buildDescriptorContextCacheKey({
       ctx: params.ctx,
       currentRuntimeConfig: params.currentRuntimeConfig,
@@ -163,6 +165,7 @@ export function capturePluginToolDescriptor(params: {
       ...(title ? { title } : {}),
       description: params.tool.description,
       inputSchema: asJsonObject(params.tool.parameters),
+      ...(params.tool.outputSchema ? { outputSchema: asJsonObject(params.tool.outputSchema) } : {}),
       owner: { kind: "plugin", pluginId: params.pluginId },
       executor: { kind: "plugin", pluginId: params.pluginId, toolName: params.tool.name },
     },

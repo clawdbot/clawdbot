@@ -1,4 +1,6 @@
 // Shares plugin activation state helpers across config and registry code.
+import { normalizePluginPolicyId } from "./plugin-policy-id.js";
+
 type EnableStateLike = {
   enabled: boolean;
   reason?: string;
@@ -104,7 +106,8 @@ function resolveExplicitPluginSelectionShared<TRootConfig>(params: {
     pluginId: string,
   ) => boolean;
 }): { explicitlyEnabled: boolean; cause?: PluginExplicitSelectionCause } {
-  if (params.config.entries[params.id]?.enabled === true) {
+  const policyId = normalizePluginPolicyId(params.id);
+  if (params.config.entries[policyId]?.enabled === true) {
     return { explicitlyEnabled: true, cause: "enabled-in-config" };
   }
   if (
@@ -119,7 +122,7 @@ function resolveExplicitPluginSelectionShared<TRootConfig>(params: {
   if (params.config.slots.contextEngine === params.id) {
     return { explicitlyEnabled: true, cause: "selected-context-engine-slot" };
   }
-  if (params.origin !== "bundled" && params.config.allow.includes(params.id)) {
+  if (params.origin !== "bundled" && params.config.allow.includes(policyId)) {
     return { explicitlyEnabled: true, cause: "selected-in-allowlist" };
   }
   return { explicitlyEnabled: false };
@@ -160,7 +163,8 @@ export function resolvePluginActivationDecisionShared<TRootConfig>(params: {
       cause: "plugins-disabled",
     };
   }
-  if (params.config.deny.includes(params.id)) {
+  const policyId = normalizePluginPolicyId(params.id);
+  if (params.config.deny.includes(policyId)) {
     return {
       enabled: false,
       activated: false,
@@ -169,7 +173,7 @@ export function resolvePluginActivationDecisionShared<TRootConfig>(params: {
       cause: "blocked-by-denylist",
     };
   }
-  const entry = params.config.entries[params.id];
+  const entry = params.config.entries[policyId];
   if (entry?.enabled === false) {
     return {
       enabled: false,
@@ -179,7 +183,7 @@ export function resolvePluginActivationDecisionShared<TRootConfig>(params: {
       cause: "disabled-in-config",
     };
   }
-  const explicitlyAllowed = params.config.allow.includes(params.id);
+  const explicitlyAllowed = params.config.allow.includes(policyId);
   if (
     params.origin === "workspace" &&
     !explicitlyAllowed &&

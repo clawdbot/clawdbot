@@ -69,6 +69,24 @@ describe("slack socket reconnect helpers", () => {
     expect(status).not.toHaveProperty("lastEventAt");
   });
 
+  it("marks socket mode degraded when boot identity is unavailable", () => {
+    const setStatus = vi.fn();
+    vi.spyOn(Date, "now").mockReturnValue(1_711_406_400_500);
+
+    publishSlackConnectedStatus(setStatus, {
+      healthState: "degraded",
+      lastError: "auth.test returned no user_id",
+    });
+
+    expect(setStatus).toHaveBeenCalledTimes(1);
+    expect(setStatus).toHaveBeenCalledWith({
+      connected: true,
+      lastConnectedAt: 1_711_406_400_500,
+      healthState: "degraded",
+      lastError: "auth.test returned no user_id",
+    });
+  });
+
   it("marks socket mode disconnected when an error closes the socket", () => {
     const setStatus = vi.fn();
     const err = new Error("dns down");
@@ -167,14 +185,11 @@ describe("slack socket reconnect helpers", () => {
     );
     client.emit(
       "ws_message",
-      Buffer.from(JSON.stringify({ type: "hello", num_connections: 2 })),
-      false,
+      Buffer.from(JSON.stringify({ type: "hello", num_connections: 4 })),
+      true,
     );
-    client.emit(
-      "ws_message",
-      Buffer.from(JSON.stringify({ type: "hello", num_connections: 3 })),
-      false,
-    );
+    client.emit("ws_message", JSON.stringify({ type: "hello", num_connections: 2 }), false);
+    client.emit("ws_message", JSON.stringify({ type: "hello", num_connections: 3 }), false);
 
     expect(onSharedConnection).toHaveBeenCalledTimes(1);
     expect(onSharedConnection).toHaveBeenCalledWith(2);

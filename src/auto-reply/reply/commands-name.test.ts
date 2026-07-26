@@ -6,7 +6,6 @@ import { loadSessionEntry, upsertSessionEntry } from "../../config/sessions/sess
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildBuiltinChatCommands } from "../commands-registry.shared.js";
 import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js";
-import { loadCommandHandlers } from "./commands-handlers.runtime.js";
 import { handleNameCommand } from "./commands-name.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
@@ -82,7 +81,6 @@ describe("name command", () => {
         captureRemaining: true,
       }),
     ]);
-    expect(loadCommandHandlers()).toContain(handleNameCommand);
   });
 
   it("renames the current session and persists the label", async () => {

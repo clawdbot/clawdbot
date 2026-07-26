@@ -2,6 +2,7 @@
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { buildGatewaySessionEventFields } from "../session-event-payload.js";
+import { invalidateSessionSharingSnapshot } from "../session-sharing.js";
 import { loadGatewaySessionRow } from "../session-utils.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -40,6 +41,7 @@ export function emitSessionsChanged(
   >,
   payload: SessionChangedPayload,
 ) {
+  invalidateSessionSharingSnapshot(payload.sessionKey);
   const evSubs = context.getSessionEventSubscriberConnIds();
   const isTeardown =
     payload.reason === "reset" || payload.reason === "delete" || payload.reason === "new";
@@ -117,6 +119,12 @@ export function emitSessionsChanged(
         : {}),
     },
     connIds,
-    { dropIfSlow: true },
+    {
+      ...(payload.agentId ? { agentId: payload.agentId } : {}),
+      dropIfSlow: true,
+      // Scope only to a concrete key; a `[undefined]` scope filters no connection
+      // correctly and would strip draft gating, so fall back to an unscoped send.
+      ...(sessionRow?.key ? { sessionKeys: [sessionRow.key] } : {}),
+    },
   );
 }

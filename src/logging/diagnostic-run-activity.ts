@@ -1,5 +1,6 @@
 // Diagnostic run activity helpers summarize run lifecycle activity for diagnostics.
 import {
+  getInternalDiagnosticEventSequence,
   onInternalDiagnosticEvent,
   type DiagnosticEventPayload,
   type DiagnosticSessionActiveWorkKind,
@@ -627,11 +628,11 @@ export function getDiagnosticEmbeddedRunActivitySequence(): number {
   return embeddedRunSequence;
 }
 
-export function markDiagnosticRunProgressForTest(params: DiagnosticRunProgressActivityEvent): void {
+function markDiagnosticRunProgressForTest(params: DiagnosticRunProgressActivityEvent): void {
   markDiagnosticRunProgress(params);
 }
 
-export function markDiagnosticToolStartedForTest(params: {
+function markDiagnosticToolStartedForTest(params: {
   sessionId?: string;
   sessionKey?: string;
   runId?: string;
@@ -641,28 +642,27 @@ export function markDiagnosticToolStartedForTest(params: {
   recordToolStarted(params);
 }
 
-export function markDiagnosticModelStartedForTest(
-  params: DiagnosticModelStartedActivityEvent,
-): void {
+function markDiagnosticModelStartedForTest(params: DiagnosticModelStartedActivityEvent): void {
   recordModelStarted(params);
 }
 
 export function resetDiagnosticRunActivityForTest(): void {
-  activityByRef.clear();
-  activityByRunId.clear();
-  embeddedRunSequence = 0;
-  unregisterDiagnosticRunActivityListener?.();
-  unregisterDiagnosticRunActivityListener = undefined;
-  registerDiagnosticRunActivityListener();
+  stopDiagnosticRunActivityTracking();
 }
 
 let unregisterDiagnosticRunActivityListener: (() => void) | undefined;
 
-function registerDiagnosticRunActivityListener(): void {
+export function startDiagnosticRunActivityTracking(): void {
   if (unregisterDiagnosticRunActivityListener) {
     return;
   }
+  const startAfterEventSequence = getInternalDiagnosticEventSequence();
   unregisterDiagnosticRunActivityListener = onInternalDiagnosticEvent((event) => {
+    // A prior lifecycle can leave already-sequenced events in the async queue.
+    // Ignore them so a restart cannot recreate activity that stop cleared.
+    if (event.seq <= startAfterEventSequence) {
+      return;
+    }
     switch (event.type) {
       case "tool.execution.started":
         recordToolStarted(event);
@@ -690,4 +690,20 @@ function registerDiagnosticRunActivityListener(): void {
   });
 }
 
-registerDiagnosticRunActivityListener();
+export function stopDiagnosticRunActivityTracking(): void {
+  unregisterDiagnosticRunActivityListener?.();
+  unregisterDiagnosticRunActivityListener = undefined;
+  activityByRef.clear();
+  activityByRunId.clear();
+  embeddedRunSequence = 0;
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.diagnosticRunActivityTestApi")
+  ] = {
+    markDiagnosticModelStartedForTest,
+    markDiagnosticRunProgressForTest,
+    markDiagnosticToolStartedForTest,
+  };
+}

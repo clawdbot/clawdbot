@@ -27,6 +27,23 @@ export type ChangedScopeArgs = {
   mergeHeadFirstParent: boolean;
 };
 
+export class ControlUiGeneratedArtifactsMixedError extends Error {}
+export class NativeGeneratedArtifactsMixedError extends Error {}
+
+export function assertControlUiGeneratedArtifactsIsolated(
+  changedPaths: string[],
+  branchName?: string,
+): void;
+export function resolveAllowedGeneratedMixBranch(
+  env?: Readonly<Record<string, string | undefined>>,
+  branchName?: string,
+): string;
+export function shouldStrictControlUiI18n(changedPaths: string[] | null): boolean;
+export function assertNativeGeneratedArtifactsIsolated(
+  changedPaths: string[],
+  branchName?: string,
+): void;
+export function shouldStrictNativeI18n(changedPaths: string[] | null): boolean;
 export function detectChangedScope(changedPaths: string[]): ChangedScope;
 export function shouldRunNativeI18n(changedPaths: string[]): boolean;
 export function detectNodeFastScope(changedPaths: string[]): NodeFastScope;

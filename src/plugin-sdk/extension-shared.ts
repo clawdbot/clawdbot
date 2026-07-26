@@ -7,7 +7,7 @@ import { resolveActiveManagedProxyTlsOptions } from "../infra/net/proxy/managed-
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 import { createDeferred as createSharedDeferred } from "../shared/deferred.js";
 import { runPassiveAccountLifecycle } from "./channel-lifecycle.core.js";
-import { createLoggerBackedRuntime } from "./runtime-logger.js";
+import { createLoggerBackedRuntime } from "./runtime-logger.internal.js";
 export { safeParseJsonWithSchema, safeParseWithSchema } from "../utils/zod-parse.js";
 export { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
 

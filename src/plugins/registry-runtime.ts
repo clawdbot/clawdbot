@@ -1,7 +1,18 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
+import { createChannelIngressDrain } from "../channels/message/ingress-drain.js";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import {
+  createPluginBlobStore,
+  type OpenBlobStoreOptions,
+  type PluginBlobStore,
+} from "../plugin-state/plugin-blob-store.js";
+import { withPluginStateLease } from "../plugin-state/plugin-state-lease.js";
+import type {
+  PluginStateLeaseContext,
+  PluginStateLeaseOptions,
+} from "../plugin-state/plugin-state-lease.types.js";
 import {
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
@@ -33,6 +44,9 @@ const PLUGIN_GATEWAY_SESSION_MUTATION_METHODS = new Set([
   "sessions.compact",
   "sessions.compaction.branch",
   "sessions.compaction.restore",
+  "sessions.branches.switch",
+  "sessions.rewind",
+  "sessions.fork",
   "sessions.create",
   "sessions.delete",
   "sessions.patch",
@@ -293,6 +307,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       const entries = registryParams.runtime.agent.session.listSessionEntries({
         ...(agentId ? { agentId } : {}),
         ...(storePath ? { storePath } : {}),
+        readOnly: true,
       });
       for (const { sessionKey, entry } of entries) {
         if (
@@ -462,37 +477,90 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         };
         if (prop === "state") {
           const baseState = getRuntimeProperty();
-          const assertPluginStateAllowed = () => {
+          const assertPluginStateAllowed = (
+            methodName:
+              | "openBlobStore"
+              | "openKeyedStore"
+              | "withLease"
+              | "openChannelIngressDrain",
+          ) => {
             const record =
               pluginRuntimeRecordById.get(pluginId) ??
               registry.plugins.find((entry) => entry.id === pluginId);
             if (record?.origin !== "bundled" && record?.trustedOfficialInstall !== true) {
               throw new Error(
-                "openKeyedStore is only available for trusted plugins in this release.",
+                `${methodName} is only available for trusted plugins in this release.`,
               );
             }
           };
           return {
             ...baseState,
+            openBlobStore: <TMetadata>(
+              options: OpenBlobStoreOptions,
+            ): PluginBlobStore<TMetadata> => {
+              assertPluginStateAllowed("openBlobStore");
+              return createPluginBlobStore<TMetadata>(pluginId, options);
+            },
             openKeyedStore: <T>(options: OpenKeyedStoreOptions): PluginStateKeyedStore<T> => {
-              assertPluginStateAllowed();
+              assertPluginStateAllowed("openKeyedStore");
               return createPluginStateKeyedStore<T>(pluginId, options);
             },
             openSyncKeyedStore: <T>(
               options: OpenKeyedStoreOptions,
             ): PluginStateSyncKeyedStore<T> => {
-              assertPluginStateAllowed();
+              assertPluginStateAllowed("openKeyedStore");
               return createPluginStateSyncKeyedStore<T>(pluginId, options);
+            },
+            withLease: <T>(
+              options: PluginStateLeaseOptions,
+              run: (lease: PluginStateLeaseContext) => Promise<T>,
+            ): Promise<T> => {
+              assertPluginStateAllowed("withLease");
+              return withPluginStateLease(pluginId, options, run);
             },
             openChannelIngressQueue: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
               options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
             ) => {
-              assertPluginStateAllowed();
+              assertPluginStateAllowed("openKeyedStore");
               const stateDir = options?.stateDir ?? baseState.resolveStateDir();
               return createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>({
                 ...options,
                 channelId: pluginId,
                 stateDir,
+              });
+            },
+            openChannelIngressDrain: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
+              options: Omit<
+                Parameters<
+                  typeof createChannelIngressDrain<TPayload, TMetadata, TCompletedMetadata>
+                >[0],
+                "queue"
+              > & {
+                queue?: ReturnType<
+                  typeof createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>
+                >;
+                accountId?: string;
+                stateDir?: string;
+              },
+            ) => {
+              assertPluginStateAllowed("openChannelIngressDrain");
+              const stateDir = options.stateDir ?? baseState.resolveStateDir();
+              const queue =
+                options.queue ??
+                createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>({
+                  channelId: pluginId,
+                  accountId: options.accountId,
+                  stateDir,
+                });
+              const {
+                queue: _queue,
+                accountId: _accountId,
+                stateDir: _stateDir,
+                ...drainOptions
+              } = options;
+              return createChannelIngressDrain<TPayload, TMetadata, TCompletedMetadata>({
+                ...drainOptions,
+                queue,
               });
             },
           } satisfies PluginRuntime["state"];
@@ -546,10 +614,12 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             listSessionEntries: session.listSessionEntries,
             createSessionEntry: async (params) =>
               await runWithPluginScope(async () => {
-                if (
-                  "agentHarnessId" in params.initialEntry ===
-                  "cliBackendId" in params.initialEntry
-                ) {
+                const runtimeOwnerCount = [
+                  "agentHarnessId" in params.initialEntry,
+                  "cliBackendId" in params.initialEntry,
+                  "acpSessionBinding" in params.initialEntry,
+                ].filter(Boolean).length;
+                if (runtimeOwnerCount !== 1) {
                   throw new Error(
                     `Plugin "${pluginId}" session creation requires exactly one runtime owner.`,
                   );
@@ -560,6 +630,17 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                   assertOwnedHarness(params.initialEntry.agentHarnessId, "create its sessions");
                   assertReservedSessionKeyOwned(params.key, "create");
                   return await session.createSessionEntry(params);
+                }
+                if ("acpSessionBinding" in params.initialEntry) {
+                  if (!params.key.startsWith(`plugin:${pluginId}:`)) {
+                    throw new Error(
+                      `Plugin "${pluginId}" session keys must start with "plugin:${pluginId}:".`,
+                    );
+                  }
+                  return await session.createSessionEntry({
+                    ...params,
+                    initialEntry: { ...params.initialEntry, pluginOwnerId: pluginId },
+                  });
                 }
                 const cliInitial = params.initialEntry;
                 const backend = registry.cliBackends.find(
@@ -725,8 +806,6 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             withPluginRuntimePluginIdScope(pluginId, () => subagent.waitForRun(params)),
           getSessionMessages: (params) =>
             withPluginRuntimePluginIdScope(pluginId, () => subagent.getSessionMessages(params)),
-          getSession: (params) =>
-            withPluginRuntimePluginIdScope(pluginId, () => subagent.getSession(params)),
           deleteSession: async (params) =>
             await withPluginRuntimePluginIdScope(pluginId, async () => {
               assertStoredSessionEntryOwned({ action: "delete", sessionKey: params.sessionKey });

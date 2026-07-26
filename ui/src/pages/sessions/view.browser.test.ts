@@ -20,7 +20,6 @@ const describeBrowserLayout = canRunPlaywrightChromium(chromiumExecutablePath)
   : describe.skip;
 
 type BrowserFixture = {
-  context: BrowserContext;
   page: Page;
 };
 
@@ -39,7 +38,7 @@ function readUiCss(): string {
 function sessionsTableHtml() {
   const headers = ["", "Key", "Kind", "Status", "Updated", "Tokens", "Actions"];
   const overviewTiles = [
-    ["3", "Sessions"],
+    ["3", "Threads"],
     ["1", "Live"],
     ["1", "Unread"],
     ["123k", "Tokens"],
@@ -129,7 +128,7 @@ function sessionsTableHtml() {
                       <span class="settings-count session-compaction-count">1</span>
                       <svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>
                     </button>
-                    <button class="icon-btn" aria-label="Open session menu" aria-haspopup="menu">
+                    <button class="icon-btn" aria-label="Open thread menu" aria-haspopup="menu">
                       <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1" /></svg>
                     </button>
                   </div>
@@ -140,7 +139,7 @@ function sessionsTableHtml() {
                   <div class="session-details-panel">
                     <div class="session-details-panel__hero">
                       <div>
-                        <div class="session-details-panel__eyebrow">Session details</div>
+                        <div class="session-details-panel__eyebrow">Thread details</div>
                         <div class="session-details-panel__title">agent:main:main</div>
                       </div>
                       <div class="session-details-panel__badges">
@@ -204,42 +203,49 @@ function sessionsTableHtml() {
 }
 
 async function openFixture(
-  browser: Browser,
+  context: BrowserContext,
   width: number,
   height: number,
 ): Promise<BrowserFixture> {
-  const context = await browser.newContext({ viewport: { width, height } });
   let page: Page | undefined;
   try {
     page = await context.newPage();
+    await page.setViewportSize({ width, height });
     await page.setContent(
       `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${sessionsTableHtml()}</body></html>`,
     );
-    return { context, page };
+    return { page };
   } catch (error) {
-    await context.close().catch(() => {});
+    await page?.close().catch(() => {});
     throw error;
   }
 }
 
 async function closeFixture(fixture: BrowserFixture): Promise<void> {
-  await fixture.context.close().catch(() => {});
+  await fixture.page.close().catch(() => {});
 }
 
 describeBrowserLayout("sessions responsive browser layout", () => {
   let browser: Browser;
+  let context: BrowserContext;
 
   beforeAll(async () => {
-    // Browser startup dominates this suite; fresh contexts keep viewport state isolated.
     browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
+    try {
+      context = await browser.newContext();
+    } catch (error) {
+      await browser.close().catch(() => {});
+      throw error;
+    }
   });
 
   afterAll(async () => {
+    await context?.close().catch(() => {});
     await browser?.close().catch(() => {});
   });
 
   it.each(VIEWPORTS)("keeps the session roster visible at %dx%d", async (width, height) => {
-    const fixture = await openFixture(browser, width, height);
+    const fixture = await openFixture(context, width, height);
     const { page } = fixture;
     try {
       const metrics = await page.evaluate(() => {

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildMcpAppHostCapabilities, resolveMcpAppSandboxUrl } from "./mcp-app-security.ts";
+import {
+  buildMcpAppHostCapabilities,
+  dispatchWidgetPrompt,
+  resolveMcpAppSandboxUrl,
+} from "./mcp-app-security.ts";
 
 describe("MCP App sandbox security", () => {
   it("advertises the CSP applied to MCP Apps", () => {
@@ -7,6 +11,16 @@ describe("MCP App sandbox security", () => {
       buildMcpAppHostCapabilities({ connectDomains: ["https://api.example.com"] }),
     ).toMatchObject({ sandbox: { csp: { connectDomains: ["https://api.example.com"] } } });
     expect(buildMcpAppHostCapabilities()).toMatchObject({ sandbox: { csp: {} } });
+  });
+
+  it("advertises update-model-context text support only when the handler path exists", () => {
+    expect(buildMcpAppHostCapabilities(undefined, true, true)).toMatchObject({
+      message: { text: {} },
+      updateModelContext: { text: {} },
+    });
+    expect(buildMcpAppHostCapabilities(undefined, true, false)).not.toHaveProperty(
+      "updateModelContext",
+    );
   });
 
   it("accepts only the dedicated-origin sandbox endpoint", () => {
@@ -64,5 +78,28 @@ describe("MCP App sandbox security", () => {
         "MCP App sandbox URL is invalid",
       );
     }
+  });
+
+  it("keeps the per-view prompt budget across iframe remounts", () => {
+    const key = `agent:main:main\0view-${crypto.randomUUID()}`;
+    const first = document.createElement("iframe");
+    document.body.append(first);
+    first.checkVisibility = () => true;
+    Object.defineProperty(document, "activeElement", { get: () => first, configurable: true });
+    for (let index = 0; index < 10; index += 1) {
+      expect(dispatchWidgetPrompt(first, `Prompt ${index}`, key)).toBe(true);
+    }
+
+    first.remove();
+    const replacement = document.createElement("iframe");
+    document.body.append(replacement);
+    replacement.checkVisibility = () => true;
+    Object.defineProperty(document, "activeElement", {
+      get: () => replacement,
+      configurable: true,
+    });
+    expect(dispatchWidgetPrompt(replacement, "Prompt after remount", key)).toBe(false);
+    replacement.remove();
+    delete (document as unknown as Record<string, unknown>).activeElement;
   });
 });

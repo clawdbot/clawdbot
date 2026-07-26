@@ -6,6 +6,7 @@ export function createQaSelfCheckScenario(options?: {
   waitTimeoutMs?: number;
 }): QaScenarioDefinition {
   const waitTimeoutMs = options?.waitTimeoutMs ?? 5_000;
+  let lifecycleTarget: string | undefined;
   return {
     name: "Synthetic Slack-class roundtrip",
     steps: [
@@ -38,11 +39,12 @@ export function createQaSelfCheckScenario(options?: {
           });
           const threadPayload = extractQaToolPayload(
             threadResult as Parameters<typeof extractQaToolPayload>[0],
-          ) as { thread?: { id?: string } } | undefined;
+          ) as { target?: string; thread?: { id?: string } } | undefined;
           const threadId = threadPayload?.thread?.id;
-          if (!threadId) {
-            throw new Error("thread-create did not return thread id");
+          if (!threadId || !threadPayload?.target) {
+            throw new Error("thread-create did not return thread id and target");
           }
+          lifecycleTarget = threadPayload.target;
 
           await state.addInboundMessage({
             conversation: { id: "qa-room", kind: "channel", title: "QA Room" },
@@ -76,8 +78,12 @@ export function createQaSelfCheckScenario(options?: {
           if (!outboundMessage) {
             throw new Error("threaded outbound message not found");
           }
+          if (!lifecycleTarget) {
+            throw new Error("thread target not found");
+          }
 
           await performAction("react", {
+            to: lifecycleTarget,
             messageId: outboundMessage.id,
             emoji: "white_check_mark",
           });
@@ -90,6 +96,7 @@ export function createQaSelfCheckScenario(options?: {
           }
 
           await performAction("edit", {
+            to: lifecycleTarget,
             messageId: outboundMessage.id,
             text: "qa-echo: inside thread (edited)",
           });
@@ -102,6 +109,7 @@ export function createQaSelfCheckScenario(options?: {
           }
 
           await performAction("delete", {
+            to: lifecycleTarget,
             messageId: outboundMessage.id,
           });
           const deleted = await state.readMessage({ messageId: outboundMessage.id });

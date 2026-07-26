@@ -1,0 +1,19 @@
+title: WhatsApp status reaction lifecycle updates the triggering message
+scenario:
+  id: whatsapp-status-reaction-lifecycle
+  surface: channels
+  coverage:
+    primary:
+      - channels.reply-message-actions
+  execution:
+    profiles: { "whatsapp:mock-default": 30 }
+    kind: flow
+    channel: whatsapp
+    timeoutMs: 90000
+    retryCount: 1
+    suiteIsolation: isolated
+    config: { whatsappScenarioId: whatsapp-status-reaction-lifecycle }
+flow:
+  module: ./live-transports/whatsapp/scenario-runtime.js
+  call: runWhatsAppStatusReactionLifecycleScenario
+  args: [{ expr: whatsappScenarioContext }]

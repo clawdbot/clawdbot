@@ -1,5 +1,6 @@
 // Msteams plugin module implements errors behavior.
 import { asFiniteNumberInRange, parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import { parseRetryAfterHeaderSeconds } from "openclaw/plugin-sdk/retry-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const MAX_SAFE_RETRY_AFTER_SECONDS = Number.MAX_SAFE_INTEGER / 1000;
@@ -136,7 +137,7 @@ function extractRetryAfterMs(err: unknown): number | null {
   if (isRecord(headers)) {
     const raw = headers["retry-after"] ?? headers["Retry-After"];
     if (typeof raw === "string") {
-      const parsed = parseNonNegativeRetryAfterSeconds(raw);
+      const parsed = parseRetryAfterHeaderSeconds(raw);
       if (parsed !== undefined) {
         return parsed * 1000;
       }
@@ -152,7 +153,7 @@ function extractRetryAfterMs(err: unknown): number | null {
   ) {
     const raw = (headers as { get: (name: string) => string | null }).get("retry-after");
     if (raw) {
-      const parsed = parseNonNegativeRetryAfterSeconds(raw);
+      const parsed = parseRetryAfterHeaderSeconds(raw);
       if (parsed !== undefined) {
         return parsed * 1000;
       }

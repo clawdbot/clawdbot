@@ -1,3 +1,4 @@
+import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
 // Qqbot type declarations define plugin contracts.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import type { EngineLogger } from "../types.js";
@@ -7,6 +8,11 @@ import type { GatewayAccount as _GatewayAccount } from "../types.js";
 export type GatewayAccount = _GatewayAccount;
 
 export interface GatewayPluginRuntime {
+  state: {
+    openChannelIngressQueue: <TPayload>(options: {
+      accountId: string;
+    }) => ChannelIngressQueue<TPayload>;
+  };
   channel: {
     activity: {
       record: (params: {
@@ -21,7 +27,12 @@ export interface GatewayPluginRuntime {
         channel: string;
         accountId: string;
         peer: { kind: "group" | "direct"; id: string };
-      }) => { sessionKey: string; accountId: string; agentId?: string };
+      }) => {
+        sessionKey: string;
+        accountId: string;
+        agentId?: string;
+        dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+      };
     };
     commands?: {
       isControlCommandMessage?: (text?: string, cfg?: unknown) => boolean;
@@ -82,9 +93,19 @@ export type { RefAttachmentSummary } from "../ref/types.js";
 export interface WSPayload {
   op: number;
   d: unknown;
+  /** Stable delivery id on gateway dispatch envelopes. */
+  id?: string;
   s?: number;
   t?: string;
 }
+
+export type QQBotIngressLifecycle = {
+  abortSignal: AbortSignal;
+  onAdopted: () => void | Promise<void>;
+  onDeferred: () => void;
+  onAdoptionFinalizing: () => void;
+  onAbandoned: () => void | Promise<void>;
+};
 
 interface RawMessageAttachment {
   content_type: string;
@@ -199,11 +220,6 @@ interface GatewayGroupOptions {
     accountId: string;
     groupId: string;
   }) => string | undefined;
-  /**
-   * Session-store reader for the `/activation` command override. When
-   * omitted, the engine loads a default node-based reader lazily.
-   */
-  sessionStoreReader?: import("../group/activation.js").SessionStoreReader;
 }
 
 /** Full gateway startup context. */

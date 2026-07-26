@@ -144,7 +144,7 @@ function normalizeFoundryModelName(value?: string | null): string | undefined {
   return trimmed || undefined;
 }
 
-export function isAnthropicFoundryDeployment(modelName?: string | null): boolean {
+function isAnthropicFoundryDeployment(modelName?: string | null): boolean {
   const normalized = normalizeFoundryModelName(modelName);
   return normalized ? normalized.startsWith("claude") : false;
 }
@@ -182,12 +182,12 @@ export function isFoundryMaiImageModel(value?: string | null): boolean {
   );
 }
 
-export function supportsFoundryReasoningContent(value?: string | null): boolean {
+function supportsFoundryReasoningContent(value?: string | null): boolean {
   const normalized = normalizeFoundryModelName(value);
   return normalized === "mai-ds-r1" || normalized === "mai-thinking-1";
 }
 
-export function supportsFoundryImageInput(value?: string | null): boolean {
+function supportsFoundryImageInput(value?: string | null): boolean {
   const normalized = normalizeFoundryModelName(value);
   if (!normalized) {
     return false;
@@ -267,7 +267,7 @@ export function requiresFoundryMaxCompletionTokens(value?: string | null): boole
   );
 }
 
-export function supportsFoundryReasoningEffort(value?: string | null): boolean {
+function supportsFoundryReasoningEffort(value?: string | null): boolean {
   const normalized = normalizeFoundryModelName(value);
   if (
     !normalized ||
@@ -282,6 +282,18 @@ export function supportsFoundryReasoningEffort(value?: string | null): boolean {
     normalized.startsWith("o3") ||
     normalized.startsWith("o4")
   );
+}
+
+if (process.env.VITEST === "true") {
+  const key = Symbol.for("openclaw.microsoftFoundryTestApi");
+  const api = (Reflect.get(globalThis, key) as Record<string, unknown> | undefined) ?? {};
+  Reflect.set(globalThis, key, {
+    ...api,
+    isAnthropicFoundryDeployment,
+    supportsFoundryImageInput,
+    supportsFoundryReasoningContent,
+    supportsFoundryReasoningEffort,
+  });
 }
 
 function resolveFoundryReasoningEfforts(value?: string | null): string[] | undefined {

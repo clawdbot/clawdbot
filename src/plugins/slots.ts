@@ -20,6 +20,8 @@ const DEFAULT_SLOT_BY_KEY: Record<PluginSlotKey, string> = {
   contextEngine: "legacy",
 };
 
+const PLUGIN_SLOT_KEYS = Object.keys(DEFAULT_SLOT_BY_KEY) as PluginSlotKey[];
+
 /** Normalize a kind field to an array for uniform iteration. */
 function normalizeKinds(kind?: PluginKind | PluginKind[]): PluginKind[] {
   if (!kind) {
@@ -56,6 +58,26 @@ function slotKeysForPluginKind(kind?: PluginKind | PluginKind[]): PluginSlotKey[
 /** Returns the implicit plugin id that owns a slot before config overrides it. */
 export function defaultSlotIdForKey(slotKey: PluginSlotKey): string {
   return DEFAULT_SLOT_BY_KEY[slotKey];
+}
+
+/** Resets every slot currently owned by a plugin to that slot's implicit default. */
+export function resetPluginSlotsToDefaults(
+  slots: PluginSlotsConfig | undefined,
+  pluginId: string,
+): PluginSlotsConfig | undefined {
+  if (!slots) {
+    return slots;
+  }
+  const next = { ...slots };
+  let changed = false;
+  for (const slotKey of PLUGIN_SLOT_KEYS) {
+    if (slots[slotKey] !== pluginId) {
+      continue;
+    }
+    next[slotKey] = defaultSlotIdForKey(slotKey);
+    changed = true;
+  }
+  return changed ? next : slots;
 }
 
 type SlotSelectionResult = {

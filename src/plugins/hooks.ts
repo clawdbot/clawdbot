@@ -25,8 +25,6 @@ import type {
   PluginHookBeforeAgentFinalizeResult,
   PluginHookBeforeAgentReplyEvent,
   PluginHookBeforeAgentReplyResult,
-  PluginHookBeforeAgentStartEvent,
-  PluginHookBeforeAgentStartResult,
   PluginHookBeforeDispatchContext,
   PluginHookBeforeDispatchEvent,
   PluginHookBeforeDispatchResult,
@@ -80,6 +78,7 @@ import type {
   PluginHookSubagentSpawningEvent,
   PluginHookSubagentSpawningResult,
   PluginHookSubagentEndedEvent,
+  PluginHookSubagentProgressEvent,
   PluginHookSubagentSpawnedEvent,
   PluginHookToolContext,
   PluginHookToolResultPersistContext,
@@ -151,13 +150,6 @@ const DEFAULT_VOID_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, numbe
 };
 const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, number>> = {
   before_agent_run: 15_000,
-  // Defensive default for the legacy compatibility hook (#48534). With
-  // before_agent_start unbudgeted, an unresponsive handler (e.g. a memory
-  // plugin waiting on a hung subprocess) blocked the entire agent pipeline
-  // because both the embedded setup and prompt-build paths await this hook.
-  // The runner is fail-open for this hook name, so a timed-out handler is
-  // logged and the run proceeds without its modifications.
-  before_agent_start: 15_000,
   // Terminal finalization hooks sit on the runner's completion path. A hung
   // handler must not freeze final delivery or keep compaction retry recovery
   // unresolved; timeout fail-opens with the original final answer.
@@ -804,29 +796,6 @@ export function createHookRunner(
   }
 
   /**
-   * @deprecated Use runBeforeModelResolve and runBeforePromptBuild.
-   *
-   * Run before_agent_start hook.
-   * Legacy compatibility hook that combines model resolve + prompt build phases.
-   */
-  async function runBeforeAgentStart(
-    event: PluginHookBeforeAgentStartEvent,
-    ctx: PluginHookAgentContext,
-  ): Promise<PluginHookBeforeAgentStartResult | undefined> {
-    return runModifyingHook<"before_agent_start", PluginHookBeforeAgentStartResult>(
-      "before_agent_start",
-      withAgentRunId(event, ctx),
-      ctx,
-      {
-        mergeResults: (acc, next) => ({
-          ...mergeBeforePromptBuild(acc, next),
-          ...mergeBeforeModelResolve(acc, next),
-        }),
-      },
-    );
-  }
-
-  /**
    * Run before_agent_reply hook.
    * Allows plugins to intercept messages and return a synthetic reply,
    * short-circuiting the LLM agent. First handler to return { handled: true } wins.
@@ -1448,6 +1417,14 @@ export function createHookRunner(
     return runVoidHook("subagent_spawned", event, ctx);
   }
 
+  /** Run portable subagent progress presentation hooks. */
+  async function runSubagentProgress(
+    event: PluginHookSubagentProgressEvent,
+    ctx: PluginHookSubagentContext,
+  ): Promise<void> {
+    return runVoidHook("subagent_progress", event, ctx);
+  }
+
   /**
    * Run subagent_ended hook.
    * Runs in parallel (fire-and-forget).
@@ -1585,7 +1562,6 @@ export function createHookRunner(
     runBeforeModelResolve,
     runAgentTurnPrepare,
     runBeforePromptBuild,
-    runBeforeAgentStart,
     runBeforeAgentReply,
     runModelCallStarted,
     runModelCallEnded,
@@ -1621,6 +1597,7 @@ export function createHookRunner(
     runSubagentSpawning,
     runSubagentDeliveryTarget,
     runSubagentSpawned,
+    runSubagentProgress,
     runSubagentEnded,
     // Gateway hooks
     runGatewayStart,
@@ -1641,6 +1618,10 @@ export type HookRunner = ReturnType<typeof createHookRunner>;
 
 export type SubagentLifecycleHookRunner = Pick<
   HookRunner,
-  "hasHooks" | "runSubagentSpawning" | "runSubagentSpawned" | "runSubagentEnded"
+  | "hasHooks"
+  | "runSubagentSpawning"
+  | "runSubagentSpawned"
+  | "runSubagentProgress"
+  | "runSubagentEnded"
 >;
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

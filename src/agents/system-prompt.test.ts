@@ -298,10 +298,8 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## OpenClaw Control");
-    expect(prompt).toContain("prefer `gateway`");
-    expect(prompt).toContain("CLI lifecycle only explicit");
-    expect(prompt).toContain("openclaw gateway status|restart|start|stop");
-    expect(prompt).toContain("`restart`, not stop+start");
+    expect(prompt).toContain("Config read: `gateway`");
+    expect(prompt).not.toContain("openclaw gateway status|restart|start|stop");
     expect(prompt).toContain("Do not invent commands");
   });
 
@@ -356,6 +354,33 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain('[embed content_type="html" title="Status"]...[/embed]');
   });
 
+  it("teaches direct status answers only on the full Control UI surface", () => {
+    const defaultPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_spawn"],
+    });
+    const webchatPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_spawn"],
+      runtimeInfo: { channel: "webchat" },
+    });
+    const minimalWebchatPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_spawn"],
+      runtimeInfo: { channel: "webchat" },
+      promptMode: "minimal",
+    });
+
+    expect(defaultPrompt).not.toContain("## Control UI Session Companion");
+    expect(webchatPrompt).toContain("## Control UI Session Companion");
+    expect(webchatPrompt).toContain("read-only rail companion");
+    expect(webchatPrompt).toContain("do not spawn sub-agents or burn main-thread turns");
+    expect(webchatPrompt).toContain(
+      "Reserve `sessions_spawn` for delegated work with its own deliverable",
+    );
+    expect(minimalWebchatPrompt).not.toContain("## Control UI Session Companion");
+  });
+
   it("guides subagent workflows to avoid polling loops", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -384,6 +409,34 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(withoutYield).not.toContain("use `sessions_yield` when waiting");
     expect(withYield).toContain("wait with `sessions_yield`");
+  });
+
+  it("limits screen guidance to web/app tool surfaces", () => {
+    const withoutScreen = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions"],
+    });
+    const withScreen = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions", "screen"],
+    });
+
+    expect(withoutScreen).not.toContain("web/app turn may drive UI");
+    expect(withScreen).toContain("- screen: Drive operator web UI");
+    expect(withScreen).toContain(
+      "`screen` present: web/app turn may drive UI; messaging turn: don't.",
+    );
+  });
+
+  it("guides visible terminal work separately from quiet exec", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["exec", "terminal"],
+    });
+
+    expect(prompt).toContain(
+      "- terminal: Own visible shell. Use for long/interactive jobs user should watch. exec for quiet work",
+    );
   });
 
   it("lists available tools when provided", () => {
@@ -733,20 +786,43 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("- Opus: anthropic/claude-opus-4-5");
   });
 
-  it("adds ClaudeBot self-update guidance when gateway tool is available", () => {
+  it("keeps gateway guidance read-only", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["gateway", "exec"],
     });
 
-    expect(prompt).toContain("## OpenClaw Self-Update");
-    expect(prompt).toContain("config.schema.lookup");
-    expect(prompt).toContain("config.apply");
-    expect(prompt).toContain("config.patch");
-    expect(prompt).toContain("Hot-reload when possible");
-    expect(prompt).toContain("update.run");
+    expect(prompt).toContain(
+      "Config read: `gateway` (`config.get|config.schema.lookup`). Write/restart unavailable; ask human.",
+    );
+    expect(prompt).not.toContain("config.patch");
+    expect(prompt).not.toContain("config.apply");
+    expect(prompt).not.toContain("`config.schema.lookup|get|patch|apply`, `restart`");
+    expect(prompt).not.toContain("update.run");
     expect(prompt).not.toContain("Use config.schema to");
     expect(prompt).not.toContain("config.schema, config.apply");
+  });
+
+  it("delegates system changes when openclaw tool is present", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["openclaw", "sessions_spawn"],
+    });
+
+    expect(prompt).toContain(
+      "Config, channels, plugins, new agents, model/provider, updates: ask `openclaw`.",
+    );
+    expect(prompt).toContain("Never write own config; OpenClaw is system expert.");
+    expect(prompt).toContain("`visible:true` only web/app user or asked.");
+  });
+
+  it("omits openclaw delegation guidance without the tool", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["gateway"],
+    });
+
+    expect(prompt).not.toContain("ask `openclaw`");
   });
 
   it("includes skills guidance when skills prompt is present", () => {
@@ -767,12 +843,13 @@ describe("buildAgentSystemPrompt", () => {
 
   it("instructs models to use skill_workshop only when the tool is available", () => {
     const section = buildSkillWorkshopPromptSection();
-    const sectionText = section.join("\n");
-    expect(section.length).toBeLessThanOrEqual(4);
-    expect(sectionText).toContain("Durable reusable skill/playbook/workflow work");
-    expect(sectionText).toContain("`skill_workshop`");
-    expect(sectionText).toContain("Generated = pending proposal");
-    expect(sectionText).toContain("only explicit user ask");
+    expect(section).toEqual([
+      "## Skill Workshop",
+      "Durable reusable skill/playbook/workflow work: `skill_workshop`; never write proposal/skill files directly.",
+      "Generated = pending proposal. Apply/reject/quarantine only explicit user ask.",
+      "proposal_content = complete final skill body, never plan/diff; update/revise preserves unchanged content.",
+      "",
+    ]);
 
     const withoutTool = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -943,12 +1020,12 @@ describe("buildAgentSystemPrompt", () => {
     expect(messagingPrompt).not.toContain("subagents(action=list)");
 
     expect(spawnOnlyPrompt).toContain(
-      '- Subagents: `sessions_spawn` with objective/output/write-scope/verification; stable handle needs `taskName`; isolated omits `context`, transcript needs `context:"fork"`.',
+      '- Subagents: `sessions_spawn` with objective/output/write-scope/verification; stable handle needs `taskName`, UI title `label`; isolated omits `context`, transcript needs `context:"fork"`.',
     );
     expect(spawnOnlyPrompt).not.toContain("manage already-spawned children");
 
     expect(orchestrationPrompt).toContain(
-      '- Subagents: `sessions_spawn` with objective/output/write-scope/verification; stable handle needs `taskName`; isolated omits `context`, transcript needs `context:"fork"`; `subagents(action=list)` only status/debug.',
+      '- Subagents: `sessions_spawn` with objective/output/write-scope/verification; stable handle needs `taskName`, UI title `label`; isolated omits `context`, transcript needs `context:"fork"`; `subagents(action=list)` only status/debug.',
     );
     expect(orchestrationWaitPrompt).toContain("wait via `sessions_yield`");
   });
@@ -1064,20 +1141,12 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("style primary|success|danger");
   });
 
-  it("describes Telegram rich text only for rich Telegram runtimes", () => {
+  it("does not embed Telegram rich-text authoring guidance in core messaging", () => {
     const telegramPrompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["message"],
       runtimeInfo: {
         channel: "telegram",
-        capabilities: ["richText"],
-      },
-    });
-    const discordPrompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      toolNames: ["message"],
-      runtimeInfo: {
-        channel: "discord",
         capabilities: ["richText"],
       },
     });
@@ -1089,47 +1158,23 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(telegramPrompt).toContain("Telegram rich ON");
-    expect(telegramPrompt).toContain("<details><summary>");
-    expect(telegramPrompt).toContain("tables (alignment/captions/spans)");
-    expect(telegramPrompt).toContain("block/pull quotes");
-    expect(telegramPrompt).toContain("checkbox tasks");
-    expect(telegramPrompt).toContain("anchors/in-message links");
-    expect(telegramPrompt).toContain(
-      "Math: `<tg-math>` inline, `<tg-math-block>` block; never `$...$`/`\\(...\\)`",
-    );
-    expect(telegramPrompt).toContain("maps/collages/slideshows");
-    expect(telegramPrompt).toContain("Collapse=`<details>` (not expandable blockquote)");
-    expect(telegramPrompt).toContain("structured bullets=`<ul><li>` (not literal bullets)");
-    expect(telegramPrompt).toContain('block media e.g. `<img src="https://..."/>`');
-    expect(telegramPrompt).toContain("captions/credits when useful");
-    expect(telegramPrompt).toContain("media tags block-only");
-    expect(telegramPrompt).toContain("Not MarkdownV2/parse_mode");
-    expect(telegramPrompt).toContain("OpenClaw renders safely");
-    expect(telegramPrompt).toContain("buttons plain text");
-    expect(telegramPrompt.indexOf("Telegram rich ON")).toBeGreaterThan(
-      telegramPrompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY),
-    );
-    expect(discordPrompt).not.toContain("Telegram rich ON");
+    expect(telegramPrompt).not.toContain("Telegram rich ON");
+    expect(telegramPrompt).not.toContain("Telegram rich OFF");
     expect(plainTelegramPrompt).not.toContain("Telegram rich ON");
-    expect(plainTelegramPrompt).toContain("Telegram rich OFF");
-    expect(plainTelegramPrompt).toContain("no 10.1 tables");
-    expect(plainTelegramPrompt).toContain("enable rich messages for this account/channel");
+    expect(plainTelegramPrompt).not.toContain("Telegram rich OFF");
+    expect(telegramPrompt).toContain("final text normally routes to source");
   });
 
-  it("describes Telegram rich text for source replies without the message tool", () => {
+  it("describes source replies without the message tool", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       runtimeInfo: {
         channel: "telegram",
-        capabilities: ["richText"],
       },
     });
 
     expect(prompt).toContain("final text normally routes to source");
     expect(prompt).toContain("If turn says final private");
-    expect(prompt).toContain("Telegram rich ON");
-    expect(prompt).toContain("headings, tables");
     expect(prompt).not.toContain("### message tool");
   });
 
@@ -1257,11 +1302,12 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Plain /approve only when");
   });
 
-  it("suppresses plain chat approval commands for native approval channels", () => {
+  it("suppresses plain chat approval commands for native approval runtimes", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       runtimeInfo: {
-        channel: "slack",
+        channel: "whatsapp",
+        capabilities: ["nativeApprovals"],
       },
     });
 

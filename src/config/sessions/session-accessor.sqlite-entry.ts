@@ -1,8 +1,11 @@
+import type { DatabaseSync } from "node:sqlite";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
@@ -28,12 +31,12 @@ import {
   collectSessionEntryLookupKeys,
   createSqliteSessionIdentitySnapshot,
   deleteLegacySessionEntryRows,
-  deleteSqliteLifecycleTargetRows,
   readExactSessionEntryRow,
   readSessionEntryRow,
   readSqliteLifecycleTargetSnapshot,
   readSqliteSessionEntrySelectionSnapshot,
   readSqliteSessionIdentitySnapshot,
+  rehomeSqliteSessionWindows,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { listSqliteTranscriptInstancesFromDatabase } from "./session-accessor.sqlite-history.js";
@@ -62,6 +65,9 @@ import {
   readSqliteSessionEntriesByStatus,
 } from "./session-accessor.sqlite-status.js";
 import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
+import { buildSessionCreationStamp } from "./session-entry-provenance.js";
+import { kickSessionHistoryDiskBudgetMaintenance } from "./session-history-eviction.js";
+import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import type { GroupKeyResolution, SessionEntry } from "./types.js";
 import { mergeSessionEntry, mergeSessionEntryPreserveActivity } from "./types.js";
 
@@ -76,6 +82,18 @@ export function loadSqliteSessionEntry(scope: SessionAccessScope): SessionEntry 
   const resolved = resolveSqliteScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
   return readSessionEntryRow(database, resolved.sessionKey)?.entry;
+}
+
+/** Loads one session entry without opening its agent database writable. */
+export function loadSqliteSessionEntryReadOnly(
+  scope: SessionAccessScope,
+): SessionEntry | undefined {
+  const resolved = resolveSqliteScope(scope);
+  const result = withOpenClawAgentDatabaseReadOnly(
+    (database) => readSessionEntryRow(database, resolved.sessionKey)?.entry,
+    toDatabaseOptions(resolved),
+  );
+  return result.found ? result.value : undefined;
 }
 
 /** Loads one exact persisted-key entry from the additive SQLite session store. */
@@ -102,7 +120,7 @@ export function resolveSqliteSessionKeyBySessionId(
   const row = executeSqliteQueryTakeFirstSync(
     database.db,
     db
-      .selectFrom("sessions")
+      .selectFrom("session_windows")
       .select("session_key")
       .where("session_id", "=", resolved.sessionId)
       .limit(1),
@@ -116,12 +134,32 @@ export function listSqliteSessionEntries(
 ): SessionEntrySummary[] {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  return listSqliteSessionEntriesFromDatabase(database);
+}
+
+/**
+ * Lists session entries without opening the agent database writable.
+ * Transient lock errors propagate: only the caller knows whether "empty" is an
+ * acceptable degradation (health snapshots) or hides real state (migration detection).
+ */
+export function listSqliteSessionEntriesReadOnly(
+  scope: Partial<Omit<SessionAccessScope, "sessionKey">> = {},
+): SessionEntrySummary[] {
+  const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
+  const result = withOpenClawAgentDatabaseReadOnly(
+    (database) => listSqliteSessionEntriesFromDatabase(database),
+    toDatabaseOptions(resolved),
+  );
+  return result.found ? result.value : [];
+}
+
+function listSqliteSessionEntriesFromDatabase(database: { db: DatabaseSync }) {
   const db = getSessionKysely(database.db);
   const rows = executeSqliteQuerySync(
     database.db,
     db
-      .selectFrom("session_entries")
-      .select(["session_key", "entry_json", "session_id", "updated_at"])
+      .selectFrom("session_nodes")
+      .select(["session_key", "entry_json", "current_session_id", "updated_at"])
       .orderBy("session_key", "asc"),
   ).rows;
   return rows
@@ -268,11 +306,15 @@ export async function patchSqliteSessionEntry(
             previous: writeBase,
             sessionKey: resolved.sessionKey,
           });
-      writeSessionEntry(writeDatabase, resolved.sessionKey, next);
+      const selectedPreviousEntry = fresh.selected?.entry ?? writeBase;
+      writeSessionEntry(writeDatabase, resolved.sessionKey, next, {
+        previousEntry: selectedPreviousEntry,
+      });
       deleteLegacySessionEntryRows(
         writeDatabase,
         fresh.selected?.legacyKeys ?? [],
         resolved.sessionKey,
+        { rehomeMembers: selectedPreviousEntry.sessionId === next.sessionId },
       );
       maintenancePlans.push(
         applySqliteSessionEntryMaintenance(writeDatabase, {
@@ -280,6 +322,7 @@ export async function patchSqliteSessionEntry(
           archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
           maintenanceConfig: options.maintenanceConfig,
           skipMaintenance: options.skipMaintenance,
+          storePath: resolveSessionStorePathForScope(scope),
         }),
       );
       currentIdentity = readSqliteSessionIdentitySnapshot(writeDatabase, identityKeys);
@@ -287,6 +330,11 @@ export async function patchSqliteSessionEntry(
     }, toDatabaseOptions(resolved));
     emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
     finalizeSqliteSessionEntryMaintenancePlansBestEffort(resolved, maintenancePlans);
+    kickSessionHistoryDiskBudgetMaintenance({
+      ...(resolved.agentId ? { agentId: resolved.agentId } : {}),
+      storePath: resolveSessionStorePathForScope(scope),
+      ...(options.maintenanceConfig ? { maintenanceConfig: options.maintenanceConfig } : {}),
+    });
     return result;
   });
 }
@@ -342,14 +390,28 @@ export async function patchSqliteSessionEntryTarget(
             previous: writeBase,
             sessionKey: scope.target.canonicalKey,
           });
-      deleteSqliteLifecycleTargetRows(writeDatabase, scope.target);
-      writeSessionEntry(writeDatabase, scope.target.canonicalKey, next);
+      const selectedPreviousEntry = fresh.primary?.entry ?? writeBase;
+      writeSessionEntry(writeDatabase, scope.target.canonicalKey, next, {
+        previousEntry: selectedPreviousEntry,
+      });
+      rehomeSqliteSessionWindows(writeDatabase, scope.target.canonicalKey, scope.target.storeKeys);
+      deleteLegacySessionEntryRows(
+        writeDatabase,
+        scope.target.storeKeys,
+        scope.target.canonicalKey,
+        { rehomeMembers: selectedPreviousEntry.sessionId === next.sessionId },
+      );
       maintenancePlans.push(
         applySqliteSessionEntryMaintenance(writeDatabase, {
           activeSessionKey: scope.target.canonicalKey,
           archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
           maintenanceConfig: options.maintenanceConfig,
           skipMaintenance: options.skipMaintenance,
+          storePath: resolveSessionStorePathForScope({
+            agentId: scope.agentId,
+            sessionKey: scope.target.canonicalKey,
+            storePath: scope.storePath,
+          }),
         }),
       );
       currentIdentity = readSqliteSessionIdentitySnapshot(writeDatabase, identityKeys);
@@ -357,6 +419,11 @@ export async function patchSqliteSessionEntryTarget(
     }, toDatabaseOptions(resolved));
     emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
     finalizeSqliteSessionEntryMaintenancePlansBestEffort(resolved, maintenancePlans);
+    kickSessionHistoryDiskBudgetMaintenance({
+      ...(resolved.agentId ? { agentId: resolved.agentId } : {}),
+      storePath: resolveSessionStorePathForScope(scope),
+      ...(options.maintenanceConfig ? { maintenanceConfig: options.maintenanceConfig } : {}),
+    });
     return result;
   });
 }
@@ -373,13 +440,27 @@ export async function recordSqliteInboundSessionMeta(params: {
   const createIfMissing = params.createIfMissing ?? true;
   return await patchSqliteSessionEntry(
     { sessionKey: params.sessionKey, storePath: params.storePath },
-    (_entry, context) =>
-      deriveSessionMetaPatch({
+    (_entry, context) => {
+      const metadataPatch = deriveSessionMetaPatch({
         ctx: params.ctx,
         sessionKey: params.sessionKey,
         existing: context.existingEntry,
         groupResolution: params.groupResolution,
-      }),
+      });
+      if (context.existingEntry) {
+        return metadataPatch;
+      }
+      const senderId = params.ctx.From?.trim();
+      return {
+        ...buildSessionCreationStamp(
+          params.ctx.SessionCreation ?? {
+            via: "channel",
+            actor: { type: "human", ...(senderId ? { id: senderId } : {}) },
+          },
+        ),
+        ...metadataPatch,
+      };
+    },
     {
       // Inbound metadata must not refresh activity timestamps; idle reset
       // evaluation relies on updatedAt from actual session turns.
@@ -393,11 +474,11 @@ export async function recordSqliteInboundSessionMeta(params: {
 export async function updateSqliteSessionLastRoute(params: {
   storePath: string;
   sessionKey: string;
-  channel?: SessionEntry["lastChannel"];
+  channel?: string;
   to?: string;
   accountId?: string;
   threadId?: string | number;
-  route?: SessionEntry["route"];
+  route?: ChannelRouteRef;
   deliveryContext?: DeliveryContext;
   ctx?: MsgContext;
   groupResolution?: GroupKeyResolution | null;
@@ -406,8 +487,8 @@ export async function updateSqliteSessionLastRoute(params: {
   const createIfMissing = params.createIfMissing ?? true;
   return await patchSqliteSessionEntry(
     { sessionKey: params.sessionKey, storePath: params.storePath },
-    (_entry, context) =>
-      deriveLastRoutePatch({
+    (_entry, context) => {
+      const routePatch = deriveLastRoutePatch({
         channel: params.channel,
         to: params.to,
         accountId: params.accountId,
@@ -418,7 +499,23 @@ export async function updateSqliteSessionLastRoute(params: {
         groupResolution: params.groupResolution,
         existing: context.existingEntry,
         sessionKey: params.sessionKey,
-      }),
+      });
+      if (context.existingEntry) {
+        return routePatch;
+      }
+      const senderId = params.ctx?.From?.trim();
+      return {
+        ...buildSessionCreationStamp(
+          params.ctx?.SessionCreation ?? {
+            via: "channel",
+            ...(params.ctx
+              ? { actor: { type: "human" as const, ...(senderId ? { id: senderId } : {}) } }
+              : {}),
+          },
+        ),
+        ...routePatch,
+      };
+    },
     {
       // Route updates must not refresh activity timestamps (#49515).
       preserveActivity: true,

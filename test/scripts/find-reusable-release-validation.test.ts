@@ -4,11 +4,12 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT_PATH = join(process.cwd(), "scripts/github/find-reusable-release-validation.sh");
 const tempDirs = createTempDirTracker();
+const sharedTempDirs = createTempDirTracker();
 
 const REPOSITORY = "openclaw/openclaw";
 const PRODUCER_SHA = "0".repeat(40);
@@ -112,6 +113,10 @@ afterEach(() => {
   tempDirs.cleanup();
 });
 
+afterAll(() => {
+  sharedTempDirs.cleanup();
+});
+
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, {
     cwd,
@@ -142,8 +147,8 @@ function plistFor(shortVersion: string, buildVersion: string): string {
   ].join("\n");
 }
 
-function createRepo(options: { plistBuildVersion?: string } = {}) {
-  const origin = tempDirs.make("evidence-reuse-origin-");
+function createRepo(options: { plistBuildVersion?: string } = {}, dirs = tempDirs) {
+  const origin = dirs.make("evidence-reuse-origin-");
   git(origin, ["init", "-q", "-b", "main"]);
   git(origin, ["config", "user.email", "test-user@example.invalid"]);
   git(origin, ["config", "user.name", "Test User"]);
@@ -166,10 +171,21 @@ function createRepo(options: { plistBuildVersion?: string } = {}) {
   return { origin, priorSha: git(origin, ["rev-parse", "HEAD"]) };
 }
 
-function cloneHead(origin: string): string {
-  const clone = tempDirs.make("evidence-reuse-clone-");
+function cloneHead(origin: string, dirs = tempDirs): string {
+  const clone = dirs.make("evidence-reuse-clone-");
   execFileSync("git", ["clone", "-q", "--depth=1", origin, clone], { encoding: "utf8" });
   return clone;
+}
+
+let sharedRepo: { clone: string; priorSha: string } | undefined;
+
+function getSharedRepo(): { clone: string; priorSha: string } {
+  if (!sharedRepo) {
+    // The resolver only reads its target checkout, so policy cases can share one immutable clone.
+    const { origin, priorSha } = createRepo({}, sharedTempDirs);
+    sharedRepo = { clone: cloneHead(origin, sharedTempDirs), priorSha };
+  }
+  return sharedRepo;
 }
 
 function normalizedEvidence(options: {
@@ -506,8 +522,7 @@ function parseOutput(output: string): Record<string, string> {
 
 describe("scripts/github/find-reusable-release-validation.sh", () => {
   it("reuses strict direct-root evidence produced by a canonical SHA-pinned run", () => {
-    const { origin, priorSha } = createRepo();
-    const clone = cloneHead(origin);
+    const { clone, priorSha } = getSharedRepo();
     const producerSha = "d".repeat(40);
     const producerRef = `release-ci/${producerSha.slice(0, 12)}-122`;
     const record = normalizedEvidence({
@@ -534,8 +549,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
   });
 
   it("rejects noncanonical release refs and workflow SHAs outside trusted main", () => {
-    const { origin, priorSha } = createRepo();
-    const clone = cloneHead(origin);
+    const { clone, priorSha } = getSharedRepo();
     const record = normalizedEvidence({ targetSha: priorSha });
     const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
 
@@ -562,8 +576,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
   });
 
   it("reuses pre-tooling trusted-main evidence for the exact target", () => {
-    const { origin, priorSha } = createRepo();
-    const clone = cloneHead(origin);
+    const { clone, priorSha } = getSharedRepo();
     const record = normalizedEvidence({ targetSha: priorSha });
     const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
 
@@ -592,8 +605,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
   });
 
   it("accepts exact-target trusted-main evidence without a compare request", () => {
-    const { origin, priorSha } = createRepo();
-    const clone = cloneHead(origin);
+    const { clone, priorSha } = getSharedRepo();
     const record = normalizedEvidence({
       producerSha: priorSha,
       targetSha: priorSha,
@@ -623,8 +635,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     ["stable", "stable"],
     ["full", "full"],
   ] as const)("accepts exact profile identity %s -> %s", (priorProfile, requestedProfile) => {
-    const { origin, priorSha } = createRepo();
-    const clone = cloneHead(origin);
+    const { clone, priorSha } = getSharedRepo();
     const record = normalizedEvidence({
       releaseProfile: priorProfile,
       targetSha: priorSha,
@@ -645,8 +656,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
   });
 
   it("skips validator rejection and selects the next strict record", () => {
-    const { origin, priorSha } = createRepo();
-    const clone = cloneHead(origin);
+    const { clone, priorSha } = getSharedRepo();
     const record = normalizedEvidence({ runId: "111", targetSha: priorSha });
     const { binDir, fixtures, validatorPath } = setUpFixtures([
       { exitCode: 1, runId: "222" },
@@ -759,8 +769,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       },
     },
   ])("rejects normalized evidence that is not reusable: $label", ({ mutate }) => {
-    const { origin, priorSha } = createRepo();
-    const clone = cloneHead(origin);
+    const { clone, priorSha } = getSharedRepo();
     const record = normalizedEvidence({ targetSha: priorSha });
     mutate(record);
     const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
@@ -830,8 +839,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
   ])(
     "rejects evidence with incompatible policy coverage: $label",
     ({ expected, recordOptions, resolverOptions }) => {
-      const { origin, priorSha } = createRepo();
-      const clone = cloneHead(origin);
+      const { clone, priorSha } = getSharedRepo();
       const record = normalizedEvidence({ targetSha: priorSha, ...recordOptions });
       const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
 
@@ -951,8 +959,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     { inputs: null, label: "null inputs", runReleaseSoak: "true" },
     { inputs: DEFAULT_INPUTS, label: "invalid soak flag", runReleaseSoak: "yes" },
   ])("rejects invalid resolver arguments: $label", ({ inputs, runReleaseSoak }) => {
-    const { origin, priorSha } = createRepo();
-    const clone = cloneHead(origin);
+    const { clone, priorSha } = getSharedRepo();
     const { binDir, fixtures, validatorPath } = setUpFixtures([]);
 
     const result = runResolver({
@@ -969,8 +976,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
   });
 
   it("reports no reuse when no prior successful runs exist", () => {
-    const { origin, priorSha } = createRepo();
-    const clone = cloneHead(origin);
+    const { clone, priorSha } = getSharedRepo();
     const { binDir, fixtures, validatorPath } = setUpFixtures([]);
 
     const result = runResolver({

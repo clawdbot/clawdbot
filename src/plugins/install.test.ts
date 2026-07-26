@@ -302,11 +302,12 @@ type CapturedInstallPolicyRequest = {
 };
 
 function writeAllowingInstallPolicyScript(dir: string) {
+  fs.chmodSync(dir, 0o700);
   const scriptPath = path.join(dir, "allow-policy.cjs");
   const logPath = path.join(dir, "policy-requests.jsonl");
   fs.writeFileSync(
     scriptPath,
-    `
+    `#!${process.execPath}
 const fs = require("node:fs");
 
 let input = "";
@@ -326,11 +327,12 @@ process.stdin.on("end", () => {
 }
 
 function writeBlockingInstallPolicyScript(dir: string) {
+  fs.chmodSync(dir, 0o700);
   const scriptPath = path.join(dir, "block-policy.cjs");
   const logPath = path.join(dir, "policy-requests.jsonl");
   fs.writeFileSync(
     scriptPath,
-    `
+    `#!${process.execPath}
 const fs = require("node:fs");
 
 let input = "";
@@ -363,11 +365,12 @@ process.stdin.on("end", () => {
 }
 
 function writeInstallOnlyBlockingPolicyScript(dir: string) {
+  fs.chmodSync(dir, 0o700);
   const scriptPath = path.join(dir, "block-install-policy.cjs");
   const logPath = path.join(dir, "policy-requests.jsonl");
   fs.writeFileSync(
     scriptPath,
-    `
+    `#!${process.execPath}
 const fs = require("node:fs");
 
 let input = "";
@@ -402,10 +405,9 @@ function configWithInstallPolicy(scriptPath: string, logPath: string): OpenClawC
         enabled: true,
         exec: {
           source: "exec",
-          command: process.execPath,
-          args: [scriptPath],
+          command: scriptPath,
           env: { OPENCLAW_POLICY_LOG: logPath },
-          allowInsecurePath: true,
+          trustedDirs: [path.dirname(scriptPath)],
           timeoutMs: 5000,
           maxOutputBytes: 16 * 1024,
         },
@@ -1914,28 +1916,6 @@ describe("installPluginFromArchive", () => {
 
     expect(result.ok).toBe(true);
     expect(warnings).toStrictEqual([]);
-  });
-
-  it("does not flag the real qa-matrix plugin as dangerous install code", async () => {
-    const sourcePluginDir = path.resolve(process.cwd(), "extensions", "qa-matrix");
-    const pluginDir = path.join(suiteTempRootTracker.makeTempDir(), "qa-matrix");
-    fs.cpSync(sourcePluginDir, pluginDir, {
-      recursive: true,
-      filter: (entryPath) =>
-        !path.relative(sourcePluginDir, entryPath).split(path.sep).includes("node_modules"),
-    });
-    vi.mocked(resolveOpenClawPackageRootSync).mockReturnValue(process.cwd());
-
-    const scanResult = await installSecurityScan.scanPackageInstallSource({
-      extensions: ["./index.ts"],
-      logger: { warn: vi.fn() },
-      packageDir: pluginDir,
-      pluginId: "qa-matrix",
-      packageName: "@openclaw/qa-matrix",
-      manifestId: "qa-matrix",
-    });
-
-    expect(scanResult?.blocked).toBeUndefined();
   });
 
   it("allows bundle installs with dangerous code patterns without built-in scanner blocking", async () => {

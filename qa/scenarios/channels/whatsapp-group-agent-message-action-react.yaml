@@ -1,0 +1,19 @@
+title: WhatsApp group user-path agent reaction uses the message tool
+scenario:
+  id: whatsapp-group-agent-message-action-react
+  surface: channels
+  coverage:
+    primary:
+      - channels.message-actions
+  execution:
+    profiles: { "whatsapp:mock-default": 12 }
+    kind: flow
+    channel: whatsapp
+    timeoutMs: 90000
+    retryCount: 1
+    suiteIsolation: isolated
+    config: { whatsappScenarioId: whatsapp-group-agent-message-action-react }
+flow:
+  module: ./live-transports/whatsapp/scenario-runtime.js
+  call: runWhatsAppGroupAgentMessageActionReactScenario
+  args: [{ expr: whatsappScenarioContext }]

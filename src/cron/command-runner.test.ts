@@ -139,9 +139,8 @@ describe("runCronCommandJob", () => {
   it.skipIf(process.platform === "win32")("kills shell process groups on timeout", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-command-"));
     const childPidPath = path.join(tempDir, "child.pid");
-    const childScript = "setInterval(() => {}, 1000)";
     const shellCommand = [
-      `${JSON.stringify(process.execPath)} -e ${JSON.stringify(childScript)} &`,
+      "sleep 60 &",
       "child_pid=$!",
       `printf '%s' "$child_pid" > ${JSON.stringify(childPidPath)}`,
       'wait "$child_pid"',
@@ -151,7 +150,7 @@ describe("runCronCommandJob", () => {
       job: makeCommandJob({
         kind: "command",
         argv: ["sh", "-lc", shellCommand],
-        timeoutSeconds: 0.2,
+        timeoutSeconds: 0.5,
       }),
     });
 

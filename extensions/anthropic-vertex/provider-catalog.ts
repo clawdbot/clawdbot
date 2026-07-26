@@ -11,6 +11,7 @@ import {
   modelCostsEqual,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeMythos5ModelIdentity,
+  resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -21,8 +22,13 @@ const ANTHROPIC_VERTEX_DEFAULT_CONTEXT_WINDOW = 1_000_000;
 const ANTHROPIC_VERTEX_CLAUDE_5_MAX_TOKENS = 128_000;
 // Vertex's introductory rate expires at the documented UTC month boundary.
 const SONNET_5_STANDARD_PRICING_START_MS = Date.UTC(2026, 8, 1);
-const SONNET_5_SUPPORTED_REGIONS = new Set(["global", "us", "eu"]);
+const CLAUDE_5_SUPPORTED_REGIONS = new Set(["global", "us", "eu"]);
 const GCP_VERTEX_CREDENTIALS_MARKER = "gcp-vertex-credentials";
+
+const OPUS_5_COST = {
+  global: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+  multiRegion: { input: 5.5, output: 27.5, cacheRead: 0.55, cacheWrite: 6.875 },
+} as const;
 
 const SONNET_5_COST = {
   promotional: {
@@ -58,12 +64,20 @@ function buildAnthropicVertexModel(params: {
   };
 }
 
+function resolveOpus5Cost(region: string): ModelDefinitionConfig["cost"] | undefined {
+  const normalizedRegion = normalizeLowercaseStringOrEmpty(region);
+  if (!CLAUDE_5_SUPPORTED_REGIONS.has(normalizedRegion)) {
+    return undefined;
+  }
+  return normalizedRegion === "global" ? OPUS_5_COST.global : OPUS_5_COST.multiRegion;
+}
+
 function resolveSonnet5Cost(
   region: string,
   nowMs: number = Date.now(),
 ): ModelDefinitionConfig["cost"] | undefined {
   const normalizedRegion = normalizeLowercaseStringOrEmpty(region);
-  if (!SONNET_5_SUPPORTED_REGIONS.has(normalizedRegion)) {
+  if (!CLAUDE_5_SUPPORTED_REGIONS.has(normalizedRegion)) {
     return undefined;
   }
   const pricingPeriod = nowMs >= SONNET_5_STANDARD_PRICING_START_MS ? "standard" : "promotional";
@@ -73,6 +87,23 @@ function resolveSonnet5Cost(
 }
 
 function buildAnthropicVertexCatalog(region: string, nowMs: number): ModelDefinitionConfig[] {
+  const opus5Cost = resolveOpus5Cost(region);
+  const opus5 = opus5Cost
+    ? [
+        buildAnthropicVertexModel({
+          id: "claude-opus-5",
+          name: "Claude Opus 5",
+          reasoning: true,
+          input: ["text", "image"],
+          cost: opus5Cost,
+          maxTokens: ANTHROPIC_VERTEX_CLAUDE_5_MAX_TOKENS,
+          mediaInput: {
+            image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+          },
+          thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+        }),
+      ]
+    : [];
   const sonnet5Cost = resolveSonnet5Cost(region, nowMs);
   const sonnet5 = sonnet5Cost
     ? [
@@ -101,6 +132,7 @@ function buildAnthropicVertexCatalog(region: string, nowMs: number): ModelDefini
       maxTokens: ANTHROPIC_VERTEX_CLAUDE_5_MAX_TOKENS,
       thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
     }),
+    ...opus5,
     buildAnthropicVertexModel({
       id: "claude-mythos-5",
       name: "Claude Mythos 5",
@@ -149,8 +181,9 @@ export function normalizeAnthropicVertexResolvedModel(
   const ref = { id: modelId, params: model.params };
   const fable5 = resolveClaudeFable5ModelIdentity(ref) !== undefined;
   const mythos5 = resolveClaudeMythos5ModelIdentity(ref) !== undefined;
+  const opus5 = resolveClaudeOpus5ModelIdentity(ref) !== undefined;
   const sonnet5 = resolveClaudeSonnet5ModelIdentity(ref) !== undefined;
-  if (!fable5 && !mythos5 && !sonnet5) {
+  if (!fable5 && !mythos5 && !opus5 && !sonnet5) {
     return undefined;
   }
   const input: ProviderRuntimeModel["input"] = model.input.includes("image")
@@ -170,9 +203,8 @@ export function normalizeAnthropicVertexResolvedModel(
     model.thinkingLevelMap.max === "max" &&
     (!(fable5 || mythos5) ||
       (model.thinkingLevelMap.off === "low" && model.thinkingLevelMap.minimal === "low"));
-  const cost = sonnet5
-    ? resolveSonnet5Cost(resolveAnthropicVertexClientRegion({ baseUrl: model.baseUrl }))
-    : undefined;
+  const region = resolveAnthropicVertexClientRegion({ baseUrl: model.baseUrl });
+  const cost = opus5 ? resolveOpus5Cost(region) : sonnet5 ? resolveSonnet5Cost(region) : undefined;
   const costMatches = !cost || modelCostsEqual(model.cost, cost);
   if (
     model.reasoning &&

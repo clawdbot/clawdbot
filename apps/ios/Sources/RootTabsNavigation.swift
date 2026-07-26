@@ -3,42 +3,19 @@ import Foundation
 import SwiftUI
 
 extension RootTabs {
-    struct PhoneChatReturn: Equatable {
-        let destination: SidebarDestination
-        let openChatRequestID: Int
-    }
-
-    struct PhoneControlNavigationRequest: Equatable {
-        enum Target: Equatable {
-            case root
-            case detail(SidebarDestination)
-        }
-
-        let id: Int
-        let target: Target
-    }
-
     private static var sidebarPersistentWidthThreshold: CGFloat {
         980
     }
 
     static let sidebarSplitIdealWidth: CGFloat = 316
     static let sidebarSplitMaximumWidth: CGFloat = 340
+    // Keep the web drawer's 86% reveal while using more of current iPhone widths.
     static let sidebarDrawerMaximumWidth: CGFloat = 340
     static let sidebarShowButtonAccessibilityIdentifier = "RootTabs.Sidebar.Show"
     static let sidebarHideButtonAccessibilityIdentifier = "RootTabs.Sidebar.Hide"
 
-    enum AppTab: Hashable {
-        case control
-        case chat
-        case talk
-        case agent
-        case settings
-    }
-
     enum SidebarDestination: String, CaseIterable, Hashable, Identifiable {
         case chat
-        case talk
         case overview
         case activity
         case agents
@@ -62,7 +39,6 @@ extension RootTabs {
         var title: String {
             switch self {
             case .chat: String(localized: "Chat")
-            case .talk: String(localized: "Talk")
             case .overview: String(localized: "Overview")
             case .activity: String(localized: "Activity")
             case .agents: String(localized: "Agents")
@@ -91,7 +67,6 @@ extension RootTabs {
         var systemImage: String {
             switch self {
             case .chat: "bubble.left"
-            case .talk: "waveform.circle"
             case .overview: "chart.bar"
             case .activity: "waveform.path.ecg"
             case .agents: "person.2"
@@ -110,29 +85,11 @@ extension RootTabs {
             }
         }
 
-        var appTab: AppTab {
-            switch self {
-            case .chat:
-                .chat
-            case .talk:
-                .talk
-            case .agents:
-                .agent
-            case .settings, .gateway:
-                .settings
-            case .overview, .activity, .workboard, .skillWorkshop, .instances, .sessions, .files,
-                 .dreaming,
-                 .usage,
-                 .cron, .terminal, .docs:
-                .control
-            }
-        }
-
         var settingsRoute: SettingsRoute? {
             switch self {
             case .gateway:
                 .gateway
-            case .chat, .talk, .overview, .activity, .agents, .workboard, .skillWorkshop, .instances, .sessions,
+            case .chat, .overview, .activity, .agents, .workboard, .skillWorkshop, .instances, .sessions,
                  .files,
                  .dreaming,
                  .usage, .cron, .terminal, .settings, .docs:
@@ -162,9 +119,23 @@ extension RootTabs {
 
     static func sidebarWidth(containerWidth: CGFloat, isDrawerLayout: Bool) -> CGFloat {
         if isDrawerLayout {
-            return min(self.sidebarDrawerMaximumWidth, max(280, containerWidth * 0.86))
+            return min(self.sidebarDrawerMaximumWidth, containerWidth * 0.86)
         }
         return min(self.sidebarSplitMaximumWidth, max(self.sidebarSplitIdealWidth, containerWidth * 0.25))
+    }
+
+    static func sidebarContentOffset(
+        sidebarWidth: CGFloat,
+        isVisible: Bool,
+        dragOffset: CGFloat,
+        reduceMotion: Bool) -> CGFloat
+    {
+        guard !reduceMotion else { return 0 }
+        if isVisible {
+            return max(0, sidebarWidth + min(0, dragOffset))
+        }
+        // Closed: a positive drag is the interactive edge-open follow.
+        return max(0, min(sidebarWidth, dragOffset))
     }
 
     static func shouldShowSidebarRevealControl(isSidebarVisible: Bool) -> Bool {
@@ -204,33 +175,6 @@ extension RootTabs {
             return false
         default:
             return nil
-        }
-    }
-
-    static func shouldOpenRootTabFromPhoneHub(_ destination: SidebarDestination) -> Bool {
-        switch destination {
-        case .chat, .talk, .agents, .gateway, .settings:
-            true
-        case .overview, .activity, .workboard, .skillWorkshop, .instances, .sessions, .files,
-             .dreaming,
-             .usage,
-             .cron, .terminal, .docs:
-            false
-        }
-    }
-
-    static func defaultSidebarDestination(for tab: AppTab) -> SidebarDestination {
-        switch tab {
-        case .control:
-            .overview
-        case .chat:
-            .chat
-        case .talk:
-            .talk
-        case .agent:
-            .agents
-        case .settings:
-            .settings
         }
     }
 
@@ -277,49 +221,51 @@ extension RootTabs {
         return discoveredGatewayCount > 0
     }
 
-    struct SidebarGroup: Identifiable {
-        let title: String
-        let destinations: [SidebarDestination]
+    static let sidebarDestinations: [SidebarDestination] = [
+        .chat,
+        .overview,
+        .workboard,
+        .usage,
+        .cron,
+        .sessions,
+        .activity,
+        .skillWorkshop,
+        .agents,
+        .instances,
+        .files,
+        .dreaming,
+        .terminal,
+        .docs,
+    ]
 
-        var id: String {
-            self.title
+    /// Home (chat) is a fixed first row like the web sidebar; only these can be
+    /// pinned/unpinned by the user.
+    static let pinnableSidebarPages: [SidebarDestination] = sidebarDestinations.filter { $0 != .chat }
+
+    /// Echoes the web first-run Pages zone (Home, Usage, Automations, …):
+    /// compact by default so sessions stay above the fold. The Sessions page is
+    /// intentionally unpinned — the sessions section + "All Sessions…" own it.
+    static let defaultPinnedSidebarPages: [SidebarDestination] = [.overview, .usage, .cron]
+
+    /// "" = never customized (defaults); "none" = user unpinned everything.
+    /// Storage order is the user's pin order (web parity); unknown or
+    /// unpinnable raw values are dropped.
+    static func pinnedSidebarPages(from storage: String) -> [SidebarDestination] {
+        let trimmed = storage.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return self.defaultPinnedSidebarPages }
+        if trimmed == "none" { return [] }
+        var seen = Set<String>()
+        return trimmed.split(separator: ",").compactMap { raw in
+            let value = String(raw)
+            guard seen.insert(value).inserted,
+                  let destination = SidebarDestination(rawValue: value),
+                  self.pinnableSidebarPages.contains(destination)
+            else { return nil }
+            return destination
         }
     }
 
-    static let sidebarGroups: [SidebarGroup] = [
-        SidebarGroup(title: "CHAT", destinations: [.chat, .talk]),
-        SidebarGroup(
-            title: "CONTROL",
-            destinations: [
-                .overview,
-                .activity,
-                .agents,
-                .workboard,
-                .skillWorkshop,
-                .instances,
-                .sessions,
-                .files,
-                .dreaming,
-                .usage,
-                .cron,
-                .terminal,
-            ]),
-        SidebarGroup(
-            title: "SETTINGS",
-            destinations: [.settings]),
-        SidebarGroup(title: "REFERENCE", destinations: [.docs]),
-    ]
-
-    static var phoneControlGroups: [SidebarGroup] {
-        // Agents owns a bottom tab and its hub entry duplicated the same destination;
-        // Chat and Talk stay per the tested Control-hub IA contract.
-        let tabOwned: Set<SidebarDestination> = [.agents]
-        return self.sidebarGroups
-            .map { group in
-                SidebarGroup(
-                    title: group.title,
-                    destinations: group.destinations.filter { !tabOwned.contains($0) })
-            }
-            .filter { !$0.destinations.isEmpty }
+    static func pinnedSidebarPagesStorage(_ pages: [SidebarDestination]) -> String {
+        pages.isEmpty ? "none" : pages.map(\.rawValue).joined(separator: ",")
     }
 }

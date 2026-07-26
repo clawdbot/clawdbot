@@ -22,6 +22,18 @@ type RemoteSkillNode = {
 
 const remoteSkillNodes = new Map<string, RemoteSkillNode>();
 const log = createSubsystemLogger("gateway/skills-remote");
+let reconcileRemoteSkillConnections: (() => ReadonlySet<string> | undefined) | null = null;
+
+function remoteConnectionKey(nodeId: string, connId: string): string {
+  return `${nodeId}\0${connId}`;
+}
+
+/** Installs the gateway-owned persistent-generation reconciliation boundary. */
+export function setRemoteSkillConnectionReconciler(
+  reconcile: (() => ReadonlySet<string> | undefined) | null,
+): void {
+  reconcileRemoteSkillConnections = reconcile;
+}
 
 function prepareNodeSkills(
   nodeId: string,
@@ -40,9 +52,8 @@ function prepareNodeSkills(
       }
       prepared.push({ ...skill, frontmatter });
     } catch (error) {
-      log.warn(
-        `dropped node skill with invalid frontmatter: ${nodeId}/${skill.name}: ${String(error)}`,
-      );
+      const filePath = `node://${encodeURIComponent(nodeId)}/skills/${skill.name}/SKILL.md`;
+      log.warn(`dropped node skill with invalid frontmatter (${filePath}): ${String(error)}`);
     }
   }
   return prepared;
@@ -169,8 +180,14 @@ export function mergeRemoteNodeSkillEntries(
   if (options?.canExec !== true) {
     return [...localEntries];
   }
+  const currentConnections = reconcileRemoteSkillConnections?.();
   const connectedNodes = [...remoteSkillNodes.values()].filter(
-    (node) => node.connected && node.canExec,
+    (node) =>
+      node.connected &&
+      node.canExec &&
+      (!currentConnections ||
+        (node.connId !== undefined &&
+          currentConnections.has(remoteConnectionKey(node.nodeId, node.connId)))),
   );
   let boundNodeId: string | undefined;
   if (options.node) {
@@ -246,6 +263,13 @@ export function mergeRemoteNodeSkillEntries(
   );
 }
 
-export function resetRemoteNodeSkillsForTests(): void {
+function resetRemoteNodeSkillsForTests(): void {
   remoteSkillNodes.clear();
+  reconcileRemoteSkillConnections = null;
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.remoteNodeSkillsTestApi")] = {
+    resetRemoteNodeSkillsForTests,
+  };
 }

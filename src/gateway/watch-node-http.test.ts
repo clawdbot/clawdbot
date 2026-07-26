@@ -1,4 +1,4 @@
-import { createServer, type Server } from "node:http";
+import { createServer, request as httpRequest, type ClientRequest, type Server } from "node:http";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -13,7 +13,13 @@ import {
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
-import { revokeDeviceToken } from "../infra/device-pairing.js";
+import {
+  approveDevicePairing,
+  getPairedDevice,
+  requestDevicePairing,
+  resolveNodePairingState,
+  revokeDeviceToken,
+} from "../infra/device-pairing.js";
 import { listNodePairing } from "../infra/node-pairing.js";
 import { NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
@@ -102,7 +108,17 @@ async function startRuntime(
     config?: OpenClawConfig;
   },
 ) {
-  const nodeRegistry = new NodeRegistry();
+  const nodeRegistry = new NodeRegistry({
+    resolveCurrentPairingState: async (nodeId) => {
+      const state = resolveNodePairingState(await getPairedDevice(nodeId, baseDir));
+      return state
+        ? {
+            identity: state.identity.key,
+            ...(state.generation ? { generation: state.generation.key } : {}),
+          }
+        : undefined;
+    },
+  });
   const broadcasts: Array<{ event: string; payload: unknown }> = [];
   const connectedNodes: string[] = [];
   const disconnectedNodes: Array<{ nodeId: string; reason: string }> = [];
@@ -164,6 +180,37 @@ async function readJson(response: Response): Promise<Record<string, unknown>> {
   return (await response.json()) as Record<string, unknown>;
 }
 
+function startPartialJsonRequest(params: { url: string; authorization: string }): {
+  request: ClientRequest;
+  response: Promise<{ statusCode: number; body: string }>;
+} {
+  let request!: ClientRequest;
+  const response = new Promise<{ statusCode: number; body: string }>((resolve, reject) => {
+    request = httpRequest(
+      params.url,
+      {
+        method: "POST",
+        headers: {
+          authorization: params.authorization,
+          "content-type": "application/json",
+        },
+      },
+      (result) => {
+        const chunks: Buffer[] = [];
+        result.on("data", (chunk: Buffer) => chunks.push(chunk));
+        result.once("end", () => {
+          resolve({
+            statusCode: result.statusCode ?? 0,
+            body: Buffer.concat(chunks).toString("utf8"),
+          });
+        });
+      },
+    );
+    request.once("error", reject);
+  });
+  return { request, response };
+}
+
 async function waitForLastConnectedMetadata(baseDir: string, nodeId: string): Promise<void> {
   await vi.waitFor(async () => {
     const paired = (await listNodePairing(baseDir)).paired.find((entry) => entry.nodeId === nodeId);
@@ -174,7 +221,9 @@ async function waitForLastConnectedMetadata(baseDir: string, nodeId: string): Pr
 describe("watch node HTTP transport", () => {
   it("rejects capabilities and identities outside the bounded watch surface", async () => {
     const baseDir = await tempDirs.make("openclaw-watch-node-surface-");
-    const identity = loadOrCreateDeviceIdentity(path.join(baseDir, "watch-identity.json"));
+    const identity = loadOrCreateDeviceIdentity({
+      path: path.join(baseDir, "watch-identity.sqlite"),
+    });
     const issued = await issueDeviceBootstrapToken({
       baseDir,
       profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -231,7 +280,9 @@ describe("watch node HTTP transport", () => {
 
   it("accepts a supported notification permission set to false", async () => {
     const baseDir = await tempDirs.make("openclaw-watch-node-permissions-");
-    const identity = loadOrCreateDeviceIdentity(path.join(baseDir, "watch-identity.json"));
+    const identity = loadOrCreateDeviceIdentity({
+      path: path.join(baseDir, "watch-identity.sqlite"),
+    });
     const issued = await issueDeviceBootstrapToken({
       baseDir,
       profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -258,7 +309,9 @@ describe("watch node HTTP transport", () => {
 
   it("does not let attacker challenges evict another client nonce", async () => {
     const baseDir = await tempDirs.make("openclaw-watch-node-challenge-eviction-");
-    const identity = loadOrCreateDeviceIdentity(path.join(baseDir, "watch-identity.json"));
+    const identity = loadOrCreateDeviceIdentity({
+      path: path.join(baseDir, "watch-identity.sqlite"),
+    });
     const issued = await issueDeviceBootstrapToken({
       baseDir,
       profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -295,7 +348,9 @@ describe("watch node HTTP transport", () => {
 
   it("requires an authenticated disconnect and emits one lifecycle teardown", async () => {
     const baseDir = await tempDirs.make("openclaw-watch-node-disconnect-");
-    const identity = loadOrCreateDeviceIdentity(path.join(baseDir, "watch-identity.json"));
+    const identity = loadOrCreateDeviceIdentity({
+      path: path.join(baseDir, "watch-identity.sqlite"),
+    });
     const issued = await issueDeviceBootstrapToken({
       baseDir,
       profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -351,9 +406,133 @@ describe("watch node HTTP transport", () => {
     expect(disconnectedNodes).toHaveLength(1);
   });
 
+  it("rejects an HTTP node session after an external reapproval changes its generation", async () => {
+    const baseDir = await tempDirs.make("openclaw-watch-node-reapproval-");
+    const identity = loadOrCreateDeviceIdentity({
+      path: path.join(baseDir, "watch-identity.sqlite"),
+    });
+    const issued = await issueDeviceBootstrapToken({
+      baseDir,
+      profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+    });
+    const { nodeRegistry, disconnectedNodes, runtime, baseUrl } = await startRuntime(baseDir);
+    const challenge = await readJson(await fetch(`${baseUrl}/challenge`));
+    const connectResponse = await fetch(`${baseUrl}/connect`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(
+        makeConnectParams({
+          identity,
+          nonce: String(challenge.nonce),
+          bootstrapToken: issued.token,
+        }),
+      ),
+    });
+    const connected = await readJson(connectResponse);
+    const paired = await getPairedDevice(identity.deviceId, baseDir);
+    const repair = await requestDevicePairing(
+      {
+        deviceId: identity.deviceId,
+        publicKey: paired?.publicKey ?? "",
+        role: "node",
+        roles: ["node"],
+        scopes: [],
+      },
+      baseDir,
+    );
+    await approveDevicePairing(repair.request.requestId, { callerScopes: [] }, baseDir);
+
+    const stalePoll = await fetch(`${baseUrl}/poll`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${String(connected.sessionToken)}` },
+    });
+    expect(stalePoll.status).toBe(401);
+    expect(nodeRegistry.get(identity.deviceId)).toBeUndefined();
+    expect(disconnectedNodes).toContainEqual({
+      nodeId: identity.deviceId,
+      reason: "node pairing changed",
+    });
+    runtime.close();
+  });
+
+  it("rejects an invoke result when pairing changes during body upload", async () => {
+    const baseDir = await tempDirs.make("openclaw-watch-node-result-generation-");
+    const identity = loadOrCreateDeviceIdentity({
+      path: path.join(baseDir, "watch-identity.sqlite"),
+    });
+    const issued = await issueDeviceBootstrapToken({
+      baseDir,
+      profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+    });
+    const { nodeRegistry, disconnectedNodes, runtime, baseUrl } = await startRuntime(baseDir);
+    const challenge = await readJson(await fetch(`${baseUrl}/challenge`));
+    const connectResponse = await fetch(`${baseUrl}/connect`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(
+        makeConnectParams({
+          identity,
+          nonce: String(challenge.nonce),
+          bootstrapToken: issued.token,
+        }),
+      ),
+    });
+    const connected = await readJson(connectResponse);
+    const invoke = nodeRegistry.invoke({
+      nodeId: identity.deviceId,
+      command: "device.info",
+      timeoutMs: 2_000,
+    });
+    const invokeAfterDisconnect = invoke.catch((error: unknown) => error);
+    const pollResponse = await fetch(`${baseUrl}/poll`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${String(connected.sessionToken)}` },
+    });
+    const polled = await readJson(pollResponse);
+    const event = polled.event as { payload: { id: string } };
+    const currentCheck = vi.spyOn(nodeRegistry, "isConnectionCurrentPairingState");
+    currentCheck.mockClear();
+    const partial = startPartialJsonRequest({
+      url: `${baseUrl}/result`,
+      authorization: `Bearer ${String(connected.sessionToken)}`,
+    });
+    partial.request.write(`{"id":${JSON.stringify(event.payload.id)},"ok":`);
+    await vi.waitFor(() => expect(currentCheck).toHaveBeenCalledTimes(1));
+
+    const paired = await getPairedDevice(identity.deviceId, baseDir);
+    const repair = await requestDevicePairing(
+      {
+        deviceId: identity.deviceId,
+        publicKey: paired?.publicKey ?? "",
+        role: "node",
+        roles: ["node"],
+        scopes: [],
+      },
+      baseDir,
+    );
+    await approveDevicePairing(repair.request.requestId, { callerScopes: [] }, baseDir);
+    partial.request.end(`true,"payloadJSON":"{\\"model\\":\\"stale\\"}"}`);
+
+    const resultResponse = await partial.response;
+    expect(resultResponse.statusCode).toBe(401);
+    expect(JSON.parse(resultResponse.body)).toMatchObject({
+      error: { type: "unauthorized" },
+    });
+    expect(currentCheck).toHaveBeenCalledTimes(2);
+    expect(nodeRegistry.get(identity.deviceId)).toBeUndefined();
+    expect(disconnectedNodes).toContainEqual({
+      nodeId: identity.deviceId,
+      reason: "node pairing changed",
+    });
+    await expect(invokeAfterDisconnect).resolves.toBeInstanceOf(Error);
+    runtime.close();
+  });
+
   it("rejects empty shadow credentials without consuming the challenge", async () => {
     const baseDir = await tempDirs.make("openclaw-watch-node-auth-fields-");
-    const identity = loadOrCreateDeviceIdentity(path.join(baseDir, "watch-identity.json"));
+    const identity = loadOrCreateDeviceIdentity({
+      path: path.join(baseDir, "watch-identity.sqlite"),
+    });
     const issued = await issueDeviceBootstrapToken({
       baseDir,
       profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -397,9 +576,9 @@ describe("watch node HTTP transport", () => {
     };
 
     const abortedBaseDir = await tempDirs.make("openclaw-watch-node-aborted-connect-");
-    const abortedIdentity = loadOrCreateDeviceIdentity(
-      path.join(abortedBaseDir, "watch-identity.json"),
-    );
+    const abortedIdentity = loadOrCreateDeviceIdentity({
+      path: path.join(abortedBaseDir, "watch-identity.sqlite"),
+    });
     const abortedBootstrap = await issueDeviceBootstrapToken({
       baseDir: abortedBaseDir,
       profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -433,9 +612,9 @@ describe("watch node HTTP transport", () => {
     }
 
     const completedBaseDir = await tempDirs.make("openclaw-watch-node-completed-connect-");
-    const completedIdentity = loadOrCreateDeviceIdentity(
-      path.join(completedBaseDir, "watch-identity.json"),
-    );
+    const completedIdentity = loadOrCreateDeviceIdentity({
+      path: path.join(completedBaseDir, "watch-identity.sqlite"),
+    });
     const completedBootstrap = await issueDeviceBootstrapToken({
       baseDir: completedBaseDir,
       profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -471,7 +650,9 @@ describe("watch node HTTP transport", () => {
 
   it("bootstraps, registers, polls an invoke, and accepts its result", async () => {
     const baseDir = await tempDirs.make("openclaw-watch-node-http-");
-    const identity = loadOrCreateDeviceIdentity(path.join(baseDir, "watch-identity.json"));
+    const identity = loadOrCreateDeviceIdentity({
+      path: path.join(baseDir, "watch-identity.sqlite"),
+    });
     const issued = await issueDeviceBootstrapToken({
       baseDir,
       profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,

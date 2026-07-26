@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it, test } from "vitest";
 import type { SessionsListResult } from "../../api/types.ts";
 import { reconcileSessionChanged, reconcileSessionHistory } from "./reconcile.ts";
@@ -42,7 +43,63 @@ test("sessions.changed removes a label when the event carries null", () => {
   expect(reconciled.result?.sessions[0]?.displayName).toBeUndefined();
 });
 
+test("sessions.changed invalidates the complete creator facet until canonical refresh", () => {
+  const key = "agent:main:main";
+  const result = buildResult([
+    {
+      key,
+      kind: "global",
+      updatedAt: 1,
+      createdActor: { type: "human", id: "profile-ada", label: "Ada" },
+    },
+  ]);
+  result.creators = [{ id: "profile-ada", label: "Ada" }];
+
+  const reconciled = reconcileSessionChanged(result, {
+    sessionKey: key,
+    reason: "reset",
+    updatedAt: 2,
+    createdActor: { type: "human", id: "profile-bob", label: "Bob" },
+  });
+
+  expect(reconciled.result?.sessions[0]?.createdActor?.id).toBe("profile-bob");
+  expect(reconciled.result?.creators).toBeUndefined();
+});
+
+test("sessions.changed preserves the creator facet when ownership is unchanged", () => {
+  const key = "agent:main:main";
+  const createdActor = { type: "human" as const, id: "profile-ada", label: "Ada" };
+  const result = buildResult([{ key, kind: "global", updatedAt: 1, createdActor }]);
+  result.creators = [{ id: createdActor.id, label: createdActor.label }];
+
+  const reconciled = reconcileSessionChanged(result, {
+    sessionKey: key,
+    reason: "send",
+    updatedAt: 2,
+    createdActor,
+  });
+
+  expect(reconciled.result?.creators).toEqual([{ id: createdActor.id, label: createdActor.label }]);
+});
+
 describe("reconcileSessionChanged", () => {
+  it("drops a cleared icon from the merged row", () => {
+    const key = "agent:main:main";
+    const result = buildResult([
+      { key, kind: "global", updatedAt: 1, sessionId: "s1", icon: "name:spark" },
+    ]);
+    const next = reconcileSessionChanged(result, {
+      sessionKey: key,
+      key,
+      kind: "global",
+      updatedAt: 2,
+      sessionId: "s1",
+      icon: null,
+    });
+    expect(next.applied).toBe(true);
+    expect(next.row?.icon).toBeUndefined();
+  });
+
   it("drops a cleared category from the merged row", () => {
     const key = "agent:main:discord:channel:1";
     const result = buildResult([
@@ -271,5 +328,54 @@ describe("reconcileSessionChanged", () => {
     });
 
     expect(next.row?.thinkingLevel).toBeUndefined();
+  });
+
+  it("keeps archive-state changes in an all-status result", () => {
+    const key = "agent:main:thread";
+    const result = buildResult([{ key, kind: "direct", updatedAt: 1, sessionId: "s1" }]);
+
+    const next = reconcileSessionHistory(
+      result,
+      { key, kind: "direct", updatedAt: 2, sessionId: "s1", archived: true },
+      undefined,
+      { archivedFilter: "all" },
+    );
+
+    expect(next?.sessions).toEqual([
+      expect.objectContaining({ key, archived: true, updatedAt: 2 }),
+    ]);
+  });
+
+  it("clears archive attribution when an unarchive event arrives", () => {
+    const key = "agent:main:thread";
+    const result = buildResult([
+      {
+        key,
+        kind: "direct",
+        updatedAt: 1,
+        sessionId: "s1",
+        archived: true,
+        archivedAt: 1,
+        archivedBy: { type: "human", id: "profile-ada", label: "Ada" },
+      },
+    ]);
+
+    const next = reconcileSessionChanged(
+      result,
+      {
+        sessionKey: key,
+        key,
+        kind: "direct",
+        updatedAt: 2,
+        sessionId: "s1",
+        archived: false,
+        archivedAt: null,
+        archivedBy: null,
+      },
+      { archivedFilter: "all" },
+    );
+
+    expect(next.row?.archivedBy).toBeUndefined();
+    expect(next.result?.sessions[0]?.archivedBy).toBeUndefined();
   });
 });

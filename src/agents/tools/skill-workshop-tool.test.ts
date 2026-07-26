@@ -44,6 +44,21 @@ describe("skill_workshop tool", () => {
     expect(schema).toContain("shortens the proposal listing entry");
   });
 
+  it("documents that proposal_content must be final skill body content, not a plan or change description", () => {
+    const tool = createSkillWorkshopTool({ workspaceDir: "/tmp/openclaw" });
+    const schema = JSON.stringify(tool.parameters);
+    const proposalOnlySchema = JSON.stringify(
+      createSkillWorkshopTool({ workspaceDir: "/tmp/openclaw", proposalOnly: true }).parameters,
+    );
+
+    expect(schema).toContain("final skill body");
+    expect(schema).toContain("not a plan");
+    expect(schema).toContain("change description");
+    expect(schema).toContain("preserve all existing content");
+    expect(proposalOnlySchema).toContain("preserve all existing content");
+    expect(schema).toContain("Proposal frontmatter is added automatically");
+  });
+
   it("is exposed in the OpenClaw tool set", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-");
     const tools = createOpenClawTools({
@@ -678,7 +693,8 @@ describe("skill_workshop tool", () => {
       action: "update",
       skill_name: "weather-planner",
       description: "Refresh weather planning steps",
-      proposal_content: "# Weather Planner\n\nCheck weather, alerts, and timing.\n",
+      proposal_content:
+        "# Weather Planner\n\n## Steps\n\nCheck weather before outdoor recommendations.\nCheck alerts and timing.\n\n## Tips\n\nPack layers.\n",
     });
 
     expect((update.content[0] as { text: string }).text).toBe(
@@ -689,6 +705,25 @@ describe("skill_workshop tool", () => {
       kind: "update",
       skillKey: "weather-planner",
     });
+
+    const revisedUpdate = await tool.execute("call-revise-update", {
+      action: "revise",
+      proposal_id: (update.details as { id: string }).id,
+      proposal_content:
+        "# Weather Planner\n\n## Steps\n\nCheck weather before outdoor recommendations.\nCheck alerts, timing, and location.\n\n## Tips\n\nPack layers.\n",
+    });
+    expect(revisedUpdate.details).toMatchObject({ kind: "update", proposedVersion: "v2" });
+    await tool.execute("call-apply-update", {
+      action: "apply",
+      proposal_id: (revisedUpdate.details as { id: string }).id,
+    });
+    const revisedSkill = await fs.readFile(
+      path.join(workspaceDir, "skills", "weather-planner", "SKILL.md"),
+      "utf8",
+    );
+    expect(revisedSkill).toContain("Check weather before outdoor recommendations.");
+    expect(revisedSkill).toContain("Check alerts, timing, and location.");
+    expect(revisedSkill).toContain("## Tips\n\nPack layers.");
 
     const rejected = await tool.execute("call-3", {
       action: "create",

@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   buildPluginApi,
   registerSingleProviderPlugin,
@@ -20,48 +21,70 @@ type BedrockClientResult =
       modelSummaries?: Array<Record<string, unknown>>;
       inferenceProfileSummaries?: Array<Record<string, unknown>>;
     }
+  | { stall: (signal: AbortSignal) => void }
   | Error;
 
 const foundationModelResults: BedrockClientResult[] = [];
 const inferenceProfileListResults: BedrockClientResult[] = [];
 const inferenceProfileGetResults: BedrockClientResult[] = [];
 const bedrockClientConfigs: Array<Record<string, unknown>> = [];
+const destroyBedrockClient = vi.fn();
 const refreshSharedConfigCache = vi.fn(async () => {});
-const sendBedrockCommand = vi.fn(async (command: unknown) => {
-  const commandName = command?.constructor?.name;
-  const queue =
-    commandName === "ListFoundationModelsCommand"
-      ? foundationModelResults
-      : commandName === "ListInferenceProfilesCommand"
-        ? inferenceProfileListResults
-        : inferenceProfileGetResults;
-  const next = queue.shift();
-  if (next instanceof Error) {
-    throw next;
-  }
-  if (next) {
-    return next;
-  }
-  if (commandName === "ListFoundationModelsCommand") {
-    return {
-      modelSummaries: [
-        {
-          modelId: NON_ANTHROPIC_MODEL,
-          modelName: "Nova Micro",
-          providerName: "Amazon",
-          inputModalities: ["TEXT"],
-          outputModalities: ["TEXT"],
-          responseStreamingSupported: true,
-          modelLifecycle: { status: "ACTIVE" },
-        },
-      ],
-    };
-  }
-  if (commandName === "ListInferenceProfilesCommand") {
-    return { inferenceProfileSummaries: [] };
-  }
-  return { models: [] };
-});
+const sendBedrockCommand = vi.fn(
+  async (command: unknown, options?: { abortSignal?: AbortSignal }) => {
+    const commandName = command?.constructor?.name;
+    const queue =
+      commandName === "ListFoundationModelsCommand"
+        ? foundationModelResults
+        : commandName === "ListInferenceProfilesCommand"
+          ? inferenceProfileListResults
+          : inferenceProfileGetResults;
+    const next = queue.shift();
+    if (next instanceof Error) {
+      throw next;
+    }
+    if (next && "stall" in next) {
+      const signal = options?.abortSignal;
+      if (!signal) {
+        throw new Error("expected Bedrock control-plane abort signal");
+      }
+      next.stall(signal);
+      return await new Promise<never>((_resolve, reject) => {
+        const rejectFromSignal = () => {
+          const reason = signal.reason;
+          reject(reason instanceof Error ? reason : new Error("Bedrock request aborted"));
+        };
+        if (signal.aborted) {
+          rejectFromSignal();
+        } else {
+          signal.addEventListener("abort", rejectFromSignal, { once: true });
+        }
+      });
+    }
+    if (next) {
+      return next;
+    }
+    if (commandName === "ListFoundationModelsCommand") {
+      return {
+        modelSummaries: [
+          {
+            modelId: NON_ANTHROPIC_MODEL,
+            modelName: "Nova Micro",
+            providerName: "Amazon",
+            inputModalities: ["TEXT"],
+            outputModalities: ["TEXT"],
+            responseStreamingSupported: true,
+            modelLifecycle: { status: "ACTIVE" },
+          },
+        ],
+      };
+    }
+    if (commandName === "ListInferenceProfilesCommand") {
+      return { inferenceProfileSummaries: [] };
+    }
+    return { models: [] };
+  },
+);
 
 vi.mock("@aws-sdk/client-bedrock", () => {
   class GetInferenceProfileCommand {
@@ -82,6 +105,7 @@ vi.mock("@aws-sdk/client-bedrock", () => {
     }
 
     send = sendBedrockCommand;
+    destroy = destroyBedrockClient;
   }
 
   return {
@@ -268,6 +292,7 @@ describe("amazon-bedrock provider plugin", () => {
     inferenceProfileListResults.length = 0;
     inferenceProfileGetResults.length = 0;
     bedrockClientConfigs.length = 0;
+    destroyBedrockClient.mockClear();
     refreshSharedConfigCache.mockClear();
     sendBedrockCommand.mockClear();
     resetBedrockDiscoveryCacheForTest();
@@ -280,6 +305,17 @@ describe("amazon-bedrock provider plugin", () => {
   afterAll(() => {
     vi.doUnmock("@aws-sdk/client-bedrock");
     vi.resetModules();
+  });
+
+  it("publishes its stream through the provider lifecycle", async () => {
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+
+    expect(
+      provider.createStreamFn?.({ model: { api: "bedrock-converse-stream" } } as never),
+    ).toBeTypeOf("function");
+    expect(
+      provider.createStreamFn?.({ model: { api: "anthropic-messages" } } as never),
+    ).toBeUndefined();
   });
 
   it("marks Claude 4.6 Bedrock models as adaptive by default", async () => {
@@ -357,6 +393,27 @@ describe("amazon-bedrock provider plugin", () => {
     }
   });
 
+  it("defaults Claude Opus 5 Bedrock model refs to high adaptive thinking", async () => {
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+
+    for (const modelId of [
+      "anthropic.claude-opus-5",
+      "us.anthropic.claude-opus-5",
+      "global.anthropic.claude-opus-5",
+    ]) {
+      expectThinkingProfile(
+        provider.resolveThinkingProfile?.({
+          provider: "amazon-bedrock",
+          modelId,
+        } as never),
+        {
+          levelIds: ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"],
+          defaultLevel: "high",
+        },
+      );
+    }
+  });
+
   it("leaves Claude Opus 4.8 Bedrock model refs off by default", async () => {
     const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
 
@@ -421,6 +478,7 @@ describe("amazon-bedrock provider plugin", () => {
   it("recognizes direct Claude 5 model refs as prompt-cache eligible", () => {
     expect(supportsBedrockPromptCaching("us.anthropic.claude-fable-5")).toBe(true);
     expect(supportsBedrockPromptCaching("us.anthropic.claude-mythos-5")).toBe(true);
+    expect(supportsBedrockPromptCaching("global.anthropic.claude-opus-5")).toBe(true);
     expect(supportsBedrockPromptCaching("global.anthropic.claude-sonnet-5")).toBe(true);
   });
 
@@ -1124,7 +1182,7 @@ describe("amazon-bedrock provider plugin", () => {
       expect(result).not.toHaveProperty("capturedPayload");
     });
 
-    it.each(["fable", "sonnet"])(
+    it.each(["fable", "opus", "sonnet"])(
       "omits unsupported service tiers for Claude %s 5",
       async (family) => {
         const provider = await registerWithConfig(undefined);
@@ -1144,7 +1202,7 @@ describe("amazon-bedrock provider plugin", () => {
       },
     );
 
-    it.each(["fable", "sonnet"])(
+    it.each(["fable", "opus", "sonnet"])(
       "keeps the standard service tier for Claude %s 5",
       async (family) => {
         const provider = await registerWithConfig(undefined);
@@ -1454,6 +1512,8 @@ describe("amazon-bedrock provider plugin", () => {
       expect(system[1]).toEqual({ cachePoint: { type: "default" } });
       expect(sendBedrockCommand).toHaveBeenCalledTimes(1);
       expect(bedrockClientConfigs).toEqual([{ region: "us-east-1" }]);
+      expect(refreshSharedConfigCache).toHaveBeenCalledTimes(1);
+      expect(destroyBedrockClient).toHaveBeenCalledTimes(1);
     });
 
     it("omits temperature for opaque application inference profile ARNs that resolve to Opus 4.7", async () => {
@@ -1591,6 +1651,132 @@ describe("amazon-bedrock provider plugin", () => {
         { cachePoint: { type: "default" } },
       ]);
       expect(sendBedrockCommand).toHaveBeenCalledTimes(2);
+      expect(destroyBedrockClient).toHaveBeenCalledTimes(2);
+    });
+
+    it("times out stalled profile lookup, destroys its client, and retries next request", async () => {
+      vi.useFakeTimers();
+      try {
+        const modelId =
+          "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/timeout-retry";
+        const firstStarted = createDeferred<AbortSignal>();
+        inferenceProfileGetResults.push(
+          { stall: firstStarted.resolve },
+          {
+            models: [
+              {
+                modelArn:
+                  "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-sonnet-4-6-20250514-v1:0",
+              },
+            ],
+          },
+        );
+        const provider = await registerWithConfig(undefined);
+        const firstPayload: Record<string, unknown> = {
+          system: [{ text: "You are helpful." }],
+          messages: [{ role: "user", content: [{ text: "Hello" }] }],
+        };
+        const secondPayload: Record<string, unknown> = {
+          system: [{ text: "You are helpful." }],
+          messages: [{ role: "user", content: [{ text: "Hello again" }] }],
+        };
+
+        const firstRequest = callWrappedStreamWithPayload(
+          provider,
+          modelId,
+          makeAppInferenceProfileDescriptor(modelId),
+          { cacheRetention: "short" },
+          firstPayload,
+        );
+        const firstSignal = await firstStarted.promise;
+        await vi.advanceTimersByTimeAsync(30_000);
+        await expect(firstRequest).resolves.toBe(firstPayload);
+
+        expect(firstSignal.aborted).toBe(true);
+        expect(firstSignal.reason).toMatchObject({ name: "TimeoutError" });
+        expect(firstPayload.system).toEqual([{ text: "You are helpful." }]);
+        expect(destroyBedrockClient).toHaveBeenCalledTimes(1);
+
+        await callWrappedStreamWithPayload(
+          provider,
+          modelId,
+          makeAppInferenceProfileDescriptor(modelId),
+          { cacheRetention: "short" },
+          secondPayload,
+        );
+
+        expect(secondPayload.system).toEqual([
+          { text: "You are helpful." },
+          { cachePoint: { type: "default" } },
+        ]);
+        expect(sendBedrockCommand).toHaveBeenCalledTimes(2);
+        expect(refreshSharedConfigCache).toHaveBeenCalledTimes(2);
+        expect(destroyBedrockClient).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("preserves caller cancellation across both profile lookup paths", async () => {
+      const cases = [
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/opaque-abort",
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/claude-abort",
+      ];
+
+      for (const [index, modelId] of cases.entries()) {
+        const started = createDeferred<AbortSignal>();
+        inferenceProfileGetResults.push({ stall: started.resolve });
+        const provider = await registerWithConfig(undefined);
+        const controller = new AbortController();
+        const reason = new Error(`caller cancelled ${index}`);
+        const payload: Record<string, unknown> = {
+          inferenceConfig: { temperature: 0.3 },
+          system: [{ text: "You are helpful." }],
+          messages: [{ role: "user", content: [{ text: "Hello" }] }],
+        };
+
+        const request = callWrappedStreamWithPayload(
+          provider,
+          modelId,
+          makeAppInferenceProfileDescriptor(modelId),
+          { cacheRetention: "short", temperature: 0.3, signal: controller.signal },
+          payload,
+        );
+        await started.promise;
+        controller.abort(reason);
+
+        await expect(request).rejects.toBe(reason);
+      }
+
+      expect(sendBedrockCommand).toHaveBeenCalledTimes(2);
+      expect(refreshSharedConfigCache).toHaveBeenCalledTimes(2);
+      expect(destroyBedrockClient).toHaveBeenCalledTimes(2);
+    });
+
+    it("checks caller cancellation before refreshing AWS credentials", async () => {
+      const modelId =
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/pre-aborted";
+      const controller = new AbortController();
+      const reason = new Error("cancelled before payload");
+      controller.abort(reason);
+      const provider = await registerWithConfig(undefined);
+
+      await expect(
+        callWrappedStreamWithPayload(
+          provider,
+          modelId,
+          makeAppInferenceProfileDescriptor(modelId),
+          { cacheRetention: "short", signal: controller.signal },
+          {
+            system: [{ text: "You are helpful." }],
+            messages: [{ role: "user", content: [{ text: "Hello" }] }],
+          },
+        ),
+      ).rejects.toBe(reason);
+
+      expect(refreshSharedConfigCache).not.toHaveBeenCalled();
+      expect(sendBedrockCommand).not.toHaveBeenCalled();
+      expect(destroyBedrockClient).not.toHaveBeenCalled();
     });
   });
 });

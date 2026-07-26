@@ -1,6 +1,7 @@
 // Line plugin module implements send behavior.
 import { messagingApi } from "@line/bot-sdk";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -10,7 +11,7 @@ import { messageAction } from "./actions.js";
 import { resolveLineChannelAccessToken } from "./channel-access-token.js";
 import { validateLineMediaUrl } from "./outbound-media.js";
 import { createLineSendReceipt } from "./send-receipt.js";
-import type { LineSendResult } from "./types.js";
+import type { LineOutboundMediaKind, LineSendResult } from "./types.js";
 
 type Message = messagingApi.Message;
 type TextMessage = messagingApi.TextMessage;
@@ -29,6 +30,25 @@ const userProfileCache = new Map<
   { displayName: string; pictureUrl?: string; fetchedAt: number }
 >();
 const PROFILE_CACHE_TTL_MS = 5 * 60 * 1000;
+const PROFILE_CACHE_MAX_ENTRIES = 1000;
+
+function cacheUserProfile(
+  userId: string,
+  profile: { displayName: string; pictureUrl?: string; fetchedAt: number },
+): void {
+  // Refresh insertion order so overflow evicts expired entries first, then the oldest live fetch.
+  userProfileCache.delete(userId);
+  userProfileCache.set(userId, profile);
+  if (userProfileCache.size <= PROFILE_CACHE_MAX_ENTRIES) {
+    return;
+  }
+  for (const [key, cached] of userProfileCache) {
+    if (profile.fetchedAt - cached.fetchedAt >= PROFILE_CACHE_TTL_MS) {
+      userProfileCache.delete(key);
+    }
+  }
+  pruneMapToMaxSize(userProfileCache, PROFILE_CACHE_MAX_ENTRIES);
+}
 
 interface LineSendOpts {
   cfg: OpenClawConfig;
@@ -36,7 +56,7 @@ interface LineSendOpts {
   accountId?: string;
   verbose?: boolean;
   mediaUrl?: string;
-  mediaKind?: "image" | "video" | "audio";
+  mediaKind?: LineOutboundMediaKind;
   previewImageUrl?: string;
   durationMs?: number;
   trackingId?: string;
@@ -511,7 +531,7 @@ export async function getUserProfile(
       pictureUrl: profile.pictureUrl,
     };
 
-    userProfileCache.set(userId, {
+    cacheUserProfile(userId, {
       ...result,
       fetchedAt: Date.now(),
     });

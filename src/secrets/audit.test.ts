@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   resolveAuthProfileDatabasePath,
   writePersistedAuthProfileStoreRaw,
@@ -24,6 +25,7 @@ type AuditFixture = {
 
 const OPENAI_API_KEY_MARKER = "OPENAI_API_KEY"; // pragma: allowlist secret
 const MAX_AUDIT_MODELS_JSON_BYTES = 5 * 1024 * 1024;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function countNonEmptyLines(value: string): number {
   let count = 0;
@@ -800,5 +802,75 @@ describe("secrets audit", () => {
           entry.jsonPath === "models.providers.openai.apiKey",
       ),
     ).toBe(true);
+  });
+
+  it("scans .env in legacy .clawdbot state directory via automatic fallback", async () => {
+    // Do NOT set OPENCLAW_STATE_DIR or OPENCLAW_CONFIG_PATH — rely on
+    // resolveStateDir's automatic legacy-directory fallback. A controlled
+    // HOME that contains only .clawdbot (no .openclaw) exercises the exact
+    // path the old resolveConfigDir call could not reach: resolveConfigDir
+    // always returns $HOME/.openclaw, so it would miss the .env inside
+    // .clawdbot.  resolveStateDir finds .clawdbot via its legacy-dir scan.
+    const homeDir = tempDirs.make("openclaw-secrets-audit-legacy-");
+    const legacyStateDir = path.join(homeDir, ".clawdbot");
+    const configPath = path.join(legacyStateDir, "openclaw.json");
+    const envPath = path.join(legacyStateDir, ".env");
+    const agentDir = path.join(legacyStateDir, "agents", "main", "agent");
+
+    await fs.mkdir(agentDir, { recursive: true });
+
+    const env = {
+      HOME: homeDir,
+      OPENAI_API_KEY: "env-openai-key", // pragma: allowlist secret
+      PATH: resolveRuntimePathEnv(),
+    };
+
+    await writeJsonFile(configPath, {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+        },
+      },
+    });
+
+    await fs.writeFile(
+      envPath,
+      "OPENAI_API_KEY=sk-legacy-plaintext\n", // pragma: allowlist secret
+      "utf8",
+    );
+
+    try {
+      const report = await runSecretsAudit({ env });
+      // Config-based key is ref'd from env, so no plaintext finding for config;
+      // but the .env file should be scanned and reported via the legacy fallback.
+      expect(report.status).toBe("findings");
+      expect(report.findings.some((f) => f.code === "PLAINTEXT_FOUND" && f.file === envPath)).toBe(
+        true,
+      );
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+      await fs.rm(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("scans config and state .env files when the config path is external", async () => {
+    await seedAuditFixture(fixture);
+    const configDir = path.join(fixture.rootDir, "config");
+    const configPath = path.join(configDir, "openclaw.json");
+    const configEnvPath = path.join(configDir, ".env");
+    await fs.mkdir(configDir, { recursive: true });
+    await fs.copyFile(fixture.configPath, configPath);
+    await fs.copyFile(fixture.envPath, configEnvPath);
+    fixture.env.OPENCLAW_CONFIG_PATH = configPath;
+
+    const report = await runSecretsAudit({ env: fixture.env });
+
+    expectFindingFile(report, configEnvPath);
+    expectFindingFile(report, fixture.envPath);
   });
 });

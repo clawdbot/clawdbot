@@ -16,7 +16,7 @@ const {
   resolvePolicyMock: vi.fn(),
   buildContextMock: vi.fn(),
   isControlCommandMessageMock: vi.fn(() => false),
-  dispatchBufferedReplyMock: vi.fn(async () => ({
+  dispatchBufferedReplyMock: vi.fn(async (_params?: unknown) => ({
     queuedFinal: false,
     counts: { tool: 0, block: 0, final: 0 },
   })),
@@ -39,7 +39,17 @@ vi.mock("./inbound-dispatch.js", async (importOriginal) => {
   return {
     ...actual,
     buildWhatsAppInboundContext: buildContextMock,
-    dispatchWhatsAppBufferedReply: dispatchBufferedReplyMock,
+    createWhatsAppReplyPlan: (...args: unknown[]) => {
+      const params = args[0] as { replyResolver?: unknown };
+      void dispatchBufferedReplyMock(params);
+      return {
+        dispatcherOptions: {},
+        delivery: { deliver: async () => {} },
+        replyOptions: {},
+        replyResolver: params.replyResolver,
+        finalize: () => true,
+      };
+    },
     resolveWhatsAppDmRouteTarget: () => null,
     resolveWhatsAppResponsePrefix: () => undefined,
     updateWhatsAppMainLastRoute: () => {},
@@ -317,11 +327,8 @@ describe("processMessage group system prompt wiring", () => {
     expect(shouldComputeCommandAuthorizedMock).toHaveBeenCalledWith("/status", {});
     expect(isControlCommandMessageMock).toHaveBeenCalledWith("/status", {});
     expect(mockCallArg(buildContextMock, "buildWhatsAppInboundContext")).toMatchObject({
-      commandBody: "/status",
-      commandAuthorized: true,
-      commandTurn: {
+      command: {
         kind: "text-slash",
-        source: "text",
         authorized: true,
         body: "/status",
       },
@@ -345,7 +352,11 @@ describe("processMessage group system prompt wiring", () => {
     expect(isControlCommandMessageMock).toHaveBeenCalledWith("/reset", {});
     expect(mockCallArg(buildContextMock, "buildWhatsAppInboundContext")).toMatchObject({
       bodyForAgent: "/reset\n\n[whatsapp attachment unavailable]",
-      commandBody: "/reset",
+      command: {
+        kind: "text-slash",
+        authorized: true,
+        body: "/reset",
+      },
       rawBody: "/reset",
     });
   });
@@ -360,19 +371,13 @@ describe("processMessage group system prompt wiring", () => {
     });
 
     expect(mockCallArg(buildContextMock, "buildWhatsAppInboundContext")).toMatchObject({
-      commandBody: "please inspect `/tmp/foo`",
-      commandAuthorized: true,
-      commandTurn: {
+      command: {
         kind: "normal",
-        source: "message",
-        authorized: false,
+        authorized: true,
         body: "please inspect `/tmp/foo`",
       },
       rawBody: "please inspect `/tmp/foo`",
     });
-    expect(
-      mockCallArg(buildContextMock, "buildWhatsAppInboundContext").commandSource,
-    ).toBeUndefined();
   });
 
   it("passes pending group history from the history window into inbound context", async () => {
@@ -427,6 +432,7 @@ describe("processMessage group system prompt wiring", () => {
       Timestamp: 1710000000,
       Provider: "whatsapp",
       Surface: "whatsapp",
+      SuppressMessageReceivedHooks: true,
       OriginatingChannel: "whatsapp",
       OriginatingTo: GROUP_JID,
       GroupSubject: "Test Group",

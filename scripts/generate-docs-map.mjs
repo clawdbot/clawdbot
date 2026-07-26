@@ -89,12 +89,21 @@ function escapeMarkdownHtmlText(value) {
 }
 
 function cleanHeadingText(value) {
-  const normalized = value
+  const codeSpans = [];
+  const withCodePlaceholders = value.replace(/(`+)([^`\n]*?)\1/gu, (_match, _ticks, content) => {
+    const index = codeSpans.push(content) - 1;
+    return `\u{e000}${index}\u{e001}`;
+  });
+  const normalized = withCodePlaceholders
     .replace(/\s+#+\s*$/u, "")
     .replace(/\[([^\]]+)\]\([^)]*\)/gu, "$1")
     .replace(/[*_~`]/gu, "")
     .replace(/\s+/gu, " ")
-    .trim();
+    .trim()
+    .replace(/\u{e000}(\d+)\u{e001}/gu, (_match, index) => {
+      const content = codeSpans[Number(index)] ?? "";
+      return /[*_~[\]()!]/u.test(content) ? `\`${content}\`` : content;
+    });
   // Docs map is Markdown consumed by humans and agents. Escape HTML instead of
   // trying to strip tags so malformed source headings cannot reintroduce markup.
   return escapeMarkdownHtmlText(normalized);

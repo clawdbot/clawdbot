@@ -90,6 +90,9 @@ export function parseSessionEntries(content: string): FileEntry[] {
 
 export function getLatestCompactionEntry(entries: SessionEntry[]): CompactionEntry | null {
   for (const entry of entries.toReversed()) {
+    if (entry.type === "reset") {
+      return null;
+    }
     if (entry.type === "compaction") {
       return entry;
     }
@@ -132,9 +135,10 @@ export function buildSessionContext(
   const path: SessionEntry[] = [];
   let current: SessionEntry | undefined = leaf;
   while (current) {
-    path.unshift(current);
+    path.push(current);
     current = current.parentId ? byId.get(current.parentId) : undefined;
   }
+  path.reverse();
   return buildCoreSessionContext(path as CoreSessionTreeEntry[]) as SessionContext;
 }
 
@@ -191,6 +195,7 @@ function isSessionEntryType(type: unknown): boolean {
     case "thinking_level_change":
     case "model_change":
     case "compaction":
+    case "reset":
     case "branch_summary":
     case "custom":
     case "custom_message":

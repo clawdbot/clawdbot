@@ -138,7 +138,7 @@ export function parseSlackNativeApprovalAction(value: string) {
   }
 }
 
-export function collectSlackButtonLabels(blocks?: unknown[]) {
+function collectSlackButtonLabels(blocks?: unknown[]) {
   const labels: string[] = [];
   function visit(value: unknown) {
     if (Array.isArray(value)) {

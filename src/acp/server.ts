@@ -23,16 +23,71 @@ import { GatewayClient } from "../gateway/client.js";
 import { isMainModule } from "../infra/is-main.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import {
-  createSqliteAcpEventLedger,
-  migrateFileAcpEventLedgerToSqlite,
-  resolveDefaultAcpEventLedgerPath,
-} from "./event-ledger.js";
+import { createSqliteAcpEventLedger } from "./event-ledger.js";
 import { readSecretFromFile } from "./secret-file.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { normalizeAcpProvenanceMode } from "./types.js";
 
 type JsonObject = Record<string, unknown>;
+
+const MAX_STARTUP_ACP_BUFFER_BYTES = 1024 * 1024;
+
+function createStartupInputMonitor(input: ReadableStream<Uint8Array>): {
+  dispose: () => void;
+  ended: Promise<void>;
+  takeReadable: () => ReadableStream<Uint8Array>;
+} {
+  const [monitor, readable] = input.tee();
+  const reader = monitor.getReader();
+  let readableTaken = false;
+  let monitorCancelled = false;
+  const cancelMonitor = (reason?: unknown) => {
+    if (monitorCancelled) {
+      return;
+    }
+    monitorCancelled = true;
+    void reader.cancel(reason).catch(() => {});
+  };
+  const cancelBoth = (reason?: unknown) => {
+    cancelMonitor(reason);
+    void readable.cancel(reason).catch(() => {});
+  };
+  const ended = (async () => {
+    try {
+      let bufferedBytes = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          return;
+        }
+        // Drain raw stdin so EOF remains observable before Gateway hello. The
+        // other branch retains the same bytes for the eventual SDK reader.
+        bufferedBytes += value.byteLength;
+        if (bufferedBytes > MAX_STARTUP_ACP_BUFFER_BYTES) {
+          const error = new Error("ACP startup input exceeded the 1 MiB buffer limit");
+          cancelBoth(error);
+          throw error;
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  })();
+  return {
+    dispose: () => {
+      if (!readableTaken) {
+        cancelBoth();
+      } else {
+        cancelMonitor();
+      }
+    },
+    ended,
+    takeReadable: () => {
+      readableTaken = true;
+      return readable;
+    },
+  };
+}
 
 /** Starts the ACP Gateway bridge and serves AgentSideConnection over stdio. */
 export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void> {
@@ -53,8 +108,9 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
   const closed = new Promise<void>((resolve) => {
     onClosed = resolve;
   });
+  const startupAbortController = new AbortController();
   let stopped = false;
-  let startupWork: Promise<unknown> | null = null;
+  let gatewayConnected = false;
   let onGatewayReadyResolve!: () => void;
   let onGatewayReadyReject!: (err: Error) => void;
   let gatewayReadySettled = false;
@@ -93,7 +149,7 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     clientDisplayName: "ACP",
     clientVersion: "acp",
     mode: GATEWAY_CLIENT_MODES.CLI,
-    caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
+    caps: [GATEWAY_CLIENT_CAPS.EXEC_APPROVALS, GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
     onEvent: (evt) => {
       if (stopped) {
         return;
@@ -108,6 +164,7 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
       });
     },
     onHelloOk: () => {
+      gatewayConnected = true;
       resolveGatewayReady();
       agent?.handleGatewayReconnect();
     },
@@ -122,28 +179,39 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
       agent?.handleGatewayDisconnect(`${code}: ${reason}`);
     },
   });
+  // Construct the sole stdin reader before waiting for Gateway hello. The raw
+  // monitor branch actively detects EOF while the bounded replay branch retains
+  // every byte until the SDK is ready to consume it.
+  const rawInput = Readable.toWeb(process.stdin) as unknown as ReadableStream<Uint8Array>;
+  const startupInput = createStartupInputMonitor(rawInput);
 
   const shutdown = async () => {
     if (stopped) {
       return;
     }
     stopped = true;
+    startupAbortController.abort();
+    startupInput.dispose();
+    process.stdin.pause();
     resolveGatewayReady();
     // Revoke ledger access before transport teardown. ACP requests and Gateway
     // events can both resume asynchronously, and must not reopen the shared DB.
     const activeAgent = agent;
     agent = null;
     activeAgent?.shutdown();
-    const startupSettlement = startupWork?.catch(() => {}) ?? Promise.resolve();
     const gatewayStop = gateway.stopAndWait().catch((err: unknown) => {
       console.warn(`acp: gateway stop failed during shutdown: ${String(err)}`);
     });
-    // Migration and transport teardown are independent. Close only after both
-    // settle so neither can touch or reopen the process-owned SQLite handle.
-    await Promise.all([startupSettlement, gatewayStop]);
+    await gatewayStop;
     closeStateDatabase();
     onClosed();
   };
+
+  void startupInput.ended.then(() => {
+    if (!gatewayConnected) {
+      void shutdown();
+    }
+  }, shutdown);
 
   process.once("SIGINT", () => {
     void shutdown();
@@ -152,9 +220,10 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     void shutdown();
   });
 
-  // Start gateway first and wait for hello before accepting ACP requests.
+  // Wait for Gateway hello before dispatching buffered ACP requests.
   const readiness = await startGatewayClientWhenEventLoopReady(gateway, {
     clientOptions: { preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs },
+    signal: startupAbortController.signal,
   });
   if (!readiness.ready) {
     rejectGatewayReady(new Error("gateway event loop readiness timeout"));
@@ -167,9 +236,10 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     return closed;
   }
 
-  const input = Writable.toWeb(process.stdout);
-  const output = Readable.toWeb(process.stdin) as unknown as ReadableStream<Uint8Array>;
-  const stream = ndJsonStream(input, output);
+  const bufferedInput = startupInput.takeReadable();
+  startupInput.dispose();
+  const output = Writable.toWeb(process.stdout);
+  const stream = ndJsonStream(output, bufferedInput);
   const readable = stream.readable.pipeThrough(
     new TransformStream<AnyMessage, AnyMessage>({
       transform(message, controller) {
@@ -177,27 +247,9 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
       },
     }),
   );
-  startupWork = migrateFileAcpEventLedgerToSqlite({
-    filePath: resolveDefaultAcpEventLedgerPath(process.env),
-    archiveSource: true,
-  });
-  try {
-    await startupWork;
-  } catch (err) {
-    if (stopped) {
-      return closed;
-    }
-    await shutdown();
-    throw err;
-  } finally {
-    startupWork = null;
-  }
-  if (stopped) {
-    return closed;
-  }
   const eventLedger = createSqliteAcpEventLedger();
 
-  void new AgentSideConnection(
+  const connection = new AgentSideConnection(
     (conn: AgentSideConnection) => {
       agent = new AcpGatewayAgent(conn, gateway, { ...opts, eventLedger });
       agent.start();
@@ -205,6 +257,9 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     },
     { ...stream, readable },
   );
+  // The SDK closes the connection when stdin reaches EOF. Reuse the normal
+  // shutdown path so the Gateway and shared database cannot keep the bridge alive.
+  void connection.closed.then(shutdown, shutdown);
 
   return closed;
 }

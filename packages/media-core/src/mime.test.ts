@@ -26,6 +26,12 @@ async function makeOoxmlZip(opts: { mainMime: string; partPath: string }): Promi
   return await zip.generateAsync({ type: "nodebuffer" });
 }
 
+// file-type classifies this generic ISO-BMFF brand as video/mp4 without track metadata.
+const ISOM_BRAND_BUFFER = Buffer.from(
+  "0000001c6674797069736f6d0000000069736f6d0000000000000000",
+  "hex",
+);
+
 describe("mime detection", () => {
   async function expectDetectedMime(params: {
     input: Parameters<typeof detectMime>[0];
@@ -130,6 +136,151 @@ describe("mime detection", () => {
     await expectDetectedMime({
       input: await input(),
       expected,
+    });
+  });
+
+  it.each([
+    "application/epub+zip",
+    "application/java-archive",
+    "application/vnd.apple.pages",
+    "application/vnd.google-earth.kmz",
+    "application/vnd.ms-word.document.macroenabled.12",
+    "application/vnd.ms-visio.drawing",
+    "application/vnd.oasis.opendocument.text",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.template",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  ])("uses %s metadata to refine extensionless generic ZIP bytes", async (headerMime) => {
+    const zip = new JSZip();
+    zip.file("hello.txt", "hi");
+
+    await expectDetectedMime({
+      input: { buffer: await zip.generateAsync({ type: "nodebuffer" }), headerMime },
+      expected: headerMime,
+    });
+  });
+
+  it("does not let unrelated document metadata override generic ZIP bytes", async () => {
+    const zip = new JSZip();
+    zip.file("hello.txt", "hi");
+
+    await expectDetectedMime({
+      input: {
+        buffer: await zip.generateAsync({ type: "nodebuffer" }),
+        headerMime: "application/pdf",
+      },
+      expected: "application/zip",
+    });
+  });
+
+  it.each(["application/vnd.oasis.opendocument.text-flat-xml", "application/vnd.visio"])(
+    "does not let non-ZIP %s metadata override generic ZIP bytes",
+    async (headerMime) => {
+      const zip = new JSZip();
+      zip.file("hello.txt", "hi");
+
+      await expectDetectedMime({
+        input: { buffer: await zip.generateAsync({ type: "nodebuffer" }), headerMime },
+        expected: "application/zip",
+      });
+    },
+  );
+
+  it("prefers ZIP-compatible metadata over an incompatible filename extension", async () => {
+    const zip = new JSZip();
+    zip.file("hello.txt", "hi");
+    const docxMime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
+    await expectDetectedMime({
+      input: {
+        buffer: await zip.generateAsync({ type: "nodebuffer" }),
+        filePath: "upload.pdf",
+        headerMime: docxMime,
+      },
+      expected: docxMime,
+    });
+  });
+
+  it("preserves audio metadata for ambiguous WebM container bytes", async () => {
+    // Minimal EBML header declaring WebM; file-type correctly recognizes the container
+    // but defaults it to video/webm because no track metadata is present.
+    const webm = Buffer.from("1a45dfa3874282847765626d", "hex");
+
+    await expectDetectedMime({
+      input: { buffer: webm, filePath: "voice.webm", headerMime: "audio/webm" },
+      expected: "audio/webm",
+    });
+  });
+
+  it("uses a secondary audio hint when primary metadata is stale", async () => {
+    const webm = Buffer.from("1a45dfa3874282847765626d", "hex");
+
+    await expectDetectedMime({
+      input: {
+        buffer: webm,
+        filePath: "voice.webm",
+        headerMime: "application/pdf",
+        additionalMimeHints: ["audio/webm"],
+      },
+      expected: "audio/webm",
+    });
+  });
+
+  it.each([
+    {
+      name: "audio/mp4 header",
+      filePath: "voice.mp4",
+      headerMime: "audio/mp4",
+      expected: "audio/mp4",
+    },
+    {
+      name: "audio/x-m4a header",
+      filePath: "voice.m4a",
+      headerMime: "audio/x-m4a",
+      expected: "audio/x-m4a",
+    },
+    {
+      name: "audio/m4a header",
+      filePath: "voice.m4a",
+      headerMime: "audio/m4a",
+      expected: "audio/m4a",
+    },
+    {
+      name: "m4a extension",
+      filePath: "voice.m4a",
+      headerMime: undefined,
+      expected: "audio/x-m4a",
+    },
+    {
+      name: "mp4 extension without an audio hint",
+      filePath: "clip.mp4",
+      headerMime: undefined,
+      expected: "video/mp4",
+    },
+    {
+      name: "audio/aac elementary-stream metadata",
+      filePath: "voice.aac",
+      headerMime: "audio/aac",
+      expected: "video/mp4",
+    },
+  ] as const)("resolves ambiguous isom-brand bytes from $name", async (testCase) => {
+    await expectDetectedMime({
+      input: {
+        buffer: ISOM_BRAND_BUFFER,
+        filePath: testCase.filePath,
+        headerMime: testCase.headerMime,
+      },
+      expected: testCase.expected,
+    });
+  });
+
+  it("does not let conflicting audio metadata override MPEG video bytes", async () => {
+    const mpegProgramStream = Buffer.from([0x00, 0x00, 0x01, 0xba, 0x00, 0x00, 0x00, 0x00]);
+
+    await expectDetectedMime({
+      input: { buffer: mpegProgramStream, headerMime: "audio/mpeg" },
+      expected: "video/mpeg",
     });
   });
 
@@ -277,6 +428,7 @@ describe("extensionForMime", () => {
     { mime: "audio/x-wav", expected: ".wav" },
     { mime: "audio/webm", expected: ".webm" },
     { mime: "audio/x-m4a", expected: ".m4a" },
+    { mime: "audio/m4a", expected: ".m4a" },
     { mime: "audio/mp4", expected: ".m4a" },
     { mime: "video/x-msvideo", expected: ".avi" },
     { mime: "video/mp4", expected: ".mp4" },

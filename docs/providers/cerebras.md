@@ -6,7 +6,7 @@ read_when:
   - You need the Cerebras API key env var or CLI auth choice
 ---
 
-[Cerebras](https://www.cerebras.ai) provides high-speed OpenAI-compatible inference on custom inference hardware. The plugin ships a static four-model catalog (no live discovery).
+[Cerebras](https://www.cerebras.ai) provides high-speed OpenAI-compatible inference on custom inference hardware. The plugin ships a static three-model catalog (no live discovery).
 
 | Property        | Value                                                     |
 | --------------- | --------------------------------------------------------- |
@@ -17,7 +17,7 @@ read_when:
 | Direct CLI flag | `--cerebras-api-key <key>`                                |
 | API             | OpenAI-compatible (`openai-completions`)                  |
 | Base URL        | `https://api.cerebras.ai/v1`                              |
-| Default model   | `cerebras/zai-glm-4.7`                                    |
+| Default model   | `cerebras/gpt-oss-120b`                                   |
 
 ## Install plugin
 
@@ -57,7 +57,7 @@ export CEREBRAS_API_KEY=csk-...
     openclaw models list --provider cerebras
     ```
 
-    Lists all four static models. If `CEREBRAS_API_KEY` is unresolved, `openclaw models status --json` reports the missing credential under `auth.unusableProfiles`.
+    Lists all three static models. If `CEREBRAS_API_KEY` is unresolved, `openclaw models status --json` reports the missing credential under `auth.unusableProfiles`.
 
   </Step>
 </Steps>
@@ -73,18 +73,13 @@ openclaw onboard --non-interactive \
 
 ## Built-in catalog
 
-All four models share a 128k context window and 8,192 max output tokens.
+All three models have a 131,072-token context window and a 40,960-token max output.
 
-| Model ref                                 | Name                 | Reasoning | Notes                                  |
-| ----------------------------------------- | -------------------- | --------- | -------------------------------------- |
-| `cerebras/zai-glm-4.7`                    | Z.ai GLM 4.7         | yes       | Default model; preview reasoning model |
-| `cerebras/gpt-oss-120b`                   | GPT OSS 120B         | yes       | Production reasoning model             |
-| `cerebras/qwen-3-235b-a22b-instruct-2507` | Qwen 3 235B Instruct | no        | Preview non-reasoning model            |
-| `cerebras/llama3.1-8b`                    | Llama 3.1 8B         | no        | Production speed-focused model         |
-
-<Warning>
-Cerebras marks `zai-glm-4.7` and `qwen-3-235b-a22b-instruct-2507` as preview models, and `llama3.1-8b` plus `qwen-3-235b-a22b-instruct-2507` are documented for deprecation on May 27, 2026. Check Cerebras' [supported-models page](https://inference-docs.cerebras.ai/models/overview) before relying on them for production workloads.
-</Warning>
+| Model ref               | Name         | Reasoning | Notes                                     |
+| ----------------------- | ------------ | --------- | ----------------------------------------- |
+| `cerebras/zai-glm-4.7`  | Z.ai GLM 4.7 | yes       | Scheduled for deprecation August 17, 2026 |
+| `cerebras/gpt-oss-120b` | GPT OSS 120B | yes       | Default production reasoning model        |
+| `cerebras/gemma-4-31b`  | Gemma 4 31B  | yes       | Preview; text-and-image input             |
 
 ## Manual config
 
@@ -95,7 +90,7 @@ Most setups only need the API key. Use explicit `models.providers.cerebras` conf
   env: { CEREBRAS_API_KEY: "csk-..." },
   agents: {
     defaults: {
-      model: { primary: "cerebras/zai-glm-4.7" },
+      model: { primary: "cerebras/gpt-oss-120b" },
     },
   },
   models: {
@@ -108,6 +103,7 @@ Most setups only need the API key. Use explicit `models.providers.cerebras` conf
         models: [
           { id: "zai-glm-4.7", name: "Z.ai GLM 4.7" },
           { id: "gpt-oss-120b", name: "GPT OSS 120B" },
+          { id: "gemma-4-31b", name: "Gemma 4 31B" },
         ],
       },
     },
@@ -126,7 +122,7 @@ If the Gateway runs as a daemon (launchd, systemd, Docker), make sure `CEREBRAS_
     Choosing providers, model refs, and failover behavior.
   </Card>
   <Card title="Thinking modes" href="/tools/thinking" icon="brain">
-    Reasoning effort levels for the two reasoning-capable Cerebras models.
+    Reasoning effort levels for the Cerebras models.
   </Card>
   <Card title="Configuration reference" href="/gateway/config-agents#agent-defaults" icon="gear">
     Agent defaults and model configuration.

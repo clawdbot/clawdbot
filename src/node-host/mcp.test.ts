@@ -2,6 +2,7 @@
 
 import { ErrorCode, type CallToolResult, type Tool } from "@modelcontextprotocol/sdk/types.js";
 import { expectDefined } from "@openclaw/normalization-core";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import { OpenClawSchema } from "../config/zod-schema.js";
 import { startNodeHostMcpManager } from "./mcp.js";
@@ -237,6 +238,20 @@ describe("node host MCP manager", () => {
     client.onclose?.();
     await expect(manager.callMcpTool({ server: "docs", tool: "slow" })).rejects.toMatchObject({
       code: "MCP_SERVER_UNAVAILABLE",
+    });
+    await manager.close();
+  });
+
+  it("clamps oversized configured and requested MCP tool timeouts", async () => {
+    const client = createClient({ tools: [tool("search")] });
+    const manager = await startNodeHostMcpManager(
+      { docs: { command: "docs", requestTimeoutMs: 1e306 } },
+      { createClient: () => client, resolveTransport: () => transport, warn: vi.fn() },
+    );
+
+    await manager.callMcpTool({ server: "docs", tool: "search", timeoutMs: 1e306 });
+    expect(client.callTool).toHaveBeenCalledWith({ name: "search", arguments: {} }, undefined, {
+      timeout: MAX_TIMER_TIMEOUT_MS,
     });
     await manager.close();
   });

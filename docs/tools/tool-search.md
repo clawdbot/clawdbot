@@ -16,6 +16,9 @@ search or dynamic-tools surface. Codex-native code mode, tool search, deferred
 dynamic tools, and nested tool calls are stable Codex harness surfaces and do
 not depend on `tools.toolSearch`.
 
+For the generic OpenClaw runtime that exposes a QuickJS-WASI `exec`/`wait`
+surface instead of Tool Search controls, see [Code Mode](/tools/code-mode).
+
 When enabled for OpenClaw runs, the model receives one `tool_search_code` tool
 by default, plus any direct-only tools whose structured results cannot cross
 the compact bridge. The code tool runs a short JavaScript body in an isolated
@@ -118,7 +121,15 @@ client-provided app tools.
 `openclaw.tools.search(query, options?)`
 
 Searches the effective catalog for the current run. Results are compact and safe
-to put back into prompt context.
+to put back into prompt context. Each hit includes a bounded TypeScript-style
+`input` signature, such as `{ id: string; mode?: "drip" | "flood" }`, so the
+model can skip `describe` when that signature is sufficient. A trusted
+OpenClaw core or plugin tool may also include a compact `output` hint, such as
+`Array<{ id: string; paid: boolean }>`. MCP and client output-schema claims are
+not promoted into this trusted hint. Their untrusted input schemas are also
+deferred as `input: "unknown"`; use `describe` before calling them. Open,
+oversized, or otherwise partial output schemas omit the hint and remain
+available through `describe` instead.
 
 ```js
 const hits = await openclaw.tools.search("calendar event", { limit: 5 });
@@ -126,7 +137,8 @@ const hits = await openclaw.tools.search("calendar event", { limit: 5 });
 
 `openclaw.tools.describe(id)`
 
-Loads full metadata for one search result, including the exact input schema.
+Loads full metadata for one search result, including the exact input schema and
+the trusted full `outputSchema` when the tool declares one.
 
 ```js
 const calendarCreate = await openclaw.tools.describe("mcp:calendar:create_event");
@@ -134,7 +146,11 @@ const calendarCreate = await openclaw.tools.describe("mcp:calendar:create_event"
 
 `openclaw.tools.call(id, args)`
 
-Calls a selected tool through OpenClaw.
+Calls a selected tool through OpenClaw and returns the raw `{ tool, result }`
+envelope. JSON-returning tools normally place their value in
+`result.details`. If a trusted tool declares `outputSchema`, OpenClaw compiles
+the schema before execution and validates final `details` after normal tool
+hooks before returning the catalog call.
 
 ```js
 await openclaw.tools.call(calendarCreate.id, {
@@ -142,6 +158,12 @@ await openclaw.tools.call(calendarCreate.id, {
   start: "2026-05-09T14:00:00Z",
 });
 ```
+
+Tool authors declare output contracts on the tool's `outputSchema` property.
+It describes `AgentToolResult.details`, not rendered content blocks. Include
+all non-throwing variants or omit it for unstable results. See
+[Code Mode output contracts](/tools/code-mode#declared-output-contracts) and
+[Tool plugins](/plugins/tool-plugins#output-contracts).
 
 The structured fallback mode exposes the same operations as tools:
 
@@ -260,15 +282,23 @@ Disable it:
 
 ## Prompt and telemetry
 
-Tool Search records enough telemetry to compare it with direct tool exposure:
+Code mode attaches a `telemetry` object to every `tool_search_code` result:
 
-- total serialized tool and prompt bytes sent to the harness
-- catalog size and source breakdown
-- search, describe, and call counts
-- final tool calls executed through OpenClaw
-- selected tool ids and sources
+- `catalogSize`: number of catalog entries the runtime resolved
+- `sources`: catalog entry counts split into `openclaw`, `mcp`, and `client`
+- `searchCount`, `describeCount`, `callCount`: running totals for the catalog
+  session, carried across calls rather than reset per call
 
-Session logs should make it possible to answer:
+`tools` and `directory` mode emit no telemetry object; their `tool_search`,
+`tool_describe`, and `tool_call` results carry only the catalog data for that
+operation. OpenClaw does not record serialized tool or prompt byte counts. The
+[E2E scenario](#e2e-validation) measures provider payload bytes separately from
+the mock provider lane, not from the runtime.
+
+Regardless of mode, target tool calls are projected into the session transcript
+as normal tool call and tool result pairs, and search, describe, and call
+results carry each tool's `id` and `source`. Session logs therefore still
+answer:
 
 - how many tool schemas the model saw up front
 - how many search and describe operations it performed

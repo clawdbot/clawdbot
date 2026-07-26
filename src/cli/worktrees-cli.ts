@@ -1,9 +1,9 @@
 import type { Command } from "commander";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import { createManagedWorktreeOwnerProtection } from "../agents/worktrees/owner-protection.js";
 import { managedWorktrees, resolveWorktreeCleanupLimits } from "../agents/worktrees/service.js";
 import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { isManagedWorktreeOwnerActive } from "../gateway/worktree-owner-activity.js";
 import { defaultRuntime } from "../runtime.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
@@ -117,10 +117,11 @@ export function registerWorktreesCli(program: Command): void {
     .description("Run managed worktree cleanup now")
     .option("--json", "Output JSON", false)
     .action(async (opts: JsonOption) => {
-      const limits = resolveWorktreeCleanupLimits(getRuntimeConfig().worktrees);
+      const cfg = getRuntimeConfig();
+      const limits = resolveWorktreeCleanupLimits();
       const result = await managedWorktrees.gc({
         limits,
-        isOwnerActive: isManagedWorktreeOwnerActive,
+        shouldProtectOwner: createManagedWorktreeOwnerProtection(cfg),
       });
       if (opts.json) {
         printJson(result);

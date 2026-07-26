@@ -1,15 +1,25 @@
 import { describe, expect, it } from "vitest";
+import { migratePersistedImplicitMainRoster } from "../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { runWithAgentRingZeroTools } from "../agent-tools.ring-zero-context.js";
 import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
 import {
-  testing,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "../tool-search.js";
-import { createAgentHarnessToolSurfaceRuntime } from "./tool-surface-bridge.js";
+import { testing } from "../tool-search.test-support.js";
+import { createAgentHarnessToolSurfaceRuntime as createAgentHarnessToolSurfaceRuntimeBase } from "./tool-surface-bridge.js";
+
+function createAgentHarnessToolSurfaceRuntime(
+  params: Parameters<typeof createAgentHarnessToolSurfaceRuntimeBase>[0],
+): ReturnType<typeof createAgentHarnessToolSurfaceRuntimeBase> {
+  return createAgentHarnessToolSurfaceRuntimeBase({
+    ...params,
+    config: migratePersistedImplicitMainRoster(params.config).config as OpenClawConfig,
+  });
+}
 
 function tools(names: string[]) {
   return names.map(createStubTool);

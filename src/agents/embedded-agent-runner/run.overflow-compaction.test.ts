@@ -91,10 +91,16 @@ function makeForwardingCase(internalEvents: AgentInternalEvent[]) {
   // Forwarding cases prove request-scoped flags survive the overflow-compaction
   // route into the eventual embedded attempt.
   const onAgentToolResult = vi.fn();
+  const conversationRecall = {
+    anchorSessionKey: "agent:main:telegram:direct:owner",
+    scope: "same-agent-private" as const,
+    corpus: "sessions" as const,
+  };
   return {
     runId: "forward-attempt-params",
     params: {
       toolsAllow: ["exec", "read"],
+      conversationRecall,
       bootstrapContextMode: "lightweight",
       bootstrapContextRunKind: "cron",
       disableMessageTool: true,
@@ -108,6 +114,7 @@ function makeForwardingCase(internalEvents: AgentInternalEvent[]) {
     },
     expected: {
       toolsAllow: ["exec", "read"],
+      conversationRecall,
       bootstrapContextMode: "lightweight",
       bootstrapContextRunKind: "cron",
       disableMessageTool: true,
@@ -304,33 +311,6 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     resetAgentEventsForTest();
     resetRunOverflowCompactionHarnessMocks();
     mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "ok" }]);
-  });
-
-  it("passes precomputed before_agent_start result into the attempt", async () => {
-    const beforeAgentStartResult = {
-      modelOverride: "agent-start-model",
-      prependContext: "agent start context",
-    };
-    mockedGlobalHookRunner.hasHooks.mockImplementation(
-      (hookName) => hookName === "before_agent_start",
-    );
-    mockedGlobalHookRunner.runBeforeAgentStart.mockResolvedValueOnce(beforeAgentStartResult);
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
-
-    await runEmbeddedAgent({
-      sessionId: "test-session",
-      sessionKey: "test-key",
-      sessionFile: "/tmp/session.json",
-      workspaceDir: "/tmp/workspace",
-      prompt: "hello",
-      timeoutMs: 30000,
-      runId: "run-before-agent-start-pass-through",
-    });
-
-    expect(mockedGlobalHookRunner.runBeforeAgentStart).toHaveBeenCalledTimes(1);
-    expectMockCallFields(mockedRunEmbeddedAttempt, {
-      beforeAgentStartResult,
-    });
   });
 
   it("reports hook-selected models as normal selected models, not fallbacks", async () => {
@@ -686,9 +666,6 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
         },
         agents: {
           defaults: {
-            cliBackends: {
-              "claude-cli": { command: "claude" },
-            },
             models: {
               "anthropic/test-model": { agentRuntime: { id: "claude-cli" } },
             },
@@ -1166,6 +1143,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     const sessionKey = "agent:main:harness:codex:supervision:native-thread";
     const initialEntry = {
       agentHarnessId: "codex",
+      delivery: { kind: "none" } as const,
       modelSelectionLocked: true,
       sessionId,
       updatedAt: Date.now(),
@@ -1656,6 +1634,8 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       expect.objectContaining({
         authProfileId: "openai:work",
         agentHarnessId: "codex",
+        modelId: "gpt-5.4",
+        modelApi: "openai-responses",
         authFingerprint: "resolved-secretref-fingerprint",
         runtimeOwnerKind: "plugin-harness",
         runtimeOwnerId: "codex",
@@ -1739,6 +1719,8 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     expect(onSuccessfulAuthBinding).toHaveBeenCalledWith({
       authProfileId: "openai:work",
       agentHarnessId: "codex",
+      modelId: "gpt-5.4",
+      modelApi: "openai-responses",
       runtimeOwnerFingerprint: expect.any(String),
       runtimeOwnerKind: "plugin-harness",
       runtimeOwnerId: "codex",
@@ -3055,19 +3037,20 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     });
     mockedResolveAuthProfileOrder.mockReturnValue(["openai:sub"]);
     mockedResolveProviderEntryApiKeyProfileReference.mockReturnValue({ kind: "literal" });
-    mockedGetApiKeyForModel.mockImplementation(async ({ profileId }: { profileId?: string } = {}) =>
-      profileId
-        ? {
-            apiKey: "profile-subscription-token",
-            profileId,
-            source: `profile:${profileId}`,
-            mode: "oauth" as const,
-          }
-        : {
-            apiKey: "direct-subscription-token",
-            source: "models.providers.openai",
-            mode: "oauth" as const,
-          },
+    mockedGetApiKeyForModel.mockImplementation(
+      async ({ profileId }: { profileId?: string } = {}) =>
+        profileId
+          ? {
+              apiKey: "profile-subscription-token",
+              profileId,
+              source: `profile:${profileId}`,
+              mode: "oauth" as const,
+            }
+          : {
+              apiKey: "direct-subscription-token",
+              source: "models.providers.openai",
+              mode: "oauth" as const,
+            },
     );
     const route = {
       provider: "openai",

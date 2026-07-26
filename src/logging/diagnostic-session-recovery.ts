@@ -25,7 +25,7 @@ export type StuckSessionRecoveryRequest = {
   expectedState?: DiagnosticSessionState;
   stateGeneration?: number;
   /**
-   * Resolved no-forward-progress age (from `diagnostics.stuckSessionAbortMs`) after
+   * Built-in no-forward-progress age after
    * which an "active" run with queued work is treated as a leaked/dead handle and
    * reclaimed. Honors an operator-raised threshold; falls back to a safe floor.
    */

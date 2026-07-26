@@ -2,9 +2,10 @@
 import path from "node:path";
 import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { testing as cliBackendsTesting } from "../agents/cli-backends.js";
+import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { stampConfigWriteMetadata } from "../config/io.meta.js";
 import type { WizardMultiSelectParams, WizardPrompter } from "../wizard/prompts.js";
 import {
   applyModelAllowlist,
@@ -18,8 +19,8 @@ const loadModelCatalog = vi.hoisted(() => vi.fn());
 const modelCatalogRouteVariants = vi.hoisted(() => ({
   value: undefined as readonly ModelCatalogEntry[] | undefined,
 }));
-vi.mock("../agents/model-catalog.js", () => ({
-  loadModelCatalogSnapshot: async (...args: unknown[]) => {
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalogSnapshot: async (...args: unknown[]) => {
     const entries = await loadModelCatalog(...args);
     return { entries, routeVariants: modelCatalogRouteVariants.value ?? entries };
   },
@@ -1866,8 +1867,13 @@ describe("promptModelAllowlist", () => {
     });
     expect(next.agents?.defaults?.models).toEqual({
       [activeModel]: { alias: "llama" },
+      [staleModel]: { alias: "elephant" },
       "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
     });
+    expect(next.agents?.defaults?.modelPolicy?.allow).toEqual([
+      "anthropic/claude-sonnet-4-6",
+      activeModel,
+    ]);
   });
 
   it("shows configured preferred provider models when the catalog has no entries", async () => {
@@ -2544,7 +2550,9 @@ describe("applyModelAllowlist", () => {
     const next = applyModelAllowlist(config, ["openai/gpt-5.5"]);
     expect(next.agents?.defaults?.models).toEqual({
       "openai/gpt-5.5": { alias: "gpt" },
+      "anthropic/claude-opus-4-6": { alias: "opus" },
     });
+    expect(next.agents?.defaults?.modelPolicy?.allow).toEqual(["openai/gpt-5.5"]);
   });
 
   it("normalizes retired Google Gemini refs before writing selected models", () => {
@@ -2568,6 +2576,11 @@ describe("applyModelAllowlist", () => {
       "google-gemini-cli/gemini-3.1-pro-preview": {},
       "openrouter/google/gemini-3.1-pro-preview": {},
     });
+    expect(next.agents?.defaults?.modelPolicy?.allow).toEqual([
+      "google/gemini-3.1-pro-preview",
+      "google-gemini-cli/gemini-3.1-pro-preview",
+      "openrouter/google/gemini-3.1-pro-preview",
+    ]);
   });
 
   it("keeps non-Google provider Gemini-looking refs unchanged while writing selected models", () => {
@@ -2578,6 +2591,10 @@ describe("applyModelAllowlist", () => {
       "litellm/gemini-3-flash": {},
       "litellm/gemini-3.1-pro": {},
     });
+    expect(next.agents?.defaults?.modelPolicy?.allow).toEqual([
+      "litellm/gemini-3-flash",
+      "litellm/gemini-3.1-pro",
+    ]);
   });
 
   it("preserves entries outside scoped allowlist updates", () => {
@@ -2589,6 +2606,7 @@ describe("applyModelAllowlist", () => {
             "anthropic/claude-opus-4-6": { alias: "opus" },
             "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
           },
+          modelPolicy: { allow: ["openai/*", "anthropic/*", "sonnet"] },
         },
       },
     } as OpenClawConfig;
@@ -2598,11 +2616,40 @@ describe("applyModelAllowlist", () => {
     });
     expect(next.agents?.defaults?.models).toEqual({
       "openai/gpt-5.5": { alias: "gpt" },
+      "anthropic/claude-opus-4-6": { alias: "opus" },
       "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
     });
+    expect(next.agents?.defaults?.modelPolicy?.allow).toEqual([
+      "openai/*",
+      "anthropic/claude-sonnet-4-6",
+    ]);
   });
 
-  it("clears the allowlist when no models remain", () => {
+  it("seeds provider-scoped configure edits from the effective legacy allowlist", () => {
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.5": { alias: "gpt" },
+            "anthropic/claude-opus-4-6": { alias: "opus" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const applied = applyModelAllowlist(config, ["openai/gpt-5.6-sol"], {
+      scopeKeys: ["openai/gpt-5.5", "openai/gpt-5.6-sol"],
+    });
+    const next = stampConfigWriteMetadata(applied, undefined, undefined, config);
+
+    expect(next.agents?.defaults?.modelPolicy?.allow).toEqual([
+      "anthropic/claude-opus-4-6",
+      "openai/gpt-5.6-sol",
+    ]);
+    expect(next.meta?.migrations?.modelPolicyAllowlist).toBe(true);
+  });
+
+  it("clears an effective legacy restriction and preserves model metadata", () => {
     const config = {
       agents: {
         defaults: {
@@ -2613,8 +2660,13 @@ describe("applyModelAllowlist", () => {
       },
     } as OpenClawConfig;
 
-    const next = applyModelAllowlist(config, []);
-    expect(next.agents?.defaults?.models).toBeUndefined();
+    const applied = applyModelAllowlist(config, []);
+    const next = stampConfigWriteMetadata(applied, undefined, undefined, config);
+    expect(next.agents?.defaults?.models).toEqual({
+      "openai/gpt-5.5": { alias: "gpt" },
+    });
+    expect(next.agents?.defaults?.modelPolicy?.allow).toEqual([]);
+    expect(next.meta?.migrations?.modelPolicyAllowlist).toBe(true);
   });
 });
 

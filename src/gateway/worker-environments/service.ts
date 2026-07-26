@@ -92,7 +92,6 @@ class WorkerEnvironmentServiceError extends Error {
 const serviceError = (code: WorkerEnvironmentServiceErrorCode, message: string) =>
   new WorkerEnvironmentServiceError(code, message);
 const ORPHANED_LEASE_ERROR = "Worker provider no longer recognizes the lease";
-const STALE_ATTACHED_BUNDLE_ERROR = "Attached worker build no longer matches the Gateway";
 
 function workerEnvironmentIdempotencyDigest(idempotencyKey: string): string {
   return createHash("sha256").update(idempotencyKey).digest("hex");
@@ -175,6 +174,7 @@ export type WorkerSessionPlacementGate = {
     binding: WorkerPlacementTurnBinding & {
       transcriptSeq?: number;
       liveSeq?: number;
+      workspaceResultPending?: boolean;
     },
   ): void;
 };
@@ -792,14 +792,10 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         (!record.bootstrapReceipt ||
           !verifyWorkerAdmissionHandshake(record.bootstrapReceipt, currentBundle))
       ) {
-        // A new Gateway build rejects the old worker at admission. Tear it down now so placement
-        // reconciliation can fail-stop cleanly instead of reporting active until the next turn.
-        await failBootstrap(
-          record,
-          leaseId,
-          provider,
-          new Error(STALE_ATTACHED_BUNDLE_ERROR),
-        ).catch(() => undefined);
+        // A new Gateway build rejects the old worker at admission. This is expected lifecycle
+        // teardown, not a bootstrap failure. `leaseId` above came from this record, so provider
+        // inspection and destruction share the same durable lease identity.
+        await finishDestroy(record, provider).catch(() => undefined);
       }
       return;
     }
@@ -893,7 +889,6 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         profileSnapshot: requireWorkerProfile({
           install: profile.install ?? "bundle",
           settings,
-          ...(profile.lifetime ? { lifetime: profile.lifetime } : {}),
         }),
         provisionOperationId: `provision:${digest}`,
       });
@@ -901,7 +896,10 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     });
   };
 
-  const destroy = async (environmentId: string) => {
+  const destroy = async (
+    environmentId: string,
+    destroyOptions: { requireUnattached?: boolean } = {},
+  ) => {
     if (stopping) {
       throw serviceError("invalid_state", "Worker environment service is stopping");
     }
@@ -912,6 +910,12 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       }
       if (inState(record, "destroyed", "failed", "orphaned")) {
         return record;
+      }
+      if (destroyOptions.requireUnattached && record.attachedSessionIds.length > 0) {
+        throw serviceError(
+          "invalid_state",
+          "Attached cloud workers must be stopped through sessions.reclaim",
+        );
       }
       record = store.requestDestroy({ environmentId, state: record.state });
       if (record.state === "requested") {
@@ -1316,6 +1320,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       options.placementStore?.updateAckCursors({
         ...placement,
         liveSeq: result.result.ackedSeq,
+        ...(isTerminalLiveEvent(request) ? { workspaceResultPending: true } : {}),
       });
       recordAckCursor(processTurn, { liveSeq: result.result.ackedSeq });
     }
@@ -1428,6 +1433,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     create: async (profileId: string, idempotencyKey: string) =>
       project(await create(profileId, idempotencyKey)),
     destroy: async (environmentId: string) => project(await destroy(environmentId)),
+    destroyUnattached: async (environmentId: string) =>
+      project(await destroy(environmentId, { requireUnattached: true })),
     admitWorker: async (admission: WorkerConnectParams["admission"]) => {
       if (stopping) {
         return { ok: false, reason: "environment-unavailable" } as const;
@@ -1521,6 +1528,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
           options.liveEvents?.rotateCredential({
             credentialHash: minted.credentialHash,
             environmentId: binding.environmentId,
+            newProcessTurn: true,
             previousCredentialHash: previous.credentialHash,
             runEpoch: binding.ownerEpoch,
             sessionId: binding.sessionId,

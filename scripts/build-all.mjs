@@ -9,28 +9,115 @@ import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import prettyMilliseconds from "pretty-ms";
 import { pluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mjs";
+import {
+  TSDOWN_PACKAGE_CONFIG_GROUP,
+  TSDOWN_UNIFIED_CONFIG_GROUP,
+} from "./lib/tsdown-config-groups.mjs";
+import {
+  TSDOWN_PACKAGE_OUTPUT_ROOTS,
+  tsdownPackageOutputRoot,
+} from "./lib/tsdown-output-roots.mjs";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 
 const nodeBin = process.execPath;
 const FULL_GIT_COMMIT_RE = /^[0-9a-f]{40}$/iu;
-const BUILD_CACHE_VERSION = 3;
+const BUILD_CACHE_VERSION = 4;
+const TSDOWN_DECLARATION_EXTENSIONS = [".d.ts", ".d.mts", ".d.cts"];
+const TSDOWN_SOURCE_EXTENSIONS = [
+  ".cjs",
+  ".cts",
+  ".js",
+  ".json",
+  ".json5",
+  ".mjs",
+  ".mts",
+  ".ts",
+  ".tsx",
+  ".yaml",
+  ".yml",
+];
+const TSDOWN_AI_OUTPUT_ROOT = tsdownPackageOutputRoot("ai");
+const TSDOWN_MAIN_PACKAGE_OUTPUT_ROOTS = TSDOWN_PACKAGE_OUTPUT_ROOTS.filter(
+  (root) => root !== TSDOWN_AI_OUTPUT_ROOT,
+);
+const TSDOWN_DECLARATION_TOOL_INPUTS = [
+  "package.json",
+  "pnpm-lock.yaml",
+  "npm-shrinkwrap.json",
+  "tsconfig.json",
+  "scripts/tsdown-build.mjs",
+  "scripts/lib/bundled-plugin-build-entries.mjs",
+  "scripts/lib/bundled-plugin-paths.mjs",
+  "scripts/lib/optional-bundled-clusters.mjs",
+  "scripts/lib/plugin-sdk-entries.mjs",
+  "scripts/lib/plugin-sdk-entrypoints.json",
+  "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
+  "scripts/lib/plugin-sdk-deprecated-public-subpaths.json",
+  "scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json",
+  "scripts/lib/tsdown-config-groups.mjs",
+  "scripts/lib/tsdown-output-roots.mjs",
+];
+const TSDOWN_PACKAGES_CACHE_INPUT = {
+  path: "packages",
+  extensions: TSDOWN_SOURCE_EXTENSIONS,
+  excludeDirectories: ["dist", "node_modules"],
+};
+const TSDOWN_UNIFIED_CACHE_INPUTS = [
+  {
+    path: "src",
+    extensions: TSDOWN_SOURCE_EXTENSIONS,
+    excludeDirectories: ["dist", "node_modules"],
+  },
+  {
+    path: "extensions",
+    extensions: TSDOWN_SOURCE_EXTENSIONS,
+    excludeDirectories: ["dist", "node_modules"],
+  },
+  TSDOWN_PACKAGES_CACHE_INPUT,
+];
+const declarationCacheOutputs = (roots) =>
+  roots.map((root) => ({ path: root, extensions: TSDOWN_DECLARATION_EXTENSIONS }));
 const PLUGIN_SDK_ENTRY_DTS_CACHE_ENV = [
   "OPENCLAW_BUILD_PRIVATE_QA",
   "OPENCLAW_PLUGIN_SDK_CANONICAL_DTS",
 ];
-const PLUGIN_SDK_ENTRY_DTS_CACHE_INPUTS = [
+const PLUGIN_SDK_ENTRY_DTS_SHARED_CACHE_INPUTS = [
   "scripts/write-plugin-sdk-entry-dts.ts",
   "scripts/lib/plugin-sdk-entries.mjs",
   "scripts/lib/plugin-sdk-entrypoints.json",
   "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
   "scripts/lib/plugin-sdk-deprecated-public-subpaths.json",
   "scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json",
+];
+const PLUGIN_SDK_ENTRY_DTS_CACHE_INPUTS = [
+  ...PLUGIN_SDK_ENTRY_DTS_SHARED_CACHE_INPUTS,
   { path: "dist/plugin-sdk", extensions: [".d.ts"], recursive: false },
 ];
+const PLUGIN_SDK_SELF_BUILT_ENTRY_DTS_CACHE_INPUTS = [
+  ...PLUGIN_SDK_ENTRY_DTS_SHARED_CACHE_INPUTS,
+  "package.json",
+  "pnpm-lock.yaml",
+  "npm-shrinkwrap.json",
+  "tsconfig.json",
+  "tsconfig.plugin-sdk.dts.json",
+  {
+    path: "src",
+    extensions: [".ts", ".tsx", ".mts", ".cts", ".json"],
+    excludeDirectories: ["dist", "node_modules"],
+  },
+  {
+    path: "packages",
+    extensions: [".ts", ".tsx", ".mts", ".cts", ".json"],
+    excludeDirectories: ["dist", "node_modules"],
+  },
+];
 const PLUGIN_SDK_ENTRY_DTS_CACHE_OUTPUTS = [
-  "dist/plugin-sdk/webhook-path.js",
   "dist/plugin-sdk/.boundary-entry-shims.stamp",
   ...pluginSdkEntrypoints.map((entry) => `packages/plugin-sdk/dist/src/plugin-sdk/${entry}.d.ts`),
+];
+const PLUGIN_SDK_SELF_BUILT_ENTRY_DTS_CACHE_OUTPUTS = [
+  { path: "dist/plugin-sdk", extensions: [".d.ts"], recursive: false },
+  ...PLUGIN_SDK_ENTRY_DTS_CACHE_OUTPUTS,
 ];
 const PNPM_STEP_NODE_FALLBACKS = new Map([
   ["plugins:assets:build", ["scripts/bundled-plugin-assets.mjs", "--phase", "build"]],
@@ -40,6 +127,68 @@ const PNPM_STEP_NODE_FALLBACKS = new Map([
 export const BUILD_ALL_STEPS = [
   { label: "plugins:assets:build", kind: "pnpm", pnpmArgs: ["plugins:assets:build"] },
   { label: "tsdown", kind: "node", args: ["scripts/tsdown-build.mjs"] },
+  {
+    label: "tsdown-ai",
+    kind: "node",
+    args: ["scripts/tsdown-build.mjs", "--config", "tsdown.ai.config.ts"],
+    cache: {
+      env: ["OPENCLAW_RUN_NODE_SKIP_DTS_BUILD"],
+      inputs: [
+        ...TSDOWN_DECLARATION_TOOL_INPUTS,
+        "tsdown.ai.config.ts",
+        TSDOWN_PACKAGES_CACHE_INPUT,
+      ],
+      outputs: declarationCacheOutputs([TSDOWN_AI_OUTPUT_ROOT]),
+      restore: "always",
+      runOnHit: {
+        env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
+      },
+    },
+  },
+  {
+    label: "tsdown-packages",
+    kind: "node",
+    args: [
+      "scripts/tsdown-build.mjs",
+      "--config",
+      "tsdown.config.ts",
+      "--filter",
+      TSDOWN_PACKAGE_CONFIG_GROUP,
+    ],
+    cache: {
+      env: ["OPENCLAW_RUN_NODE_SKIP_DTS_BUILD"],
+      inputs: [...TSDOWN_DECLARATION_TOOL_INPUTS, "tsdown.config.ts", TSDOWN_PACKAGES_CACHE_INPUT],
+      outputs: declarationCacheOutputs(TSDOWN_MAIN_PACKAGE_OUTPUT_ROOTS),
+      restore: "always",
+      runOnHit: {
+        env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
+      },
+    },
+  },
+  {
+    label: "tsdown-unified",
+    kind: "node",
+    args: [
+      "scripts/tsdown-build.mjs",
+      "--config",
+      "tsdown.config.ts",
+      "--filter",
+      TSDOWN_UNIFIED_CONFIG_GROUP,
+    ],
+    cache: {
+      env: ["OPENCLAW_BUILD_PRIVATE_QA", "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD"],
+      inputs: [
+        ...TSDOWN_DECLARATION_TOOL_INPUTS,
+        "tsdown.config.ts",
+        ...TSDOWN_UNIFIED_CACHE_INPUTS,
+      ],
+      outputs: declarationCacheOutputs(["dist"]),
+      restore: "always",
+      runOnHit: {
+        env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
+      },
+    },
+  },
   {
     label: "check-cli-bootstrap-imports",
     kind: "node",
@@ -113,11 +262,37 @@ export const BUILD_ALL_STEPS = [
     label: "write-cli-startup-metadata",
     kind: "node",
     args: ["--import", "tsx", "scripts/write-cli-startup-metadata.ts"],
+    cache: {
+      inputs: [
+        "scripts/write-cli-startup-metadata.ts",
+        "scripts/lib/cli-startup-root-help-bundle.ts",
+      ],
+      outputs: ["dist/cli-startup-metadata.json"],
+      restore: "always",
+      runOnHit: { finalize: "refresh" },
+    },
   },
 ];
 
 export const BUILD_ALL_PROFILES = {
-  full: BUILD_ALL_STEPS.map((step) => step.label),
+  full: [
+    "plugins:assets:build",
+    "tsdown-ai",
+    "tsdown-packages",
+    "tsdown-unified",
+    "check-cli-bootstrap-imports",
+    "plugins:assets:copy",
+    "runtime-postbuild",
+    "build-stamp",
+    "runtime-postbuild-stamp",
+    "write-plugin-sdk-entry-dts",
+    "check-plugin-sdk-exports",
+    "copy-hook-metadata",
+    "copy-export-html-templates",
+    "ui:build",
+    "write-build-info",
+    "write-cli-startup-metadata",
+  ],
   ciArtifacts: [
     "plugins:assets:build",
     "tsdown",
@@ -172,14 +347,21 @@ export const BUILD_ALL_PROFILES = {
 
 export const BUILD_ALL_PROFILE_STEP_ENV = {
   full: {
-    tsdown: {
+    "tsdown-unified": {
       OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
     },
   },
   ciArtifacts: {
     tsdown: {
-      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0",
+      // Global declaration emission is ~95% of the tsdown wall clock and PR
+      // CI's dist consumers are runtime JS only; the plugin-sdk gate below
+      // self-builds its scoped declarations instead. Release/package builds
+      // (full profile, docker packaging) keep canonical dts.
+      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
       OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
+    },
+    "write-plugin-sdk-entry-dts": {
+      OPENCLAW_PLUGIN_SDK_CANONICAL_DTS: "0",
     },
   },
   gatewayWatch: {
@@ -267,7 +449,21 @@ export function resolveBuildAllSteps(profile = "full") {
       return step;
     }
     const mergedEnv = Object.assign({}, step.env, env);
-    return Object.assign({}, step, { env: mergedEnv });
+    const merged = Object.assign({}, step, { env: mergedEnv });
+    // Self-built declarations need both the complete repository-owned type
+    // graph and the flat declarations that this step generates after tsdown
+    // clears dist. Canonical mode keeps its narrower generated-dts cache.
+    if (
+      step.label === "write-plugin-sdk-entry-dts" &&
+      mergedEnv.OPENCLAW_PLUGIN_SDK_CANONICAL_DTS !== "1"
+    ) {
+      merged.cache = {
+        ...step.cache,
+        inputs: PLUGIN_SDK_SELF_BUILT_ENTRY_DTS_CACHE_INPUTS,
+        outputs: PLUGIN_SDK_SELF_BUILT_ENTRY_DTS_CACHE_OUTPUTS,
+      };
+    }
+    return merged;
   });
 }
 
@@ -365,6 +561,16 @@ export function resolveBuildAllStep(step, params = {}) {
   };
 }
 
+export function resolveBuildAllStepOnCacheHit(step) {
+  if (!step.cache?.runOnHit) {
+    return null;
+  }
+  return {
+    ...step,
+    env: Object.assign({}, step.env, step.cache.runOnHit.env),
+  };
+}
+
 function normalizeCacheEntry(entry) {
   if (typeof entry === "string") {
     return { path: entry };
@@ -377,6 +583,10 @@ function cacheEntryIncludesFile(entry, filePath) {
     return true;
   }
   return entry.extensions.some((extension) => filePath.endsWith(extension));
+}
+
+function cacheEntryExcludesDirectory(entry, name) {
+  return entry.excludeDirectories?.includes(name) ?? false;
 }
 
 function listFilesRecursively(rootPath, fsImpl, cacheEntry = { path: rootPath }) {
@@ -400,6 +610,9 @@ function listFilesRecursively(rootPath, fsImpl, cacheEntry = { path: rootPath })
       continue;
     }
     const entryPath = path.join(rootPath, dirent.name);
+    if (dirent.isDirectory() && cacheEntryExcludesDirectory(cacheEntry, dirent.name)) {
+      continue;
+    }
     if (dirent.isDirectory() && recursive) {
       out.push(...listFilesRecursively(entryPath, fsImpl, cacheEntry));
     } else if (dirent.isFile() && cacheEntryIncludesFile(cacheEntry, entryPath)) {
@@ -585,6 +798,20 @@ export function restoreBuildAllStepCacheOutputs(cacheState, params = {}) {
   return true;
 }
 
+export function finalizeBuildAllStepCache(step, cacheState, params = {}) {
+  if (params.reusedCache && step.cache?.runOnHit?.finalize !== "refresh") {
+    return restoreBuildAllStepCacheOutputs(cacheState, params);
+  }
+  // Validator-style cache hits may update a restored seed. Capture that result;
+  // restoring the old seed here would silently discard the validated refresh.
+  writeBuildAllStepCacheStamp(
+    step,
+    resolveBuildAllStepCacheStampState(step, cacheState, params),
+    params,
+  );
+  return true;
+}
+
 export function formatBuildAllDuration(durationMs) {
   const clampedMs = Math.max(0, durationMs);
   const roundedMs =
@@ -638,15 +865,22 @@ if (isMainModule()) {
     for (const step of resolveBuildAllSteps(args.profile)) {
       const startedAt = performance.now();
       const cacheState = resolveBuildAllStepCacheState(step, { env: buildEnv });
+      let stepToRun = step;
+      let reusedCache = false;
       if (process.env.OPENCLAW_BUILD_CACHE !== "0" && cacheState.fresh) {
         restoreBuildAllStepCacheOutputs(cacheState);
-        const durationMs = performance.now() - startedAt;
-        timings.push({ label: step.label, status: "cached", durationMs });
-        console.error(`[build-all] ${step.label} (cached) ${formatBuildAllDuration(durationMs)}`);
-        continue;
+        const cacheHitStep = resolveBuildAllStepOnCacheHit(step);
+        if (!cacheHitStep) {
+          const durationMs = performance.now() - startedAt;
+          timings.push({ label: step.label, status: "cached", durationMs });
+          console.error(`[build-all] ${step.label} (cached) ${formatBuildAllDuration(durationMs)}`);
+          continue;
+        }
+        reusedCache = true;
+        stepToRun = cacheHitStep;
       }
-      console.error(`[build-all] ${step.label}`);
-      const invocation = resolveBuildAllStep(step, { env: buildEnv });
+      console.error(`[build-all] ${step.label}${reusedCache ? " (cache restored)" : ""}`);
+      const invocation = resolveBuildAllStep(stepToRun, { env: buildEnv });
       const result = spawnSync(invocation.command, invocation.args, invocation.options);
       const durationMs = performance.now() - startedAt;
       if (typeof result.status === "number") {
@@ -658,11 +892,10 @@ if (isMainModule()) {
           exitCode = result.status;
           break;
         }
-        writeBuildAllStepCacheStamp(
-          step,
-          resolveBuildAllStepCacheStampState(step, cacheState, { env: buildEnv }),
-        );
-        timings.push({ label: step.label, status: "ran", durationMs });
+        // Runtime-only tsdown cleans its output roots. Cache hits restore
+        // declarations again after that pass so the full build stays complete.
+        finalizeBuildAllStepCache(step, cacheState, { env: buildEnv, reusedCache });
+        timings.push({ label: step.label, status: reusedCache ? "reused" : "ran", durationMs });
         console.error(`[build-all] ${step.label} done in ${formatBuildAllDuration(durationMs)}`);
         continue;
       }

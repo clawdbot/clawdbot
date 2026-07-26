@@ -976,13 +976,14 @@ describe("tui command handlers", () => {
     // /new creates a unique session key (isolates TUI client) (#39217)
     expect(createSessionMock).toHaveBeenCalledTimes(1);
     const createOptions = firstMockArg(createSessionMock, "createSession") as
-      | { key?: string; agentId?: string; parentSessionKey?: string }
+      | { key?: string; agentId?: string; parentSessionKey?: string; succeedsParent?: boolean }
       | undefined;
     if (!createOptions?.key) {
       throw new Error("expected /new to create a TUI session key");
     }
     expect(createOptions.agentId).toBe("main");
     expect(createOptions.parentSessionKey).toBe("agent:main:main");
+    expect(createOptions.succeedsParent).toBe(true);
     expect(createOptions.key.startsWith("tui-")).toBe(true);
     const uuidParts: string[] = createOptions.key.slice("tui-".length).split("-");
     expect(uuidParts.map((part) => part.length)).toEqual([8, 4, 4, 4, 12]);
@@ -1025,7 +1026,7 @@ describe("tui command handlers", () => {
     expect(createSession).toHaveBeenCalledWith({
       key: expect.stringMatching(/^tui-/),
       agentId: currentAgentId,
-      ...(expectedParent ? { parentSessionKey: expectedParent } : {}),
+      ...(expectedParent ? { parentSessionKey: expectedParent, succeedsParent: true } : {}),
     });
   });
 
@@ -1066,6 +1067,45 @@ describe("tui command handlers", () => {
 
     expect(createSession).not.toHaveBeenCalled();
     expect(addSystem).toHaveBeenCalledWith("abort the current run before /new");
+  });
+
+  it.each([
+    {
+      activeChatRunId: "active-run",
+      pendingSubmit: null,
+      activityStatus: "running",
+    },
+    {
+      activeChatRunId: null,
+      pendingSubmit: {
+        phase: "accepted" as const,
+        runId: "pending-run",
+        draftText: null,
+      },
+      activityStatus: "sending",
+    },
+    {
+      activeChatRunId: null,
+      pendingSubmit: {
+        phase: "sending" as const,
+        runId: "pending-run",
+        draftText: "pending",
+      },
+      activityStatus: "sending",
+    },
+    {
+      activeChatRunId: null,
+      pendingSubmit: null,
+      activityStatus: "finishing context",
+    },
+  ])("blocks /reset while the current session lifecycle is unfinished", async (runState) => {
+    const resetSession = vi.fn();
+    const { handleCommand, addSystem } = createHarness({ resetSession, ...runState });
+
+    await handleCommand("/reset");
+
+    expect(resetSession).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith("abort the current run before /reset");
   });
 
   it("serializes input until /new adopts the created session", async () => {
@@ -1160,6 +1200,18 @@ describe("tui command handlers", () => {
     expect(openclaw.addSystem).toHaveBeenCalledWith(expect.stringContaining("ultra"));
   });
 
+  it.each([
+    { command: "verbose", usage: "usage: /verbose <on|off|full>" },
+    { command: "reasoning", usage: "usage: /reasoning <on|off|stream>" },
+  ])("shows the complete canonical no-argument /$command usage", async ({ command, usage }) => {
+    const { handleCommand, addSystem, patchSession } = createHarness();
+
+    await handleCommand(`/${command}`);
+
+    expect(addSystem).toHaveBeenCalledWith(usage);
+    expect(patchSession).not.toHaveBeenCalled();
+  });
+
   it("hides tools locally for /verbose off without reloading history", async () => {
     const patchResult = { entry: { verboseLevel: "off" } };
     const patchSession = vi.fn().mockResolvedValue(patchResult);
@@ -1195,6 +1247,31 @@ describe("tui command handlers", () => {
 
     await handleCommand("/verbose on");
 
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+    expect(refreshSessionInfo).not.toHaveBeenCalled();
+    expect(clearTools).not.toHaveBeenCalled();
+  });
+
+  it("reloads history for /verbose full so prior full tool output becomes visible", async () => {
+    const patchResult = { entry: { verboseLevel: "full" } };
+    const patchSession = vi.fn().mockResolvedValue(patchResult);
+    const applySessionInfoFromPatch = vi.fn();
+    const loadHistory = vi.fn().mockResolvedValue(undefined);
+    const refreshSessionInfo = vi.fn().mockResolvedValue(undefined);
+    const { handleCommand, clearTools } = createHarness({
+      patchSession,
+      applySessionInfoFromPatch,
+      loadHistory,
+      refreshSessionInfo,
+    });
+
+    await handleCommand("/verbose full");
+
+    expect(patchSession).toHaveBeenCalledWith({
+      key: "agent:main:main",
+      verboseLevel: "full",
+    });
+    expect(applySessionInfoFromPatch).toHaveBeenCalledWith(patchResult);
     expect(loadHistory).toHaveBeenCalledTimes(1);
     expect(refreshSessionInfo).not.toHaveBeenCalled();
     expect(clearTools).not.toHaveBeenCalled();
@@ -1688,9 +1765,8 @@ describe("tui command handlers", () => {
   it("preserves provider prefix for nested model ids in /model confirmation", async () => {
     // Some providers route to nested model ids that themselves contain a slash
     // (e.g. resolved.model: "moonshotai/kimi-k2.5" with modelProvider: "nvidia").
-    // The confirmation must still show the full nvidia/moonshotai/kimi-k2.5 ref
-    // to match the footer/status bar, not strip the provider just because the
-    // model id already contains a slash.
+    // The confirmation must still show the full nvidia/moonshotai/kimi-k2.5 ref,
+    // not strip the provider just because the model id already contains a slash.
     const patchSession = vi.fn().mockResolvedValue({
       ok: true,
       path: "/sessions/patch",
@@ -1826,6 +1902,19 @@ describe("tui command handlers", () => {
     await handleCommand("/queue:followup");
 
     expectSendChatFields(sendChat, { message: "/queue:followup" });
+  });
+
+  it("routes /queue directives through the local backend", async () => {
+    const { handleCommand, sendChat, addSystem } = createHarness({
+      opts: { local: true },
+      activeChatRunId: "run-active",
+      activityStatus: "streaming",
+    });
+
+    await handleCommand("/queue followup");
+
+    expectSendChatFields(sendChat, { message: "/queue followup" });
+    expect(addSystem).not.toHaveBeenCalledWith("/queue is unavailable in local mode");
   });
 
   it("blocks /queue while optimistic user message is pending", async () => {

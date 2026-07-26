@@ -40,6 +40,15 @@ export type PluginHealthErrorSummary = {
 export type PluginHealthSummary = {
   loaded: string[];
   errors: PluginHealthErrorSummary[];
+  unavailable?: Array<{
+    id: string;
+    state: "configured-unavailable";
+    diagnostic: {
+      kind: "plugin-verification";
+      reason: import("../plugins/runtime-degraded-state.js").PluginVerificationFailureReason;
+      detail: string;
+    };
+  }>;
 };
 
 /** Context engine quarantine entry included in health output. */
@@ -60,6 +69,12 @@ export type ContextEngineHealthSummary = {
 export type DeliveryQueueHealthSummary = {
   failed: Array<{
     queueName: string;
+    count: number;
+    oldestFailedAt?: number;
+  }>;
+  ingressFailed?: Array<{
+    channelId: string;
+    accountId: string;
     count: number;
     oldestFailedAt?: number;
   }>;

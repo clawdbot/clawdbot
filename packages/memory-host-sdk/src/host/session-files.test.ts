@@ -154,6 +154,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toContainEqual({
       agentId: "main",
       artifactKind: "archive-artifact",
+      contentRevision: expect.any(String),
       generatedByCronRun: true,
       sessionFile: archivePath,
       sessionId: "cron-run",
@@ -204,6 +205,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
         expect.objectContaining({
           agentId: "main",
           artifactKind: "active-session",
+          contentRevision: expect.any(String),
           sessionFile: turn.sessionFile,
           sessionId,
           sessionKey,
@@ -213,6 +215,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
         expect.objectContaining({
           agentId: "main",
           artifactKind: "archive-artifact",
+          contentRevision: expect.any(String),
           sessionFile: archivePath,
           sessionId,
         }),
@@ -240,6 +243,57 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       "sessions/main/sqlite-live.jsonl.deleted.2026-06-25T12-01-00.000Z",
     );
     expect(archiveEntry.content).toBe("User: Archived JSONL transcript text");
+  });
+
+  it("exposes content revisions that change with SQLite appends and file replacement", async () => {
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionKey = "agent:main:chat:revision";
+    const sessionId = "revision";
+    const archivePath = path.join(
+      sessionsDir,
+      `${sessionId}.jsonl.deleted.2026-06-25T12-01-00.000Z`,
+    );
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      { sessionId, updatedAt: 1 },
+    );
+    await persistSessionTranscriptTurn(
+      { agentId: "main", sessionId, sessionKey, storePath },
+      {
+        messages: [{ message: { role: "user", content: "first" } }],
+        touchSessionEntry: true,
+        updateMode: "none",
+      },
+    );
+    fsSync.writeFileSync(archivePath, "first");
+
+    const before = await listSessionTranscriptCorpusEntriesForAgent("main");
+    const beforeLive = before.find((entry) => entry.transcriptSource === "sqlite");
+    const beforeArchive = before.find((entry) => entry.sessionFile === archivePath);
+    expect(beforeLive?.contentRevision).toEqual(expect.any(String));
+    expect(beforeArchive?.contentRevision).toEqual(expect.any(String));
+
+    await persistSessionTranscriptTurn(
+      { agentId: "main", sessionId, sessionKey, storePath },
+      {
+        messages: [{ message: { role: "assistant", content: "second" } }],
+        touchSessionEntry: true,
+        updateMode: "none",
+      },
+    );
+    const replacement = `${archivePath}.replacement`;
+    fsSync.writeFileSync(replacement, "second");
+    fsSync.renameSync(replacement, archivePath);
+
+    const after = await listSessionTranscriptCorpusEntriesForAgent("main");
+    expect(after.find((entry) => entry.transcriptSource === "sqlite")?.contentRevision).not.toBe(
+      beforeLive?.contentRevision,
+    );
+    expect(after.find((entry) => entry.sessionFile === archivePath)?.contentRevision).not.toBe(
+      beforeArchive?.contentRevision,
+    );
   });
 
   it("classifies active entries through cron parentage chains", async () => {
@@ -323,6 +377,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       {
         agentId: "main",
         artifactKind: "archive-artifact",
+        contentRevision: expect.any(String),
         generatedByCronRun: true,
         sessionFile: expectedArchivePath,
         sessionId: "cron-run",
@@ -493,6 +548,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       {
         agentId: "main",
         artifactKind: "archive-artifact",
+        contentRevision: expect.any(String),
         sessionFile: archivePath,
         sessionId: "retained",
       },
@@ -564,7 +620,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     );
     fsSync.writeFileSync(
       configPath,
-      JSON.stringify({ agents: { list: [{ id: "ops", default: true }] } }),
+      JSON.stringify({ agents: { entries: { ops: { default: true } } } }),
     );
     Reflect.set(process.env, "OPENCLAW_CONFIG_PATH", configPath);
     clearRuntimeConfigSnapshot();
@@ -902,6 +958,118 @@ describe("buildSessionEntry", () => {
     const entry = requireSessionEntry(await buildSessionEntry(filePath));
     expect(entry.content).toBe("Assistant: User-facing summary.\nUser: Actual user follow-up.");
     expect(entry.lineMap).toStrictEqual([2, 3]);
+  });
+
+  it("drops every assistant response in a provenance-marked heartbeat turn", async () => {
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: "[OpenClaw heartbeat poll]",
+          provenance: { kind: "internal_system", sourceTool: "heartbeat" },
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: "Heartbeat received. Main is active. No pending user request in this cron poll.",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "toolResult", content: "Background check complete." },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "One maintenance task was also completed." },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: "Internal handoff.",
+          provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "Cross-session response." },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "What is the weather today?" },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "The weather is sunny." },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "heartbeat-session.jsonl");
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
+
+    const entry = requireSessionEntry(await buildSessionEntry(filePath));
+    expect(entry.content).toBe(
+      "Assistant: Cross-session response.\nUser: What is the weather today?\nAssistant: The weather is sunny.",
+    );
+    expect(entry.lineMap).toStrictEqual([6, 7, 8]);
+  });
+
+  it("does not couple user-spoofed heartbeat text to the next assistant response", async () => {
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: "[OpenClaw heartbeat poll]",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: "This reply belongs to a real user turn.",
+        },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "normal-session.jsonl");
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
+
+    const entry = requireSessionEntry(await buildSessionEntry(filePath));
+    expect(entry.content).toBe("Assistant: This reply belongs to a real user turn.");
+    expect(entry.lineMap).toStrictEqual([2]);
+  });
+
+  it("ends a heartbeat turn when the next real user message has no text", async () => {
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: "[OpenClaw heartbeat poll]",
+          provenance: { kind: "internal_system", sourceTool: "heartbeat" },
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "Heartbeat received." },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: [{ type: "image", source: "photo.jpg" }] },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "I can see the photo." },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "heartbeat-before-media-session.jsonl");
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
+
+    const entry = requireSessionEntry(await buildSessionEntry(filePath));
+    expect(entry.content).toBe("Assistant: I can see the photo.");
+    expect(entry.lineMap).toStrictEqual([4]);
   });
 
   it("drops Date-invalid numeric message timestamps", async () => {

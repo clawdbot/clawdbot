@@ -21,12 +21,14 @@ function createSkill() {
     blockedByAllowlist: false,
     eligible: true,
     requirements: {
+      anyBins: [],
       bins: [],
       env: [],
       config: [],
       os: [],
     },
     missing: {
+      anyBins: [],
       bins: [],
       env: [],
       config: [],
@@ -125,6 +127,7 @@ function createProps(overrides: Partial<AgentsProps> = {}): AgentsProps {
     pinnedAgentIds: [],
     onRefresh: () => undefined,
     onSelectAgent: () => undefined,
+    onCreateAgent: () => undefined,
     onSelectPanel: () => undefined,
     onLoadFiles: () => undefined,
     onSelectFile: () => undefined,
@@ -193,14 +196,14 @@ describe("renderAgents", () => {
       render(renderAgents(createProps()), container);
       const select = container.querySelector("openclaw-agent-select") as
         | (HTMLElement & {
-            agents: Array<{ id: string }>;
+            options: Array<{ value: string }>;
             updateComplete: Promise<boolean>;
           })
         | null;
       expect(select).not.toBeNull();
       await select?.updateComplete;
 
-      expect(select?.agents).toHaveLength(2);
+      expect(select?.options.map((option) => option.value)).toEqual(["alpha", "beta"]);
       expect(select?.querySelector(".agent-select__label")?.textContent?.trim()).toBe("Beta");
     } finally {
       container.remove();
@@ -266,6 +269,41 @@ describe("renderAgents", () => {
     });
     expect(inheritedSelect?.selectedOptions[0]?.textContent?.trim()).toBe(
       "Inherit default (openai/gpt-5.4)",
+    );
+  });
+
+  it.each([
+    { name: "a string primary", model: "openai/gpt-5.4" },
+    { name: "an object primary", model: { primary: "openai/gpt-5.4" } },
+  ])("does not display inherited fallback chips for $name", ({ model }) => {
+    const container = document.createElement("div");
+    const fallback = "anthropic/claude-sonnet-4-6";
+
+    render(
+      renderAgents(
+        createProps({
+          selectedAgentId: "beta",
+          config: {
+            form: {
+              agents: {
+                defaults: {
+                  model: { primary: "openai/gpt-5.4", fallbacks: [fallback] },
+                },
+                list: [{ id: "alpha" }, { id: "beta", model }],
+              },
+            },
+            loading: false,
+            saving: false,
+            dirty: false,
+          },
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelectorAll(".agent-chip-input .chip")).toHaveLength(0);
+    expect(container.querySelector<HTMLInputElement>(".agent-chip-input input")?.placeholder).toBe(
+      "provider/model",
     );
   });
 
@@ -479,8 +517,8 @@ describe("renderAgentFiles", () => {
               missing: false,
             },
             {
-              name: "HEARTBEAT.md",
-              path: "/tmp/workspace/HEARTBEAT.md",
+              name: "SOUL.md",
+              path: "/tmp/workspace/SOUL.md",
               missing: false,
             },
           ],
@@ -500,9 +538,9 @@ describe("renderAgentFiles", () => {
       container,
     );
 
-    const heartbeatTab = expectAgentTab(container, "HEARTBEAT");
-    expect(heartbeatTab.disabled).toBe(true);
-    heartbeatTab.click();
+    const soulTab = expectAgentTab(container, "SOUL");
+    expect(soulTab.disabled).toBe(true);
+    soulTab.click();
     expect(onSelectFile).not.toHaveBeenCalled();
   });
 

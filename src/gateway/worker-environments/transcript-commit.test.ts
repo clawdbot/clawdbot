@@ -425,7 +425,7 @@ describe("worker transcript commit application", () => {
   });
 
   it("replays an interrupted terminal write after its branch is abandoned", async () => {
-    cfg = { ...cfg, logging: { redactSensitive: "tools" } };
+    cfg = { ...cfg };
     const initialManager = SessionManager.open(sessionFile);
     const baseLeafId = initialManager.appendMessage({
       role: "user",
@@ -485,7 +485,7 @@ describe("worker transcript commit application", () => {
     });
     const updates: Parameters<Parameters<typeof onSessionTranscriptUpdate>[0]>[0][] = [];
     unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
-    cfg = { ...cfg, logging: { redactSensitive: "off" } };
+    cfg = { ...cfg };
 
     const replay = await committer.commit({ identity: IDENTITY, request });
 

@@ -11,7 +11,7 @@ import {
 import pMap, { pMapSkip } from "p-map";
 import { formatSlackFileReference } from "../file-reference.js";
 import type { SlackAttachment, SlackFile } from "../types.js";
-export { MAX_SLACK_MEDIA_FILES, type SlackMediaResult } from "./media-types.js";
+export type { SlackMediaResult } from "./media-types.js";
 import { MAX_SLACK_MEDIA_FILES, type SlackMediaResult } from "./media-types.js";
 import { type FetchLike, fetchWithRuntimeDispatcher, saveRemoteMedia } from "./media.runtime.js";
 import { logVerbose } from "./thread.runtime.js";
@@ -19,8 +19,6 @@ export {
   resetSlackThreadStarterCacheForTest,
   resolveSlackThreadHistory,
   resolveSlackThreadStarter,
-  type SlackThreadMessage,
-  type SlackThreadStarter,
 } from "./thread.js";
 
 function isSlackHostname(hostname: string): boolean {

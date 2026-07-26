@@ -39,15 +39,6 @@ describe("resolveReplyToMode", () => {
         },
       },
     } as OpenClawConfig;
-    const legacyDmCfg = {
-      channels: {
-        slack: {
-          replyToMode: "off",
-          dm: { replyToMode: "all" },
-        },
-      },
-    } as OpenClawConfig;
-
     const cases: Array<{
       cfg: OpenClawConfig;
       channel?: "telegram" | "discord" | "slack";
@@ -67,8 +58,6 @@ describe("resolveReplyToMode", () => {
       { cfg: chatTypeCfg, channel: "slack", chatType: undefined, expected: "off" },
       { cfg: topLevelFallbackCfg, channel: "slack", chatType: "direct", expected: "first" },
       { cfg: topLevelFallbackCfg, channel: "slack", chatType: "channel", expected: "first" },
-      { cfg: legacyDmCfg, channel: "slack", chatType: "direct", expected: "all" },
-      { cfg: legacyDmCfg, channel: "slack", chatType: "channel", expected: "off" },
     ];
     for (const testCase of cases) {
       expect(resolveReplyToMode(testCase.cfg, testCase.channel, null, testCase.chatType)).toBe(

@@ -2,16 +2,19 @@
 import fs from "node:fs";
 import { promises as fsPromises } from "node:fs";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
   appendConfigAuditRecord,
   createConfigWriteAuditRecordBase,
   finalizeConfigWriteAuditRecord,
   formatConfigOverwriteLogMessage,
-  resolveConfigAuditLogPath,
+  resolveLegacyConfigAuditLogPath,
+  sanitizeConfigAuditRecord,
   scrubConfigAuditLog,
 } from "./io.audit.js";
+import { listConfigAuditRecordsForTests } from "./io.audit.test-support.js";
 
 function createAuditRecordBase(configPath: string, argv?: string[]) {
   return createConfigWriteAuditRecordBase({
@@ -66,7 +69,7 @@ function createRenameAuditRecord(home: string) {
   });
 }
 
-function readAuditLog(home: string): unknown[] {
+function readLegacyAuditLog(home: string): unknown[] {
   const auditPath = path.join(home, ".openclaw", "logs", "config-audit.jsonl");
   return fs
     .readFileSync(auditPath, "utf-8")
@@ -89,13 +92,35 @@ describe("config io audit helpers", () => {
     await suiteRootTracker.setup();
   });
 
+  it("sanitizes external records without adding write-process fields", () => {
+    const record = sanitizeConfigAuditRecord({
+      ts: "2026-07-18T00:00:00.000Z",
+      source: "config-io",
+      event: "config.external",
+      detectedBy: "watch",
+      configPath: "/tmp/openclaw.json",
+      previousHash: "previous",
+      nextHash: null,
+      valid: false,
+      issues: ["gateway.port: expected number"],
+    });
+
+    expect(record).not.toHaveProperty("argv");
+    expect(record).not.toHaveProperty("execArgv");
+    expect(record).toHaveProperty("issues", ["gateway.port: expected number"]);
+  });
+
   afterAll(async () => {
     await suiteRootTracker.cleanup();
   });
 
+  afterEach(() => {
+    resetPluginStateStoreForTests();
+  });
+
   it('ignores literal "undefined" home env values when choosing the audit log path', async () => {
     const home = await suiteRootTracker.make("home");
-    const auditPath = resolveConfigAuditLogPath(
+    const auditPath = resolveLegacyConfigAuditLogPath(
       {
         HOME: "undefined",
         USERPROFILE: "null",
@@ -196,18 +221,20 @@ describe("config io audit helpers", () => {
     expect(record.errorMessage).toBe("disk full");
   });
 
-  it("appends JSONL audit entries to the resolved audit path", async () => {
+  it("appends audit entries to shared SQLite state", async () => {
     const home = await suiteRootTracker.make("append");
     const record = createRenameAuditRecord(home);
 
     await appendConfigAuditRecord({
-      fs,
       env: {} as NodeJS.ProcessEnv,
       homedir: () => home,
       record,
     });
 
-    const records = readAuditLog(home);
+    const records = listConfigAuditRecordsForTests({
+      env: {} as NodeJS.ProcessEnv,
+      homedir: () => home,
+    });
     expect(records).toHaveLength(1);
     const written = requireAuditRecord(records[0]);
     expect(written.event).toBe("config.write");
@@ -230,15 +257,16 @@ describe("config io audit helpers", () => {
     });
 
     await appendConfigAuditRecord({
-      fs,
       env: {} as NodeJS.ProcessEnv,
       homedir: () => home,
       record,
     });
 
-    const raw = fs.readFileSync(
-      path.join(home, ".openclaw", "logs", "config-audit.jsonl"),
-      "utf-8",
+    const raw = JSON.stringify(
+      listConfigAuditRecordsForTests({
+        env: {} as NodeJS.ProcessEnv,
+        homedir: () => home,
+      }),
     );
     expect(raw).not.toContain("AIzaSyD-very-real-looking");
     expect(raw).not.toContain("ya29.fake-access-token");
@@ -355,6 +383,99 @@ describe("config io audit helpers", () => {
       argv: ["openclaw", "--token"],
       expected: ["openclaw", "--token"],
     },
+    {
+      name: "sensitive config set positional value",
+      argv: ["openclaw", "config", "set", "channels.slack.token", "secret-value"],
+      expected: ["openclaw", "config", "set", "channels.slack.token", "***"],
+    },
+    {
+      name: "sensitive config set value after boolean option",
+      argv: ["openclaw", "config", "set", "--json", "channels.slack.token", '"secret-value"'],
+      expected: ["openclaw", "config", "set", "--json", "channels.slack.token", "***"],
+    },
+    {
+      name: "sensitive config set value after root value option",
+      argv: [
+        "openclaw",
+        "config",
+        "set",
+        "--profile",
+        "work",
+        "channels.slack.token",
+        "secret-value",
+      ],
+      expected: ["openclaw", "config", "set", "--profile", "work", "channels.slack.token", "***"],
+    },
+    {
+      name: "sensitive config set value after option before subcommand",
+      argv: [
+        "openclaw",
+        "config",
+        "--profile",
+        "work",
+        "set",
+        "channels.slack.token",
+        "secret-value",
+      ],
+      expected: ["openclaw", "config", "--profile", "work", "set", "channels.slack.token", "***"],
+    },
+    {
+      name: "sensitive config set value after config parent option",
+      argv: [
+        "openclaw",
+        "config",
+        "--section",
+        "channels",
+        "set",
+        "channels.slack.token",
+        "secret-value",
+      ],
+      expected: [
+        "openclaw",
+        "config",
+        "--section",
+        "channels",
+        "set",
+        "channels.slack.token",
+        "***",
+      ],
+    },
+    {
+      name: "sensitive config set value when a root option value is config",
+      argv: [
+        "openclaw",
+        "--profile",
+        "config",
+        "config",
+        "set",
+        "channels.slack.token",
+        "secret-value",
+      ],
+      expected: ["openclaw", "--profile", "config", "config", "set", "channels.slack.token", "***"],
+    },
+    {
+      name: "sensitive config set value after interleaved option",
+      argv: [
+        "openclaw",
+        "config",
+        "set",
+        "channels.slack.token",
+        "--strict-json",
+        '"secret-value"',
+      ],
+      expected: ["openclaw", "config", "set", "channels.slack.token", "--strict-json", "***"],
+    },
+    {
+      name: "config set batch JSON",
+      argv: [
+        "openclaw",
+        "config",
+        "set",
+        "--batch-json",
+        '[{"path":"channels.slack.token","value":"secret-value"}]',
+      ],
+      expected: ["openclaw", "config", "set", "--batch-json", "***"],
+    },
   ])("redacts $name in persisted audit process info", ({ argv, expected }) => {
     expect(createAuditRecordBase("/tmp/openclaw.json", argv).argv).toEqual(expected);
   });
@@ -364,13 +485,15 @@ describe("config io audit helpers", () => {
     const record = createRenameAuditRecord(home);
 
     await appendConfigAuditRecord({
-      fs,
       env: {} as NodeJS.ProcessEnv,
       homedir: () => home,
       ...record,
     });
 
-    const records = readAuditLog(home);
+    const records = listConfigAuditRecordsForTests({
+      env: {} as NodeJS.ProcessEnv,
+      homedir: () => home,
+    });
     expect(records).toHaveLength(1);
     const written = requireAuditRecord(records[0]);
     expect(written.event).toBe("config.write");
@@ -429,7 +552,7 @@ describe("config io audit helpers", () => {
     });
 
     expect(result).toEqual({ scanned: 2, rewritten: 1, skipped: 0, aborted: false });
-    const after = readAuditLog(home);
+    const after = readLegacyAuditLog(home);
     expect(after).toHaveLength(2);
     const firstAfter = requireAuditRecord(after[0]);
     const secondAfter = requireAuditRecord(after[1]);

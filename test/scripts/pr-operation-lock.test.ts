@@ -11,16 +11,19 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   realpathSync,
+  rmSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -33,6 +36,7 @@ const worktreeScript = join(repoRoot, "scripts/pr-lib/worktree.sh");
 const lockRef = "refs/openclaw/pr-operation-locks/42";
 const detachedChildren = new WeakSet<ChildProcess>();
 const goneProcessGroups = new Set<number>();
+let templateRepo = "";
 
 // Direct preload affects only the supervisor; operation fixtures keep real clocks.
 // The source assertions below pin the production safety durations being accelerated.
@@ -62,18 +66,33 @@ function spawnDetached(command: string, args: readonly string[], options: SpawnO
   return child;
 }
 
-function createRepo(nestedName?: string) {
-  const tempRoot = tempDirs.make("openclaw-pr-operation-lock-");
-  const dir = nestedName ? join(tempRoot, nestedName) : tempRoot;
-  if (nestedName) {
-    mkdirSync(dir);
-  }
+function createTemplateRepo() {
+  const dir = mkdtempSync(join(tmpdir(), "openclaw-pr-operation-lock-template-"));
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
   execFileSync("git", ["config", "user.name", "OpenClaw Test"], { cwd: dir });
   execFileSync("git", ["config", "user.email", "test@openclaw.invalid"], { cwd: dir });
   writeFileSync(join(dir, "base.txt"), "base\n");
   execFileSync("git", ["add", "base.txt"], { cwd: dir });
   execFileSync("git", ["commit", "-qm", "base"], { cwd: dir });
+  return dir;
+}
+
+beforeAll(() => {
+  templateRepo = createTemplateRepo();
+});
+
+afterAll(() => {
+  rmSync(templateRepo, { force: true, recursive: true });
+});
+
+function createRepo(nestedName?: string) {
+  const tempRoot = tempDirs.make("openclaw-pr-operation-lock-");
+  const dir = nestedName ? join(tempRoot, nestedName) : tempRoot;
+  if (nestedName) {
+    mkdirSync(dir);
+  }
+  // Preserve per-test Git isolation without paying five setup processes per fixture.
+  cpSync(templateRepo, dir, { recursive: true });
   return dir;
 }
 
@@ -110,8 +129,10 @@ function installPrCliFixture(repoDir: string) {
     "scripts/pr-lib/common.sh",
     "scripts/pr-lib/changelog.sh",
     "scripts/pr-lib/gates.sh",
+    "scripts/pr-lib/ci-dispatch.mjs",
     "scripts/pr-lib/push.sh",
     "scripts/pr-lib/review.sh",
+    "scripts/pr-lib/review-artifacts.mjs",
     "scripts/pr-lib/prepare-core.sh",
     "scripts/pr-lib/merge.sh",
   ];
@@ -135,18 +156,23 @@ function installPrCliFixture(repoDir: string) {
 async function runSupervisedFixture(
   repoDir: string,
   fixture: string,
-  options: { accelerateTimeouts?: boolean; env?: NodeJS.ProcessEnv } = {},
+  options: {
+    accelerateTimeouts?: boolean;
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    runner?: string;
+  } = {},
 ) {
   const controller = spawn(
     process.execPath,
     [
       ...(options.accelerateTimeouts ? ["--require", createProcessGroupTimingPreload()] : []),
-      processGroupRunner,
+      options.runner ?? processGroupRunner,
       repoDir,
       fixture,
     ],
     {
-      cwd: repoDir,
+      cwd: options.cwd ?? repoDir,
       env: { ...process.env, ...options.env },
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -270,7 +296,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5000) {
     if (predicate()) {
       return true;
     }
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await new Promise((resolve) => setTimeout(resolve, 5));
   }
   return false;
 }
@@ -982,6 +1008,162 @@ describePosix("scripts/pr per-PR operation lock", () => {
 
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(refExists(repoDir)).toBe(false);
+    expect(result.stderr).not.toContain("Retaining the operation lock");
+  });
+
+  it("releases a failed lock while the child is still in validation phase", async () => {
+    const repoDir = createRepo();
+    const fixture = writeOperationFixture(repoDir, "failed-validation.sh", [
+      "acquire_pr_operation_lock 42",
+      "begin_pr_operation_validation_phase",
+      "exit 3",
+    ]);
+    const result = await runSupervisedFixture(repoDir, fixture);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(3);
+    expect(refExists(repoDir)).toBe(false);
+    expect(result.stderr).not.toContain("Retaining the operation lock");
+  });
+
+  it("retains a failed lock after the child leaves validation phase", async () => {
+    const repoDir = createRepo();
+    const fixture = writeOperationFixture(repoDir, "failed-after-side-effects.sh", [
+      "acquire_pr_operation_lock 42",
+      "begin_pr_operation_validation_phase",
+      "mark_pr_operation_side_effects_started",
+      "exit 3",
+    ]);
+    const result = await runSupervisedFixture(repoDir, fixture);
+    const ownerOid = refOid(repoDir);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(3);
+    expect(result.stderr).toContain("reason: child exited with code 3");
+    expect(refOid(repoDir)).toBe(ownerOid);
+
+    const recovered = runLockShell(repoDir, [
+      `recover_pr_operation_lock 42 '${ownerOid}' --confirmed-no-running-tools`,
+    ]);
+    expect(recovered.status, `${recovered.stdout}\n${recovered.stderr}`).toBe(0);
+  });
+
+  it("reports the child exit code when retaining a failed operation", async () => {
+    const repoDir = createRepo();
+    const fixture = writeOperationFixture(repoDir, "failed-operation.sh", [
+      "acquire_pr_operation_lock 42",
+      "exit 3",
+    ]);
+    const result = await runSupervisedFixture(repoDir, fixture);
+    const ownerOid = refOid(repoDir);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(3);
+    expect(result.stderr).toContain("reason: child exited with code 3");
+    expect(refOid(repoDir)).toBe(ownerOid);
+
+    const recovered = runLockShell(repoDir, [
+      `recover_pr_operation_lock 42 '${ownerOid}' --confirmed-no-running-tools`,
+    ]);
+    expect(recovered.status, `${recovered.stdout}\n${recovered.stderr}`).toBe(0);
+    expect(refExists(repoDir)).toBe(false);
+  });
+
+  it("does not re-enter validation after side effects have started", async () => {
+    const repoDir = createRepo();
+    const fixture = writeOperationFixture(repoDir, "failed-after-forged-validation.sh", [
+      "acquire_pr_operation_lock 42",
+      "begin_pr_operation_validation_phase",
+      "mark_pr_operation_side_effects_started",
+      "notify_pr_operation_phase validation-started",
+      "exit 3",
+    ]);
+    const result = await runSupervisedFixture(repoDir, fixture);
+    const ownerOid = refOid(repoDir);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(3);
+    expect(result.stderr).toContain("reason: child exited with code 3");
+    expect(refOid(repoDir)).toBe(ownerOid);
+
+    const recovered = runLockShell(repoDir, [
+      `recover_pr_operation_lock 42 '${ownerOid}' --confirmed-no-running-tools`,
+    ]);
+    expect(recovered.status, `${recovered.stdout}\n${recovered.stderr}`).toBe(0);
+  });
+
+  it("retains a validation-phase lock when the child exits through a trapped signal", async () => {
+    const repoDir = createRepo();
+    const fixture = writeOperationFixture(repoDir, "signaled-validation.sh", [
+      "trap 'exit 143' TERM",
+      "acquire_pr_operation_lock 42",
+      "begin_pr_operation_validation_phase",
+      "kill -TERM $$",
+    ]);
+    const result = await runSupervisedFixture(repoDir, fixture);
+    const ownerOid = refOid(repoDir);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(143);
+    expect(result.stderr).toContain("reason: child exited with code 143");
+    expect(refOid(repoDir)).toBe(ownerOid);
+
+    const recovered = runLockShell(repoDir, [
+      `recover_pr_operation_lock 42 '${ownerOid}' --confirmed-no-running-tools`,
+    ]);
+    expect(recovered.status, `${recovered.stdout}\n${recovered.stderr}`).toBe(0);
+  });
+
+  it("retains a validation-phase lock for untrapped signal exit statuses", async () => {
+    const repoDir = createRepo();
+    const fixture = writeOperationFixture(repoDir, "killed-validation.sh", [
+      "acquire_pr_operation_lock 42",
+      "begin_pr_operation_validation_phase",
+      "exit 137",
+    ]);
+    const result = await runSupervisedFixture(repoDir, fixture);
+    const ownerOid = refOid(repoDir);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(137);
+    expect(result.stderr).toContain("reason: child exited with code 137");
+    expect(refOid(repoDir)).toBe(ownerOid);
+
+    const recovered = runLockShell(repoDir, [
+      `recover_pr_operation_lock 42 '${ownerOid}' --confirmed-no-running-tools`,
+    ]);
+    expect(recovered.status, `${recovered.stdout}\n${recovered.stderr}`).toBe(0);
+  });
+
+  it("releases the lock after the operation deletes its runner worktree", async () => {
+    const repoDir = createRepo();
+    const doomedDir = tempDirs.make("openclaw-pr-self-deleting-runner-");
+    const copiedLibDir = join(doomedDir, "pr-lib");
+    mkdirSync(copiedLibDir, { recursive: true });
+    for (const file of ["operation-lock.sh", "process-group-runner.mjs"]) {
+      cpSync(join(repoRoot, "scripts/pr-lib", file), join(copiedLibDir, file));
+    }
+    const copiedRunner = join(copiedLibDir, "process-group-runner.mjs");
+    const fixture = join(doomedDir, "delete-own-worktree.sh");
+    writeFileSync(
+      fixture,
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        `source '${join(copiedLibDir, "operation-lock.sh")}'`,
+        `repo_root() { printf '%s\\n' '${repoDir}'; }`,
+        "acquire_pr_operation_lock 42",
+        "echo 'fixture: lock acquired'",
+        `rm -rf '${doomedDir}'`,
+        "echo 'fixture: runner worktree deleted'",
+      ].join("\n"),
+    );
+    chmodSync(fixture, 0o755);
+
+    const result = await runSupervisedFixture(repoDir, fixture, {
+      cwd: doomedDir,
+      runner: copiedRunner,
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain("fixture: lock acquired");
+    expect(result.stdout).toContain("fixture: runner worktree deleted");
+    expect(result.stderr).not.toContain("Retaining the operation lock");
+    expect(refExists(repoDir)).toBe(false);
   });
 
   it("retains the exact owner when supervisor release cannot take the ref lock", async () => {
@@ -1421,6 +1603,9 @@ describePosix("scripts/pr per-PR operation lock", () => {
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
       expect(processGroupExists(operationPgid)).toBe(false);
       expect(result.stderr).toContain("process group remained active after wrapper exit");
+      expect(result.stderr).toContain(`surviving processes in group ${operationPgid}`);
+      expect(result.stderr).toMatch(/^\s+\d+ \d+ sleep$/mu);
+      expect(result.stderr).toContain("process group appears empty at report time");
       expect(result.stderr).toContain(
         `scripts/pr lock-recover 42 ${ownerOid} --confirmed-no-running-tools`,
       );
@@ -1910,6 +2095,102 @@ describePosix("scripts/pr per-PR operation lock", () => {
         cwd: repoDir,
       }).status,
     ).toBe(1);
+  });
+
+  it("prunes a registered worktree whose directory is already gone", () => {
+    const repoDir = createRepo();
+    const worktreeDir = join(repoDir, ".worktrees", "pr-42");
+    mkdirSync(dirname(worktreeDir), { recursive: true });
+    execFileSync("git", ["worktree", "add", "-q", "-b", "pr-42", worktreeDir], {
+      cwd: repoDir,
+    });
+    const canonicalWorktreeDir = realpathSync(worktreeDir);
+    rmSync(worktreeDir, { recursive: true });
+
+    const result = runLockShell(repoDir, ['remove_worktree_if_present ".worktrees/pr-42"']);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(
+      execFileSync("git", ["worktree", "list", "--porcelain"], {
+        cwd: repoDir,
+        encoding: "utf8",
+      }),
+    ).not.toContain(canonicalWorktreeDir);
+  });
+
+  it("surfaces git worktree remove stderr without making cleanup fatal", () => {
+    const repoDir = createRepo();
+    const worktreeDir = join(repoDir, ".worktrees", "pr-42");
+    mkdirSync(dirname(worktreeDir), { recursive: true });
+    execFileSync("git", ["worktree", "add", "-q", "-b", "pr-42", worktreeDir], {
+      cwd: repoDir,
+    });
+
+    const result = runLockShell(repoDir, [
+      "git() {",
+      "  if [ \"$1 $2\" = 'worktree remove' ]; then",
+      "    echo 'fixture remove failure' >&2",
+      "    return 1",
+      "  fi",
+      '  command git "$@"',
+      "}",
+      'remove_worktree_if_present ".worktrees/pr-42"',
+    ]);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain(
+      "Warning: git worktree remove failed for .worktrees/pr-42: fixture remove failure",
+    );
+    expect(existsSync(worktreeDir)).toBe(true);
+  });
+
+  it("prunes a missing registration and resets its script-owned branch on worktree add", () => {
+    const repoDir = createRepo();
+    execFileSync("git", ["remote", "add", "origin", repoDir], { cwd: repoDir });
+    const physicalWorktreesDir = join(repoDir, "linked-worktrees");
+    mkdirSync(physicalWorktreesDir);
+    symlinkSync(physicalWorktreesDir, join(repoDir, ".worktrees"), "dir");
+    const worktreeDir = join(repoDir, ".worktrees", "pr-42");
+    execFileSync("git", ["worktree", "add", "-q", "-b", "temp/pr-42", worktreeDir], {
+      cwd: repoDir,
+    });
+    rmSync(worktreeDir, { recursive: true });
+
+    const result = runLockShell(repoDir, [
+      "ensure_gh_api_auth() { return 0; }",
+      "enter_worktree 42",
+    ]);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain("Pruning stale worktree registration for .worktrees/pr-42");
+    expect(existsSync(worktreeDir)).toBe(true);
+    expect(
+      execFileSync("git", ["branch", "--show-current"], {
+        cwd: worktreeDir,
+        encoding: "utf8",
+      }).trim(),
+    ).toBe("temp/pr-42");
+  });
+
+  it("resets an existing script-owned branch when adding a fresh worktree", () => {
+    const repoDir = createRepo();
+    execFileSync("git", ["remote", "add", "origin", repoDir], { cwd: repoDir });
+    execFileSync("git", ["branch", "temp/pr-43"], { cwd: repoDir });
+    const worktreeDir = join(repoDir, ".worktrees", "pr-43");
+
+    const result = runLockShell(repoDir, [
+      "ensure_gh_api_auth() { return 0; }",
+      "enter_worktree 43",
+    ]);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(existsSync(worktreeDir)).toBe(true);
+    expect(
+      execFileSync("git", ["branch", "--show-current"], {
+        cwd: worktreeDir,
+        encoding: "utf8",
+      }).trim(),
+    ).toBe("temp/pr-43");
   });
 
   it("refuses a symlink alias to another registered worktree", () => {

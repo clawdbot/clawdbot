@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpenClaw Copilot</title>
+    <link rel="stylesheet" href="sidepanel.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="mark" aria-hidden="true">OC</div>
+      <div class="identity">
+        <div class="eyebrow">TAB COPILOT</div>
+        <div id="tab-title" class="tab-title">Resolving tab…</div>
+      </div>
+      <div id="status-dot" class="status-dot" title="Connecting"></div>
+    </header>
+
+    <div class="scope-strip">
+      <span class="scope-icon" aria-hidden="true">↳</span>
+      <span id="tab-origin">This panel is bound to one Chrome tab</span>
+    </div>
+
+    <main id="conversation" aria-live="polite">
+      <section id="gate" class="gate" data-testid="denial-card">
+        <div class="gate-kicker">SECURE BINDING</div>
+        <h1 id="gate-title">Preparing this tab</h1>
+        <p id="gate-detail">Chrome is proving which tab owns this panel.</p>
+        <code id="request-id" class="request-id hidden"></code>
+        <button id="gate-action" class="primary hidden" type="button">Share this tab</button>
+      </section>
+      <section id="messages" class="messages hidden" aria-label="Conversation"></section>
+    </main>
+
+    <footer class="composer-shell">
+      <div id="session-note" class="session-note">No session until this tab is shared.</div>
+      <div class="composer">
+        <textarea
+          id="message-input"
+          rows="1"
+          maxlength="12000"
+          placeholder="Ask about this tab…"
+          aria-label="Message"
+          disabled
+        ></textarea>
+        <button id="send-button" class="send" type="button" aria-label="Send message" disabled>
+          <span aria-hidden="true">↑</span>
+        </button>
+      </div>
+      <div class="binding-note">
+        Page text stays out of prompts. Browser actions stay on this tab.
+      </div>
+    </footer>
+
+    <script src="sidepanel.js" type="module"></script>
+  </body>
+</html>

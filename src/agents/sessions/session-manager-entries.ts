@@ -16,6 +16,8 @@ import type {
   CustomMessageEntry,
   LabelEntry,
   ModelChangeEntry,
+  ResetEntry,
+  ResetReason,
   SessionContext,
   SessionEntry,
   SessionInfoEntry,
@@ -108,6 +110,19 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     return entry.id;
   }
 
+  appendResetBoundary(reason: ResetReason, firstKeptEntryId?: string): string {
+    const entry: ResetEntry = {
+      type: "reset",
+      id: generateSessionEntryId(this.byId),
+      parentId: this.appendParentId,
+      timestamp: new Date().toISOString(),
+      reason,
+      ...(firstKeptEntryId ? { firstKeptEntryId } : {}),
+    };
+    this.appendEntry(entry);
+    return entry.id;
+  }
+
   appendCustomEntry(customType: string, data?: unknown): string {
     const entry: CustomEntry = {
       type: "custom",
@@ -127,7 +142,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       id: generateSessionEntryId(this.byId),
       parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
-      name: name.trim(),
+      name: name.replace(/[\r\n]+/g, " ").trim(),
     };
     this.appendEntry(entry);
     return entry.id;
@@ -222,17 +237,23 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       const current = this.byId.get(currentId);
       if (current) {
         const normalizedCurrent = this.normalizeEntryParent(current);
-        path.unshift(normalizedCurrent);
+        path.push(normalizedCurrent);
         currentId = normalizedCurrent.parentId;
       } else {
         currentId = this.opaqueParentsById.get(currentId) ?? null;
       }
     }
+    path.reverse();
     return path;
   }
 
   buildSessionContext(): SessionContext {
     return buildCoreSessionContext(this.getBranch() as CoreSessionTreeEntry[]) as SessionContext;
+  }
+
+  getBoundaryCount(): number {
+    return this.getBranch().filter((entry) => entry.type === "compaction" || entry.type === "reset")
+      .length;
   }
 
   getHeader(): SessionHeader | null {

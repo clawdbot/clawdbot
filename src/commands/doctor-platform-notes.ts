@@ -12,6 +12,8 @@ import { resolveGatewayService, type GatewayService } from "../daemon/service.js
 import { runExec } from "../process/exec.js";
 import { shortenHomePath } from "../utils.js";
 
+const DOCTOR_LAUNCHCTL_TIMEOUT_MS = 5_000;
+
 function resolveHomeDir(): string {
   return process.env.HOME ?? os.homedir();
 }
@@ -104,7 +106,10 @@ export async function noteMacStaleOpenClawUpdateLaunchdJobs(deps?: {
 
 async function launchctlGetenv(name: string): Promise<string | undefined> {
   try {
-    const result = await runExec("/bin/launchctl", ["getenv", name], { logOutput: false });
+    const result = await runExec("/bin/launchctl", ["getenv", name], {
+      logOutput: false,
+      timeoutMs: DOCTOR_LAUNCHCTL_TIMEOUT_MS,
+    });
     const value = normalizeOptionalString(result.stdout) ?? "";
     return value.length > 0 ? value : undefined;
   } catch {

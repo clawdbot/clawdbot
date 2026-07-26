@@ -4,8 +4,8 @@ import { asDateTimestampMs } from "../../packages/normalization-core/src/number-
 import { COPILOT_INTEGRATION_ID } from "../agents/copilot-dynamic-headers.js";
 import { resolveStateDir } from "../config/paths.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
+import { DEFAULT_GITHUB_COPILOT_DOMAIN } from "./github-copilot-domain.js";
 
-export const DEFAULT_GITHUB_COPILOT_DOMAIN = "github.com";
 const COPILOT_CACHE_NAMESPACE = "github-copilot-token";
 // Retain ordinary multi-account rotation without letting credential-derived
 // bearer tokens grow unbounded in shared state.

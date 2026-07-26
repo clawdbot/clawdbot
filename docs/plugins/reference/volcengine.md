@@ -16,7 +16,7 @@ Adds Volcengine, Volcengine Plan model provider support to OpenClaw.
 
 ## Surface
 
-providers: volcengine, volcengine-plan; contracts: speechProviders
+providers: `volcengine`, `volcengine-plan`; contracts: `speechProviders`
 
 ## Related docs
 

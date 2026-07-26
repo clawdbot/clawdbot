@@ -31,4 +31,20 @@ describe("reply usage state handoff", () => {
 
     expect(consumeReplyUsageState("run-expiry")).toBeUndefined();
   });
+
+  it("evicts the oldest snapshots above the handoff capacity", () => {
+    const entryCount = 1_025;
+    for (let index = 0; index < entryCount; index += 1) {
+      recordReplyUsageState(`run-capacity-${index}`, {
+        provider: "openai",
+        model: `model-${index}`,
+      });
+    }
+
+    expect(consumeReplyUsageState("run-capacity-0")).toBeUndefined();
+    expect(consumeReplyUsageState("run-capacity-1")?.model).toBe("model-1");
+    expect(consumeReplyUsageState(`run-capacity-${entryCount - 1}`)?.model).toBe(
+      `model-${entryCount - 1}`,
+    );
+  });
 });

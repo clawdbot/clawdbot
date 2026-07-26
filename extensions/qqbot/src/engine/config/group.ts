@@ -1,4 +1,5 @@
 // Qqbot plugin module implements group behavior.
+import { resolveScopeRequireMention, type ScopeTree } from "openclaw/plugin-sdk/channel-policy";
 import { asBoolean } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { asOptionalObjectRecord as asRecord } from "../utils/string-normalize.js";
 import { resolveAccountBase } from "./resolve.js";
@@ -81,18 +82,32 @@ export function resolveGroupConfig(
 ): GroupConfig {
   const account = resolveAccountBase(cfg, accountId);
   const groups = readGroupsMap(cfg, accountId);
-  const wildcard = groups["*"] ?? {};
+  const { "*": wildcard = {}, ...scopes } = groups;
   const specific = groupOpenid ? (groups[groupOpenid] ?? {}) : {};
 
   // 账户级默认值：defaultRequireMention 配置 > 默认 true
-  const accountDefaultRequireMention =
-    asBoolean(account.config.defaultRequireMention) ?? DEFAULT_GROUP_CONFIG.requireMention;
+  const accountDefaultRequireMention = asBoolean(account.config.defaultRequireMention);
+  const mentionTree: ScopeTree = {
+    defaults: { requireMention: readBoolean(wildcard, "requireMention") },
+    scopes: Object.fromEntries(
+      Object.entries(scopes).map(([key, entry]) => [
+        key,
+        { requireMention: readBoolean(entry, "requireMention") },
+      ]),
+    ),
+  };
+  // Engine mention matching stays exact and case-sensitive. QQBot's tool-policy
+  // adapter is intentionally case-insensitive, so these paths remain asymmetric.
+  const mentionPath =
+    groupOpenid && Object.hasOwn(mentionTree.scopes, groupOpenid) ? [groupOpenid] : [];
 
   return {
-    requireMention:
-      readBoolean(specific, "requireMention") ??
-      readBoolean(wildcard, "requireMention") ??
-      accountDefaultRequireMention,
+    requireMention: resolveScopeRequireMention({
+      tree: mentionTree,
+      path: mentionPath,
+      requireMentionOverride: accountDefaultRequireMention,
+      overrideOrder: "after-config",
+    }),
     ignoreOtherMentions:
       readBoolean(specific, "ignoreOtherMentions") ??
       readBoolean(wildcard, "ignoreOtherMentions") ??

@@ -166,6 +166,31 @@ describe("createReplyDispatcher", () => {
     expect(delivered).toEqual(["tool", "block", "final"]);
   });
 
+  it("waits for asynchronous delivery error cleanup before becoming idle", async () => {
+    const cleanup = createDeferred<void>();
+    const order: string[] = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async () => {
+        throw new Error("delivery failed");
+      },
+      onError: async () => {
+        order.push("cleanup-start");
+        await cleanup.promise;
+        order.push("cleanup-end");
+      },
+    });
+
+    dispatcher.sendFinalReply({ text: "final" });
+    const idle = dispatcher.waitForIdle().then(() => {
+      order.push("idle");
+    });
+    await vi.waitFor(() => expect(order).toEqual(["cleanup-start"]));
+
+    cleanup.resolve();
+    await idle;
+    expect(order).toEqual(["cleanup-start", "cleanup-end", "idle"]);
+  });
+
   it("releases the same dispatcher after a beforeDeliver timeout", async () => {
     vi.useFakeTimers();
     try {

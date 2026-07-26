@@ -200,4 +200,77 @@ describe("AgentSession context usage", () => {
 
     expect(usage?.tokens).toBeGreaterThan(190_000);
   });
+
+  it("preserves an earlier exact post-compaction snapshot before zero usage", () => {
+    const exactUsage = {
+      input: 180_000,
+      output: 10_000,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 190_000,
+      contextUsage: {
+        state: "available" as const,
+        promptTokens: 180_000,
+        totalTokens: 190_000,
+      },
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    };
+    const zeroUsage = {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      contextUsage: { state: "available" as const, promptTokens: 0, totalTokens: 0 },
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    };
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "exact post-compaction answer" }],
+        stopReason: "stop",
+        usage: exactUsage,
+      },
+      { role: "user", content: "small follow-up" },
+      {
+        role: "assistant",
+        content: [],
+        stopReason: "stop",
+        usage: zeroUsage,
+      },
+    ] as unknown as AgentMessage[];
+    const branchEntries = [
+      {
+        type: "compaction",
+        id: "compact-1",
+        parentId: null,
+        timestamp: "2026-07-05T00:00:00.000Z",
+        summary: "summary",
+        firstKeptEntryId: "assistant-exact",
+        tokensBefore: 120_000,
+      },
+      {
+        type: "message",
+        id: "assistant-exact",
+        parentId: "compact-1",
+        timestamp: "2026-07-05T00:00:01.000Z",
+        message: messages[0],
+      },
+      {
+        type: "message",
+        id: "assistant-zero",
+        parentId: "assistant-exact",
+        timestamp: "2026-07-05T00:00:02.000Z",
+        message: messages[2],
+      },
+    ];
+
+    const usage = AgentSession.prototype.getContextUsage.call({
+      model: { contextWindow: 200_000 },
+      messages,
+      sessionManager: { getBranch: () => branchEntries },
+    } as unknown as AgentSession);
+
+    expect(usage?.tokens).toBeGreaterThan(190_000);
+  });
 });

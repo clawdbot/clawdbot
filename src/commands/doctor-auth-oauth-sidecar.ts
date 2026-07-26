@@ -330,7 +330,13 @@ export async function maybeRepairLegacyOAuthSidecarProfiles(params: {
   return result;
 }
 
-export const testing = {
+const testing = {
   buildLegacyOAuthSecretAad: legacyOAuthSidecarTestUtils.buildLegacyOAuthSecretAad,
   buildLegacyOAuthSecretKey: legacyOAuthSidecarTestUtils.buildLegacyOAuthSecretKey,
 };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.doctorAuthOAuthSidecarTestApi")
+  ] = testing;
+}

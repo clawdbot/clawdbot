@@ -71,6 +71,19 @@ describeControlUiE2e("Control UI About mocked Gateway E2E", () => {
       await expect.poll(() => commit.textContent()).toBe(COMMIT.slice(0, 12));
       await expect.poll(() => commit.getAttribute("title")).toBe(COMMIT);
 
+      const [versionLabelBox, versionValueBox, commitBox, commitAgeBox] = await Promise.all([
+        strip.locator(":scope > dt").first().boundingBox(),
+        items.first().boundingBox(),
+        commit.boundingBox(),
+        items.nth(1).locator(".about-commit__age").boundingBox(),
+      ]);
+      expect(versionLabelBox).not.toBeNull();
+      expect(versionValueBox).not.toBeNull();
+      expect(commitBox).not.toBeNull();
+      expect(commitAgeBox).not.toBeNull();
+      expect(versionValueBox!.x - (versionLabelBox!.x + versionLabelBox!.width)).toBeLessThan(32);
+      expect(commitAgeBox!.x - (commitBox!.x + commitBox!.width)).toBeLessThan(12);
+
       const built = items.nth(2).locator("time");
       await expect.poll(() => built.textContent()).toBe("Jul 10, 2026");
       await expect.poll(() => built.getAttribute("datetime")).toBe(BUILT_AT);
@@ -96,6 +109,8 @@ describeControlUiE2e("Control UI About mocked Gateway E2E", () => {
       await expect.poll(() => githubLink.getAttribute("rel")).toContain("noopener");
       const discordLink = hero.getByRole("link", { name: "Discord", exact: true });
       await expect.poll(() => discordLink.getAttribute("href")).toBe("https://discord.gg/clawd");
+      const xLink = hero.getByRole("link", { name: "X (Twitter)", exact: true });
+      await expect.poll(() => xLink.getAttribute("href")).toBe("https://x.com/openclaw");
 
       const clawd = page.getByRole("button", { name: "Wave hello to Clawd" });
       await clawd.click();

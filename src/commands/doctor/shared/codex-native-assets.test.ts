@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { collectCodexNativeAssetInfoNotes, scanCodexNativeAssets } from "./codex-native-assets.js";
+import { collectCodexNativeAssetInfoNotes } from "./codex-native-assets.js";
+import { scanCodexNativeAssets } from "./codex-native-assets.test-support.js";
 
 const tempRoots = new Set<string>();
 

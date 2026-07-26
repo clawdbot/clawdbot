@@ -1,4 +1,5 @@
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentPlanStep, AgentPlanStepStatus } from "openclaw/plugin-sdk/channel-outbound";
 import {
   readNonNegativeInteger,
   readNullableString,
@@ -22,6 +23,7 @@ export class CodexReasoningProjection {
   private readonly reasoningTextByGroup = new Map<string, ReasoningTextGroup>();
   private readonly reasoningItemOrder = new Map<string, number>();
   private readonly planTextByItem = new Map<string, string>();
+  private turnPlanText: string | undefined;
   private reasoningStarted = false;
   private reasoningEnded = false;
 
@@ -67,10 +69,14 @@ export class CodexReasoningProjection {
     }
     const text = `${this.planTextByItem.get(itemId) ?? ""}${delta}`;
     this.planTextByItem.set(itemId, text);
-    this.emitPlanUpdate({ explanation: undefined, steps: splitPlanText(text) });
+    this.emitPlanUpdate({
+      explanation: undefined,
+      steps: splitPlanText(text).map((step) => ({ step, status: "pending" })),
+    });
   }
 
   handleTurnPlanUpdated(params: JsonObject): void {
+    const explanation = readNullableString(params, "explanation");
     const plan = Array.isArray(params.plan)
       ? params.plan.flatMap((entry) => {
           if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
@@ -78,15 +84,25 @@ export class CodexReasoningProjection {
           }
           const record = entry as JsonObject;
           const step = readString(record, "step");
-          const status = readString(record, "status");
           if (!step) {
             return [];
           }
-          return status ? [`${step} (${status})`] : [step];
+          return [{ step, status: normalizePlanStepStatus(readString(record, "status")) }];
         })
       : undefined;
+    const planText = [
+      explanation,
+      ...(plan ?? []).map(({ step, status }) => `- [${status}] ${step}`),
+    ]
+      .filter((part): part is string => Boolean(part))
+      .join("\n");
+    if (planText) {
+      // Structured turn updates are the canonical latest plan. Retain the last
+      // non-empty update so the terminal transcript proves planning occurred.
+      this.turnPlanText = planText;
+    }
     this.emitPlanUpdate({
-      explanation: readNullableString(params, "explanation"),
+      explanation,
       steps: plan,
     });
   }
@@ -94,7 +110,10 @@ export class CodexReasoningProjection {
   recordItem(item: CodexThreadItem | undefined): void {
     if (item?.type === "plan" && typeof item.text === "string" && item.text) {
       this.planTextByItem.set(item.id, item.text);
-      this.emitPlanUpdate({ explanation: undefined, steps: splitPlanText(item.text) });
+      this.emitPlanUpdate({
+        explanation: undefined,
+        steps: splitPlanText(item.text).map((step) => ({ step, status: "pending" })),
+      });
     }
   }
 
@@ -113,10 +132,13 @@ export class CodexReasoningProjection {
   }
 
   planText(): string {
-    return [...this.planTextByItem.values()].filter((text) => text.trim().length > 0).join("\n\n");
+    return (
+      this.turnPlanText ??
+      [...this.planTextByItem.values()].filter((text) => text.trim().length > 0).join("\n\n")
+    );
   }
 
-  private emitPlanUpdate(params: { explanation?: string | null; steps?: string[] }): void {
+  private emitPlanUpdate(params: { explanation?: string | null; steps?: AgentPlanStep[] }): void {
     if (!params.explanation && (!params.steps || params.steps.length === 0)) {
       return;
     }
@@ -131,6 +153,13 @@ export class CodexReasoningProjection {
       },
     });
   }
+}
+
+function normalizePlanStepStatus(status: string | undefined): AgentPlanStepStatus {
+  if (status === "inProgress" || status === "in_progress") {
+    return "in_progress";
+  }
+  return status === "completed" ? "completed" : "pending";
 }
 
 function collectReasoningTextValues(

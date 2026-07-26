@@ -34,7 +34,7 @@ async function waitUntil(params: {
       throw new Error(`timed out waiting for ${params.description}`);
     }
     await new Promise<void>((resolve) => {
-      setTimeout(resolve, 20);
+      setTimeout(resolve, 5);
     });
   }
 }

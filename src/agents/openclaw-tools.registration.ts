@@ -5,7 +5,7 @@
  */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isStrictAgenticExecutionContractActive } from "./execution-contract.js";
+import { isPrimaryBootstrapRun } from "./bootstrap-routing.js";
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -22,77 +22,35 @@ export function collectPresentOpenClawTools(
   return candidates.filter((tool): tool is AnyAgentTool => tool !== null && tool !== undefined);
 }
 
-/** Resolves the default update_plan switch from explicit config or strict execution contract. */
-function isUpdatePlanToolEnabledForOpenClawTools(params: {
-  config?: OpenClawConfig;
-  agentSessionKey?: string;
-  agentId?: string | null;
-  modelProvider?: string;
-  modelId?: string;
-}): boolean {
-  const configured = params.config?.tools?.experimental?.planTool;
-  if (configured !== undefined) {
-    return configured;
-  }
-  return isStrictAgenticExecutionContractActive({
-    config: params.config,
-    sessionKey: params.agentSessionKey,
-    agentId: params.agentId,
-    provider: params.modelProvider,
-    modelId: params.modelId,
-  });
-}
-
-function mergeOpenClawToolPolicyList(...lists: Array<string[] | undefined>): string[] | undefined {
-  const merged = lists.flatMap((list) => (Array.isArray(list) ? list : []));
-  return merged.length > 0 ? uniqueStrings(merged) : undefined;
-}
-
-function isToolExplicitlyAllowedByOpenClawToolPolicy(params: {
-  toolName: string;
-  allowlist?: string[];
-  denylist?: string[];
-}): boolean {
-  if (!params.allowlist?.some((entry) => typeof entry === "string" && entry.trim().length > 0)) {
-    return false;
-  }
-  return isToolAllowedByPolicyName(params.toolName, {
-    allow: params.allowlist,
-    deny: params.denylist,
-  });
-}
-
 /** Decides whether update_plan should be included in the assembled OpenClaw tool set. */
 export function shouldIncludeUpdatePlanToolForOpenClawTools(params: {
   config?: OpenClawConfig;
-  agentSessionKey?: string;
-  agentId?: string | null;
-  modelProvider?: string;
-  modelId?: string;
-  pluginToolAllowlist?: string[];
   pluginToolDenylist?: string[];
 }): boolean {
-  const allowlist = mergeOpenClawToolPolicyList(
-    params.config?.tools?.allow,
-    params.config?.tools?.alsoAllow,
-    params.pluginToolAllowlist,
-  );
-  const denylist = mergeOpenClawToolPolicyList(
-    params.config?.tools?.deny,
-    params.pluginToolDenylist,
-  );
-  return (
-    isToolExplicitlyAllowedByOpenClawToolPolicy({
-      toolName: "update_plan",
-      allowlist,
-      denylist,
-    }) ||
-    isUpdatePlanToolEnabledForOpenClawTools({
-      config: params.config,
-      agentSessionKey: params.agentSessionKey,
-      agentId: params.agentId,
-      modelProvider: params.modelProvider,
-      modelId: params.modelId,
-    })
-  );
+  // Default-on with an explicit kill switch: only `false` opts out.
+  if (params.config?.tools?.updatePlan === false) {
+    return false;
+  }
+  const deny = uniqueStrings([
+    ...(params.config?.tools?.deny ?? []),
+    ...(params.pluginToolDenylist ?? []),
+  ]);
+  return isToolAllowedByPolicyName("update_plan", { deny });
+}
+
+/** Includes ask_user only on a primary session and when normal deny policy permits it. */
+export function shouldIncludeAskUserToolForOpenClawTools(params: {
+  config?: OpenClawConfig;
+  agentSessionKey?: string;
+  pluginToolDenylist?: string[];
+}): boolean {
+  const sessionKey = params.agentSessionKey?.trim();
+  if (!sessionKey) {
+    return false;
+  }
+  const deny = uniqueStrings([
+    ...(params.config?.tools?.deny ?? []),
+    ...(params.pluginToolDenylist ?? []),
+  ]);
+  return isPrimaryBootstrapRun(sessionKey) && isToolAllowedByPolicyName("ask_user", { deny });
 }

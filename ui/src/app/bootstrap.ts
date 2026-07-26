@@ -14,7 +14,15 @@ import { createAgentCapability } from "../lib/agents/index.ts";
 import { createChannelCapability } from "../lib/channels/index.ts";
 import { createRuntimeConfigCapability } from "../lib/config/index.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
+import { areUiSessionKeysEquivalentForHost } from "../lib/sessions/session-key.ts";
 import { createWorkboardCapability } from "../lib/workboard/capability.ts";
+import { loadChatObserverDisplayPreference } from "../pages/chat/chat-observer-display.ts";
+import { sendSessionObserverVisibility } from "../pages/chat/chat-observer.ts";
+import {
+  isDefaultChatLanding,
+  locationsMatch,
+  startModelSetupFirstRunRedirect,
+} from "../pages/model-setup/first-run.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
 import { resolveApprovalDocumentMode, type ApprovalDocumentMode } from "./approval-deep-link.ts";
 import { createBrowserHistory, resolveControlUiBasePath } from "./browser.ts";
@@ -29,8 +37,10 @@ import type {
 } from "./context.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
+import { createInitialUserMessageHandoff } from "./initial-user-message-handoff.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
 import { startNativeLinkRouting } from "./native-link-routing.ts";
+import { createNativeNotificationsCapability } from "./native-notifications.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 import {
   loadSettings,
@@ -51,7 +61,7 @@ function normalizeInitialApplicationLocation(
   sessionKey: string,
 ) {
   const routeId = routeIdFromPath(location.pathname, basePath);
-  if ((routeId !== null && routeId !== "chat") || !sessionKey.trim()) {
+  if (!isDefaultChatLanding(location, basePath, routeIdFromPath) || !sessionKey.trim()) {
     return location;
   }
 
@@ -66,7 +76,7 @@ function normalizeInitialApplicationLocation(
   };
 }
 
-function applyStartupPresentation(settings: ReturnType<typeof loadSettings>): void {
+function applyThemePresentation(settings: ReturnType<typeof loadSettings>): void {
   if (typeof document === "undefined") {
     return;
   }
@@ -74,6 +84,9 @@ function applyStartupPresentation(settings: ReturnType<typeof loadSettings>): vo
   const resolvedTheme = resolveTheme(settings.theme, settings.themeMode);
   root.dataset.theme = resolvedTheme;
   root.dataset.themeMode = resolvedTheme.endsWith("light") ? "light" : "dark";
+  // Carapace CSS (openclaw/carapace) selects on [data-theme-resolved]; keep it
+  // in lockstep with data-theme-mode so its stylesheets work unmodified here.
+  root.dataset.themeResolved = root.dataset.themeMode;
   root.classList.toggle("wa-light", root.dataset.themeMode === "light");
   root.classList.toggle("wa-dark", root.dataset.themeMode === "dark");
   root.style.colorScheme = root.dataset.themeMode;
@@ -89,7 +102,7 @@ function createApplicationTheme(
   const listeners = new Set<() => void>();
 
   const publish = () => {
-    applyStartupPresentation(settings);
+    applyThemePresentation(settings);
     for (const listener of listeners) {
       listener();
     }
@@ -165,7 +178,8 @@ function createApplicationNavigationPreferences(
   let snapshot: ApplicationNavigationPreferencesSnapshot = {
     navCollapsed: settings.navCollapsed,
     navWidth: settings.navWidth,
-    sidebarPinnedRoutes: settings.sidebarPinnedRoutes,
+    sidebarEntries: settings.sidebarEntries,
+    sessionSectionOrder: settings.sessionSectionOrder,
     pinnedAgentIds: settings.pinnedAgentIds ?? [],
   };
   const listeners = new Set<(next: ApplicationNavigationPreferencesSnapshot) => void>();
@@ -179,7 +193,8 @@ function createApplicationNavigationPreferences(
       if (
         nextSnapshot.navCollapsed === snapshot.navCollapsed &&
         nextSnapshot.navWidth === snapshot.navWidth &&
-        nextSnapshot.sidebarPinnedRoutes === snapshot.sidebarPinnedRoutes &&
+        nextSnapshot.sidebarEntries === snapshot.sidebarEntries &&
+        nextSnapshot.sessionSectionOrder === snapshot.sessionSectionOrder &&
         nextSnapshot.pinnedAgentIds === snapshot.pinnedAgentIds
       ) {
         return;
@@ -187,7 +202,8 @@ function createApplicationNavigationPreferences(
       settings = patchSettings({
         navCollapsed: nextSnapshot.navCollapsed,
         navWidth: nextSnapshot.navWidth,
-        sidebarPinnedRoutes: [...nextSnapshot.sidebarPinnedRoutes],
+        sidebarEntries: [...nextSnapshot.sidebarEntries],
+        sessionSectionOrder: [...nextSnapshot.sessionSectionOrder],
         pinnedAgentIds: [...nextSnapshot.pinnedAgentIds],
       });
       snapshot = nextSnapshot;
@@ -261,6 +277,12 @@ export function bootstrapApplication(): ApplicationRuntime {
   const initialLocation = documentMode
     ? startup.location
     : normalizeInitialApplicationLocation(startup.location, basePath, startup.settings.sessionKey);
+  const firstRunDefaultLanding =
+    documentMode === null && isDefaultChatLanding(startup.location, basePath, routeIdFromPath);
+  const expectedDefaultLanding = {
+    ...initialLocation,
+    pathname: pathForRoute("chat", basePath),
+  };
   const currentLocation = history.location();
   if (
     currentLocation.pathname !== initialLocation.pathname ||
@@ -280,7 +302,7 @@ export function bootstrapApplication(): ApplicationRuntime {
   );
   const agents = createAgentCapability(gateway);
   const agentIdentity = createAgentIdentityCapability(gateway);
-  const agentSelection = createAgentSelectionCapability(gateway);
+  const agentSelection = createAgentSelectionCapability(gateway, agents);
   const channels = createChannelCapability(gateway);
   const config = createApplicationConfigCapability({
     basePath,
@@ -308,9 +330,11 @@ export function bootstrapApplication(): ApplicationRuntime {
   const theme = createApplicationTheme(settings);
   const nativeChatDrafts = createNativeChatDrafts();
   const nativeLinkRouting = startNativeLinkRouting();
+  const nativeNotifications = createNativeNotificationsCapability();
   const webPush = createWebPushCapability(gateway);
   const skillWorkshopRevision = createSkillWorkshopRevisionHandoff();
-  applyStartupPresentation(settings);
+  const initialUserMessage = createInitialUserMessageHandoff();
+  applyThemePresentation(settings);
   const router = createApplicationRouter();
   let pendingGatewayConnection =
     startup.pendingGatewayUrl !== null
@@ -320,16 +344,16 @@ export function bootstrapApplication(): ApplicationRuntime {
           bootstrapToken: startup.pendingBootstrapToken ?? "",
         }
       : null;
-  let lastConfigRefreshClient: GatewayBrowserClient | null = null;
-  const stopConfigRefresh = gateway.subscribe((snapshot) => {
-    if (!snapshot.connected || !snapshot.client) {
-      lastConfigRefreshClient = null;
+  let lastPostConnectClient: GatewayBrowserClient | null = null;
+  const stopPostConnect = gateway.subscribe((snapshot) => {
+    if (snapshot.phase !== "connected" || !snapshot.client) {
+      lastPostConnectClient = null;
       return;
     }
-    if (lastConfigRefreshClient === snapshot.client) {
+    if (lastPostConnectClient === snapshot.client) {
       return;
     }
-    lastConfigRefreshClient = snapshot.client;
+    lastPostConnectClient = snapshot.client;
     void config.refresh({
       auth: {
         hello: snapshot.hello,
@@ -337,12 +361,26 @@ export function bootstrapApplication(): ApplicationRuntime {
         password: gateway.connection.password,
       },
     });
+    void sendSessionObserverVisibility(
+      snapshot.client,
+      loadChatObserverDisplayPreference() !== "off",
+    ).catch(() => undefined);
   });
   const routeLocation = (routeId: RouteId, options?: ApplicationNavigationOptions) => {
     const location = locationForRoute(routeId, basePath);
-    if (options?.search !== undefined || options?.hash !== undefined) {
+    const activeMatch = router.getState().matches[0];
+    const activeDynamicPath =
+      activeMatch?.routeId === routeId && routeId === "workboard"
+        ? activeMatch.location.pathname
+        : null;
+    if (
+      options?.pathname !== undefined ||
+      options?.search !== undefined ||
+      options?.hash !== undefined
+    ) {
       return {
         ...location,
+        pathname: options?.pathname ?? activeDynamicPath ?? location.pathname,
         search: options?.search ?? "",
         hash: options?.hash ?? "",
       };
@@ -379,8 +417,10 @@ export function bootstrapApplication(): ApplicationRuntime {
     navigation,
     theme,
     nativeChatDrafts,
+    nativeNotifications,
     webPush,
     skillWorkshopRevision,
+    initialUserMessage,
     navigate: (routeId, options) => {
       void router
         .navigate(routeId, context, { history: "push" }, routeLocation(routeId, options))
@@ -398,6 +438,15 @@ export function bootstrapApplication(): ApplicationRuntime {
     revalidate: (routeId) => router.revalidate(context, routeId),
     preload: (routeId) => router.preloadRoute(routeId, context),
   };
+  const stopModelSetupRedirect = firstRunDefaultLanding
+    ? startModelSetupFirstRunRedirect({
+        context,
+        isStillDefaultLanding: () =>
+          locationsMatch(history.location(), expectedDefaultLanding, (left, right) =>
+            areUiSessionKeysEquivalentForHost({ hello: gateway.snapshot.hello }, left, right),
+          ),
+      })
+    : () => undefined;
   return {
     context,
     router,
@@ -416,7 +465,8 @@ export function bootstrapApplication(): ApplicationRuntime {
       await routerStart;
     },
     stop: () => {
-      stopConfigRefresh();
+      stopModelSetupRedirect();
+      stopPostConnect();
       router.stop();
       gateway.stop();
       agents.dispose();
@@ -429,8 +479,10 @@ export function bootstrapApplication(): ApplicationRuntime {
       theme.dispose();
       nativeChatDrafts.dispose();
       nativeLinkRouting.dispose();
+      nativeNotifications?.dispose();
       webPush.dispose();
       skillWorkshopRevision.clear();
+      initialUserMessage.clear();
     },
   };
 }

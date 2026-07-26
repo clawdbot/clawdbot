@@ -34,8 +34,29 @@ export class CommandLaneClearedError extends Error {
  * released so queued work is not blocked forever.
  */
 class CommandLaneTaskTimeoutError extends Error {
-  constructor(lane: string, timeoutMs: number) {
-    super(`Command lane "${lane}" task timed out after ${timeoutMs}ms`);
+  constructor(
+    lane: string,
+    details:
+      | { cause: "task-budget"; elapsedMs: number; taskBudgetMs: number }
+      | { cause: "progress-idle"; elapsedMs: number; idleMs: number; taskBudgetMs: number }
+      | { cause: "abort-grace"; elapsedMs: number; graceMs: number; taskBudgetMs: number }
+      | { cause: "release-signal"; elapsedMs: number; taskBudgetMs: number },
+  ) {
+    const message = (() => {
+      switch (details.cause) {
+        case "task-budget":
+          return `elapsed ${details.elapsedMs}ms reached task budget ${details.taskBudgetMs}ms`;
+        case "progress-idle":
+          return `no progress for ${details.idleMs}ms (task budget ${details.taskBudgetMs}ms, elapsed ${details.elapsedMs}ms)`;
+        case "abort-grace":
+          return `abort grace ${details.graceMs}ms elapsed (task budget ${details.taskBudgetMs}ms, elapsed ${details.elapsedMs}ms)`;
+        case "release-signal":
+          return `lane release requested after ${details.elapsedMs}ms (task budget ${details.taskBudgetMs}ms)`;
+        default:
+          throw new TypeError("Unsupported command lane timeout cause");
+      }
+    })();
+    super(`Command lane "${lane}" task timed out: ${message}`);
     this.name = "CommandLaneTaskTimeoutError";
   }
 }
@@ -55,8 +76,14 @@ export function isCommandLaneTaskTimeoutError(err: unknown, lane?: string): bool
 // low-risk parallelism (e.g. cron jobs) without interleaving stdin / logs for
 // the main auto-reply workflow.
 
+export type CommandLaneTaskMarker = Readonly<{
+  lane: string;
+  taskId: number;
+  generation: number;
+}>;
+
 type QueueEntry = {
-  task: () => Promise<unknown>;
+  task: (marker: CommandLaneTaskMarker) => Promise<unknown>;
   resolve: (value: unknown) => void;
   reject: (reason?: unknown) => void;
   enqueuedAt: number;
@@ -280,8 +307,12 @@ function enqueueLaneEntry(state: LaneState, entry: QueueEntry): void {
   state.queue.splice(insertAt, 0, entry);
 }
 
-async function runQueueEntryTask(lane: string, entry: QueueEntry): Promise<unknown> {
-  const taskPromise = Promise.resolve().then(entry.task);
+async function runQueueEntryTask(
+  lane: string,
+  entry: QueueEntry,
+  marker: CommandLaneTaskMarker,
+): Promise<unknown> {
+  const taskPromise = Promise.resolve().then(() => entry.task(marker));
   const taskTimeoutMs = normalizeTaskTimeoutMs(entry.taskTimeoutMs);
   if (taskTimeoutMs === undefined) {
     return await taskPromise;
@@ -306,9 +337,22 @@ async function runQueueEntryTask(lane: string, entry: QueueEntry): Promise<unkno
   let removeReleaseListener: (() => void) | undefined;
   let timedOut = false;
   const timeoutPromise = new Promise<never>((_, reject) => {
-    const rejectForTimeout = () => {
+    const elapsedSinceStartMs = () => Math.max(0, Date.now() - startedAtMs);
+    const rejectForTimeout = (
+      details:
+        | { cause: "task-budget" }
+        | { cause: "progress-idle"; idleMs: number }
+        | { cause: "abort-grace"; graceMs: number }
+        | { cause: "release-signal" },
+    ) => {
       timedOut = true;
-      reject(new CommandLaneTaskTimeoutError(lane, taskTimeoutMs));
+      reject(
+        new CommandLaneTaskTimeoutError(lane, {
+          ...details,
+          elapsedMs: elapsedSinceStartMs(),
+          taskBudgetMs: taskTimeoutMs,
+        }),
+      );
     };
     const armTimer = (delayMs: number, onTimeout: () => void) => {
       if (timeoutHandle) {
@@ -325,19 +369,29 @@ async function runQueueEntryTask(lane: string, entry: QueueEntry): Promise<unkno
       const elapsedMs = Math.max(0, Date.now() - readLastProgressAtMs());
       const remainingMs = taskTimeoutMs - elapsedMs;
       if (remainingMs <= 0) {
-        rejectForTimeout();
+        rejectForTimeout(
+          entry.taskTimeoutProgressAtMs
+            ? { cause: "progress-idle", idleMs: elapsedMs }
+            : { cause: "task-budget" },
+        );
         return;
       }
       armTimer(remainingMs, armProgressTimeout);
     };
     const armAbortTimeout = () => {
-      armTimer(taskTimeoutAbortGraceMs, rejectForTimeout);
+      const abortStartedAtMs = Date.now();
+      armTimer(taskTimeoutAbortGraceMs, () =>
+        rejectForTimeout({
+          cause: "abort-grace",
+          graceMs: Math.max(0, Date.now() - abortStartedAtMs),
+        }),
+      );
     };
     const abortSignal = entry.taskTimeoutAbortSignal;
     const releaseSignal = entry.taskTimeoutReleaseSignal;
     const onRelease = () => {
       removeReleaseListener?.();
-      rejectForTimeout();
+      rejectForTimeout({ cause: "release-signal" });
     };
     if (releaseSignal?.aborted) {
       onRelease();
@@ -417,7 +471,11 @@ function drainLane(lane: string) {
         void (async () => {
           const startTime = Date.now();
           try {
-            const result = await runQueueEntryTask(lane, entry);
+            const result = await runQueueEntryTask(lane, entry, {
+              lane,
+              taskId,
+              generation: taskGeneration,
+            });
             const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
             if (completedCurrentGeneration) {
               notifyActiveTaskWaiters();
@@ -480,7 +538,7 @@ export function setCommandLaneConcurrency(lane: string, maxConcurrent: number) {
 
 export function enqueueCommandInLane<T>(
   lane: string,
-  task: () => Promise<T>,
+  task: (marker: CommandLaneTaskMarker) => Promise<T>,
   opts?: CommandQueueEnqueueOptions,
 ): Promise<T> {
   const queueState = getQueueState();
@@ -492,7 +550,7 @@ export function enqueueCommandInLane<T>(
   const state = getLaneState(cleaned);
   return new Promise<T>((resolve, reject) => {
     enqueueLaneEntry(state, {
-      task: () => task(),
+      task: (marker) => task(marker),
       resolve: (value) => resolve(value as T),
       reject,
       enqueuedAt: Date.now(),
@@ -547,10 +605,13 @@ export function getCommandLaneActiveTaskIds(lane: string = CommandLane.Main): nu
   return state ? [...state.activeTaskIds] : [];
 }
 
-export function getCommandLaneSnapshots(): CommandLaneSnapshot[] {
-  return Array.from(getQueueState().lanes.values(), createCommandLaneSnapshot).toSorted((a, b) =>
-    a.lane.localeCompare(b.lane),
-  );
+/** Return whether this exact lane task still owns an active queue slot. */
+export function isCommandLaneTaskMarkerCurrent(marker: CommandLaneTaskMarker | undefined): boolean {
+  if (!marker) {
+    return false;
+  }
+  const state = getQueueState().lanes.get(normalizeLane(marker.lane));
+  return state?.generation === marker.generation && state.activeTaskIds.has(marker.taskId);
 }
 
 export function getTotalQueueSize() {

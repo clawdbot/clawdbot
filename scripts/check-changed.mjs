@@ -43,6 +43,8 @@ const PLUGIN_SDK_API_BASELINE_PATH_RE =
   /^(?:src\/|packages\/|extensions\/|pnpm-lock\.yaml$|tsconfig\.json$|scripts\/(?:generate-plugin-sdk-api-baseline\.ts|lib\/plugin-sdk-(?:doc-metadata\.ts|entries\.mjs|entrypoints\.json|private-local-only-subpaths\.json))|docs\/\.generated\/plugin-sdk-api-baseline\.sha256$)/u;
 const PLUGIN_SDK_SURFACE_PATH_RE =
   /^(?:package\.json$|src\/plugin-sdk\/|scripts\/(?:plugin-sdk-surface-report\.mjs|sync-plugin-sdk-exports\.mjs|lib\/plugin-sdk-(?:declaration-budget\.mjs|deprecated-barrel-subpaths\.json|deprecated-public-subpaths\.json|entries\.mjs|entrypoints\.json|private-local-only-subpaths\.json)))/u;
+const DEPRECATION_HYGIENE_PATH_RE =
+  /^(?:package\.json$|src\/|extensions\/|packages\/|scripts\/(?:check-deprecated-api-usage\.mjs$|plugin-boundary-report\.ts$|lib\/plugin-sdk))/u;
 const CANVAS_A2UI_NATIVE_RESOURCE_PATH_RE =
   /^(?:pnpm-lock\.yaml$|apps\/shared\/OpenClawKit\/Sources\/OpenClawKit\/Resources\/CanvasA2UI\/|extensions\/canvas\/(?:package\.json$|scripts\/bundle-a2ui\.mjs$|src\/host\/a2ui(?:\/(?:index\.html|a2ui\.bundle\.js|\.bundle\.hash)$|-app\/))|scripts\/(?:bundle-a2ui|sync-native-a2ui)\.mjs$)/u;
 const CONTROL_UI_I18N_VERIFY_PATH_RE =
@@ -215,8 +217,8 @@ function changedCheckDiffRefsReady({ base, head, cwd = process.cwd() }) {
 export function buildChangedCheckCrabboxArgs(argv = [], options = {}) {
   const delegatedArgv = buildDelegatedChangedCheckArgv(argv, options);
   return [
-    "crabbox:run",
-    "--",
+    "scripts/crabbox-wrapper.mjs",
+    "run",
     "--provider",
     "blacksmith-testbox",
     "--blacksmith-org",
@@ -251,17 +253,11 @@ function buildDelegatedChangedCheckArgv(argv, options = {}) {
     return argv;
   }
   const stagedPaths = listStagedChangedPaths(options.cwd);
-  const next = [];
-  if (args.timed) {
-    next.push("--timed");
-  }
+  const timedArgs = args.timed ? ["--timed"] : [];
   if (stagedPaths.length === 0) {
-    next.push("--no-changes");
-    return next;
+    return [...timedArgs, "--no-changes"];
   }
-  next.push("--base", "HEAD", "--head", "HEAD");
-  next.push("--", ...stagedPaths);
-  return next;
+  return [...timedArgs, "--base", "HEAD", "--head", "HEAD", "--", ...stagedPaths];
 }
 
 export function shouldRunShrinkwrapGuard(paths) {
@@ -311,6 +307,13 @@ export function shouldRunPluginSdkSurfaceChecks(paths) {
   );
 }
 
+/** Returns whether changed files can alter deprecated API or plugin-boundary results. */
+export function shouldRunDeprecationHygieneChecks(paths) {
+  return paths.some((changedPath) =>
+    DEPRECATION_HYGIENE_PATH_RE.test(normalizeChangedPath(changedPath)),
+  );
+}
+
 export function shouldRunCanvasA2uiNativeResourceCheck(paths) {
   return paths.some((changedPath) =>
     CANVAS_A2UI_NATIVE_RESOURCE_PATH_RE.test(normalizeChangedPath(changedPath)),
@@ -353,9 +356,9 @@ export function createShrinkwrapGuardCommand(paths) {
 }
 
 async function runChangedCheckViaCrabbox(argv = [], env = process.env) {
-  console.error("[check:changed] delegating to Blacksmith Testbox via `pnpm crabbox:run`.");
+  console.error("[check:changed] delegating to Blacksmith Testbox via the Node wrapper.");
   return await runManagedCommand({
-    bin: "pnpm",
+    bin: "node",
     args: buildChangedCheckCrabboxArgs(argv),
     env,
   });
@@ -398,6 +401,20 @@ export function createChangedCheckPlan(result, options = {}) {
   };
 
   add("conflict markers", ["check:no-conflict-markers"]);
+  if (
+    result.paths.some((filePath) =>
+      /^(?:src\/|packages\/|extensions\/|config\/env-var-count-budget\.txt$|scripts\/check-env-var-count\.mjs$)/u.test(
+        filePath,
+      ),
+    )
+  ) {
+    add("environment variable count ratchet", [
+      "check:env-var-count",
+      ...(options.staged ? ["--staged"] : []),
+      "--base",
+      options.staged ? "HEAD" : (options.base ?? "origin/main"),
+    ]);
+  }
   if (
     result.paths.some((filePath) =>
       /^(?:src\/|ui\/src\/|packages\/|extensions\/|\.oxlintrc\.json$|config\/max-lines-baseline\.txt$|scripts\/check-max-lines-ratchet\.mjs$)/u.test(
@@ -456,11 +473,17 @@ export function createChangedCheckPlan(result, options = {}) {
     add("SQLite sessions/transcripts schema baseline", ["sqlite:sessions-schema:check"]);
   }
   if (shouldRunPluginSdkApiBaselineCheck(result.paths)) {
-    add("Plugin SDK API baseline", ["plugin-sdk:api:check"]);
+    add("Plugin SDK API contract manifest", ["plugin-sdk:api:check"]);
   }
   if (!result.lanes.releaseMetadata && shouldRunPluginSdkSurfaceChecks(result.paths)) {
     add("Plugin SDK package exports", ["plugin-sdk:check-exports"]);
     add("Plugin SDK surface budget", ["plugin-sdk:surface:check"]);
+  }
+  if (result.lanes.all || shouldRunDeprecationHygieneChecks(result.paths)) {
+    add("deprecated API usage", ["check:deprecated-api-usage"]);
+    // After 2026-07-24, lapsed compatibility windows intentionally fail this gate
+    // until their scheduled deletion PRs land.
+    add("plugin boundaries", ["plugins:boundary-report:ci"]);
   }
   if (shouldRunCanvasA2uiNativeResourceCheck(result.paths)) {
     addCommand(
@@ -491,6 +514,9 @@ export function createChangedCheckPlan(result, options = {}) {
   const lanes = result.lanes;
   const runAll = lanes.all;
   const shouldRunAndroidVersionSync = hasAndroidVersionSyncPath(result.paths);
+  if (lanes.scripts || lanes.tooling || lanes.testRoot) {
+    add("script declaration contracts", ["check:script-declarations"]);
+  }
 
   if (lanes.releaseMetadata) {
     add("release metadata guard", [
@@ -530,7 +556,6 @@ export function createChangedCheckPlan(result, options = {}) {
   if (shouldRunControlUiI18nVerify(result.paths)) {
     addLint("Control UI i18n catalog", ["lint:ui:i18n"]);
   }
-
   if (lanes.core) {
     addTypecheck("typecheck core", ["tsgo:core"]);
   }
@@ -616,6 +641,14 @@ export function createChangedCheckPlan(result, options = {}) {
   }
   if (hasMacosAppCiPath(result.paths)) {
     add("macOS app CI tests", ["test:macos:ci"], baseEnv);
+  }
+  if (lanes.apps || lanes.core) {
+    addCommand(
+      "native state schema version guard",
+      "node",
+      ["scripts/check-native-state-schema-version.mjs"],
+      baseEnv,
+    );
   }
 
   if (lanes.core || lanes.extensions) {

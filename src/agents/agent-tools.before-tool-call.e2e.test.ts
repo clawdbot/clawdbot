@@ -7,6 +7,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
 import {
   onInternalDiagnosticEvent,
@@ -797,6 +798,33 @@ describe("before_tool_call loop detection behavior", () => {
       expect(JSON.stringify(emitted)).not.toContain("private");
       expect(JSON.stringify(emitted)).not.toContain("Review before running");
     });
+    mockCallGateway.mockReset();
+  });
+
+  it("returns a structured denial without an approval request in deny mode", async () => {
+    const onResolution = vi.fn();
+    hookRunner.hasHooks.mockImplementation((hookName: string) => hookName === "before_tool_call");
+    hookRunner.runBeforeToolCall.mockResolvedValueOnce({
+      requireApproval: { title: "Approve", description: "Approval required", onResolution },
+    });
+    const mockCallGateway = vi.mocked(callGatewayTool);
+    const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
+    const tool = wrapToolWithBeforeToolCallHook(
+      { name: "exec", execute } as unknown as AnyAgentTool,
+      { agentId: "main", sessionKey: "session-key", runId: "run-1" },
+      { approvalMode: "deny" },
+    );
+
+    const result = await tool.execute("tool-call-deny", { command: "private" });
+
+    expect(result.details).toEqual({
+      status: "blocked",
+      deniedReason: "plugin-approval",
+      reason: "approval_required",
+    });
+    expect(execute).not.toHaveBeenCalled();
+    expect(mockCallGateway).not.toHaveBeenCalled();
+    expect(onResolution).toHaveBeenCalledWith(PluginApprovalResolutions.DENY);
     mockCallGateway.mockReset();
   });
 
@@ -2652,22 +2680,17 @@ describe("before_tool_call tool content private-data capture", () => {
     }
   }
 
-  function configWithToolContent(
-    fields: { toolInputs?: boolean; toolOutputs?: boolean } = {
-      toolInputs: true,
-      toolOutputs: true,
-    },
-  ) {
+  function configWithToolContent(): OpenClawConfig {
     return {
       diagnostics: {
         enabled: true,
         otel: {
           enabled: true,
           traces: true,
-          captureContent: { enabled: true, ...fields },
+          captureContent: true,
         },
       },
-    } as unknown as import("../config/types.openclaw.js").OpenClawConfig;
+    };
   }
 
   it("attaches tool input/output to private data when opted in", async () => {
@@ -2714,7 +2737,7 @@ describe("before_tool_call tool content private-data capture", () => {
     });
   });
 
-  it("captures only opted-in fields and clones away from live params", async () => {
+  it("clones captured content away from live params", async () => {
     const liveParams = { path: "/etc/secret" };
     const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "out" }] });
     const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "read", execute }), {
@@ -2722,7 +2745,7 @@ describe("before_tool_call tool content private-data capture", () => {
       sessionKey: "session-key",
       runId: "run-1",
       loopDetection: { enabled: false },
-      config: configWithToolContent({ toolInputs: true, toolOutputs: false }),
+      config: configWithToolContent(),
     });
 
     await withTrustedToolEvents(async (emitted, flush) => {
@@ -2731,7 +2754,9 @@ describe("before_tool_call tool content private-data capture", () => {
 
       const completed = emitted.find((e) => e.event.type === "tool.execution.completed");
       expect(completed?.privateData.toolContent?.toolInput).toEqual({ path: "/etc/secret" });
-      expect(completed?.privateData.toolContent?.toolOutput).toBeUndefined();
+      expect(completed?.privateData.toolContent?.toolOutput).toEqual({
+        content: [{ type: "text", text: "out" }],
+      });
       // Captured snapshot is a clone, not the live params object.
       expect(completed?.privateData.toolContent?.toolInput).not.toBe(liveParams);
     });

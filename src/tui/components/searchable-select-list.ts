@@ -38,9 +38,9 @@ export class SearchableSelectList implements Component {
   private searchInput: Input;
   private regexCache = new Map<string, RegExp>();
 
-  onSelect?: (item: SelectItem) => void;
+  onSelect?: (item: SearchableSelectItem) => void;
   onCancel?: () => void;
-  onSelectionChange?: (item: SelectItem) => void;
+  onSelectionChange?: (item: SearchableSelectItem) => void;
 
   private static readonly DESCRIPTION_LAYOUT_MIN_WIDTH = 40;
   private static readonly DESCRIPTION_MIN_WIDTH = 12;
@@ -117,7 +117,7 @@ export class SearchableSelectList implements Component {
         searchText: normalizeLowercaseStringOrEmpty(
           [rawLabel, rawDesc, searchText]
             .map((value) => stripAnsi(value))
-            .filter(Boolean)
+            .filter((value) => value.length > 0)
             .join(" "),
         ),
       });
@@ -133,8 +133,8 @@ export class SearchableSelectList implements Component {
   }
 
   private compareByScore = (
-    a: { item: SelectItem; tier: number; score: number },
-    b: { item: SelectItem; tier: number; score: number },
+    a: { item: SearchableSelectItem; tier: number; score: number },
+    b: { item: SearchableSelectItem; tier: number; score: number },
   ) => {
     if (a.tier !== b.tier) {
       return a.tier - b.tier;
@@ -145,7 +145,7 @@ export class SearchableSelectList implements Component {
     return this.getItemLabel(a.item).localeCompare(this.getItemLabel(b.item));
   };
 
-  private getItemLabel(item: SelectItem): string {
+  private getItemLabel(item: SearchableSelectItem): string {
     return item.label || item.value;
   }
 
@@ -259,7 +259,7 @@ export class SearchableSelectList implements Component {
   }
 
   private renderItemLine(
-    item: SelectItem,
+    item: SearchableSelectItem,
     isSelected: boolean,
     width: number,
     query: string,
@@ -365,6 +365,8 @@ export class SearchableSelectList implements Component {
     const newValue = this.searchInput.getValue();
 
     if (prevValue !== newValue) {
+      // Only current-query patterns are reusable; retaining older edits grows without bound.
+      this.regexCache.clear();
       this.updateFilter();
     }
   }
@@ -376,7 +378,7 @@ export class SearchableSelectList implements Component {
     }
   }
 
-  getSelectedItem(): SelectItem | null {
+  getSelectedItem(): SearchableSelectItem | null {
     return this.filteredItems[this.selectedIndex] ?? null;
   }
 }

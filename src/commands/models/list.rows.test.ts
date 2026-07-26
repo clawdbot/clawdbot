@@ -16,8 +16,8 @@ vi.mock("../../agents/model-suppression.js", () => ({
   shouldSuppressBuiltInModelFromManifest: mocks.shouldSuppressBuiltInModelFromManifest,
 }));
 
-vi.mock("../../agents/model-catalog.js", () => ({
-  loadModelCatalogSnapshot: mocks.loadModelCatalogSnapshot,
+vi.mock("../../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalogSnapshot: mocks.loadModelCatalogSnapshot,
 }));
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
@@ -250,57 +250,6 @@ describe("appendConfiguredRows", () => {
 });
 
 describe("appendProviderCatalogRows", () => {
-  it("can skip runtime model-suppression hooks for provider-catalog fast paths", async () => {
-    const rows: ModelRow[] = [];
-
-    await appendProviderCatalogRows({
-      rows,
-      seenKeys: new Set(),
-      catalogModels: [
-        {
-          id: "gpt-5.5",
-          name: "gpt-5.5",
-          provider: "codex",
-          api: "openai-chatgpt-responses",
-          baseUrl: "https://chatgpt.com/backend-api",
-          input: ["text"],
-          reasoning: false,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 8192,
-          maxTokens: 4096,
-        },
-      ],
-      context: {
-        cfg: {
-          agents: { defaults: { model: { primary: "codex/gpt-5.5" } } },
-          models: { providers: {} },
-        },
-        agentDir: "/tmp/openclaw-agent",
-        authIndex,
-        configuredByKey: new Map(),
-        discoveredKeys: new Set(),
-        filter: { provider: "codex", local: false },
-        skipRuntimeModelSuppression: true,
-      },
-    });
-
-    expect(mocks.shouldSuppressBuiltInModel).not.toHaveBeenCalled();
-    expect(mocks.shouldSuppressBuiltInModelFromManifest).toHaveBeenCalledWith({
-      provider: "codex",
-      id: "gpt-5.5",
-      baseUrl: "https://chatgpt.com/backend-api",
-      config: {
-        agents: { defaults: { model: { primary: "codex/gpt-5.5" } } },
-        models: { providers: {} },
-      },
-    });
-    expect(mocks.normalizeProviderResolvedModelWithPlugin).not.toHaveBeenCalled();
-    const row = requireOnlyRow(rows);
-    expect(row.key).toBe("codex/gpt-5.5");
-    expect(row.available).toBe(true);
-    expect(row.missing).toBe(false);
-  });
-
   it("applies manifest suppression when runtime model-suppression hooks are skipped", async () => {
     mocks.shouldSuppressBuiltInModelFromManifest.mockReturnValueOnce(true);
     const rows: ModelRow[] = [];
@@ -709,6 +658,7 @@ describe("appendAuthenticatedCatalogRows", () => {
       context: {
         cfg: {},
         agentDir: "/tmp/openclaw-agent",
+        workspaceDir: "/tmp/openclaw-workspace",
         authIndex: {
           evaluateModelAuth: () => ({
             availability: undefined,
@@ -727,6 +677,12 @@ describe("appendAuthenticatedCatalogRows", () => {
       key: "local-openai/local-model",
       local: true,
       available: true,
+    });
+    expect(mocks.loadModelCatalogSnapshot).toHaveBeenCalledWith({
+      config: {},
+      agentDir: "/tmp/openclaw-agent",
+      workspaceDir: "/tmp/openclaw-workspace",
+      readOnly: true,
     });
   });
 

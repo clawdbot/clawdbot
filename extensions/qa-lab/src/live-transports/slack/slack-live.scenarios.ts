@@ -1,9 +1,5 @@
 // QA Lab Slack live scenario catalog.
 import { randomUUID } from "node:crypto";
-import {
-  collectLiveTransportStandardScenarioCoverage,
-  selectLiveTransportScenarios,
-} from "../shared/live-transport-scenarios.js";
 import { waitForSlackReaction } from "./slack-live.codex-approval.js";
 import {
   SLACK_QA_REACTION_VERIFY_TIMEOUT_MS,
@@ -28,7 +24,6 @@ import {
 const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
   {
     id: "slack-canary",
-    standardId: "canary",
     title: "Slack canary echo",
     timeoutMs: 45_000,
     buildRun: (sutUserId) => {
@@ -42,7 +37,6 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
   },
   {
     id: "slack-mention-gating",
-    standardId: "mention-gating",
     title: "Slack unmentioned bot message does not trigger",
     timeoutMs: 8_000,
     buildRun: () => {
@@ -56,7 +50,6 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
   },
   {
     id: "slack-allowlist-block",
-    standardId: "allowlist-block",
     title: "Slack non-allowlisted sender does not trigger",
     timeoutMs: 8_000,
     configOverrides: {
@@ -76,7 +69,6 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
     id: "slack-channel-disabled-warning",
     title: "Slack disabled channel warns and does not trigger",
     timeoutMs: 8_000,
-    defaultEnabled: false,
     configOverrides: { channelEnabled: false },
     buildRun: (sutUserId) => {
       const marker = `SLACK_QA_DISABLED_${randomUUID().slice(0, 8).toUpperCase()}`;
@@ -120,7 +112,6 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
   },
   {
     id: "slack-top-level-reply-shape",
-    standardId: "top-level-reply-shape",
     title: "Slack top-level reply stays top-level",
     timeoutMs: 45_000,
     configOverrides: { replyToMode: "off" },
@@ -143,7 +134,6 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
   {
     id: "slack-progress-commentary-true",
     title: "Slack progress commentary true is independent from tool progress",
-    defaultEnabled: false,
     timeoutMs: 90_000,
     configOverrides: {
       progress: { commentary: true, toolProgress: false },
@@ -157,7 +147,6 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
   {
     id: "slack-progress-commentary-false",
     title: "Slack progress commentary false stays out of the progress draft",
-    defaultEnabled: false,
     timeoutMs: 90_000,
     configOverrides: {
       progress: { commentary: false, toolProgress: false },
@@ -171,7 +160,6 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
   {
     id: "slack-progress-commentary-omitted",
     title: "Slack omitted progress commentary preserves the tool-progress default",
-    defaultEnabled: false,
     timeoutMs: 90_000,
     configOverrides: {
       progress: { toolProgress: true },
@@ -185,7 +173,6 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
   {
     id: "slack-progress-commentary-verbose-dedupe",
     title: "Slack explicit commentary yields to durable verbose progress",
-    defaultEnabled: false,
     timeoutMs: 90_000,
     configOverrides: {
       progress: { commentary: true, toolProgress: false, verboseDefault: "on" },
@@ -273,7 +260,6 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
   {
     id: "slack-table-invalid-blocks-fallback",
     title: "Slack rejects an over-limit native table and stores its complete fallback",
-    defaultEnabled: false,
     timeoutMs: 45_000,
     buildRun: () => ({
       kind: "direct-transport",
@@ -389,19 +375,14 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
   },
 ];
 
-export const SLACK_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScenarioCoverage({
-  scenarios: SLACK_QA_SCENARIOS,
-});
-
 export function listSlackQaScenarioCatalog() {
   return SLACK_QA_SCENARIOS.map((scenario) => ({ id: scenario.id }));
 }
 
-export function findScenario(ids?: string[]) {
-  const selected = selectLiveTransportScenarios({
-    ids,
-    laneLabel: "Slack",
-    scenarios: SLACK_QA_SCENARIOS,
-  });
-  return ids?.length ? selected : selected.filter((scenario) => scenario.defaultEnabled !== false);
+export function getSlackQaScenarioDefinition(id: string) {
+  const scenario = SLACK_QA_SCENARIOS.find((candidate) => candidate.id === id);
+  if (!scenario) {
+    throw new Error(`unknown Slack QA scenario id: ${id}`);
+  }
+  return scenario;
 }

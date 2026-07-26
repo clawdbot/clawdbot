@@ -3,6 +3,12 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  requireSuccessfulNativeCommandCompactionEvidence,
+  requireSuccessfulPersistedNativeCommandExecution,
+} from "./gateway-codex-harness.command-evidence.live-helpers.js";
+import {
+  buildCodexHarnessLargeOutputCommand,
+  CODEX_HARNESS_MAX_LARGE_OUTPUT_BYTES,
   EXPECTED_CODEX_MODELS_COMMAND_TEXT,
   EXPECTED_CODEX_STATUS_COMMAND_TEXT,
   isExpectedCodexModelsCommandText,
@@ -10,10 +16,14 @@ import {
   isExpectedYieldedAgentTimeout,
   isRetryableCodexHarnessLiveError,
   isStrictExpectedCodexModelsCommandText,
+  requireSuccessfulNativeCommandExecution,
+  shouldUseCodexHarnessSubagentOnlyFastPath,
 } from "./gateway-codex-harness.live-helpers.js";
 
 const includesExpectedCodexModelsCommandText = (text: string) =>
   EXPECTED_CODEX_MODELS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText));
+
+const shellSingleQuote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
 
 function expectExpectedCodexModelsCommandText(text: string): void {
   expect(includesExpectedCodexModelsCommandText(text)).toBe(true);
@@ -30,6 +40,43 @@ function expectStrictCodexModelsCommandText(text: string): void {
 }
 
 describe("gateway codex harness live helpers", () => {
+  it("builds an exact large-output command without escape-sensitive newlines", () => {
+    const command = buildCodexHarnessLargeOutputCommand({
+      commandMarker: "OPENCLAW-LARGE-OUTPUT-ABC",
+      outputBytes: CODEX_HARNESS_MAX_LARGE_OUTPUT_BYTES,
+    });
+
+    expect(command).toContain('"OPENCLAW-LARGE-OUTPUT-ABC|"');
+    expect(command).toContain(".slice(0,800000)");
+    expect(CODEX_HARNESS_MAX_LARGE_OUTPUT_BYTES).toBeLessThan(1024 * 1024);
+    expect(command).not.toContain("\\n");
+    expect(command).not.toContain("\n");
+  });
+
+  it("keeps combined stress probes out of the subagent-only fast path", () => {
+    const base = {
+      chatImageProbe: false,
+      codeModeOnly: false,
+      compactionStress: false,
+      explicitOptOut: false,
+      guardianProbe: false,
+      imageProbe: false,
+      mcpProbe: false,
+      resumeStress: false,
+      subagentProbe: true,
+    };
+
+    expect(shouldUseCodexHarnessSubagentOnlyFastPath(base)).toBe(true);
+    expect(shouldUseCodexHarnessSubagentOnlyFastPath({ ...base, resumeStress: true })).toBe(false);
+    expect(shouldUseCodexHarnessSubagentOnlyFastPath({ ...base, compactionStress: true })).toBe(
+      false,
+    );
+    expect(shouldUseCodexHarnessSubagentOnlyFastPath({ ...base, codeModeOnly: true })).toBe(false);
+    expect(shouldUseCodexHarnessSubagentOnlyFastPath({ ...base, explicitOptOut: true })).toBe(
+      false,
+    );
+  });
+
   it("classifies sessions.list timeouts as retryable live Codex errors", () => {
     const error = new Error("gateway request timeout for sessions.list");
 
@@ -40,6 +87,521 @@ describe("gateway codex harness live helpers", () => {
     const error = new Error("subagent child did not emit lifecycle event");
 
     expect(isRetryableCodexHarnessLiveError(error)).toBe(false);
+  });
+
+  it("matches a successful wrapped native command by its per-turn marker", () => {
+    const expectedCommand = `node -e 'console.log("OPENCLAW-LARGE-OUTPUT-ABC")'`;
+    const wrappedCommand = `node -e "console.log(\\"OPENCLAW-LARGE-OUTPUT-ABC\\")"`;
+    const events = [
+      {
+        stream: "tool",
+        data: {
+          phase: "start",
+          name: "bash",
+          itemId: "item-1",
+          args: { command: `/bin/bash -lc ${shellSingleQuote(wrappedCommand)}` },
+        },
+      },
+      {
+        stream: "tool",
+        data: {
+          phase: "result",
+          itemId: "item-1",
+          status: "completed",
+          isError: false,
+          result: { exitCode: 0 },
+        },
+      },
+    ];
+
+    expect(
+      requireSuccessfulNativeCommandExecution(events, {
+        commandMarker: "OPENCLAW-LARGE-OUTPUT-ABC",
+        expectedCommand,
+      }),
+    ).toEqual({ itemId: "item-1", resultIndex: 1, startIndex: 0 });
+  });
+
+  it("rejects a successful command that only echoes the expected command", () => {
+    const expectedCommand = `node -e 'console.log("OPENCLAW-LARGE-OUTPUT-ABC")'`;
+    expect(() =>
+      requireSuccessfulNativeCommandExecution(
+        [
+          {
+            stream: "tool",
+            data: {
+              phase: "start",
+              name: "bash",
+              itemId: "item-echo",
+              args: { command: `echo ${shellSingleQuote(expectedCommand)}` },
+            },
+          },
+          {
+            stream: "tool",
+            data: {
+              phase: "result",
+              itemId: "item-echo",
+              status: "completed",
+              isError: false,
+              result: { exitCode: 0 },
+            },
+          },
+        ],
+        {
+          commandMarker: "OPENCLAW-LARGE-OUTPUT-ABC",
+          expectedCommand,
+        },
+      ),
+    ).toThrow("missing native bash command start for marker OPENCLAW-LARGE-OUTPUT-ABC");
+  });
+
+  it("accepts a completed native command when Codex omits or nulls its optional exit code", () => {
+    const expectedCommand = "node -e OPENCLAW-NO-EXIT-CODE";
+    for (const result of [{ status: "completed" }, { status: "completed", exitCode: null }]) {
+      const events = [
+        {
+          stream: "tool",
+          data: {
+            phase: "start",
+            name: "bash",
+            itemId: "item-no-exit-code",
+            args: { command: expectedCommand },
+          },
+        },
+        {
+          stream: "tool",
+          data: {
+            phase: "result",
+            itemId: "item-no-exit-code",
+            status: "completed",
+            isError: false,
+            result,
+          },
+        },
+      ];
+
+      expect(
+        requireSuccessfulNativeCommandExecution(events, {
+          commandMarker: "OPENCLAW-NO-EXIT-CODE",
+          expectedCommand,
+        }),
+      ).toEqual({ itemId: "item-no-exit-code", resultIndex: 1, startIndex: 0 });
+    }
+  });
+
+  it("reports a missing native command start explicitly", () => {
+    expect(() =>
+      requireSuccessfulNativeCommandExecution([], {
+        commandMarker: "OPENCLAW-MISSING",
+        expectedCommand: "node -e OPENCLAW-MISSING",
+      }),
+    ).toThrow("missing native bash command start for marker OPENCLAW-MISSING");
+  });
+
+  it("reports a missing native command item id explicitly", () => {
+    expect(() =>
+      requireSuccessfulNativeCommandExecution(
+        [
+          {
+            stream: "tool",
+            data: {
+              phase: "start",
+              name: "bash",
+              args: { command: "node -e OPENCLAW-NO-ITEM" },
+            },
+          },
+        ],
+        {
+          commandMarker: "OPENCLAW-NO-ITEM",
+          expectedCommand: "node -e OPENCLAW-NO-ITEM",
+        },
+      ),
+    ).toThrow("native bash command start for marker OPENCLAW-NO-ITEM has no itemId");
+  });
+
+  it("reports a missing successful native command result explicitly", () => {
+    expect(() =>
+      requireSuccessfulNativeCommandExecution(
+        [
+          {
+            stream: "tool",
+            data: {
+              phase: "start",
+              name: "bash",
+              itemId: "item-failed",
+              args: { command: "node -e OPENCLAW-FAILED" },
+            },
+          },
+          {
+            stream: "tool",
+            data: {
+              phase: "result",
+              itemId: "item-failed",
+              status: "completed",
+              isError: true,
+              result: { exitCode: 1 },
+            },
+          },
+        ],
+        {
+          commandMarker: "OPENCLAW-FAILED",
+          expectedCommand: "node -e OPENCLAW-FAILED",
+        },
+      ),
+    ).toThrow(
+      "native bash command item-failed for marker OPENCLAW-FAILED has no successful result",
+    );
+  });
+
+  it("bounds failed-command diagnostics to the matching item without raw output", () => {
+    const secretOutput = "sensitive-command-output";
+    let message = "";
+    try {
+      requireSuccessfulNativeCommandExecution(
+        [
+          {
+            stream: "tool",
+            data: {
+              phase: "start",
+              name: "bash",
+              itemId: "item-failed",
+              args: { command: "node -e OPENCLAW-FAILED" },
+            },
+          },
+          {
+            stream: "tool",
+            data: {
+              phase: "result",
+              itemId: "item-other",
+              status: "completed",
+              isError: true,
+              result: { stderr: secretOutput, exitCode: 1 },
+            },
+          },
+          {
+            stream: "tool",
+            data: {
+              phase: "result",
+              itemId: "item-failed",
+              status: "completed",
+              isError: true,
+              result: { stdout: secretOutput, exitCode: 1 },
+            },
+          },
+        ],
+        {
+          commandMarker: "OPENCLAW-FAILED",
+          expectedCommand: "node -e OPENCLAW-FAILED",
+        },
+      );
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toContain('"itemId":"item-failed"');
+    expect(message).toContain(`"stdoutChars":${secretOutput.length}`);
+    expect(message).not.toContain("item-other");
+    expect(message).not.toContain(secretOutput);
+  });
+
+  it("requires a successful marker-bearing large result in durable history", () => {
+    const expectedCommand = `node -e 'console.log("OPENCLAW-PERSISTED")'`;
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "persisted-call",
+            name: "bash",
+            arguments: { command: expectedCommand },
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "persisted-call",
+        isError: false,
+        content: [
+          {
+            type: "text",
+            text: "OPENCLAW-PERSISTED",
+          },
+          {
+            type: "text",
+            text: "...(truncated: original 2000 chars)",
+          },
+        ],
+      },
+    ];
+
+    expect(
+      requireSuccessfulPersistedNativeCommandExecution(messages, {
+        commandMarker: "OPENCLAW-PERSISTED",
+        expectedCommand,
+        minimumOutputChars: 1_000,
+      }),
+    ).toEqual({ callIndex: 0, resultIndex: 1, toolCallId: "persisted-call" });
+    expect(() =>
+      requireSuccessfulPersistedNativeCommandExecution(messages.slice(1), {
+        commandMarker: "OPENCLAW-PERSISTED",
+        expectedCommand,
+        minimumOutputChars: 1_000,
+      }),
+    ).toThrow("has no successful large result");
+    expect(
+      requireSuccessfulPersistedNativeCommandExecution(messages.slice(1), {
+        commandMarker: "OPENCLAW-PERSISTED",
+        expectedCommand,
+        minimumOutputChars: 1_000,
+        toolCallId: "persisted-call",
+      }),
+    ).toEqual({ callIndex: -1, resultIndex: 0, toolCallId: "persisted-call" });
+  });
+
+  it("rejects echoed or failed native commands in durable history", () => {
+    const expectedCommand = `node -e 'console.log("OPENCLAW-PERSISTED")'`;
+    const echoedMessages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "echoed-call",
+            name: "bash",
+            arguments: { command: `echo ${shellSingleQuote(expectedCommand)}` },
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "echoed-call",
+        isError: false,
+        content: [
+          {
+            type: "text",
+            text: "OPENCLAW-PERSISTED\n...(truncated: original 2000 chars)",
+          },
+        ],
+      },
+    ];
+    expect(() =>
+      requireSuccessfulPersistedNativeCommandExecution(echoedMessages, {
+        commandMarker: "OPENCLAW-PERSISTED",
+        expectedCommand,
+        minimumOutputChars: 1_000,
+      }),
+    ).toThrow("has no successful large result");
+
+    const failedMessages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "failed-call",
+            name: "bash",
+            arguments: { command: expectedCommand },
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "failed-call",
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: "OPENCLAW-PERSISTED\n...(truncated: original 2000 chars)",
+          },
+        ],
+      },
+    ];
+    expect(() =>
+      requireSuccessfulPersistedNativeCommandExecution(failedMessages, {
+        commandMarker: "OPENCLAW-PERSISTED",
+        expectedCommand,
+        minimumOutputChars: 1_000,
+      }),
+    ).toThrow(
+      "persisted native bash command for marker OPENCLAW-PERSISTED has no successful large result",
+    );
+
+    const nonzeroMessages = [
+      failedMessages[0],
+      {
+        ...failedMessages[1],
+        isError: false,
+        details: { status: "completed", exitCode: 17 },
+      },
+    ];
+    expect(() =>
+      requireSuccessfulPersistedNativeCommandExecution(nonzeroMessages, {
+        commandMarker: "OPENCLAW-PERSISTED",
+        expectedCommand,
+        minimumOutputChars: 1_000,
+      }),
+    ).toThrow("has no successful large result");
+  });
+
+  it("accepts successful request-local evidence when compaction removed durable history", () => {
+    const expectedCommand = "node -e OPENCLAW-COMPACTED";
+    const events = [
+      {
+        stream: "tool",
+        data: {
+          phase: "start",
+          name: "bash",
+          itemId: "compacted-command",
+          args: { command: expectedCommand },
+        },
+      },
+      {
+        stream: "tool",
+        data: {
+          phase: "result",
+          itemId: "compacted-command",
+          status: "completed",
+          isError: false,
+          result: { exitCode: 0 },
+        },
+      },
+      { stream: "compaction", data: { phase: "end", completed: true } },
+    ];
+
+    expect(
+      requireSuccessfulNativeCommandCompactionEvidence({
+        commandMarker: "OPENCLAW-COMPACTED",
+        events,
+        expectedCommand,
+        messages: [],
+        minimumOutputChars: 1_000,
+      }),
+    ).toEqual({ source: "compacted-event" });
+    expect(() =>
+      requireSuccessfulNativeCommandCompactionEvidence({
+        commandMarker: "OPENCLAW-COMPACTED",
+        events: events.slice(0, 2),
+        expectedCommand,
+        messages: [],
+        minimumOutputChars: 1_000,
+      }),
+    ).toThrow("successful request-local command result was not followed by compaction");
+
+    expect(() =>
+      requireSuccessfulNativeCommandCompactionEvidence({
+        commandMarker: "OPENCLAW-COMPACTED",
+        events,
+        expectedCommand,
+        messages: [
+          {
+            role: "toolResult",
+            toolCallId: "compacted-command",
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: "OPENCLAW-COMPACTED\n...(truncated: original 2000 chars)",
+              },
+            ],
+          },
+        ],
+        minimumOutputChars: 1_000,
+      }),
+    ).toThrow("durable result for successful request-local command failed validation");
+  });
+
+  it("rejects large durable output from a different marker-bearing command", () => {
+    const expectedCommand = "node -e OPENCLAW-EXACT";
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "mismatched-call",
+            name: "bash",
+            arguments: { command: `echo ${shellSingleQuote(expectedCommand)}` },
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "mismatched-call",
+        isError: false,
+        content: [
+          {
+            type: "text",
+            text: "OPENCLAW-EXACT\n...(truncated: original 2000 chars)",
+          },
+        ],
+      },
+    ];
+
+    expect(() =>
+      requireSuccessfulNativeCommandCompactionEvidence({
+        commandMarker: "OPENCLAW-EXACT",
+        events: [],
+        expectedCommand,
+        messages,
+        minimumOutputChars: 1_000,
+      }),
+    ).toThrow("has no successful request-local evidence");
+  });
+
+  it("ties a result-only durable row to the exact request-local item id", () => {
+    const expectedCommand = "node -e OPENCLAW-RESULT-ONLY";
+    const events = [
+      {
+        stream: "tool",
+        data: {
+          phase: "start",
+          name: "bash",
+          itemId: "exact-call",
+          args: { command: expectedCommand },
+        },
+      },
+      {
+        stream: "tool",
+        data: {
+          phase: "result",
+          itemId: "exact-call",
+          status: "completed",
+          isError: false,
+          result: { exitCode: 0 },
+        },
+      },
+    ];
+    const resultOnlyMessage = (toolCallId: string) => ({
+      role: "toolResult",
+      toolCallId,
+      isError: false,
+      content: [
+        {
+          type: "text",
+          text: "OPENCLAW-RESULT-ONLY\n...(truncated: original 2000 chars)",
+        },
+      ],
+    });
+
+    expect(
+      requireSuccessfulNativeCommandCompactionEvidence({
+        commandMarker: "OPENCLAW-RESULT-ONLY",
+        events,
+        expectedCommand,
+        messages: [resultOnlyMessage("different-call"), resultOnlyMessage("exact-call")],
+        minimumOutputChars: 1_000,
+      }),
+    ).toEqual({ source: "persisted-history" });
+    expect(() =>
+      requireSuccessfulNativeCommandCompactionEvidence({
+        commandMarker: "OPENCLAW-RESULT-ONLY",
+        events,
+        expectedCommand,
+        messages: [resultOnlyMessage("different-call")],
+        minimumOutputChars: 1_000,
+      }),
+    ).toThrow("successful request-local command result was not followed by compaction");
   });
 
   it("accepts only paused yielded agent timeouts for native subagent delivery", () => {

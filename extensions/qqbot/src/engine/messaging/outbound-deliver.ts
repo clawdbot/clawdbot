@@ -6,6 +6,10 @@
  * `DeliverDeps.mediaSender`.
  */
 
+import {
+  sendPayloadMediaSequence,
+  sendPayloadTextChunkSequence,
+} from "openclaw/plugin-sdk/reply-payload";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { GatewayAccount } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
@@ -171,32 +175,34 @@ async function autoMediaBatch(params: {
   onSuccess?: (mediaUrl: string) => string | undefined;
 }): Promise<number> {
   let sentCount = 0;
-  for (const mediaUrl of params.mediaUrls) {
-    try {
-      const result = await params.mediaSender.sendMedia({
-        to: params.qualifiedTarget,
-        text: "",
-        mediaUrl,
-        accountId: params.account.accountId,
-        replyToId: params.replyToId,
-        account: params.account,
-        ...(params.mediaAccess ? { mediaAccess: params.mediaAccess } : {}),
-        ...(params.mediaLocalRoots ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
-        ...(params.mediaReadFile ? { mediaReadFile: params.mediaReadFile } : {}),
-      });
-      if (result.error) {
-        params.log?.error(params.onResultError(mediaUrl, result.error));
-        continue;
+  await sendPayloadMediaSequence({
+    text: "",
+    mediaUrls: params.mediaUrls,
+    send: async ({ mediaUrl }) =>
+      await sendWithResultLogging({
+        run: async () =>
+          await params.mediaSender.sendMedia({
+            to: params.qualifiedTarget,
+            text: "",
+            mediaUrl,
+            accountId: params.account.accountId,
+            replyToId: params.replyToId,
+            account: params.account,
+            ...(params.mediaAccess ? { mediaAccess: params.mediaAccess } : {}),
+            ...(params.mediaLocalRoots ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
+            ...(params.mediaReadFile ? { mediaReadFile: params.mediaReadFile } : {}),
+          }),
+        log: params.log,
+        onSuccess: params.onSuccess ? () => params.onSuccess?.(mediaUrl) : undefined,
+        onError: (error) => params.onResultError(mediaUrl, error),
+        onThrownError: (error) => params.onThrownError(mediaUrl, error),
+      }),
+    onResult: (sent) => {
+      if (sent) {
+        sentCount++;
       }
-      sentCount++;
-      const successMessage = params.onSuccess?.(mediaUrl);
-      if (successMessage) {
-        params.log?.info(successMessage);
-      }
-    } catch (err) {
-      params.log?.error(params.onThrownError(mediaUrl, formatErrorMessage(err)));
-    }
-  }
+    },
+  });
   return sentCount;
 }
 
@@ -292,24 +298,27 @@ async function sendTextChunksWithRetry(params: {
 }): Promise<void> {
   const { account, event, chunks, sendWithRetry, consumeQuoteRef, allowDm, forcePlainText, log } =
     params;
-  for (const chunk of chunks) {
-    try {
-      await sendWithRetry((token) =>
-        sendTextChunkToTarget({
-          account,
-          event,
-          token,
-          text: chunk,
-          consumeQuoteRef,
-          allowDm,
-          forcePlainText,
-        }),
-      );
-      log?.info(params.onSuccess(chunk));
-    } catch (err) {
-      log?.error(params.onError(err));
-    }
-  }
+  await sendPayloadTextChunkSequence({
+    chunks,
+    send: async ({ text }) => {
+      try {
+        await sendWithRetry((token) =>
+          sendTextChunkToTarget({
+            account,
+            event,
+            token,
+            text,
+            consumeQuoteRef,
+            allowDm,
+            forcePlainText,
+          }),
+        );
+        log?.info(params.onSuccess(text));
+      } catch (err) {
+        log?.error(params.onError(err));
+      }
+    },
+  });
 }
 
 // ---- Result logging helpers ----
@@ -319,6 +328,7 @@ async function sendWithResultLogging(params: {
   log?: DeliverAccountContext["log"];
   onSuccess?: () => string | undefined;
   onError: (error: string) => string;
+  onThrownError?: (error: string) => string;
 }): Promise<boolean> {
   try {
     const result = await params.run();
@@ -332,7 +342,8 @@ async function sendWithResultLogging(params: {
     }
     return true;
   } catch (err) {
-    params.log?.error(params.onError(formatErrorMessage(err)));
+    const error = formatErrorMessage(err);
+    params.log?.error((params.onThrownError ?? params.onError)(error));
     return false;
   }
 }

@@ -11,6 +11,7 @@ import {
   type ConfigSnapshotForInstallPersist,
 } from "../../plugins/install-persistence.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
+import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry-refresh.js";
 import type { PluginRecord } from "../../plugins/registry.js";
 import {
@@ -274,134 +275,142 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
   }
 
   if (pluginsCommand.action === "install") {
-    const loadedConfig = await loadPluginCommandConfig();
-    if (!loadedConfig.ok) {
+    return await withPluginLifecycleLease({}, async () => {
+      const loadedConfig = await loadPluginCommandConfig();
+      if (!loadedConfig.ok) {
+        return {
+          shouldContinue: false,
+          reply: { text: `⚠️ ${loadedConfig.error}` },
+        };
+      }
+      const installed = await installPluginFromPluginsCommand({
+        raw: pluginsCommand.spec,
+        force: pluginsCommand.force,
+        config: loadedConfig.snapshot.config,
+        snapshot: loadedConfig.snapshot,
+      });
+      if (!installed.ok) {
+        return {
+          shouldContinue: false,
+          reply: { text: `⚠️ ${installed.error}` },
+        };
+      }
       return {
         shouldContinue: false,
-        reply: { text: `⚠️ ${loadedConfig.error}` },
+        reply: {
+          text: [
+            `🔌 Installed plugin "${installed.pluginId}". Gateway restart will load the new plugin source.`,
+            ...(installed.warnings ?? []).map((warning) => `⚠️ ${warning}`),
+          ].join("\n"),
+        },
       };
-    }
-    const installed = await installPluginFromPluginsCommand({
-      raw: pluginsCommand.spec,
-      force: pluginsCommand.force,
-      config: loadedConfig.snapshot.config,
-      snapshot: loadedConfig.snapshot,
     });
-    if (!installed.ok) {
+  }
+
+  const handleLoadedCommand = async () => {
+    const loaded = await loadPluginCommandState(params.workspaceDir, {
+      loadModules: pluginsCommand.action === "inspect",
+    });
+    if (!loaded.ok) {
       return {
         shouldContinue: false,
-        reply: { text: `⚠️ ${installed.error}` },
+        reply: { text: `⚠️ ${loaded.error}` },
       };
     }
-    return {
-      shouldContinue: false,
-      reply: {
-        text: [
-          `🔌 Installed plugin "${installed.pluginId}". Gateway restart will load the new plugin source.`,
-          ...(installed.warnings ?? []).map((warning) => `⚠️ ${warning}`),
-        ].join("\n"),
-      },
-    };
-  }
 
-  const loaded = await loadPluginCommandState(params.workspaceDir, {
-    loadModules: pluginsCommand.action === "inspect",
-  });
-  if (!loaded.ok) {
-    return {
-      shouldContinue: false,
-      reply: { text: `⚠️ ${loaded.error}` },
-    };
-  }
-
-  if (pluginsCommand.action === "list") {
-    return {
-      shouldContinue: false,
-      reply: { text: formatPluginsList(loaded.report) },
-    };
-  }
-
-  if (pluginsCommand.action === "inspect") {
-    const installRecords = await loadInstalledPluginIndexInstallRecords();
-    if (!pluginsCommand.name) {
+    if (pluginsCommand.action === "list") {
       return {
         shouldContinue: false,
         reply: { text: formatPluginsList(loaded.report) },
       };
     }
-    if (normalizeOptionalLowercaseString(pluginsCommand.name) === "all") {
+
+    if (pluginsCommand.action === "inspect") {
+      const installRecords = await loadInstalledPluginIndexInstallRecords();
+      if (!pluginsCommand.name) {
+        return {
+          shouldContinue: false,
+          reply: { text: formatPluginsList(loaded.report) },
+        };
+      }
+      if (normalizeOptionalLowercaseString(pluginsCommand.name) === "all") {
+        return {
+          shouldContinue: false,
+          reply: {
+            text: renderJsonBlock(
+              "🔌 Plugins",
+              buildAllPluginInspectJson({ ...loaded, installRecords }),
+            ),
+          },
+        };
+      }
+      const payload = buildPluginInspectJson({
+        id: pluginsCommand.name,
+        config: loaded.config,
+        installRecords,
+        report: loaded.report,
+      });
+      if (!payload) {
+        return {
+          shouldContinue: false,
+          reply: { text: `🔌 No plugin named "${pluginsCommand.name}" found.` },
+        };
+      }
       return {
         shouldContinue: false,
         reply: {
-          text: renderJsonBlock(
-            "🔌 Plugins",
-            buildAllPluginInspectJson({ ...loaded, installRecords }),
-          ),
+          text: renderJsonBlock(`🔌 Plugin "${payload.inspect.plugin.id}"`, {
+            ...payload.inspect,
+            compatibilityWarnings: payload.compatibilityWarnings,
+            install: payload.install,
+          }),
         },
       };
     }
-    const payload = buildPluginInspectJson({
-      id: pluginsCommand.name,
-      config: loaded.config,
-      installRecords,
-      report: loaded.report,
-    });
-    if (!payload) {
+
+    const plugin = findPlugin(loaded.report, pluginsCommand.name);
+    if (!plugin) {
       return {
         shouldContinue: false,
         reply: { text: `🔌 No plugin named "${pluginsCommand.name}" found.` },
       };
     }
+
+    let registryWarning: string | undefined;
+    try {
+      const committedConfig = await setPluginEnabledFromCommand({
+        pluginId: plugin.id,
+        enabled: pluginsCommand.action === "enable",
+        action: pluginsCommand.action,
+      });
+      await refreshPluginRegistryAfterConfigMutation({
+        config: committedConfig,
+        reason: "policy-changed",
+        logger: {
+          warn: (message) => {
+            registryWarning = message;
+          },
+        },
+      });
+    } catch (error) {
+      if (error instanceof AutoReplyConfigMutationError) {
+        return { shouldContinue: false, reply: { text: `⚠️ ${error.message}` } };
+      }
+      throw error;
+    }
+
     return {
       shouldContinue: false,
       reply: {
-        text: renderJsonBlock(`🔌 Plugin "${payload.inspect.plugin.id}"`, {
-          ...payload.inspect,
-          compatibilityWarnings: payload.compatibilityWarnings,
-          install: payload.install,
-        }),
+        text:
+          `🔌 Plugin "${plugin.id}" ${pluginsCommand.action}d in ${loaded.path}. Gateway reload will apply it to new agent turns.` +
+          (registryWarning ? `\n${registryWarning}` : ""),
       },
     };
-  }
-
-  const plugin = findPlugin(loaded.report, pluginsCommand.name);
-  if (!plugin) {
-    return {
-      shouldContinue: false,
-      reply: { text: `🔌 No plugin named "${pluginsCommand.name}" found.` },
-    };
-  }
-
-  let committedConfig: OpenClawConfig;
-  try {
-    committedConfig = await setPluginEnabledFromCommand({
-      pluginId: plugin.id,
-      enabled: pluginsCommand.action === "enable",
-      action: pluginsCommand.action,
-    });
-  } catch (error) {
-    if (error instanceof AutoReplyConfigMutationError) {
-      return { shouldContinue: false, reply: { text: `⚠️ ${error.message}` } };
-    }
-    throw error;
-  }
-  let registryWarning: string | undefined;
-  await refreshPluginRegistryAfterConfigMutation({
-    config: committedConfig,
-    reason: "policy-changed",
-    logger: {
-      warn: (message) => {
-        registryWarning = message;
-      },
-    },
-  });
-
-  return {
-    shouldContinue: false,
-    reply: {
-      text:
-        `🔌 Plugin "${plugin.id}" ${pluginsCommand.action}d in ${loaded.path}. Gateway reload will apply it to new agent turns.` +
-        (registryWarning ? `\n${registryWarning}` : ""),
-    },
   };
+
+  if (pluginsCommand.action === "enable" || pluginsCommand.action === "disable") {
+    return await withPluginLifecycleLease({}, handleLoadedCommand);
+  }
+  return await handleLoadedCommand();
 };

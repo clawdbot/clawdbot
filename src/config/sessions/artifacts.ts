@@ -38,6 +38,11 @@ export function isSessionArchiveArtifactName(fileName: string): boolean {
   );
 }
 
+/** Returns true for retained reset/delete transcript archives counted by the session budget. */
+export function isRetainedSessionTranscriptArchiveName(fileName: string): boolean {
+  return hasArchiveSuffix(fileName, "deleted") || hasArchiveSuffix(fileName, "reset");
+}
+
 /** Returns true for migration rollback archives retained beside their legacy source. */
 export function isMigrationArchiveArtifactName(fileName: string): boolean {
   return MIGRATION_ARCHIVE_RE.test(fileName);

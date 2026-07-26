@@ -2,10 +2,10 @@ import type { ChildProcess } from "node:child_process";
 import { basename, dirname, resolve, win32 as pathWin32 } from "node:path";
 import { trimForSummary } from "./shared.ts";
 
-export type CrossOsSuite = "packaged-fresh" | "installer-fresh" | "packaged-upgrade" | "dev-update";
-export type CrossOsMode = "fresh" | "upgrade" | "both";
-export type CrossOsOsId = "ubuntu" | "windows" | "macos";
-export type ProviderId = "openai" | "anthropic" | "minimax";
+type CrossOsSuite = "packaged-fresh" | "installer-fresh" | "packaged-upgrade" | "dev-update";
+type CrossOsMode = "fresh" | "upgrade" | "both";
+type CrossOsOsId = "ubuntu" | "windows" | "macos";
+type ProviderId = "openai" | "anthropic" | "minimax";
 export type ProviderConfig = {
   extensionId: string;
   secretEnv: string;
@@ -197,7 +197,6 @@ export const INSTALL_STAGE_DEBRIS_DIR_PATTERN = /^\.openclaw-install-stage(?:-[^
 export const OMITTED_QA_EXTENSION_PREFIXES = [
   "dist/extensions/qa-channel/",
   "dist/extensions/qa-lab/",
-  "dist/extensions/qa-matrix/",
 ];
 export const CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS = 120_000;
 export const CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS = 10_000;
@@ -211,6 +210,11 @@ export const CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS =
   CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS + 45_000;
 export const CROSS_OS_GATEWAY_READY_TIMEOUT_MS = 3 * 60_000;
 export const CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS = 5 * 60_000;
+export function managedGatewayRestartCommandTimeoutMs(platform = process.platform) {
+  // The CLI performs its own restart health loop. Keep the outer release
+  // harness alive long enough to receive that result plus service-manager overhead.
+  return gatewayReadyDeadlineMs(platform) + 60_000;
+}
 export const CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE = "minimal";
 export const CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS = 10 * 60;
 export const CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS =
@@ -671,7 +675,7 @@ export function updateTimeoutMs() {
     : 20 * 60 * 1000;
 }
 
-export function updateStepTimeoutSeconds() {
+function updateStepTimeoutSeconds() {
   return process.platform === "win32"
     ? CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS
     : 1200;

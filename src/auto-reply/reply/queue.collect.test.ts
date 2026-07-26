@@ -30,13 +30,52 @@ import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 installQueueRuntimeErrorSilencer();
 
 describe("followup queue collect routing", () => {
+  it("marks exclusive admission without onAbandoned and isolates collect identity", () => {
+    // Failure window: cancel-only used to be inferred from missing onAbandoned,
+    // so exclusive admission without onAbandoned shared collect identity.
+    const exclusiveNoAbandon = createRun({ prompt: "exclusive a" });
+    exclusiveNoAbandon.turnAdoptionLifecycle = {
+      admission: "exclusive",
+      onAdopted: async () => {},
+    };
+    const exclusiveSibling = createRun({ prompt: "exclusive b" });
+    exclusiveSibling.turnAdoptionLifecycle = {
+      admission: "exclusive",
+      onAdopted: async () => {},
+    };
+    const cancelOnly = createRun({ prompt: "cancel-only" });
+    cancelOnly.turnAdoptionLifecycle = {
+      admission: "cancel-only",
+      ownerKey: "gw:owner",
+      onAdopted: async () => {},
+    };
+    const cancelOnlyShared = createRun({ prompt: "cancel-only shared" });
+    cancelOnlyShared.turnAdoptionLifecycle = {
+      admission: "cancel-only",
+      ownerKey: "gw:owner",
+      onAdopted: async () => {},
+    };
+
+    const exclusiveA = resolveFollowupDeliveryContextKey(exclusiveNoAbandon);
+    const exclusiveB = resolveFollowupDeliveryContextKey(exclusiveSibling);
+    expect(exclusiveA).not.toEqual(exclusiveB);
+
+    const cancelA = resolveFollowupDeliveryContextKey(cancelOnly);
+    const cancelB = resolveFollowupDeliveryContextKey(cancelOnlyShared);
+    expect(cancelA).toEqual(cancelB);
+  });
+
   it("retries lifecycle admission after a callback rejection", async () => {
     const onAdmitted = vi
       .fn<() => Promise<void>>()
       .mockRejectedValueOnce(new Error("admission failed"))
       .mockResolvedValueOnce();
     const run = createRun({ prompt: "retry admission" });
-    run.queuedLifecycle = { onAdmitted };
+    run.turnAdoptionLifecycle = {
+      onAdopted: onAdmitted,
+      admission: "exclusive",
+      onAbandoned: () => {},
+    };
 
     await expect(admitFollowupRunLifecycle(run)).rejects.toThrow("admission failed");
     await expect(admitFollowupRunLifecycle(run)).resolves.toBeUndefined();
@@ -61,7 +100,12 @@ describe("followup queue collect routing", () => {
       events.push("complete");
     });
     const run = createRun({ prompt: "complete during admission" });
-    run.queuedLifecycle = { onAdmitted, onComplete };
+    run.turnAdoptionLifecycle = {
+      onAdopted: onAdmitted,
+      onSettled: onComplete,
+      admission: "exclusive",
+      onAbandoned: () => {},
+    };
 
     const admission = admitFollowupRunLifecycle(run);
     await admissionStarted.promise;
@@ -84,7 +128,7 @@ describe("followup queue collect routing", () => {
     const key = `test-rejected-lifecycle-${Date.now()}`;
     const onEnqueued = vi.fn(() => false);
     const run = createRun({ prompt: "duplicate owner" });
-    run.queuedLifecycle = { onEnqueued };
+    run.turnAdoptionLifecycle = { onAdopted: async () => {}, onDeferred: onEnqueued };
 
     const enqueued = enqueueFollowupRun(key, run, {
       mode: "followup",
@@ -748,7 +792,7 @@ describe("followup queue collect routing", () => {
             originatingTo: "channel:A",
             originatingChatType: "channel",
           }),
-          queuedLifecycle: { onComplete },
+          turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: onComplete },
         },
         settings,
       );
@@ -783,7 +827,11 @@ describe("followup queue collect routing", () => {
         key,
         {
           ...createRun({ prompt: "rejected" }),
-          queuedLifecycle: { onEnqueued, onComplete },
+          turnAdoptionLifecycle: {
+            onAdopted: async () => {},
+            onDeferred: onEnqueued,
+            onSettled: onComplete,
+          },
         },
         settings,
       ),
@@ -1580,7 +1628,7 @@ describe("followup queue collect routing", () => {
           originatingTo: "same-target",
           originatingChatType: "direct",
         }),
-        queuedLifecycle: { onComplete },
+        turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: onComplete },
       },
       settings,
     );
@@ -1907,7 +1955,7 @@ describe("followup queue collect routing", () => {
     };
     const controller = new AbortController();
     const begin = () => () => undefined;
-    const lifecycle = { onComplete: () => undefined };
+    const lifecycle = { onAdopted: async () => {}, onSettled: () => undefined };
 
     enqueueFollowupRun(
       key,
@@ -1927,7 +1975,7 @@ describe("followup queue collect routing", () => {
     first.currentInboundContext = { text: "room event body" };
     first.abortSignal = controller.signal;
     first.deliveryCorrelations = [{ begin }];
-    first.queuedLifecycle = lifecycle;
+    first.turnAdoptionLifecycle = lifecycle;
     enqueueFollowupRun(
       key,
       createRun({
@@ -1948,7 +1996,7 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.currentInboundContext?.text).toBe("room event body");
     expect(calls[0]?.abortSignal).toBe(controller.signal);
     expect(calls[0]?.deliveryCorrelations?.[0]?.begin).toBe(begin);
-    expect(calls[0]?.queuedLifecycle).toBe(lifecycle);
+    expect(calls[0]?.turnAdoptionLifecycle).toBe(lifecycle);
     expect(calls[1]?.prompt).toBe("second");
   });
 
@@ -2336,7 +2384,7 @@ describe("followup queue collect routing", () => {
             originatingChannel: "webchat",
             originatingTo: "session:main",
           }),
-          queuedLifecycle: { ownerKey },
+          turnAdoptionLifecycle: { onAdopted: async () => {}, ownerKey },
         },
         settings,
       );
@@ -3122,7 +3170,7 @@ describe("followup queue collect routing", () => {
       {
         ...createRun({ prompt: "aborted" }),
         abortSignal: controller.signal,
-        queuedLifecycle: { onComplete },
+        turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: onComplete },
       },
       settings,
     );
@@ -3411,7 +3459,7 @@ describe("followup queue collect routing", () => {
         currentInboundContext: { text: "live context" },
         abortSignal: controller.signal,
         deliveryCorrelations: [{ begin }],
-        queuedLifecycle: { onComplete },
+        turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: onComplete },
       },
       settings,
     );
@@ -3429,7 +3477,7 @@ describe("followup queue collect routing", () => {
     expect(calls[1]?.currentInboundAudio).toBe(true);
     expect(calls[1]?.currentInboundContext?.text).toBe("live context");
     expect(calls[1]?.abortSignal).toBe(controller.signal);
-    expect(calls[1]?.queuedLifecycle?.onComplete).toBe(onComplete);
+    expect(calls[1]?.turnAdoptionLifecycle?.onSettled).toBe(onComplete);
     expect(calls[1]?.deliveryCorrelations?.[0]?.begin).toBe(begin);
   });
 
@@ -3501,7 +3549,7 @@ describe("followup queue collect routing", () => {
         currentInboundEventKind: "room_event",
         currentInboundContext: { text: "dropped context" },
         abortSignal: controller.signal,
-        queuedLifecycle: { onComplete },
+        turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: onComplete },
       },
       settings,
     );
@@ -3537,9 +3585,10 @@ describe("followup queue collect routing", () => {
         {
           ...createRun({ prompt }),
           abortSignal: new AbortController().signal,
-          queuedLifecycle: {
+          turnAdoptionLifecycle: {
+            onAdopted: async () => {},
             onCancellationRetired: sourceCancellationRetirements[index],
-            onComplete: sourceCompletions[index],
+            onSettled: sourceCompletions[index],
           },
         },
         settings,
@@ -3551,12 +3600,12 @@ describe("followup queue collect routing", () => {
       calls.push(run);
       if (calls.length === 1) {
         expect(run.prompt).toContain("[Queue overflow] Dropped 2 messages due to cap.");
-        await run.queuedLifecycle?.onAdmitted?.();
+        await run.turnAdoptionLifecycle?.onAdopted?.();
         expect(sourceCancellationRetirements[0]).toHaveBeenCalledTimes(1);
         expect(sourceCancellationRetirements[1]).not.toHaveBeenCalled();
         expect(sourceCompletions[0]).not.toHaveBeenCalled();
         expect(sourceCompletions[1]).not.toHaveBeenCalled();
-        run.queuedLifecycle?.onComplete?.();
+        run.turnAdoptionLifecycle?.onSettled?.();
         expect(sourceCompletions[0]).toHaveBeenCalledTimes(1);
         expect(sourceCompletions[1]).toHaveBeenCalledTimes(1);
         return;
@@ -3587,11 +3636,13 @@ describe("followup queue collect routing", () => {
       key,
       {
         ...createRun({ prompt: "dropped lifecycle source" }),
-        queuedLifecycle: {
-          onAdmitted: async () => {
+        turnAdoptionLifecycle: {
+          onAdopted: async () => {
             events.push("source-admitted");
           },
-          onComplete: sourceComplete,
+          onSettled: sourceComplete,
+          admission: "exclusive",
+          onAbandoned: () => {},
         },
       },
       settings,
@@ -3601,10 +3652,10 @@ describe("followup queue collect routing", () => {
     scheduleFollowupDrain(key, async (run) => {
       if (run.prompt.includes("[Queue overflow]")) {
         events.push("summary-started");
-        expect(run.queuedLifecycle?.onAdmitted).toEqual(expect.any(Function));
-        await run.queuedLifecycle?.onAdmitted?.();
+        expect(run.turnAdoptionLifecycle?.onAdopted).toEqual(expect.any(Function));
+        await run.turnAdoptionLifecycle?.onAdopted?.();
         events.push("model");
-        run.queuedLifecycle?.onComplete?.();
+        run.turnAdoptionLifecycle?.onSettled?.();
         return;
       }
       events.push("live-followup");
@@ -3632,7 +3683,7 @@ describe("followup queue collect routing", () => {
     let attempts = 0;
     const runFollowup = async (run: FollowupRun) => {
       calls.push(run);
-      expect(run.queuedLifecycle).toBeUndefined();
+      expect(run.turnAdoptionLifecycle).toBeUndefined();
       attempts += 1;
       if (attempts === 1) {
         firstAttempt.resolve();
@@ -3654,7 +3705,7 @@ describe("followup queue collect routing", () => {
         ...createRun({ prompt: "dropped ambient" }),
         currentInboundEventKind: "room_event",
         currentInboundContext: { text: "dropped context" },
-        queuedLifecycle: { onComplete },
+        turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: onComplete },
       },
       settings,
     );
@@ -3671,7 +3722,7 @@ describe("followup queue collect routing", () => {
     expect(getExistingFollowupQueue(key)?.summarySources[0]?.currentInboundEventKind).toBe(
       "room_event",
     );
-    expect(getExistingFollowupQueue(key)?.summarySources[0]?.queuedLifecycle).toBeDefined();
+    expect(getExistingFollowupQueue(key)?.summarySources[0]?.turnAdoptionLifecycle).toBeDefined();
     expect(getExistingFollowupQueue(key)?.summarySources[0]?.currentInboundContext).toBeUndefined();
 
     scheduleFollowupDrain(key, runFollowup);
@@ -3703,7 +3754,7 @@ describe("followup queue collect routing", () => {
       {
         ...createRun({ prompt: "first" }),
         abortSignal: new AbortController().signal,
-        queuedLifecycle: { onComplete: firstComplete },
+        turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: firstComplete },
       },
       settings,
     );
@@ -3712,7 +3763,7 @@ describe("followup queue collect routing", () => {
       {
         ...createRun({ prompt: "second" }),
         abortSignal: new AbortController().signal,
-        queuedLifecycle: { onComplete: secondComplete },
+        turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: secondComplete },
       },
       settings,
     );
@@ -3736,14 +3787,16 @@ describe("followup queue collect routing", () => {
     const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
 
     const first = createRun({ prompt: "first" });
-    first.queuedLifecycle = {
-      onAdmitted: async () => {
+    first.turnAdoptionLifecycle = {
+      onAdopted: async () => {
         events.push("first-admitted");
       },
+      admission: "exclusive",
+      onAbandoned: () => {},
     };
     const second = createRun({ prompt: "second" });
-    second.queuedLifecycle = {
-      onAdmitted: vi
+    second.turnAdoptionLifecycle = {
+      onAdopted: vi
         .fn<() => Promise<void>>()
         .mockImplementationOnce(async () => {
           events.push("second-rejected");
@@ -3752,6 +3805,8 @@ describe("followup queue collect routing", () => {
         .mockImplementationOnce(async () => {
           events.push("second-admitted");
         }),
+      admission: "exclusive",
+      onAbandoned: () => {},
     };
 
     enqueueFollowupRun(key, first, settings);
@@ -3785,7 +3840,7 @@ describe("followup queue collect routing", () => {
       "second-admitted",
       "model:second",
     ]);
-    expect(second.queuedLifecycle.onAdmitted).toHaveBeenCalledTimes(2);
+    expect(second.turnAdoptionLifecycle.onAdopted).toHaveBeenCalledTimes(2);
   });
 
   it("collects transcript-owned turns under one aggregate recorder", async () => {
@@ -3819,7 +3874,7 @@ describe("followup queue collect routing", () => {
           currentInboundContext: { text: "shared gateway context", promptJoiner: " " },
           deliveryCorrelations: [deliveryCorrelation],
           abortSignal: new AbortController().signal,
-          queuedLifecycle: { onComplete },
+          turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: onComplete },
         },
         settings,
       );
@@ -3849,10 +3904,11 @@ describe("followup queue collect routing", () => {
     const message = await calls[0]?.userTurnTranscriptRecorder?.resolveMessage();
     expect(message?.content).toContain("first transcript");
     expect(message?.content).toContain("second transcript");
-    expect((message as unknown as { MediaPaths?: string[] } | undefined)?.MediaPaths).toEqual([
-      "/tmp/first.png",
-      "/tmp/second.png",
-    ]);
+    expect(
+      (message as unknown as { __openclaw?: { media?: Array<{ path?: string }> } } | undefined)?.[
+        "__openclaw"
+      ]?.media?.map((fact) => fact.path),
+    ).toEqual(["/tmp/first.png", "/tmp/second.png"]);
     await vi.waitFor(() => expect(firstComplete).toHaveBeenCalledTimes(1));
     expect(secondComplete).toHaveBeenCalledTimes(1);
   });
@@ -3920,9 +3976,10 @@ describe("followup queue collect routing", () => {
           transcriptPrompt: `${prompt} transcript`,
           userTurnTranscriptRecorder: createRecorder(`${prompt} transcript`),
           abortSignal,
-          queuedLifecycle: {
+          turnAdoptionLifecycle: {
+            onAdopted: async () => {},
             onCancellationRetired: sourceCancellationRetirements[index],
-            onComplete: sourceCompletions[index],
+            onSettled: sourceCompletions[index],
           },
         },
         settings,
@@ -3934,7 +3991,7 @@ describe("followup queue collect routing", () => {
       if (calls.length === 1) {
         expect(run.abortSignal).toBeDefined();
         expect(run.abortSignal).not.toBe(survivor.signal);
-        await run.queuedLifecycle?.onAdmitted?.();
+        await run.turnAdoptionLifecycle?.onAdopted?.();
         expect(sourceCancellationRetirements[0]).toHaveBeenCalledTimes(1);
         expect(sourceCancellationRetirements[1]).not.toHaveBeenCalled();
         expect(sourceCompletions[0]).not.toHaveBeenCalled();
@@ -3968,7 +4025,7 @@ describe("followup queue collect routing", () => {
     scheduleFollowupDrain(key, async (run) => {
       expect(run.abortSignal).toBeUndefined();
       expect(run.queueAbortSignal?.aborted).toBe(false);
-      await run.queuedLifecycle?.onAdmitted?.();
+      await run.turnAdoptionLifecycle?.onAdopted?.();
       clearFollowupQueue(key);
       expect(run.queueAbortSignal?.aborted).toBe(true);
       done.resolve();
@@ -3990,7 +4047,7 @@ describe("followup queue collect routing", () => {
       const enqueueSource = (prompt: string, onComplete: () => void, abortSignal?: AbortSignal) => {
         const source: FollowupRun = {
           ...createRun({ prompt }),
-          queuedLifecycle: { onComplete },
+          turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: onComplete },
         };
         if (abortSignal) {
           source.abortSignal = abortSignal;
@@ -4052,7 +4109,7 @@ describe("followup queue collect routing", () => {
       {
         ...createRun({ prompt: "owner A summary" }),
         abortSignal: new AbortController().signal,
-        queuedLifecycle: { onComplete: summarizedComplete },
+        turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: summarizedComplete },
       },
       settings,
     );
@@ -4061,7 +4118,7 @@ describe("followup queue collect routing", () => {
       {
         ...createRun({ prompt: "owner B live" }),
         abortSignal: aborted.signal,
-        queuedLifecycle: { onComplete: abortedComplete },
+        turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: abortedComplete },
       },
       settings,
     );
@@ -4105,7 +4162,7 @@ describe("followup queue collect routing", () => {
       {
         ...createRun({ prompt: "elided and cancelled" }),
         abortSignal: elided.signal,
-        queuedLifecycle: { onComplete: elidedComplete },
+        turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: elidedComplete },
       },
       settings,
     );
@@ -4139,7 +4196,7 @@ describe("followup queue collect routing", () => {
       key,
       {
         ...createRun({ prompt: "elided source" }),
-        queuedLifecycle: { onComplete: elidedComplete },
+        turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: elidedComplete },
       },
       settings,
     );
@@ -4147,7 +4204,7 @@ describe("followup queue collect routing", () => {
       key,
       {
         ...createRun({ prompt: "retained source" }),
-        queuedLifecycle: { onComplete: retainedComplete },
+        turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: retainedComplete },
       },
       settings,
     );
@@ -4158,7 +4215,7 @@ describe("followup queue collect routing", () => {
       if (calls.length === 1) {
         expect(run.prompt).toContain("Dropped 2 messages");
         expect(run.prompt).toContain("retained source");
-        await run.queuedLifecycle?.onAdmitted?.();
+        await run.turnAdoptionLifecycle?.onAdopted?.();
         expect(getExistingFollowupQueue(key)?.summaryElisions).toEqual([]);
         expect(getExistingFollowupQueue(key)?.droppedCount).toBe(0);
         throw new Error("admitted summary failure");
@@ -4186,14 +4243,16 @@ describe("followup queue collect routing", () => {
     };
 
     const first = createRun({ prompt: "first dropped" });
-    first.queuedLifecycle = {
-      onAdmitted: async () => {
+    first.turnAdoptionLifecycle = {
+      onAdopted: async () => {
         events.push("first-admitted");
       },
+      admission: "exclusive",
+      onAbandoned: () => {},
     };
     const second = createRun({ prompt: "second dropped" });
-    second.queuedLifecycle = {
-      onAdmitted: vi
+    second.turnAdoptionLifecycle = {
+      onAdopted: vi
         .fn<() => Promise<void>>()
         .mockImplementationOnce(async () => {
           events.push("second-rejected");
@@ -4202,6 +4261,8 @@ describe("followup queue collect routing", () => {
         .mockImplementationOnce(async () => {
           events.push("second-admitted");
         }),
+      admission: "exclusive",
+      onAbandoned: () => {},
     };
 
     enqueueFollowupRun(key, first, settings);
@@ -4238,7 +4299,7 @@ describe("followup queue collect routing", () => {
       "summary-model",
       "live-followup",
     ]);
-    expect(second.queuedLifecycle.onAdmitted).toHaveBeenCalledTimes(2);
+    expect(second.turnAdoptionLifecycle.onAdopted).toHaveBeenCalledTimes(2);
   });
 });
 

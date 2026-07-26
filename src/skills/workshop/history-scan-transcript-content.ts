@@ -1,3 +1,4 @@
+import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { filterHeartbeatTranscriptTurns } from "../../auto-reply/heartbeat-transcript-turns.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { formatSkillExperienceReviewTranscript } from "./experience-review-prompt.js";
@@ -20,12 +21,12 @@ function capSessionTranscript(transcript: string, maxChars: number): string {
   }
   const omission = "\n\n[older session content omitted]\n\n";
   if (maxChars <= omission.length) {
-    return transcript.slice(0, maxChars);
+    return truncateUtf16Safe(transcript, maxChars);
   }
   const contentBudget = Math.max(0, maxChars - omission.length);
   const headLength = Math.min(2_000, Math.floor(contentBudget / 2));
-  const head = transcript.slice(0, headLength);
-  const tail = transcript.slice(-(contentBudget - headLength));
+  const head = truncateUtf16Safe(transcript, headLength);
+  const tail = sliceUtf16Safe(transcript, -(contentBudget - head.length));
   return `${head}${omission}${tail}`;
 }
 

@@ -73,9 +73,6 @@ export function createGoogleVideoGenerationProviderMetadata(): Omit<
       DEFAULT_GOOGLE_VIDEO_MODEL,
       "veo-3.1-generate-preview",
       "veo-3.1-lite-generate-preview",
-      "veo-3.0-fast-generate-001",
-      "veo-3.0-generate-001",
-      "veo-2.0-generate-001",
     ],
     isConfigured: isGoogleProviderConfigured,
     capabilities: {

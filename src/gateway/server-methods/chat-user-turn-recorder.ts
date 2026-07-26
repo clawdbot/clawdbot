@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import {
+  buildRunUserTurnIdempotencyKey,
   createUserTurnTranscriptRecorder,
   type UserTurnInput,
   type UserTurnTranscriptRecorder,
@@ -34,6 +35,7 @@ export function createGatewayChatUserTurnController(params: {
   provenance?: InputProvenance;
   rawMessage: string;
   restartAdmission?: RestartSafeChatAdmission;
+  sender?: UserTurnInput["sender"];
   senderIsOwner: boolean;
   sessionKey: string;
   sessionLoadOptions?: { agentId?: string; clone?: boolean };
@@ -44,7 +46,8 @@ export function createGatewayChatUserTurnController(params: {
   const baseInput: UserTurnInput = {
     text: params.rawMessage,
     timestamp: params.now,
-    idempotencyKey: `${params.clientRunId}:user`,
+    idempotencyKey: buildRunUserTurnIdempotencyKey(params.clientRunId),
+    ...(params.sender ? { sender: params.sender } : {}),
     ...(params.senderIsOwner ? { senderIsOwner: true } : {}),
     ...(params.provenance ? { provenance: params.provenance } : {}),
   };

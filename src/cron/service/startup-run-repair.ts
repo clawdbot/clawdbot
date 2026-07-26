@@ -3,7 +3,12 @@ import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-
 import type { CronRunLogEntry } from "../run-log-types.js";
 import type { CronJob, CronRunStatus } from "../types.js";
 import type { CronServiceState } from "./state.js";
-import { applyJobResult, applyTriggerRunResult, type CronTriggerEvalOutcome } from "./timer.js";
+import {
+  applyJobResult,
+  applyScriptRunResult,
+  applyTriggerRunResult,
+  type CronTriggerEvalOutcome,
+} from "./timer.js";
 
 export const STARTUP_INTERRUPTED_ERROR = "cron: job interrupted by gateway restart";
 
@@ -21,7 +26,7 @@ function resolveInterruptedStartupFailureNotificationStatus(params: {
   if (params.job.delivery?.bestEffort === true) {
     return "not-requested";
   }
-  if (resolveFailureDestination(params.job, params.state.deps.cronConfig?.failureDestination)) {
+  if (resolveFailureDestination(params.job, params.state.deps.cronConfig?.failureAlert)) {
     return "unknown";
   }
   const primaryPlan = resolveCronDeliveryPlan(params.job);
@@ -85,6 +90,7 @@ export function restoreFinalizedStartupRun(params: {
   job: CronJob;
   runningAtMs: number;
   entry: CronRunLogEntry & { status: CronRunStatus };
+  scriptResult?: { scriptStateChanged: true; scriptState?: unknown };
   triggerEval?: CronTriggerEvalOutcome;
 }): boolean {
   const { state, job, runningAtMs, entry } = params;
@@ -93,12 +99,7 @@ export function restoreFinalizedStartupRun(params: {
     state,
     job,
     {
-      status: entry.status,
-      error: entry.error,
-      deliveryError: entry.deliveryError,
-      diagnostics: entry.diagnostics,
-      delivered: entry.delivered,
-      provider: entry.provider,
+      ...entry,
       startedAt,
       endedAt: entry.ts,
     },
@@ -115,12 +116,22 @@ export function restoreFinalizedStartupRun(params: {
   job.state.lastFailureNotificationDeliveryStatus = entry.failureNotificationDelivery?.status;
   job.state.lastFailureNotificationDeliveryError = entry.failureNotificationDelivery?.error;
   job.state.nextRunAtMs = entry.nextRunAtMs;
+  // The finalized ledger row owns the schedule decision made before the stale
+  // store write. No next run means that one-shot was permanently disabled.
+  if (job.schedule.kind === "at" && entry.nextRunAtMs === undefined) {
+    job.enabled = false;
+  }
   if (params.triggerEval) {
     applyTriggerRunResult(job, {
       status: entry.status,
       endedAt: entry.ts,
       triggerEval: params.triggerEval,
     });
+  }
+  if (params.scriptResult) {
+    // The payload script is the final writer when a trigger and payload both
+    // update their shared state during the same successful run.
+    applyScriptRunResult(job, { status: entry.status, ...params.scriptResult });
   }
   state.deps.log.info(
     { jobId: job.id, runningAtMs, status: entry.status },

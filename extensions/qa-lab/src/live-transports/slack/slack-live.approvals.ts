@@ -168,7 +168,7 @@ export async function waitForSlackApprovalPrompt(params: {
   );
 }
 
-export function matchesSlackApprovalPromptText(params: {
+function matchesSlackApprovalPromptText(params: {
   approvalKind: SlackQaApprovalKind;
   extraTextMatches?: string[];
   text: string;
@@ -247,7 +247,7 @@ export async function waitForSlackApprovalResolvedUpdate(params: {
   );
 }
 
-export function matchesSlackApprovalResolvedUpdate(params: {
+function matchesSlackApprovalResolvedUpdate(params: {
   actionValues: string[];
   approvalKind: SlackQaApprovalKind;
   decision: SlackQaApprovalDecision;

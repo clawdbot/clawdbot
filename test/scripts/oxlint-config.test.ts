@@ -146,6 +146,7 @@ describe("oxlint config", () => {
       "dist-runtime/",
       "docs/_layouts/",
       "**/a2ui.bundle.js",
+      "extensions/browser/chrome-extension/modules/copilot-runtime.js",
       "extensions/diffs/assets/viewer-runtime.js",
       "extensions/diffs-language-pack/assets/viewer-runtime.js",
       "node_modules/",

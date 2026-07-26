@@ -55,7 +55,3 @@ export async function wasMSTeamsMessageSentWithPersistence(params: {
   }
   return await sentMessages.lookup(makeKey(params.conversationId, params.messageId));
 }
-
-export function clearMSTeamsSentMessageCache(): void {
-  sentMessages.clearForTest();
-}

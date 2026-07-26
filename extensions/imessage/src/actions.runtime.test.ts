@@ -255,6 +255,9 @@ describe("normalizeDirectChatIdentifier", () => {
   });
   it("leaves group identifiers (iMessage;+;chat...) unchanged", () => {
     expect(normalizeDirectChatIdentifierForTest("iMessage;+;chat0000")).toBe("iMessage;+;chat0000");
+    expect(normalizeDirectChatIdentifierForTest("iMessage;+;Some@example.com")).toBe(
+      "iMessage;+;Some@example.com",
+    );
   });
   it("leaves bare values unchanged", () => {
     expect(normalizeDirectChatIdentifierForTest("+12069106512")).toBe("+12069106512");

@@ -129,6 +129,8 @@ async function fetchChutesUserInfo(params: {
     }),
   });
   if (!response.ok) {
+    // Release the connection instead of leaving the error body to idle timeout.
+    await response.body?.cancel().catch(() => undefined);
     return null;
   }
   const data = await readProviderJsonResponse<unknown>(response, "Chutes userinfo");

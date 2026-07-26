@@ -148,6 +148,8 @@ export function createDiagnosticsEventHandler(params: {
           break;
         case "run.progress":
           break;
+        case "run.execution_phase":
+          break;
         case "diagnostic.heartbeat":
           recordHeartbeat(evt);
           return;

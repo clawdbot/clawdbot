@@ -195,7 +195,7 @@ function formatWhatsAppMessageShape(message: WhatsAppQaDriverObservedMessage, in
   ].join(" ");
 }
 
-export function formatWhatsAppScenarioWaitDiagnostics(
+function formatWhatsAppScenarioWaitDiagnostics(
   context: WhatsAppQaObservedMessagesContext,
   params: {
     diagnosticChecks?: Array<{
@@ -346,14 +346,14 @@ export async function assertWhatsAppScenarioMessageBatch(params: {
   return `observed ${uniqueMessages.length} SUT message(s) after settle`;
 }
 
-export function formatWhatsAppBatchMessageDiagnostics(messages: WhatsAppQaDriverObservedMessage[]) {
+function formatWhatsAppBatchMessageDiagnostics(messages: WhatsAppQaDriverObservedMessage[]) {
   if (messages.length === 0) {
     return "no matching SUT message shapes observed";
   }
   return messages.slice(-5).map(formatWhatsAppMessageShape).join("; ");
 }
 
-export function dedupeWhatsAppMessagesById(messages: WhatsAppQaDriverObservedMessage[]) {
+function dedupeWhatsAppMessagesById(messages: WhatsAppQaDriverObservedMessage[]) {
   const seen = new Set<string>();
   const unique: WhatsAppQaDriverObservedMessage[] = [];
   for (const message of messages) {

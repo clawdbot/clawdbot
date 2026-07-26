@@ -5,8 +5,8 @@ scenario:
   surface: dm
   coverage:
     primary:
-      - channels.dm
-      - memory.session-key-construction
+      - matrix.sender-bound-dm-routing
+      - channels.session-key-construction
   objective: Verify Matrix dm.sessionScope=per-room isolates two DM rooms and suppresses the shared-session notice.
   gatewayConfigPatch:
     channels:
@@ -23,7 +23,9 @@ scenario:
   codeRefs:
     - extensions/matrix/src/session-route.ts
     - extensions/matrix/src/matrix/monitor/handler.ts
+    - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
   execution:
+    profiles: { "matrix:adapter": 12, "matrix:all": 17, "matrix:transport": 16 }
     kind: flow
     channel: matrix
     summary: Send consecutive DMs in two Matrix rooms and require per-room isolation.

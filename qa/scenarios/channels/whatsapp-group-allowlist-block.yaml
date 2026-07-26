@@ -1,0 +1,19 @@
+title: WhatsApp group outside allowlist stays quiet
+scenario:
+  id: whatsapp-group-allowlist-block
+  surface: channels
+  coverage:
+    primary:
+      - whatsapp.group-allowlists
+  execution:
+    profiles: { "whatsapp:default": 6, "whatsapp:mock-default": 31 }
+    kind: flow
+    channel: whatsapp
+    timeoutMs: 8000
+    retryCount: 1
+    suiteIsolation: isolated
+    config: { whatsappScenarioId: whatsapp-group-allowlist-block }
+flow:
+  module: ./live-transports/whatsapp/scenario-runtime.js
+  call: runWhatsAppGroupAllowlistBlockScenario
+  args: [{ expr: whatsappScenarioContext }]

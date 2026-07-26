@@ -1,6 +1,7 @@
 /** Private JSONL worker exposing the CLI node-host runtime to the macOS app. */
 import { createInterface } from "node:readline";
 import { VERSION } from "../version.js";
+import { loadNodeHostConfig } from "./config.js";
 import { prepareNodeHostRuntime, type NodeHostInventory } from "./runtime.js";
 import {
   NodeHostWorkerBridgeClient,
@@ -17,7 +18,11 @@ function emitInventory(inventory: NodeHostInventory): void {
 }
 
 export async function runNodeHostWorker(): Promise<void> {
-  const prepared = await prepareNodeHostRuntime({ enableDuplexPluginCommands: true });
+  const nodeConfig = await loadNodeHostConfig();
+  const prepared = await prepareNodeHostRuntime({
+    enableDuplexPluginCommands: true,
+    installedAppsSharingEnabled: nodeConfig?.installedAppsSharing === true,
+  });
   const client = new NodeHostWorkerBridgeClient(writeMessage);
   let stopping = false;
   let resolveStopped: (() => void) | undefined;

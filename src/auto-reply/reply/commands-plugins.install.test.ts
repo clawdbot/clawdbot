@@ -165,7 +165,6 @@ describe("handleCommands /plugins install", () => {
             source: "exec",
             command: process.execPath,
             args: ["-e", "process.exit(1)"],
-            allowInsecurePath: true,
           },
         },
       },
@@ -203,7 +202,10 @@ describe("handleCommands /plugins install", () => {
       const installParams = mockFirstObjectArg(installPluginFromNpmSpecMock);
       expectObjectFields(installParams, {
         spec: "@acme/policy-plugin@1.0.0",
-        config: policyConfig,
+        config: {
+          ...policyConfig,
+          agents: { entries: { main: { default: true } } },
+        },
         mode: "update",
       });
       expect(installParams).not.toHaveProperty("expectedPluginId");
@@ -228,7 +230,6 @@ describe("handleCommands /plugins install", () => {
             source: "exec",
             command: process.execPath,
             args: ["-e", "process.exit(1)"],
-            allowInsecurePath: true,
           },
         },
       },
@@ -264,7 +265,10 @@ describe("handleCommands /plugins install", () => {
       expect(result?.reply?.text).toContain('Installed plugin "brave"');
       expectObjectFields(mockFirstObjectArg(installPluginFromNpmSpecMock), {
         spec: "@openclaw/brave-plugin",
-        config: policyConfig,
+        config: {
+          ...policyConfig,
+          agents: { entries: { main: { default: true } } },
+        },
         expectedPluginId: "brave",
         trustedSourceLinkedOfficialInstall: true,
       });
@@ -503,7 +507,12 @@ describe("handleCommands /plugins install", () => {
   });
 
   it("installs a bundled local path without --force", async () => {
-    const bundledPath = path.resolve("extensions/discord");
+    // Resolve the canonical bundled path from discovery: built checkouts
+    // resolve bundled sources to dist/extensions, not the source tree.
+    const { getProcessBundledPluginSources } = await import("../../plugins/bundled-sources.js");
+    const bundledPath =
+      getProcessBundledPluginSources().get("discord")?.localPath ??
+      path.resolve("extensions/discord");
     installPluginFromPathMock.mockResolvedValue({
       ok: true,
       pluginId: "discord",

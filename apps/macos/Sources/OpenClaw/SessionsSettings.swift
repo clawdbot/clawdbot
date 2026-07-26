@@ -36,7 +36,7 @@ struct SessionsSettings: View {
     private var header: some View {
         HStack(alignment: .top, spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Sessions")
+                Text("Threads")
                     .font(.title3.weight(.semibold))
                 Text("Peek at the stored conversation buckets the CLI reuses for context and rate limits.")
                     .font(.callout)
@@ -53,7 +53,7 @@ struct SessionsSettings: View {
     @ViewBuilder
     private var content: some View {
         if self.rows.isEmpty, self.errorMessage == nil {
-            Text("No sessions yet. They appear after the first inbound message or heartbeat.")
+            Text("No threads yet. They appear after the first inbound message or heartbeat.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .padding(.top, 6)

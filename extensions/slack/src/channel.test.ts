@@ -74,10 +74,11 @@ beforeEach(async () => {
 
 async function getSlackConfiguredState(cfg: OpenClawConfig) {
   const account = slackPlugin.config.resolveAccount(cfg, "default");
+  const inspectedAccount = slackPlugin.config.inspectAccount?.(cfg, "default") ?? account;
   return {
     configured: slackPlugin.config.isConfigured?.(account, cfg),
     snapshot: await slackPlugin.status?.buildAccountSnapshot?.({
-      account,
+      account: inspectedAccount as never,
       cfg,
       runtime: undefined,
     }),
@@ -471,6 +472,41 @@ describe("slackPlugin actions", () => {
 });
 
 describe("slackPlugin status", () => {
+  it("probes the human user token for user identity", async () => {
+    setSlackRuntime(null as never);
+    const probeSpy = vi.spyOn(probeModule, "probeSlack").mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      user: { id: "U12345678", name: "test-human" },
+      team: { id: "T12345678", name: "Test Team" },
+    });
+    const cfg = {
+      channels: {
+        slack: {
+          postAs: "user",
+          userToken: "test-user-token",
+          appToken: "test-app-token",
+        },
+      },
+    } as OpenClawConfig;
+    const account = slackPlugin.config.resolveAccount(cfg, "default");
+
+    const result = await slackPlugin.status!.probeAccount!({
+      account,
+      timeoutMs: 2500,
+      cfg,
+    });
+
+    expect(probeSpy).toHaveBeenCalledWith("test-user-token", 2500, {
+      accountId: "default",
+      identity: "user",
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      user: { id: "U12345678", name: "test-human" },
+    });
+  });
+
   it("uses the direct Slack probe helper when runtime is not initialized", async () => {
     setSlackRuntime(null as never);
     const probeSpy = vi.spyOn(probeModule, "probeSlack").mockResolvedValueOnce({
@@ -525,6 +561,21 @@ describe("slackPlugin status", () => {
       },
       { text: "Bot: @human-installer" },
       { text: "Team: OpenClaw (T1)" },
+    ]);
+  });
+
+  it("renders the resolved human identity in capabilities output", () => {
+    const lines = slackPlugin.status?.formatCapabilitiesProbe?.({
+      probe: {
+        ok: true,
+        user: { id: "U12345678", name: "test-human" },
+        team: { id: "T12345678", name: "Test Team" },
+      },
+    });
+
+    expect(lines).toStrictEqual([
+      { text: "User identity: @test-human (U12345678)" },
+      { text: "Team: Test Team (T12345678)" },
     ]);
   });
 
@@ -750,7 +801,8 @@ describe("slackPlugin security", () => {
       cfg: {
         channels: {
           slack: {
-            dm: { policy: "allowlist", allowFrom: ["  slack:U123  "] },
+            dmPolicy: "allowlist",
+            allowFrom: ["  slack:U123  "],
           },
         },
       } as OpenClawConfig,
@@ -760,7 +812,8 @@ describe("slackPlugin security", () => {
             slack: {
               botToken: "xoxb-test",
               appToken: "xapp-test",
-              dm: { policy: "allowlist", allowFrom: ["  slack:U123  "] },
+              dmPolicy: "allowlist",
+              allowFrom: ["  slack:U123  "],
             },
           },
         } as OpenClawConfig,
@@ -1579,6 +1632,44 @@ describe("slackPlugin configured bindings", () => {
 });
 
 describe("slackPlugin config", () => {
+  it.each([
+    {
+      name: "Socket Mode",
+      slack: {
+        postAs: "user" as const,
+        userToken: "test-user-token",
+        appToken: "test-app-token",
+      },
+      expectedTransportSource: { appTokenSource: "config" },
+    },
+    {
+      name: "HTTP mode",
+      slack: {
+        postAs: "user" as const,
+        mode: "http" as const,
+        userToken: "test-user-token",
+        signingSecret: "test-signing-secret",
+      },
+      expectedTransportSource: { signingSecretSource: "config" },
+    },
+  ])(
+    "treats a complete user-identity $name account as configured",
+    async ({ slack, expectedTransportSource }) => {
+      const { configured, snapshot } = await getSlackConfiguredState({
+        channels: { slack },
+      } as OpenClawConfig);
+
+      expect(configured).toBe(true);
+      expect(snapshot).toMatchObject({
+        configured: true,
+        identity: "user",
+        userTokenSource: "config",
+        userTokenStatus: "available",
+        ...expectedTransportSource,
+      });
+    },
+  );
+
   it("treats HTTP mode accounts with bot token + signing secret as configured", async () => {
     const cfg: OpenClawConfig = {
       channels: {

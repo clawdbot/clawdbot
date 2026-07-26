@@ -9,6 +9,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { bindModelLlmRuntime } from "../../llm/model-runtime-binding.js";
 import { complete } from "../../llm/stream.js";
 import type { Context } from "../../llm/types.js";
 import {
@@ -18,11 +19,18 @@ import {
 import { extractPdfContent, type PdfExtractedContent } from "../../media/pdf-extract.js";
 import { loadWebMediaRaw } from "../../media/web-media.js";
 import { resolveUserPath } from "../../utils.js";
+import { resolveDefaultAgentDir } from "../agent-scope.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
+import { abortable } from "../embedded-agent-runner/run/abortable.js";
 import { applySecretRefHeaderSentinels } from "../model-auth.js";
+import {
+  acquireAgentRunPreparedModelRuntime,
+  type PreparedModelRuntimeSnapshot,
+} from "../prepared-model-runtime.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
 import { optionalFiniteNumberSchema } from "../schema/typebox.js";
+import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
 import { readFiniteNumberParam, ToolInputError } from "./common.js";
 import { coerceImageModelConfig, type ImageModelConfig } from "./image-tool.helpers.js";
 import {
@@ -48,9 +56,6 @@ import {
 import { resolvePdfModelConfigForTool } from "./pdf-tool.model-config.js";
 import {
   createSandboxBridgeReadFile,
-  discoverAuthStorage,
-  discoverModels,
-  ensureOpenClawModelsJson,
   resolveSandboxedBridgeMediaPath,
   runWithImageModelFallback,
   type AnyAgentTool,
@@ -142,8 +147,10 @@ type PdfSandboxConfig = {
 
 async function runPdfPrompt(params: {
   cfg?: OpenClawConfig;
+  agentId?: string;
   agentDir: string;
   workspaceDir?: string;
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   pdfModelConfig: ImageModelConfig;
   modelOverride?: string;
   prompt: string;
@@ -151,6 +158,7 @@ async function runPdfPrompt(params: {
   password?: string;
   pageNumbers?: number[];
   getExtractions: () => Promise<PdfExtractedContent[]>;
+  signal?: AbortSignal;
 }): Promise<{
   text: string;
   provider: string;
@@ -158,140 +166,203 @@ async function runPdfPrompt(params: {
   native: boolean;
   attempts: Array<{ provider: string; model: string; error: string }>;
 }> {
-  const effectiveCfg = applyImageModelConfigDefaults(params.cfg, params.pdfModelConfig);
+  const requestedCfg = applyImageModelConfigDefaults(params.cfg, params.pdfModelConfig);
 
-  const modelsOptions = params.workspaceDir ? { workspaceDir: params.workspaceDir } : undefined;
-  await ensureOpenClawModelsJson(effectiveCfg, params.agentDir, modelsOptions);
-  const authStorage = discoverAuthStorage(params.agentDir);
-  const modelRegistry = discoverModels(authStorage, params.agentDir, {
-    config: effectiveCfg,
-    ...modelsOptions,
-  });
-
-  let extractionCache: PdfExtractedContent[] | null = null;
-  const getExtractions = async (): Promise<PdfExtractedContent[]> => {
-    if (!extractionCache) {
-      extractionCache = await params.getExtractions();
-    }
-    return extractionCache;
-  };
-
-  const result = await runWithImageModelFallback({
-    cfg: effectiveCfg,
-    modelOverride: params.modelOverride,
-    run: async (provider, modelId) => {
-      const model = applySecretRefHeaderSentinels(
-        resolveModelFromRegistry({ modelRegistry, provider, modelId }),
-        effectiveCfg,
-      );
-      const apiKey = await resolveModelRuntimeApiKey({
-        model,
-        cfg: effectiveCfg,
-        agentDir: params.agentDir,
-        authStorage,
-      });
-
-      if (providerSupportsNativePdf(provider)) {
-        if (params.password) {
-          throw new Error(
-            `password is not supported with native PDF providers (${provider}/${modelId}). Remove password, or use a non-native model for encrypted PDFs.`,
-          );
-        }
-        if (params.pageNumbers && params.pageNumbers.length > 0) {
-          throw new Error(
-            `pages is not supported with native PDF providers (${provider}/${modelId}). Remove pages, or use a non-native model for page filtering.`,
-          );
-        }
-
-        const pdfs = params.pdfBuffers.map((p) => ({
-          base64: p.base64,
-          filename: p.filename,
-        }));
-
-        if (provider === "anthropic") {
-          const text = await anthropicAnalyzePdf({
-            apiKey,
-            modelId,
-            prompt: params.prompt,
-            pdfs,
-            maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
-            baseUrl: model.baseUrl,
-            requestConfig: {
-              headers: model.headers,
-              request: getModelProviderRequestTransport(model),
-            },
-          });
-          return { text, provider, model: modelId, native: true };
-        }
-
-        if (provider === "google") {
-          const text = await geminiAnalyzePdf({
-            apiKey,
-            modelId,
-            prompt: params.prompt,
-            pdfs,
-            baseUrl: model.baseUrl,
-            requestConfig: {
-              headers: model.headers,
-              request: getModelProviderRequestTransport(model),
-            },
-          });
-          return { text, provider, model: modelId, native: true };
-        }
+  let preparedRuntimeLease: Awaited<ReturnType<typeof acquireAgentRunPreparedModelRuntime>>;
+  if (params.preparedModelRuntime) {
+    preparedRuntimeLease = { snapshot: params.preparedModelRuntime, release: () => {} };
+  } else {
+    const acquireRuntime = acquireAgentRunPreparedModelRuntime({
+      agentDir: params.agentDir,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      config: requestedCfg ?? {},
+      inheritedAuthDir: resolveDefaultAgentDir(requestedCfg ?? {}),
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    });
+    try {
+      preparedRuntimeLease = params.signal
+        ? await abortable(params.signal, acquireRuntime)
+        : await acquireRuntime;
+    } catch (error) {
+      if (params.signal?.aborted) {
+        void acquireRuntime.then(
+          (late) => late.release(),
+          () => undefined,
+        );
       }
+      throw error;
+    }
+  }
 
-      // PDF-only model selections may not have loaded their provider plugin yet.
-      // Register before complete() so plugin-owned APIs resolve on first use.
-      registerProviderStreamForModel({
-        model,
-        cfg: effectiveCfg,
-        agentDir: params.agentDir,
-        ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-      });
+  try {
+    params.signal?.throwIfAborted();
+    const preparedRuntime = preparedRuntimeLease.snapshot;
+    const runtimeAgentDir = preparedRuntime.agentDir;
+    const runtimeWorkspaceDir = preparedRuntime.workspaceDir ?? params.workspaceDir;
+    const { authStorage, modelRegistry } = preparedRuntime.createStores();
+    const modelRuntime = getModelRegistryRuntime(modelRegistry);
+    const committedPdfModelConfig = resolvePdfModelConfigForTool({
+      cfg: preparedRuntime.config,
+      agentDir: runtimeAgentDir,
+      ...(runtimeWorkspaceDir ? { workspaceDir: runtimeWorkspaceDir } : {}),
+    });
+    if (!committedPdfModelConfig) {
+      throw new ToolInputError("No PDF model configured in the active runtime generation.");
+    }
+    const effectiveCfg = applyImageModelConfigDefaults(
+      preparedRuntime.config,
+      committedPdfModelConfig,
+    );
+    let extractionCache: PdfExtractedContent[] | null = null;
+    const getExtractions = async (): Promise<PdfExtractedContent[]> => {
+      if (!extractionCache) {
+        extractionCache = await params.getExtractions();
+      }
+      return extractionCache;
+    };
 
-      const extractions = await getExtractions();
-      const hasImages = extractions.some((e) => e.images.length > 0);
-      if (hasImages && !model.input?.includes("image")) {
-        const hasText = extractions.some((e) => e.text.trim().length > 0);
-        if (!hasText) {
-          throw new Error(
-            `Model ${provider}/${modelId} does not support images and PDF has no extractable text.`,
-          );
+    const result = await runWithImageModelFallback({
+      cfg: effectiveCfg,
+      modelOverride: params.modelOverride,
+      abortSignal: params.signal,
+      run: async (provider, modelId) => {
+        const model = bindModelLlmRuntime(
+          applySecretRefHeaderSentinels(
+            resolveModelFromRegistry({ modelRegistry, provider, modelId }),
+            effectiveCfg,
+          ),
+          modelRuntime.llmRuntime,
+        );
+        const apiKey = await resolveModelRuntimeApiKey({
+          model,
+          cfg: effectiveCfg,
+          agentDir: runtimeAgentDir,
+          authStorage,
+        });
+
+        if (providerSupportsNativePdf(provider)) {
+          if (params.password) {
+            throw new Error(
+              `password is not supported with native PDF providers (${provider}/${modelId}). Remove password, or use a non-native model for encrypted PDFs.`,
+            );
+          }
+          if (params.pageNumbers && params.pageNumbers.length > 0) {
+            throw new Error(
+              `pages is not supported with native PDF providers (${provider}/${modelId}). Remove pages, or use a non-native model for page filtering.`,
+            );
+          }
+
+          const pdfs = params.pdfBuffers.map((p) => ({
+            base64: p.base64,
+            filename: p.filename,
+          }));
+
+          if (provider === "anthropic") {
+            // A run cancelled mid-dispatch must not buy another provider call.
+            params.signal?.throwIfAborted();
+            const text = await anthropicAnalyzePdf({
+              apiKey,
+              modelId,
+              prompt: params.prompt,
+              pdfs,
+              maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
+              baseUrl: model.baseUrl,
+              requestConfig: {
+                headers: model.headers,
+                request: getModelProviderRequestTransport(model),
+              },
+              signal: params.signal,
+            });
+            return { text, provider, model: modelId, native: true };
+          }
+
+          if (provider === "google") {
+            // A run cancelled mid-dispatch must not buy another provider call.
+            params.signal?.throwIfAborted();
+            const text = await geminiAnalyzePdf({
+              apiKey,
+              modelId,
+              prompt: params.prompt,
+              pdfs,
+              baseUrl: model.baseUrl,
+              requestConfig: {
+                headers: model.headers,
+                request: getModelProviderRequestTransport(model),
+              },
+              signal: params.signal,
+            });
+            return { text, provider, model: modelId, native: true };
+          }
         }
-        const textOnlyExtractions: PdfExtractedContent[] = extractions.map((e) => ({
-          text: e.text,
-          images: [],
-        }));
-        const context = buildPdfExtractionContext(params.prompt, textOnlyExtractions, model);
-        const message = await complete(model, context, {
+
+        // PDF-only model selections may not have loaded their provider plugin yet.
+        // Register before complete() so plugin-owned APIs resolve on first use.
+        registerProviderStreamForModel({
+          model,
+          cfg: effectiveCfg,
+          agentDir: runtimeAgentDir,
+          apiRegistry: modelRuntime.apiRegistry,
+          ...(runtimeWorkspaceDir ? { workspaceDir: runtimeWorkspaceDir } : {}),
+        });
+
+        const extractions = await getExtractions();
+        const hasImages = extractions.some((e) => e.images.length > 0);
+        if (hasImages && !model.input?.includes("image")) {
+          const hasText = extractions.some((e) => e.text.trim().length > 0);
+          if (!hasText) {
+            throw new Error(
+              `Model ${provider}/${modelId} does not support images and PDF has no extractable text.`,
+            );
+          }
+          const textOnlyExtractions: PdfExtractedContent[] = extractions.map((e) => ({
+            text: e.text,
+            images: [],
+          }));
+          const context = buildPdfExtractionContext(params.prompt, textOnlyExtractions, model);
+          // A run cancelled mid-dispatch must not buy another provider call.
+          params.signal?.throwIfAborted();
+          const completion = complete(model, context, {
+            apiKey,
+            maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
+            signal: params.signal,
+          });
+          const message = params.signal
+            ? await abortable(params.signal, completion)
+            : await completion;
+          const text = coercePdfAssistantText({ message, provider, model: modelId });
+          return { text, provider, model: modelId, native: false };
+        }
+
+        const context = buildPdfExtractionContext(params.prompt, extractions, model);
+        // A run cancelled mid-dispatch must not buy another provider call.
+        params.signal?.throwIfAborted();
+        const completion = complete(model, context, {
           apiKey,
           maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
+          signal: params.signal,
         });
+        const message = params.signal
+          ? await abortable(params.signal, completion)
+          : await completion;
         const text = coercePdfAssistantText({ message, provider, model: modelId });
         return { text, provider, model: modelId, native: false };
-      }
+      },
+    });
 
-      const context = buildPdfExtractionContext(params.prompt, extractions, model);
-      const message = await complete(model, context, {
-        apiKey,
-        maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
-      });
-      const text = coercePdfAssistantText({ message, provider, model: modelId });
-      return { text, provider, model: modelId, native: false };
-    },
-  });
-
-  return {
-    text: result.result.text,
-    provider: result.result.provider,
-    model: result.result.model,
-    native: result.result.native,
-    attempts: result.attempts.map((a) => ({
-      provider: a.provider,
-      model: a.model,
-      error: a.error,
-    })),
-  };
+    return {
+      text: result.result.text,
+      provider: result.result.provider,
+      model: result.result.model,
+      native: result.result.native,
+      attempts: result.attempts.map((a) => ({
+        provider: a.provider,
+        model: a.model,
+        error: a.error,
+      })),
+    };
+  } finally {
+    preparedRuntimeLease.release();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -300,9 +371,11 @@ async function runPdfPrompt(params: {
 
 export function createPdfTool(options?: {
   config?: OpenClawConfig;
+  agentId?: string;
   agentDir?: string;
   authProfileStore?: AuthProfileStore;
   workspaceDir?: string;
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   sandbox?: PdfSandboxConfig;
   fsPolicy?: ToolFsPolicy;
   /**
@@ -336,7 +409,7 @@ export function createPdfTool(options?: {
 
   const maxBytesMbDefault = (
     options?.config?.agents?.defaults as Record<string, unknown> | undefined
-  )?.pdfMaxBytesMb;
+  )?.pdfMaxMb;
   const maxPagesDefault = (options?.config?.agents?.defaults as Record<string, unknown> | undefined)
     ?.pdfMaxPages;
   const configuredMaxBytesMb =
@@ -357,7 +430,7 @@ export function createPdfTool(options?: {
     name: "pdf",
     description,
     parameters: PdfToolSchema,
-    execute: async (_toolCallId, args) => {
+    execute: async (_toolCallId, args, signal) => {
       const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
 
       // MARK: - Normalize pdf + pdfs input
@@ -424,6 +497,9 @@ export function createPdfTool(options?: {
       }> = [];
 
       for (const pdfRaw of pdfInputs) {
+        // Stop before starting the next sequential download when the run was
+        // aborted, so a dead run cannot keep pulling remote PDFs.
+        signal?.throwIfAborted();
         const trimmed = normalizeMediaReferenceSource(pdfRaw);
         const refInfo = classifyMediaReferenceSource(trimmed);
         const { isHttpUrl } = refInfo;
@@ -484,6 +560,9 @@ export function createPdfTool(options?: {
               localRoots,
               ...(isHttpUrl ? { readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS } : {}),
               ssrfPolicy: remoteMediaSsrfPolicy,
+              // Forward the run abort signal into the fetch layer so an abort
+              // mid-download disconnects the in-flight socket.
+              ...(signal ? { requestInit: { signal } } : {}),
             });
 
         if (media.kind !== "document") {
@@ -515,6 +594,9 @@ export function createPdfTool(options?: {
       const getExtractions = async (): Promise<PdfExtractedContent[]> => {
         const extractedAll: PdfExtractedContent[] = [];
         for (const pdf of loadedPdfs) {
+          // Extraction is sequential and can be CPU-heavy. Do not start the next
+          // document after the owning agent run has been cancelled.
+          signal?.throwIfAborted();
           const extracted = await extractPdfContent({
             buffer: pdf.buffer,
             maxPages: configuredMaxPages,
@@ -529,10 +611,17 @@ export function createPdfTool(options?: {
         return extractedAll;
       };
 
+      // Do not issue a paid PDF-model call for an already-aborted run.
+      signal?.throwIfAborted();
       const result = await runPdfPrompt({
+        signal,
         cfg: options?.config,
+        agentId: options?.agentId,
         agentDir,
         ...(options?.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
+        ...(options?.preparedModelRuntime
+          ? { preparedModelRuntime: options.preparedModelRuntime }
+          : {}),
         pdfModelConfig,
         modelOverride,
         prompt: promptRaw,

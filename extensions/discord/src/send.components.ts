@@ -36,6 +36,7 @@ import {
   resolveDiscordChannel,
   stripUndefinedFields,
   SUPPRESS_NOTIFICATIONS_FLAG,
+  type DiscordAllowedMentions,
 } from "./send.shared.js";
 import type { DiscordSendResult } from "./send.types.js";
 
@@ -168,6 +169,7 @@ type DiscordComponentSendOpts = {
   tableMode?: MarkdownTableMode;
   chunkMode?: ChunkMode;
   suppressEmbeds?: boolean;
+  allowedMentions?: DiscordAllowedMentions;
   /** Persist the concrete platform send before component bookkeeping can fail. */
   onDeliveryResult?: (result: DiscordSendResult) => Promise<void> | void;
 };
@@ -253,6 +255,7 @@ async function buildDiscordComponentPayload(params: {
 
   const payload: MessagePayloadObject = {
     components: buildResult.components,
+    allowed_mentions: params.opts.allowedMentions,
     ...(finalFlags ? { flags: finalFlags } : {}),
     ...(files ? { files } : {}),
   };

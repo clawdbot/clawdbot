@@ -4,8 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { registerResolvedAgentDir } from "../agents/agent-dir-registry.js";
-import { getRuntimeAuthProfileStoreCredentialMutationRevision } from "../agents/auth-profiles/runtime-snapshots.js";
+import { getRuntimeAuthProfileStoreCredentialMutationToken } from "../agents/auth-profiles/runtime-snapshots.js";
 import {
   readPersistedAuthProfileStateRaw,
   readPersistedAuthProfileStoreRaw,
@@ -17,8 +18,8 @@ import {
   getRuntimeAuthProfileStoreSnapshot,
   replaceRuntimeAuthProfileStoreSnapshots,
   saveAuthProfileStore,
-  testing as storeTesting,
 } from "../agents/auth-profiles/store.js";
+import { testing as storeTesting } from "../agents/auth-profiles/store.test-support.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -45,6 +46,7 @@ vi.mock("./runtime.js", () => ({
 let runSecretsApply: typeof import("./apply.js").runSecretsApply;
 let applyTesting: typeof import("./apply.js").testing;
 let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const OPENAI_API_KEY_ENV_REF = {
   source: "env",
@@ -637,7 +639,7 @@ describe("secrets apply", () => {
     const coderStorePath = resolveAuthProfileDatabasePath(coderAgentDir);
     await writeJsonFile(fixture.configPath, {
       agents: {
-        list: [{ id: "coder", agentDir: coderAgentDir }],
+        entries: { coder: { agentDir: coderAgentDir } },
       },
     });
     const plan: SecretsApplyPlan = {
@@ -679,10 +681,10 @@ describe("secrets apply", () => {
     const secondStorePath = resolveAuthProfileDatabasePath(secondAgentDir);
     await writeJsonFile(fixture.configPath, {
       agents: {
-        list: [
-          { id: "first", agentDir: firstAgentDir },
-          { id: "second", agentDir: secondAgentDir },
-        ],
+        entries: {
+          first: { agentDir: firstAgentDir },
+          second: { agentDir: secondAgentDir },
+        },
       },
     });
     const firstState = {
@@ -698,7 +700,7 @@ describe("secrets apply", () => {
       { agentDir: firstAgentDir, store: { profiles: {}, ...firstState } },
     ]);
     const firstMutationRevision =
-      getRuntimeAuthProfileStoreCredentialMutationRevision(firstAgentDir);
+      getRuntimeAuthProfileStoreCredentialMutationToken(firstAgentDir).revision;
     const secondDatabase = openOpenClawAgentDatabase({
       agentId: "second",
       path: secondStorePath,
@@ -738,9 +740,9 @@ describe("secrets apply", () => {
       profiles: {},
       order: firstState.order,
     });
-    expect(getRuntimeAuthProfileStoreCredentialMutationRevision(firstAgentDir)).toBeGreaterThan(
-      firstMutationRevision,
-    );
+    expect(
+      getRuntimeAuthProfileStoreCredentialMutationToken(firstAgentDir).revision,
+    ).toBeGreaterThan(firstMutationRevision);
   });
 
   it.each(["credentials", "state"] as const)(
@@ -753,10 +755,10 @@ describe("secrets apply", () => {
       registerResolvedAgentDir({ agentId: "second", agentDir: secondAgentDir });
       await writeJsonFile(fixture.configPath, {
         agents: {
-          list: [
-            { id: "first", agentDir: firstAgentDir },
-            { id: "second", agentDir: secondAgentDir },
-          ],
+          entries: {
+            first: { agentDir: firstAgentDir },
+            second: { agentDir: secondAgentDir },
+          },
         },
       });
       const initialStore: AuthProfileStore = {
@@ -1194,22 +1196,23 @@ describe("secrets apply", () => {
     );
   });
 
-  it("applies array-indexed targets for agent memory search", async () => {
+  it("applies keyed targets for agent memory search", async () => {
     await fs.writeFile(
       fixture.configPath,
       `${JSON.stringify(
         {
           agents: {
-            list: [
-              {
-                id: "main",
-                memorySearch: {
-                  remote: {
-                    apiKey: "sk-memory-plaintext", // pragma: allowlist secret
+            entries: {
+              main: {
+                memory: {
+                  search: {
+                    remote: {
+                      apiKey: "sk-memory-plaintext", // pragma: allowlist secret
+                    },
                   },
                 },
               },
-            ],
+            },
           },
         },
         null,
@@ -1225,9 +1228,9 @@ describe("secrets apply", () => {
       generatedBy: "manual",
       targets: [
         {
-          type: "agents.list[].memorySearch.remote.apiKey",
-          path: "agents.list.0.memorySearch.remote.apiKey",
-          pathSegments: ["agents", "list", "0", "memorySearch", "remote", "apiKey"],
+          type: "agents.entries.*.memory.search.remote.apiKey",
+          path: "agents.entries.main.memory.search.remote.apiKey",
+          pathSegments: ["agents", "entries", "main", "memory", "search", "remote", "apiKey"],
           ref: { source: "env", provider: "default", id: "MEMORY_REMOTE_API_KEY" },
         },
       ],
@@ -1244,16 +1247,21 @@ describe("secrets apply", () => {
       env: fixture.env,
     })) as {
       agents?: {
-        list?: Array<{
-          memorySearch?: {
-            remote?: {
-              apiKey?: unknown;
+        entries?: Record<
+          string,
+          {
+            memory?: {
+              search?: {
+                remote?: {
+                  apiKey?: unknown;
+                };
+              };
             };
-          };
-        }>;
+          }
+        >;
       };
     };
-    expect(nextConfig.agents?.list?.[0]?.memorySearch?.remote?.apiKey).toEqual({
+    expect(nextConfig.agents?.entries?.main?.memory?.search?.remote?.apiKey).toEqual({
       source: "env",
       provider: "default",
       id: "MEMORY_REMOTE_API_KEY",
@@ -1576,6 +1584,142 @@ describe("secrets apply", () => {
     );
   });
 
+  it("scrubs .env in legacy .clawdbot state directory via automatic fallback", async () => {
+    // Do NOT set OPENCLAW_STATE_DIR — rely on resolveStateDir's automatic
+    // legacy-directory fallback. A controlled HOME that contains only
+    // .clawdbot (no .openclaw) exercises the scrub path so the old
+    // resolveConfigDir call (which always returns $HOME/.openclaw) would
+    // miss the .env inside .clawdbot.
+    const homeDir = tempDirs.make("openclaw-secrets-apply-legacy-");
+    const legacyStateDir = path.join(homeDir, ".clawdbot");
+    const configPath = path.join(legacyStateDir, "openclaw.json");
+    const agentDir = path.join(legacyStateDir, "agents", "main", "agent");
+    const envPath = path.join(legacyStateDir, ".env");
+    const authStorePath = resolveAuthProfileDatabasePath(agentDir);
+
+    await fs.mkdir(agentDir, { recursive: true });
+
+    const env = {
+      HOME: homeDir,
+      OPENAI_API_KEY: "sk-openai-plaintext", // pragma: allowlist secret
+    };
+
+    await writeJsonFile(configPath, {
+      models: {
+        providers: {
+          openai: createOpenAiProviderConfig(),
+        },
+      },
+    });
+    await writeJsonFile(authStorePath, {
+      version: 1,
+      profiles: {},
+    });
+    await fs.writeFile(
+      envPath,
+      "OPENAI_API_KEY=sk-openai-plaintext\nUNRELATED=value\n", // pragma: allowlist secret
+      "utf8",
+    );
+
+    try {
+      const plan = createPlan({
+        targets: [createOpenAiProviderTarget()],
+        options: createOneWayScrubOptions(),
+      });
+
+      const applied = await runSecretsApply({ plan, env, write: true });
+      expect(applied.mode).toBe("write");
+      expect(applied.changed).toBe(true);
+
+      const nextEnv = await fs.readFile(envPath, "utf8");
+      expect(nextEnv).not.toContain("sk-openai-plaintext");
+      expect(nextEnv).toContain("UNRELATED=value");
+    } finally {
+      clearSecretsRuntimeSnapshot();
+      closeOpenClawAgentDatabasesForTest();
+      await fs.rm(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the same resolved stateDir for .env scrubbing as for auth stores", async () => {
+    // Regression: projectPlanState resolves stateDir once (line 296) and
+    // must pass it into scrubEnvFiles so the same root is used for auth
+    // stores (auth-profiles.json, auth.json) and .env. If scrubEnvFiles
+    // re-resolves stateDir independently, a legacy/canonical directory
+    // appearing or disappearing during the operation could direct .env
+    // scrubbing at a different file.
+    //
+    // Set up a HOME where both .openclaw and .clawdbot exist.
+    // resolveStateDir returns .openclaw when both exist because it checks
+    // .openclaw first. The apply must use that same root for .env.
+    const homeDir = tempDirs.make("openclaw-secrets-apply-root-");
+    const openclawDir = path.join(homeDir, ".openclaw");
+    const clawdbotDir = path.join(homeDir, ".clawdbot");
+    const configPath = path.join(openclawDir, "openclaw.json");
+    const agentDir = path.join(openclawDir, "agents", "main", "agent");
+    const openclawEnvPath = path.join(openclawDir, ".env");
+    const clawdbotEnvPath = path.join(clawdbotDir, ".env");
+    const authStorePath = resolveAuthProfileDatabasePath(agentDir);
+
+    await fs.mkdir(agentDir, { recursive: true });
+    // Create .clawdbot dir (without config) to simulate a legacy install
+    await fs.mkdir(clawdbotDir, { recursive: true });
+
+    const env = {
+      HOME: homeDir,
+      OPENAI_API_KEY: "sk-openai-plaintext", // pragma: allowlist secret
+    };
+
+    await writeJsonFile(configPath, {
+      models: {
+        providers: {
+          openai: createOpenAiProviderConfig(),
+        },
+      },
+    });
+    await writeJsonFile(authStorePath, {
+      version: 1,
+      profiles: {},
+    });
+    // .env in the canonical .openclaw dir — this is the one that should be scrubbed
+    await fs.writeFile(
+      openclawEnvPath,
+      "OPENAI_API_KEY=sk-openai-plaintext\nUNRELATED=value\n", // pragma: allowlist secret
+      "utf8",
+    );
+    // .env in the legacy .clawdbot dir — must NOT be touched
+    await fs.writeFile(
+      clawdbotEnvPath,
+      "OPENAI_API_KEY=sk-should-not-touch\nUNRELATED=legacy\n", // pragma: allowlist secret
+      "utf8",
+    );
+
+    try {
+      const plan = createPlan({
+        targets: [createOpenAiProviderTarget()],
+        options: createOneWayScrubOptions(),
+      });
+
+      const applied = await runSecretsApply({ plan, env, write: true });
+      expect(applied.mode).toBe("write");
+      expect(applied.changed).toBe(true);
+
+      // Canonical .openclaw/.env was scrubbed
+      const nextOpenclawEnv = await fs.readFile(openclawEnvPath, "utf8");
+      expect(nextOpenclawEnv).not.toContain("sk-openai-plaintext");
+      expect(nextOpenclawEnv).toContain("UNRELATED=value");
+
+      // Legacy .clawdbot/.env was NOT touched — same stateDir used throughout
+      const nextClawdbotEnv = await fs.readFile(clawdbotEnvPath, "utf8");
+      expect(nextClawdbotEnv).toContain("sk-should-not-touch");
+      expect(nextClawdbotEnv).toContain("UNRELATED=legacy");
+    } finally {
+      clearSecretsRuntimeSnapshot();
+      closeOpenClawAgentDatabasesForTest();
+      await fs.rm(homeDir, { recursive: true, force: true });
+    }
+  });
+
   it("preserves normalized restrictive plugin allowlist entries for plugin-managed exec provider upserts", async () => {
     await writeJsonFile(fixture.configPath, {
       plugins: {
@@ -1607,6 +1751,29 @@ describe("secrets apply", () => {
     };
     expect(nextConfig.plugins?.allow).toEqual(["Vault"]);
     expect(nextConfig.plugins?.entries?.vault).toEqual({ enabled: true });
+  });
+
+  it("scrubs config and state .env files when the config path is external", async () => {
+    const configDir = path.join(fixture.rootDir, "config");
+    const configPath = path.join(configDir, "openclaw.json");
+    const configEnvPath = path.join(configDir, ".env");
+    await fs.mkdir(configDir, { recursive: true });
+    await fs.copyFile(fixture.configPath, configPath);
+    await fs.copyFile(fixture.envPath, configEnvPath);
+    fixture.env.OPENCLAW_CONFIG_PATH = configPath;
+
+    const applied = await runSecretsApply({
+      plan: createPlan({
+        targets: [createOpenAiProviderTarget()],
+        options: createOneWayScrubOptions(),
+      }),
+      env: fixture.env,
+      write: true,
+    });
+
+    expect(applied.changedFiles).toEqual(expect.arrayContaining([configEnvPath, fixture.envPath]));
+    await expect(fs.readFile(configEnvPath, "utf8")).resolves.toBe("UNRELATED=value\n");
+    await expect(fs.readFile(fixture.envPath, "utf8")).resolves.toBe("UNRELATED=value\n");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

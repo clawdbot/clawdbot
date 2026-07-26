@@ -75,11 +75,13 @@ function buildSystemNodeCandidates(
 type ExecFileAsync = (
   file: string,
   args: readonly string[],
-  options: { encoding: "utf8" },
+  options: { encoding: "utf8"; timeoutMs: number },
 ) => Promise<{ stdout: string; stderr: string }>;
 
-const execFileAsync: ExecFileAsync = async (file, args) =>
-  await runExec(file, [...args], { logOutput: false });
+const NODE_RUNTIME_PROBE_TIMEOUT_MS = 5_000;
+
+const execFileAsync: ExecFileAsync = async (file, args, options) =>
+  await runExec(file, [...args], { logOutput: false, timeoutMs: options.timeoutMs });
 
 const NODE_RUNTIME_PROBE = String.raw`
 let sqliteVersion = null;
@@ -92,12 +94,15 @@ try {
     db.close();
   }
 } catch {}
-process.stdout.write(JSON.stringify({ nodeVersion: process.versions.node, sqliteVersion }));
+const variables = (process.config && process.config.variables) || {};
+const nodeSharedSqlite = variables.node_shared_sqlite === true || variables.node_shared_sqlite === "true";
+process.stdout.write(JSON.stringify({ nodeVersion: process.versions.node, sqliteVersion, nodeSharedSqlite }));
 `;
 
 type NodeRuntimeInfo = {
   nodeVersion: string | null;
   sqliteVersion: string | null;
+  nodeSharedSqlite: boolean;
   supported: boolean;
 };
 
@@ -108,23 +113,27 @@ async function resolveNodeRuntimeInfo(
   try {
     const { stdout } = await execFileImpl(nodePath, ["-e", NODE_RUNTIME_PROBE], {
       encoding: "utf8",
+      timeoutMs: NODE_RUNTIME_PROBE_TIMEOUT_MS,
     });
     const parsed = JSON.parse(stdout) as {
       nodeVersion?: unknown;
       sqliteVersion?: unknown;
+      nodeSharedSqlite?: unknown;
     };
     const nodeVersion = typeof parsed.nodeVersion === "string" ? parsed.nodeVersion : null;
     const sqliteVersion = typeof parsed.sqliteVersion === "string" ? parsed.sqliteVersion : null;
+    const nodeSharedSqlite = parsed.nodeSharedSqlite === true || parsed.nodeSharedSqlite === "true";
     return {
       nodeVersion,
       sqliteVersion,
+      nodeSharedSqlite,
       supported:
         isSupportedNodeVersion(nodeVersion) &&
         sqliteVersion !== null &&
         isSqliteWalResetSafeVersion(sqliteVersion),
     };
   } catch {
-    return { nodeVersion: null, sqliteVersion: null, supported: false };
+    return { nodeVersion: null, sqliteVersion: null, nodeSharedSqlite: false, supported: false };
   }
 }
 
@@ -132,6 +141,7 @@ type SystemNodeInfo = {
   path: string;
   sqliteVersion: string | null;
   version: string | null;
+  nodeSharedSqlite: boolean;
   supported: boolean;
 };
 
@@ -211,6 +221,7 @@ export async function resolveSystemNodeInfo(params: {
       path: systemNode,
       sqliteVersion: runtime.sqliteVersion,
       version: runtime.nodeVersion,
+      nodeSharedSqlite: runtime.nodeSharedSqlite,
       supported: runtime.supported,
     };
     if (info.supported) {
@@ -233,6 +244,12 @@ export function renderSystemNodeWarning(
   const selectedLabel = selectedNodePath ? ` Using ${selectedNodePath} for the daemon.` : "";
   if (isSupportedNodeVersion(systemNode.version)) {
     const sqliteLabel = systemNode.sqliteVersion ?? "unknown";
+    if (systemNode.nodeSharedSqlite) {
+      return (
+        `System Node ${versionLabel} at ${systemNode.path} uses shared system SQLite ${sqliteLabel}, which is not WAL-reset-safe.${selectedLabel} ` +
+        "Upgrade the system SQLite library to 3.51.3+ (or patched 3.50.7+/3.44.6+), or install a Node build that embeds a safe version."
+      );
+    }
     return `System Node ${versionLabel} at ${systemNode.path} uses SQLite ${sqliteLabel}, which is not WAL-reset-safe.${selectedLabel} Install Node 24.15+ (recommended) or Node 22.22.3+ from nodejs.org or Homebrew.`;
   }
   return `System Node ${versionLabel} at ${systemNode.path} is outside the supported range.${selectedLabel} Install Node 24.15+ (recommended) or Node 22.22.3+ from nodejs.org or Homebrew.`;

@@ -35,17 +35,53 @@ describe("NodeHostWorkerBridgeClient", () => {
     const client = new NodeHostWorkerBridgeClient((message) => messages.push(message));
 
     await client.request("node.invoke.result", { id: "invoke-1", ok: true });
-    await client.request("node.invoke.progress", { invokeId: "invoke-1", seq: 0, chunk: "a" });
     await client.request("node.event", { event: "exec.started", payloadJSON: "{}" });
 
     expect(messages).toEqual([
       { type: "invoke-result", result: { id: "invoke-1", ok: true } },
-      {
-        type: "invoke-progress",
-        progress: { invokeId: "invoke-1", seq: 0, chunk: "a" },
-      },
       { type: "node-event", event: { event: "exec.started", payloadJSON: "{}" } },
     ]);
+  });
+
+  it("tunnels invoke progress and waits for gateway acceptance", async () => {
+    const messages: Array<Record<string, unknown>> = [];
+    const client = new NodeHostWorkerBridgeClient((message) => {
+      messages.push(message as Record<string, unknown>);
+    });
+
+    let settled = false;
+    const response = client
+      .request("node.invoke.progress", {
+        invokeId: "invoke-1",
+        nodeId: "node-1",
+        seq: 0,
+        chunk: "a",
+      })
+      .then(() => {
+        settled = true;
+      });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(messages).toEqual([
+      {
+        type: "gateway-request",
+        id: "gateway-1",
+        method: "node.invoke.progress",
+        params: { invokeId: "invoke-1", nodeId: "node-1", seq: 0, chunk: "a" },
+        timeoutMs: 15_000,
+      },
+    ]);
+
+    expect(
+      client.handleResponse({
+        type: "gateway-response",
+        id: "gateway-1",
+        ok: true,
+        result: { ok: true },
+      }),
+    ).toBe(true);
+    await response;
+    expect(settled).toBe(true);
   });
 
   it("tunnels runtime gateway requests and resolves their matching response", async () => {

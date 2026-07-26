@@ -276,19 +276,31 @@ function readBaselineAtRef(root, ref) {
 
 function resolveDefaultBase(root, staged) {
   const candidates = staged ? ["HEAD"] : ["origin/main", "HEAD"];
-  return (
-    candidates.find((ref) => {
-      try {
-        execFileSync("git", ["rev-parse", "--verify", ref + "^{commit}"], {
-          cwd: root,
-          stdio: "ignore",
-        });
-        return true;
-      } catch {
-        return false;
-      }
-    }) ?? null
-  );
+  const resolved = candidates.find((ref) => {
+    try {
+      execFileSync("git", ["rev-parse", "--verify", ref + "^{commit}"], {
+        cwd: root,
+        stdio: "ignore",
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  if (!resolved || staged || resolved !== "origin/main") {
+    return resolved ?? null;
+  }
+  // A release or long-lived branch owns the suppression debt from its fork.
+  // Comparing against moving main would turn unrelated debt cleanup into a blocker.
+  try {
+    return execFileSync("git", ["merge-base", "HEAD", resolved], {
+      cwd: root,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return resolved;
+  }
 }
 
 function writeBaseline(root, entries) {

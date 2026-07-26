@@ -242,6 +242,57 @@ struct UpdateOrchestrationTests {
             launchAgentWriteDisabled: false))
     }
 
+    @Test func `post-update window is reserved for managed Gateway work`() {
+        let managed = CLIInstaller.managedExecutableLocation()
+
+        #expect(PostUpdateController.gatewayAction(
+            status: .ready(location: managed, version: "2026.7.4"),
+            ownsManagedRuntime: true,
+            gatewayUpdateIncomplete: false) == .none)
+        #expect(PostUpdateController.gatewayAction(
+            status: .ready(location: managed, version: "2026.7.4"),
+            ownsManagedRuntime: true,
+            gatewayUpdateIncomplete: true) == .repair)
+        #expect(PostUpdateController.gatewayAction(
+            status: .incompatible(location: managed, found: "2026.7.3", required: "2026.7.4"),
+            ownsManagedRuntime: true,
+            gatewayUpdateIncomplete: false) == .update)
+        #expect(PostUpdateController.gatewayAction(
+            status: .missing(location: managed),
+            ownsManagedRuntime: true,
+            gatewayUpdateIncomplete: false) == .install)
+        #expect(PostUpdateController.gatewayAction(
+            status: .incompatible(location: managed, found: "2026.7.5", required: "2026.7.4"),
+            ownsManagedRuntime: true,
+            gatewayUpdateIncomplete: false) == .none)
+        #expect(PostUpdateController.gatewayAction(
+            status: .incompatible(location: managed, found: "2026.7.3", required: "2026.7.4"),
+            ownsManagedRuntime: false,
+            gatewayUpdateIncomplete: false) == .none)
+        #expect(PostUpdateController.gatewayAction(
+            status: .ready(location: managed, version: "2026.7.4"),
+            ownsManagedRuntime: false,
+            gatewayUpdateIncomplete: true) == .ownershipFailure)
+    }
+
+    @Test func `incomplete managed update keeps ownership failures retryable`() {
+        #expect(PostUpdateController.shouldPresentOwnershipFailure(
+            connectionMode: .local,
+            gatewayUpdateIncomplete: true))
+        #expect(PostUpdateController.shouldPresentOwnershipFailure(
+            connectionMode: .remote,
+            gatewayUpdateIncomplete: true))
+        #expect(!PostUpdateController.shouldPresentOwnershipFailure(
+            connectionMode: .local,
+            gatewayUpdateIncomplete: false))
+        #expect(!PostUpdateController.shouldPresentOwnershipFailure(
+            connectionMode: .remote,
+            gatewayUpdateIncomplete: false))
+        #expect(!PostUpdateController.shouldPresentOwnershipFailure(
+            connectionMode: .unconfigured,
+            gatewayUpdateIncomplete: true))
+    }
+
     @Test func `notification retries only definitely uncommitted sends`() {
         #expect(PostUpdateController.notificationSendFailureOutcome(
             OpenClawChatTransportSendError.notDispatched) == .retryLater)

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createChatRunState } from "../server-chat-state.js";
 import { createChatSendDispatchErrorLifecycle } from "./chat-send-dispatch-errors.js";
 
 describe("createChatSendDispatchErrorLifecycle", () => {
@@ -23,7 +24,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
       context: {
         agentRunSeq: new Map(),
         broadcast,
-        chatAbortedRuns: new Set(),
+        chatRunState: createChatRunState(),
         dedupe,
         getRuntimeConfig: () => ({}),
         logGateway: { warn },
@@ -58,6 +59,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
     expect(broadcast).toHaveBeenCalledWith(
       "chat",
       expect.objectContaining({ runId: "run-1", state: "final" }),
+      { sessionKeys: ["agent:main:main"] },
     );
     expect(cleanupAdmittedRun).toHaveBeenCalledOnce();
     expect(removeChatRun).toHaveBeenCalledWith("run-1", "run-1", "agent:main:main");

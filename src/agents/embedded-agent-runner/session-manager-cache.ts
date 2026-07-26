@@ -25,7 +25,7 @@ type SessionManagerCache = {
   trackSessionManagerAccess: (sessionFile: string) => void;
 };
 
-export function createSessionManagerCache(options?: {
+function createSessionManagerCache(options?: {
   clock?: () => number;
   fsModule?: Pick<typeof fs, "open">;
   ttlMs?: number | (() => number);
@@ -86,4 +86,9 @@ export function trackSessionManagerAccess(sessionFile: string): void {
 
 export async function prewarmSessionFile(sessionFile: string): Promise<void> {
   await sessionManagerCache.prewarmSessionFile(sessionFile);
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.sessionManagerCacheTestApi")] =
+    { createSessionManagerCache };
 }

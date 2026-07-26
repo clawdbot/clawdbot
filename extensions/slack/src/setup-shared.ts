@@ -26,8 +26,8 @@ export function buildSlackManifest(botName = "OpenClaw") {
         messages_tab_enabled: true,
         messages_tab_read_only_enabled: false,
       },
-      assistant_view: {
-        assistant_description: `${safeName} connects Slack assistant threads to OpenClaw agents.`,
+      agent_view: {
+        agent_description: `${safeName} connects Slack Agent View conversations to OpenClaw agents.`,
         suggested_prompts: [
           {
             title: "What can you do?",
@@ -86,8 +86,7 @@ export function buildSlackManifest(botName = "OpenClaw") {
         bot_events: [
           "app_home_opened",
           "app_mention",
-          "assistant_thread_context_changed",
-          "assistant_thread_started",
+          "app_context_changed",
           "channel_rename",
           "member_joined_channel",
           "member_left_channel",
@@ -111,8 +110,8 @@ export function buildSlackSetupLines(): string[] {
     "1) Slack API -> Create App -> From scratch or From manifest (with the JSON below)",
     "2) Add Socket Mode + enable it to get the app-level token (xapp-...)",
     "3) Install App to workspace to get the xoxb- bot token",
-    "4) Enable Event Subscriptions (socket) for message, App Home, and assistant events",
-    "5) App Home -> enable the Home tab, Messages tab for DMs, and AI assistant view",
+    "4) Enable Event Subscriptions (socket) for message, App Home, and Agent View events",
+    "5) App Home -> enable the Home tab, Messages tab for DMs, and Agent View",
     "Manifest JSON follows as plain text for copy/paste.",
     "Tip: set SLACK_BOT_TOKEN + SLACK_APP_TOKEN in your env.",
     `Docs: ${formatDocsLink("/slack", "slack")}`,
@@ -137,10 +136,19 @@ export function isSlackSetupAccountConfigured(account: ResolvedSlackAccount): bo
   if (account.config.mode === "relay") {
     return isSlackPluginAccountConfigured(account);
   }
+  const hasConfiguredUserToken =
+    Boolean(account.userToken?.trim()) || hasConfiguredSecretInput(account.config.userToken);
   const hasConfiguredBotToken =
     Boolean(account.botToken?.trim()) || hasConfiguredSecretInput(account.config.botToken);
   const hasConfiguredAppToken =
     Boolean(account.appToken?.trim()) || hasConfiguredSecretInput(account.config.appToken);
+  if (account.identity === "user") {
+    const hasTransportCredential =
+      account.config.mode === "http"
+        ? hasConfiguredSecretInput(account.config.signingSecret)
+        : hasConfiguredAppToken;
+    return hasConfiguredUserToken && hasTransportCredential;
+  }
   return hasConfiguredBotToken && hasConfiguredAppToken;
 }
 
@@ -151,6 +159,9 @@ export function describeSlackSetupAccount(account: ResolvedSlackAccount) {
     extra: {
       botTokenSource: account.botTokenSource,
       appTokenSource: account.appTokenSource,
+      ...(account.identity === "user"
+        ? { identity: account.identity, userTokenSource: account.userTokenSource }
+        : {}),
     },
   });
 }

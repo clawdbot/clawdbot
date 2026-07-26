@@ -1,13 +1,9 @@
 // Qa Lab tests cover discord live plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
-  findMissingLiveTransportStandardScenarios,
-} from "openclaw/plugin-sdk/qa-live-transport-scenarios";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { discordQaLiveRuntime } from "./discord-live.runtime.js";
+import { discordQaScenarioSupport } from "./discord-live.runtime.js";
 
-const { testing } = discordQaLiveRuntime;
+const { testing } = discordQaScenarioSupport;
 
 describe("discord live qa runtime", () => {
   afterEach(() => {
@@ -213,7 +209,6 @@ describe("discord live qa runtime", () => {
     expect(next.messages?.ackReactionScope).toBe("all");
     expect(next.messages?.groupChat?.visibleReplies).toBe("message_tool");
     expect(next.messages?.statusReactions?.enabled).toBe(true);
-    expect(next.messages?.statusReactions?.timing?.debounceMs).toBe(0);
     const discordAccount = next.channels?.discord?.accounts?.sut;
     expect(discordAccount?.allowBots).toBe(true);
     expect(discordAccount?.guilds?.["123456789012345678"]?.requireMention).toBe(false);
@@ -472,16 +467,6 @@ describe("discord live qa runtime", () => {
     expect(() => testing.findScenario(["discord-canary", "typo-scenario"])).toThrow(
       "unknown Discord QA scenario id(s): typo-scenario",
     );
-  });
-
-  it("tracks Discord live coverage against the shared transport contract", () => {
-    expect(testing.DISCORD_QA_STANDARD_SCENARIO_IDS).toEqual(["canary", "mention-gating"]);
-    expect(
-      findMissingLiveTransportStandardScenarios({
-        coveredStandardScenarioIds: testing.DISCORD_QA_STANDARD_SCENARIO_IDS,
-        expectedStandardScenarioIds: LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
-      }),
-    ).toEqual(["allowlist-block", "top-level-reply-shape", "restart-resume"]);
   });
 
   it("lists Discord application commands through the REST API", async () => {

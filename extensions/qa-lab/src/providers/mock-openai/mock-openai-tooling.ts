@@ -215,6 +215,42 @@ export function buildQaToolSearchArgs(
   if (targetTool === "message") {
     return { action: "send", message: "runtime parity message fixture" };
   }
+  if (targetTool === "ask_user") {
+    return {
+      questions: [
+        {
+          id: "deploy_target",
+          header: "Deploy",
+          question: "Where should this deploy?",
+          options: [
+            { label: "Staging (Recommended)", description: "Safer default" },
+            { label: "Production", description: "Ship to users" },
+          ],
+        },
+        {
+          id: "checks",
+          header: "Checks",
+          question: "Which checks should run?",
+          options: [
+            { label: "Unit (Recommended)", description: "Fast focused coverage" },
+            { label: "E2E", description: "Full user-path coverage" },
+            { label: "Lint", description: "Static checks" },
+          ],
+          multiSelect: true,
+        },
+        {
+          id: "release_note",
+          header: "Note",
+          question: "Which release note label should be used?",
+          options: [
+            { label: "Routine (Recommended)", description: "Standard release note" },
+            { label: "Urgent", description: "Highlight prominently" },
+          ],
+        },
+      ],
+      timeoutSeconds: 60,
+    };
+  }
   if (targetTool === "session_status") {
     return { sessionKey: "current" };
   }
@@ -234,6 +270,12 @@ export function buildQaToolSearchArgs(
 
 export function isActiveMemorySubagentPrompt(text: string) {
   return text.includes("You are a memory search agent.");
+}
+
+export function isSnackRecallPrompt(text: string) {
+  return (
+    /silent snack recall check/i.test(text) || /remember across conversations qa check/i.test(text)
+  );
 }
 
 export function extractSnackPreference(text: string) {

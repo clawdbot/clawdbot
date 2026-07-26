@@ -16,7 +16,7 @@ Adds the QA Channel surface for sending and receiving OpenClaw messages.
 
 ## Surface
 
-channels: qa-channel
+channels: `qa-channel`
 
 ## Related docs
 

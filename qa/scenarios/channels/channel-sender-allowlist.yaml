@@ -5,9 +5,9 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.group-messages
+      - channels.room-allowlist
     secondary:
-      - runtime.delivery
+      - channels.automatic-final-reply
   objective: Verify a blocked secondary actor stays quiet while the configured driver override still triggers a reply.
   successCriteria:
     - A mentioned message from the observer actor produces no reply.
@@ -19,6 +19,7 @@ scenario:
     - extensions/qa-lab/src/qa-transport.ts
     - src/channels/turn/kernel.ts
   execution:
+    profiles: { "matrix:adapter": 4, "matrix:all": 47, "matrix:fast": 10, "matrix:transport": 46 }
     kind: flow
     summary: Exercise sender allowlist rejection and the configured driver override in one ordered flow.
     transportPolicy:

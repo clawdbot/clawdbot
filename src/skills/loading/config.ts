@@ -5,7 +5,12 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import type { SkillConfig } from "../../config/types.skills.js";
+import {
+  findActiveDegradedSecretOwner,
+  listActiveDegradedSecretOwners,
+} from "../../secrets/runtime-degraded-state.js";
 import {
   evaluateRuntimeEligibility,
   hasBinary,
@@ -56,6 +61,34 @@ export function resolveSkillConfig(
   return entry;
 }
 
+/** Returns whether cold startup isolated this exact skill's configured secret. */
+export function isSkillSecretOwnerUnavailable(skillKey: string): boolean {
+  return Boolean(findActiveDegradedSecretOwner("capability", `skill:${skillKey}`));
+}
+
+/** Returns whether cold startup isolated any configured skill secret. */
+export function hasUnavailableSkillSecretOwners(): boolean {
+  return listActiveDegradedSecretOwners().some(
+    (owner) =>
+      owner.degradationState !== "stale" &&
+      owner.ownerKind === "capability" &&
+      owner.ownerId.startsWith("skill:"),
+  );
+}
+
+export function isSkillEnvRequirementSatisfied(params: {
+  envName: string;
+  skillConfig?: SkillConfig;
+  primaryEnv?: string;
+}): boolean {
+  const { envName, skillConfig, primaryEnv } = params;
+  return (
+    normalizeOptionalString(process.env[envName]) !== undefined ||
+    normalizeOptionalString(skillConfig?.env?.[envName]) !== undefined ||
+    (primaryEnv === envName && hasConfiguredSecretInput(skillConfig?.apiKey))
+  );
+}
+
 function normalizeAllowlist(input: unknown): ReadonlySet<string> | undefined {
   if (!input) {
     return undefined;
@@ -101,6 +134,9 @@ export function shouldIncludeSkill(params: {
   if (skillConfig?.enabled === false) {
     return false;
   }
+  if (isSkillSecretOwnerUnavailable(skillKey)) {
+    return false;
+  }
   if (!isBundledSkillAllowed(entry, bundledAllowlist)) {
     return false;
   }
@@ -113,11 +149,11 @@ export function shouldIncludeSkill(params: {
     hasRemoteBin: eligibility?.remote?.hasBin,
     hasAnyRemoteBin: eligibility?.remote?.hasAnyBin,
     hasEnv: (envName) =>
-      Boolean(
-        process.env[envName] ||
-        skillConfig?.env?.[envName] ||
-        (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName),
-      ),
+      isSkillEnvRequirementSatisfied({
+        envName,
+        skillConfig,
+        primaryEnv: entry.metadata?.primaryEnv,
+      }),
     isConfigPathTruthy: (configPath) => isSkillConfigPathTruthy(config, configPath),
   });
 }

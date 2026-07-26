@@ -113,17 +113,18 @@
 
 /* ---------- panel + notices ---------- */
 
-/* Sections inside the tabpanel keep the settings-page rhythm. */
+/* Sections inside the tabpanel keep the settings-page rhythm. wa-tab-panel's
+   shadow slot (part=base) owns the slotted children's layout, so the column
+   flex + gap must live on the part — host-level gap never reaches them. */
 .plugins-panel {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-7);
   min-width: 0;
 }
 
-/* Keep the installed-state filter shrink-to-fit inside the panel column. */
-.plugins-panel > .settings-segmented {
-  align-self: flex-start;
+.plugins-panel::part(base) {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  min-width: 0;
 }
 
 .plugins-readonly {
@@ -280,6 +281,11 @@ h3.plugins-subheader {
   object-fit: cover;
 }
 
+.plugins-tile img.plugins-icon {
+  object-fit: contain;
+  padding: 6px;
+}
+
 .plugins-tile--fallback {
   background: linear-gradient(135deg, var(--plugins-art-a), var(--plugins-art-b));
   border-color: transparent;
@@ -427,10 +433,14 @@ h3.plugins-subheader {
   text-align: center;
 }
 
+.plugins-empty__icon,
+.plugins-empty__mascot {
+  margin-bottom: var(--space-3);
+}
+
 .plugins-empty__icon {
   width: 32px;
   height: 32px;
-  margin-bottom: var(--space-3);
   color: var(--border-hover);
 }
 
@@ -464,35 +474,6 @@ h3.plugins-subheader {
 
 .plugins-search-state--error {
   color: var(--danger);
-}
-
-/* ---------- MCP inline form ---------- */
-
-/* Lives inside the MCP group surface; hairline divider instead of a nested card. */
-.plugins-mcp-form {
-  display: grid;
-  grid-template-columns: minmax(140px, 220px) minmax(0, 1fr) auto;
-  gap: var(--space-2);
-  align-items: end;
-  padding: var(--space-3) var(--space-4);
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-}
-
-.plugins-mcp-form label {
-  display: grid;
-  gap: 5px;
-  min-width: 0;
-}
-
-.plugins-mcp-form label span {
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 580;
-}
-
-.plugins-mcp-form__actions {
-  display: flex;
-  gap: var(--space-2);
 }
 
 /* ---------- detail overlay ---------- */
@@ -535,6 +516,12 @@ h3.plugins-subheader {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.plugins-cover img.plugins-icon {
+  width: min(180px, 48%);
+  height: min(180px, 48%);
+  object-fit: contain;
 }
 
 .plugins-cover--fallback {
@@ -668,11 +655,6 @@ h3.plugins-subheader {
 @media (max-width: 768px) {
   .plugins-content-header {
     display: flex;
-  }
-
-  .plugins-mcp-form {
-    grid-template-columns: minmax(0, 1fr);
-    align-items: stretch;
   }
 }
 

@@ -6,10 +6,8 @@ const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
 }));
 
-import {
-  setFalFetchGuardForTesting,
-  buildFalImageGenerationProvider,
-} from "./image-generation-provider.js";
+import { buildFalImageGenerationProvider } from "./image-generation-provider.js";
+import { setFalFetchGuardForTesting } from "./test-support.js";
 
 function expectFalJsonPost(params: { call: number; url: string; body: Record<string, unknown> }) {
   const request = fetchWithSsrFGuardMock.mock.calls[params.call - 1]?.[0];

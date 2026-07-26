@@ -103,6 +103,7 @@ export async function handleCodexAppServerApprovalRequest(params: {
       paramsForRun: params.paramsForRun,
       context,
       nativeHookRelay: params.nativeHookRelay,
+      autoApprove: params.autoApprove,
       signal: params.signal,
     });
     if (policyOutcome?.outcome === "denied") {
@@ -406,6 +407,7 @@ async function runOpenClawToolPolicyForApprovalRequest(params: {
     NativeHookRelayRegistrationHandle,
     "allowedEvents" | "generation" | "relayId"
   >;
+  autoApprove?: boolean;
   signal?: AbortSignal;
 }): Promise<ApprovalPolicyOutcome | undefined> {
   const policyRequest = buildOpenClawToolPolicyRequest(params.method, params.requestParams);
@@ -419,6 +421,7 @@ async function runOpenClawToolPolicyForApprovalRequest(params: {
     context: params.context,
     policyRequest,
     nativeHookRelay: params.nativeHookRelay,
+    autoApprove: params.autoApprove,
     cwd,
     signal: params.signal,
   });
@@ -499,6 +502,7 @@ async function runNativeRelayToolPolicyForApprovalRequest(params: {
     NativeHookRelayRegistrationHandle,
     "allowedEvents" | "generation" | "relayId"
   >;
+  autoApprove?: boolean;
   cwd?: string;
   signal?: AbortSignal;
 }): Promise<
@@ -597,6 +601,18 @@ async function runNativeRelayToolPolicyForApprovalRequest(params: {
     }
     return { handled: true };
   } catch (error) {
+    // Only a relay that failed before invocation is unavailable. Once invoked,
+    // handler failures join explicit denials and malformed replies in failing closed.
+    if (
+      params.autoApprove === true &&
+      !hasNativeHookRelayInvocation({
+        relayId: params.nativeHookRelay.relayId,
+        event: "pre_tool_use",
+        toolUseId: params.context.approvalId,
+      })
+    ) {
+      return undefined;
+    }
     return {
       handled: true,
       blocked: true,

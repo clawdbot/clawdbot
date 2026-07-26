@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
@@ -22,10 +23,7 @@ import {
 import { buildRecallPrompt } from "./prompt.js";
 import { getModelRef } from "./query.js";
 import { toSingleLineLogValue } from "./recall-state.js";
-import {
-  resolveCanonicalSessionKeyFromSessionId,
-  resolveRecallRunChannelContext,
-} from "./session.js";
+import { resolveRecallRunChannelContext } from "./session.js";
 import {
   attachPartialTimeoutData,
   readMemoryToolResultEvidence,
@@ -40,7 +38,9 @@ import { fileTranscriptSource, transcriptSourceFromReturnedSessionFile } from ".
 import {
   ACTIVE_MEMORY_CLEANUP_RETRY_DELAYS_MS,
   ACTIVE_MEMORY_RECALL_LANE,
+  type ActiveMemoryFastMode,
   type ActiveMemoryTranscriptSource,
+  type ConversationRecallContext,
   type RecallSubagentResult,
   type ResolvedActiveRecallPluginConfig,
 } from "./types.js";
@@ -142,9 +142,10 @@ async function cleanupActiveMemoryRecallSession(params: {
 
 async function runRecallSubagent(params: {
   api: OpenClawPluginApi;
+  runtimeConfig: OpenClawConfig;
   config: ResolvedActiveRecallPluginConfig;
   agentId: string;
-  sessionKey?: string;
+  parentSessionKey?: string;
   sessionId?: string;
   messageProvider?: string;
   channelId?: string;
@@ -153,14 +154,17 @@ async function runRecallSubagent(params: {
   currentModelProviderId?: string;
   currentModelId?: string;
   modelRef?: { provider: string; model: string };
+  conversationRecall?: ConversationRecallContext;
+  storePath: string;
+  fastMode?: ActiveMemoryFastMode;
   abortSignal?: AbortSignal;
   onTranscriptSources?: (sources: readonly ActiveMemoryTranscriptSource[]) => void;
 }): Promise<RecallSubagentResult> {
-  const workspaceDir = resolveAgentWorkspaceDir(params.api.config, params.agentId);
-  const agentDir = resolveAgentDir(params.api.config, params.agentId);
+  const workspaceDir = resolveAgentWorkspaceDir(params.runtimeConfig, params.agentId);
+  const agentDir = resolveAgentDir(params.runtimeConfig, params.agentId);
   const modelRef =
     params.modelRef ??
-    getModelRef(params.api, params.agentId, params.config, {
+    getModelRef(params.runtimeConfig, params.agentId, params.config, {
       modelProviderId: params.currentModelProviderId,
       modelId: params.currentModelId,
     });
@@ -168,13 +172,7 @@ async function runRecallSubagent(params: {
     return { rawReply: "NONE" };
   }
   const subagentSessionId = `active-memory-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`;
-  const parentSessionKey =
-    params.sessionKey ??
-    resolveCanonicalSessionKeyFromSessionId({
-      api: params.api,
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-    });
+  const parentSessionKey = params.parentSessionKey;
   const subagentScope = parentSessionKey ?? params.sessionId ?? crypto.randomUUID();
   const subagentSuffix = `active-memory:${crypto
     .createHash("sha1")
@@ -201,12 +199,7 @@ async function runRecallSubagent(params: {
     persistedDir !== undefined
       ? path.join(persistedDir, `${subagentSessionId}.jsonl`)
       : path.join(requireTransientWorkspaceDir(tempDir), "session.jsonl");
-  const storePath = params.api.runtime.agent.session.resolveStorePath(
-    params.api.config.session?.store,
-    {
-      agentId: params.agentId,
-    },
-  );
+  const storePath = params.storePath;
   const runtimeSessionFile = formatSqliteSessionFileMarker({
     agentId: params.agentId,
     sessionId: subagentSessionId,
@@ -269,7 +262,10 @@ async function runRecallSubagent(params: {
       messageProvider: params.messageProvider,
       channelId: params.channelId,
     });
-    const embeddedConfig = applyActiveMemoryRuntimeConfigSnapshot(params.api.config, params.config);
+    const embeddedConfig = applyActiveMemoryRuntimeConfigSnapshot(
+      params.runtimeConfig,
+      params.config,
+    );
     const embeddedTimeoutMs = params.config.timeoutMs + params.config.setupGraceTimeoutMs;
     const result = await params.api.runtime.agent.runEmbeddedAgent({
       sessionId: subagentSessionId,
@@ -294,15 +290,22 @@ async function runRecallSubagent(params: {
       timeoutMs: embeddedTimeoutMs,
       runId: subagentSessionId,
       trigger: "manual",
+      conversationRecall: params.conversationRecall,
       toolsAllow: [...params.config.toolsAllow],
       disableMessageTool: true,
       allowGatewaySubagentBinding: true,
       bootstrapContextMode: "lightweight",
       verboseLevel: "off",
       thinkLevel: params.config.thinking,
+      fastMode: params.fastMode,
       reasoningLevel: "off",
       silentExpected: true,
       authProfileFailurePolicy: "local",
+      // On subscription-only claude-cli setups, direct provider API calls
+      // either fail with a billing rejection or silently draw metered extra
+      // usage; route recall through the CLI backend so it runs on plan
+      // limits like the session's main turns.
+      cliBackendDispatch: "subscription-auth",
       cleanupBundleMcpOnRunEnd: true,
       abortSignal: params.abortSignal,
       onAgentToolResult: (event) => {

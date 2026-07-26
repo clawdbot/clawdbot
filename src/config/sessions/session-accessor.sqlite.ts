@@ -1,10 +1,12 @@
 // Stable SQLite accessor surface. Domain owners live in the focused modules below.
 export {
   listSqliteSessionEntries,
+  listSqliteSessionEntriesReadOnly,
   listSqliteSessionEntriesByStatus,
   listSqliteSessionTranscriptInstances,
   loadExactSqliteSessionEntry,
   loadSqliteSessionEntry,
+  loadSqliteSessionEntryReadOnly,
   patchSqliteSessionEntry,
   patchSqliteSessionEntryTarget,
   readSqliteSessionUpdatedAt,
@@ -38,6 +40,13 @@ export {
   restoreSqliteCompactionCheckpointSession,
 } from "./session-accessor.sqlite-checkpoint.js";
 export {
+  forkSqliteSessionAtMessage,
+  listSqliteSessionBranches,
+  resolveSessionTranscriptActiveLeafEntryId,
+  rewindSqliteSessionToMessage,
+  switchSqliteSessionBranch,
+} from "./session-accessor.sqlite-message-cut.js";
+export {
   appendSqliteExpectedSessionTranscriptTurn,
   appendSqliteTranscriptEvent,
   appendSqliteTranscriptEventSync,
@@ -46,15 +55,18 @@ export {
   importSqliteSessionRows,
   replaceSqliteTranscriptEvents,
   replaceSqliteTranscriptEventsSync,
+  trimSqliteTranscriptForManualCompact,
   withSqliteTranscriptWriteLock,
   withSqliteTranscriptWriteTransaction,
 } from "./session-accessor.sqlite-transcript-write.js";
 export { publishSqliteTranscriptUpdate } from "./session-accessor.sqlite-events.js";
-export { previewSqliteSessionDiskBudget } from "./session-accessor.sqlite-maintenance.js";
+export { readSqliteTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
 export {
   findSqliteTranscriptEvent,
   loadLatestSqliteAssistantText,
+  loadSqliteTranscriptEventRowsAfterSeqSync,
   loadSqliteTranscriptEvents,
   loadSqliteTranscriptEventsSync,
+  readSqliteTranscriptEventAtSeqSync,
   readSqliteTranscriptStatsSync,
 } from "./session-accessor.sqlite-read.js";

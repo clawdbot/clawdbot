@@ -272,7 +272,12 @@ actor GatewayWizardClient {
             params["auth"] = ProtoAnyCodable(["password": ProtoAnyCodable(password)])
         }
         let connectNonce = try await self.waitForConnectChallenge()
-        let identity = DeviceIdentityStore.loadOrCreate()
+        guard let identity = DeviceIdentityStore.loadOrCreatePersisted() else {
+            throw NSError(
+                domain: "OpenClawMacCLI",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Could not access the persisted device identity"])
+        }
         let signedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
         let payload = GatewayDeviceAuthPayload.buildConnectCompatibilityPayload(
             fields: .init(

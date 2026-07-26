@@ -160,7 +160,7 @@ export function createDispatchReplyOperationCoordinator(params: {
     const allowGatewayQueueResolution =
       phase === "dispatch" &&
       replyTurnKind === "visible" &&
-      params.replyOptions?.queuedFollowupLifecycle !== undefined &&
+      params.replyOptions?.turnAdoptionLifecycle !== undefined &&
       replyRunRegistry.get(params.dispatchOperationSessionKey) !== undefined;
     if (allowGatewayQueueResolution) {
       // Gateway turns need to reach getReplyFromConfig while the owner is active;

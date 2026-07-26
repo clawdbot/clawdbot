@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveSandboxScript } from "./doctor-sandbox.js";
+import { resolveSandboxScript } from "./doctor-sandbox.test-support.js";
 
 describe("resolveSandboxScript", () => {
   const created: string[] = [];

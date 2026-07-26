@@ -68,6 +68,13 @@ describe("readProcessTreeCpuMs on Windows", () => {
     expect(spawnSyncMock.mock.calls[0]?.[0]).toBe(
       path.win32.join("D:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
     );
+    expect(spawnSyncMock.mock.calls[0]?.[2]).toEqual({
+      encoding: "utf8",
+      killSignal: "SIGKILL",
+      maxBuffer: 16 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5_000,
+    });
   });
 
   it("rejects non-decimal Windows process counters", () => {

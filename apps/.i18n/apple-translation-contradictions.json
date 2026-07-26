@@ -194,11 +194,43 @@
       ]
     },
     {
-      "locale": "vi",
-      "source": "Access Level",
+      "locale": "ja-JP",
+      "source": "%@ tokens",
       "translations": [
-        "Cấp truy cập",
-        "Mức truy cập"
+        "%@ トークン",
+        "%@トークン"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "%@ tokens",
+      "translations": [
+        "%@개 토큰",
+        "토큰 %@개"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "%@ tokens",
+      "translations": [
+        "%@ token",
+        "%@ tokens"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "%@ tokens",
+      "translations": [
+        "%@ jeton",
+        "%@ token"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "%@ tokens",
+      "translations": [
+        "%@ 个 token",
+        "%@ 个令牌"
       ]
     },
     {
@@ -270,7 +302,6 @@
       "locale": "uk",
       "source": "Active",
       "translations": [
-        "Активний",
         "Активно",
         "Активні"
       ]
@@ -279,7 +310,6 @@
       "locale": "zh-CN",
       "source": "Active",
       "translations": [
-        "活动",
         "活跃",
         "进行中"
       ]
@@ -314,8 +344,7 @@
       "source": "Agent",
       "translations": [
         "Agent",
-        "代理",
-        "智能体"
+        "代理"
       ]
     },
     {
@@ -323,7 +352,6 @@
       "source": "Agent",
       "translations": [
         "Agent",
-        "代理",
         "代理程式"
       ]
     },
@@ -553,6 +581,14 @@
       ]
     },
     {
+      "locale": "ja-JP",
+      "source": "Always",
+      "translations": [
+        "常に",
+        "常に許可"
+      ]
+    },
+    {
       "locale": "th",
       "source": "Always",
       "translations": [
@@ -705,6 +741,102 @@
       ]
     },
     {
+      "locale": "it",
+      "source": "Archive",
+      "translations": [
+        "Archivia",
+        "Archivio"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Archive",
+      "translations": [
+        "보관",
+        "아카이브"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Archive",
+      "translations": [
+        "Archiveer",
+        "Archiveren"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Archive",
+      "translations": [
+        "Архив",
+        "Архивировать"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Archive",
+      "translations": [
+        "Arkiv",
+        "Arkivera"
+      ]
+    },
+    {
+      "locale": "ar",
+      "source": "Archived",
+      "translations": [
+        "مؤرشف",
+        "مؤرشفة"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "Archived",
+      "translations": [
+        "Archivada",
+        "Archivadas"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Archived",
+      "translations": [
+        "Archivé",
+        "Archivée"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Archived",
+      "translations": [
+        "Archiviata",
+        "Archiviato"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Archived",
+      "translations": [
+        "Zarchiwizowana",
+        "Zarchiwizowane"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Archived",
+      "translations": [
+        "เก็บถาวรแล้ว",
+        "เก็บเข้าคลังแล้ว"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Archived",
+      "translations": [
+        "Arşivlendi",
+        "Arşivlenmiş"
+      ]
+    },
+    {
       "locale": "fr",
       "source": "Asking OpenClaw",
       "translations": [
@@ -769,14 +901,6 @@
       ]
     },
     {
-      "locale": "fa",
-      "source": "Attention",
-      "translations": [
-        "توجه",
-        "نیازمند توجه"
-      ]
-    },
-    {
       "locale": "id",
       "source": "Attention",
       "translations": [
@@ -790,14 +914,6 @@
       "translations": [
         "주의",
         "주의 필요"
-      ]
-    },
-    {
-      "locale": "nl",
-      "source": "Attention",
-      "translations": [
-        "Aandacht",
-        "Let op"
       ]
     },
     {
@@ -821,7 +937,6 @@
       "source": "Attention",
       "translations": [
         "Kräver uppmärksamhet",
-        "Observera",
         "Åtgärd krävs"
       ]
     },
@@ -830,8 +945,7 @@
       "source": "Attention",
       "translations": [
         "ต้องดำเนินการ",
-        "ต้องตรวจสอบ",
-        "โปรดทราบ"
+        "ต้องตรวจสอบ"
       ]
     },
     {
@@ -843,23 +957,7 @@
       ]
     },
     {
-      "locale": "vi",
-      "source": "Attention",
-      "translations": [
-        "Chú ý",
-        "Cần chú ý"
-      ]
-    },
-    {
       "locale": "zh-CN",
-      "source": "Attention",
-      "translations": [
-        "注意",
-        "需要注意"
-      ]
-    },
-    {
-      "locale": "zh-TW",
       "source": "Attention",
       "translations": [
         "注意",
@@ -963,11 +1061,27 @@
       ]
     },
     {
+      "locale": "vi",
+      "source": "Camera",
+      "translations": [
+        "Camera",
+        "Máy ảnh"
+      ]
+    },
+    {
       "locale": "zh-CN",
       "source": "Camera",
       "translations": [
         "摄像头",
         "相机"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Cancel",
+      "translations": [
+        "Annuleer",
+        "Annuleren"
       ]
     },
     {
@@ -984,7 +1098,6 @@
       "source": "Chat",
       "translations": [
         "Chat",
-        "چت",
         "گفت‌وگو"
       ]
     },
@@ -1101,6 +1214,78 @@
       ]
     },
     {
+      "locale": "hi",
+      "source": "Collapsed",
+      "translations": [
+        "संकुचित",
+        "संक्षिप्त"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "Collapsed",
+      "translations": [
+        "Ciut",
+        "Diciutkan"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Collapsed",
+      "translations": [
+        "折りたたみ",
+        "折りたたみ済み"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Collapsed",
+      "translations": [
+        "접힘",
+        "축소됨"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Collapsed",
+      "translations": [
+        "Ihopfälld",
+        "Komprimerad"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Collapsed",
+      "translations": [
+        "ยุบอยู่",
+        "ยุบแล้ว"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Collapsed",
+      "translations": [
+        "Daraltıldı",
+        "Daraltılmış"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Collapsed",
+      "translations": [
+        "Thu gọn",
+        "Đã thu gọn"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Collapsed",
+      "translations": [
+        "已折叠",
+        "已收起"
+      ]
+    },
+    {
       "locale": "zh-TW",
       "source": "Command",
       "translations": [
@@ -1110,26 +1295,34 @@
     },
     {
       "locale": "ar",
-      "source": "Configured",
+      "source": "Confirmation needed",
       "translations": [
-        "مهيأ",
-        "مُهيأ"
+        "التأكيد مطلوب",
+        "يلزم التأكيد"
       ]
     },
     {
       "locale": "fa",
-      "source": "Configured",
+      "source": "Confirmation needed",
       "translations": [
-        "پیکربندی شده",
-        "پیکربندی‌شده"
+        "تأیید لازم است",
+        "نیاز به تأیید"
       ]
     },
     {
-      "locale": "ja-JP",
-      "source": "Configured",
+      "locale": "th",
+      "source": "Confirmation needed",
       "translations": [
-        "構成済み",
-        "設定済み"
+        "ต้องการการยืนยัน",
+        "ต้องยืนยัน"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Confirmation needed",
+      "translations": [
+        "Onay gerekiyor",
+        "Onay gerekli"
       ]
     },
     {
@@ -1407,14 +1600,6 @@
       ]
     },
     {
-      "locale": "de",
-      "source": "Connecting",
-      "translations": [
-        "Verbinden",
-        "Verbindung wird hergestellt"
-      ]
-    },
-    {
       "locale": "fr",
       "source": "Connecting",
       "translations": [
@@ -1455,6 +1640,22 @@
       ]
     },
     {
+      "locale": "it",
+      "source": "Connecting...",
+      "translations": [
+        "Connessione in corso...",
+        "Connessione..."
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Connecting...",
+      "translations": [
+        "Verbinden...",
+        "Verbinding maken..."
+      ]
+    },
+    {
       "locale": "zh-TW",
       "source": "Connecting...",
       "translations": [
@@ -1492,14 +1693,6 @@
       "translations": [
         "З'єднання…",
         "Підключення…"
-      ]
-    },
-    {
-      "locale": "zh-CN",
-      "source": "Connecting…",
-      "translations": [
-        "正在连接…",
-        "连接中…"
       ]
     },
     {
@@ -1568,19 +1761,35 @@
       ]
     },
     {
-      "locale": "hi",
-      "source": "Control",
+      "locale": "fa",
+      "source": "Copy Session Key",
       "translations": [
-        "कंट्रोल",
-        "नियंत्रण"
+        "کپی کلید جلسه",
+        "کپی کلید نشست"
       ]
     },
     {
-      "locale": "th",
-      "source": "Control",
+      "locale": "nl",
+      "source": "Copy Session Key",
       "translations": [
-        "การควบคุม",
-        "ควบคุม"
+        "Kopieer sessiesleutel",
+        "Sessiesleutel kopiëren"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Copy Session Key",
+      "translations": [
+        "Скопировать ключ сеанса",
+        "Скопировать ключ сессии"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Copy Session Key",
+      "translations": [
+        "Копіювати ключ сеансу",
+        "Копіювати ключ сесії"
       ]
     },
     {
@@ -1589,6 +1798,14 @@
       "translations": [
         "बनाएँ",
         "बनाएं"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Cron",
+      "translations": [
+        "Cron",
+        "定时任务"
       ]
     },
     {
@@ -1620,7 +1837,8 @@
       "source": "Default",
       "translations": [
         "Default",
-        "افتراضي"
+        "افتراضي",
+        "الافتراضي"
       ]
     },
     {
@@ -1700,6 +1918,7 @@
       "source": "Default",
       "translations": [
         "Default",
+        "Domyślne",
         "Domyślnie"
       ]
     },
@@ -1776,6 +1995,30 @@
       ]
     },
     {
+      "locale": "fa",
+      "source": "Default (inherited)",
+      "translations": [
+        "پیش‌فرض (ارث‌بری‌شده)",
+        "پیش‌فرض (به‌ارث‌رسیده)"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Default (inherited)",
+      "translations": [
+        "Domyślne (dziedziczone)",
+        "Domyślne (odziedziczone)"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Default (inherited)",
+      "translations": [
+        "ค่าเริ่มต้น (สืบทอด)",
+        "ค่าเริ่มต้น (สืบทอดมา)"
+      ]
+    },
+    {
       "locale": "ko",
       "source": "Default Agent",
       "translations": [
@@ -1796,8 +2039,7 @@
       "source": "Default Agent",
       "translations": [
         "Varsayılan Agent",
-        "Varsayılan Ajan",
-        "Varsayılan Temsilci"
+        "Varsayılan Ajan"
       ]
     },
     {
@@ -1821,8 +2063,7 @@
       "source": "Default Agent",
       "translations": [
         "預設 Agent",
-        "預設代理",
-        "預設代理程式"
+        "預設代理"
       ]
     },
     {
@@ -1874,27 +2115,51 @@
       ]
     },
     {
-      "locale": "hi",
-      "source": "Delete Session",
+      "locale": "nl",
+      "source": "Delete",
       "translations": [
-        "सत्र हटाएं",
-        "सेशन हटाएँ"
-      ]
-    },
-    {
-      "locale": "ru",
-      "source": "Delete Session",
-      "translations": [
-        "Удалить сеанс",
-        "Удалить сессию"
+        "Verwijder",
+        "Verwijderen"
       ]
     },
     {
       "locale": "sv",
-      "source": "Delete Session",
+      "source": "Delete",
       "translations": [
-        "Radera session",
-        "Ta bort session"
+        "Radera",
+        "Ta bort"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Delete Group",
+      "translations": [
+        "Radera grupp",
+        "Ta bort grupp"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Delete Group",
+      "translations": [
+        "删除分组",
+        "删除群组"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Delete “%@”?",
+      "translations": [
+        "Supprimer « %@ » ?",
+        "Supprimer « %@ » ?"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Delete “%@”?",
+      "translations": [
+        "Radera ”%@”?",
+        "Ta bort ”%@”?"
       ]
     },
     {
@@ -1967,46 +2232,6 @@
       "translations": [
         "عیب‌یابی",
         "عیب‌یابی‌ها"
-      ]
-    },
-    {
-      "locale": "fa",
-      "source": "Disable",
-      "translations": [
-        "غیرفعال کردن",
-        "غیرفعال‌کردن"
-      ]
-    },
-    {
-      "locale": "hi",
-      "source": "Disable",
-      "translations": [
-        "अक्षम करें",
-        "बंद करें"
-      ]
-    },
-    {
-      "locale": "ru",
-      "source": "Disable",
-      "translations": [
-        "Выключить",
-        "Отключить"
-      ]
-    },
-    {
-      "locale": "th",
-      "source": "Disable",
-      "translations": [
-        "ปิดใช้",
-        "ปิดใช้งาน"
-      ]
-    },
-    {
-      "locale": "zh-CN",
-      "source": "Disable",
-      "translations": [
-        "停用",
-        "禁用"
       ]
     },
     {
@@ -2386,6 +2611,14 @@
       ]
     },
     {
+      "locale": "hi",
+      "source": "Done",
+      "translations": [
+        "पूर्ण",
+        "हो गया"
+      ]
+    },
+    {
       "locale": "it",
       "source": "Done",
       "translations": [
@@ -2484,8 +2717,7 @@
       "translations": [
         "Dreaming",
         "구상 중",
-        "꿈꾸는 중",
-        "드리밍"
+        "꿈꾸는 중"
       ]
     },
     {
@@ -2543,8 +2775,7 @@
         "Dreaming",
         "Düş kuruyor",
         "Düşünüyor",
-        "Hayal Kuruyor",
-        "Rüya Görüyor"
+        "Hayal Kuruyor"
       ]
     },
     {
@@ -2621,78 +2852,6 @@
       ]
     },
     {
-      "locale": "ar",
-      "source": "Enable Talk",
-      "translations": [
-        "تفعيل Talk",
-        "تمكين التحدث"
-      ]
-    },
-    {
-      "locale": "ja-JP",
-      "source": "Enable Talk",
-      "translations": [
-        "Talk を有効にする",
-        "トークを有効化"
-      ]
-    },
-    {
-      "locale": "nl",
-      "source": "Enable Talk",
-      "translations": [
-        "Gesprek inschakelen",
-        "Talk inschakelen"
-      ]
-    },
-    {
-      "locale": "pt-BR",
-      "source": "Enable Talk",
-      "translations": [
-        "Ativar Talk",
-        "Ativar conversa"
-      ]
-    },
-    {
-      "locale": "ru",
-      "source": "Enable Talk",
-      "translations": [
-        "Включить Talk",
-        "Включить разговор"
-      ]
-    },
-    {
-      "locale": "tr",
-      "source": "Enable Talk",
-      "translations": [
-        "Konuşmayı Etkinleştir",
-        "Talk’u etkinleştir"
-      ]
-    },
-    {
-      "locale": "uk",
-      "source": "Enable Talk",
-      "translations": [
-        "Увімкнути Talk",
-        "Увімкнути розмову"
-      ]
-    },
-    {
-      "locale": "zh-CN",
-      "source": "Enable Talk",
-      "translations": [
-        "启用 Talk",
-        "启用对话"
-      ]
-    },
-    {
-      "locale": "zh-TW",
-      "source": "Enable Talk",
-      "translations": [
-        "啟用 Talk",
-        "啟用對話"
-      ]
-    },
-    {
       "locale": "es",
       "source": "Enabled",
       "translations": [
@@ -2714,6 +2873,38 @@
       "translations": [
         "Ativado",
         "Habilitado"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "Expanded",
+      "translations": [
+        "Buka",
+        "Diperluas"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Expanded",
+      "translations": [
+        "Expanderad",
+        "Utfälld"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Expanded",
+      "translations": [
+        "ขยายอยู่",
+        "ขยายแล้ว"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Expanded",
+      "translations": [
+        "Mở rộng",
+        "Đã mở rộng"
       ]
     },
     {
@@ -2805,6 +2996,22 @@
       ]
     },
     {
+      "locale": "ko",
+      "source": "Fast",
+      "translations": [
+        "빠르게",
+        "빠름"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Fast",
+      "translations": [
+        "Szybkie",
+        "Szybko"
+      ]
+    },
+    {
       "locale": "ar",
       "source": "Forget Gateway",
       "translations": [
@@ -2834,6 +3041,204 @@
       "translations": [
         "Gateway 삭제",
         "Gateway 지우기"
+      ]
+    },
+    {
+      "locale": "ar",
+      "source": "Fork",
+      "translations": [
+        "تشعيب",
+        "تفريع",
+        "تفرّع"
+      ]
+    },
+    {
+      "locale": "de",
+      "source": "Fork",
+      "translations": [
+        "Abzweigen",
+        "Fork"
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "Fork",
+      "translations": [
+        "Fork",
+        "انشعاب"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Fork",
+      "translations": [
+        "Bifurquer",
+        "Dupliquer"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Fork",
+      "translations": [
+        "Fork",
+        "फ़ोर्क करें",
+        "फोर्क"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "Fork",
+      "translations": [
+        "Buat Cabang",
+        "Cabangkan",
+        "Fork"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Fork",
+      "translations": [
+        "Crea fork",
+        "Dirama",
+        "Duplica",
+        "Fork"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Fork",
+      "translations": [
+        "Afsplitsen",
+        "Fork",
+        "Splits af"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Fork",
+      "translations": [
+        "Fork",
+        "Rozgałęź",
+        "Utwórz odgałęzienie"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "Fork",
+      "translations": [
+        "Bifurcar",
+        "Ramificar"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Fork",
+      "translations": [
+        "Ответвить",
+        "Создать ответвление",
+        "Форк"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Fork",
+      "translations": [
+        "แยกสาขา",
+        "แยกเซสชัน",
+        "แยกแขนง"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Fork",
+      "translations": [
+        "Dallandır",
+        "Çatalla"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Fork",
+      "translations": [
+        "Відгалузити",
+        "Створити відгалуження",
+        "Форк"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Fork",
+      "translations": [
+        "Phân nhánh",
+        "Tạo nhánh"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Fork",
+      "translations": [
+        "分叉",
+        "分支",
+        "创建分支"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Fork",
+      "translations": [
+        "分支",
+        "建立分支"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Full",
+      "translations": [
+        "フル",
+        "最大"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Full",
+      "translations": [
+        "Pełna",
+        "Pełne",
+        "Pełny"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Full",
+      "translations": [
+        "Полная",
+        "Полное",
+        "Полный"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Full",
+      "translations": [
+        "เต็ม",
+        "เต็มรูปแบบ"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Full",
+      "translations": [
+        "Повна",
+        "Повне",
+        "Повний"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Full",
+      "translations": [
+        "完全",
+        "完整"
       ]
     },
     {
@@ -2992,24 +3397,8 @@
       "locale": "ar",
       "source": "Gateway connected",
       "translations": [
-        "تم اتصال Gateway",
-        "تم اتصال الـ Gateway"
-      ]
-    },
-    {
-      "locale": "ja-JP",
-      "source": "Gateway connected",
-      "translations": [
-        "Gateway に接続しました",
-        "Gateway接続済み"
-      ]
-    },
-    {
-      "locale": "ru",
-      "source": "Gateway connected",
-      "translations": [
-        "Gateway подключен",
-        "Gateway подключён"
+        "Gateway متصل",
+        "تم الاتصال بـ Gateway"
       ]
     },
     {
@@ -3018,6 +3407,14 @@
       "translations": [
         "Gateway bağlandı",
         "Gateway bağlı"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Gateway connected",
+      "translations": [
+        "Gateway đã kết nối",
+        "Đã kết nối Gateway"
       ]
     },
     {
@@ -3303,11 +3700,52 @@
       ]
     },
     {
+      "locale": "ar",
+      "source": "Get Info…",
+      "translations": [
+        "إحضار المعلومات…",
+        "الحصول على معلومات…"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Get Info…",
+      "translations": [
+        "जानकारी पाएँ…",
+        "जानकारी प्राप्त करें…"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Get Info…",
+      "translations": [
+        "Informacje…",
+        "Pokaż informacje…"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "Get Info…",
+      "translations": [
+        "Obter Informações…",
+        "Obter informações…"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Get Info…",
+      "translations": [
+        "Отримати інформацію…",
+        "Переглянути інформацію…"
+      ]
+    },
+    {
       "locale": "zh-CN",
       "source": "Group name",
       "translations": [
         "分组名称",
-        "组名称"
+        "组名称",
+        "群组名称"
       ]
     },
     {
@@ -3738,6 +4176,22 @@
       ]
     },
     {
+      "locale": "fa",
+      "source": "Listening",
+      "translations": [
+        "در حال گوش دادن",
+        "در حال گوش‌دادن"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Listening",
+      "translations": [
+        "सुन रहा है",
+        "सुना जा रहा है"
+      ]
+    },
+    {
       "locale": "ja-JP",
       "source": "Listening",
       "translations": [
@@ -3754,11 +4208,20 @@
       ]
     },
     {
+      "locale": "pl",
+      "source": "Listening",
+      "translations": [
+        "Nasłuchiwanie",
+        "Słuchanie"
+      ]
+    },
+    {
       "locale": "uk",
       "source": "Listening",
       "translations": [
         "Прослуховування",
-        "Слухання"
+        "Слухання",
+        "Слухаю"
       ]
     },
     {
@@ -3931,6 +4394,150 @@
       "translations": [
         "Loading",
         "載入中"
+      ]
+    },
+    {
+      "locale": "de",
+      "source": "Loading sessions",
+      "translations": [
+        "Loading sessions",
+        "Sitzungen werden geladen"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "Loading sessions",
+      "translations": [
+        "Cargando sesiones",
+        "Loading sessions"
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "Loading sessions",
+      "translations": [
+        "Loading sessions",
+        "در حال بارگذاری جلسه‌ها"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Loading sessions",
+      "translations": [
+        "Chargement des sessions",
+        "Loading sessions"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Loading sessions",
+      "translations": [
+        "Loading sessions",
+        "सत्र लोड हो रहे हैं"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "Loading sessions",
+      "translations": [
+        "Loading sessions",
+        "Memuat sesi"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Loading sessions",
+      "translations": [
+        "Caricamento delle sessioni",
+        "Caricamento sessioni"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Loading sessions",
+      "translations": [
+        "Loading sessions",
+        "セッションを読み込み中"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Loading sessions",
+      "translations": [
+        "Loading sessions",
+        "세션 불러오는 중"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Loading sessions",
+      "translations": [
+        "Loading sessions",
+        "Sessies laden"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Loading sessions",
+      "translations": [
+        "Loading sessions",
+        "Wczytywanie sesji"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "Loading sessions",
+      "translations": [
+        "Carregando sessões",
+        "Loading sessions"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Loading sessions",
+      "translations": [
+        "Loading sessions",
+        "Загрузка сеансов"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Loading sessions",
+      "translations": [
+        "Loading sessions",
+        "Läser in sessioner"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Loading sessions",
+      "translations": [
+        "Loading sessions",
+        "กำลังโหลดเซสชัน"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Loading sessions",
+      "translations": [
+        "Loading sessions",
+        "Завантаження сеансів"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Loading sessions",
+      "translations": [
+        "Đang tải các phiên",
+        "Đang tải phiên"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Loading sessions",
+      "translations": [
+        "Loading sessions",
+        "正在載入工作階段"
       ]
     },
     {
@@ -4271,6 +4878,54 @@
     },
     {
       "locale": "ar",
+      "source": "Mark Read",
+      "translations": [
+        "تحديد كمقروء",
+        "وضع علامة كمقروء"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Mark Read",
+      "translations": [
+        "पठित चिह्नित करें",
+        "पढ़ा हुआ चिह्नित करें"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Mark Read",
+      "translations": [
+        "Segna come letta",
+        "Segna come letto"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Mark Read",
+      "translations": [
+        "Markeer als gelezen",
+        "Markeren als gelezen"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Mark Read",
+      "translations": [
+        "Позначити прочитаним",
+        "Позначити як прочитане"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Mark Read",
+      "translations": [
+        "Đánh dấu là đã đọc",
+        "Đánh dấu đã đọc"
+      ]
+    },
+    {
+      "locale": "ar",
       "source": "Message",
       "translations": [
         "Message",
@@ -4486,6 +5141,14 @@
       ]
     },
     {
+      "locale": "ru",
+      "source": "Name",
+      "translations": [
+        "Имя",
+        "Название"
+      ]
+    },
+    {
       "locale": "ar",
       "source": "Needs attention",
       "translations": [
@@ -4521,7 +5184,6 @@
       "locale": "fr",
       "source": "Needs attention",
       "translations": [
-        "Attention requise",
         "Nécessite une attention",
         "Nécessite votre attention"
       ]
@@ -4543,6 +5205,14 @@
       ]
     },
     {
+      "locale": "pt-BR",
+      "source": "Needs attention",
+      "translations": [
+        "Precisa de atenção",
+        "Requer atenção"
+      ]
+    },
+    {
       "locale": "sv",
       "source": "Needs attention",
       "translations": [
@@ -4556,7 +5226,7 @@
       "translations": [
         "ต้องการการดูแล",
         "ต้องการความสนใจ",
-        "ต้องดำเนินการ"
+        "ต้องตรวจสอบ"
       ]
     },
     {
@@ -4564,8 +5234,7 @@
       "source": "Needs attention",
       "translations": [
         "Dikkat gerekiyor",
-        "Dikkat gerektiriyor",
-        "İlgilenilmesi gerekiyor"
+        "Dikkat gerektiriyor"
       ]
     },
     {
@@ -4590,6 +5259,54 @@
       "translations": [
         "新建分组…",
         "新建组…"
+      ]
+    },
+    {
+      "locale": "ar",
+      "source": "New Thread",
+      "translations": [
+        "سلسلة محادثة جديدة",
+        "محادثة جديدة"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "New Thread",
+      "translations": [
+        "Nouveau fil",
+        "Nouveau fil de discussion"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "New Thread",
+      "translations": [
+        "新しいスレッド",
+        "新規スレッド"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "New Thread",
+      "translations": [
+        "Nieuw gesprek",
+        "Nieuwe thread"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "New Thread",
+      "translations": [
+        "Yeni İleti Dizisi",
+        "Yeni İş Parçacığı"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "New Thread",
+      "translations": [
+        "新建对话",
+        "新建话题"
       ]
     },
     {
@@ -4678,54 +5395,6 @@
       "translations": [
         "沒有待核准項目",
         "沒有待處理的核准"
-      ]
-    },
-    {
-      "locale": "fa",
-      "source": "No archived sessions",
-      "translations": [
-        "جلسه بایگانی‌شده‌ای وجود ندارد",
-        "نشست بایگانی‌شده‌ای وجود ندارد"
-      ]
-    },
-    {
-      "locale": "hi",
-      "source": "No archived sessions",
-      "translations": [
-        "कोई आर्काइव किया गया सेशन नहीं",
-        "कोई संग्रहीत सत्र नहीं"
-      ]
-    },
-    {
-      "locale": "ja-JP",
-      "source": "No archived sessions",
-      "translations": [
-        "アーカイブされたセッションはありません",
-        "アーカイブ済みセッションはありません"
-      ]
-    },
-    {
-      "locale": "ru",
-      "source": "No archived sessions",
-      "translations": [
-        "Нет архивных сеансов",
-        "Нет архивных сессий"
-      ]
-    },
-    {
-      "locale": "uk",
-      "source": "No archived sessions",
-      "translations": [
-        "Немає архівованих сеансів",
-        "Немає заархівованих сеансів"
-      ]
-    },
-    {
-      "locale": "vi",
-      "source": "No archived sessions",
-      "translations": [
-        "Không có phiên nào đã lưu trữ",
-        "Không có phiên đã lưu trữ"
       ]
     },
     {
@@ -4948,24 +5617,114 @@
       "locale": "de",
       "source": "No recent sessions",
       "translations": [
-        "Keine aktuellen Sitzungen",
-        "Keine letzten Sitzungen"
+        "Keine kürzlich verwendeten Sitzungen",
+        "Keine letzten Sitzungen",
+        "No recent sessions"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "No recent sessions",
+      "translations": [
+        "No hay sesiones recientes",
+        "No recent sessions"
       ]
     },
     {
       "locale": "fa",
       "source": "No recent sessions",
       "translations": [
-        "جلسه اخیر وجود ندارد",
-        "نشست اخیر وجود ندارد"
+        "No recent sessions",
+        "جلسه اخیری وجود ندارد",
+        "نشست اخیری وجود ندارد"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "No recent sessions",
+      "translations": [
+        "Aucune session récente",
+        "No recent sessions"
       ]
     },
     {
       "locale": "hi",
       "source": "No recent sessions",
       "translations": [
-        "कोई हाल के सत्र नहीं",
-        "हाल के कोई सत्र नहीं"
+        "No recent sessions",
+        "कोई हालिया सत्र नहीं"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "No recent sessions",
+      "translations": [
+        "No recent sessions",
+        "Tidak ada sesi terbaru"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "No recent sessions",
+      "translations": [
+        "No recent sessions",
+        "最近のセッションはありません"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "No recent sessions",
+      "translations": [
+        "No recent sessions",
+        "최근 세션 없음"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "No recent sessions",
+      "translations": [
+        "Geen recente sessies",
+        "No recent sessions"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "No recent sessions",
+      "translations": [
+        "Brak ostatnich sesji",
+        "No recent sessions"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "No recent sessions",
+      "translations": [
+        "Nenhuma sessão recente",
+        "No recent sessions"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "No recent sessions",
+      "translations": [
+        "No recent sessions",
+        "Нет недавних сеансов"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "No recent sessions",
+      "translations": [
+        "Inga senaste sessioner",
+        "No recent sessions"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "No recent sessions",
+      "translations": [
+        "No recent sessions",
+        "ไม่มีเซสชันล่าสุด"
       ]
     },
     {
@@ -4977,10 +5736,19 @@
       ]
     },
     {
+      "locale": "uk",
+      "source": "No recent sessions",
+      "translations": [
+        "No recent sessions",
+        "Немає недавніх сеансів",
+        "Немає нещодавніх сеансів"
+      ]
+    },
+    {
       "locale": "zh-TW",
       "source": "No recent sessions",
       "translations": [
-        "沒有最近工作階段",
+        "No recent sessions",
         "沒有最近的工作階段"
       ]
     },
@@ -5129,6 +5897,22 @@
       ]
     },
     {
+      "locale": "es",
+      "source": "Not selected",
+      "translations": [
+        "No seleccionada",
+        "No seleccionado"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Not selected",
+      "translations": [
+        "Inte vald",
+        "Inte valt"
+      ]
+    },
+    {
       "locale": "de",
       "source": "Notifications",
       "translations": [
@@ -5177,6 +5961,14 @@
       ]
     },
     {
+      "locale": "zh-CN",
+      "source": "OK",
+      "translations": [
+        "好",
+        "确定"
+      ]
+    },
+    {
       "locale": "zh-TW",
       "source": "OK",
       "translations": [
@@ -5222,7 +6014,8 @@
       "source": "Off",
       "translations": [
         "꺼짐",
-        "끄기"
+        "끄기",
+        "끔"
       ]
     },
     {
@@ -5248,6 +6041,14 @@
       "translations": [
         "Выкл.",
         "Выключено"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Off",
+      "translations": [
+        "Вимк.",
+        "Вимкнено"
       ]
     },
     {
@@ -5400,7 +6201,16 @@
       "source": "On",
       "translations": [
         "켜기",
-        "켜짐"
+        "켜짐",
+        "켬"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "On",
+      "translations": [
+        "Wł.",
+        "Włączone"
       ]
     },
     {
@@ -5409,6 +6219,14 @@
       "translations": [
         "Ativado",
         "Ligado"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "On",
+      "translations": [
+        "Увімк.",
+        "Увімкнено"
       ]
     },
     {
@@ -5468,19 +6286,51 @@
       ]
     },
     {
-      "locale": "fr",
-      "source": "Open Gateway Settings",
+      "locale": "hi",
+      "source": "Open Chat",
       "translations": [
-        "Ouvrir les paramètres de Gateway",
-        "Ouvrir les paramètres du Gateway"
+        "Chat खोलें",
+        "चैट खोलें"
       ]
     },
     {
-      "locale": "vi",
-      "source": "Open Gateway Settings",
+      "locale": "id",
+      "source": "Open Chat",
       "translations": [
-        "Mở Cài đặt Gateway",
-        "Mở cài đặt Gateway"
+        "Buka Chat",
+        "Buka Obrolan"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Open Chat",
+      "translations": [
+        "Apri Chat",
+        "Apri chat"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "Open Chat",
+      "translations": [
+        "Abrir Chat",
+        "Abrir chat"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Open Chat",
+      "translations": [
+        "เปิดแชต",
+        "เปิดแชท"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Open Chat",
+      "translations": [
+        "Chat'i Aç",
+        "Sohbeti Aç"
       ]
     },
     {
@@ -5652,6 +6502,14 @@
       ]
     },
     {
+      "locale": "ko",
+      "source": "OpenClaw unavailable",
+      "translations": [
+        "OpenClaw를 사용할 수 없습니다",
+        "OpenClaw을 사용할 수 없습니다"
+      ]
+    },
+    {
       "locale": "ar",
       "source": "Opens Settings / Gateway",
       "translations": [
@@ -5759,14 +6617,6 @@
         "開啟 Settings / Gateway",
         "開啟「設定」/ Gateway",
         "開啟設定 / Gateway"
-      ]
-    },
-    {
-      "locale": "hi",
-      "source": "Overview",
-      "translations": [
-        "अवलोकन",
-        "ओवरव्यू"
       ]
     },
     {
@@ -5914,6 +6764,14 @@
       ]
     },
     {
+      "locale": "hi",
+      "source": "Paused",
+      "translations": [
+        "रोका गया",
+        "रोके गए"
+      ]
+    },
+    {
       "locale": "ko",
       "source": "Paused",
       "translations": [
@@ -5946,6 +6804,14 @@
       ]
     },
     {
+      "locale": "sv",
+      "source": "Paused",
+      "translations": [
+        "Pausad",
+        "Pausade"
+      ]
+    },
+    {
       "locale": "uk",
       "source": "Paused",
       "translations": [
@@ -5970,20 +6836,54 @@
       ]
     },
     {
+      "locale": "ar",
+      "source": "Pinned",
+      "translations": [
+        "مثبّت",
+        "مثبّتة"
+      ]
+    },
+    {
       "locale": "es",
       "source": "Pinned",
       "translations": [
+        "Fijada",
         "Fijadas",
         "Fijado"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Pinned",
+      "translations": [
+        "Épinglé",
+        "Épinglée"
       ]
     },
     {
       "locale": "it",
       "source": "Pinned",
       "translations": [
+        "Fissata",
         "Fissati",
         "Fissato",
         "In evidenza"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Pinned",
+      "translations": [
+        "ピン留め",
+        "ピン留め済み"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Pinned",
+      "translations": [
+        "Przypięta",
+        "Przypięte"
       ]
     },
     {
@@ -5991,7 +6891,8 @@
       "source": "Pinned",
       "translations": [
         "Fixada",
-        "Fixado"
+        "Fixado",
+        "Fixados"
       ]
     },
     {
@@ -6072,6 +6973,30 @@
       "translations": [
         "Bağlantı Noktası",
         "Port"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Provider",
+      "translations": [
+        "제공업체",
+        "제공자"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Provider",
+      "translations": [
+        "Поставщик",
+        "Провайдер"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Provider",
+      "translations": [
+        "提供商",
+        "提供方"
       ]
     },
     {
@@ -6307,9 +7232,26 @@
       ]
     },
     {
+      "locale": "es",
+      "source": "Recent",
+      "translations": [
+        "Reciente",
+        "Recientes"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Recent",
+      "translations": [
+        "Récent",
+        "Récents"
+      ]
+    },
+    {
       "locale": "hi",
       "source": "Recent",
       "translations": [
+        "हाल के",
         "हाल ही के",
         "हालिया"
       ]
@@ -6320,6 +7262,22 @@
       "translations": [
         "Son",
         "Son Kullanılanlar"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Recent",
+      "translations": [
+        "Нещодавні",
+        "Останні"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Recent",
+      "translations": [
+        "最近",
+        "最近使用"
       ]
     },
     {
@@ -6383,6 +7341,7 @@
       "source": "Reconnecting…",
       "translations": [
         "다시 연결 중…",
+        "다시 연결하는 중…",
         "재연결 중…"
       ]
     },
@@ -6444,43 +7403,284 @@
       ]
     },
     {
-      "locale": "es",
-      "source": "Rename Session",
+      "locale": "ar",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
       "translations": [
-        "Cambiar nombre de sesión",
-        "Renombrar sesión"
+        "أزل المرفقات أو انتظر حتى يكتمل التسليم قبل بدء محادثة جديدة.",
+        "أزِل المرفقات أو انتظر اكتمال التسليم قبل بدء محادثة جديدة."
+      ]
+    },
+    {
+      "locale": "de",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translations": [
+        "Entferne Anhänge oder warte, bis die Zustellung abgeschlossen ist, bevor du einen neuen Chat startest.",
+        "Entfernen Sie Anhänge oder warten Sie auf die Zustellung, bevor Sie einen neuen Chat starten."
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translations": [
+        "Elimina los adjuntos o espera a que se complete la entrega antes de iniciar un nuevo chat.",
+        "Elimina los archivos adjuntos o espera a que se complete la entrega antes de iniciar un nuevo chat."
       ]
     },
     {
       "locale": "fa",
-      "source": "Rename Session",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
       "translations": [
-        "تغییر نام جلسه",
-        "تغییر نام نشست"
+        "پیش از شروع گفتگوی جدید، پیوست‌ها را حذف کنید یا منتظر تکمیل ارسال بمانید.",
+        "پیش از شروع گفت‌وگوی جدید، پیوست‌ها را حذف کنید یا منتظر بمانید تا ارسال آن‌ها تکمیل شود."
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translations": [
+        "Supprimez les pièces jointes ou attendez la fin de leur envoi avant de démarrer une nouvelle discussion.",
+        "Supprimez les pièces jointes ou attendez la livraison avant de démarrer une nouvelle conversation."
       ]
     },
     {
       "locale": "hi",
-      "source": "Rename Session",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
       "translations": [
-        "सत्र का नाम बदलें",
-        "सेशन का नाम बदलें"
+        "नई चैट शुरू करने से पहले अटैचमेंट हटाएँ या डिलीवरी पूरी होने की प्रतीक्षा करें।",
+        "नई चैट शुरू करने से पहले अटैचमेंट हटाएं या डिलीवरी पूरी होने की प्रतीक्षा करें।"
       ]
     },
     {
-      "locale": "ko",
-      "source": "Rename Session",
+      "locale": "id",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
       "translations": [
-        "세션 이름 바꾸기",
-        "세션 이름 변경"
+        "Hapus lampiran atau tunggu hingga pengiriman selesai sebelum memulai obrolan baru.",
+        "Hapus lampiran atau tunggu pengiriman selesai sebelum memulai obrolan baru."
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translations": [
+        "新しいチャットを開始する前に、添付ファイルを削除するか、配信が完了するまでお待ちください。",
+        "新しいチャットを開始する前に、添付ファイルを削除するか送信が完了するのを待ってください。"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translations": [
+        "Verwijder bijlagen of wacht tot de bezorging is afgerond voordat je een nieuwe chat start.",
+        "Verwijder bijlagen of wacht tot de bezorging is voltooid voordat je een nieuwe chat start."
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translations": [
+        "Remova os anexos ou aguarde a conclusão da entrega antes de iniciar uma nova conversa.",
+        "Remova os anexos ou aguarde a entrega ser concluída antes de iniciar uma nova conversa."
       ]
     },
     {
       "locale": "ru",
-      "source": "Rename Session",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
       "translations": [
-        "Переименовать сеанс",
-        "Переименовать сессию"
+        "Удалите вложения или дождитесь доставки, прежде чем начинать новый чат.",
+        "Удалите вложения или дождитесь завершения доставки, прежде чем начинать новый чат."
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translations": [
+        "Ta bort bilagor eller vänta på att leveransen slutförs innan du startar en ny chatt.",
+        "Ta bort bilagor eller vänta tills leveransen är klar innan du startar en ny chatt."
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translations": [
+        "นำไฟล์แนบออกหรือรอให้การส่งเสร็จสิ้นก่อนเริ่มแชตใหม่",
+        "ลบไฟล์แนบหรือรอให้การส่งเสร็จสิ้นก่อนเริ่มแชทใหม่"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translations": [
+        "Видаліть вкладення або дочекайтеся завершення доставки, перш ніж починати новий чат.",
+        "Видаліть вкладення або зачекайте на завершення доставлення, перш ніж починати новий чат."
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translations": [
+        "Gỡ tệp đính kèm hoặc chờ gửi xong trước khi bắt đầu cuộc trò chuyện mới.",
+        "Xóa tệp đính kèm hoặc chờ quá trình gửi hoàn tất trước khi bắt đầu cuộc trò chuyện mới."
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translations": [
+        "请移除附件或等待发送完成后再开始新聊天。",
+        "请移除附件或等待发送完成后，再开始新聊天。"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translations": [
+        "請先移除附件或等待傳送完成，再開始新的聊天。",
+        "請移除附件，或等待傳送問題解決後再開始新的聊天。"
+      ]
+    },
+    {
+      "locale": "ar",
+      "source": "Rename",
+      "translations": [
+        "إعادة التسمية",
+        "إعادة تسمية"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "Rename",
+      "translations": [
+        "Cambiar nombre",
+        "Renombrar"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "Rename",
+      "translations": [
+        "Ganti Nama",
+        "Ubah Nama",
+        "Ubah nama"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Rename",
+      "translations": [
+        "이름 바꾸기",
+        "이름 변경"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Rename",
+      "translations": [
+        "Hernoem",
+        "Hernoemen"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "Rename Group",
+      "translations": [
+        "Cambiar nombre del grupo",
+        "Renombrar grupo"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "Rename Group",
+      "translations": [
+        "Ganti Nama Grup",
+        "Ubah Nama Grup"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Rename Group",
+      "translations": [
+        "Groep hernoemen",
+        "Groepsnaam wijzigen"
+      ]
+    },
+    {
+      "locale": "ar",
+      "source": "Rename Thread",
+      "translations": [
+        "إعادة تسمية المحادثة",
+        "إعادة تسمية سلسلة المحادثة"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "Rename Thread",
+      "translations": [
+        "Cambiar el nombre del hilo",
+        "Renombrar hilo"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Rename Thread",
+      "translations": [
+        "Renommer le fil",
+        "Renommer le fil de discussion"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Rename Thread",
+      "translations": [
+        "Gesprek hernoemen",
+        "Thread hernoemen"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Rename Thread",
+      "translations": [
+        "İleti Dizisini Yeniden Adlandır",
+        "İş Parçacığını Yeniden Adlandır"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Rename Thread",
+      "translations": [
+        "重命名对话",
+        "重命名话题"
+      ]
+    },
+    {
+      "locale": "ar",
+      "source": "Rename…",
+      "translations": [
+        "إعادة التسمية…",
+        "إعادة تسمية…"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "Rename…",
+      "translations": [
+        "Cambiar nombre…",
+        "Renombrar…"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "Rename…",
+      "translations": [
+        "Ganti nama…",
+        "Ubah nama…"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Rename…",
+      "translations": [
+        "Hernoemen…",
+        "Naam wijzigen…"
       ]
     },
     {
@@ -6568,7 +7768,8 @@
       "source": "Retry",
       "translations": [
         "Erneut versuchen",
-        "Retry"
+        "Retry",
+        "Wiederholen"
       ]
     },
     {
@@ -6584,7 +7785,6 @@
       "source": "Retry",
       "translations": [
         "Retry",
-        "تلاش دوباره",
         "تلاش مجدد"
       ]
     },
@@ -6652,7 +7852,8 @@
       "translations": [
         "Ponów",
         "Ponów próbę",
-        "Retry"
+        "Retry",
+        "Spróbuj ponownie"
       ]
     },
     {
@@ -6684,7 +7885,8 @@
       "source": "Retry",
       "translations": [
         "Retry",
-        "ลองอีกครั้ง"
+        "ลองอีกครั้ง",
+        "ลองใหม่"
       ]
     },
     {
@@ -6729,11 +7931,132 @@
       ]
     },
     {
+      "locale": "ar",
+      "source": "Run",
+      "translations": [
+        "التشغيل",
+        "تشغيل"
+      ]
+    },
+    {
+      "locale": "de",
+      "source": "Run",
+      "translations": [
+        "Ausführen",
+        "Ausführung"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "Run",
+      "translations": [
+        "Ejecución",
+        "Ejecutar"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Run",
+      "translations": [
+        "Exécuter",
+        "Exécution"
+      ]
+    },
+    {
       "locale": "hi",
       "source": "Run",
       "translations": [
         "चलाएँ",
-        "चलाएं"
+        "चलाएं",
+        "रन"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "Run",
+      "translations": [
+        "Jalankan",
+        "Proses"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Run",
+      "translations": [
+        "Esecuzione",
+        "Esegui"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Run",
+      "translations": [
+        "Uitvoeren",
+        "Uitvoering"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Run",
+      "translations": [
+        "Uruchom",
+        "Uruchomienie"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "Run",
+      "translations": [
+        "Executar",
+        "Execução"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Run",
+      "translations": [
+        "Запуск",
+        "Запустить"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Run",
+      "translations": [
+        "Kör",
+        "Körning"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Run",
+      "translations": [
+        "การทำงาน",
+        "เรียกใช้"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Run",
+      "translations": [
+        "Çalıştır",
+        "Çalıştırma"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Run",
+      "translations": [
+        "Запуск",
+        "Запустити"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Run",
+      "translations": [
+        "Chạy",
+        "Lần chạy"
       ]
     },
     {
@@ -6745,11 +8068,20 @@
       ]
     },
     {
+      "locale": "hi",
+      "source": "Running",
+      "translations": [
+        "चल रहा है",
+        "जारी"
+      ]
+    },
+    {
       "locale": "id",
       "source": "Running",
       "translations": [
         "Berjalan",
-        "Sedang Berjalan"
+        "Sedang Berjalan",
+        "Sedang berjalan"
       ]
     },
     {
@@ -6757,6 +8089,7 @@
       "source": "Running",
       "translations": [
         "Actief",
+        "In uitvoering",
         "Wordt uitgevoerd"
       ]
     },
@@ -6764,8 +8097,18 @@
       "locale": "pl",
       "source": "Running",
       "translations": [
+        "Uruchomiona",
         "Uruchomione",
-        "Uruchomiono"
+        "Uruchomiono",
+        "W toku"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Running",
+      "translations": [
+        "Körs",
+        "Pågår"
       ]
     },
     {
@@ -7147,30 +8490,6 @@
       ]
     },
     {
-      "locale": "de",
-      "source": "Search sessions",
-      "translations": [
-        "Sitzungen durchsuchen",
-        "Sitzungen suchen"
-      ]
-    },
-    {
-      "locale": "hi",
-      "source": "Search sessions",
-      "translations": [
-        "सत्र खोजें",
-        "सेशन खोजें"
-      ]
-    },
-    {
-      "locale": "uk",
-      "source": "Search sessions",
-      "translations": [
-        "Пошук сеансів",
-        "Пошук сесій"
-      ]
-    },
-    {
       "locale": "ja-JP",
       "source": "Secure (TLS)",
       "translations": [
@@ -7203,6 +8522,38 @@
       ]
     },
     {
+      "locale": "ar",
+      "source": "Selected",
+      "translations": [
+        "محدد",
+        "محدّد"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "Selected",
+      "translations": [
+        "Seleccionada",
+        "Seleccionado"
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "Selected",
+      "translations": [
+        "انتخاب شده",
+        "انتخاب‌شده"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Selected",
+      "translations": [
+        "Vald",
+        "Valt"
+      ]
+    },
+    {
       "locale": "tr",
       "source": "Selected",
       "translations": [
@@ -7212,106 +8563,26 @@
     },
     {
       "locale": "fa",
-      "source": "Session",
-      "translations": [
-        "جلسه",
-        "نشست"
-      ]
-    },
-    {
-      "locale": "hi",
-      "source": "Session",
-      "translations": [
-        "सत्र",
-        "सेशन"
-      ]
-    },
-    {
-      "locale": "ru",
-      "source": "Session",
-      "translations": [
-        "Сеанс",
-        "Сессия"
-      ]
-    },
-    {
-      "locale": "uk",
-      "source": "Session",
-      "translations": [
-        "Сеанс",
-        "Сесія"
-      ]
-    },
-    {
-      "locale": "es",
-      "source": "Session name",
-      "translations": [
-        "Nombre de la sesión",
-        "Nombre de sesión"
-      ]
-    },
-    {
-      "locale": "fa",
-      "source": "Session name",
-      "translations": [
-        "نام جلسه",
-        "نام نشست"
-      ]
-    },
-    {
-      "locale": "hi",
-      "source": "Session name",
-      "translations": [
-        "सत्र का नाम",
-        "सेशन का नाम"
-      ]
-    },
-    {
-      "locale": "it",
-      "source": "Session name",
-      "translations": [
-        "Nome della sessione",
-        "Nome sessione"
-      ]
-    },
-    {
-      "locale": "ru",
-      "source": "Session name",
-      "translations": [
-        "Имя сессии",
-        "Название сеанса"
-      ]
-    },
-    {
-      "locale": "fa",
-      "source": "Sessions",
-      "translations": [
-        "جلسه‌ها",
-        "نشست‌ها"
-      ]
-    },
-    {
-      "locale": "nl",
-      "source": "Sessions",
-      "translations": [
-        "Sessies",
-        "Sessions"
-      ]
-    },
-    {
-      "locale": "uk",
-      "source": "Sessions",
-      "translations": [
-        "Сеанси",
-        "Сесії"
-      ]
-    },
-    {
-      "locale": "fa",
       "source": "Sessions unavailable",
       "translations": [
         "جلسه‌ها در دسترس نیستند",
         "نشست‌ها در دسترس نیستند"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Sessions unavailable",
+      "translations": [
+        "Không có phiên khả dụng",
+        "Không thể truy cập các phiên"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Sessions unavailable",
+      "translations": [
+        "工作階段無法使用",
+        "無法使用工作階段"
       ]
     },
     {
@@ -7361,6 +8632,14 @@
       "translations": [
         "Configurar",
         "Configuração"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Show less",
+      "translations": [
+        "Minder tonen",
+        "Minder weergeven"
       ]
     },
     {
@@ -7441,46 +8720,6 @@
       "translations": [
         "Skill Workshop",
         "Skill 工作坊"
-      ]
-    },
-    {
-      "locale": "de",
-      "source": "Speakerphone",
-      "translations": [
-        "Freisprechen",
-        "Freisprecher"
-      ]
-    },
-    {
-      "locale": "hi",
-      "source": "Speakerphone",
-      "translations": [
-        "Speakerphone",
-        "स्पीकरफ़ोन"
-      ]
-    },
-    {
-      "locale": "th",
-      "source": "Speakerphone",
-      "translations": [
-        "ลำโพงโทรศัพท์",
-        "สปีกเกอร์โฟน"
-      ]
-    },
-    {
-      "locale": "uk",
-      "source": "Speakerphone",
-      "translations": [
-        "Гучний зв’язок",
-        "Гучномовець"
-      ]
-    },
-    {
-      "locale": "zh-TW",
-      "source": "Speakerphone",
-      "translations": [
-        "免持聽筒",
-        "擴音"
       ]
     },
     {
@@ -7633,6 +8872,14 @@
       "translations": [
         "Говорить…",
         "Озвучення…"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Speaking…",
+      "translations": [
+        "正在朗讀…",
+        "說話中…"
       ]
     },
     {
@@ -7796,96 +9043,11 @@
       ]
     },
     {
-      "locale": "ar",
-      "source": "Talk",
+      "locale": "id",
+      "source": "Stop",
       "translations": [
-        "التحدث",
-        "تحدث",
-        "تحدّث"
-      ]
-    },
-    {
-      "locale": "fa",
-      "source": "Talk",
-      "translations": [
-        "صحبت",
-        "گفتگو",
-        "گفت‌وگو"
-      ]
-    },
-    {
-      "locale": "ja-JP",
-      "source": "Talk",
-      "translations": [
-        "トーク",
-        "会話",
-        "話す"
-      ]
-    },
-    {
-      "locale": "ko",
-      "source": "Talk",
-      "translations": [
-        "대화",
-        "대화하기"
-      ]
-    },
-    {
-      "locale": "pl",
-      "source": "Talk",
-      "translations": [
-        "Rozmawiaj",
-        "Rozmowa"
-      ]
-    },
-    {
-      "locale": "pt-BR",
-      "source": "Talk",
-      "translations": [
-        "Conversar",
-        "Falar"
-      ]
-    },
-    {
-      "locale": "ru",
-      "source": "Talk",
-      "translations": [
-        "Говорить",
-        "Разговор"
-      ]
-    },
-    {
-      "locale": "uk",
-      "source": "Talk",
-      "translations": [
-        "Говорити",
-        "Розмова"
-      ]
-    },
-    {
-      "locale": "vi",
-      "source": "Talk",
-      "translations": [
-        "Nói chuyện",
-        "Trò chuyện"
-      ]
-    },
-    {
-      "locale": "zh-CN",
-      "source": "Talk",
-      "translations": [
-        "对话",
-        "通话"
-      ]
-    },
-    {
-      "locale": "zh-TW",
-      "source": "Talk",
-      "translations": [
-        "交談",
-        "對話",
-        "語音對話",
-        "說話"
+        "Berhenti",
+        "Hentikan"
       ]
     },
     {
@@ -8012,6 +9174,7 @@
       "locale": "de",
       "source": "Thinking",
       "translations": [
+        "Denkmodus",
         "Denkprozess",
         "Denkt nach",
         "Nachdenken"
@@ -8038,7 +9201,8 @@
       "source": "Thinking",
       "translations": [
         "विचार प्रक्रिया",
-        "सोच रहा है"
+        "सोच रहा है",
+        "सोच-विचार"
       ]
     },
     {
@@ -8080,6 +9244,7 @@
       "translations": [
         "Aan het nadenken",
         "Denken",
+        "Denkmodus",
         "Redeneren"
       ]
     },
@@ -8302,6 +9467,102 @@
       ]
     },
     {
+      "locale": "fr",
+      "source": "Thread",
+      "translations": [
+        "Fil",
+        "Fil de discussion"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Thread",
+      "translations": [
+        "Conversazione",
+        "Thread"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Thread",
+      "translations": [
+        "Gesprek",
+        "Thread"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Thread",
+      "translations": [
+        "Dizi",
+        "Konu"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Thread",
+      "translations": [
+        "Chuỗi",
+        "Luồng"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Thread",
+      "translations": [
+        "对话串",
+        "话题串"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Thread",
+      "translations": [
+        "對話串",
+        "討論串"
+      ]
+    },
+    {
+      "locale": "ar",
+      "source": "Thread name",
+      "translations": [
+        "اسم المحادثة",
+        "اسم سلسلة المحادثة"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Thread name",
+      "translations": [
+        "Nom du fil",
+        "Nom du fil de discussion"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Thread name",
+      "translations": [
+        "Gespreksnaam",
+        "Threadnaam"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Thread name",
+      "translations": [
+        "İleti dizisi adı",
+        "İş parçacığı adı"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Thread name",
+      "translations": [
+        "对话名称",
+        "话题名称"
+      ]
+    },
+    {
       "locale": "uk",
       "source": "Title",
       "translations": [
@@ -8310,51 +9571,10 @@
       ]
     },
     {
-      "locale": "vi",
-      "source": "Transport",
-      "translations": [
-        "Phương thức truyền tải",
-        "Truyền tải"
-      ]
-    },
-    {
-      "locale": "de",
-      "source": "Unarchive",
-      "translations": [
-        "Aus Archiv entfernen",
-        "Aus Archiv holen"
-      ]
-    },
-    {
-      "locale": "fa",
-      "source": "Unarchive",
-      "translations": [
-        "خارج کردن از بایگانی",
-        "خروج از بایگانی"
-      ]
-    },
-    {
-      "locale": "hi",
-      "source": "Unarchive",
-      "translations": [
-        "अनआर्काइव करें",
-        "संग्रह से हटाएं"
-      ]
-    },
-    {
-      "locale": "id",
-      "source": "Unarchive",
-      "translations": [
-        "Batalkan Pengarsipan",
-        "Batalkan arsip"
-      ]
-    },
-    {
       "locale": "it",
       "source": "Unarchive",
       "translations": [
         "Annulla archiviazione",
-        "Rimuovi dall'archivio",
         "Rimuovi dall’archivio"
       ]
     },
@@ -8364,14 +9584,6 @@
       "translations": [
         "アーカイブを解除",
         "アーカイブ解除"
-      ]
-    },
-    {
-      "locale": "nl",
-      "source": "Unarchive",
-      "translations": [
-        "Dearchiveren",
-        "Uit archief halen"
       ]
     },
     {
@@ -8391,19 +9603,11 @@
       ]
     },
     {
-      "locale": "th",
-      "source": "Unarchive",
+      "locale": "ja-JP",
+      "source": "Unavailable",
       "translations": [
-        "ยกเลิกการเก็บถาวร",
-        "เลิกเก็บถาวร"
-      ]
-    },
-    {
-      "locale": "tr",
-      "source": "Unarchive",
-      "translations": [
-        "Arşivden Çıkar",
-        "Arşivden çıkar"
+        "利用できません",
+        "利用不可"
       ]
     },
     {
@@ -8493,6 +9697,14 @@
       "translations": [
         "Désépingler",
         "Détacher"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Unpin",
+      "translations": [
+        "अनपिन करें",
+        "पिन हटाएँ"
       ]
     },
     {
@@ -8640,6 +9852,30 @@
       ]
     },
     {
+      "locale": "fr",
+      "source": "Verbosity",
+      "translations": [
+        "Niveau de détail",
+        "Verbosité"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "Verbosity",
+      "translations": [
+        "Nível de detalhe",
+        "Nível de detalhes"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Verbosity",
+      "translations": [
+        "Ayrıntı Düzeyi",
+        "Ayrıntı düzeyi"
+      ]
+    },
+    {
       "locale": "fa",
       "source": "Voice & Talk",
       "translations": [
@@ -8669,14 +9905,6 @@
       "translations": [
         "Röst och samtal",
         "Röst och tal"
-      ]
-    },
-    {
-      "locale": "uk",
-      "source": "Voice Mode",
-      "translations": [
-        "Голосовий режим",
-        "Режим голосу"
       ]
     },
     {
@@ -8812,7 +10040,7 @@
       "source": "Voice note",
       "translations": [
         "Voice note",
-        "ボイスメモ"
+        "ボイスノート"
       ]
     },
     {
@@ -8868,7 +10096,7 @@
       "source": "Voice note",
       "translations": [
         "Voice note",
-        "บันทึกเสียง"
+        "ข้อความเสียง"
       ]
     },
     {
@@ -8984,19 +10212,19 @@
       ]
     },
     {
-      "locale": "de",
-      "source": "While Using the App",
-      "translations": [
-        "Bei Verwendung der App",
-        "Beim Verwenden der App"
-      ]
-    },
-    {
       "locale": "es",
       "source": "While Using the App",
       "translations": [
         "Al usar la app",
         "Mientras se usa la app"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "While Using the App",
+      "translations": [
+        "Lors de l'utilisation de l'app",
+        "Lorsque l’app est utilisée"
       ]
     },
     {
@@ -9008,11 +10236,51 @@
       ]
     },
     {
+      "locale": "id",
+      "source": "While Using the App",
+      "translations": [
+        "Saat Menggunakan Aplikasi",
+        "Saat Menggunakan App"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "While Using the App",
+      "translations": [
+        "Durante l'uso dell'app",
+        "Mentre usi l'app"
+      ]
+    },
+    {
       "locale": "ja-JP",
       "source": "While Using the App",
       "translations": [
-        "アプリ使用中",
+        "アプリの使用中",
         "アプリ使用中のみ"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "While Using the App",
+      "translations": [
+        "앱 사용 중",
+        "앱을 사용하는 동안"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "While Using the App",
+      "translations": [
+        "Bij gebruik van de app",
+        "Tijdens gebruik van de app"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "While Using the App",
+      "translations": [
+        "Podczas korzystania z aplikacji",
+        "Podczas używania aplikacji"
       ]
     },
     {
@@ -9020,7 +10288,7 @@
       "source": "While Using the App",
       "translations": [
         "Ao Usar o App",
-        "Ao usar o app"
+        "Durante o uso do app"
       ]
     },
     {
@@ -9032,6 +10300,14 @@
       ]
     },
     {
+      "locale": "th",
+      "source": "While Using the App",
+      "translations": [
+        "ขณะใช้งานแอป",
+        "ขณะใช้แอป"
+      ]
+    },
+    {
       "locale": "tr",
       "source": "While Using the App",
       "translations": [
@@ -9040,11 +10316,19 @@
       ]
     },
     {
+      "locale": "vi",
+      "source": "While Using the App",
+      "translations": [
+        "Khi dùng ứng dụng",
+        "Khi đang dùng ứng dụng"
+      ]
+    },
+    {
       "locale": "zh-CN",
       "source": "While Using the App",
       "translations": [
-        "使用应用时",
-        "使用应用期间"
+        "使用 App 期间",
+        "使用应用时"
       ]
     },
     {
@@ -9109,6 +10393,14 @@
       "translations": [
         "Çalışma Panosu",
         "Çalışma panosu"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "You",
+      "translations": [
+        "Jij",
+        "U"
       ]
     },
     {

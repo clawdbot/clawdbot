@@ -150,7 +150,7 @@ describe("ensureTool", () => {
       finalUrl: "https://example.com/archive.tar.gz",
     });
     const destination = join(tempAgentDir!, "archive.tar.gz");
-    const { testing } = await import("./tools-manager.js");
+    const { testing } = await import("./tools-manager.test-support.js");
 
     await expect(
       testing.downloadFile("https://example.com/archive.tar.gz", destination, 10),
@@ -179,7 +179,7 @@ describe("ensureTool", () => {
       finalUrl: "https://example.com/archive.tar.gz",
     });
     const destination = join(tempAgentDir!, "archive.tar.gz");
-    const { testing } = await import("./tools-manager.js");
+    const { testing } = await import("./tools-manager.test-support.js");
 
     await expect(
       testing.downloadFile("https://example.com/archive.tar.gz", destination, 10),
@@ -201,12 +201,46 @@ describe("ensureTool", () => {
       finalUrl: "https://example.com/archive.tar.gz",
     });
     const destination = join(tempAgentDir!, "archive.tar.gz");
-    const { testing } = await import("./tools-manager.js");
+    const { testing } = await import("./tools-manager.test-support.js");
 
     await testing.downloadFile("https://example.com/archive.tar.gz", destination, body.byteLength);
 
     expect(release).toHaveBeenCalledOnce();
     expect(readFileSync(destination)).toEqual(Buffer.from(body));
+  });
+
+  it("bounds GitHub release metadata reads", async () => {
+    let reads = 0;
+    let canceled = false;
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (reads >= 20) {
+            controller.close();
+            return;
+          }
+          reads += 1;
+          controller.enqueue(new Uint8Array(512 * 1024));
+        },
+        cancel() {
+          canceled = true;
+        },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response,
+      release,
+      finalUrl: "https://api.github.com/repos/sharkdp/fd/releases/latest",
+    });
+
+    const { ensureTool } = await import("./tools-manager.js");
+    await expect(ensureTool("fd", true)).resolves.toBeUndefined();
+
+    expect(reads).toBeLessThan(20);
+    expect(canceled).toBe(true);
+    expect(release).toHaveBeenCalledOnce();
   });
 });
 
@@ -243,6 +277,11 @@ describe("ensureTool exit-status handling", () => {
       stdout: Buffer.alloc(0),
     });
     await expect(ensureTool("fd", true)).resolves.toBe("fd");
+    expect(spawnSyncMock).toHaveBeenCalledWith("fd", ["--version"], {
+      killSignal: "SIGKILL",
+      stdio: "pipe",
+      timeout: 5_000,
+    });
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 });

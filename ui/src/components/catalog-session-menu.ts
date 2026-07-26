@@ -2,6 +2,7 @@ import { html } from "lit";
 import { property } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
+import { DropdownMenuController } from "./dropdown-menu-controller.ts";
 import { icons } from "./icons.ts";
 import { promoteToPopoverTopLayer } from "./menu-surface.ts";
 import "./web-awesome.ts";
@@ -12,38 +13,19 @@ class CatalogSessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) x = 0;
   @property({ attribute: false }) y = 0;
   @property({ attribute: false }) trigger: HTMLElement | null = null;
+  @property({ attribute: false }) lastActive = "";
   @property({ attribute: false }) terminalDisabled = false;
   @property({ attribute: false }) onAction: (action: CatalogSessionMenuAction) => void = () => {};
   @property({ attribute: false }) onClose: () => void = () => {};
+  readonly menuLifecycle = new DropdownMenuController(this, {
+    getTrigger: () => this.trigger,
+    onClose: () => this.onClose(),
+  });
 
   override connectedCallback() {
     super.connectedCallback();
-    document.addEventListener("keydown", this.handleDocumentKeydown, true);
     promoteToPopoverTopLayer(this);
   }
-
-  override disconnectedCallback() {
-    document.removeEventListener("keydown", this.handleDocumentKeydown, true);
-    super.disconnectedCallback();
-  }
-
-  protected override firstUpdated(): void {
-    const dropdown = this.querySelector<HTMLElement & { updateComplete?: Promise<unknown> }>(
-      "wa-dropdown",
-    );
-    void Promise.resolve(dropdown?.updateComplete).then(() => {
-      this.querySelector<HTMLElement>("wa-dropdown-item:not([disabled])")?.focus();
-    });
-  }
-
-  private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      event.stopPropagation();
-      this.trigger?.focus();
-      this.onClose();
-    }
-  };
 
   private run(action: CatalogSessionMenuAction) {
     // Dispatch while the controller still owns the menu snapshot; close clears it synchronously.
@@ -69,7 +51,7 @@ class CatalogSessionMenu extends OpenClawLightDomElement {
 
   override render() {
     const menuWidth = 240;
-    const menuMaxHeight = 112;
+    const menuMaxHeight = 140;
     const x = Math.max(8, Math.min(this.x, window.innerWidth - menuWidth - 8));
     const y = Math.max(8, Math.min(this.y, window.innerHeight - menuMaxHeight - 8));
     const menuLabel = t("chat.catalog.sessionMenu");
@@ -91,6 +73,11 @@ class CatalogSessionMenu extends OpenClawLightDomElement {
           aria-label=${menuLabel}
           style="position: fixed; left: ${x}px; top: ${y}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
         ></button>
+        ${this.lastActive
+          ? html`<div class="session-menu__info">
+              ${t("sessionsView.lastActive", { time: this.lastActive })}
+            </div>`
+          : ""}
         <wa-dropdown-item class="session-menu__item" value="viewer">
           <span slot="icon" class="session-menu__icon" aria-hidden="true"
             >${icons.messageSquare}</span

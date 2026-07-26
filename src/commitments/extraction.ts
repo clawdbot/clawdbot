@@ -245,7 +245,7 @@ Rules:
 - Dedupe keys should be stable within a session, like "interview:2026-04-29" or "sleep:2026-04-29".
 
 Items:
-${JSON.stringify(items, null, 2)}`;
+${JSON.stringify(items)}`;
 }
 
 function parseDueMs(raw: string | undefined): number | undefined {
@@ -273,7 +273,7 @@ function resolveMinimumDueMs(params: {
   return params.nowMs + intervalMs;
 }
 
-export function validateCommitmentCandidates(params: {
+function validateCommitmentCandidates(params: {
   cfg?: OpenClawConfig;
   items: CommitmentExtractionItem[];
   result: CommitmentExtractionBatchResult;
@@ -369,4 +369,9 @@ export async function persistCommitmentExtractionResult(params: {
     );
   }
   return created;
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.commitmentExtractionTestApi")] =
+    { validateCommitmentCandidates };
 }

@@ -9,6 +9,7 @@ import { markdownToIR } from "../../packages/markdown-core/src/ir.js";
 
 const WORKFLOW_PATH = ".github/workflows/ios-periphery-comment.yml";
 const PRODUCER_WORKFLOW_PATH = ".github/workflows/ios-periphery.yml";
+const MACOS_PRODUCER_WORKFLOW_PATH = ".github/workflows/macos-periphery.yml";
 const ARTIFACT_NAME = "ios-periphery-dead-code-12345-2";
 
 type WorkflowStep = {
@@ -44,6 +45,7 @@ type ProducerWorkflow = {
       steps?: WorkflowStep[];
     };
     scan?: {
+      "runs-on"?: string;
       steps?: WorkflowStep[];
     };
   };
@@ -84,74 +86,6 @@ function commenterScript(): string {
     throw new Error("missing iOS Periphery commenter script");
   }
   return script;
-}
-
-function scopeScript(): string {
-  const workflow = parse(readFileSync(PRODUCER_WORKFLOW_PATH, "utf8")) as ProducerWorkflow;
-  const step = workflow.jobs?.scope?.steps?.find((candidate) => candidate.id === "scope");
-  const script = step?.with?.script;
-  if (!script) {
-    throw new Error("missing iOS Periphery scope script");
-  }
-  return script;
-}
-
-async function runScope(options: {
-  diffExitCode?: number;
-  draft?: boolean;
-  eventName?: string;
-  files?: Array<string | { filename: string; previous_filename?: string }>;
-}): Promise<string | undefined> {
-  const outputs = new Map<string, string>();
-  const core = {
-    setOutput(name: string, value: string) {
-      outputs.set(name, value);
-    },
-  };
-  const context = {
-    eventName: options.eventName ?? "pull_request",
-    payload: {
-      pull_request: {
-        base: { sha: "base-sha" },
-        draft: options.draft ?? false,
-        number: 123,
-      },
-    },
-    repo: {
-      owner: "openclaw",
-      repo: "openclaw",
-    },
-  };
-  const exec = {
-    async getExecOutput(command: string, args: string[]) {
-      if (command !== "git" || args.slice(0, 5).join(" ") !== "diff --quiet base-sha HEAD --") {
-        throw new Error(`unexpected scope command: ${command} ${args.join(" ")}`);
-      }
-      if (options.diffExitCode !== undefined) {
-        return { exitCode: options.diffExitCode };
-      }
-      const pathspecs = args.slice(5);
-      const filenames = (options.files ?? []).flatMap((file) =>
-        typeof file === "string"
-          ? [file]
-          : [file.filename, file.previous_filename].filter((name): name is string => Boolean(name)),
-      );
-      const changed = filenames.some((filename) =>
-        pathspecs.some((pathspec) =>
-          pathspec.endsWith("/") ? filename.startsWith(pathspec) : filename === pathspec,
-        ),
-      );
-      return { exitCode: changed ? 1 : 0 };
-    },
-  };
-  const execute = compileFunction(`return (async () => {\n${scopeScript()}\n})();`, [
-    "context",
-    "core",
-    "exec",
-  ]) as (context: unknown, core: unknown, exec: unknown) => Promise<void>;
-
-  await execute(context, core, exec);
-  return outputs.get("should-scan");
 }
 
 async function runCommenter(
@@ -468,68 +402,12 @@ describe("iOS Periphery comment workflow", () => {
     expect(upload?.with?.["if-no-files-found"]).toBe("error");
   });
 
-  it("runs scope detection for PR transitions that can clear stale findings", () => {
-    const workflow = parse(readFileSync(PRODUCER_WORKFLOW_PATH, "utf8")) as ProducerWorkflow;
-
-    expect(workflow.on?.pull_request?.types).toContain("converted_to_draft");
-    expect(workflow.on?.pull_request?.paths).toBeUndefined();
-    expect(() =>
-      compileFunction(`return (async () => {\n${scopeScript()}\n})();`, [
-        "context",
-        "core",
-        "exec",
-      ]),
-    ).not.toThrow();
-    expect(scopeScript()).toContain("exec.getExecOutput");
-    expect(scopeScript()).not.toContain("pulls.listFiles");
+  it("uses hosted macOS capacity on retried scans", () => {
+    for (const workflowPath of [PRODUCER_WORKFLOW_PATH, MACOS_PRODUCER_WORKFLOW_PATH]) {
+      const workflow = parse(readFileSync(workflowPath, "utf8")) as ProducerWorkflow;
+      expect(workflow.jobs?.scan?.["runs-on"]).toContain("github.run_attempt > 1");
+    }
   });
-
-  it.each([
-    {
-      expected: "false",
-      files: ["apps/ios/Sources/Test.swift"],
-      name: "draft pull request",
-      options: { draft: true },
-    },
-    {
-      expected: "true",
-      files: ["apps/ios/Sources/Test.swift"],
-      name: "iOS change",
-      options: {},
-    },
-    {
-      expected: "false",
-      files: ["docs/index.md"],
-      name: "out-of-scope change",
-      options: {},
-    },
-    {
-      expected: "true",
-      files: [
-        {
-          filename: "docs/Moved.swift",
-          previous_filename: "apps/ios/Sources/Moved.swift",
-        },
-      ],
-      name: "iOS file renamed out of scope",
-      options: {},
-    },
-    {
-      expected: "true",
-      files: [],
-      name: "manual dispatch",
-      options: { eventName: "workflow_dispatch" },
-    },
-  ])("sets scope output for $name", async ({ expected, files, options }) => {
-    await expect(runScope({ ...options, files })).resolves.toBe(expected);
-  });
-
-  it("fails closed when git cannot compare the base and head", async () => {
-    await expect(runScope({ diffExitCode: 128 })).rejects.toThrow(
-      "git diff failed with exit code 128",
-    );
-  });
-
   it("accepts a valid small Periphery artifact", async () => {
     const archive = makeZip({
       "periphery.json": "[]\n",

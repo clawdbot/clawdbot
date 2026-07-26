@@ -1,5 +1,6 @@
 import Foundation
 import OpenClawKit
+import Security
 import Testing
 @testable import OpenClaw
 
@@ -465,7 +466,7 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
             gatewayStableID: gatewayID) == .empty)
     }
 
-    @Test func `credentialless setup suppresses stored auth until handoff completes`() {
+    @Test func `credentialless setup suppresses stored auth until handoff completes`() throws {
         let instanceID = "credentialless-owner-\(UUID().uuidString)"
         defer { GatewaySettingsStore.deleteAllGatewayCredentials(instanceId: instanceID) }
         let gatewayID = "manual|gateway.example.com|443"
@@ -484,7 +485,7 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
         #expect(!pending.hasCredentials)
         #expect(pending.suppressStoredDeviceAuth)
 
-        GatewaySettingsStore.completeGatewayCredentialHandoff(
+        try GatewaySettingsStore.completeGatewayCredentialHandoff(
             instanceId: instanceID,
             gatewayStableID: gatewayID)
         #expect(GatewaySettingsStore.loadGatewayCredentials(
@@ -495,7 +496,7 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
             gatewayStableID: gatewayID) == nil)
     }
 
-    @Test func `bootstrap handoff clears bootstrap while enabling stored auth`() {
+    @Test func `bootstrap handoff clears bootstrap while enabling stored auth`() throws {
         let instanceID = "bootstrap-handoff-\(UUID().uuidString)"
         defer { GatewaySettingsStore.deleteAllGatewayCredentials(instanceId: instanceID) }
         let gatewayID = "manual|gateway.example.com|443"
@@ -508,7 +509,7 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
             suppressStoredDeviceAuth: true,
             instanceId: instanceID)
 
-        #expect(GatewaySettingsStore.completeGatewayCredentialHandoff(
+        #expect(try GatewaySettingsStore.completeGatewayCredentialHandoff(
             instanceId: instanceID,
             gatewayStableID: gatewayID))
         let completed = GatewaySettingsStore.loadGatewayCredentials(
@@ -517,6 +518,40 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
         #expect(completed.token == "shared-token")
         #expect(completed.bootstrapToken == nil)
         #expect(!completed.suppressStoredDeviceAuth)
+    }
+
+    @Test func `credentialless handoff survives deferred keychain deletion after redaction`() throws {
+        let instanceID = "deferred-handoff-cleanup-\(UUID().uuidString)"
+        defer { GatewaySettingsStore.deleteAllGatewayCredentials(instanceId: instanceID) }
+        let gatewayID = "manual|gateway.example.com|443"
+        let bootstrapToken = "one-time-bootstrap"
+
+        #expect(GatewaySettingsStore.saveGatewayCredentials(
+            token: nil,
+            bootstrapToken: bootstrapToken,
+            password: nil,
+            gatewayStableID: gatewayID,
+            suppressStoredDeviceAuth: true,
+            instanceId: instanceID))
+
+        #expect(try GatewaySettingsStore.completeGatewayCredentialHandoff(
+            instanceId: instanceID,
+            gatewayStableID: gatewayID,
+            deleteCredentialBundle: { _, _ in
+                .failure(.init(operation: .delete, status: errSecInteractionNotAllowed))
+            }))
+
+        let completed = GatewaySettingsStore.loadGatewayCredentials(
+            instanceId: instanceID,
+            gatewayStableID: gatewayID)
+        #expect(completed == .empty)
+        #expect(GatewaySettingsStore.loadGatewayCredentialMetadata(
+            instanceId: instanceID,
+            gatewayStableID: gatewayID)?.suppressStoredDeviceAuth == false)
+        let storageComponent = try #require(GatewayStableIdentifier.storageComponent(gatewayID))
+        let account = "gateway-credentials.\(instanceID).v2.\(storageComponent)"
+        let retainedJSON = KeychainStore.loadString(service: gatewayService, account: account)
+        #expect(retainedJSON?.contains(bootstrapToken) == false)
     }
 
     @Test func `field edits preserve pending bootstrap handoff for the same gateway`() {
@@ -675,16 +710,108 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
             #expect(GatewaySettingsStore.markGatewayConnected(stableID: gatewayB.stableID, atMs: 1234))
             let firstJSON = KeychainStore.loadString(service: gatewayService, account: "gateway-registry")
             let registry = GatewaySettingsStore.loadGatewayRegistry()
+            #expect(registry.version == 1)
             #expect(registry.entries.map(\.stableID) == [gatewayA.stableID, gatewayB.stableID])
             #expect(registry.activeStableID == gatewayB.stableID)
+            #expect(registry.connectedStableIDs == [gatewayB.stableID])
+            #expect(GatewaySettingsStore.connectedGatewayEntries().map(\.stableID) == [gatewayB.stableID])
             #expect(registry.entries.last?.lastConnectedAtMs == 1234)
-
             #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(gatewayA))
             #expect(KeychainStore.loadString(service: gatewayService, account: "gateway-registry") == firstJSON)
+
+            #expect(GatewaySettingsStore.setActiveGateway(stableID: gatewayA.stableID))
+            #expect(GatewaySettingsStore.loadGatewayRegistry().connectedStableIDs == [
+                gatewayB.stableID,
+                gatewayA.stableID,
+            ])
+            #expect(GatewaySettingsStore.setGatewayConnectionEnabled(
+                stableID: gatewayB.stableID,
+                enabled: false))
+            #expect(GatewaySettingsStore.connectedGatewayEntries() == [gatewayA])
+
             #expect(GatewaySettingsStore.removeGatewayRegistryEntry(stableID: gatewayB.stableID))
             #expect(GatewaySettingsStore.loadGatewayRegistry().entries == [gatewayA])
-            #expect(GatewaySettingsStore.activeGatewayEntry() == nil)
+            #expect(GatewaySettingsStore.activeGatewayEntry() == gatewayA)
         }
+    }
+
+    @Test func `version one registry upgrades focused gateway to connected`() {
+        withLastGatewaySnapshot {
+            applyKeychain([
+                gatewayRegistryKeychainEntry:
+                    #"{"version":1,"activeStableID":"bonjour|alpha","entries":[{"stableID":"bonjour|alpha","kind":"discovered","name":"Alpha","useTLS":true}]}"#,
+                lastGatewayKeychainEntry: nil,
+            ])
+
+            GatewaySettingsStore.bootstrapPersistence()
+
+            let registry = GatewaySettingsStore.loadGatewayRegistry()
+            #expect(registry.version == 1)
+            #expect(registry.activeStableID == "bonjour|alpha")
+            #expect(registry.connectedStableIDs == ["bonjour|alpha"])
+            #expect(KeychainStore.loadString(
+                service: gatewayService,
+                account: "gateway-registry")?.contains("connectedStableIDs") == true)
+        }
+    }
+
+    @Test func `version two registry without connectivity does not enable focus`() {
+        withLastGatewaySnapshot {
+            applyKeychain([
+                gatewayRegistryKeychainEntry:
+                    #"{"version":2,"activeStableID":"bonjour|alpha","entries":[{"stableID":"bonjour|alpha","kind":"discovered","name":"Alpha","useTLS":true}]}"#,
+                lastGatewayKeychainEntry: nil,
+            ])
+
+            GatewaySettingsStore.bootstrapPersistence()
+
+            let registry = GatewaySettingsStore.loadGatewayRegistry()
+            #expect(registry.version == 1)
+            #expect(registry.activeStableID == "bonjour|alpha")
+            #expect(registry.connectedStableIDs.isEmpty)
+        }
+    }
+
+    @Test func `newer registry blocks pairing mutations without overwriting`() {
+        withLastGatewaySnapshot {
+            let unsupported = #"{"version":3,"future":["keep-me"]}"#
+            applyKeychain([
+                gatewayRegistryKeychainEntry: unsupported,
+                lastGatewayKeychainEntry: nil,
+            ])
+
+            #expect(!GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+                stableID: "bonjour|new",
+                kind: .discovered,
+                name: "New",
+                host: nil,
+                port: nil,
+                useTLS: true,
+                lastConnectedAtMs: nil)))
+            #expect(KeychainStore.loadString(
+                service: gatewayService,
+                account: "gateway-registry") == unsupported)
+
+            let missingVersion = #"{"entries":[]}"#
+            applyKeychain([gatewayRegistryKeychainEntry: missingVersion])
+            #expect(!GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+                stableID: "bonjour|new",
+                kind: .discovered,
+                name: "New",
+                host: nil,
+                port: nil,
+                useTLS: true,
+                lastConnectedAtMs: nil)))
+            #expect(KeychainStore.loadString(
+                service: gatewayService,
+                account: "gateway-registry") == missingVersion)
+        }
+    }
+
+    @Test func `operator fleet excludes focus and deduplicates background gateways`() {
+        #expect(GatewayOperatorFleet.backgroundStableIDs(
+            connectedStableIDs: ["alpha", "beta", "beta", "gamma"],
+            focusedStableID: "alpha") == ["beta", "gamma"])
     }
 
     @Test func `registry preserves byte-distinct unicode gateway owners`() {

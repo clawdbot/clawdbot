@@ -8,11 +8,7 @@ import type {
   DetachedTaskFinalizeParams,
   DetachedTaskLifecycleRuntime,
 } from "./detached-task-runtime-contract.js";
-import {
-  clearDetachedTaskLifecycleRuntimeRegistration,
-  getRegisteredDetachedTaskLifecycleRuntime,
-  registerDetachedTaskLifecycleRuntime,
-} from "./detached-task-runtime-state.js";
+import { getRegisteredDetachedTaskLifecycleRuntime } from "./detached-task-runtime-state.js";
 import { cancelTaskById as cancelDetachedTaskRunByIdInCore } from "./runtime-internal.js";
 import {
   completeTaskRunByRunId as completeTaskRunByRunIdFromExecutor,
@@ -72,14 +68,6 @@ const DEFAULT_DETACHED_TASK_LIFECYCLE_RUNTIME: DetachedTaskLifecycleRuntime = {
 
 export function getDetachedTaskLifecycleRuntime(): DetachedTaskLifecycleRuntime {
   return getRegisteredDetachedTaskLifecycleRuntime() ?? DEFAULT_DETACHED_TASK_LIFECYCLE_RUNTIME;
-}
-
-export function setDetachedTaskLifecycleRuntime(runtime: DetachedTaskLifecycleRuntime): void {
-  registerDetachedTaskLifecycleRuntime("__test__", runtime);
-}
-
-export function resetDetachedTaskLifecycleRuntimeForTests(): void {
-  clearDetachedTaskLifecycleRuntimeRegistration();
 }
 
 export function createQueuedTaskRun(

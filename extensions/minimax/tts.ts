@@ -20,7 +20,6 @@ export const MINIMAX_TTS_MODELS = [
   "speech-02-turbo",
   "speech-01-hd",
   "speech-01-turbo",
-  "speech-01-240228",
 ] as const;
 
 export const MINIMAX_TTS_VOICES = [

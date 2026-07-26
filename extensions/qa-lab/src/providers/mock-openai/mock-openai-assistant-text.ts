@@ -44,6 +44,7 @@ import {
   extractActiveMemorySummary,
   extractToolSearchTarget,
   extractSnackPreference,
+  isSnackRecallPrompt,
 } from "./mock-openai-tooling.js";
 export function buildAssistantText(
   input: ResponsesInputItem[],
@@ -60,6 +61,16 @@ export function buildAssistantText(
       ? extractLatestToolOutput(input)
       : "");
   const toolJson = parseToolOutputJson(scenarioToolOutput);
+  const structuredToolText = Array.isArray(toolJson?.content)
+    ? toolJson.content
+        .map((entry) =>
+          entry && typeof entry === "object" && !Array.isArray(entry)
+            ? (entry as { text?: unknown }).text
+            : undefined,
+        )
+        .filter((value): value is string => typeof value === "string")
+        .join("\n")
+    : "";
   const userTexts = extractAllUserTexts(input);
   const allInputText = extractAllRequestTexts(input, body);
   const rememberedFact = extractRememberedFact(userTexts);
@@ -79,9 +90,13 @@ export function buildAssistantText(
       : "";
   const promptExactReplyDirective = extractExactReplyDirective(prompt);
   const promptExactMarkerDirective = extractExactMarkerDirective(prompt);
+  const allUserText = userTexts.join("\n");
+  const userExactReplyDirective =
+    promptExactReplyDirective ?? extractExactReplyDirective(allUserText);
+  const userExactMarkerDirective =
+    promptExactMarkerDirective ?? extractExactMarkerDirective(allUserText);
   const exactReplyDirective = promptExactReplyDirective ?? extractExactReplyDirective(allInputText);
-  const exactMarkerDirective =
-    promptExactMarkerDirective ?? extractExactMarkerDirective(allInputText);
+  const latestImageUserTurn = extractLatestImageUserTurn(input);
   const whatsAppLocationMarker = shouldUseWhatsAppLocationMarker(prompt)
     ? extractWhatsAppLocationMarkerDirective(allInputText)
     : "";
@@ -93,7 +108,6 @@ export function buildAssistantText(
     : "";
   const finishExactlyDirective =
     extractFinishExactlyDirective(prompt) ?? extractFinishExactlyDirective(allInputText);
-  const latestImageUserTurn = extractLatestImageUserTurn(input);
   const activeMemorySummary = extractActiveMemorySummary(allInputText);
   const snackPreference = extractSnackPreference(activeMemorySummary ?? memorySnippet);
   const sessionsSpawnError = extractToolErrorForNamedCall({
@@ -150,11 +164,11 @@ export function buildAssistantText(
   if (/\bmarker\b/i.test(allInputText) && promptExactReplyDirective) {
     return promptExactReplyDirective;
   }
-  if (/\bmarker\b/i.test(allInputText) && exactMarkerDirective) {
-    return exactMarkerDirective;
+  if (/\bmarker\b/i.test(allInputText) && userExactMarkerDirective) {
+    return userExactMarkerDirective;
   }
-  if (/\bmarker\b/i.test(allInputText) && exactReplyDirective) {
-    return exactReplyDirective;
+  if (/\bmarker\b/i.test(allInputText) && userExactReplyDirective) {
+    return userExactReplyDirective;
   }
   if (promptExactReplyDirective) {
     return promptExactReplyDirective;
@@ -168,10 +182,10 @@ export function buildAssistantText(
   if (/memory tools check/i.test(prompt) && orbitCode) {
     return `Protocol note: I checked memory and the project codename is ${orbitCode}.`;
   }
-  if (/silent snack recall check/i.test(prompt) && snackPreference) {
+  if (isSnackRecallPrompt(prompt) && snackPreference) {
     return `Protocol note: you usually want ${snackPreference} for QA movie night.`;
   }
-  if (/silent snack recall check/i.test(prompt)) {
+  if (isSnackRecallPrompt(prompt)) {
     return "Protocol note: I do not have enough context to say what you usually want for QA movie night.";
   }
   if (/qa private final reply warning check/i.test(prompt)) {
@@ -319,6 +333,24 @@ export function buildAssistantText(
       return "Protocol note: replay unsafe after write.";
     }
     return "";
+  }
+  const askUserResult = structuredToolText || toolOutput;
+  const askUserDeploy = /^Deploy:\s*(.+)$/m.exec(askUserResult)?.[1]?.trim();
+  const askUserChecks = /^Checks:\s*(.+)$/m
+    .exec(askUserResult)?.[1]
+    ?.split(",")
+    .map((value) => value.replace(/\s*\(Recommended\)\s*$/, "").trim())
+    .filter(Boolean)
+    .join(",");
+  const askUserNote = /^Note:\s*(.+)$/m.exec(askUserResult)?.[1]?.trim();
+  if (
+    toolOutput &&
+    /"status"\s*:\s*"answered"/.test(askUserResult) &&
+    askUserDeploy &&
+    askUserChecks &&
+    askUserNote
+  ) {
+    return `ASK-USER-ROUNDTRIP-OK | deploy=${askUserDeploy} | checks=${askUserChecks} | note=${askUserNote}`;
   }
   if (
     toolOutput &&

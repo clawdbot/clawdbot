@@ -224,4 +224,25 @@ describe("Google Meet voice-call gateway", () => {
       { timeoutMs: 30_000 },
     );
   });
+
+  it("preserves a successful mutating RPC result when client teardown fails", async () => {
+    gatewayMocks.request.mockResolvedValueOnce({ callId: "call-1" });
+    gatewayMocks.stopAndWait.mockRejectedValueOnce(new Error("gateway teardown failed"));
+    const config = resolveGoogleMeetConfig({
+      voiceCall: { gatewayUrl: "wss://voice.example.test" },
+    });
+    const gateway = createVoiceCallGateway({
+      config,
+      runtime: { gateway: { request: gatewayMocks.runtimeRequest } } as never,
+    });
+
+    await expect(
+      joinMeetViaVoiceCallGateway({
+        config,
+        gateway,
+        dialInNumber: "+15551234567",
+      }),
+    ).resolves.toMatchObject({ callId: "call-1" });
+    expect(gatewayMocks.stopAndWait).toHaveBeenCalledOnce();
+  });
 });

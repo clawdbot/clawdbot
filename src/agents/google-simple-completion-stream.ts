@@ -1,3 +1,4 @@
+import type { ApiRegistry } from "@openclaw/ai";
 /**
  * Google simple-completion stream adapter.
  *
@@ -5,15 +6,14 @@
  * backend but sanitizes unsupported thinking payload options for simple models.
  */
 import { clampThinkingLevel } from "@openclaw/ai/internal/runtime";
-import { streamSimple } from "../llm/stream.js";
-import type { Api, Model, ModelThinkingLevel } from "../llm/types.js";
+import type { StreamFn } from "@openclaw/llm-core";
 import {
   sanitizeGoogleThinkingPayload,
-  streamWithPayloadPatch,
   type GoogleThinkingInputLevel,
-} from "../plugin-sdk/provider-stream-shared.js";
+} from "../llm/providers/stream-wrappers/google-thinking-payload.js";
+import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
+import type { Api, Model, ModelThinkingLevel } from "../llm/types.js";
 import { ensureCustomApiRegistered } from "./custom-api-registry.js";
-import type { StreamFn } from "./runtime/index.js";
 
 /** Custom API id for the Google simple-completion stream adapter. */
 const GOOGLE_SIMPLE_COMPLETION_API: Api = "openclaw-google-generative-ai-simple";
@@ -40,11 +40,15 @@ function resolveGoogleSimpleThinkingLevel(
   }
 }
 
-function buildGoogleSimpleCompletionStreamFn(): StreamFn {
+function buildGoogleSimpleCompletionStreamFn(registry: ApiRegistry): StreamFn {
   return (model, context, options) => {
     const googleModel: Model = { ...model, api: SOURCE_API };
+    const sourceProvider = registry.getApiProvider(SOURCE_API);
+    if (!sourceProvider) {
+      throw new Error(`No API provider registered for api: ${SOURCE_API}`);
+    }
     return streamWithPayloadPatch(
-      streamSimple as unknown as StreamFn,
+      sourceProvider.streamSimple as StreamFn,
       googleModel,
       context,
       options,
@@ -63,10 +67,17 @@ function buildGoogleSimpleCompletionStreamFn(): StreamFn {
 }
 
 /** Rewrites Google generative-ai models to the simple-completion adapter when needed. */
-export function prepareGoogleSimpleCompletionModel<TApi extends Api>(model: Model<TApi>): Model {
+export function prepareGoogleSimpleCompletionModel<TApi extends Api>(
+  registry: ApiRegistry,
+  model: Model<TApi>,
+): Model {
   if (model.api !== SOURCE_API) {
     return model;
   }
-  ensureCustomApiRegistered(GOOGLE_SIMPLE_COMPLETION_API, buildGoogleSimpleCompletionStreamFn());
+  ensureCustomApiRegistered(
+    registry,
+    GOOGLE_SIMPLE_COMPLETION_API,
+    buildGoogleSimpleCompletionStreamFn(registry),
+  );
   return { ...model, api: GOOGLE_SIMPLE_COMPLETION_API };
 }

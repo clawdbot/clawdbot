@@ -11,17 +11,13 @@ import { dirname, join } from "node:path";
 import { findEnvKeys, getEnvApiKey } from "@openclaw/ai/internal/runtime";
 import lockfile from "proper-lockfile";
 import { replaceFileAtomicSync } from "../../infra/replace-file.js";
-import {
-  getOAuthApiKey,
-  getOAuthProvider,
-  getOAuthProviders,
-} from "../../llm/utils/oauth/index.js";
 import type {
   OAuthCredentials,
   OAuthLoginCallbacks,
   OAuthProviderId,
 } from "../../llm/utils/oauth/types.js";
 import { getAgentDir } from "../config.js";
+import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-registry.js";
 import { resolveConfigValue } from "./resolve-config-value.js";
 import { acquireLockSyncWithRetry } from "./storage-lock.js";
 
@@ -37,6 +33,13 @@ export type OAuthCredential = {
 export type AuthCredential = ApiKeyCredential | OAuthCredential;
 
 export type AuthStorageData = Record<string, AuthCredential>;
+
+class AuthStoragePersistenceError extends Error {
+  constructor(message: string, cause: unknown) {
+    super(message, { cause });
+    this.name = "AuthStoragePersistenceError";
+  }
+}
 
 export type AuthStatus = {
   configured: boolean;
@@ -252,11 +255,20 @@ export class AuthStorage {
 
   private persistProviderChange(provider: string, credential: AuthCredential | undefined): void {
     if (this.loadError) {
-      return;
+      this.reload();
+    }
+
+    if (this.loadError) {
+      const error = new AuthStoragePersistenceError(
+        `Cannot update auth storage because it could not be loaded: ${this.loadError.message}`,
+        this.loadError,
+      );
+      this.recordError(error);
+      throw error;
     }
 
     try {
-      this.storage.withLock((current) => {
+      const persistedData = this.storage.withLock((current) => {
         const currentData = this.parseStorageData(current);
         const merged: AuthStorageData = { ...currentData };
         if (credential) {
@@ -264,10 +276,20 @@ export class AuthStorage {
         } else {
           delete merged[provider];
         }
-        return { result: undefined, next: JSON.stringify(merged, null, 2) };
+        return { result: merged, next: JSON.stringify(merged, null, 2) };
       });
+      this.loadError = null;
+      this.data = persistedData;
     } catch (error) {
-      this.recordError(error);
+      const persistenceError =
+        error instanceof AuthStoragePersistenceError
+          ? error
+          : new AuthStoragePersistenceError(
+              `Failed to persist auth storage update for provider "${provider}": ${error instanceof Error ? error.message : String(error)}`,
+              error,
+            );
+      this.recordError(persistenceError);
+      throw persistenceError;
     }
   }
 
@@ -282,7 +304,6 @@ export class AuthStorage {
    * Set credential for a provider.
    */
   set(provider: string, credential: AuthCredential): void {
-    this.data[provider] = credential;
     this.persistProviderChange(provider, credential);
   }
 
@@ -290,7 +311,6 @@ export class AuthStorage {
    * Remove credential for a provider.
    */
   remove(provider: string): void {
-    delete this.data[provider];
     this.persistProviderChange(provider, undefined);
   }
 
@@ -369,7 +389,7 @@ export class AuthStorage {
    * Login to an OAuth provider.
    */
   async login(providerId: OAuthProviderId, callbacks: OAuthLoginCallbacks): Promise<void> {
-    const provider = getOAuthProvider(providerId);
+    const provider = getAuthStorageOAuthProviderRegistry(this).get(providerId);
     if (!provider) {
       throw new Error(`Unknown OAuth provider: ${providerId}`);
     }
@@ -392,7 +412,7 @@ export class AuthStorage {
   private async refreshOAuthTokenWithLock(
     providerId: OAuthProviderId,
   ): Promise<{ apiKey: string; newCredentials: OAuthCredentials } | null> {
-    const provider = getOAuthProvider(providerId);
+    const provider = getAuthStorageOAuthProviderRegistry(this).get(providerId);
     if (!provider) {
       return null;
     }
@@ -418,7 +438,10 @@ export class AuthStorage {
         }
       }
 
-      const refreshed = await getOAuthApiKey(providerId, oauthCreds);
+      const refreshed = await getAuthStorageOAuthProviderRegistry(this).getApiKey(
+        providerId,
+        oauthCreds,
+      );
       if (!refreshed) {
         return { result: null };
       }
@@ -461,7 +484,7 @@ export class AuthStorage {
     }
 
     if (cred?.type === "oauth") {
-      const provider = getOAuthProvider(providerId);
+      const provider = getAuthStorageOAuthProviderRegistry(this).get(providerId);
       if (!provider) {
         // Unknown OAuth provider, can't get API key
         return undefined;
@@ -513,9 +536,9 @@ export class AuthStorage {
   }
 
   /**
-   * Get all registered OAuth providers
+   * Get all OAuth providers registered for this auth/session runtime.
    */
   getOAuthProviders() {
-    return getOAuthProviders();
+    return getAuthStorageOAuthProviderRegistry(this).getAll();
   }
 }

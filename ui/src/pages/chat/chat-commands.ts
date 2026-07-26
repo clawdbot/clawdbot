@@ -10,12 +10,14 @@ import {
   replaceSlashCommands,
   type SlashCommandDef,
 } from "../../lib/chat/commands.ts";
+import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
 import {
   scopedAgentIdForSession,
   visibleSessionMatches,
   type SessionCapability,
 } from "../../lib/sessions/index.ts";
 import {
+  areUiSessionKeysEquivalent,
   resolveUiDefaultAgentId,
   type UiSessionDefaultsHost,
 } from "../../lib/sessions/session-key.ts";
@@ -48,7 +50,7 @@ type ChatCommandSendOptions = ChatCommandResetOptions & {
   sendResetMessage: (message: string, opts: ChatCommandResetOptions) => Promise<void>;
 };
 
-type ChatCommandDispatchResult = "completed" | "failed" | "uncertain";
+type ChatCommandDispatchResult = "completed" | "failed" | "uncertain" | "cancelled" | "deferred";
 
 export type ChatCommandHost = Parameters<typeof handleAbortChat>[0] &
   Parameters<typeof clearChatHistory>[0] & {
@@ -57,7 +59,8 @@ export type ChatCommandHost = Parameters<typeof handleAbortChat>[0] &
     chatModelCatalog: ModelCatalogEntry[];
     sessionsResult?: SessionsListResult | null;
     sessionsResultAgentId?: string | null;
-    createChatSession?: () => Promise<void>;
+    createChatSession?: () => Promise<boolean>;
+    confirmConversationReset?: () => Promise<boolean>;
     exportCurrentChat?: () => Promise<void> | void;
     refreshCurrentSessionTools?: () => Promise<void>;
     refreshCurrentChat?: () => Promise<void>;
@@ -190,6 +193,32 @@ export function shouldQueueLocalSlashCommand(name: string): boolean {
   return !["stop", "export-session", "steer", "redirect", "new"].includes(name);
 }
 
+export async function confirmConversationResetForCurrentSession(
+  host: ChatCommandHost,
+  target?: { sessionKey: string; agentId?: string },
+): Promise<"confirmed" | "cancelled" | "deferred"> {
+  const resetSessionKey = target?.sessionKey ?? host.sessionKey;
+  const targetIsCurrent = target
+    ? () => visibleSessionMatches(host, target.sessionKey, target.agentId)
+    : () =>
+        host.sessionKey === resetSessionKey ||
+        areUiSessionKeysEquivalent(host.sessionKey, resetSessionKey);
+  if (!targetIsCurrent()) {
+    return "deferred";
+  }
+  if (!host.confirmConversationReset) {
+    return "confirmed";
+  }
+  const confirmed = await host.confirmConversationReset();
+  if (!targetIsCurrent()) {
+    return target ? "deferred" : "cancelled";
+  }
+  if (!confirmed) {
+    return "cancelled";
+  }
+  return host.chatRunId ? "deferred" : "confirmed";
+}
+
 export async function dispatchChatSlashCommand(
   host: ChatCommandHost,
   name: string,
@@ -205,13 +234,22 @@ export async function dispatchChatSlashCommand(
         setChatCommandError(host, "New Chat is unavailable.");
         return "failed";
       }
-      await host.createChatSession();
-      return "completed";
-    case "reset":
+      return (await host.createChatSession()) ? "completed" : "cancelled";
+    case "reset": {
+      const confirmation = await confirmConversationResetForCurrentSession(host);
+      if (confirmation !== "confirmed") {
+        return confirmation;
+      }
       await opts.sendResetMessage(args ? `/reset ${args}` : "/reset", opts);
       return "completed";
-    case "clear":
+    }
+    case "clear": {
+      const confirmation = await confirmConversationResetForCurrentSession(host);
+      if (confirmation !== "confirmed") {
+        return confirmation;
+      }
       return await clearChatHistory(host);
+    }
     case "export-session":
       await host.exportCurrentChat?.();
       return "completed";
@@ -289,7 +327,13 @@ export async function dispatchChatSlashCommand(
   }
 
   if (result.pendingCurrentRun && host.chatRunId && targetIsCurrent()) {
-    enqueuePendingRunMessage(host, `/${name} ${args}`.trim(), host.chatRunId);
+    enqueuePendingRunMessage(
+      host,
+      `/${name} ${args}`.trim(),
+      host.chatRunId,
+      undefined,
+      resolveCurrentUserIdentity(host.hello, host.client?.instanceId) ?? undefined,
+    );
   }
 
   if (result.sessionPatch && "modelOverride" in result.sessionPatch) {

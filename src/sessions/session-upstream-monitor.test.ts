@@ -15,7 +15,7 @@ import {
   readSessionUpstreamLink,
   upsertSessionUpstreamLink,
 } from "./session-upstream-links.js";
-import { runSessionUpstreamMonitorTick } from "./session-upstream-monitor.js";
+import { runSessionUpstreamMonitorTick } from "./session-upstream-monitor.test-support.js";
 
 const tempDirs: string[] = [];
 const watcherSessionKey = "agent:main:main";

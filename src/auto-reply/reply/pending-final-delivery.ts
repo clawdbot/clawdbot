@@ -1,3 +1,4 @@
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads.js";
 import {
   isSilentReplyPayloadText,
@@ -7,7 +8,6 @@ import {
   stripLeadingSilentToken,
   stripSilentToken,
 } from "../tokens.js";
-/** Sanitizes pending final delivery text before channel-visible output. */
 import type { ReplyPayload } from "../types.js";
 import { stripInternalMetadataForDisplay } from "./display-text-sanitize.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
@@ -87,6 +87,19 @@ export function buildPendingFinalDeliveryText(payloads: ReplyPayload[]): string 
   return sanitizePendingFinalDeliveryText(text);
 }
 
+// A delivered or discarded final must lose the whole record. Keeping this list
+// centralized prevents new ownership fields from leaving a phantom pending delivery.
+export const PENDING_FINAL_DELIVERY_CLEAR_PATCH = {
+  pendingFinalDelivery: undefined,
+  pendingFinalDeliveryText: undefined,
+  pendingFinalDeliveryCreatedAt: undefined,
+  pendingFinalDeliveryLastAttemptAt: undefined,
+  pendingFinalDeliveryAttemptCount: undefined,
+  pendingFinalDeliveryLastError: undefined,
+  pendingFinalDeliveryContext: undefined,
+  pendingFinalDeliveryIntentId: undefined,
+} as const satisfies Partial<SessionEntry>;
+
 function collectDurableMediaDirectives(payload: ReplyPayload): string[] {
   if (payload.sensitiveMedia === true) {
     return [];
@@ -144,7 +157,7 @@ function hasUnrecoverableNormalizedDeliveryShape(payload: ReplyPayload): boolean
   );
 }
 
-/** Sanitizes final pending-delivery text and removes silent control tokens. */
+/** Sanitizes pending final delivery text before channel-visible output. */
 export function sanitizePendingFinalDeliveryText(text: string): string {
   let stripped = stripInternalMetadataForDisplay(text).trim();
   if (isSilentReplyPayloadText(stripped, SILENT_REPLY_TOKEN)) {

@@ -6,19 +6,30 @@ import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
 } from "../shared/credential-lease.runtime.js";
-import { __testing as slackLive } from "./slack-live.runtime.js";
+import { createSlackQaScenarioEnvironment } from "./scenario-environment.js";
+import {
+  buildSlackQaConfig,
+  parseSlackQaCredentialPayload,
+  resolveSlackQaRuntimeEnv,
+} from "./slack-live.config.js";
+import type { SlackMessage, SlackQaRuntimeEnv } from "./slack-live.contracts.js";
+import { waitForSlackChannelStable } from "./slack-live.message-observations.js";
+import {
+  getSlackIdentity,
+  listSlackMessages,
+  listSlackThreadMessages,
+  sendSlackChannelMessage,
+} from "./slack-live.observations.js";
 
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
 type FactoryContext = Parameters<AdapterFactory["create"]>[0];
 type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>>;
-type SlackRuntimeEnv = ReturnType<typeof slackLive.resolveSlackQaRuntimeEnv>;
-type SlackObservedMessage = Awaited<ReturnType<typeof slackLive.listSlackMessages>>[number];
 
 async function recordSlackObservedMessage(params: {
   accountId: string;
   busMessageIds: Map<string, string>;
   logicalConversationId: string;
-  message: SlackObservedMessage;
+  message: SlackMessage;
   messages: FactoryContext["messages"];
   observedText: Map<string, string>;
   sutUserId: string;
@@ -59,29 +70,36 @@ export async function createSlackQaTransportAdapter(
   context: FactoryContext,
 ): Promise<AdapterDefinition> {
   const options = context.adapterOptions ?? {};
-  const lease = await acquireQaCredentialLease<SlackRuntimeEnv>({
+  const lease = await acquireQaCredentialLease<SlackQaRuntimeEnv>({
     kind: "slack",
     source: options.credentialSource,
     role: options.credentialRole,
-    resolveEnvPayload: () => slackLive.resolveSlackQaRuntimeEnv(),
-    parsePayload: slackLive.parseSlackQaCredentialPayload,
+    resolveEnvPayload: () => resolveSlackQaRuntimeEnv(),
+    parsePayload: parseSlackQaCredentialPayload,
   });
   const heartbeat = startQaCredentialLeaseHeartbeat(lease);
   const runtimeEnv = lease.payload;
-  let driverIdentity: Awaited<ReturnType<typeof slackLive.getSlackIdentity>>;
-  let sutIdentity: Awaited<ReturnType<typeof slackLive.getSlackIdentity>>;
+  let driverIdentity: Awaited<ReturnType<typeof getSlackIdentity>>;
+  let sutIdentity: Awaited<ReturnType<typeof getSlackIdentity>>;
   try {
     [driverIdentity, sutIdentity] = await Promise.all([
-      slackLive.getSlackIdentity(runtimeEnv.driverBotToken),
-      slackLive.getSlackIdentity(runtimeEnv.sutBotToken),
+      getSlackIdentity(runtimeEnv.driverBotToken),
+      getSlackIdentity(runtimeEnv.sutBotToken),
     ]);
+    if (driverIdentity.userId === sutIdentity.userId) {
+      throw new Error("Slack QA requires two distinct bots for driver and SUT.");
+    }
   } catch (error) {
-    await heartbeat.stop();
-    await lease.release();
+    try {
+      await heartbeat.stop();
+    } finally {
+      await lease.release();
+    }
     throw error;
   }
   const driverClient = createSlackWriteClient(runtimeEnv.driverBotToken);
   const sutClient = createSlackWebClient(runtimeEnv.sutBotToken);
+  const sutWriteClient = createSlackWriteClient(runtimeEnv.sutBotToken);
   const accountId = options.sutAccountId?.trim() || "sut";
   let oldestTs = `${Math.floor(Date.now() / 1_000)}.000000`;
   let stopped = false;
@@ -96,7 +114,7 @@ export async function createSlackQaTransportAdapter(
       if (stopped) {
         return;
       }
-      const messages = await slackLive.listSlackMessages({
+      const messages = await listSlackMessages({
         channelId: runtimeEnv.channelId,
         client: sutClient,
         oldestTs,
@@ -116,7 +134,7 @@ export async function createSlackQaTransportAdapter(
         }
       }
       for (const threadTs of activeThreadRoots) {
-        const threadMessages = await slackLive.listSlackThreadMessages({
+        const threadMessages = await listSlackThreadMessages({
           channelId: runtimeEnv.channelId,
           client: sutClient,
           threadTs,
@@ -160,7 +178,7 @@ export async function createSlackQaTransportAdapter(
       logicalConversationId = input.conversation.id;
       const text = input.text.replaceAll("@openclaw", `<@${sutIdentity.userId}>`);
       const nativeThreadTs = input.threadId ? nativeMessageIds.get(input.threadId) : undefined;
-      const sent = await slackLive.sendSlackChannelMessage({
+      const sent = await sendSlackChannelMessage({
         channelId: runtimeEnv.channelId,
         client: driverClient,
         text,
@@ -183,15 +201,26 @@ export async function createSlackQaTransportAdapter(
       activeThreadRoots.clear();
     },
     createGatewayConfig: () =>
-      slackLive.buildSlackQaConfig({} as OpenClawConfig, {
+      buildSlackQaConfig({} as OpenClawConfig, {
         channelId: runtimeEnv.channelId,
         driverBotUserId: driverIdentity.userId,
         sutAccountId: accountId,
         sutAppToken: runtimeEnv.sutAppToken,
         sutBotToken: runtimeEnv.sutBotToken,
       }),
+    prepareFlow: createSlackQaScenarioEnvironment({
+      accountId,
+      channelId: runtimeEnv.channelId,
+      driverBotUserId: driverIdentity.userId,
+      driverClient,
+      sutAppToken: runtimeEnv.sutAppToken,
+      sutBotToken: runtimeEnv.sutBotToken,
+      sutIdentity,
+      sutReadClient: sutClient,
+      sutWriteClient,
+    }).prepareFlow,
     waitReady: async ({ gateway }) =>
-      await slackLive.waitForSlackChannelStable(gateway as never, accountId, "connected"),
+      await waitForSlackChannelStable(gateway as never, accountId, "connected"),
     buildAgentDelivery: () => ({
       channel: "slack",
       to: `channel:${runtimeEnv.channelId}`,
@@ -205,8 +234,12 @@ export async function createSlackQaTransportAdapter(
     async cleanup() {
       stopped = true;
       await polling.catch(() => undefined);
-      await heartbeat.stop();
-      await lease.release();
+      // Lease release must still run when heartbeat shutdown reports an error.
+      try {
+        await heartbeat.stop();
+      } finally {
+        await lease.release();
+      }
     },
   };
 }

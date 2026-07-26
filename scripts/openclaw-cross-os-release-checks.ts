@@ -47,7 +47,7 @@ function isMainModule() {
   return resolve(invokedPath) === SCRIPT_PATH;
 }
 
-export async function main(argv: string[]) {
+async function main(argv: string[]) {
   const args = parseArgs(argv);
 
   if (args["resolve-matrix"] === "true") {

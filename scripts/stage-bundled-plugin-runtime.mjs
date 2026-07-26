@@ -77,13 +77,11 @@ function writeJsonFile(targetPath, value) {
 
 const PRIVATE_LOCAL_ONLY_PLUGIN_SDK_DIST_FILE_NAME_FALLBACK = [
   "codex-mcp-projection.js",
-  "codex-native-task-runtime.js",
   "qa-channel.js",
   "qa-channel-protocol.js",
   "qa-lab.js",
   "qa-runtime.js",
   "ssrf-runtime-internal.js",
-  "test-utils.js",
 ];
 
 function tryReadJsonFile(targetPath) {
@@ -141,10 +139,6 @@ function readPublicPluginSdkDistFileNames(params) {
 
   const fileNames = new Set();
   for (const exportKey of Object.keys(packageExports)) {
-    if (exportKey === "./plugin-sdk") {
-      fileNames.add("index.js");
-      continue;
-    }
     if (!exportKey.startsWith("./plugin-sdk/")) {
       continue;
     }
@@ -159,27 +153,16 @@ function readPublicPluginSdkDistFileNames(params) {
 
 function buildRuntimePluginSdkPackageExports(publicDistFileNames) {
   if (!publicDistFileNames) {
-    return {
-      "./plugin-sdk": "./plugin-sdk/index.js",
-    };
+    return {};
   }
 
-  const sortedFileNames = [...publicDistFileNames].toSorted((left, right) => {
-    if (left === "index.js") {
-      return -1;
-    }
-    if (right === "index.js") {
-      return 1;
-    }
-    return left.localeCompare(right);
-  });
+  const sortedFileNames = [...publicDistFileNames].toSorted((left, right) =>
+    left.localeCompare(right),
+  );
   return Object.fromEntries(
     sortedFileNames.map((fileName) => {
       const subpath = fileName.slice(0, -".js".length);
-      return [
-        subpath === "index" ? "./plugin-sdk" : `./plugin-sdk/${subpath}`,
-        `./plugin-sdk/${fileName}`,
-      ];
+      return [`./plugin-sdk/${subpath}`, `./plugin-sdk/${fileName}`];
     }),
   );
 }

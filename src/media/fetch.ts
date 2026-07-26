@@ -24,7 +24,11 @@ import { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
 import { saveMediaBuffer, saveMediaStream, type SavedMedia } from "./store.js";
 
 /** Default remote media fetch cap shared by buffer reads and store writes. */
-export const DEFAULT_FETCH_MEDIA_MAX_BYTES = MAX_DOCUMENT_BYTES;
+const DEFAULT_FETCH_MEDIA_MAX_BYTES = MAX_DOCUMENT_BYTES;
+
+// Large media endpoints get a generous header-only deadline. The timer is
+// cleared once headers arrive, so healthy streaming bodies keep their own limits.
+const DEFAULT_MEDIA_RESPONSE_HEADER_TIMEOUT_MS = 15 * 60_000;
 
 /** Remote media bytes plus metadata before they are persisted to the media store. */
 type FetchMediaResult = {
@@ -39,7 +43,7 @@ export type SavedRemoteMedia = SavedMedia & {
 };
 
 /** Closed error classes callers can use for retry and diagnostic policy. */
-export type MediaFetchErrorCode = "max_bytes" | "http_error" | "fetch_failed";
+type MediaFetchErrorCode = "max_bytes" | "http_error" | "fetch_failed";
 
 /** Retry policy applied around the complete guarded fetch and body read/save operation. */
 export type MediaFetchRetryOptions = RetryOptions;
@@ -65,7 +69,7 @@ export class MediaFetchError extends Error {
 export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 /** Alternate dispatcher/lookup pair tried inside a single guarded fetch attempt. */
-export type FetchDispatcherAttempt = {
+type FetchDispatcherAttempt = {
   dispatcherPolicy?: PinnedDispatcherPolicy;
   lookupFn?: LookupFn;
 };
@@ -101,7 +105,7 @@ type FetchMediaOptions = {
 };
 
 /** Options for validating and saving an existing Response body into the media store. */
-export type SaveResponseMediaOptions = {
+type SaveResponseMediaOptions = {
   sourceUrl?: string;
   filePathHint?: string;
   maxBytes?: number;
@@ -112,7 +116,7 @@ export type SaveResponseMediaOptions = {
 };
 
 /** Options for guarded URL fetches that are saved directly into the media store. */
-export type SaveRemoteMediaOptions = FetchMediaOptions & {
+type SaveRemoteMediaOptions = FetchMediaOptions & {
   fallbackContentType?: string;
   subdir?: string;
   originalFilename?: string;
@@ -129,6 +133,14 @@ function stripQuotes(value: string): string {
   return value.replace(/^["']|["']$/g, "");
 }
 
+function decodeRemoteFileNameComponent(value: string): string {
+  try {
+    return decodeURIComponent(value).replace(/[\\/]/g, "_");
+  } catch {
+    return value;
+  }
+}
+
 function parseContentDispositionFileName(header?: string | null): string | undefined {
   if (!header) {
     return undefined;
@@ -137,11 +149,7 @@ function parseContentDispositionFileName(header?: string | null): string | undef
   if (starMatch?.[1]) {
     const cleaned = stripQuotes(starMatch[1].trim());
     const encoded = cleaned.split("''").slice(1).join("''") || cleaned;
-    try {
-      return basenameFromAnyPath(decodeURIComponent(encoded));
-    } catch {
-      return basenameFromAnyPath(encoded);
-    }
+    return basenameFromAnyPath(decodeRemoteFileNameComponent(encoded));
   }
   const match = /filename\s*=\s*([^;]+)/i.exec(header);
   if (match?.[1]) {
@@ -155,11 +163,7 @@ function basenameFromUrlPathname(pathname: string): string {
   if (!base) {
     return "";
   }
-  try {
-    return decodeURIComponent(base).replace(/[\\/]/g, "_");
-  } catch {
-    return base;
-  }
+  return decodeRemoteFileNameComponent(base);
 }
 
 async function readErrorBodySnippet(
@@ -193,7 +197,7 @@ async function fetchGuardedMediaResponse(
     requestInit,
     maxRedirects,
     timeoutMs,
-    responseHeaderTimeoutMs,
+    responseHeaderTimeoutMs = DEFAULT_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
     ssrfPolicy,
     lookupFn,
     dispatcherPolicy,
@@ -474,7 +478,7 @@ async function saveOkMediaResponse(params: {
     fallbackContentType: params.fallbackContentType,
   });
   const detectionFilePathHint = isGenericResponseContentType(contentType)
-    ? params.filePathHint
+    ? (params.filePathHint ?? fileName)
     : undefined;
   try {
     const saved = params.res.body

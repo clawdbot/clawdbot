@@ -4,7 +4,45 @@ import {
   chunkFeishuMarkdown,
   chunkFeishuPostMarkdown,
   materializeFeishuPostMarkdownSoftBreaks,
+  parseFeishuMarkdown,
 } from "./markdown.js";
+
+describe("parseFeishuMarkdown", () => {
+  it("retains the block tree needed by rich-post and document consumers", () => {
+    const root = parseFeishuMarkdown(
+      [
+        "> quote",
+        "",
+        "- parent",
+        "  1. child",
+        "",
+        "```ts",
+        "const value = `inline`;",
+        "```",
+        "",
+        "| A | B |",
+        "| - | - |",
+        '| [docs](https://example.test) | <at user_id="ou_1"></at> ||spoiler|| |',
+      ].join("\n"),
+    );
+
+    expect(root.children?.map((node) => node.type)).toEqual([
+      "blockquote",
+      "list",
+      "code",
+      "table",
+    ]);
+  });
+
+  it("serializes authored markdown bytes unchanged in the Feishu rich-post element", () => {
+    const markdown = String.raw`\*literal\* [docs](https://example.test) <at user_id="ou_1"></at> ||spoiler||`;
+    const content = JSON.parse(buildFeishuPostMessageContent({ messageText: markdown })) as {
+      zh_cn: { content: Array<Array<{ tag: string; text?: string }>> };
+    };
+
+    expect(content.zh_cn.content[0]?.at(-1)).toEqual({ tag: "md", text: markdown });
+  });
+});
 
 describe("materializeFeishuPostMarkdownSoftBreaks", () => {
   it.each([
@@ -117,6 +155,27 @@ describe("chunkFeishuPostMarkdown", () => {
         messageText: chunk,
         mentions: index === 0 ? mentions : undefined,
       });
+      expect(Buffer.byteLength(content, "utf8")).toBeLessThanOrEqual(30 * 1024);
+    }
+  });
+
+  it("reserves every chunk byte budget for required bot mentions", () => {
+    const mentions = [
+      {
+        openId: "ou_peer_bot",
+        name: "界".repeat(1_000),
+        key: "",
+      },
+    ];
+    const chunks = chunkFeishuPostMarkdown({
+      text: "界".repeat(11_000),
+      limit: 25_000,
+      chunkMentions: mentions,
+    });
+
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      const content = buildFeishuPostMessageContent({ messageText: chunk, mentions });
       expect(Buffer.byteLength(content, "utf8")).toBeLessThanOrEqual(30 * 1024);
     }
   });

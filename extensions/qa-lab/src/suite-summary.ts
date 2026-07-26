@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { QaSuiteArtifactError } from "./errors.js";
-import type { QaEvidenceSummaryJson } from "./evidence-summary.js";
+import type { QaEvidenceSummaryJson, QaEvidenceTiming } from "./evidence-summary.js";
 import type { QaProviderMode } from "./model-selection.js";
 import type { RuntimeId, RuntimeParityResult } from "./runtime-parity.js";
 import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
@@ -12,6 +12,7 @@ type QaSuiteSummaryScenario = {
   status: "pass" | "fail" | "skip" | "skipped";
   steps: unknown[];
   details?: string;
+  timing?: QaEvidenceTiming;
   runtimeParity?: RuntimeParityResult;
 };
 
@@ -21,6 +22,7 @@ export type QaSuiteSummaryJson = {
     total: number;
     passed: number;
     failed: number;
+    skipped: number;
   };
   metrics?: {
     wallMs: number;

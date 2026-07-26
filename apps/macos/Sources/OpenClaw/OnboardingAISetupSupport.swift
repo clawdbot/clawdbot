@@ -15,6 +15,18 @@ extension OnboardingAISetupModel {
         }
     }
 
+    struct CandidatePresentation: Equatable {
+        let icon: String?
+        let website: String?
+    }
+
+    struct UnavailableCandidate: Identifiable, Equatable, Decodable {
+        let id: String
+        let label: String
+        let detail: String
+        let reason: String
+    }
+
     enum CandidateStatus: Equatable {
         case untried
         case testing
@@ -50,6 +62,8 @@ extension OnboardingAISetupModel {
         let id: String
         let label: String
         let hint: String?
+        let icon: String?
+        let website: String?
     }
 
     struct AuthOption: Identifiable, Equatable, Decodable {
@@ -57,8 +71,90 @@ extension OnboardingAISetupModel {
         let label: String
         let hint: String?
         let groupLabel: String?
+        let icon: String?
+        let website: String?
         let kind: String
         let featured: Bool
+    }
+
+    struct RecommendedInstall: Identifiable, Equatable, Decodable {
+        let id: String
+        let label: String
+        let hint: String
+        let website: String
+        let icon: String
+    }
+
+    struct PrepareOption: Identifiable, Equatable {
+        let id: String
+        let label: String
+        let hint: String?
+        let icon: String?
+        let website: String?
+    }
+
+    enum ProviderWizardKind: Equatable {
+        case auth
+        case prepare
+
+        var startMethod: String {
+            switch self {
+            case .auth: "openclaw.setup.auth.start"
+            case .prepare: "openclaw.setup.prepare.start"
+            }
+        }
+    }
+
+    static func prepareOptions(
+        candidates: [Candidate],
+        manualProviders: [ManualProvider],
+        authOptions: [AuthOption],
+        recommendedInstalls: [RecommendedInstall]) -> [PrepareOption]
+    {
+        let known = [
+            PrepareOption(
+                id: "ollama",
+                label: "Ollama",
+                hint: "Download a tools-capable model from your Ollama server",
+                icon: nil,
+                website: nil),
+            PrepareOption(
+                id: "llama-cpp",
+                label: "Local model (llama.cpp)",
+                hint: "Download an approximately 5.0 GB local model; requires 16 GB RAM",
+                icon: nil,
+                website: nil),
+        ]
+        return known.compactMap { choice in
+            guard !candidates.contains(where: {
+                $0.kind == "provider-auto:\(choice.id)" || $0.modelRef.hasPrefix("\(choice.id)/")
+            }) else { return nil }
+            if let option = authOptions.first(where: { $0.id == choice.id }) {
+                return PrepareOption(
+                    id: choice.id,
+                    label: option.label,
+                    hint: option.hint,
+                    icon: option.icon,
+                    website: option.website)
+            }
+            if let provider = manualProviders.first(where: { $0.id == choice.id }) {
+                return PrepareOption(
+                    id: choice.id,
+                    label: provider.label,
+                    hint: provider.hint,
+                    icon: provider.icon,
+                    website: provider.website)
+            }
+            if let install = recommendedInstalls.first(where: { $0.id == choice.id }) {
+                return PrepareOption(
+                    id: choice.id,
+                    label: install.label,
+                    hint: install.hint,
+                    icon: install.icon,
+                    website: install.website)
+            }
+            return choice
+        }
     }
 
     static func canAcceptProviderAuthReconciliation(

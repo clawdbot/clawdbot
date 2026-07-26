@@ -1,6 +1,6 @@
 // Keeps manifest providerAuthChoices literals aligned with registered provider.auth methods.
 import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { availableParallelism, tmpdir } from "node:os";
 import path from "node:path";
 import pLimit from "p-limit";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -158,7 +158,8 @@ const parityCases = listParityCases().toSorted((left, right) => {
 });
 
 const probeAgentDir = mkdtempSync(path.join(tmpdir(), "openclaw-auth-parity-"));
-const PLUGIN_LOAD_CONCURRENCY = 5;
+// Keep at least five imports in flight, but leave CPU headroom on larger CI runners.
+const PLUGIN_LOAD_CONCURRENCY = Math.max(5, Math.min(12, availableParallelism()));
 const parityPluginIds = [...new Set(parityCases.map((entry) => entry.pluginId))];
 const registerResultByPluginId = new Map<string, Promise<PromiseSettledResult<PluginRegister>>>();
 

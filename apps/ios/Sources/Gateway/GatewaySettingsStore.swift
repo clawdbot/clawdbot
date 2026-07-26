@@ -2,6 +2,23 @@ import Foundation
 import OpenClawKit
 import os
 
+enum GatewayCredentialPersistenceError: Error, Equatable, LocalizedError {
+    case invalidOwner
+    case encodingFailed
+    case keychain(GenericPasswordKeychainStore.MutationError)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidOwner:
+            "Gateway credential owner is invalid."
+        case .encodingFailed:
+            "Gateway credential encoding failed."
+        case let .keychain(error):
+            error.localizedDescription
+        }
+    }
+}
+
 enum GatewaySettingsStore {
     private static let productionGatewayService = "ai.openclawfoundation.app.gateway"
     private static var gatewayService: String {
@@ -41,8 +58,8 @@ enum GatewaySettingsStore {
     private static let gatewayCustomHeadersService = "ai.openclawfoundation.app.gateway.custom-headers"
     private static let talkProviderApiKeyAccountPrefix = "provider.apiKey." // pragma: allowlist secret
 
-    struct GatewayRegistryEntry: Codable, Equatable, Identifiable {
-        enum Kind: String, Codable {
+    struct GatewayRegistryEntry: Codable, Equatable, Identifiable, Sendable {
+        enum Kind: String, Codable, Sendable {
             case manual
             case discovered
         }
@@ -70,14 +87,6 @@ enum GatewaySettingsStore {
         }
     }
 
-    struct GatewayRegistry: Codable, Equatable {
-        var version: Int = 1
-        var activeStableID: String?
-        var entries: [GatewayRegistryEntry] = []
-
-        static let empty = GatewayRegistry()
-    }
-
     struct GatewayCredentialMetadata: Codable, Equatable {
         let gatewayStableID: String
         let suppressStoredDeviceAuth: Bool
@@ -91,6 +100,10 @@ enum GatewaySettingsStore {
         let token: String?
         let bootstrapToken: String?
         let password: String?
+
+        var hasCredentials: Bool {
+            self.token != nil || self.bootstrapToken != nil || self.password != nil
+        }
     }
 
     struct GatewayCredentials: Equatable {
@@ -224,47 +237,19 @@ enum GatewaySettingsStore {
         suppressStoredDeviceAuth: Bool,
         instanceId: String) -> Bool
     {
-        let stableID = self.authenticationOwnerID(routeStableID: gatewayStableID)
-        let trimmedInstanceID = instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !stableID.isEmpty, !trimmedInstanceID.isEmpty else { return false }
-        let bundle = GatewayCredentialBundle(
-            gatewayStableID: stableID,
-            suppressStoredDeviceAuth: suppressStoredDeviceAuth,
-            token: self.normalizedCredential(token),
-            bootstrapToken: self.normalizedCredential(bootstrapToken),
-            password: self.normalizedCredential(password))
-        let account = self.gatewayCredentialBundleAccount(
-            instanceId: trimmedInstanceID,
-            stableID: stableID)
-        let hasCredentials = bundle.token != nil || bundle.bootstrapToken != nil || bundle.password != nil
-        guard hasCredentials || suppressStoredDeviceAuth else {
-            let deleted = KeychainStore.delete(service: self.gatewayService, account: account)
-            self.deleteLegacyScopedCredentialBundleIfOwned(
-                instanceId: trimmedInstanceID,
-                stableID: stableID)
-            self.deleteLegacyGatewayCredentials(instanceId: trimmedInstanceID)
-            return deleted || KeychainStore.loadString(service: self.gatewayService, account: account) == nil
-        }
-        guard let data = try? JSONEncoder().encode(bundle),
-              let json = String(data: data, encoding: .utf8)
-        else {
-            _ = KeychainStore.delete(service: self.gatewayService, account: account)
+        do {
+            try self.persistGatewayCredentials(
+                token: token,
+                bootstrapToken: bootstrapToken,
+                password: password,
+                gatewayStableID: gatewayStableID,
+                suppressStoredDeviceAuth: suppressStoredDeviceAuth,
+                instanceId: instanceId)
+            return true
+        } catch {
+            GatewayDiagnostics.log("gateway credential persistence failed: \(error.localizedDescription)")
             return false
         }
-        guard KeychainStore.saveString(
-            json,
-            service: self.gatewayService,
-            account: account)
-        else {
-            // The Keychain helper restores the prior item when replacement fails. Keep that
-            // known-good bundle; callers already treat this attempted update as uncommitted.
-            return false
-        }
-        self.deleteLegacyScopedCredentialBundleIfOwned(
-            instanceId: trimmedInstanceID,
-            stableID: stableID)
-        self.deleteLegacyGatewayCredentials(instanceId: trimmedInstanceID)
-        return true
     }
 
     @discardableResult
@@ -284,25 +269,6 @@ enum GatewaySettingsStore {
             password: password,
             gatewayStableID: stableID,
             suppressStoredDeviceAuth: existing?.suppressStoredDeviceAuth == true,
-            instanceId: instanceId)
-    }
-
-    @discardableResult
-    static func completeGatewayCredentialHandoff(instanceId: String, gatewayStableID: String) -> Bool {
-        let stableID = self.authenticationOwnerID(routeStableID: gatewayStableID)
-        guard let bundle = self.loadGatewayCredentialBundle(
-            instanceId: instanceId,
-            gatewayStableID: stableID),
-            bundle.suppressStoredDeviceAuth
-        else { return false }
-        // Device-token issuance and bootstrap consumption are one durable handoff. A relaunch
-        // must never observe a spent bootstrap token while stored device auth remains disabled.
-        return self.saveGatewayCredentials(
-            token: bundle.token,
-            bootstrapToken: nil,
-            password: bundle.password,
-            gatewayStableID: stableID,
-            suppressStoredDeviceAuth: false,
             instanceId: instanceId)
     }
 
@@ -506,7 +472,7 @@ enum GatewaySettingsStore {
             account: self.gatewayRegistryAccount),
             let data = json.data(using: .utf8),
             let registry = try? JSONDecoder().decode(GatewayRegistry.self, from: data),
-            registry.version == 1
+            (1...2).contains(registry.version)
         else { return .empty }
         return self.normalizedGatewayRegistry(registry)
     }
@@ -533,18 +499,12 @@ enum GatewaySettingsStore {
         }
         if activate {
             registry.activeStableID = normalized.stableID
+            if !registry.connectedStableIDs.contains(where: {
+                GatewayStableIdentifier.matches($0, normalized.stableID)
+            }) {
+                registry.connectedStableIDs.append(normalized.stableID)
+            }
         }
-        return self.saveGatewayRegistry(registry)
-    }
-
-    @discardableResult
-    static func setActiveGateway(stableID: String) -> Bool {
-        guard let stableID = GatewayStableIdentifier.exact(stableID) else { return false }
-        var registry = self.loadGatewayRegistry()
-        guard let storedID = registry.entries.first(where: {
-            GatewayStableIdentifier.matches($0.stableID, stableID)
-        })?.stableID else { return false }
-        registry.activeStableID = storedID
         return self.saveGatewayRegistry(registry)
     }
 
@@ -564,6 +524,7 @@ enum GatewaySettingsStore {
         guard let stableID = GatewayStableIdentifier.exact(stableID) else { return false }
         var registry = self.loadGatewayRegistry()
         registry.entries.removeAll { GatewayStableIdentifier.matches($0.stableID, stableID) }
+        registry.connectedStableIDs.removeAll { GatewayStableIdentifier.matches($0, stableID) }
         if GatewayStableIdentifier.matches(registry.activeStableID, stableID) {
             registry.activeStableID = nil
         }
@@ -602,7 +563,8 @@ enum GatewaySettingsStore {
         self.removeLastGatewayDefaults(defaults)
     }
 
-    private static func saveGatewayRegistry(_ registry: GatewayRegistry) -> Bool {
+    static func saveGatewayRegistry(_ registry: GatewayRegistry) -> Bool {
+        guard self.gatewayRegistryMutationsAllowed() else { return false }
         let normalized = self.normalizedGatewayRegistry(registry)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -613,6 +575,17 @@ enum GatewaySettingsStore {
             json,
             service: self.gatewayService,
             account: self.gatewayRegistryAccount)
+    }
+
+    private static func gatewayRegistryMutationsAllowed() -> Bool {
+        guard let json = KeychainStore.loadString(
+            service: self.gatewayService,
+            account: self.gatewayRegistryAccount)
+        else { return true }
+        guard let data = json.data(using: .utf8),
+              let registry = try? JSONDecoder().decode(GatewayRegistry.self, from: data)
+        else { return false }
+        return (1...2).contains(registry.version)
     }
 
     private static func normalizedGatewayRegistry(_ registry: GatewayRegistry) -> GatewayRegistry {
@@ -632,7 +605,19 @@ enum GatewaySettingsStore {
                 GatewayStableIdentifier.matches($0.stableID, activeID)
             })?.stableID
         }
-        return GatewayRegistry(version: 1, activeStableID: activeStableID, entries: entries)
+        var seenConnected = Set<GatewayStableIdentifier.Key>()
+        let connectedStableIDs: [String] = registry.connectedStableIDs.compactMap { connectedID in
+            guard let entry = entries.first(where: {
+                GatewayStableIdentifier.matches($0.stableID, connectedID)
+            }), let key = GatewayStableIdentifier.key(entry.stableID), seenConnected.insert(key).inserted
+            else { return nil }
+            return entry.stableID
+        }
+        return GatewayRegistry(
+            version: 1,
+            activeStableID: activeStableID,
+            connectedStableIDs: connectedStableIDs,
+            entries: entries)
     }
 
     private static func normalizedGatewayRegistryEntry(
@@ -663,7 +648,15 @@ enum GatewaySettingsStore {
     }
 
     private static func migrateGatewayRegistryIfNeeded(defaults: UserDefaults = .standard) {
-        if KeychainStore.loadString(service: self.gatewayService, account: self.gatewayRegistryAccount) != nil {
+        if let json = KeychainStore.loadString(
+            service: self.gatewayService,
+            account: self.gatewayRegistryAccount)
+        {
+            guard let data = json.data(using: .utf8),
+                  let registry = try? JSONDecoder().decode(GatewayRegistry.self, from: data),
+                  (1...2).contains(registry.version)
+            else { return }
+            _ = self.saveGatewayRegistry(registry)
             _ = KeychainStore.delete(service: self.gatewayService, account: self.lastGatewayConnectionAccount)
             self.removeLastGatewayDefaults(defaults)
             return
@@ -671,7 +664,10 @@ enum GatewaySettingsStore {
 
         let legacy = self.loadLegacyLastGatewayConnection(defaults: defaults)
         guard let entry = legacy.flatMap(self.gatewayRegistryEntry(from:)) else { return }
-        let registry = GatewayRegistry(activeStableID: entry.stableID, entries: [entry])
+        let registry = GatewayRegistry(
+            activeStableID: entry.stableID,
+            connectedStableIDs: [entry.stableID],
+            entries: [entry])
         guard self.saveGatewayRegistry(registry) else { return }
         _ = KeychainStore.delete(service: self.gatewayService, account: self.lastGatewayConnectionAccount)
         self.removeLastGatewayDefaults(defaults)
@@ -1005,6 +1001,125 @@ enum GatewaySettingsStore {
 
         if let stored = self.loadLastDiscoveredGatewayStableID(), !stored.isEmpty {
             defaults.set(stored, forKey: self.lastDiscoveredGatewayStableIDDefaultsKey)
+        }
+    }
+}
+
+extension GatewaySettingsStore {
+    @discardableResult
+    static func completeGatewayCredentialHandoff(
+        instanceId: String,
+        gatewayStableID: String,
+        deleteCredentialBundle: (String, String) -> Result<
+            Void,
+            GenericPasswordKeychainStore.MutationError,
+        > = { service, account in
+            KeychainStore.deleteResult(service: service, account: account)
+        }) throws -> Bool
+    {
+        let stableID = self.authenticationOwnerID(routeStableID: gatewayStableID)
+        guard let bundle = self.loadGatewayCredentialBundle(
+            instanceId: instanceId,
+            gatewayStableID: stableID),
+            bundle.suppressStoredDeviceAuth
+        else { return false }
+        // Device-token issuance and bootstrap consumption are one durable handoff. A relaunch
+        // must never observe a spent bootstrap token while stored device auth remains disabled.
+        let completedBundle = GatewayCredentialBundle(
+            gatewayStableID: stableID,
+            suppressStoredDeviceAuth: false,
+            token: bundle.token,
+            bootstrapToken: nil,
+            password: bundle.password)
+        let trimmedInstanceID = instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !stableID.isEmpty, !trimmedInstanceID.isEmpty else {
+            throw GatewayCredentialPersistenceError.invalidOwner
+        }
+        let account = self.gatewayCredentialBundleAccount(
+            instanceId: trimmedInstanceID,
+            stableID: stableID)
+        try self.saveGatewayCredentialBundle(completedBundle, account: account)
+        self.deleteLegacyScopedCredentialBundleIfOwned(
+            instanceId: trimmedInstanceID,
+            stableID: stableID)
+        self.deleteLegacyGatewayCredentials(instanceId: trimmedInstanceID)
+
+        guard !completedBundle.hasCredentials else { return true }
+        switch deleteCredentialBundle(self.gatewayService, account) {
+        case .success:
+            return true
+        case let .failure(error):
+            // Deletion is cleanup after the atomic overwrite. Only continue when readback
+            // proves that no bootstrap or shared credential survived in the retained item.
+            guard let retained = self.loadGatewayCredentialBundle(
+                instanceId: trimmedInstanceID,
+                gatewayStableID: stableID),
+                !retained.hasCredentials,
+                !retained.suppressStoredDeviceAuth
+            else {
+                throw GatewayCredentialPersistenceError.keychain(error)
+            }
+            GatewayDiagnostics.log("gateway credential cleanup deferred: \(error.localizedDescription)")
+            return true
+        }
+    }
+
+    private static func persistGatewayCredentials(
+        token: String?,
+        bootstrapToken: String?,
+        password: String?,
+        gatewayStableID: String,
+        suppressStoredDeviceAuth: Bool,
+        instanceId: String) throws
+    {
+        let stableID = self.authenticationOwnerID(routeStableID: gatewayStableID)
+        let trimmedInstanceID = instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !stableID.isEmpty, !trimmedInstanceID.isEmpty else {
+            throw GatewayCredentialPersistenceError.invalidOwner
+        }
+        let bundle = GatewayCredentialBundle(
+            gatewayStableID: stableID,
+            suppressStoredDeviceAuth: suppressStoredDeviceAuth,
+            token: self.normalizedCredential(token),
+            bootstrapToken: self.normalizedCredential(bootstrapToken),
+            password: self.normalizedCredential(password))
+        let account = self.gatewayCredentialBundleAccount(
+            instanceId: trimmedInstanceID,
+            stableID: stableID)
+        if bundle.hasCredentials || suppressStoredDeviceAuth {
+            try self.saveGatewayCredentialBundle(bundle, account: account)
+        } else {
+            switch KeychainStore.deleteResult(service: self.gatewayService, account: account) {
+            case .success:
+                break
+            case let .failure(error):
+                guard KeychainStore.loadString(service: self.gatewayService, account: account) == nil else {
+                    throw GatewayCredentialPersistenceError.keychain(error)
+                }
+            }
+        }
+        self.deleteLegacyScopedCredentialBundleIfOwned(
+            instanceId: trimmedInstanceID,
+            stableID: stableID)
+        self.deleteLegacyGatewayCredentials(instanceId: trimmedInstanceID)
+    }
+
+    private static func saveGatewayCredentialBundle(
+        _ bundle: GatewayCredentialBundle,
+        account: String) throws
+    {
+        guard let data = try? JSONEncoder().encode(bundle),
+              let json = String(data: data, encoding: .utf8)
+        else {
+            throw GatewayCredentialPersistenceError.encodingFailed
+        }
+        do {
+            try KeychainStore.saveStringResult(
+                json,
+                service: self.gatewayService,
+                account: account).get()
+        } catch {
+            throw GatewayCredentialPersistenceError.keychain(error)
         }
     }
 }

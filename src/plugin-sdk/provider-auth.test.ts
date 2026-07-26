@@ -345,6 +345,9 @@ describe("provider auth profile helpers", () => {
       deriveCopilotApiBaseUrlFromToken("copilot-token;proxy-ep=javascript:alert(1);"),
     ).toBeNull();
     expect(deriveCopilotApiBaseUrlFromToken("copilot-token;proxy-ep=://bad;")).toBeNull();
+    expect(
+      deriveCopilotApiBaseUrlFromToken("copilot-token;proxy-ep=proxy.attacker.example;"),
+    ).toBeNull();
   });
 
   it("rejects Copilot token expiry values outside the supported date range", async () => {

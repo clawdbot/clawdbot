@@ -169,6 +169,14 @@ describe("inspectTelegramAccount SecretRef resolution", () => {
       expect(account.tokenSource).toBe("tokenFile");
       expect(account.tokenStatus).toBe("configured_unavailable");
       expect(account.token).toBe("");
+      expect(account.credentialDiagnostics).toEqual([
+        {
+          code: "CREDENTIAL_FILE_UNAVAILABLE",
+          path: "channels.telegram.tokenFile",
+          reason: "symlink",
+        },
+      ]);
+      expect(JSON.stringify(account.credentialDiagnostics)).not.toContain(tokenLink);
       fs.rmSync(dir, { recursive: true, force: true });
     },
   );

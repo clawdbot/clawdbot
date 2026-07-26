@@ -24,10 +24,11 @@ import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
 import type { TelegramSpooledReplayDeferredParticipant } from "./bot-processing-outcome.js";
 import { MEDIA_GROUP_TIMEOUT_MS, type MediaGroupEntry } from "./bot-updates.js";
 import { resolveMedia } from "./bot/delivery.resolve-media.js";
-import { getTelegramTextParts, hasBotMention } from "./bot/helpers.js";
+import { getTelegramTextParts, hasBotMention, resolveTelegramPrimaryMedia } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { isTelegramForumServiceMessage } from "./forum-service-message.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
+import type { TelegramMessageDispatchReplayClaim } from "./message-dispatch-dedupe.js";
 
 type MediaAuthorization = {
   authorizationCfg: OpenClawConfig;
@@ -49,7 +50,7 @@ type TelegramMediaGroupInput = MediaAuthorization & {
   storeAllowFrom: string[];
   promptContextMinTimestampMs?: number;
   promptContextAmbientWatermark?: TelegramAmbientTranscriptWatermark;
-  dispatchDedupeKeys: string[];
+  dispatchDedupeClaims: TelegramMessageDispatchReplayClaim[];
 };
 
 type BufferedMediaGroupEntry = MediaGroupEntry &
@@ -65,7 +66,6 @@ export function createTelegramInboundMediaGroupRuntime(
     | "opts"
     | "runtime"
     | "mediaMaxBytes"
-    | "telegramCfg"
     | "logger"
     | "resolveGroupActivation"
     | "resolveGroupRequireMention"
@@ -78,7 +78,6 @@ export function createTelegramInboundMediaGroupRuntime(
     opts,
     runtime,
     mediaMaxBytes,
-    telegramCfg,
     logger,
     resolveGroupActivation,
     resolveGroupRequireMention,
@@ -88,8 +87,8 @@ export function createTelegramInboundMediaGroupRuntime(
     promptContextBoundaryOptions,
     latestPromptContextMinTimestampMs,
     latestPromptContextAmbientWatermark,
-    mergeDispatchDedupeKeys,
-    releaseDispatchDedupeKeys,
+    mergeDispatchDedupeClaims,
+    releaseDispatchDedupeClaims,
     buildFailedProcessingResult,
     settleSpooledReplayParticipants,
     createSpooledReplayParticipantForBufferedWork,
@@ -101,10 +100,7 @@ export function createTelegramInboundMediaGroupRuntime(
     typeof opts.testTimings?.mediaGroupFlushMs === "number" &&
     Number.isFinite(opts.testTimings.mediaGroupFlushMs)
       ? Math.max(10, Math.floor(opts.testTimings.mediaGroupFlushMs))
-      : typeof telegramCfg.mediaGroupFlushMs === "number" &&
-          Number.isFinite(telegramCfg.mediaGroupFlushMs)
-        ? Math.max(10, Math.floor(telegramCfg.mediaGroupFlushMs))
-        : MEDIA_GROUP_TIMEOUT_MS;
+      : MEDIA_GROUP_TIMEOUT_MS;
   const buffer = new Map<string, BufferedMediaGroupEntry>();
   const queue = new KeyedAsyncQueue();
 
@@ -217,20 +213,22 @@ export function createTelegramInboundMediaGroupRuntime(
       const primary =
         entry.messages.find((item) => item.msg.caption || item.msg.text) ?? entry.messages[0];
       if (!primary) {
-        releaseDispatchDedupeKeys(entry.dispatchDedupeKeys);
+        releaseDispatchDedupeClaims(entry.dispatchDedupeClaims);
         settleSpooledReplayParticipants(entry.spooledReplayParticipants, { kind: "skipped" });
         return;
       }
       if (await shouldSkipMediaDownloadForUnaddressedMentionGroup({ ...entry, ...primary })) {
-        releaseDispatchDedupeKeys(entry.dispatchDedupeKeys);
+        releaseDispatchDedupeClaims(entry.dispatchDedupeClaims);
         settleSpooledReplayParticipants(entry.spooledReplayParticipants, { kind: "skipped" });
         return;
       }
       const allMedia: TelegramMediaRef[] = [];
       const selection = new Map<string, "include" | "exclude">();
+      let materializedCount = 0;
       let skippedCount = 0;
       for (const { ctx, msg } of entry.messages) {
         const sourceMessageId = String(msg.message_id);
+        const nativeKind = resolveTelegramPrimaryMedia(msg)?.kind ?? "document";
         let media;
         try {
           media = await resolveMedia({ ctx, maxBytes: mediaMaxBytes, ...mediaRuntimeWithAbort });
@@ -245,6 +243,7 @@ export function createTelegramInboundMediaGroupRuntime(
             throw error;
           }
           runtime.log?.(warn(`media group: skipping photo that failed to fetch: ${String(error)}`));
+          allMedia.push({ kind: nativeKind, sourceMessageId });
           selection.set(sourceMessageId, "exclude");
           skippedCount++;
           continue;
@@ -253,11 +252,14 @@ export function createTelegramInboundMediaGroupRuntime(
           allMedia.push({
             path: media.path,
             contentType: media.contentType,
+            kind: media.kind,
             stickerMetadata: media.stickerMetadata,
             sourceMessageId,
           });
+          materializedCount++;
           selection.set(sourceMessageId, "include");
         } else {
+          allMedia.push({ kind: nativeKind, sourceMessageId });
           selection.set(sourceMessageId, "exclude");
           skippedCount++;
         }
@@ -270,7 +272,7 @@ export function createTelegramInboundMediaGroupRuntime(
           fn: () =>
             bot.api.sendMessage(
               primary.msg.chat.id,
-              `⚠️ Received ${allMedia.length} of ${entry.messages.length} images — ${skippedCount} could not be fetched and ${verb} skipped.`,
+              `⚠️ Received ${materializedCount} of ${entry.messages.length} images — ${skippedCount} could not be fetched and ${verb} skipped.`,
               {
                 reply_parameters: {
                   message_id: primary.msg.message_id,
@@ -293,12 +295,12 @@ export function createTelegramInboundMediaGroupRuntime(
           ),
           ...spooledReplayOptions(entry.spooledReplayParticipants),
         },
-        dispatchDedupeKeys: entry.dispatchDedupeKeys,
+        dispatchDedupeClaims: entry.dispatchDedupeClaims,
         spooledReplayParticipants: entry.spooledReplayParticipants,
       });
       settleSpooledReplayParticipants(entry.spooledReplayParticipants, result);
     } catch (error) {
-      releaseDispatchDedupeKeys(entry.dispatchDedupeKeys, error);
+      releaseDispatchDedupeClaims(entry.dispatchDedupeClaims, error);
       settleSpooledReplayParticipants(
         entry.spooledReplayParticipants,
         buildFailedProcessingResult(error),
@@ -336,9 +338,9 @@ export function createTelegramInboundMediaGroupRuntime(
         existing.promptContextAmbientWatermark,
         input.promptContextAmbientWatermark,
       );
-      existing.dispatchDedupeKeys = mergeDispatchDedupeKeys(
-        existing.dispatchDedupeKeys,
-        input.dispatchDedupeKeys,
+      existing.dispatchDedupeClaims = mergeDispatchDedupeClaims(
+        existing.dispatchDedupeClaims,
+        input.dispatchDedupeClaims,
       );
       existing.timer = setTimeout(() => {
         buffer.delete(key);

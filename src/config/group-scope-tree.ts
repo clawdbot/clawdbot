@@ -22,6 +22,12 @@ export type ScopeTree = {
 
 export type ScopePath = string[];
 
+export const encodeScopeSegment = (value: string) => `${value.length}:${value}`;
+
+export function scopeKey(...segments: Array<readonly [prefix: string, value: string]>): string {
+  return segments.map(([prefix, value]) => `${prefix}:${encodeScopeSegment(value)}`).join("/");
+}
+
 type ScopeToolPolicySender = Omit<Parameters<typeof resolveToolsBySender>[0], "toolsBySender">;
 
 export function buildChannelGroupsScopeTree(
@@ -51,7 +57,7 @@ export function resolveScopeKeyCaseInsensitive(
   }
   const target = normalizeLowercaseStringOrEmpty(key);
   return Object.keys(tree.scopes).find(
-    (scopeKey) => normalizeLowercaseStringOrEmpty(scopeKey) === target,
+    (candidate) => normalizeLowercaseStringOrEmpty(candidate) === target,
   );
 }
 
@@ -120,14 +126,16 @@ export function resolveScopeToolsPolicy(
     tree: params.tree,
     path: params.path,
     resolveNode: (node) =>
-      resolveToolsBySender({
-        toolsBySender: node.toolsBySender,
-        senderId: params.senderId,
-        senderName: params.senderName,
-        senderUsername: params.senderUsername,
-        senderE164: params.senderE164,
-        messageProvider: params.messageProvider,
-      }) ?? node.tools,
+      (params.senderPolicyMode === "never"
+        ? undefined
+        : resolveToolsBySender({
+            toolsBySender: node.toolsBySender,
+            senderId: params.senderId,
+            senderName: params.senderName,
+            senderUsername: params.senderUsername,
+            senderE164: params.senderE164,
+            messageProvider: params.messageProvider,
+          })) ?? node.tools,
   });
 }
 

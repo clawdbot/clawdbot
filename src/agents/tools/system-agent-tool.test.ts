@@ -180,10 +180,17 @@ describe("openclaw tool", () => {
     );
     expect(
       resolveSystemAgentProposalTransition({
-        args: { action: "setup", workspace: "/tmp/work" },
+        args,
         resultText: toolText(result),
       }),
-    ).toEqual({ proposal: proposalRef.current });
+    ).toEqual({
+      proposal: proposalRef.current,
+      operation: {
+        kind: "setup",
+        workspace: "/tmp/work",
+        model: "openai/gpt-5.5",
+      },
+    });
   });
 
   it("voids setup approval when the requested model changes", async () => {
@@ -411,13 +418,19 @@ describe("openclaw tool", () => {
         args,
         resultText: "needs-approval: this action changes state.",
       }),
-    ).toEqual({ proposal: hash });
+    ).toEqual({
+      proposal: hash,
+      operation: { kind: "set-default-model", model: "openai/gpt-5.5" },
+    });
     expect(
       resolveSystemAgentProposalTransition({
         args,
         resultText: `needs-approval:${hash}\nThis action changes state.`,
       }),
-    ).toEqual({ proposal: hash });
+    ).toEqual({
+      proposal: hash,
+      operation: { kind: "set-default-model", model: "openai/gpt-5.5" },
+    });
     // A voided approval clears it.
     expect(
       resolveSystemAgentProposalTransition({

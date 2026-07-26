@@ -4,7 +4,7 @@ import {
   resolveAgentEffectiveModelPrimary,
   resolveDefaultModelForAgent,
 } from "openclaw/plugin-sdk/agent-runtime";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   ACTIVE_MEMORY_CLOSE_TAG,
@@ -291,7 +291,7 @@ function parseModelCandidate(modelRef: string | undefined, defaultProvider = DEF
 }
 
 function getModelRef(
-  api: OpenClawPluginApi,
+  runtimeConfig: OpenClawConfig,
   agentId: string,
   config: ResolvedActiveRecallPluginConfig,
   ctx?: {
@@ -301,8 +301,8 @@ function getModelRef(
 ): { provider: string; model: string } | undefined {
   const currentRunModel =
     ctx?.modelProviderId && ctx?.modelId ? `${ctx.modelProviderId}/${ctx.modelId}` : undefined;
-  const configuredDefaultModel = resolveAgentEffectiveModelPrimary(api.config, agentId)
-    ? resolveDefaultModelForAgent({ cfg: api.config, agentId })
+  const configuredDefaultModel = resolveAgentEffectiveModelPrimary(runtimeConfig, agentId)
+    ? resolveDefaultModelForAgent({ cfg: runtimeConfig, agentId })
     : undefined;
   const defaultProvider = configuredDefaultModel?.provider ?? DEFAULT_PROVIDER;
   const candidates = [

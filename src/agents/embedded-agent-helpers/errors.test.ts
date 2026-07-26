@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../../shared/assistant-error-format.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import {
+  classifyFailoverReason,
   extractFailoverSignalDetails,
   formatAssistantErrorText,
   isLikelyContextOverflowError,
@@ -22,6 +23,16 @@ vi.mock("../../logging/subsystem.js", () => ({
     warn: vi.fn(),
   }),
 }));
+
+describe("Claude CLI logged-out failures", () => {
+  const loggedOutMessage = "Not logged in · Please run /login";
+
+  it("classifies the logged-out response as auth only for claude-cli", () => {
+    expect(classifyFailoverReason(loggedOutMessage, { provider: "claude-cli" })).toBe("auth");
+    expect(classifyFailoverReason(loggedOutMessage, { provider: "openai" })).toBeNull();
+    expect(classifyFailoverReason(loggedOutMessage)).toBeNull();
+  });
+});
 
 describe("formatAssistantErrorText streaming JSON parse classification", () => {
   beforeEach(() => {

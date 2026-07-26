@@ -35,7 +35,9 @@ function makeBrowser(targetId: string, url: string): BrowserMockBundle {
     on: vi.fn(),
     newCDPSession: vi.fn(async () => ({
       send: vi.fn(async (method: string) =>
-        method === "Target.getTargetInfo" ? { targetInfo: { targetId } } : {},
+        method === "Target.getTargetInfo"
+          ? { targetInfo: { targetId, title: `title:${targetId}` } }
+          : {},
       ),
       detach: vi.fn(async () => {}),
     })),
@@ -49,6 +51,62 @@ function makeBrowser(targetId: string, url: string): BrowserMockBundle {
   } as unknown as import("playwright-core").Browser;
 
   return { browser, browserClose };
+}
+
+function makePageEnumerationBrowser(
+  specs: Array<{
+    targetId: string;
+    title: string;
+    url: string;
+    readTitle?: () => Promise<string>;
+    readTargetInfo?: () => Promise<{ targetInfo: { targetId: string; title: string } }>;
+    detach?: () => Promise<void>;
+  }>,
+): BrowserMockBundle & {
+  pages: import("playwright-core").Page[];
+  newCDPSession: ReturnType<typeof vi.fn>;
+} {
+  const browserClose = vi.fn(async () => {});
+  const specByPage = new WeakMap<import("playwright-core").Page, (typeof specs)[number]>();
+  const pages = specs.map((spec) => {
+    const page = {
+      on: vi.fn(),
+      context: () => context,
+      title: vi.fn(spec.readTitle ?? (async () => spec.title)),
+      url: vi.fn(() => spec.url),
+    } as unknown as import("playwright-core").Page;
+    specByPage.set(page, spec);
+    return page;
+  });
+  const newCDPSession = vi.fn(async (page: import("playwright-core").Page) => {
+    const spec = specByPage.get(page);
+    if (!spec) {
+      throw new Error("unexpected page");
+    }
+    return {
+      send: vi.fn(async (method: string) => {
+        if (method !== "Target.getTargetInfo") {
+          return {};
+        }
+        return await (spec.readTargetInfo?.() ??
+          Promise.resolve({ targetInfo: { targetId: spec.targetId, title: spec.title } }));
+      }),
+      detach: vi.fn(spec.detach ?? (async () => {})),
+    };
+  });
+  const context = {
+    pages: () => pages,
+    on: vi.fn(),
+    newCDPSession,
+  } as unknown as import("playwright-core").BrowserContext;
+  const browser = {
+    contexts: () => [context],
+    on: vi.fn(),
+    off: vi.fn(),
+    close: browserClose,
+  } as unknown as import("playwright-core").Browser;
+
+  return { browser, browserClose, pages, newCDPSession };
 }
 
 function makeEmptyBrowser(): BrowserMockBundle {
@@ -217,7 +275,7 @@ describe("pw-session connection scoping", () => {
     getChromeWebSocketUrlSpy.mockResolvedValue(null);
     const ssrfPolicy = {
       dangerouslyAllowPrivateNetwork: true,
-      hostnameAllowlist: ["example.com"],
+      allowedHostnames: ["example.com"],
     };
 
     const page = await getPageForTargetId({
@@ -229,7 +287,7 @@ describe("pw-session connection scoping", () => {
     expect(connectOverCdpSpy).toHaveBeenCalledTimes(1);
     expect(ssrfPolicy).toStrictEqual({
       dangerouslyAllowPrivateNetwork: true,
-      hostnameAllowlist: ["example.com"],
+      allowedHostnames: ["example.com"],
     });
   });
 
@@ -492,6 +550,109 @@ describe("pw-session connection scoping", () => {
     expect(connectOverCdpSpy).toHaveBeenCalledTimes(2);
     await vi.waitFor(() => expect(stale.browserClose).toHaveBeenCalledTimes(1));
     expect(refreshed.browserClose).not.toHaveBeenCalled();
+  });
+
+  it("lists healthy pages without awaiting a wedged page title", async () => {
+    vi.useFakeTimers();
+    const fixture = makePageEnumerationBrowser([
+      {
+        targetId: "WEDGED",
+        title: "Wedged",
+        url: "https://wedged.example",
+        readTitle: () => new Promise<string>(() => {}),
+      },
+      {
+        targetId: "HEALTHY",
+        title: "Healthy title",
+        url: "https://healthy.example",
+      },
+    ]);
+    connectOverCdpSpy.mockResolvedValue(fixture.browser);
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+
+    let listed: Awaited<ReturnType<typeof listPagesViaPlaywright>> | undefined;
+    void listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" }).then((pages) => {
+      listed = pages;
+    });
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(listed).toEqual([
+      {
+        targetId: "WEDGED",
+        title: "Wedged",
+        url: "https://wedged.example",
+        type: "page",
+      },
+      {
+        targetId: "HEALTHY",
+        title: "Healthy title",
+        url: "https://healthy.example",
+        type: "page",
+      },
+    ]);
+  });
+
+  it("times out stuck target-info reads in one window and shares them across enumerations", async () => {
+    vi.useFakeTimers();
+    const fixture = makePageEnumerationBrowser([
+      {
+        targetId: "STUCK_A",
+        title: "Stuck A",
+        url: "https://stuck-a.example",
+        readTargetInfo: () => new Promise(() => {}),
+        detach: () => new Promise(() => {}),
+      },
+      {
+        targetId: "STUCK_B",
+        title: "Stuck B",
+        url: "https://stuck-b.example",
+        readTargetInfo: () => new Promise(() => {}),
+        detach: () => new Promise(() => {}),
+      },
+      {
+        targetId: "HEALTHY",
+        title: "Healthy title",
+        url: "https://healthy.example",
+      },
+    ]);
+    connectOverCdpSpy.mockResolvedValue(fixture.browser);
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+
+    let listed: Array<Awaited<ReturnType<typeof listPagesViaPlaywright>>> | undefined;
+    void Promise.all([
+      listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" }),
+      listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" }),
+    ]).then((pages) => {
+      listed = pages;
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(listed).toEqual([
+      [
+        {
+          targetId: "HEALTHY",
+          title: "Healthy title",
+          url: "https://healthy.example",
+          type: "page",
+        },
+      ],
+      [
+        {
+          targetId: "HEALTHY",
+          title: "Healthy title",
+          url: "https://healthy.example",
+          type: "page",
+        },
+      ],
+    ]);
+    expect(
+      fixture.pages
+        .slice(0, 2)
+        .map(
+          (page) =>
+            fixture.newCDPSession.mock.calls.filter(([candidate]) => candidate === page).length,
+        ),
+    ).toEqual([1, 1]);
   });
 
   it("times out stuck page enumeration and evicts the scoped connection", async () => {

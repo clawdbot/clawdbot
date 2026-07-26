@@ -2,10 +2,11 @@ title: WhatsApp new-session command
 
 scenario:
   id: whatsapp-native-new-command
-  surface: channel-framework
-  category: channel-framework.channel-actions-commands-and-approvals
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
   coverage:
-    primary: [channels.native-commands]
+    primary:
+      - channels.channel-native-commands
   objective: Verify WhatsApp `/new` starts a new session through native command dispatch.
   successCriteria:
     - The `/new` command is accepted in a WhatsApp DM.
@@ -14,10 +15,10 @@ scenario:
     - src/auto-reply/reply/commands-core.ts
     - extensions/qa-lab/src/live-transports/whatsapp/adapter.runtime.ts
   execution:
+    profiles: { "whatsapp:mock-default": 38 }
     kind: flow
     channel: whatsapp
     config:
-      requiredChannelDriver: live
       requiredProviderMode: mock-openai
     summary: Run `/new` through WhatsApp and verify the new-session acknowledgement.
 

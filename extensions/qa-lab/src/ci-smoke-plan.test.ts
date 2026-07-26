@@ -22,18 +22,23 @@ function estimateScenarioCost(scenario: QaScenario | undefined): number {
 }
 
 describe("createQaSmokeCiPart", () => {
-  it("balances the bounded automatic smoke set across two profile parts", () => {
-    const first = createQaSmokeCiPart("profile-1");
-    const second = createQaSmokeCiPart("profile-2");
-    const repeatedSecond = createQaSmokeCiPart("profile-2");
+  it("balances the bounded automatic smoke set across four profile parts", () => {
+    const parts = ["profile-1", "profile-2", "profile-3", "profile-4"].map((partId) =>
+      createQaSmokeCiPart(partId),
+    );
+    const repeatedLast = createQaSmokeCiPart("profile-4");
 
-    expect(repeatedSecond).toEqual(second);
-    expect(first.runs[0]?.channel).toBe(OPENCLAW_CRABLINE_DEFAULT_CHANNEL);
-    expect(second.runs[0]?.channel).toBe(OPENCLAW_CRABLINE_DEFAULT_CHANNEL);
-    expect(first.runs.some((run) => run.channel === "matrix")).toBe(false);
-    expect(second.runs.some((run) => run.channel === "matrix")).toBe(true);
+    expect(repeatedLast).toEqual(parts[3]);
+    for (const part of parts) {
+      expect(part.runs[0]?.channel).toBe(OPENCLAW_CRABLINE_DEFAULT_CHANNEL);
+    }
+    // The matrix channel run rides only on the last part.
+    expect(
+      parts.slice(0, 3).some((part) => part.runs.some((run) => run.channel === "matrix")),
+    ).toBe(false);
+    expect(parts[3]?.runs.some((run) => run.channel === "matrix")).toBe(true);
 
-    const scenarioIds = [...first.runs, ...second.runs].flatMap((run) => run.scenario_ids);
+    const scenarioIds = parts.flatMap((part) => part.runs.flatMap((run) => run.scenario_ids));
     expect(new Set(scenarioIds).size).toBe(scenarioIds.length);
     const scenarioById = new Map(
       readQaScenarioPack().scenarios.map((scenario) => [scenario.id, scenario] as const),
@@ -50,15 +55,26 @@ describe("createQaSmokeCiPart", () => {
       scenarioIds.map((scenarioId) => scenarioById.get(scenarioId)?.sourcePath),
     );
     const scorecardReport = readQaScorecardTaxonomyReport([...scenarioById.values()]);
+    const smokeScenarioRefs = new Set(
+      scorecardReport.categories
+        .filter((category) => category.profiles.includes("smoke-ci"))
+        .flatMap((category) => category.scenarioRefs),
+    );
+    expect(
+      [...selectedScenarioPaths].every(
+        (scenarioPath) => scenarioPath !== undefined && smokeScenarioRefs.has(scenarioPath),
+      ),
+    ).toBe(true);
     const uncoveredCategoryIds = scorecardReport.categories
       .filter((category) => category.profiles.includes("smoke-ci"))
       .filter((category) => !category.scenarioRefs.some((ref) => selectedScenarioPaths.has(ref)))
       .map((category) => category.id);
     expect(uncoveredCategoryIds).toEqual([]);
 
-    const primaryScenarioIds = [first, second].map(
+    const primaryScenarioIds = parts.map(
       (part) => part.runs.find((run) => run.slug === "primary")?.scenario_ids ?? [],
     );
+    expect(primaryScenarioIds[1]).toContain("system-agent-ring-zero-setup");
     const primaryRunCosts = primaryScenarioIds.map((ids) =>
       ids.reduce(
         (cost, scenarioId) => cost + estimateScenarioCost(scenarioById.get(scenarioId)),
@@ -70,14 +86,23 @@ describe("createQaSmokeCiPart", () => {
         ids.map((scenarioId) => estimateScenarioCost(scenarioById.get(scenarioId))),
       ),
     );
-    const firstRunCost = expectDefined(primaryRunCosts[0], "first QA smoke run cost");
-    const secondRunCost = expectDefined(primaryRunCosts[1], "second QA smoke run cost");
-    expect(Math.abs(firstRunCost - secondRunCost)).toBeLessThanOrEqual(largestScenarioCost);
+    const heaviestRunCost = expectDefined(
+      primaryRunCosts.toSorted((left, right) => right - left)[0],
+      "heaviest QA smoke run cost",
+    );
+    const lightestRunCost = expectDefined(
+      primaryRunCosts.toSorted((left, right) => left - right)[0],
+      "lightest QA smoke run cost",
+    );
+    // Greedy balance: no part carries more than one heaviest-scenario cost
+    // beyond the lightest, and every part runs at least one scenario.
+    expect(heaviestRunCost - lightestRunCost).toBeLessThanOrEqual(largestScenarioCost);
+    expect(primaryScenarioIds.every((ids) => ids.length > 0)).toBe(true);
   });
 
   it("rejects undeclared profile parts", () => {
-    expect(() => createQaSmokeCiPart("profile-3")).toThrow(
-      "unknown QA smoke CI profile part: profile-3",
+    expect(() => createQaSmokeCiPart("profile-5")).toThrow(
+      "unknown QA smoke CI profile part: profile-5",
     );
   });
 });

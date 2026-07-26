@@ -32,8 +32,12 @@ import { parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { createSseByteGuard } from "../utils/streaming-byte-guard.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
-import { buildBaseOptions } from "./simple-options.js";
-import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
+import { buildBaseOptions, clampMaxTokensToModel } from "./simple-options.js";
+import {
+  describeToolResultMediaPlaceholder,
+  extractToolResultText,
+  isImageWithMediaPayload,
+} from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
 const MISTRAL_TOOL_CALL_ID_LENGTH = 9;
@@ -165,7 +169,7 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
       const headers = { ...model.headers, ...options?.headers };
       // Mistral infrastructure uses `x-affinity` for KV-cache reuse (prefix caching).
       // Respect explicit caller-provided header values.
-      if (options?.sessionId) {
+      if (resolveMistralPromptCacheKey(options) && options?.sessionId) {
         headers["x-affinity"] ||= options.sessionId;
       }
       const mistralStream = await mistral.chat.stream(payload, {
@@ -213,7 +217,10 @@ export const streamSimpleMistral: StreamFunction<"mistral-conversations", Simple
     throw new Error(`No API key for provider: ${model.provider}`);
   }
 
-  const base = buildBaseOptions(model, options, apiKey);
+  const base = {
+    ...buildBaseOptions(model, options, apiKey),
+    maxTokens: clampMaxTokensToModel(model, options?.maxTokens),
+  };
   const clampedReasoning = options?.reasoning
     ? clampThinkingLevel(model, options.reasoning)
     : undefined;
@@ -361,6 +368,10 @@ function buildChatPayload(
   if (options?.reasoningEffort) {
     payload.reasoningEffort = options.reasoningEffort;
   }
+  const promptCacheKey = resolveMistralPromptCacheKey(options);
+  if (promptCacheKey) {
+    payload.promptCacheKey = promptCacheKey;
+  }
 
   if (context.systemPrompt) {
     payload.messages.unshift({
@@ -370,6 +381,30 @@ function buildChatPayload(
   }
 
   return payload;
+}
+
+function resolveMistralPromptCacheKey(options?: MistralOptions): string | undefined {
+  if (options?.cacheRetention === "none") {
+    return undefined;
+  }
+  return options?.promptCacheKey?.trim() || options?.sessionId?.trim() || undefined;
+}
+
+function readMistralCachedPromptTokens(usage: unknown, promptTokens: number): number {
+  const record = usage as {
+    promptTokensDetails?: { cachedTokens?: unknown } | null;
+    prompt_tokens_details?: { cached_tokens?: unknown } | null;
+    cachedTokens?: unknown;
+    cached_tokens?: unknown;
+  };
+  const rawCachedTokens =
+    record.promptTokensDetails?.cachedTokens ??
+    record.prompt_tokens_details?.cached_tokens ??
+    record.cachedTokens ??
+    record.cached_tokens;
+  const cachedTokens =
+    typeof rawCachedTokens === "number" && Number.isFinite(rawCachedTokens) ? rawCachedTokens : 0;
+  return Math.min(promptTokens, Math.max(0, cachedTokens));
 }
 
 async function consumeChatStream(
@@ -567,12 +602,15 @@ async function consumeChatStream(
     output.responseId ||= chunk.id;
 
     if (chunk.usage) {
-      output.usage.input = chunk.usage.promptTokens || 0;
+      const promptTokens = chunk.usage.promptTokens || 0;
+      const cachedPromptTokens = readMistralCachedPromptTokens(chunk.usage, promptTokens);
+      output.usage.input = Math.max(0, promptTokens - cachedPromptTokens);
       output.usage.output = chunk.usage.completionTokens || 0;
-      output.usage.cacheRead = 0;
+      output.usage.cacheRead = cachedPromptTokens;
       output.usage.cacheWrite = 0;
       output.usage.totalTokens =
-        chunk.usage.totalTokens || output.usage.input + output.usage.output;
+        chunk.usage.totalTokens ||
+        output.usage.input + output.usage.output + output.usage.cacheRead;
       calculateCost(model, output.usage);
     }
 
@@ -871,7 +909,7 @@ function toChatMessages(
     const toolContent: ContentChunk[] = [];
     const textResult = extractToolResultText(msg.content);
     const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
-    const hasImages = msg.content.some((part) => part.type === "image");
+    const hasImages = msg.content.some(isImageWithMediaPayload);
     const toolText = buildToolResultText(
       textResult,
       mediaPlaceholder,
@@ -884,7 +922,7 @@ function toChatMessages(
       if (!supportsImages) {
         continue;
       }
-      if (part.type !== "image") {
+      if (!isImageWithMediaPayload(part)) {
         continue;
       }
       toolContent.push({

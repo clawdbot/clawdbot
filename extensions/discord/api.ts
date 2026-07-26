@@ -124,8 +124,19 @@ export {
   DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
   DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS,
   DISCORD_DEFAULT_LISTENER_TIMEOUT_MS,
-  mergeAbortSignals,
 } from "./src/monitor/timeouts.js";
+
+/**
+ * @deprecated Shipped `@openclaw/discord/api` compatibility only. Use native
+ * `AbortSignal.any` after filtering optional signals. Removal with the next
+ * plugin-SDK major.
+ */
+export function mergeAbortSignals(
+  signals: Array<AbortSignal | undefined>,
+): AbortSignal | undefined {
+  const activeSignals = signals.filter((signal): signal is AbortSignal => Boolean(signal));
+  return activeSignals.length > 1 ? AbortSignal.any(activeSignals) : activeSignals[0];
+}
 export type { DiscordSendComponents, DiscordSendEmbeds } from "./src/send.shared.js";
 export type { DiscordSendResult } from "./src/send.types.js";
 export type { DiscordTokenResolution } from "./src/token.js";

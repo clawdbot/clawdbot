@@ -1,11 +1,9 @@
 // QA Lab mock provider input and tool-output extraction.
-import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   type ResponsesInputItem,
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
   QA_WHATSAPP_PENDING_HISTORY_TRIGGER_MARKER_RE,
-  QA_WHATSAPP_PENDING_HISTORY_STRUCTURED_LABEL,
   QA_WHATSAPP_BROADCAST_PROMPT_RE,
   QA_WHATSAPP_RUNTIME_AGENT_RE,
   QA_WHATSAPP_ACTIVATION_ALWAYS_MARKER_RE,
@@ -329,14 +327,15 @@ export function extractAllRequestTexts(input: ResponsesInputItem[], body: Record
   return texts.join("\n");
 }
 
-export function buildWhatsAppPendingHistoryReply(allInputText: string) {
-  const triggerMatch = QA_WHATSAPP_PENDING_HISTORY_TRIGGER_MARKER_RE.exec(allInputText);
+export function buildWhatsAppPendingHistoryReply(prompt: string, input: ResponsesInputItem[]) {
+  const triggerMatch = QA_WHATSAPP_PENDING_HISTORY_TRIGGER_MARKER_RE.exec(prompt);
   if (!triggerMatch?.[1]) {
     return undefined;
   }
   const suffix = triggerMatch[1];
-  const beforeTrigger = allInputText.slice(0, triggerMatch.index);
-  const priorGroupContext = extractStructuredWhatsAppPendingHistoryContext(beforeTrigger);
+  // Pending history is injected as an internal runtime carrier, separate from the current prompt.
+  // Restricting proof to those carriers prevents current-message marker text from satisfying QA.
+  const priorGroupContext = extractWhatsAppPendingHistoryRuntimeContext(input);
   const quietMarkerPattern = new RegExp(`\\bWHATSAPP_QA_PENDING_HISTORY_QUIET_${suffix}\\b`, "u");
   const contextSentinelPattern = new RegExp(
     `\\bWHATSAPP_QA_PENDING_HISTORY_CONTEXT_ONLY_${suffix}\\b`,
@@ -351,12 +350,13 @@ export function buildWhatsAppPendingHistoryReply(allInputText: string) {
   return `WHATSAPP_QA_PENDING_HISTORY_OK_${suffix}`;
 }
 
-function extractStructuredWhatsAppPendingHistoryContext(beforeTrigger: string) {
-  const blockRe = new RegExp(
-    `${escapeRegExp(QA_WHATSAPP_PENDING_HISTORY_STRUCTURED_LABEL)}\\n((?:(?!\\n\\n)[\\s\\S])+)\\n\\n`,
-    "gu",
-  );
-  return Array.from(beforeTrigger.matchAll(blockRe), (match) => match[1]?.trim())
+function extractWhatsAppPendingHistoryRuntimeContext(input: ResponsesInputItem[]) {
+  return input
+    .filter((item) => item.role === "user" && Array.isArray(item.content))
+    .map((item) => {
+      const text = extractInputText(item.content as unknown[]);
+      return isInternalRuntimeContextCarrierText(text) ? text : undefined;
+    })
     .filter((block): block is string => Boolean(block))
     .join("\n");
 }

@@ -18,7 +18,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
   // turn small route-graph changes into extra startup preload requests.
   if (
     normalized.endsWith("/ui/src/components/config-form.shared.ts") ||
-    normalized.endsWith("/ui/src/lib/clipboard.ts")
+    normalized.endsWith("/ui/src/lib/clipboard.ts") ||
+    normalized.endsWith("/ui/src/build-info-normalizers.ts") ||
+    normalized.endsWith("/ui/src/build-info.ts")
   ) {
     return "control-ui-shared";
   }
@@ -49,7 +51,11 @@ export function controlUiStableChunkName(id: string): string | undefined {
     return "markdown-runtime";
   }
 
-  if (moduleIdIncludesPackage(id, "zod") || moduleIdIncludesPackage(id, "json5")) {
+  if (
+    moduleIdIncludesPackage(id, "zod") ||
+    moduleIdIncludesPackage(id, "json5") ||
+    moduleIdIncludesPackage(id, "libphonenumber-js")
+  ) {
     return "config-runtime";
   }
 
@@ -77,7 +83,10 @@ export const controlUiCodeSplitting = {
         normalizeModuleId(id).includes("/ui/src/") ? "control-ui-core" : "control-ui-foundation",
       tags: ["$initial"] as ["$initial"],
       priority: 10,
-      maxSize: 400 * 1024,
+      // 512 KiB packs the grown core graph into fewer chunks; the previous
+      // 448 KiB boundary split one core chunk in two, costing ~1.9 KiB startup
+      // gzip (same tradeoff as the earlier 400->448 bump).
+      maxSize: 512 * 1024,
     },
   ],
 };

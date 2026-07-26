@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
 import { getCommandLaneSnapshot } from "../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { CommandLane } from "../../process/lanes.js";
@@ -15,23 +16,77 @@ import type {
   SystemAgentVerifiedInferenceDeps,
 } from "../../system-agent/verified-inference.js";
 import { createDeferred } from "../../test-utils/deferred.js";
+import type { WizardPrompter } from "../../wizard/prompts.js";
+import { ExecApprovalManager } from "../exec-approval-manager.js";
 import {
   systemAgentHandlers,
   runExclusiveSystemAgentSetupActivation,
   type SystemAgentChatSession,
 } from "./system-agent.js";
-import type { GatewayRequestContext } from "./types.js";
+import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const setupInferenceMocks = vi.hoisted(() => ({
   activateSetupInference: vi.fn(),
   detectSetupInference: vi.fn(),
   verifySetupInference: vi.fn(),
 }));
+const setupInferenceDetectionMocks = vi.hoisted(() => ({
+  detectSetupInferenceIsolated: vi.fn(),
+}));
+const providerAuthChoiceMocks = vi.hoisted(() => ({
+  applyAuthChoiceLoadedPluginProvider: vi.fn(),
+}));
+const setupSharedMocks = vi.hoisted(() => ({
+  readSetupConfigFileSnapshot: vi.fn(),
+  writeWizardConfigFile: vi.fn(),
+}));
+const transcriptStoreMocks = vi.hoisted(() => ({
+  appendTranscriptReset: vi.fn(),
+  appendTranscriptTurn: vi.fn(),
+  readTranscriptTail: vi.fn<
+    (limit: number) => Array<{ role: "user" | "assistant"; text: string; at: number }>
+  >(() => []),
+}));
+const greetingMocks = vi.hoisted(() => ({
+  acknowledgeSystemAgentGreetingDelivery: vi.fn(),
+  loadSystemAgentGreetingFacts: vi.fn(),
+  resolveSystemAgentGreeting: vi.fn(),
+}));
+const onboardingWelcomeMocks = vi.hoisted(() => ({
+  buildOnboardingWelcome: vi.fn(),
+}));
 
 vi.mock("../../system-agent/setup-inference.js", () => ({
   activateSetupInference: setupInferenceMocks.activateSetupInference,
   detectSetupInference: setupInferenceMocks.detectSetupInference,
   verifySetupInference: setupInferenceMocks.verifySetupInference,
+}));
+vi.mock("../../system-agent/setup-inference-detection.js", () => ({
+  detectSetupInferenceIsolated: setupInferenceDetectionMocks.detectSetupInferenceIsolated,
+}));
+vi.mock("../../plugins/provider-auth-choice.js", () => ({
+  applyAuthChoiceLoadedPluginProvider: providerAuthChoiceMocks.applyAuthChoiceLoadedPluginProvider,
+}));
+vi.mock("../../wizard/setup.shared.js", () => ({
+  readSetupConfigFileSnapshot: setupSharedMocks.readSetupConfigFileSnapshot,
+  writeWizardConfigFile: setupSharedMocks.writeWizardConfigFile,
+}));
+vi.mock("../../system-agent/transcript-store.js", () => ({
+  appendTranscriptReset: transcriptStoreMocks.appendTranscriptReset,
+  appendTranscriptTurn: transcriptStoreMocks.appendTranscriptTurn,
+  readTranscriptTail: transcriptStoreMocks.readTranscriptTail,
+}));
+vi.mock("../../system-agent/greeting.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../system-agent/greeting.js")>();
+  return {
+    ...actual,
+    acknowledgeSystemAgentGreetingDelivery: greetingMocks.acknowledgeSystemAgentGreetingDelivery,
+    loadSystemAgentGreetingFacts: greetingMocks.loadSystemAgentGreetingFacts,
+    resolveSystemAgentGreeting: greetingMocks.resolveSystemAgentGreeting,
+  };
+});
+vi.mock("../../system-agent/onboarding-welcome.js", () => ({
+  buildOnboardingWelcome: onboardingWelcomeMocks.buildOnboardingWelcome,
 }));
 
 type RespondCall = {
@@ -51,6 +106,11 @@ function makeRespond() {
 function makeContext(sessions: Map<string, SystemAgentChatSession>): GatewayRequestContext {
   return { systemAgentSessions: sessions } as unknown as GatewayRequestContext;
 }
+
+const defaultClient = {
+  connId: "conn-test",
+  connect: { device: { id: "device-test" } },
+} as GatewayClient;
 
 const verifiedConfig: OpenClawConfig = {
   agents: { defaults: { model: "openai/gpt-5.5@openai:verified" } },
@@ -122,6 +182,7 @@ function seededSession(overrides?: Partial<SystemAgentChatSession>): SystemAgent
     engine: makeVerifiedEngine(),
     welcome: "welcome text",
     lastUsedAt: 1,
+    ownerKey: "device:device-test",
     ...overrides,
   };
 }
@@ -136,13 +197,48 @@ beforeEach(async () => {
     latencyMs: 10,
     binding: verifiedInference,
   });
+  setupSharedMocks.readSetupConfigFileSnapshot.mockResolvedValue({
+    exists: true,
+    valid: true,
+    path: "/tmp/openclaw.json",
+    hash: "prepare-base-hash",
+    sourceConfig: verifiedConfig,
+    config: verifiedConfig,
+    issues: [],
+  });
+  setupSharedMocks.writeWizardConfigFile.mockImplementation(async (config) => config);
+  transcriptStoreMocks.appendTranscriptTurn.mockReset();
+  transcriptStoreMocks.appendTranscriptReset.mockReset();
+  transcriptStoreMocks.readTranscriptTail.mockReset().mockReturnValue([]);
+  greetingMocks.acknowledgeSystemAgentGreetingDelivery.mockReset();
+  greetingMocks.loadSystemAgentGreetingFacts.mockReset().mockReturnValue({
+    updateAvailable: null,
+    channelHealth: { available: true, degraded: [] },
+    recentExternalEdit: false,
+    auditSequence: 0,
+  });
+  greetingMocks.resolveSystemAgentGreeting.mockReset().mockResolvedValue({
+    text: "I'm OpenClaw. All systems nominal.",
+    source: "model",
+  });
+  onboardingWelcomeMocks.buildOnboardingWelcome.mockReset().mockResolvedValue({
+    text: "Inference is ready. Let's finish setup.",
+  });
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
   setupInferenceMocks.activateSetupInference.mockReset();
   setupInferenceMocks.detectSetupInference.mockReset();
+  setupInferenceDetectionMocks.detectSetupInferenceIsolated.mockReset();
   setupInferenceMocks.verifySetupInference.mockReset();
+  providerAuthChoiceMocks.applyAuthChoiceLoadedPluginProvider.mockReset();
+  setupSharedMocks.readSetupConfigFileSnapshot.mockReset();
+  setupSharedMocks.writeWizardConfigFile.mockReset();
+  greetingMocks.loadSystemAgentGreetingFacts.mockReset();
+  greetingMocks.resolveSystemAgentGreeting.mockReset();
+  greetingMocks.acknowledgeSystemAgentGreetingDelivery.mockReset();
+  onboardingWelcomeMocks.buildOnboardingWelcome.mockReset();
   verifiedInference = undefined;
   verifiedInferenceDeps = undefined;
   resetCommandQueueStateForTest();
@@ -151,6 +247,7 @@ afterEach(() => {
 async function callChat(
   context: GatewayRequestContext,
   params: Record<string, unknown>,
+  client: GatewayClient | null = defaultClient,
 ): Promise<RespondCall> {
   const { calls, respond } = makeRespond();
   await expectDefined(
@@ -160,6 +257,7 @@ async function callChat(
     params,
     respond,
     context,
+    client,
   } as never);
   const call = calls[0];
   if (!call) {
@@ -295,6 +393,72 @@ describe("openclaw.setup.auth.start", () => {
   });
 });
 
+describe("openclaw.setup.prepare.start", () => {
+  it("runs the selected provider method in a shared wizard session and commits its config", async () => {
+    const preparedConfig: OpenClawConfig = {
+      ...verifiedConfig,
+      models: { providers: { ollama: { baseUrl: "http://127.0.0.1:11434", models: [] } } },
+    };
+    providerAuthChoiceMocks.applyAuthChoiceLoadedPluginProvider.mockImplementationOnce(
+      async (params) => {
+        await params.prompter.note("Model ready", "Ollama");
+        await params.beforePersistentEffect();
+        return { config: preparedConfig };
+      },
+    );
+    const wizardSessions = new Map();
+    const context = {
+      wizardSessions,
+      findRunningWizard: () => undefined,
+      purgeWizardSession: (id: string) => wizardSessions.delete(id),
+    } as unknown as GatewayRequestContext;
+    const { calls, respond } = makeRespond();
+
+    await expectDefined(
+      systemAgentHandlers["openclaw.setup.prepare.start"],
+      'systemAgentHandlers["openclaw.setup.prepare.start"] test invariant',
+    )({
+      params: {
+        sessionId: "prepare-session-1",
+        authChoice: "ollama",
+        workspace: "/tmp/models-workspace",
+      },
+      respond,
+      context,
+    } as never);
+
+    expect(calls[0]).toMatchObject({
+      ok: true,
+      payload: { sessionId: "prepare-session-1", done: false, status: "running" },
+    });
+    const session = wizardSessions.get("prepare-session-1");
+    const note = await session.next();
+    expect(note).toMatchObject({
+      done: false,
+      step: { type: "note", title: "Ollama", message: "Model ready" },
+    });
+    expect(providerAuthChoiceMocks.applyAuthChoiceLoadedPluginProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authChoice: "ollama",
+        config: verifiedConfig,
+        workspaceDir: "/tmp/models-workspace",
+        setDefaultModel: false,
+        preserveExistingDefaultModel: true,
+        signal: session.signal,
+        isRemote: true,
+      }),
+    );
+    await session.answer(note.step.id, null);
+    await expect(session.next()).resolves.toMatchObject({ done: true, status: "done" });
+    expect(setupSharedMocks.writeWizardConfigFile).toHaveBeenCalledWith(preparedConfig, {
+      allowConfigSizeDrop: false,
+      baseSnapshot: expect.objectContaining({ hash: "prepare-base-hash" }),
+      baseHash: "prepare-base-hash",
+      migrationBaseConfig: verifiedConfig,
+    });
+  });
+});
+
 describe("openclaw.chat", () => {
   it("refuses to create a session before inference is available", async () => {
     setupInferenceMocks.verifySetupInference.mockResolvedValueOnce({
@@ -313,6 +477,7 @@ describe("openclaw.chat", () => {
         message: "OpenClaw requires working inference: no configured model",
       },
     });
+    expect(call.error).not.toHaveProperty("details");
     expect(sessions.size).toBe(0);
   });
 
@@ -348,15 +513,18 @@ describe("openclaw.chat", () => {
     expect(secondCall.ok).toBe(true);
   });
 
-  it("tracks setup detection until its RPC response is sent", async () => {
+  it("keeps read-only setup detection outside the serialized system-agent lane", async () => {
     const started = createDeferred();
     const release = createDeferred();
-    setupInferenceMocks.detectSetupInference.mockImplementation(async () => {
+    setupInferenceDetectionMocks.detectSetupInferenceIsolated.mockImplementation(async () => {
       started.resolve();
       await release.promise;
       return {
         candidates: [],
+        unavailableCandidates: [],
         manualProviders: [],
+        authOptions: [],
+        recommendedInstalls: [],
         workspace: "/tmp/work",
         setupComplete: false,
       };
@@ -374,11 +542,11 @@ describe("openclaw.chat", () => {
     } as never);
 
     await started.promise;
-    expect(getCommandLaneSnapshot(CommandLane.SystemAgent).activeCount).toBe(1);
+    expect(getCommandLaneSnapshot(CommandLane.SystemAgent).activeCount).toBe(0);
     release.resolve();
     await pending;
 
-    expect(activeAtResponse).toEqual([1]);
+    expect(activeAtResponse).toEqual([0]);
     expect(getCommandLaneSnapshot(CommandLane.SystemAgent).activeCount).toBe(0);
   });
 
@@ -483,24 +651,178 @@ describe("openclaw.chat", () => {
     expect(call.ok).toBe(false);
   });
 
-  it("returns the stored welcome when no message is sent", async () => {
-    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession()]]);
-    const call = await callChat(makeContext(sessions), { sessionId: "s1" });
-    expect(call.ok).toBe(true);
-    expect(call.payload).toMatchObject({ sessionId: "s1", reply: "welcome text", action: "none" });
-  });
-
-  it("routes messages through the session engine", async () => {
-    const engine = makeVerifiedEngine();
-    const handle = vi
-      .spyOn(engine, "handle")
-      .mockResolvedValue({ text: "did the thing", action: "none" });
+  it("persists completed turns from the engine's sanitized history", async () => {
+    const engine = new SystemAgentChatEngine({
+      verifiedInference: requireVerifiedInferenceFixture(),
+      deps: requireVerifiedInferenceDeps(),
+      runAgentTurn: async () => ({ text: "Everything is healthy." }),
+      planWithAssistant: async () => null,
+    });
     const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
 
-    const call = await callChat(makeContext(sessions), { sessionId: "s1", message: "status" });
+    const call = await callChat(makeContext(sessions), {
+      sessionId: "s1",
+      message: "How is this machine doing?",
+    });
 
-    expect(handle).toHaveBeenCalledWith("status");
-    expect(call.payload).toMatchObject({ reply: "did the thing", action: "none" });
+    expect(call.payload).toMatchObject({ reply: "Everything is healthy." });
+    expect(transcriptStoreMocks.appendTranscriptTurn).toHaveBeenCalledTimes(2);
+    expect(transcriptStoreMocks.appendTranscriptTurn).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ role: "user", text: "How is this machine doing?" }),
+    );
+    expect(transcriptStoreMocks.appendTranscriptTurn).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ role: "assistant", text: "Everything is healthy." }),
+    );
+  });
+
+  it("seeds a new engine with the persisted tail before recording its welcome", async () => {
+    stubEngineOverview();
+    transcriptStoreMocks.readTranscriptTail.mockReturnValue([
+      { role: "user", text: "Earlier question", at: 1 },
+      { role: "assistant", text: "Earlier answer", at: 2 },
+    ]);
+    const seedHistory = vi.spyOn(SystemAgentChatEngine.prototype, "seedHistory");
+
+    const call = await callChat(makeContext(new Map()), { sessionId: "fresh" });
+
+    expect(call.ok).toBe(true);
+    expect(transcriptStoreMocks.readTranscriptTail).toHaveBeenCalledWith(30, {
+      afterLastReset: true,
+    });
+    expect(seedHistory).toHaveBeenCalledWith([
+      { role: "user", text: "Earlier question" },
+      { role: "assistant", text: "Earlier answer" },
+    ]);
+    expect(transcriptStoreMocks.appendTranscriptTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ role: "assistant", text: expect.any(String) }),
+    );
+  });
+
+  it("persists only the mask marker for a sensitive hosted-wizard answer", async () => {
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      verifiedInference: requireVerifiedInferenceFixture(),
+      deps: requireVerifiedInferenceDeps(),
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await prompter.text({ message: "Bot token", sensitive: true });
+      },
+    });
+    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
+    const context = makeContext(sessions);
+
+    const prompt = await callChat(context, { sessionId: "s1", message: "connect telegram" });
+    expect(prompt.payload).toMatchObject({ sensitive: true, wizardInputPending: true });
+    transcriptStoreMocks.appendTranscriptTurn.mockClear();
+
+    await callChat(context, { sessionId: "s1", message: "raw-secret-value" });
+
+    const persisted = transcriptStoreMocks.appendTranscriptTurn.mock.calls.map(([turn]) => turn);
+    expect(persisted).toContainEqual(
+      expect.objectContaining({ role: "user", text: "<redacted secret>" }),
+    );
+    expect(JSON.stringify(persisted)).not.toContain("raw-secret-value");
+  });
+
+  it("returns history oldest-first with default and explicit bounded limits", async () => {
+    const turns = [
+      { role: "user" as const, text: "one", at: 1 },
+      { role: "assistant" as const, text: "two", at: 2 },
+    ];
+    transcriptStoreMocks.readTranscriptTail.mockImplementation((limit: number) =>
+      turns.slice(-limit),
+    );
+    const invoke = async (params: Record<string, unknown>) => {
+      const { calls, respond } = makeRespond();
+      await expectDefined(
+        systemAgentHandlers["openclaw.chat.history"],
+        'systemAgentHandlers["openclaw.chat.history"] test invariant',
+      )({ params, respond } as never);
+      return calls[0];
+    };
+
+    expect(await invoke({})).toEqual({ ok: true, payload: { turns }, error: undefined });
+    expect(transcriptStoreMocks.readTranscriptTail).toHaveBeenLastCalledWith(100);
+    expect(await invoke({ limit: 1 })).toEqual({
+      ok: true,
+      payload: { turns: [turns[1]] },
+      error: undefined,
+    });
+    expect((await invoke({ limit: 501 }))?.ok).toBe(false);
+  });
+
+  it("surfaces delegated proposals without letting the agent arm them", async () => {
+    const operation = { kind: "config-set" as const, path: "gateway.port", value: "19001" };
+    const proposalHash = "a".repeat(64);
+    const engine = makeVerifiedEngine();
+    vi.spyOn(engine, "handle").mockResolvedValue({ text: "Approval pending.", action: "none" });
+    vi.spyOn(engine, "getPendingOperatorProposal").mockReturnValue({
+      operation,
+      hash: proposalHash,
+    });
+    const resolveOperatorApproval = vi
+      .spyOn(engine, "resolveOperatorApproval")
+      .mockResolvedValue(null);
+    const sessions = new Map<string, SystemAgentChatSession>([
+      [
+        "delegate-1",
+        seededSession({
+          engine,
+          ownerKey: JSON.stringify(["main", "agent:main:main"]),
+        }),
+      ],
+    ]);
+    const manager = new ExecApprovalManager<SystemAgentApprovalRequestPayload>({
+      approvalKind: "system-agent",
+      resolveAllowedDecisions: (request) => request.allowedDecisions,
+    });
+    const broadcast = vi.fn();
+    const context = {
+      ...makeContext(sessions),
+      systemAgentApprovalManager: manager,
+      broadcast,
+      broadcastToConnIds: vi.fn(),
+      hasExecApprovalClients: () => true,
+    } as unknown as GatewayRequestContext;
+
+    const first = await callChat(context, {
+      sessionId: "delegate-1",
+      message: "Change port.",
+      delegation: { agentId: "main", sessionKey: "agent:main:main" },
+    });
+    const proposalId = (first.payload as { proposalId?: string }).proposalId;
+
+    expect(first.payload).toMatchObject({
+      reply: "Approval pending.",
+      needsApproval: true,
+      proposalId: expect.stringMatching(/^system-agent:/),
+    });
+    expect(proposalId).toBeTruthy();
+    expect(manager.getSnapshot(proposalId!)).toMatchObject({
+      request: { proposalHash, agentId: "main", sessionKey: "agent:main:main" },
+    });
+    expect(manager.getSnapshot(proposalId!)?.decision).toBeUndefined();
+    expect(broadcast).toHaveBeenCalledWith(
+      "openclaw.approval.requested",
+      expect.objectContaining({ id: proposalId }),
+      { dropIfSlow: true },
+    );
+    expect(resolveOperatorApproval).not.toHaveBeenCalled();
+
+    await callChat(context, {
+      sessionId: "delegate-1",
+      message: "yes",
+      delegation: { agentId: "main", sessionKey: "agent:main:main" },
+    });
+    expect(resolveOperatorApproval).not.toHaveBeenCalled();
+
+    manager.resolve(proposalId!, "allow-once", "operator-ui");
+    await vi.waitFor(() => {
+      expect(resolveOperatorApproval).toHaveBeenCalledWith("allow-once", proposalHash);
+    });
   });
 
   it("drops a failed session and requires fresh inference on retry", async () => {
@@ -520,6 +842,7 @@ describe("openclaw.chat", () => {
       error: {
         code: "UNAVAILABLE",
         message: expect.stringContaining("working inference"),
+        details: { code: "system_agent_session_invalidated" },
       },
     });
     expect(dispose).toHaveBeenCalledOnce();
@@ -572,6 +895,7 @@ describe("openclaw.chat", () => {
       'systemAgentHandlers["openclaw.chat"] test invariant',
     )({
       params: { sessionId: "s1", message: "yes" },
+      client: defaultClient,
       context: makeContext(sessions),
       respond: () => {
         activeAtResponse.push(getCommandLaneSnapshot(CommandLane.SystemAgent).activeCount);
@@ -582,6 +906,7 @@ describe("openclaw.chat", () => {
       'systemAgentHandlers["openclaw.chat"] test invariant',
     )({
       params: { sessionId: "s2", message: "yes" },
+      client: defaultClient,
       context: makeContext(sessions),
       respond: () => {
         activeAtResponse.push(getCommandLaneSnapshot(CommandLane.SystemAgent).activeCount);
@@ -638,43 +963,13 @@ describe("openclaw.chat", () => {
     expect(sessions.has("new-2")).toBe(true);
   });
 
-  it("forwards sensitive-input metadata to clients", async () => {
-    const engine = makeVerifiedEngine();
-    vi.spyOn(engine, "handle").mockResolvedValue({
-      text: "Enter the bot token",
-      action: "none",
-      sensitive: true,
-    });
-    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
-
-    const call = await callChat(makeContext(sessions), { sessionId: "s1", message: "yes" });
-
-    expect(call.payload).toMatchObject({ sensitive: true });
-  });
-
-  it("maps the TUI handoff to an open-agent action for clients", async () => {
-    const engine = makeVerifiedEngine();
-    vi.spyOn(engine, "handle").mockResolvedValue({
-      text: "",
-      action: "open-tui",
-      handoff: { kind: "open-tui" },
-    });
-    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
-
-    const call = await callChat(makeContext(sessions), {
-      sessionId: "s1",
-      message: "talk to agent",
-    });
-
-    expect(call.payload).toMatchObject({ action: "open-agent" });
-    expect((call.payload as { reply: string }).reply).toContain("continue with your agent");
-  });
-
   it("resets a session on request", async () => {
     stubEngineOverview();
+    transcriptStoreMocks.readTranscriptTail.mockReturnValue([]);
     const engine = makeVerifiedEngine();
     const handle = vi.spyOn(engine, "handle");
     const dispose = vi.spyOn(engine, "dispose").mockResolvedValue();
+    const seedHistory = vi.spyOn(SystemAgentChatEngine.prototype, "seedHistory");
     const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
     // Reset drops the stored session; loading a fresh welcome would hit real
     // discovery, so stub the overview loader on the replacement engine path by
@@ -686,6 +981,7 @@ describe("openclaw.chat", () => {
       'systemAgentHandlers["openclaw.chat"] test invariant',
     )({
       params: { sessionId: "s1", reset: true },
+      client: defaultClient,
       respond,
       context,
     } as never);
@@ -694,5 +990,21 @@ describe("openclaw.chat", () => {
     expect(dispose).toHaveBeenCalledOnce();
     expect(sessions.get("s1")?.engine).not.toBe(engine);
     expect(calls[0]?.ok).toBe(true);
+    expect(seedHistory).not.toHaveBeenCalled();
+    expect(transcriptStoreMocks.appendTranscriptReset).toHaveBeenCalledOnce();
+
+    transcriptStoreMocks.readTranscriptTail.mockReturnValue([
+      { role: "user", text: "After reset", at: 3 },
+      { role: "assistant", text: "Fresh answer", at: 4 },
+    ]);
+    const fresh = await callChat(context, { sessionId: "fresh-after-reset" });
+    expect(fresh.ok).toBe(true);
+    expect(seedHistory).toHaveBeenCalledWith([
+      { role: "user", text: "After reset" },
+      { role: "assistant", text: "Fresh answer" },
+    ]);
+    expect(transcriptStoreMocks.readTranscriptTail).toHaveBeenLastCalledWith(30, {
+      afterLastReset: true,
+    });
   });
 });

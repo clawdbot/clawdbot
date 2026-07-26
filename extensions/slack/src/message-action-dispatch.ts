@@ -5,7 +5,7 @@ import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-actions";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import {
-  normalizeInteractiveReply,
+  normalizeLegacyInteractiveReply,
   normalizeMessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { readPositiveIntegerParam, readStringParam } from "openclaw/plugin-sdk/param-readers";
@@ -88,7 +88,7 @@ export async function handleSlackMessageAction(params: {
     });
     const mediaUrl = readStringParam(actionParams, "media", { trim: false });
     const presentation = normalizeMessagePresentation(actionParams.presentation);
-    const interactive = normalizeInteractiveReply(actionParams.interactive);
+    const interactive = normalizeLegacyInteractiveReply(actionParams.interactive);
     const hasStructuredContent = Boolean(presentation || interactive?.blocks.length);
     const resolution = resolveSlackReplyBlockResolution(
       {

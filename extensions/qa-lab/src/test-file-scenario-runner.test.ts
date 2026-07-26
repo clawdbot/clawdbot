@@ -4,7 +4,7 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { validateQaEvidenceSummaryJson } from "./evidence-summary.js";
-import { readQaScenarioById, type QaSeedScenarioWithSource } from "./scenario-catalog.js";
+import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 import {
   qaTestFileScenarioRunnerTesting,
@@ -35,7 +35,7 @@ async function readPid(filePath: string, timeoutMs: number) {
     } catch {
       // retry until the process writes its pid
     }
-    await sleep(25);
+    await sleep(5);
   }
   throw new Error(`timeout waiting for pid in ${filePath}`);
 }
@@ -46,7 +46,7 @@ async function waitForDead(pid: number, timeoutMs: number) {
     if (!isProcessRunning(pid)) {
       return;
     }
-    await sleep(25);
+    await sleep(5);
   }
   throw new Error(`process ${pid} still alive`);
 }
@@ -60,10 +60,7 @@ function makeTestFileScenario(
     id: `scenario-${executionKind}`,
     title: `${executionKind} scenario`,
     surface: executionKind === "playwright" ? "control-ui" : "qa-lab",
-    category:
-      executionKind === "playwright"
-        ? "browser-control-ui-and-webchat.browser-ui"
-        : "qa-lab.coverage",
+    category: executionKind === "playwright" ? "control-ui.browser-ui" : "qa-lab.coverage",
     coverage: {
       primary: [executionKind === "playwright" ? "ui.control" : "qa.coverage"],
       secondary: [executionKind === "playwright" ? "ui.streaming" : "qa.reporting"],
@@ -340,6 +337,51 @@ describe("qa test file scenario runner", () => {
     });
   });
 
+  it.each([
+    { failFast: true, expectedScenarioIds: ["first-native-scenario"] },
+    {
+      failFast: false,
+      expectedScenarioIds: ["first-native-scenario", "later-native-scenario"],
+    },
+    {
+      failFast: undefined,
+      expectedScenarioIds: ["first-native-scenario", "later-native-scenario"],
+    },
+  ])(
+    "honors native scenario fail-fast mode ($failFast)",
+    async ({ failFast, expectedScenarioIds }) => {
+      const repoRoot = await makeTempRepo("qa-vitest-fail-fast-");
+      const runCommand = vi.fn(async () => ({
+        exitCode: 1,
+        stdout: "",
+        stderr: "native scenario failed\n",
+      }));
+      const firstScenario = {
+        ...makeTestFileScenario("vitest", "extensions/qa-lab/src/coverage-report.test.ts"),
+        id: "first-native-scenario",
+      };
+      const laterScenario = {
+        ...makeTestFileScenario("vitest", "extensions/qa-lab/src/cli.test.ts"),
+        id: "later-native-scenario",
+      };
+
+      const result = await runQaTestFileScenarios({
+        repoRoot,
+        outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "native-fail-fast"),
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        failFast,
+        scenarios: [firstScenario, laterScenario],
+        runCommand,
+      });
+
+      expect(runCommand).toHaveBeenCalledTimes(expectedScenarioIds.length);
+      expect(result.results.map((scenario) => scenario.scenario.id)).toEqual(expectedScenarioIds);
+      expect(result.results.every((scenario) => scenario.status === "fail")).toBe(true);
+      expect(result.evidence.entries.map((entry) => entry.test.id)).toEqual(expectedScenarioIds);
+    },
+  );
+
   it("runs script scenarios and imports producer QA evidence artifacts", async () => {
     const repoRoot = await makeTempRepo("qa-script-scenario-");
     const commands: QaScenarioCommandExecution[] = [];
@@ -448,8 +490,12 @@ describe("qa test file scenario runner", () => {
       },
       coverage: [
         {
-          id: "ui.control",
+          id: "qa.coverage",
           role: "primary",
+        },
+        {
+          id: "qa.reporting",
+          role: "secondary",
         },
       ],
       execution: {
@@ -742,6 +788,10 @@ describe("qa test file scenario runner", () => {
         kind: "script-producer-check",
         id: "script-producer.web-ui.smoke",
       },
+      coverage: [
+        { id: "qa.coverage", role: "primary" },
+        { id: "qa.reporting", role: "secondary" },
+      ],
       result: {
         status: "fail",
         failure: {
@@ -1081,72 +1131,58 @@ describe("qa test file scenario runner", () => {
     expect(artifactPath?.includes("..")).toBe(false);
   });
 
-  describe("UX Matrix scenario composition", () => {
-    let outputDir: string;
-    let result: Awaited<ReturnType<typeof runQaTestFileScenarios>>;
-    let evidence: ReturnType<typeof validateQaEvidenceSummaryJson>;
+  it("imports the standalone UX Matrix producer as coverage-free infrastructure", async () => {
+    const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-ux-matrix-producer-"));
+    tempRoots.push(outputDir);
+    // The runner accepts scenario-shaped execution input, but this test fixture is not cataloged
+    // and deliberately carries no product taxonomy coverage.
+    const infrastructureFixture: QaSeedScenarioWithSource = {
+      id: "scenario-script",
+      title: "UX Matrix producer infrastructure fixture",
+      surface: "qa-lab",
+      objective: "Exercise the standalone UX Matrix evidence producer through the script runner.",
+      successCriteria: ["The runner imports the producer's structured evidence bundle."],
+      codeRefs: ["scripts/qa/ux-matrix-evidence-producer.ts"],
+      sourcePath: "test/scripts/qa-ux-matrix-evidence-producer.test.ts",
+      execution: {
+        kind: "script",
+        path: "scripts/qa/ux-matrix-evidence-producer.ts",
+        allowBlockedEvidence: true,
+        args: ["--artifact-base", "${outputDir}", "--skip-visual-proof"],
+      },
+    };
 
-    beforeAll(async () => {
-      outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-ux-matrix-script-"));
-      tempRoots.push(outputDir);
-      const scenario = readQaScenarioById("ux-matrix-evidence-dashboard");
-
-      expect(scenario.execution.kind).toBe("script");
-      result = await runQaTestFileScenarios({
-        repoRoot: process.cwd(),
-        outputDir,
-        providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.6-luna",
-        scenarios: [scenario],
-        env: {
-          OPENCLAW_QA_REF: "scenario-ref",
-        } as NodeJS.ProcessEnv,
-      });
-      evidence = validateQaEvidenceSummaryJson(
-        JSON.parse(await fs.readFile(result.evidencePath, "utf8")),
-      );
+    const result = await runQaTestFileScenarios({
+      repoRoot: process.cwd(),
+      outputDir,
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      scenarios: [infrastructureFixture],
+      env: { OPENCLAW_QA_REF: "infrastructure-fixture" } as NodeJS.ProcessEnv,
     });
+    const evidence = validateQaEvidenceSummaryJson(
+      JSON.parse(await fs.readFile(result.evidencePath, "utf8")),
+    );
 
-    it("runs the checked-in producer and imports its evidence bundle", () => {
-      expect(result.executionKind).toBe("script");
-      expect(result.results[0]?.producerEvidence?.entries).toHaveLength(3);
-      expect(evidence.entries.map((entry) => entry.test.id)).toEqual([
-        "ux-matrix.qa-lab.producer-artifact-fixture",
-        "ux-matrix.control-ui.screenshot-artifact",
-        "ux-matrix.cli.entrypoint-help",
-      ]);
-      expect(
-        evidence.entries.flatMap((entry) => entry.coverage.map((coverage) => coverage.id)),
-      ).toEqual(
-        expect.arrayContaining([
-          "qa.artifact-safety",
-          "tools.evidence",
-          "workspace.artifacts",
-          "ui.control",
-          "gateway.control-ui-hosting",
-          "cli.entrypoint",
-          "cli.status-snapshots",
-        ]),
-      );
-      const artifactKinds = evidence.entries.flatMap(
+    expect(result.executionKind).toBe("script");
+    expect(result.results[0]).toMatchObject({ status: "pass" });
+    expect(result.results[0]?.producerEvidence?.entries).toHaveLength(3);
+    expect(evidence.entries.map((entry) => entry.test.id)).toEqual([
+      "ux-matrix.qa-lab.producer-artifact-fixture",
+      "ux-matrix.control-ui.screenshot-artifact",
+      "ux-matrix.cli.entrypoint-help",
+    ]);
+    expect(evidence.entries.every((entry) => entry.coverage.length === 0)).toBe(true);
+    expect(
+      evidence.entries.flatMap(
         (entry) => entry.execution?.artifacts.map((artifact) => artifact.kind) ?? [],
-      );
-      expect(artifactKinds).toEqual(expect.arrayContaining(["html", "log"]));
-      const fixtureEntry = evidence.entries.find(
-        (entry) => entry.test.id === "ux-matrix.qa-lab.producer-artifact-fixture",
-      );
-      expect(fixtureEntry?.execution?.artifacts.map((artifact) => artifact.path)).toContain(
-        path.join(
-          outputDir,
-          "ux-matrix-evidence-dashboard",
-          "surfaces",
-          "qa-lab",
-          "stages",
-          "producer-artifact-fixture",
-          "producer-artifact-fixture.html",
-        ),
-      );
-    });
+      ),
+    ).toEqual(expect.arrayContaining(["html", "log"]));
+    expect(
+      evidence.entries
+        .flatMap((entry) => entry.execution?.artifacts.map((artifact) => artifact.path) ?? [])
+        .some((artifactPath) => artifactPath.includes(path.join(outputDir, "scenario-script"))),
+    ).toBe(true);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

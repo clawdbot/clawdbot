@@ -23,13 +23,8 @@ function createSlackAccount(config: NonNullable<OpenClawConfig["channels"]>["sla
   } as ResolvedSlackAccount;
 }
 
-function createSlashCommandSlackConfig(
-  options: { useAccessGroups?: boolean } = {},
-): OpenClawConfig {
+function createSlashCommandSlackConfig(): OpenClawConfig {
   return {
-    ...(options.useAccessGroups === undefined
-      ? {}
-      : { commands: { useAccessGroups: options.useAccessGroups } }),
     channels: {
       slack: {
         enabled: true,
@@ -59,16 +54,5 @@ describe("Slack security audit findings", () => {
       ({ checkId }) => checkId === "channels.slack.commands.slash.no_allowlists",
     );
     expect(slashAllowlistFinding?.severity).toBe("warn");
-  });
-
-  it("flags slash commands when access-group enforcement is disabled", async () => {
-    const findings = await collectSlackFindingsForConfig(
-      createSlashCommandSlackConfig({ useAccessGroups: false }),
-    );
-
-    const accessGroupFinding = findings.find(
-      ({ checkId }) => checkId === "channels.slack.commands.slash.useAccessGroups_off",
-    );
-    expect(accessGroupFinding?.severity).toBe("critical");
   });
 });

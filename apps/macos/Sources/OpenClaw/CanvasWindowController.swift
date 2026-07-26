@@ -193,9 +193,9 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
             return
         }
 
-        self.showWindow(nil)
-        self.window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        // The window is built in init, so skip showWindow(_:); it would make the
+        // window key and steal focus from the user's current window.
+        self.window?.orderFrontRegardless()
         if let path {
             self.load(target: path, trustedA2UIActions: trustedA2UIActions)
         }

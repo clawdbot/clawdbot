@@ -1,6 +1,7 @@
 // Coverage for sanitizing replay messages at the LLM boundary.
 import { describe, expect, it } from "vitest";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
+import { MEDIA_ONLY_USER_TEXT } from "../../../sessions/user-turn-media.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import {
   installRuntimeContextMessageForPrompt,
@@ -111,7 +112,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
       [
         "Conversation info (untrusted metadata):",
         "```json",
-        '{\n  "sender": {\n    "id": "alice-id",\n    "name": "Alice",\n    "username": "alice"\n  }\n}',
+        '{"sender":{"id":"alice-id","name":"Alice","username":"alice"}}',
         "```",
         "",
         "The launch is Friday",
@@ -121,7 +122,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
       [
         "Conversation info (untrusted metadata):",
         "```json",
-        '{\n  "sender": {\n    "id": "bob-id",\n    "name": "Bob"\n  }\n}',
+        '{"sender":{"id":"bob-id","name":"Bob"}}',
         "```",
         "",
         "Who said the launch is Friday?",
@@ -233,6 +234,129 @@ describe("normalizeMessagesForLlmBoundary", () => {
       timezone: "UTC",
     });
     expect(output[2]?.content).toBe(`${expectedCurrentPrefix}Current ask`);
+  });
+
+  it("injects media-only text before timestamping with legacy-identical provider bytes", () => {
+    const timestamp = 1717570800000;
+    const persisted = {
+      role: "user",
+      content: "",
+      timestamp,
+      MediaPath: "/tmp/input.png",
+      MediaPaths: ["/tmp/input.png"],
+      __openclaw: {
+        media: [{ path: "/tmp/input.png", contentType: "image/png" }],
+      },
+    };
+    const { __openclaw: _canonicalMedia, ...legacyFields } = persisted;
+    const legacy = { ...legacyFields, content: MEDIA_ONLY_USER_TEXT };
+    const [normalizedPersisted] = normalizeMessagesForLlmBoundary(
+      [persisted] as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+      { timezone: "UTC" },
+    ) as unknown as Array<{ content?: unknown }>;
+    const [normalizedLegacy] = normalizeMessagesForLlmBoundary(
+      [legacy] as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+      { timezone: "UTC" },
+    ) as unknown as Array<{ content?: unknown }>;
+    const expectedText = `${buildTimestampPrefix(new Date(timestamp), { timezone: "UTC" })}${MEDIA_ONLY_USER_TEXT}`;
+
+    const { __openclaw: _persistedFacts, ...persistedProviderFields } =
+      normalizedPersisted as Record<string, unknown>;
+    expect(persistedProviderFields).toEqual(normalizedLegacy);
+    expect(normalizedPersisted?.content).toBe(expectedText);
+
+    const image = { type: "image", data: "aGVsbG8=", mimeType: "image/png" };
+    const [normalizedArray] = normalizeMessagesForLlmBoundary(
+      [
+        {
+          ...persisted,
+          content: [{ type: "text", text: "   " }, image],
+        },
+      ] as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+      { timezone: "UTC" },
+    ) as unknown as Array<{ content?: unknown }>;
+    expect(normalizedArray?.content).toEqual([{ type: "text", text: expectedText }, image]);
+  });
+
+  it("synthesizes marked late-media path lines with reference-identical string bytes", () => {
+    const timestamp = 1717570800000;
+    const mediaText = "[media attached: /tmp/a.png]\n[media attached: media://inbound/b.jpg]";
+    const marked = {
+      role: "user",
+      content: "",
+      timestamp,
+      __openclaw: {
+        lateMedia: true,
+        media: [{ path: "/tmp/a.png" }, { url: "media://inbound/b.jpg" }],
+      },
+    };
+    const legacy = { ...marked, content: mediaText, __openclaw: undefined };
+    const [normalizedMarked] = normalizeMessagesForLlmBoundary(
+      [marked] as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+      { timezone: "UTC" },
+    ) as unknown as Array<{ content?: unknown }>;
+    const [normalizedLegacy] = normalizeMessagesForLlmBoundary(
+      [legacy] as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+      { timezone: "UTC" },
+    ) as unknown as Array<{ content?: unknown }>;
+
+    expect(normalizedMarked?.content).toBe(normalizedLegacy?.content);
+    expect(normalizedMarked?.content).toBe(
+      `${buildTimestampPrefix(new Date(timestamp), { timezone: "UTC" })}${mediaText}`,
+    );
+
+    const [normalizedUrlOnly] = normalizeMessagesForLlmBoundary(
+      [
+        {
+          role: "user",
+          content: "",
+          timestamp,
+          __openclaw: {
+            lateMedia: true,
+            media: [{ url: "https://example.test/late.png" }],
+          },
+        },
+      ] as unknown as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+      { timezone: "UTC" },
+    ) as unknown as Array<{ content?: unknown }>;
+    expect(normalizedUrlOnly?.content).toBe(
+      `${buildTimestampPrefix(new Date(timestamp), { timezone: "UTC" })}[media attached: https://example.test/late.png]`,
+    );
+  });
+
+  it("synthesizes marked late-media path lines without dropping replayed image blocks", () => {
+    const timestamp = 1717570800000;
+    const mediaText = "[media attached: /tmp/input.png]";
+    const image = { type: "image", data: "aGVsbG8=", mimeType: "image/png" };
+    const fields = { role: "user", timestamp };
+    const [normalizedMarked] = normalizeMessagesForLlmBoundary(
+      [
+        {
+          ...fields,
+          content: [image],
+          __openclaw: { lateMedia: true, media: [{ path: "/tmp/input.png" }] },
+        },
+      ] as unknown as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+      { timezone: "UTC" },
+    ) as unknown as Array<{ content?: unknown }>;
+    const [normalizedLegacy] = normalizeMessagesForLlmBoundary(
+      [
+        {
+          ...fields,
+          content: [{ type: "text", text: mediaText }, image],
+        },
+      ] as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+      { timezone: "UTC" },
+    ) as unknown as Array<{ content?: unknown }>;
+
+    expect(normalizedMarked?.content).toEqual(normalizedLegacy?.content);
+    expect(normalizedMarked?.content).toEqual([
+      {
+        type: "text",
+        text: `${buildTimestampPrefix(new Date(timestamp), { timezone: "UTC" })}${mediaText}`,
+      },
+      image,
+    ]);
   });
 
   it("can leave user message bytes bare for cache-sensitive local providers", () => {
@@ -521,8 +645,8 @@ describe("normalizeMessagesForLlmBoundary", () => {
     const content = output[0]?.content ?? "";
 
     expect(content.match(/Conversation info \(untrusted metadata\):/g)).toHaveLength(1);
-    expect(content).toContain('"channel": "discord"');
-    expect(content).toContain('"name": "Alice"');
+    expect(content).toContain('"channel":"discord"');
+    expect(content).toContain('"name":"Alice"');
     expect(content).toContain("Current ask");
   });
 

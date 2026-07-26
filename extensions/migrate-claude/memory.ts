@@ -8,13 +8,29 @@ import {
   canonicalPathFromExistingAncestor,
   isPathInside,
 } from "openclaw/plugin-sdk/security-runtime";
-import { exists } from "./helpers.js";
 import {
   CLAUDE_AUTO_MEMORY_MAX_FILES,
   CLAUDE_AUTO_MEMORY_MAX_SCAN_ENTRIES,
   type ClaudeSource,
 } from "./source.js";
 import type { PlannedTargets } from "./targets.js";
+
+const MIGRATION_REASON_TARGET_NOT_REGULAR = "target is not a regular file";
+
+async function lstatIfExists(filePath: string) {
+  try {
+    return await fs.lstat(filePath);
+  } catch (error) {
+    const code =
+      error && typeof error === "object" && "code" in error
+        ? String((error as { code?: unknown }).code)
+        : undefined;
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return undefined;
+    }
+    throw error;
+  }
+}
 
 async function addMemoryItem(params: {
   items: MigrationItem[];
@@ -28,8 +44,12 @@ async function addMemoryItem(params: {
   if (!params.source) {
     return;
   }
-  const targetExists = await exists(params.target);
+  const targetStat = await lstatIfExists(params.target);
+  const targetExists = targetStat !== undefined;
+  const targetNotRegular = targetExists && !targetStat.isFile();
   const action = params.copyWhenMissing && !targetExists ? "copy" : "append";
+  const targetConflict =
+    targetNotRegular || (action === "copy" && targetExists && !params.overwrite);
   params.items.push(
     createMigrationItem({
       id: params.id,
@@ -39,9 +59,10 @@ async function addMemoryItem(params: {
       action,
       source: params.source,
       target: params.target,
-      status: action === "copy" && targetExists && !params.overwrite ? "conflict" : "planned",
-      reason:
-        action === "copy" && targetExists && !params.overwrite
+      status: targetConflict ? "conflict" : "planned",
+      reason: targetNotRegular
+        ? MIGRATION_REASON_TARGET_NOT_REGULAR
+        : targetConflict
           ? MIGRATION_REASON_TARGET_EXISTS
           : undefined,
       details: { sourceLabel: params.sourceLabel },
@@ -174,8 +195,13 @@ async function buildAutoMemoryItems(params: {
     for (const relativePath of files) {
       const source = path.join(collection.path, relativePath);
       const target = path.join(targetRoot, relativePath);
-      await assertSafeMemoryDestination(destinationBoundary, target);
-      const targetExists = await exists(target);
+      const targetStat = await lstatIfExists(target);
+      const targetExists = targetStat !== undefined;
+      const targetNotRegular = targetExists && !targetStat.isFile();
+      if (!targetNotRegular) {
+        await assertSafeMemoryDestination(destinationBoundary, target);
+      }
+      const targetConflict = targetNotRegular || (targetExists && !params.overwrite);
       items.push(
         createMigrationItem({
           id: `memory:claude-auto:${collection.id}:${relativePath.replaceAll(path.sep, "/")}`,
@@ -183,8 +209,12 @@ async function buildAutoMemoryItems(params: {
           action: "copy",
           source,
           target,
-          status: targetExists && !params.overwrite ? "conflict" : "planned",
-          reason: targetExists && !params.overwrite ? MIGRATION_REASON_TARGET_EXISTS : undefined,
+          status: targetConflict ? "conflict" : "planned",
+          reason: targetNotRegular
+            ? MIGRATION_REASON_TARGET_NOT_REGULAR
+            : targetConflict
+              ? MIGRATION_REASON_TARGET_EXISTS
+              : undefined,
           message: "Copy Claude Code auto-memory Markdown into the OpenClaw memory index.",
           details: {
             sourceType: "claude-auto-memory",

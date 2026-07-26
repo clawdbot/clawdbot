@@ -13,7 +13,7 @@ import {
 import type { Client } from "./client.js";
 import { Guild, Message, User } from "./structures.js";
 
-type DiscordMessageDispatchData = {
+export type DiscordMessageDispatchData = {
   id?: string;
   channel_id: string;
   channelId?: string;
@@ -72,7 +72,7 @@ export abstract class GuildDeleteListener extends BaseListener {
 
 export abstract class MessageCreateListener extends BaseListener {
   readonly type = GatewayDispatchEvents.MessageCreate;
-  abstract override handle(data: DiscordMessageDispatchData, client: Client): Promise<void> | void;
+  abstract override handle(data: APIMessage, client: Client): Promise<void> | void;
 }
 
 export abstract class InteractionCreateListener extends BaseListener {

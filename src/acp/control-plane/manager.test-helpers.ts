@@ -5,7 +5,7 @@ import { resetAcpManagerTaskStateForTests } from "../../../test/helpers/acp-mana
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AcpSessionRuntimeOptions, SessionAcpMeta } from "../../config/sessions/types.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
-import { resetAcpActiveTurnsForTests } from "./active-turns.js";
+import { resetAcpActiveTurnsForTests } from "./active-turns.test-support.js";
 
 export type { AcpRuntime, OpenClawConfig, SessionAcpMeta };
 

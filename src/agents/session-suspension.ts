@@ -129,7 +129,7 @@ function resolveLaneResumeConcurrency(cfg: OpenClawConfig | undefined, laneId: s
       return resolveSubagentMaxConcurrent(cfg);
     case "cron":
     case "cron-nested":
-      return resolveCronMaxConcurrentRuns(cfg?.cron);
+      return resolveCronMaxConcurrentRuns();
     default:
       return DEFAULT_CUSTOM_LANE_RESUME_CONCURRENCY;
   }
@@ -413,27 +413,31 @@ async function suspendSessionQueued(params: SessionSuspensionParams, queuedGener
   releasePendingWrite();
 }
 
-export const testing = {
-  resetSessionSuspensionStateForTest: () => {
-    const state = getSessionSuspensionState();
-    for (const entry of state.laneResumeTimers.values()) {
-      clearTimeout(entry.timer);
-    }
-    state.laneResumeTimers.clear();
-    state.clearedLaneResumes.clear();
-    state.pendingSuspensionWrites.clear();
-    state.suspensionWriteChain = Promise.resolve();
-    state.cleanupGeneration = 0;
-    state.cleanupActive = false;
-  },
-  seedClearedLaneResumeForTest: (
-    laneId: string,
-    cleared: { resumeConcurrency: number; resumeAtMs: number },
-  ) => {
-    const state = getSessionSuspensionState();
-    state.cleanupActive = true;
-    state.clearedLaneResumes.set(laneId, cleared);
-  },
-  resolveLaneResumeConcurrency,
-  resolveSessionSuspensionReason,
-} as const;
+function resetSessionSuspensionStateForTest(): void {
+  const state = getSessionSuspensionState();
+  for (const entry of state.laneResumeTimers.values()) {
+    clearTimeout(entry.timer);
+  }
+  state.laneResumeTimers.clear();
+  state.clearedLaneResumes.clear();
+  state.pendingSuspensionWrites.clear();
+  state.suspensionWriteChain = Promise.resolve();
+  state.cleanupGeneration = 0;
+  state.cleanupActive = false;
+}
+
+function seedClearedLaneResumeForTest(
+  laneId: string,
+  cleared: { resumeConcurrency: number; resumeAtMs: number },
+): void {
+  const state = getSessionSuspensionState();
+  state.cleanupActive = true;
+  state.clearedLaneResumes.set(laneId, cleared);
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.sessionSuspensionTestApi")] = {
+    resetSessionSuspensionStateForTest,
+    seedClearedLaneResumeForTest,
+  };
+}

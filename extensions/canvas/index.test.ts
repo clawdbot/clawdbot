@@ -7,7 +7,6 @@ import type {
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import canvasPlugin from "./index.js";
-import { SHOW_WIDGET_REQUIRED_CLIENT_CAPS } from "./src/tool-schema.js";
 
 const VALID_A2UI_V08_JSONL = [
   JSON.stringify({
@@ -31,11 +30,9 @@ const mocks = vi.hoisted(() => {
     close: vi.fn(async () => {}),
   };
   const toolExecute = vi.fn(async () => ({ content: [{ type: "text", text: "ok" }] }));
-  const widgetToolExecute = vi.fn(async () => ({ content: [{ type: "text", text: "widget" }] }));
   return {
     httpHandler,
     createCanvasHttpRouteHandler: vi.fn(() => httpHandler),
-    resolveCanvasHttpPathToLocalPath: vi.fn(() => "/tmp/canvas-asset"),
     createDefaultCanvasCliDependencies: vi.fn(() => ({ deps: true })),
     registerNodesCanvasCommands: vi.fn(),
     toolExecute,
@@ -46,23 +43,11 @@ const mocks = vi.hoisted(() => {
       parameters: {},
       execute: toolExecute,
     })),
-    widgetToolExecute,
-    createShowWidgetTool: vi.fn(() => ({
-      label: "Show Widget",
-      name: "show_widget",
-      description: "Show Widget",
-      parameters: {},
-      execute: widgetToolExecute,
-    })),
   };
 });
 
 vi.mock("./src/http-route.js", () => ({
   createCanvasHttpRouteHandler: mocks.createCanvasHttpRouteHandler,
-}));
-
-vi.mock("./src/documents.js", () => ({
-  resolveCanvasHttpPathToLocalPath: mocks.resolveCanvasHttpPathToLocalPath,
 }));
 
 vi.mock("./src/cli.js", () => ({
@@ -72,10 +57,6 @@ vi.mock("./src/cli.js", () => ({
 
 vi.mock("./src/tool.js", () => ({
   createCanvasTool: mocks.createCanvasTool,
-}));
-
-vi.mock("./src/widget-tool.js", () => ({
-  createShowWidgetTool: mocks.createShowWidgetTool,
 }));
 
 function registerCanvas() {
@@ -157,22 +138,15 @@ describe("Canvas plugin entry", () => {
     expect(mocks.httpHandler.close).toHaveBeenCalledTimes(1);
   });
 
-  it("defers Canvas resolver, CLI, and tool implementations until use", async () => {
+  it("defers Canvas CLI and tool implementations until use", async () => {
     const { resolvers, tools, cliFeatures } = registerCanvas();
 
-    expect(resolvers).toHaveLength(1);
-    expect(tools).toHaveLength(2);
-    expect(tools.map(({ opts }) => opts?.name)).toEqual([undefined, "show_widget"]);
+    expect(resolvers).toHaveLength(0);
+    expect(tools).toHaveLength(1);
+    expect(tools.map(({ opts }) => opts?.name)).toEqual([undefined]);
     expect(cliFeatures).toHaveLength(1);
-    expect(mocks.resolveCanvasHttpPathToLocalPath).not.toHaveBeenCalled();
     expect(mocks.createDefaultCanvasCliDependencies).not.toHaveBeenCalled();
     expect(mocks.createCanvasTool).not.toHaveBeenCalled();
-    expect(mocks.createShowWidgetTool).not.toHaveBeenCalled();
-
-    await expect(resolvers[0]?.("/__openclaw__/canvas/documents/id/index.html")).resolves.toBe(
-      "/tmp/canvas-asset",
-    );
-    expect(mocks.resolveCanvasHttpPathToLocalPath).toHaveBeenCalledTimes(1);
 
     await cliFeatures[0]?.registrar({
       program: {} as never,
@@ -196,12 +170,10 @@ describe("Canvas plugin entry", () => {
       expect(Array.isArray(tool)).toBe(false);
       return tool as AnyAgentTool;
     });
-    expect(registeredTools.map((tool) => tool.name)).toEqual(["canvas", "show_widget"]);
-    expect(registeredTools[1]?.requiredClientCaps).toEqual(SHOW_WIDGET_REQUIRED_CLIENT_CAPS);
+    expect(registeredTools.map((tool) => tool.name)).toEqual(["canvas"]);
     expect(mocks.createCanvasTool).not.toHaveBeenCalled();
-    expect(mocks.createShowWidgetTool).not.toHaveBeenCalled();
 
-    const [canvasTool, showWidgetTool] = registeredTools;
+    const [canvasTool] = registeredTools;
     await canvasTool?.execute("tool-call", { action: "hide" });
     expect(mocks.createCanvasTool).toHaveBeenCalledWith({
       config: {},
@@ -209,20 +181,6 @@ describe("Canvas plugin entry", () => {
       agentSessionKey: "agent:main:canvas",
     });
     expect(mocks.toolExecute).toHaveBeenCalledWith("tool-call", { action: "hide" });
-
-    await showWidgetTool?.execute("widget-call", {
-      title: "Status",
-      widget_code: "<p>ready</p>",
-    });
-    expect(mocks.createShowWidgetTool).toHaveBeenCalledWith({
-      config: {},
-      sessionId: "session-1",
-      agentId: "agent-1",
-    });
-    expect(mocks.widgetToolExecute).toHaveBeenCalledWith("widget-call", {
-      title: "Status",
-      widget_code: "<p>ready</p>",
-    });
   });
 
   it.each([

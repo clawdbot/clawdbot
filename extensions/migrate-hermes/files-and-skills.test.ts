@@ -7,7 +7,7 @@ import { MIGRATION_REASON_TARGET_EXISTS } from "openclaw/plugin-sdk/migration";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildAuthItems } from "./auth.js";
 import { buildHermesMigrationProvider } from "./provider.js";
-import { discoverHermesSource, resolveImplicitHermesRoot } from "./source.js";
+import { discoverHermesSource } from "./source.js";
 import { resolveTargets } from "./targets.js";
 import { cleanupTempRoots, makeContext, makeTempRoot, writeFile } from "./test/provider-helpers.js";
 
@@ -87,7 +87,41 @@ describe("Hermes migration file and skill items", () => {
     );
   });
 
-  it("honors explicit Hermes home, active profiles, and Windows legacy state", async () => {
+  it("resolves HERMES_HOME through active_profile unless it already names a profile", async () => {
+    const root = await makeTempRoot();
+    const hermesRoot = path.join(root, "hermes");
+    const profileRoot = path.join(hermesRoot, "profiles", "coder");
+    await writeFile(path.join(hermesRoot, "active_profile"), "coder\n");
+    await writeFile(path.join(profileRoot, "memories", "MEMORY.md"), "coder memory\n");
+
+    expect(
+      (
+        await discoverHermesSource(undefined, {
+          env: { HERMES_HOME: hermesRoot },
+          platform: "darwin",
+        })
+      ).root,
+    ).toBe(profileRoot);
+    expect(
+      (
+        await discoverHermesSource(undefined, {
+          env: { HERMES_HOME: profileRoot },
+          platform: "darwin",
+        })
+      ).root,
+    ).toBe(profileRoot);
+    // Supervised default slot pins to the root profile, ignoring active_profile.
+    expect(
+      (
+        await discoverHermesSource(undefined, {
+          env: { HERMES_HOME: hermesRoot, HERMES_S6_SUPERVISED_CHILD: "1" },
+          platform: "darwin",
+        })
+      ).root,
+    ).toBe(hermesRoot);
+  });
+
+  it("honors implicit Hermes active profiles and Windows legacy state", async () => {
     const root = await makeTempRoot();
     const home = path.join(root, "home");
     const defaultRoot = path.join(home, ".hermes");
@@ -95,14 +129,15 @@ describe("Hermes migration file and skill items", () => {
     await writeFile(path.join(defaultRoot, "active_profile"), "coder\n");
     await writeFile(path.join(profileRoot, "config.yaml"), "model: openai/gpt-5.6\n");
 
-    expect(await resolveImplicitHermesRoot({ HERMES_HOME: defaultRoot }, "darwin")).toBe(
-      defaultRoot,
-    );
-    expect(await resolveImplicitHermesRoot({ HOME: home }, "darwin")).toBe(profileRoot);
+    expect(
+      (await discoverHermesSource(undefined, { env: { HOME: home }, platform: "darwin" })).root,
+    ).toBe(profileRoot);
     expect((await discoverHermesSource(profileRoot)).root).toBe(profileRoot);
 
     await writeFile(path.join(defaultRoot, "active_profile"), "../escape\n");
-    expect(await resolveImplicitHermesRoot({ HOME: home }, "darwin")).toBe(defaultRoot);
+    expect(
+      (await discoverHermesSource(undefined, { env: { HOME: home }, platform: "darwin" })).root,
+    ).toBe(defaultRoot);
 
     const windowsHome = path.join(root, "windows-home");
     const localAppData = path.join(windowsHome, "AppData", "Local");
@@ -110,17 +145,21 @@ describe("Hermes migration file and skill items", () => {
     const legacyWindowsRoot = path.join(windowsHome, ".hermes");
     await writeFile(path.join(legacyWindowsRoot, "config.yaml"), "model: legacy\n");
     expect(
-      await resolveImplicitHermesRoot(
-        { LOCALAPPDATA: localAppData, USERPROFILE: windowsHome },
-        "win32",
-      ),
+      (
+        await discoverHermesSource(undefined, {
+          env: { LOCALAPPDATA: localAppData, USERPROFILE: windowsHome },
+          platform: "win32",
+        })
+      ).root,
     ).toBe(legacyWindowsRoot);
     await writeFile(path.join(nativeWindowsRoot, "config.yaml"), "model: current\n");
     expect(
-      await resolveImplicitHermesRoot(
-        { LOCALAPPDATA: localAppData, USERPROFILE: windowsHome },
-        "win32",
-      ),
+      (
+        await discoverHermesSource(undefined, {
+          env: { LOCALAPPDATA: localAppData, USERPROFILE: windowsHome },
+          platform: "win32",
+        })
+      ).root,
     ).toBe(nativeWindowsRoot);
 
     const personaHome = path.join(root, "persona-home");
@@ -128,10 +167,12 @@ describe("Hermes migration file and skill items", () => {
     const personaLegacyRoot = path.join(personaHome, ".hermes");
     await writeFile(path.join(personaLegacyRoot, "SOUL.md"), "Legacy persona\n");
     expect(
-      await resolveImplicitHermesRoot(
-        { LOCALAPPDATA: personaLocalAppData, USERPROFILE: personaHome },
-        "win32",
-      ),
+      (
+        await discoverHermesSource(undefined, {
+          env: { LOCALAPPDATA: personaLocalAppData, USERPROFILE: personaHome },
+          platform: "win32",
+        })
+      ).root,
     ).toBe(personaLegacyRoot);
   });
 
@@ -195,6 +236,8 @@ describe("Hermes migration file and skill items", () => {
           anthropic: {},
           nous: {},
           "qwen-oauth": {},
+          "qwen-cli": {},
+          "qwen-portal": {},
           [xaiProvider]: {},
           [minimaxProvider]: {},
         },
@@ -216,7 +259,7 @@ describe("Hermes migration file and skill items", () => {
     expect(reauthItems.map((item) => item.reason)).toEqual([
       "Authenticate anthropic in OpenClaw after migration.",
       "Authenticate nous in OpenClaw after migration.",
-      "Authenticate qwen-oauth in OpenClaw after migration.",
+      "Authenticate qwen with an API key after migration: openclaw onboard --auth-choice qwen-api-key.",
       "Authenticate minimax-portal in OpenClaw after migration.",
       "Authenticate xai in OpenClaw after migration.",
     ]);

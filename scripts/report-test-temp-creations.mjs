@@ -435,7 +435,7 @@ export function collectTempCreationFindingsFromDiff(diffText, options = {}) {
   return findings;
 }
 
-export async function main(argv, io) {
+async function main(argv, io) {
   const args = parseArgs(argv ?? process.argv.slice(2));
   const stdout = io?.stdout ?? process.stdout;
   const stderr = io?.stderr ?? process.stderr;

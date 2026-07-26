@@ -13,7 +13,7 @@ interface NodeHttpProxyAgents {
 }
 
 /** Resolves the environment proxy URL that applies to a target URL. */
-export function resolveHttpProxyUrlForTarget(targetUrl: string | URL): URL | undefined {
+function resolveHttpProxyUrlForTarget(targetUrl: string | URL): URL | undefined {
   return resolveEnvNodeProxyUrlForTarget(targetUrl);
 }
 

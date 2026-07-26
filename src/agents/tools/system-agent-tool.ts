@@ -32,7 +32,7 @@ export type SystemAgentToolOptions = {
    * its canonical hash here (host-owned, survives turns), and an armed turn
    * may execute only a call matching that hash. Cleared after use.
    */
-  proposalRef?: { current?: string };
+  proposalRef?: { current?: string; operation?: SystemAgentOperation };
   /**
    * Host handoff channel for actions the tool cannot perform itself
    * (interactive channel setup, external onboarding guidance, opening the
@@ -126,7 +126,7 @@ function directiveForOperation(
 export function resolveSystemAgentProposalTransition(params: {
   args: Record<string, unknown>;
   resultText: string;
-}): { proposal: string | undefined } | null {
+}): { proposal: string | undefined; operation?: SystemAgentOperation } | null {
   let operation: SystemAgentOperation;
   try {
     operation = operationForAction(params.args);
@@ -146,6 +146,7 @@ export function resolveSystemAgentProposalTransition(params: {
       proposal: /^[a-f0-9]{64}$/.test(carriedHash)
         ? carriedHash
         : hashSystemAgentOperation(operation),
+      operation,
     };
   }
   // Executed or errored mutation: an armed approval is single-use either way.
@@ -190,7 +191,9 @@ const SystemAgentToolSchema = Type.Object({
   envVar: Type.Optional(Type.String({ description: "Env var name for config_set_ref" })),
   model: Type.Optional(Type.String({ description: "provider/model ref" })),
   workspace: Type.Optional(Type.String({ description: "Workspace directory" })),
-  agentId: Type.Optional(Type.String({ description: "Agent id for create_agent/open_agent" })),
+  agentId: Type.Optional(
+    Type.String({ description: "Agent id for create_agent/open_agent/set_default_model" }),
+  ),
   channel: Type.Optional(
     Type.String({
       description: "Channel id for connect_channel, channel_info, or open_setup channels",
@@ -319,8 +322,14 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
         ...(model ? { model } : {}),
       };
     }
-    case "set_default_model":
-      return { kind: "set-default-model", model: requireParam(params, "model") };
+    case "set_default_model": {
+      const agentId = readStringParam(params, "agentId")?.trim();
+      return {
+        kind: "set-default-model",
+        model: requireParam(params, "model"),
+        ...(agentId ? { agentId } : {}),
+      };
+    }
     case "create_agent": {
       const workspace = readStringParam(params, "workspace")?.trim();
       const model = readStringParam(params, "model")?.trim();
@@ -360,11 +369,11 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
       "System agent. Setup, config, channels, plugins, agents, repair.",
       "Read now: status, models, agents, channels, channel_info, config_get, config_schema, gateway_status, plugin_search, validate_config, doctor, audit.",
       "Handoff: connect_channel; open_setup target=channels; open_agent.",
-      "Inference, provider, auth, credentials: exit; run `openclaw onboard`. Never request credentials.",
-      "Write: setup, set_default_model, config_set, config_set_ref, create_agent, gateway_*, plugin_install. Exact user approval required; then approved=true. Host applies after turn; rechecks inference owner.",
+      "Provider/auth/credentials: exit; run `openclaw onboard`. Never request credentials.",
+      "Write: setup, set_default_model (agentId optional; live-tested), config_set, config_set_ref, create_agent, gateway_*, plugin_install, plugin_uninstall. Exact user approval required; then approved=true. Host applies after turn; rechecks inference owner.",
       "plugin_install: ClawHub/bundled/official only. Arbitrary source: exit, trusted shell.",
-      "Unknown config: config_schema first. Secrets: config_set_ref env. No plaintext. No raw auth/models/env/secrets/plugins/tools/agent-route/$include; typed workflows.",
-      "No plugin uninstall. No doctor repair. Writes validated, audited. Invalid config: fix now.",
+      "Unknown config: config_schema first. Secrets: config_set_ref env. No plaintext. No raw auth/models/env/secrets/$include or default-route agent fields; use set_default_model / onboard.",
+      "No doctor repair. Writes validated, audited. Invalid config: fix now.",
     ].join(" "),
     parameters: SystemAgentToolSchema,
     execute: async (_toolCallId, args) => {
@@ -407,6 +416,7 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
           if (options.approvalArmed === true) {
             if (options.proposalRef) {
               options.proposalRef.current = undefined;
+              options.proposalRef.operation = undefined;
             }
             return textResult(
               `${SYSTEM_AGENT_APPROVAL_MISMATCH_PREFIX} this call is not the operation the user approved. The approval is void; describe the new change and get a fresh yes before retrying.`,
@@ -415,6 +425,7 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
           }
           if (options.proposalRef) {
             options.proposalRef.current = operationHash;
+            options.proposalRef.operation = operation;
           }
           return textResult(
             `${SYSTEM_AGENT_NEEDS_APPROVAL_PREFIX}${operationHash}\nThis action changes state. The proposal is registered; describe this exact change and ask the user to reply yes (their approval unlocks THIS action only — then retry the exact registered operation with approved=true).`,
@@ -424,6 +435,7 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
         if (options.proposalRef) {
           // One approval, one mutation: re-proposals need a fresh yes.
           options.proposalRef.current = undefined;
+          options.proposalRef.operation = undefined;
         }
         const approvedDirective: SystemAgentToolDirective = {
           kind: "approved-operation",

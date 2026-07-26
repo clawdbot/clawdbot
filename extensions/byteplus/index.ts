@@ -3,12 +3,15 @@
  */
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { buildOpenAICompatibleLiveModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { readManifestProviderDefaultModelRef } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { ensureModelAllowlistEntry } from "openclaw/plugin-sdk/provider-onboard";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { BYTEPLUS_PROVIDER_CATALOG_ENTRIES } from "./provider-catalog.js";
 import { buildBytePlusVideoGenerationProvider } from "./video-generation-provider.js";
 
 const PROVIDER_ID = "byteplus";
-const BYTEPLUS_DEFAULT_MODEL_REF = "byteplus-plan/ark-code-latest";
+const BYTEPLUS_DEFAULT_MODEL_REF = readManifestProviderDefaultModelRef(manifest, "byteplus-plan")!;
 
 export default definePluginEntry({
   id: PROVIDER_ID,
@@ -49,19 +52,38 @@ export default definePluginEntry({
       catalog: {
         order: "paired",
         run: async (ctx) => {
-          const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
+          const auth = ctx.resolveProviderApiKey(PROVIDER_ID);
+          const apiKey = auth.apiKey;
           if (!apiKey) {
             return null;
           }
           return {
             providers: Object.fromEntries(
-              BYTEPLUS_PROVIDER_CATALOG_ENTRIES.map(({ id, buildProvider }) => [
-                id,
-                { ...buildProvider(), apiKey },
-              ]),
+              await Promise.all(
+                BYTEPLUS_PROVIDER_CATALOG_ENTRIES.map(
+                  async ({ id, buildProvider }) =>
+                    [
+                      id,
+                      await buildOpenAICompatibleLiveModelProviderConfig({
+                        providerId: id,
+                        providerConfig: buildProvider(),
+                        apiKey,
+                        discoveryApiKey: auth.discoveryApiKey,
+                      }),
+                    ] as const,
+                ),
+              ),
             ),
           };
         },
+      },
+      staticCatalog: {
+        order: "paired",
+        run: async () => ({
+          providers: Object.fromEntries(
+            BYTEPLUS_PROVIDER_CATALOG_ENTRIES.map(({ id, buildProvider }) => [id, buildProvider()]),
+          ),
+        }),
       },
       augmentModelCatalog: () =>
         BYTEPLUS_PROVIDER_CATALOG_ENTRIES.flatMap(({ id: provider, models }) =>

@@ -11,6 +11,7 @@ import {
 import {
   asOptionalRecord as asRecord,
   normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { refreshAwsSharedConfigCacheForBedrock } from "./aws-credential-refresh.js";
 
@@ -288,11 +289,15 @@ function parseCohereBatch(family: Family, raw: string): number[][] {
   return asNumberArrayBatch(embeddings);
 }
 
-export const testing = {
+const testing = {
   parseCohereBatch,
   parseSingle,
   stripInferenceProfilePrefix,
 };
+
+if (process.env.VITEST === "true") {
+  Reflect.set(globalThis, Symbol.for("openclaw.amazonBedrockEmbeddingTestApi"), testing);
+}
 
 // ---------------------------------------------------------------------------
 // Provider
@@ -402,8 +407,8 @@ function resolveBedrockEmbeddingClient(
   const region =
     regionFromUrl(options.remote?.baseUrl) ??
     regionFromUrl(providerConfig?.baseUrl) ??
-    process.env.AWS_REGION ??
-    process.env.AWS_DEFAULT_REGION ??
+    normalizeOptionalString(process.env.AWS_REGION) ??
+    normalizeOptionalString(process.env.AWS_DEFAULT_REGION) ??
     "us-east-1";
 
   let dimensions: number | undefined;
@@ -449,4 +454,3 @@ export async function hasAwsCredentials(
     return false;
   }
 }
-export { testing as __testing };

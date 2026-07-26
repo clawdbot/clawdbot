@@ -33,7 +33,6 @@ let enqueueCommandInLane: CommandQueueModule["enqueueCommandInLane"];
 let GatewayDrainingError: CommandQueueModule["GatewayDrainingError"];
 let getActiveTaskCount: CommandQueueModule["getActiveTaskCount"];
 let getCommandLaneSnapshot: CommandQueueModule["getCommandLaneSnapshot"];
-let getCommandLaneSnapshots: CommandQueueModule["getCommandLaneSnapshots"];
 let getQueueSize: CommandQueueModule["getQueueSize"];
 let markGatewayDraining: CommandQueueModule["markGatewayDraining"];
 let resetAllLanes: CommandQueueModule["resetAllLanes"];
@@ -103,7 +102,6 @@ describe("command queue", () => {
       GatewayDrainingError,
       getActiveTaskCount,
       getCommandLaneSnapshot,
-      getCommandLaneSnapshots,
       getQueueSize,
       markGatewayDraining,
       resetAllLanes,
@@ -499,6 +497,7 @@ describe("command queue", () => {
       });
       const firstRejected = expect(first).rejects.toMatchObject({
         name: "CommandLaneTaskTimeoutError",
+        message: expect.stringContaining("elapsed 25ms reached task budget 25ms"),
       });
       let secondRan = false;
       const second = enqueueCommandInLane(lane, async () => {
@@ -607,6 +606,9 @@ describe("command queue", () => {
       });
       const firstRejected = expect(first).rejects.toMatchObject({
         name: "CommandLaneTaskTimeoutError",
+        message: expect.stringContaining(
+          "abort grace 25ms elapsed (task budget 172800000ms, elapsed 25ms)",
+        ),
       });
       let secondRan = false;
       const second = enqueueCommandInLane(lane, async () => {
@@ -642,6 +644,9 @@ describe("command queue", () => {
       });
       const firstRejected = expect(first).rejects.toMatchObject({
         name: "CommandLaneTaskTimeoutError",
+        message: expect.stringContaining(
+          "lane release requested after 0ms (task budget 172800000ms)",
+        ),
       });
       let secondRan = false;
       const second = enqueueCommandInLane(lane, async () => {
@@ -674,6 +679,7 @@ describe("command queue", () => {
       });
       const firstRejected = expect(first).rejects.toMatchObject({
         name: "CommandLaneTaskTimeoutError",
+        message: expect.stringContaining("no progress for 25ms (task budget 25ms"),
       });
 
       await vi.advanceTimersByTimeAsync(25);
@@ -741,40 +747,6 @@ describe("command queue", () => {
     blocker.resolve();
     await expect(first).resolves.toBe("first");
     await expect(second).resolves.toBe("second");
-  });
-
-  it("getCommandLaneSnapshots reports all live lanes in stable order", async () => {
-    const alphaLane = `snapshot-all-alpha-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    const betaLane = `snapshot-all-beta-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    setCommandLaneConcurrency(alphaLane, 1);
-    setCommandLaneConcurrency(betaLane, 1);
-
-    const alphaBlocker = createDeferred();
-    const betaBlocker = createDeferred();
-    const alpha = enqueueCommandInLane(alphaLane, async () => {
-      await alphaBlocker.promise;
-      return "alpha";
-    });
-    const beta = enqueueCommandInLane(betaLane, async () => {
-      await betaBlocker.promise;
-      return "beta";
-    });
-
-    const snapshots = getCommandLaneSnapshots().filter(
-      (snapshot) => snapshot.lane === alphaLane || snapshot.lane === betaLane,
-    );
-    expect(snapshots.map((snapshot) => snapshot.lane)).toEqual([alphaLane, betaLane]);
-    expect(snapshots[0]?.lane).toBe(alphaLane);
-    expect(snapshots[0]?.activeCount).toBe(1);
-    expect(snapshots[0]?.queuedCount).toBe(0);
-    expect(snapshots[1]?.lane).toBe(betaLane);
-    expect(snapshots[1]?.activeCount).toBe(1);
-    expect(snapshots[1]?.queuedCount).toBe(0);
-
-    alphaBlocker.resolve();
-    betaBlocker.resolve();
-    await expect(alpha).resolves.toBe("alpha");
-    await expect(beta).resolves.toBe("beta");
   });
 
   it("waitForActiveTasks ignores tasks that start after the call", async () => {

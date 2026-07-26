@@ -2,10 +2,10 @@ import {
   FAST_MODE_AUTO_PROGRESS_KIND,
   type ReplyPayload,
 } from "../../../auto-reply/reply-payload.js";
-import { emitAgentItemEvent } from "../../../infra/agent-events.js";
+import { emitAgentItemEvent } from "../../../infra/agent-activity-events.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { resolveFastModeModelAutoOnSeconds } from "../../../shared/fast-mode.js";
 import {
-  DEFAULT_FAST_MODE_AUTO_ON_SECONDS,
   type FastModeAutoProgressState,
   formatFastModeAutoProgressText,
   resolveFastModeForElapsed,
@@ -20,8 +20,15 @@ export function createEmbeddedRunProgressController(params: {
   startedAtMs: number;
 }) {
   const fastModeStartedAtMs = params.attempt.fastModeStartedAtMs ?? params.startedAtMs;
+  // Embedded callers may set only `fastMode: "auto"`; preserve the selected
+  // model's cutoff instead of silently falling back to the global default.
   const fastModeAutoOnSeconds =
-    params.attempt.fastModeAutoOnSeconds ?? DEFAULT_FAST_MODE_AUTO_ON_SECONDS;
+    params.attempt.fastModeAutoOnSeconds ??
+    resolveFastModeModelAutoOnSeconds({
+      cfg: params.attempt.config,
+      provider: params.attempt.provider,
+      model: params.attempt.model,
+    });
   const fastModeAutoProgressState: FastModeAutoProgressState = params.attempt
     .fastModeAutoProgressState ?? {
     offAnnounced: false,

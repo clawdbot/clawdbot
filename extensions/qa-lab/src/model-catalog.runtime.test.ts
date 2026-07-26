@@ -17,7 +17,7 @@ async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
       return;
     } catch {
       await new Promise((resolvePoll) => {
-        setTimeout(resolvePoll, 25);
+        setTimeout(resolvePoll, 5);
       });
     }
   }
@@ -40,7 +40,7 @@ async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
       return;
     }
     await new Promise((resolvePoll) => {
-      setTimeout(resolvePoll, 25);
+      setTimeout(resolvePoll, 5);
     });
   }
   throw new Error(`timed out waiting for pid ${pid} to exit`);

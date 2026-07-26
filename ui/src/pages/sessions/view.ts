@@ -15,6 +15,7 @@ import { pathForRoute } from "../../app-route-paths.ts";
 import { icons } from "../../components/icons.ts";
 import {
   renderSettingsPage,
+  renderSettingsSegmented,
   renderSettingsSection,
   renderSettingsStatus,
 } from "../../components/settings-ui.ts";
@@ -34,6 +35,7 @@ import {
   parseSessionKeyParts,
 } from "../../lib/format.ts";
 import { formatSessionTokens } from "../../lib/presenter.ts";
+import { isCronSessionKey } from "../../lib/session-display.ts";
 import { formatGoalDetail, formatGoalSummary } from "../../lib/session-goal.ts";
 import { sessionModelMatchesDefaults } from "../../lib/session-model-defaults.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
@@ -45,7 +47,7 @@ import {
   type SessionsGroupBy,
   UNGROUPED_ID,
 } from "../../lib/sessions/grouping.ts";
-import { searchForSession } from "../../lib/sessions/index.ts";
+import { searchForSession, type SessionArchivedFilter } from "../../lib/sessions/index.ts";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -71,7 +73,7 @@ export type SessionsProps = {
   limit: string;
   includeGlobal: boolean;
   includeUnknown: boolean;
-  showArchived: boolean;
+  statusFilter: SessionArchivedFilter;
   basePath: string;
   searchQuery: string;
   transcriptSearchAvailable: boolean;
@@ -96,7 +98,6 @@ export type SessionsProps = {
     limit: string;
     includeGlobal: boolean;
     includeUnknown: boolean;
-    showArchived: boolean;
   }) => void;
   onClearFilters: () => void;
   onSearchChange: (query: string) => void;
@@ -110,11 +111,14 @@ export type SessionsProps = {
   onPageChange: (page: number) => void;
   onPageSizeChange: (size: number) => void;
   onRefresh: () => void;
+  onStatusFilterChange: (statusFilter: SessionArchivedFilter) => void;
+  onDeleteAllArchived: () => void;
   onPatch: (
     key: string,
     patch: {
       label?: string | null;
       category?: string | null;
+      icon?: string | null;
       archived?: boolean;
       pinned?: boolean;
       unread?: boolean;
@@ -286,14 +290,21 @@ const SESSION_KIND_ICONS = {
   group: icons.users,
   global: icons.globe,
   unknown: icons.circle,
-} satisfies Record<GatewaySessionRow["kind"], unknown>;
+} satisfies Record<GatewaySessionRow["kind"] | "cron", unknown>;
+
+// The server row kind never carries "cron" — cron is a key-shape fact, so the
+// display kind derives it from the key for the avatar, badge class, and label.
+function resolveSessionDisplayKind(row: GatewaySessionRow): GatewaySessionRow["kind"] | "cron" {
+  return isCronSessionKey(row.key) ? "cron" : row.kind;
+}
 
 // Kind glyph anchors each row; the dot mirrors isSessionRunActive so run
 // state also reads at the identity anchor while scanning the key column.
 function renderSessionAvatar(row: GatewaySessionRow) {
+  const displayKind = resolveSessionDisplayKind(row);
   return html`
-    <span class="session-avatar session-avatar--${row.kind}" aria-hidden="true">
-      ${SESSION_KIND_ICONS[row.kind] ?? icons.circle}
+    <span class="session-avatar session-avatar--${displayKind}" aria-hidden="true">
+      ${SESSION_KIND_ICONS[displayKind] ?? icons.circle}
       ${isSessionRunActive(row) ? html`<span class="session-avatar__status"></span>` : nothing}
     </span>
   `;
@@ -350,8 +361,13 @@ function renderTokensCell(row: GatewaySessionRow) {
   `;
 }
 
-function renderSessionsOverview(rows: GatewaySessionRow[], liveCount: number) {
-  const unreadCount = rows.filter((row) => row.unread === true).length;
+function renderSessionsOverview(
+  rows: GatewaySessionRow[],
+  liveCount: number,
+  statusFilter: SessionArchivedFilter,
+) {
+  const unreadCount = rows.filter((row) => row.unread === true && row.archived !== true).length;
+  const archivedCount = rows.filter((row) => row.archived === true).length;
   // Sum only known token totals; "~" marks the sum as partial/approximate when
   // rows lack a snapshot or carry a stale one, and no snapshot at all is n/a
   // rather than a fabricated 0.
@@ -393,6 +409,17 @@ function renderSessionsOverview(rows: GatewaySessionRow[], liveCount: number) {
       value: tokensValue,
       active: false,
     },
+    ...(statusFilter === "active"
+      ? []
+      : [
+          {
+            id: "archived",
+            icon: icons.archive,
+            label: t("sessionsView.archived"),
+            value: String(archivedCount),
+            active: false,
+          },
+        ]),
   ];
   return html`
     <div class="sessions-overview">
@@ -700,10 +727,7 @@ function hasActiveFilters(props: SessionsProps): boolean {
   return (
     normalizeLowercaseStringOrEmpty(props.searchQuery).length > 0 ||
     hasPositiveNumberFilter(props.activeMinutes) ||
-    hasPositiveNumberFilter(props.limit) ||
-    !props.includeGlobal ||
-    !props.includeUnknown ||
-    !props.showArchived
+    !props.includeGlobal
   );
 }
 
@@ -1074,6 +1098,13 @@ export function renderSessions(props: SessionsProps) {
   const emptyBecauseFiltered =
     rawRows.length === 0 ? hasActiveFilters(props) : filtered.length === 0;
   const liveCount = rawRows.filter((row) => isSessionRunActive(row)).length;
+  const archivedCount = rawRows.filter((row) => row.archived === true).length;
+  const emptyMessage =
+    props.statusFilter === "archived"
+      ? t("sessionsView.noArchivedSessions")
+      : props.statusFilter === "active"
+        ? t("sessionsView.noActiveSessions")
+        : t("sessionsView.noSessions");
 
   const sortHeader = (
     col: "key" | "kind" | "updated" | "tokens",
@@ -1106,13 +1137,26 @@ export function renderSessions(props: SessionsProps) {
       : nothing}
   `;
   const refreshAction = html`
+    ${props.statusFilter === "archived"
+      ? html`
+          <button
+            class="btn danger"
+            ?disabled=${props.loading || archivedCount === 0}
+            @click=${props.onDeleteAllArchived}
+          >
+            ${icons.trash} ${t("sessionsView.deleteAllArchived")}
+          </button>
+        `
+      : nothing}
     <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
       ${props.loading ? t("common.loading") : t("common.refresh")}
     </button>
   `;
   const children = [
     props.error ? html`<div class="sessions-error">${props.error}</div>` : nothing,
-    props.result ? renderSettingsSection({}, renderSessionsOverview(rawRows, liveCount)) : nothing,
+    props.result
+      ? renderSettingsSection({}, renderSessionsOverview(rawRows, liveCount, props.statusFilter))
+      : nothing,
     // When the gateway lacks sessions.search the section still renders: the
     // form disables itself and shows the unavailable notice (shipped behavior).
     renderSettingsSection(
@@ -1133,6 +1177,7 @@ export function renderSessions(props: SessionsProps) {
         groups,
         groupingActive,
         emptyBecauseFiltered,
+        emptyMessage,
         totalRows,
         totalPages,
         page,
@@ -1148,6 +1193,7 @@ type SessionsTableContext = {
   groups: SessionRowGroup[] | null;
   groupingActive: boolean;
   emptyBecauseFiltered: boolean;
+  emptyMessage: string;
   totalRows: number;
   totalPages: number;
   page: number;
@@ -1159,14 +1205,23 @@ type SessionsTableContext = {
 };
 
 function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
-  const { paginated, groups, groupingActive, emptyBecauseFiltered, totalRows, totalPages, page } =
-    ctx;
+  const {
+    paginated,
+    groups,
+    groupingActive,
+    emptyBecauseFiltered,
+    emptyMessage,
+    totalRows,
+    totalPages,
+    page,
+  } = ctx;
   const sortHeader = ctx.sortHeader;
   const activeTooltip = t("sessionsView.activeTooltip", { count: props.activeMinutes.trim() });
   const limitTooltip = t("sessionsView.limitTooltip");
   const globalTooltip = t("sessionsView.globalTooltip");
   const unknownTooltip = t("sessionsView.unknownTooltip");
-  const showArchivedTooltip = t("sessionsView.archivedOnlyTooltip");
+  // Archived timestamps are intentionally stale, so recency only applies to the active view.
+  const recencyFilterDisabled = props.statusFilter !== "active";
   return html`
     <div
       class="sessions-toolbar sessions-filter-bar"
@@ -1189,14 +1244,13 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
               class="session-filter-input session-filter-input--minutes"
               placeholder=${t("sessionsView.minutesPlaceholder")}
               .value=${props.activeMinutes}
-              ?disabled=${props.showArchived}
+              ?disabled=${recencyFilterDisabled}
               @input=${(e: Event) =>
                 props.onFiltersChange({
                   activeMinutes: (e.target as HTMLInputElement).value,
                   limit: props.limit,
                   includeGlobal: props.includeGlobal,
                   includeUnknown: props.includeUnknown,
-                  showArchived: props.showArchived,
                 })}
             />
           </label>
@@ -1213,7 +1267,6 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
                   limit: (e.target as HTMLInputElement).value,
                   includeGlobal: props.includeGlobal,
                   includeUnknown: props.includeUnknown,
-                  showArchived: props.showArchived,
                 })}
             />
           </label>
@@ -1235,7 +1288,6 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
               limit: props.limit,
               includeGlobal: checked,
               includeUnknown: props.includeUnknown,
-              showArchived: props.showArchived,
             }),
         })}
         ${renderFilterToggle({
@@ -1249,23 +1301,22 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
               limit: props.limit,
               includeGlobal: props.includeGlobal,
               includeUnknown: checked,
-              showArchived: props.showArchived,
             }),
         })}
-        ${renderFilterToggle({
-          name: "showArchived",
-          checked: props.showArchived,
-          label: t("sessionsView.archivedOnly"),
-          title: showArchivedTooltip,
-          extraClass: "session-archive-toggle",
-          onChange: (checked) =>
-            props.onFiltersChange({
-              activeMinutes: props.activeMinutes,
-              limit: props.limit,
-              includeGlobal: props.includeGlobal,
-              includeUnknown: props.includeUnknown,
-              showArchived: checked,
-            }),
+        ${renderSettingsSegmented<SessionArchivedFilter>({
+          value: props.statusFilter,
+          ariaLabel: t("sessionsView.sessionState"),
+          className: "sessions-view-segment",
+          options: [
+            { value: "active", label: t("common.active") },
+            {
+              value: "archived",
+              label: t("sessionsView.archived"),
+              title: t("sessionsView.archivedOnlyTooltip"),
+            },
+            { value: "all", label: t("sessionsView.all") },
+          ],
+          onChange: (value) => props.onStatusFilterChange(value),
         })}
       </div>
       <span class="sessions-toolbar__divider" aria-hidden="true"></span>
@@ -1369,7 +1420,7 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
                             <div class="data-table-empty-state" role="status" aria-live="polite">
                               <div class="data-table-empty-state__message">
                                 ${icons.messageSquare}
-                                <span>${t("sessionsView.noSessions")}</span>
+                                <span>${emptyMessage}</span>
                               </div>
                             </div>
                           `}
@@ -1455,10 +1506,12 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
   const chatUrl = canLink
     ? `${pathForRoute("chat", props.basePath)}${searchForSession(row.key)}`
     : null;
-  const kindClass = `session-kind session-kind--${row.kind}`;
+  const displayKind = resolveSessionDisplayKind(row);
+  const kindClass = `session-kind session-kind--${displayKind}`;
   const rowClass = [
     "session-data-row",
     "session-data-row--expandable",
+    props.statusFilter === "all" && row.archived === true ? "session-data-row--archived" : "",
     isExpanded ? "session-data-row--expanded" : "",
     props.sessionMenu?.key === row.key ? "session-data-row--menu-open" : "",
   ]
@@ -1570,11 +1623,14 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
       </td>
       ${categoryMode ? renderCategoryCell(row, props) : nothing}
       <td>
-        <span class=${kindClass}>${row.kind}</span>
+        <span class=${kindClass}>${resolveSessionDisplayKind(row)}</span>
       </td>
       <td class="session-status-col">
         <div class="session-status-stack">
           ${renderSessionStatusBadge(row)} ${renderSessionGoalStatus(row.goal)}
+          ${props.statusFilter === "all" && row.archived === true
+            ? renderSettingsStatus({ kind: "muted", label: t("sessionsView.archived") })
+            : nothing}
         </div>
       </td>
       <td>${updated}</td>
@@ -1704,7 +1760,7 @@ function renderSessionDetailsRow(params: {
           </div>
           <div class="session-details-panel__badges">
             ${renderSessionStatusBadge(row)} ${renderSessionGoalStatus(row.goal)}
-            <span class=${kindClass}>${row.kind}</span>
+            <span class=${kindClass}>${resolveSessionDisplayKind(row)}</span>
           </div>
         </div>
 

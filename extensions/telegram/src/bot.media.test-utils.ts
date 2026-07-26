@@ -125,11 +125,6 @@ async function loadTelegramBotHarness() {
   undiciFetchSpyRef = harness.undiciFetchSpy;
   resetReadRemoteMediaBufferMockRef = harness.resetReadRemoteMediaBufferMock;
   const botModule = await import("./bot.js");
-  botModule.setTelegramBotRuntimeForTest(
-    harness.telegramBotRuntimeForTest as unknown as Parameters<
-      typeof botModule.setTelegramBotRuntimeForTest
-    >[0],
-  );
   createTelegramBotRef = (opts) =>
     botModule.createTelegramBot({
       ...opts,

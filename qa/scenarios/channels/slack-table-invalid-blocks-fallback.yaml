@@ -1,0 +1,18 @@
+title: Slack rejects an over-limit native table and stores its complete fallback
+scenario:
+  id: slack-table-invalid-blocks-fallback
+  surface: channels
+  coverage:
+    primary:
+      - slack.media-and-rich-content
+  execution:
+    kind: flow
+    channel: slack
+    timeoutMs: 45000
+    retryCount: 1
+    suiteIsolation: isolated
+    config: { slackScenarioId: slack-table-invalid-blocks-fallback }
+flow:
+  module: ./live-transports/slack/scenario-runtime.js
+  call: runSlackTableInvalidBlocksFallbackScenario
+  args: [{ expr: slackScenarioContext }]

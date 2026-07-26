@@ -1,0 +1,56 @@
+title: Telegram streamed final stays one message
+
+scenario:
+  id: telegram-stream-final-single-message
+  surface: channels
+  category: channels.conversation-routing-and-delivery
+  coverage:
+    primary:
+      - telegram.conversation-routing-and-delivery
+  regressionRefs:
+    - openclaw/openclaw#39905
+  objective: Verify Telegram quiet streaming finalizes one preview without a duplicate reply.
+  successCriteria:
+    - The scripted streaming reply contains the exact marker.
+    - One final outbound Telegram message remains after streaming settles.
+  codeRefs:
+    - extensions/telegram/src/send.ts
+    - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
+  execution:
+    profiles: { "telegram:adapter": 14, "telegram:all": 13 }
+    kind: flow
+    channel: telegram
+    summary: Run the scripted quiet-streaming reply and verify one final message.
+    config:
+      marker: QA-TELEGRAM-STREAM-SINGLE-OK
+      requiredProviderMode: mock-openai
+
+flow:
+  steps:
+    - name: finalizes one streaming message
+      actions:
+        - resetTransport: true
+        - set: outboundStartIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation: { id: telegram-stream-room, kind: channel }
+            senderId: qa-stream-operator
+            senderName: QA Stream Operator
+            text:
+              expr: "`@openclaw Quiet streaming QA check. Reply exactly: ${config.marker}`"
+        - waitForOutbound:
+            conversation: { id: telegram-stream-room, kind: channel }
+            sinceIndex: { ref: outboundStartIndex }
+            textIncludes: { ref: config.marker }
+            timeoutMs: 75000
+        - call: sleep
+          args: [4000]
+        - set: finalMessages
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').slice(outboundStartIndex)"
+        - assert:
+            expr: "finalMessages.length === 1 && finalMessages[0].text.includes(config.marker)"
+            message:
+              expr: "`expected one final Telegram message; saw ${finalMessages.length}: ${finalMessages.map((message) => message.text).join(' | ')}`"
+      detailsExpr: finalMessages[0].text

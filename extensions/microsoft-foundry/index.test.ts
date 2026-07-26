@@ -3,36 +3,41 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { shouldTestFoundryTextConnection } from "./auth.js";
-import { getAccessTokenResultAsync } from "./cli.js";
+import { azLoginDeviceCodeWithOptions, getAccessTokenResultAsync } from "./cli.js";
 import plugin from "./index.js";
 import {
-  buildFoundryConnectionTest,
-  isValidTenantIdentifier,
   promptApiKeyEndpointAndModel,
   promptEndpointAndModelManually,
   selectFoundryDeployment,
 } from "./onboard.js";
-import { resetFoundryRuntimeAuthCaches } from "./runtime.js";
 import {
   COGNITIVE_SERVICES_RESOURCE,
   FOUNDRY_ANTHROPIC_SCOPE,
   buildFoundryAuthResult,
   extractFoundryEndpoint,
   formatFoundryApiLabel,
-  isAnthropicFoundryDeployment,
   isFoundryMaiImageModel,
   normalizeFoundryEndpoint,
   requiresFoundryMaxCompletionTokens,
   requiresFoundryEntraIdClaudeAuth,
-  supportsFoundryReasoningContent,
-  supportsFoundryReasoningEffort,
-  supportsFoundryImageInput,
   usesFoundryResponsesByDefault,
 } from "./shared.js";
+import { microsoftFoundryTesting } from "./test-support.js";
+
+const {
+  buildFoundryConnectionTest,
+  isAnthropicFoundryDeployment,
+  isValidTenantIdentifier,
+  resetFoundryRuntimeAuthCaches,
+  shouldTestFoundryTextConnection,
+  supportsFoundryImageInput,
+  supportsFoundryReasoningContent,
+  supportsFoundryReasoningEffort,
+} = microsoftFoundryTesting;
 
 const execFileMock = vi.hoisted(() => vi.fn());
 const execFileSyncMock = vi.hoisted(() => vi.fn());
+const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
 const ensureAuthProfileStoreMock = vi.hoisted(() =>
   vi.fn(() => ({
     profiles: {},
@@ -51,6 +56,7 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>();
   return {
     ...actual,
+    runCommandWithTimeout: runCommandWithTimeoutMock,
     runExec: execFileMock,
   };
 });
@@ -434,7 +440,7 @@ describe("microsoft-foundry plugin", () => {
   it("preserves the model-derived base URL for Entra runtime auth refresh", async () => {
     const provider = registerProvider();
     const prepareRuntimeAuth = requirePrepareRuntimeAuth(provider);
-    mockAzureCliToken({ accessToken: "test-token", expiresInMs: 60_000 });
+    mockAzureCliToken({ accessToken: "test-token-placeholder", expiresInMs: 60_000 });
     ensureAuthProfileStoreMock.mockReturnValueOnce(buildEntraProfileStore());
 
     const prepared = requireRuntimeAuthResult(
@@ -444,7 +450,7 @@ describe("microsoft-foundry plugin", () => {
     expect(prepared.baseUrl).toBe("https://example.services.ai.azure.com/openai/v1");
     expect(prepared.request?.auth).toEqual({
       mode: "authorization-bearer",
-      token: "test-token",
+      token: "test-token-placeholder",
     });
     expect(execFileMock.mock.calls[0]?.[1]).toEqual(
       expect.arrayContaining(["--resource", COGNITIVE_SERVICES_RESOURCE]),
@@ -454,7 +460,7 @@ describe("microsoft-foundry plugin", () => {
   it("falls back to Entra metadata when a configured Foundry endpoint is malformed", async () => {
     const provider = registerProvider();
     const prepareRuntimeAuth = requirePrepareRuntimeAuth(provider);
-    mockAzureCliToken({ accessToken: "test-token", expiresInMs: 60_000 });
+    mockAzureCliToken({ accessToken: "test-token-placeholder", expiresInMs: 60_000 });
     ensureAuthProfileStoreMock.mockReturnValueOnce(buildEntraProfileStore());
 
     const prepared = requireRuntimeAuthResult(
@@ -469,7 +475,7 @@ describe("microsoft-foundry plugin", () => {
     expect(prepared.baseUrl).toBe("https://example.services.ai.azure.com/openai/v1");
     expect(prepared.request?.auth).toEqual({
       mode: "authorization-bearer",
-      token: "test-token",
+      token: "test-token-placeholder",
     });
   });
 
@@ -502,7 +508,7 @@ describe("microsoft-foundry plugin", () => {
   it("uses active model routing when Entra metadata points at another deployment", async () => {
     const provider = registerProvider();
     const prepareRuntimeAuth = requirePrepareRuntimeAuth(provider);
-    mockAzureCliToken({ accessToken: "test-token", expiresInMs: 60_000 });
+    mockAzureCliToken({ accessToken: "test-token-placeholder", expiresInMs: 60_000 });
     ensureAuthProfileStoreMock.mockReturnValueOnce(
       buildEntraProfileStore({
         endpoint: "https://example.services.ai.azure.com",
@@ -1416,6 +1422,7 @@ describe("microsoft-foundry plugin", () => {
 
   it.each([
     ["claude-mythos-preview", 128_000],
+    ["claude-opus-5", 128_000],
     ["claude-fable-5", 128_000],
     ["claude-opus-4.8", 128_000],
     ["claude-opus-4.7", 128_000],
@@ -1472,6 +1479,25 @@ describe("microsoft-foundry plugin", () => {
   it("resolves Claude thinking profiles from configured Foundry model names", () => {
     const provider = registerProvider();
 
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "microsoft-foundry",
+        modelId: "prod-opus",
+        params: { canonicalModelId: "claude-opus-5" },
+      }),
+    ).toMatchObject({
+      defaultLevel: "high",
+      levels: [
+        { id: "off" },
+        { id: "minimal" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "high" },
+        { id: "xhigh" },
+        { id: "adaptive" },
+        { id: "max" },
+      ],
+    });
     expect(
       provider.resolveThinkingProfile?.({
         provider: "microsoft-foundry",
@@ -1765,7 +1791,7 @@ describe("microsoft-foundry plugin", () => {
 
   it("preserves project-scoped endpoint prefixes when extracting the Foundry endpoint", async () => {
     const provider = registerProvider();
-    mockAzureCliToken({ accessToken: "test-token", expiresInMs: 60_000 });
+    mockAzureCliToken({ accessToken: "test-token-placeholder", expiresInMs: 60_000 });
     ensureAuthProfileStoreMock.mockReturnValueOnce({ profiles: {} });
 
     const prepared = await provider.prepareRuntimeAuth?.(
@@ -2039,4 +2065,71 @@ describe("isAnthropicFoundryDeployment", () => {
     },
   );
 });
+describe("azLoginDeviceCodeWithOptions utf-8 chunk boundary", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    runCommandWithTimeoutMock.mockReset();
+  });
+
+  it("reassembles split-byte UTF-8 across both spawned process streams", async () => {
+    runCommandWithTimeoutMock.mockImplementationOnce(
+      async (
+        _argv: string[],
+        options: {
+          onOutputChunk?: (chunk: Buffer, stream: "stdout" | "stderr") => void;
+        },
+      ) => {
+        const writeSplitUtf8 = (stream: "stdout" | "stderr", text: string) => {
+          const bytes = Buffer.from(text);
+          options.onOutputChunk?.(bytes.subarray(0, 2), stream);
+          options.onOutputChunk?.(bytes.subarray(2), stream);
+        };
+        writeSplitUtf8("stderr", "😊");
+        writeSplitUtf8("stdout", "🚀");
+        return {
+          stdout: "",
+          stderr: "",
+          code: 1,
+          signal: null,
+          killed: false,
+          termination: "exit",
+          noOutputTimedOut: false,
+        };
+      },
+    );
+    const stdoutWriteSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderrWriteSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    const err = await azLoginDeviceCodeWithOptions({}).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe("az login exited with code 1: 😊🚀");
+    expect(stdoutWriteSpy).toHaveBeenCalledWith("🚀");
+    expect(stderrWriteSpy).toHaveBeenCalledWith("😊");
+  });
+
+  it("allows post-auth work after the 15-minute device-code lifetime", async () => {
+    runCommandWithTimeoutMock.mockResolvedValueOnce({
+      stdout: "",
+      stderr: "",
+      code: 124,
+      signal: null,
+      killed: true,
+      termination: "timeout",
+      noOutputTimedOut: false,
+    });
+
+    const err = await azLoginDeviceCodeWithOptions({}).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe("az login timed out after 20 minutes");
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
+      ["az", "login", "--use-device-code"],
+      expect.objectContaining({
+        killProcessTree: true,
+        outputCapture: "discard",
+        timeoutMs: 20 * 60 * 1000,
+      }),
+    );
+  });
+});
+
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

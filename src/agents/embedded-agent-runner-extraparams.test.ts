@@ -3,7 +3,7 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { testing as extraParamsTesting } from "./embedded-agent-runner/extra-params.js";
+import { testing as extraParamsTesting } from "./embedded-agent-runner/extra-params.test-support.js";
 
 vi.mock("../plugins/provider-hook-runtime.js", () => ({
   clearProviderRuntimePluginCacheForTest: vi.fn(),
@@ -294,7 +294,7 @@ function createAnthropicFastModeWrapper(baseStreamFn: StreamFn | undefined, fast
   return createAnthropicServiceTierWrapper(baseStreamFn, fastMode ? "auto" : "standard_only");
 }
 
-import { isAnthropicBedrockModel } from "../llm/providers/stream-wrappers/anthropic-family-cache-semantics.js";
+import { isAnthropicFamilyCacheTtlEligible } from "../llm/providers/stream-wrappers/anthropic-family-cache-semantics.js";
 import { createAnthropicToolPayloadCompatibilityWrapper } from "../llm/providers/stream-wrappers/anthropic-family-tool-payload-compat.js";
 import { createGoogleThinkingPayloadWrapper } from "../llm/providers/stream-wrappers/google.js";
 import { createMinimaxFastModeWrapper } from "../llm/providers/stream-wrappers/minimax.js";
@@ -355,7 +355,10 @@ function installFullProviderRuntimeDepsForTest() {
         return createTestOpenAIProviderWrapper(params, false);
       }
       if (params.provider === "amazon-bedrock") {
-        return isAnthropicBedrockModel(params.context.modelId)
+        return isAnthropicFamilyCacheTtlEligible({
+          provider: params.provider,
+          modelId: params.context.modelId,
+        })
           ? params.context.streamFn
           : createTestBedrockNoCacheWrapper(params.context.streamFn);
       }

@@ -1,6 +1,7 @@
 // Tests inbound metadata normalization before prompt injection.
 import { describe, expect, it, vi } from "vitest";
 import type { SessionEntry, SessionGoalStatus } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnv } from "../../test-utils/env.js";
@@ -11,21 +12,33 @@ import {
   refreshActiveGoalContext,
 } from "./inbound-meta.js";
 
+const EMPTY_CFG = {} as OpenClawConfig;
+
+const { formattingHintCalls } = vi.hoisted(() => ({
+  formattingHintCalls: [] as Array<{ cfg: OpenClawConfig; accountId?: string | null }>,
+}));
+
 vi.mock("../../channels/plugins/registry-loaded.js", () => ({
   getLoadedChannelPluginById: (channelId: string) =>
     channelId === "slack"
       ? {
           agentPrompt: {
-            inboundFormattingHints: () => ({
-              text_markup: "slack_mrkdwn",
-              rules: [
-                "Use Slack mrkdwn, not standard Markdown.",
-                "Bold uses *single asterisks*.",
-                "Links use <url|label>.",
-                "Code blocks use triple backticks without a language identifier.",
-                "Do not use markdown headings or pipe tables.",
-              ],
-            }),
+            inboundFormattingHints: (params: {
+              cfg: OpenClawConfig;
+              accountId?: string | null;
+            }) => {
+              formattingHintCalls.push(params);
+              return {
+                text_markup: "slack_mrkdwn",
+                rules: [
+                  "Use Slack mrkdwn, not standard Markdown.",
+                  "Bold uses *single asterisks*.",
+                  "Links use <url|label>.",
+                  "Code blocks use triple backticks without a language identifier.",
+                  "Do not use markdown headings or pipe tables.",
+                ],
+              };
+            },
           },
         }
       : undefined,
@@ -112,17 +125,20 @@ function createGoalSessionEntry(
 
 describe("buildInboundMetaSystemPrompt", () => {
   it("includes stable routing fields and omits chat ids", () => {
-    const prompt = buildInboundMetaSystemPrompt({
-      MessageSid: "123",
-      MessageSidFull: "123",
-      ReplyToId: "99",
-      OriginatingTo: "telegram:5494292670",
-      AccountId: " work ",
-      OriginatingChannel: "telegram",
-      Provider: "telegram",
-      Surface: "telegram",
-      ChatType: "direct",
-    } as TemplateContext);
+    const prompt = buildInboundMetaSystemPrompt(
+      {
+        MessageSid: "123",
+        MessageSidFull: "123",
+        ReplyToId: "99",
+        OriginatingTo: "telegram:5494292670",
+        AccountId: " work ",
+        OriginatingChannel: "telegram",
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "direct",
+      } as TemplateContext,
+      EMPTY_CFG,
+    );
 
     const payload = parseInboundMetaPayload(prompt);
     expect(payload["schema"]).toBe("openclaw.inbound_meta.v2");
@@ -132,39 +148,48 @@ describe("buildInboundMetaSystemPrompt", () => {
   });
 
   it("keeps task-scoped chat ids out of the system prompt for cache stability", () => {
-    const first = buildInboundMetaSystemPrompt({
-      OriginatingTo: "paperclip:issue:c585d0cc",
-      OriginatingChannel: "paperclip",
-      Provider: "paperclip",
-      Surface: "paperclip",
-      ChatType: "direct",
-      AccountId: "default",
-    } as TemplateContext);
-    const second = buildInboundMetaSystemPrompt({
-      OriginatingTo: "paperclip:issue:ca527062",
-      OriginatingChannel: "paperclip",
-      Provider: "paperclip",
-      Surface: "paperclip",
-      ChatType: "direct",
-      AccountId: "default",
-    } as TemplateContext);
+    const first = buildInboundMetaSystemPrompt(
+      {
+        OriginatingTo: "paperclip:issue:c585d0cc",
+        OriginatingChannel: "paperclip",
+        Provider: "paperclip",
+        Surface: "paperclip",
+        ChatType: "direct",
+        AccountId: "default",
+      } as TemplateContext,
+      EMPTY_CFG,
+    );
+    const second = buildInboundMetaSystemPrompt(
+      {
+        OriginatingTo: "paperclip:issue:ca527062",
+        OriginatingChannel: "paperclip",
+        Provider: "paperclip",
+        Surface: "paperclip",
+        ChatType: "direct",
+        AccountId: "default",
+      } as TemplateContext,
+      EMPTY_CFG,
+    );
 
     expect(parseInboundMetaPayload(first)["chat_id"]).toBeUndefined();
     expect(first).toBe(second);
   });
 
   it("does not include per-turn message identifiers (cache stability)", () => {
-    const prompt = buildInboundMetaSystemPrompt({
-      MessageSid: "123",
-      MessageSidFull: "123",
-      ReplyToId: "99",
-      SenderId: "289522496",
-      OriginatingTo: "telegram:5494292670",
-      OriginatingChannel: "telegram",
-      Provider: "telegram",
-      Surface: "telegram",
-      ChatType: "direct",
-    } as TemplateContext);
+    const prompt = buildInboundMetaSystemPrompt(
+      {
+        MessageSid: "123",
+        MessageSidFull: "123",
+        ReplyToId: "99",
+        SenderId: "289522496",
+        OriginatingTo: "telegram:5494292670",
+        OriginatingChannel: "telegram",
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "direct",
+      } as TemplateContext,
+      EMPTY_CFG,
+    );
 
     const payload = parseInboundMetaPayload(prompt);
     expect(payload["message_id"]).toBeUndefined();
@@ -174,56 +199,68 @@ describe("buildInboundMetaSystemPrompt", () => {
   });
 
   it("does not include per-turn flags in system metadata", () => {
-    const prompt = buildInboundMetaSystemPrompt({
-      ReplyToBody: "quoted",
-      ForwardedFrom: "sender",
-      ThreadStarterBody: "starter",
-      InboundHistory: [{ sender: "a", body: "b", timestamp: 1 }],
-      WasMentioned: true,
-      OriginatingTo: "telegram:-1001249586642",
-      OriginatingChannel: "telegram",
-      Provider: "telegram",
-      Surface: "telegram",
-      ChatType: "group",
-    } as TemplateContext);
+    const prompt = buildInboundMetaSystemPrompt(
+      {
+        ReplyToBody: "quoted",
+        ForwardedFrom: "sender",
+        ThreadStarterBody: "starter",
+        InboundHistory: [{ sender: "a", body: "b", timestamp: 1 }],
+        WasMentioned: true,
+        OriginatingTo: "telegram:-1001249586642",
+        OriginatingChannel: "telegram",
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "group",
+      } as TemplateContext,
+      EMPTY_CFG,
+    );
 
     const payload = parseInboundMetaPayload(prompt);
     expect(payload["flags"]).toBeUndefined();
   });
 
-  it("keeps explicit bot mentions out of the system metadata", () => {
-    const prompt = buildInboundMetaSystemPrompt({
-      OriginatingTo: "telegram:-1001249586642",
-      OriginatingChannel: "telegram",
-      Provider: "telegram",
-      Surface: "telegram",
-      ChatType: "group",
-      BotUsername: "SirPinchALotBot",
-      ExplicitlyMentionedBot: true,
-    } as TemplateContext);
+  it("keeps bot usernames out of the system metadata and includes standing mention guidance", () => {
+    const prompt = buildInboundMetaSystemPrompt(
+      {
+        OriginatingTo: "telegram:-1001249586642",
+        OriginatingChannel: "telegram",
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "group",
+        BotUsername: "SirPinchALotBot",
+        ExplicitlyMentionedBot: true,
+      } as TemplateContext,
+      EMPTY_CFG,
+    );
 
     const payload = parseInboundMetaPayload(prompt);
     expect(payload["flags"]).toBeUndefined();
     expect(prompt).not.toContain("SirPinchALotBot");
-    expect(prompt).not.toContain("explicitly mentions your channel identity");
+    expect(prompt).toContain(
+      "When explicitly_mentioned_bot is true, the incoming message mentions your channel identity; treat it as addressed to you even if your persona name differs.",
+    );
   });
 
   it("omits sender_id when blank", () => {
-    const prompt = buildInboundMetaSystemPrompt({
-      MessageSid: "458",
-      SenderId: "   ",
-      OriginatingTo: "telegram:-1001249586642",
-      OriginatingChannel: "telegram",
-      Provider: "telegram",
-      Surface: "telegram",
-      ChatType: "group",
-    } as TemplateContext);
+    const prompt = buildInboundMetaSystemPrompt(
+      {
+        MessageSid: "458",
+        SenderId: "   ",
+        OriginatingTo: "telegram:-1001249586642",
+        OriginatingChannel: "telegram",
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "group",
+      } as TemplateContext,
+      EMPTY_CFG,
+    );
 
     const payload = parseInboundMetaPayload(prompt);
     expect(payload["sender_id"]).toBeUndefined();
   });
 
-  it("includes Slack mrkdwn response format hints for Slack chats", () => {
+  it("includes Slack mrkdwn response format hints for Slack chats and threads cfg", () => {
+    formattingHintCalls.length = 0;
     resetPluginRuntimeStateForTest();
     setActivePluginRegistry(
       createTestRegistry([
@@ -258,13 +295,20 @@ describe("buildInboundMetaSystemPrompt", () => {
       ]),
     );
 
-    const prompt = buildInboundMetaSystemPrompt({
-      OriginatingTo: "channel:C123",
-      OriginatingChannel: "slack",
-      Provider: "slack",
-      Surface: "slack",
-      ChatType: "channel",
-    } as TemplateContext);
+    const cfg = {
+      channels: { slack: { botToken: "test-token-placeholder" } },
+    } as OpenClawConfig;
+    const prompt = buildInboundMetaSystemPrompt(
+      {
+        OriginatingTo: "channel:C123",
+        OriginatingChannel: "slack",
+        Provider: "slack",
+        Surface: "slack",
+        ChatType: "channel",
+        AccountId: " work ",
+      } as TemplateContext,
+      cfg,
+    );
 
     const payload = parseInboundMetaPayload(prompt);
     expect(payload["response_format"]).toEqual({
@@ -277,16 +321,48 @@ describe("buildInboundMetaSystemPrompt", () => {
         "Do not use markdown headings or pipe tables.",
       ],
     });
+    expect(formattingHintCalls).toEqual([{ cfg, accountId: "work" }]);
   });
 
-  it("omits response format hints for non-Slack chats", () => {
-    const prompt = buildInboundMetaSystemPrompt({
-      OriginatingTo: "telegram:123",
-      OriginatingChannel: "telegram",
-      Provider: "telegram",
-      Surface: "telegram",
-      ChatType: "direct",
-    } as TemplateContext);
+  it("resolves response format hints from formattingHintsCtx for system-event turns", () => {
+    const prompt = buildInboundMetaSystemPrompt(
+      {
+        OriginatingChannel: "heartbeat",
+        Provider: "heartbeat",
+        Surface: "heartbeat",
+        ChatType: "direct",
+      } as TemplateContext,
+      EMPTY_CFG,
+      {
+        formattingHintsCtx: {
+          OriginatingChannel: "slack",
+          Provider: "slack",
+          Surface: "slack",
+          ChatType: "channel",
+          AccountId: "work",
+        } as TemplateContext,
+      },
+    );
+
+    const payload = parseInboundMetaPayload(prompt);
+    const responseFormat = payload["response_format"] as { text_markup?: string } | undefined;
+    expect(responseFormat?.text_markup).toBe("slack_mrkdwn");
+    // Trusted metadata still identifies the system event; only authoring hints
+    // follow the delivery channel.
+    expect(payload["channel"]).toBe("heartbeat");
+  });
+
+  it("omits response format hints when the channel plugin has no formatting hook", () => {
+    const prompt = buildInboundMetaSystemPrompt(
+      {
+        OriginatingTo: "telegram:123",
+        OriginatingChannel: "telegram",
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "direct",
+      } as TemplateContext,
+      EMPTY_CFG,
+    );
 
     const payload = parseInboundMetaPayload(prompt);
     expect(payload["response_format"]).toBeUndefined();
@@ -450,7 +526,10 @@ describe("buildInboundUserContextPrefix", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "direct",
       OriginatingChannel: "discord",
-      MediaTypes: ["application/pdf", "image/png"],
+      media: [
+        { path: "/tmp/report.pdf", contentType: "application/pdf" },
+        { path: "/tmp/photo.png", contentType: "image/png" },
+      ],
     } as TemplateContext);
 
     expect(parseConversationInfoPayload(text)["source_modality"]).toBe("document");
@@ -528,7 +607,7 @@ describe("buildInboundUserContextPrefix", () => {
     } as TemplateContext);
 
     expect(text).toContain("Conversation info (untrusted metadata):");
-    expect(text).toContain('"conversation_label": "ops-room"');
+    expect(text).toContain('"conversation_label":"ops-room"');
   });
 
   it("renders group subject and participants as untrusted metadata", () => {
@@ -702,29 +781,34 @@ describe("buildInboundUserContextPrefix", () => {
   });
 
   it("renders hydrated reply chain instead of duplicate one-hop reply target", () => {
-    const text = buildInboundUserContextPrefix({
-      ReplyToSender: "Blair",
-      ReplyToBody: "The cache warmer is the piece I meant.",
-      ReplyChain: [
-        {
-          messageId: "3001",
-          sender: "Blair",
-          senderId: "700002",
-          timestamp: 1778216405000,
-          body: "The cache warmer is the piece I meant.",
-          replyToId: "3000",
-        },
-        {
-          messageId: "3000",
-          sender: "Avery",
-          senderId: "700001",
-          timestamp: 1778216400000,
-          body: "Architecture sketch for the cache warmer",
-          mediaType: "image",
-          mediaRef: "telegram:file/proof-photo-small",
-        },
-      ],
-    } as TemplateContext);
+    const text = buildInboundUserContextPrefix(
+      {
+        ReplyToSender: "Blair",
+        ReplyToBody: "The cache warmer is the piece I meant.",
+        ReplyChain: [
+          {
+            messageId: "3001",
+            sender: "Blair",
+            senderId: "700002",
+            timestamp: 1778216405000,
+            body: "The cache warmer is the piece I meant.",
+            replyToId: "3000",
+            forwardedFrom: "Morgan",
+            forwardedDate: 1778212800000,
+          },
+          {
+            messageId: "3000",
+            sender: "Avery",
+            senderId: "700001",
+            timestamp: 1778216400000,
+            body: "Architecture sketch for the cache warmer",
+            mediaType: "image",
+            mediaRef: "telegram:file/proof-photo-small",
+          },
+        ],
+      } as TemplateContext,
+      { timezone: "UTC" },
+    );
 
     const replyChain = parseReplyChainPayload(text);
     expect(replyChain).toEqual([
@@ -732,22 +816,23 @@ describe("buildInboundUserContextPrefix", () => {
         message_id: "3001",
         sender: "Blair",
         sender_id: "700002",
-        timestamp_ms: 1778216405000,
+        timestamp: "2026-05-08T05:00:05Z",
         body: "The cache warmer is the piece I meant.",
         reply_to_id: "3000",
+        forwarded_from: "Morgan",
+        forwarded_date: "2026-05-08T04:00:00Z",
       },
       {
         message_id: "3000",
         sender: "Avery",
         sender_id: "700001",
-        timestamp_ms: 1778216400000,
+        timestamp: "2026-05-08T05:00:00Z",
         body: "Architecture sketch for the cache warmer",
         media_type: "image",
         media_ref: "telegram:file/proof-photo-small",
       },
     ]);
     expect(text).not.toContain("Reply target of current user message");
-    expect(parseConversationInfoPayload(text)["has_reply_context"]).toBe(true);
   });
 
   it("renders Telegram replies as an inline current-message quote", () => {
@@ -863,6 +948,29 @@ describe("buildInboundUserContextPrefix", () => {
     expect(conversationInfo["sender"]).toEqual({ e164: "+15551234567" });
   });
 
+  it("omits e164 when it repeats the sender id digits", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      SenderId: "15551234567",
+      SenderE164: "+1 (555) 123-4567",
+    } as TemplateContext);
+
+    expect(parseConversationInfoPayload(text)["sender"]).toEqual({ id: "15551234567" });
+  });
+
+  it("keeps e164 when it differs from the sender id digits", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      SenderId: "15550001111",
+      SenderE164: "+15551234567",
+    } as TemplateContext);
+
+    expect(parseConversationInfoPayload(text)["sender"]).toEqual({
+      id: "15550001111",
+      e164: "+15551234567",
+    });
+  });
+
   it("includes dynamic per-turn flags in conversation info", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "group",
@@ -888,9 +996,6 @@ describe("buildInboundUserContextPrefix", () => {
     expect(conversationInfo["mentioned_subteam_ids"]).toEqual(["S_ONCALL"]);
     expect(conversationInfo["implicit_mention_kinds"]).toEqual(["bot_thread_participant"]);
     expect(conversationInfo["mention_source"]).toBe("implicit_thread");
-    expect(conversationInfo["has_reply_context"]).toBe(true);
-    expect(conversationInfo["has_forwarded_context"]).toBe(true);
-    expect(conversationInfo["has_thread_starter"]).toBe(true);
     expect(conversationInfo["history_count"]).toBe(1);
   });
 
@@ -903,8 +1008,7 @@ describe("buildInboundUserContextPrefix", () => {
 
     const conversationInfo = parseConversationInfoPayload(text);
     expect(conversationInfo["explicitly_mentioned_bot"]).toBe(true);
-    expect(text).toContain("explicitly mentions your channel identity @SirPinchALotBot");
-    expect(text).toContain("Treat that mention as addressed to you");
+    expect(text).not.toContain("SirPinchALotBot");
   });
 
   it("trims sender_id in conversation info", () => {
@@ -957,11 +1061,11 @@ describe("buildInboundUserContextPrefix", () => {
     });
     expect(conversationInfo["topic_id"]).toBe("thread--1");
 
-    expect(text).toContain('"body": "thread starter"');
-    expect(text).toContain('"sender_label": "Quoter"');
-    expect(text).toContain('"body": "quoted body"');
-    expect(text).toContain('"from": "forwarder"');
-    expect(text).toContain('"title": "title"');
+    expect(text).toContain('"body":"thread starter"');
+    expect(text).toContain('"sender_label":"Quoter"');
+    expect(text).toContain('"body":"quoted body"');
+    expect(text).toContain('"from":"forwarder"');
+    expect(text).toContain('"title":"title"');
     expect(text).toContain("history: body text");
   });
 
@@ -1102,7 +1206,7 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).not.toContain("telegram:file/old-provider-ref");
     expect(text).not.toContain("/home/user/.openclaw/media/inbound/sticker.webp");
     expect(text).not.toContain("Current local chat window (untrusted metadata):");
-    expect(text).not.toContain('"message_id": "34273"');
+    expect(text).not.toContain('"message_id":"34273"');
   });
 
   it("honors timestamp suppression for chat window structured context", () => {
@@ -1289,7 +1393,7 @@ describe("buildInboundUserContextPrefix", () => {
     } as TemplateContext);
 
     expect(withForwardedFrom).toContain("Forwarded message context (untrusted metadata):");
-    expect(withForwardedFrom).toContain('"from": "source"');
+    expect(withForwardedFrom).toContain('"from":"source"');
   });
 
   it("truncates oversized untrusted strings before serializing them into prompt context", () => {
@@ -1301,7 +1405,7 @@ describe("buildInboundUserContextPrefix", () => {
 
     expect(text).not.toContain(oversized);
     expect(text).toContain("…[truncated]");
-    expect(text).toContain('"body": "');
+    expect(text).toContain('"body":"');
   });
 
   it("preserves tail content in ReplyChain body via head+tail truncation", () => {
@@ -1431,9 +1535,6 @@ describe("buildInboundUserContextPrefix", () => {
       ],
     } as TemplateContext);
 
-    const conversationInfo = parseConversationInfoPayload(text);
-    expect(conversationInfo["history_media_count"]).toBe(1);
-
     expect(text).toContain("#m-1");
     expect(text).toContain("Alice: <media:image> (1 image) [image/png]");
     expect(text).not.toContain("/tmp/openclaw-secret-image.png");
@@ -1468,9 +1569,6 @@ describe("buildInboundUserContextPrefix", () => {
         },
       ],
     } as TemplateContext);
-
-    const conversationInfo = parseConversationInfoPayload(text);
-    expect(conversationInfo["history_media_count"]).toBe(2);
 
     expect(text).toContain("#m-2");
     expect(text).toContain("Alice: <media:image> (2 images) [image/png, image/jpeg]");

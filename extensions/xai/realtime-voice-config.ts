@@ -18,7 +18,7 @@ import { XAI_BASE_URL } from "./model-definitions.js";
 type XaiRealtimeVoice = "eve" | "ara" | "rex" | "sal" | "leo";
 type XaiRealtimeReasoningEffort = "high" | "none";
 
-export type XaiRealtimeVoiceProviderConfig = {
+type XaiRealtimeVoiceProviderConfig = {
   apiKey?: string;
   baseUrl?: string;
   model?: string;

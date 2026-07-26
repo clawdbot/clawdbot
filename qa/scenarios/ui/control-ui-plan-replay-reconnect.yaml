@@ -1,0 +1,30 @@
+title: Control UI plan checklist replay on reconnect
+
+scenario:
+  id: control-ui-plan-replay-reconnect
+  surface: control-ui
+  coverage:
+    primary:
+      - control-ui.gateway-hosted-ui-control
+  objective: >-
+    Prove a client that connects or refreshes mid-run renders the active plan
+    checklist from the replayed chat.history/chat.startup inFlightRun snapshot,
+    then keeps the normal live-update and terminal-clear lifecycle.
+  successCriteria:
+    - The checklist renders from the replayed snapshot alone, before any live plan event.
+    - A newer live plan event replaces the seeded snapshot in place.
+    - The checklist clears when the run reaches a terminal outcome.
+    - A mid-run page reload restores the checklist from the snapshot.
+  docsRefs:
+    - docs/web/control-ui.md
+  codeRefs:
+    - ui/src/e2e/plan-replay-reconnect.e2e.test.ts
+    - ui/src/pages/chat/chat-history.ts
+    - src/gateway/chat-abort.ts
+  execution:
+    kind: playwright
+    path: ui/src/e2e/plan-replay-reconnect.e2e.test.ts
+    summary: >-
+      Playwright coverage for plan-snapshot replay on connect, reload, live
+      replacement, and terminal clearing (follow-up to the live-verified
+      reconnect gap fixed in PR 109966).

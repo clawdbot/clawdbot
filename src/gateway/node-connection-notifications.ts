@@ -4,18 +4,26 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { NodeRegistry, NodeSession } from "./node-registry.js";
 
-type NotificationRegistry = Pick<NodeRegistry, "listConnected" | "invoke">;
+type NotificationRegistry = Pick<
+  NodeRegistry,
+  "listCurrentConnected" | "isConnectionCurrentPairingState" | "invoke"
+>;
 
 type RouterOptions = {
   primaryDelayMs?: number;
   fallbackDelayMs?: number;
-  reconnectCooldownMs?: number;
-  now?: () => number;
+};
+
+type PendingConnectionAlert = {
+  nodeId: string;
+  connId: string;
+  pairingIdentity?: string;
+  pairingGeneration?: string;
+  timer?: ReturnType<typeof setTimeout>;
 };
 
 const DEFAULT_PRIMARY_DELAY_MS = 750;
 const DEFAULT_FALLBACK_DELAY_MS = 5_000;
-const DEFAULT_RECONNECT_COOLDOWN_MS = 5 * 60_000;
 
 function isMacNotificationNode(node: NodeSession): boolean {
   const platform = node.platform?.trim().toLowerCase() ?? "";
@@ -38,15 +46,11 @@ function connectionLabel(node: NodeSession): string {
   return sliceUtf16Safe(raw.replace(/\s+/g, " "), 0, 80);
 }
 
-/** One gateway-runtime router with bounded reconnect suppression and short-lived timers. */
+/** One gateway-runtime router with short-lived first-connection timers. */
 class NodeConnectionNotificationRouter {
   private readonly primaryDelayMs: number;
   private readonly fallbackDelayMs: number;
-  private readonly reconnectCooldownMs: number;
-  private readonly now: () => number;
-  private readonly lastAlertAtByNodeId = new Map<string, number>();
-  private readonly timersByNodeId = new Map<string, ReturnType<typeof setTimeout>>();
-  private readonly pendingConnByNodeId = new Map<string, string>();
+  private readonly pendingByNodeId = new Map<string, PendingConnectionAlert>();
 
   constructor(
     private readonly registry: NotificationRegistry,
@@ -54,95 +58,139 @@ class NodeConnectionNotificationRouter {
   ) {
     this.primaryDelayMs = options.primaryDelayMs ?? DEFAULT_PRIMARY_DELAY_MS;
     this.fallbackDelayMs = options.fallbackDelayMs ?? DEFAULT_FALLBACK_DELAY_MS;
-    this.reconnectCooldownMs = options.reconnectCooldownMs ?? DEFAULT_RECONNECT_COOLDOWN_MS;
-    this.now = options.now ?? Date.now;
   }
 
-  onConnected(source: NodeSession): void {
-    const now = this.now();
-    const previous = this.lastAlertAtByNodeId.get(source.nodeId);
-    if (previous !== undefined && now - previous < this.reconnectCooldownMs) {
+  onConnected(source: NodeSession, isFirstConnection: boolean): void {
+    // A rapid replacement may take over an already-pending first-connection alert.
+    // Ordinary reconnects have no pending claim and remain silent.
+    if (!isFirstConnection && !this.pendingByNodeId.has(source.nodeId)) {
       return;
     }
-    this.pendingConnByNodeId.set(source.nodeId, source.connId);
-    this.replaceTimer(
-      source.nodeId,
-      setTimeout(() => {
-        this.timersByNodeId.delete(source.nodeId);
-        void this.deliverPrimary(source);
-      }, this.primaryDelayMs),
-    );
+    const previous = this.pendingByNodeId.get(source.nodeId);
+    if (previous?.timer) {
+      clearTimeout(previous.timer);
+    }
+    const pending: PendingConnectionAlert = {
+      nodeId: source.nodeId,
+      connId: source.connId,
+      pairingIdentity: source.pairingIdentity,
+      pairingGeneration: source.pairingGeneration,
+    };
+    this.pendingByNodeId.set(source.nodeId, pending);
+    this.armTimer(pending, this.primaryDelayMs, () => this.deliverPrimary(pending));
   }
 
   dispose(): void {
-    for (const timer of this.timersByNodeId.values()) {
-      clearTimeout(timer);
+    for (const pending of this.pendingByNodeId.values()) {
+      if (pending.timer) {
+        clearTimeout(pending.timer);
+      }
     }
-    this.timersByNodeId.clear();
-    this.pendingConnByNodeId.clear();
+    this.pendingByNodeId.clear();
   }
 
-  private async deliverPrimary(source: NodeSession): Promise<void> {
-    if (!this.attemptIsCurrent(source)) {
+  private async deliverPrimary(pending: PendingConnectionAlert): Promise<void> {
+    const connected = await this.registry.listCurrentConnected();
+    const source = this.currentSource(pending, connected);
+    if (!source) {
+      this.finishAlert(pending);
       return;
     }
-    const primary = this.notificationTargets()
+    const primary = this.notificationTargets(connected)
       .filter((node) => node.lastActiveAtMs !== undefined)
       .toSorted(compareActivity)
       .at(0);
-    const delivered = primary ? await this.notify(primary, source) : false;
-    if (!this.attemptIsCurrent(source)) {
+    const delivered = primary ? await this.notify(primary, source, pending) : false;
+    if (!this.attemptIsCurrent(pending)) {
       return;
     }
     if (delivered) {
-      this.finishAlert(source);
+      this.finishAlert(pending);
       return;
     }
-    this.replaceTimer(
-      source.nodeId,
-      setTimeout(() => {
-        this.timersByNodeId.delete(source.nodeId);
-        void this.deliverFallback(source, primary?.connId);
-      }, this.fallbackDelayMs),
+    this.armTimer(pending, this.fallbackDelayMs, () =>
+      this.deliverFallback(pending, primary?.connId),
     );
   }
 
-  private async deliverFallback(source: NodeSession, attemptedConnId?: string): Promise<void> {
-    if (!this.attemptIsCurrent(source)) {
+  private async deliverFallback(
+    pending: PendingConnectionAlert,
+    attemptedConnId?: string,
+  ): Promise<void> {
+    const connected = await this.registry.listCurrentConnected();
+    const source = this.currentSource(pending, connected);
+    if (!source) {
+      this.finishAlert(pending);
       return;
     }
-    const targets = this.notificationTargets().filter((node) => node.connId !== attemptedConnId);
-    await Promise.all(targets.map(async (node) => await this.notify(node, source)));
-    if (this.attemptIsCurrent(source)) {
-      this.finishAlert(source);
+    const targets = this.notificationTargets(connected).filter(
+      (node) => node.connId !== attemptedConnId,
+    );
+    await Promise.all(targets.map(async (node) => await this.notify(node, source, pending)));
+    if (this.attemptIsCurrent(pending)) {
+      this.finishAlert(pending);
     }
   }
 
-  private attemptIsCurrent(source: NodeSession): boolean {
-    return (
-      this.pendingConnByNodeId.get(source.nodeId) === source.connId &&
-      this.registry
-        .listConnected()
-        .some((node) => node.nodeId === source.nodeId && node.connId === source.connId)
+  private currentSource(
+    pending: PendingConnectionAlert,
+    connected: readonly NodeSession[],
+  ): NodeSession | undefined {
+    if (!this.attemptIsCurrent(pending)) {
+      return undefined;
+    }
+    return connected.find(
+      (node) =>
+        node.nodeId === pending.nodeId &&
+        node.connId === pending.connId &&
+        node.pairingIdentity === pending.pairingIdentity &&
+        node.pairingGeneration === pending.pairingGeneration,
     );
   }
 
-  private finishAlert(source: NodeSession): void {
-    this.pendingConnByNodeId.delete(source.nodeId);
-    const now = this.now();
-    this.lastAlertAtByNodeId.set(source.nodeId, now);
-    this.pruneCooldowns(now);
+  private attemptIsCurrent(pending: PendingConnectionAlert): boolean {
+    // Object identity lets a replacement invalidate both staged timers and
+    // in-flight deliveries without a second generation bookkeeping path.
+    return this.pendingByNodeId.get(pending.nodeId) === pending;
   }
 
-  private notificationTargets(): NodeSession[] {
-    return this.registry.listConnected().filter(isMacNotificationNode);
+  private finishAlert(pending: PendingConnectionAlert): void {
+    if (this.attemptIsCurrent(pending)) {
+      if (pending.timer) {
+        clearTimeout(pending.timer);
+      }
+      this.pendingByNodeId.delete(pending.nodeId);
+    }
   }
 
-  private async notify(target: NodeSession, source: NodeSession): Promise<boolean> {
+  private notificationTargets(connected: readonly NodeSession[]): NodeSession[] {
+    return connected.filter(isMacNotificationNode);
+  }
+
+  private async sourceIsCurrent(pending: PendingConnectionAlert): Promise<boolean> {
+    if (!this.attemptIsCurrent(pending)) {
+      return false;
+    }
+    const connected = await this.registry.listCurrentConnected();
+    if (!this.currentSource(pending, connected)) {
+      return false;
+    }
+    return await this.registry.isConnectionCurrentPairingState(pending.connId);
+  }
+
+  private async notify(
+    target: NodeSession,
+    source: NodeSession,
+    pending: PendingConnectionAlert,
+  ): Promise<boolean> {
     try {
+      if (!(await this.sourceIsCurrent(pending)) || !this.attemptIsCurrent(pending)) {
+        return false;
+      }
       const result = await this.registry.invoke({
         nodeId: target.nodeId,
         expectedConnId: target.connId,
+        expectedPairingGeneration: target.pairingGeneration,
         command: "system.notify",
         params: {
           title: "Node connected",
@@ -159,33 +207,18 @@ class NodeConnectionNotificationRouter {
     }
   }
 
-  private replaceTimer(nodeId: string, timer: ReturnType<typeof setTimeout>): void {
-    const existing = this.timersByNodeId.get(nodeId);
-    if (existing) {
-      clearTimeout(existing);
+  private armTimer(
+    pending: PendingConnectionAlert,
+    delayMs: number,
+    deliver: () => Promise<void>,
+  ): void {
+    if (pending.timer) {
+      clearTimeout(pending.timer);
     }
-    this.timersByNodeId.set(nodeId, timer);
-  }
-
-  private pruneCooldowns(now: number): void {
-    if (this.lastAlertAtByNodeId.size <= 256) {
-      return;
-    }
-    for (const [nodeId, alertedAt] of this.lastAlertAtByNodeId) {
-      if (now - alertedAt >= this.reconnectCooldownMs) {
-        this.lastAlertAtByNodeId.delete(nodeId);
-      }
-      if (this.lastAlertAtByNodeId.size <= 256) {
-        return;
-      }
-    }
-    while (this.lastAlertAtByNodeId.size > 256) {
-      const oldest = this.lastAlertAtByNodeId.keys().next().value;
-      if (oldest === undefined) {
-        return;
-      }
-      this.lastAlertAtByNodeId.delete(oldest);
-    }
+    pending.timer = setTimeout(() => {
+      pending.timer = undefined;
+      void deliver();
+    }, delayMs);
   }
 }
 
@@ -195,13 +228,17 @@ const routersByRegistry = new WeakMap<NodeRegistry, NodeConnectionNotificationRo
 export function scheduleNodeConnectionNotification(
   registry: NodeRegistry,
   source: NodeSession,
+  options: { isFirstConnection: boolean },
 ): void {
   let router = routersByRegistry.get(registry);
+  if (!options.isFirstConnection && !router) {
+    return;
+  }
   if (!router) {
     router = new NodeConnectionNotificationRouter(registry);
     routersByRegistry.set(registry, router);
   }
-  router.onConnected(source);
+  router.onConnected(source, options.isFirstConnection);
 }
 
 /** Cancels staged alerts owned by a gateway node registry during shutdown. */

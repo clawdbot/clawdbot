@@ -12,6 +12,10 @@ describe("Codex agent harness supports()", () => {
     expect(harness.authBootstrap).toBe("harness");
   });
 
+  it("publishes provider ids for lightweight auto selection", () => {
+    expect(harness.autoSelection?.providerIds).toEqual(["codex", "openai"]);
+  });
+
   const harness = createCodexAppServerAgentHarness({
     bindingStore: testCodexAppServerBindingStore,
   });
@@ -216,6 +220,7 @@ describe("Codex agent harness supports()", () => {
     });
     const result = narrowHarness.supports({ provider: "openai", requestedRuntime: "codex" });
     expect(result.supported).toBe(false);
+    expect(narrowHarness.autoSelection?.providerIds).toEqual(["codex"]);
   });
 
   it("exposes the fail-closed exact runtime artifact validator", async () => {

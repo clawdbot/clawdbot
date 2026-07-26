@@ -1,8 +1,17 @@
+// @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
-import { TerminalConnection, type TerminalGatewayClient } from "./terminal-connection.ts";
+import {
+  TerminalConnection,
+  type TerminalGatewayClient,
+  TerminalOpenTimeoutError,
+} from "./terminal-connection.ts";
 
 const TERMINAL_LIVENESS_IDLE_MS = 20_000;
 const TERMINAL_LIVENESS_PROBE_TIMEOUT_MS = 5_000;
+const TERMINAL_LIVENESS_FAILURE_RETRY_MS = 5_000;
+const TERMINAL_OPEN_WATCHDOG_MS = 35_000;
+// Idle window elapses, then one probe times out: the interval after which a probe resolves failed.
+const IDLE_PLUS_PROBE_MS = TERMINAL_LIVENESS_IDLE_MS + TERMINAL_LIVENESS_PROBE_TIMEOUT_MS;
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -64,6 +73,31 @@ function makeFakeClient() {
   return client;
 }
 
+function setLivenessProbeOutcomes(
+  client: ReturnType<typeof makeFakeClient>,
+  outcomes: readonly ("success" | "timeout")[],
+): void {
+  const baseRequest = client.request.bind(client);
+  let probeIndex = 0;
+  client.request = (<T>(
+    method: string,
+    params?: unknown,
+    options?: { timeoutMs?: number | null },
+  ): Promise<T> => {
+    if (method !== "terminal.list") {
+      return baseRequest<T>(method, params, options);
+    }
+    client.requests.push({ method, params, ...(options ? { options } : {}) });
+    const outcome = outcomes[probeIndex++] ?? "timeout";
+    if (outcome === "success") {
+      return Promise.resolve({ sessions: [] } as T);
+    }
+    return new Promise<T>((_, reject) => {
+      setTimeout(() => reject(new Error("request timed out")), options?.timeoutMs ?? 0);
+    });
+  }) as typeof client.request;
+}
+
 describe("TerminalConnection", () => {
   it("opens a session and routes its data to the registered sink", async () => {
     const client = makeFakeClient();
@@ -75,7 +109,11 @@ describe("TerminalConnection", () => {
     );
 
     expect(result.sessionId).toBe("s1");
-    expect(client.requests[0]).toEqual({ method: "terminal.open", params: { cols: 80, rows: 24 } });
+    expect(client.requests[0]).toEqual({
+      method: "terminal.open",
+      params: { cols: 80, rows: 24 },
+      options: { timeoutMs: TERMINAL_OPEN_WATCHDOG_MS },
+    });
 
     client.emit("terminal.data", { sessionId: "s1", seq: 5, data: "hello" });
     client.emit("terminal.data", { sessionId: "s1", seq: 6, data: "!" });
@@ -176,7 +214,7 @@ describe("TerminalConnection", () => {
     const client = makeFakeClient();
     const conn = new TerminalConnection(client);
     const data: string[] = [];
-    const replays: string[] = [];
+    const replays: Array<{ snapshot: string; newlyObservedFrom: number }> = [];
     const recovery = deferred<{
       sessionId: string;
       agentId: string;
@@ -190,7 +228,7 @@ describe("TerminalConnection", () => {
       { cols: 80, rows: 24 },
       {
         onData: (chunk) => data.push(chunk),
-        onReplay: (snapshot) => replays.push(snapshot),
+        onReplay: (snapshot, newlyObservedFrom) => replays.push({ snapshot, newlyObservedFrom }),
         onExit: () => {},
       },
     );
@@ -219,11 +257,13 @@ describe("TerminalConnection", () => {
       shell: "/bin/zsh",
       cwd: "/work",
       confined: false,
-      buffer: "authoritative snapshot",
+      buffer: "hello??worldcovered",
       seq: 19,
     });
 
-    await vi.waitFor(() => expect(replays).toEqual(["authoritative snapshot"]));
+    await vi.waitFor(() =>
+      expect(replays).toEqual([{ snapshot: "hello??worldcovered", newlyObservedFrom: 5 }]),
+    );
     expect(data).toEqual(["hello"]);
     expect(client.requests.filter((request) => request.method === "terminal.attach")).toHaveLength(
       1,
@@ -476,7 +516,47 @@ describe("TerminalConnection", () => {
     expect(client.requests[0]).toEqual({
       method: "terminal.open",
       params: { agentId: "ops", cols: 100, rows: 30 },
+      options: { timeoutMs: TERMINAL_OPEN_WATCHDOG_MS },
     });
+  });
+
+  it("maps the Gateway's request-scoped terminal open deadline", async () => {
+    const client = makeFakeClient();
+    client.request = <T>(
+      method: string,
+      params?: unknown,
+      options?: { timeoutMs?: number | null },
+    ) => {
+      client.requests.push({ method, params, ...(options ? { options } : {}) });
+      return Promise.reject(new Error("terminal open timed out")) as Promise<T>;
+    };
+    const conn = new TerminalConnection(client);
+
+    await expect(
+      conn.open({ cols: 80, rows: 24 }, { onData: () => {}, onExit: () => {} }),
+    ).rejects.toBeInstanceOf(TerminalOpenTimeoutError);
+    expect(client.requests[0]?.options).toEqual({ timeoutMs: TERMINAL_OPEN_WATCHDOG_MS });
+    expect(client.forceReconnects).toEqual([]);
+  });
+
+  it("reconnects when the browser watchdog cannot receive the Gateway deadline", async () => {
+    const client = makeFakeClient();
+    client.request = <T>(
+      method: string,
+      params?: unknown,
+      options?: { timeoutMs?: number | null },
+    ) => {
+      client.requests.push({ method, params, ...(options ? { options } : {}) });
+      return Promise.reject(
+        new Error(`gateway request timed out after ${options?.timeoutMs}ms: ${method}`),
+      ) as Promise<T>;
+    };
+    const conn = new TerminalConnection(client);
+
+    await expect(
+      conn.open({ cols: 80, rows: 24 }, { onData: () => {}, onExit: () => {} }),
+    ).rejects.toBeInstanceOf(TerminalOpenTimeoutError);
+    expect(client.forceReconnects).toEqual(["terminal open watchdog timeout"]);
   });
 
   it("forwards a typed catalog reference and preserves the returned title", async () => {
@@ -499,6 +579,7 @@ describe("TerminalConnection", () => {
     expect(client.requests[0]).toEqual({
       method: "terminal.open",
       params: { cols: 100, rows: 30, catalog },
+      options: { timeoutMs: TERMINAL_OPEN_WATCHDOG_MS },
     });
     expect(result.title).toBe("codex resume 0d5c…");
   });
@@ -911,35 +992,61 @@ describe("TerminalConnection", () => {
     expect(await conn.list()).toEqual([]);
   });
 
-  it("forces reconnect when a terminal liveness probe gets no inbound response", async () => {
+  it("keeps the socket after one failed liveness probe and retries on a short backoff", async () => {
     vi.useFakeTimers();
     try {
       const client = makeFakeClient();
-      client.request = ((
-        method: string,
-        params: unknown,
-        options?: { timeoutMs?: number | null },
-      ) => {
-        client.requests.push({ method, params, ...(options ? { options } : {}) });
-        if (method === "terminal.list") {
-          return new Promise((_, reject) => {
-            setTimeout(() => reject(new Error("request timed out")), options?.timeoutMs ?? 0);
-          });
-        }
-        return Promise.resolve(client.nextResponse);
-      }) as typeof client.request;
+      setLivenessProbeOutcomes(client, ["timeout"]);
+      const conn = new TerminalConnection(client);
+      await conn.open({ cols: 80, rows: 24 }, { onData: () => {}, onExit: () => {} });
+      const probes = () =>
+        client.requests.filter((request) => request.method === "terminal.list").length;
+
+      await vi.advanceTimersByTimeAsync(IDLE_PLUS_PROBE_MS);
+      expect(probes()).toBe(1);
+      // A single failure only schedules the short retry; it never tears down the socket.
+      expect(client.forceReconnects).toEqual([]);
+      await vi.advanceTimersByTimeAsync(TERMINAL_LIVENESS_FAILURE_RETRY_MS);
+      expect(probes()).toBe(2);
+      conn.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("forces exactly one reconnect after two consecutive failed liveness probes", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = makeFakeClient();
+      setLivenessProbeOutcomes(client, ["timeout", "timeout"]);
       const conn = new TerminalConnection(client);
       await conn.open({ cols: 80, rows: 24 }, { onData: () => {}, onExit: () => {} });
 
-      await vi.advanceTimersByTimeAsync(TERMINAL_LIVENESS_IDLE_MS);
-      expect(client.requests.at(-1)).toEqual({
-        method: "terminal.list",
-        params: undefined,
-        options: { timeoutMs: TERMINAL_LIVENESS_PROBE_TIMEOUT_MS },
-      });
-      await vi.advanceTimersByTimeAsync(TERMINAL_LIVENESS_PROBE_TIMEOUT_MS);
-
+      await vi.advanceTimersByTimeAsync(IDLE_PLUS_PROBE_MS);
+      expect(client.forceReconnects).toEqual([]);
+      await vi.advanceTimersByTimeAsync(
+        TERMINAL_LIVENESS_FAILURE_RETRY_MS + TERMINAL_LIVENESS_PROBE_TIMEOUT_MS,
+      );
       expect(client.forceReconnects).toEqual(["terminal liveness timeout"]);
+      conn.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resets liveness failures after a successful probe", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = makeFakeClient();
+      setLivenessProbeOutcomes(client, ["timeout", "success", "timeout"]);
+      const conn = new TerminalConnection(client);
+      await conn.open({ cols: 80, rows: 24 }, { onData: () => {}, onExit: () => {} });
+
+      // Probes: timeout (fail), success (clears the streak), timeout (fail again).
+      await vi.advanceTimersByTimeAsync(IDLE_PLUS_PROBE_MS);
+      await vi.advanceTimersByTimeAsync(TERMINAL_LIVENESS_FAILURE_RETRY_MS + IDLE_PLUS_PROBE_MS);
+      // The middle success reset the streak, so the later lone failure cannot reconnect.
+      expect(client.forceReconnects).toEqual([]);
       conn.dispose();
     } finally {
       vi.useRealTimers();
@@ -950,26 +1057,44 @@ describe("TerminalConnection", () => {
     vi.useFakeTimers();
     try {
       const client = makeFakeClient();
-      client.request = ((
-        method: string,
-        params: unknown,
-        options?: { timeoutMs?: number | null },
-      ) => {
-        client.requests.push({ method, params, ...(options ? { options } : {}) });
-        if (method === "terminal.list") {
-          return new Promise((_, reject) => {
-            setTimeout(() => reject(new Error("request timed out")), options?.timeoutMs ?? 0);
-          });
-        }
-        return Promise.resolve(client.nextResponse);
-      }) as typeof client.request;
+      setLivenessProbeOutcomes(client, ["timeout", "timeout"]);
       const conn = new TerminalConnection(client);
       await conn.open({ cols: 80, rows: 24 }, { onData: () => {}, onExit: () => {} });
 
       await vi.advanceTimersByTimeAsync(TERMINAL_LIVENESS_IDLE_MS);
+      // A frame delivered mid-probe proves the socket alive, so the probe timeout is not counted.
       client.emitActivity();
-      await vi.advanceTimersByTimeAsync(TERMINAL_LIVENESS_PROBE_TIMEOUT_MS);
+      await vi.advanceTimersByTimeAsync(TERMINAL_LIVENESS_PROBE_TIMEOUT_MS + IDLE_PLUS_PROBE_MS);
 
+      expect(client.forceReconnects).toEqual([]);
+      conn.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("restarts the full idle window when inbound traffic arrives during the retry backoff", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = makeFakeClient();
+      setLivenessProbeOutcomes(client, ["timeout", "timeout"]);
+      const conn = new TerminalConnection(client);
+      await conn.open({ cols: 80, rows: 24 }, { onData: () => {}, onExit: () => {} });
+
+      const probeCount = () =>
+        client.requests.filter((request) => request.method === "terminal.list").length;
+      // First probe fails and schedules the short 5s retry.
+      await vi.advanceTimersByTimeAsync(IDLE_PLUS_PROBE_MS);
+      expect(probeCount()).toBe(1);
+
+      // A non-terminal frame proves the socket alive during the backoff: the next check treats it
+      // as fresh activity and waits a full idle window instead of re-probing on the short retry, so
+      // no second probe fires and no reconnect happens.
+      client.emitActivity();
+      await vi.advanceTimersByTimeAsync(
+        TERMINAL_LIVENESS_FAILURE_RETRY_MS + TERMINAL_LIVENESS_PROBE_TIMEOUT_MS,
+      );
+      expect(probeCount()).toBe(1);
       expect(client.forceReconnects).toEqual([]);
       conn.dispose();
     } finally {

@@ -1,18 +1,22 @@
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import {
+  createAssistantCommentaryMessage as buildAssistantCommentaryMessage,
   createAssistantMessage as buildAssistantMessage,
   createAssistantMirrorMessage as buildAssistantMirrorMessage,
   type AssistantMessageOptions,
 } from "./event-projector-assistant-message.js";
+import { shouldClearTerminalPresentationForNativeItem } from "./event-projector-items.js";
 import { extractRawAssistantText, readItemString, readString } from "./event-projector-values.js";
 import type { CodexThreadItem, JsonObject } from "./protocol.js";
 
 type AgentEvent = Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0];
+type AnswerCandidateStatus = "candidate" | "superseded" | "selected";
 
 export class CodexAssistantProjection {
   private readonly assistantTextByItem = new Map<string, string>();
   private readonly assistantItemOrder: string[] = [];
+  private readonly assistantTimestampByItem = new Map<string, number>();
   private readonly assistantPhaseByItem = new Map<string, string>();
   private latestCompletedItemId: string | undefined;
   private latestCompletedTerminalAssistantItemId: string | undefined;
@@ -22,6 +26,8 @@ export class CodexAssistantProjection {
   private terminalAssistantCandidateEarlierActiveItemIds = new Set<string>();
   private pendingRawTerminalAssistantEchoItemId: string | undefined;
   private readonly lastCommentaryProgressTextByItem = new Map<string, string>();
+  private readonly lastAnswerCandidateEventByItem = new Map<string, string>();
+  private visibleAnswerCandidateItemId: string | undefined;
   // Codex emits each typed item completion before its matching raw response item.
   // Pair by protocol order because contributors may rewrite only the typed text.
   private pendingRawCommentaryEchoes = 0;
@@ -37,6 +43,7 @@ export class CodexAssistantProjection {
     private readonly params: EmbeddedRunAttemptParams,
     private readonly emitAgentEvent: (event: AgentEvent) => void,
     private readonly matchesToolProgressEcho: (text: string) => boolean,
+    private readonly nextTranscriptTimestamp: () => number,
   ) {}
 
   hasCompletedTerminalAssistantText(completedItemIds: ReadonlySet<string>): boolean {
@@ -103,6 +110,9 @@ export class CodexAssistantProjection {
       this.emitCommentaryProgress({ itemId, text });
       return;
     }
+    if (this.isFinalAnswerAssistantItem(itemId)) {
+      this.emitAnswerCandidate(itemId, "candidate");
+    }
     const knownFinalAnswer = this.shouldStreamAssistantPartial(itemId);
     const replace =
       this.streamedPartialAssistantItemId !== undefined &&
@@ -145,6 +155,9 @@ export class CodexAssistantProjection {
       this.pendingRawTerminalAssistantEchoItemId = undefined;
     }
     this.rememberAssistantPhase(item);
+    if (item?.type === "agentMessage" && itemId) {
+      this.rememberAssistantItem(itemId);
+    }
     if (itemId && itemId !== this.latestTerminalAssistantCandidateItemId) {
       this.markTerminalAssistantCandidateSupersededBy(itemId, {
         preserveEarlierActiveItem: true,
@@ -189,6 +202,8 @@ export class CodexAssistantProjection {
       if (item.text && this.isCommentaryAssistantItem(item.id)) {
         this.emitCommentaryProgress({ itemId: item.id, text: item.text });
         this.pendingRawCommentaryEchoes += 1;
+      } else if (item.text && this.isFinalAnswerAssistantItem(item.id)) {
+        this.emitAnswerCandidate(item.id, "candidate");
       }
     }
   }
@@ -275,6 +290,61 @@ export class CodexAssistantProjection {
     return finalText ? [finalText] : [];
   }
 
+  collectCommentaryMessages(): Array<{ itemId: string; message: AssistantMessage }> {
+    return this.assistantItemOrder.flatMap((itemId) => {
+      if (!this.isCommentaryAssistantItem(itemId)) {
+        return [];
+      }
+      const text = this.assistantTextByItem.get(itemId)?.trim();
+      const timestamp = this.assistantTimestampByItem.get(itemId);
+      if (!text || timestamp === undefined) {
+        return [];
+      }
+      return [
+        {
+          itemId,
+          message: buildAssistantCommentaryMessage(this.params, text, itemId, timestamp),
+        },
+      ];
+    });
+  }
+
+  finalizeAnswerCandidate(turn: { status?: string; items?: CodexThreadItem[] }): void {
+    if (turn.status !== "completed") {
+      this.supersedeVisibleAnswerCandidate();
+      return;
+    }
+    const turnItems = turn.items ?? [];
+    const authoritativeIndex = turnItems.findLastIndex(
+      (item) =>
+        item.type === "agentMessage" &&
+        readItemString(item, "phase") === "final_answer" &&
+        typeof item.text === "string" &&
+        item.text.trim().length > 0,
+    );
+    const authoritative = authoritativeIndex >= 0 ? turnItems[authoritativeIndex] : undefined;
+    const invalidatedByLaterTool = turnItems
+      .slice(authoritativeIndex + 1)
+      .some(shouldClearTerminalPresentationForNativeItem);
+    if (
+      invalidatedByLaterTool ||
+      (authoritative?.id === this.latestTerminalAssistantCandidateItemId &&
+        this.latestTerminalAssistantCandidateSuperseded)
+    ) {
+      this.supersedeVisibleAnswerCandidate();
+      return;
+    }
+    const itemId = authoritative?.id ?? this.visibleAnswerCandidateItemId;
+    if (!itemId) {
+      return;
+    }
+    if (itemId !== this.visibleAnswerCandidateItemId) {
+      this.supersedeVisibleAnswerCandidate();
+      this.visibleAnswerCandidateItemId = itemId;
+    }
+    this.emitAnswerCandidate(itemId, "selected");
+  }
+
   hasAssistantItemTextForSynthesis(): boolean {
     for (let i = this.assistantItemOrder.length - 1; i >= 0; i -= 1) {
       const itemId = this.assistantItemOrder[i];
@@ -333,6 +403,10 @@ export class CodexAssistantProjection {
     return this.assistantPhaseByItem.get(itemId) === "commentary";
   }
 
+  private isFinalAnswerAssistantItem(itemId: string): boolean {
+    return this.assistantPhaseByItem.get(itemId) === "final_answer";
+  }
+
   private shouldStreamAssistantPartial(itemId: string): boolean {
     return this.assistantPhaseByItem.get(itemId) === "final_answer";
   }
@@ -357,6 +431,45 @@ export class CodexAssistantProjection {
         source: "codex-app-server",
       },
     });
+  }
+
+  private emitAnswerCandidate(itemId: string, status: AnswerCandidateStatus): void {
+    const text = this.assistantTextByItem.get(itemId)?.trim();
+    if (!text) {
+      return;
+    }
+    if (status === "candidate" && this.visibleAnswerCandidateItemId !== itemId) {
+      this.supersedeVisibleAnswerCandidate();
+      this.visibleAnswerCandidateItemId = itemId;
+    }
+    const signature = `${status}\0${text}`;
+    if (this.lastAnswerCandidateEventByItem.get(itemId) === signature) {
+      return;
+    }
+    this.lastAnswerCandidateEventByItem.set(itemId, signature);
+    this.emitAgentEvent({
+      stream: "item",
+      data: {
+        itemId,
+        kind: "answer_candidate",
+        title: "Answer candidate",
+        phase: "update",
+        status,
+        progressText: text,
+        source: "codex-app-server",
+        // Activity consumes this event directly; channel progress must never render it.
+        hideFromChannelProgress: true,
+      },
+    });
+  }
+
+  private supersedeVisibleAnswerCandidate(): void {
+    const itemId = this.visibleAnswerCandidateItemId;
+    if (!itemId) {
+      return;
+    }
+    this.emitAnswerCandidate(itemId, "superseded");
+    this.visibleAnswerCandidateItemId = undefined;
   }
 
   private markLatestTerminalAssistantCandidate(
@@ -389,6 +502,7 @@ export class CodexAssistantProjection {
     this.latestTerminalAssistantCandidateSuperseded = true;
     this.latestTerminalAssistantCandidateCanReleaseAfterToolHandoff = false;
     this.terminalAssistantCandidateEarlierActiveItemIds.clear();
+    this.supersedeVisibleAnswerCandidate();
   }
 
   private resolveFinalAssistantTextItem(): { itemId: string; text: string } | undefined {
@@ -413,6 +527,7 @@ export class CodexAssistantProjection {
       return;
     }
     this.assistantItemOrder.push(itemId);
+    this.assistantTimestampByItem.set(itemId, this.nextTranscriptTimestamp());
   }
 
   private isToolProgressEchoText(itemId: string, text: string): boolean {

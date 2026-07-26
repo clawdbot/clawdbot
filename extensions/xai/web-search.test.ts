@@ -749,25 +749,6 @@ describe("xai web search config resolution", () => {
     });
   });
 
-  it("reuses the legacy grok web search api key for provider auth fallback", () => {
-    expect(
-      resolveFallbackXaiAuth({
-        tools: {
-          web: {
-            search: {
-              grok: {
-                apiKey: "xai-legacy-fallback", // pragma: allowlist secret
-              },
-            },
-          },
-        },
-      } as never),
-    ).toEqual({
-      apiKey: "xai-legacy-fallback",
-      source: "tools.web.search.grok.apiKey",
-    });
-  });
-
   it("returns a managed marker for SecretRef-backed plugin auth fallback", () => {
     expect(
       resolveFallbackXaiAuth({

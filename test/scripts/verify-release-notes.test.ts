@@ -655,6 +655,30 @@ describe("release-note verification", () => {
     ).toEqual([]);
   });
 
+  it("allows shipped PR references only in generated record metadata", () => {
+    const nodes = new Map([
+      [97118, { __typename: "PullRequest" }],
+      [102000, { __typename: "PullRequest" }],
+    ]);
+    const params = {
+      noteReferences: [],
+      recordedReferences: [97118, 102000],
+      excludedRecordedReferences: new Set([97118]),
+      sourcePullRequests: new Set([102000]),
+      sourceReferences: [102000],
+      seededPullRequests: new Set<number>(),
+      nodes,
+    };
+
+    expect(contaminatingPullRequestReferences(params)).toEqual([]);
+    expect(
+      contaminatingPullRequestReferences({
+        ...params,
+        noteReferences: [97118],
+      }),
+    ).toEqual([97118]);
+  });
+
   it("ignores the stale generated record while rewriting it", () => {
     const record = {
       pullRequests: new Map([[104732, { references: [102289], thanks: ["fuller-stack-dev"] }]]),

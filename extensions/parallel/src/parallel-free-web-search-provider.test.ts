@@ -76,7 +76,7 @@ describe("parallel-free web search provider", () => {
     expect(provider.autoDetectOrder).toBeUndefined();
   });
 
-  it("advertises the free MCP's tighter 100-char session_id cap in its tool schema", () => {
+  it("advertises the shared count contract and free MCP's tighter session_id cap", () => {
     const provider = createParallelFreeWebSearchProvider();
     const tool = provider.createTool({ config: {}, searchConfig: {} });
     if (!tool) {
@@ -86,6 +86,12 @@ describe("parallel-free web search provider", () => {
       tool.parameters as { properties: Record<string, { maxLength?: number }> }
     ).properties.session_id;
     expect(expectDefined(sessionIdParam, "Parallel session_id parameter").maxLength).toBe(100);
+    const countParam = (
+      tool.parameters as {
+        properties: Record<string, { type?: string; minimum?: number; maximum?: number }>;
+      }
+    ).properties.count;
+    expect(countParam).toMatchObject({ type: "integer", minimum: 1, maximum: 40 });
   });
 
   it("searches via the free MCP and brands the result, with no API key", async () => {
@@ -155,6 +161,25 @@ describe("parallel-free web search provider", () => {
     }
     const result = await tool.execute({ objective: "x" });
     expect(result.error).toBe("invalid_search_queries");
+    expect(endpointMockState.calls).toHaveLength(0);
+  });
+
+  it("rejects invalid counts before calling the free MCP", async () => {
+    const provider = createParallelFreeWebSearchProvider();
+    const tool = provider.createTool({ config: {}, searchConfig: {} });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    for (const count of [4.5, "3abc", 41]) {
+      await expect(
+        tool.execute({
+          objective: "Count validation",
+          search_queries: ["count validation"],
+          count,
+        }),
+      ).rejects.toThrow("count must be an integer from 1 to 40.");
+    }
     expect(endpointMockState.calls).toHaveLength(0);
   });
 });

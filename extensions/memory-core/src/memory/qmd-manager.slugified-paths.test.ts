@@ -80,6 +80,14 @@ import { QmdMemoryManager } from "./qmd-manager.js";
 
 const spawnMock = mockedSpawn as unknown as Mock;
 const originalQmdStateDir = process.env.OPENCLAW_STATE_DIR;
+const withLease = async <T>(
+  options: { signal?: AbortSignal },
+  run: (lease: { signal: AbortSignal; assertOwned: () => void }) => Promise<T>,
+) =>
+  await run({
+    signal: options.signal ?? new AbortController().signal,
+    assertOwned: vi.fn(),
+  });
 
 function setQmdStateDir(stateDir: string): void {
   Reflect.set(process.env, "OPENCLAW_STATE_DIR", stateDir);
@@ -116,6 +124,7 @@ describe("QmdMemoryManager slugified path resolution", () => {
         cfg: cfgToUse,
         agentId,
         resolved,
+        withLease,
         mode: "status",
       }),
     );

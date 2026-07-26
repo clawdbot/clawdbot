@@ -136,7 +136,7 @@ function shouldScanCodexNativeAssets(cfg: OpenClawConfig, env: NodeJS.ProcessEnv
 }
 
 /** Discover personal Codex skills, plugins, config, and hooks relevant to Codex-mode agents. */
-export async function scanCodexNativeAssets(params: {
+async function scanCodexNativeAssets(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): Promise<CodexNativeAssetHit[]> {
@@ -202,4 +202,10 @@ export async function collectCodexNativeAssetInfoNotes(params: {
       "- To review or promote them: install the Codex plugin (openclaw plugins install npm:@openclaw/codex), then run openclaw migrate plan codex.",
     ].join("\n"),
   ];
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.codexNativeAssetsTestApi")] = {
+    scanCodexNativeAssets,
+  };
 }

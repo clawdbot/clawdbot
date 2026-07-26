@@ -1,5 +1,11 @@
 export type ManagedWorktreeOwnerKind = "manual" | "workboard" | "session";
 
+export type ProvisionedFileState = {
+  path: string;
+  mode: number | null;
+  chunks: number;
+};
+
 export type ManagedWorktreeRecord = {
   id: string;
   name: string;
@@ -38,10 +44,13 @@ export type ManagedWorktreeBranch = {
   kind: "local" | "remote";
 };
 
+type ManagedWorktreeRepositoryStatus = "git" | "not_git" | "unavailable";
+
 export type ManagedWorktreeBranchesResult = {
   branches: ManagedWorktreeBranch[];
   defaultBranch?: string;
   headBranch?: string;
+  repositoryStatus?: ManagedWorktreeRepositoryStatus;
 };
 
 export type ManagedWorktreeGcResult = {

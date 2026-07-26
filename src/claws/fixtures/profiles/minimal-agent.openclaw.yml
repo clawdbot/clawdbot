@@ -1,0 +1,8 @@
+schemaVersion: 1
+agent:
+  tools:
+    deny:
+      - exec
+      - browser
+  humanDelay:
+    mode: natural

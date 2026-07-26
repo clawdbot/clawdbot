@@ -56,7 +56,12 @@ const CLAWHUB_PACKAGE_PUBLISH_WORKFLOW_REF = "9d49df109d4ad3dc8a6ecf05d26b39f46d
 const toolPluginEntryModuleLoaders = createPluginModuleLoaderCache();
 
 function readJsonFile(filePath: string): JsonObject {
-  return JSON.parse(fs.readFileSync(filePath, "utf8")) as JsonObject;
+  const raw = fs.readFileSync(filePath, "utf8");
+  try {
+    return JSON.parse(raw) as JsonObject;
+  } catch (err) {
+    throw new Error(`Malformed JSON in ${filePath}`, { cause: err });
+  }
 }
 
 function writeJsonFile(filePath: string, value: unknown): void {

@@ -1,13 +1,16 @@
 // Verifies shell selection, PATH lookup, and platform-specific shell helpers.
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import {
+  buildShellCommandInvocation,
+  createStreamingBinaryOutputSanitizer,
   detectRuntimeShell,
   getBashShellConfig,
-  getShellEnv,
+  getBashShellEnv,
   getShellConfig,
   sanitizeBinaryOutput,
 } from "./shell-utils.js";
@@ -40,6 +43,16 @@ describe("sanitizeBinaryOutput", () => {
   });
 });
 
+describe("createStreamingBinaryOutputSanitizer", () => {
+  it("carries ANSI state across process-output chunks", () => {
+    const sanitize = createStreamingBinaryOutputSanitizer();
+
+    expect(sanitize("A\u001b]0;title")).toBe("A");
+    expect(sanitize("\u0007B\u001b[31")).toBe("B");
+    expect(sanitize("mC")).toBe("C");
+  });
+});
+
 function createTempCommandDir(
   tempDirs: string[],
   files: Array<{ name: string; executable?: boolean }>,
@@ -54,6 +67,8 @@ function createTempCommandDir(
   }
   return dir;
 }
+
+type ShellConfig = ReturnType<typeof getBashShellConfig>;
 
 describe("getShellConfig", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
@@ -138,7 +153,11 @@ describe("getShellConfig", () => {
     const binDir = createTempCommandDir(tempDirs, [{ name: "zsh" }]);
     const shellPath = path.join(binDir, "zsh");
 
-    expect(getShellConfig(shellPath)).toEqual({ shell: shellPath, args: ["-f", "-c"] });
+    expect(getShellConfig(shellPath)).toEqual({
+      shell: shellPath,
+      args: ["-f", "-c"],
+      commandTransport: "argv",
+    });
   });
 
   it("rejects a missing explicit custom shell path", () => {
@@ -188,7 +207,7 @@ describe("getBashShellConfig", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["ProgramFiles", "ProgramFiles(x86)", "PATH"]);
+    envSnapshot = captureEnv(["ProgramFiles", "ProgramFiles(x86)", "PATH", "Path"]);
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
   });
 
@@ -211,27 +230,144 @@ describe("getBashShellConfig", () => {
     process.env.ProgramFiles = programFiles;
     process.env.PATH = "";
 
-    expect(getBashShellConfig()).toEqual({ shell: bashPath, args: ["-c"] });
+    expect(getBashShellConfig()).toEqual({
+      shell: bashPath,
+      args: ["-c"],
+      commandTransport: "argv",
+    });
+  });
+
+  it("prepends coreutils for a standard Git for Windows install", () => {
+    const programFiles = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-git-bash-env-"));
+    tempDirs.push(programFiles);
+    const gitRoot = path.join(programFiles, "Git");
+    const bashPath = path.join(gitRoot, "bin", "bash.exe");
+    const usrBin = path.join(gitRoot, "usr", "bin");
+    fs.mkdirSync(path.dirname(bashPath), { recursive: true });
+    fs.mkdirSync(path.join(gitRoot, "cmd"), { recursive: true });
+    fs.mkdirSync(usrBin, { recursive: true });
+    fs.writeFileSync(bashPath, "");
+    fs.writeFileSync(path.join(gitRoot, "cmd", "git.exe"), "");
+    process.env.PATH = path.join(programFiles, "OtherBin");
+
+    const env = getBashShellEnv(bashPath);
+
+    expect(env.PATH?.split(path.delimiter)[0]).toBe(usrBin);
+    expect(env.PATH).toContain(process.env.PATH);
+    expect(Object.keys(env).filter((key) => key.toLowerCase() === "path")).toEqual(["PATH"]);
+  });
+
+  it("recognizes portable Git for Windows installs", () => {
+    const gitRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-portable-git-"));
+    tempDirs.push(gitRoot);
+    const bashPath = path.join(gitRoot, "usr", "bin", "bash.exe");
+    const usrBin = path.dirname(bashPath);
+    fs.mkdirSync(usrBin, { recursive: true });
+    fs.mkdirSync(path.join(gitRoot, "cmd"), { recursive: true });
+    fs.writeFileSync(bashPath, "");
+    fs.writeFileSync(path.join(gitRoot, "cmd", "git.exe"), "");
+
+    expect(getBashShellEnv(bashPath).PATH?.split(path.delimiter)[0]).toBe(usrBin);
+  });
+
+  it("leaves unrelated MSYS2 installs unchanged", () => {
+    const msysRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-msys2-"));
+    tempDirs.push(msysRoot);
+    const bashPath = path.join(msysRoot, "usr", "bin", "bash.exe");
+    fs.mkdirSync(path.dirname(bashPath), { recursive: true });
+    fs.writeFileSync(bashPath, "");
+    process.env.PATH = path.join(msysRoot, "ucrt64", "bin");
+
+    const env = getBashShellEnv(bashPath);
+
+    expect(env.PATH?.split(path.delimiter)[0]).not.toBe(path.dirname(bashPath));
+    expect(env.PATH).toContain(process.env.PATH);
+  });
+
+  it.each(["System32", "Sysnative"])(
+    "uses stdin transport for the legacy %s WSL launcher",
+    (systemDirectory) => {
+      const shellPath = `C:\\Windows\\${systemDirectory}\\bash.exe`;
+      vi.spyOn(fs, "existsSync").mockImplementation((candidate) => String(candidate) === shellPath);
+
+      expect(getBashShellConfig(shellPath)).toEqual({
+        shell: shellPath,
+        args: ["-s"],
+        commandTransport: "stdin",
+      });
+    },
+  );
+
+  it("builds a stdin invocation for the legacy WSL launcher", () => {
+    const config: ShellConfig = {
+      shell: "C:\\Windows\\System32\\bash.exe",
+      args: ["-s"],
+      commandTransport: "stdin",
+    };
+
+    expect(buildShellCommandInvocation("printf ready", config)).toEqual({
+      argv: [config.shell, "-s"],
+      input: "printf ready",
+      stdin: "pipe",
+    });
+  });
+
+  it("builds an argv invocation for regular shells", () => {
+    const config: ShellConfig = {
+      shell: "/bin/bash",
+      args: ["-c"],
+      commandTransport: "argv",
+    };
+
+    expect(buildShellCommandInvocation("printf ready", config)).toEqual({
+      argv: [config.shell, "-c", "printf ready"],
+      stdin: "ignore",
+    });
   });
 });
 
-describe("getShellEnv", () => {
+describe("getBashShellEnv", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["PATH"]);
+    envSnapshot = captureEnv(["PATH", "Path"]);
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     envSnapshot.restore();
   });
 
   it("returns an env object with the OpenClaw bin dir on PATH", () => {
     process.env.PATH = "/usr/bin";
-    const env = getShellEnv();
+    const env = getBashShellEnv();
 
     expect(env.PATH).toContain("/usr/bin");
     expect(env.PATH).toContain(".openclaw");
+  });
+
+  it("collapses case-insensitive PATH duplicates before Windows spawn", () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+    const env = getBashShellEnv(undefined, { PATH: "/selected", Path: "/discarded" });
+
+    expect(Object.keys(env).filter((key) => key.toLowerCase() === "path")).toEqual(["PATH"]);
+    expect(env.PATH).toContain("/selected");
+    expect(env.PATH).not.toContain("/discarded");
+  });
+
+  it.runIf(isWin)("passes one canonical PATH entry to a child process", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "-e",
+        "process.stdout.write(JSON.stringify(Object.keys(process.env).filter((key) => key.toLowerCase() === 'path')))",
+      ],
+      { encoding: "utf8", env: getBashShellEnv() },
+    );
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual(["PATH"]);
   });
 });
 

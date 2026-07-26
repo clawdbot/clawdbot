@@ -133,17 +133,15 @@ describe("ACP SDK protocol schema fixtures", () => {
       expect(
         validateJsonSchemaValue({
           schema,
-          cacheKey: `acp:${name}:valid`,
+          cacheKey: `acp:${name}`,
           value: valid,
-          cache: false,
         }).ok,
       ).toBe(true);
       expect(
         validateJsonSchemaValue({
           schema,
-          cacheKey: `acp:${name}:invalid`,
+          cacheKey: `acp:${name}`,
           value: invalid,
-          cache: false,
         }).ok,
       ).toBe(false);
     },

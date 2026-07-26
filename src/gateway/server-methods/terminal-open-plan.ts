@@ -55,6 +55,8 @@ export function resolveTerminalOpenSpawnPlan(
     return resolveTerminalSpawnPlan(launchPlan);
   }
   if (catalogPlan.kind === "local") {
+    // Keep catalog commands behind the policy-selected login shell. Its profile restores
+    // CLI dependencies omitted from a sparse Gateway daemon PATH before the shebang runs.
     return resolveTerminalSpawnPlan({
       ...launchPlan,
       initialCommand: catalogPlan.argv,

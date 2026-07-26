@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { NODE_DEVICE_APPS_COMMAND } from "../infra/node-commands.js";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
 import type { NodeHostClient } from "./client.js";
 import { listRegisteredNodeHostCapsAndCommands } from "./plugin-node-host.js";
@@ -163,5 +164,32 @@ describe("node-host duplex capability selection", () => {
     expect(listRegisteredNodeHostCapsAndCommands).toHaveBeenLastCalledWith(expect.anything(), {
       includeDuplex: true,
     });
+  });
+});
+
+describe("installed application command advertisement", () => {
+  it("advertises device.apps only when sharing is enabled on macOS", async () => {
+    const disabled = await prepareNodeHostRuntime({
+      config: { nodeHost: { skills: { enabled: false } } },
+      env: { PATH: "/usr/bin" },
+      platform: "darwin",
+      installedAppsSharingEnabled: false,
+    });
+    const enabled = await prepareNodeHostRuntime({
+      config: { nodeHost: { skills: { enabled: false } } },
+      env: { PATH: "/usr/bin" },
+      platform: "darwin",
+      installedAppsSharingEnabled: true,
+    });
+    const nonDarwin = await prepareNodeHostRuntime({
+      config: { nodeHost: { skills: { enabled: false } } },
+      env: { PATH: "/usr/bin" },
+      platform: "linux",
+      installedAppsSharingEnabled: true,
+    });
+
+    expect(disabled.manifest.commands).not.toContain(NODE_DEVICE_APPS_COMMAND);
+    expect(enabled.manifest.commands).toContain(NODE_DEVICE_APPS_COMMAND);
+    expect(nonDarwin.manifest.commands).not.toContain(NODE_DEVICE_APPS_COMMAND);
   });
 });

@@ -1,8 +1,10 @@
 // Qqbot helper module supports config schema behavior.
 import {
   AllowFromListSchema,
-  ToolPolicySchema,
+  GroupPolicySchema,
   buildChannelConfigSchema,
+  buildGroupEntrySchema,
+  buildMultiAccountChannelSchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
@@ -50,21 +52,16 @@ const QQBotExecApprovalsSchema = z
   .optional();
 
 const QQBotDmPolicySchema = z.enum(["open", "allowlist", "disabled"]).optional();
-const QQBotGroupPolicySchema = z.enum(["open", "allowlist", "disabled"]).optional();
+const QQBotGroupPolicySchema = GroupPolicySchema.optional();
 const QQBotGroupCommandLevelSchema = z.enum(["all", "safety", "strict"]).optional();
 
-const QQBotGroupSchema = z
-  .object({
-    requireMention: z.boolean().optional(),
-    commandLevel: QQBotGroupCommandLevelSchema,
-    ignoreOtherMentions: z.boolean().optional(),
-    historyLimit: z.number().optional(),
-    name: z.string().optional(),
-    prompt: z.string().optional(),
-    tools: ToolPolicySchema,
-    toolsBySender: z.record(z.string(), ToolPolicySchema).optional(),
-  })
-  .strict();
+const QQBotGroupSchema = buildGroupEntrySchema({
+  commandLevel: QQBotGroupCommandLevelSchema,
+  ignoreOtherMentions: z.boolean().optional(),
+  historyLimit: z.number().optional(),
+  name: z.string().optional(),
+  prompt: z.string().optional(),
+}).omit({ skills: true, enabled: true, allowFrom: true, systemPrompt: true });
 
 const QQBotGroupsSchema = z.record(z.string(), QQBotGroupSchema).optional();
 
@@ -92,9 +89,13 @@ const QQBotAccountSchema = z
   })
   .passthrough();
 
-const QQBotConfigSchema = QQBotAccountSchema.extend({
-  stt: QQBotSttSchema,
-  accounts: z.object({}).catchall(QQBotAccountSchema.passthrough()).optional(),
-  defaultAccount: z.string().optional(),
-}).passthrough();
+const QQBotConfigSchema = buildMultiAccountChannelSchema(
+  QQBotAccountSchema.extend({
+    stt: QQBotSttSchema,
+  }).passthrough(),
+  {
+    accountSchema: QQBotAccountSchema,
+    accountsMode: "catchall",
+  },
+);
 export const qqbotChannelConfigSchema = buildChannelConfigSchema(QQBotConfigSchema);

@@ -1,4 +1,4 @@
-// Stale hashed-chunk recovery for lazy routes.
+// Stale hashed-chunk recovery for lazy routes and the entry stylesheet.
 //
 // A gateway update replaces `ui/dist` in place, so a document loaded before the
 // update still references the old hashed chunk URLs; the first visit to a lazy
@@ -29,6 +29,12 @@ type StaleChunkReloadDeps = {
   buildId?: string;
   storage?: Pick<Storage, "getItem" | "setItem"> | null;
   reload?: () => void;
+};
+
+type MissingStylesheetRecoveryDeps = {
+  isCssApplied?: () => boolean;
+  schedule?: () => Promise<boolean>;
+  retry?: () => Promise<boolean>;
 };
 
 const lastAttemptAtByStorage = new WeakMap<object, number>();
@@ -148,17 +154,75 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
   return true;
 }
 
+// A restarting gateway is the common case behind this banner: the stale chunk
+// exists precisely because the gateway was just updated. Give the restart time
+// to finish rather than declining the reload on the first failed probe.
+const REACHABLE_WAIT_TIMEOUT_MS = 30_000;
+const REACHABLE_WAIT_INTERVAL_MS = 1_000;
+
 /**
- * User-initiated retry: bypasses the automatic-reload rate guard but keeps the
- * reachability probe — reloading against an unreachable gateway replaces the
- * recoverable panel error with a fatal navigation error in app webviews.
+ * Keeps the advertised bound local instead of trusting the probe to time out:
+ * the default probe aborts itself, but a caller-supplied one need not, and a
+ * probe that never settles would strand the caller's pending UI forever.
  */
-export async function retryStaleChunkReload(deps: StaleChunkReloadDeps = {}): Promise<boolean> {
-  if (!(await probeControlUiDocument())) {
-    return false;
+async function probeWithinDeadline(
+  probe: () => Promise<boolean>,
+  remainingMs: number,
+): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => resolve(false), remainingMs);
+  });
+  try {
+    return await Promise.race([probe(), expired]);
+  } finally {
+    clearTimeout(timer);
   }
-  (deps.reload ?? reloadControlUiDocument)();
-  return true;
+}
+
+/**
+ * User-initiated retry that survives the restart which caused the stale chunk:
+ * poll until the gateway answers, then reload. Returns false only when it stays
+ * unreachable for the whole window, so callers keep the recoverable panel error
+ * instead of navigating into a fatal error page.
+ */
+export async function retryStaleChunkReloadWhenReachable(
+  deps: StaleChunkReloadDeps & {
+    timeoutMs?: number;
+    intervalMs?: number;
+    probe?: () => Promise<boolean>;
+    wait?: (ms: number) => Promise<void>;
+  } = {},
+): Promise<boolean> {
+  const now = deps.now ?? Date.now;
+  const probe = deps.probe ?? probeControlUiDocument;
+  const wait =
+    deps.wait ??
+    ((ms: number) =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, ms);
+      }));
+  const intervalMs = deps.intervalMs ?? REACHABLE_WAIT_INTERVAL_MS;
+  const deadline = now() + (deps.timeoutMs ?? REACHABLE_WAIT_TIMEOUT_MS);
+  for (let attempt = 0; ; attempt += 1) {
+    const remaining = deadline - now();
+    // The interval wait can carry the loop past the deadline, so re-check here:
+    // only the first attempt may probe from outside the window.
+    if (attempt > 0 && remaining <= 0) {
+      return false;
+    }
+    // The first attempt always probes, so timeoutMs: 0 means "single shot"
+    // rather than "never ask"; the probe's own abort bounds that case.
+    const reachable = remaining > 0 ? await probeWithinDeadline(probe, remaining) : await probe();
+    if (reachable) {
+      (deps.reload ?? reloadControlUiDocument)();
+      return true;
+    }
+    if (now() >= deadline) {
+      return false;
+    }
+    await wait(intervalMs);
+  }
 }
 
 /**
@@ -178,4 +242,113 @@ export function installStaleChunkReloadListener(
   };
   window.addEventListener("vite:preloadError", onPreloadError);
   return () => window.removeEventListener("vite:preloadError", onPreloadError);
+}
+
+export function installMissingStylesheetRecovery(
+  deps: MissingStylesheetRecoveryDeps = {},
+): () => void {
+  const isCssApplied =
+    deps.isCssApplied ??
+    (() =>
+      getComputedStyle(document.documentElement).getPropertyValue("--openclaw-css-ok").trim() ===
+      "1");
+  const schedule = deps.schedule ?? scheduleStaleChunkReload;
+  // Single-shot (timeoutMs: 0) keeps the stylesheet banner's existing
+  // behavior; only the lazy-route button waits out a restart.
+  const retry = deps.retry ?? (() => retryStaleChunkReloadWhenReachable({ timeoutMs: 0 }));
+  let detected = false;
+  let uninstalled = false;
+  let banner: HTMLDivElement | null = null;
+
+  const removeListeners = () => {
+    window.removeEventListener("load", checkStylesheet);
+    window.removeEventListener("error", onResourceError, true);
+  };
+
+  const showBanner = () => {
+    if (uninstalled || banner) {
+      return;
+    }
+    banner = document.createElement("div");
+    banner.setAttribute("role", "alert");
+    // All styles are inline because the entry stylesheet is broken by definition.
+    Object.assign(banner.style, {
+      position: "fixed",
+      top: "0",
+      left: "0",
+      right: "0",
+      zIndex: "2147483647",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: "12px",
+      padding: "12px 16px",
+      background: "#1f2937",
+      color: "#ffffff",
+      fontFamily: "system-ui, sans-serif",
+      fontSize: "14px",
+    });
+    const message = document.createElement("span");
+    // Intentional English: this failure surface mirrors the inline index.html fallback.
+    message.textContent = "Styles failed to load, so the page may look broken.";
+    const reloadButton = document.createElement("button");
+    reloadButton.type = "button";
+    reloadButton.textContent = "Reload";
+    Object.assign(reloadButton.style, {
+      border: "0",
+      borderRadius: "4px",
+      padding: "6px 12px",
+      background: "#ffffff",
+      color: "#111827",
+      cursor: "pointer",
+      font: "inherit",
+    });
+    reloadButton.addEventListener("click", () => void retry());
+    banner.append(message, reloadButton);
+    document.body.append(banner);
+  };
+
+  const detectMissingStylesheet = async () => {
+    if (detected || uninstalled) {
+      return;
+    }
+    detected = true;
+    removeListeners();
+    const reloaded = await schedule();
+    if (!reloaded) {
+      showBanner();
+    }
+  };
+
+  function checkStylesheet() {
+    if (isCssApplied()) {
+      removeListeners();
+      return;
+    }
+    void detectMissingStylesheet();
+  }
+
+  function onResourceError(event: Event) {
+    const resource = event.target;
+    if (!(resource instanceof HTMLLinkElement) || !resource.relList.contains("stylesheet")) {
+      return;
+    }
+    // Resource errors do not bubble, so capture is required. This can miss an
+    // error fired before module evaluation; the load-time sentinel is authoritative.
+    void detectMissingStylesheet();
+  }
+
+  window.addEventListener("error", onResourceError, true);
+  if (document.readyState === "complete") {
+    checkStylesheet();
+  } else {
+    window.addEventListener("load", checkStylesheet, { once: true });
+  }
+
+  return () => {
+    uninstalled = true;
+    removeListeners();
+    banner?.remove();
+    banner = null;
+  };
 }

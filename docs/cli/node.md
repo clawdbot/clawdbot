@@ -82,7 +82,7 @@ Options:
 - `--tls`: Use TLS for the gateway connection
 - `--no-tls`: Force a plaintext Gateway connection even when the local Gateway config enables TLS
 - `--tls-fingerprint <sha256>`: Expected TLS certificate fingerprint (sha256)
-- `--node-id <id>`: Override the legacy client instance ID stored in `node.json` (does not reset pairing)
+- `--node-id <id>`: Override the client instance ID stored in shared SQLite state (does not reset pairing)
 - `--display-name <name>`: Override the node display name
 
 ## Gateway auth for node host
@@ -121,7 +121,7 @@ Options:
 - `--context-path <path>`: Gateway WebSocket context path (e.g. `/openclaw-gw`). Appended to the WebSocket URL.
 - `--tls`: Use TLS for the gateway connection
 - `--tls-fingerprint <sha256>`: Expected TLS certificate fingerprint (sha256)
-- `--node-id <id>`: Override the legacy client instance ID stored in `node.json` (does not reset pairing)
+- `--node-id <id>`: Override the client instance ID stored in shared SQLite state (does not reset pairing)
 - `--display-name <name>`: Override the node display name
 - `--runtime <runtime>`: Service runtime (`node`)
 - `--force`: Reinstall/overwrite if already installed
@@ -170,8 +170,8 @@ Inspect the local node identity the Gateway verifies against:
 openclaw node identity --json
 ```
 
-It prints the device ID and public key from `identity/device.json` and never
-creates or modifies identity files.
+It prints the device ID and public key from the `primary` row in
+`state/openclaw.sqlite` and never creates the database or a new identity.
 
 On tightly controlled node networks, the Gateway operator can explicitly opt in
 to auto-approving first-time node pairing from trusted CIDRs:
@@ -199,20 +199,21 @@ Run `openclaw devices list` again before approval.
 
 ### Identity and pairing state
 
-The headless node separates its legacy client instance ID from the signed device
-identity that the Gateway uses for pairing and routing. These files live in the
+The headless node separates its client instance ID from the signed device
+identity that the Gateway uses for pairing and routing. This state lives in the
 OpenClaw state directory (`~/.openclaw` by default, or `$OPENCLAW_STATE_DIR`
 when set):
 
-| File                        | Purpose                                                                                                                                       |
-| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `node.json`                 | Client instance ID under the legacy `nodeId` key, display name, and Gateway connection metadata. The client sends this value as `instanceId`. |
-| `identity/device.json`      | Signed Ed25519 keypair and derived device ID. For signed connections, this device ID is the routed node ID and pairing identity.              |
-| `identity/device-auth.json` | Paired device tokens, keyed by cryptographic device ID and role.                                                                              |
+| State                                                    | Purpose                                                                                                                          |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `state/openclaw.sqlite` (`node_host_config`)             | Client instance ID, display name, and Gateway connection metadata. The client sends this ID as `instanceId`.                     |
+| `state/openclaw.sqlite` (`device_identities`, `primary`) | Signed Ed25519 keypair and derived device ID. For signed connections, this device ID is the routed node ID and pairing identity. |
+| `state/openclaw.sqlite` (`device_auth_tokens`)           | Paired device tokens, keyed by cryptographic device ID and role.                                                                 |
 
-`--node-id` changes only the client instance ID in `node.json`. It does not
-change the cryptographic device ID or clear pairing auth. Deleting only
-`node.json` likewise does not reset pairing. To revoke and re-pair a node:
+`--node-id` changes only the client instance ID in shared SQLite state. It does
+not change the cryptographic device ID or clear pairing auth. Migrating a retired
+`node.json` with `openclaw doctor --fix` likewise does not reset pairing. To
+revoke and re-pair a node:
 
 1. On the Gateway, run `openclaw nodes remove --node <id|name|ip>`.
 2. On the node, restart the installed service with `openclaw node restart`, or
@@ -233,10 +234,14 @@ The two request IDs are distinct. An applicable trusted-CIDR policy can
 auto-approve the first-time device-pairing step; command-surface approval remains
 a separate check.
 
-Older OpenClaw releases could leave a legacy `token` field in `node.json`.
-Current OpenClaw does not use that field and removes it the next time the node
-host saves the file. Keep both files under `identity/` private; they contain the
-device keypair and auth tokens.
+Older OpenClaw releases stored node-host state in `node.json`, the signed
+identity in `identity/device.json`, and paired auth in
+`identity/device-auth.json`. Stop the node host and run
+`openclaw doctor --fix` once; Doctor claims each retired source, validates it,
+imports and verifies the canonical SQLite row, then removes the old file. Normal
+node commands fail closed with this repair instruction while either retired file
+or an interrupted Doctor claim remains. Keep `state/openclaw.sqlite` private;
+it contains the device keypair and auth tokens.
 
 ## Exec approvals
 

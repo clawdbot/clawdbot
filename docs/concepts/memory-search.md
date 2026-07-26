@@ -18,11 +18,9 @@ explicitly:
 
 ```json5
 {
-  agents: {
-    defaults: {
-      memorySearch: {
-        provider: "openai", // or "gemini", "voyage", "mistral", "bedrock", "local", "ollama", "lmstudio", "github-copilot", "openai-compatible"
-      },
+  memory: {
+    search: {
+      provider: "openai", // or "gemini", "voyage", "mistral", "bedrock", "local", "ollama", "lmstudio", "github-copilot", "openai-compatible"
     },
   },
 }
@@ -132,14 +130,12 @@ different daily notes.
 
 ```json5
 {
-  agents: {
-    defaults: {
-      memorySearch: {
-        query: {
-          hybrid: {
-            mmr: { enabled: true },
-            temporalDecay: { enabled: true },
-          },
+  memory: {
+    search: {
+      query: {
+        hybrid: {
+          mmr: { enabled: true },
+          temporalDecay: { enabled: true },
         },
       },
     },
@@ -150,7 +146,7 @@ different daily notes.
 ## Multimodal memory
 
 With `gemini-embedding-2-preview`, you can index images and audio alongside
-Markdown. This only applies to files under `memorySearch.extraPaths`; default
+Markdown. This only applies to files under `memory.search.extraPaths`; default
 memory roots (`MEMORY.md`, `memory/*.md`) stay Markdown-only. Search queries
 remain text, but they match against visual and audio content. See
 [Memory configuration reference](/reference/memory-config#multimodal-memory-gemini)
@@ -166,10 +162,13 @@ Optionally index session transcripts so `memory_search` can recall earlier
 conversations. This is opt-in: set `experimental.sessionMemory: true` and add
 `"sessions"` to `sources` (default `sources` is `["memory"]`).
 
-Session hits obey `tools.sessions.visibility`: the default `"tree"` only
-exposes the current session and sessions it spawned. To recall an unrelated
-same-agent session from a different session (for example a gateway-dispatched
-session from a DM), widen visibility to `"agent"`.
+Session hits obey `tools.sessions.visibility`: the default `"tree"` exposes the
+current session, sessions it spawned, and same-agent group sessions watched
+through ambient group awareness. With `session.dmScope: "main"`, a multi-user
+DM setup shares that main session, so users routed there can recall content
+from its watched groups. Use a per-peer `dmScope` for DM isolation, or set
+visibility to `"self"` to opt out of ambient watched-session reads. Other
+unrelated same-agent sessions still require `"agent"` visibility.
 
 When using the QMD backend, also set `memory.qmd.sessions.enabled: true` so
 transcripts get exported into the QMD collection; `experimental.sessionMemory`
@@ -184,9 +183,8 @@ and `sources` alone do not export transcripts into QMD. See
 **Only keyword matches?** Your embedding provider may not be configured. Check
 `openclaw memory status --deep`.
 
-**Local embeddings time out?** `ollama`, `lmstudio`, and `local` use a longer
-inline batch timeout by default. If the host is just slow, set
-`agents.defaults.memorySearch.sync.embeddingBatchTimeoutSeconds` and rerun
+**Local embeddings time out?** `ollama`, `lmstudio`, and `local` use longer
+provider-owned batch deadlines. Check provider health and rerun
 `openclaw memory index --force`.
 
 **CJK text not found?** Rebuild the FTS index with

@@ -127,6 +127,23 @@ describe("buildLineMessageContext", () => {
     expect(context?.ctxPayload.To).toBe("line:group:group-1");
   });
 
+  it("passes the caller-provided inbound history through to the context payload", async () => {
+    const event = createMessageEvent({ type: "group", groupId: "group-1", userId: "user-1" });
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+      inboundHistory: [{ sender: "user:user-2", body: "earlier chatter", timestamp: 1000 }],
+    });
+
+    expect(context?.ctxPayload.InboundHistory).toEqual([
+      { sender: "user:user-2", body: "earlier chatter", timestamp: 1000 },
+    ]);
+  });
+
   it("keeps inbound log previews UTF-16 well-formed at the limit", async () => {
     const timestamp = 1_700_000_000_000;
     const logCfg: OpenClawConfig = {
@@ -168,7 +185,7 @@ describe("buildLineMessageContext", () => {
     );
   });
 
-  it("replaces a failed media placeholder with an unavailable notice", async () => {
+  it("keeps failed media-only command text empty and preserves its native media fact", async () => {
     const event = createMessageEvent({ type: "user", userId: "user-image" }, {
       message: {
         id: "image-1",
@@ -186,10 +203,40 @@ describe("buildLineMessageContext", () => {
       commandAuthorized: true,
     });
 
-    expect(context?.ctxPayload.RawBody).toBe("<media:image>");
-    expect(context?.ctxPayload.CommandBody).toBe("<media:image>");
+    expect(context?.ctxPayload.RawBody).toBe("");
+    expect(context?.ctxPayload.CommandBody).toBe("");
     expect(context?.ctxPayload.BodyForAgent).toBe("[line attachment unavailable]");
-    expect(context?.ctxPayload.MediaPath).toBeUndefined();
+    expect(context?.ctxPayload.media?.[0]).toMatchObject({
+      path: undefined,
+      kind: "image",
+    });
+  });
+
+  it("keeps materialized media-only text empty and projects structured media facts", async () => {
+    const event = createMessageEvent({ type: "user", userId: "user-image" }, {
+      message: {
+        id: "image-2",
+        type: "image",
+        contentProvider: { type: "line" },
+      },
+    } as Partial<MessageEvent>);
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [{ path: "/tmp/line-image.png", contentType: "image/png" }],
+      cfg,
+      account,
+      commandAuthorized: false,
+    });
+
+    expect(context?.ctxPayload.RawBody).toBe("");
+    expect(context?.ctxPayload.CommandBody).toBe("");
+    expect(context?.ctxPayload.BodyForAgent).toBe("");
+    expect(context?.ctxPayload.media?.[0]).toMatchObject({
+      path: "/tmp/line-image.png",
+      contentType: "image/png",
+      kind: "image",
+    });
   });
 
   it("routes group postback replies to the group id", async () => {

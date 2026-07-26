@@ -1,5 +1,6 @@
 // Discord plugin module implements send.webhook behavior.
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
+import { recordOutboundMessageIdentity } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   readProviderJsonResponse,
@@ -99,6 +100,17 @@ export async function sendWebhookMessageDiscord(
     accountId: account.accountId,
     mentionAliases: account.config.mentionAliases,
   });
+  const threadConversationId = opts.threadId == null ? "" : String(opts.threadId).trim();
+  if (threadConversationId) {
+    // Reserve the webhook source before the request so an immediate gateway echo
+    // cannot outrun the response that supplies the concrete message id.
+    recordOutboundMessageIdentity({
+      channel: "discord",
+      accountId: account.accountId,
+      conversationId: threadConversationId,
+      sourceId: webhookId,
+    });
+  }
 
   const response = await (proxyFetch ?? fetch)(
     resolveWebhookExecutionUrl({
@@ -143,11 +155,22 @@ export async function sendWebhookMessageDiscord(
   } catch {
     // Best-effort telemetry only.
   }
-  return createDiscordSendResult({
+  const result = createDiscordSendResult({
     result: payload,
     fallbackChannelId: opts.threadId ? String(opts.threadId) : "",
     kind: "text",
     ...(opts.threadId != null ? { threadId: opts.threadId } : {}),
     ...(replyTo ? { replyToId: replyTo } : {}),
   });
+  const resultConversationId = result.channelId.trim();
+  if (result.messageId !== "unknown" && resultConversationId) {
+    recordOutboundMessageIdentity({
+      channel: "discord",
+      accountId: account.accountId,
+      conversationId: resultConversationId,
+      messageId: result.messageId,
+      sourceId: webhookId,
+    });
+  }
+  return result;
 }

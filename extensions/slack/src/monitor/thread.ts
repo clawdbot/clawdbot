@@ -173,7 +173,7 @@ export function resetSlackThreadStarterCacheForTest(): void {
   THREAD_STARTER_CACHE.clear();
 }
 
-export type SlackThreadMessage = {
+type SlackThreadMessage = {
   text: string;
   userId?: string;
   ts?: string;

@@ -25,6 +25,7 @@ export function createFinalDispatchPayloadDedupeKey(payload: ReplyPayload): stri
       trustedLocalMedia: payload.trustedLocalMedia,
       sensitiveMedia: payload.sensitiveMedia,
       presentation: payload.presentation,
+      presentationTextMode: payload.presentationTextMode,
       delivery: payload.delivery,
       interactive: payload.interactive,
       btw: payload.btw,
