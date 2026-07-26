@@ -45,7 +45,7 @@ import {
 const readSchema = Type.Object({
   path: Type.String({ description: "File path; relative/absolute." }),
   offset: Type.Optional(Type.Integer({ minimum: 1, description: "Start line; 1-based." })),
-  limit: Type.Optional(Type.Integer({ description: "Max lines." })),
+  limit: Type.Optional(Type.Number({ description: "Max lines." })),
 });
 
 const ReadTruncationOutputSchema = Type.Object(
@@ -351,9 +351,6 @@ export function createReadToolDefinition(
       void onUpdate;
       if (offset !== undefined && (!Number.isSafeInteger(offset) || offset < 1)) {
         throw new Error("Offset must be an integer at least 1");
-      }
-      if (limit !== undefined && !Number.isSafeInteger(limit)) {
-        throw new Error("Limit must be an integer");
       }
       return new Promise<{
         content: (TextContent | ImageContent)[];

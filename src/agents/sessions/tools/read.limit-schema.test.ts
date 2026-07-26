@@ -1,14 +1,14 @@
 /**
- * Regression coverage for read tool `limit` schema tightening.
+ * Regression coverage for read tool `limit` schema.
  *
  * Validates against the actual production `readSchema` from
  * `createReadToolDefinition`, not a standalone copy.
  *
  * Two validation layers:
- * 1. Schema layer: TypeBox Value.Check rejects float values
- * 2. Execution layer: tool.execute() rejects non-integer limit at runtime
+ * 1. Schema layer: TypeBox Value.Check accepts float values (Number)
+ * 2. Execution layer: tool.execute() normalizes float limit via resolveIntegerOption
  *
- * Covers: valid ints, float rejection, sibling offset, optional omission
+ * Covers: valid ints, float acceptance, sibling offset, optional omission
  */
 import { Value } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
@@ -22,8 +22,8 @@ describe("read tool limit schema (production)", () => {
     expect(Value.Check(schema, { path: "/tmp/x", limit: 100 })).toBe(true);
   });
 
-  it("rejects float limit at schema layer", () => {
-    expect(Value.Check(schema, { path: "/tmp/x", limit: 3.14 })).toBe(false);
+  it("accepts float limit at schema layer", () => {
+    expect(Value.Check(schema, { path: "/tmp/x", limit: 3.14 })).toBe(true);
   });
 
   it("accepts omitted limit (optional)", () => {
@@ -41,18 +41,24 @@ describe("read tool limit schema (production)", () => {
 });
 
 describe("read tool limit execution boundary", () => {
-  it("rejects float limit at execution boundary", async () => {
+  it("accepts float limit at execution boundary (normalizes via resolveIntegerOption)", async () => {
     const tool = createReadToolDefinition("/workspace", {
       operations: {
         access: vi.fn(async () => {}),
         detectImageMimeType: vi.fn(async () => null),
-        readFile: vi.fn(async () => Buffer.from("test")),
+        readFile: vi.fn(async () => Buffer.from("line1\nline2\nline3")),
       },
     });
 
-    await expect(
-      tool.execute("call-1", { path: "x.txt", limit: 3.14 }, undefined, undefined, {} as never),
-    ).rejects.toThrow("Limit must be an integer");
+    // Float is not rejected; resolveIntegerOption floors it to a valid integer
+    const result = await tool.execute(
+      "call-1",
+      { path: "x.txt", limit: 3.14 },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    expect(result.content).toBeDefined();
   });
 
   it("accepts valid integer limit at execution boundary", async () => {
