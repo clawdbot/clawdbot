@@ -56,6 +56,15 @@ Defines system architecture, service relationships, routing, and component respo
 
 ---
 
+## Web Runtime Standards
+
+PYTHON_WEB_RUNTIME_INVENTORY.md
+
+Inventories Python web applications, records their WSGI or ASGI deployment
+status, and defines the development-first migration and reliability gates.
+
+---
+
 ## Operational Philosophy
 
 SOUL.md
@@ -194,6 +203,7 @@ The maintained documentation library is located under `docs/`.
 
 - `docs/architecture/RANCHBOT_ARCHITECTURE.md`
 - `docs/architecture/DASHBOARD_REPORT.md`
+- `docs/architecture/PYTHON_WEB_RUNTIME_INVENTORY.md`
 - `docs/architecture/PROJECT_CONTEXT.md`
 - `docs/architecture/TOOLS.md`
 
