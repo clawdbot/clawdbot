@@ -56,6 +56,7 @@ describe("buildHostingProfileConditions", () => {
     expect(requiredCriteriaForHostingProfile("local")).toEqual([
       "openclaw.config-current",
       "openclaw.model-route-ready",
+      "openclaw.plugins-loaded",
       "openclaw.secrets-ready",
       "openclaw.workspace-writable",
       "openclaw.session-storage-ready",
@@ -66,6 +67,7 @@ describe("buildHostingProfileConditions", () => {
       "openclaw.harness-ready",
     ]);
     expect(advisoryCriteriaForHostingProfile("local")).toEqual([
+      "openclaw.event-loop-healthy",
       "openclaw.state-ready",
       "openclaw.delivery-runtime-ready",
       "openclaw.scheduler-ready",
