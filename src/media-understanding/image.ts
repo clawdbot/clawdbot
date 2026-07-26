@@ -194,6 +194,7 @@ async function describeImagesWithMinimax(params: {
   images: Array<{ buffer: Buffer; mime?: string }>;
   allowPrivateNetwork?: boolean;
   request?: ModelProviderRequestTransportOverrides;
+  signal?: AbortSignal;
 }): Promise<ImagesDescriptionResult> {
   const responses: string[] = [];
   // MiniMax VLM handles its own outbound fetch, so unwrap only at this final handoff.
@@ -203,6 +204,9 @@ async function describeImagesWithMinimax(params: {
   );
   const apiKey = runtimeValue;
   for (const [index, image] of params.images.entries()) {
+    // One MiniMax request is issued per image, so cancellation must gate every
+    // iteration or a dead run can continue buying calls after the first image.
+    params.signal?.throwIfAborted();
     const prompt =
       params.images.length > 1
         ? `${params.prompt}\n\nDescribe image ${index + 1} of ${params.images.length} independently.`
@@ -216,6 +220,7 @@ async function describeImagesWithMinimax(params: {
       timeoutMs: params.timeoutMs,
       allowPrivateNetwork: params.allowPrivateNetwork,
       request: params.request,
+      signal: params.signal,
     });
     responses.push(params.images.length > 1 ? `Image ${index + 1}:\n${text.trim()}` : text.trim());
   }
@@ -353,23 +358,52 @@ async function withImageDescriptionTimeout<T>(params: {
   task: Promise<T>;
   timeoutMs: number | undefined;
   controller: AbortController;
+  signal?: AbortSignal;
   createTimeoutError: (timeoutMs: number) => Error;
 }): Promise<T> {
-  if (params.timeoutMs === undefined) {
+  params.signal?.throwIfAborted();
+  if (params.timeoutMs === undefined && !params.signal) {
     return await params.task;
   }
   let timeout: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      params.task,
+  let removeAbortListener: (() => void) | undefined;
+  const races: Promise<T>[] = [params.task];
+  if (params.timeoutMs !== undefined) {
+    races.push(
       new Promise<never>((_, reject) => {
         timeout = setTimeout(() => {
           params.controller.abort();
           reject(params.createTimeoutError(params.timeoutMs!));
         }, params.timeoutMs);
       }),
-    ]);
+    );
+  }
+  if (params.signal) {
+    races.push(
+      new Promise<never>((_, reject) => {
+        const onAbort = () => {
+          try {
+            params.signal?.throwIfAborted();
+          } catch (error) {
+            reject(
+              error instanceof Error
+                ? error
+                : new Error("image description aborted", { cause: error }),
+            );
+          }
+        };
+        params.signal?.addEventListener("abort", onAbort, { once: true });
+        removeAbortListener = () => params.signal?.removeEventListener("abort", onAbort);
+        if (params.signal?.aborted) {
+          onAbort();
+        }
+      }),
+    );
+  }
+  try {
+    return await Promise.race(races);
   } finally {
+    removeAbortListener?.();
     if (timeout) {
       clearTimeout(timeout);
     }
@@ -381,8 +415,12 @@ async function describeImagesWithModelInternal(
   options: { onPayload?: ProviderStreamOptions["onPayload"] } = {},
 ): Promise<ImagesDescriptionResult> {
   const prompt = params.prompt ?? "Describe the image.";
+  params.signal?.throwIfAborted();
   const startedAtMs = Date.now();
   const controller = new AbortController();
+  const requestSignal = params.signal
+    ? AbortSignal.any([params.signal, controller.signal])
+    : controller.signal;
   const configuredTimeoutMs = resolveImageDescriptionTimeoutMs(params.timeoutMs);
   const allowPrivateNetwork = resolveConfiguredProviderAllowPrivateNetwork(
     params.cfg,
@@ -396,6 +434,7 @@ async function describeImagesWithModelInternal(
   try {
     const resolved = await withImageDescriptionTimeout({
       controller,
+      signal: params.signal,
       timeoutMs: configuredTimeoutMs,
       createTimeoutError: (timeoutMs) =>
         buildImageDescriptionTimeoutError({ phase: "setup", timeoutMs }),
@@ -411,11 +450,13 @@ async function describeImagesWithModelInternal(
       (late) => late.release(),
       () => undefined,
     );
+    params.signal?.throwIfAborted();
     if (!isMinimaxVlmModel(params.provider, params.model) || !isUnknownModelError(err)) {
       throw err;
     }
     const fallback = await withImageDescriptionTimeout({
       controller,
+      signal: params.signal,
       timeoutMs: configuredTimeoutMs,
       createTimeoutError: (timeoutMs) =>
         buildImageDescriptionTimeoutError({ phase: "setup", timeoutMs }),
@@ -430,11 +471,13 @@ async function describeImagesWithModelInternal(
       timeoutMs: params.timeoutMs,
       images: params.images,
       allowPrivateNetwork,
+      signal: params.signal,
     });
   }
 
   const apiKey = runtimeValue;
   try {
+    params.signal?.throwIfAborted();
     const setupDurationMs = Date.now() - startedAtMs;
 
     if (isMinimaxVlmModel(model.provider, model.id)) {
@@ -447,6 +490,7 @@ async function describeImagesWithModelInternal(
         timeoutMs: params.timeoutMs,
         images: params.images,
         request: getModelProviderRequestTransport(model),
+        signal: params.signal,
       });
     }
 
@@ -468,13 +512,14 @@ async function describeImagesWithModelInternal(
 
     const maxTokens = resolveImageToolMaxTokens(model.maxTokens, params.maxTokens);
     const completeImage = async (onPayload?: ProviderStreamOptions["onPayload"]) => {
+      params.signal?.throwIfAborted();
       const payloadHandler = composeImageDescriptionPayloadHandlers(onPayload, options.onPayload);
       const timeoutMs = configuredTimeoutMs;
       const headers = buildImageRequestHeaders(model);
       const streamOptions = {
         apiKey,
         maxTokens,
-        signal: controller.signal,
+        signal: requestSignal,
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
         ...(headers ? { headers } : {}),
         ...(payloadHandler ? { onPayload: payloadHandler } : {}),
@@ -484,6 +529,7 @@ async function describeImagesWithModelInternal(
         : complete(model, context, streamOptions);
       return await withImageDescriptionTimeout({
         controller,
+        signal: params.signal,
         timeoutMs,
         createTimeoutError: (requestTimeoutMs) =>
           buildImageDescriptionTimeoutError({
@@ -509,6 +555,7 @@ async function describeImagesWithModelInternal(
       }
     }
 
+    params.signal?.throwIfAborted();
     const retryMessage = await completeImage(disableReasoningForImageRetryPayload);
     const text = coerceImageAssistantText({
       message: retryMessage,
@@ -535,6 +582,7 @@ function toImagesDescriptionRequest(params: ImageDescriptionRequest): ImagesDesc
     prompt: params.prompt,
     maxTokens: params.maxTokens,
     timeoutMs: params.timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
     profile: params.profile,
     preferredProfile: params.preferredProfile,
     authStore: params.authStore,

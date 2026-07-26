@@ -154,6 +154,17 @@ export class ModelSetupWizardRunner {
       this.sessionId = null;
       this.abortController = null;
       this.options.onDone(this.startMethod);
+      return;
+    }
+    // Gateway-executed steps (download/pull progress) carry no input controls,
+    // so nothing would ever ask for the next one. Keep polling: the session
+    // long-polls until the next update or the terminal result, so this renders
+    // live progress instead of freezing on the first frame.
+    if (next.phase === "step" && next.step.executor === "gateway") {
+      const generation = this.generation;
+      void this.requestNext(authChoice, undefined, generation).catch((error: unknown) => {
+        this.handleError(error, generation);
+      });
     }
   }
 

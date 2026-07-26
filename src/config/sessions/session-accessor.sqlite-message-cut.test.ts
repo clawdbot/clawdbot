@@ -76,7 +76,19 @@ async function createSession(options: { activeLeafTarget?: string } = {}) {
       id: "user-2",
       parentId: "assistant-1",
       timestamp: "2026-07-18T00:00:03.000Z",
-      message: { role: "user", content: [{ type: "text", text: "second prompt" }] },
+      message: {
+        role: "user",
+        content: [
+          { type: "text", text: "second prompt" },
+          { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+        ],
+        __openclaw: {
+          media: [
+            { path: "/state/media/inbound/stored-image.png", contentType: "image/png" },
+            { path: "/state/media/inbound/notes.txt", contentType: "text/plain" },
+          ],
+        },
+      },
     },
     {
       type: "message",
@@ -203,6 +215,10 @@ describe("SQLite session message cuts", () => {
       status: "created",
       key: sessionKey,
       editorText: "second prompt",
+      editorAttachments: [{ mimeType: "image/png", data: "aW1hZ2U=" }],
+      editorMediaRefs: [
+        { path: "/state/media/inbound/stored-image.png", contentType: "image/png" },
+      ],
     });
     if (result.status !== "created") {
       throw new Error("expected rewind result");
@@ -229,6 +245,21 @@ describe("SQLite session message cuts", () => {
       to: "chat-123",
       accountId: undefined,
     });
+  });
+
+  it("omits editor attachments for a text-only message", async () => {
+    const { env } = await createSession();
+
+    const result = await rewindSessionToMessage({
+      agentId,
+      env,
+      entryId: "user-1",
+      sessionKey,
+    });
+
+    expect(result).toMatchObject({ status: "created", editorText: "first prompt" });
+    expect(result).not.toHaveProperty("editorAttachments");
+    expect(result).not.toHaveProperty("editorMediaRefs");
   });
 
   it("rewinds the stored row when its canonical key differs", async () => {
@@ -269,6 +300,10 @@ describe("SQLite session message cuts", () => {
       status: "created",
       key: targetKey,
       editorText: "second prompt",
+      editorAttachments: [{ mimeType: "image/png", data: "aW1hZ2U=" }],
+      editorMediaRefs: [
+        { path: "/state/media/inbound/stored-image.png", contentType: "image/png" },
+      ],
     });
     if (result.status !== "created") {
       throw new Error("expected fork result");

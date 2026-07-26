@@ -112,6 +112,17 @@ export function registerModelsCli(program: Command) {
     });
 
   models
+    .command("refresh")
+    .description("Refresh the hosted model catalog")
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await withModelsRuntime(async ({ defaultRuntime }) => {
+        const { modelsRefreshCommand } = await import("../commands/models/refresh.js");
+        await modelsRefreshCommand({ json: Boolean(opts.json) }, defaultRuntime);
+      });
+    });
+
+  models
     .command("set")
     .description("Set the default model")
     .argument("<model>", "Model id or alias")

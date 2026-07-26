@@ -52,12 +52,36 @@ function loadExecApprovalsUnlocked(): ExecApprovalsFile {
   }
 }
 
+function loadExecApprovalsHeldByCurrentProcess(): ExecApprovalsFile {
+  // The sync lock fails instantly when a same-process async holder owns it —
+  // spinning would deadlock the event loop. That failure must not degrade a
+  // valid persisted policy to the fail-closed deny fallback: all approvals
+  // mutations go through the fully synchronous writeExecApprovalsRaw /
+  // hardenUnchangedExecApprovals (no fs.promises anywhere in this store), so
+  // while this sync code runs no same-process write can be in flight — the
+  // file on disk IS the current committed policy. A missing file stays deny —
+  // the holder may be committing the first policy.
+  try {
+    const snapshot = readExecApprovalsSnapshotFromPath(resolveExecApprovalsPath());
+    if (snapshot.exists) {
+      return snapshot.file;
+    }
+  } catch {
+    // Unreadable state keeps the fail-closed fallback below.
+  }
+  return createFailClosedExecApprovalsFallback();
+}
+
 export function loadExecApprovals(): ExecApprovalsFile {
   try {
     return withExecApprovalsReadLockSync(resolveExecApprovalsPath(), loadExecApprovalsUnlocked);
-  } catch {
-    // A busy, malformed, or unreadable approvals store must never restore the
-    // permissive defaults while another process is revoking access.
+  } catch (err) {
+    // Cross-process contention stays fail-closed: a foreign writer may be
+    // mid-revocation, and deny is the only state we can assert. Only the
+    // provably race-free same-process case reads the committed file.
+    if ((err as { heldByCurrentProcess?: boolean }).heldByCurrentProcess === true) {
+      return loadExecApprovalsHeldByCurrentProcess();
+    }
     return createFailClosedExecApprovalsFallback();
   }
 }
@@ -68,8 +92,8 @@ export async function loadExecApprovalsAsync(): Promise<ExecApprovalsFile> {
       loadExecApprovalsUnlocked(),
     );
   } catch {
-    // Match the synchronous reader's fail-closed contract while allowing
-    // same-process async writers to finish instead of rejecting valid state.
+    // Match the synchronous reader's fail-closed contract; the async lock
+    // already waits for same-process holders via the process-local queue.
     return createFailClosedExecApprovalsFallback();
   }
 }

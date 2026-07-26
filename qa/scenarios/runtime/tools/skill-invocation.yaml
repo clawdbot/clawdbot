@@ -14,7 +14,7 @@ scenario:
   docsRefs:
     - docs/tools/skills.md
   codeRefs:
-    - src/agents/skills-clawhub.ts
+    - src/skills/runtime/tool-dispatch.ts
     - extensions/qa-lab/src/runtime-tool-fixture.ts
   execution:
     kind: flow

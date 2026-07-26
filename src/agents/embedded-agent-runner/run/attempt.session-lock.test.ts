@@ -2524,6 +2524,7 @@ describe("embedded attempt session lock lifecycle", () => {
       },
       async () =>
         await appendExactAssistantMessageToSessionTranscript({
+          agentId: "main",
           sessionKey,
           storePath,
           message: {

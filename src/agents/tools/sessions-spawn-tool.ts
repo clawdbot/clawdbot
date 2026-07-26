@@ -140,7 +140,11 @@ function createSessionsSpawnToolSchema(params: {
           "Stable later-target alias; starts lowercase letter; then lowercase/digit/_/-.",
       }),
     ),
-    label: Type.Optional(Type.String()),
+    label: Type.Optional(
+      Type.String({
+        description: "Short task title shown in UI lists; name the work, not the agent.",
+      }),
+    ),
     runtime: optionalStringEnum(
       params.acpAvailable ? SESSIONS_SPAWN_RUNTIMES : (["subagent"] as const),
       { description: 'Runtime; visible=true requires "subagent".' },

@@ -149,7 +149,8 @@ async function runConfiguredSystemAgentText(params: {
       (params.deps?.resolveAssistantTimeoutMs ?? resolveSystemAgentAssistantTimeoutMs)(route);
     const shared = {
       sessionId: `${runId}-session`,
-      agentId: "openclaw",
+      // OpenClaw is the planner surface, but the configured roster owner supplies runtime policy.
+      agentId: route.agentId,
       trigger: "manual" as const,
       sessionFile: path.join(tempDir, "session.jsonl"),
       workspaceDir: tempDir,

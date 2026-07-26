@@ -19,10 +19,10 @@ function createSettings(): UiSettings {
     chatShowThinking: true,
     chatShowToolCalls: true,
     chatPersistCommentary: true,
-    splitRatio: 0.6,
     navCollapsed: false,
     navWidth: 280,
     sidebarEntries: ["route:workboard", "route:tasks"],
+    sessionSectionOrder: [],
   };
 }
 

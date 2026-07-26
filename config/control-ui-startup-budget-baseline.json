@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 318587,
-  "reason": "move presentation preferences to browser-local state",
-  "updatedAt": "2026-07-23"
+  "startupJsGzipBytes": 321325,
+  "reason": "Account for the current Control UI startup chunk set after session hydration scoping",
+  "updatedAt": "2026-07-26"
 }

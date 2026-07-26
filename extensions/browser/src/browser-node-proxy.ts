@@ -33,6 +33,7 @@ type BrowserProxyRequest = ((params: {
   body?: unknown;
   timeoutMs?: number;
   profile?: string;
+  signal?: AbortSignal;
 }) => Promise<unknown>) & {
   isHostFallbackActive: () => boolean;
 };
@@ -62,6 +63,7 @@ async function callBrowserProxy(params: {
   body?: unknown;
   timeoutMs?: number;
   profile?: string;
+  signal?: AbortSignal;
 }): Promise<BrowserProxySuccess> {
   const proxyTimeoutMs =
     typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
@@ -90,7 +92,10 @@ async function callBrowserProxy(params: {
         },
         idempotencyKey: crypto.randomUUID(),
       },
-      { scopes: ["operator.admin"] },
+      {
+        scopes: ["operator.admin"],
+        ...(params.signal ? { signal: params.signal } : {}),
+      },
     );
   } catch (error) {
     if (params.markControlHostUnavailable && isBrowserControlHostUnavailableError(error)) {
@@ -124,6 +129,7 @@ async function callLocalBrowserControl(params: Parameters<BrowserProxyRequest>[0
     method: params.method,
     body: params.body === undefined ? undefined : JSON.stringify(params.body),
     timeoutMs: params.timeoutMs,
+    signal: params.signal,
   });
 }
 

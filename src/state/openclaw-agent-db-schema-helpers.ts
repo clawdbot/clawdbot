@@ -33,7 +33,7 @@ type ExistingAgentSchemaMeta = {
   schemaVersion: number | null;
 };
 
-const OPENCLAW_AGENT_SCHEMA_COMPATIBILITY = {
+const AGENT_SCHEMA_COMPATIBILITY = {
   allowedColumnDefinitions: {
     "conversations.delivery_target": ["delivery_target TEXT NOT NULL DEFAULT ''"],
   },
@@ -50,7 +50,7 @@ export function assertOpenClawAgentSchemaContains(
   pathname: string,
   schemaSql: string,
 ): void {
-  assertSqliteSchemaContains(database, pathname, schemaSql, OPENCLAW_AGENT_SCHEMA_COMPATIBILITY);
+  assertSqliteSchemaContains(database, pathname, schemaSql, AGENT_SCHEMA_COMPATIBILITY);
 }
 
 export function assertOpenClawAgentCurrentRuntimeSchema(
@@ -150,6 +150,24 @@ export function assertSupportedAgentSchemaVersion(db: DatabaseSync, pathname: st
       pathname,
       userVersion,
       OPENCLAW_AGENT_SCHEMA_VERSION,
+    );
+  }
+}
+
+/** Refuse steady-state reads until Doctor has completed the v16 media cutover. */
+export function assertCanonicalAgentMediaPersistenceVersion(
+  db: DatabaseSync,
+  pathname: string,
+): void {
+  const userVersion = readSqliteUserVersion(db);
+  const hasApplicationSchema = db
+    .prepare("SELECT 1 FROM sqlite_master WHERE substr(name, 1, 7) <> 'sqlite_' LIMIT 1")
+    .get();
+  const isNewUnownedDatabase =
+    userVersion === 0 && readExistingAgentSchemaMeta(db) === null && !hasApplicationSchema;
+  if (userVersion < OPENCLAW_AGENT_SCHEMA_VERSION && !isNewUnownedDatabase) {
+    throw new Error(
+      `OpenClaw agent database ${pathname} uses schema version ${userVersion}; run openclaw doctor --fix to migrate persisted media before using it.`,
     );
   }
 }

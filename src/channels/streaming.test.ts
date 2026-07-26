@@ -132,26 +132,6 @@ describe("normalizeAgentPlanSteps", () => {
 });
 
 describe("streaming config resolution", () => {
-  // Flat delivery keys remain external SDK compatibility fallbacks. Bundled
-  // schemas are nested-only; mode-family aliases stay doctor-only.
-  it("resolves flat delivery keys while ignoring mode-family aliases", () => {
-    const legacyEntry = {
-      streamMode: "block",
-      chunkMode: "newline",
-      blockStreaming: true,
-      draftChunk: { minChars: 10 },
-      blockStreamingCoalesce: { idleMs: 5 },
-      nativeStreaming: false,
-    } as never;
-
-    expect(resolveChannelPreviewStreamMode(legacyEntry, "partial")).toBe("partial");
-    expect(resolveChannelStreamingChunkMode(legacyEntry)).toBe("newline");
-    expect(resolveChannelStreamingBlockEnabled(legacyEntry)).toBe(true);
-    expect(resolveChannelStreamingPreviewChunk(legacyEntry)).toEqual({ minChars: 10 });
-    expect(resolveChannelStreamingBlockCoalesce(legacyEntry)).toEqual({ idleMs: 5 });
-    expect(resolveChannelStreamingNativeTransport(legacyEntry)).toBeUndefined();
-  });
-
   it("resolves the canonical nested streaming shape", () => {
     const entry = {
       streaming: {
@@ -169,13 +149,6 @@ describe("streaming config resolution", () => {
     expect(resolveChannelStreamingPreviewChunk(entry)).toEqual({ minChars: 10 });
     expect(resolveChannelStreamingBlockCoalesce(entry)).toEqual({ idleMs: 5 });
     expect(resolveChannelStreamingNativeTransport(entry)).toBe(false);
-  });
-
-  it("keeps the scalar streaming fallback for external SDK plugin configs", () => {
-    // Bundled schemas are nested-only; this compatibility path is deprecated.
-    expect(resolveChannelPreviewStreamMode({ streaming: "block" }, "partial")).toBe("block");
-    expect(resolveChannelPreviewStreamMode({ streaming: true }, "off")).toBe("partial");
-    expect(resolveChannelPreviewStreamMode({ streaming: false }, "partial")).toBe("off");
   });
 });
 

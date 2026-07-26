@@ -116,6 +116,36 @@ describe("resolveSessionNavigation", () => {
     );
   });
 
+  it("keeps the selected archived session ahead of an active-filtered result", () => {
+    const selectedSession = {
+      key: "agent:main:archived",
+      kind: "direct" as const,
+      archived: true,
+      updatedAt: 50,
+    };
+    const navigation = resolveSessionNavigation({
+      result: sessionsResult([{ key: "agent:main:recent", kind: "direct", updatedAt: 100 }]),
+      activeSession: selectedSession,
+      resultAgentId: "main",
+      sessionKey: selectedSession.key,
+      archivedFilter: "active",
+    });
+
+    expect(navigation.visibleSessions.map((row) => row.key)).toEqual([
+      selectedSession.key,
+      "agent:main:recent",
+    ]);
+    expect(navigation.visibleSessions[0]).toMatchObject({
+      key: selectedSession.key,
+      archived: true,
+    });
+    expect(navigation.activeRowKey).toBe(selectedSession.key);
+    expect(navigation.selectedSession).toMatchObject({
+      key: selectedSession.key,
+      archived: true,
+    });
+  });
+
   it("keeps the selected session in place in a long list", () => {
     const rows = Array.from({ length: 12 }, (_, index) => ({
       key: `agent:main:recent-${index}`,

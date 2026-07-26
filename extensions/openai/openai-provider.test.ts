@@ -348,14 +348,17 @@ describe("buildOpenAIProvider", () => {
     expect(manifest.modelCatalog.discovery.openai).toBe("runtime");
   });
 
-  it("does not hardcode chatgpt-responses transport on gpt-5.3-codex catalog entry (#91710)", () => {
+  it("does not hardcode transport routing on static catalog entries (#91710)", () => {
     const openaiModels = manifest.modelCatalog.providers.openai.models as Array<
       Record<string, unknown>
     >;
-    const codexEntry = openaiModels.find((m) => m.id === "gpt-5.3-codex");
-    expect(codexEntry).toBeDefined();
-    expect(codexEntry?.api).toBeUndefined();
-    expect(codexEntry?.baseUrl).toBeUndefined();
+    expect(openaiModels.length).toBeGreaterThan(0);
+    // Transport selection is runtime-owned; a manifest row pinning api/baseUrl
+    // would bypass route policy (the original #91710 regression).
+    for (const entry of openaiModels) {
+      expect(entry.api, `catalog row ${String(entry.id)} must not pin api`).toBeUndefined();
+      expect(entry.baseUrl, `catalog row ${String(entry.id)} must not pin baseUrl`).toBeUndefined();
+    }
   });
 
   it("keeps a network-free OpenAI static catalog", async () => {

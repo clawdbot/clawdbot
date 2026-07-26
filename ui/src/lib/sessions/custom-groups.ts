@@ -1,6 +1,8 @@
-// Pure helpers for the gateway-owned custom session group catalog.
+// Pure helpers for custom session groups and their sidebar section tokens.
 // Catalog storage and member updates live on the gateway (sessions.groups.*);
 // the SessionCapability mirrors the catalog into state.groups.
+
+const BUILT_IN_SESSION_SECTION_IDS = new Set(["ungrouped", "groups", "work"]);
 
 export function readSessionCustomGroupNames(payload: unknown): string[] {
   const groups = (payload as { groups?: Array<{ name?: unknown }> } | null)?.groups;
@@ -12,14 +14,38 @@ export function readSessionCustomGroupNames(payload: unknown): string[] {
   );
 }
 
-/** Move one custom group before another while preserving every other group. */
-export function reorderSessionCustomGroups(
-  groups: readonly string[],
+/** Validate and deduplicate a persisted partial section order. */
+export function normalizeSessionSectionOrderTokens(value: unknown): string[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const normalized: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    let token: string | null = null;
+    if (BUILT_IN_SESSION_SECTION_IDS.has(entry)) {
+      token = entry;
+    } else if (entry.startsWith("category:")) {
+      const name = entry.slice("category:".length).trim();
+      token = name ? `category:${name}` : null;
+    }
+    if (token && !normalized.includes(token)) {
+      normalized.push(token);
+    }
+  }
+  return normalized;
+}
+
+/** Move one entry relative to another while preserving every other entry. */
+export function moveSessionOrderEntry(
+  order: readonly string[],
   source: string,
   target: string,
-  position: "before" | "after" = "before",
+  position: "before" | "after",
 ): string[] {
-  const ordered = [...new Set(groups.map((name) => name.trim()).filter(Boolean))];
+  const ordered = [...order];
   const sourceIndex = ordered.indexOf(source);
   const targetIndex = ordered.indexOf(target);
   if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) {

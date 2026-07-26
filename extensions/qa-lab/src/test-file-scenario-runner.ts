@@ -43,6 +43,7 @@ type QaTestFileScenarioRunParams = {
   commandTimeoutMs?: number;
   evidenceMode?: QaScorecardEvidenceMode;
   env?: NodeJS.ProcessEnv;
+  failFast?: boolean;
   outputDir: string;
   primaryModel: string;
   providerMode: QaProviderMode;
@@ -580,16 +581,18 @@ export async function runQaTestFileScenarios(
   };
   const results: QaTestFileScenarioResult[] = [];
   for (const scenario of scenarios) {
-    results.push(
-      await runQaTestFileScenario({
-        env,
-        commandTimeoutMs,
-        outputDir: params.outputDir,
-        repoRoot: params.repoRoot,
-        runCommand,
-        scenario,
-      }),
-    );
+    const result = await runQaTestFileScenario({
+      env,
+      commandTimeoutMs,
+      outputDir: params.outputDir,
+      repoRoot: params.repoRoot,
+      runCommand,
+      scenario,
+    });
+    results.push(result);
+    if (params.failFast && result.status !== "pass") {
+      break;
+    }
   }
   const generatedAt = new Date().toISOString();
   const artifactPaths = buildScenarioArtifactPaths({

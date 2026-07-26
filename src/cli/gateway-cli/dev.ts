@@ -119,9 +119,8 @@ export async function ensureDevGatewayConfig(opts: { reset?: boolean }) {
           workspace,
           skipBootstrap: true,
         },
-        list: [
-          {
-            id: "dev",
+        entries: {
+          dev: {
             default: true,
             workspace,
             identity: {
@@ -130,7 +129,7 @@ export async function ensureDevGatewayConfig(opts: { reset?: boolean }) {
               emoji: DEV_IDENTITY_EMOJI,
             },
           },
-        ],
+        },
       },
     },
     afterWrite: { mode: "auto" },

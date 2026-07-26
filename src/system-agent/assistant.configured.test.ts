@@ -277,6 +277,7 @@ describe("OpenClaw configured-model planner", () => {
     });
     expect(runCliAgent).toHaveBeenCalledWith(
       expect.objectContaining({
+        agentId: "ops",
         provider: "claude-cli",
         model: "claude-opus-4-8",
         agentDir: "/tmp/ops-agent",

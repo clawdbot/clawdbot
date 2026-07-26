@@ -208,6 +208,7 @@ describe("resolveSystemRunExecArgv", () => {
         expect(bareResult.stdout).not.toContain("TRUSTED_EXECUTABLE");
 
         const approvals = resolveExecApprovalsFromFile({
+          agentId: "main",
           file: {
             version: 1,
             defaults: { security: "allowlist", ask: "off", askFallback: "deny" },

@@ -445,9 +445,10 @@ for (const requiredPrefix of REQUIRED_TARBALL_ENTRY_PREFIXES) {
   }
 }
 let packageVersion = "";
+let packageJson = null;
 if (entrySet.has("package.json")) {
   try {
-    const packageJson = JSON.parse(readTarEntry("package.json"));
+    packageJson = JSON.parse(readTarEntry("package.json"));
     packageVersion = typeof packageJson.version === "string" ? packageJson.version : "";
     errors.push(...collectWorkspaceProtocolDependencyErrors(packageJson, "package.json"));
     if (cliArgs.requireBundledWorkspaceDeps) {
@@ -548,6 +549,23 @@ if (entrySet.has("dist/postinstall-inventory.json")) {
         errors.push(
           `package dist inventory must omit install guard ${PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`,
         );
+      }
+      if (typeof packageJson?.scripts?.postinstall === "string") {
+        // Postinstall prunes every uninventoried dist file, including dashboard
+        // assets that cannot be recovered from the JavaScript import graph.
+        const requiredControlUiInventoryEntries = new Set([
+          ...REQUIRED_TARBALL_ENTRIES.filter((entry) => entry.startsWith("dist/")),
+          ...normalized.filter(
+            (entry) =>
+              REQUIRED_TARBALL_ENTRY_PREFIXES.some((prefix) => entry.startsWith(prefix)) &&
+              fs.statSync(path.join(extractedPackageRoot, entry)).isFile(),
+          ),
+        ]);
+        for (const requiredEntry of requiredControlUiInventoryEntries) {
+          if (!normalizedInventorySet.has(requiredEntry)) {
+            errors.push(`postinstall inventory omits Control UI file ${requiredEntry}`);
+          }
+        }
       }
       packageDistImports = runPhase("dist import graph", () =>
         collectPackageDistImports({

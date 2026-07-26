@@ -92,7 +92,7 @@ export function createCombinedSessionMcpRuntime(params: {
     parts.every((part, index) => part.peekCatalog() === mergedSourceCatalogs?.[index]);
 
   const loadCatalog = async (): Promise<McpToolCatalog> => {
-    if (cachedCatalog && cachedCatalogIsCurrent()) {
+    if (cachedCatalog && !cachedCatalog.diagnostics?.length && cachedCatalogIsCurrent()) {
       return cachedCatalog;
     }
     if (catalogInFlight) {
@@ -100,6 +100,12 @@ export function createCombinedSessionMcpRuntime(params: {
     }
     const inFlight = (async () => {
       const catalogs = await Promise.all(parts.map((part) => part.getCatalog()));
+      if (
+        cachedCatalog &&
+        mergedSourceCatalogs?.every((source, index) => source === catalogs[index])
+      ) {
+        return cachedCatalog;
+      }
       serverOwner.clear();
       for (let index = 0; index < parts.length; index += 1) {
         rememberServerOwners(catalogs[index]!, parts[index]!);
