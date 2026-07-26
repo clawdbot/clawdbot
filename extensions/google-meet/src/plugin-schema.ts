@@ -220,7 +220,12 @@ export const GoogleMeetToolSchema = Type.Object({
       description: "For action=create with Google Meet OAuth, configure allowed join entry points.",
     }),
   ),
-  url: Type.Optional(Type.String({ description: "Explicit https://meet.google.com/... URL" })),
+  url: Type.Optional(
+    Type.String({
+      description:
+        "Explicit https://meet.google.com/... URL. recover_current_tab without it only targets the Meet tab this session is already tracking.",
+    }),
+  ),
   transport: Type.Optional(
     Type.String({ enum: ["chrome", "chrome-node", "twilio"], description: "Join transport" }),
   ),

@@ -24,10 +24,12 @@ import {
   type GoogleMeetRuntimeProbeContext,
 } from "./runtime-probes.js";
 import {
+  GOOGLE_MEET_SESSION_MESSAGES,
   isBrowserTransport,
   noteSession,
   resolveMode,
   resolveTransport,
+  trackedRecoveryScope,
   withSessionAgentConfig,
 } from "./runtime-session.js";
 import { getGoogleMeetRuntimeSetupStatus } from "./runtime-setup.js";
@@ -121,28 +123,7 @@ export class GoogleMeetRuntime {
         "browser-unverified",
         "meet-microphone-muted",
       ]),
-      messages: {
-        previousBrowserLeaveFailed:
-          "Could not leave the previous Meet browser tab before reassignment.",
-        reassignedSessionNote: "Ended before the same Meet tab was reassigned to another agent.",
-        reusedSessionNote: "Reused existing active Meet session.",
-        replacementBrowserLeaveFailed:
-          "Could not leave the previous Meet browser tab before reassignment.",
-        speechBlockedFallback: "Realtime speech blocked until Google Meet is ready.",
-        speech: {
-          audioBridgeUnavailable: "Realtime speech requires an active Chrome audio bridge.",
-          browserUnverified: "Google Meet browser state has not been verified yet.",
-          manualActionFallback:
-            "Resolve the Google Meet browser prompt before asking OpenClaw to speak.",
-          microphoneMuted:
-            "Turn on the OpenClaw Google Meet microphone before asking OpenClaw to speak.",
-          microphoneMutedReason: "meet-microphone-muted",
-          notInCall: "Google Meet has not reported that the browser participant is in the call.",
-          notInCallReason: "not-in-call",
-          browserUnverifiedReason: "browser-unverified",
-          audioBridgeUnavailableReason: "audio-bridge-unavailable",
-        },
-      },
+      messages: GOOGLE_MEET_SESSION_MESSAGES,
       resolveJoin: (request) => ({
         url: adapter.urls.validateAndNormalize(request.url),
         transport: resolveTransport(request.transport, params.config),
@@ -252,19 +233,40 @@ export class GoogleMeetRuntime {
     const url = request.url
       ? GOOGLE_MEET_PLATFORM_ADAPTER.urls.validateAndNormalize(request.url)
       : undefined;
-    return transport === "chrome-node"
-      ? await recoverCurrentMeetTabOnNode({
-          runtime: this.params.runtime,
-          config: this.params.config,
-          fullConfig: this.params.fullConfig,
-          url,
-        })
-      : await recoverCurrentMeetTab({
-          runtime: this.params.runtime,
-          config: this.params.config,
-          fullConfig: this.params.fullConfig,
-          url,
+    // Untargeted recovery must stay scoped to tabs this runtime owns. Without the
+    // guard it would attach to any Meet tab in the shared profile and arm its
+    // microphone (issue #113990).
+    const tracked = url
+      ? undefined
+      : trackedRecoveryScope({
+          sessions: this.list(),
+          transport,
+          lastCreatedBrowserTabUrl: [...this.#createdBrowserTabs.values()].at(-1),
         });
+    if (!url && !tracked) {
+      return {
+        transport,
+        nodeId: undefined,
+        found: false,
+        targetId: undefined,
+        tab: undefined,
+        browser: undefined,
+        message:
+          "No url was provided and this session is not tracking a Meet tab. Pass url to recover a specific meeting tab.",
+      };
+    }
+    const params = {
+      runtime: this.params.runtime,
+      config: this.params.config,
+      fullConfig: this.params.fullConfig,
+      mode: tracked?.mode,
+      trackedMeetingUrl: tracked?.trackedMeetingUrl,
+      trackedTargetId: tracked?.trackedTargetId,
+      url: url ?? tracked?.url,
+    };
+    return transport === "chrome-node"
+      ? await recoverCurrentMeetTabOnNode(params)
+      : await recoverCurrentMeetTab(params);
   }
 
   async join(request: GoogleMeetJoinRequest): Promise<GoogleMeetJoinResult> {
@@ -521,28 +523,20 @@ export class GoogleMeetRuntime {
     options: { force?: boolean; readOnly?: boolean } = {},
   ): Promise<void> {
     try {
+      const recoverParams = {
+        runtime: this.params.runtime,
+        config: this.params.config,
+        fullConfig: this.params.fullConfig,
+        mode: session.mode,
+        readOnly: options.readOnly,
+        trackedMeetingUrl: session.url,
+        trackedTargetId: session.chrome?.browserTab?.targetId,
+        url: session.url,
+      };
       const result =
         session.transport === "chrome-node"
-          ? await recoverCurrentMeetTabOnNode({
-              runtime: this.params.runtime,
-              config: this.params.config,
-              fullConfig: this.params.fullConfig,
-              mode: session.mode,
-              readOnly: options.readOnly,
-              trackedMeetingUrl: session.url,
-              trackedTargetId: session.chrome?.browserTab?.targetId,
-              url: session.url,
-            })
-          : await recoverCurrentMeetTab({
-              runtime: this.params.runtime,
-              config: this.params.config,
-              fullConfig: this.params.fullConfig,
-              mode: session.mode,
-              readOnly: options.readOnly,
-              trackedMeetingUrl: session.url,
-              trackedTargetId: session.chrome?.browserTab?.targetId,
-              url: session.url,
-            });
+          ? await recoverCurrentMeetTabOnNode(recoverParams)
+          : await recoverCurrentMeetTab(recoverParams);
       if (result.found && session.chrome) {
         if (result.targetId) {
           const currentTab = session.chrome.browserTab;

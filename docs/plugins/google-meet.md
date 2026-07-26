@@ -1111,7 +1111,7 @@ openclaw googlemeet recover-tab
 openclaw googlemeet recover-tab https://meet.google.com/abc-defg-hij
 ```
 
-The equivalent tool action is `recover_current_tab`: it focuses and inspects an existing Meet tab for the selected transport (local browser control for `chrome`, the configured node for `chrome-node`) without opening a new tab or session, and reports the current blocker (login, admission, permissions, audio-choice state). The CLI command talks to the configured Gateway, which must be running; `chrome-node` also requires the node to be connected.
+The equivalent tool action is `recover_current_tab`: it focuses and inspects an existing Meet tab for the selected transport (local browser control for `chrome`, the configured node for `chrome-node`) without opening a new tab or session, and reports the current blocker (login, admission, permissions, audio-choice state). Without a URL it only recovers a Meet tab the calling session is already tracking (an active session's tab, or the tab a browser `create` opened); it never attaches to unrelated Meet tabs in the shared browser profile. Pass the meeting URL to recover a specific tab. The CLI command talks to the configured Gateway, which must be running; `chrome-node` also requires the node to be connected.
 
 ### Twilio setup checks fail
 

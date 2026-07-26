@@ -4926,35 +4926,58 @@ describe("google-meet plugin", () => {
     ).toBe(true);
   });
 
-  it("preserves the Google sign-in diagnostic when no meeting tab is recoverable", async () => {
-    const { tools } = setup(
+  it("refuses untargeted recovery when this session tracks no Meet tab", async () => {
+    const { tools, nodesInvoke } = setup(
       { defaultTransport: "chrome-node" },
       {
         nodesInvokeHandler: createNodeBrowserScenario({
           tabs: [
             {
-              targetId: "google-sign-in-tab",
-              title: "Sign in - Google Accounts - Meet",
-              url: "https://accounts.google.com/signin",
+              targetId: "someone-elses-meet-tab",
+              title: "Meet",
+              url: "https://meet.google.com/hum-anpr-ivt",
             },
           ],
           focus: true,
-          inspect: () => ({
-            inCall: false,
-            manualActionRequired: true,
-            manualActionReason: "google-login-required",
-            manualActionMessage: "Sign in to Google, then retry.",
-            url: "https://accounts.google.com/signin",
-          }),
         }),
       },
     );
     const tool = getMeetTool({ tools });
 
     const result = await tool.execute("id", { action: "recover_current_tab" });
-    const browser = requireRecord(result.details.browser, "recovered browser state");
-    expect(result.details.targetId).toBe("google-sign-in-tab");
-    expect(browser.manualActionReason).toBe("google-login-required");
+
+    expect(result.details.found).toBe(false);
+    expect(result.details.message).toContain("not tracking a Meet tab");
+    expect(nodesInvoke).not.toHaveBeenCalled();
+  });
+
+  it("recovers the tracked session tab when recover_current_tab has no url", async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    try {
+      const callGatewayFromCli = mockLocalMeetBrowserRequestWithTabState();
+      const { methods } = setup({ defaultMode: "transcribe", defaultTransport: "chrome" });
+      const joined = (await invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.join", {
+        url: MEET_URL,
+      })) as { session: { chrome?: { browserTab?: { targetId?: string } } } };
+      expect(joined.session.chrome?.browserTab?.targetId).toBe("local-meet-tab");
+
+      const recovered = (await invokeGoogleMeetGatewayMethodForTest(
+        methods,
+        "googlemeet.recoverCurrentTab",
+        {},
+      )) as { found: boolean; targetId?: string };
+
+      expect(recovered.found).toBe(true);
+      expect(recovered.targetId).toBe("local-meet-tab");
+      expect(
+        callGatewayFromCli.mock.calls.some(
+          (call) => (call[2] as { path?: string }).path === "/tabs/focus",
+        ),
+      ).toBe(true);
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    }
   });
 
   it("reports an ambiguous local Chrome Meet tab without reloading it", async () => {
