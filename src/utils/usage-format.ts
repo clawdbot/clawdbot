@@ -21,45 +21,15 @@ import {
   resolveCatalogModelPricing,
   resolveHostedModelPricing,
 } from "../model-catalog/pricing.js";
+import {
+  normalizeModelCostConfig,
+  normalizeResolvedPricing,
+  type ModelCostConfig,
+  type PricingTier,
+  type RawModelCostConfig,
+} from "./usage-format-pricing.js";
 export { formatTokenCount } from "./token-format.js";
-
-/**
- * A single tier in a tiered-pricing schedule.  Prices are expressed as
- * USD per-million tokens, just like the flat `ModelCostConfig` fields.
- *
- * `range` is a half-open interval `[start, end)` expressed in *input*
- * token counts.  The tiers MUST be sorted in ascending `range[0]` order
- * with no gaps.
- */
-type PricingTier = {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  /** [startTokens, endTokens) — half-open interval on the input token axis. */
-  range: [number, number];
-};
-
-type RawPricingTier = {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  range: [number, number] | [number];
-};
-
-/** Per-million-token model pricing used by usage summaries and cost estimates. */
-export type ModelCostConfig = {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  /** Optional tiered pricing tiers.  When present, `estimateUsageCost`
-   *  uses them instead of the flat rates above.  The flat rates still
-   *  serve as the "default / first-tier" fallback for callers that are
-   *  unaware of tiered pricing. */
-  tieredPricing?: PricingTier[];
-};
+export type { ModelCostConfig } from "./usage-format-pricing.js";
 
 type UsageTotals = {
   input?: number;
@@ -92,10 +62,6 @@ type ProviderCostIndex = {
   entries: Map<string, ModelCostConfig>;
   sources: Map<string, ProviderCostIndexSource>;
   structureFingerprint: string;
-};
-
-type RawModelCostConfig = Omit<ModelCostConfig, "tieredPricing"> & {
-  tieredPricing?: RawPricingTier[];
 };
 
 const EMPTY_PROVIDER_COST_INDEX = new Map<string, ModelCostConfig>();
@@ -180,76 +146,6 @@ function shouldUseNormalizedCostLookup(params: { provider?: string; model?: stri
     return false;
   }
   return provider === "anthropic" || provider === "openrouter" || provider === "vercel-ai-gateway";
-}
-
-/**
- * Normalize a raw tieredPricing array from models.json / config.
- * Supports open-ended ranges such as `[128000]` or `[128000, -1]`,
- * which are converted to `[128000, Infinity]`.
- */
-function normalizeTieredPricing(raw: RawPricingTier[] | undefined): PricingTier[] | undefined {
-  if (!raw || raw.length === 0) {
-    return undefined;
-  }
-  const result: PricingTier[] = [];
-  for (const tier of raw) {
-    const range = tier.range;
-    if (!Array.isArray(range) || range.length < 1) {
-      continue;
-    }
-    const start = typeof range[0] === "number" ? range[0] : Number.NaN;
-    if (!Number.isFinite(start)) {
-      continue;
-    }
-    const rawEnd = range.length >= 2 ? range[1] : null;
-    const end =
-      typeof rawEnd === "number" && Number.isFinite(rawEnd) && rawEnd > start ? rawEnd : Infinity;
-    if (
-      !Number.isFinite(tier.input) ||
-      !Number.isFinite(tier.output) ||
-      !Number.isFinite(tier.cacheRead) ||
-      !Number.isFinite(tier.cacheWrite)
-    ) {
-      continue;
-    }
-    result.push({
-      input: tier.input,
-      output: tier.output,
-      cacheRead: tier.cacheRead,
-      cacheWrite: tier.cacheWrite,
-      range: [start, end],
-    });
-  }
-  return result.length > 0 ? result.toSorted((a, b) => a.range[0] - b.range[0]) : undefined;
-}
-
-function normalizeModelCostConfig(cost: RawModelCostConfig): ModelCostConfig {
-  const normalizedTiers = normalizeTieredPricing(cost.tieredPricing);
-  return {
-    input: cost.input,
-    output: cost.output,
-    cacheRead: cost.cacheRead,
-    cacheWrite: cost.cacheWrite,
-    ...(normalizedTiers ? { tieredPricing: normalizedTiers } : {}),
-  };
-}
-
-function normalizeResolvedPricing(cost: {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  tieredPricing?: RawPricingTier[];
-}): ModelCostConfig {
-  return normalizeModelCostConfig({
-    input: typeof cost.input === "number" && Number.isFinite(cost.input) ? cost.input : 0,
-    output: typeof cost.output === "number" && Number.isFinite(cost.output) ? cost.output : 0,
-    cacheRead:
-      typeof cost.cacheRead === "number" && Number.isFinite(cost.cacheRead) ? cost.cacheRead : 0,
-    cacheWrite:
-      typeof cost.cacheWrite === "number" && Number.isFinite(cost.cacheWrite) ? cost.cacheWrite : 0,
-    ...(cost.tieredPricing ? { tieredPricing: cost.tieredPricing } : {}),
-  });
 }
 
 function isRawModelCostConfig(value: unknown): value is RawModelCostConfig {
