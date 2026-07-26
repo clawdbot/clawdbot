@@ -730,8 +730,6 @@ src/gateway/gateway-models.profiles.live.test.ts
 src/gateway/managed-image-attachments.test.ts
 src/gateway/managed-image-attachments.ts
 src/gateway/mcp-http.test.ts
-src/gateway/model-pricing-cache.test.ts
-src/gateway/model-pricing-cache.ts
 src/gateway/node-registry.test.ts
 src/gateway/node-registry.ts
 src/gateway/openai-http.test.ts

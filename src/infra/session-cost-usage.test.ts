@@ -10,10 +10,6 @@ import {
   persistSessionTranscriptTurn,
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import {
-  clearGatewayModelPricingFailures,
-  replaceGatewayModelPricingCache,
-} from "../gateway/model-pricing-cache-state.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import * as usageFormat from "../utils/usage-format.js";
@@ -83,11 +79,6 @@ async function refreshSessionCostUsageForTest(sessionFile: string): Promise<void
     agentId: "main",
     sessionFiles: [sessionFile],
   });
-}
-
-function clearGatewayModelPricingState(): void {
-  replaceGatewayModelPricingCache(new Map(), 0);
-  clearGatewayModelPricingFailures();
 }
 
 describe("session cost usage", () => {
@@ -596,16 +587,14 @@ describe("session cost usage", () => {
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
 
-    // A real assistant turn that burned tokens. The transport recorded cost.total: 0,
-    // derived from an all-zero catalog price — exactly what codex/gpt-5.x models produce,
-    // since the Codex backend exposes no per-token price and the operator never set one.
+    // A real assistant turn that burned tokens for a model absent from every pricing source.
     const entry = {
       type: "message",
       timestamp: new Date().toISOString(),
       message: {
         role: "assistant",
-        provider: "openai",
-        model: "gpt-5.5",
+        provider: "custom",
+        model: "unpriced-model",
         usage: {
           input: 881,
           output: 6,
@@ -625,7 +614,6 @@ describe("session cost usage", () => {
 
     // No operator-configured pricing for this model, so its all-zero cost is unknown,
     // not an intentional "free" price.
-    clearGatewayModelPricingState();
     await withStateDir(root, async () => {
       const summary = await loadCostUsageSummary();
       expect(summary.totals.totalTokens).toBe(23287);
@@ -649,8 +637,8 @@ describe("session cost usage", () => {
       timestamp: new Date().toISOString(),
       message: {
         role: "assistant",
-        provider: "openai",
-        model: "gpt-5.5",
+        provider: "custom",
+        model: "unpriced-model",
         usage: {
           input: 881,
           output: 6,
@@ -673,10 +661,10 @@ describe("session cost usage", () => {
     const config = {
       models: {
         providers: {
-          openai: {
+          custom: {
             models: [
               {
-                id: "gpt-5.5",
+                id: "unpriced-model",
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               },
             ],
@@ -685,7 +673,6 @@ describe("session cost usage", () => {
       },
     } as unknown as OpenClawConfig;
 
-    clearGatewayModelPricingState();
     await withStateDir(root, async () => {
       const summary = await loadCostUsageSummary({ config });
       expect(summary.totals.totalTokens).toBe(23287);
@@ -701,9 +688,9 @@ describe("session cost usage", () => {
     const sessionFile = path.join(sessionsDir, "sess-missing-by-model.jsonl");
     const timestamp = Date.now() - 1_000;
     const entries = [
-      ["openai", "gpt-5.6-sol"],
-      ["openai", "gpt-5.6-sol"],
-      ["openai-codex", "gpt-5.5"],
+      ["custom", "unpriced-a"],
+      ["custom", "unpriced-a"],
+      ["other", "unpriced-b"],
     ].map(([provider, model], index) => ({
       type: "message",
       timestamp: new Date(timestamp + index).toISOString(),
@@ -725,13 +712,12 @@ describe("session cost usage", () => {
       "utf-8",
     );
 
-    clearGatewayModelPricingState();
     await withStateDir(root, async () => {
       const summary = await loadCostUsageSummary();
       expect(summary.totals.missingCostEntries).toBe(3);
       expect(summary.totals.missingCostByModel).toEqual({
-        "openai/gpt-5.6-sol": 2,
-        "openai-codex/gpt-5.5": 1,
+        "custom/unpriced-a": 2,
+        "other/unpriced-b": 1,
       });
 
       const sessionSummary = await loadSessionCostSummary({ sessionFile });
@@ -1675,8 +1661,8 @@ describe("session cost usage", () => {
             timestamp: `2026-02-05T12:0${index}:00.000Z`,
             message: {
               role: "assistant",
-              provider: "openai",
-              model: "gpt-5.5",
+              provider: "custom",
+              model: "unpriced-batch",
               usage: { input: index + 1, output: 0, totalTokens: index + 1 },
             },
           }),
@@ -1693,7 +1679,7 @@ describe("session cost usage", () => {
         refreshMode: "sync-when-empty",
       });
       expect(warmed.cacheStatus?.status).toBe("fresh");
-      expect(warmed.totals.missingCostByModel).toEqual({ "openai/gpt-5.5": 2 });
+      expect(warmed.totals.missingCostByModel).toEqual({ "custom/unpriced-batch": 2 });
 
       await loadSessionCostSummariesFromCache({
         sessions,
@@ -1708,8 +1694,8 @@ describe("session cost usage", () => {
           });
           expect(cached.cacheStatus.status).toBe("fresh");
           expect(cached.summaries.map((summary) => summary?.missingCostByModel)).toEqual([
-            { "openai/gpt-5.5": 1 },
-            { "openai/gpt-5.5": 1 },
+            { "custom/unpriced-batch": 1 },
+            { "custom/unpriced-batch": 1 },
           ]);
         },
         { interval: 10, timeout: 2_000 },

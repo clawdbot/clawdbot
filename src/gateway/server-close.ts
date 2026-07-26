@@ -617,7 +617,6 @@ export async function runGatewayClosePrelude(params: {
   skillsChangeUnsub?: () => void;
   disposeAuthRateLimiter?: () => void;
   disposeBrowserAuthRateLimiter: () => void;
-  stopModelPricingRefresh?: () => void;
   stopChannelHealthMonitor?: () => Promise<void>;
   stopReadinessEventLoopHealth?: () => void;
   clearSecretsRuntimeSnapshot?: () => void;
@@ -628,7 +627,6 @@ export async function runGatewayClosePrelude(params: {
   params.skillsChangeUnsub?.();
   params.disposeAuthRateLimiter?.();
   params.disposeBrowserAuthRateLimiter();
-  params.stopModelPricingRefresh?.();
   await params.stopChannelHealthMonitor?.();
   params.stopReadinessEventLoopHealth?.();
   params.clearSecretsRuntimeSnapshot?.();

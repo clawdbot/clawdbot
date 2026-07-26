@@ -102,14 +102,12 @@ flow:
                                   ref: prompt
                                 timeoutMs:
                                   expr: liveTurnTimeoutMs(env, 90000)
-                          - call: waitForAgentHistoryReply
-                            saveAs: outbound
+                          - call: waitForCondition
+                            saveAs: parentTranscript
                             args:
-                              - ref: env
-                              - ref: sessionKey
                               - lambda:
-                                  params: [text]
-                                  expr: "config.expectedReplyGroups.every((group) => group.some((needle) => normalizeLowercaseStringOrEmpty(text).includes(needle)))"
+                                  async: true
+                                  expr: "readSessionTranscriptSummary(env, sessionKey).then((summary) => config.expectedReplyGroups.every((group) => group.some((needle) => normalizeLowercaseStringOrEmpty(summary.finalText).includes(needle))) ? summary : undefined).catch(() => undefined)"
                               - expr: "30000"
                               - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
                           - if:
@@ -173,7 +171,7 @@ flow:
                                       expr: "`expected at least two sessions_spawn tool calls during subagent fanout scenario, saw ${fanoutSpawnRequests.length}`"
                           - set: details
                             value:
-                              expr: "outbound.text"
+                              expr: "parentTranscript.finalText"
                           - set: lastError
                             value: __done__
                         catchAs: attemptError
