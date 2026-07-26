@@ -71,7 +71,7 @@ export async function fetchSessionLineage(params: {
   return { rowsByParent, topmostRow, lookupFailed };
 }
 
-export function mergeChildSessionRows(
+function mergeChildSessionRows(
   current: Readonly<Record<string, readonly GatewaySessionRow[]>>,
   additions: Readonly<Record<string, readonly GatewaySessionRow[]>>,
 ): Record<string, GatewaySessionRow[]> {
