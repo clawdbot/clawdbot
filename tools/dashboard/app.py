@@ -1,6 +1,8 @@
 from flask import Flask, redirect, request, send_from_directory, abort
 from pathlib import Path
 from datetime import datetime
+import os
+import sys
 import subprocess
 import shutil
 import tarfile
@@ -18,13 +20,27 @@ import markdown
 from urllib.parse import quote
 from werkzeug.utils import secure_filename
 from pypdf import PdfReader
+
+OPENCLAW_ROOT = Path(__file__).resolve().parents[2]
+if str(OPENCLAW_ROOT) not in sys.path:
+    sys.path.insert(0, str(OPENCLAW_ROOT))
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+from tools.ai_intelligence.ollama_config import OllamaConfig
 
 app = Flask(__name__)
 
-OLLAMA_HOST = "http://127.0.0.1:11434"
+OLLAMA_CONFIG = OllamaConfig.from_env()
+OLLAMA_HOST = OLLAMA_CONFIG.base_url
+OLLAMA_TIMEOUT_SECONDS = OLLAMA_CONFIG.default_timeout_seconds
+M4_SSH_HOST = os.environ.get("OPENCLAW_M4_SSH_HOST", "192.168.50.117")
+M4_SSH_USER = os.environ.get("OPENCLAW_M4_SSH_USER", "andrewgraves")
+M4_SSH_KEY = os.environ.get(
+    "OPENCLAW_M4_SSH_KEY",
+    str(Path.home() / ".ssh/id_ed25519_openclaw_m4"),
+)
 
 REPORT_DIR = Path.home() / "ai/projects/openclaw/reports"
 GRAPH_DIR = REPORT_DIR / "graphs"
@@ -40,7 +56,6 @@ MODELS = [
 
 BACKUP_DIR = Path.home() / "openclaw-backups"
 
-OPENCLAW_ROOT = Path(__file__).resolve().parents[2]
 AI_REPORT_DIR = OPENCLAW_ROOT / "reports/ai_intelligence"
 AI_EVALUATION_PATH = AI_REPORT_DIR / "evaluation_lab/evaluation-lab-latest.json"
 AI_APPROVAL_PATH = AI_REPORT_DIR / "evaluation_approvals/evaluation-approval-latest.json"
@@ -368,19 +383,39 @@ def check_ai_drift():
 
 
 def test_model(model_name):
+    is_embedding_model = model_name.startswith("nomic-embed-")
+    endpoint = "/api/embed" if is_embedding_model else "/api/generate"
+    payload = (
+        {"model": model_name, "input": "OpenClaw health check"}
+        if is_embedding_model
+        else {
+            "model": model_name,
+            "prompt": "Reply with exactly: Ollama is working correctly.",
+            "stream": False,
+        }
+    )
+
     try:
         response = requests.post(
-            f"{OLLAMA_HOST}/api/generate",
-            json={
-                "model": model_name,
-                "prompt": "Reply with exactly: Ollama is working correctly on the Apple Mac mini.",
-                "stream": False
-            },
-            timeout=30
+            f"{OLLAMA_HOST}{endpoint}",
+            json=payload,
+            timeout=OLLAMA_TIMEOUT_SECONDS
         )
+        response.raise_for_status()
 
         data = response.json()
-        text = data.get("response", "").strip().split("\n")[0]
+        if is_embedding_model:
+            embeddings = data.get("embeddings", [])
+            if not embeddings or not embeddings[0]:
+                raise ValueError("Ollama returned no embedding vector")
+            text = f"Embedding check passed ({len(embeddings[0])} dimensions)"
+        else:
+            text = data.get("response", "").strip().split("\n")[0]
+            if not text:
+                if data.get("done") is True:
+                    text = "Generation check passed"
+                else:
+                    raise ValueError("Ollama returned an incomplete response")
 
         if len(text) > 120:
             text = text[:120]
@@ -390,11 +425,86 @@ def test_model(model_name):
             "response": text
         }
 
+    except requests.exceptions.Timeout:
+        return {
+            "success": False,
+            "status": "timeout",
+            "response": (
+                "Installed model did not complete within "
+                f"{OLLAMA_TIMEOUT_SECONDS:g} seconds"
+            ),
+        }
     except Exception as e:
         return {
             "success": False,
+            "status": "failed",
             "response": str(e)
         }
+
+
+def model_status_panel_html(ollama, run_live_checks=False):
+    output = "<div class='panel'><h2>Model Status</h2><div class='output'>"
+
+    if not ollama["connected"]:
+        output += (
+            "\nAI model server is unreachable.\n"
+            f"Endpoint: {html_module.escape(ollama['endpoint'])}\n"
+            f"Reason: {html_module.escape(ollama['error'])}\n"
+            "Individual model tests were skipped because they would all "
+            "repeat the same connection failure.\n"
+        )
+    else:
+        installed_models = set(ollama.get("model_names", []))
+        for model in MODELS:
+            output += f"\n{model}\n"
+            if model not in installed_models:
+                output += (
+                    "FAILED: Model is not installed on the configured "
+                    "AI server.\n"
+                )
+                continue
+            if not run_live_checks:
+                capability = (
+                    "embedding"
+                    if model.startswith("nomic-embed-")
+                    else "generation"
+                )
+                output += (
+                    f"AVAILABLE: Installed {capability} model. "
+                    "Live test not requested.\n"
+                )
+                continue
+            result = test_model(model)
+            if result["success"]:
+                output += (
+                    f"SUCCESS: {html_module.escape(result['response'])}\n"
+                )
+            elif result.get("status") == "timeout":
+                output += (
+                    f"WARNING: {html_module.escape(result['response'])}\n"
+                )
+            else:
+                output += (
+                    f"FAILED: {html_module.escape(result['response'])}\n"
+                )
+
+    output += "</div>"
+    if ollama["connected"] and not run_live_checks:
+        output += """
+<form method="GET" action="/" style="margin-top:14px;">
+  <input type="hidden" name="run_model_checks" value="1">
+  <button type="submit">Run Live Model Tests</button>
+</form>
+"""
+    elif run_live_checks:
+        output += """
+<p style="margin-bottom:0;">
+  <a href="/" style="color:#93c5fd;font-weight:bold;">
+    Return to fast inventory status
+  </a>
+</p>
+"""
+    return output + "</div>"
 
 
 def find_column(rows, names):
@@ -766,13 +876,18 @@ def ai_routing_telemetry_panel_html():
         </div>
         """
 
+    report_age_seconds = max(0, int(time.time() - report_path.stat().st_mtime))
+    report_age_minutes = report_age_seconds // 60
+    report_is_stale = report_age_seconds > 600
     status = str(summary.get("status", "unknown"))
+    display_status = "stale" if report_is_stale else status
     configured = summary.get("configured_versus_observed", {})
     color = {
         "healthy": "#7CFC00",
         "failover-active": "#fbbf24",
         "attention": "#f97316",
-    }.get(status, "#ef4444")
+        "stale": "#f97316",
+    }.get(display_status, "#ef4444")
     preview = ""
     if text_path.exists():
         preview = html.escape(
@@ -783,7 +898,9 @@ def ai_routing_telemetry_panel_html():
     <div class='panel'>
         <h2>AI Routing Telemetry</h2>
         <div class='status-box'>
-            <b>Status:</b> <span style='color:{color};'>{html.escape(status)}</span><br><br>
+            <b>Status:</b> <span style='color:{color};'>{html.escape(display_status)}</span><br>
+            <b>Report age:</b> {report_age_minutes} minute(s)<br>
+            <b>Updated:</b> {html.escape(datetime.fromtimestamp(report_path.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S'))}<br><br>
             <b>Matched:</b> {html.escape(str(configured.get('matched', 0)))}<br>
             <b>Drift:</b> {html.escape(str(configured.get('drift', 0)))}<br>
             <b>Not observed:</b> {html.escape(str(configured.get('not_observed', 0)))}<br>
@@ -795,34 +912,13 @@ def ai_routing_telemetry_panel_html():
     """
 
 
-def m4_ai_health_panel_html():
-    m4_tail_ip = "100.104.100.96"
-    m4_user = "andrewgraves"
-    ssh_key = str(Path.home() / ".ssh/id_ed25519_openclaw_m4")
-
-    ollama_status = "Offline"
-    ollama_color = "#ef4444"
-    response_ms = "unknown"
-    model_count = "unknown"
-    model_names = "unknown"
-
-    start = time.time()
-    try:
-        r = requests.get(f"{OLLAMA_HOST}/api/tags", timeout=5)
-        response_ms = int((time.time() - start) * 1000)
-        if r.ok:
-            data = r.json()
-            models = data.get("models", [])
-            model_count = len(models)
-            names = [m.get("name", "") for m in models if m.get("name")]
-            model_names = ", ".join(names[:8]) if names else "none"
-            ollama_status = "Online"
-            ollama_color = "#22c55e"
-        else:
-            ollama_status = f"HTTP {r.status_code}"
-    except Exception as e:
-        response_ms = "failed"
-        model_names = str(e)[:120]
+def m4_ai_health_panel_html(ollama=None):
+    ollama = ollama or get_m4_ollama_status()
+    ollama_status = "Online" if ollama["connected"] else "Offline"
+    ollama_color = "#22c55e" if ollama["connected"] else "#ef4444"
+    response_ms = ollama.get("response_ms", "unknown")
+    model_count = ollama.get("model_count", "unknown")
+    model_names = ollama.get("detected_models") or ollama.get("error", "unknown")
 
     m4 = {
         "reachable": False,
@@ -896,10 +992,10 @@ PY_REMOTE
         out = subprocess.check_output(
             [
                 "ssh",
-                "-i", ssh_key,
+                "-i", M4_SSH_KEY,
                 "-o", "BatchMode=yes",
                 "-o", "ConnectTimeout=5",
-                f"{m4_user}@{m4_tail_ip}",
+                f"{M4_SSH_USER}@{M4_SSH_HOST}",
                 remote_script,
             ],
             text=True,
@@ -913,8 +1009,8 @@ PY_REMOTE
     except Exception as e:
         m4["error"] = str(e)[:160]
 
-    ssh_status = "Reachable" if m4["reachable"] else "Not reachable"
-    ssh_color = "#22c55e" if m4["reachable"] else "#ef4444"
+    ssh_status = "Available" if m4["reachable"] else "Unavailable"
+    ssh_color = "#22c55e" if m4["reachable"] else "#fbbf24"
 
     html = f"""
 <div class='panel'>
@@ -923,9 +1019,9 @@ PY_REMOTE
 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px;">
 
 <div style="background:#0f172a;border:1px solid #334155;border-radius:10px;padding:15px;">
-<b>SSH / Tailscale</b><br><br>
+<b>Remote metrics (optional)</b><br><br>
 <span style="color:{ssh_color};font-weight:bold;">{ssh_status}</span><br>
-M4 IP: {m4_tail_ip}
+M4 SSH host: {html_module.escape(M4_SSH_HOST)}
 </div>
 
 <div style="background:#0f172a;border:1px solid #334155;border-radius:10px;padding:15px;">
@@ -967,11 +1063,14 @@ Errors:
 
 
 def get_m4_ollama_status():
-    endpoint = "http://127.0.0.1:11434/api/tags"
+    endpoint = f"{OLLAMA_HOST}/api/tags"
+    start = time.time()
 
     try:
         r = requests.get(endpoint, timeout=5)
+        r.raise_for_status()
         data = r.json()
+        response_ms = int((time.time() - start) * 1000)
 
         names = []
         for item in data.get("models", []):
@@ -988,7 +1087,9 @@ def get_m4_ollama_status():
             "model_count": len(names),
             "display_count": len(names),
             "primary": primary,
-            "detected_models": detected
+            "detected_models": detected,
+            "model_names": names,
+            "response_ms": response_ms,
         }
 
     except Exception as e:
@@ -999,7 +1100,9 @@ def get_m4_ollama_status():
             "model_count": 0,
             "display_count": 0,
             "primary": "Unavailable",
-            "detected_models": ""
+            "detected_models": "",
+            "model_names": [],
+            "response_ms": "failed",
         }
 
 
@@ -4354,20 +4457,13 @@ All monitored OpenClaw services are connected.
         </div>
         """
 
-    html += m4_ai_health_panel_html()
+    html += m4_ai_health_panel_html(m4)
     html += ai_routing_telemetry_panel_html()
 
-    html += "<div class='panel'><h2>Model Status</h2><div class='output'>"
-
-    for model in MODELS:
-        result = test_model(model)
-        html += f"\nTesting {model}...\n"
-        if result["success"]:
-            html += f"SUCCESS: {result['response']}\n"
-        else:
-            html += f"FAILED: {result['response']}\n"
-
-    html += "</div></div>"
+    html += model_status_panel_html(
+        m4,
+        run_live_checks=request.args.get("run_model_checks") == "1",
+    )
 
     trend_refresh_msg = ""
     if request.args.get("refresh_trends") == "1":

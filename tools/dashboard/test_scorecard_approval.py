@@ -44,6 +44,7 @@ def install_stubs():
     requests = types.ModuleType("requests")
     requests.get = mock.Mock()
     requests.post = mock.Mock()
+    requests.exceptions = types.SimpleNamespace(Timeout=TimeoutError)
     sys.modules["requests"] = requests
 
     markdown = types.ModuleType("markdown")
@@ -87,6 +88,14 @@ class ScorecardDashboardTests(unittest.TestCase):
         dashboard.request.remote_addr = "127.0.0.1"
         dashboard.request.form = {}
         dashboard.request.args = {}
+        dashboard.requests.get.reset_mock(
+            side_effect=True,
+            return_value=True,
+        )
+        dashboard.requests.post.reset_mock(
+            side_effect=True,
+            return_value=True,
+        )
         self.temp = tempfile.TemporaryDirectory()
         root = Path(self.temp.name)
         reports = root / "reports"
@@ -283,6 +292,163 @@ class ScorecardDashboardTests(unittest.TestCase):
         self.assertIn("/ai-scorecard?view=all", rendered)
         self.assertIn(">All Models Scorecard<", rendered)
         self.assertIn(">Review Queue<", rendered)
+
+    def test_generation_model_uses_configured_ollama_generate_endpoint(self):
+        response = mock.Mock()
+        response.json.return_value = {"response": "Ollama is working correctly."}
+        dashboard.requests.post.return_value = response
+
+        result = dashboard.test_model("gemma3:12b")
+
+        self.assertTrue(result["success"])
+        dashboard.requests.post.assert_called_once()
+        call = dashboard.requests.post.call_args
+        self.assertEqual(
+            call.args[0],
+            f"{dashboard.OLLAMA_HOST}/api/generate",
+        )
+        self.assertEqual(call.kwargs["json"]["model"], "gemma3:12b")
+        self.assertEqual(
+            call.kwargs["timeout"],
+            dashboard.OLLAMA_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status.assert_called_once_with()
+
+    def test_embedding_model_uses_embedding_health_check(self):
+        response = mock.Mock()
+        response.json.return_value = {"embeddings": [[0.1, 0.2, 0.3]]}
+        dashboard.requests.post.return_value = response
+
+        result = dashboard.test_model("nomic-embed-text:latest")
+
+        self.assertTrue(result["success"])
+        call = dashboard.requests.post.call_args
+        self.assertEqual(call.args[0], f"{dashboard.OLLAMA_HOST}/api/embed")
+        self.assertEqual(
+            call.kwargs["json"],
+            {
+                "model": "nomic-embed-text:latest",
+                "input": "OpenClaw health check",
+            },
+        )
+        self.assertIn("3 dimensions", result["response"])
+
+    def test_completed_generation_with_empty_display_text_is_healthy(self):
+        response = mock.Mock()
+        response.json.return_value = {"response": "", "done": True}
+        dashboard.requests.post.return_value = response
+
+        result = dashboard.test_model("glm-4.7-flash:latest")
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["response"], "Generation check passed")
+
+    def test_model_timeout_is_reported_as_warning_not_failure(self):
+        dashboard.requests.post.side_effect = TimeoutError()
+
+        result = dashboard.test_model("glm-4.7-flash:latest")
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["status"], "timeout")
+        self.assertIn("did not complete", result["response"])
+
+        ollama = {
+            "connected": True,
+            "endpoint": "http://m4.example:11434/api/tags",
+            "model_names": ["glm-4.7-flash:latest"],
+        }
+        with (
+            mock.patch.object(
+                dashboard,
+                "MODELS",
+                ["glm-4.7-flash:latest"],
+            ),
+            mock.patch.object(
+                dashboard,
+                "test_model",
+                return_value=result,
+            ),
+        ):
+            rendered = dashboard.model_status_panel_html(
+                ollama,
+                run_live_checks=True,
+            )
+
+        self.assertIn("WARNING:", rendered)
+        self.assertNotIn("FAILED:", rendered)
+
+    def test_default_model_status_uses_fast_inventory_without_live_calls(self):
+        ollama = {
+            "connected": True,
+            "endpoint": "http://m4.example:11434/api/tags",
+            "model_names": list(dashboard.MODELS),
+        }
+
+        with mock.patch.object(dashboard, "test_model") as test_model:
+            rendered = dashboard.model_status_panel_html(ollama)
+
+        test_model.assert_not_called()
+        self.assertIn("AVAILABLE: Installed generation model", rendered)
+        self.assertIn("AVAILABLE: Installed embedding model", rendered)
+        self.assertIn("Run Live Model Tests", rendered)
+
+    def test_unreachable_server_is_reported_once_without_model_tests(self):
+        ollama = {
+            "connected": False,
+            "endpoint": "http://m4.example:11434/api/tags",
+            "error": "connection refused",
+        }
+
+        with mock.patch.object(dashboard, "test_model") as test_model:
+            rendered = dashboard.model_status_panel_html(ollama)
+
+        test_model.assert_not_called()
+        self.assertEqual(rendered.count("AI model server is unreachable"), 1)
+        self.assertIn("Individual model tests were skipped", rendered)
+        self.assertNotIn("Testing gemma3:12b", rendered)
+
+    def test_ollama_inventory_uses_configured_endpoint(self):
+        response = mock.Mock()
+        response.json.return_value = {
+            "models": [{"name": "gemma3:12b"}, {"name": "nomic-embed-text:latest"}]
+        }
+        dashboard.requests.get.return_value = response
+
+        result = dashboard.get_m4_ollama_status()
+
+        self.assertTrue(result["connected"])
+        self.assertEqual(result["model_count"], 2)
+        dashboard.requests.get.assert_called_once_with(
+            f"{dashboard.OLLAMA_HOST}/api/tags",
+            timeout=5,
+        )
+        response.raise_for_status.assert_called_once_with()
+
+    def test_routing_telemetry_panel_shows_report_age(self):
+        telemetry_dir = Path(self.temp.name) / "ai_intelligence"
+        telemetry_dir.mkdir()
+        (telemetry_dir / "routing-telemetry-latest.json").write_text(
+            json.dumps(
+                {
+                    "status": "healthy",
+                    "configured_versus_observed": {
+                        "matched": 2,
+                        "drift": 0,
+                        "not_observed": 0,
+                    },
+                    "recent_failover_count": 0,
+                    "recent_failure_count": 0,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with mock.patch.object(dashboard, "REPORT_DIR", telemetry_dir.parent):
+            rendered = dashboard.ai_routing_telemetry_panel_html()
+
+        self.assertIn("Report age:", rendered)
+        self.assertIn("Updated:", rendered)
+        self.assertIn("healthy", rendered)
 
     def test_queue_selects_an_older_undecided_archived_evaluation(self):
         archived = dashboard.AI_EVALUATION_PATH.parent / (

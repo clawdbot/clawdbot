@@ -63,8 +63,8 @@ Browser → Flask (0.0.0.0:5051)
 | Trend samples    | `~/ai/projects/openclaw/reports/trends.csv`            |
 | AI summary drift | `~/ai/projects/openclaw/reports/home_ai_summary_*.txt` |
 | Chart output     | `~/ai/projects/openclaw/reports/graphs/`               |
-| Ollama (local)   | `http://127.0.0.1:11434`                               |
-| M4 Mac (remote)  | SSH via Tailscale `100.104.100.96`                     |
+| Ollama provider  | `OPENCLAW_OLLAMA_BASE_URL`                             |
+| Model host stats | Optional SSH via `OPENCLAW_M4_SSH_HOST`                |
 | Trend collection | `tools/home_manager/collect_trends.sh`                 |
 
 ---
@@ -79,20 +79,42 @@ Browser → Flask (0.0.0.0:5051)
 
 ### Intel Mini → M4 Model Server
 
-- Probes `http://127.0.0.1:11434/api/tags`.
+- Probes the canonical `OPENCLAW_OLLAMA_BASE_URL` via `/api/tags`.
 - Lists model count, primary model (`gpt-oss:20b` preferred), detected model names.
 
 ### M4 AI Server Health
 
-- SSH to M4 (`andrewgraves@100.104.100.96`) with `~/.ssh/id_ed25519_openclaw_m4`.
+- Treats Ollama API reachability as the authoritative model-server health.
+- Optionally connects to the model host using `OPENCLAW_M4_SSH_HOST`,
+  `OPENCLAW_M4_SSH_USER`, and `OPENCLAW_M4_SSH_KEY`.
 - Remote Python collects: memory (vm_stat), Ollama process/CPU, uptime.
-- Local Ollama API status and response time.
+- An SSH metrics failure does not mark a reachable Ollama API offline.
 
 ### Model Status
 
-- Live inference test for 6 models via `/api/generate`:
+- Performs live checks for six configured models:
   - `llama3.2:3b`, `hermes3:8b`, `gemma3:12b`, `nomic-embed-text:latest`, `gpt-oss:20b`, `glm-4.7-flash:latest`
-- 30s timeout per model; runs **on every page load** (can be slow).
+- Generation models use `/api/generate`; embedding models use `/api/embed`.
+- The default page uses the inventory for a fast installed/available status.
+- **Run Live Model Tests** explicitly performs generation and embedding calls.
+- When the server is unreachable, the dashboard shows one server-level failure
+  and skips redundant per-model failures.
+- Live checks use the canonical Ollama timeout and do not block normal page
+  loads.
+- An installed model that exceeds the live-test timeout is shown as a
+  performance warning rather than a missing-model failure.
+
+### AI Routing Telemetry
+
+- Reads recent observed model usage, deployment drift, failures, and failovers
+  from the AI Intelligence database.
+- The development reporter prefers
+  `~/.openclaw/credentials/ai-intelligence-dev.env`; the generic
+  `ai-intelligence.env` remains a fallback.
+- `openclaw-ai-routing-telemetry.timer` refreshes the report every five minutes.
+- The panel displays report age and marks reports older than ten minutes stale.
+- Report artifacts are
+  `reports/ai_intelligence/routing-telemetry-latest.{json,txt}`.
 
 ### Trend Charts
 
@@ -214,7 +236,8 @@ Current `app.py` is a **simplified single-page** layout vs. earlier multi-tab ve
 - **Port:** `5051` (`app.run(host="0.0.0.0", port=5051)`)
 - **systemd:** Expected unit at `~/.config/systemd/user/openclaw-dashboard.service`
 - **venv:** `tools/dashboard/.venv` (Flask, matplotlib, numpy, requests)
-- **Hardcoded paths:** `~/ai/projects/openclaw`, `~/openclaw-dashboard-backups`, M4 Tailscale IP, SSH key path
+- **Configured endpoints:** Ollama and optional model-host SSH use environment
+  variables; deployment-local repository and backup paths remain fixed.
 
 ---
 
@@ -272,7 +295,8 @@ report becomes the next review item.
 ## 11. Gaps and Observations
 
 1. **Dead code:** `build_system_health()` result is unused; service grid is missing from UI.
-2. **Performance:** Six live Ollama tests on every page load can make the dashboard slow.
+2. **Performance:** Deep model checks are operator-triggered so normal dashboard
+   loads remain responsive.
 3. **PropertyManager:** Backup script exists; UI integration was started but not shipped.
 4. **Not product OpenClaw:** Separate from `ui/` Control UI and Gateway `:18789`.
 5. **Backup clutter:** 100+ `app.py.before-*` files and 12 propertymanager bundles dominate the folder.

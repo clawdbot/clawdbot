@@ -22,11 +22,17 @@ from tools.ai_intelligence.telemetry import (
 )
 
 
-CREDENTIALS_PATH = (
-    Path.home()
-    / ".openclaw"
-    / "credentials"
-    / "ai-intelligence.env"
+CREDENTIALS_PATHS = (
+    Path(
+        os.environ.get(
+            "OPENCLAW_AI_INTELLIGENCE_ENV_FILE",
+            Path.home()
+            / ".openclaw"
+            / "credentials"
+            / "ai-intelligence-dev.env",
+        )
+    ),
+    Path.home() / ".openclaw" / "credentials" / "ai-intelligence.env",
 )
 REQUIRED_DATABASE_KEYS = {
     "OPENCLAW_DB_HOST",
@@ -44,7 +50,18 @@ def load_database_environment() -> None:
     if REQUIRED_DATABASE_KEYS <= os.environ.keys():
         return
 
-    for line in CREDENTIALS_PATH.read_text(encoding="utf-8").splitlines():
+    credentials_path = next(
+        (path for path in CREDENTIALS_PATHS if path.is_file()),
+        None,
+    )
+    if credentials_path is None:
+        checked = ", ".join(str(path) for path in CREDENTIALS_PATHS)
+        raise RuntimeError(
+            "AI Intelligence database credentials file not found; "
+            f"checked: {checked}"
+        )
+
+    for line in credentials_path.read_text(encoding="utf-8").splitlines():
         if not line or line.lstrip().startswith("#"):
             continue
         key, separator, value = line.partition("=")

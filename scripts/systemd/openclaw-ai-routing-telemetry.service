@@ -1,0 +1,10 @@
+[Unit]
+Description=Generate OpenClaw development AI routing telemetry report
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/ai/projects/openclaw
+EnvironmentFile=-%h/.openclaw/credentials/ai-intelligence-dev.env
+ExecStart=%h/ai/projects/openclaw/tools/ai_intelligence/.venv/bin/python %h/ai/projects/openclaw/tools/ai_intelligence/report_routing_telemetry.py
+
