@@ -5,10 +5,6 @@ import {
   WORKSPACE_WRITABLE_CRITERION_ID,
   type ReadinessCondition,
 } from "../readiness/conditions.js";
-import {
-  EVENT_LOOP_HEALTHY_CRITERION_ID,
-  PLUGINS_LOADED_CRITERION_ID,
-} from "../readiness/selection.js";
 import { CORE_READINESS_SUBJECT_REFS, type ReadinessSubject } from "../readiness/subjects.js";
 import type { HostingProfileId } from "./types.js";
 
@@ -35,7 +31,7 @@ type HostingProfileDescriptor = {
 const STANDARD_REQUIRED_CRITERIA = [
   "openclaw.config-current",
   "openclaw.model-route-ready",
-  PLUGINS_LOADED_CRITERION_ID,
+  "openclaw.plugins-loaded",
   "openclaw.secrets-ready",
   WORKSPACE_WRITABLE_CRITERION_ID,
   "openclaw.session-storage-ready",
@@ -47,7 +43,7 @@ const STANDARD_REQUIRED_CRITERIA = [
 ] as const;
 
 const STANDARD_ADVISORY_CRITERIA = [
-  EVENT_LOOP_HEALTHY_CRITERION_ID,
+  "openclaw.event-loop-healthy",
   "openclaw.state-ready",
   "openclaw.delivery-runtime-ready",
   "openclaw.scheduler-ready",
