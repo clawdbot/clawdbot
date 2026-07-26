@@ -80,10 +80,27 @@ describe("status-json-payload", () => {
         agents: [{ id: "main" }],
         secretDiagnostics: ["diag"],
         readiness: {
+          contractVersion: 1,
+          evaluatedAtMs: 1,
+          identity: {
+            producerRef: "openclaw/gateway/current",
+            subjects: [
+              {
+                ref: "openclaw/gateway/current",
+                kind: "openclaw.gateway",
+                id: "gateway-test",
+              },
+              {
+                ref: "openclaw/plugins/active",
+                kind: "openclaw.plugins",
+              },
+            ],
+          },
           ready: true,
           conditions: [
             {
               type: "PluginsLoaded",
+              subjectRef: "openclaw/plugins/active",
               status: "False",
               requirement: "advisory",
               reason: "PluginLoadFailures",
@@ -110,6 +127,9 @@ describe("status-json-payload", () => {
       ok: true,
       os: { platform: "linux" },
       readiness: {
+        contractVersion: 1,
+        evaluatedAtMs: 1,
+        identity: expect.any(Object),
         ready: true,
         failures: [],
         advisories: ["PluginLoadFailures"],

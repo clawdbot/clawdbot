@@ -58,10 +58,10 @@ External uptime monitoring services should use the dedicated `/health` endpoint,
 
 ## Selected readiness criteria
 
-Without a `gateway.readiness` section, `/ready` and `/readyz` use the legacy
-Gateway lifecycle and channel checker. Adding the section opts the Gateway into
-bounded canonical condition evaluation; an empty section is an explicit opt-in
-with no additional selected criteria.
+Without a `gateway.readiness` section, `/ready` and `/readyz` use the existing
+Gateway lifecycle and channel checks projected into a versioned canonical
+result. Adding the section opts the Gateway into additional bounded condition
+evaluation; an empty section selects no additional criteria.
 
 An operator can add registered criteria to the Gateway's lifecycle readiness
 conditions without selecting a hosting profile:
@@ -88,13 +88,24 @@ example, selecting `openclaw.workspace-writable` emits the canonical
 `WorkspaceWritable` condition; plugin criteria use their namespaced ID as the
 condition type.
 
-Canonical results declare observed runtime subjects once under `identity` and
-each condition references its primary `subjectRef`. This distinguishes, for
-example, a stable process from a restarted Gateway or a changed config
-generation. Set `OPENCLAW_INSTANCE_ID` before Gateway startup when a host needs
-to supply the opaque Gateway lifecycle ID; otherwise OpenClaw generates one.
-The value must remain unchanged for that serving lifecycle and unique after a
-restart.
+Canonical results declare observed runtime subjects once under `identity`, and
+each condition references its primary `subjectRef`. Every ID follows its
+owner's renewal boundary: a host instance ID lasts for one host-defined
+workload, a process ID lasts for one OS process, and a Gateway ID lasts for one
+serving lifecycle. OpenClaw always generates the process and Gateway IDs. Set
+`OPENCLAW_INSTANCE_ID` only when a host needs a separate workload correlation
+subject; OpenClaw emits a one-way fingerprint rather than the supplied value.
+Rotate the value when that host-level workload identity is replaced.
+
+`generation` records an owner-defined revision that does not replace the
+subject, such as an active config revision. When
+`ReadinessEvaluationComplete` is not `True`, consumers must not interpret
+missing conditions as deselection or owner deactivation.
+
+Dynamic subject IDs, generations, node-specific references, and messages are
+diagnostic fields, not metric labels. Telemetry exporters should use bounded
+dimensions such as condition type, status, requirement, reason, subject kind,
+and selected profile.
 
 - **DO use:** `GET /health` - instant response, no session created, no LLM call, returns `{"ok":true,"status":"live"}`
 - **DON'T use:** `/v1/chat/completions` for health checks - each request creates a full agent session with skill snapshot, context assembly, and LLM calls

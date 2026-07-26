@@ -43,7 +43,6 @@ describe("createPluginReadinessResolver", () => {
     expect(first.subjects).toContainEqual({
       ref: "plugin.storage/criterion/backend",
       kind: "plugin.storage.criterion",
-      id: "backend",
     });
     expect(second).toEqual(first);
     expect(check).toHaveBeenCalledTimes(1);
@@ -98,6 +97,19 @@ describe("createPluginReadinessResolver", () => {
 
     expect(first).toMatchObject({ status: "Unknown", reason: "CriterionTimedOut" });
     expect(afterCacheExpiry).toEqual(first);
+    expect(check).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not overlap a hung criterion across config and registry replacement", async () => {
+    const check = vi.fn(() => new Promise<never>(() => {}));
+    const first = registration(check);
+    const replacement = registration(check);
+    const resolve = createPluginReadinessResolver({ timeoutMs: 5, cacheTtlMs: 0 });
+
+    await resolve({ registry: { readinessCriteria: [first] }, config: {} });
+    const result = await resolve({ registry: { readinessCriteria: [replacement] }, config: {} });
+
+    expect(result.conditions[0]).toMatchObject({ reason: "CriterionTimedOut" });
     expect(check).toHaveBeenCalledTimes(1);
   });
 
@@ -212,8 +224,8 @@ describe("createPluginReadinessResolver", () => {
     expect(declaredResult.subjects).toContainEqual({
       ref: "plugin.storage/backend/primary",
       kind: "plugin.storage.backend",
-      id: "account-7",
-      generation: "config-42",
+      id: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+      generation: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
     });
 
     const invalidResult = await resolve({
