@@ -1,6 +1,8 @@
 node_modules
 **/node_modules/
 .env
+.env.*
+!*.env.example
 docker-compose.override.yml
 docker-compose.extra.yml
 docker-compose.sandbox.yml
