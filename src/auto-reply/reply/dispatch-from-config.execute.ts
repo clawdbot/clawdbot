@@ -85,7 +85,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     routeReplyThreadId,
     routeReplyTo,
     runWithDispatchLifecycleAdmission,
-    sendPayloadAsync,
     sendPlanUpdate,
     sendPolicy,
     sendPolicyDenied,

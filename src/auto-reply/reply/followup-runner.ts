@@ -508,7 +508,7 @@ export function createFollowupRunner(params: {
       await opts.onBlockReply(payload);
       return true;
     };
-    for (const [payloadIndex, payload] of policyCandidatePayloads.entries()) {
+    for (const payload of policyCandidatePayloads) {
       const providerRoute = deliveryPlan.resolveFollowupRoute({
         payload,
         originatingChannel,

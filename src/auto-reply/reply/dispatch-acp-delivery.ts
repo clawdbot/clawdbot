@@ -513,7 +513,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     let policySettled = false;
     const settleOperationalPolicy = (delivered: boolean): Promise<void> | undefined => {
       policySettled = true;
-      return policyResult.shouldDeliver && policyResult.markDelivered
+      return policyResult.shouldDeliver
         ? markOperationalReplyPolicyDelivered(policyResult, delivered)
         : undefined;
     };

@@ -506,7 +506,7 @@ export async function finalizeHeartbeatOutcome(params: {
     status: eventStatus,
     to: delivery.to,
     ...(deliveredAgentRunFailure ? { reason: "agent-runner-failure" } : {}),
-    ...(!deliveredAgentRunFailure && !visibleSendSucceeded ? { reason: send.reason } : {}),
+    ...(!deliveredAgentRunFailure && send.status === "suppressed" ? { reason: send.reason } : {}),
     preview: truncateHeartbeatPreview(previewText),
     durationMs: Date.now() - startedAt,
     hasMedia: mediaUrls.length > 0,
