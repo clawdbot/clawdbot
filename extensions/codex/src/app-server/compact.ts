@@ -8,6 +8,11 @@ import {
   type EmbeddedAgentCompactResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentDir, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  closeCodexStartupClientBestEffort,
+  CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+  unsubscribeCodexThreadBestEffort,
+} from "./attempt-client-cleanup.js";
 import { readCodexNotificationItem } from "./attempt-notifications.js";
 import { resolveCodexBindingAppServerConnection } from "./binding-connection.js";
 import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
@@ -29,6 +34,7 @@ import {
   releaseLeasedSharedCodexAppServerClient,
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
+import { resumeCodexAppServerThread } from "./thread-resume.js";
 
 const warnedIgnoredCompactionOverrides = new Set<string>();
 const codexNativeCompactionQueues = new Map<string, Promise<void>>();
@@ -581,6 +587,7 @@ async function compactCodexNativeThread(
           agentDir: params.agentDir,
           config: params.config,
         });
+        let subscribedForPostRunCompaction = false;
         const completionWatch = watchCodexNativeCompactionCompletion({
           client,
           threadId: binding.threadId,
@@ -682,6 +689,36 @@ async function compactCodexNativeThread(
                   };
                 }
                 binding = currentBinding;
+                try {
+                  // One-shot runs retire their app-server before post-run budget
+                  // checks, so restore the persisted thread on this leased client.
+                  await resumeCodexAppServerThread({
+                    client,
+                    abandonClient: () => closeCodexStartupClientBestEffort(client),
+                    request: {
+                      threadId: binding.threadId,
+                      excludeTurns: true,
+                      initialTurnsPage: {
+                        limit: 1,
+                        sortDirection: "desc",
+                        itemsView: "notLoaded",
+                      },
+                    },
+                    timeoutMs: Math.min(
+                      appServer.requestTimeoutMs,
+                      CODEX_APP_SERVER_BINDING_GUARDED_REQUEST_TIMEOUT_MS,
+                    ),
+                    ...(params.abortSignal ? { signal: params.abortSignal } : {}),
+                  });
+                  subscribedForPostRunCompaction = true;
+                } catch (error) {
+                  return {
+                    started: true as const,
+                    accepted: false as const,
+                    requestStarted: false as const,
+                    error,
+                  };
+                }
                 await clearContextEngineProjectionBeforeNativeCompaction({
                   sessionId: params.sessionId,
                   bindingStore: options.bindingStore,
@@ -695,7 +732,11 @@ async function compactCodexNativeThread(
                       CODEX_APP_SERVER_BINDING_GUARDED_REQUEST_TIMEOUT_MS,
                     ),
                   );
-                  return { started: true as const, accepted: true as const };
+                  return {
+                    started: true as const,
+                    accepted: true as const,
+                    requestStarted: true as const,
+                  };
                 } catch (error) {
                   await options.bindingStore.mutate(bindingIdentity, {
                     kind: "set",
@@ -703,7 +744,12 @@ async function compactCodexNativeThread(
                   });
                   // Retire outside the binding lock: remote detach acquires this
                   // same lock and would otherwise deadlock the failure path.
-                  return { started: true as const, accepted: false as const, error };
+                  return {
+                    started: true as const,
+                    accepted: false as const,
+                    requestStarted: true as const,
+                    error,
+                  };
                 }
               },
             );
@@ -711,7 +757,9 @@ async function compactCodexNativeThread(
               return guardedResult.result;
             }
             if (!guardedResult.accepted) {
-              await settleNativeCompactionRequestError(guardedResult.error);
+              if (guardedResult.requestStarted) {
+                await settleNativeCompactionRequestError(guardedResult.error);
+              }
               throw guardedResult.error;
             }
           } else {
@@ -756,6 +804,25 @@ async function compactCodexNativeThread(
           };
         } finally {
           completionWatch.cancel();
+          if (subscribedForPostRunCompaction) {
+            const unsubscribed = await unsubscribeCodexThreadBestEffort(client, {
+              threadId: binding.threadId,
+              timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+            });
+            if (!unsubscribed) {
+              try {
+                await closeCodexStartupClientBestEffort(client);
+              } catch (error) {
+                embeddedAgentLog.warn(
+                  "failed to retire codex app-server after compaction unsubscribe failure",
+                  {
+                    threadId: binding.threadId,
+                    reason: formatCompactionError(error),
+                  },
+                );
+              }
+            }
+          }
           if (shouldReleaseDefaultLease) {
             releaseLeasedSharedCodexAppServerClient(client);
           }

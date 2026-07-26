@@ -381,7 +381,7 @@ describe("maybeCompactCodexAppServerSession", () => {
     });
   });
 
-  it("starts native app-server compaction for post-context-engine budget requests", async () => {
+  it("resumes the bound thread before post-context-engine budget compaction", async () => {
     const fake = createFakeCodexClient();
     setCodexAppServerClientFactoryForTest(async () => fake.client);
     const sessionFile = await writeTestBinding({
@@ -417,6 +417,11 @@ describe("maybeCompactCodexAppServerSession", () => {
       { threadId: "thread-1" },
       { timeoutMs: 60_000 },
     );
+    expect(fake.request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/resume",
+      "thread/compact/start",
+      "thread/unsubscribe",
+    ]);
     expect(result.ok).toBe(true);
     expect(result.compacted).toBe(true);
     expect(result.reason).toBeUndefined();
@@ -489,6 +494,61 @@ describe("maybeCompactCodexAppServerSession", () => {
       trigger: "budget",
       expectedThreadId: "thread-1",
       currentThreadId: "thread-1",
+    });
+    expect(await readCodexAppServerBinding(sessionFile)).toMatchObject({
+      threadId: "thread-1",
+      contextEngine: {
+        projection: {
+          epoch: "epoch-1",
+          fingerprint: "fingerprint-1",
+        },
+      },
+    });
+  });
+
+  it("preserves projection when the post-run thread cannot be resumed", async () => {
+    const fake = createFakeCodexClient();
+    fake.request.mockRejectedValueOnce(
+      new CodexAppServerRpcError(
+        { code: -32_600, message: "thread not found: thread-1" },
+        "thread/resume",
+      ),
+    );
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const sessionFile = await writeTestBinding({
+      contextEngine: {
+        schemaVersion: 1,
+        engineId: "lossless-claw",
+        policyFingerprint: "policy-1",
+        projection: {
+          schemaVersion: 1,
+          mode: "thread_bootstrap",
+          epoch: "epoch-1",
+          fingerprint: "fingerprint-1",
+        },
+      },
+    });
+
+    const result = requireCompactResult(
+      await maybeCompactCodexAppServerSession(
+        {
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          sessionFile,
+          workspaceDir: tempDir,
+          trigger: "budget",
+          currentTokenCount: 456,
+        },
+        { allowNonManualNativeRequest: true },
+      ),
+    );
+
+    expect(fake.request.mock.calls.map(([method]) => method)).toEqual(["thread/resume"]);
+    expect(result).toMatchObject({
+      ok: false,
+      compacted: false,
+      reason: "thread not found: thread-1",
+      failure: { reason: "stale_thread_binding" },
     });
     expect(await readCodexAppServerBinding(sessionFile)).toMatchObject({
       threadId: "thread-1",
@@ -588,7 +648,13 @@ describe("maybeCompactCodexAppServerSession", () => {
     let externalWriteStarted = false;
     let externalWriteFinished = false;
     const fake = createFakeCodexClient();
-    fake.request.mockImplementation(async () => {
+    fake.request.mockImplementation(async (method, params) => {
+      if (method === "thread/resume") {
+        return codexThreadResumeResult((params as { threadId: string }).threadId);
+      }
+      if (method === "thread/unsubscribe") {
+        return {};
+      }
       const response = await expectExternalMutationBlockedDuringNativeRequest({
         releaseExternalMutation: releaseExternalWrite,
         isExternalMutationStarted: () => externalWriteStarted,
@@ -672,7 +738,13 @@ describe("maybeCompactCodexAppServerSession", () => {
     let externalClearStarted = false;
     let externalClearFinished = false;
     const fake = createFakeCodexClient();
-    fake.request.mockImplementation(async () => {
+    fake.request.mockImplementation(async (method, params) => {
+      if (method === "thread/resume") {
+        return codexThreadResumeResult((params as { threadId: string }).threadId);
+      }
+      if (method === "thread/unsubscribe") {
+        return {};
+      }
       const response = await expectExternalMutationBlockedDuringNativeRequest({
         releaseExternalMutation: releaseExternalClear,
         isExternalMutationStarted: () => externalClearStarted,
@@ -1479,8 +1551,9 @@ describe("maybeCompactCodexAppServerSession", () => {
   });
 
   it("detaches a guarded remote start after releasing the binding lock", async () => {
-    const fake = createFakeCodexClient();
-    fake.request.mockRejectedValueOnce(new Error("thread/compact/start timed out"));
+    const fake = createFakeCodexClient({
+      compactStartError: new Error("thread/compact/start timed out"),
+    });
     fake.closeAndWait.mockResolvedValueOnce(false);
     const sessionFile = await writeTestBinding();
 
@@ -1896,9 +1969,45 @@ describe("maybeCompactCodexAppServerSession", () => {
   });
 });
 
+function codexThreadResumeResult(threadId: string) {
+  return {
+    thread: {
+      id: threadId,
+      sessionId: "session-1",
+      forkedFromId: null,
+      preview: "",
+      ephemeral: false,
+      modelProvider: "openai",
+      createdAt: 1,
+      updatedAt: 1,
+      status: { type: "idle" },
+      path: null,
+      cwd: tempDir,
+      cliVersion: "0.139.0",
+      source: "unknown",
+      agentNickname: null,
+      agentRole: null,
+      gitInfo: null,
+      name: null,
+      turns: [],
+    },
+    model: "gpt-5.5-codex",
+    modelProvider: "openai",
+    serviceTier: null,
+    cwd: tempDir,
+    instructionSources: [],
+    approvalPolicy: "never",
+    approvalsReviewer: "user",
+    sandbox: { type: "dangerFullAccess" },
+    permissionProfile: null,
+    reasoningEffort: null,
+  };
+}
+
 function createFakeCodexClient(
   options: {
     autoCompleteCompaction?: boolean;
+    compactStartError?: Error;
     interruptError?: Error;
     rejectInterrupt?: boolean;
   } = {},
@@ -1951,11 +2060,17 @@ function createFakeCodexClient(
   };
   const request = vi.fn<CodexAppServerClient["request"]>(
     async (method: string, params?: unknown) => {
+      if (method === "thread/resume") {
+        return codexThreadResumeResult((params as { threadId: string }).threadId);
+      }
       if (method === "turn/interrupt" && options.interruptError) {
         throw options.interruptError;
       }
       if (method === "turn/interrupt" && options.rejectInterrupt) {
         throw new Error("interrupt unavailable");
+      }
+      if (method === "thread/compact/start" && options.compactStartError) {
+        throw options.compactStartError;
       }
       if (method === "thread/compact/start" && options.autoCompleteCompaction !== false) {
         const threadId = (params as { threadId?: unknown }).threadId;
