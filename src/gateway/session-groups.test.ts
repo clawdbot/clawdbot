@@ -5,11 +5,16 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import {
   deleteSessionGroup,
   ensureSessionGroupRegistered,
+  listSidebarSectionOrder,
   listSessionGroups,
   putSessionGroups,
   renameSessionGroup,
@@ -42,17 +47,73 @@ describe("session groups catalog", () => {
 
   it("replaces the ordered catalog with deduped trimmed names", () => {
     expect(listSessionGroups(env)).toEqual([]);
-    const groups = putSessionGroups(["Work", "  Personal  ", "Work", ""], env);
+    const groups = putSessionGroups(["Work", "  Personal  ", "Work", ""], undefined, env);
     expect(groups).toEqual([
       { name: "Work", position: 0 },
       { name: "Personal", position: 1 },
     ]);
     expect(listSessionGroups(env)).toEqual(groups);
-    expect(putSessionGroups(["Personal"], env)).toEqual([{ name: "Personal", position: 0 }]);
+    expect(putSessionGroups(["Personal"], undefined, env)).toEqual([
+      { name: "Personal", position: 0 },
+    ]);
+  });
+
+  it("roundtrips normalized sidebar order and prunes unknown category ids", () => {
+    putSessionGroups(
+      ["Alpha", " Beta ", "Alpha"],
+      [
+        " work ",
+        "category:Beta",
+        "category:Missing",
+        "category: Alpha ",
+        "groups",
+        "groups",
+        "pinned",
+        "",
+      ],
+      env,
+    );
+    expect(listSessionGroups(env).map((group) => group.name)).toEqual(["Alpha", "Beta"]);
+    expect(listSidebarSectionOrder(env)).toEqual([
+      "work",
+      "category:Beta",
+      "category:Alpha",
+      "groups",
+    ]);
+
+    putSessionGroups(["Beta", "Alpha"], undefined, env);
+    expect(listSidebarSectionOrder(env)).toEqual([
+      "work",
+      "category:Beta",
+      "category:Alpha",
+      "groups",
+    ]);
+  });
+
+  it("lazily adds sidebar_sections to a pre-existing current-schema database", () => {
+    const databasePath = openOpenClawStateDatabase({ env }).path;
+    closeOpenClawStateDatabaseForTest();
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec("DROP TABLE sidebar_sections;");
+    legacy.close();
+
+    const reopened = openOpenClawStateDatabase({ env });
+    expect(
+      reopened.db
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+        .get("sidebar_sections"),
+    ).toBeUndefined();
+    expect(listSidebarSectionOrder(env)).toEqual([]);
+    expect(
+      reopened.db
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+        .get("sidebar_sections"),
+    ).toEqual({ name: "sidebar_sections" });
   });
 
   it("absorbs ad-hoc categories at the end of the catalog", () => {
-    putSessionGroups(["Work"], env);
+    putSessionGroups(["Work"], undefined, env);
     ensureSessionGroupRegistered("Travel", env);
     ensureSessionGroupRegistered("Travel", env);
     expect(listSessionGroups(env)).toEqual([
@@ -62,7 +123,11 @@ describe("session groups catalog", () => {
   });
 
   it("renames a group and repoints member categories without bumping updatedAt", async () => {
-    putSessionGroups(["Old", "Other"], env);
+    putSessionGroups(
+      ["Old", "Other"],
+      ["ungrouped", "category:Old", "work", "category:Other"],
+      env,
+    );
     // Store saves run maintenance pruning; stale timestamps would be dropped.
     const updatedAtA = Date.now() - 1_000;
     const updatedAtB = Date.now() - 2_000;
@@ -74,6 +139,7 @@ describe("session groups catalog", () => {
     const result = await renameSessionGroup({ cfg, name: "Old", to: "New", env });
     expect(result.updatedSessions).toBe(1);
     expect(result.groups.map((group) => group.name)).toEqual(["New", "Other"]);
+    expect(result.sectionOrder).toEqual(["ungrouped", "category:New", "work", "category:Other"]);
 
     const sessionA = loadSessionEntry({
       agentId: "main",
@@ -91,7 +157,7 @@ describe("session groups catalog", () => {
   });
 
   it("deletes a group and clears member categories", async () => {
-    putSessionGroups(["Gone"], env);
+    putSessionGroups(["Gone"], ["category:Gone", "ungrouped", "work"], env);
     const storePath = await seedSessionStore({
       "agent:main:dashboard:a": { sessionId: "a1", updatedAt: Date.now(), category: "Gone" },
     });
@@ -99,6 +165,7 @@ describe("session groups catalog", () => {
     const result = await deleteSessionGroup({ cfg, name: "Gone", env });
     expect(result.updatedSessions).toBe(1);
     expect(result.groups).toEqual([]);
+    expect(result.sectionOrder).toEqual(["ungrouped", "work"]);
 
     expect(
       loadSessionEntry({
@@ -110,12 +177,22 @@ describe("session groups catalog", () => {
   });
 
   it("merges a rename into an existing target group", async () => {
-    putSessionGroups(["A", "B"], env);
+    putSessionGroups(["A", "B"], ["category:A", "ungrouped", "category:B"], env);
     await seedSessionStore({
       "agent:main:dashboard:a": { sessionId: "a1", updatedAt: Date.now(), category: "A" },
     });
     const result = await renameSessionGroup({ cfg, name: "A", to: "B", env });
     expect(result.groups).toEqual([{ name: "B", position: 1 }]);
+    expect(result.sectionOrder).toEqual(["ungrouped", "category:B"]);
     expect(result.updatedSessions).toBe(1);
+  });
+
+  it("keeps the source sidebar slot when the merge target has no stored slot", async () => {
+    putSessionGroups(["A", "B"], ["category:A", "work"], env);
+
+    const result = await renameSessionGroup({ cfg, name: "A", to: "B", env });
+
+    expect(result.groups).toEqual([{ name: "B", position: 1 }]);
+    expect(result.sectionOrder).toEqual(["category:B", "work"]);
   });
 });

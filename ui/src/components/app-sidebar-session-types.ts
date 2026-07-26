@@ -161,7 +161,7 @@ export function resolveSidebarSessionsScrollState(
   }
   return "middle";
 }
-export type SidebarSessionGroupDropTarget = {
+export type SidebarSectionDropTarget = {
   sectionId: string;
   position: "before" | "after";
 };

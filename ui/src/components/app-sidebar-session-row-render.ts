@@ -55,10 +55,10 @@ export interface SessionListHost {
   readonly collapsedSessionSections: ReadonlySet<string>;
   readonly sessionOrganizer: Pick<
     SessionOrganizerController,
-    | "draggingSessionGroup"
+    | "draggingSidebarSection"
     | "draggingSessionKey"
     | "sessionDropTarget"
-    | "sessionGroupDropTarget"
+    | "sidebarSectionDropTarget"
     | "sessionListRemovalDrop"
   >;
   readonly sidebarMenus: Pick<
@@ -101,8 +101,8 @@ export interface SessionListHost {
   sectionDragOver(event: DragEvent, sectionId: string, group?: string): void;
   sectionDragLeave(event: DragEvent, sectionId: string, group?: string): void;
   sectionDrop(event: DragEvent, sectionId: string, group?: string): void;
-  startSessionGroupDrag(group: string): void;
-  finishSessionGroupDrag(): void;
+  startSidebarSectionDrag(sectionId: string): void;
+  finishSidebarSectionDrag(): void;
   toggleSection(sectionId: string): void;
   openNewSession(): void;
   setVisibleSessionLimit(sectionId: string, limit: number): void;

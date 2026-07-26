@@ -34,7 +34,6 @@ export type ApplicationNavigationPreferencesSnapshot = {
   navCollapsed: boolean;
   navWidth: number;
   sidebarEntries: readonly string[];
-  sessionSectionOrder: readonly string[];
   pinnedAgentIds: readonly string[];
 };
 

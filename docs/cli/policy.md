@@ -26,6 +26,10 @@ not be enabled" or "governed tools must declare risk and owner metadata." If
 you only need local behavior with no attestation or drift detection, plain
 config is enough.
 
+Separately, [`openclaw agent exec`](/cli/agent#agent-exec) applies an isolated
+implicit policy config for each run: the agent sandbox is off, Gateway-host
+execution is fully allowed, and filesystem tools are restricted to `--cwd`.
+
 ## Quick start
 
 ```bash

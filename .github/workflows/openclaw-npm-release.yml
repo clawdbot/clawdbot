@@ -395,7 +395,6 @@ jobs:
                 exit 1
               fi
               AI_TARBALL_PATH="${AI_TARBALLS[0]}"
-              node --import tsx scripts/prepare-openclaw-npm-shrinkwrap.ts "$AI_TARBALL_PATH"
             elif [[ "${#AI_TARBALLS[@]}" -ne 0 ]]; then
               echo "Frozen target without an @openclaw/ai dependency contains unexpected AI runtime artifacts." >&2
               exit 1

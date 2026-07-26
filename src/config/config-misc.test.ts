@@ -548,32 +548,6 @@ describe("ui.prefs.sidebarEntries", () => {
   });
 });
 
-describe("ui.prefs.sessionSectionOrder", () => {
-  it("accepts section ids synchronized by the Control UI", () => {
-    const result = validateConfigObject({
-      ui: {
-        prefs: {
-          sessionSectionOrder: ["category:Research", "ungrouped", "groups", "work"],
-        },
-      },
-    });
-
-    expect(result.ok).toBe(true);
-  });
-
-  it("rejects section order entries that are not strings", () => {
-    const result = validateConfigObject({
-      ui: {
-        prefs: {
-          sessionSectionOrder: ["work", 7],
-        },
-      },
-    });
-
-    expect(result.ok).toBe(false);
-  });
-});
-
 describe("gateway.controlUi.embedSandbox", () => {
   it("accepts strict, scripts, and trusted modes", () => {
     for (const mode of ["strict", "scripts", "trusted"] as const) {

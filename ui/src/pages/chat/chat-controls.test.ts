@@ -22,7 +22,6 @@ function createSettings(): UiSettings {
     navCollapsed: false,
     navWidth: 280,
     sidebarEntries: ["route:workboard", "route:tasks"],
-    sessionSectionOrder: [],
   };
 }
 

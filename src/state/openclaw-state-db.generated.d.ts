@@ -1081,6 +1081,11 @@ export interface SessionWatchCursors {
   watcher_session_key: string;
 }
 
+export interface SidebarSections {
+  position: number;
+  section_id: string;
+}
+
 export interface SkillCuratorState {
   id: Generated<number>;
   last_attempt_at_ms: number;
@@ -1566,6 +1571,7 @@ export interface DB {
   session_state_heads: SessionStateHeads;
   session_upstream_links: SessionUpstreamLinks;
   session_watch_cursors: SessionWatchCursors;
+  sidebar_sections: SidebarSections;
   skill_curator_state: SkillCuratorState;
   skill_lifecycle: SkillLifecycle;
   skill_upload_chunks: SkillUploadChunks;
