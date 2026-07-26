@@ -556,67 +556,75 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     if (!policyResult.shouldDeliver) {
                       return;
                     }
-                    const canBypassSourceSuppression =
-                      suppressUserDeliveryBySourceReplyPolicy &&
-                      isOperationalPayload &&
-                      visiblePayloadMetadata?.deliverDespiteSourceReplySuppression === true &&
-                      !visiblePayloadMetadata.sourceReplyTranscriptMirror &&
-                      ctx.InboundEventKind !== "room_event";
-                    if (suppressDelivery && (sendPolicyDenied || !canBypassSourceSuppression)) {
-                      await markOperationalReplyPolicyDelivered(policyResult, false);
-                      return;
-                    }
-                    // Channels that keep a live draft preview may need to rotate their
-                    // preview state at the logical block boundary before queued block
-                    // delivery drains asynchronously through the dispatcher.
-                    const payloadMetadata = getReplyPayloadMetadata(payload);
-                    const queuedContext =
-                      payloadMetadata?.assistantMessageIndex !== undefined
-                        ? {
-                            ...context,
-                            assistantMessageIndex: payloadMetadata.assistantMessageIndex,
-                          }
-                        : context;
-                    if (!suppressAutomaticSourceDelivery) {
-                      await params.replyOptions?.onBlockReplyQueued?.(
-                        visiblePayload,
-                        queuedContext,
-                      );
-                    }
-                    if (isDispatchOperationAborted()) {
-                      return;
-                    }
-                    const ttsPayload =
-                      payload.isReasoning === true || payload.isCommentary === true
-                        ? visiblePayload
-                        : await maybeApplyTtsWithFinalizationLease({
-                            payload: visiblePayload,
-                            cfg,
-                            channel: deliveryChannel,
-                            kind: "block",
-                            ttsAuto: sessionTtsAuto,
-                            agentId: sessionAgentId,
-                            accountId: replyRoute.accountId,
-                          });
-                    const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
-                    if (isDispatchOperationAborted()) {
-                      return;
-                    }
-                    if (shouldRouteToOriginating) {
-                      await settleRoutedOperationalPolicyAfterDispatch(
-                        normalizedPayload,
-                        policyResult,
-                        { abortSignal: context?.abortSignal, kind: "block" },
-                      );
-                    } else {
-                      markInboundDedupeReplayUnsafe();
-                      const delivered = await settleDirectOperationalPolicyAfterDispatch(
-                        normalizedPayload,
-                        policyResult,
-                        () => dispatcher.sendBlockReply(normalizedPayload),
-                      );
-                      if (delivered) {
-                        state.hasPendingDirectBlockReplyDelivery = true;
+                    let dispatchOwnsPolicySettlement = false;
+                    try {
+                      const canBypassSourceSuppression =
+                        suppressUserDeliveryBySourceReplyPolicy &&
+                        isOperationalPayload &&
+                        visiblePayloadMetadata?.deliverDespiteSourceReplySuppression === true &&
+                        !visiblePayloadMetadata.sourceReplyTranscriptMirror &&
+                        ctx.InboundEventKind !== "room_event";
+                      if (suppressDelivery && (sendPolicyDenied || !canBypassSourceSuppression)) {
+                        return;
+                      }
+                      // Channels that keep a live draft preview may need to rotate their
+                      // preview state at the logical block boundary before queued block
+                      // delivery drains asynchronously through the dispatcher.
+                      const payloadMetadata = getReplyPayloadMetadata(payload);
+                      const queuedContext =
+                        payloadMetadata?.assistantMessageIndex !== undefined
+                          ? {
+                              ...context,
+                              assistantMessageIndex: payloadMetadata.assistantMessageIndex,
+                            }
+                          : context;
+                      if (!suppressAutomaticSourceDelivery) {
+                        await params.replyOptions?.onBlockReplyQueued?.(
+                          visiblePayload,
+                          queuedContext,
+                        );
+                      }
+                      if (isDispatchOperationAborted()) {
+                        return;
+                      }
+                      const ttsPayload =
+                        payload.isReasoning === true || payload.isCommentary === true
+                          ? visiblePayload
+                          : await maybeApplyTtsWithFinalizationLease({
+                              payload: visiblePayload,
+                              cfg,
+                              channel: deliveryChannel,
+                              kind: "block",
+                              ttsAuto: sessionTtsAuto,
+                              agentId: sessionAgentId,
+                              accountId: replyRoute.accountId,
+                            });
+                      const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
+                      if (isDispatchOperationAborted()) {
+                        return;
+                      }
+                      if (shouldRouteToOriginating) {
+                        dispatchOwnsPolicySettlement = true;
+                        await settleRoutedOperationalPolicyAfterDispatch(
+                          normalizedPayload,
+                          policyResult,
+                          { abortSignal: context?.abortSignal, kind: "block" },
+                        );
+                      } else {
+                        markInboundDedupeReplayUnsafe();
+                        dispatchOwnsPolicySettlement = true;
+                        const delivered = await settleDirectOperationalPolicyAfterDispatch(
+                          normalizedPayload,
+                          policyResult,
+                          () => dispatcher.sendBlockReply(normalizedPayload),
+                        );
+                        if (delivered) {
+                          state.hasPendingDirectBlockReplyDelivery = true;
+                        }
+                      }
+                    } finally {
+                      if (!dispatchOwnsPolicySettlement) {
+                        await markOperationalReplyPolicyDelivered(policyResult, false);
                       }
                     }
                   };

@@ -435,8 +435,16 @@ export function createFollowupRunner(params: {
     payloads: ReplyPayload[],
     queued: FollowupRun,
     resolvedRun: { provider: string; modelId: string },
-    options: { kind?: ReplyDispatchKind; mirror?: boolean; runId?: string } = {},
+    options: {
+      kind?: ReplyDispatchKind;
+      mirror?: boolean;
+      runId?: string;
+      sendPolicyDenied?: boolean;
+    } = {},
   ): Promise<boolean> => {
+    if (options.sendPolicyDenied === true) {
+      return false;
+    }
     // Check if we should route to originating channel.
     const { originatingChannel, originatingTo } = queued;
     const runtimeConfig = resolveQueuedReplyRuntimeConfig(queued.run.config);
@@ -462,7 +470,7 @@ export function createFollowupRunner(params: {
         cfg: runtimeConfig,
         payload,
         explicitCommandTurn: false,
-        sendPolicyDenied: false,
+        sendPolicyDenied: options.sendPolicyDenied === true,
         sourceSessionKey: queued.run.runtimePolicySessionKey ?? queued.run.sessionKey,
         sourceStorePath: storePath,
         sourceEventKey: resolveFollowupOperationalReplySourceEventKey({
@@ -830,12 +838,16 @@ export function createFollowupRunner(params: {
         progressOpts?.preserveProgressCallbackStartOrder === true;
       // Carry the admission-time policy through every queued delivery path; direct origin routing
       // bypasses the outer dispatcher that normally enforces sendPolicy.
-      const sendRunPayloads: typeof sendFollowupPayloads = async (...args) => {
-        if (sendPolicyDenied) {
-          return false;
-        }
-        return sendFollowupPayloads(...args);
-      };
+      const sendRunPayloads: typeof sendFollowupPayloads = async (
+        payloads,
+        targetRun,
+        resolvedRun,
+        options = {},
+      ) =>
+        sendFollowupPayloads(payloads, targetRun, resolvedRun, {
+          ...options,
+          sendPolicyDenied,
+        });
       // Admission already loads the latest entry under the lifecycle fence.
       const goalContextSessionEntry = admission.sessionEntry ?? activeSessionEntry;
       const currentInboundContext =

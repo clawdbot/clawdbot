@@ -871,6 +871,55 @@ describe("dispatchReplyFromConfig", () => {
     clearOperationalReplyPolicyStateForTest();
   });
 
+  it("releases once reservations when block preparation fails before dispatch", async () => {
+    clearOperationalReplyPolicyStateForTest();
+    const cfg = {
+      ...emptyConfig,
+      messages: {
+        operationalReplies: { policy: "once" },
+      },
+    } satisfies OpenClawConfig;
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "direct",
+    });
+    const payload = setReplyPayloadMetadata(
+      { text: "host status block", isStatusNotice: true },
+      { operationalNotice: true },
+    );
+
+    await expect(
+      dispatchReplyFromConfig({
+        ctx,
+        cfg,
+        dispatcher: createDispatcher(),
+        replyResolver: async (_ctx, opts) => {
+          await opts?.onBlockReply?.(payload);
+          return undefined;
+        },
+        replyOptions: {
+          onBlockReplyQueued: () => {
+            throw new Error("preview failed");
+          },
+        },
+      }),
+    ).rejects.toThrow("preview failed");
+
+    const retryDispatcher = createDispatcher();
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher: retryDispatcher,
+      replyResolver: async (_ctx, opts) => {
+        await opts?.onBlockReply?.(payload);
+        return undefined;
+      },
+    });
+
+    expect(retryDispatcher.sendBlockReply).toHaveBeenCalledWith(payload);
+    clearOperationalReplyPolicyStateForTest();
+  });
+
   it("sends only one plan status notice per reply run", async () => {
     setNoAbort();
     const cfg = {
