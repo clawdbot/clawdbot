@@ -2,11 +2,7 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import {
-  normalizeStorageMode,
-  parseDreamingNumber,
-  renderDreamingSettings,
-} from "./memory-dreaming.ts";
+import { renderDreamingSettings } from "./memory-dreaming.ts";
 
 function renderInto(
   dreaming: Record<string, unknown> | null,
@@ -82,6 +78,9 @@ describe("renderDreamingSettings", () => {
   it("renders the runtime storage-mode default when the config omits it", () => {
     expect(selectedSegment(renderInto({ enabled: true }))).toBe("separate");
     expect(selectedSegment(renderInto({ storage: { mode: "inline" } }))).toBe("inline");
+    expect(selectedSegment(renderInto({ storage: { mode: "both" } }))).toBe("both");
+    // An unreadable stored value is not a fourth mode: it reads as the default.
+    expect(selectedSegment(renderInto({ storage: { mode: "nonsense" } }))).toBe("separate");
   });
 });
 
@@ -112,6 +111,24 @@ describe("numeric field bounds", () => {
     expect(input.value).toBe("7");
   });
 
+  it("treats the manifest bounds as inclusive", () => {
+    const onPatch = vi.fn();
+    const container = renderInto({ enabled: true }, onPatch);
+
+    editNumber(numberInput(container, "Dedupe similarity"), "1");
+    editNumber(numberInput(container, "Dedupe similarity"), "0");
+    expect(onPatch).toHaveBeenNthCalledWith(1, ["phases", "light", "dedupeSimilarity"], 1);
+    expect(onPatch).toHaveBeenNthCalledWith(2, ["phases", "light", "dedupeSimilarity"], 0);
+  });
+
+  it("clears the stored value when the field is emptied", () => {
+    const onPatch = vi.fn();
+    const container = renderInto({ phases: { light: { lookbackDays: 7 } } }, onPatch);
+
+    editNumber(numberInput(container, "Lookback days"), "");
+    expect(onPatch).toHaveBeenCalledWith(["phases", "light", "lookbackDays"], undefined);
+  });
+
   it("advertises the manifest bounds on the inputs", () => {
     const container = renderInto(null);
 
@@ -124,25 +141,5 @@ describe("numeric field bounds", () => {
     expect(maxAge.getAttribute("min")).toBe("1");
     expect(maxAge.getAttribute("step")).toBe("1");
     expect(maxAge.getAttribute("max")).toBeNull();
-  });
-});
-
-describe("parseDreamingNumber", () => {
-  it("enforces integer, minimum, and maximum from the manifest", () => {
-    expect(parseDreamingNumber("0", { integer: true, min: 0 })).toBe(0);
-    expect(parseDreamingNumber("-1", { integer: true, min: 0 })).toBeNull();
-    expect(parseDreamingNumber("1.5", { integer: true, min: 0 })).toBeNull();
-    expect(parseDreamingNumber("nope", { integer: true, min: 0 })).toBeNull();
-    expect(parseDreamingNumber("1", { integer: false, min: 0, max: 1 })).toBe(1);
-    expect(parseDreamingNumber("1.01", { integer: false, min: 0, max: 1 })).toBeNull();
-  });
-});
-
-describe("normalizeStorageMode", () => {
-  it("falls back to DEFAULT_MEMORY_DREAMING_STORAGE_MODE, not inline", () => {
-    expect(normalizeStorageMode(undefined)).toBe("separate");
-    expect(normalizeStorageMode("nonsense")).toBe("separate");
-    expect(normalizeStorageMode("inline")).toBe("inline");
-    expect(normalizeStorageMode("both")).toBe("both");
   });
 });

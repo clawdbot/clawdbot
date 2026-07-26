@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { MEMORY_PANEL_ID } from "./memory.ts";
 import "./memory-page.ts";
 
 type MemoryPageElement = HTMLElement & {
@@ -91,7 +90,7 @@ function addonStatus(element: HTMLElement, label: string): string | null {
 
 /** Which tab body is actually mounted, rather than what the tab strip claims. */
 function visibleTab(element: HTMLElement): "overview" | "search" | "dreaming" | null {
-  const panel = element.querySelector(`#${MEMORY_PANEL_ID}`);
+  const panel = element.querySelector('[role="tabpanel"]');
   if (!panel) {
     return null;
   }

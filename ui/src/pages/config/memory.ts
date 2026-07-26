@@ -16,7 +16,7 @@ import { t } from "../../i18n/index.ts";
 
 export type MemoryTab = "overview" | "search" | "dreaming";
 
-export type MemoryBackend = "builtin" | "qmd";
+type MemoryBackend = "builtin" | "qmd";
 
 /** One installed plugin that can claim the exclusive `plugins.slots.memory` slot. */
 export type MemoryEngineOption = {
@@ -50,7 +50,7 @@ export type MemoryEngineSelection =
   | { kind: "off" }
   | { kind: "pinned"; engineId: string };
 
-export type MemoryViewProps = {
+type MemoryViewProps = {
   activeTab: MemoryTab;
   onTabChange: (tab: MemoryTab) => void;
   engineOptions: readonly MemoryEngineOption[];
@@ -78,7 +78,7 @@ export type MemoryViewProps = {
   dreaming: TemplateResult;
 };
 
-export const MEMORY_PANEL_ID = "memory-settings-panel";
+const MEMORY_PANEL_ID = "memory-settings-panel";
 
 /** Scroll target for `memory.backend`, which Overview curates out of the editor. */
 export const MEMORY_BACKEND_ANCHOR_ID = "memory-backend";
@@ -117,7 +117,7 @@ export function resolveMemoryEngineSelection(
       return { kind: "off" };
     case "pinned":
       return { kind: "pinned", engineId: selection.pluginId };
-    case "default":
+    default:
       return { kind: "auto", engineId: selection.pluginId };
   }
 }
@@ -140,7 +140,7 @@ function engineHintKey(selection: MemoryEngineSelection): string {
       return "memoryPage.engine.autoHint";
     case "off":
       return "memoryPage.engine.offHint";
-    case "pinned":
+    default:
       return "memoryPage.engine.explicitHint";
   }
 }
@@ -261,7 +261,7 @@ function renderAddonStatus(state: MemoryPluginState) {
       return renderSettingsStatus({ kind: "muted", label: t("common.disabled") });
     case "loading":
       return renderSettingsStatus({ kind: "muted", label: t("common.loading") });
-    case "unknown":
+    default:
       return renderSettingsStatus({ kind: "muted", label: t("memoryPage.addons.stateUnknown") });
   }
 }

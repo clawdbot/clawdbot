@@ -8,8 +8,10 @@ import {
   narrowMemorySchema,
   renderMemory,
   resolveMemoryBackend,
-  type MemoryViewProps,
 } from "./memory.ts";
+
+/** The view is the only public surface, so its props type comes from its signature. */
+type MemoryViewProps = Parameters<typeof renderMemory>[0];
 
 function createProps(overrides: Partial<MemoryViewProps> = {}): MemoryViewProps {
   return {

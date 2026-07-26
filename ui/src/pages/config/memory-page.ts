@@ -86,7 +86,7 @@ function pluginState(
       return "loading";
     case "unavailable":
       return "unknown";
-    case "ready":
+    default:
       return entry?.enabled === true ? "enabled" : "disabled";
   }
 }

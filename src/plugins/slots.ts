@@ -81,7 +81,7 @@ export function normalizeSlotValue(value: unknown): string | null | undefined {
  * the implicit default owner, never "whichever plugin happens to be enabled".
  * Config normalization and the Control UI both resolve slots through this.
  */
-export type SlotSelection =
+type SlotSelection =
   | { kind: "default"; pluginId: string }
   | { kind: "off" }
   | { kind: "pinned"; pluginId: string };

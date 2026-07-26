@@ -229,7 +229,7 @@ type StorageMode = (typeof STORAGE_MODES)[number];
 // DEFAULT_MEMORY_DREAMING_STORAGE_MODE in src/memory-host-sdk/dreaming.ts.
 const DEFAULT_STORAGE_MODE: StorageMode = "separate";
 
-export type DreamingSettingsProps = {
+type DreamingSettingsProps = {
   /** `plugins.entries.<slot owner>.config.dreaming`, or null when unset. */
   dreaming: Record<string, unknown> | null;
   onPatch: (path: readonly string[], value: unknown) => void;
@@ -250,12 +250,12 @@ function readAtPath(root: Record<string, unknown> | null, path: readonly string[
   return undefined;
 }
 
-export function normalizeStorageMode(value: unknown): StorageMode {
+function normalizeStorageMode(value: unknown): StorageMode {
   return STORAGE_MODES.find((mode) => mode === value) ?? DEFAULT_STORAGE_MODE;
 }
 
 /** Parses an edited number against its manifest bounds; null means "do not write". */
-export function parseDreamingNumber(raw: string, bounds: DreamingNumberBounds): number | null {
+function parseDreamingNumber(raw: string, bounds: DreamingNumberBounds): number | null {
   const parsed = Number(raw);
   if (!Number.isFinite(parsed) || parsed < bounds.min) {
     return null;
