@@ -35,10 +35,12 @@ class DummyRequest:
 def install_stubs():
     flask = types.ModuleType("flask")
     flask.Flask = DummyFlask
+    flask.Response = lambda *args, **kwargs: (args, kwargs)
     flask.request = DummyRequest()
     flask.redirect = lambda location: location
     flask.abort = lambda code: (_ for _ in ()).throw(PermissionError(code))
     flask.send_from_directory = lambda *_args, **_kwargs: None
+    flask.stream_with_context = lambda function: function
     sys.modules["flask"] = flask
 
     requests = types.ModuleType("requests")
@@ -60,9 +62,12 @@ def install_stubs():
     sys.modules["pypdf"] = pypdf
 
     werkzeug = types.ModuleType("werkzeug")
+    werkzeug_exceptions = types.ModuleType("werkzeug.exceptions")
+    werkzeug_exceptions.HTTPException = Exception
     werkzeug_utils = types.ModuleType("werkzeug.utils")
     werkzeug_utils.secure_filename = lambda value: value
     sys.modules["werkzeug"] = werkzeug
+    sys.modules["werkzeug.exceptions"] = werkzeug_exceptions
     sys.modules["werkzeug.utils"] = werkzeug_utils
 
     matplotlib = types.ModuleType("matplotlib")
@@ -112,6 +117,9 @@ class ScorecardDashboardTests(unittest.TestCase):
         dashboard.AI_BENCHMARK_PATH = reports / "benchmark.json"
         dashboard.AI_VALIDATION_PATH = reports / "validation.json"
         dashboard.AI_REVIEW_PATH = reports / "review.json"
+        dashboard.REMOTE_BACKUP_REPORT_PATH = (
+            reports / "openclaw_remote_backup_verification_status.json"
+        )
 
         dashboard.AI_EVALUATION_PATH.write_text(
             json.dumps(
@@ -295,46 +303,45 @@ class ScorecardDashboardTests(unittest.TestCase):
         rendered = dashboard.openclaw_shared_navigation()
 
         self.assertIn('href="/notes"', rendered)
-        self.assertIn(">Notes<", rendered)
+        self.assertIn(">Vault<", rendered)
         self.assertNotIn('href="/ranchbrain/review"', rendered)
         self.assertIn("/ai-scorecard?view=all", rendered)
         self.assertIn(">All Models Scorecard<", rendered)
         self.assertIn(">Review Queue<", rendered)
 
-    def test_notes_has_dedicated_route_and_title(self):
-        with (
-            mock.patch.object(
-                dashboard,
-                "ranchbrain_schema_is_ready",
-                return_value=True,
-            ),
-            mock.patch.object(
-                dashboard,
-                "get_ranchbrain_notes",
-                return_value=[],
-            ),
+    def test_notes_has_dedicated_vault_route_and_title(self):
+        with mock.patch.object(
+            dashboard,
+            "ranchbrain_vault_scan",
+            return_value={
+                "mode": "remote",
+                "host": "intelmini",
+                "documents": [],
+                "error": "",
+            },
         ):
             rendered = dashboard.notes_dashboard()
 
-        self.assertIn("<title>Notes</title>", rendered)
-        self.assertIn("<h1>Notes</h1>", rendered)
-        self.assertIn("Pending Notes", rendered)
-        self.assertNotIn("<h1>RanchBrain Review</h1>", rendered)
+        self.assertIn("<title>RanchBrain Vault</title>", rendered)
+        self.assertIn("<h1>📚 RanchBrain Vault</h1>", rendered)
+        self.assertIn("No vault documents were found", rendered)
+        self.assertIn("Open Postgres note review queue", rendered)
 
-    def test_notes_missing_schema_is_clear_and_non_failing(self):
-        with (
-            mock.patch.object(
-                dashboard,
-                "ranchbrain_schema_is_ready",
-                return_value=False,
-            ),
-            mock.patch.object(dashboard, "get_ranchbrain_notes") as notes,
+    def test_notes_vault_probe_failure_is_clear_and_non_failing(self):
+        with mock.patch.object(
+            dashboard,
+            "ranchbrain_vault_scan",
+            return_value={
+                "mode": "remote",
+                "host": "intelmini",
+                "documents": [],
+                "error": "read-only SSH probe unavailable",
+            },
         ):
             rendered = dashboard.notes_dashboard()
 
-        self.assertIn("Notes Setup Required", rendered)
-        self.assertIn("No production data was queried or copied", rendered)
-        notes.assert_not_called()
+        self.assertIn("Vault unavailable", rendered)
+        self.assertIn("read-only SSH probe unavailable", rendered)
 
     def test_generation_model_uses_configured_ollama_generate_endpoint(self):
         response = mock.Mock()
@@ -536,6 +543,51 @@ class ScorecardDashboardTests(unittest.TestCase):
         self.assertIn("Updated:", rendered)
         self.assertIn("healthy", rendered)
 
+    def test_routing_telemetry_explains_development_failover_plainly(self):
+        telemetry_dir = Path(self.temp.name) / "ai_intelligence"
+        telemetry_dir.mkdir()
+        (telemetry_dir / "routing-telemetry-latest.json").write_text(
+            json.dumps(
+                {
+                    "status": "attention",
+                    "configured_versus_observed": {
+                        "matched": 0,
+                        "drift": 1,
+                        "not_observed": 8,
+                        "rows": [
+                            {
+                                "component_id": "telegram_ranch_bot",
+                                "configured_primary_model": "ollama-hermes3-8b",
+                                "latest_observed_model": "ollama-llama3.2-3b",
+                                "deployment_status": "drift",
+                            }
+                        ],
+                    },
+                    "recent_failover_count": 1,
+                    "recent_failure_count": 0,
+                    "recent_observations": [
+                        {
+                            "component_id": "telegram_ranch_bot",
+                            "request_id": "dev-fallback-20260725",
+                            "failover_occurred": True,
+                            "success": True,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with mock.patch.object(dashboard, "REPORT_DIR", telemetry_dir.parent):
+            rendered = dashboard.ai_routing_telemetry_panel_html()
+
+        self.assertIn("Development test recorded", rendered)
+        self.assertIn("No action is required", rendered)
+        self.assertIn("No failed requests were recorded", rendered)
+        self.assertIn("does not mean the component failed", rendered)
+        self.assertIn("Telegram Ranch Bot", rendered)
+        self.assertIn("Technical details", rendered)
+
     def test_missing_external_storage_is_not_reported_as_zero_percent(self):
         missing_path = Path(self.temp.name) / "not-mounted"
 
@@ -606,6 +658,177 @@ class ScorecardDashboardTests(unittest.TestCase):
         self.assertEqual(disk["status"], "Intel Mini probe unavailable")
         self.assertIsNone(disk["pct_num"])
 
+    def test_backup_remote_probe_uses_read_only_ssh_inventory(self):
+        snapshot = {
+            "host": "intelmini",
+            "checked_at": "2026-07-26T20:00:00-05:00",
+            "backups": [],
+            "history": [],
+            "qnap": {"mounted": True},
+        }
+        completed = mock.Mock(
+            returncode=0,
+            stdout=json.dumps(snapshot),
+            stderr="",
+        )
+        with mock.patch.object(
+            dashboard.subprocess,
+            "run",
+            return_value=completed,
+        ) as run:
+            result = dashboard.backup_center_remote_probe()
+
+        self.assertEqual(result["host"], "intelmini")
+        arguments = run.call_args.args[0]
+        self.assertEqual(arguments[0], "ssh")
+        self.assertIn("BatchMode=yes", arguments)
+        self.assertIn(
+            f"{dashboard.INTELMINI_STORAGE_USER}@"
+            f"{dashboard.INTELMINI_STORAGE_HOST}",
+            arguments,
+        )
+        self.assertEqual(run.call_args.kwargs["timeout"], 20)
+
+    def test_m4_time_machine_probe_reports_current_backup(self):
+        output = """Andrew-M4-Max
+Backup session status:
+{
+    Running = 0;
+}
+OPENCLAW_LATEST_BACKUP
+/Volumes/.timemachine/id/2026-07-26-131055.backup/2026-07-26-131055.backup
+OPENCLAW_DESTINATION
+Name          : MacTimeMachine
+Kind          : Network
+"""
+        completed = mock.Mock(returncode=0, stdout=output, stderr="")
+        current = dashboard.datetime(2026, 7, 26, 14, 0, 0)
+        with (
+            mock.patch.object(
+                dashboard.subprocess,
+                "run",
+                return_value=completed,
+            ) as run,
+            mock.patch.object(
+                dashboard,
+                "datetime",
+                wraps=dashboard.datetime,
+            ) as datetime_mock,
+        ):
+            datetime_mock.now.return_value = current
+            result = dashboard.backup_center_m4_time_machine()
+
+        self.assertTrue(result["found"])
+        self.assertEqual(result["status"], "healthy")
+        self.assertEqual(result["status_label"], "Current")
+        self.assertIn("MacTimeMachine", result["content"])
+        self.assertIn("Expected Frequency: Daily", result["content"])
+        arguments = run.call_args.args[0]
+        self.assertIn("tmutil status", arguments[-1])
+        self.assertIn("tmutil latestbackup", arguments[-1])
+        self.assertNotIn("tmutil startbackup", arguments[-1])
+
+    def test_backup_center_uses_remote_inventory_and_safe_controls(self):
+        now = 1785110400.0
+        snapshot = {
+            "host": "intelmini",
+            "checked_at": "2026-07-26T20:00:00-05:00",
+            "backups": [
+                {
+                    "key": "production",
+                    "label": "OpenClaw Production",
+                    "directory": "/mnt/ai-storage/openclaw-backups",
+                    "filename": "openclaw-checkpoint-current.tar.gz",
+                    "timestamp_epoch": now,
+                    "size": "135.2 MB",
+                    "status": "available",
+                },
+                {
+                    "key": "development",
+                    "label": "OpenClaw Development",
+                    "directory": "/mnt/ai-storage/openclaw-backups/dev",
+                    "filename": "openclaw-dev-backup-current.tar.gz",
+                    "timestamp_epoch": now,
+                    "size": "68.2 MB",
+                    "status": "available",
+                },
+                {
+                    "key": "dashboard",
+                    "label": "Dashboard and PropertyManager",
+                    "directory": (
+                        "/mnt/ai-storage/openclaw-backups/"
+                        "dashboard-property-backups"
+                    ),
+                    "filename": "dashboard-property-backup-current.tar.gz",
+                    "timestamp_epoch": now,
+                    "size": "9.3 MB",
+                    "status": "available",
+                },
+            ],
+            "history": [],
+            "qnap": {
+                "mounted": True,
+                "path": "/mnt/qnap-backup",
+                "total": "1.0 TB",
+                "used": "100.0 GB",
+                "free": "900.0 GB",
+                "percent_number": 10,
+            },
+        }
+        with (
+            mock.patch.object(
+                dashboard,
+                "backup_center_remote_probe",
+                return_value=snapshot,
+            ),
+            mock.patch.object(dashboard.time, "time", return_value=now),
+        ):
+            rendered = dashboard.backup_recovery_center()
+
+        self.assertIn("openclaw-checkpoint-current.tar.gz", rendered)
+        self.assertIn("Mounted on Intel Mini", rendered)
+        self.assertIn("Run Development Backup Now", rendered)
+        self.assertNotIn("Run Production Backup Now", rendered)
+        self.assertNotIn("Run Dashboard Backup Now", rendered)
+        self.assertIn("Production write actions remain disabled", rendered)
+
+    def test_remote_verification_writes_development_report(self):
+        snapshot = {
+            "host": "intelmini",
+            "checked_at": "2026-07-26T20:00:00-05:00",
+            "backups": [
+                {
+                    "label": "OpenClaw Production",
+                    "status": "verified",
+                    "checksum_status": "verified",
+                }
+            ],
+        }
+        with mock.patch.object(
+            dashboard,
+            "backup_center_remote_probe",
+            return_value=snapshot,
+        ) as probe:
+            response = dashboard.backup_recovery_verify()
+
+        self.assertIn("result=success", response)
+        probe.assert_called_once_with(verify=True)
+        report = json.loads(
+            dashboard.REMOTE_BACKUP_REPORT_PATH.read_text()
+        )
+        self.assertEqual(report["host"], "intelmini")
+        self.assertEqual(report["verified_count"], 1)
+
+    def test_production_backup_action_is_blocked_in_development(self):
+        with mock.patch.object(dashboard.subprocess, "run") as run:
+            response = dashboard.backup_recovery_run("production")
+
+        self.assertIn(
+            "Production+backup+actions+are+disabled+in+development",
+            response,
+        )
+        run.assert_not_called()
+
     def test_ranchbrain_uses_existing_development_database_credentials(self):
         missing_chat_env = Path(self.temp.name) / "chat-agent.env"
         development_env = Path(self.temp.name) / "ai-intelligence-dev.env"
@@ -648,6 +871,57 @@ class ScorecardDashboardTests(unittest.TestCase):
         self.assertIn("long_term_memory", rendered)
         self.assertIn("No production data was queried or copied", rendered)
         self.assertNotIn("connection refused", rendered.lower())
+
+    def test_ranchbrain_schema_migration_matches_consumers(self):
+        migration = (
+            MODULE_PATH.parents[1]
+            / "ranchbrain"
+            / "migrations"
+            / "001_create_long_term_memory.sql"
+        )
+        sql = migration.read_text(encoding="utf-8")
+
+        self.assertIn("CREATE TABLE IF NOT EXISTS public.long_term_memory", sql)
+        self.assertIn("id BIGSERIAL PRIMARY KEY", sql)
+        self.assertIn("agent_name TEXT NOT NULL", sql)
+        self.assertIn("category TEXT NOT NULL", sql)
+        self.assertIn("content TEXT NOT NULL", sql)
+        self.assertIn("source TEXT NOT NULL", sql)
+        self.assertIn("embedding vector(768)", sql)
+        self.assertIn("created_at TIMESTAMPTZ NOT NULL", sql)
+
+    def test_ranchbrain_review_action_uses_development_database_env(self):
+        completed = mock.Mock(returncode=0)
+        development_env = {
+            "OPENCLAW_DB_HOST": "127.0.0.1",
+            "OPENCLAW_DB_PORT": "55432",
+            "OPENCLAW_DB_NAME": "openclaw_ai_dev",
+            "OPENCLAW_DB_USER": "openclaw_ai",
+            "OPENCLAW_DB_PASSWORD": "development-only",
+        }
+        with (
+            mock.patch.object(
+                dashboard,
+                "load_ranchbrain_env",
+                return_value=development_env,
+            ),
+            mock.patch.object(
+                dashboard.subprocess,
+                "run",
+                return_value=completed,
+            ) as run,
+        ):
+            success = dashboard.run_review_action("approve", "12")
+
+        self.assertTrue(success)
+        self.assertEqual(
+            run.call_args.kwargs["env"]["OPENCLAW_DB_NAME"],
+            "openclaw_ai_dev",
+        )
+        self.assertEqual(
+            run.call_args.kwargs["env"]["OPENCLAW_DB_PORT"],
+            "55432",
+        )
 
     def test_queue_selects_an_older_undecided_archived_evaluation(self):
         archived = dashboard.AI_EVALUATION_PATH.parent / (

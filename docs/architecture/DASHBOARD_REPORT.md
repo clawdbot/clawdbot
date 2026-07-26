@@ -151,6 +151,28 @@ Browser → Flask (0.0.0.0:5051)
 - **Backup Now** → POST `/backup`.
 - Shows latest verified backup from `~/openclaw-dashboard-backups/`.
 
+### Backup & Recovery Center
+
+- Development reads the Intel Mini backup inventory and QNAP capacity through
+  the same approved SSH identity used by the external-storage health probe.
+- Inventory probes are read-only. They inspect archive metadata, mount state,
+  and capacity without mounting storage in the development VM.
+- The M4 Time Machine card uses a read-only SSH probe of `tmutil status`,
+  `tmutil latestbackup`, and `tmutil destinationinfo`; it never starts or
+  changes a Time Machine backup.
+- Time Machine is expected to back up daily. The dashboard reports healthy
+  through 30 hours, warning from 30–48 hours, and critical after 48 hours.
+- **Run Verification Now** validates the latest remote archives and available
+  SHA-256 files read-only, then stores the resulting report in the development
+  report directory.
+- Production and Dashboard/PropertyManager backup write actions are disabled
+  in the development dashboard.
+- **Run Development Backup Now** is the only manual write action exposed in
+  development. It requires an operator confirmation and uses the dedicated
+  development-backup script and SSH identity.
+- The development backup destination defaults to the Intel Mini Tailscale
+  address and does not automatically delete older remote backups.
+
 ### Live Resource Monitor
 
 - CPU (`top`), RAM (`free`), disk (`df`), Docker container count.
@@ -314,6 +336,13 @@ Before querying notes, the dashboard checks for
 initialized, the page returns a clear development-setup notice rather than a
 raw database error. The dashboard does not infer a schema or copy production
 data.
+
+The authoritative RanchBrain memory schema is versioned at
+`tools/ranchbrain/migrations/001_create_long_term_memory.sql`. It creates the
+shared memory fields required by the RanchBrain capture, duplicate detection,
+review, approval, rejection, search, and dashboard consumers. Development
+applies this migration only to `openclaw_ai_dev`; it does not copy production
+records.
 
 ### Scorecard routes
 

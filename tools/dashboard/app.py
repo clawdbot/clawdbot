@@ -1,4 +1,13 @@
-from flask import Flask, redirect, request, send_from_directory, abort
+from flask import (
+    Flask,
+    Response,
+    abort,
+    redirect,
+    request,
+    send_from_directory,
+    stream_with_context,
+)
+from werkzeug.exceptions import HTTPException
 from pathlib import Path
 from datetime import datetime
 import os
@@ -11,6 +20,7 @@ import csv
 import re
 import json
 import time
+import base64
 import psycopg2
 import html as html_module
 
@@ -39,7 +49,7 @@ M4_SSH_HOST = os.environ.get("OPENCLAW_M4_SSH_HOST", "192.168.50.117")
 M4_SSH_USER = os.environ.get("OPENCLAW_M4_SSH_USER", "andrewgraves")
 M4_SSH_KEY = os.environ.get(
     "OPENCLAW_M4_SSH_KEY",
-    str(Path.home() / ".ssh/id_ed25519_openclaw_m4"),
+    str(Path.home() / ".ssh/openclaw_dev_backup_ed25519"),
 )
 INTELMINI_STORAGE_HOST = os.environ.get(
     "OPENCLAW_INTELMINI_STORAGE_HOST",
@@ -1184,12 +1194,90 @@ def ai_routing_telemetry_panel_html():
     status = str(summary.get("status", "unknown"))
     display_status = "stale" if report_is_stale else status
     configured = summary.get("configured_versus_observed", {})
-    color = {
-        "healthy": "#7CFC00",
-        "failover-active": "#fbbf24",
-        "attention": "#f97316",
-        "stale": "#f97316",
-    }.get(display_status, "#ef4444")
+    matched_count = int(configured.get("matched", 0) or 0)
+    drift_count = int(configured.get("drift", 0) or 0)
+    not_observed_count = int(configured.get("not_observed", 0) or 0)
+    failover_count = int(summary.get("recent_failover_count", 0) or 0)
+    failure_count = int(summary.get("recent_failure_count", 0) or 0)
+    observations = summary.get("recent_observations", [])
+    if not isinstance(observations, list):
+        observations = []
+    failover_observations = [
+        item
+        for item in observations
+        if isinstance(item, dict) and item.get("failover_occurred")
+    ]
+    test_failovers = [
+        item
+        for item in failover_observations
+        if str(item.get("request_id", "")).startswith(("dev-", "test-"))
+    ]
+    live_failover_count = max(0, failover_count - len(test_failovers))
+
+    if report_is_stale:
+        operator_status = "Report needs refresh"
+        color = "#f97316"
+        operator_summary = (
+            "The telemetry report is more than 10 minutes old. "
+            "Its routing observations may no longer describe current activity."
+        )
+        action_text = "Refresh telemetry before making a routing decision."
+    elif failure_count > 0:
+        operator_status = "Action required"
+        color = "#ef4444"
+        operator_summary = (
+            f"{failure_count} recent AI request failure(s) were recorded."
+        )
+        action_text = "Review the failed requests and model-host health."
+    elif live_failover_count > 0:
+        operator_status = "Fallback used successfully"
+        color = "#fbbf24"
+        operator_summary = (
+            f"{live_failover_count} live request(s) used a fallback model, "
+            "and no failed requests were recorded."
+        )
+        action_text = (
+            "No immediate action is required; review the fallback cause "
+            "if it was unexpected."
+        )
+    elif test_failovers:
+        operator_status = "Development test recorded"
+        color = "#60a5fa"
+        operator_summary = (
+            f"{len(test_failovers)} successful development fallback test(s) "
+            "were recorded. No failed requests were recorded."
+        )
+        action_text = "No action is required when this test was expected."
+    elif drift_count:
+        operator_status = "Routing difference detected"
+        color = "#fbbf24"
+        operator_summary = (
+            f"{drift_count} component(s) used a model other than the "
+            "configured primary. No failed requests were recorded."
+        )
+        action_text = "Review the routing difference if it was unexpected."
+    else:
+        operator_status = "Healthy"
+        color = "#7CFC00"
+        operator_summary = "No routing failures or unexpected fallbacks were recorded."
+        action_text = "No action is required."
+
+    difference_items = []
+    for row in configured.get("rows", []):
+        if not isinstance(row, dict) or row.get("deployment_status") != "drift":
+            continue
+        component = str(row.get("component_id", "unknown")).replace("_", " ").title()
+        expected = str(row.get("configured_primary_model", "unknown"))
+        observed = str(row.get("latest_observed_model", "unknown"))
+        difference_items.append(
+            f"<li><b>{html.escape(component)}:</b> configured for "
+            f"{html.escape(expected)}, observed {html.escape(observed)}</li>"
+        )
+    differences_html = (
+        "<ul>" + "".join(difference_items) + "</ul>"
+        if difference_items
+        else "<p>No model-routing differences were recorded.</p>"
+    )
     preview = ""
     if text_path.exists():
         preview = html.escape(
@@ -1200,16 +1288,38 @@ def ai_routing_telemetry_panel_html():
     <div class='panel'>
         <h2>AI Routing Telemetry</h2>
         <div class='status-box'>
-            <b>Status:</b> <span style='color:{color};'>{html.escape(display_status)}</span><br>
+            <div style="font-size:20px;font-weight:bold;color:{color};">
+                {html.escape(operator_status)}
+            </div>
+            <p>{html.escape(operator_summary)}</p>
+            <p><b>What to do:</b> {html.escape(action_text)}</p>
             <b>Report age:</b> {report_age_minutes} minute(s)<br>
-            <b>Updated:</b> {html.escape(datetime.fromtimestamp(report_path.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S'))}<br><br>
-            <b>Matched:</b> {html.escape(str(configured.get('matched', 0)))}<br>
-            <b>Drift:</b> {html.escape(str(configured.get('drift', 0)))}<br>
-            <b>Not observed:</b> {html.escape(str(configured.get('not_observed', 0)))}<br>
-            <b>Recent failovers:</b> {html.escape(str(summary.get('recent_failover_count', 0)))}<br>
-            <b>Recent failures:</b> {html.escape(str(summary.get('recent_failure_count', 0)))}
+            <b>Updated:</b> {html.escape(datetime.fromtimestamp(report_path.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S'))}
         </div>
-        <div class='output'>{preview or 'No text summary available.'}</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-top:14px;">
+            <div class="status-box"><b>Failed requests</b><br>{failure_count}</div>
+            <div class="status-box"><b>Successful fallback tests</b><br>{len(test_failovers)}</div>
+            <div class="status-box"><b>Live fallbacks</b><br>{live_failover_count}</div>
+            <div class="status-box"><b>Routing differences</b><br>{drift_count}</div>
+        </div>
+        <div class="status-box" style="margin-top:14px;">
+            <b>Model-routing differences</b>
+            {differences_html}
+            <p style="color:#cbd5e1;">
+                {not_observed_count} configured component(s) had no request
+                telemetry in this reporting window. “Not observed” means no
+                request was recorded; it does not mean the component failed.
+            </p>
+        </div>
+        <details style="margin-top:14px;">
+            <summary style="cursor:pointer;font-weight:bold;">Technical details</summary>
+            <div class='output'>{preview or 'No text summary available.'}</div>
+            <p>
+                Matched: {matched_count} · Drift: {drift_count} ·
+                Not observed: {not_observed_count} ·
+                Raw status: {html.escape(display_status)}
+            </p>
+        </details>
     </div>
     """
 
@@ -1547,7 +1657,7 @@ def openclaw_shared_navigation():
     links = (
         ("/", "Overview"),
         ("/ranchbrain", "RanchBrain"),
-        ("/notes", "Notes"),
+        ("/notes", "Vault"),
         ("/ai-scorecard?view=all", "All Models Scorecard"),
         ("/ai-scorecard", "Review Queue"),
         ("/documentation", "Foundational Documentation"),
@@ -1746,71 +1856,9 @@ def ranchbrain_dashboard():
         ), 500
 
 
-@app.route("/notes")
-@app.route("/ranchbrain/review")
-def notes_dashboard():
-    try:
-        if not ranchbrain_schema_is_ready():
-            body = """
-<div class="panel" style="border-left:7px solid #fbbf24;">
-  <h2>Notes Setup Required</h2>
-  <p>
-    The Notes page is connected to the approved development PostgreSQL
-    service, but its <code>long_term_memory</code> schema has not been
-    initialized.
-  </p>
-  <p>
-    No production data was queried or copied. Notes will remain unavailable
-    until an authoritative migration is added and approved for development.
-  </p>
-</div>
-"""
-            return ranchbrain_shell("Notes", body)
-
-        pending = get_ranchbrain_notes("ranchbrain_pending")
-
-        body = """
-<div class="panel">
-  <h2>Pending Notes</h2>
-"""
-
-        if not pending:
-            body += "<p>No notes are waiting for approval.</p>"
-        else:
-            for memory_id, content, source, created_at in pending:
-                body += f"""
-<div class="note">
-  <h3>Pending Memory ID {memory_id}</h3>
-  <div>{html_module.escape(str(content))}</div>
-  <div class="meta">
-    Captured: {html_module.escape(str(created_at))}<br>
-    File: {html_module.escape(str(source))}
-  </div>
-
-  <form method="POST" action="/ranchbrain/review/approve" style="display:inline-block;margin-top:12px;">
-    <input type="hidden" name="memory_id" value="{memory_id}">
-    <button class="approve" type="submit">Approve</button>
-  </form>
-
-  <form method="POST" action="/ranchbrain/review/reject" style="display:inline-block;margin-top:12px;margin-left:8px;">
-    <input type="hidden" name="memory_id" value="{memory_id}">
-    <button class="reject" type="submit">Reject</button>
-  </form>
-</div>
-"""
-
-        body += "</div>"
-
-        return ranchbrain_shell("Notes", body)
-
-    except Exception as exc:
-        return ranchbrain_shell(
-            "Notes",
-            f"<div class='panel'>Error: {html_module.escape(str(exc))}</div>",
-        ), 500
-
-
 def run_review_action(action, memory_id):
+    review_env = os.environ.copy()
+    review_env.update(load_ranchbrain_env())
     result = subprocess.run(
         [
             str(OPENCLAW_PYTHON),
@@ -1820,6 +1868,7 @@ def run_review_action(action, memory_id):
         text=True,
         capture_output=True,
         timeout=180,
+        env=review_env,
     )
 
     return result.returncode == 0
@@ -1830,10 +1879,10 @@ def ranchbrain_review_approve():
     memory_id = request.form.get("memory_id", "").strip()
 
     if not memory_id.isdigit():
-        return redirect("/notes")
+        return redirect("/ranchbrain/review")
 
     run_review_action("approve", memory_id)
-    return redirect("/notes")
+    return redirect("/ranchbrain/review")
 
 
 @app.route("/ranchbrain/review/reject", methods=["POST"])
@@ -1841,10 +1890,10 @@ def ranchbrain_review_reject():
     memory_id = request.form.get("memory_id", "").strip()
 
     if not memory_id.isdigit():
-        return redirect("/notes")
+        return redirect("/ranchbrain/review")
 
     run_review_action("reject", memory_id)
-    return redirect("/notes")
+    return redirect("/ranchbrain/review")
 
 
 def load_json_object(path):
@@ -2828,6 +2877,256 @@ def documentation_view(doc_path):
 
 
 # =============================================================================
+# AI STORAGE (Intel Mini 4TB) SHARED HELPERS
+# =============================================================================
+
+AI_STORAGE_ROOT = Path("/mnt/ai-storage")
+RANCHBRAIN_VAULT_ROOT = AI_STORAGE_ROOT / "ranchbrain"
+
+RANCHBRAIN_VAULT_SECTIONS = (
+    "notes",
+    "photos",
+    "documents",
+    "manuals",
+    "Foundation",
+    "invoices",
+    "maps",
+    "memories",
+    "projects",
+    "receipts",
+    "reports",
+    "assets",
+)
+
+RANCHBRAIN_VAULT_ROOT_FILES = (
+    "Dashboard.md",
+    "Property.md",
+)
+
+RANCHBRAIN_VAULT_SUFFIXES = {
+    ".md",
+    ".txt",
+    ".pdf",
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".webp",
+    ".heic",
+}
+
+RANCHBRAIN_VAULT_IMAGE_SUFFIXES = {
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".webp",
+    ".heic",
+}
+
+RANCHBRAIN_VAULT_TEXT_SUFFIXES = {".md", ".txt"}
+
+
+def ai_storage_is_local():
+    local_mount = run_command(
+        "findmnt -n -T /mnt/ai-storage -o TARGET",
+        timeout=5,
+    )
+    return local_mount == "/mnt/ai-storage" and AI_STORAGE_ROOT.is_dir()
+
+
+def ai_storage_ssh(remote_command, timeout=30, binary=False):
+    result = subprocess.run(
+        [
+            "ssh",
+            "-i",
+            INTELMINI_STORAGE_KEY,
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "IdentitiesOnly=yes",
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            "ConnectTimeout=8",
+            f"{INTELMINI_STORAGE_USER}@{INTELMINI_STORAGE_HOST}",
+            remote_command,
+        ],
+        capture_output=True,
+        text=not binary,
+        timeout=timeout,
+        check=False,
+    )
+
+    if result.returncode != 0:
+        detail = result.stderr or result.stdout or b""
+        if isinstance(detail, bytes):
+            detail = detail.decode("utf-8", errors="replace")
+        lines = detail.strip().splitlines()
+        raise RuntimeError(
+            lines[-1] if lines else "Intel Mini storage probe failed."
+        )
+
+    return result.stdout
+
+
+def ai_storage_validate_relative_path(
+    relative_path,
+    *,
+    allowed_top_levels=None,
+    allowed_suffixes=None,
+    allow_root_files=None,
+):
+    text = str(relative_path or "").replace("\\", "/").strip().lstrip("/")
+
+    if not text:
+        raise ValueError("Missing document path.")
+
+    parts = text.split("/")
+
+    if any(
+        (not part) or part in {".", ".."} or part.startswith(".")
+        for part in parts
+    ):
+        raise ValueError("Invalid document path.")
+
+    suffix = Path(parts[-1]).suffix.lower()
+
+    if allowed_suffixes is not None and suffix not in allowed_suffixes:
+        raise ValueError("Unsupported document type.")
+
+    if len(parts) == 1:
+        if allow_root_files is not None and parts[0] not in allow_root_files:
+            raise ValueError("Invalid document path.")
+        return text
+
+    if allowed_top_levels is not None and parts[0] not in allowed_top_levels:
+        raise ValueError("Invalid document section.")
+
+    return text
+
+
+def ai_storage_guess_mimetype(path_name):
+    suffix = Path(path_name).suffix.lower()
+    return {
+        ".pdf": "application/pdf",
+        ".md": "text/markdown; charset=utf-8",
+        ".txt": "text/plain; charset=utf-8",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+        ".heic": "image/heic",
+    }.get(suffix, "application/octet-stream")
+
+
+def ai_storage_stream_remote(root_path, relative_path, mimetype=None):
+    relative = str(relative_path).replace("\\", "/").lstrip("/")
+    encoded_root = base64.b64encode(str(root_path).encode("utf-8")).decode("ascii")
+    encoded_path = base64.b64encode(relative.encode("utf-8")).decode("ascii")
+    remote_program = (
+        "import base64, os, sys\n"
+        f"root = base64.b64decode('{encoded_root}').decode('utf-8')\n"
+        f"path = base64.b64decode('{encoded_path}').decode('utf-8')\n"
+        "full = os.path.join(root, path)\n"
+        "if not os.path.isfile(full):\n"
+        "    sys.stderr.write('Document was not found.\\n')\n"
+        "    sys.exit(2)\n"
+        "with open(full, 'rb') as handle:\n"
+        "    while True:\n"
+        "        chunk = handle.read(1024 * 1024)\n"
+        "        if not chunk:\n"
+        "            break\n"
+        "        sys.stdout.buffer.write(chunk)\n"
+    )
+    encoded_program = base64.b64encode(
+        remote_program.encode("utf-8")
+    ).decode("ascii")
+    remote_command = (
+        "python3 -c 'import base64;"
+        f'exec(base64.b64decode("{encoded_program}"))'
+        "'"
+    )
+
+    process = subprocess.Popen(
+        [
+            "ssh",
+            "-i",
+            INTELMINI_STORAGE_KEY,
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "IdentitiesOnly=yes",
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            "ConnectTimeout=8",
+            f"{INTELMINI_STORAGE_USER}@{INTELMINI_STORAGE_HOST}",
+            remote_command,
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    first_chunk = process.stdout.read(1024 * 1024) if process.stdout else b""
+
+    if not first_chunk:
+        process.wait(timeout=20)
+        if process.returncode not in (0, None):
+            raise FileNotFoundError("Document was not found.")
+
+    @stream_with_context
+    def generate():
+        try:
+            if first_chunk:
+                yield first_chunk
+            while True:
+                chunk = process.stdout.read(1024 * 1024)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            if process.poll() is None:
+                process.wait(timeout=60)
+
+    filename = Path(relative).name
+    headers = {
+        "Content-Disposition": (
+            f"inline; filename*=UTF-8''{quote(filename)}"
+        ),
+        "Cache-Control": "private, max-age=120",
+    }
+    return Response(
+        generate(),
+        mimetype=mimetype or ai_storage_guess_mimetype(filename),
+        headers=headers,
+        direct_passthrough=True,
+    )
+
+
+def ai_storage_read_text(root_path, relative_path, timeout=30):
+    relative = str(relative_path).replace("\\", "/").lstrip("/")
+
+    if ai_storage_is_local():
+        path = (Path(root_path) / relative).resolve()
+        path.relative_to(Path(root_path).resolve())
+        return path.read_text(encoding="utf-8", errors="replace")
+
+    encoded_root = base64.b64encode(str(root_path).encode("utf-8")).decode("ascii")
+    encoded_path = base64.b64encode(relative.encode("utf-8")).decode("ascii")
+    remote_command = (
+        "python3 -c 'import base64,os,sys;"
+        f"root=base64.b64decode(\"{encoded_root}\").decode();"
+        f"path=base64.b64decode(\"{encoded_path}\").decode();"
+        "full=os.path.join(root,path);"
+        "sys.exit(2) if not os.path.isfile(full) else "
+        "sys.stdout.write(open(full,encoding=\"utf-8\",errors=\"replace\").read())'"
+    )
+    return ai_storage_ssh(remote_command, timeout=timeout)
+
+
+# =============================================================================
 # PDF DOCUMENT UPLOAD ROUTES
 # =============================================================================
 
@@ -2848,6 +3147,10 @@ PDF_UPLOAD_CATEGORIES = (
 
 PDF_MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 app.config["MAX_CONTENT_LENGTH"] = PDF_MAX_UPLOAD_BYTES
+
+
+def pdf_document_storage_is_local():
+    return ai_storage_is_local() and PDF_DOCUMENT_ROOT.is_dir()
 
 
 def pdf_upload_safe_destination(category, original_name):
@@ -2880,6 +3183,54 @@ def pdf_upload_safe_destination(category, original_name):
             counter += 1
 
     return destination
+
+
+def pdf_upload_remote_destination(category, original_name):
+    if category not in PDF_UPLOAD_CATEGORIES:
+        raise ValueError("Invalid document category.")
+
+    safe_name = secure_filename(str(original_name or ""))
+    if not safe_name:
+        raise ValueError("The file does not have a usable filename.")
+
+    if Path(safe_name).suffix.lower() != ".pdf":
+        raise ValueError("Only PDF files may be uploaded.")
+
+    categories_json = json.dumps(list(PDF_UPLOAD_CATEGORIES))
+    encoded_category = base64.b64encode(category.encode("utf-8")).decode("ascii")
+    encoded_name = base64.b64encode(safe_name.encode("utf-8")).decode("ascii")
+    remote_program = (
+        "import base64, json, os\n"
+        "from datetime import datetime\n"
+        "from pathlib import Path\n"
+        "root = Path('/mnt/ai-storage/openclaw-documents')\n"
+        f"categories = {categories_json}\n"
+        f"category = base64.b64decode('{encoded_category}').decode('utf-8')\n"
+        f"safe_name = base64.b64decode('{encoded_name}').decode('utf-8')\n"
+        "if category not in categories:\n"
+        "    raise SystemExit('invalid category')\n"
+        "directory = root / category\n"
+        "directory.mkdir(parents=True, exist_ok=True)\n"
+        "destination = directory / safe_name\n"
+        "if destination.exists():\n"
+        "    stem = destination.stem\n"
+        "    suffix = destination.suffix\n"
+        "    timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')\n"
+        "    destination = directory / f'{stem}-{timestamp}{suffix}'\n"
+        "    counter = 1\n"
+        "    while destination.exists():\n"
+        "        destination = directory / f'{stem}-{timestamp}-{counter}{suffix}'\n"
+        "        counter += 1\n"
+        "print(str(destination.relative_to(root)).replace('\\\\', '/'))\n"
+    )
+    encoded_program = base64.b64encode(remote_program.encode("utf-8")).decode("ascii")
+    remote_command = (
+        "python3 -c 'import base64;"
+        f'exec(base64.b64decode("{encoded_program}"))'
+        "'"
+    )
+    relative_path = str(ai_storage_ssh(remote_command, timeout=20)).strip()
+    return pdf_library_validate_relative_path(relative_path)
 
 
 def pdf_upload_validate(path):
@@ -2925,20 +3276,83 @@ def pdf_upload_record(metadata):
         handle.write(json.dumps(metadata, ensure_ascii=False) + "\n")
 
 
-def pdf_upload_resolve(category, filename):
-    if category not in PDF_UPLOAD_CATEGORIES:
-        raise ValueError("Invalid category.")
+def pdf_upload_record_remote(metadata):
+    encoded = base64.b64encode(
+        json.dumps(metadata, ensure_ascii=False).encode("utf-8")
+    ).decode("ascii")
+    remote_program = (
+        "import base64, os\n"
+        "from pathlib import Path\n"
+        "root = Path('/mnt/ai-storage/openclaw-documents')\n"
+        "meta = root / '.metadata'\n"
+        "meta.mkdir(parents=True, exist_ok=True)\n"
+        f"line = base64.b64decode('{encoded}').decode('utf-8') + '\\n'\n"
+        "with (meta / 'uploads.jsonl').open('a', encoding='utf-8') as handle:\n"
+        "    handle.write(line)\n"
+    )
+    encoded_program = base64.b64encode(remote_program.encode("utf-8")).decode("ascii")
+    remote_command = (
+        "python3 -c 'import base64;"
+        f'exec(base64.b64decode("{encoded_program}"))'
+        "'"
+    )
+    ai_storage_ssh(remote_command, timeout=20)
 
-    safe_name = secure_filename(str(filename or ""))
 
-    if safe_name != filename:
-        raise ValueError("Invalid filename.")
+def pdf_upload_copy_remote(local_path, relative_path):
+    relative = pdf_library_validate_relative_path(relative_path)
+    remote_target = (
+        f"{INTELMINI_STORAGE_USER}@{INTELMINI_STORAGE_HOST}:"
+        f"{PDF_DOCUMENT_ROOT / relative}"
+    )
+    result = subprocess.run(
+        [
+            "scp",
+            "-i",
+            INTELMINI_STORAGE_KEY,
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "IdentitiesOnly=yes",
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            "ConnectTimeout=8",
+            str(local_path),
+            remote_target,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip().splitlines()
+        raise RuntimeError(
+            detail[-1] if detail else "Remote PDF copy to Intel Mini failed."
+        )
 
-    if Path(safe_name).suffix.lower() != ".pdf":
-        raise ValueError("Only PDF files may be opened.")
+
+def pdf_library_validate_relative_path(relative_path):
+    return ai_storage_validate_relative_path(
+        relative_path,
+        allowed_top_levels=PDF_UPLOAD_CATEGORIES,
+        allowed_suffixes={".pdf"},
+    )
+
+
+def pdf_upload_resolve(relative_path):
+    relative = pdf_library_validate_relative_path(relative_path)
+
+    if not pdf_document_storage_is_local():
+        return {
+            "mode": "remote",
+            "relative_path": relative,
+            "filename": Path(relative).name,
+        }
 
     root = PDF_DOCUMENT_ROOT.resolve()
-    candidate = (root / category / safe_name).resolve()
+    candidate = (root / relative).resolve()
 
     try:
         candidate.relative_to(root)
@@ -2948,7 +3362,21 @@ def pdf_upload_resolve(category, filename):
     if not candidate.is_file():
         raise FileNotFoundError("PDF was not found.")
 
-    return candidate
+    return {
+        "mode": "local",
+        "path": candidate,
+        "relative_path": relative,
+        "filename": candidate.name,
+    }
+
+
+def pdf_library_stream_remote(relative_path):
+    relative = pdf_library_validate_relative_path(relative_path)
+    return ai_storage_stream_remote(
+        PDF_DOCUMENT_ROOT,
+        relative,
+        mimetype="application/pdf",
+    )
 
 
 @app.errorhandler(413)
@@ -2965,6 +3393,7 @@ def pdf_upload_too_large(_error):
 def documentation_upload_pdf():
     message = ""
     message_class = "empty-state"
+    remote_mode = not pdf_document_storage_is_local()
 
     if request.method == "POST":
         upload = request.files.get("pdf_file")
@@ -2979,42 +3408,89 @@ def documentation_upload_pdf():
             if upload is None or not upload.filename:
                 raise ValueError("Select a PDF file before uploading.")
 
-            final_path = pdf_upload_safe_destination(
-                category,
-                upload.filename,
-            )
+            if remote_mode:
+                temporary_path = Path("/tmp") / (
+                    f"openclaw-pdf-upload-{time.time_ns()}.pdf"
+                )
+                upload.save(temporary_path)
+                validation = pdf_upload_validate(temporary_path)
+                relative_path = pdf_upload_remote_destination(
+                    category,
+                    upload.filename,
+                )
+                pdf_upload_copy_remote(temporary_path, relative_path)
+                metadata = {
+                    "uploaded_at": datetime.now().astimezone().isoformat(),
+                    "original_filename": str(upload.filename),
+                    "stored_filename": Path(relative_path).name,
+                    "relative_path": relative_path,
+                    "category": category,
+                    "title": title or Path(relative_path).stem,
+                    "notes": notes,
+                    "size_bytes": validation["size_bytes"],
+                    "page_count": validation["page_count"],
+                    "encrypted": validation["encrypted"],
+                }
+                try:
+                    pdf_upload_record_remote(metadata)
+                except Exception:
+                    # Best-effort cleanup of remote file if metadata write fails.
+                    try:
+                        encoded = base64.b64encode(
+                            relative_path.encode("utf-8")
+                        ).decode("ascii")
+                        ai_storage_ssh(
+                            "python3 -c 'import base64,os;"
+                            f"p=base64.b64decode(\"{encoded}\").decode();"
+                            "os.unlink(os.path.join("
+                            "\"/mnt/ai-storage/openclaw-documents\",p))'",
+                            timeout=15,
+                        )
+                    except Exception:
+                        pass
+                    raise
+                temporary_path.unlink(missing_ok=True)
+                temporary_path = None
+            else:
+                final_path = pdf_upload_safe_destination(
+                    category,
+                    upload.filename,
+                )
 
-            temporary_path = final_path.with_name(
-                f".{final_path.name}.uploading-{time.time_ns()}"
-            )
+                temporary_path = final_path.with_name(
+                    f".{final_path.name}.uploading-{time.time_ns()}"
+                )
 
-            upload.save(temporary_path)
-            validation = pdf_upload_validate(temporary_path)
+                upload.save(temporary_path)
+                validation = pdf_upload_validate(temporary_path)
 
-            temporary_path.replace(final_path)
+                temporary_path.replace(final_path)
+                temporary_path = None
 
-            metadata = {
-                "uploaded_at": datetime.now().astimezone().isoformat(),
-                "original_filename": str(upload.filename),
-                "stored_filename": final_path.name,
-                "relative_path": str(final_path.relative_to(PDF_DOCUMENT_ROOT)),
-                "category": category,
-                "title": title or final_path.stem,
-                "notes": notes,
-                "size_bytes": validation["size_bytes"],
-                "page_count": validation["page_count"],
-                "encrypted": validation["encrypted"],
-            }
+                metadata = {
+                    "uploaded_at": datetime.now().astimezone().isoformat(),
+                    "original_filename": str(upload.filename),
+                    "stored_filename": final_path.name,
+                    "relative_path": str(
+                        final_path.relative_to(PDF_DOCUMENT_ROOT)
+                    ),
+                    "category": category,
+                    "title": title or final_path.stem,
+                    "notes": notes,
+                    "size_bytes": validation["size_bytes"],
+                    "page_count": validation["page_count"],
+                    "encrypted": validation["encrypted"],
+                }
 
-            try:
-                pdf_upload_record(metadata)
-            except Exception:
-                final_path.unlink(missing_ok=True)
-                raise
+                try:
+                    pdf_upload_record(metadata)
+                except Exception:
+                    final_path.unlink(missing_ok=True)
+                    raise
 
             open_url = (
-                f"/documentation/pdf/{quote(category)}/"
-                f"{quote(final_path.name)}"
+                "/documentation/pdf/"
+                f"{quote(metadata['relative_path'], safe='/')}"
             )
 
             message_class = "document-viewer"
@@ -3027,17 +3503,18 @@ def documentation_upload_pdf():
 
         except ValueError as exc:
             if temporary_path:
-                temporary_path.unlink(missing_ok=True)
+                Path(temporary_path).unlink(missing_ok=True)
 
             message = f"""<h2>Upload unsuccessful</h2>
 <p>{html.escape(str(exc))}</p>"""
 
-        except Exception:
+        except Exception as exc:
             if temporary_path:
-                temporary_path.unlink(missing_ok=True)
+                Path(temporary_path).unlink(missing_ok=True)
 
-            message = """<h2>Upload unsuccessful</h2>
-<p>An unexpected error occurred while storing the PDF.</p>"""
+            message = f"""<h2>Upload unsuccessful</h2>
+<p>An unexpected error occurred while storing the PDF.</p>
+<p class="muted">{html.escape(str(exc))}</p>"""
 
     category_options = []
 
@@ -3047,6 +3524,15 @@ def documentation_upload_pdf():
             f'<option value="{html.escape(category_name, quote=True)}"'
             f'{selected}>{html.escape(category_name)}</option>'
         )
+
+    storage_note = (
+        "This development host does not mount /mnt/ai-storage. "
+        f"Uploads are stored on Intel Mini ({html.escape(INTELMINI_STORAGE_HOST)}) "
+        "at /mnt/ai-storage/openclaw-documents."
+        if remote_mode
+        else "Uploads are stored on the local external AI drive at "
+        f"{html.escape(str(PDF_DOCUMENT_ROOT))}."
+    )
 
     body = f"""
 <p class="breadcrumb">
@@ -3061,6 +3547,11 @@ def documentation_upload_pdf():
 The original PDF will be stored on the external AI drive.
 Only valid PDF files up to 50 MB are accepted.
 </p>
+
+<div class="health" style="margin:16px 0;">
+<div class="muted">Upload destination</div>
+<div>{storage_note}</div>
+</div>
 
 <form method="POST"
       action="/documentation/upload"
@@ -3113,15 +3604,26 @@ Only valid PDF files up to 50 MB are accepted.
     return documentation_shell("Upload PDF", body)
 
 
-@app.route("/documentation/pdf/<category>/<filename>")
-def documentation_open_pdf(category, filename):
+@app.route("/documentation/pdf/<path:doc_path>")
+def documentation_open_pdf(doc_path):
     try:
-        path = pdf_upload_resolve(category, filename)
+        resolved = pdf_upload_resolve(doc_path)
     except FileNotFoundError:
         abort(404)
     except ValueError:
         abort(400)
 
+    if resolved["mode"] == "remote":
+        try:
+            return pdf_library_stream_remote(resolved["relative_path"])
+        except FileNotFoundError:
+            abort(404)
+        except HTTPException:
+            raise
+        except Exception:
+            abort(502)
+
+    path = resolved["path"]
     return send_from_directory(
         str(path.parent),
         path.name,
@@ -3131,45 +3633,67 @@ def documentation_open_pdf(category, filename):
     )
 
 
-
 # =============================================================================
 # PDF DOCUMENT LIBRARY ROUTES
 # =============================================================================
 
-def pdf_library_load_metadata():
+def pdf_library_load_metadata_from_text(raw_text):
     records = []
 
-    if not PDF_UPLOAD_LOG.is_file():
-        return records
+    for line in str(raw_text or "").splitlines():
+        line = line.strip()
 
-    try:
-        with PDF_UPLOAD_LOG.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                line = line.strip()
+        if not line:
+            continue
 
-                if not line:
-                    continue
+        try:
+            item = json.loads(line)
+        except (ValueError, TypeError):
+            continue
 
-                try:
-                    item = json.loads(line)
-                except (ValueError, TypeError):
-                    continue
-
-                if isinstance(item, dict):
-                    records.append(item)
-
-    except OSError:
-        return []
+        if isinstance(item, dict):
+            records.append(item)
 
     return records
 
 
-def pdf_library_scan_files():
-    metadata_records = pdf_library_load_metadata()
+def pdf_library_load_metadata():
+    if not PDF_UPLOAD_LOG.is_file():
+        return []
 
+    try:
+        return pdf_library_load_metadata_from_text(
+            PDF_UPLOAD_LOG.read_text(encoding="utf-8")
+        )
+    except OSError:
+        return []
+
+
+def pdf_library_build_document(relative_path, size_bytes, modified_timestamp, metadata):
+    path_name = Path(relative_path).name
+    category = relative_path.split("/", 1)[0]
+
+    return {
+        "title": str(
+            metadata.get("title")
+            or Path(path_name).stem.replace("-", " ").replace("_", " ").title()
+        ),
+        "category": category,
+        "filename": path_name,
+        "relative_path": relative_path,
+        "notes": str(metadata.get("notes") or ""),
+        "uploaded_at": str(metadata.get("uploaded_at") or ""),
+        "page_count": metadata.get("page_count"),
+        "size_bytes": int(metadata.get("size_bytes") or size_bytes or 0),
+        "modified_timestamp": float(modified_timestamp or 0),
+        "encrypted": bool(metadata.get("encrypted", False)),
+    }
+
+
+def pdf_library_scan_files_local():
     metadata_by_path = {
         str(item.get("relative_path") or ""): item
-        for item in metadata_records
+        for item in pdf_library_load_metadata()
         if item.get("relative_path")
     }
 
@@ -3181,11 +3705,20 @@ def pdf_library_scan_files():
         if not directory.is_dir():
             continue
 
-        for path in directory.glob("*.pdf"):
+        for path in directory.rglob("*.pdf"):
             if not path.is_file():
                 continue
 
-            relative_path = str(path.relative_to(PDF_DOCUMENT_ROOT))
+            relative_path = str(path.relative_to(PDF_DOCUMENT_ROOT)).replace(
+                "\\",
+                "/",
+            )
+
+            try:
+                pdf_library_validate_relative_path(relative_path)
+            except ValueError:
+                continue
+
             metadata = metadata_by_path.get(relative_path, {})
 
             try:
@@ -3193,21 +3726,14 @@ def pdf_library_scan_files():
             except OSError:
                 continue
 
-            documents.append({
-                "title": str(
-                    metadata.get("title")
-                    or path.stem.replace("-", " ").replace("_", " ").title()
-                ),
-                "category": category,
-                "filename": path.name,
-                "relative_path": relative_path,
-                "notes": str(metadata.get("notes") or ""),
-                "uploaded_at": str(metadata.get("uploaded_at") or ""),
-                "page_count": metadata.get("page_count"),
-                "size_bytes": int(metadata.get("size_bytes") or stat.st_size),
-                "modified_timestamp": stat.st_mtime,
-                "encrypted": bool(metadata.get("encrypted", False)),
-            })
+            documents.append(
+                pdf_library_build_document(
+                    relative_path,
+                    stat.st_size,
+                    stat.st_mtime,
+                    metadata,
+                )
+            )
 
     documents.sort(
         key=lambda item: (
@@ -3217,6 +3743,160 @@ def pdf_library_scan_files():
     )
 
     return documents
+
+
+def pdf_library_scan_files_remote():
+    categories_json = json.dumps(list(PDF_UPLOAD_CATEGORIES))
+    remote_program = (
+        "import json\n"
+        "import os\n"
+        "from pathlib import Path\n"
+        "\n"
+        "root = Path('/mnt/ai-storage/openclaw-documents')\n"
+        f"categories = {categories_json}\n"
+        "documents = []\n"
+        "metadata_records = []\n"
+        "metadata_log = root / '.metadata' / 'uploads.jsonl'\n"
+        "\n"
+        "if metadata_log.is_file():\n"
+        "    for line in metadata_log.read_text(encoding='utf-8', errors='replace').splitlines():\n"
+        "        line = line.strip()\n"
+        "        if not line:\n"
+        "            continue\n"
+        "        try:\n"
+        "            item = json.loads(line)\n"
+        "        except Exception:\n"
+        "            continue\n"
+        "        if isinstance(item, dict):\n"
+        "            metadata_records.append(item)\n"
+        "\n"
+        "metadata_by_path = {\n"
+        "    str(item.get('relative_path') or '').replace('\\\\', '/'): item\n"
+        "    for item in metadata_records\n"
+        "    if item.get('relative_path')\n"
+        "}\n"
+        "\n"
+        "for category in categories:\n"
+        "    directory = root / category\n"
+        "    if not directory.is_dir():\n"
+        "        continue\n"
+        "    for path in directory.rglob('*.pdf'):\n"
+        "        if not path.is_file():\n"
+        "            continue\n"
+        "        relative_path = str(path.relative_to(root)).replace('\\\\', '/')\n"
+        "        parts = relative_path.split('/')\n"
+        "        if any((not part) or part in {'.', '..'} or part.startswith('.') for part in parts):\n"
+        "            continue\n"
+        "        if parts[0] not in categories:\n"
+        "            continue\n"
+        "        try:\n"
+        "            stat = path.stat()\n"
+        "        except OSError:\n"
+        "            continue\n"
+        "        metadata = metadata_by_path.get(relative_path, {})\n"
+        "        documents.append({\n"
+        "            'title': str(\n"
+        "                metadata.get('title')\n"
+        "                or path.stem.replace('-', ' ').replace('_', ' ').title()\n"
+        "            ),\n"
+        "            'category': category,\n"
+        "            'filename': path.name,\n"
+        "            'relative_path': relative_path,\n"
+        "            'notes': str(metadata.get('notes') or ''),\n"
+        "            'uploaded_at': str(metadata.get('uploaded_at') or ''),\n"
+        "            'page_count': metadata.get('page_count'),\n"
+        "            'size_bytes': int(metadata.get('size_bytes') or stat.st_size),\n"
+        "            'modified_timestamp': float(stat.st_mtime),\n"
+        "            'encrypted': bool(metadata.get('encrypted', False)),\n"
+        "        })\n"
+        "\n"
+        "documents.sort(\n"
+        "    key=lambda item: (\n"
+        "        -float(item.get('modified_timestamp') or 0),\n"
+        "        str(item.get('title') or '').casefold(),\n"
+        "    )\n"
+        ")\n"
+        "print(json.dumps({\n"
+        "    'host': os.uname().nodename,\n"
+        "    'document_count': len(documents),\n"
+        "    'documents': documents,\n"
+        "}))\n"
+    )
+    encoded_program = base64.b64encode(
+        remote_program.encode("utf-8")
+    ).decode("ascii")
+    remote_command = (
+        "python3 -c 'import base64;"
+        f'exec(base64.b64decode("{encoded_program}"))'
+        "'"
+    )
+    payload = json.loads(ai_storage_ssh(remote_command, timeout=45))
+
+    if not isinstance(payload, dict) or not isinstance(
+        payload.get("documents"),
+        list,
+    ):
+        raise ValueError("Intel Mini PDF library probe returned invalid data.")
+
+    documents = []
+
+    for item in payload["documents"]:
+        if not isinstance(item, dict):
+            continue
+
+        relative_path = str(item.get("relative_path") or "").replace("\\", "/")
+
+        try:
+            relative_path = pdf_library_validate_relative_path(relative_path)
+        except ValueError:
+            continue
+
+        documents.append(
+            pdf_library_build_document(
+                relative_path,
+                item.get("size_bytes") or 0,
+                item.get("modified_timestamp") or 0,
+                item,
+            )
+        )
+
+    documents.sort(
+        key=lambda item: (
+            -float(item.get("modified_timestamp") or 0),
+            str(item.get("title") or "").casefold(),
+        )
+    )
+
+    return documents, str(payload.get("host") or INTELMINI_STORAGE_HOST)
+
+
+def pdf_library_scan_files():
+    if pdf_document_storage_is_local():
+        return {
+            "documents": pdf_library_scan_files_local(),
+            "mode": "local",
+            "host": "this host",
+            "available": True,
+            "error": "",
+        }
+
+    try:
+        documents, host = pdf_library_scan_files_remote()
+        return {
+            "documents": documents,
+            "mode": "remote",
+            "host": host,
+            "available": True,
+            "error": "",
+        }
+    except Exception as exc:
+        return {
+            "documents": [],
+            "mode": "remote",
+            "host": INTELMINI_STORAGE_HOST,
+            "available": False,
+            "error": str(exc),
+        }
 
 
 def pdf_library_display_date(value, fallback_timestamp=None):
@@ -3240,7 +3920,9 @@ def pdf_library_display_date(value, fallback_timestamp=None):
 
 @app.route("/documentation/pdfs")
 def documentation_pdf_library():
-    documents = pdf_library_scan_files()
+    scan = pdf_library_scan_files()
+    documents = scan["documents"]
+    scan_error = str(scan.get("error") or "")
 
     search_term = str(request.args.get("q") or "").strip()
     selected_category = str(
@@ -3299,8 +3981,8 @@ def documentation_pdf_library():
 
     for item in filtered:
         open_url = (
-            f"/documentation/pdf/{quote(item['category'])}/"
-            f"{quote(item['filename'])}"
+            "/documentation/pdf/"
+            f"{quote(item['relative_path'], safe='/')}"
         )
 
         page_text = (
@@ -3348,16 +4030,30 @@ Open PDF →
 </article>"""
         )
 
-    if cards:
+    if scan_error:
+        results_html = (
+            '<div class="empty-state">'
+            "<h2>PDF library unavailable</h2>"
+            "<p>Could not read the document library from the Intel Mini.</p>"
+            f"<p class=\"muted\">{html.escape(scan_error)}</p>"
+            "</div>"
+        )
+    elif cards:
         results_html = (
             '<div class="document-grid">'
             + "".join(cards)
             + "</div>"
         )
-    else:
+    elif documents:
         results_html = (
             '<div class="empty-state">'
             "No uploaded PDFs matched your search."
+            "</div>"
+        )
+    else:
+        results_html = (
+            '<div class="empty-state">'
+            "No PDFs were found in the document library."
             "</div>"
         )
 
@@ -3369,10 +4065,28 @@ Open PDF →
         )
     ) or "No PDFs uploaded"
 
+    if scan["mode"] == "local":
+        source_note = (
+            "Reading PDFs from local external storage at "
+            f"{html.escape(str(PDF_DOCUMENT_ROOT))}."
+        )
+    else:
+        source_note = (
+            "Development host does not mount /mnt/ai-storage. "
+            "Reading the PDF library from Intel Mini "
+            f"({html.escape(str(scan.get('host') or INTELMINI_STORAGE_HOST))}) "
+            "over SSH."
+        )
+
     body = f"""
 <p class="muted">
 Search and open PDFs stored on the external AI drive.
 </p>
+
+<div class="health" style="margin-bottom:18px;">
+<div class="muted">Library source</div>
+<div>{source_note}</div>
+</div>
 
 <div class="summary-grid">
 <div class="health">
@@ -3447,6 +4161,606 @@ Clear
     return documentation_shell("Uploaded PDF Library", body)
 
 
+# =============================================================================
+# RANCHBRAIN VAULT (4TB) BROWSER
+# =============================================================================
+
+def ranchbrain_vault_validate_relative_path(relative_path):
+    return ai_storage_validate_relative_path(
+        relative_path,
+        allowed_top_levels=RANCHBRAIN_VAULT_SECTIONS,
+        allowed_suffixes=RANCHBRAIN_VAULT_SUFFIXES,
+        allow_root_files=RANCHBRAIN_VAULT_ROOT_FILES,
+    )
+
+
+def ranchbrain_vault_build_item(relative_path, size_bytes, modified_timestamp, metadata=None):
+    metadata = metadata or {}
+    path_name = Path(relative_path).name
+    suffix = Path(path_name).suffix.lower()
+    section = (
+        relative_path.split("/", 1)[0]
+        if "/" in relative_path
+        else "root"
+    )
+
+    return {
+        "title": str(
+            metadata.get("title")
+            or Path(path_name).stem.replace("-", " ").replace("_", " ").title()
+        ),
+        "section": section,
+        "filename": path_name,
+        "relative_path": relative_path,
+        "notes": str(metadata.get("notes") or metadata.get("description") or ""),
+        "tags": metadata.get("tags") or [],
+        "suffix": suffix,
+        "size_bytes": int(size_bytes or 0),
+        "modified_timestamp": float(modified_timestamp or 0),
+        "document_type": str(metadata.get("document_type") or suffix.lstrip(".")),
+    }
+
+
+def ranchbrain_vault_load_sidecar_local(path):
+    sidecar = Path(str(path) + ".metadata.json")
+    if not sidecar.is_file():
+        return {}
+    try:
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def ranchbrain_vault_scan_local():
+    root = RANCHBRAIN_VAULT_ROOT
+    documents = []
+
+    if not root.is_dir():
+        return documents
+
+    for root_file in RANCHBRAIN_VAULT_ROOT_FILES:
+        path = root / root_file
+        if not path.is_file():
+            continue
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        documents.append(
+            ranchbrain_vault_build_item(
+                root_file,
+                stat.st_size,
+                stat.st_mtime,
+                ranchbrain_vault_load_sidecar_local(path),
+            )
+        )
+
+    for section in RANCHBRAIN_VAULT_SECTIONS:
+        directory = root / section
+        if not directory.is_dir():
+            continue
+        for path in directory.rglob("*"):
+            if not path.is_file():
+                continue
+            if path.name.startswith(".") or path.name.startswith("._"):
+                continue
+            if path.name.endswith(".metadata.json"):
+                continue
+            relative_path = str(path.relative_to(root)).replace("\\", "/")
+            try:
+                ranchbrain_vault_validate_relative_path(relative_path)
+            except ValueError:
+                continue
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            documents.append(
+                ranchbrain_vault_build_item(
+                    relative_path,
+                    stat.st_size,
+                    stat.st_mtime,
+                    ranchbrain_vault_load_sidecar_local(path),
+                )
+            )
+
+    documents.sort(
+        key=lambda item: (
+            -float(item.get("modified_timestamp") or 0),
+            str(item.get("title") or "").casefold(),
+        )
+    )
+    return documents
+
+
+def ranchbrain_vault_scan_remote():
+    sections_json = json.dumps(list(RANCHBRAIN_VAULT_SECTIONS))
+    root_files_json = json.dumps(list(RANCHBRAIN_VAULT_ROOT_FILES))
+    suffixes_json = json.dumps(sorted(RANCHBRAIN_VAULT_SUFFIXES))
+    remote_program = (
+        "import json, os\n"
+        "from pathlib import Path\n"
+        "root = Path('/mnt/ai-storage/ranchbrain')\n"
+        f"sections = {sections_json}\n"
+        f"root_files = {root_files_json}\n"
+        f"suffixes = set({suffixes_json})\n"
+        "documents = []\n"
+        "\n"
+        "def load_sidecar(path):\n"
+        "    sidecar = Path(str(path) + '.metadata.json')\n"
+        "    if not sidecar.is_file():\n"
+        "        return {}\n"
+        "    try:\n"
+        "        data = json.loads(sidecar.read_text(encoding='utf-8', errors='replace'))\n"
+        "        return data if isinstance(data, dict) else {}\n"
+        "    except Exception:\n"
+        "        return {}\n"
+        "\n"
+        "def build_item(relative_path, size_bytes, modified_timestamp, metadata):\n"
+        "    path_name = Path(relative_path).name\n"
+        "    suffix = Path(path_name).suffix.lower()\n"
+        "    section = relative_path.split('/', 1)[0] if '/' in relative_path else 'root'\n"
+        "    return {\n"
+        "        'title': str(metadata.get('title') or path_name.rsplit('.', 1)[0].replace('-', ' ').replace('_', ' ').title()),\n"
+        "        'section': section,\n"
+        "        'filename': path_name,\n"
+        "        'relative_path': relative_path,\n"
+        "        'notes': str(metadata.get('notes') or metadata.get('description') or ''),\n"
+        "        'tags': metadata.get('tags') or [],\n"
+        "        'suffix': suffix,\n"
+        "        'size_bytes': int(size_bytes or 0),\n"
+        "        'modified_timestamp': float(modified_timestamp or 0),\n"
+        "        'document_type': str(metadata.get('document_type') or suffix.lstrip('.')),\n"
+        "    }\n"
+        "\n"
+        "for root_file in root_files:\n"
+        "    path = root / root_file\n"
+        "    if path.is_file():\n"
+        "        stat = path.stat()\n"
+        "        documents.append(build_item(root_file, stat.st_size, stat.st_mtime, load_sidecar(path)))\n"
+        "\n"
+        "for section in sections:\n"
+        "    directory = root / section\n"
+        "    if not directory.is_dir():\n"
+        "        continue\n"
+        "    for path in directory.rglob('*'):\n"
+        "        if not path.is_file():\n"
+        "            continue\n"
+        "        if path.name.startswith('.') or path.name.startswith('._'):\n"
+        "            continue\n"
+        "        if path.name.endswith('.metadata.json'):\n"
+        "            continue\n"
+        "        relative_path = str(path.relative_to(root)).replace('\\\\', '/')\n"
+        "        parts = relative_path.split('/')\n"
+        "        if any((not part) or part in {'.', '..'} or part.startswith('.') for part in parts):\n"
+        "            continue\n"
+        "        suffix = Path(path.name).suffix.lower()\n"
+        "        if suffix not in suffixes:\n"
+        "            continue\n"
+        "        try:\n"
+        "            stat = path.stat()\n"
+        "        except OSError:\n"
+        "            continue\n"
+        "        documents.append(build_item(relative_path, stat.st_size, stat.st_mtime, load_sidecar(path)))\n"
+        "\n"
+        "documents.sort(key=lambda item: (-float(item.get('modified_timestamp') or 0), str(item.get('title') or '').casefold()))\n"
+        "print(json.dumps({'host': os.uname().nodename, 'documents': documents, 'sections_present': sorted({item['section'] for item in documents})}))\n"
+    )
+    encoded_program = base64.b64encode(remote_program.encode("utf-8")).decode("ascii")
+    remote_command = (
+        "python3 -c 'import base64;"
+        f'exec(base64.b64decode("{encoded_program}"))'
+        "'"
+    )
+    payload = json.loads(ai_storage_ssh(remote_command, timeout=60))
+    if not isinstance(payload, dict) or not isinstance(payload.get("documents"), list):
+        raise ValueError("Intel Mini vault probe returned invalid data.")
+
+    documents = []
+    for item in payload["documents"]:
+        if not isinstance(item, dict):
+            continue
+        relative_path = str(item.get("relative_path") or "").replace("\\", "/")
+        try:
+            relative_path = ranchbrain_vault_validate_relative_path(relative_path)
+        except ValueError:
+            continue
+        documents.append(
+            ranchbrain_vault_build_item(
+                relative_path,
+                item.get("size_bytes") or 0,
+                item.get("modified_timestamp") or 0,
+                item,
+            )
+        )
+
+    documents.sort(
+        key=lambda item: (
+            -float(item.get("modified_timestamp") or 0),
+            str(item.get("title") or "").casefold(),
+        )
+    )
+    return documents, str(payload.get("host") or INTELMINI_STORAGE_HOST)
+
+
+def ranchbrain_vault_scan():
+    if ai_storage_is_local() and RANCHBRAIN_VAULT_ROOT.is_dir():
+        return {
+            "documents": ranchbrain_vault_scan_local(),
+            "mode": "local",
+            "host": "this host",
+            "available": True,
+            "error": "",
+        }
+
+    try:
+        documents, host = ranchbrain_vault_scan_remote()
+        return {
+            "documents": documents,
+            "mode": "remote",
+            "host": host,
+            "available": True,
+            "error": "",
+        }
+    except Exception as exc:
+        return {
+            "documents": [],
+            "mode": "remote",
+            "host": INTELMINI_STORAGE_HOST,
+            "available": False,
+            "error": str(exc),
+        }
+
+
+def ranchbrain_vault_resolve(relative_path):
+    relative = ranchbrain_vault_validate_relative_path(relative_path)
+
+    if not (ai_storage_is_local() and RANCHBRAIN_VAULT_ROOT.is_dir()):
+        return {
+            "mode": "remote",
+            "relative_path": relative,
+            "filename": Path(relative).name,
+            "suffix": Path(relative).suffix.lower(),
+        }
+
+    root = RANCHBRAIN_VAULT_ROOT.resolve()
+    candidate = (root / relative).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("Document is outside the RanchBrain vault.") from exc
+
+    if not candidate.is_file():
+        raise FileNotFoundError("Document was not found.")
+
+    return {
+        "mode": "local",
+        "path": candidate,
+        "relative_path": relative,
+        "filename": candidate.name,
+        "suffix": candidate.suffix.lower(),
+    }
+
+
+@app.route("/notes")
+def notes_dashboard():
+    scan = ranchbrain_vault_scan()
+    documents = scan["documents"]
+    scan_error = str(scan.get("error") or "")
+
+    search_term = str(request.args.get("q") or "").strip()
+    selected_section = str(request.args.get("section") or "").strip()
+
+    filtered = list(documents)
+
+    if selected_section:
+        filtered = [
+            item for item in filtered
+            if item["section"].casefold() == selected_section.casefold()
+        ]
+
+    if search_term:
+        needle = search_term.casefold()
+        filtered = [
+            item for item in filtered
+            if needle in " ".join([
+                item["title"],
+                item["filename"],
+                item["section"],
+                item["notes"],
+                item["relative_path"],
+                item["document_type"],
+                " ".join(str(tag) for tag in item.get("tags") or []),
+            ]).casefold()
+        ]
+
+    section_options = ['<option value="">All sections</option>']
+    for section in ("root",) + RANCHBRAIN_VAULT_SECTIONS:
+        selected = (
+            " selected"
+            if section.casefold() == selected_section.casefold()
+            else ""
+        )
+        section_options.append(
+            f'<option value="{html.escape(section, quote=True)}"'
+            f'{selected}>{html.escape(section)}</option>'
+        )
+
+    section_counts = {section: 0 for section in RANCHBRAIN_VAULT_SECTIONS}
+    section_counts["root"] = 0
+    for item in documents:
+        section_counts[item["section"]] = section_counts.get(item["section"], 0) + 1
+
+    cards = []
+    for item in filtered:
+        open_url = f"/notes/open/{quote(item['relative_path'], safe='/')}"
+        type_badge = html.escape(item["suffix"].lstrip(".") or "file")
+        notes_html = ""
+        if item["notes"]:
+            notes_html = f"<p><b>Notes:</b> {html.escape(item['notes'])}</p>"
+
+        modified_display = pdf_library_display_date(
+            None,
+            item.get("modified_timestamp"),
+        )
+
+        cards.append(
+            f"""<article class="document-card">
+<h3>{html.escape(item['title'])}</h3>
+<p class="muted">{html.escape(item['relative_path'])}</p>
+<div>
+<span class="badge">{html.escape(item['section'])}</span>
+<span class="badge">{type_badge}</span>
+</div>
+<p><b>Modified:</b> {html.escape(modified_display)}</p>
+<p><b>Size:</b> {html.escape(documentation_human_size(item['size_bytes']))}</p>
+{notes_html}
+<p class="open-link"><a href="{open_url}">Open →</a></p>
+</article>"""
+        )
+
+    if scan_error:
+        results_html = (
+            '<div class="empty-state">'
+            "<h2>Vault unavailable</h2>"
+            "<p>Could not read the RanchBrain vault from the Intel Mini 4TB drive.</p>"
+            f"<p class=\"muted\">{html.escape(scan_error)}</p>"
+            "</div>"
+        )
+    elif cards:
+        results_html = (
+            '<div class="document-grid">' + "".join(cards) + "</div>"
+        )
+    elif documents:
+        results_html = (
+            '<div class="empty-state">No vault documents matched your search.</div>'
+        )
+    else:
+        results_html = (
+            '<div class="empty-state">No vault documents were found.</div>'
+        )
+
+    section_summary = ", ".join(
+        f"{html.escape(section)}: {count}"
+        for section, count in sorted(
+            ((k, v) for k, v in section_counts.items() if v > 0),
+            key=lambda item: item[0].casefold(),
+        )
+    ) or "No documents"
+
+    # Always show planned sections, including empty ones.
+    empty_sections = [
+        section for section in RANCHBRAIN_VAULT_SECTIONS
+        if section_counts.get(section, 0) == 0
+    ]
+    empty_note = (
+        f"<p class=\"muted\">Empty sections: {html.escape(', '.join(empty_sections))}</p>"
+        if empty_sections
+        else ""
+    )
+
+    if scan["mode"] == "local":
+        source_note = (
+            "Reading the RanchBrain vault from local external storage at "
+            f"{html.escape(str(RANCHBRAIN_VAULT_ROOT))}."
+        )
+    else:
+        source_note = (
+            "Development host does not mount /mnt/ai-storage. "
+            "Reading notes, manuals, photos, and other vault documents from Intel Mini "
+            f"({html.escape(str(scan.get('host') or INTELMINI_STORAGE_HOST))}) "
+            "over SSH."
+        )
+
+    body = f"""
+<p class="muted">
+Browse notes, pictures, manuals, and other application documents stored on the Intel Mini 4TB drive.
+</p>
+
+<div class="health" style="margin-bottom:18px;">
+<div class="muted">Vault source</div>
+<div>{source_note}</div>
+</div>
+
+<div class="summary-grid">
+<div class="health">
+<div class="muted">Vault documents</div>
+<div class="health-number">{len(documents)}</div>
+</div>
+<div class="health">
+<div class="muted">Current results</div>
+<div class="health-number">{len(filtered)}</div>
+</div>
+<div class="health">
+<div class="muted">Sections used</div>
+<div class="health-number">{sum(1 for count in section_counts.values() if count)}</div>
+</div>
+<div class="health">
+<div class="muted">Total size</div>
+<div class="health-number">{html.escape(documentation_human_size(sum(item['size_bytes'] for item in documents)))}</div>
+</div>
+</div>
+
+<div class="health" style="margin-bottom:18px;">
+<div class="muted">Section breakdown</div>
+<div>{section_summary}</div>
+{empty_note}
+</div>
+
+<form method="GET" action="/notes" class="toolbar">
+<div>
+<label for="vault-search"><b>Search vault</b></label>
+<input id="vault-search" name="q" type="search"
+       value="{html.escape(search_term, quote=True)}"
+       placeholder="Search title, path, section, notes, or type">
+</div>
+<div>
+<label for="vault-section"><b>Section</b></label>
+<select id="vault-section" name="section">
+{"".join(section_options)}
+</select>
+</div>
+<div>
+<button type="submit">Search Vault</button>
+<a href="/notes" style="display:inline-block;margin-left:10px;">Clear</a>
+</div>
+</form>
+
+<p><a href="/ranchbrain/review">Open Postgres note review queue →</a></p>
+
+{results_html}
+"""
+    return documentation_shell("RanchBrain Vault", body)
+
+
+@app.route("/notes/open/<path:doc_path>")
+def notes_open_document(doc_path):
+    try:
+        resolved = ranchbrain_vault_resolve(doc_path)
+    except FileNotFoundError:
+        abort(404)
+    except ValueError:
+        abort(400)
+
+    suffix = resolved["suffix"]
+    relative = resolved["relative_path"]
+
+    if suffix in RANCHBRAIN_VAULT_TEXT_SUFFIXES:
+        try:
+            content = ai_storage_read_text(RANCHBRAIN_VAULT_ROOT, relative)
+        except Exception:
+            abort(502)
+
+        if suffix == ".md":
+            rendered = markdown.markdown(
+                content,
+                extensions=["fenced_code", "tables"],
+            )
+        else:
+            rendered = f"<pre>{html.escape(content)}</pre>"
+
+        body = f"""
+<p class="breadcrumb">
+<a href="/notes">Vault</a>&nbsp;→&nbsp;{html.escape(relative)}
+</p>
+<div class="document-viewer">
+{rendered}
+</div>
+"""
+        return documentation_shell(Path(relative).name, body)
+
+    if suffix == ".pdf" or suffix in RANCHBRAIN_VAULT_IMAGE_SUFFIXES:
+        if resolved["mode"] == "remote":
+            try:
+                return ai_storage_stream_remote(
+                    RANCHBRAIN_VAULT_ROOT,
+                    relative,
+                    mimetype=ai_storage_guess_mimetype(relative),
+                )
+            except FileNotFoundError:
+                abort(404)
+            except HTTPException:
+                raise
+            except Exception:
+                abort(502)
+
+        path = resolved["path"]
+        return send_from_directory(
+            str(path.parent),
+            path.name,
+            mimetype=ai_storage_guess_mimetype(path.name),
+            as_attachment=False,
+            conditional=True,
+        )
+
+    abort(400)
+
+
+@app.route("/ranchbrain/review")
+def ranchbrain_review_dashboard():
+    try:
+        if not ranchbrain_schema_is_ready():
+            body = """
+<div class="panel" style="border-left:7px solid #fbbf24;">
+  <h2>Notes Setup Required</h2>
+  <p>
+    The review queue is connected to the approved development PostgreSQL
+    service, but its <code>long_term_memory</code> schema has not been
+    initialized.
+  </p>
+  <p>
+    No production data was queried or copied. Review actions remain unavailable
+    until an authoritative migration is added and approved for development.
+  </p>
+  <p><a href="/notes">Open the 4TB RanchBrain Vault →</a></p>
+</div>
+"""
+            return ranchbrain_shell("Notes Review", body)
+
+        pending = get_ranchbrain_notes("ranchbrain_pending")
+
+        body = """
+<div class="panel">
+  <h2>Pending Notes</h2>
+  <p><a href="/notes">Open the 4TB RanchBrain Vault →</a></p>
+"""
+
+        if not pending:
+            body += "<p>No notes are waiting for approval.</p>"
+        else:
+            for memory_id, content, source, created_at in pending:
+                body += f"""
+<div class="note">
+  <h3>Pending Memory ID {memory_id}</h3>
+  <div>{html_module.escape(str(content))}</div>
+  <div class="meta">
+    Captured: {html_module.escape(str(created_at))}<br>
+    File: {html_module.escape(str(source))}
+  </div>
+
+  <form method="POST" action="/ranchbrain/review/approve" style="display:inline-block;margin-top:12px;">
+    <input type="hidden" name="memory_id" value="{memory_id}">
+    <button class="approve" type="submit">Approve</button>
+  </form>
+
+  <form method="POST" action="/ranchbrain/review/reject" style="display:inline-block;margin-top:12px;margin-left:8px;">
+    <input type="hidden" name="memory_id" value="{memory_id}">
+    <button class="reject" type="submit">Reject</button>
+  </form>
+</div>
+"""
+
+        body += "</div>"
+        return ranchbrain_shell("Notes Review", body)
+
+    except Exception as exc:
+        return ranchbrain_shell(
+            "Notes Review",
+            f"<div class='panel'>Error: {html_module.escape(str(exc))}</div>",
+        ), 500
+
+
 # BACKUP & RECOVERY CENTER
 # ===========================================================
 
@@ -3459,12 +4773,343 @@ DASHBOARD_BACKUP_MANAGER = (
     Path.home()
     / "ai/projects/openclaw/tools/dashboard/dashboard-property-backup-manager.sh"
 )
+DEVELOPMENT_BACKUP_MANAGER = (
+    Path.home()
+    / "ai/projects/openclaw/tools/system_manager/openclaw-dev-backup.sh"
+)
 
 BACKUP_WARNING_DAYS = {
     "production": 10,
     "development": 8,
     "dashboard": 10,
 }
+
+REMOTE_BACKUP_REPORT_PATH = (
+    REPORT_DIR
+    / "system_manager"
+    / "openclaw_remote_backup_verification_status.json"
+)
+
+
+def backup_center_remote_probe(verify=False):
+    """
+    Read backup and QNAP state from the Intel Mini over SSH.
+
+    The normal probe reads metadata only. Verification additionally reads the
+    latest archives and checksum files but never changes remote files.
+    """
+    remote_program = r'''
+import datetime
+import glob
+import hashlib
+import json
+import os
+import shutil
+import tarfile
+
+root = "/mnt/ai-storage/openclaw-backups"
+verify = __VERIFY__
+specs = [
+    ("production", "OpenClaw Production", root, "openclaw-checkpoint-*.tar.gz"),
+    ("development", "OpenClaw Development", root + "/dev", "openclaw-dev-backup-*.tar.gz"),
+    ("dashboard", "Dashboard and PropertyManager", root + "/dashboard-property-backups", "dashboard-property-backup-*.tar.gz"),
+]
+
+def human_size(value):
+    size = float(value)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size < 1024 or unit == "TB":
+            return f"{int(size)} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+
+def checksum_status(path):
+    checksum_path = path + ".sha256"
+    if not os.path.isfile(checksum_path):
+        return "not_available", "No checksum file found."
+    expected = open(checksum_path, encoding="utf-8", errors="replace").read().split()[0]
+    digest = hashlib.sha256()
+    with open(path, "rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    if digest.hexdigest().lower() == expected.lower():
+        return "verified", "SHA-256 checksum matched."
+    return "failed", "SHA-256 checksum did not match."
+
+backups = []
+history = []
+for key, label, directory, pattern in specs:
+    candidates = [
+        path for path in glob.glob(os.path.join(directory, pattern))
+        if os.path.isfile(path)
+    ]
+    candidates.sort(key=os.path.getmtime, reverse=True)
+    for path in candidates[:10]:
+        stat = os.stat(path)
+        history.append({
+            "type": label,
+            "filename": os.path.basename(path),
+            "timestamp_epoch": stat.st_mtime,
+            "timestamp": datetime.datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %I:%M %p"),
+            "size": human_size(stat.st_size),
+            "location": directory,
+        })
+    if not candidates:
+        backups.append({
+            "key": key,
+            "label": label,
+            "directory": directory,
+            "filename": "None found",
+            "timestamp_epoch": None,
+            "size": "unknown",
+            "status": "missing",
+            "message": "No matching backup found.",
+            "checksum_status": "not_available",
+        })
+        continue
+    latest = candidates[0]
+    stat = os.stat(latest)
+    entry = {
+        "key": key,
+        "label": label,
+        "directory": directory,
+        "filename": os.path.basename(latest),
+        "timestamp_epoch": stat.st_mtime,
+        "modified": datetime.datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %I:%M:%S %p"),
+        "size": human_size(stat.st_size),
+        "status": "available",
+        "message": "Latest remote backup metadata loaded.",
+        "checksum_status": "not_checked",
+        "checksum_message": "Checksum was not checked.",
+    }
+    if verify:
+        try:
+            with tarfile.open(latest, "r:gz") as archive:
+                for _member in archive:
+                    pass
+            entry["status"] = "verified"
+            entry["message"] = "Archive passed gzip and tar validation."
+        except Exception as exc:
+            entry["status"] = "failed"
+            entry["message"] = f"Archive validation failed: {exc}"
+        checksum, checksum_message = checksum_status(latest)
+        entry["checksum_status"] = checksum
+        entry["checksum_message"] = checksum_message
+        if checksum == "failed":
+            entry["status"] = "failed"
+            entry["message"] = "Archive validation or checksum verification failed."
+    backups.append(entry)
+
+qnap_path = "/mnt/qnap-backup"
+qnap = {"mounted": os.path.ismount(qnap_path), "path": qnap_path}
+if qnap["mounted"]:
+    usage = shutil.disk_usage(qnap_path)
+    qnap.update({
+        "total": human_size(usage.total),
+        "used": human_size(usage.used),
+        "free": human_size(usage.free),
+        "percent_number": round((usage.used / usage.total) * 100) if usage.total else 0,
+    })
+
+history.sort(key=lambda item: item["timestamp_epoch"], reverse=True)
+print(json.dumps({
+    "host": os.uname().nodename,
+    "checked_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+    "backups": backups,
+    "history": history[:30],
+    "qnap": qnap,
+}))
+'''.replace("__VERIFY__", "True" if verify else "False")
+    encoded_program = base64.b64encode(
+        remote_program.encode("utf-8")
+    ).decode("ascii")
+    remote_command = (
+        "python3 -c 'import base64;"
+        f'exec(base64.b64decode("{encoded_program}"))'
+        "'"
+    )
+    result = subprocess.run(
+        [
+            "ssh",
+            "-i",
+            INTELMINI_STORAGE_KEY,
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "IdentitiesOnly=yes",
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            "ConnectTimeout=8",
+            f"{INTELMINI_STORAGE_USER}@{INTELMINI_STORAGE_HOST}",
+            remote_command,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=1800 if verify else 20,
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip().splitlines()
+        raise RuntimeError(
+            detail[-1] if detail else "Intel Mini backup probe failed."
+        )
+    data = json.loads(result.stdout)
+    if not isinstance(data, dict) or not isinstance(data.get("backups"), list):
+        raise ValueError("Intel Mini backup probe returned invalid data.")
+    return data
+
+
+def backup_center_remote_latest(entry, warning_days):
+    result = {
+        "directory": str(entry.get("directory", "unknown")),
+        "exists": entry.get("status") != "missing",
+        "file": None,
+        "filename": str(entry.get("filename", "None found")),
+        "timestamp": "Never",
+        "age_days": None,
+        "size": str(entry.get("size", "unknown")),
+        "status": "critical",
+        "status_label": "Critical",
+        "status_color": "#ef4444",
+        "message": str(entry.get("message", "No backup was found.")),
+    }
+    timestamp = entry.get("timestamp_epoch")
+    if timestamp is None:
+        return result
+    age_days = max(0, int((time.time() - float(timestamp)) // 86400))
+    if age_days > warning_days:
+        status, label, color = "critical", "Critical", "#ef4444"
+        message = f"Remote backup is overdue at {age_days} days old."
+    elif age_days >= max(1, warning_days - 2):
+        status, label, color = "warning", "Warning", "#facc15"
+        message = f"Remote backup is approaching its {warning_days}-day limit."
+    else:
+        status, label, color = "healthy", "Healthy", "#22c55e"
+        message = "Remote backup is current."
+    result.update({
+        "file": str(Path(result["directory"]) / result["filename"]),
+        "timestamp": datetime.fromtimestamp(float(timestamp)).strftime(
+            "%Y-%m-%d %I:%M:%S %p"
+        ),
+        "age_days": age_days,
+        "status": status,
+        "status_label": label,
+        "status_color": color,
+        "message": message,
+    })
+    return result
+
+
+def backup_center_m4_time_machine():
+    """Read Time Machine status from the M4 without changing its state."""
+    remote_command = (
+        "hostname; tmutil status 2>&1; "
+        "printf '\\nOPENCLAW_LATEST_BACKUP\\n'; "
+        "tmutil latestbackup 2>&1; "
+        "printf '\\nOPENCLAW_DESTINATION\\n'; "
+        "tmutil destinationinfo 2>&1"
+    )
+    try:
+        result = subprocess.run(
+            [
+                "ssh",
+                "-i",
+                M4_SSH_KEY,
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "IdentitiesOnly=yes",
+                "-o",
+                "StrictHostKeyChecking=yes",
+                "-o",
+                "ConnectTimeout=8",
+                f"{M4_SSH_USER}@{M4_SSH_HOST}",
+                remote_command,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                (result.stderr or result.stdout).strip()
+                or "M4 Time Machine probe failed."
+            )
+        output = result.stdout
+        latest_section = output.split(
+            "OPENCLAW_LATEST_BACKUP",
+            1,
+        )[1].split("OPENCLAW_DESTINATION", 1)[0].strip()
+        latest_path = latest_section.splitlines()[-1].strip()
+        timestamp_match = re.search(
+            r"/(\d{4})-(\d{2})-(\d{2})-(\d{2})(\d{2})(\d{2})"
+            r"\.backup",
+            latest_path,
+        )
+        if not timestamp_match:
+            raise ValueError("M4 latest backup timestamp was unavailable.")
+        latest_at = datetime(
+            *[int(value) for value in timestamp_match.groups()]
+        )
+        age_hours = max(
+            0,
+            int(
+                (
+                    datetime.now() - latest_at
+                ).total_seconds() // 3600
+            ),
+        )
+        running = bool(re.search(r"Running\s*=\s*1", output))
+        destination_match = re.search(
+            r"^Name\s*:\s*(.+)$",
+            output,
+            flags=re.MULTILINE,
+        )
+        destination = (
+            destination_match.group(1).strip()
+            if destination_match
+            else "unknown"
+        )
+        if age_hours <= 30:
+            status, label, color = "healthy", "Current", "#22c55e"
+        elif age_hours <= 48:
+            status, label, color = "warning", "Delayed", "#facc15"
+        else:
+            status, label, color = "critical", "Stale", "#ef4444"
+        content = "\n".join([
+            f"Status: {label}",
+            f"Computer: {output.splitlines()[0].strip()}",
+            f"Destination: {destination}",
+            f"Backup Running: {'yes' if running else 'no'}",
+            f"Latest Backup: {latest_at.strftime('%Y-%m-%d %I:%M:%S %p')}",
+            f"Age: {age_hours} hour(s)",
+            "Expected Frequency: Daily",
+        ])
+        return {
+            "found": True,
+            "file": "Live read-only M4 Time Machine probe",
+            "content": content,
+            "values": {
+                "latest_backup_path": latest_path,
+                "age_hours": age_hours,
+                "running": running,
+                "destination": destination,
+            },
+            "status": status,
+            "status_label": label,
+            "status_color": color,
+        }
+    except Exception as exc:
+        return {
+            "found": False,
+            "file": "M4 Time Machine live probe unavailable",
+            "content": f"Could not read M4 Time Machine status: {exc}",
+            "values": {},
+            "status": "warning",
+            "status_label": "Remote Status Unavailable",
+            "status_color": "#facc15",
+        }
 
 
 def backup_center_human_size(size_bytes):
@@ -3673,13 +5318,60 @@ def backup_center_read_report(candidates):
     }
 
 
-def backup_center_qnap():
+def backup_center_qnap(remote_data=None):
     """
     Check that the QNAP share is mounted and writable, and obtain storage
     data without parsing df output. This works even when the share name
     contains spaces.
     """
     mount_path = Path("/mnt/qnap-backup")
+
+    if remote_data is not None:
+        mounted = bool(remote_data.get("mounted"))
+        if not mounted:
+            return {
+                "mounted": False,
+                "writable": None,
+                "status": "warning",
+                "status_label": "Not Mounted on Intel Mini",
+                "status_color": "#facc15",
+                "path": str(remote_data.get("path", mount_path)),
+                "total": "unknown",
+                "used": "unknown",
+                "free": "unknown",
+                "percent": "unknown",
+            }
+        percent_number = int(remote_data.get("percent_number", 0) or 0)
+        if percent_number >= 90:
+            status, label, color = (
+                "critical",
+                "Mounted — Storage Critical",
+                "#ef4444",
+            )
+        elif percent_number >= 80:
+            status, label, color = (
+                "warning",
+                "Mounted — Storage Warning",
+                "#facc15",
+            )
+        else:
+            status, label, color = (
+                "healthy",
+                "Mounted on Intel Mini",
+                "#22c55e",
+            )
+        return {
+            "mounted": True,
+            "writable": None,
+            "status": status,
+            "status_label": label,
+            "status_color": color,
+            "path": str(remote_data.get("path", mount_path)),
+            "total": str(remote_data.get("total", "unknown")),
+            "used": str(remote_data.get("used", "unknown")),
+            "free": str(remote_data.get("free", "unknown")),
+            "percent": f"{percent_number}%",
+        }
 
     try:
         mounted_result = subprocess.run(
@@ -3780,11 +5472,7 @@ def backup_center_qnap():
 
 
 def backup_center_verification():
-    report_path = (
-        REPORT_DIR
-        / "system_manager"
-        / "openclaw_backup_verification_status.json"
-    )
+    report_path = REMOTE_BACKUP_REPORT_PATH
 
     if not report_path.exists():
         return {
@@ -3861,7 +5549,21 @@ def backup_center_verification():
         }
 
 
-def backup_center_history():
+def backup_center_history(remote_history=None):
+    if remote_history is not None:
+        return [
+            {
+                "type": str(entry.get("type", "Unknown")),
+                "filename": str(entry.get("filename", "unknown")),
+                "timestamp_epoch": float(entry.get("timestamp_epoch", 0)),
+                "timestamp": str(entry.get("timestamp", "unknown")),
+                "size": str(entry.get("size", "unknown")),
+                "location": str(entry.get("location", "unknown")),
+            }
+            for entry in remote_history[:30]
+            if isinstance(entry, dict)
+        ]
+
     sources = [
         (
             "Production",
@@ -4102,35 +5804,85 @@ code {{
 
 @app.route("/backup-recovery")
 def backup_recovery_center():
-    production = backup_center_latest(
-        BACKUP_ROOT,
-        "openclaw-checkpoint-*.tar.gz",
-        BACKUP_WARNING_DAYS["production"],
-    )
+    remote_error = ""
+    try:
+        remote_snapshot = backup_center_remote_probe()
+        remote_entries = {
+            str(item.get("key")): item
+            for item in remote_snapshot["backups"]
+            if isinstance(item, dict)
+        }
+        production = backup_center_remote_latest(
+            remote_entries.get("production", {}),
+            BACKUP_WARNING_DAYS["production"],
+        )
+        development = backup_center_remote_latest(
+            remote_entries.get("development", {}),
+            BACKUP_WARNING_DAYS["development"],
+        )
+        dashboard = backup_center_remote_latest(
+            remote_entries.get("dashboard", {}),
+            BACKUP_WARNING_DAYS["dashboard"],
+        )
+        qnap = backup_center_qnap(remote_snapshot.get("qnap", {}))
+        history = backup_center_history(remote_snapshot.get("history", []))
+    except Exception as exc:
+        remote_snapshot = {}
+        remote_error = f"Intel Mini backup probe unavailable: {exc}"
+        unavailable = {
+            "directory": "/mnt/ai-storage/openclaw-backups",
+            "filename": "Remote status unavailable",
+            "size": "unknown",
+            "status": "missing",
+            "message": remote_error,
+        }
+        production = backup_center_remote_latest(
+            unavailable,
+            BACKUP_WARNING_DAYS["production"],
+        )
+        development = backup_center_remote_latest(
+            {
+                **unavailable,
+                "directory": "/mnt/ai-storage/openclaw-backups/dev",
+            },
+            BACKUP_WARNING_DAYS["development"],
+        )
+        dashboard = backup_center_remote_latest(
+            {
+                **unavailable,
+                "directory": (
+                    "/mnt/ai-storage/openclaw-backups/"
+                    "dashboard-property-backups"
+                ),
+            },
+            BACKUP_WARNING_DAYS["dashboard"],
+        )
+        qnap = {
+            "mounted": False,
+            "writable": None,
+            "status": "warning",
+            "status_label": "Remote Status Unavailable",
+            "status_color": "#facc15",
+            "path": "/mnt/qnap-backup on Intel Mini",
+            "total": "unknown",
+            "used": "unknown",
+            "free": "unknown",
+            "percent": "unknown",
+        }
+        history = []
 
-    development = backup_center_latest(
-        BACKUP_ROOT / "dev",
-        "openclaw-dev-backup-*.tar.gz",
-        BACKUP_WARNING_DAYS["development"],
-    )
-
-    dashboard = backup_center_latest(
-        BACKUP_ROOT / "dashboard-property-backups",
-        "dashboard-property-backup-*.tar.gz",
-        BACKUP_WARNING_DAYS["dashboard"],
-    )
-
-    time_machine = backup_center_read_report([
+    time_machine = backup_center_m4_time_machine()
+    report_fallback = backup_center_read_report([
         REPORT_DIR / "system_manager/m4_timemachine_status.json",
         REPORT_DIR / "system_manager/m4_timemachine_watchdog_report.txt",
         REPORT_DIR / "system_manager/m4_time_machine_watchdog_report.txt",
         REPORT_DIR / "system_manager/time_machine_watchdog_report.txt",
         REPORT_DIR / "system_manager/timemachine_watchdog_report.txt",
     ])
+    if not time_machine["found"] and report_fallback["found"]:
+        time_machine = report_fallback
 
-    qnap = backup_center_qnap()
     verification = backup_center_verification()
-    history = backup_center_history()
 
     component_statuses = [
         production["status"],
@@ -4173,25 +5925,30 @@ def backup_recovery_center():
 """
 
     production_action = """
+<div style="color:#cbd5e1;max-width:300px;">
+Production backups cannot be started from the development dashboard.
+Run them on the Intel Mini only after explicit production approval.
+</div>
+"""
+
+    development_action = """
 <form method="POST"
-      action="/backup-recovery/run/production"
+      action="/backup-recovery/run/development"
       onsubmit="
+        if (!window.confirm(
+          'Create a development backup on the Intel Mini external drive?'
+        )) return false;
         this.querySelector('button').disabled=true;
         this.querySelector('button').innerText='Backup running...';
       ">
-    <button type="submit">Run Production Backup Now</button>
+    <button type="submit">Run Development Backup Now</button>
 </form>
 """
 
     dashboard_action = """
-<form method="POST"
-      action="/backup-recovery/run/dashboard"
-      onsubmit="
-        this.querySelector('button').disabled=true;
-        this.querySelector('button').innerText='Backup running...';
-      ">
-    <button type="submit">Run Dashboard Backup Now</button>
-</form>
+<div style="color:#cbd5e1;max-width:300px;">
+Dashboard production backups cannot be started from development.
+</div>
 """
 
     cards_html = backup_center_status_card(
@@ -4205,11 +5962,7 @@ def backup_recovery_center():
         "OpenClaw Development",
         "🧪",
         development,
-        """
-<div style="color:#cbd5e1;max-width:280px;">
-DEV backups run from the DEV VM every Sunday at 3:00 AM Central.
-</div>
-""",
+        development_action,
     )
 
     cards_html += backup_center_status_card(
@@ -4515,8 +6268,24 @@ DEV backups run from the DEV VM every Sunday at 3:00 AM Central.
 </tr>
 """
 
+    remote_notice = (
+        f"""
+<div class="notice" style="background:#92400e;">
+    {html_module.escape(remote_error)}
+</div>
+"""
+        if remote_error
+        else """
+<div class="notice" style="background:#1e3a5f;">
+    Backup inventory and QNAP capacity are read-only live results from the
+    Intel Mini. Production write actions remain disabled in development.
+</div>
+"""
+    )
+
     body = f"""
 {notice_html}
+{remote_notice}
 
 <div class="panel" style="border-left:7px solid {overall_color};">
     <div style="
@@ -4604,62 +6373,63 @@ DEV backups run from the DEV VM every Sunday at 3:00 AM Central.
 def backup_recovery_verify():
     from urllib.parse import quote_plus
 
-    verifier = (
-        Path.home()
-        / "ai"
-        / "projects"
-        / "openclaw"
-        / "tools"
-        / "system_manager"
-        / "openclaw-backup-verify.sh"
-    )
-
-    if not verifier.exists() or not verifier.is_file():
-        return redirect(
-            "/backup-recovery?result=error&message="
-            + quote_plus(
-                f"Verification script was not found: {verifier}"
-            )
-        )
-
     try:
-        result = subprocess.run(
-            [str(verifier)],
-            cwd=str(
-                Path.home() / "ai" / "projects" / "openclaw"
-            ),
-            capture_output=True,
-            text=True,
-            timeout=1800,
-            check=False,
+        snapshot = backup_center_remote_probe(verify=True)
+        backups = snapshot.get("backups", [])
+        failed_count = sum(
+            1 for item in backups if item.get("status") == "failed"
         )
-
-        output = (
-            result.stdout + "\n" + result.stderr
-        ).strip()
-
-        if result.returncode == 0:
-            message = "Backup verification completed successfully."
-            action_result = "success"
-        else:
-            last_line = (
-                output.splitlines()[-1]
-                if output
-                else "Unknown verification error"
-            )
-
+        verified_count = sum(
+            1 for item in backups if item.get("status") == "verified"
+        )
+        warning_count = sum(
+            1
+            for item in backups
+            if item.get("status") not in {"verified", "failed"}
+            or item.get("checksum_status") == "not_available"
+        )
+        overall_status = (
+            "critical"
+            if failed_count
+            else "warning"
+            if warning_count
+            else "healthy"
+        )
+        report = {
+            "checked_at": snapshot.get("checked_at", "unknown"),
+            "host": snapshot.get("host", "unknown"),
+            "overall_status": overall_status,
+            "verified_count": verified_count,
+            "warning_count": warning_count,
+            "failed_count": failed_count,
+            "backups": backups,
+        }
+        REMOTE_BACKUP_REPORT_PATH.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+        temporary_report = REMOTE_BACKUP_REPORT_PATH.with_suffix(".tmp")
+        temporary_report.write_text(
+            json.dumps(report, indent=2) + "\n"
+        )
+        temporary_report.replace(REMOTE_BACKUP_REPORT_PATH)
+        if failed_count:
             message = (
-                f"Backup verification failed with exit code "
-                f"{result.returncode}: {last_line}"
+                f"Remote verification completed with {failed_count} "
+                "failed archive(s)."
             )
             action_result = "error"
-
+        else:
+            message = (
+                "Remote verification completed without archive failures."
+            )
+            action_result = "success"
     except subprocess.TimeoutExpired:
-        message = "Backup verification timed out."
+        message = "Remote backup verification timed out."
         action_result = "error"
 
     except Exception as exc:
-        message = f"Backup verification could not run: {exc}"
+        message = f"Remote backup verification could not run: {exc}"
         action_result = "error"
 
     return redirect(
@@ -4673,19 +6443,16 @@ def backup_recovery_verify():
 @app.route("/backup-recovery/run/<backup_type>", methods=["POST"])
 def backup_recovery_run(backup_type):
     managers = {
-        "production": (
-            PRODUCTION_BACKUP_MANAGER,
-            "Production OpenClaw backup completed successfully.",
-        ),
-        "dashboard": (
-            DASHBOARD_BACKUP_MANAGER,
-            "Dashboard and PropertyManager backup completed successfully.",
+        "development": (
+            DEVELOPMENT_BACKUP_MANAGER,
+            "Development OpenClaw backup completed successfully.",
         ),
     }
 
     if backup_type not in managers:
         return redirect(
-            "/backup-recovery?result=error&message=Unknown+backup+type."
+            "/backup-recovery?result=error&message="
+            "Production+backup+actions+are+disabled+in+development."
         )
 
     manager, success_message = managers[backup_type]
