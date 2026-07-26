@@ -304,6 +304,12 @@ export function resolveCatalogModelPricing(params: {
   const normalized = normalizeModelRef(params.provider, params.model, {
     manifestPlugins: context.snapshot?.plugins,
   });
+  if (
+    context.policies.get(normalized.provider)?.external === false ||
+    !allowsHostedPricing(config, normalized.provider, normalized.model, context.snapshot?.plugins)
+  ) {
+    return undefined;
+  }
   const pricing = context.catalog.get(modelKey(normalized.provider, normalized.model));
   return pricing && hasKnownPricing(pricing) ? pricing : undefined;
 }
@@ -312,7 +318,7 @@ export function resolveHostedModelPricing(params: {
   config?: OpenClawConfig;
   provider: string;
   model: string;
-}): RemoteModelCatalogPricing | undefined {
+}): PricingValue | undefined {
   const config = params.config ?? EMPTY_CONFIG;
   const context = getPricingContext(config);
   const normalized = normalizeModelRef(params.provider, params.model, {
@@ -339,6 +345,15 @@ export function resolveHostedModelPricing(params: {
       manifestPlugins: context.snapshot?.plugins,
     }),
   ];
+  for (const candidate of new Set(candidates)) {
+    const normalizedCandidate = normalizedHostedKey(candidate, context.snapshot?.plugins);
+    const catalogPricing =
+      context.catalog.get(candidate) ??
+      (normalizedCandidate ? context.catalog.get(normalizedCandidate) : undefined);
+    if (catalogPricing && hasKnownPricing(catalogPricing)) {
+      return catalogPricing;
+    }
+  }
   for (const candidate of new Set(candidates)) {
     const exact = context.hosted[candidate];
     if (exact) {

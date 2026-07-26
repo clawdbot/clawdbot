@@ -95,6 +95,14 @@ describe("hosted model pricing", () => {
     ).toBeUndefined();
     expect(
       resolveModelCostConfig({
+        config: configFor("http://127.0.0.1:8080/v1"),
+        agentDir,
+        provider: "openai",
+        model: "gpt-catalog",
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveModelCostConfig({
         config: configFor("https://api.openai.com/v1"),
         agentDir,
         provider: "openai",
@@ -114,5 +122,27 @@ describe("hosted model pricing", () => {
         model: "gpt-external",
       }),
     ).toBeUndefined();
+  });
+
+  it("resolves passthrough provider aliases through a priced catalog row", () => {
+    const agentDir = tempDirs.make("openclaw-passthrough-pricing-");
+    const config = {
+      models: {
+        providers: {
+          openrouter: {
+            baseUrl: "https://openrouter.ai/api/v1",
+            models: [{ id: "openai/gpt-catalog", name: "Catalog GPT through OpenRouter" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    expect(
+      resolveModelCostConfig({
+        config,
+        agentDir,
+        provider: "openrouter",
+        model: "openai/gpt-catalog",
+      }),
+    ).toEqual({ input: 1, output: 2, cacheRead: 0, cacheWrite: 0 });
   });
 });
