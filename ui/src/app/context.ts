@@ -48,6 +48,11 @@ export type ApplicationNavigationOptions = Partial<
   Pick<RouteLocation, "pathname" | "search" | "hash">
 >;
 
+export type ApplicationRouteTransition = {
+  ready: Promise<boolean>;
+  isActive: () => boolean;
+};
+
 type SkillWorkshopRevisionHandoff = {
   sessionKey: string;
   instructions: string;
@@ -99,6 +104,10 @@ export type ApplicationContext<TRouteId extends string = string> = {
   readonly webPush: WebPushCapability;
   readonly skillWorkshopRevision: ApplicationSkillWorkshopRevisionHandoff;
   readonly initialUserMessage: ApplicationInitialUserMessageHandoff;
+  readonly transition: (
+    routeId: TRouteId,
+    options?: ApplicationNavigationOptions,
+  ) => ApplicationRouteTransition;
   readonly navigate: (routeId: TRouteId, options?: ApplicationNavigationOptions) => void;
   readonly replace: (routeId: TRouteId, options?: ApplicationNavigationOptions) => void;
   readonly revalidate: (routeId?: TRouteId) => Promise<void>;

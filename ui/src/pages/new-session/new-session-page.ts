@@ -16,6 +16,7 @@ import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
+import { generateUUID } from "../../lib/uuid.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/chat.css";
@@ -51,6 +52,40 @@ import { retainRejectedInitialTurn } from "./rejected-initial-turn.ts";
 import { renderAgentSelect } from "./target-controls.ts";
 
 const CATALOG_RETRY_DELAYS_MS = [0, 1_000, 3_000] as const;
+
+type FailedOptimisticDraft = {
+  routeKey: string;
+  gatewayUrl: string;
+  recoveryScope: string;
+  agentId: string;
+  agentSelectedByUser: boolean;
+  folder: string;
+  folderSelectedByUser: boolean;
+  worktree: boolean;
+  visibility: NewSessionVisibility;
+  worktreeName: string;
+  baseRef: string;
+  repository: DraftRepositoryState;
+  execNode: string;
+  message: string;
+  attachments: unknown[] | undefined;
+  model: string;
+  thinkingLevel: string;
+  error: string;
+  outcomeUnknown: boolean;
+};
+
+type ActiveOptimisticSubmission = {
+  sessionKey: string;
+  gatewayUrl: string;
+  recoveryScope: string;
+  previousSessionKey: string;
+};
+
+// Optimistic navigation unmounts this route before creation settles. Keep one
+// failed draft for the replacement /new route to consume during rollback.
+let failedOptimisticDraft: FailedOptimisticDraft | null = null;
+let activeOptimisticSubmission: ActiveOptimisticSubmission | null = null;
 
 class NewSessionPage extends OpenClawLightDomElement {
   @property({ attribute: false }) data: NewSessionRouteData | undefined;
@@ -92,6 +127,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   private agentSelectedByUser = false;
   private folderSelectedByUser = false;
   private submitRequestToken = 0;
+  private draftInteractionGeneration = 0;
   private nodesRequestToken = 0;
   private readonly gatewayNameDiscovery = new GatewayNameDiscovery(
     () => this.context?.gateway.snapshot,
@@ -299,6 +335,9 @@ class NewSessionPage extends OpenClawLightDomElement {
   }
 
   handleEvent(event: Event) {
+    if (event.currentTarget === this && (event.type === "input" || event.type === "change")) {
+      this.draftInteractionGeneration += 1;
+    }
     const picker = this.querySelector<HTMLDetailsElement>(".chat-controls__model[open]");
     if (!picker) {
       return;
@@ -324,6 +363,8 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   override connectedCallback() {
     super.connectedCallback();
+    this.addEventListener("input", this);
+    this.addEventListener("change", this);
     // /new renders chat controls without ChatPane, so the route owns both
     // pointer and Escape light-dismissal for the combined picker.
     document.addEventListener("keydown", this, true);
@@ -331,6 +372,8 @@ class NewSessionPage extends OpenClawLightDomElement {
   }
 
   override disconnectedCallback() {
+    this.removeEventListener("input", this);
+    this.removeEventListener("change", this);
     document.removeEventListener("keydown", this, true);
     document.removeEventListener("pointerdown", this, true);
     this.subscriptions.clear();
@@ -462,7 +505,21 @@ class NewSessionPage extends OpenClawLightDomElement {
   }
 
   private resetDraft() {
+    this.draftInteractionGeneration = 0;
     const preservePendingCloud = Boolean(this.pendingCloud.sessionKey);
+    const recoveryCandidate =
+      failedOptimisticDraft?.routeKey === catalog.routeKey(this.data)
+        ? failedOptimisticDraft
+        : null;
+    const optimisticRecovery =
+      recoveryCandidate &&
+      recoveryCandidate.gatewayUrl === this.context?.gateway.connection.gatewayUrl &&
+      recoveryCandidate.recoveryScope === this.context?.gateway.snapshot.client?.recoveryScope
+        ? recoveryCandidate
+        : null;
+    if (recoveryCandidate) {
+      failedOptimisticDraft = null;
+    }
     this.invalidateSubmission();
     this.submissionOutcomeUnknown = preservePendingCloud;
     this.agentSelectedByUser = false;
@@ -490,15 +547,38 @@ class NewSessionPage extends OpenClawLightDomElement {
       this.pendingCloud.restored = false;
       this.message = this.pendingCloud.message;
       this.attachmentDraft.replace(restoreChatApiAttachments(this.pendingCloud.attachments));
+    } else if (optimisticRecovery) {
+      this.clearPendingCloudRecovery();
+      this.agentId = optimisticRecovery.agentId;
+      this.agentSelectedByUser = optimisticRecovery.agentSelectedByUser;
+      this.folder = optimisticRecovery.folder;
+      this.folderSelectedByUser = optimisticRecovery.folderSelectedByUser;
+      this.worktree = optimisticRecovery.worktree;
+      this.visibility = optimisticRecovery.visibility;
+      this.worktreeName = optimisticRecovery.worktreeName;
+      this.baseRef = optimisticRecovery.baseRef;
+      this.repository = optimisticRecovery.repository;
+      this.execNode = optimisticRecovery.execNode;
+      this.message = optimisticRecovery.message;
+      this.attachmentDraft.replace(restoreChatApiAttachments(optimisticRecovery.attachments));
+      this.modelControl.selected = optimisticRecovery.model;
+      this.modelControl.thinkingLevel = optimisticRecovery.thinkingLevel;
     } else {
       this.clearPendingCloudRecovery();
       this.message = "";
     }
-    this.error = null;
+    this.submissionOutcomeUnknown =
+      preservePendingCloud || optimisticRecovery?.outcomeUnknown === true;
+    this.error = optimisticRecovery?.outcomeUnknown ? null : (optimisticRecovery?.error ?? null);
     this.placePopoverHiding = false;
     this.closeAgentDropdown();
     this.closeBrowser();
-    this.adoptAgentDefaults();
+    if (optimisticRecovery && this.selectedAgent()) {
+      void this.loadNodes();
+      this.modelControl.load(this.context, this.agentId, !catalog.isTarget(this.data));
+    } else {
+      this.adoptAgentDefaults();
+    }
     void this.updateComplete.then(() => {
       this.querySelector<HTMLTextAreaElement>(".new-session-page__message")?.focus();
     });
@@ -786,6 +866,18 @@ class NewSessionPage extends OpenClawLightDomElement {
     const submissionRecoveryScope = pendingCloud
       ? this.pendingCloud.recoveryScope
       : submissionClient.recoveryScope;
+    const selectedSessionKey = context.gateway.snapshot.sessionKey;
+    const previousSessionKey =
+      activeOptimisticSubmission?.sessionKey === selectedSessionKey &&
+      activeOptimisticSubmission.gatewayUrl === submissionGatewayUrl &&
+      activeOptimisticSubmission.recoveryScope === submissionRecoveryScope
+        ? activeOptimisticSubmission.previousSessionKey
+        : selectedSessionKey;
+    const returnLocation = {
+      pathname: globalThis.location?.pathname ?? "",
+      search: globalThis.location?.search ?? "",
+      hash: globalThis.location?.hash ?? "",
+    };
     const requestId = ++this.submitRequestToken;
     const submittedAt = Date.now();
     this.submitting = true;
@@ -801,12 +893,19 @@ class NewSessionPage extends OpenClawLightDomElement {
       const cloudProfileId = this.cloudProfileForSubmission();
       // Draft mode can go stale if sharing policy changed since it was selected.
       const draftRetired = this.visibility === "draft" && !this.canStartAsDraft();
+      const submissionVisibility = draftRetired ? "normal" : this.visibility;
+      const optimisticSessionKey = cloudProfileId
+        ? ""
+        : `agent:${submissionAgentId}:dashboard:${submissionVisibility === "incognito" ? "incognito-" : ""}${generateUUID()}`;
       const createParams = buildDraftSessionCreateParams({
+        // Catalog owners mint their final key; their temporary dashboard key
+        // exists only so the chat route can open while creation is pending.
+        key: catalog.isTarget(this.data) ? undefined : optimisticSessionKey || undefined,
         agentId: this.agentId,
         message: cloudProfileId ? "" : message,
         model: this.modelControl.selected,
         thinkingLevel: this.modelControl.thinkingLevel,
-        visibility: draftRetired ? "normal" : this.visibility,
+        visibility: submissionVisibility,
         attachments: cloudProfileId ? undefined : apiAttachments,
         worktree: this.worktree,
         baseRef: this.baseRef,
@@ -827,7 +926,7 @@ class NewSessionPage extends OpenClawLightDomElement {
               gatewayUrl: submissionGatewayUrl,
               recoveryScope: submissionRecoveryScope,
               createParams,
-              persistent: this.visibility !== "incognito",
+              persistent: submissionVisibility !== "incognito",
             })
         : undefined;
       if (cloudProfileId && !pendingCloud && !cloudCreateParams) {
@@ -854,13 +953,183 @@ class NewSessionPage extends OpenClawLightDomElement {
         this.gatewayUrl === submissionGatewayUrl &&
         this.gatewayRecoveryScope === submissionRecoveryScope &&
         ownsSubmissionRecovery();
-      const result =
+      const optimisticDraft = optimisticSessionKey
+        ? {
+            routeKey: catalog.routeKey(this.data),
+            agentId: this.agentId,
+            agentSelectedByUser: this.agentSelectedByUser,
+            folder: this.folder,
+            folderSelectedByUser: this.folderSelectedByUser,
+            worktree: this.worktree,
+            visibility: submissionVisibility,
+            worktreeName: this.worktreeName,
+            baseRef: this.baseRef,
+            repository: this.repository,
+            execNode: this.execNode,
+            message,
+            attachments: apiAttachments,
+            model: this.modelControl.selected,
+            thinkingLevel: this.modelControl.thinkingLevel,
+          }
+        : null;
+      const createRequest =
         pendingCloud && this.pendingCloud.phase !== "creating"
-          ? { key: this.pendingCloud.sessionKey, initialRun: { status: "idle" as const } }
-          : await context.sessions.createResult(cloudCreateParams ?? createParams, {
+          ? Promise.resolve({
+              key: this.pendingCloud.sessionKey,
+              initialRun: { status: "idle" as const },
+            })
+          : context.sessions.createResult(cloudCreateParams ?? createParams, {
               reconciliation: "background",
             });
-      if (requestId !== this.submitRequestToken && !cloudProfileId) {
+      let submissionConnectionChanged = false;
+      const stopTrackingSubmissionConnection = optimisticSessionKey
+        ? context.gateway.subscribe((snapshot) => {
+            if (
+              snapshot.phase !== "connected" ||
+              snapshot.client !== submissionClient ||
+              context.gateway.connection.gatewayUrl !== submissionGatewayUrl
+            ) {
+              submissionConnectionChanged = true;
+            }
+          })
+        : () => undefined;
+      const optimisticSubmission: ActiveOptimisticSubmission | null = optimisticSessionKey
+        ? {
+            sessionKey: optimisticSessionKey,
+            gatewayUrl: submissionGatewayUrl,
+            recoveryScope: submissionRecoveryScope,
+            previousSessionKey,
+          }
+        : null;
+      let optimisticTransition: ReturnType<typeof context.transition> | null = null;
+      if (optimisticSessionKey) {
+        // The router renders chat immediately but does not write the temporary
+        // client-owned key into browser history before creation is confirmed.
+        activeOptimisticSubmission = optimisticSubmission;
+        context.gateway.setSessionKey(optimisticSessionKey);
+        optimisticTransition = context.transition("chat", {
+          search: searchForSession(optimisticSessionKey),
+        });
+      }
+      const result = await createRequest;
+      const transitionReady = (await optimisticTransition?.ready) ?? true;
+      stopTrackingSubmissionConnection();
+      if (optimisticSessionKey && !result) {
+        const ownsOptimisticSubmission = () => activeOptimisticSubmission === optimisticSubmission;
+        if (!ownsOptimisticSubmission()) {
+          return;
+        }
+        const isViewingOptimisticSession = () =>
+          transitionReady
+            ? optimisticTransition?.isActive() === true
+            : globalThis.location?.pathname === returnLocation.pathname &&
+              globalThis.location?.search === returnLocation.search &&
+              globalThis.location?.hash === returnLocation.hash;
+        const hasSubmissionGatewayIdentity = () =>
+          context.gateway.connection.gatewayUrl === optimisticSubmission?.gatewayUrl &&
+          context.gateway.snapshot.client?.recoveryScopeReady === true &&
+          context.gateway.snapshot.client.recoveryScope === optimisticSubmission?.recoveryScope;
+        const retireOptimisticSubmission = () => {
+          if (ownsOptimisticSubmission()) {
+            activeOptimisticSubmission = null;
+          }
+        };
+        const restoreOwnedGatewaySession = (sameIdentity: boolean) => {
+          if (context.gateway.snapshot.sessionKey !== optimisticSubmission?.sessionKey) {
+            return;
+          }
+          const defaultAgentId = normalizeAgentId(
+            context.agents.state.agentsList?.defaultId ?? "main",
+          );
+          context.gateway.setSessionKey(
+            sameIdentity
+              ? previousSessionKey
+              : buildAgentMainSessionKey({
+                  agentId: defaultAgentId,
+                  mainKey: context.agents.state.agentsList?.mainKey ?? undefined,
+                }),
+          );
+        };
+        const outcomeUnknown =
+          submissionConnectionChanged ||
+          context.gateway.snapshot.client !== submissionClient ||
+          context.gateway.connection.gatewayUrl !== submissionGatewayUrl;
+        const settleFailure = () => {
+          if (!ownsOptimisticSubmission()) {
+            return;
+          }
+          const sameIdentity = hasSubmissionGatewayIdentity();
+          const shouldRollback = isViewingOptimisticSession();
+          restoreOwnedGatewaySession(sameIdentity);
+          retireOptimisticSubmission();
+          if (!sameIdentity || !optimisticDraft) {
+            if (shouldRollback) {
+              this.openedFor = null;
+              context.replace("new-session", returnLocation);
+            }
+            return;
+          }
+          const isOnDifferentPage =
+            globalThis.location?.pathname !== returnLocation.pathname ||
+            globalThis.location?.search !== returnLocation.search ||
+            globalThis.location?.hash !== returnLocation.hash;
+          const returnedPage = globalThis.document?.querySelector<NewSessionPage>(
+            "openclaw-new-session-page",
+          );
+          const returnedToEmptyComposer =
+            !shouldRollback &&
+            !isOnDifferentPage &&
+            returnedPage?.isConnected === true &&
+            returnedPage.draftInteractionGeneration === 0 &&
+            !returnedPage.message.trim() &&
+            returnedPage.attachmentDraft.attachments.length === 0;
+          if (shouldRollback || isOnDifferentPage || returnedToEmptyComposer) {
+            failedOptimisticDraft = {
+              ...optimisticDraft,
+              gatewayUrl: submissionGatewayUrl,
+              recoveryScope: submissionRecoveryScope,
+              error:
+                context.sessions.state.error ??
+                (outcomeUnknown
+                  ? t("newSession.createOutcomeUnknown")
+                  : t("newSession.createFailed")),
+              outcomeUnknown,
+            };
+          }
+          if (shouldRollback) {
+            // The router may reconnect this same element. Retire its prior route
+            // key so updated() consumes the rollback draft instead of stale state.
+            this.openedFor = null;
+            context.replace("new-session", returnLocation);
+          } else if (returnedToEmptyComposer) {
+            returnedPage.resetDraft();
+          }
+        };
+        if (
+          outcomeUnknown &&
+          (context.gateway.snapshot.phase !== "connected" ||
+            context.gateway.snapshot.client?.recoveryScopeReady !== true)
+        ) {
+          // An offline route load cannot hydrate /new. Wait for the Gateway so
+          // rollback commits the page instead of leaving chat under a /new URL.
+          let unsubscribe: () => void = () => {};
+          unsubscribe = context.gateway.subscribe((snapshot) => {
+            if (!ownsOptimisticSubmission()) {
+              unsubscribe();
+            } else if (
+              snapshot.phase === "connected" &&
+              snapshot.client?.recoveryScopeReady === true
+            ) {
+              unsubscribe();
+              settleFailure();
+            }
+          });
+        } else {
+          settleFailure();
+        }
+        return;
+      }
+      if (requestId !== this.submitRequestToken && !cloudProfileId && !optimisticSessionKey) {
         return;
       }
       if (!result) {
@@ -974,14 +1243,19 @@ class NewSessionPage extends OpenClawLightDomElement {
         );
         this.attachmentDraft.clearAfterSubmit(true);
       } else {
-        if (requestId !== this.submitRequestToken) {
+        if (requestId !== this.submitRequestToken && !optimisticSessionKey) {
           return;
         }
+        // Route teardown releases composer payloads. Rebuild them from the
+        // submitted wire payload before handing a late result to chat.
+        const submittedAttachments = optimisticSessionKey
+          ? restoreChatApiAttachments(apiAttachments)
+          : attachments;
         const handedOffAttachments =
           result.initialRun.status === "rejected" &&
           retainRejectedInitialTurn({
-            agentId: this.agentId,
-            attachments,
+            agentId: submissionAgentId,
+            attachments: submittedAttachments,
             context,
             error: result.initialRun.error,
             message,
@@ -993,7 +1267,7 @@ class NewSessionPage extends OpenClawLightDomElement {
             result.key,
             {
               text: message,
-              attachments,
+              attachments: submittedAttachments,
               createdAt: submittedAt,
             },
             submissionConnection,
@@ -1003,7 +1277,46 @@ class NewSessionPage extends OpenClawLightDomElement {
             },
           );
         }
-        this.attachmentDraft.clearAfterSubmit(!handedOffAttachments);
+        if (!optimisticSessionKey) {
+          this.attachmentDraft.clearAfterSubmit(!handedOffAttachments);
+        }
+      }
+      if (optimisticSessionKey) {
+        if (activeOptimisticSubmission !== optimisticSubmission || !optimisticSubmission) {
+          return;
+        }
+        const sameIdentity =
+          context.gateway.connection.gatewayUrl === optimisticSubmission.gatewayUrl &&
+          context.gateway.snapshot.client?.recoveryScopeReady === true &&
+          context.gateway.snapshot.client.recoveryScope === optimisticSubmission.recoveryScope;
+        const ownsGatewaySession =
+          context.gateway.snapshot.sessionKey === optimisticSubmission.sessionKey;
+        const isViewingOptimisticSession = transitionReady
+          ? optimisticTransition?.isActive() === true
+          : globalThis.location?.pathname === returnLocation.pathname &&
+            globalThis.location?.search === returnLocation.search &&
+            globalThis.location?.hash === returnLocation.hash;
+        activeOptimisticSubmission = null;
+        if (ownsGatewaySession) {
+          const defaultAgentId = normalizeAgentId(
+            context.agents.state.agentsList?.defaultId ?? "main",
+          );
+          context.gateway.setSessionKey(
+            sameIdentity
+              ? result.key
+              : buildAgentMainSessionKey({
+                  agentId: defaultAgentId,
+                  mainKey: context.agents.state.agentsList?.mainKey ?? undefined,
+                }),
+          );
+        }
+        if (sameIdentity && isViewingOptimisticSession) {
+          context.navigate("chat", { search: searchForSession(result.key) });
+        } else if (isViewingOptimisticSession) {
+          this.openedFor = null;
+          context.replace("new-session", returnLocation);
+        }
+        return;
       }
       if (requestId !== this.submitRequestToken) {
         return;
@@ -1026,6 +1339,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     if (normalizeAgentId(agentId) === normalizeAgentId(this.agentId)) {
       return;
     }
+    this.draftInteractionGeneration += 1;
     this.agentId = normalizeAgentId(agentId);
     this.modelControl.reset();
     this.error = null;
@@ -1057,6 +1371,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     if (this.submitting || this.pendingCloud.sessionKey) {
       return;
     }
+    this.draftInteractionGeneration += 1;
     this.execNode = execNode;
     if (execNode) {
       // Node sessions run on that device; a cloud worker cannot sync a node path.
@@ -1083,6 +1398,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     if (execNode === this.execNode && !this.cloudProfileId) {
       return;
     }
+    this.draftInteractionGeneration += 1;
     // Turning a cloud selection back into a plain Gateway session keeps the
     // picked repo; only a host change retires the folder path.
     const keepGatewayFolder = !execNode && !this.execNode;
@@ -1110,6 +1426,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     ) {
       return;
     }
+    this.draftInteractionGeneration += 1;
     // worktreeAvailable() is false for node targets, so this transition always
     // starts from a Gateway selection and the folder is a Gateway path. It
     // stays selected: its repo is what the managed worktree checks out and the
@@ -1342,6 +1659,7 @@ class NewSessionPage extends OpenClawLightDomElement {
         if (this.cloudProfileId) {
           return;
         }
+        this.draftInteractionGeneration += 1;
         this.worktree = !this.worktree;
         if (this.worktree) {
           this.maybeLoadBranches();
@@ -1404,6 +1722,7 @@ class NewSessionPage extends OpenClawLightDomElement {
           },
           onVisibilityChange: (visibility) => {
             if (!this.submitting && !this.pendingCloud.sessionKey) {
+              this.draftInteractionGeneration += 1;
               this.visibility = visibility;
             }
           },

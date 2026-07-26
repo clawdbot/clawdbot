@@ -421,6 +421,27 @@ export function bootstrapApplication(): ApplicationRuntime {
     webPush,
     skillWorkshopRevision,
     initialUserMessage,
+    transition: (routeId, options) => {
+      const location = routeLocation(routeId, options);
+      const ready = router
+        .navigate(routeId, context, { history: "none" }, location)
+        .then(() => true)
+        .catch((error: unknown) => {
+          console.error("[openclaw] route transition failed", error);
+          return false;
+        });
+      return {
+        ready,
+        isActive: () => {
+          const active = router.getState().location;
+          return (
+            active.pathname === location.pathname &&
+            active.search === location.search &&
+            active.hash === location.hash
+          );
+        },
+      };
+    },
     navigate: (routeId, options) => {
       void router
         .navigate(routeId, context, { history: "push" }, routeLocation(routeId, options))

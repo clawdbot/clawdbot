@@ -2162,6 +2162,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         message: "use Claude Code",
         catalogId: "claude",
       });
+      expect(create.params).not.toHaveProperty("key");
       expect(create.params).not.toHaveProperty("model");
     } finally {
       await context.close();
@@ -2352,6 +2353,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         message: "keep this reconnect draft",
         catalogId: "claude",
       });
+      expect(create.params).not.toHaveProperty("key");
       expect(create.params).not.toHaveProperty("model");
       expect(create.params).not.toHaveProperty("cwd");
     } finally {
@@ -2967,6 +2969,48 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     }
   });
 
+  it("settles an optimistic route after gateway session ownership changes", async () => {
+    const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const sessionKey = "agent:main:created-after-session-reset";
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.create": { key: sessionKey },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      await gateway.deferNext("sessions.create");
+      await page.locator(".new-session-page__message").fill("finish after session reset");
+      await page.getByRole("button", { name: "Start thread" }).click();
+      await gateway.waitForRequest("sessions.create");
+      await page.locator("openclaw-chat-page").waitFor({ state: "attached", timeout: 1_000 });
+      await page.evaluate(() => {
+        const app = document.querySelector("openclaw-app") as HTMLElement & {
+          runtime?: { context: { gateway: { setSessionKey: (key: string) => void } } };
+        };
+        app.runtime?.context.gateway.setSessionKey("agent:main:main");
+      });
+
+      await gateway.resolveDeferred("sessions.create", { key: sessionKey });
+
+      await page.waitForURL((url) => url.searchParams.get("session") === sessionKey);
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const app = document.querySelector("openclaw-app") as HTMLElement & {
+              runtime?: { context: { gateway: { snapshot: { sessionKey: string } } } };
+            };
+            return app.runtime?.context.gateway.snapshot.sessionKey;
+          }),
+        )
+        .toBe(sessionKey);
+    } finally {
+      await context.close();
+    }
+  });
+
   for (const reconnectKind of ["same-client reconnect", "client replacement"] as const) {
     it(`marks a pending creation outcome unknown after ${reconnectKind}`, async () => {
       const context = await browser.newContext({
@@ -3009,8 +3053,11 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         await message.fill("retry this draft after reconnect");
         await gateway.deferNext("sessions.create");
         await start.click();
-        await gateway.waitForRequest("sessions.create");
-        await expect.poll(() => start.isDisabled()).toBe(true);
+        const create = await gateway.waitForRequest("sessions.create");
+        const optimisticSessionKey = (create.params as { key?: string }).key;
+        expect(optimisticSessionKey).toMatch(/^agent:main:dashboard:/);
+        await page.locator("openclaw-chat-page").waitFor({ state: "attached", timeout: 1_000 });
+        await page.waitForURL((url) => url.pathname.endsWith("/new"), { timeout: 1_000 });
 
         if (reconnectKind === "client replacement") {
           await gateway.setMethodResponse("agents.list", {
@@ -3032,14 +3079,11 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
           await expect.poll(() => gateway.getSocketCount()).toBe(socketsBefore + 1);
           await page.getByRole("heading", { name: "Replacement agent" }).waitFor();
         } else {
-          const agentRequestsBefore = (await gateway.getRequests("agents.list")).length;
           await gateway.setOnline(false);
           await page.locator(".sidebar-identity-card__subtitle").waitFor({ timeout: 10_000 });
           await gateway.setOnline(true);
-          await expect
-            .poll(async () => (await gateway.getRequests("agents.list")).length)
-            .toBe(agentRequestsBefore + 1);
         }
+        await page.waitForURL((url) => url.pathname.endsWith("/new"), { timeout: 10_000 });
         await expect.poll(() => message.inputValue()).toBe("retry this draft after reconnect");
         await expect.poll(() => message.isEnabled()).toBe(true);
         await expect.poll(() => start.isDisabled()).toBe(true);
@@ -3134,6 +3178,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         message: "retarget this draft",
         catalogId: "claude",
       });
+      expect(create.params).not.toHaveProperty("key");
       expect(create.params).not.toHaveProperty("model");
       expect(create.params).not.toHaveProperty("cwd");
     } finally {
@@ -3141,7 +3186,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     }
   });
 
-  it("locks the submitted draft until creation settles and restores it after failure", async () => {
+  it("opens a new thread immediately and restores its draft after creation fails", async () => {
     const context = await browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -3185,9 +3230,13 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
 
     try {
       await page.goto(`${server.baseUrl}new`);
+      await page.evaluate(() => {
+        history.replaceState(null, "", "chat");
+        history.pushState(null, "", "new?agent=main#draft-anchor");
+        dispatchEvent(new PopStateEvent("popstate"));
+      });
       await gateway.deferNext("sessions.create");
 
-      const draft = page.locator(".new-session-page__scroll");
       const message = page.locator(".new-session-page__message");
       const placeSelect = page.locator("wa-popover.new-session-page__place-popover");
       const placeSummary = page.locator("#new-session-place-trigger");
@@ -3198,39 +3247,101 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await page.getByRole("button", { name: "Start thread" }).click();
 
       const create = await gateway.waitForRequest("sessions.create");
-      expect(create.params).toMatchObject({ message: submittedMessage });
-      await expect.poll(() => message.isDisabled()).toBe(true);
-      expect(await draft.getAttribute("inert")).not.toBeNull();
-      expect(await draft.getAttribute("aria-busy")).toBe("true");
-      expect(await placeSelect.getAttribute("open")).toBeNull();
-      expect(await placeSummary.isDisabled()).toBe(true);
-
-      await expect(
-        message.fill("silently discarded late edit", { timeout: 250 }),
-      ).rejects.toThrow();
-      await placeSummary.click({ force: true });
-      await page.locator(".agent-chat__suggestion").first().click({ force: true });
-      expect(await placeSelect.getAttribute("open")).toBeNull();
-      expect(await message.inputValue()).toBe(submittedMessage);
+      const optimisticSessionKey = (create.params as { key?: string }).key;
+      expect(create.params).toMatchObject({
+        key: expect.stringMatching(/^agent:main:dashboard:/),
+        message: submittedMessage,
+      });
+      expect(optimisticSessionKey).toMatch(/^agent:main:dashboard:/);
+      await page.waitForURL((url) => url.pathname.endsWith("/new"), { timeout: 1_000 });
+      await page.locator("openclaw-chat-page").waitFor({ state: "attached", timeout: 1_000 });
+      await captureUiProof(page, "03-instant-thread-pending.png");
       expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
 
       await gateway.rejectDeferred("sessions.create", {
         code: "UNAVAILABLE",
         message: "session creation unavailable",
       });
+      await page.waitForURL((url) => url.pathname.endsWith("/new"), { timeout: 10_000 });
+      expect(new URL(page.url()).hash).toBe("#draft-anchor");
       await expect.poll(() => message.isDisabled()).toBe(false);
-      expect(await draft.getAttribute("inert")).toBeNull();
-      expect(await draft.getAttribute("aria-busy")).toBe("false");
       expect(await message.inputValue()).toBe(submittedMessage);
       expect(await placeSummary.isDisabled()).toBe(false);
+      await page.getByText("session creation unavailable", { exact: false }).waitFor();
+      await captureUiProof(page, "04-instant-thread-rollback.png");
 
+      await page.goBack();
+      await page.waitForURL((url) => url.pathname.endsWith("/chat"));
+      await page.goForward();
+      await page.waitForURL((url) => url.pathname.endsWith("/new"));
+      expect(await page.goForward()).toBeNull();
+      await page.waitForURL((url) => url.pathname.endsWith("/new"));
+      await message.fill(submittedMessage);
+
+      await gateway.deferNext("sessions.create");
       await page.getByRole("button", { name: "Start thread" }).click();
       await expect.poll(async () => (await gateway.getRequests("sessions.create")).length).toBe(2);
-      const retry = (await gateway.getRequests("sessions.create")).at(-1);
-      expect(retry?.params).toMatchObject({ message: submittedMessage });
+      const abandonedRetry = (await gateway.getRequests("sessions.create")).at(-1);
+      const abandonedSessionKey = (abandonedRetry?.params as { key?: string } | undefined)?.key;
+      expect(abandonedRetry?.params).toMatchObject({
+        key: expect.stringMatching(/^agent:main:dashboard:/),
+        message: submittedMessage,
+      });
+      await page.goBack();
+      await page.waitForURL((url) => url.pathname.endsWith("/chat"));
+      await page.goForward();
+      await page.waitForURL((url) => url.pathname.endsWith("/new"));
+      await expect.poll(() => message.inputValue()).toBe("");
+      await gateway.rejectDeferred("sessions.create", {
+        code: "UNAVAILABLE",
+        message: "session creation unavailable after leaving",
+      });
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const app = document.querySelector("openclaw-app") as HTMLElement & {
+              runtime?: { context: { gateway: { snapshot: { sessionKey: string } } } };
+            };
+            return app.runtime?.context.gateway.snapshot.sessionKey;
+          }),
+        )
+        .not.toBe(abandonedSessionKey);
+      await page.waitForURL((url) => url.pathname.endsWith("/new"));
+      await expect.poll(() => message.inputValue()).toBe(submittedMessage);
+      await page
+        .getByText("session creation unavailable after leaving", { exact: false })
+        .waitFor();
+
+      await gateway.deferNext("sessions.create");
+      await page.getByRole("button", { name: "Start thread" }).click();
+      await expect.poll(async () => (await gateway.getRequests("sessions.create")).length).toBe(3);
+      const staleRetry = (await gateway.getRequests("sessions.create")).at(-1);
+      expect(staleRetry?.params).toMatchObject({
+        key: expect.stringMatching(/^agent:main:dashboard:/),
+        message: submittedMessage,
+      });
+      await page.goBack();
+      await page.waitForURL((url) => url.pathname.endsWith("/chat"));
+      await page.goForward();
+      await page.waitForURL((url) => url.pathname.endsWith("/new"));
+      await message.fill("newer submission wins");
+      await page.getByRole("button", { name: "Start thread" }).click();
+      await expect.poll(async () => (await gateway.getRequests("sessions.create")).length).toBe(4);
       await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
         timeout: 30_000,
       });
+      await gateway.resolveDeferred("sessions.create", { key: "agent:main:stale-optimistic" });
+      await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBe(sessionKey);
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const app = document.querySelector("openclaw-app") as HTMLElement & {
+              runtime?: { context: { gateway: { snapshot: { sessionKey: string } } } };
+            };
+            return app.runtime?.context.gateway.snapshot.sessionKey;
+          }),
+        )
+        .toBe(sessionKey);
     } finally {
       await context.close();
     }
