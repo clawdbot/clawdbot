@@ -219,6 +219,10 @@ const toolCommonMocks = vi.hoisted(() => ({
   })),
   completeWithPreparedSimpleCompletionModel: vi.fn(async () => ({ content: [] })),
   extractAssistantText: vi.fn(() => "Friday."),
+  validateJsonSchemaValue: vi.fn((params: { value: unknown }) => ({
+    ok: true as const,
+    value: params.value,
+  })),
 }));
 vi.mock("./sdk-setup-tools.js", async () => {
   const actual =
@@ -231,6 +235,7 @@ vi.mock("./sdk-setup-tools.js", async () => {
     completeWithPreparedSimpleCompletionModel:
       toolCommonMocks.completeWithPreparedSimpleCompletionModel,
     extractAssistantText: toolCommonMocks.extractAssistantText,
+    validateJsonSchemaValue: toolCommonMocks.validateJsonSchemaValue,
     htmlToMarkdown: toolCommonMocks.htmlToMarkdown,
     normalizeWhitespace: toolCommonMocks.normalizeWhitespace,
     prepareSimpleCompletionModelForAgent: toolCommonMocks.prepareSimpleCompletionModelForAgent,
@@ -292,6 +297,7 @@ vi.mock("./browser-tool.runtime.js", async () => {
     normalizeWhitespace: toolCommonMocks.normalizeWhitespace,
     prepareSimpleCompletionModelForAgent: toolCommonMocks.prepareSimpleCompletionModelForAgent,
     sanitizeHtml: toolCommonMocks.sanitizeHtml,
+    validateJsonSchemaValue: toolCommonMocks.validateJsonSchemaValue,
     saveMediaBuffer: toolCommonMocks.saveMediaBuffer,
     stageBrowserScreenshotForSharing: toolCommonMocks.stageBrowserScreenshotForSharing,
     imageResultFromFile: toolCommonMocks.imageResultFromFile,

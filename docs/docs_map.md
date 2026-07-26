@@ -9718,6 +9718,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /tools/browser-control
 - Headings:
   - H2: Control API (optional)
+  - H3: Page extraction
   - H3: /act error contract
   - H3: Playwright requirement
   - H4: Docker Playwright install
