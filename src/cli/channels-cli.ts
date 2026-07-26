@@ -23,7 +23,7 @@ import { normalizeWindowsArgv } from "./windows-argv.js";
 
 type ChannelsCommandsModule = typeof import("../commands/channels.js");
 const optionNamesRemove = ["channel", "account", "delete"] as const;
-const CHANNEL_ADD_SELECTION_OPTION_NAMES = new Set(["channel"]);
+const CHANNEL_ADD_GUIDED_SELECTION_OPTION_NAMES = new Set(["channel"]);
 
 type RegisterChannelsCliOptions = {
   includeSetupOptions?: boolean;
@@ -323,9 +323,13 @@ export async function registerChannelsCli(
   addCommand.action(async (channelArg: string | undefined, opts, command) => {
     await runChannelsCommand(async () => {
       const { channelsAddCommand } = await loadChannelsCommands();
-      const hasFlags = hasExplicitOptions(
+      const hasSelectedChannel = Boolean(channelArg ?? opts.channel);
+      // `--channel` selects the guided target; only additional options request flag-driven setup.
+      const hasSetupFlags = hasExplicitOptions(
         command,
-        getOptionNames(command).filter((name) => !CHANNEL_ADD_SELECTION_OPTION_NAMES.has(name)),
+        getOptionNames(command).filter(
+          (name) => !CHANNEL_ADD_GUIDED_SELECTION_OPTION_NAMES.has(name),
+        ),
       );
       await channelsAddCommand(
         resolveChannelsAddOptions(
@@ -335,8 +339,8 @@ export async function registerChannelsCli(
         ),
         defaultRuntime,
         {
-          hasFlags,
-          ...(!hasFlags ? { directEntry: true } : {}),
+          hasFlags: hasSetupFlags,
+          ...(hasSelectedChannel && !hasSetupFlags ? { directEntry: true } : {}),
         },
       );
     });

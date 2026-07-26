@@ -524,6 +524,16 @@ describe("registerChannelsCli", () => {
     );
   });
 
+  it("keeps selectionless channel adds picker-first", async () => {
+    await runChannelsAddCli(["channels", "add"]);
+
+    expect(channelsAddCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: undefined }),
+      runtimeMock,
+      { hasFlags: false },
+    );
+  });
+
   it.each([
     ["token", ["--token", "test-token"]],
     ["token file", ["--token-file", "/tmp/test-token"]],
