@@ -168,6 +168,44 @@ describe("check-database-first-legacy-stores", () => {
     expect(migrationViolations).toEqual([]);
   });
 
+  it("keeps exec approvals legacy paths and stable URI identity in their exact owners", () => {
+    const runtimeViolations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import fs from "node:fs";
+        const legacyFilename = "exec-approvals.json";
+      `,
+      "src/infra/exec-approvals-store.ts",
+    );
+    const migrationViolations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import fs from "node:fs";
+        const legacyFilename = "exec-approvals.json";
+      `,
+      "src/infra/state-migrations.exec-approvals.ts",
+    );
+    const configViolations = collectDatabaseFirstLegacyStoreViolations(
+      'const EXEC_APPROVALS_FILE = "exec-approvals.json";',
+      "src/infra/exec-approvals-config.ts",
+    );
+    const stableUriViolations = collectDatabaseFirstLegacyStoreViolations(
+      'export const EXEC_APPROVALS_POLICY_URI = "oc://exec-approvals.json";',
+      "extensions/policy/src/exec-approvals-uri.ts",
+    );
+    const copiedUriViolations = collectDatabaseFirstLegacyStoreViolations(
+      'const copied = "oc://exec-approvals.json";',
+      "extensions/policy/src/doctor/copied-uri.ts",
+    );
+
+    expect(runtimeViolations).toEqual([
+      { kind: "legacy exec approvals filesystem import", line: 2 },
+      { kind: "legacy exec approvals reference", line: 3 },
+    ]);
+    expect(migrationViolations).toEqual([]);
+    expect(configViolations).toEqual([]);
+    expect(stableUriViolations).toEqual([]);
+    expect(copiedUriViolations).toEqual([{ kind: "legacy exec approvals reference", line: 1 }]);
+  });
+
   // Legacy paths and literal propagation.
   it.each(
     namedCases({

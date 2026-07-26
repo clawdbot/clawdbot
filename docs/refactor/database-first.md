@@ -153,10 +153,10 @@ without exceptions outside doctor/import/export/debug boundaries.
 - Doctor migration: `migrating`, intentionally. Doctor imports legacy JSON,
   JSONL, and retired sidecar stores into SQLite, records migration runs/sources,
   and removes successful sources.
-- Exec approvals: `file-runtime`. TypeScript and macOS still read and write the
-  active state directory's `exec-approvals.json`; the reserved
-  `exec_approvals_config` schema has no runtime owner yet. A future cutover must
-  add same-state doctor import and move both runtimes together.
+- Exec approvals: `sqlite-runtime`. TypeScript and macOS read and write the
+  `exec_approvals_config` singleton row in shared state. Doctor exclusively
+  imports the retired state-scoped JSON file, and runtime fails closed until
+  that one-time migration completes.
 - E2E scripts: `clean` for runtime coverage. Docker MCP seeding writes SQLite
   rows. The runtime-context Docker script creates legacy JSONL only inside the
   doctor migration seed and names the legacy session index path explicitly.
@@ -472,9 +472,9 @@ The branch already has a real shared SQLite base:
   sidecars. `openclaw doctor --fix` validates and claims legacy sources,
   imports them into SQLite with migration receipts, verifies the canonical
   rows, and only then removes the claimed files.
-- The shared schema reserves an `exec_approvals_config` singleton row, but the
-  runtime cutover remains pending. TypeScript and the macOS companion still use
-  the state-scoped JSON file and must move to SQLite together.
+- Exec approvals use the shared `exec_approvals_config` singleton row in both
+  TypeScript and the macOS companion. The row's `raw_json` remains authoritative
+  for protocol CAS hashes; typed columns are write-time projections.
 - TypeScript device identity now uses typed `device_identities` rows, with
   doctor-only legacy JSON import kept outside the runtime owner. Device auth is
   still file-backed pending a coordinated schema and cross-runtime migration;
@@ -2224,7 +2224,7 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - `openrouter-models.json`
 - `auth-profiles.json`
 - `auth-state.json`
-- `exec-approvals.json`
+- `exec-approvals.json` (retired; Doctor-only import into `exec_approvals_config`)
 - `openclaw-workspace-state.json`
 - `workspace-state.json`
 - `workspace-attestations/*.attested`
