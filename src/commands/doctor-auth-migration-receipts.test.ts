@@ -24,11 +24,18 @@ type MigrationReceiptTestApi = {
   recordAuthProfileMigrationCompleted: (
     receipt: ReturnType<typeof createAuthProfileMigrationSourceReceipt>,
   ) => void;
+  restoreAuthProfileMigrationArchiveNoClobber: (
+    receipt: ReturnType<typeof createAuthProfileMigrationSourceReceipt>,
+  ) => "restored" | "source-exists";
 };
 
-const { recordAuthProfileMigrationImported, recordAuthProfileMigrationCompleted } = (
-  globalThis as Record<PropertyKey, unknown>
-)[Symbol.for("openclaw.authProfileMigrationReceiptsTestApi")] as MigrationReceiptTestApi;
+const {
+  recordAuthProfileMigrationImported,
+  recordAuthProfileMigrationCompleted,
+  restoreAuthProfileMigrationArchiveNoClobber,
+} = (globalThis as Record<PropertyKey, unknown>)[
+  Symbol.for("openclaw.authProfileMigrationReceiptsTestApi")
+] as MigrationReceiptTestApi;
 
 describe("auth profile migration receipts", () => {
   const states: OpenClawTestState[] = [];
@@ -81,6 +88,46 @@ describe("auth profile migration receipts", () => {
     archiveAuthProfileMigrationSource(receipt);
 
     expect(resumePendingAuthProfileMigrationArchives(state.env)).toHaveLength(1);
+    expect(fs.existsSync(receipt.archivePath)).toBe(true);
+  });
+
+  it("restores an archive for retry when its SQLite target was rolled back", async () => {
+    const { state, sourcePath, receipt } = await makeReceipt();
+    fs.mkdirSync(path.dirname(receipt.targetDatabasePath), { recursive: true });
+    const target = new DatabaseSync(receipt.targetDatabasePath);
+    target.exec(
+      "CREATE TABLE auth_profile_store (store_key TEXT PRIMARY KEY, store_json TEXT NOT NULL, updated_at INTEGER NOT NULL)",
+    );
+    const profileValue = { type: "oauth", provider: "openai", refresh: "not-a-real" };
+    target
+      .prepare("INSERT INTO auth_profile_store VALUES ('primary', ?, 1)")
+      .run(JSON.stringify({ version: 1, profiles: { "openai:default": profileValue } }));
+    receipt.expectedProfileSha256 = {
+      "openai:default": digestAuthProfileMigrationValue(profileValue),
+    };
+    recordAuthProfileMigrationImported(receipt);
+    archiveAuthProfileMigrationSource(receipt);
+    target.prepare("DELETE FROM auth_profile_store").run();
+    target.close();
+
+    expect(resumePendingAuthProfileMigrationArchives(state.env)).toEqual([
+      "Reset an interrupted auth migration receipt for retry.",
+    ]);
+    expect(fs.existsSync(sourcePath)).toBe(true);
+    expect(fs.existsSync(receipt.archivePath)).toBe(false);
+    const row = openOpenClawStateDatabase({ env: state.env })
+      .db.prepare("SELECT status FROM migration_sources WHERE source_key = ?")
+      .get(receipt.sourceKey);
+    expect(row).toEqual({ status: "retryable" });
+  });
+
+  it("does not overwrite a source recreated before archive restoration", async () => {
+    const { sourcePath, receipt } = await makeReceipt();
+    archiveAuthProfileMigrationSource(receipt);
+    fs.writeFileSync(sourcePath, '{"newer":true}\n', "utf8");
+
+    expect(restoreAuthProfileMigrationArchiveNoClobber(receipt)).toBe("source-exists");
+    expect(fs.readFileSync(sourcePath, "utf8")).toBe('{"newer":true}\n');
     expect(fs.existsSync(receipt.archivePath)).toBe(true);
   });
 

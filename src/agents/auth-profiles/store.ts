@@ -27,6 +27,7 @@ import {
   assertAuthProfileMigrationReady,
   clearAuthProfileMigrationRequired,
   listLegacyAuthProfileSources,
+  markAuthProfileMigrationRequired,
   warnLegacyAuthProfileSourcesIgnored,
 } from "./legacy-source-diagnostic.js";
 import {
@@ -985,9 +986,19 @@ function loadAuthProfileStoreForAgent(
     resolvePersistedLoadOptions(effectiveOptions),
   );
   if (asStore) {
+    const legacySources = listLegacyAuthProfileSources({ agentDir: effectiveAgentDir });
+    const credentialSources = legacySources.filter((source) => source.kind !== "auth-state");
+    if (credentialSources.length > 0) {
+      const migrationError = new AuthProfileMigrationRequiredError({
+        agentDir: effectiveAgentDir,
+        sources: credentialSources,
+      });
+      markAuthProfileMigrationRequired(effectiveAgentDir, migrationError);
+      throw migrationError;
+    }
     warnLegacyAuthProfileSourcesIgnored({
       agentDir: effectiveAgentDir,
-      sources: listLegacyAuthProfileSources({ agentDir: effectiveAgentDir }),
+      sources: legacySources,
     });
     clearAuthProfileMigrationRequired(effectiveAgentDir);
     const synced = maybeSyncPersistedExternalCliAuthProfiles({

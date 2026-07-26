@@ -144,6 +144,20 @@ describe("SQLite auth storage", () => {
     expect(fs.existsSync(legacyPath)).toBe(false);
   });
 
+  it("fails closed instead of ignoring credentials at a deprecated custom path", () => {
+    const agentDir = makeAgentDir();
+    const customPath = path.join(agentDir, "plugin-credentials.json");
+    fs.writeFileSync(customPath, '{"openai":{"key":"not-a-real"}}\n', "utf8");
+
+    expect(() => AuthStorage.create(customPath)).toThrow(
+      expect.objectContaining({ code: "AUTH_PROFILE_MIGRATION_REQUIRED" }),
+    );
+    expect(() => new FileAuthStorageBackend(customPath)).toThrow(
+      expect.objectContaining({ code: "AUTH_PROFILE_MIGRATION_REQUIRED" }),
+    );
+    expect(loadPersistedAuthProfileStore(agentDir)).toBeNull();
+  });
+
   it("keeps FileAuthStorageBackend as a deprecated fail-closed SQLite adapter", async () => {
     const agentDir = makeAgentDir();
     const legacyPath = path.join(agentDir, "auth.json");

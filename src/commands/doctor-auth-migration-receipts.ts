@@ -188,6 +188,21 @@ function retirePendingAuthProfileMigrationReceipt(
   );
 }
 
+function restoreAuthProfileMigrationArchiveNoClobber(
+  receipt: AuthProfileMigrationSourceReceipt,
+): "restored" | "source-exists" {
+  try {
+    fs.linkSync(receipt.archivePath, receipt.sourcePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+      return "source-exists";
+    }
+    throw error;
+  }
+  fs.unlinkSync(receipt.archivePath);
+  return "restored";
+}
+
 function recordAuthProfileMigrationCompleted(
   receipt: AuthProfileMigrationSourceReceipt,
   now = Date.now(),
@@ -371,7 +386,8 @@ export function resumePendingAuthProfileMigrationArchives(env?: NodeJS.ProcessEn
     const lockTarget = fs.existsSync(receipt.sourcePath) ? receipt.sourcePath : receipt.archivePath;
     const release = acquireLockSyncWithRetry(lockTarget);
     try {
-      if (fs.existsSync(receipt.sourcePath)) {
+      const sourceExists = fs.existsSync(receipt.sourcePath);
+      if (sourceExists) {
         const sourceBytes = fs.readFileSync(receipt.sourcePath);
         if (digestBytes(sourceBytes) !== receipt.sourceSha256) {
           // The imported receipt describes different bytes. Retire its claim so
@@ -380,15 +396,35 @@ export function resumePendingAuthProfileMigrationArchives(env?: NodeJS.ProcessEn
           changes.push("Retired an interrupted auth migration receipt for a changed source.");
           continue;
         }
-        try {
-          verifyAuthProfileMigrationTarget(receipt);
-        } catch {
-          // The source is still authoritative, so let the normal migration path
-          // rebuild and reverify the target instead of wedging on a stale claim.
-          retirePendingAuthProfileMigrationReceipt(receipt, "retryable");
-          changes.push("Reset an interrupted auth migration receipt for retry.");
-          continue;
+      } else {
+        const archiveBytes = fs.readFileSync(receipt.archivePath);
+        if (digestBytes(archiveBytes) !== receipt.sourceSha256) {
+          throw new Error("legacy auth archive verification failed");
         }
+      }
+      try {
+        verifyAuthProfileMigrationTarget(receipt);
+      } catch {
+        if (!sourceExists) {
+          // Restore only hash-verified archive bytes, without replacing a
+          // source recreated by a non-cooperating legacy writer or restore.
+          const restored = restoreAuthProfileMigrationArchiveNoClobber(receipt);
+          if (restored === "source-exists") {
+            const currentBytes = fs.readFileSync(receipt.sourcePath);
+            const status =
+              digestBytes(currentBytes) === receipt.sourceSha256 ? "retryable" : "superseded";
+            retirePendingAuthProfileMigrationReceipt(receipt, status);
+            changes.push(
+              status === "retryable"
+                ? "Reset an interrupted auth migration receipt for retry."
+                : "Retired an interrupted auth migration receipt for a changed source.",
+            );
+            continue;
+          }
+        }
+        retirePendingAuthProfileMigrationReceipt(receipt, "retryable");
+        changes.push("Reset an interrupted auth migration receipt for retry.");
+        continue;
       }
       archiveAuthProfileMigrationSource(receipt);
       recordAuthProfileMigrationCompleted(
@@ -434,5 +470,6 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   ] = {
     recordAuthProfileMigrationImported,
     recordAuthProfileMigrationCompleted,
+    restoreAuthProfileMigrationArchiveNoClobber,
   };
 }
