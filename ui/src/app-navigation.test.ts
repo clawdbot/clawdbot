@@ -21,7 +21,7 @@ import {
 import { createApplicationRouter, routeIdFromPath, type RouteId } from "./app-routes.ts";
 import { pathForSession } from "./app-session-path-builder.ts";
 import { sessionRefFromPath } from "./app-session-route-paths.ts";
-import { pathForSessionKey } from "./lib/sessions/navigation.ts";
+import { sessionNavigationTarget } from "./lib/sessions/route-navigation.ts";
 import { pluginTabKey, pluginTabRefFromSearch, pluginTabSearch } from "./pages/plugin/route.ts";
 
 type SessionUrlContractCase = {
@@ -458,7 +458,11 @@ describe("routeIdFromPath", () => {
   });
 
   it("requires an explicit agent fallback for unscoped session keys", () => {
-    const pathname = pathForSessionKey("chat", "telegram:12345", "research");
+    const pathname = sessionNavigationTarget({
+      face: "chat",
+      sessionKey: "telegram:12345",
+      fallbackAgentId: "research",
+    }).options.pathname;
     expect(pathname).toBe("/chat/research/telegram/12345");
     expect(sessionRefFromPath(pathname)).toMatchObject({
       kind: "literal",

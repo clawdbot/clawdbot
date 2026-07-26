@@ -26,11 +26,13 @@ import type { SessionsGroupBy } from "../../lib/sessions/grouping.ts";
 import {
   DEFAULT_SESSION_LIST_QUERY,
   filterSessionRows,
-  pathForSessionKey,
   scopedAgentParamsForSession,
   type SessionArchivedFilter,
 } from "../../lib/sessions/index.ts";
-import { resolveSessionNavigationAgentId } from "../../lib/sessions/route-navigation.ts";
+import {
+  resolveSessionNavigationAgentId,
+  sessionNavigationTarget,
+} from "../../lib/sessions/route-navigation.ts";
 import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
@@ -963,12 +965,12 @@ class SessionsPage extends OpenClawLightDomElement {
       }
       if (forkedKey) {
         scope.context.navigate("chat", {
-          pathname: pathForSessionKey(
-            "chat",
-            forkedKey,
-            agentId ?? this.sessionPathAgentId(forkedKey, scope.context),
-            scope.context.basePath,
-          ),
+          ...sessionNavigationTarget({
+            context: scope.context,
+            face: "chat",
+            sessionKey: forkedKey,
+            agentId: agentId ?? this.sessionPathAgentId(forkedKey, scope.context),
+          }).options,
           hash: "",
         });
       } else if (scope.sessions.state.error) {
@@ -1063,19 +1065,12 @@ class SessionsPage extends OpenClawLightDomElement {
       });
       if (this.isRequestScopeCurrent(scope)) {
         scope.context.navigate("chat", {
-          pathname: pathForSessionKey(
-            "chat",
-            result.key,
-            this.sessionPathAgentId(result.key, scope.context),
-            scope.context.basePath,
-            {
-              key: result.key,
-            },
-            resolveUiConfiguredMainKey({
-              agentsList: scope.context.agents.state.agentsList,
-              hello: scope.gateway.snapshot.hello,
-            }),
-          ),
+          ...sessionNavigationTarget({
+            context: scope.context,
+            face: "chat",
+            sessionKey: result.key,
+            agentId: this.sessionPathAgentId(result.key, scope.context),
+          }).options,
           hash: "",
         });
       }
@@ -1224,17 +1219,12 @@ class SessionsPage extends OpenClawLightDomElement {
           switch (action.kind) {
             case "open-chat":
               context.navigate("chat", {
-                pathname: pathForSessionKey(
-                  "chat",
-                  row.key,
-                  this.sessionPathAgentId(row.key, context),
-                  context.basePath,
-                  row,
-                  resolveUiConfiguredMainKey({
-                    agentsList: context.agents.state.agentsList,
-                    hello: context.gateway.snapshot.hello,
-                  }),
-                ),
+                ...sessionNavigationTarget({
+                  context,
+                  face: "chat",
+                  sessionKey: row.key,
+                  agentId: this.sessionPathAgentId(row.key, context),
+                }).options,
                 hash: "",
               });
               break;
@@ -1407,17 +1397,12 @@ class SessionsPage extends OpenClawLightDomElement {
           onDeleteSelected: () => void this.deleteSelected(),
           onNavigateToChat: (sessionKey) =>
             context.navigate("chat", {
-              pathname: pathForSessionKey(
-                "chat",
+              ...sessionNavigationTarget({
+                context,
+                face: "chat",
                 sessionKey,
-                this.sessionPathAgentId(sessionKey, context),
-                context.basePath,
-                this.result?.sessions.find((row) => row.key === sessionKey),
-                resolveUiConfiguredMainKey({
-                  agentsList: context.agents.state.agentsList,
-                  hello: context.gateway.snapshot.hello,
-                }),
-              ),
+                agentId: this.sessionPathAgentId(sessionKey, context),
+              }).options,
               hash: "",
             }),
           onOpenSessionMenu: (row, position, trigger) =>

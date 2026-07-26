@@ -32,9 +32,10 @@ import {
   type CronModelSuggestionsState,
   type CronState,
 } from "../../lib/cron/index.ts";
-import { pathForSessionKey } from "../../lib/sessions/index.ts";
-import { resolveSessionNavigationAgentId } from "../../lib/sessions/route-navigation.ts";
-import { resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
+import {
+  resolveSessionNavigationAgentId,
+  sessionNavigationTarget,
+} from "../../lib/sessions/route-navigation.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import {
@@ -466,19 +467,14 @@ class CronPage extends OpenClawLightDomElement {
               );
             }),
           onNavigateToChat: (sessionKey) =>
-            this.context.navigate("chat", {
-              pathname: pathForSessionKey(
-                "chat",
+            this.context.navigate(
+              "chat",
+              sessionNavigationTarget({
+                context: this.context,
+                face: "chat",
                 sessionKey,
-                fallbackAgentId,
-                this.context.basePath,
-                undefined,
-                resolveUiConfiguredMainKey({
-                  agentsList: this.context.agents.state.agentsList,
-                  hello: this.context.gateway.snapshot.hello,
-                }),
-              ),
-            }),
+              }).options,
+            ),
         }),
       )}
     `;

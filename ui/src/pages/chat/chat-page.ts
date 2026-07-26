@@ -14,7 +14,7 @@ import type { BoardFace } from "../../lib/board/settings.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { readSessionDragData, sessionDragActive } from "../../lib/sessions/drag.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
-import { sessionRouteNavigationOptions } from "../../lib/sessions/route-navigation.ts";
+import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -366,12 +366,12 @@ export class ChatPage extends OpenClawLightDomElement {
     ) {
       return;
     }
-    const options = sessionRouteNavigationOptions({
+    const options = sessionNavigationTarget({
       context: this.context,
       face,
       sessionKey,
       agentId: this.data?.agentId,
-    });
+    }).options;
     if (replace) {
       this.context.replace(face, options);
     } else {

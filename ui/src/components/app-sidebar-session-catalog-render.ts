@@ -15,10 +15,9 @@ import {
   groupCatalogSessionsByProject,
   type CatalogProjectGrouping,
 } from "../lib/sessions/catalog-project-grouping.ts";
-import { pathForSessionKey } from "../lib/sessions/index.ts";
+import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { shouldHandleNavigationClick } from "./app-sidebar-nav-menus.ts";
-import { catalogSessionNavigation } from "./app-sidebar-session-catalog-navigation.ts";
 import {
   formatSidebarTimestamp,
   type CatalogBackingSessionDisplay,
@@ -362,25 +361,14 @@ function renderCatalogSessionRow(
   const label = session.name || session.threadId;
   const meta = formatSidebarTimestamp(timestamp);
   const routeId = "chat";
-  const sessionPath = session.sessionKey
-    ? pathForSessionKey(
-        "chat",
-        session.sessionKey,
-        params.newSessionAgentId,
-        params.basePath,
-        undefined,
-        params.mainKey,
-      )
-    : null;
-  const target = sessionPath
-    ? { href: sessionPath, navigation: { pathname: sessionPath } }
-    : catalogSessionNavigation(
-        params.newSessionAgentId,
-        catalogKey,
-        params.basePath,
-        params.mainKey,
-      );
-  const { href, navigation } = target;
+  const target = sessionNavigationTarget({
+    face: routeId,
+    sessionKey: key,
+    fallbackAgentId: params.newSessionAgentId,
+    basePath: params.basePath,
+    mainKey: params.mainKey,
+  });
+  const { href, options: navigation } = target;
   const active = params.routeSessionKey !== "" && key === params.routeSessionKey;
   const running = session.status === "active" || session.status === "running";
   const canOpenTerminal = session.canOpenTerminal === true && params.terminalAvailable;

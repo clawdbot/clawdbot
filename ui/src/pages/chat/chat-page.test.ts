@@ -26,7 +26,7 @@ import {
   type CatalogSessionKey,
 } from "../../lib/sessions/catalog-key.ts";
 import { SESSION_DRAG_MIME } from "../../lib/sessions/drag.ts";
-import { pathForSessionKey } from "../../lib/sessions/index.ts";
+import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { ChatPage } from "./chat-page.ts";
 import { loadChatRoute } from "./route-loader.ts";
@@ -38,6 +38,8 @@ const CATALOG_KEY = {
   threadId: "thread-1",
 } satisfies CatalogSessionKey;
 const CATALOG_SESSION_KEY = buildCatalogSessionKey(CATALOG_KEY);
+const sessionPath = (sessionKey: string) =>
+  sessionNavigationTarget({ face: "chat", sessionKey, fallbackAgentId: "main" }).options.pathname;
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { SplitDropZone } from "./split-drop-zone.ts";
 import { insertPane, type ChatSplitLayout } from "./split-layout.ts";
@@ -290,7 +292,7 @@ describe("chat page split layout host", () => {
     expect(split.defaultPrevented).toBe(true);
     expect(getLayout(page)?.columns.at(1)?.panes.at(0)?.sessionKey).toBe(WORK_SESSION_KEY);
     expect(navigation.replace).toHaveBeenLastCalledWith("chat", {
-      pathname: pathForSessionKey("chat", WORK_SESSION_KEY, "main"),
+      pathname: sessionPath(WORK_SESSION_KEY),
     });
 
     window.dispatchEvent(
@@ -361,7 +363,7 @@ describe("chat page split layout host", () => {
     expect(getRouteDraftForActivePane(page)).toBeUndefined();
     expect(navigation.replace).toHaveBeenCalledOnce();
     expect(navigation.replace).toHaveBeenCalledWith("chat", {
-      pathname: pathForSessionKey("chat", "main", "main"),
+      pathname: sessionPath("main"),
     });
     page.data = { ...firstRouteData };
     expect(getRouteDraftForActivePane(page)).toBe("one-shot draft");
@@ -605,7 +607,7 @@ describe("chat page split layout host", () => {
     expect(getLayout(page)).toBeUndefined();
     expect(loadSettings().chatSplitLayout).toBeUndefined();
     expect(navigation.navigate).toHaveBeenCalledWith("chat", {
-      pathname: pathForSessionKey("chat", WORK_SESSION_KEY, "main"),
+      pathname: sessionPath(WORK_SESSION_KEY),
     });
     expect(navigation.replace).not.toHaveBeenCalled();
   });
@@ -625,7 +627,7 @@ describe("chat page split layout host", () => {
     expect(layout?.activePaneId).toBe("p2");
     expect(loadSettings().chatSplitLayout).toEqual(layout);
     expect(navigation.replace).toHaveBeenCalledWith("chat", {
-      pathname: pathForSessionKey("chat", WORK_SESSION_KEY, "main"),
+      pathname: sessionPath(WORK_SESSION_KEY),
     });
   });
 
@@ -645,7 +647,7 @@ describe("chat page split layout host", () => {
     expect(layout?.activePaneId).toBe("p3");
     expect(loadSettings().chatSplitLayout).toEqual(layout);
     expect(navigation.replace).toHaveBeenCalledWith("chat", {
-      pathname: pathForSessionKey("chat", WORK_SESSION_KEY, "main"),
+      pathname: sessionPath(WORK_SESSION_KEY),
     });
   });
 
@@ -662,7 +664,7 @@ describe("chat page split layout host", () => {
     expect(layout?.activePaneId).toBe("p1");
     expect(loadSettings().chatSplitLayout).toEqual(layout);
     expect(navigation.replace).toHaveBeenCalledWith("chat", {
-      pathname: pathForSessionKey("chat", WORK_SESSION_KEY, "main"),
+      pathname: sessionPath(WORK_SESSION_KEY),
     });
   });
 
@@ -718,7 +720,7 @@ describe("chat page split layout host", () => {
       "main",
     ]);
     expect(navigation.replace).toHaveBeenCalledWith("chat", {
-      pathname: pathForSessionKey("chat", WORK_SESSION_KEY, "main"),
+      pathname: sessionPath(WORK_SESSION_KEY),
     });
   });
 
@@ -800,7 +802,7 @@ describe("chat page split layout host", () => {
 
     expect(getLayout(page)?.columns.at(0)?.panes.at(0)?.sessionKey).toBe(WORK_SESSION_KEY);
     expect(navigation.replace).toHaveBeenCalledWith("chat", {
-      pathname: pathForSessionKey("chat", WORK_SESSION_KEY, "main"),
+      pathname: sessionPath(WORK_SESSION_KEY),
     });
   });
 });

@@ -10,9 +10,9 @@ import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import {
   compareSessionRowsByUpdatedAt,
   filterVisibleSessionRows,
-  pathForSessionKey,
   sessionMatchesArchivedFilter,
 } from "../lib/sessions/index.ts";
+import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
@@ -282,18 +282,16 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   }
 
   readonly selectSession = (sessionKey: string) => {
-    const pathname = pathForSessionKey(
-      "chat",
+    const target = sessionNavigationTarget({
+      face: "chat",
       sessionKey,
-      this.selectedAgentIdForSessions(),
-      this.basePath,
-      this.findSidebarSessionByKey(sessionKey),
-      this.sessionMainKey(),
-    );
-    this.context?.gateway.setSessionKey(sessionKey);
-    this.onNavigate?.("chat", {
-      pathname,
+      fallbackAgentId: this.selectedAgentIdForSessions(),
+      basePath: this.basePath,
+      row: this.findSidebarSessionByKey(sessionKey),
+      mainKey: this.sessionMainKey(),
     });
+    this.context?.gateway.setSessionKey(sessionKey);
+    this.onNavigate?.("chat", target.options);
   };
 
   /** Collapsed zones keep full rows for true header counts and status dots. */
@@ -422,17 +420,17 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   }
 
   readonly replaceCurrentSession = (sessionKey: string) => {
-    const pathname = pathForSessionKey(
-      "chat",
+    const target = sessionNavigationTarget({
+      face: "chat",
       sessionKey,
-      this.selectedAgentIdForSessions(),
-      this.basePath,
-      this.findSidebarSessionByKey(sessionKey),
-      this.sessionMainKey(),
-    );
+      fallbackAgentId: this.selectedAgentIdForSessions(),
+      basePath: this.basePath,
+      row: this.findSidebarSessionByKey(sessionKey),
+      mainKey: this.sessionMainKey(),
+    });
     this.context?.gateway.setSessionKey(sessionKey);
     if (isSessionRouteId(this.activeRouteId)) {
-      this.onNavigate?.("chat", { pathname });
+      this.onNavigate?.("chat", target.options);
     }
   };
 
@@ -533,16 +531,17 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     }
     const key = this.agentResumeKey(agentId);
     const draft = encodeURIComponent(t("chat.welcome.suggestions.whatCanYouDo"));
+    const target = sessionNavigationTarget({
+      face: "chat",
+      sessionKey: key,
+      fallbackAgentId: agentId,
+      basePath: this.basePath,
+      row: this.findSidebarSessionByKey(key),
+      mainKey: this.sessionMainKey(),
+    });
     this.context?.gateway.setSessionKey(key);
     this.onNavigate?.("chat", {
-      pathname: pathForSessionKey(
-        "chat",
-        key,
-        agentId,
-        this.basePath,
-        this.findSidebarSessionByKey(key),
-        this.sessionMainKey(),
-      ),
+      ...target.options,
       search: `?draft=${draft}`,
     });
   }

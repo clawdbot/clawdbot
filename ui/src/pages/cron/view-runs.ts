@@ -16,7 +16,7 @@ import {
   formatMs,
   formatTokens,
 } from "../../lib/format.ts";
-import { pathForSessionKey } from "../../lib/sessions/index.ts";
+import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 
 // Leaf contract: the slice of the cron view props this module needs. Keeping
 // it local (instead of importing CronProps from view.ts) avoids a module
@@ -290,7 +290,12 @@ function renderRun(
 ) {
   const chatUrl =
     typeof entry.sessionKey === "string" && entry.sessionKey.trim().length > 0
-      ? pathForSessionKey("chat", entry.sessionKey, fallbackAgentId, basePath)
+      ? sessionNavigationTarget({
+          face: "chat",
+          sessionKey: entry.sessionKey,
+          fallbackAgentId,
+          basePath,
+        }).href
       : null;
   const status = runStatusLabel(entry.status ?? "unknown");
   const delivery = runDeliveryLabel(entry.deliveryStatus ?? "not-requested");

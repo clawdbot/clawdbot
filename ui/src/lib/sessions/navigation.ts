@@ -1,8 +1,5 @@
 import type { GatewayHelloOk } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import { pathForRoute } from "../../app-route-paths.ts";
-import { pathForSession } from "../../app-session-path-builder.ts";
-import type { BoardFace } from "../board/settings.ts";
 import { isCronSessionKey } from "../session-display.ts";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -339,25 +336,4 @@ export function resolveSessionNavigation(input: SessionNavigationInput): Session
     visibleSessions,
     activeRowKey: activeRow?.key ?? null,
   };
-}
-
-export function pathForSessionKey(
-  face: BoardFace,
-  sessionKey: string,
-  fallbackAgentId: string,
-  basePath = "",
-  row?: Pick<GatewaySessionRow, "displayName" | "key">,
-  mainKey?: string | null,
-): string {
-  const key = row?.key ?? sessionKey;
-  const agentId = parseAgentSessionKey(key)?.agentId ?? normalizeOptionalString(fallbackAgentId);
-  if (!agentId) {
-    return pathForRoute(face, basePath);
-  }
-  return (
-    pathForSession(face, normalizeAgentId(agentId), key, basePath, {
-      displayName: row?.displayName,
-      mainKey,
-    }) ?? pathForRoute(face, basePath)
-  );
 }

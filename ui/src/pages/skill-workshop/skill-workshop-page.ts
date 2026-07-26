@@ -8,9 +8,9 @@ import { loadSettings } from "../../app/settings.ts";
 import { renderPluginsHubTabs } from "../../components/plugins-hub-tabs.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
-import { pathForSessionKey, resolveSessionKey } from "../../lib/sessions/index.ts";
-import { resolveSessionNavigationAgentId } from "../../lib/sessions/route-navigation.ts";
-import { normalizeAgentId, resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
+import { resolveSessionKey } from "../../lib/sessions/index.ts";
+import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
+import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { filterSkillWorkshopProposals } from "../../lib/skill-workshop/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -468,19 +468,10 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     if (!this.isCurrentSourceScope(scope)) {
       return;
     }
-    scope.navigate("chat", {
-      pathname: pathForSessionKey(
-        "chat",
-        sessionKey,
-        resolveSessionNavigationAgentId(scope.context),
-        scope.context.basePath,
-        undefined,
-        resolveUiConfiguredMainKey({
-          agentsList: scope.context.agents.state.agentsList,
-          hello: scope.context.gateway.snapshot.hello,
-        }),
-      ),
-    });
+    scope.navigate(
+      "chat",
+      sessionNavigationTarget({ context: scope.context, face: "chat", sessionKey }).options,
+    );
   };
 
   override willUpdate() {

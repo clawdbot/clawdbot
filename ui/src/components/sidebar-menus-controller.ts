@@ -11,9 +11,8 @@ import type { ThemeMode } from "../app/theme.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
-import { pathForSessionKey } from "../lib/sessions/index.ts";
-import { resolveSessionNavigationAgentId } from "../lib/sessions/route-navigation.ts";
-import { parseAgentSessionKey, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
+import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
+import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import { SidebarCatalogMenuController } from "./app-sidebar-catalog-menu.ts";
 import { isSidebarRouteActive, renderSidebarNavRoute } from "./app-sidebar-nav-menus.ts";
 import type {
@@ -534,32 +533,18 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     }
     const routeSessionKey = isSessionRouteId(routeId) ? this.host.getRouteSessionKey() : "";
     const context = this.host.sessionDataContext;
-    const mainKey = context
-      ? resolveUiConfiguredMainKey({
-          agentsList: context.agents.state.agentsList,
-          hello: context.gateway.snapshot.hello,
-        })
-      : undefined;
-    const fallbackAgentId = context ? resolveSessionNavigationAgentId(context) : "";
-    const sessionPath =
-      routeId === "chat" && routeSessionKey
-        ? pathForSessionKey(
-            "chat",
-            routeSessionKey,
-            fallbackAgentId,
-            this.host.basePath,
-            undefined,
-            mainKey,
-          )
-        : "";
+    const sessionTarget =
+      isSessionRouteId(routeId) && routeSessionKey && context
+        ? sessionNavigationTarget({ context, face: routeId, sessionKey: routeSessionKey })
+        : null;
     return renderSidebarNavRoute({
       routeId,
-      href: sessionPath || pathForRoute(routeId, this.host.basePath),
+      href: sessionTarget?.href ?? pathForRoute(routeId, this.host.basePath),
       active:
         isSidebarRouteActive(this.host.activeRouteId, routeId) &&
         !(routeId === "workboard" && this.activeWorkboardBoardIsPinned()),
       onNavigate: () => {
-        this.host.onNavigate?.(routeId, sessionPath ? { pathname: sessionPath } : undefined);
+        this.host.onNavigate?.(routeId, sessionTarget?.options);
       },
       onPreload: (event, immediate) => this.preloadRoute(routeId, event, immediate),
       onCancelPreload: this.cancelPreload,

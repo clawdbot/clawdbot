@@ -58,11 +58,7 @@ import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
-import { pathForSessionKey } from "../lib/sessions/index.ts";
-import {
-  resolveSessionNavigationAgentId,
-  sessionRouteNavigationOptions,
-} from "../lib/sessions/route-navigation.ts";
+import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import {
   isUiGlobalSessionKey,
   normalizeAgentId,
@@ -819,16 +815,10 @@ class OpenClawShell extends OpenClawLightDomElement {
               context.gateway.setSessionKey(sessionKey);
               // Ambiguous one-segment keys intentionally fall back to /chat;
               // the removed query deep-link format is not a compatibility path.
-              this.navigate("chat", {
-                pathname: pathForSessionKey(
-                  "chat",
-                  sessionKey,
-                  this.sessionNavigationAgentId(),
-                  context.basePath,
-                  undefined,
-                  this.sessionMainKey(),
-                ),
-              });
+              this.navigate(
+                "chat",
+                sessionNavigationTarget({ context, face: "chat", sessionKey }).options,
+              );
             },
           }),
         );
@@ -887,16 +877,10 @@ class OpenClawShell extends OpenClawLightDomElement {
       return;
     }
     context.gateway.setSessionKey(command.sessionKey);
-    this.navigate("chat", {
-      pathname: pathForSessionKey(
-        "chat",
-        command.sessionKey,
-        this.sessionNavigationAgentId(),
-        context.basePath,
-        undefined,
-        this.sessionMainKey(),
-      ),
-    });
+    this.navigate(
+      "chat",
+      sessionNavigationTarget({ context, face: "chat", sessionKey: command.sessionKey }).options,
+    );
   };
 
   private scheduleAgentRosterRefresh() {
@@ -971,21 +955,9 @@ class OpenClawShell extends OpenClawLightDomElement {
     return (
       options ??
       (sessionKey && context
-        ? sessionRouteNavigationOptions({ context, face, sessionKey })
+        ? sessionNavigationTarget({ context, face, sessionKey }).options
         : undefined)
     );
-  }
-
-  private sessionMainKey(): string {
-    return resolveUiConfiguredMainKey({
-      agentsList: this.context?.agents.state.agentsList,
-      hello: this.context?.gateway.snapshot.hello,
-    });
-  }
-
-  private sessionNavigationAgentId(): string {
-    const context = this.context;
-    return context ? resolveSessionNavigationAgentId(context) : "";
   }
 
   private navigate(routeId: string, options?: ApplicationNavigationOptions) {
@@ -1757,16 +1729,10 @@ class OpenClawShell extends OpenClawLightDomElement {
             .onNavigate=${(routeId: RouteId) => this.navigate(routeId)}
             .onSelectSession=${(sessionKey: string) => {
               context.gateway.setSessionKey(sessionKey);
-              this.navigate("chat", {
-                pathname: pathForSessionKey(
-                  "chat",
-                  sessionKey,
-                  this.sessionNavigationAgentId(),
-                  context.basePath,
-                  undefined,
-                  this.sessionMainKey(),
-                ),
-              });
+              this.navigate(
+                "chat",
+                sessionNavigationTarget({ context, face: "chat", sessionKey }).options,
+              );
             }}
             .onSlashCommand=${this.handleCommandPaletteSlashCommand}
           ></openclaw-command-palette>`

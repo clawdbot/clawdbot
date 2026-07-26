@@ -11,8 +11,10 @@ import {
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import { t } from "../../i18n/index.ts";
-import { pathForSessionKey } from "../../lib/sessions/index.ts";
-import { resolveSessionNavigationAgentId } from "../../lib/sessions/route-navigation.ts";
+import {
+  resolveSessionNavigationAgentId,
+  sessionNavigationTarget,
+} from "../../lib/sessions/route-navigation.ts";
 import {
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
@@ -382,19 +384,14 @@ class TasksPage extends OpenClawLightDomElement {
         cancellingTaskIds: this.cancellingTaskIds,
         onCancel: (taskId) => void this.cancelTask(taskId),
         onNavigateToChat: (sessionKey) =>
-          this.context.navigate("chat", {
-            pathname: pathForSessionKey(
-              "chat",
+          this.context.navigate(
+            "chat",
+            sessionNavigationTarget({
+              context: this.context,
+              face: "chat",
               sessionKey,
-              fallbackAgentId,
-              this.context.basePath,
-              undefined,
-              resolveUiConfiguredMainKey({
-                agentsList: this.context.agents.state.agentsList,
-                hello: this.context.gateway.snapshot.hello,
-              }),
-            ),
-          }),
+            }).options,
+          ),
       })}
     `;
   }

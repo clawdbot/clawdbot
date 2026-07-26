@@ -18,8 +18,8 @@ import {
   compareSessionRowsByUpdatedAt,
   filterVisibleSessionRows,
   resolveSessionNavigation,
-  pathForSessionKey,
 } from "../lib/sessions/index.ts";
+import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
@@ -122,17 +122,14 @@ export function buildSidebarSessionNavigationState(input: {
       label: resolveSessionDisplayName(row.key, row, { includeSubagentPrefix: false }),
       meta: formatSidebarTimestamp(row.updatedAt),
       subtitle: resolveSessionWorkSubtitle(row),
-      href:
-        pathForSessionKey(
-          "chat",
-          row.key,
-          navigation.selectedAgentId,
-          context?.basePath ?? "",
-          row,
-          mainKey,
-        ) ||
-        (row.key === navigation.currentSessionKey ? globalThis.location?.pathname : "#") ||
-        "#",
+      href: sessionNavigationTarget({
+        face: "chat",
+        sessionKey: row.key,
+        fallbackAgentId: navigation.selectedAgentId,
+        basePath: context?.basePath ?? "",
+        row,
+        mainKey,
+      }).href,
       active: row.key === navigation.activeRowKey,
       visuallyActive: input.highlightCurrentSession && row.key === navigation.currentSessionKey,
       hasActiveRun: row.archived !== true && Boolean(row.hasActiveRun),

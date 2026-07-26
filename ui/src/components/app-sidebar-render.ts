@@ -13,7 +13,7 @@ import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { sessionHasBoard } from "../lib/board/provider.ts";
-import { pathForSessionKey } from "../lib/sessions/index.ts";
+import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import {
   areUiSessionKeysEquivalent,
   normalizeAgentId,
@@ -135,14 +135,14 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
   });
   return html`
     <a
-      href=${pathForSessionKey(
-        "chat",
-        mainKey,
-        agentId,
-        host.basePath,
-        mainRow ?? undefined,
-        parseAgentSessionKey(mainKey)?.rest,
-      )}
+      href=${sessionNavigationTarget({
+        face: "chat",
+        sessionKey: mainKey,
+        fallbackAgentId: agentId,
+        basePath: host.basePath,
+        row: mainRow ?? undefined,
+        mainKey: parseAgentSessionKey(mainKey)?.rest,
+      }).href}
       class="nav-item nav-item--home ${active ? "nav-item--active" : ""}"
       aria-current=${active ? "page" : nothing}
       @click=${(event: MouseEvent) => {

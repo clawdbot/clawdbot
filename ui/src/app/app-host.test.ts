@@ -788,10 +788,12 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     const shell = document.createElement("openclaw-app-shell") as unknown as ShellUiCommandState;
     shell.runtime = {
       context: {
+        basePath: "",
         navigation: { update },
         gateway: { setSessionKey, snapshot: { hello: null } },
         agents: { state: { agentsList: { mainKey: "main" } } },
         agentSelection: { state: { selectedId: "main" } },
+        sessions: { state: { result: null } },
         navigate,
       } as unknown as ApplicationContext,
     };

@@ -1,13 +1,45 @@
+import type { GatewaySessionRow } from "../../api/types.ts";
+import { pathForRoute } from "../../app-route-paths.ts";
+import { pathForSession } from "../../app-session-path-builder.ts";
 import type { ApplicationNavigationOptions, ApplicationContext } from "../../app/context.ts";
 import type { BoardFace } from "../board/settings.ts";
+import { normalizeOptionalString } from "../string-coerce.ts";
 import { catalogSessionSearch, parseCatalogSessionKey } from "./catalog-key.ts";
-import { pathForSessionKey } from "./navigation.ts";
 import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
 } from "./session-key.ts";
+
+type ContextSessionNavigationTargetParams<TRouteId extends string> = {
+  context: ApplicationContext<TRouteId>;
+  face: BoardFace;
+  sessionKey: string;
+  agentId?: string;
+  fallbackAgentId?: never;
+  basePath?: never;
+  row?: never;
+  mainKey?: never;
+};
+
+type ExplicitSessionNavigationTargetParams = {
+  context?: never;
+  face: BoardFace;
+  sessionKey: string;
+  fallbackAgentId: string;
+  basePath?: string;
+  row?: Pick<GatewaySessionRow, "displayName" | "key">;
+  mainKey?: string | null;
+  agentId?: never;
+};
+
+type SessionNavigationTarget = {
+  href: string;
+  options: ApplicationNavigationOptions & { pathname: string };
+};
 
 export function resolveSessionNavigationAgentId<TRouteId extends string>(
   context: Pick<ApplicationContext<TRouteId>, "agents" | "agentSelection" | "gateway">,
@@ -24,45 +56,67 @@ export function resolveSessionNavigationAgentId<TRouteId extends string>(
   );
 }
 
-export function sessionRouteNavigationOptions<TRouteId extends string>(params: {
-  context: ApplicationContext<TRouteId>;
+function pathForNonCatalogSessionKey(params: {
   face: BoardFace;
   sessionKey: string;
-  agentId?: string;
-}): ApplicationNavigationOptions {
-  const { context, face, sessionKey } = params;
-  const defaults = {
-    agentsList: context.agents.state.agentsList,
-    hello: context.gateway.snapshot.hello,
-  };
-  const mainKey = resolveUiConfiguredMainKey(defaults);
-  const fallbackAgentId = resolveSessionNavigationAgentId(context, params.agentId);
-  const catalogKey = parseCatalogSessionKey(sessionKey);
-  if (catalogKey) {
-    const mainSessionKey = buildAgentMainSessionKey({ agentId: fallbackAgentId, mainKey });
-    return {
-      pathname: pathForSessionKey(
-        face,
-        mainSessionKey,
-        fallbackAgentId,
-        context.basePath,
-        undefined,
-        mainKey,
-      ),
-      search: catalogSessionSearch(catalogKey),
-    };
+  fallbackAgentId: string;
+  basePath: string;
+  row?: Pick<GatewaySessionRow, "displayName" | "key">;
+  mainKey?: string | null;
+}): string {
+  const key = params.row?.key ?? params.sessionKey;
+  const agentId =
+    parseAgentSessionKey(key)?.agentId ?? normalizeOptionalString(params.fallbackAgentId);
+  if (!agentId) {
+    return pathForRoute(params.face, params.basePath);
   }
-  const row = context.sessions.state.result?.sessions.find((candidate) =>
-    areUiSessionKeysEquivalent(candidate.key, sessionKey),
+  return (
+    pathForSession(params.face, normalizeAgentId(agentId), key, params.basePath, {
+      displayName: params.row?.displayName,
+      mainKey: params.mainKey,
+    }) ?? pathForRoute(params.face, params.basePath)
   );
-  return {
-    pathname: pathForSessionKey(
-      face,
-      row?.key ?? sessionKey,
-      fallbackAgentId,
-      context.basePath,
-      row,
-      mainKey,
-    ),
-  };
+}
+
+export function sessionNavigationTarget<TRouteId extends string>(
+  params: ContextSessionNavigationTargetParams<TRouteId> | ExplicitSessionNavigationTargetParams,
+): SessionNavigationTarget {
+  const context = params.context;
+  const sessionKey = params.sessionKey;
+  let fallbackAgentId: string;
+  let basePath: string;
+  let row: Pick<GatewaySessionRow, "displayName" | "key"> | undefined;
+  let mainKey: string | null | undefined;
+  if (context) {
+    const defaults = {
+      agentsList: context.agents.state.agentsList,
+      hello: context.gateway.snapshot.hello,
+    };
+    fallbackAgentId = resolveSessionNavigationAgentId(context, params.agentId);
+    basePath = context.basePath;
+    mainKey = resolveUiConfiguredMainKey(defaults);
+    row = context.sessions.state.result?.sessions.find((candidate) =>
+      areUiSessionKeysEquivalent(candidate.key, sessionKey),
+    );
+  } else {
+    fallbackAgentId = params.fallbackAgentId;
+    basePath = params.basePath ?? "";
+    row = params.row;
+    mainKey = params.mainKey;
+  }
+
+  const catalogKey = parseCatalogSessionKey(row?.key ?? sessionKey);
+  const targetKey = catalogKey
+    ? buildAgentMainSessionKey({ agentId: fallbackAgentId, mainKey: mainKey ?? "main" })
+    : (row?.key ?? sessionKey);
+  const pathname = pathForNonCatalogSessionKey({
+    face: params.face,
+    sessionKey: targetKey,
+    fallbackAgentId,
+    basePath,
+    ...(catalogKey ? { mainKey } : { row, mainKey }),
+  });
+  const search = catalogKey ? catalogSessionSearch(catalogKey) : undefined;
+  const options = search ? { pathname, search } : { pathname };
+  return { href: `${pathname}${search ?? ""}`, options };
 }
