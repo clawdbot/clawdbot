@@ -40,6 +40,8 @@ import {
   shouldRetrySilentErrorAssistantTurn,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./run/incomplete-turn.js";
+import { resolveEmbeddedRunTerminal } from "./run/terminal-resolution.js";
+import { createEmbeddedRunTerminalRetryState } from "./run/terminal-retry-state.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 const REASONING_ONLY_RETRY_INSTRUCTION =
@@ -4833,4 +4835,131 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
   });
 });
+
+describe("resolveEmbeddedRunTerminal auth incomplete-turn gating", () => {
+  function buildTerminalInput(
+    overrides: {
+      terminalTimedOut?: boolean;
+      hadPotentialSideEffects?: boolean;
+      assistantProfileFailureReason?: "auth" | "auth_permanent" | null;
+    } = {},
+  ): Parameters<typeof resolveEmbeddedRunTerminal>[0] {
+    const attempt = makeAttemptResult({
+      assistantTexts: [],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "error",
+        provider: "openai",
+        model: "gpt-4.1",
+        content: [],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    });
+
+    return {
+      runParams: {
+        ...overflowBaseRunParams,
+        allowEmptyAssistantReplyAsSilent: false,
+      } as Parameters<typeof resolveEmbeddedRunTerminal>[0]["runParams"],
+      retryState: createEmbeddedRunTerminalRetryState(),
+      attempt,
+      attemptAssistant: attempt.lastAssistant,
+      activeErrorContext: { provider: "openai", model: "gpt-4.1" },
+      modelApi: "openai-responses",
+      executionContract: "openai",
+      terminalAborted: false,
+      terminalTimedOut: overrides.terminalTimedOut ?? false,
+      terminalInterrupted: false,
+      externalAbort: false,
+      signalOwnedInterruption: false,
+      promptError: undefined,
+      payloadsWithToolMedia: [],
+      finalAssistantVisibleText: undefined,
+      finalAssistantRawText: undefined,
+      agentMeta: {} as Parameters<typeof resolveEmbeddedRunTerminal>[0]["agentMeta"],
+      attemptToolSummary: { calls: 0, tools: [], failures: 0 },
+      maxReasoningOnlyRetryAttempts: 0,
+      maxEmptyResponseRetryAttempts: 0,
+      attemptCompactionCount: 0,
+      replayState: {
+        hadPotentialSideEffects: overrides.hadPotentialSideEffects ?? false,
+      } as Parameters<typeof resolveEmbeddedRunTerminal>[0]["replayState"],
+      activePromptPersisted: false,
+      activateInternalPrompt: vi.fn(),
+      setSuppressNextUserMessagePersistence: vi.fn(),
+      armPostCompactionGuard: vi.fn(),
+      readTerminalToolPresentation: vi.fn(() => undefined),
+      resolveReplayInvalid: vi.fn(() => false),
+      setTerminalLifecycleMeta: vi.fn(),
+      maybeMarkAuthProfileFailure: vi.fn(async () => {}),
+      assistantProfileFailureReason: overrides.assistantProfileFailureReason ?? null,
+      startedAtMs: Date.now(),
+      provider: "openai",
+      modelId: "gpt-4.1",
+      modelTransportId: "gpt-4.1",
+      modelTransportApi: "openai-responses",
+      profileFailureStore: { version: 1, profiles: {} } as Parameters<
+        typeof resolveEmbeddedRunTerminal
+      >[0]["profileFailureStore"],
+      attemptAuthProfileStore: { version: 1, profiles: {} } as Parameters<
+        typeof resolveEmbeddedRunTerminal
+      >[0]["attemptAuthProfileStore"],
+      apiKeyInfo: null,
+      agentHarnessId: "test-harness",
+      settledTurnFinalizationAttempted: false,
+      pluginHarnessOwnsTransport: false,
+      pluginHarnessOwnsAuthBootstrap: false,
+      reportedModelRef: { provider: "openai", model: "gpt-4.1" },
+      traceAttempts: [],
+      traceAttemptUsesFallback: () => false,
+      contextRecoveryState: { recovered: false } as Parameters<
+        typeof resolveEmbeddedRunTerminal
+      >[0]["contextRecoveryState"],
+    };
+  }
+
+  it("surfaces the auth-specific message when the generic incomplete-turn warning would be shown", async () => {
+    const result = await resolveEmbeddedRunTerminal(
+      buildTerminalInput({ assistantProfileFailureReason: "auth" }),
+    );
+
+    expect(result.action).toBe("complete");
+    if (result.action !== "complete") {
+      throw new Error("Expected terminal resolution to complete");
+    }
+    expect(result.result.payloads?.[0]?.text).toBe(
+      "Authentication failed for model openai/gpt-4.1. Please check your API key or switch to a different model.",
+    );
+  });
+
+  it("does not override a suppressed terminal outcome with auth text", async () => {
+    const result = await resolveEmbeddedRunTerminal(
+      buildTerminalInput({ assistantProfileFailureReason: "auth", terminalTimedOut: true }),
+    );
+
+    expect(result.action).toBe("complete");
+    if (result.action !== "complete") {
+      throw new Error("Expected terminal resolution to complete");
+    }
+    const text = result.result.payloads?.[0]?.text;
+    expect(text).toBeUndefined();
+  });
+
+  it("preserves the safety-qualified warning when side effects exist and the reason is auth", async () => {
+    const result = await resolveEmbeddedRunTerminal(
+      buildTerminalInput({
+        assistantProfileFailureReason: "auth",
+        hadPotentialSideEffects: true,
+      }),
+    );
+
+    expect(result.action).toBe("complete");
+    if (result.action !== "complete") {
+      throw new Error("Expected terminal resolution to complete");
+    }
+    const text = result.result.payloads?.[0]?.text;
+    expect(text).toContain("some tool actions may have already been executed");
+    expect(text).not.toContain("Authentication failed");
+  });
+});
+
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

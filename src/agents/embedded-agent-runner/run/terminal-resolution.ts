@@ -22,7 +22,6 @@ import {
   hasAttemptTerminalState,
   hasYieldContinuationEvidence,
   resolveAttemptReplayMetadata,
-  resolveAuthFailurePayloadText,
   resolveEmptyResponseRetryInstruction,
   resolveIncompleteTurnPayloadText,
   resolveReasoningOnlyRetryInstruction,
@@ -283,19 +282,17 @@ export async function resolveEmbeddedRunTerminal(input: {
   }
   const incompleteTurnText = emptyAssistantReplyIsSilent
     ? null
-    : (resolveAuthFailurePayloadText({
-        assistantProfileFailureReason: input.assistantProfileFailureReason,
-        provider: input.provider,
-        modelId: input.modelId,
-      }) ??
-      resolveIncompleteTurnPayloadText({
+    : resolveIncompleteTurnPayloadText({
         payloadCount,
         aborted: input.terminalAborted,
         externalAbort: input.externalAbort || input.signalOwnedInterruption,
         timedOut: input.terminalTimedOut,
         hadPotentialSideEffects: input.replayState.hadPotentialSideEffects,
         attempt,
-      }));
+        assistantProfileFailureReason: input.assistantProfileFailureReason,
+        provider: input.provider,
+        modelId: input.modelId,
+      });
   const incompleteTurnFallbackSafe = Boolean(
     incompleteTurnText &&
     !input.terminalInterrupted &&

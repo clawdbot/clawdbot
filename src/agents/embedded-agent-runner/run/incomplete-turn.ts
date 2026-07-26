@@ -254,6 +254,9 @@ export function resolveIncompleteTurnPayloadText(params: {
   timedOut: boolean;
   hadPotentialSideEffects?: boolean;
   attempt: IncompleteTurnAttempt;
+  assistantProfileFailureReason?: AuthProfileFailureReason | null;
+  provider?: string;
+  modelId?: string;
 }): string | null {
   // Prefer the current attempt's terminal message. The session fallback can
   // still point at the pre-tool turn after a post-tool answer completes. (#80918)
@@ -319,10 +322,30 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
-  return params.hadPotentialSideEffects ||
-    resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects
+  const hasPotentialSideEffects =
+    params.hadPotentialSideEffects ||
+    resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects;
+  const baseText = hasPotentialSideEffects
     ? "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying."
     : "⚠️ Agent couldn't generate a response. Please try again.";
+
+  if (
+    !hasPotentialSideEffects &&
+    (params.assistantProfileFailureReason === "auth" ||
+      params.assistantProfileFailureReason === "auth_permanent") &&
+    params.provider &&
+    params.modelId
+  ) {
+    return (
+      resolveAuthFailurePayloadText({
+        assistantProfileFailureReason: params.assistantProfileFailureReason,
+        provider: params.provider,
+        modelId: params.modelId,
+      }) ?? baseText
+    );
+  }
+
+  return baseText;
 }
 
 /**
