@@ -132,14 +132,14 @@ export type PreparedFormattedSystemEvents = {
   managedDeliveries: PreparedManagedSystemEventDelivery[];
 };
 
-const OPENCLAW_MESSAGE_METADATA_KEY = "__openclaw";
+const MESSAGE_METADATA_KEY = "__openclaw";
 
 function readSessionDeliveryAckIds(message: unknown): Set<string> {
   const ids = new Set<string>();
   if (!message || typeof message !== "object" || Array.isArray(message)) {
     return ids;
   }
-  const metadata = (message as Record<string, unknown>)[OPENCLAW_MESSAGE_METADATA_KEY];
+  const metadata = (message as Record<string, unknown>)[MESSAGE_METADATA_KEY];
   if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
     return ids;
   }
