@@ -75,18 +75,19 @@ describe("media-generation live-test helpers", () => {
 
   it("redacts live API keys for diagnostics", () => {
     expect(redactLiveApiKey(undefined)).toBe("none");
-    expect(redactLiveApiKey("short-key")).toBe("short-key");
-    expect(redactLiveApiKey("sk-proj-1234567890")).toBe("sk-proj-...7890");
+    expect(redactLiveApiKey("   ")).toBe("none");
+    expect(redactLiveApiKey("short-key")).toBe("<redacted>");
+    expect(redactLiveApiKey("sk-proj-1234567890")).toBe("<redacted>");
   });
 
-  it("preserves UTF-16 surrogate pairs during API key redaction", () => {
+  it("handles keys with UTF-16 surrogate pairs by fully redacting", () => {
     // 😀 (U+1F600) is a surrogate pair at code-unit positions 7-8.
-    // raw .slice(0, 8) captures the high surrogate at index 7 without the low.
-    // truncateUtf16Safe backs the boundary up to avoid the orphan.
+    // Full redaction means the credential never reaches the output, so
+    // surrogate pairs in the key value are inherently safe.
     const key = "abcdefg😀hijklmnop";
     const result = redactLiveApiKey(key);
-    expect(result).toBe("abcdefg...mnop");
-    expect(result).not.toMatch(/[\uD800-\uDBFF]/u); // no orphaned high surrogate
-    expect(result).not.toMatch(/[\uDC00-\uDFFF]/u); // no orphaned low surrogate
+    expect(result).toBe("<redacted>");
+    expect(result).not.toMatch(/[\uD800-\uDBFF]/u);
+    expect(result).not.toMatch(/[\uDC00-\uDFFF]/u);
   });
 });

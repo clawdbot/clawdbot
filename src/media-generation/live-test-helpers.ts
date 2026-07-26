@@ -1,6 +1,5 @@
 // Provides live-test helpers for media-generation provider checks.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { sliceUtf16Safe, truncateUtf16Safe as n } from "@openclaw/normalization-core/utf16-slice";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 
 // Helpers shared by live media-generation tests. They keep provider/model/env
@@ -13,16 +12,13 @@ type LiveProviderModelConfig =
     }
   | undefined;
 
-/** Redacts live API keys without retaining credential-derived text in test output. */
+/** Redacts live API keys without retaining any credential characters in test output. */
 export function redactLiveApiKey(value: string | undefined): string {
   const trimmed = value?.trim();
   if (!trimmed) {
     return "none";
   }
-  if (trimmed.length <= 12) {
-    return trimmed;
-  }
-  return `${n(trimmed, 8)}...${sliceUtf16Safe(trimmed, -4)}`;
+  return "<redacted>";
 }
 
 /** Parses comma-separated live-test filters; null means "all". */
