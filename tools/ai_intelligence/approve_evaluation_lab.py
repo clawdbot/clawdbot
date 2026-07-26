@@ -16,6 +16,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 REPORTS = ROOT / "reports/ai_intelligence"
 EVALUATION = REPORTS / "evaluation_lab/evaluation-lab-latest.json"
+EVALUATION_DIR = EVALUATION.parent
 APPROVAL_DIR = REPORTS / "evaluation_approvals"
 LATEST_APPROVAL = APPROVAL_DIR / "evaluation-approval-latest.json"
 LATEST_CANDIDATES = APPROVAL_DIR / "approved-scorecard-candidates-latest.json"
@@ -87,6 +88,14 @@ def eligible_candidates(evaluation: dict[str, Any]) -> list[dict[str, Any]]:
     return candidates
 
 
+def resolve_evaluation_path(value: str | None) -> Path:
+    path = Path(value).resolve() if value else EVALUATION.resolve()
+    allowed = EVALUATION_DIR.resolve()
+    if path.parent != allowed or not path.name.startswith("evaluation-lab-"):
+        raise ValueError("Evaluation file must be an Evaluation Lab report.")
+    return path
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     group = parser.add_mutually_exclusive_group()
@@ -94,9 +103,11 @@ def main() -> int:
     group.add_argument("--reject", metavar="PIPELINE_ID")
     group.add_argument("--status", action="store_true")
     parser.add_argument("--note", default="")
+    parser.add_argument("--evaluation-file")
     args = parser.parse_args()
 
-    evaluation = load(EVALUATION)
+    evaluation_path = resolve_evaluation_path(args.evaluation_file)
+    evaluation = load(evaluation_path)
     pipeline_id = str(evaluation.get("pipeline_id", ""))
     candidates = eligible_candidates(evaluation)
 

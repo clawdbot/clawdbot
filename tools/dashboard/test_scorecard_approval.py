@@ -94,8 +94,8 @@ class ScorecardDashboardTests(unittest.TestCase):
         reports.mkdir()
         config.mkdir()
 
-        dashboard.AI_EVALUATION_PATH = reports / "evaluation.json"
-        dashboard.AI_APPROVAL_PATH = reports / "approval.json"
+        dashboard.AI_EVALUATION_PATH = reports / "evaluation-lab-latest.json"
+        dashboard.AI_APPROVAL_PATH = reports / "evaluation-approval-latest.json"
         dashboard.AI_CANDIDATES_PATH = reports / "candidates.json"
         dashboard.AI_PROMOTION_DIR = reports / "promotions"
         dashboard.AI_SCORECARD_PATH = config / "scorecard.json"
@@ -227,6 +227,44 @@ class ScorecardDashboardTests(unittest.TestCase):
         self.assertIn("Insufficient evidence", rendered)
         self.assertNotIn("Approve Evaluation", rendered)
         self.assertNotIn("Reject Evaluation", rendered)
+
+    def test_queue_selects_an_older_undecided_archived_evaluation(self):
+        archived = dashboard.AI_EVALUATION_PATH.parent / (
+            "evaluation-lab-pipeline-0.json"
+        )
+        archived.write_text(
+            json.dumps(
+                {
+                    "pipeline_id": "pipeline-0",
+                    "created_at": "2026-07-25T10:00:00Z",
+                    "benchmark_reconciliation": {
+                        "safe-tool-use": {
+                            "promotion_eligible": True,
+                            "winner_passed_deterministic_validation": True,
+                            "final_winner": "gemma3:12b",
+                            "final_status": "passed",
+                        }
+                    },
+                }
+            )
+        )
+        dashboard.AI_APPROVAL_PATH.write_text(
+            json.dumps(
+                {
+                    "decision": "rejected",
+                    "decision_id": "pipeline-1-rejected",
+                    "pipeline_id": "pipeline-1",
+                }
+            )
+        )
+
+        snapshot = dashboard.scorecard_snapshot()
+        rendered = dashboard.ai_scorecard()
+
+        self.assertEqual(snapshot["evaluation"]["pipeline_id"], "pipeline-0")
+        self.assertEqual(snapshot["pending_count"], 1)
+        self.assertIn("Approve Evaluation", rendered)
+        self.assertIn("pipeline_id=pipeline-0", rendered)
 
     def test_mutations_require_loopback(self):
         dashboard.request.remote_addr = "192.168.50.20"

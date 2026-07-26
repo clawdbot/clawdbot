@@ -7,11 +7,18 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tools.ai_intelligence.approve_evaluation_lab import eligible_candidates
+from tools.ai_intelligence.approve_evaluation_lab import (
+    eligible_candidates,
+    resolve_evaluation_path,
+)
 from tools.ai_intelligence.promote_approved_scorecard import atomic_json
 
 
 class ScorecardWorkflowTests(unittest.TestCase):
+    def test_evaluation_path_rejects_files_outside_report_directory(self) -> None:
+        with self.assertRaises(ValueError):
+            resolve_evaluation_path("/tmp/not-an-evaluation.json")
+
     def test_only_validated_winners_are_approval_candidates(self) -> None:
         candidates = eligible_candidates(
             {

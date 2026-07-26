@@ -225,16 +225,20 @@ The deployment-local dashboard includes an operator review surface at
 
 The review workflow:
 
-- displays the latest undecided Evaluation Lab pipeline;
-- links each promotion-eligible recommendation to a read-only evidence view;
+- discovers immutable `evaluation-lab-*.json` reports and displays the oldest
+  undecided pipeline first;
+- advances to the next archived undecided pipeline after a decision;
+- links each promotion-eligible recommendation to a pipeline-specific,
+  read-only evidence view;
 - shows benchmark prompts, model responses, deterministic validation, reviewer
   scores, and findings when those source reports exist;
 - labels fixture-only or missing evidence and warns the operator not to treat it
   as a real recommendation;
 - presents direct Approve and Reject actions with optional audit notes;
 - treats the decision-button click as confirmation;
-- binds the submitted action to the pipeline shown on the page so stale pages
-  cannot decide a newer evaluation;
+- binds the submitted action to the pipeline shown on the page and passes the
+  exact validated Evaluation Lab report path to the decision tool, so stale
+  pages cannot decide another evaluation;
 - restricts mutations to loopback requests;
 - returns successful decisions to the clean review URL;
 - preserves completed decisions and shows an explicit empty queue when no

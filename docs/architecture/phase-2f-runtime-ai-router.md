@@ -448,9 +448,12 @@ connections remain review-only. Operators should use an SSH tunnel to
 
 The scorecard exposes read-only evidence for each recommendation and must
 distinguish executed evidence from development fixtures or missing reports.
-After a completed rejection, the dashboard preserves the decision and shows an
-empty review queue until a new Evaluation Lab report exists. It must not create
-synthetic review items to keep the queue populated.
+The dashboard discovers archived Evaluation Lab reports, orders undecided
+pipelines deterministically, and advances to the next pipeline after a
+decision. Evidence links remain bound to the selected pipeline. When no
+undecided report remains, the dashboard preserves completed decisions and shows
+an empty review queue. It must not create synthetic review items to keep the
+queue populated.
 
 ## 18. Production Promotion Requirements
 

@@ -1354,9 +1354,65 @@ def scorecard_action_is_local():
     return request.remote_addr in {"127.0.0.1", "::1"}
 
 
+def scorecard_evaluation_records():
+    evaluations = {}
+    for path in sorted(AI_EVALUATION_PATH.parent.glob("evaluation-lab-*.json")):
+        value = load_json_object(path)
+        pipeline_id = str((value or {}).get("pipeline_id", ""))
+        if pipeline_id:
+            evaluations[pipeline_id] = {"path": path, "value": value}
+
+    decisions = {}
+    if AI_APPROVAL_PATH.parent.is_dir():
+        for path in sorted(
+            AI_APPROVAL_PATH.parent.glob("evaluation-approval-*.json")
+        ):
+            if path.name == AI_APPROVAL_PATH.name:
+                continue
+            value = load_json_object(path)
+            pipeline_id = str((value or {}).get("pipeline_id", ""))
+            if pipeline_id:
+                decisions[pipeline_id] = value
+    latest_decision = load_json_object(AI_APPROVAL_PATH)
+    latest_pipeline = str((latest_decision or {}).get("pipeline_id", ""))
+    if latest_pipeline:
+        decisions[latest_pipeline] = latest_decision
+
+    pending = [
+        record
+        for pipeline_id, record in evaluations.items()
+        if pipeline_id not in decisions
+    ]
+    pending.sort(
+        key=lambda record: (
+            str(record["value"].get("created_at")
+                or record["value"].get("generated_at")
+                or ""),
+            str(record["value"].get("pipeline_id", "")),
+        )
+    )
+    return {
+        "evaluations": evaluations,
+        "decisions": decisions,
+        "pending": pending,
+    }
+
+
+def scorecard_evaluation_path(pipeline_id):
+    queue = scorecard_evaluation_records()
+    record = queue["evaluations"].get(str(pipeline_id))
+    return record["path"] if record else None
+
+
 def scorecard_snapshot():
-    evaluation = load_json_object(AI_EVALUATION_PATH)
-    approval = load_json_object(AI_APPROVAL_PATH)
+    queue = scorecard_evaluation_records()
+    selected = queue["pending"][0] if queue["pending"] else None
+    if selected:
+        evaluation = selected["value"]
+    else:
+        evaluation = load_json_object(AI_EVALUATION_PATH)
+    pipeline_id = str((evaluation or {}).get("pipeline_id", ""))
+    approval = queue["decisions"].get(pipeline_id)
     candidates = load_json_object(AI_CANDIDATES_PATH)
     scorecard = load_json_object(AI_SCORECARD_PATH)
 
@@ -1414,6 +1470,8 @@ def scorecard_snapshot():
         "eligible": eligible,
         "audits": audits,
         "promotion_applied": bool(decision_id and decision_id in applied_decisions),
+        "pending_count": len(queue["pending"]),
+        "completed_count": len(queue["decisions"]),
     }
 
 
@@ -1468,7 +1526,9 @@ def ai_scorecard():
   <td>{html_module.escape(str(candidate['model']))}</td>
   <td>{html_module.escape(str(candidate['status']))}</td>
   <td>
-    <a href="/ai-scorecard/evidence/{quote(str(candidate['benchmark_id']))}"
+    <a href="/ai-scorecard/evidence/{quote(str(candidate['benchmark_id']))}?pipeline_id={
+        quote(pipeline_id)
+    }"
        style="display:inline-block;background:#2563eb;color:white;
               padding:10px 14px;border-radius:7px;text-decoration:none;
               font-weight:bold;white-space:nowrap;">
@@ -1623,7 +1683,7 @@ def ai_scorecard():
      audit and review.</p>
   <a href="/ai-scorecard/evidence/{quote(next(iter(evaluation.get(
       'benchmark_reconciliation', {}
-  )), ''))}"
+  )), ''))}?pipeline_id={quote(pipeline_id)}"
      style="display:inline-block;background:#475569;color:white;
             padding:10px 14px;border-radius:7px;text-decoration:none;
             font-weight:bold;">View Completed Decision Details</a>
@@ -1668,7 +1728,15 @@ def ai_scorecard():
 
 @app.route("/ai-scorecard/evidence/<benchmark_id>")
 def ai_scorecard_evidence(benchmark_id):
-    evaluation = load_json_object(AI_EVALUATION_PATH) or {}
+    requested_pipeline = str(request.args.get("pipeline_id") or "")
+    requested_path = (
+        scorecard_evaluation_path(requested_pipeline)
+        if requested_pipeline
+        else AI_EVALUATION_PATH
+    )
+    if requested_pipeline and requested_path is None:
+        abort(404)
+    evaluation = load_json_object(requested_path) or {}
     reconciliation = evaluation.get("benchmark_reconciliation", {})
     if benchmark_id not in reconciliation:
         abort(404)
@@ -1842,7 +1910,8 @@ def require_local_scorecard_action():
 @app.route("/ai-scorecard/approve", methods=["POST"])
 def ai_scorecard_approve():
     require_local_scorecard_action()
-    evaluation = load_json_object(AI_EVALUATION_PATH) or {}
+    evaluation_path = scorecard_evaluation_path(request.form.get("pipeline_id", ""))
+    evaluation = load_json_object(evaluation_path) if evaluation_path else {}
     pipeline_id = str(evaluation.get("pipeline_id", ""))
     if not pipeline_id or request.form.get("pipeline_id", "") != pipeline_id:
         return scorecard_redirect(
@@ -1850,7 +1919,12 @@ def ai_scorecard_approve():
             "The evaluation changed. Refresh the page and try again.",
         )
     note = str(request.form.get("note") or "").strip()[:500]
-    arguments = ["--approve", pipeline_id]
+    arguments = [
+        "--evaluation-file",
+        str(evaluation_path),
+        "--approve",
+        pipeline_id,
+    ]
     if note:
         arguments.extend(["--note", note])
     success, output = run_scorecard_action(AI_APPROVAL_TOOL, *arguments)
@@ -1862,7 +1936,8 @@ def ai_scorecard_approve():
 @app.route("/ai-scorecard/reject", methods=["POST"])
 def ai_scorecard_reject():
     require_local_scorecard_action()
-    evaluation = load_json_object(AI_EVALUATION_PATH) or {}
+    evaluation_path = scorecard_evaluation_path(request.form.get("pipeline_id", ""))
+    evaluation = load_json_object(evaluation_path) if evaluation_path else {}
     pipeline_id = str(evaluation.get("pipeline_id", ""))
     if not pipeline_id or request.form.get("pipeline_id", "") != pipeline_id:
         return scorecard_redirect(
@@ -1870,7 +1945,12 @@ def ai_scorecard_reject():
             "The evaluation changed. Refresh the page and try again.",
         )
     note = str(request.form.get("note") or "").strip()[:500]
-    arguments = ["--reject", pipeline_id]
+    arguments = [
+        "--evaluation-file",
+        str(evaluation_path),
+        "--reject",
+        pipeline_id,
+    ]
     if note:
         arguments.extend(["--note", note])
     success, output = run_scorecard_action(AI_APPROVAL_TOOL, *arguments)
