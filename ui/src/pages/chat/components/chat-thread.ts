@@ -37,7 +37,6 @@ import {
 } from "../../../lib/chat/companion-question.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
-import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -862,6 +861,11 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   const selection = window.getSelection();
   const selectedText = selectionIntersectsElement(selection, bubble) ? selection?.toString() : "";
 
+  // When text is selected, let the native browser context menu handle copy.
+  if (selectedText) {
+    return;
+  }
+
   event.preventDefault();
   event.stopPropagation();
   removeReplyContextMenu();
@@ -872,19 +876,6 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   menu.style.left = `${event.clientX}px`;
   menu.style.top = `${event.clientY}px`;
   const focusCandidates: HTMLButtonElement[] = [];
-  if (selectedText) {
-    const action = createMessageActionContextButton({
-      label: t("chat.messages.copySelection"),
-      disabled: false,
-      tooltip: t("chat.messages.copySelection"),
-      onClick: () => {
-        void copyToClipboard(selectedText);
-        removeReplyContextMenu();
-      },
-    });
-    menu.append(action.element);
-    focusCandidates.push(action.button);
-  }
   if (canReply) {
     const replyMessageId = messageId || stableReplyMessageId(senderLabel, text);
     const replyButton = createReplyContextMenuButton(() => {

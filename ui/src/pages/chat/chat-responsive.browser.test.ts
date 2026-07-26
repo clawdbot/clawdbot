@@ -2494,5 +2494,86 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       await closeBrowserPage(page);
     }
   });
+
+  it(
+    "keeps selected bubble text in the native context menu and unselected actions in the app menu",
+    FULL_APP_TEST_OPTIONS,
+    async () => {
+      if (!realChatServer) {
+        throw new Error("Expected the Control UI server to be ready");
+      }
+      const page = await openBrowserPage(1366, 900);
+      try {
+        const messageText = "Selected chat text keeps browser copy actions available.";
+        await installMockGateway(page, {
+          historyMessages: [
+            {
+              content: [{ text: messageText, type: "text" }],
+              role: "assistant",
+              timestamp: Date.now(),
+            },
+          ],
+        });
+        await page.goto(`${realChatServer.baseUrl}chat`, {
+          waitUntil: "domcontentloaded",
+          timeout: APP_FIRST_RENDER_TIMEOUT_MS,
+        });
+        const bubble = page
+          .locator(".chat-group.assistant .chat-bubble")
+          .filter({ hasText: messageText });
+        await bubble.waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
+        await bubble.evaluate((element, text) => {
+          const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+          let textNode: Text | null = null;
+          while (walker.nextNode()) {
+            const candidate = walker.currentNode;
+            if (candidate instanceof Text && candidate.textContent?.includes(text)) {
+              textNode = candidate;
+              break;
+            }
+          }
+          if (!textNode) {
+            throw new Error("Expected selectable chat text");
+          }
+          const range = document.createRange();
+          range.selectNodeContents(textNode);
+          const selection = window.getSelection();
+          selection?.removeAllRanges();
+          selection?.addRange(range);
+          const thread = element.closest(".chat-thread");
+          if (!thread) {
+            throw new Error("Expected chat thread");
+          }
+          thread.addEventListener(
+            "contextmenu",
+            (event) => {
+              element.setAttribute(
+                "data-context-menu-default-prevented",
+                String(event.defaultPrevented),
+              );
+            },
+            { once: true },
+          );
+        }, messageText);
+
+        await bubble.click({ button: "right" });
+        await expect
+          .poll(() => bubble.getAttribute("data-context-menu-default-prevented"))
+          .toBe("false");
+        await expect.poll(() => page.locator(".chat-reply-context-menu").count()).toBe(0);
+
+        await page.keyboard.press("Escape");
+        await page.evaluate(() => window.getSelection()?.removeAllRanges());
+        await bubble.click({ button: "right" });
+        const menu = page.locator(".chat-reply-context-menu");
+        await menu.waitFor({ state: "visible" });
+        await expect
+          .poll(() => menu.getByRole("menuitem", { name: "Reply", exact: true }).isVisible())
+          .toBe(true);
+      } finally {
+        await closeBrowserPage(page);
+      }
+    },
+  );
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

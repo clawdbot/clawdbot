@@ -5818,14 +5818,8 @@ describe("right-click Reply", () => {
     const selectedEvent = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
     bubble.dispatchEvent(selectedEvent);
 
-    expect(selectedEvent.defaultPrevented).toBe(true);
-    expect(
-      [...document.querySelectorAll(".chat-reply-context-menu button")].map((button) =>
-        button.textContent?.trim(),
-      ),
-    ).toEqual(["Copy", "Reply"]);
-    document.querySelector<HTMLButtonElement>('[aria-label="Copy"]')!.click();
-    await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith("selectable"));
+    expect(selectedEvent.defaultPrevented).toBe(false);
+    expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
 
     selectedRange = document.createRange();
     selectedRange.selectNodeContents(otherBubble);
