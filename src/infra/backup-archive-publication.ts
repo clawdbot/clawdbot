@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { constants as fsConstants, type Stats } from "node:fs";
+import { type Stats } from "node:fs";
 import fs from "node:fs/promises";
-import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 import {
   removePreparedBackupArchive,
@@ -9,8 +8,10 @@ import {
   type PreparedBackupArchive,
 } from "./backup-create-stream.js";
 import {
+  getPublishFileExclusiveFailureDetails,
+  isHardlinkFallbackError,
+  publishFileExclusive,
   requireDirectorySync,
-  syncDirectory,
   syncDirectoryIfSupported,
   type DirectoryReceipt,
 } from "./directory-durability.js";
@@ -50,20 +51,6 @@ async function assertTargetAbsent(targetPath: string): Promise<void> {
   throw new Error(`Refusing to overwrite existing backup archive: ${targetPath}`);
 }
 
-async function assertPublicationParentUnchanged(plan: BackupArchivePublication): Promise<void> {
-  const currentCanonicalParent = await fs.realpath(plan.requestedParentPath);
-  const currentParentIdentity = await fs.lstat(plan.canonicalParentPath);
-  if (
-    !pathsEqual(currentCanonicalParent, plan.canonicalParentPath) ||
-    !currentParentIdentity.isDirectory() ||
-    !sameFileIdentity(plan.parentReceipt.identity, currentParentIdentity)
-  ) {
-    throw new Error(
-      `Backup output directory changed during archive creation: ${plan.requestedParentPath}`,
-    );
-  }
-}
-
 async function removeDirectoryIfOwned(
   directoryPath: string,
   expectedIdentity: Stats,
@@ -88,80 +75,6 @@ async function removeDirectoryIfOwned(
 
 async function removeStagingDirectoryIfOwned(plan: BackupArchivePublication): Promise<boolean> {
   return await removeDirectoryIfOwned(plan.stagingDir, plan.stagingIdentity);
-}
-
-async function syncPublishedArchiveCommit(
-  plan: BackupArchivePublication,
-  preparedHandle: FileHandle,
-): Promise<void> {
-  if (process.platform === "win32") {
-    // Windows FlushFileBuffers requires a writable file handle and flushes
-    // buffered file metadata. The prepared handle pins the published inode.
-    await preparedHandle.sync();
-    return;
-  }
-  // Publication success requires a real directory fsync. Unsupported
-  // filesystems fail closed instead of weakening crash durability.
-  const outcome = await syncDirectory(plan.parentReceipt, {
-    label: "backup publication directory",
-  });
-  requireDirectorySync(outcome, "Backup publication directory");
-}
-
-function isUnsupportedHardLinkError(error: unknown): boolean {
-  const code = (error as NodeJS.ErrnoException).code;
-  return (
-    code === "EPERM" ||
-    code === "EXDEV" ||
-    code === "ENOTSUP" ||
-    code === "EOPNOTSUPP" ||
-    code === "ENOSYS"
-  );
-}
-
-async function openPreparedArchive(
-  plan: BackupArchivePublication,
-  prepared: PreparedBackupArchive,
-): Promise<FileHandle> {
-  const accessMode = process.platform === "win32" ? fsConstants.O_RDWR : fsConstants.O_RDONLY;
-  const flags = accessMode | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0);
-  const handle = await fs.open(prepared.archivePath, flags);
-  try {
-    const openedIdentity = await handle.stat();
-    const currentIdentity = await fs.lstat(prepared.archivePath);
-    if (
-      !pathsEqual(path.dirname(prepared.archivePath), plan.stagingDir) ||
-      !openedIdentity.isFile() ||
-      !currentIdentity.isFile() ||
-      !sameFileIdentity(prepared.identity, openedIdentity) ||
-      !sameFileIdentity(prepared.identity, currentIdentity)
-    ) {
-      throw new Error(
-        `Backup archive staging file changed before publication: ${prepared.archivePath}`,
-      );
-    }
-    return handle;
-  } catch (error) {
-    await handle.close().catch(() => undefined);
-    throw error;
-  }
-}
-
-async function assertPublishedArchiveUnchanged(
-  plan: BackupArchivePublication,
-  handle: FileHandle,
-  expectedIdentity: Stats,
-): Promise<void> {
-  const openedIdentity = await handle.stat();
-  const currentIdentity = await fs.lstat(plan.canonicalOutputPath);
-  if (
-    !openedIdentity.isFile() ||
-    !currentIdentity.isFile() ||
-    !sameFileIdentity(expectedIdentity, openedIdentity) ||
-    !sameFileIdentity(expectedIdentity, currentIdentity)
-  ) {
-    throw new Error(`Published backup archive changed: ${plan.requestedOutputPath}`);
-  }
 }
 
 export async function createBackupArchivePublication(
@@ -278,55 +191,43 @@ export async function publishPreparedBackupArchive(params: {
   log?: BackupArchiveLogger;
 }): Promise<void> {
   const { plan, prepared } = params;
-  let preparedHandle: FileHandle | undefined;
-  let publishedIdentity: Stats | undefined;
-  let hardLinkCreated = false;
+  let publicationPreserved = false;
   let committed = false;
   try {
-    await assertPublicationParentUnchanged(plan);
-    preparedHandle = await openPreparedArchive(plan, prepared);
-    await assertTargetAbsent(plan.canonicalOutputPath);
-    // publishFileExclusive removes a newly linked target when its internal
-    // directory sync fails. Backups intentionally retain that complete output
-    // for recovery, so this site cannot adopt it until fs-safe exposes a
-    // preserve-on-sync-failure publication policy.
     try {
-      await fs.link(prepared.archivePath, plan.canonicalOutputPath);
-      hardLinkCreated = true;
+      const publication = await publishFileExclusive({
+        sourcePath: prepared.archivePath,
+        targetPath: plan.canonicalOutputPath,
+        expectedSourceIdentity: prepared.identity,
+        parentReceipt: plan.parentReceipt,
+        strategy: "link-required",
+        onSyncFailure: "preserve",
+      });
+      publicationPreserved = true;
+      requireDirectorySync(publication.directorySync, "Backup publication directory");
+      committed = true;
     } catch (error) {
+      const details = getPublishFileExclusiveFailureDetails(error);
+      publicationPreserved ||= details?.cleanup === "preserved";
       if ((error as NodeJS.ErrnoException).code === "EEXIST") {
         throw new Error(
           `Refusing to overwrite existing backup archive: ${plan.requestedOutputPath}`,
           { cause: error },
         );
       }
-      if (isUnsupportedHardLinkError(error)) {
+      if (isHardlinkFallbackError(error)) {
         throw new Error(
           `Atomic backup publication requires hard-link support in ${plan.requestedParentPath}.`,
           { cause: error },
         );
       }
+      if ((error as { code?: unknown }).code === "path-mismatch") {
+        throw new Error(`Backup archive changed during publication: ${plan.requestedOutputPath}`, {
+          cause: error,
+        });
+      }
       throw error;
     }
-
-    await assertPublicationParentUnchanged(plan);
-    const currentTargetIdentity = await fs.lstat(plan.canonicalOutputPath);
-    const currentStagingIdentity = await fs.lstat(prepared.archivePath);
-    if (
-      !currentTargetIdentity.isFile() ||
-      !currentStagingIdentity.isFile() ||
-      !sameFileIdentity(prepared.identity, currentTargetIdentity) ||
-      !sameFileIdentity(prepared.identity, currentStagingIdentity)
-    ) {
-      throw new Error(`Backup archive changed during publication: ${plan.requestedOutputPath}`);
-    }
-    publishedIdentity = currentTargetIdentity;
-    await assertPublishedArchiveUnchanged(plan, preparedHandle, publishedIdentity);
-
-    // The first parent sync commits the final pathname. After this point,
-    // cleanup failures must not remove or invalidate the durable archive.
-    await syncPublishedArchiveCommit(plan, preparedHandle);
-    committed = true;
 
     if (!removePreparedBackupArchive(prepared)) {
       retainArchiveForCleanup(plan, prepared);
@@ -344,24 +245,11 @@ export async function publishPreparedBackupArchive(params: {
         }.`,
       );
     });
-    await assertPublicationParentUnchanged(plan);
-    await assertPublishedArchiveUnchanged(plan, preparedHandle, publishedIdentity);
   } catch (error) {
     if (!committed) {
-      if (!publishedIdentity && hardLinkCreated) {
-        const currentTargetIdentity = await fs
-          .lstat(plan.canonicalOutputPath)
-          .catch(() => undefined);
-        if (
-          currentTargetIdentity?.isFile() &&
-          sameFileIdentity(currentTargetIdentity, prepared.identity)
-        ) {
-          publishedIdentity = currentTargetIdentity;
-        }
-      }
-      if (publishedIdentity) {
+      if (publicationPreserved) {
         params.log?.(
-          `Backup archiver preserved the final archive after publication failed so a concurrent replacement could not be deleted: ${plan.requestedOutputPath}.`,
+          `Backup archiver preserved the final archive after publication failed: ${plan.requestedOutputPath}.`,
         );
       }
       if (!removePreparedBackupArchive(prepared)) {
@@ -370,7 +258,5 @@ export async function publishPreparedBackupArchive(params: {
       await removeStagingDirectoryIfOwned(plan);
     }
     throw error;
-  } finally {
-    await preparedHandle?.close().catch(() => undefined);
   }
 }

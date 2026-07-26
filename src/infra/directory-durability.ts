@@ -14,6 +14,8 @@ export {
   ensureDurableDirectory,
   isHardlinkFallbackError,
   pinDirectory,
+  publishFileExclusive,
+  sha256File,
   syncDirectory,
   syncDirectoryBestEffortSync,
   type DirectorySyncOutcome,

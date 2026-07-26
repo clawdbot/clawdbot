@@ -1,9 +1,12 @@
 // Imessage plugin module implements media staging behavior.
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import type { ChannelInboundMediaInput } from "openclaw/plugin-sdk/channel-inbound";
 import { isInboundPathAllowed, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
+import { openLocalFileSafely } from "openclaw/plugin-sdk/security-runtime";
+import { withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import type { IMessageAttachment } from "./types.js";
 
@@ -19,6 +22,7 @@ type SaveMediaBufferImpl = typeof saveMediaBuffer;
 type StageIMessageAttachmentsDeps = {
   saveMediaBuffer?: SaveMediaBufferImpl;
   convertHeicToJpeg?: (sourcePath: string, maxBytes: number) => Promise<Buffer>;
+  openLocalFileSafely?: typeof openLocalFileSafely;
   logVerbose?: (message: string) => void;
 };
 
@@ -62,19 +66,17 @@ async function canonicalizeAllowedRoots(roots: readonly string[]): Promise<strin
   return canonicalRoots;
 }
 
-async function resolveAllowedCanonicalAttachmentPath(params: {
-  attachmentPath: string;
+async function assertAllowedCanonicalAttachmentPath(params: {
+  canonicalPath: string;
   allowedRoots?: readonly string[];
-}): Promise<string> {
+}): Promise<void> {
   if (!params.allowedRoots) {
-    return params.attachmentPath;
+    return;
   }
-  const canonicalPath = await fs.realpath(params.attachmentPath);
   const canonicalRoots = await canonicalizeAllowedRoots(params.allowedRoots);
-  if (!isInboundPathAllowed({ filePath: canonicalPath, roots: canonicalRoots })) {
+  if (!isInboundPathAllowed({ filePath: params.canonicalPath, roots: canonicalRoots })) {
     throw new Error("attachment path resolves outside allowed roots");
   }
-  return canonicalPath;
 }
 
 async function readAttachmentBuffer(params: {
@@ -84,58 +86,59 @@ async function readAttachmentBuffer(params: {
   allowedRoots?: readonly string[];
   deps: StageIMessageAttachmentsDeps;
 }): Promise<{ buffer: Buffer; contentType?: string; originalFilename?: string }> {
-  const stat = await fs.lstat(params.attachmentPath);
-  if (stat.isSymbolicLink()) {
-    throw new Error("attachment path is a symlink");
-  }
-  if (!stat.isFile()) {
-    throw new Error("attachment path is not a file");
-  }
-  if (stat.size > params.maxBytes) {
-    throw new Error(`attachment exceeds ${Math.round(params.maxBytes / (1024 * 1024))}MB limit`);
-  }
-
-  const canonicalPath = await resolveAllowedCanonicalAttachmentPath({
-    attachmentPath: params.attachmentPath,
-    allowedRoots: params.allowedRoots,
+  const opened = await (params.deps.openLocalFileSafely ?? openLocalFileSafely)({
+    filePath: params.attachmentPath,
   });
-  const canonicalStat = await fs.stat(canonicalPath);
-  if (!canonicalStat.isFile()) {
-    throw new Error("attachment path is not a file");
-  }
-  if (canonicalStat.size > params.maxBytes) {
-    throw new Error(`attachment exceeds ${Math.round(params.maxBytes / (1024 * 1024))}MB limit`);
-  }
-
-  if (isHeicAttachment(params.attachmentPath, params.mimeType)) {
-    try {
-      const convert = params.deps.convertHeicToJpeg;
-      const converted = convert
-        ? {
-            buffer: await convert(canonicalPath, params.maxBytes),
-            fileName: jpegFilenameForAttachment(params.attachmentPath),
-          }
-        : await loadWebMedia(canonicalPath, {
-            maxBytes: params.maxBytes,
-            localRoots: [path.dirname(canonicalPath)],
-          });
-      return {
-        buffer: converted.buffer,
-        contentType: "image/jpeg",
-        originalFilename: converted.fileName ?? jpegFilenameForAttachment(params.attachmentPath),
-      };
-    } catch (err) {
-      params.deps.logVerbose?.(
-        `imessage: HEIC attachment conversion failed; staging original instead: ${String(err)}`,
-      );
+  try {
+    if (opened.stat.size > params.maxBytes) {
+      throw new Error(`attachment exceeds ${Math.round(params.maxBytes / (1024 * 1024))}MB limit`);
     }
-  }
+    await assertAllowedCanonicalAttachmentPath({
+      canonicalPath: opened.realPath,
+      allowedRoots: params.allowedRoots,
+    });
+    const buffer = await opened.handle.readFile();
+    if (buffer.length > params.maxBytes) {
+      throw new Error(`attachment exceeds ${Math.round(params.maxBytes / (1024 * 1024))}MB limit`);
+    }
 
-  return {
-    buffer: await fs.readFile(canonicalPath),
-    contentType: params.mimeType ?? undefined,
-    originalFilename: path.basename(params.attachmentPath),
-  };
+    if (isHeicAttachment(params.attachmentPath, params.mimeType)) {
+      try {
+        const convert = params.deps.convertHeicToJpeg;
+        const converted = await withTempWorkspace(
+          { rootDir: os.tmpdir(), prefix: "openclaw-imessage-heic-" },
+          async (workspace) => {
+            const pinnedPath = await workspace.write("attachment.heic", buffer);
+            return convert
+              ? {
+                  buffer: await convert(pinnedPath, params.maxBytes),
+                }
+              : await loadWebMedia(pinnedPath, {
+                  maxBytes: params.maxBytes,
+                  localRoots: [workspace.dir],
+                });
+          },
+        );
+        return {
+          buffer: converted.buffer,
+          contentType: "image/jpeg",
+          originalFilename: jpegFilenameForAttachment(params.attachmentPath),
+        };
+      } catch (err) {
+        params.deps.logVerbose?.(
+          `imessage: HEIC attachment conversion failed; staging original instead: ${String(err)}`,
+        );
+      }
+    }
+
+    return {
+      buffer,
+      contentType: params.mimeType ?? undefined,
+      originalFilename: path.basename(params.attachmentPath),
+    };
+  } finally {
+    await opened.handle.close().catch(() => undefined);
+  }
 }
 
 export async function stageIMessageAttachments(
