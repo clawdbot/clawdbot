@@ -661,6 +661,8 @@ export function stagePostCompactionDelegate(
     ...(delegate.targetSessionKey ? { targetSessionKey: delegate.targetSessionKey } : {}),
     ...(delegate.targetSessionKeys ? { targetSessionKeys: delegate.targetSessionKeys } : {}),
     ...(delegate.fanoutMode ? { fanoutMode: delegate.fanoutMode } : {}),
+    ...(delegate.returnOptions ? { returnOptions: delegate.returnOptions } : {}),
+    ...(delegate.recipientContext ? { recipientContext: delegate.recipientContext } : {}),
     ...(delegate.traceparent && delegate.traceparentProvenance === "internal"
       ? { traceparent: delegate.traceparent }
       : {}),

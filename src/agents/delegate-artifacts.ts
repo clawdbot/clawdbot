@@ -207,12 +207,22 @@ type DelegateArtifactDatabase = {
 type PolicyRow = DelegateArtifactDatabase["delegate_artifact_policies"];
 type ClaimRow = DelegateArtifactDatabase["delegate_artifact_claims"];
 
+function hasControlCharacter(value: string): boolean {
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+    if (code < 0x20 || code === 0x7f) {
+      return true;
+    }
+  }
+  return false;
+}
+
 const PurposeSchema = z
   .string()
   .trim()
   .min(1)
   .refine((value) => Buffer.byteLength(value, "utf8") <= 1024)
-  .refine((value) => !/[\u0000-\u001f\u007f]/.test(value));
+  .refine((value) => !hasControlCharacter(value));
 const RecipientSchema = z.discriminatedUnion("relation", [
   z
     .object({
@@ -390,7 +400,7 @@ function toClaim(row: ClaimRow): DelegateArtifactClaim {
 
 function assertSafeArtifactScalar(value: string, field: "type" | "title" | "mimeType"): void {
   const unsafe =
-    /[\u0000-\u001f\u007f]/.test(value) ||
+    hasControlCharacter(value) ||
     value.includes("/") ||
     value.includes("\\") ||
     value.includes("://") ||
@@ -520,6 +530,13 @@ export function isDelegateArtifactReturnConfigured(
   );
 }
 
+export class MissingDelegateArtifactPolicyError extends Error {
+  constructor() {
+    super("artifact-capable continuation dispatch has no accepted policy");
+    this.name = "MissingDelegateArtifactPolicyError";
+  }
+}
+
 export function assertDelegateArtifactPolicyPrepared(
   flowId: string,
   options: OpenClawStateDatabaseOptions = {},
@@ -534,7 +551,7 @@ export function assertDelegateArtifactPolicyPrepared(
       .where("flow_id", "=", flowId),
   );
   if (!policy) {
-    throw new Error("artifact-capable continuation dispatch has no accepted policy");
+    throw new MissingDelegateArtifactPolicyError();
   }
 }
 
@@ -1736,6 +1753,17 @@ export function prepareDelegateArtifactDelivery(params: {
     ({ db }) => {
       const now = params.now ?? Date.now();
       const context = params.projection.arrivalContext;
+      const markUnavailable = () => {
+        markDelegateArtifactDeliveryUnavailableInTransaction({
+          db,
+          dispatchId: context.dispatchId,
+          recipientSessionKey: context.binding.recipientSessionKey,
+          recipientSessionId: context.binding.recipientSessionId,
+          reason: "delivery-state-unavailable",
+          now,
+        });
+        return { status: "unavailable" } as const;
+      };
       const kdb = artifactDb(db);
       const policy = executeSqliteQueryTakeFirstSync(
         db,
@@ -1771,7 +1799,9 @@ export function prepareDelegateArtifactDelivery(params: {
         recipientOutcome?.outcome !== "available" ||
         recipientOutcome.delivery_terminal_reason !== null
       ) {
-        return { status: "unavailable" } as const;
+        return recipientOutcome?.delivery_terminal_reason
+          ? { status: "unavailable" }
+          : markUnavailable();
       }
       if (recipientOutcome.delivery_acknowledged_at !== null) {
         return { status: "acknowledged" } as const;
@@ -1797,7 +1827,7 @@ export function prepareDelegateArtifactDelivery(params: {
           createHash("sha256").update(claim.backing).digest("hex") !== claim.sha256,
       );
       if (policy.retention_deadline <= now || corruptBacking) {
-        return { status: "unavailable" } as const;
+        return markUnavailable();
       }
       const bindings = executeSqliteQuerySync(
         db,
@@ -1823,7 +1853,7 @@ export function prepareDelegateArtifactDelivery(params: {
           (binding) => binding.status === "discarded" || binding.status === "unavailable",
         )
       ) {
-        return { status: "unavailable" } as const;
+        return markUnavailable();
       }
       const deliveredAt = recipientOutcome.first_delivery_at ?? now;
       const durableProjection = projectionsForCompletedPolicy({

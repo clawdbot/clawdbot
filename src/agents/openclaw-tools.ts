@@ -592,6 +592,7 @@ export function createOpenClawTools(options?: CreateOpenClawToolsOptions): AnyAg
       workspaceDir,
       sandboxRoot: options?.sandboxRoot,
       sandboxFsBridge: options?.sandboxFsBridge,
+      sandboxWritable: options?.sandboxWritable,
       drainsContinuationDelegateQueue: options?.drainsContinuationDelegateQueue,
       disableContinuationTools: options?.disableContinuationTools,
       continueWorkOpts: options?.continueWorkOpts,

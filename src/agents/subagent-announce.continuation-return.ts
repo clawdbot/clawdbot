@@ -10,6 +10,7 @@ import {
   markTrustedContinuationHeartbeatWake,
   requestHeartbeatNow,
 } from "../infra/heartbeat-wake.js";
+import type { DelegateArtifactDeliveryReceipt } from "../infra/session-delivery-queue-storage.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { defaultRuntime } from "../runtime.js";
@@ -145,40 +146,39 @@ export async function routeSubagentContinuationReturn(params: {
         }
       }
     }
+    const expectedSessionIds = new Map<string, string>();
+    const delegateArtifactReceipts = new Map<string, DelegateArtifactDeliveryReceipt>();
+    const delegateArtifactProjections = new Map<string, DelegateArtifactRecipientProjectionV1>();
     for (const targetSessionKey of targetSessionKeys) {
       const projection = params.managedArtifactProjections?.get(targetSessionKey);
-      const expectedSessionIds = projection
-        ? new Map([
-            [targetSessionKey, projection.arrivalContext.binding.recipientSessionId] as const,
-          ])
-        : undefined;
-      const delegateArtifactReceipts = projection
-        ? new Map([
-            [
-              targetSessionKey,
-              {
-                kind: "delegate-artifact" as const,
-                dispatchId: projection.arrivalContext.dispatchId,
-                recipientSessionKey: targetSessionKey,
-                recipientSessionId: projection.arrivalContext.binding.recipientSessionId,
-              },
-            ] as const,
-          ])
-        : undefined;
+      if (!projection) {
+        continue;
+      }
+      const recipientSessionId = projection.arrivalContext.binding.recipientSessionId;
+      expectedSessionIds.set(targetSessionKey, recipientSessionId);
+      delegateArtifactReceipts.set(targetSessionKey, {
+        kind: "delegate-artifact",
+        dispatchId: projection.arrivalContext.dispatchId,
+        recipientSessionKey: targetSessionKey,
+        recipientSessionId,
+      });
+      delegateArtifactProjections.set(targetSessionKey, projection);
+    }
+    if (targetSessionKeys.length > 0) {
       await enqueueContinuationReturnDeliveries({
-        targetSessionKeys: [targetSessionKey],
+        targetSessionKeys,
         text:
-          params.triggerMessagesBySessionKey?.get(targetSessionKey) ||
           params.triggerMessage ||
           `[continuation:enrichment-return] Delegate completed: ${params.taskLabel}`,
+        ...(params.triggerMessagesBySessionKey
+          ? { textBySessionKey: params.triggerMessagesBySessionKey }
+          : {}),
         idempotencyKeyBase: `continuation-return:${params.announceId}`,
         wakeRecipients: params.wakeOnReturn === true || params.silentAnnounce !== true,
         childRunId: params.childRunId,
-        ...(expectedSessionIds ? { expectedSessionIds } : {}),
-        ...(delegateArtifactReceipts ? { delegateArtifactReceipts } : {}),
-        ...(projection
-          ? { delegateArtifactProjections: new Map([[targetSessionKey, projection]]) }
-          : {}),
+        ...(expectedSessionIds.size > 0 ? { expectedSessionIds } : {}),
+        ...(delegateArtifactReceipts.size > 0 ? { delegateArtifactReceipts } : {}),
+        ...(delegateArtifactProjections.size > 0 ? { delegateArtifactProjections } : {}),
         ...(params.continuationFanoutMode ? { fanoutMode: params.continuationFanoutMode } : {}),
         ...(completionTrace.chainStepRemaining !== undefined
           ? { chainStepRemaining: completionTrace.chainStepRemaining }

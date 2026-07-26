@@ -125,6 +125,23 @@ describe("post-compaction durable handoff", () => {
     expect(rereleased.map((d) => d.task)).toContain("evacuate context");
   });
 
+  it("preserves managed artifact return metadata when staging a session delegate", () => {
+    stagePostCompactionDelegate(sessionKey, {
+      task: "produce a managed report",
+      createdAt: 1_700_000_000_000,
+      returnOptions: { artifacts: "required" },
+      recipientContext: { purpose: "Use the report after compaction." },
+    });
+
+    expect(consumeStagedPostCompactionDelegates(sessionKey)).toEqual([
+      expect.objectContaining({
+        task: "produce a managed report",
+        returnOptions: { artifacts: "required" },
+        recipientContext: { purpose: "Use the report after compaction." },
+      }),
+    ]);
+  });
+
   it("startup recovery boot cutoff skips rows claimed by live traffic after process start", () => {
     // A row claimed to `running` AFTER the boot cutoff is a live release, not a
     // crash-orphaned row. Startup recovery must not surface it for re-dispatch

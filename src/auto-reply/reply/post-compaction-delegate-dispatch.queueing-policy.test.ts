@@ -137,11 +137,13 @@ function createDispatchDeps(options?: {
   const finalizeStagedPostCompactionDelegates = vi.fn(
     (flowIds: readonly (string | undefined)[]) => flowIds.filter(Boolean).length,
   );
+  const rejectPostCompactionTaskFlowDelegate = vi.fn(() => true);
   const requeueReleasedPostCompactionDelegate = vi.fn(() => false);
   const stagePostCompactionDelegate = vi.fn();
   const deps: PostCompactionDelegateDispatchDeps = {
     consumeStagedPostCompactionDelegates: vi.fn(() => options?.staged ?? []),
     finalizeStagedPostCompactionDelegates,
+    rejectPostCompactionTaskFlowDelegate,
     requeueReleasedPostCompactionDelegate,
     stagePostCompactionDelegate,
     drainPostCompactionDelegateDeliveries,
@@ -161,6 +163,7 @@ function createDispatchDeps(options?: {
     enqueueSystemEvent,
     finalizeStagedPostCompactionDelegates,
     log,
+    rejectPostCompactionTaskFlowDelegate,
     readPostCompactionContext,
     requeueReleasedPostCompactionDelegate,
     resolveAgentWorkspaceDir,
@@ -536,6 +539,49 @@ describe("post-compaction delegate dispatch extraction", () => {
   });
 
   it.each([
+    { name: "stale", maxDelegatesPerTurn: 5, firstArmedAtOffsetMs: 8 * 24 * 60 * 60 * 1000 },
+    { name: "over budget", maxDelegatesPerTurn: 0, firstArmedAtOffsetMs: 60_000 },
+  ])(
+    "terminalizes managed TaskFlow claims dropped as $name",
+    async ({ firstArmedAtOffsetMs, maxDelegatesPerTurn }) => {
+      const now = 1_700_000_000_000;
+      const managedDelegate: SessionPostCompactionDelegate = {
+        task: "managed drop",
+        createdAt: now,
+        firstArmedAt: now - firstArmedAtOffsetMs,
+        flowId: "flow-managed-drop",
+        expectedRevision: 7,
+        returnOptions: { artifacts: "required" },
+      };
+      const { deps, finalizeStagedPostCompactionDelegates, rejectPostCompactionTaskFlowDelegate } =
+        createDispatchDeps({
+          staged: [managedDelegate],
+          runtimeConfig: { ...defaultRuntimeConfig, maxDelegatesPerTurn },
+          now,
+        });
+
+      const result = await dispatchPostCompactionDelegates(
+        {
+          cfg,
+          compactionCount: 1,
+          followupRun: createFollowupRun(),
+          postCompactionDelegatesToPreserve: [],
+          sessionEntry: { sessionId: "session", updatedAt: 1 },
+          sessionKey: "main",
+        },
+        deps,
+      );
+
+      expect(result).toEqual({ queuedDelegates: 0, droppedDelegates: 1 });
+      expect(rejectPostCompactionTaskFlowDelegate).toHaveBeenCalledWith(
+        expect.objectContaining(managedDelegate),
+        expect.stringContaining("Post-compaction delegate rejected"),
+      );
+      expect(finalizeStagedPostCompactionDelegates).toHaveBeenCalledWith([]);
+    },
+  );
+
+  it.each([
     {
       name: "continuation",
       runtimeConfig: {
@@ -603,6 +649,54 @@ describe("post-compaction delegate dispatch extraction", () => {
       expect(preserve).toEqual([]);
     },
   );
+
+  it("does not restage a managed return when its authoritative TaskFlow requeue is not applied", async () => {
+    const managedDelegate: SessionPostCompactionDelegate = {
+      task: "defer managed post-compaction work",
+      createdAt: 1,
+      firstArmedAt: 1,
+      flowId: "flow-managed-disabled",
+      expectedRevision: 4,
+      returnOptions: { artifacts: "required" },
+    };
+    const preserve: SessionPostCompactionDelegate[] = [];
+    const {
+      deps,
+      finalizeStagedPostCompactionDelegates,
+      log,
+      requeueReleasedPostCompactionDelegate,
+      stagePostCompactionDelegate,
+    } = createDispatchDeps({
+      staged: [managedDelegate],
+      runtimeConfig: {
+        ...defaultRuntimeConfig,
+        enabled: false,
+        maxDelegatesPerTurn: 0,
+      },
+    });
+
+    await dispatchPostCompactionDelegates(
+      {
+        cfg,
+        compactionCount: 1,
+        followupRun: createFollowupRun(),
+        postCompactionDelegatesToPreserve: preserve,
+        sessionEntry: { sessionId: "session", updatedAt: 1 },
+        sessionKey: "main",
+      },
+      deps,
+    );
+
+    expect(requeueReleasedPostCompactionDelegate).toHaveBeenCalledWith(
+      expect.objectContaining(managedDelegate),
+    );
+    expect(stagePostCompactionDelegate).not.toHaveBeenCalled();
+    expect(finalizeStagedPostCompactionDelegates).toHaveBeenCalledWith([]);
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("preserving authoritative TaskFlow state"),
+    );
+    expect(preserve).toEqual([]);
+  });
 
   it("reduces compaction budget by one when a bracket delegate was already spawned this turn", async () => {
     const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: 1 };

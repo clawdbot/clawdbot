@@ -39,6 +39,7 @@ export function createOpenClawContinuationTools(
     workspaceDir?: string;
     sandboxRoot?: string;
     sandboxFsBridge?: SandboxFsBridge;
+    sandboxWritable?: boolean;
   },
 ): AnyAgentTool[] {
   const enabled =
@@ -48,16 +49,18 @@ export function createOpenClawContinuationTools(
     return [];
   }
 
+  const liveSessionKey = options.runSessionKey ?? options.agentSessionKey;
   const tools: AnyAgentTool[] = [];
   tools.push(
     ...createDelegateArtifactTools({
       config: options.config,
-      agentSessionKey: options.agentSessionKey,
+      agentSessionKey: liveSessionKey,
       sessionId: options.sessionId,
       runId: options.runId,
       workspaceDir: options.workspaceDir,
       sandboxRoot: options.sandboxRoot,
       sandboxFsBridge: options.sandboxFsBridge,
+      sandboxWritable: options.sandboxWritable,
     }),
   );
   if (options.continueWorkOpts) {
@@ -69,7 +72,7 @@ export function createOpenClawContinuationTools(
     );
   }
   if (options.drainsContinuationDelegateQueue !== false) {
-    tools.push(createContinueDelegateTool({ agentSessionKey: options.agentSessionKey }));
+    tools.push(createContinueDelegateTool({ agentSessionKey: liveSessionKey }));
   }
   if (options.requestCompactionOpts) {
     tools.push(

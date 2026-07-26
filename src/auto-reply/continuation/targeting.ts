@@ -89,6 +89,7 @@ export async function enqueueContinuationReturnDeliveries(
   params: {
     targetSessionKeys: readonly string[];
     text: string;
+    textBySessionKey?: ReadonlyMap<string, string>;
     idempotencyKeyBase: string;
     expectedSessionIds?: ReadonlyMap<string, string>;
     delegateArtifactReceipts?: ReadonlyMap<string, DelegateArtifactDeliveryReceipt>;
@@ -108,6 +109,7 @@ export async function enqueueContinuationReturnDeliveries(
   let delivered = 0;
 
   for (const sessionKey of targetSessionKeys) {
+    const text = params.textBySessionKey?.get(sessionKey) ?? params.text;
     const expectedSessionId = params.expectedSessionIds?.get(sessionKey);
     const delegateArtifactReceipt = params.delegateArtifactReceipts?.get(sessionKey);
     const delegateArtifactProjection = params.delegateArtifactProjections?.get(sessionKey);
@@ -126,7 +128,7 @@ export async function enqueueContinuationReturnDeliveries(
       {
         kind: "systemEvent",
         sessionKey,
-        text: params.text,
+        text,
         ...(expectedSessionId ? { expectedSessionId } : {}),
         ...(delegateArtifactReceipt && delegateArtifactProjection
           ? {
@@ -147,7 +149,7 @@ export async function enqueueContinuationReturnDeliveries(
     );
     deliveryIds.push(deliveryId);
 
-    const enqueued = deps.enqueueSystemEvent(params.text, {
+    const enqueued = deps.enqueueSystemEvent(text, {
       sessionKey,
       trusted: true,
       ...(params.deliveryContext ? { deliveryContext: params.deliveryContext } : {}),

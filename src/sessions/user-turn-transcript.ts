@@ -500,6 +500,42 @@ export function createUserTurnTranscriptRecorder(
   let runtimePersistedMessage: PersistedUserTurnMessage | undefined;
   let sentToProvider = false;
   let resolvedBeforeProvider = false;
+  const replacementSessionDeliveryAckIds = new Set<string>();
+  let hasReplacementSessionDeliveryAckIds = false;
+
+  const replaceSessionDeliveryAckIds = (deliveryIds: readonly string[]): boolean => {
+    if (selfPersistencePromise || runtimePersistencePromise || runtimePersisted || persisted) {
+      return false;
+    }
+    hasReplacementSessionDeliveryAckIds = true;
+    replacementSessionDeliveryAckIds.clear();
+    for (const deliveryId of deliveryIds) {
+      const normalized = deliveryId.trim();
+      if (normalized) {
+        replacementSessionDeliveryAckIds.add(normalized);
+      }
+    }
+    return true;
+  };
+
+  const withReplacementSessionDeliveryAckIds = (
+    candidate: PersistedUserTurnMessage | undefined,
+  ): PersistedUserTurnMessage | undefined => {
+    if (!candidate || !hasReplacementSessionDeliveryAckIds) {
+      return candidate;
+    }
+    const metadata = { ...readOpenClawMessageMeta(candidate) };
+    Reflect.deleteProperty(metadata, "sessionDeliveryAckIds");
+    return {
+      ...candidate,
+      __openclaw: {
+        ...metadata,
+        ...(replacementSessionDeliveryAckIds.size > 0
+          ? { sessionDeliveryAckIds: [...replacementSessionDeliveryAckIds] }
+          : {}),
+      },
+    } as PersistedUserTurnMessage;
+  };
 
   const handlePersistenceError = (error: unknown) => {
     if (params.onPersistenceError) {
@@ -517,10 +553,10 @@ export function createUserTurnTranscriptRecorder(
 
   const resolveMessageForPersistence = async (): Promise<PersistedUserTurnMessage | undefined> => {
     if (params.message) {
-      return params.message;
+      return withReplacementSessionDeliveryAckIds(params.message);
     }
     if (!params.resolveInput) {
-      return message;
+      return withReplacementSessionDeliveryAckIds(message);
     }
     if (!resolvedMessagePromise) {
       resolvedMessagePromise = (async () => {
@@ -539,7 +575,7 @@ export function createUserTurnTranscriptRecorder(
         }
       })();
     }
-    return await resolvedMessagePromise;
+    return withReplacementSessionDeliveryAckIds(await resolvedMessagePromise);
   };
 
   const notifyMessagePersisted = (persistedMessage?: PersistedUserTurnMessage) => {
@@ -690,6 +726,7 @@ export function createUserTurnTranscriptRecorder(
     message,
     resolveMessage: resolveMessageForPersistence,
     getPersistedMessage: () => runtimePersistedMessage ?? persistedResult?.message,
+    replaceSessionDeliveryAckIds,
     markSentToProvider: () => {
       sentToProvider = true;
     },

@@ -399,11 +399,10 @@ describe("user turn transcript persistence", () => {
           sessionDeliveryAckIds: ["delivery-1", "delivery-1", "delivery-2"],
         },
         beforeMessageWrite: ({ message }) => {
-          const deliveryIds = (
-            message as unknown as {
-              __openclaw?: { sessionDeliveryAckIds?: unknown[] };
-            }
-          ).__openclaw?.sessionDeliveryAckIds;
+          const metadata = Reflect.get(message, "__openclaw") as
+            | { sessionDeliveryAckIds?: unknown[] }
+            | undefined;
+          const deliveryIds = metadata?.sessionDeliveryAckIds;
           deliveryIds?.splice(0);
           return castAgentMessage({
             role: "user",
@@ -425,6 +424,40 @@ describe("user turn transcript persistence", () => {
           },
         }),
       ]);
+    });
+
+    it("replaces managed delivery receipts in a supplied recorder before persistence", async () => {
+      const dir = createTempDir("openclaw-user-turn-managed-delivery-supplied-");
+      const target = createSqliteTranscriptTarget({ dir });
+      const recorder = createUserTurnTranscriptRecorder({
+        input: { text: "managed completion" },
+        target,
+      });
+
+      expect(recorder.replaceSessionDeliveryAckIds?.(["delivery-1", "delivery-1"])).toBe(true);
+      expect(recorder.replaceSessionDeliveryAckIds?.(["delivery-2"])).toBe(true);
+      await recorder.persistApproved();
+
+      expect(recorder.getPersistedMessage?.()).toMatchObject({
+        __openclaw: { sessionDeliveryAckIds: ["delivery-2"] },
+      });
+      expect(recorder.replaceSessionDeliveryAckIds?.(["delivery-3"])).toBe(false);
+    });
+
+    it("removes stale managed delivery receipts when the final replacement is empty", async () => {
+      const dir = createTempDir("openclaw-user-turn-managed-delivery-empty-");
+      const target = createSqliteTranscriptTarget({ dir });
+      const recorder = createUserTurnTranscriptRecorder({
+        input: { text: "managed completion", sessionDeliveryAckIds: ["delivery-stale"] },
+        target,
+      });
+
+      expect(recorder.replaceSessionDeliveryAckIds?.([])).toBe(true);
+      await recorder.persistApproved();
+
+      expect(recorder.getPersistedMessage?.()).not.toHaveProperty(
+        "__openclaw.sessionDeliveryAckIds",
+      );
     });
 
     it("returns the older receipt-free row for an idempotent managed-delivery retry", async () => {

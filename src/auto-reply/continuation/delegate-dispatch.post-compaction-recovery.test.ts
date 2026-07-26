@@ -209,6 +209,7 @@ vi.mock("../../tasks/task-flow-registry.js", () => ({
   }),
 }));
 
+import { MissingDelegateArtifactPolicyError } from "../../agents/delegate-artifacts.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
   noopTracer,
@@ -551,6 +552,34 @@ describe("recoverAndReleaseStagedPostCompactionDelegates", () => {
     });
     // The accepted row is finalized (terminal) so it cannot replay.
     expect(mockFlows.get(flowId)).toMatchObject({ status: "succeeded" });
+    expect(listRecoverableStagedPostCompactionDelegates()).toHaveLength(0);
+  });
+
+  it("terminalizes a crash-orphaned artifact row whose accepted policy is missing", async () => {
+    const sessionKey = "agent:main:subagent:pc-recover-policy-missing";
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: { sessionId: "session-child", continuationChainCount: 0 },
+    });
+    stagePostCompactionTaskFlowDelegate(sessionKey, {
+      task: "rehydrate artifact return after crash",
+      stagedAt: Date.now(),
+      returnOptions: { artifacts: "optional" },
+    });
+    const claimed = claimStagedPostCompactionTaskFlowDelegates(sessionKey);
+    const flowId = claimed[0]?.flowId;
+    expect(flowId).toBeDefined();
+    assertDelegateArtifactPolicyPreparedMock.mockImplementationOnce(() => {
+      throw new MissingDelegateArtifactPolicyError();
+    });
+
+    const result = await recoverAndReleaseStagedPostCompactionDelegates({
+      runningUpdatedAtOrBefore: Date.now(),
+    });
+
+    expect(result).toMatchObject({ sessions: 1, dispatched: 0, failed: 1 });
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(mockFlows.get(flowId as string)).toMatchObject({ status: "failed" });
+    expect(removeUnacceptedDelegateArtifactPolicyMock).toHaveBeenCalledWith(flowId);
     expect(listRecoverableStagedPostCompactionDelegates()).toHaveLength(0);
   });
 

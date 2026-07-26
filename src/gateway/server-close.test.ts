@@ -119,6 +119,7 @@ function createGatewayCloseTestDeps(
     dedupeCleanup: setInterval(() => undefined, 60_000),
     mediaCleanup: null,
     worktreeCleanup: null,
+    delegateArtifactCleanup: null,
     skillCuratorCleanup: vi.fn(),
     agentUnsub: null,
     taskUnsub: null,
@@ -176,16 +177,24 @@ describe("createGatewayCloseHandler", () => {
   });
 
   it("completes a clean shutdown with a ShutdownResult", async () => {
-    const deps = createGatewayCloseTestDeps();
+    const delegateArtifactCleanup = setInterval(() => undefined, 60_000);
+    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
+    const deps = createGatewayCloseTestDeps({ delegateArtifactCleanup });
     const close = createGatewayCloseHandler(deps);
 
-    const result = await close({ reason: "test" });
+    try {
+      const result = await close({ reason: "test" });
 
-    expect(result.warnings).toStrictEqual([]);
-    expect(result.durationMs).toBeGreaterThanOrEqual(0);
-    expect(deps.cron.stop).toHaveBeenCalledTimes(1);
-    expect(deps.heartbeatRunner.stop).toHaveBeenCalledTimes(1);
-    expect(deps.chatRunState.clear).toHaveBeenCalledTimes(1);
+      expect(result.warnings).toStrictEqual([]);
+      expect(result.durationMs).toBeGreaterThanOrEqual(0);
+      expect(deps.cron.stop).toHaveBeenCalledTimes(1);
+      expect(deps.heartbeatRunner.stop).toHaveBeenCalledTimes(1);
+      expect(deps.chatRunState.clear).toHaveBeenCalledTimes(1);
+      expect(clearIntervalSpy).toHaveBeenCalledWith(delegateArtifactCleanup);
+    } finally {
+      clearIntervalSpy.mockRestore();
+      clearInterval(delegateArtifactCleanup);
+    }
   });
 
   it("joins an in-flight config reload before mutable runtime teardown", async () => {

@@ -20,6 +20,7 @@ import {
   requeueReleasedPostCompactionDelegate,
   stagePostCompactionDelegate,
 } from "../continuation/delegate-store.js";
+import { rejectPostCompactionTaskFlowDelegate } from "../continuation/post-compaction-taskflow-rejection.js";
 import type { ContinuationSignal } from "../continuation/signal.js";
 import { hasCrossSessionDelegateTargeting } from "../continuation/targeting-pure.js";
 import type { ContinuationRuntimeConfig } from "../continuation/types.js";
@@ -40,6 +41,10 @@ import type { FollowupRun } from "./queue/types.js";
 export type PostCompactionDelegateDispatchDeps = {
   consumeStagedPostCompactionDelegates(sessionKey: string): SessionPostCompactionDelegate[];
   finalizeStagedPostCompactionDelegates(flowIds: readonly (string | undefined)[]): number;
+  rejectPostCompactionTaskFlowDelegate?: (
+    delegate: Pick<SessionPostCompactionDelegate, "flowId" | "expectedRevision" | "task">,
+    blockedSummary: string,
+  ) => boolean;
   requeueReleasedPostCompactionDelegate(
     delegate: Pick<SessionPostCompactionDelegate, "flowId" | "expectedRevision" | "task">,
   ): boolean;
@@ -98,6 +103,7 @@ const defaultRecoveryLog: SessionDeliveryRecoveryLogger = {
 const defaultPostCompactionDelegateDispatchDeps: PostCompactionDelegateDispatchDeps = {
   consumeStagedPostCompactionDelegates,
   finalizeStagedPostCompactionDelegates,
+  rejectPostCompactionTaskFlowDelegate,
   requeueReleasedPostCompactionDelegate,
   stagePostCompactionDelegate,
   drainPostCompactionDelegateDeliveries,
@@ -113,6 +119,37 @@ const defaultPostCompactionDelegateDispatchDeps: PostCompactionDelegateDispatchD
 
 function formatErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+function hasManagedArtifactReturn(delegate: SessionPostCompactionDelegate): boolean {
+  return (
+    delegate.returnOptions?.artifacts === "optional" ||
+    delegate.returnOptions?.artifacts === "required"
+  );
+}
+
+function terminalizeDroppedManagedDelegate(params: {
+  delegate: SessionPostCompactionDelegate;
+  deps: Partial<Pick<PostCompactionDelegateDispatchDeps, "rejectPostCompactionTaskFlowDelegate">>;
+  summary: string;
+}): string | undefined {
+  if (!hasManagedArtifactReturn(params.delegate)) {
+    return undefined;
+  }
+  if (!params.delegate.flowId || params.delegate.expectedRevision === undefined) {
+    throw new Error(
+      "[continuation:post-compaction-managed-drop-missing-flow] managed delegate cannot be terminalized without TaskFlow claim metadata",
+    );
+  }
+  const reject =
+    params.deps.rejectPostCompactionTaskFlowDelegate ?? rejectPostCompactionTaskFlowDelegate;
+  const failed = reject(params.delegate, params.summary);
+  if (!failed) {
+    throw new Error(
+      `[continuation:post-compaction-managed-drop-not-committed] flowId=${params.delegate.flowId}`,
+    );
+  }
+  return params.delegate.flowId;
 }
 
 function enqueueSystemEventOrLog(params: {
@@ -278,6 +315,7 @@ export async function dispatchPostCompactionDelegates(
   const now = deps.now();
   const freshCompactionDelegates: SessionPostCompactionDelegate[] = [];
   let staleDroppedDelegates = 0;
+  const terminalizedManagedFlowIds = new Set<string>();
   for (const delegate of gateEligibleCompactionDelegates) {
     const ageMs = now - (delegate.firstArmedAt ?? delegate.createdAt);
     if (ageMs > POST_COMPACTION_DELEGATE_TTL_MS) {
@@ -285,6 +323,14 @@ export async function dispatchPostCompactionDelegates(
       deps.log(
         `Post-compaction delegate dropped as stale for ${params.sessionKey}: ageMs=${ageMs} ttlMs=${POST_COMPACTION_DELEGATE_TTL_MS} firstArmedAt=${delegate.firstArmedAt ?? delegate.createdAt} task=${formatPostCompactionDelegateTaskPreview(delegate.task)}`,
       );
+      const terminalizedFlowId = terminalizeDroppedManagedDelegate({
+        delegate,
+        deps,
+        summary: `Post-compaction delegate rejected as stale after ${ageMs}ms.`,
+      });
+      if (terminalizedFlowId) {
+        terminalizedManagedFlowIds.add(terminalizedFlowId);
+      }
       continue;
     }
     freshCompactionDelegates.push(delegate);
@@ -298,14 +344,22 @@ export async function dispatchPostCompactionDelegates(
   const bracketDelegateOffset = params.continuationSignalKind === "delegate" ? 1 : 0;
   const compactionBudget = Math.max(0, maxCompactionDelegates - bracketDelegateOffset);
   const releasedCompactionDelegates = freshCompactionDelegates.slice(0, compactionBudget);
-  const overflowDroppedDelegates = Math.max(
-    0,
-    freshCompactionDelegates.length - releasedCompactionDelegates.length,
-  );
+  const overflowDelegates = freshCompactionDelegates.slice(compactionBudget);
+  const overflowDroppedDelegates = overflowDelegates.length;
   if (overflowDroppedDelegates > 0) {
     deps.log(
       `Post-compaction delegates dropped for ${params.sessionKey}: ${overflowDroppedDelegates} over maxDelegatesPerTurn budget (${maxCompactionDelegates}, bracketOffset=${bracketDelegateOffset})`,
     );
+    for (const delegate of overflowDelegates) {
+      const terminalizedFlowId = terminalizeDroppedManagedDelegate({
+        delegate,
+        deps,
+        summary: `Post-compaction delegate rejected: maxDelegatesPerTurn exceeded (${maxCompactionDelegates}).`,
+      });
+      if (terminalizedFlowId) {
+        terminalizedManagedFlowIds.add(terminalizedFlowId);
+      }
+    }
   }
 
   let postCompactionContextContent: string | null = null;
@@ -368,11 +422,21 @@ export async function dispatchPostCompactionDelegates(
   }
 
   const requeuedClaimedFlowIds = new Set<string>();
+  const authoritativeManagedFlowIds = new Set<string>();
   if (params.postCompactionDelegatesToPreserve.length > 0) {
     const delegatesToPersist: SessionPostCompactionDelegate[] = [];
     for (const delegate of params.postCompactionDelegatesToPreserve) {
       if (deps.requeueReleasedPostCompactionDelegate(delegate)) {
         requeuedClaimedFlowIds.add(delegate.flowId!);
+        continue;
+      }
+      if (hasManagedArtifactReturn(delegate)) {
+        if (delegate.flowId) {
+          authoritativeManagedFlowIds.add(delegate.flowId);
+        }
+        deps.log(
+          `[continuation:post-compaction-managed-requeue-not-applied] flowId=${delegate.flowId ?? "missing"}; preserving authoritative TaskFlow state`,
+        );
         continue;
       }
       delegatesToPersist.push(delegate);
@@ -419,7 +483,11 @@ export async function dispatchPostCompactionDelegates(
   // leaves the claimed rows recoverable via listRecoverableStagedPostCompactionDelegates
   // instead of silently losing them behind a premature finish.
   const flowIdsToFinalize = claimedFlowIds.filter(
-    (flowId) => !flowId || !requeuedClaimedFlowIds.has(flowId),
+    (flowId) =>
+      !flowId ||
+      (!requeuedClaimedFlowIds.has(flowId) &&
+        !authoritativeManagedFlowIds.has(flowId) &&
+        !terminalizedManagedFlowIds.has(flowId)),
   );
   const finalized = deps.finalizeStagedPostCompactionDelegates(flowIdsToFinalize);
   assertStagedPostCompactionFinalizationComplete({

@@ -3,7 +3,7 @@
 import { formatDelegateArtifactTaskInstruction } from "../../agents/delegate-artifact-policy.js";
 import {
   assertDelegateArtifactPolicyPrepared,
-  removeUnacceptedDelegateArtifactPolicy,
+  MissingDelegateArtifactPolicyError,
 } from "../../agents/delegate-artifacts.js";
 import { deriveContinuationDelegateChildSessionKeyFromParent } from "../../agents/subagent-continuation-ids.js";
 import {
@@ -22,10 +22,8 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { sanitizeInboundSystemTags } from "../../security/system-tags.js";
 import type { InlineAttachment, InlineAttachmentMount } from "../../shared/inline-attachments.js";
 import { resolveContinuationRuntimeConfig } from "./config.js";
-import {
-  markPendingDelegateFailed,
-  requeueReleasedPostCompactionTaskFlowDelegate,
-} from "./delegate-store.js";
+import { requeueReleasedPostCompactionTaskFlowDelegate } from "./delegate-store.js";
+import { rejectPostCompactionTaskFlowDelegate } from "./post-compaction-taskflow-rejection.js";
 import { checkContinuationBudget, type ChainState } from "./scheduler.js";
 import { hasCrossSessionDelegateTargeting } from "./targeting-pure.js";
 
@@ -140,15 +138,8 @@ export async function dispatchStagedPostCompactionDelegates(
     summary: string,
   ): void => {
     failed++;
-    if (markPendingDelegateFailed(delegate, summary, "Post-compaction delegate rejected")) {
+    if (rejectPostCompactionTaskFlowDelegate(delegate, summary)) {
       terminalRejectedFlowIds.push(delegate.flowId!);
-      if (
-        delegate.flowId &&
-        (delegate.returnOptions?.artifacts === "optional" ||
-          delegate.returnOptions?.artifacts === "required")
-      ) {
-        removeUnacceptedDelegateArtifactPolicy(delegate.flowId);
-      }
     }
   };
 
@@ -338,6 +329,18 @@ export async function dispatchStagedPostCompactionDelegates(
         noteTransientFailure(delegate);
       }
     } catch (err) {
+      if (err instanceof MissingDelegateArtifactPolicyError) {
+        const summary = "Post-compaction delegate rejected: accepted artifact policy is missing.";
+        postCompactionLog.warn(
+          `[continuation:post-compaction-policy-missing] session=${sessionKey} task=${delegate.task.slice(0, 80)}`,
+        );
+        enqueueSystemEvent(
+          `[continuation] ${summary} Task: ${formatDelegateTaskForSystemEvent(delegate.task)}`,
+          { sessionKey, trusted: true },
+        );
+        markTerminalRejected(delegate, summary);
+        continue;
+      }
       postCompactionLog.warn(
         `[continuation:post-compaction-spawn-failed] error=${err instanceof Error ? err.message : String(err)} session=${sessionKey} task=${delegate.task.slice(0, 80)}`,
       );

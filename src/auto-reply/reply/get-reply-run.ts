@@ -939,7 +939,7 @@ export async function runPreparedReply(
     : !isNewSession && threadStarterBody
       ? `[Thread starter - for context]\n${threadStarterBody}`
       : undefined;
-  const drainedSystemEventBlocks: string[] = [];
+  const drainedSystemEventBlocks: Array<{ key?: string; text: string }> = [];
   const seenSystemEventBlockKeys = new Set<string>();
   const managedSystemEventDeliveries = new Map<string, PreparedManagedSystemEventDelivery>();
   const rebuildPromptBodies = async (): Promise<{
@@ -951,6 +951,16 @@ export async function runPreparedReply(
     currentInboundContext?: typeof promptEnvelopeBase.currentInboundContext;
   }> => {
     if (!useFastReplyRuntime && heartbeatRunScope !== "commitment-only") {
+      for (const deliveryId of managedSystemEventDeliveries.keys()) {
+        const blockKey = `session-delivery:${deliveryId}`;
+        seenSystemEventBlockKeys.delete(blockKey);
+        for (let index = drainedSystemEventBlocks.length - 1; index >= 0; index -= 1) {
+          if (drainedSystemEventBlocks[index]?.key === blockKey) {
+            drainedSystemEventBlocks.splice(index, 1);
+          }
+        }
+      }
+      managedSystemEventDeliveries.clear();
       const preparedEvents = await prepareFormattedSystemEvents({
         cfg,
         sessionKey,
@@ -958,17 +968,28 @@ export async function runPreparedReply(
         isNewSession,
         suppressHeartbeatOwnedEvents: isHeartbeat,
       });
-      for (const delivery of preparedEvents.managedDeliveries) {
+      const managedDeliveryIds = preparedEvents.managedDeliveries.map((delivery) => delivery.id);
+      const suppliedRecorderAccepted =
+        !opts?.userTurnTranscriptRecorder ||
+        opts.userTurnTranscriptRecorder.replaceSessionDeliveryAckIds?.(managedDeliveryIds) === true;
+      const managedDeliveries = suppliedRecorderAccepted ? preparedEvents.managedDeliveries : [];
+      const deferredManagedBlockKeys = suppliedRecorderAccepted
+        ? undefined
+        : new Set(managedDeliveryIds.map((id) => `session-delivery:${id}`));
+      for (const delivery of managedDeliveries) {
         managedSystemEventDeliveries.set(delivery.id, delivery);
       }
       for (const block of preparedEvents.blocks) {
+        if (block.key && deferredManagedBlockKeys?.has(block.key)) {
+          continue;
+        }
         if (block.key) {
           if (seenSystemEventBlockKeys.has(block.key)) {
             continue;
           }
           seenSystemEventBlockKeys.add(block.key);
         }
-        drainedSystemEventBlocks.push(block.text);
+        drainedSystemEventBlocks.push(block);
       }
     }
     return buildReplyPromptEnvelope({
@@ -988,7 +1009,7 @@ export async function runPreparedReply(
       inboundEventKind,
       sourceReplyDeliveryMode,
       threadContextNote,
-      systemEventBlocks: drainedSystemEventBlocks,
+      systemEventBlocks: drainedSystemEventBlocks.map((block) => block.text),
       media: opts?.media,
     });
   };

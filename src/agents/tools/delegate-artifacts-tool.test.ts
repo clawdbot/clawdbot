@@ -357,6 +357,7 @@ describe("delegate artifact tools", () => {
       workspaceDir: join(test.workspace, "host-path-not-used"),
       sandboxRoot: test.workspace,
       sandboxFsBridge: bridge,
+      sandboxWritable: true,
       stateOptions: { path: test.statePath },
     }).find((tool) => tool.name === "delegate_artifacts_publish")!;
 
@@ -399,8 +400,33 @@ describe("delegate artifact tools", () => {
       workspaceDir: join(test.workspace, "host-path-not-used"),
       sandboxRoot: test.workspace,
       sandboxFsBridge: bridge,
+      sandboxWritable: true,
       stateOptions: { path: test.statePath },
     }).find((tool) => tool.name === "delegate_artifacts")!;
+
+    const readOnlyOperations = createDelegateArtifactTools({
+      config,
+      getRuntimeConfig: () => config,
+      resolveSessionId: () => "parent-session-1",
+      agentSessionKey: "agent:main:parent",
+      sessionId: "parent-session-1",
+      runId: "parent-run",
+      workspaceDir: join(test.workspace, "host-path-not-used"),
+      sandboxRoot: test.workspace,
+      sandboxFsBridge: bridge,
+      sandboxWritable: false,
+      stateOptions: { path: test.statePath },
+    }).find((tool) => tool.name === "delegate_artifacts")!;
+    expect(
+      parseResult(
+        await readOnlyOperations.execute("sandbox-read-only-materialization", {
+          action: "materialize",
+          claimId,
+          destination: "rejected-read-only.txt",
+        }),
+      ),
+    ).toEqual({ outcome: "unauthorized" });
+    expect(existsSync(join(test.workspace, "rejected-read-only.txt"))).toBe(false);
 
     expect(
       parseResult(

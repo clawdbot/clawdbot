@@ -826,6 +826,38 @@ describe("managed delegate artifact claims", () => {
     ).toEqual({ outcome: "unauthorized" });
   });
 
+  it("terminalizes a finalized binding that expires before its initial delivery", () => {
+    const options = stateOptions();
+    createDelegateArtifactPolicy(policy(), options);
+    publish(options);
+    const finalized = finalize(options);
+    if (finalized.status !== "finalized") {
+      throw new Error("expected finalized claims");
+    }
+    const projection = finalized.projections.get("agent:main:parent")!;
+
+    expect(
+      prepareDelegateArtifactDelivery({
+        projection,
+        runtimeEnabled: true,
+        crossSessionEnabled: true,
+        currentRecipientSessionId: "parent-session-1",
+        now: 1_000 + DELEGATE_ARTIFACT_RETENTION_MS,
+        options,
+      }),
+    ).toEqual({ status: "unavailable" });
+    expect(
+      openOpenClawStateDatabase(options)
+        .db.prepare(
+          "SELECT outcome, delivery_terminal_reason FROM delegate_artifact_recipient_outcomes WHERE flow_id = ? AND recipient_session_key = ?",
+        )
+        .get("flow-1", "agent:main:parent"),
+    ).toEqual({
+      outcome: "available",
+      delivery_terminal_reason: "delivery-state-unavailable",
+    });
+  });
+
   it("persists the first policy creation as dispatch acceptance across crash replay", () => {
     const options = stateOptions();
     const { dispatchAcceptedAt: _ignored, ...replayedPolicy } = policy();
@@ -1728,8 +1760,8 @@ describe("managed delegate artifact claims", () => {
       "patch",
     ]);
     for (const artifact of artifacts ?? []) {
-      expect(Object.keys(artifact).sort()).toEqual(
-        ["download", "id", "mimeType", "sizeBytes", "source", "title", "type"].sort(),
+      expect(Object.keys(artifact).toSorted()).toEqual(
+        ["download", "id", "mimeType", "sizeBytes", "source", "title", "type"].toSorted(),
       );
       expect(artifact.download).toEqual({ mode: "unsupported" });
       expect(JSON.stringify(artifact)).not.toMatch(

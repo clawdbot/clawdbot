@@ -1527,6 +1527,7 @@ export async function startGatewayServer(
       dedupeCleanup: runtimeState.dedupeCleanup,
       mediaCleanup: runtimeState.mediaCleanup,
       worktreeCleanup: runtimeState.worktreeCleanup,
+      delegateArtifactCleanup: runtimeState.delegateArtifactCleanup,
       skillCuratorCleanup: runtimeState.skillCuratorCleanup,
       agentUnsub: runtimeState.agentUnsub,
       heartbeatUnsub: runtimeState.heartbeatUnsub,
@@ -2460,6 +2461,7 @@ export async function startGatewayServer(
               clearInterval(maintenance.mediaCleanup);
             }
             clearInterval(maintenance.worktreeCleanup);
+            clearInterval(maintenance.delegateArtifactCleanup);
             maintenance.skillCuratorCleanup();
             return;
           }
@@ -2468,6 +2470,7 @@ export async function startGatewayServer(
           runtimeState.dedupeCleanup = maintenance.dedupeCleanup;
           runtimeState.mediaCleanup = maintenance.mediaCleanup;
           runtimeState.worktreeCleanup = maintenance.worktreeCleanup;
+          runtimeState.delegateArtifactCleanup = maintenance.delegateArtifactCleanup;
           runtimeState.skillCuratorCleanup = maintenance.skillCuratorCleanup;
         },
         shouldStartCron: () => !closePreludeStarted && !gatewayCronStartHandled,

@@ -2002,6 +2002,7 @@ describe("startGatewayPostAttachRuntime", () => {
       dedupeCleanup: setInterval(() => {}, 1 << 30),
       mediaCleanup: null,
       worktreeCleanup: null,
+      delegateArtifactCleanup: null,
       skillCuratorCleanup: vi.fn(),
       agentUnsub: null,
       taskUnsub: null,

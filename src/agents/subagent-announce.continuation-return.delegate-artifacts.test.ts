@@ -1,7 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+type EnqueueContinuationReturnParams = Parameters<
+  (typeof import("../auto-reply/continuation/targeting.js"))["enqueueContinuationReturnDeliveries"]
+>[0];
+
 const mocks = vi.hoisted(() => ({
-  enqueueContinuationReturnDeliveries: vi.fn(async (_params: { text: string }) => undefined),
+  enqueueContinuationReturnDeliveries: vi.fn(
+    async (_params: EnqueueContinuationReturnParams) => undefined,
+  ),
   listSessionEntries: vi.fn(() => {
     throw new Error("managed return must not enumerate live sessions");
   }),
@@ -101,22 +107,32 @@ describe("managed delegate artifact return routing", () => {
 
     expect(mocks.resolveAllAgentSessionStoreTargetsSync).not.toHaveBeenCalled();
     expect(mocks.listSessionEntries).not.toHaveBeenCalled();
-    expect(mocks.enqueueContinuationReturnDeliveries).toHaveBeenCalledTimes(2);
-    expect(mocks.enqueueContinuationReturnDeliveries.mock.calls.map(([call]) => call.text)).toEqual(
-      ["alpha envelope", "beta envelope"],
-    );
-    expect(
-      mocks.enqueueContinuationReturnDeliveries.mock.calls.map(
-        ([call]) =>
-          (
-            call as {
-              delegateArtifactProjections?: Map<string, unknown>;
-            }
-          ).delegateArtifactProjections
-            ?.values()
-            .next().value,
-      ),
-    ).toEqual([alphaProjection, betaProjection]);
+    expect(mocks.enqueueContinuationReturnDeliveries).toHaveBeenCalledTimes(1);
+    const call = mocks.enqueueContinuationReturnDeliveries.mock.calls[0]?.[0];
+    expect(call).toBeDefined();
+    if (!call) {
+      throw new Error("expected one continuation return delivery");
+    }
+    expect(call.targetSessionKeys).toEqual(["agent:main:alpha", "agent:main:beta"]);
+    expect(call.textBySessionKey).toBe(messages);
+    expect([...(call.expectedSessionIds?.entries() ?? [])]).toEqual([
+      ["agent:main:alpha", "alpha-session"],
+      ["agent:main:beta", "beta-session"],
+    ]);
+    expect([...(call.delegateArtifactReceipts?.values() ?? [])]).toEqual([
+      expect.objectContaining({
+        recipientSessionKey: "agent:main:alpha",
+        recipientSessionId: "alpha-session",
+      }),
+      expect.objectContaining({
+        recipientSessionKey: "agent:main:beta",
+        recipientSessionId: "beta-session",
+      }),
+    ]);
+    expect([...(call.delegateArtifactProjections?.values() ?? [])]).toEqual([
+      alphaProjection,
+      betaProjection,
+    ]);
   });
 
   it("terminalizes a stored managed recipient filtered by lifecycle state", async () => {

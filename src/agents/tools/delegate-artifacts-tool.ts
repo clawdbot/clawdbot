@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { root } from "@openclaw/fs-safe";
 import { detectMime } from "@openclaw/media-core/mime";
 import { Type } from "typebox";
 import { resolveContinuationRuntimeConfig } from "../../auto-reply/continuation/config.js";
@@ -9,6 +8,7 @@ import { resolveAgentIdFromSessionKey, resolveStorePath } from "../../config/ses
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { openRootFile, readFileDescriptorBounded } from "../../infra/boundary-file-read.js";
+import { root } from "../../infra/fs-safe.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
 import {
   DELEGATE_ARTIFACT_MAX_COUNT,
@@ -153,10 +153,14 @@ async function materializeToSafeDestination(params: {
   destination: string;
   bytes: Uint8Array;
   sandbox?: { root: string; bridge: SandboxFsBridge };
+  sandboxWritable?: boolean;
 }): Promise<string> {
   const segments = safeRelativeSegments(params.destination);
   if (!segments || segments.length < 1) {
     throw new Error("destination rejected");
+  }
+  if (params.sandbox && !params.sandboxWritable) {
+    throw new Error("sandbox workspace is read-only");
   }
   const workspaceRoot = params.sandbox
     ? resolveSandboxHostPath(params.sandbox, params.sandbox.root)
@@ -205,6 +209,7 @@ export function createDelegateArtifactTools(options: {
   workspaceDir?: string;
   sandboxRoot?: string;
   sandboxFsBridge?: SandboxFsBridge;
+  sandboxWritable?: boolean;
   stateOptions?: OpenClawStateDatabaseOptions;
 }): AnyAgentTool[] {
   const resolveCurrentConfig = options.getRuntimeConfig ?? getRuntimeConfig;
@@ -384,6 +389,7 @@ export function createDelegateArtifactTools(options: {
           destination: input.destination,
           bytes: resolved.bytes,
           sandbox,
+          sandboxWritable: options.sandboxWritable,
         });
       } catch {
         return jsonResult({ outcome: "unauthorized" });
