@@ -3,7 +3,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
+import { readAcpSessionMeta, readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
 import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { lookupContextTokens } from "../agents/context.js";
@@ -169,7 +169,12 @@ type GatewaySessionThinkingProjectionParams = {
 export function resolveGatewaySessionThinkingProjectionInternal(
   params: GatewaySessionThinkingProjectionParams,
 ) {
-  const acpMeta = readAcpSessionMeta({ sessionKey: params.sessionKey });
+  // Row builders already resolved this session's entry, and re-reading the store
+  // here materialized every entry once per listed row. Callers without an entry
+  // keep the store-resolving read, which also normalizes aliased keys.
+  const acpMeta = params.entry
+    ? readAcpSessionMetaForEntry({ sessionKey: params.sessionKey, entry: params.entry })
+    : readAcpSessionMeta({ sessionKey: params.sessionKey });
   const configuredAgentRuntime = resolveModelAgentRuntimeMetadata({
     cfg: params.cfg,
     agentId: params.agentId,

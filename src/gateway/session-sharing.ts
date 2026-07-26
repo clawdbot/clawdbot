@@ -29,6 +29,7 @@ import {
 } from "./session-sharing-snapshot-cache.js";
 import {
   resolveFreshestSessionStoreMatchFromStoreKeys,
+  type GatewaySessionStoreCache,
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils.js";
 
@@ -100,11 +101,13 @@ export function resolveSessionSharingTarget(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId?: string;
+  storeCache?: GatewaySessionStoreCache;
 }): SessionSharingTarget | null {
   const target = resolveGatewaySessionStoreTargetWithStore({
     cfg: params.cfg,
     key: params.sessionKey,
     agentId: params.agentId,
+    ...(params.storeCache ? { storeCache: params.storeCache } : {}),
   });
   const match = resolveFreshestSessionStoreMatchFromStoreKeys(target.store, target.storeKeys);
   return match
