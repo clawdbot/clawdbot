@@ -2877,7 +2877,8 @@ describe("memory index", () => {
           "abort",
           () => {
             clearTimeout(timer);
-            reject(options.signal?.reason);
+            const reason = options.signal?.reason;
+            reject(reason instanceof Error ? reason : new Error("embedding aborted"));
           },
           { once: true },
         );
