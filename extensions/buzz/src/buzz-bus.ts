@@ -25,6 +25,7 @@ const REPLAY_MAX_ENTRIES = 10_000;
 const REPLAY_STATE_MAX_ENTRIES = 50_000;
 const REPLAY_NAMESPACE_PREFIX = "buzz.inbound-dedupe";
 const MEMBERSHIP_READY_TIMEOUT_MS = 10_000;
+const MEMBERSHIP_TRACKER_SETUP_CLOSE_REASON = "membership tracker setup failed";
 const MEMBERSHIP_REFRESH_DELAYS_MS = [100, 500, 1_500, 3_000] as const;
 const MEMBERSHIP_EVENT_CACHE_MAX_ENTRIES = 10_000;
 
@@ -457,6 +458,7 @@ async function createBuzzRoomMembershipTracker(params: {
           } else if (
             reason !== "shutdown" &&
             reason !== "relay connection closed by us" &&
+            reason !== MEMBERSHIP_TRACKER_SETUP_CLOSE_REASON &&
             !params.signal?.aborted
           ) {
             params.onFatalError?.(
@@ -473,7 +475,7 @@ async function createBuzzRoomMembershipTracker(params: {
     memberships = await queryBuzzRoomMemberships(params);
   } catch (error) {
     for (const subscription of subscriptions) {
-      subscription.close("membership tracker setup failed");
+      subscription.close(MEMBERSHIP_TRACKER_SETUP_CLOSE_REASON);
     }
     throw error;
   } finally {
@@ -483,7 +485,7 @@ async function createBuzzRoomMembershipTracker(params: {
   for (const channelId of params.channelIds) {
     if (memberships.get(channelId)?.roles.get(params.botPublicKey) !== "bot") {
       for (const subscription of subscriptions) {
-        subscription.close("membership tracker setup failed");
+        subscription.close(MEMBERSHIP_TRACKER_SETUP_CLOSE_REASON);
       }
       throw new Error(`Buzz bot does not have the Bot role in configured room ${channelId}`);
     }

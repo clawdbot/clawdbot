@@ -76,9 +76,9 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
     let bus: BuzzBus | undefined;
     let cycleError: Error | undefined;
     let connectedAt: number | undefined;
-    let rejectBusFailure: (error: Error) => void = () => {};
-    const busFailure = new Promise<never>((_, reject) => {
-      rejectBusFailure = reject;
+    let reportBusFailure: (error: Error) => void = () => {};
+    const busFailure = new Promise<Error>((resolve) => {
+      reportBusFailure = resolve;
     });
     try {
       const sessionSince =
@@ -105,7 +105,7 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
         },
         onFatalError: (error) => {
           ctx.log?.error?.(`[${account.accountId}] Buzz bus failed: ${error.message}`);
-          rejectBusFailure(error);
+          reportBusFailure(error);
         },
         onDedupeError: (error) => {
           ctx.log?.error?.(`[${account.accountId}] Buzz replay state failed: ${error.message}`);
@@ -135,7 +135,13 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
       ctx.log?.info?.(
         `[${account.accountId}] Buzz connected to ${account.relayUrl} for ${channelIds.length} channel(s)`,
       );
-      await Promise.race([waitUntilAbort(ctx.abortSignal), busFailure]);
+      const fatalError = await Promise.race([
+        waitUntilAbort(ctx.abortSignal).then(() => undefined),
+        busFailure,
+      ]);
+      if (fatalError) {
+        throw fatalError;
+      }
     } catch (error) {
       if (ctx.abortSignal.aborted) {
         return;
