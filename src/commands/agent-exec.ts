@@ -286,19 +286,32 @@ async function requireDirectory(value: string, label: string): Promise<string> {
   return resolved;
 }
 
-function setScopedEnvironment(values: Record<string, string>): () => void {
-  const previous = new Map<string, string | undefined>();
-  for (const [key, value] of Object.entries(values)) {
-    previous.set(key, process.env[key]);
-    process.env[key] = value;
-  }
+function setAgentExecEnvironment(params: {
+  stateDir: string;
+  configPath: string;
+  cwd: string;
+}): () => void {
+  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+  const previousWorkspaceDir = process.env.OPENCLAW_WORKSPACE_DIR;
+  process.env.OPENCLAW_STATE_DIR = params.stateDir;
+  process.env.OPENCLAW_CONFIG_PATH = params.configPath;
+  process.env.OPENCLAW_WORKSPACE_DIR = params.cwd;
   return () => {
-    for (const [key, value] of previous) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
+    if (previousConfigPath === undefined) {
+      delete process.env.OPENCLAW_CONFIG_PATH;
+    } else {
+      process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+    }
+    if (previousWorkspaceDir === undefined) {
+      delete process.env.OPENCLAW_WORKSPACE_DIR;
+    } else {
+      process.env.OPENCLAW_WORKSPACE_DIR = previousWorkspaceDir;
     }
   };
 }
@@ -395,11 +408,7 @@ export async function agentExecCommand(
     const fallbacks = normalizeFallbacks(opts.model, opts.fallback);
     const { resolveDefaultAgentDir } = await import("../agents/agent-scope-config.js");
     const storedAuthAgentDir = resolveDefaultAgentDir({});
-    restoreEnvironment = setScopedEnvironment({
-      OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_WORKSPACE_DIR: cwd,
-    });
+    restoreEnvironment = setAgentExecEnvironment({ stateDir, configPath, cwd });
     [runtimePaths, configIo] = await Promise.all([
       import("../config/paths.js"),
       import("../config/io.js"),
