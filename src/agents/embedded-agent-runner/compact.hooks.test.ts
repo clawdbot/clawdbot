@@ -4198,6 +4198,50 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     });
   });
 
+  it("keeps a partial structured successor in the active transcript store", async () => {
+    const maintain = vi.fn(async (_params?: unknown) => ({
+      changed: false,
+      bytesFreed: 0,
+      rewrittenEntries: 0,
+    }));
+    const delegatedSessionId = "delegated-session";
+    const storePath = "/tmp/custom-active-sessions.json";
+    resolveContextEngineMock.mockResolvedValue({
+      info: { ownsCompaction: false },
+      compact: contextEngineCompactMock,
+      maintain,
+    } as never);
+    contextEngineCompactMock.mockResolvedValue({
+      ok: true,
+      compacted: true,
+      result: {
+        sessionTarget: { sessionId: delegatedSessionId },
+      },
+    } as never);
+
+    const result = await compactEmbeddedAgentSession(
+      wrappedCompactionArgs({
+        sessionTarget: {
+          agentId: "main",
+          sessionId: TEST_SESSION_ID,
+          sessionKey: TEST_SESSION_KEY,
+          storePath,
+        },
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    expectRecordFields(mockCallArg(maintain), {
+      sessionId: delegatedSessionId,
+      sessionTarget: expect.objectContaining({
+        agentId: "main",
+        sessionId: delegatedSessionId,
+        sessionKey: TEST_SESSION_KEY,
+        storePath,
+      }),
+    });
+  });
+
   it.each([
     ["session key", "agent:main:other", "/tmp/active-sessions.json"],
     ["store path", TEST_SESSION_KEY, "/tmp/other-sessions.json"],

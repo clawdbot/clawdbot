@@ -14,6 +14,7 @@ import {
   upsertSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { replaceSqliteTranscriptEvents } from "../../config/sessions/session-accessor.sqlite.js";
+import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import {
   clearMemoryPluginState,
   registerMemoryCapability,
@@ -2667,6 +2668,49 @@ describe("runMemoryFlushIfNeeded", () => {
     const compactCall = requireCompactEmbeddedAgentSessionCall();
     expect(compactCall.trigger).toBe("budget");
     expect(compactCall.preflightCompactionTrigger).toBe("transcript_bytes");
+  });
+
+  it("keeps incognito preflight compaction in the process-local transcript store", async () => {
+    const durableStorePath = path.join(rootDir, "durable-sessions.json");
+    const sessionKey = "agent:main:dashboard:incognito-preflight";
+    const sessionEntry: SessionEntry = {
+      sessionId: "incognito-session",
+      updatedAt: Date.now(),
+      totalTokens: 90_000,
+      totalTokensFresh: true,
+      compactionCount: 0,
+    };
+
+    await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({
+        sessionId: sessionEntry.sessionId,
+        sessionKey,
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath: durableStorePath,
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    const expectedStorePath = resolveSessionStorePathForScope({
+      agentId: "main",
+      sessionKey,
+      storePath: durableStorePath,
+    });
+    expect(requireCompactEmbeddedAgentSessionCall().sessionTarget).toMatchObject({
+      agentId: "main",
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      storePath: expectedStorePath,
+    });
+    expect(incrementCompactionCountMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "main", sessionKey, storePath: expectedStorePath }),
+    );
   });
 
   it("resolves usage from an active branch whose leaf target predates the bounded tail", async () => {

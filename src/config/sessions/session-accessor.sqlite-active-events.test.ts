@@ -12,6 +12,7 @@ import { appendTranscriptEvent, persistSessionTranscriptTurn } from "./session-a
 import {
   readRecentSessionTranscriptMessageEvents,
   readSessionTranscriptActiveLeafEvents,
+  readSessionTranscriptActiveStats,
   readSessionTranscriptMessageAnchorPage,
   readSessionTranscriptMessageEventById,
   readSessionTranscriptMessageEventCount,
@@ -132,6 +133,24 @@ describe("SQLite active transcript event projection", () => {
       { active_position: 0, event_seq: 1, message_position: 0 },
       { active_position: 1, event_seq: 3, message_position: 1 },
     ]);
+
+    const activeRows = database.db
+      .prepare(
+        `SELECT event.event_json
+         FROM session_transcript_active_events AS active
+         JOIN transcript_events AS event
+           ON event.session_id = active.session_id AND event.seq = active.event_seq
+         WHERE active.session_id = ?
+         ORDER BY active.active_position`,
+      )
+      .all(scope.sessionId) as Array<{ event_json: string }>;
+    expect(readSessionTranscriptActiveStats(scope)).toEqual({
+      eventCount: activeRows.length,
+      sizeBytes: activeRows.reduce(
+        (total, row) => total + Buffer.byteLength(row.event_json, "utf8") + 1,
+        0,
+      ),
+    });
   });
 
   it("defers mixed legacy and canonical rebuilds off request stacks", async () => {

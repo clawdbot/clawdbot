@@ -694,7 +694,10 @@ async function compactResolvedContextEngine(
             sessionId: delegatedSessionTarget.sessionId ?? postCompactionSessionId,
             sessionFile: delegatedSessionFile,
             sessionKey: delegatedSessionTarget.sessionKey ?? params.sessionKey,
-            sessionTarget: delegatedSessionTarget,
+            sessionTarget: {
+              ...delegatedSessionTarget,
+              storePath: delegatedSessionTarget.storePath ?? runtimeTarget.storePath,
+            },
           });
           if (
             resolvedDelegatedTarget.agentId !== runtimeTarget.agentId ||

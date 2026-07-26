@@ -17,7 +17,7 @@ import { resolveStateDir } from "../../../config/paths.js";
 import { resolveStorePath } from "../../../config/sessions/paths.js";
 import {
   loadTranscriptEvents,
-  loadTranscriptEventsSync,
+  readRecentSessionTranscriptMessageEvents,
   type TranscriptEvent,
 } from "../../../config/sessions/session-accessor.js";
 import { selectVisibleTranscriptEvents } from "../../../config/sessions/transcript-visible-events.js";
@@ -353,12 +353,26 @@ const saveSessionToMemory: HookHandler = (event) => {
         typeof context.storePath === "string" && context.storePath.trim()
           ? context.storePath.trim()
           : resolveStorePath(cfg?.session?.store, { agentId });
-      capturedEvents = loadTranscriptEventsSync({
-        agentId,
-        sessionId,
-        sessionKey: event.sessionKey,
-        storePath,
-      });
+      const hookConfig = resolveHookConfig(cfg, "session-memory");
+      const messageCount =
+        typeof hookConfig?.messages === "number" && hookConfig.messages > 0
+          ? hookConfig.messages
+          : 15;
+      capturedEvents = readRecentSessionTranscriptMessageEvents(
+        {
+          agentId,
+          sessionId,
+          sessionKey: event.sessionKey,
+          storePath,
+        },
+        {
+          maxBytes: 8 * 1024 * 1024,
+          // This limit is over the materialized visible-message projection;
+          // control events cannot consume the configured message window.
+          maxLines: messageCount,
+          maxMessages: messageCount,
+        },
+      ).events.map(({ event: transcriptEvent }) => transcriptEvent);
     }
   } catch {
     // The async writer retains its existing best-effort read fallback.

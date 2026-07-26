@@ -362,9 +362,9 @@ export function readSessionTranscriptActiveStats(scope: SessionTranscriptReadSco
         )
         .select((eb) => [
           eb.fn.count<number>("active.event_seq").as("event_count"),
-          /* kysely-allow-raw: JSONL size includes event bytes plus newline separators. */
+          /* kysely-allow-raw: JSONL size includes one terminating newline per event. */
           sql<number>`COALESCE(SUM(LENGTH(CAST(event.event_json AS BLOB))), 0)
-            + CASE WHEN COUNT(*) > 0 THEN COUNT(*) - 1 ELSE 0 END`.as("size_bytes"),
+            + COUNT(*)`.as("size_bytes"),
         ])
         .where("active.session_id", "=", projection.resolved.sessionId),
     );
