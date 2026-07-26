@@ -133,7 +133,7 @@ describe("equivalent spellings inside one payload", () => {
   it("attaches an owned artifact once when a single payload lists two spellings", () => {
     const payloads = [
       { text: "here you go", mediaUrls: ["/tmp/generated-dog.png", "/tmp/./generated-dog.png"] },
-    ] as ReplyPayload[];
+    ];
 
     const out = enforceHandoffMediaDeliveryOwnership({
       payloads,
@@ -145,9 +145,7 @@ describe("equivalent spellings inside one payload", () => {
   });
 
   it("does not collapse two spellings of media the handoff does not own", () => {
-    const payloads = [
-      { text: "chart", mediaUrls: ["/tmp/chart.png", "/tmp/./chart.png"] },
-    ] as ReplyPayload[];
+    const payloads = [{ text: "chart", mediaUrls: ["/tmp/chart.png", "/tmp/./chart.png"] }];
 
     const out = enforceHandoffMediaDeliveryOwnership({
       payloads,
@@ -164,7 +162,7 @@ describe("equivalent spellings inside one payload", () => {
         mediaUrl: "/tmp/generated-dog.png",
         mediaUrls: ["/tmp/./generated-dog.png"],
       },
-    ] as ReplyPayload[];
+    ];
 
     const out = enforceHandoffMediaDeliveryOwnership({
       payloads,
