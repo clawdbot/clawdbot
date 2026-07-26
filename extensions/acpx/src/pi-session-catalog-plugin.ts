@@ -23,6 +23,7 @@ import type {
 } from "openclaw/plugin-sdk/session-catalog";
 import {
   createSessionCatalogAdoptionCoordinator,
+  importSessionCatalogHistory,
   listAdoptedSessionCatalogSessions,
   sessionCatalogAdoptedSessionKey,
   sessionCatalogAdoptedSourceKey,
@@ -479,8 +480,6 @@ async function continuePiSession(
       }
       const config = currentPiCatalogConfig(api);
       const marker = { sourceThreadId: threadId };
-      // ACPX consumes load replay before OpenClaw turn handlers attach, so the
-      // OpenClaw transcript starts empty while Pi resumes from its session file.
       const created = await api.runtime.agent.session.createSessionEntry({
         cfg: config,
         key: sessionCatalogAdoptedSessionKey(PI_ADOPTED_SESSION_KEY_PREFIX, threadId),
@@ -496,9 +495,25 @@ async function continuePiSession(
           },
           pluginExtensions: { acpx: { piSessionCatalog: marker } },
         },
-        afterCreate: async () => ({
-          pluginExtensions: { acpx: { piSessionCatalog: marker } },
-        }),
+        afterCreate: async (entry) => {
+          await importSessionCatalogHistory({
+            catalogId: "pi",
+            threadId,
+            read: async ({ cursor, limit }) =>
+              await readPiTranscript(api.runtime, {
+                hostId,
+                threadId,
+                limit,
+                ...(cursor ? { cursor } : {}),
+              }),
+            sessionId: entry.sessionId,
+            sessionKey: entry.key,
+            agentId: entry.agentId,
+            ...(record.cwd ? { cwd: record.cwd } : {}),
+            config,
+          });
+          return { pluginExtensions: { acpx: { piSessionCatalog: marker } } };
+        },
       });
       return { sessionKey: created.key };
     },

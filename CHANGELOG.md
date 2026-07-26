@@ -51,6 +51,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Control UI initial prompts:** keep accepted first messages visible across Gateway transport reconnects by binding the process-local handoff to the logical browser client instead of the per-handshake hello snapshot.
 - **Gateway exec deny fallback:** fail closed immediately when shell-expanded arguments prevent an allowlisted command from producing an enforceable execution plan and effective policy is `ask=off` with `askFallback=deny`, instead of registering an approval that can only time out. Fixes #113191. Thanks @shakkernerd.
 - **Cron local-provider preflight:** report the guarded-fetch deadline as a bounded preflight timeout, preserve concrete nested non-timeout errors, and carry the failure reason into fallback warnings. Thanks @shakkernerd.
 - **ClickClack split-origin setup codes:** consume versioned exact claim endpoints without appending a second claim path, validate the returned canonical API base, preserve private API transport overrides, and keep legacy setup URLs working. Fixes #111919. Thanks @shakkernerd.
