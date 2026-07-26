@@ -123,10 +123,25 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       if (activeClaim) {
         throw new Error(`card already claimed by ${activeClaim.ownerId}.`);
       }
-      const claimable =
+      const callerSessionKey = normalizeOptionalString(input.sessionKey);
+      const boundSessionKey = cardSessionKey(guarded);
+      if (callerSessionKey && boundSessionKey && callerSessionKey !== boundSessionKey) {
+        throw new Error(`card is bound to session ${boundSessionKey}.`);
+      }
+      let claimable =
         options.adoptWorkspaceAccess && !guarded.metadata?.automation?.workspaceAccess
           ? await this.updateCard(id, { workspaceAccess: options.adoptWorkspaceAccess })
           : guarded;
+      if (callerSessionKey && !cardSessionKey(claimable)) {
+        this.assertPrimarySessionAvailable(
+          await this.list(),
+          id,
+          callerSessionKey,
+          claimable.status,
+          true,
+        );
+        claimable = await this.updateCard(id, { sessionKey: callerSessionKey });
+      }
       const metadata = clearDiagnostics(claimable.metadata, ["stranded_ready"]);
       const card = await this.updateCard(id, {
         metadata: {

@@ -19,6 +19,7 @@ import {
   assertCanMutateClaimedCard,
   cardBoardId,
   cardParentIds,
+  cardSessionKey,
   compareCards,
   isActiveDependencyTarget,
   isDependencyPromotableStatus,
@@ -40,6 +41,7 @@ import type {
   WorkboardLinkedCreateInput,
   WorkboardListOptions,
   WorkboardMutationScope,
+  WorkboardSessionBindingInput,
   WorkboardStatsResult,
 } from "./store-inputs.js";
 import {
@@ -66,6 +68,14 @@ import {
   syncExecutionSessionKey,
   trimMetadataToBudget,
 } from "./store-normalizers.js";
+
+function isActivePrimarySessionCard(card: Pick<WorkboardCard, "status" | "metadata">): boolean {
+  return !card.metadata?.archivedAt && (card.status === "running" || card.status === "review");
+}
+
+function canHoldPrimarySessionBinding(card: Pick<WorkboardCard, "status" | "metadata">): boolean {
+  return !card.metadata?.archivedAt && card.status !== "blocked" && card.status !== "done";
+}
 
 export class WorkboardCoreStore {
   private mutationQueue: Promise<unknown> = Promise.resolve();
@@ -292,6 +302,27 @@ export class WorkboardCoreStore {
     return entry?.version === 1 ? entry.card : undefined;
   }
 
+  protected assertPrimarySessionAvailable(
+    cards: readonly WorkboardCard[],
+    cardId: string,
+    sessionKey: string | undefined,
+    status: WorkboardStatus,
+    strict = false,
+  ): void {
+    if (!sessionKey || (!strict && !isActivePrimarySessionCard({ status, metadata: undefined }))) {
+      return;
+    }
+    const conflict = cards.find(
+      (card) =>
+        card.id !== cardId &&
+        (strict ? canHoldPrimarySessionBinding(card) : isActivePrimarySessionCard(card)) &&
+        cardSessionKey(card) === sessionKey,
+    );
+    if (conflict) {
+      throw new Error(`session ${sessionKey} is already bound to active card ${conflict.id}.`);
+    }
+  }
+
   private async removeReferencesToCard(cardId: string): Promise<void> {
     for (const card of await this.list()) {
       const links = card.metadata?.links;
@@ -394,6 +425,7 @@ export class WorkboardCoreStore {
     const syncedMetadata = trimMetadataToBudget(
       syncExecutionAttemptMetadata(metadata, execution, now),
     );
+    this.assertPrimarySessionAvailable(cards, "", sessionKey, status);
     const boardId = syncedMetadata.automation?.boardId ?? "default";
     const position = Number.isFinite(normalizedPosition)
       ? normalizedPosition
@@ -606,6 +638,14 @@ export class WorkboardCoreStore {
       syncExecutionAttemptMetadata(next.metadata ?? {}, execution, now),
       options,
     );
+    const previousSessionKey = cardSessionKey(existing);
+    const nextSessionKey = cardSessionKey(next);
+    if (
+      previousSessionKey !== nextSessionKey ||
+      isActivePrimarySessionCard(next) !== isActivePrimarySessionCard(existing)
+    ) {
+      this.assertPrimarySessionAvailable(await this.list(), next.id, nextSessionKey, next.status);
+    }
     next.events = appendEvent(next, updateEvent(existing, next), now);
     if (options.enforceStatusHolds && effectivePatch.status !== undefined) {
       await this.assertActiveStatusAllowed(existing, next, now);
@@ -625,6 +665,53 @@ export class WorkboardCoreStore {
     await this.store.register(next.id, { version: 1, card: next });
     await this.deleteDetachedAttachments(existing, next);
     return next;
+  }
+
+  async bindSession(
+    id: string,
+    input: WorkboardSessionBindingInput,
+    scope?: WorkboardMutationScope,
+  ): Promise<WorkboardCard> {
+    return await this.enqueueMutation(async () => {
+      const existing = await this.get(id);
+      if (!existing) {
+        throw new Error(`card not found: ${id}`);
+      }
+      assertCanMutateClaimedCard(existing, scope);
+      const currentSessionKey = cardSessionKey(existing);
+      const requestedSessionKey = normalizeOptionalString(input.sessionKey);
+      const action =
+        normalizeOptionalString(input.action) ?? (currentSessionKey ? "rebind" : "bind");
+      if (action !== "bind" && action !== "rebind" && action !== "detach") {
+        throw new Error("session binding action must be bind, rebind, or detach.");
+      }
+      if (action === "detach") {
+        if (requestedSessionKey) {
+          throw new Error("detach must not include a session key.");
+        }
+        return currentSessionKey ? await this.updateCard(id, { sessionKey: "" }) : existing;
+      }
+      if (!requestedSessionKey) {
+        throw new Error(`${action} requires a session key.`);
+      }
+      if (action === "bind" && currentSessionKey && currentSessionKey !== requestedSessionKey) {
+        throw new Error("card is already bound; use rebind to change its session.");
+      }
+      if (action === "rebind" && !currentSessionKey) {
+        throw new Error("card is not bound; use bind to set its first session.");
+      }
+      if (currentSessionKey === requestedSessionKey) {
+        return existing;
+      }
+      this.assertPrimarySessionAvailable(
+        await this.list(),
+        id,
+        requestedSessionKey,
+        existing.status,
+        true,
+      );
+      return await this.updateCard(id, { sessionKey: requestedSessionKey });
+    });
   }
 
   private async assertActiveStatusAllowed(

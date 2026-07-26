@@ -2527,6 +2527,11 @@ describe("workboard controller", () => {
 
     await saveWorkboardCardDraft({ host, client: client as never });
 
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.bindSession", {
+      id: "card-1",
+      action: "bind",
+      sessionKey: sampleSession.key,
+    });
     expect(client.request).toHaveBeenCalledWith("workboard.cards.update", {
       id: "card-1",
       patch: {
@@ -2536,7 +2541,6 @@ describe("workboard controller", () => {
         priority: "high",
         labels: ["ui", "polish"],
         agentId: "dev",
-        sessionKey: sampleSession.key,
       },
     });
     expect(state.cards[0]).toMatchObject({ title: "Updated board", status: "review" });

@@ -351,6 +351,11 @@ export function assertCanMutateClaimedCard(
   if (claim.ownerId !== ownerId && !safeEqualSecret(token, claim.token)) {
     throw new Error(`card is claimed by ${claim.ownerId}.`);
   }
+  const callerSessionKey = normalizeOptionalString(scope.sessionKey);
+  const boundSessionKey = cardSessionKey(card);
+  if (callerSessionKey && boundSessionKey && callerSessionKey !== boundSessionKey) {
+    throw new Error(`card is bound to session ${boundSessionKey}.`);
+  }
 }
 
 export function retryBudgetExhausted(card: WorkboardCard): boolean {

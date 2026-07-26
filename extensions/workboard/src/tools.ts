@@ -115,7 +115,7 @@ type WorkboardToolCardParams = {
   record: Record<string, unknown>;
   id: string;
   token?: string;
-  scope: { ownerId: string; token?: string };
+  scope: { ownerId: string; token?: string; sessionKey?: string };
 };
 type WorkboardToolCardParamsReader = (rawParams: unknown) => Promise<WorkboardToolCardParams>;
 type WorkboardCardMutation = (
@@ -132,7 +132,11 @@ const OptionalOperatorNoteField = Type.Optional(
   Type.String({ description: "Optional operator note." }),
 );
 
-function readCardToolParams(rawParams: unknown, ownerId: string): WorkboardToolCardParams {
+function readCardToolParams(
+  rawParams: unknown,
+  ownerId: string,
+  sessionKey?: string,
+): WorkboardToolCardParams {
   const record = rawParams as Record<string, unknown>;
   const id = readStringParam(record, "id", { required: true });
   const token = record.token as string | undefined;
@@ -140,7 +144,7 @@ function readCardToolParams(rawParams: unknown, ownerId: string): WorkboardToolC
     record,
     id,
     token,
-    scope: { ownerId, token },
+    scope: { ownerId, token, ...(sessionKey ? { sessionKey } : {}) },
   };
 }
 
@@ -178,15 +182,17 @@ export function createWorkboardTools(params: {
 }): AnyAgentTool[] {
   const store = params.store ?? WorkboardStore.openSqlite();
   const ownerId = contextOwner(params.context);
+  const callerSessionKey =
+    typeof params.context?.sessionKey === "string" ? params.context.sessionKey.trim() : undefined;
   const readScopedCardToolParams = async (rawParams: unknown): Promise<WorkboardToolCardParams> => {
-    const input = readCardToolParams(rawParams, ownerId);
+    const input = readCardToolParams(rawParams, ownerId, callerSessionKey);
     await requireScopedCard(store, input.id, ownerId, input.token);
     return input;
   };
   const readClaimedCardToolParams = async (
     rawParams: unknown,
   ): Promise<WorkboardToolCardParams> => {
-    const input = readCardToolParams(rawParams, ownerId);
+    const input = readCardToolParams(rawParams, ownerId, callerSessionKey);
     await requireClaimedCard(store, input.id, ownerId, input.token);
     return input;
   };
@@ -361,8 +367,44 @@ export function createWorkboardTools(params: {
         const claimed = await store.claim(id, {
           ownerId,
           ttlSeconds: record.ttlSeconds,
+          sessionKey: callerSessionKey,
         });
         return jsonResult({ ...claimed, card: redactClaimToken(claimed.card) });
+      },
+    },
+    {
+      name: "workboard_session_bind",
+      label: "Workboard Session Bind",
+      description:
+        "Bind, explicitly rebind, or detach a Workboard card from the current chat session.",
+      parameters: Type.Object(
+        {
+          id: cardIdField(),
+          action: Type.String({ description: "bind, rebind, or detach." }),
+          sessionKey: Type.Optional(Type.String({ description: "Target session key." })),
+          token: ScopedClaimTokenField,
+        },
+        { additionalProperties: false },
+      ),
+      execute: async (_toolCallId, rawParams) => {
+        const { record, id, scope } = await readScopedCardToolParams(rawParams);
+        const requestedSessionKey =
+          typeof record.sessionKey === "string" ? record.sessionKey.trim() : undefined;
+        const action = typeof record.action === "string" ? record.action : "";
+        if (requestedSessionKey && callerSessionKey && requestedSessionKey !== callerSessionKey) {
+          throw new Error("session binding must target the current chat session.");
+        }
+        return redactedCardResult(
+          await store.bindSession(
+            id,
+            {
+              action,
+              sessionKey:
+                action === "detach" ? undefined : (requestedSessionKey ?? callerSessionKey),
+            },
+            scope,
+          ),
+        );
       },
     },
     {
