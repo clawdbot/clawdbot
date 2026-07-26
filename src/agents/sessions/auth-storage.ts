@@ -23,6 +23,7 @@ import {
   AuthProfileMigrationRequiredError,
   AuthProfileStoreUnreadableError,
 } from "../auth-profiles/legacy-source-diagnostic.js";
+import { resolveOAuthRefreshLockPath } from "../auth-profiles/paths.js";
 import { loadPersistedAuthProfileStore } from "../auth-profiles/persisted.js";
 import { getRuntimeAuthProfileStoreSnapshot } from "../auth-profiles/runtime-snapshots.js";
 import {
@@ -304,6 +305,7 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
   withLock<T>(fn: (current: string | undefined) => LockResult<T>): T {
     assertAuthProfileMigrationReady(this.agentDir);
     const snapshots = this.resolveMaterializedRuntimeStores();
+    assertAuthProfileMigrationReady(this.agentDir);
     return runAuthProfileWriteTransaction(this.agentDir, (database) => {
       const store = loadSqliteAuthStorageStore(this.agentDir, database);
       const materializedData = projectAuthoritativeAuthStorageData(store, snapshots);
@@ -339,6 +341,7 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
         if (next === undefined) {
           return result;
         }
+        assertAuthProfileMigrationReady(this.agentDir);
         runAuthProfileWriteTransaction(this.agentDir, (database) => {
           const authoritative = loadSqliteAuthStorageStore(this.agentDir, database);
           if (!isDeepStrictEqual(authoritative.profiles, initialRaw.profiles)) {
@@ -699,43 +702,52 @@ export class AuthStorage {
       return null;
     }
 
-    const result = await this.storage.withLockAsync(async (current) => {
-      const currentData = this.parseStorageData(current);
-      this.data = currentData;
-      this.loadError = null;
+    const refresh = async () =>
+      await this.storage.withLockAsync(async (current) => {
+        const currentData = this.parseStorageData(current);
+        this.data = currentData;
+        this.loadError = null;
 
-      const cred = currentData[providerId];
-      if (cred?.type !== "oauth") {
-        return { result: null };
-      }
-
-      if (Date.now() < cred.expires) {
-        return { result: { apiKey: provider.getApiKey(cred), newCredentials: cred } };
-      }
-
-      const oauthCreds: Record<string, OAuthCredentials> = {};
-      for (const [key, value] of Object.entries(currentData)) {
-        if (value.type === "oauth") {
-          oauthCreds[key] = value;
+        const cred = currentData[providerId];
+        if (cred?.type !== "oauth") {
+          return { result: null };
         }
-      }
 
-      const refreshed = await getAuthStorageOAuthProviderRegistry(this).getApiKey(
-        providerId,
-        oauthCreds,
-      );
-      if (!refreshed) {
-        return { result: null };
-      }
+        if (Date.now() < cred.expires) {
+          return { result: { apiKey: provider.getApiKey(cred), newCredentials: cred } };
+        }
 
-      const merged: AuthStorageData = {
-        ...currentData,
-        [providerId]: { type: "oauth", ...refreshed.newCredentials },
-      };
-      this.data = merged;
-      this.loadError = null;
-      return { result: refreshed, next: JSON.stringify(merged, null, 2) };
-    });
+        const oauthCreds: Record<string, OAuthCredentials> = {};
+        for (const [key, value] of Object.entries(currentData)) {
+          if (value.type === "oauth") {
+            oauthCreds[key] = value;
+          }
+        }
+
+        const refreshed = await getAuthStorageOAuthProviderRegistry(this).getApiKey(
+          providerId,
+          oauthCreds,
+        );
+        if (!refreshed) {
+          return { result: null };
+        }
+
+        const merged: AuthStorageData = {
+          ...currentData,
+          [providerId]: { type: "oauth", ...refreshed.newCredentials },
+        };
+        this.data = merged;
+        this.loadError = null;
+        return { result: refreshed, next: JSON.stringify(merged, null, 2) };
+      });
+
+    const result = this.migrationOwnerAgentDir
+      ? await withFileLock(
+          resolveOAuthRefreshLockPath(providerId, `${providerId}:default`),
+          OAUTH_REFRESH_LOCK_OPTIONS,
+          refresh,
+        )
+      : await refresh();
 
     return result;
   }

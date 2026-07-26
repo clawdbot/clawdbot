@@ -82,6 +82,17 @@ describe("auth profile migration receipts", () => {
     expect(row).toEqual({ status: "completed", removed_source: 1 });
   });
 
+  it("archives an empty receipt without requiring a target database", async () => {
+    const { state, sourcePath, receipt } = await makeReceipt();
+    receipt.expectedProfileSha256 = {};
+    recordAuthProfileMigrationImported(receipt);
+
+    expect(resumePendingAuthProfileMigrationArchives(state.env)).toHaveLength(1);
+    expect(fs.existsSync(sourcePath)).toBe(false);
+    expect(fs.existsSync(receipt.archivePath)).toBe(true);
+    expect(fs.existsSync(receipt.targetDatabasePath)).toBe(false);
+  });
+
   it("resumes after archive rename but before receipt finalization", async () => {
     const { state, receipt } = await makeReceipt();
     recordAuthProfileMigrationImported(receipt);

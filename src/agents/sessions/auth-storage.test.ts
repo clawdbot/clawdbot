@@ -132,6 +132,51 @@ describe("SQLite auth storage", () => {
     expect(readPersistedAuthProfileStoreRaw(agentDir)).toEqual(unreadableStore);
   });
 
+  it("does not commit a refresh when a legacy source appears during the provider call", async () => {
+    const agentDir = makeAgentDir();
+    writePersistedAuthProfileStoreRaw(
+      {
+        version: 1,
+        profiles: {
+          "test-oauth:default": {
+            type: "oauth",
+            provider: "test-oauth",
+            access: "not-a-real",
+            refresh: "not-a-real",
+            expires: 1,
+          },
+        },
+      },
+      agentDir,
+    );
+    const storage = AuthStorage.forAgent(agentDir);
+    getAuthStorageOAuthProviderRegistry(storage).register({
+      id: "test-oauth",
+      name: "Test OAuth",
+      async login() {
+        throw new Error("not used");
+      },
+      async refreshToken() {
+        fs.writeFileSync(path.join(agentDir, "auth.json"), '{"legacy":true}\n', "utf8");
+        return {
+          access: "not-a-real",
+          refresh: "not-a-real",
+          expires: Date.now() + 60_000,
+        };
+      },
+      getApiKey(credentials: { access: string }) {
+        return credentials.access;
+      },
+    });
+
+    await expect(storage.getApiKey("test-oauth")).rejects.toThrow(
+      "requires legacy credential migration",
+    );
+    expect(loadPersistedAuthProfileStore(agentDir)?.profiles["test-oauth:default"]).toMatchObject({
+      expires: 1,
+    });
+  });
+
   it("keeps AuthStorage.create(path) as a named SQLite-backed deprecation", () => {
     const agentDir = makeAgentDir();
     const legacyPath = path.join(agentDir, "auth.json");

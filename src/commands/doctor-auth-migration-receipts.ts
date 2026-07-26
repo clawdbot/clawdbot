@@ -269,13 +269,14 @@ export function acquireAuthProfileMigrationSourceLocks(sourcePaths: readonly str
 }
 
 function verifyAuthProfileMigrationTarget(receipt: AuthProfileMigrationSourceReceipt): void {
-  if (!receipt.expectedProfileSha256 && !receipt.expectedStateSha256) {
+  const hasExpectedProfiles = Object.keys(receipt.expectedProfileSha256 ?? {}).length > 0;
+  if (!hasExpectedProfiles && !receipt.expectedStateSha256) {
     return;
   }
   const db = openNodeSqliteDatabase(receipt.targetDatabasePath, { readOnly: true });
   try {
     const kysely = getNodeSqliteKysely<AuthProfileTargetDatabase>(db);
-    if (receipt.expectedProfileSha256) {
+    if (hasExpectedProfiles && receipt.expectedProfileSha256) {
       const row = executeSqliteQueryTakeFirstSync(
         db,
         kysely
