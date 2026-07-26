@@ -352,7 +352,7 @@ describe("phase hooks merger", () => {
         });
         await runner.runMessageReceived(
           { from: "user-1", content: "hello" },
-          { channelId: "test" },
+          { channelId: "test", sessionKey: "agent:session-agent:main" },
           { agentId: "message-agent" },
         );
         await runner.runSubagentProgress(
@@ -367,6 +367,62 @@ describe("phase hooks merger", () => {
       reply_dispatch: { pluginId: "reply-plugin", agentId: "reply-agent" },
       message_received: { pluginId: "message-plugin", agentId: "message-agent" },
       subagent_progress: { pluginId: "progress-plugin", agentId: "child-agent" },
+    });
+  });
+
+  it("derives hook agent scope from canonical session keys when no explicit scope is passed", async () => {
+    const scopes: Record<string, { pluginId?: string; agentId?: string } | undefined> = {};
+    const captureScope = (hookName: string) => {
+      const scope = getPluginRuntimeGatewayRequestScope();
+      scopes[hookName] = scope ? { pluginId: scope.pluginId, agentId: scope.agentId } : undefined;
+    };
+    const { runner } = createHookRunnerWithRegistry([
+      {
+        hookName: "before_dispatch",
+        pluginId: "dispatch-plugin",
+        handler: () => {
+          captureScope("before_dispatch");
+          return { handled: false };
+        },
+      },
+      {
+        hookName: "message_sending",
+        pluginId: "sending-plugin",
+        handler: () => {
+          captureScope("message_sending");
+        },
+      },
+      {
+        hookName: "message_sent",
+        pluginId: "sent-plugin",
+        handler: () => {
+          captureScope("message_sent");
+        },
+      },
+    ]);
+
+    await withPluginRuntimeGatewayRequestScope(
+      { agentId: "ambient-agent", isWebchatConnect: () => false },
+      async () => {
+        await runner.runBeforeDispatch(
+          { content: "hello", sessionKey: "agent:dispatch-agent:main" } as never,
+          { channelId: "test", sessionKey: "agent:dispatch-agent:main" },
+        );
+        await runner.runMessageSending(
+          { to: "user-1", content: "hello" },
+          { channelId: "test", sessionKey: "agent:sending-agent:main" },
+        );
+        await runner.runMessageSent(
+          { to: "user-1", content: "hello", success: true },
+          { channelId: "test", sessionKey: "agent:sent-agent:main" },
+        );
+      },
+    );
+
+    expect(scopes).toEqual({
+      before_dispatch: { pluginId: "dispatch-plugin", agentId: "dispatch-agent" },
+      message_sending: { pluginId: "sending-plugin", agentId: "sending-agent" },
+      message_sent: { pluginId: "sent-plugin", agentId: "sent-agent" },
     });
   });
 
@@ -388,7 +444,7 @@ describe("phase hooks merger", () => {
       () =>
         runner.runReplyPayloadSending(
           { payload: { text: "test" }, kind: "final" },
-          { channelId: "test" },
+          { channelId: "test", sessionKey: "main" },
         ),
     );
 

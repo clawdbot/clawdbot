@@ -9,6 +9,7 @@ import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number
 import { copyReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { formatHookErrorForLog } from "../hooks/fire-and-forget.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { concatOptionalTextSegments } from "../shared/text/join-segments.js";
 import {
   type GateHookResult,
@@ -214,6 +215,21 @@ function resolvePluginHookAgentId(...sources: unknown[]): string | undefined {
         : undefined;
     if (typeof rawAgentId === "string" && rawAgentId.trim()) {
       return rawAgentId.trim();
+    }
+  }
+  // Some message lifecycle owners carry only the canonical session identity.
+  // Parse that trusted key after checking every explicit agent; opaque legacy keys stay unscoped.
+  for (const source of sources) {
+    const rawSessionKey =
+      typeof source === "object" && source !== null && "sessionKey" in source
+        ? (source as { sessionKey?: unknown }).sessionKey
+        : undefined;
+    if (typeof rawSessionKey !== "string" || !rawSessionKey.trim()) {
+      continue;
+    }
+    const sessionAgentId = parseAgentSessionKey(rawSessionKey)?.agentId;
+    if (sessionAgentId) {
+      return sessionAgentId;
     }
   }
   return undefined;
