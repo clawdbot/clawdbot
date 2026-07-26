@@ -27,7 +27,7 @@ type ProviderOptions = {
 
 function successfulCheck(name: string, id: number) {
   return {
-    id,
+    id: String(id),
     name,
     status: "completed",
     conclusion: "success",
