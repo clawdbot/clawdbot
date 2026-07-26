@@ -46,7 +46,7 @@ export async function resolveQuote(
       event,
       deps,
       senderId: refEntry.senderId,
-      senderIsBot: refEntry.isBot === true,
+      senderIsCurrentAccountBot: refEntry.isBot === true && refEntry.senderId === account.accountId,
     });
     if (!includeQuote) {
       log?.debug?.(
@@ -144,10 +144,10 @@ async function shouldIncludeQuoteContext(params: {
   event: QueuedMessage;
   deps: InboundPipelineDeps;
   senderId?: string;
-  senderIsBot?: boolean;
+  senderIsCurrentAccountBot?: boolean;
 }): Promise<boolean> {
   const visibilityMode = resolveQuoteVisibilityMode(params.event, params.deps.account.config);
-  if (params.senderIsBot || visibilityMode === "all") {
+  if (params.senderIsCurrentAccountBot || visibilityMode === "all") {
     return true;
   }
 

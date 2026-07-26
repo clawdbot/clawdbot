@@ -278,14 +278,19 @@ describe("buildInboundContext bot self-echo suppression", () => {
     expect(processAttachmentsMock).toHaveBeenCalledTimes(1);
   });
 
-  it("does not block a user message that quotes a bot-authored ref", async () => {
+  it("does not block a restricted user message that quotes this account's bot-authored ref", async () => {
     getRefIndexMock.mockReturnValue({
       content: "previous bot reply",
       senderId: "qq-main",
       timestamp: 1,
       isBot: true,
     });
-    const deps = makeDeps();
+    const deps = makeDeps({
+      account: {
+        ...account,
+        config: { allowFrom: ["user-openid"], dmPolicy: "allowlist" },
+      },
+    });
 
     const inbound = await buildInboundContext(makeEvent({ refMsgIdx: "REF_BOT" }), deps);
 
@@ -300,6 +305,38 @@ describe("buildInboundContext bot self-echo suppression", () => {
     });
     expect(deps.startTyping).toHaveBeenCalledTimes(1);
     expect(processAttachmentsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits cached quoted content from another bot account under restricted policy", async () => {
+    getRefIndexMock.mockReturnValue({
+      content: "other bot reply",
+      senderId: "qq-other",
+      timestamp: 1,
+      isBot: true,
+    });
+    const deps = makeDeps({
+      account: {
+        ...account,
+        config: { allowFrom: ["user-openid"], dmPolicy: "allowlist" },
+      },
+    });
+    deps.adapters.access.resolveInboundAccess = vi.fn(
+      (input): QQBotInboundAccess =>
+        makeAccessResult({
+          isGroup: input.isGroup,
+          allowed: input.senderId === "user-openid",
+        }),
+    );
+
+    const inbound = await buildInboundContext(makeEvent({ refMsgIdx: "REF_OTHER_BOT" }), deps);
+
+    expect(inbound.replyTo).toStrictEqual({
+      id: "REF_OTHER_BOT",
+      sender: "qq-other",
+      isQuote: true,
+    });
+    expect(inbound.agentBody).toContain("Original content unavailable");
+    expect(inbound.agentBody).not.toContain("other bot reply");
   });
 
   it("omits cache-miss quoted content when restricted policy cannot verify the quoted sender", async () => {
