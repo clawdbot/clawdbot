@@ -861,6 +861,36 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
+  it("evaluates redirect policy for source-suppressed ACP room events", async () => {
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig({
+        messages: { operationalReplies: { policy: "redirect" } },
+      }),
+      ctx: buildTestCtx({
+        Provider: "visiblechat",
+        Surface: "visiblechat",
+        SessionKey: "agent:codex-acp:session-1",
+        InboundEventKind: "room_event",
+      }),
+      dispatcher: createDispatcher(),
+      inboundAudio: false,
+      sourceReplyDeliveryMode: "message_tool_only",
+      suppressUserDelivery: true,
+      suppressUserDeliveryBySourceReplyPolicy: true,
+      shouldRouteToOriginating: false,
+    });
+
+    await expect(
+      coordinator.deliver(
+        "final",
+        markOperationalReplyPayloadForSourceSuppressionDelivery({
+          text: "room operational failure",
+          isError: true,
+        }),
+      ),
+    ).rejects.toThrow("redirectSessionKey is required");
+  });
+
   it("does not silence visible bare ACP tool errors with operational reply policy", async () => {
     const dispatcher = createDispatcher();
     const coordinator = createAcpDispatchDeliveryCoordinator({

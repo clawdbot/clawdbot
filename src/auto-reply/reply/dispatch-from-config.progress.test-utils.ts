@@ -833,6 +833,33 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
+  it("evaluates redirect policy for source-suppressed room-event finals", async () => {
+    setNoAbort();
+    const payload = setReplyPayloadMetadata(
+      { text: "room operational failure", isError: true },
+      { operationalNotice: true },
+    );
+
+    await expect(
+      dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "telegram",
+          ChatType: "group",
+          InboundEventKind: "room_event",
+        }),
+        cfg: {
+          ...emptyConfig,
+          messages: { operationalReplies: { policy: "redirect" } },
+        },
+        dispatcher: createDispatcher(),
+        replyResolver: async () => payload,
+        replyOptions: {
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      }),
+    ).rejects.toThrow("redirectSessionKey is required");
+  });
+
   it("keeps missing-final recovery when policy silence is mixed with a hidden ordinary final", async () => {
     setNoAbort();
     const cfg = {

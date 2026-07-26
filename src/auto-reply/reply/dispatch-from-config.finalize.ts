@@ -139,9 +139,21 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       continue;
     }
     eligibleFinalCount += 1;
+    const independentlySuppressed =
+      suppressHookUserDelivery && !suppressUserDeliveryBySourceReplyPolicy;
+    const suppressedBySourcePolicy =
+      suppressDelivery && !shouldDeliverDespiteSourceReplySuppression(reply);
+    const shouldEvaluateSuppressedOperationalReply =
+      suppressedBySourcePolicy &&
+      !sendPolicyDenied &&
+      isOperationalReplyPayload({
+        payload: reply,
+        explicitCommandTurn: explicitCommandTurnCtx,
+      }) &&
+      (operationalReplyPolicy.policy === "redirect" || operationalReplyPolicy.policy === "silent");
     if (
-      (suppressHookUserDelivery && !suppressUserDeliveryBySourceReplyPolicy) ||
-      (suppressDelivery && !shouldDeliverDespiteSourceReplySuppression(reply))
+      independentlySuppressed ||
+      (suppressedBySourcePolicy && !shouldEvaluateSuppressedOperationalReply)
     ) {
       if (hasOutboundReplyContent(reply, { trimText: true })) {
         logVerbose(
@@ -162,6 +174,10 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     const policyResult = await applyDispatchOperationalReplyPolicy(reply);
     if (!policyResult.shouldDeliver) {
       operationalPolicySuppressedFinalCount += 1;
+      continue;
+    }
+    if (suppressedBySourcePolicy) {
+      await markOperationalReplyPolicyDelivered(policyResult, false);
       continue;
     }
     const finalPayloadDedupeKey = createFinalDispatchPayloadDedupeKey(reply);

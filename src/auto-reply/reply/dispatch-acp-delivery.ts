@@ -27,6 +27,7 @@ import {
   applyOperationalReplyPolicy,
   isOperationalReplyPayload,
   markOperationalReplyPolicyDelivered,
+  resolveOperationalReplyPolicy,
 } from "./operational-reply-policy.js";
 import {
   captureReplyDispatchDeliveryOutcome,
@@ -481,9 +482,20 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       params.sourceReplyDeliveryMode === "message_tool_only" &&
       params.suppressUserDeliveryBySourceReplyPolicy === true &&
       params.ctx.InboundEventKind !== "room_event";
+    const operationalPolicy = resolveOperationalReplyPolicy(params.cfg).policy;
+    const shouldEvaluateSuppressedRoomEvent =
+      params.suppressUserDelivery &&
+      params.suppressUserDeliveryBySourceReplyPolicy === true &&
+      params.ctx.InboundEventKind === "room_event" &&
+      isOperationalReply &&
+      (operationalPolicy === "redirect" || operationalPolicy === "silent");
     // Parent-owned and otherwise independent ACP runs stay private. Redirect
     // policy has cross-session side effects, so enforce this boundary first.
-    if (params.suppressUserDelivery && !allowOperationalSuppressionBypass) {
+    if (
+      params.suppressUserDelivery &&
+      !allowOperationalSuppressionBypass &&
+      !shouldEvaluateSuppressedRoomEvent
+    ) {
       return false;
     }
     const policyResult = isOperationalReply
@@ -498,6 +510,9 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     };
     try {
       if (!policyResult.shouldDeliver) {
+        return false;
+      }
+      if (params.suppressUserDelivery && !allowOperationalSuppressionBypass) {
         return false;
       }
       if (hasOutboundReplyContent(visiblePayload, { trimText: true })) {
