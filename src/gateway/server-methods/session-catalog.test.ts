@@ -280,6 +280,44 @@ describe("session catalog Gateway methods", () => {
     });
   });
 
+  it("returns unavailable when distinct catalog requests saturate admission", async () => {
+    const releaseList: Array<() => void> = [];
+    const list = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        releaseList.push(resolve);
+      });
+      return [];
+    });
+    hoisted.activeRegistry.sessionCatalogs = [
+      {
+        provider: provider("codex", { list }),
+      },
+    ];
+
+    const activeRequests = Array.from({ length: 4 }, (_, index) =>
+      call("sessions.catalog.list", { search: `saturating-${index}` }),
+    );
+
+    try {
+      await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(4));
+
+      const rejected = await call("sessions.catalog.list", { search: "saturating-overflow" });
+
+      expect(list).toHaveBeenCalledTimes(4);
+      expect(rejected).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: ErrorCodes.UNAVAILABLE,
+          message: "session catalog is busy; retry shortly",
+        }),
+      );
+    } finally {
+      releaseList.forEach((release) => release());
+      await Promise.allSettled(activeRequests);
+    }
+  });
+
   it("uses the pinned Gateway catalog runtime after active registry churn", async () => {
     const previousNodesRuntime = gatewaySubagentState.nodes;
     const listNodes = vi.fn(async () => ({ nodes: [] }));
