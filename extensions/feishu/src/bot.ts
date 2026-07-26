@@ -284,6 +284,50 @@ async function filterFetchedGroupContextMessages<
   return results.filter((message): message is T => message !== undefined);
 }
 
+const FEISHU_REPLY_SESSION_INIT_CONFLICT_RE = /reply session initialization conflicted for \S+/u;
+const FEISHU_REPLY_SESSION_INIT_CONFLICT_RETRY_DELAYS_MS = [1_000, 2_000, 4_000] as const;
+
+export function isFeishuReplySessionInitConflictError(error: unknown): boolean {
+  const re = FEISHU_REPLY_SESSION_INIT_CONFLICT_RE;
+  const seen = new WeakSet<object>();
+  const stack: unknown[] = [error];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (current == null) continue;
+    if (typeof current === "string") {
+      if (re.test(current)) return true;
+      continue;
+    }
+    if (typeof current !== "object") continue;
+    if (seen.has(current as object)) continue;
+    seen.add(current as object);
+    const node = current as { message?: unknown; cause?: unknown; errors?: unknown[] };
+    if (typeof node.message === "string" && re.test(node.message)) return true;
+    if (node.cause) stack.push(node.cause);
+    if (Array.isArray(node.errors)) for (const entry of node.errors) stack.push(entry);
+  }
+  return false;
+}
+
+export async function runFeishuInboundWithConflictRetry<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (initialError) {
+    if (!isFeishuReplySessionInitConflictError(initialError)) throw initialError;
+    let lastError: unknown = initialError;
+    for (const delayMs of FEISHU_REPLY_SESSION_INIT_CONFLICT_RETRY_DELAYS_MS) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      try {
+        return await run();
+      } catch (err) {
+        lastError = err;
+        if (!isFeishuReplySessionInitConflictError(err)) throw err;
+      }
+    }
+    throw lastError;
+  }
+}
+
 export async function handleFeishuMessage(params: {
   cfg: ClawdbotConfig;
   event: FeishuMessageEvent;
@@ -1821,53 +1865,55 @@ export async function handleFeishuMessage(params: {
         });
 
       log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
-      const turnResult = await core.channel.inbound.run({
-        channel: "feishu",
-        accountId: route.accountId,
-        raw: ctx,
-        adapter: {
-          ingest: () => ({
-            id: ctx.messageId,
-            timestamp: messageCreateTimeMs,
-            rawText: ctx.content,
-            textForAgent: ctxPayload.BodyForAgent,
-            textForCommands: ctxPayload.CommandBody,
-            raw: ctx,
-          }),
-          resolveTurn: () => ({
-            cfg: effectiveCfg,
-            channel: "feishu",
-            accountId: route.accountId,
-            route: { agentId: route.agentId, sessionKey: route.sessionKey },
-            ctxPayload,
-            record: {
-              updateLastRoute: buildFeishuInboundLastRouteUpdate({
-                sessionKey: route.sessionKey,
-                accountId: route.accountId,
-              }),
-              onRecordError: (err) => {
-                log(
-                  `feishu[${account.accountId}]: failed to record inbound session ${route.sessionKey}: ${String(err)}`,
-                );
+      const turnResult = await runFeishuInboundWithConflictRetry(() =>
+        core.channel.inbound.run({
+          channel: "feishu",
+          accountId: route.accountId,
+          raw: ctx,
+          adapter: {
+            ingest: () => ({
+              id: ctx.messageId,
+              timestamp: messageCreateTimeMs,
+              rawText: ctx.content,
+              textForAgent: ctxPayload.BodyForAgent,
+              textForCommands: ctxPayload.CommandBody,
+              raw: ctx,
+            }),
+            resolveTurn: () => ({
+              cfg: effectiveCfg,
+              channel: "feishu",
+              accountId: route.accountId,
+              route: { agentId: route.agentId, sessionKey: route.sessionKey },
+              ctxPayload,
+              record: {
+                updateLastRoute: buildFeishuInboundLastRouteUpdate({
+                  sessionKey: route.sessionKey,
+                  accountId: route.accountId,
+                }),
+                onRecordError: (err) => {
+                  log(
+                    `feishu[${account.accountId}]: failed to record inbound session ${route.sessionKey}: ${String(err)}`,
+                  );
+                },
               },
-            },
-            history: {
-              isGroup,
-              historyKey,
-              historyMap: chatHistories,
-              limit: historyLimit,
-            },
-            dispatcherOptions,
-            delivery,
-            replyOptions: {
-              ...replyOptions,
-              ...(turnAdoptionLifecycle
-                ? bindIngressLifecycleToReplyOptions(turnAdoptionLifecycle)
-                : {}),
-            },
-          }),
-        },
-      });
+              history: {
+                isGroup,
+                historyKey,
+                historyMap: chatHistories,
+                limit: historyLimit,
+              },
+              dispatcherOptions,
+              delivery,
+              replyOptions: {
+                ...replyOptions,
+                ...(turnAdoptionLifecycle
+                  ? bindIngressLifecycleToReplyOptions(turnAdoptionLifecycle)
+                  : {}),
+              },
+            }),
+          },
+        }),
+      );
       if (!turnResult.dispatched) {
         return;
       }
@@ -1883,6 +1929,25 @@ export async function handleFeishuMessage(params: {
     }
   } catch (err) {
     error(`feishu[${account.accountId}]: failed to dispatch message: ${String(err)}`);
+    if (isFeishuReplySessionInitConflictError(err) && !turnAdoptionLifecycle && ctx.chatId) {
+      try {
+        await createFeishuClient(account).im.message.create({
+          params: { receive_id_type: "chat_id" },
+          data: {
+            receive_id: ctx.chatId,
+            msg_type: "text",
+            content: JSON.stringify({
+              text: "Your message could not be delivered because the reply session was briefly locked. Please send it again.",
+            }),
+          },
+        });
+        log(`feishu[${account.accountId}]: sent reply-session-conflict notice to ${ctx.chatId}`);
+      } catch (noticeErr) {
+        error(
+          `feishu[${account.accountId}]: failed to send reply-session-conflict notice: ${String(noticeErr)}`,
+        );
+      }
+    }
     if (turnAdoptionLifecycle) {
       throw err;
     }
