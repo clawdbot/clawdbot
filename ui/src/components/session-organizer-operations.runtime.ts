@@ -38,6 +38,7 @@ export interface SessionOrganizerControllerHost extends ReactiveControllerHost {
   clearSessionSelection(): void;
   findSidebarSessionByKey(sessionKey: string): SidebarRecentSession | undefined;
   knownSessionGroups(): string[];
+  knownSessionCatalogIds(): string[];
   knownSectionOrder(): string[];
   pruneSidebarSessionEntry(key: string): void;
   reconciledSidebarZone(): { sidebarEntries: readonly string[] };
@@ -443,8 +444,9 @@ export async function reorderSidebarSection(
     // knownSessionGroups() is the full discovered set (gateway catalog plus
     // row-discovered categories), so normalize only prunes deleted groups.
     const knownGroups = host.knownSessionGroups();
+    const knownCatalogIds = host.knownSessionCatalogIds();
     const next = moveSessionSection(
-      normalizeSessionSectionOrder(host.knownSectionOrder(), knownGroups),
+      normalizeSessionSectionOrder(host.knownSectionOrder(), knownGroups, knownCatalogIds),
       sourceSectionId,
       targetSectionId,
       position,

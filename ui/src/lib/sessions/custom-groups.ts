@@ -33,6 +33,18 @@ export function normalizeSessionSectionOrderTokens(value: unknown): string[] | n
       continue;
     }
     const trimmed = entry.trim();
+    // Catalog-backed sections (session catalog providers) order alongside the
+    // built-ins and custom categories, so their ids must survive normalization.
+    const catalogName = trimmed.startsWith("catalog:")
+      ? trimmed.slice("catalog:".length).trim()
+      : "";
+    if (catalogName) {
+      const catalogSectionId = `catalog:${catalogName}`;
+      if (!normalized.includes(catalogSectionId)) {
+        normalized.push(catalogSectionId);
+      }
+      continue;
+    }
     let token: string | null = null;
     if (BUILT_IN_SESSION_SECTION_IDS.has(trimmed)) {
       token = trimmed;

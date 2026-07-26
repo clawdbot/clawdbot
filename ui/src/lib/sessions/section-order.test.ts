@@ -5,7 +5,7 @@ import { createSessionCapability } from "./index.ts";
 
 describe("gateway-owned sidebar section order", () => {
   it("sends and publishes the order", async () => {
-    const sectionOrder = ["work", "category:Beta", "ungrouped", "category:Alpha"];
+    const sectionOrder = ["catalog:codex", "work", "category:Beta", "ungrouped", "category:Alpha"];
     const request = vi.fn(async (method: string, params: unknown) => {
       expect(method).toBe("sessions.groups.put");
       expect(params).toEqual({ names: ["Beta", "Alpha"], sectionOrder });
