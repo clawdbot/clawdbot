@@ -66,7 +66,8 @@ export async function resolveAgentRunSessionTarget(params: {
     (fileBackedCompatibilityValue ||
       (!plainCompatibilitySessionKey &&
         !recognizedCompatibilityKey &&
-        legacySessionFile !== suppliedSessionKey))
+        legacySessionFile !== suppliedSessionKey &&
+        legacySessionFile !== targetSessionKey))
   ) {
     throw new Error(
       "File-backed transcript targets are unsupported; migrate the session to SQLite first",

@@ -13,6 +13,7 @@ import {
 } from "../../agents/embedded-agent-runner/tool-result-char-estimator.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { buildSystemPromptReport } from "../../agents/system-prompt-report.js";
+import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import {
   resolveFreshSessionTotalTokens,
   type SessionEntry,
@@ -86,12 +87,17 @@ async function readContextTranscriptMessages(
   if (!sessionId) {
     return [];
   }
+  const agentId = resolveContextReportAgentId(params);
   return (await readSessionMessagesAsync(
     {
-      agentId: resolveContextReportAgentId(params),
+      agentId,
       sessionId,
       sessionKey: params.sessionKey,
-      storePath: params.storePath,
+      storePath: resolveSessionStorePathForScope({
+        agentId,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+      }),
     },
     { mode: "full", reason: "context-report" },
   )) as AgentMessage[];

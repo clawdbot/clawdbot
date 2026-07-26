@@ -10,6 +10,7 @@ import {
   loadSessionEntry,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 
 const ttsMocks = vi.hoisted(() => ({
   getResolvedSpeechProviderConfig: vi.fn(),
@@ -405,6 +406,50 @@ describe("handleTtsCommands status fallback reporting", () => {
     expect(speechCall.text).toBe("latest visible reply");
     expect(sessionEntry.lastTtsReadLatestHash).toMatch(/^[a-f0-9]{64}$/);
     expect(sessionEntry.lastTtsReadLatestAt).toBeGreaterThanOrEqual(beforeTtsRead);
+  });
+
+  it("reads the latest assistant reply from the incognito transcript store", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-tts-incognito-"));
+    const durableStorePath = path.join(tempDir, "sessions.json");
+    const sessionKey = "agent:main:dashboard:incognito-tts-latest";
+    const sessionEntry: SessionEntry = { sessionId: "incognito-session", updatedAt: 1 };
+    const scopedStorePath = resolveSessionStorePathForScope({
+      agentId: "main",
+      sessionKey,
+      storePath: durableStorePath,
+    });
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey, storePath: scopedStorePath },
+      sessionEntry,
+    );
+    appendTranscriptMessageSync(
+      {
+        agentId: "main",
+        sessionId: sessionEntry.sessionId,
+        sessionKey,
+        storePath: scopedStorePath,
+      },
+      { message: { role: "assistant", content: "incognito latest reply" } },
+    );
+    ttsMocks.textToSpeech.mockResolvedValue({
+      success: true,
+      audioPath: "/tmp/incognito-latest.ogg",
+      provider: PRIMARY_TTS_PROVIDER,
+      voiceCompatible: true,
+    });
+
+    const result = await handleTtsCommands(
+      buildTtsParams("/tts latest", {}, "main", {
+        initialSessionEntry: structuredClone(sessionEntry),
+        sessionEntry,
+        sessionStore: { [sessionKey]: sessionEntry },
+        sessionKey,
+        storePath: durableStorePath,
+      }),
+      true,
+    );
+
+    expect(expectReply(result).spokenText).toBe("incognito latest reply");
   });
 
   it("does not resend /tts latest for the same assistant reply", async () => {

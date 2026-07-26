@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.js";
+import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { buildContextReply } from "./commands-context-report.js";
 import { buildCommandContext } from "./commands-context.js";
@@ -114,14 +115,17 @@ async function withTranscript(
       sessionKey: options.sessionKey ?? `agent:${agentId}:main`,
       storePath: join(dir, "sessions.json"),
     };
-    await persistSessionTranscriptTurn(target, {
-      messages: messages.map((message, index) => ({
-        eventId: `record-${index + 1}`,
-        message,
-        parentId: index === 0 ? null : `record-${index}`,
-      })),
-      touchSessionEntry: false,
-    });
+    await persistSessionTranscriptTurn(
+      { ...target, storePath: resolveSessionStorePathForScope(target) },
+      {
+        messages: messages.map((message, index) => ({
+          eventId: `record-${index + 1}`,
+          message,
+          parentId: index === 0 ? null : `record-${index}`,
+        })),
+        touchSessionEntry: false,
+      },
+    );
     await run(target);
   } finally {
     closeOpenClawAgentDatabasesForTest();

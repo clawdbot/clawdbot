@@ -5,6 +5,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { readLatestAssistantTextFromSessionTranscript } from "../../config/sessions.js";
+import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { logVerbose } from "../../globals.js";
 import {
   isUnscopedSessionKeySentinel,
@@ -227,12 +228,16 @@ async function handleTtsLatestAction(
   const targetSessionEntry = params.sessionStore[params.sessionKey] ?? params.sessionEntry;
   const targetAgentId = isUnscopedSessionKeySentinel(params.sessionKey)
     ? params.agentId
-    : resolveAgentIdFromSessionKey(params.sessionKey);
+    : resolveAgentIdFromSessionKey(params.sessionKey, params.agentId);
   const latest = await readLatestAssistantTextFromSessionTranscript({
     agentId: targetAgentId,
     sessionId: targetSessionEntry.sessionId,
     sessionKey: params.sessionKey,
-    storePath: params.storePath,
+    storePath: resolveSessionStorePathForScope({
+      agentId: targetAgentId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    }),
   });
   const latestText = latest?.text.trim();
   if (!latestText || isSilentReplyPayloadText(latestText)) {
