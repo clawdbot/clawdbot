@@ -229,6 +229,34 @@ describe("main session recovery state", () => {
     expect(entry.mainRestartRecovery).toBeUndefined();
   });
 
+  it("clears orphaned recovery residue when the row never recorded a status", () => {
+    // Production shape (2026-07-26): fences from two dead gateway generations on
+    // a row whose status was never persisted, so it matched no cleanup branch.
+    const entry = interruptedEntry({
+      status: undefined,
+      abortedLastRun: false,
+      mainRestartRecovery: undefined,
+      restartRecoveryRuns: [
+        { runId: "stale-run-1", lifecycleGeneration: "dead-generation-1" },
+        { runId: "stale-run-2", lifecycleGeneration: "dead-generation-2" },
+      ],
+    });
+
+    expect(
+      transitionMainSessionRecovery(entry, {
+        kind: "claim_foreground",
+        cycleId: "unused",
+        lifecycleGeneration: "generation-1",
+        sessionId: "session-1",
+        sessionKey,
+        claimId: "foreground-1",
+      }),
+    ).toEqual({ kind: "applied" });
+    expect(entry.restartRecoveryRuns).toBeUndefined();
+    expect(entry.mainRestartRecovery).toBeUndefined();
+    expect(entry.abortedLastRun).toBe(false);
+  });
+
   it("clears orphaned recovery residue before terminal foreground admission", () => {
     const entry = interruptedEntry({
       status: "failed",

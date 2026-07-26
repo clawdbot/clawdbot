@@ -165,12 +165,13 @@ function hasOrphanedMainRestartRecoveryFences(entry: SessionEntry, sessionKey: s
       entry.mainRestartRecovery === undefined &&
       entry.restartRecoveryDeliveryRunId === undefined &&
       isMainRestartRecoveryCandidate(entry, sessionKey)) ||
-    // Terminal sessions with recovery residue were permanently unadmittable,
-    // returning "changed while starting work" forever (production incident 2026-07-26).
-    // A pending delivery claim may coexist with the residue, so it must not gate
-    // the cleanup here the way it does for the running case above.
-    (entry.status !== undefined &&
-      entry.status !== "running" &&
+    // Sessions that are not running were permanently unadmittable while holding
+    // recovery residue, returning "changed while starting work" forever
+    // (production incident 2026-07-26). A row whose status is absent never
+    // reached an active run either, so it carries residue the same way a
+    // terminal row does. A pending delivery claim may coexist with the residue,
+    // so it must not gate the cleanup the way it does for the running case above.
+    (entry.status !== "running" &&
       entry.mainRestartRecovery === undefined &&
       isMainRestartRecoveryCandidate(entry, sessionKey) &&
       (entry.restartRecoveryRuns !== undefined || entry.abortedLastRun === true))
