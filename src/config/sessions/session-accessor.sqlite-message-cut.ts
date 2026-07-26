@@ -465,6 +465,11 @@ function extractEditorText(content: unknown): string | undefined {
   return text || undefined;
 }
 
+// Gateway-written inline images are already size-capped at send time; these bounds
+// only keep a corrupted transcript from ballooning the rewind/fork response.
+const EDITOR_ATTACHMENT_LIMIT = 10;
+const EDITOR_ATTACHMENT_MAX_BASE64_CHARS = Math.ceil((5 * 1024 * 1024) / 3) * 4;
+
 function extractEditorAttachments(
   content: unknown,
 ): Array<{ mimeType: string; data: string }> | undefined {
@@ -476,12 +481,13 @@ function extractEditorAttachments(
     return record?.type === "image" &&
       typeof record.data === "string" &&
       record.data.trim() &&
+      record.data.length <= EDITOR_ATTACHMENT_MAX_BASE64_CHARS &&
       typeof record.mimeType === "string" &&
-      record.mimeType.trim()
+      record.mimeType.startsWith("image/")
       ? [{ mimeType: record.mimeType, data: record.data }]
       : [];
   });
-  return attachments.length > 0 ? attachments : undefined;
+  return attachments.length > 0 ? attachments.slice(0, EDITOR_ATTACHMENT_LIMIT) : undefined;
 }
 
 function extractEditorMediaRefs(
