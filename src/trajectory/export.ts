@@ -215,22 +215,30 @@ async function readSessionEntries(params: {
   warnings: JsonlParseWarning[];
   rowByEntry: Map<FileEntry, number>;
 }> {
-  const target = normalizeCompleteSessionTarget(params.sessionTarget);
-  if (target) {
+  const completeTarget = normalizeCompleteSessionTarget(params.sessionTarget);
+  if (completeTarget) {
     if (
-      target.sessionId !== params.sessionId ||
-      (params.sessionKey !== undefined && target.sessionKey !== params.sessionKey)
+      completeTarget.sessionId !== params.sessionId ||
+      (params.sessionKey !== undefined && completeTarget.sessionKey !== params.sessionKey)
     ) {
       throw new Error("Trajectory export transcript target does not match the requested session");
     }
     const events = await loadTranscriptEvents({
-      agentId: target.agentId,
-      sessionId: target.sessionId,
-      sessionKey: target.sessionKey,
-      storePath: target.storePath,
+      agentId: completeTarget.agentId,
+      sessionId: completeTarget.sessionId,
+      sessionKey: completeTarget.sessionKey,
+      storePath: completeTarget.storePath,
     });
     return collectSessionEntries(events.map((value, index) => ({ row: index + 1, value })));
   }
+  const incompleteTarget = params.sessionTarget
+    ? {
+        agentId: normalizeOptionalString(params.sessionTarget.agentId),
+        sessionId: normalizeOptionalString(params.sessionTarget.sessionId),
+        sessionKey: normalizeOptionalString(params.sessionTarget.sessionKey),
+        storePath: normalizeOptionalString(params.sessionTarget.storePath),
+      }
+    : undefined;
   if (!params.sessionFile) {
     throw new Error("Trajectory export requires a transcript identity or artifact file");
   }
@@ -248,22 +256,23 @@ async function readSessionEntries(params: {
   if (marker.sessionId !== params.sessionId) {
     throw new Error("Trajectory export legacy marker does not match the requested session");
   }
-  const targetKeyAgentId = parseAgentSessionKey(target?.sessionKey)?.agentId;
+  const targetKeyAgentId = parseAgentSessionKey(incompleteTarget?.sessionKey)?.agentId;
   const targetKeyEntry =
-    target?.sessionKey && marker
+    incompleteTarget?.sessionKey && marker
       ? loadSessionEntry({
           agentId: marker.agentId,
-          sessionKey: target.sessionKey,
+          sessionKey: incompleteTarget.sessionKey,
           storePath: marker.storePath,
         })
       : undefined;
   if (
-    target &&
-    ((target.agentId && target.agentId !== marker.agentId) ||
-      (target.sessionId && target.sessionId !== marker.sessionId) ||
+    incompleteTarget &&
+    ((incompleteTarget.agentId && incompleteTarget.agentId !== marker.agentId) ||
+      (incompleteTarget.sessionId && incompleteTarget.sessionId !== marker.sessionId) ||
       (targetKeyAgentId && targetKeyAgentId !== marker.agentId) ||
-      (target.sessionKey && targetKeyEntry?.sessionId !== marker.sessionId) ||
-      (target.storePath && path.resolve(target.storePath) !== path.resolve(marker.storePath)))
+      (incompleteTarget.sessionKey && targetKeyEntry?.sessionId !== marker.sessionId) ||
+      (incompleteTarget.storePath &&
+        path.resolve(incompleteTarget.storePath) !== path.resolve(marker.storePath)))
   ) {
     throw new Error("Trajectory export transcript target conflicts with the legacy marker");
   }
