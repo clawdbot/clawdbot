@@ -2527,11 +2527,6 @@ describe("workboard controller", () => {
 
     await saveWorkboardCardDraft({ host, client: client as never });
 
-    expect(client.request).toHaveBeenCalledWith("workboard.cards.bindSession", {
-      id: "card-1",
-      action: "bind",
-      sessionKey: sampleSession.key,
-    });
     expect(client.request).toHaveBeenCalledWith("workboard.cards.update", {
       id: "card-1",
       patch: {
@@ -2541,11 +2536,47 @@ describe("workboard controller", () => {
         priority: "high",
         labels: ["ui", "polish"],
         agentId: "dev",
+        sessionKey: sampleSession.key,
       },
     });
     expect(state.cards[0]).toMatchObject({ title: "Updated board", status: "review" });
     expect(state.draftOpen).toBe(false);
     expect(state.editingCardId).toBeNull();
+  });
+
+  it("keeps the existing binding when the atomic card update fails", async () => {
+    const bound = createWorkboardCard({ sessionKey: sampleSession.key });
+    state.cards = [bound];
+    state.draftOpen = true;
+    state.editingCardId = bound.id;
+    state.draftTitle = "Updated title";
+    state.draftStatus = bound.status;
+    state.draftPriority = bound.priority;
+    state.draftLabels = bound.labels.join(", ");
+    state.draftSessionKey = "agent:main:dashboard:replacement";
+    const client = createClient((method) => {
+      if (method === "workboard.cards.update") {
+        throw new Error("update rejected");
+      }
+      return {};
+    });
+
+    await saveWorkboardCardDraft({ host, client: client as never });
+
+    expect(client.request).toHaveBeenCalledTimes(1);
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.update", {
+      id: bound.id,
+      patch: expect.objectContaining({
+        title: "Updated title",
+        sessionKey: "agent:main:dashboard:replacement",
+      }),
+    });
+    expect(state.cards[0]).toMatchObject({
+      title: bound.title,
+      sessionKey: bound.sessionKey,
+    });
+    expect(state.draftOpen).toBe(true);
+    expect(state.editingCardId).toBe(bound.id);
   });
 
   it("creates cards from draft state through the save action", async () => {
