@@ -381,7 +381,7 @@ export async function runMemoryRemBackfill(
   });
 }
 const DAILY_MEMORY_FILE_NAME_RE = /^(\d{4}-\d{2}-\d{2})(?:-[^/]+)?\.md$/i;
-export async function listHistoricalDailyFiles(inputPath: string): Promise<string[]> {
+async function listHistoricalDailyFiles(inputPath: string): Promise<string[]> {
   const resolvedPath = path.resolve(inputPath);
   let stat;
   try {
@@ -404,7 +404,7 @@ export async function listHistoricalDailyFiles(inputPath: string): Promise<strin
     .map((entry) => path.join(resolvedPath, entry.name))
     .toSorted((a, b) => path.basename(a).localeCompare(path.basename(b)));
 }
-export async function createHistoricalRemHarnessWorkspace(params: {
+async function createHistoricalRemHarnessWorkspace(params: {
   inputPath: string;
   remLimit: number;
   nowMs: number;
@@ -445,14 +445,14 @@ export async function createHistoricalRemHarnessWorkspace(params: {
     skippedPaths: seeded.skippedPaths,
   };
 }
-export function extractIsoDayFromPath(filePath: string): string | null {
+function extractIsoDayFromPath(filePath: string): string | null {
   const match = path.basename(filePath).match(DAILY_MEMORY_FILE_NAME_RE);
   return match?.[1] ?? null;
 }
-export function normalizeRelativePath(baseDir: string, filePath: string): string {
+function normalizeRelativePath(baseDir: string, filePath: string): string {
   return path.relative(baseDir, filePath).replace(/\\/g, "/");
 }
-export function groundedMarkdownToDiaryLines(markdown: string): string[] {
+function groundedMarkdownToDiaryLines(markdown: string): string[] {
   return markdown
     .split(/\r?\n/)
     .map((line) => line.replace(/^##\s+/, "").trimEnd())
@@ -476,7 +476,7 @@ function parseGroundedRef(
     endLine: Math.max(1, Number(match[3] ?? match[2])),
   };
 }
-export function collectGroundedShortTermSeedItems(
+function collectGroundedShortTermSeedItems(
   previews: Awaited<ReturnType<typeof previewGroundedRemMarkdown>>["files"],
 ): Array<{
   path: string;

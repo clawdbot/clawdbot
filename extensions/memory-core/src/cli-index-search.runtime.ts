@@ -44,7 +44,7 @@ import {
   resolveShortTermRecallStorePath,
 } from "./short-term-promotion.js";
 const { accent, heading, info, muted, success, warn } = theme;
-export function formatMemoryIndexIdentityWarning(
+function formatMemoryIndexIdentityWarning(
   status: ReturnType<MemoryManager["status"]>,
   agentId: string,
 ): {
