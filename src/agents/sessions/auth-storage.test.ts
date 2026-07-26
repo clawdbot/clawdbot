@@ -274,7 +274,9 @@ describe("SQLite auth storage", () => {
         refreshCalls += 1;
         activeRefreshes += 1;
         maxActiveRefreshes = Math.max(maxActiveRefreshes, activeRefreshes);
-        await new Promise((resolve) => setTimeout(resolve, 50));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 50);
+        });
         activeRefreshes -= 1;
         return {
           access: "fake-fresh-access",
