@@ -399,6 +399,8 @@ const config = {
       ],
       // Platform tools and shell builtins used by package scripts and process-boundary tests.
       ignoreBinaries: ["mint", "open", "sleep", "xcrun"],
+      // The stylelint config lives under config/, not a root default path.
+      stylelint: { config: ["config/stylelint.config.mjs"] },
       project: [
         ".github/actions/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "apps/**/*.{js,mjs,cjs,ts,mts,cts}!",
