@@ -33,7 +33,7 @@ describe("buildEmptyInteractiveReplyPayload", () => {
   it("does not mark silent failure sentinels as operational notices", () => {
     const payload = markAgentRunFailureReplyPayload({ text: SILENT_REPLY_TOKEN });
 
-    expect(payload.isError).toBeUndefined();
+    expect(payload).not.toHaveProperty("isError");
     expect(getReplyPayloadMetadata(payload)).toBeUndefined();
   });
 
