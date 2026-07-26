@@ -315,6 +315,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
           senderName: params.senderName,
           senderUsername: params.senderUsername,
           senderE164: params.senderE164,
+          senderIsOwner: params.senderIsOwner,
           allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
           agentDir,
           cwd: effectiveCwd,
@@ -329,6 +330,9 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
           modelCompat: extractModelCompat(effectiveModel),
           modelApi: effectiveModel.api,
           modelContextWindowTokens: contextTokenBudget,
+          // Compaction is nested maintenance, not an active turn owner; it cannot
+          // schedule or drain continuation work without corrupting the parent turn.
+          disableContinuationTools: true,
           skillsSnapshot: skillsSnapshotForRun,
           skillUsagePaths,
           conversationCapabilityProfile: runtimeCapabilityProfile,
@@ -448,6 +452,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
             sessionId: params.sessionId,
             agentId: sessionAgentId,
             senderId: params.senderId,
+            senderIsOwner: params.senderIsOwner,
           }),
         )
       : undefined;
