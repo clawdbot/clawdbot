@@ -8,7 +8,7 @@ import { runGit } from "../agents/worktrees/git.js";
 /** Lowercased merged-PR head, the base it merged into, and its merge commit. */
 export type MergedPullHead = { sha: string; baseRef?: string; mergeCommitSha?: string };
 
-export type BranchLanding = {
+type BranchLanding = {
   /** origin/<branch> tip when the remote-tracking ref resolves. */
   pushedSha: string | null;
   /** Newest known-published commit to diff the working tree against. */
@@ -48,11 +48,15 @@ async function isAncestor(root: string, ancestor: string, descendant: string): P
 async function maximalCommit(root: string, candidates: readonly string[]): Promise<string | null> {
   const unique = [...new Set(candidates)];
   const first = unique[0];
-  if (unique.length <= 1) {
-    return first ?? null;
+  if (first === undefined) {
+    return null;
   }
-  if (unique.length === 2) {
-    return (await isAncestor(root, first, unique[1])) ? unique[1] : first;
+  if (unique.length === 1) {
+    return first;
+  }
+  const second = unique[1];
+  if (unique.length === 2 && second !== undefined) {
+    return (await isAncestor(root, first, second)) ? second : first;
   }
   // Candidates are verified local objects, so a failed call is unexpected;
   // fall back to the merge base rather than guessing.
