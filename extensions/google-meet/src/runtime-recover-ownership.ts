@@ -6,7 +6,7 @@ import { isBrowserTransport } from "./runtime-session.js";
 import { GOOGLE_MEET_PLATFORM_ADAPTER } from "./transports/google-meet-platform-adapter.js";
 import type { GoogleMeetSession } from "./transports/types.js";
 
-export interface RecoverOwnership {
+interface RecoverOwnership {
   trackedMeetingUrl?: string;
   trackedTargetId?: string;
 }
