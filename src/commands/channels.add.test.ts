@@ -592,6 +592,50 @@ describe("channelsAddCommand", () => {
     expect(setupOptions().directEntryChannel).toBe("external-chat");
   });
 
+  it("opens an exact channel id instead of an earlier plugin alias", async () => {
+    const config: OpenClawConfig = { channels: {} };
+    const aliasOwner = createChannelTestPluginBase({
+      id: "alias-owner",
+      label: "Alias Owner",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "alias-owner",
+          plugin: {
+            ...aliasOwner,
+            meta: { ...aliasOwner.meta, aliases: ["exact-id"] },
+          },
+          source: "test",
+        },
+      ]),
+    );
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      sourceConfig: config,
+      config,
+    });
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+      {
+        ...createExternalChatCatalogEntry(),
+        id: "exact-id",
+        meta: {
+          ...createExternalChatCatalogEntry().meta,
+          id: "exact-id",
+          label: "Exact ID",
+          selectionLabel: "Exact ID",
+        },
+      },
+    ]);
+
+    await channelsAddCommand({ channel: "exact-id" }, runtime, {
+      hasFlags: false,
+      directEntry: true,
+    });
+
+    expect(setupOptions().directEntryChannel).toBe("exact-id");
+  });
+
   it("exits quietly when guided channel setup is cancelled", async () => {
     const { WizardCancelledError } = await import("../wizard/prompts.js");
     configMocks.readConfigFileSnapshot.mockResolvedValue({
