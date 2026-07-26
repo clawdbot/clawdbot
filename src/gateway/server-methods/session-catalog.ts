@@ -184,6 +184,84 @@ function projectCatalogHostCreatedActors(
   };
 }
 
+type PendingCatalogList = {
+  promise: Promise<SessionCatalogHost[]>;
+  onHosts: Set<(host: SessionCatalogHost) => void>;
+};
+
+const pendingCatalogLists = new Map<string, PendingCatalogList>();
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableJson).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .sort()
+      .filter((key) => record[key] !== undefined)
+      .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function catalogListKey(provider: SessionCatalogProvider, request: SessionsCatalogListParams) {
+  return stableJson({
+    providerId: provider.id,
+    search: normalizeSessionCatalogSearch(request.search),
+    limitPerHost: request.limitPerHost,
+    hostIds: request.hostIds,
+    cursors: request.cursors,
+  });
+}
+
+async function listProviderHosts(
+  provider: SessionCatalogProvider,
+  request: SessionsCatalogListParams,
+  options: {
+    search: string | undefined;
+    onHost?: (host: SessionCatalogHost) => void;
+  },
+): Promise<SessionCatalogHost[]> {
+  const key = catalogListKey(provider, request);
+  const pending = pendingCatalogLists.get(key);
+  if (pending) {
+    if (options.onHost) {
+      pending.onHosts.add(options.onHost);
+    }
+    return pending.promise;
+  }
+  const onHosts = new Set<(host: SessionCatalogHost) => void>();
+  if (options.onHost) {
+    onHosts.add(options.onHost);
+  }
+  const promise = provider.list({
+    search: options.search,
+    limitPerHost: request.limitPerHost,
+    hostIds: request.hostIds,
+    ...(request.cursors !== undefined ? { cursors: request.cursors } : {}),
+    onHost: (host) => {
+      for (const callback of onHosts) {
+        try {
+          callback(host);
+        } catch {
+          // Progressive host frames are best-effort. The final RPC response
+          // remains authoritative for every coalesced caller.
+        }
+      }
+    },
+  });
+  pendingCatalogLists.set(key, { promise, onHosts });
+  try {
+    return await promise;
+  } finally {
+    if (pendingCatalogLists.get(key)?.promise === promise) {
+      pendingCatalogLists.delete(key);
+    }
+  }
+}
+
 export const sessionCatalogHandlers: GatewayRequestHandlers = {
   "sessions.catalog.list": async ({ params, respond, context, client }) => {
     if (
@@ -261,13 +339,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
             }
           : undefined;
         try {
-          const hosts = await provider.list({
-            search,
-            limitPerHost: request.limitPerHost,
-            hostIds: request.hostIds,
-            ...(request.cursors !== undefined ? { cursors: request.cursors } : {}),
-            ...(onHost ? { onHost } : {}),
-          });
+          const hosts = await listProviderHosts(provider, request, { search, onHost });
           return catalogResult(
             provider,
             hosts.map((host) =>

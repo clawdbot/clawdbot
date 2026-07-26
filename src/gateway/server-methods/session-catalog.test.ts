@@ -156,6 +156,82 @@ describe("session catalog Gateway methods", () => {
     });
   });
 
+  it("coalesces concurrent identical list calls while preserving progress fan-out", async () => {
+    let resolveList:
+      | ((value: Awaited<ReturnType<SessionCatalogProvider["list"]>>) => void)
+      | undefined;
+    const host = {
+      hostId: "node:fast",
+      label: "Fast node",
+      kind: "node" as const,
+      connected: true,
+      nodeId: "fast",
+      sessions: [],
+    };
+    const list = vi.fn(
+      ({ onHost }) =>
+        new Promise<Awaited<ReturnType<SessionCatalogProvider["list"]>>>((resolve) => {
+          resolveList = resolve;
+          queueMicrotask(() => onHost?.(host));
+        }),
+    );
+    const firstBroadcast = vi.fn();
+    const secondBroadcast = vi.fn();
+    hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("codex", { list }) }];
+
+    const first = call(
+      "sessions.catalog.list",
+      { catalogId: "codex", progressId: "progress-1", limitPerHost: 5 },
+      {},
+      { connId: "first", connect: {} },
+      { broadcastToConnIds: firstBroadcast },
+    );
+    const second = call(
+      "sessions.catalog.list",
+      { catalogId: "codex", progressId: "progress-2", limitPerHost: 5 },
+      {},
+      { connId: "second", connect: {} },
+      { broadcastToConnIds: secondBroadcast },
+    );
+
+    await vi.waitFor(() => expect(list).toHaveBeenCalledOnce());
+    resolveList?.([host]);
+    const [firstRespond, secondRespond] = await Promise.all([first, second]);
+
+    expect(firstBroadcast).toHaveBeenCalledWith(
+      "sessions.catalog.host",
+      expect.objectContaining({ progressId: "progress-1" }),
+      new Set(["first"]),
+      { dropIfSlow: true },
+    );
+    expect(secondBroadcast).toHaveBeenCalledWith(
+      "sessions.catalog.host",
+      expect.objectContaining({ progressId: "progress-2" }),
+      new Set(["second"]),
+      { dropIfSlow: true },
+    );
+    expect(firstRespond).toHaveBeenCalledWith(true, {
+      catalogs: [expect.objectContaining({ id: "codex", hosts: [host] })],
+    });
+    expect(secondRespond).toHaveBeenCalledWith(true, {
+      catalogs: [expect.objectContaining({ id: "codex", hosts: [host] })],
+    });
+  });
+
+  it("does not coalesce different list parameters", async () => {
+    hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("codex") }];
+
+    await Promise.all([
+      call("sessions.catalog.list", { catalogId: "codex", limitPerHost: 5 }),
+      call("sessions.catalog.list", { catalogId: "codex", limitPerHost: 10 }),
+    ]);
+
+    const catalog = hoisted.activeRegistry.sessionCatalogs[0] as {
+      provider: SessionCatalogProvider;
+    };
+    expect(catalog.provider.list).toHaveBeenCalledTimes(2);
+  });
+
   it("projects authoritative creator ownership onto streamed and final catalog rows", async () => {
     const broadcastToConnIds = vi.fn();
     const host = {

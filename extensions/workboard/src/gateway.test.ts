@@ -466,6 +466,81 @@ describe("workboard gateway methods", () => {
     }
   });
 
+  it("coalesces concurrent identical dispatch gateway calls", async () => {
+    type RegisteredMethod = {
+      handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
+      opts: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2];
+    };
+    const methods = new Map<string, RegisteredMethod>();
+    let resolveRun: ((value: { runId: string }) => void) | undefined;
+    const run = vi.fn(
+      () =>
+        new Promise<{ runId: string }>((resolve) => {
+          resolveRun = resolve;
+        }),
+    );
+    const api = {
+      runtime: {
+        state: { openKeyedStore: vi.fn(() => createMemoryStore()) },
+        agent: {
+          listAgentIds: vi.fn(() => ["main"]),
+          resolveAgentWorkspaceDir: vi.fn(() => "/workspace"),
+        },
+        sandbox: {
+          resolveWorkspaceAuthority: vi.fn(() => ({
+            sandboxed: true,
+            workspaceAccess: "rw",
+          })),
+          prepareWorkspaceAuthority: vi.fn(async () => ({
+            sandboxed: true,
+            workspaceAccess: "rw",
+          })),
+        },
+        subagent: { run },
+      },
+      registerGatewayMethod: vi.fn(
+        (method: string, handler: RegisteredMethod["handler"], opts: RegisteredMethod["opts"]) => {
+          methods.set(method, { handler, opts });
+        },
+      ),
+    } as unknown as OpenClawPluginApi;
+    const store = new WorkboardStore(createMemoryStore());
+    await store.create({
+      title: "Ready worker",
+      status: "ready",
+      priority: "urgent",
+      boardId: "coalesce",
+      workspaceAccess: { unrestricted: true },
+    });
+
+    registerWorkboardGatewayMethods({ api, store });
+
+    const firstRespond = vi.fn();
+    const secondRespond = vi.fn();
+    const handler = methods.get("workboard.cards.dispatchWithOptions")?.handler;
+    const first = handler?.({
+      params: { boardId: "coalesce", maxStarts: 1 },
+      respond: firstRespond,
+    } as never);
+    const second = handler?.({
+      params: { boardId: "coalesce", maxStarts: 1 },
+      respond: secondRespond,
+    } as never);
+
+    await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
+    resolveRun?.({ runId: "run-card" });
+    await Promise.all([first, second]);
+
+    expect(firstRespond.mock.calls[0]?.[0]).toBe(true);
+    expect(secondRespond.mock.calls[0]?.[0]).toBe(true);
+    expect(firstRespond.mock.calls[0]?.[1]).toMatchObject({
+      started: [expect.objectContaining({ runId: "run-card" })],
+    });
+    expect(secondRespond.mock.calls[0]?.[1]).toMatchObject({
+      started: [expect.objectContaining({ runId: "run-card" })],
+    });
+  });
+
   it("keeps write-scope worktree dispatch within configured agent workspaces", async () => {
     type RegisteredMethod = {
       handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
