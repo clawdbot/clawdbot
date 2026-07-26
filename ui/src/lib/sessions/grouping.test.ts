@@ -119,6 +119,40 @@ describe("groupSidebarSessionRows", () => {
     ]);
   });
 
+  it("applies stored cross-section order after pinned rows", () => {
+    const sections = groupSidebarSessionRows(
+      [
+        row({ key: "pin", pinned: true }),
+        row({ key: "a", category: "Alpha" }),
+        row({ key: "thread" }),
+        row({ key: "group", kind: "group" }),
+      ],
+      { sectionOrder: ["work", "groups", "ungrouped", "category:Alpha"] },
+    );
+    expect(sections.map((section) => section.id)).toEqual([
+      "pinned",
+      "work",
+      "groups",
+      "ungrouped",
+      "category:Alpha",
+    ]);
+  });
+
+  it("appends sections missing from stored order in default relative order", () => {
+    const sections = groupSidebarSessionRows(
+      [row({ key: "a", category: "Alpha" }), row({ key: "thread" })],
+      { sectionOrder: ["work"] },
+    );
+    expect(sections.map((section) => section.id)).toEqual(["category:Alpha", "work", "ungrouped"]);
+  });
+
+  it("keeps the default order for an empty stored order", () => {
+    const rows = [row({ key: "a", category: "Alpha" }), row({ key: "thread" })];
+    expect(groupSidebarSessionRows(rows, { sectionOrder: [] })).toEqual(
+      groupSidebarSessionRows(rows),
+    );
+  });
+
   it("collapses categories into the threads list when grouping is none", () => {
     const sections = groupSidebarSessionRows(
       [

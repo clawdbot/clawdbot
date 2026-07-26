@@ -156,6 +156,7 @@ export {
 } from "./board-session-surface.ts";
 export { catalogMessageId } from "./catalog-message-id.ts";
 export { refreshChatAvatar } from "./chat-avatar.ts";
+export { replaceChatAttachmentsFromEditor } from "./attachment-payload-store.ts";
 export type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 export {
   applyChatAgentsList,

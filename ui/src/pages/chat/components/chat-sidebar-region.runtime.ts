@@ -62,8 +62,9 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     this.draggedPanelId = "";
   }
 
-  private draggedPanel(): string {
-    return this.draggedPanelId;
+  private draggedPanel(): SidebarPanel | undefined {
+    const panel = panelsOf(this.layout).find((candidate) => candidate.id === this.draggedPanelId);
+    return panel && this.canMutatePanel(panel.slot) ? panel : undefined;
   }
 
   private allowPanelDrop(event: DragEvent) {
@@ -77,8 +78,8 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
   }
 
   private dropOnHeader(event: DragEvent, column: SidebarColumn) {
-    const panelId = this.draggedPanel();
-    if (!panelId) {
+    const draggedPanel = this.draggedPanel();
+    if (!draggedPanel) {
       return;
     }
     event.preventDefault();
@@ -96,7 +97,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
       const zone = resolveSplitDropZone(rect, event.clientX, event.clientY);
       panelIndex = targetIndex + (zone.kind === "edge" && zone.edge === "left" ? 0 : 1);
     }
-    this.callbacks?.mergePanel(panelId, column.id, panelIndex);
+    this.callbacks?.mergePanel(draggedPanel.id, column.id, panelIndex);
     this.endDrag();
   }
 
@@ -106,8 +107,8 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     columnIndex: number,
     element: Element | undefined,
   ) {
-    const panelId = this.draggedPanel();
-    if (!panelId || !(element instanceof HTMLElement)) {
+    const panel = this.draggedPanel();
+    if (!panel || !(element instanceof HTMLElement)) {
       return;
     }
     const rect = element.getBoundingClientRect();
@@ -116,7 +117,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
       return;
     }
     event.preventDefault();
-    this.callbacks?.detachPanel(panelId, side, columnIndex);
+    this.callbacks?.detachPanel(panel.id, side, columnIndex);
     this.endDrag();
   }
 
@@ -126,6 +127,36 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
 
   private canMutatePanel(slot: SidebarSlotId): boolean {
     return this.panelMutationEnabled[slot] !== false;
+  }
+
+  private renderEmptySideDropZone(side: SidebarSide) {
+    const panel = this.draggedPanel();
+    if (!panel || this.layout.columns.some((column) => column.side === side)) {
+      return nothing;
+    }
+    const label = t(
+      side === "left"
+        ? "chat.sidebarColumns.dropOnEmptyLeft"
+        : "chat.sidebarColumns.dropOnEmptyRight",
+      { panel: panelTitle(panel.slot) },
+    );
+    return html`<div
+      class="sidebar-empty-side-drop-zone sidebar-empty-side-drop-zone--${side}"
+      role="region"
+      aria-label=${label}
+      @dragover=${(event: DragEvent) => this.allowPanelDrop(event)}
+      @drop=${(event: DragEvent) =>
+        this.dropOnBoundary(
+          event,
+          side,
+          0,
+          (event.currentTarget as HTMLElement).querySelector(
+            ".sidebar-empty-side-drop-zone__boundary",
+          ) ?? undefined,
+        )}
+    >
+      <span class="sidebar-empty-side-drop-zone__boundary" aria-hidden="true"></span>
+    </div>`;
   }
 
   private renderHeader(column: SidebarColumn, activePanelId: string, narrow: boolean) {
@@ -387,11 +418,11 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     const left = this.layout.columns.filter((column) => column.side === "left");
     return html`${collapsed
       ? nothing
-      : left.map(
+      : html`${this.renderEmptySideDropZone("left")}${left.map(
           (column, index) => html`
             ${this.renderColumn(column)} ${this.renderDivider(column, "left", index + 1)}
           `,
-        )}`;
+        )}${this.renderEmptySideDropZone("right")}`}`;
   }
 }
 

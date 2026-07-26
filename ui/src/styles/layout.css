@@ -1265,11 +1265,11 @@ html.openclaw-native-macos
   opacity: 0.45;
 }
 
-.sidebar-recent-sessions__group--group-drop-before {
+.sidebar-recent-sessions__group--section-drop-before {
   box-shadow: inset 0 2px 0 color-mix(in srgb, var(--accent) 75%, transparent);
 }
 
-.sidebar-recent-sessions__group--group-drop-after {
+.sidebar-recent-sessions__group--section-drop-after {
   box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--accent) 75%, transparent);
 }
 
@@ -1406,8 +1406,14 @@ html.openclaw-native-macos
   background-position: 0 0;
   background-size: 4px 4px;
   color: var(--muted);
-  opacity: 0.55;
+  opacity: 0;
   cursor: grab;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.sidebar-recent-sessions__head--draggable:hover .sidebar-session-group-drag-handle,
+.sidebar-recent-sessions__head--draggable:focus-within .sidebar-session-group-drag-handle {
+  opacity: 0.55;
 }
 
 .sidebar-session-group-drag-handle:active {

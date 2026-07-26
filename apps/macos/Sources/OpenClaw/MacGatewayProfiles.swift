@@ -37,6 +37,8 @@ enum MacGatewayProfileError: LocalizedError, Equatable {
 actor MacGatewayProfileStore {
     static let shared = MacGatewayProfileStore()
 
+    static let didChangeNotification = Notification.Name("openclaw.gateway-profiles.did-change")
+
     struct StoredProfile: Codable, Equatable {
         var profile: MacGatewayProfile
         var credentials: Credentials
@@ -106,11 +108,21 @@ actor MacGatewayProfileStore {
         // Metadata and secrets share one Keychain value, so the profile becomes
         // reachable only when the complete record commits.
         try self.saveRegistry(registry)
+        NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
         return profile
     }
 
     func profiles() throws -> [MacGatewayProfile] {
         try Self.sortedProfiles(self.loadRegistryMigratingLegacyPrimary().profiles.map(\.profile))
+    }
+
+    func catalogProfiles() throws -> [MacGatewayCatalogProfile] {
+        let stored = try self.loadRegistryMigratingLegacyPrimary().profiles
+        return Self.sortedProfiles(stored.map(\.profile)).compactMap { profile in
+            guard let item = stored.first(where: { $0.profile.id == profile.id }) else { return nil }
+            let token = item.credentials.token?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return MacGatewayCatalogProfile(profile: profile, canPromote: token?.isEmpty == false)
+        }
     }
 
     func remove(profileID: String) throws {
@@ -120,6 +132,7 @@ actor MacGatewayProfileStore {
         }
         registry.profiles.removeAll { $0.profile.id == profileID }
         try self.saveRegistry(registry)
+        NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
     }
 
     func endpoint(profileID: String) throws -> GatewayConnection.EndpointSnapshot {

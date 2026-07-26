@@ -20,6 +20,11 @@ import {
   optionalNumber,
   optionalString,
 } from "./control-ui-github-api.js";
+import {
+  gitOutput,
+  resolveBranchLanding,
+  type MergedPullHead,
+} from "./control-ui-session-prs-landing.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 import { loadSessionEntryReadOnly } from "./session-utils.js";
 
@@ -60,9 +65,6 @@ type PullListItem = {
   mergeCommitSha?: string;
 };
 
-/** Lowercased merged-PR head, the base it merged into, and its merge commit. */
-type MergedPullHead = { sha: string; baseRef?: string; mergeCommitSha?: string };
-
 /**
  * Cached GitHub snapshot plus the merged PRs' heads. The heads stay
  * gateway-internal (stripped before responding): they only exist so branch
@@ -101,24 +103,6 @@ export function parseControlUiSessionPullRequestsParams(
     ...(agentId ? { agentId } : {}),
     ...(value.refresh === true ? { refresh: true } : {}),
   };
-}
-
-async function gitOutput(cwd: string, args: string[]): Promise<string | null> {
-  try {
-    const result = await runGit(cwd, args);
-    return result.code === 0 ? result.stdout.trim() || null : null;
-  } catch {
-    return null;
-  }
-}
-
-async function isAncestor(root: string, ancestor: string, descendant: string): Promise<boolean> {
-  try {
-    const result = await runGit(root, ["merge-base", "--is-ancestor", ancestor, descendant]);
-    return result.code === 0;
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -309,86 +293,15 @@ async function resolveSessionBranch(
       createUrl: branchCreateUrl(context),
     };
   }
-  const pushedSha = await gitOutput(root, [
-    "rev-parse",
-    "--verify",
-    "--quiet",
-    `refs/remotes/origin/${context.branch}`,
-  ]);
-  const headSha = await gitOutput(root, ["rev-parse", "HEAD"]);
-  // Only merges whose content reached this checkout's default branch prove
-  // the tip landed there: a direct default-base merge, or a landing through
-  // another branch (feature -> release -> main) whose merge commit is now
-  // contained in the default branch. A PR merged into an unpropagated
-  // release/staging branch must not hide Create PR. Filtered here, not in
-  // the cache, because the cache key has no default branch.
-  const defaultRef = context.defaultBranch ? `refs/remotes/origin/${context.defaultBranch}` : null;
-  const landedHeads: MergedPullHead[] = [];
-  for (const head of mergedHeads) {
-    if (head.baseRef === context.defaultBranch) {
-      landedHeads.push(head);
-    } else if (
-      defaultRef &&
-      head.mergeCommitSha &&
-      (await isAncestor(root, head.mergeCommitSha, defaultRef))
-    ) {
-      landedHeads.push(head);
-    }
-  }
-  const mergedHeadShas = landedHeads.map((head) => head.sha);
-  const mergeBase = context.defaultBranch
-    ? await gitOutput(root, ["merge-base", `refs/remotes/origin/${context.defaultBranch}`, "HEAD"])
-    : null;
-  // The stats base is the newest commit whose content is known-published:
-  // the ordinary default-branch merge base, or a merged PR head related to
-  // HEAD by ancestry (a HEAD trailing the merged tip is fully landed, so
-  // HEAD itself is the baseline). Diffing against anything older would
-  // replay landed work as pending — the squash-merged commits are never
-  // ancestors of the default branch, so the merge base alone cannot see
-  // them. Ancestry is best-effort: a merged head never fetched locally
-  // cannot be proven related and falls back to the merge base.
-  const baselines: string[] = mergeBase ? [mergeBase] : [];
-  if (headSha) {
-    for (const merged of mergedHeadShas) {
-      if (await isAncestor(root, merged, headSha)) {
-        baselines.push(merged);
-      } else if (await isAncestor(root, headSha, merged)) {
-        baselines.push(headSha);
-      }
-    }
-  }
-  let statsBase: string | null = null;
-  for (const candidate of baselines) {
-    if (!statsBase || (await isAncestor(root, statsBase, candidate))) {
-      statsBase = candidate;
-    }
-  }
-  // Squash merges leave origin/<branch> "ahead" of the default branch
-  // forever, so local git alone would keep offering Create PR after the work
-  // landed. Once merged PRs exist, the link returns only when the merge base
-  // provably contains EVERY known landing — a merge-commit landing leaves the
-  // head itself as an ancestor, a squash landing is visible only via its
-  // merge commit, and an older landing must not vouch for a newer one whose
-  // diff a new PR would replay. A tip merely descending from a squashed head
-  // or a fetch-stale tracking ref proves nothing, so those states keep the
-  // row stats-only until a rebase or fetch.
-  let provenNewPushedWork = false;
-  if (pushedSha && mergeBase && !mergedHeadShas.includes(pushedSha.toLowerCase())) {
-    provenNewPushedWork = landedHeads.length > 0;
-    for (const head of landedHeads) {
-      const incorporated =
-        (await isAncestor(root, head.sha, mergeBase)) ||
-        (head.mergeCommitSha ? await isAncestor(root, head.mergeCommitSha, mergeBase) : false);
-      if (!incorporated) {
-        provenNewPushedWork = false;
-        break;
-      }
-    }
-  }
+  const landing = await resolveBranchLanding(root, {
+    branch: context.branch,
+    defaultBranch: context.defaultBranch,
+    mergedHeads,
+  });
   const creatable =
-    (mergedHeadShas.length === 0 || provenNewPushedWork) &&
-    (await branchHasCreatablePullRequest(root, context, pushedSha));
-  const stats = statsBase ? await diffStatsAgainst(root, statsBase) : null;
+    (!landing.hasLandedPullRequest || landing.provenNewPushedWork) &&
+    (await branchHasCreatablePullRequest(root, context, landing.pushedSha));
+  const stats = landing.statsBase ? await diffStatsAgainst(root, landing.statsBase) : null;
   // No createUrl until GitHub can compare, but local changes still get a row.
   if (!creatable && !(stats && stats.changedFiles > 0)) {
     return undefined;

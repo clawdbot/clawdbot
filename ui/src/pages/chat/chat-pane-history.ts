@@ -7,6 +7,7 @@ import {
   parseCatalogSessionKey,
   persistChatComposerState,
   resolveChatHistoryPagination,
+  replaceChatAttachmentsFromEditor,
   rewindChatHistory,
   scheduleChatScroll,
   scopedAgentParamsForSession,
@@ -368,6 +369,12 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
       }
       this.onPaneSessionChange?.(this.paneId, result.sessionKey);
       this.switchPaneSession(result.sessionKey);
+      // Restored images intentionally stay in this tab's memory; persisted composer drafts remain
+      // text-only so large payloads do not enter local storage.
+      state.chatAttachments = replaceChatAttachmentsFromEditor(
+        state.chatAttachments,
+        result.editorAttachments,
+      );
       if (!draftPersisted) {
         state.handleChatDraftChange(editorText);
       }
