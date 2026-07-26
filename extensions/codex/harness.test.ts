@@ -237,7 +237,7 @@ describe("Codex agent harness supports()", () => {
 });
 
 describe("Codex agent harness reset()", () => {
-  it("retires the physical session generation", async () => {
+  it("clears an in-place session generation without stranding its replacement", async () => {
     const bindingStore = createCodexTestBindingStore();
     const identity = sessionBindingIdentity({
       agentId: "worker",
@@ -261,6 +261,70 @@ describe("Codex agent harness reset()", () => {
     });
 
     await expect(bindingStore.read(identity)).resolves.toBeUndefined();
+    await expect(
+      bindingStore.mutate(identity, {
+        kind: "set",
+        binding: { threadId: "thread-2", cwd: "/repo" },
+      }),
+    ).resolves.toBe(true);
+    await expect(bindingStore.read(identity)).resolves.toMatchObject({ threadId: "thread-2" });
+  });
+
+  it("repairs a retirement fence left by an earlier in-place reset", async () => {
+    const bindingStore = createCodexTestBindingStore();
+    const identity = sessionBindingIdentity({
+      agentId: "worker",
+      sessionId: "session-1",
+      sessionKey: "agent:worker:main",
+    });
+    await bindingStore.mutate(identity, {
+      kind: "set",
+      binding: { threadId: "thread-1", cwd: "/repo" },
+    });
+    await bindingStore.retireSessionGeneration(identity);
+    const harness = createCodexAppServerAgentHarness({ bindingStore });
+
+    await harness.reset?.({
+      agentId: "worker",
+      sessionId: "session-1",
+      sessionKey: "agent:worker:main",
+      reason: "reset",
+    });
+
+    await expect(
+      bindingStore.mutate(identity, {
+        kind: "set",
+        binding: { threadId: "thread-recovered", cwd: "/repo" },
+      }),
+    ).resolves.toBe(true);
+  });
+
+  it("keeps deleted session generations retired", async () => {
+    const bindingStore = createCodexTestBindingStore();
+    const identity = sessionBindingIdentity({
+      agentId: "worker",
+      sessionId: "session-1",
+      sessionKey: "agent:worker:main",
+    });
+    await bindingStore.mutate(identity, {
+      kind: "set",
+      binding: { threadId: "thread-1", cwd: "/repo" },
+    });
+    const harness = createCodexAppServerAgentHarness({ bindingStore });
+
+    await harness.reset?.({
+      agentId: "worker",
+      sessionId: "session-1",
+      sessionKey: "agent:worker:main",
+      reason: "deleted",
+    });
+
+    await expect(
+      bindingStore.mutate(identity, {
+        kind: "set",
+        binding: { threadId: "thread-stale", cwd: "/repo" },
+      }),
+    ).resolves.toBe(false);
   });
 });
 
