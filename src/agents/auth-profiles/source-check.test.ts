@@ -4,8 +4,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearAuthProfileMigrationDiagnostics } from "./legacy-source-diagnostic.js";
 import { hasAuthProfileStoreSourceForProvider } from "./source-check.js";
-import { writePersistedAuthProfileStoreRaw } from "./sqlite.js";
-import { loadAuthProfileStoreForRuntime } from "./store.js";
+import { readPersistedAuthProfileStoreRaw, writePersistedAuthProfileStoreRaw } from "./sqlite.js";
+import { loadAuthProfileStoreForRuntime, updateAuthProfileStoreWithLock } from "./store.js";
 
 describe("hasAuthProfileStoreSourceForProvider", () => {
   afterEach(() => {
@@ -71,6 +71,17 @@ describe("hasAuthProfileStoreSourceForProvider", () => {
 
     expect(hasAuthProfileStoreSourceForProvider("openai", agentDir)).toBe(true);
     expect(() => loadAuthProfileStoreForRuntime(agentDir)).toThrow("is unreadable");
+  });
+
+  it("rejects structurally unreadable rows inside write transactions", async () => {
+    const { agentDir } = await withAgentStore({});
+    const unreadableStore = { version: 1, profiles: "invalid-profile-map" };
+    writePersistedAuthProfileStoreRaw(unreadableStore, agentDir);
+    const updater = vi.fn(() => true);
+
+    await expect(updateAuthProfileStoreWithLock({ agentDir, updater })).resolves.toBeNull();
+    expect(updater).not.toHaveBeenCalled();
+    expect(readPersistedAuthProfileStoreRaw(agentDir)).toEqual(unreadableStore);
   });
 
   it("detects a legacy credential source that appears after an earlier clean load", async () => {

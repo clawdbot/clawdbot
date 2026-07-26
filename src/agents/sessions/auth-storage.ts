@@ -19,6 +19,7 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { AUTH_STORE_VERSION, OAUTH_REFRESH_LOCK_OPTIONS } from "../auth-profiles/constants.js";
 import {
   assertAuthProfileMigrationReady,
+  AuthProfileMigrationRequiredError,
   AuthProfileStoreUnreadableError,
 } from "../auth-profiles/legacy-source-diagnostic.js";
 import { loadPersistedAuthProfileStore } from "../auth-profiles/persisted.js";
@@ -671,6 +672,15 @@ export class AuthStorage {
       return runtimeKey;
     }
 
+    if (
+      this.loadError instanceof AuthProfileMigrationRequiredError ||
+      this.loadError instanceof AuthProfileStoreUnreadableError
+    ) {
+      // Canonical-store ownership blocks implicit env/config fallback. An
+      // explicit runtime override above remains the only caller-owned escape.
+      throw this.loadError;
+    }
+
     const cred = this.data[providerId];
 
     if (cred?.type === "api_key") {
@@ -704,6 +714,17 @@ export class AuthStorage {
           this.recordError(error);
           // Refresh failed - re-read file to check if another instance succeeded
           this.reload();
+          const canonicalStoreError =
+            error instanceof AuthProfileMigrationRequiredError ||
+            error instanceof AuthProfileStoreUnreadableError
+              ? error
+              : this.loadError;
+          if (
+            canonicalStoreError instanceof AuthProfileMigrationRequiredError ||
+            canonicalStoreError instanceof AuthProfileStoreUnreadableError
+          ) {
+            throw canonicalStoreError;
+          }
           const updatedCred = this.data[providerId];
 
           if (updatedCred?.type === "oauth" && Date.now() < updatedCred.expires) {

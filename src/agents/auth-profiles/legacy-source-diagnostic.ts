@@ -61,7 +61,9 @@ export function listLegacyAuthProfileArchives(params: {
   const archives: LegacyAuthProfileSource[] = [];
   for (const [sourcePath, kind] of candidates) {
     const directory = path.dirname(sourcePath);
-    const prefix = `${path.basename(sourcePath)}.migrated-`;
+    const baseName = path.basename(sourcePath);
+    const migratedPrefix = `${baseName}.migrated-`;
+    const priorImportPrefix = `${baseName}.sqlite-import.`;
     let entries: string[];
     try {
       entries = fs.readdirSync(directory);
@@ -69,7 +71,10 @@ export function listLegacyAuthProfileArchives(params: {
       continue;
     }
     for (const entry of entries) {
-      if (entry.startsWith(prefix)) {
+      if (
+        entry.startsWith(migratedPrefix) ||
+        (entry.startsWith(priorImportPrefix) && entry.endsWith(".bak"))
+      ) {
         archives.push({ kind, path: path.join(directory, entry) });
       }
     }

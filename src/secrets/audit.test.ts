@@ -304,13 +304,20 @@ describe("secrets audit", () => {
   });
 
   it("reports Doctor-created auth archives without reading their contents", async () => {
-    const archivePath = `${fixture.authJsonPath}.migrated-2026-07-25T12-00-00.000Z-fake`;
-    await fs.writeFile(archivePath, "opaque fake credential bytes", "utf8");
+    const archivePaths = [
+      `${fixture.authJsonPath}.migrated-2026-07-25T12-00-00.000Z-fake`,
+      `${fixture.authJsonPath}.sqlite-import.1753430400000.bak`,
+    ];
+    for (const archivePath of archivePaths) {
+      await fs.writeFile(archivePath, "opaque fake credential bytes", "utf8");
+    }
 
     const report = await runSecretsAudit({ env: fixture.env });
     expectFindingCode(report, "LEGACY_RESIDUE");
-    expectFindingFile(report, archivePath);
-    expect(report.filesScanned).not.toContain(archivePath);
+    for (const archivePath of archivePaths) {
+      expectFindingFile(report, archivePath);
+      expect(report.filesScanned).not.toContain(archivePath);
+    }
   });
 
   it("skips exec ref resolution during audit unless explicitly allowed", async () => {

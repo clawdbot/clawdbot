@@ -76,6 +76,16 @@ describe("SQLite auth storage", () => {
     expect(readPersistedAuthProfileStoreRaw(agentDir)).toEqual(unreadableStore);
   });
 
+  it("blocks environment fallback after a canonical store becomes unreadable", async () => {
+    const agentDir = makeAgentDir();
+    const storage = AuthStorage.forAgent(agentDir);
+    writePersistedAuthProfileStoreRaw({ version: 1, profiles: "invalid-profile-map" }, agentDir);
+    vi.stubEnv("OPENAI_API_KEY", "fake-environment-key");
+    storage.reload();
+
+    await expect(storage.getApiKey("openai")).rejects.toThrow("is unreadable");
+  });
+
   it("never overwrites a store that becomes unreadable during an OAuth refresh", async () => {
     const agentDir = makeAgentDir();
     writePersistedAuthProfileStoreRaw(
@@ -114,7 +124,7 @@ describe("SQLite auth storage", () => {
     const unreadableStore = { version: 1, profiles: "invalid-profile-map" };
     writePersistedAuthProfileStoreRaw(unreadableStore, agentDir);
 
-    await expect(storage.getApiKey("test-oauth")).resolves.toBeUndefined();
+    await expect(storage.getApiKey("test-oauth")).rejects.toThrow("is unreadable");
     expect(storage.drainErrors().some((error) => error.message.includes("is unreadable"))).toBe(
       true,
     );

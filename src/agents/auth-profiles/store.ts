@@ -998,11 +998,12 @@ function loadAuthProfileStoreForAgent(
     return markRuntimePersistedProfiles(synced.store);
   }
 
-  if (!effectiveOptions?.database) {
-    const inspection = inspectPersistedAuthProfileStoreRaw(effectiveAgentDir);
-    if (inspection.status !== "missing") {
-      throw new AuthProfileStoreUnreadableError(effectiveAgentDir);
-    }
+  const inspection = inspectPersistedAuthProfileStoreRaw(
+    effectiveAgentDir,
+    effectiveOptions?.database,
+  );
+  if (inspection.status !== "missing") {
+    throw new AuthProfileStoreUnreadableError(effectiveAgentDir);
   }
   const legacySources = listLegacyAuthProfileSources({ agentDir: effectiveAgentDir });
   const credentialSources = legacySources.filter((source) => source.kind !== "auth-state");
