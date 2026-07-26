@@ -2,6 +2,18 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+// Resolving a healthy `openai` profile reaches the synthetic-profile-auth hook,
+// which cold-loads the bundled OpenAI provider runtime. That import costs ~150s
+// through the Vitest transform pipeline on a cold cache and blew the 120s test
+// timeout in the `secrets` shard on CI. This suite proves per-agent auth
+// migration isolation, not provider-plugin behavior, so keep the bundled
+// provider runtime out of the shard (see `src/agents/CLAUDE.md`: import-bound
+// tests must not cold-load full bundled provider runtime).
+vi.mock("../plugins/provider-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/provider-runtime.js")>()),
+  shouldDeferProviderSyntheticProfileAuthWithPlugin: () => undefined,
+}));
 import { writePersistedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
