@@ -15,7 +15,11 @@ import {
 } from "../../../agents/agent-scope.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import { resolveStorePath } from "../../../config/sessions/paths.js";
-import { loadTranscriptEvents } from "../../../config/sessions/session-accessor.js";
+import {
+  loadTranscriptEvents,
+  loadTranscriptEventsSync,
+  type TranscriptEvent,
+} from "../../../config/sessions/session-accessor.js";
 import { selectVisibleTranscriptEvents } from "../../../config/sessions/transcript-visible-events.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isVitestRuntimeEnv } from "../../../infra/env.js";
@@ -116,9 +120,10 @@ async function resolveAvailableMemoryFilename(params: {
 async function getRecentSqliteSessionContent(
   scope: { agentId: string; sessionId: string; sessionKey: string; storePath: string },
   messageCount: number,
+  capturedEvents?: TranscriptEvent[],
 ): Promise<string | null> {
   try {
-    const events = await loadTranscriptEvents({ ...scope });
+    const events = capturedEvents ?? (await loadTranscriptEvents({ ...scope }));
     const latestResetIndex = events.findLastIndex(
       (event) =>
         Boolean(event) &&
@@ -164,7 +169,10 @@ export async function flushSessionMemoryWritesForTest(): Promise<void> {
   await Promise.allSettled(pendingSessionMemoryWrites);
 }
 
-async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<void> {
+async function saveSessionMemoryNow(
+  event: Parameters<HookHandler>[0],
+  capturedEvents?: TranscriptEvent[],
+): Promise<void> {
   try {
     log.debug("Hook triggered for reset/new command", { action: event.action });
 
@@ -235,6 +243,7 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
           storePath: contextStorePath ?? resolveStorePath(cfg?.session?.store, { agentId }),
         },
         messageCount,
+        capturedEvents,
       );
       log.debug("Session content loaded", {
         length: sessionContent?.length ?? 0,
@@ -321,7 +330,38 @@ const saveSessionToMemory: HookHandler = (event) => {
     return;
   }
 
-  const writePromise = saveSessionMemoryNow(event);
+  let capturedEvents: TranscriptEvent[] | undefined;
+  try {
+    const context = event.context || {};
+    const sessionEntry = (context.previousSessionEntry || context.sessionEntry || {}) as Record<
+      string,
+      unknown
+    >;
+    const sessionId =
+      typeof sessionEntry.sessionId === "string" && sessionEntry.sessionId.trim()
+        ? sessionEntry.sessionId.trim()
+        : undefined;
+    if (sessionId) {
+      const cfg = context.cfg as OpenClawConfig | undefined;
+      const agentId =
+        typeof context.agentId === "string" && context.agentId.trim()
+          ? context.agentId.trim()
+          : resolveAgentIdFromSessionKey(event.sessionKey, resolveDefaultAgentId(cfg ?? {}));
+      const storePath =
+        typeof context.storePath === "string" && context.storePath.trim()
+          ? context.storePath.trim()
+          : resolveStorePath(cfg?.session?.store, { agentId });
+      capturedEvents = loadTranscriptEventsSync({
+        agentId,
+        sessionId,
+        sessionKey: event.sessionKey,
+        storePath,
+      });
+    }
+  } catch {
+    // The async writer retains its existing best-effort read fallback.
+  }
+  const writePromise = saveSessionMemoryNow(event, capturedEvents);
   pendingSessionMemoryWrites.add(writePromise);
   void writePromise.finally(() => {
     pendingSessionMemoryWrites.delete(writePromise);

@@ -128,14 +128,11 @@ function resolveSqliteMarkerSessionKey(
     readOnly: true,
     storePath: marker.storePath,
   });
-  if (
-    explicitSessionKey &&
-    entries.some(
-      ({ entry, sessionKey }) =>
-        sessionKey === explicitSessionKey && entry.sessionId === marker.sessionId,
-    )
-  ) {
-    return explicitSessionKey;
+  if (explicitSessionKey) {
+    const explicitEntry = entries.find(({ sessionKey }) => sessionKey === explicitSessionKey);
+    if (explicitEntry) {
+      return explicitEntry.entry.sessionId === marker.sessionId ? explicitSessionKey : undefined;
+    }
   }
   const matches = entries.filter(({ entry }) => entry.sessionId === marker.sessionId);
   return selectPreferredSessionKey(matches, marker.sessionId);

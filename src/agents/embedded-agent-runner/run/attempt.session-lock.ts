@@ -96,6 +96,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   let reloadFailed = false;
   let reloadFailure: unknown;
   let disposePromise: Promise<void> | undefined;
+  const activeWriteOperations = new Set<Promise<void>>();
   type LifecycleOwner = {
     active: boolean;
     nestedPending: number;
@@ -225,12 +226,19 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       if (disposed) {
         throw new Error("attempt disposed before transcript write");
       }
-      return await serializeLifecycle(async () => {
+      const operation = serializeLifecycle(async () => {
         if (reloadFailed) {
           throw reloadFailure;
         }
         return await run();
       });
+      const settlement = operation.then(
+        () => undefined,
+        () => undefined,
+      );
+      activeWriteOperations.add(settlement);
+      void settlement.then(() => activeWriteOperations.delete(settlement));
+      return await operation;
     },
     acquireForCleanup: async () => {
       await serializeLifecycle(async () => {
@@ -262,6 +270,9 @@ export async function createEmbeddedAttemptSessionLockController(params: {
               timeout = setTimeout(resolve, PROMPT_DISPOSE_SETTLE_TIMEOUT_MS);
             }),
           ]);
+          while (activeWriteOperations.size > 0) {
+            await Promise.all(activeWriteOperations);
+          }
         } finally {
           if (timeout) {
             clearTimeout(timeout);

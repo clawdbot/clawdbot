@@ -355,6 +355,31 @@ describe("createEmbeddedAttemptSessionLockController", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it("keeps session ownership until an active write callback settles", async () => {
+    let releaseWrite!: () => void;
+    const writeBlocked = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    const release = vi.fn(async () => undefined);
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: vi.fn(async () => ({ release })),
+      lockOptions: { sessionFile: "agent:main:main" },
+    });
+    const write = controller.withSessionWriteLock(async () => await writeBlocked);
+    await Promise.resolve();
+    let disposeSettled = false;
+    const disposal = controller.dispose().then(() => {
+      disposeSettled = true;
+    });
+
+    await Promise.resolve();
+    expect(disposeSettled).toBe(false);
+    expect(release).not.toHaveBeenCalled();
+    releaseWrite();
+    await Promise.all([write, disposal]);
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("reloads after a delayed prompt following a non-terminal sessions_yield abort", async () => {
     const reloadPromptReleasedSessionFile = vi.fn();
     const controller = await createEmbeddedAttemptSessionLockController({
