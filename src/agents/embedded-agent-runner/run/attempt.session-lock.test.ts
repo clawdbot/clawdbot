@@ -384,18 +384,24 @@ describe("installPromptSubmissionLockRelease", () => {
 
   it("preserves an undefined prompt settlement rejection", async () => {
     const session = { agent: { streamFn: vi.fn(async () => "ok") } };
+    const undefinedRejection = new Promise<void>((_resolve, reject) => {
+      queueMicrotask(() => {
+        Reflect.apply(reject, undefined, [undefined]);
+      });
+    });
     installPromptSubmissionLockRelease({
       session,
       waitForSessionEvents: vi.fn(async () => undefined),
       releaseForPrompt: vi.fn(async () => undefined),
-      reacquireAfterPrompt: vi.fn(async () => await Promise.reject(undefined)),
+      reacquireAfterPrompt: vi.fn(() => undefinedRejection),
     });
 
     await expect(session.agent.streamFn()).rejects.toBeUndefined();
   });
 
   it("preserves a frozen provider error when prompt settlement also fails", async () => {
-    const providerError = Object.freeze(new Error("frozen provider failure"));
+    const providerError = new Error("frozen provider failure");
+    Object.freeze(providerError);
     const session = {
       agent: {
         streamFn: vi.fn(async () => {
