@@ -309,9 +309,10 @@ Current `app.py` is a **simplified single-page** layout vs. earlier multi-tab ve
 The deployment-local dashboard includes an operator review surface at
 `/ai-scorecard`.
 
-The shared navigation separates the read-only **All Models Scorecard** view
-from the actionable **Review Queue** so returning to the scorecard never
-depends on whether a pending decision exists.
+Shared navigation links to the read-only **All Models Scorecard**. The
+actionable **Review Queue** button appears only inside the All Models page,
+keeping review navigation available without placing a mutation-oriented link
+on every dashboard page.
 
 The All Models Scorecard reads the authoritative model registry and lists every
 registered local and cloud model, including production, fallback, evaluation,
@@ -370,6 +371,13 @@ review, approval, rejection, search, and dashboard consumers. Development
 applies this migration only to `openclaw_ai_dev`; it does not copy production
 records.
 
+The Knowledge Status panel presents its review-queue link as a visible primary
+button. Each approved note also has a direct **Reject Mistaken Note** POST
+action for correcting test or operator mistakes. Rejection moves either a
+pending or approved note to `ranchbrain_rejected`, archives its source
+Markdown, and restores the previous file location and status if the database
+transaction fails.
+
 ### Scorecard routes
 
 | Route                                       | Purpose                               |
@@ -380,6 +388,7 @@ records.
 | `POST /ai-scorecard/approve`                | Record pipeline approval              |
 | `POST /ai-scorecard/reject`                 | Record pipeline rejection             |
 | `POST /ai-scorecard/promote`                | Promote an approved scorecard         |
+| `POST /ranchbrain/knowledge/reject`         | Reject approved mistaken knowledge    |
 
 ## 12. Gaps and Observations
 

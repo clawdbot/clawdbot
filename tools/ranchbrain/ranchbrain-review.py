@@ -515,11 +515,11 @@ def reject_note(memory_id: int) -> str:
 
     cur.execute(
         """
-        SELECT content, source
+        SELECT content, source, category
         FROM long_term_memory
         WHERE id = %s
           AND agent_name = 'RanchBrain'
-          AND category = 'ranchbrain_pending'
+          AND category IN ('ranchbrain_pending', 'ranchbrain_note')
         FOR UPDATE;
         """,
         (memory_id,),
@@ -533,11 +533,16 @@ def reject_note(memory_id: int) -> str:
 
         return (
             "🧠 RanchBrain Rejection\n\n"
-            f"Pending Memory ID {memory_id} was not found."
+            f"Reviewable Memory ID {memory_id} was not found."
         )
 
-    content, source = row
+    content, source, prior_category = row
     old_path = Path(str(source))
+    prior_status = (
+        "approved"
+        if prior_category == "ranchbrain_note"
+        else "pending"
+    )
 
     ARCHIVE_DIR.mkdir(
         parents=True,
@@ -574,7 +579,7 @@ def reject_note(memory_id: int) -> str:
     except Exception:
         if new_path.is_file():
             shutil.move(str(new_path), str(old_path))
-            rewrite_status(old_path, "pending")
+            rewrite_status(old_path, prior_status)
 
         conn.rollback()
         raise

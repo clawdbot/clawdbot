@@ -296,7 +296,7 @@ class ScorecardDashboardTests(unittest.TestCase):
         self.assertIn('class="table-scroll"', rendered)
         self.assertIn('class="dashboard-table winners-table"', rendered)
         self.assertIn('class="dashboard-table audit-table"', rendered)
-        self.assertIn("Open Approval / Reject Queue", rendered)
+        self.assertIn(">Review Queue</a>", rendered)
         self.assertNotIn("No pending scorecard reviews", rendered)
 
     def test_navigation_separates_scorecard_and_review_queue(self):
@@ -307,7 +307,7 @@ class ScorecardDashboardTests(unittest.TestCase):
         self.assertNotIn('href="/ranchbrain/review"', rendered)
         self.assertIn("/ai-scorecard?view=all", rendered)
         self.assertIn(">All Models Scorecard<", rendered)
-        self.assertIn(">Review Queue<", rendered)
+        self.assertNotIn(">Review Queue<", rendered)
 
     def test_notes_has_dedicated_vault_route_and_title(self):
         with mock.patch.object(
@@ -1185,6 +1185,53 @@ class PdfUploadHardeningTests(unittest.TestCase):
         connection.rollback.assert_called_once()
         connection.commit.assert_not_called()
         connection.close.assert_called_once()
+
+    def test_knowledge_status_has_visible_review_and_reject_controls(self):
+        with (
+            mock.patch.object(dashboard, "ranchbrain_schema_is_ready", return_value=True),
+            mock.patch.object(
+                dashboard,
+                "get_ranchbrain_counts",
+                return_value={"approved": 1, "pending": 0, "rejected": 0},
+            ),
+            mock.patch.object(
+                dashboard,
+                "get_ranchbrain_notes",
+                return_value=[(42, "Incorrect test note", "note.md", "today")],
+            ),
+        ):
+            rendered = dashboard.ranchbrain_dashboard()
+
+        self.assertIn("Open Knowledge Review Queue", rendered)
+        self.assertIn("/ranchbrain/review", rendered)
+        self.assertIn("Reject Mistaken Note", rendered)
+        self.assertIn("/ranchbrain/knowledge/reject", rendered)
+        self.assertIn('value="42"', rendered)
+
+    def test_knowledge_reject_runs_audited_action_without_confirmation(self):
+        dashboard.request.form = {"memory_id": "42"}
+        with mock.patch.object(
+            dashboard,
+            "run_review_action",
+            return_value=True,
+        ) as action:
+            response = dashboard.ranchbrain_knowledge_reject()
+
+        self.assertEqual(response, "/ranchbrain")
+        action.assert_called_once_with("reject", "42")
+
+    def test_review_queue_navigation_is_only_on_all_models_page(self):
+        navigation = dashboard.openclaw_shared_navigation()
+        self.assertNotIn('href="/ai-scorecard"', navigation)
+
+        dashboard.request.args = {"view": "all"}
+        all_models = dashboard.ai_scorecard()
+        self.assertIn("Scorecard Navigation", all_models)
+        self.assertIn(">Review Queue</a>", all_models)
+
+        dashboard.request.args = {}
+        review_page = dashboard.ai_scorecard()
+        self.assertNotIn("Scorecard Navigation", review_page)
 
 
 if __name__ == "__main__":

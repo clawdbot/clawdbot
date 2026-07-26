@@ -1661,7 +1661,6 @@ def openclaw_shared_navigation():
         ("/ranchbrain", "RanchBrain"),
         ("/notes", "Vault"),
         ("/ai-scorecard?view=all", "All Models Scorecard"),
-        ("/ai-scorecard", "Review Queue"),
         ("/documentation", "Foundational Documentation"),
         ("/pdf", "PDF"),
         ("/backup-recovery", "Backup & Recovery Center"),
@@ -1825,7 +1824,12 @@ def ranchbrain_dashboard():
   <p>Approved: <b>{counts['approved']}</b></p>
   <p>Pending: <b>{counts['pending']}</b></p>
   <p>Rejected: <b>{counts['rejected']}</b></p>
-  <p><a href="/ranchbrain/review">Open Review Page</a></p>
+  <p>
+    <a href="/ranchbrain/review"
+       style="display:inline-block;background:#2563eb;color:white;
+              padding:11px 16px;border-radius:7px;text-decoration:none;
+              font-weight:bold;">Open Knowledge Review Queue</a>
+  </p>
 </div>
 
 <div class="panel">
@@ -1844,6 +1848,17 @@ def ranchbrain_dashboard():
     Created: {html_module.escape(str(created_at))}<br>
     File: {html_module.escape(str(source))}
   </div>
+  <form method="POST"
+        action="/ranchbrain/knowledge/reject"
+        style="margin-top:12px;">
+    <input type="hidden" name="memory_id"
+           value="{html_module.escape(str(memory_id), quote=True)}">
+    <button type="submit"
+            style="background:#dc2626;color:white;border:0;padding:10px 14px;
+                   border-radius:7px;font-weight:bold;cursor:pointer;">
+      Reject Mistaken Note
+    </button>
+  </form>
 </div>
 """
 
@@ -1896,6 +1911,17 @@ def ranchbrain_review_reject():
 
     run_review_action("reject", memory_id)
     return redirect("/ranchbrain/review")
+
+
+@app.route("/ranchbrain/knowledge/reject", methods=["POST"])
+def ranchbrain_knowledge_reject():
+    memory_id = request.form.get("memory_id", "").strip()
+
+    if not memory_id.isdigit():
+        return redirect("/ranchbrain")
+
+    run_review_action("reject", memory_id)
+    return redirect("/ranchbrain")
 
 
 def load_json_object(path):
@@ -2289,13 +2315,15 @@ def ai_scorecard():
 """
             return ranchbrain_shell("AI Model Scorecard Review Queue", body)
 
-        queue_link = """
+        queue_link = ""
+        if request.args.get("view") == "all":
+            queue_link = """
 <div class="panel" style="border:2px solid #64748b;">
   <h2>Scorecard Navigation</h2>
   <a href="/ai-scorecard"
      style="display:inline-block;background:#2563eb;color:white;
             padding:11px 16px;border-radius:7px;text-decoration:none;
-            font-weight:bold;">Open Approval / Reject Queue</a>
+            font-weight:bold;">Review Queue</a>
 </div>
 """
         all_models_panel = ""
