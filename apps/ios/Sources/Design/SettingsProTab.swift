@@ -327,9 +327,7 @@ struct SettingsProTab: View {
                         }
                     }),
                 titleVisibility: .visible,
-                // Hand the entry to the action. Dismissal clears
-                // `pendingForgetGateway` before the button action runs, so an
-                // action that reads it back from state always sees nil.
+                // Dismissal clears `pendingForgetGateway` before the action runs, so hand it over instead.
                 presenting: self.pendingForgetGateway)
             { entry in
                 Button(role: .destructive) {
