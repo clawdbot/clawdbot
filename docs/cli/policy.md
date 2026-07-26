@@ -194,7 +194,7 @@ Cross-cutting notes not obvious from the rule tables below:
 - `agents.workspace.denyTools` accepts `exec`, `process`, `write`, `edit`,
   `apply_patch`. The config tool-deny groups `group:fs` (file mutation) and
   `group:runtime` (shell/process) satisfy the equivalent posture.
-- Exec-approvals checks read the live `exec-approvals.json` artifact only when
+- Exec-approvals checks read the live SQLite approvals document only when
   an `execApprovals` rule is present; a missing or invalid artifact is
   unobservable evidence, not a synthetic pass.
 - Secret and auth-profile evidence records provider/source posture and
@@ -430,9 +430,11 @@ allowlist such as `["all"]`.
 
 #### Exec approvals
 
-Exec-approvals checks read the runtime `exec-approvals.json` artifact:
-`~/.openclaw/exec-approvals.json` by default, or
-`$OPENCLAW_STATE_DIR/exec-approvals.json` when `OPENCLAW_STATE_DIR` is set.
+Exec-approvals checks read the runtime `exec_approvals_config` singleton row in
+`~/.openclaw/state/openclaw.sqlite` by default, or the same database under
+`$OPENCLAW_STATE_DIR/state` when `OPENCLAW_STATE_DIR` is set. Findings keep the
+stable `oc://exec-approvals.json/...` URI scheme; it now denotes paths within
+the authoritative JSON document stored in that row.
 Posture rules under `execApprovals.defaults.*` or `execApprovals.agents.*`
 require readable artifact evidence; a missing or invalid artifact reports as
 unobservable evidence rather than a best-effort pass. Once readable, omitted
@@ -444,7 +446,7 @@ missing agent security inherits that default. Evidence includes `defaults`,
 
 | Policy field                                | Observed state                                                                         | Use when                                                                                |
 | ------------------------------------------- | -------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `execApprovals.requireFile`                 | Active runtime `exec-approvals.json` path                                              | Set to `true` to require the approvals artifact to exist and parse.                     |
+| `execApprovals.requireFile`                 | Active runtime `exec_approvals_config` row                                             | Set to `true` to require the approvals document to exist and parse.                     |
 | `execApprovals.defaults.allowSecurity`      | `defaults.security`, defaulting to `full`                                              | Allow only approved default approval security modes.                                    |
 | `execApprovals.agents.allowSecurity`        | `agents.*.security`, inheriting defaults                                               | Allow only approved per-agent effective approval security modes.                        |
 | `execApprovals.agents.allowAutoAllowSkills` | `defaults.autoAllowSkills` and `agents.*.autoAllowSkills`, inheriting runtime defaults | Set to `false` to require strict manual allowlists without implicit skill CLI approval. |
@@ -857,8 +859,8 @@ the interval.
 | `policy/secrets-insecure-provider`                       | A secret provider opts into insecure posture when policy denies it.               |
 | `policy/auth-profile-invalid-metadata`                   | A config auth profile is missing valid provider or mode metadata.                 |
 | `policy/auth-profile-unapproved-mode`                    | A config auth profile mode is outside the policy allowlist.                       |
-| `policy/exec-approvals-missing`                          | Policy requires `exec-approvals.json`, but the artifact is missing.               |
-| `policy/exec-approvals-invalid`                          | The configured exec approvals artifact cannot be parsed.                          |
+| `policy/exec-approvals-missing`                          | Policy requires the SQLite exec approvals document, but its row is missing.       |
+| `policy/exec-approvals-invalid`                          | The configured SQLite exec approvals document cannot be parsed.                   |
 | `policy/exec-approvals-default-security-unapproved`      | Exec approval defaults use a security mode outside the policy allowlist.          |
 | `policy/exec-approvals-agent-security-unapproved`        | A per-agent effective exec approval security mode is outside the allowlist.       |
 | `policy/exec-approvals-auto-allow-skills-enabled`        | An exec approval agent implicitly auto-allows skill CLIs when policy denies it.   |
