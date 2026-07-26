@@ -439,6 +439,7 @@ function createChatHeaderState(
       navCollapsed: false,
       navWidth: 280,
       sidebarEntries: [],
+      sessionSectionOrder: [],
       chatShowThinking: false,
       chatShowToolCalls: true,
     },

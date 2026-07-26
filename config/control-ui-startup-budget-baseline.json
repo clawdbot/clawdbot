@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 319835,
-  "reason": "flexible multi-sidebar chat layout",
-  "updatedAt": "2026-07-25"
+  "startupJsGzipBytes": 320262,
+  "reason": "sidebar session-section ordering pref",
+  "updatedAt": "2026-07-26"
 }

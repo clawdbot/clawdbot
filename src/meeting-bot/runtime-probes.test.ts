@@ -33,16 +33,25 @@ type Config = {
 
 const cases = [
   {
+    name: "Google Meet",
+    invalidRequestName: "Error",
+    session: { id: "google", chrome: { launched: true } } satisfies Session,
+    shouldWaitForListening: (session: Session) => Boolean(session.chrome?.launched),
+    waitsForListening: true,
+  },
+  {
     name: "Teams",
     invalidRequestName: "Error",
     session: { id: "teams", chrome: { launched: true } } satisfies Session,
     shouldWaitForListening: (session: Session) => Boolean(session.chrome?.launched),
+    waitsForListening: true,
   },
   {
     name: "Zoom",
     invalidRequestName: "ZoomInvalidRequest",
     session: { id: "zoom", chrome: { launched: true } } satisfies Session,
     shouldWaitForListening: (session: Session) => Boolean(session.chrome?.browserTab?.targetId),
+    waitsForListening: false,
   },
 ] as const;
 
@@ -102,7 +111,7 @@ describe.each(cases)("$name meeting runtime probe parity", (testCase) => {
       timeoutMs: 5,
     });
 
-    if (testCase.name === "Teams") {
+    if (testCase.waitsForListening) {
       expect(refreshCaptionHealth).toHaveBeenCalled();
     } else {
       expect(refreshCaptionHealth).not.toHaveBeenCalled();

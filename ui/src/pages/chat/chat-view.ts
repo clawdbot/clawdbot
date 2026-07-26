@@ -40,6 +40,7 @@ import {
   renderBackgroundTasksRail,
   type BackgroundTasksProps,
 } from "./components/chat-background-tasks.ts";
+import type { ChatComposerDisabledBanner } from "./components/chat-composer-types.ts";
 import { isChatRunWorking, renderChatComposer } from "./components/chat-composer.ts";
 import { inlineChatImageFromEvent, openInlineChatImage } from "./components/chat-image-lightbox.ts";
 import { renderChatPullRequests } from "./components/chat-pull-requests.ts";
@@ -143,7 +144,7 @@ export type ChatProps = {
   onTypingChange?: (typing: boolean) => void;
   canSend: boolean;
   disabledReason: string | null;
-  disabledBanner?: { text: string; actionLabel: string; onAction: () => void };
+  disabledBanner?: ChatComposerDisabledBanner;
   error: string | null;
   runError?: { summary: string } | null;
   inlineApproval?: ExecApprovalRequest | null;

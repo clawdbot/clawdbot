@@ -327,6 +327,7 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       disabledBanner:
         selectedSessionArchived && !catalogDisabledReason
           ? {
+              kind: "composer-replacement",
               text: t("chat.archivedSessionDisabled"),
               actionLabel: t("common.unarchive"),
               onAction: () => void this.restoreArchivedSession(state.sessionKey),
@@ -668,6 +669,9 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       focusVersion: state.sidebarFocusVersion,
       layout: sidebarLayout,
       narrow: this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX,
+      panelMutationEnabled: {
+        chat: Boolean(board.activeTabId) && !board.activeTabReadOnly && board.provider.canMutate,
+      },
       panelTemplates,
       primary,
       sessionKey: state.sessionKey,

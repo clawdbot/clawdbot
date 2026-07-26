@@ -3,7 +3,7 @@
 import { html } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "../../../components/resizable-divider.ts";
-import { mergePanelIntoColumn, openSlot } from "../sidebar-layout.ts";
+import { mergePanelIntoColumn, openSlot, type SidebarSlotId } from "../sidebar-layout.ts";
 import "./chat-sidebar-region.runtime.ts";
 
 type Region = HTMLElementTagNameMap["openclaw-chat-sidebar-region"] & {
@@ -12,7 +12,10 @@ type Region = HTMLElementTagNameMap["openclaw-chat-sidebar-region"] & {
 
 const regions: Region[] = [];
 
-async function createRegion(narrow: boolean) {
+async function createRegion(
+  narrow: boolean,
+  panelMutationEnabled: Partial<Record<SidebarSlotId, boolean>> = {},
+) {
   const shell = document.createElement("div");
   shell.className = `sidebar-region ${narrow ? "sidebar-region--narrow" : ""}`;
   const region = document.createElement("openclaw-chat-sidebar-region") as Region;
@@ -22,6 +25,7 @@ async function createRegion(narrow: boolean) {
     detail: html`<div data-panel="detail">Detail panel</div>`,
     discussion: html`<div data-panel="discussion">Discussion panel</div>`,
   };
+  region.panelMutationEnabled = panelMutationEnabled;
   region.callbacks = {
     activatePanel: vi.fn(),
     closeSlot: vi.fn(),
@@ -142,6 +146,51 @@ describe("chat sidebar region", () => {
       region.layout.columns[1]?.id,
       1,
     );
+  });
+
+  it("gates chat close while keeping non-chat close controls functional", async () => {
+    const region = await createRegion(false, { chat: false });
+    const closeButtons = () =>
+      Array.from(
+        regionRoot(region).querySelectorAll<HTMLButtonElement>(".sidebar-column__actions button"),
+      );
+    const closeButton = (panel: string) =>
+      closeButtons().find((button) => button.getAttribute("aria-label") === `Close ${panel}`);
+
+    expect(closeButton("Chat")).toBeUndefined();
+    closeButton("Details")?.click();
+    closeButton("Discussion")?.click();
+    expect(region.callbacks?.closeSlot).toHaveBeenCalledWith("detail");
+    expect(region.callbacks?.closeSlot).toHaveBeenCalledWith("discussion");
+
+    region.panelMutationEnabled = { chat: true };
+    await region.updateComplete;
+
+    closeButton("Chat")?.click();
+    closeButton("Details")?.click();
+    closeButton("Discussion")?.click();
+    expect(region.callbacks?.closeSlot).toHaveBeenCalledWith("chat");
+    expect(region.callbacks?.closeSlot).toHaveBeenCalledWith("detail");
+    expect(region.callbacks?.closeSlot).toHaveBeenCalledWith("discussion");
+  });
+
+  it("gates chat dragging while keeping non-chat panels draggable", async () => {
+    const region = await createRegion(false, { chat: false });
+    const tabs = () =>
+      Array.from(regionRoot(region).querySelectorAll<HTMLElement>(".sidebar-column__tab"));
+    const tab = (panel: string) =>
+      tabs().find((candidate) => candidate.textContent?.trim() === panel);
+
+    expect(tab("Chat")?.draggable).toBe(false);
+    expect(tab("Details")?.draggable).toBe(true);
+    expect(tab("Discussion")?.draggable).toBe(true);
+
+    region.panelMutationEnabled = { chat: true };
+    await region.updateComplete;
+
+    expect(tab("Chat")?.draggable).toBe(true);
+    expect(tab("Details")?.draggable).toBe(true);
+    expect(tab("Discussion")?.draggable).toBe(true);
   });
 
   it("routes boundary drops through the detach callback", async () => {

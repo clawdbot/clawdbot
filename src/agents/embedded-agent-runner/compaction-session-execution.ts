@@ -287,6 +287,8 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             senderUsername: params.senderUsername,
             senderE164: params.senderE164,
           });
+          // Standalone compaction sessions do not install the normal attempt stream guards.
+          // This wrapper is therefore their sole terminal accounting owner.
           session.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(
             session.agent.streamFn,
             {

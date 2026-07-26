@@ -38,6 +38,7 @@ import {
 } from "../app-navigation.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
 import { normalizeBoardSessionViews, type BoardSessionViews } from "../lib/board/settings.ts";
+import { normalizeSessionSectionOrderTokens } from "../lib/sessions/custom-groups.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { getSafeLocalStorage, getSafeSessionStorage } from "../local-storage.ts";
 import {
@@ -193,6 +194,7 @@ export type UiSettings = {
   navCollapsed: boolean; // Collapsible sidebar state
   navWidth: number; // Sidebar width when expanded (240–400px)
   sidebarEntries: string[]; // Ordered routes, Workboard boards, and pinned sessions below Home
+  sessionSectionOrder: string[]; // Custom session groups interleaved with built-in session zones
   sidebarLiveActivity?: boolean; // Latest activity under running sidebar sessions (default true)
   chatMessageMaxWidth?: string; // Browser-local centered chat transcript max width
   showAdvancedSettings?: boolean; // Expand advanced schema settings (default false)
@@ -427,6 +429,7 @@ export function loadSettings(): UiSettings {
     navCollapsed: false,
     navWidth: NAV_WIDTH_DEFAULT,
     sidebarEntries: [...DEFAULT_SIDEBAR_ENTRIES],
+    sessionSectionOrder: [],
     sidebarLiveActivity: true,
     showAdvancedSettings: false,
     pinnedAgentIds: [],
@@ -524,6 +527,9 @@ export function loadSettings(): UiSettings {
         normalizeSidebarEntries(parsedRecord.sidebarEntries) ??
         migratedSidebarEntries ??
         defaults.sidebarEntries,
+      sessionSectionOrder:
+        normalizeSessionSectionOrderTokens(parsedRecord.sessionSectionOrder) ??
+        defaults.sessionSectionOrder,
       sidebarLiveActivity:
         typeof parsed.sidebarLiveActivity === "boolean"
           ? parsed.sidebarLiveActivity
@@ -664,6 +670,7 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     navCollapsed: next.navCollapsed,
     navWidth: next.navWidth,
     sidebarEntries: next.sidebarEntries,
+    sessionSectionOrder: next.sessionSectionOrder,
     ...(next.sidebarLiveActivity === false ? { sidebarLiveActivity: false } : {}),
     ...(normalizeChatMessageMaxWidth(next.chatMessageMaxWidth)
       ? { chatMessageMaxWidth: normalizeChatMessageMaxWidth(next.chatMessageMaxWidth) }

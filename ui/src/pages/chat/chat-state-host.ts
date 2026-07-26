@@ -93,6 +93,10 @@ export type ChatPageHost = ChatHost &
     planStatus: PlanStatus | null;
     observerDigest: SessionObserverDigest | null;
     knownAgentRunIds: Set<string>;
+    /** `sessionKey|runId` scopes that already forced a PR-chips refresh mid-stream. */
+    streamPullRequestRefreshKeys?: Set<string>;
+    /** Rolling stream suffix so a PR URL split across delta chunks still matches. */
+    streamPullRequestTail?: { scope: string; text: string };
     waitingApprovalStatuses: Map<string, WaitingApprovalStatus>;
     waitingApprovalResolvedIds: Set<string>;
     chatRunStatus: ChatProps["runStatus"];
