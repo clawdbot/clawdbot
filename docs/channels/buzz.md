@@ -89,9 +89,9 @@ disabled; the next setup run offers to reuse that identity.
 Every target room must contain the bot identity with the **Bot** role. An
 existing human member or ordinary room member role is not sufficient.
 
-In Buzz desktop, open the room, open **Members**, choose **Add members**, search
-for the bot public key, and select the **Bot** role when the identity appears.
-An authorized human owner or admin can always use the Buzz CLI:
+Buzz desktop's room member picker searches published profiles and cannot add a
+newly generated bare OpenClaw identity by public key. Use the Buzz CLI as the
+existing human room owner or admin:
 
 ```bash
 buzz channels add-member \
@@ -105,7 +105,8 @@ human private key.
 
 The local Buzz `just dev` relay does not require separate relay membership by
 default. A hosted or closed relay may require the bot public key to be added to
-the workspace community first:
+the workspace community first. Adding community membership grants relay access;
+it does not add the identity to a room with the Bot role.
 
 ```bash
 buzz-admin add-member --pubkey <BOT_PUBLIC_KEY> --role member
