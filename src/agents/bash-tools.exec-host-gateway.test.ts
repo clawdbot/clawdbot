@@ -849,6 +849,36 @@ describe("processGatewayAllowlist", () => {
     expect(JSON.stringify(captured.events)).not.toContain("allowed");
   });
 
+  it("keeps login-shell commands off auto-review", async () => {
+    const payload = "rm -rf /tmp/openclaw-auto-review-target && echo done";
+    const command = `bash -lc "${payload}"`;
+    const { authorizationPlan } = await configurePlanBackedCommand({ command });
+    expect(authorizationPlan).toMatchObject({
+      ok: true,
+      groups: [
+        {
+          candidates: [
+            {
+              sourceSegment: { argv: ["bash", "-lc", payload] },
+              transport: { kind: "direct" },
+              trustMode: "executable",
+            },
+          ],
+        },
+      ],
+    });
+
+    const result = await runGatewayAllowlist({
+      command,
+      ask: "on-miss",
+      autoReview: true,
+    });
+
+    expect(defaultExecAutoReviewerMock).not.toHaveBeenCalled();
+    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+  });
+
   it("does not execute after cancellation wins during auto-review", async () => {
     const command = "echo ok";
     await configurePlanBackedCommand({ command });

@@ -1690,7 +1690,7 @@ describe("executeNodeHostCommand", () => {
     expectSystemRunInvoke({ invokeTimeoutMs: 35_000, runTimeoutMs: 30_000 });
   });
 
-  it("keeps non-transport login shells approval-gated", async () => {
+  it("keeps non-transport login shells off auto-review", async () => {
     const loginPlan = {
       argv: ["bash", "-lc", "./scripts/check_mail.sh --limit 5"],
       cwd: "/tmp/work",
@@ -1745,9 +1745,9 @@ describe("executeNodeHostCommand", () => {
         params?.allowlistSatisfied !== true && params?.durableApprovalSatisfied !== true,
     );
     const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
-      decision: "ask",
-      risk: "medium",
-      rationale: "login shell needs human approval",
+      decision: "allow-once",
+      risk: "low",
+      rationale: "would allow the opaque login shell",
     }));
     resolveExecHostApprovalContextMock.mockReturnValue({
       approvals: { allowlist: [], file: { version: 1, agents: {} } },
@@ -1772,12 +1772,7 @@ describe("executeNodeHostCommand", () => {
     });
 
     expect(result.details?.status).toBe("approval-pending");
-    expect(autoReviewer).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: `bash -lc "./scripts/check_mail.sh --limit 5"`,
-        argv: ["bash", "-lc", "./scripts/check_mail.sh --limit 5"],
-      }),
-    );
+    expect(autoReviewer).not.toHaveBeenCalled();
     expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalled();
   });
 

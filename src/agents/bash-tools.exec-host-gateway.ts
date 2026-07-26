@@ -40,6 +40,7 @@ import {
   type ExecAutoReviewInput,
 } from "../infra/exec-auto-review.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
+import { isBlockedShellWrapperCommand } from "../infra/exec-wrapper-resolution.js";
 import {
   GatewayDrainingError,
   runWithGatewayIndependentRootWorkAdmission,
@@ -762,11 +763,15 @@ export async function processGatewayAllowlist(
       };
     }
     const [autoReviewSegment] = allowlistEval.segments;
+    // Login and interactive shell startup may execute code outside the inline payload.
+    // Keep opaque wrappers on the explicit human-approval path.
     const autoReviewArgv =
       allowlistEval.segments.length === 1 &&
+      autoReviewSegment !== undefined &&
+      !isBlockedShellWrapperCommand(autoReviewSegment.argv, autoReviewSegment.raw) &&
       (autoReviewSegment?.raw === undefined ||
         autoReviewSegment.raw.trim() === params.command.trim())
-        ? autoReviewSegment?.argv
+        ? autoReviewSegment.argv
         : undefined;
     const autoReviewHasBoundCommand = analysisOk && autoReviewArgv !== undefined;
     // A model approval is valid only for the executable resolved during review;

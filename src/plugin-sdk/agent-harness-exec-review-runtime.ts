@@ -37,10 +37,12 @@ export async function buildExecAutoReviewInputForShellCommand(params: {
     { commandRequiresSecurityAuditSuppressionApproval, evaluateShellAllowlistWithAuthorization },
     { detectUnsafeExecControlShellCommand },
     { detectPolicyInlineEval },
+    { isBlockedShellWrapperCommand },
   ] = await Promise.all([
     import("../infra/exec-approvals.js"),
     import("../infra/exec-control-command-guard.js"),
     import("../infra/command-analysis/policy.js"),
+    import("../infra/exec-wrapper-resolution.js"),
   ]);
   const command = params.command.trim();
   const host: ExecAutoReviewHost = params.host;
@@ -61,6 +63,11 @@ export async function buildExecAutoReviewInputForShellCommand(params: {
     segment !== undefined &&
     segment.raw.trim() === command;
   if (!boundSingleCommand) {
+    return undefined;
+  }
+  // Login and interactive shell startup may execute code outside the inline payload.
+  // Keep opaque wrappers on the explicit human-approval path.
+  if (isBlockedShellWrapperCommand(segment.argv, segment.raw)) {
     return undefined;
   }
   if (
