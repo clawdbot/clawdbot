@@ -281,6 +281,10 @@ describe("Parallels smoke model selection", () => {
     expect(controller).toContain('prlctl stop "$VM_NAME" --acpi');
     expect(controller).toContain("HypervisorPresent");
     expect(controller).toContain("git --version && node --version && npm --version");
+    expect(controller).toContain(
+      "if (Test-Path -LiteralPath '${GUEST_PROFILE_PS}/Downloads/OpenClawPrereqs')",
+    );
+    expect(controller).toContain("winget.exe download --source winget");
     expect(controller).toContain("OPENCLAW_PARALLELS_WINDOWS_LIBRARY_ONLY");
     expect(controller).not.toContain("openclaw-windows-node");
   });
