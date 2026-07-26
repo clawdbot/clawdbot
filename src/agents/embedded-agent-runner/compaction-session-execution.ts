@@ -421,8 +421,8 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               },
             },
           );
-          let effectiveFirstKeptEntryId = result.firstKeptEntryId;
-          let postCompactionLeafId =
+          const effectiveFirstKeptEntryId = result.firstKeptEntryId;
+          const postCompactionLeafId =
             typeof sessionManager.getLeafId === "function"
               ? (sessionManager.getLeafId() ?? undefined)
               : undefined;
