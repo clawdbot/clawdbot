@@ -34,10 +34,36 @@ describe("Agentic OS allow lease release persistence", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+    vi.restoreAllMocks();
     if (runtimeStateDir) {
       rmSync(runtimeStateDir, { recursive: true, force: true });
       runtimeStateDir = undefined;
     }
+  });
+
+  it("rolls back failed acquisition persistence so retry is durable across restart", async () => {
+    const contract = await import("./agentic-os-runtime-contract.js");
+    const store = await import("./agentic-os-runtime-contract-store.js");
+    vi.spyOn(store, "saveAgenticOsRuntimeSnapshot").mockImplementationOnce(() => {
+      throw new Error("synthetic acquire snapshot failure");
+    });
+
+    expect(() => contract.acquireAgenticOsAllowLease(acquireParams)).toThrow(
+      "synthetic acquire snapshot failure",
+    );
+    expect(contract.listAgenticOsAllowLeases().leases).toEqual([]);
+
+    const acquired = contract.acquireAgenticOsAllowLease(acquireParams);
+    expect(acquired).toEqual(expect.objectContaining({ status: "active" }));
+
+    vi.resetModules();
+    const restarted = await import("./agentic-os-runtime-contract.js");
+    expect(restarted.listAgenticOsAllowLeases().leases).toEqual([
+      expect.objectContaining({
+        status: "active",
+        gateway_lease_id: acquired.gateway_lease_id,
+      }),
+    ]);
   });
 
   it("rolls back failed persistence so retry is durable across restart", async () => {

@@ -381,7 +381,7 @@ describe("Agentic OS runtime contract v1", () => {
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
     expect(spawnSubagentDirectMock).toHaveBeenLastCalledWith(
       expect.any(Object),
-      expect.objectContaining({ agentSessionKey: "agent:main" }),
+      expect.objectContaining({ agentSessionKey: "agent:main:main" }),
     );
     const replayed = payload(await invoke("sessions_spawn", spawnParams));
     expect(replayed.session_key).toBe(accepted.session_key);
@@ -669,26 +669,28 @@ describe("Agentic OS runtime contract v1", () => {
     expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
-  it("rejects sessions_spawn session mode before advertising unsupported thread semantics", async () => {
-    const gatewayLeaseId = await acquireLease();
-    expectInvalid(
-      await invoke("sessions_spawn", {
-        task: "unsupported session mode",
-        runtime: "subagent",
-        mode: "session",
-        agentId: "ai-engineer",
-        gateway_lease_id: gatewayLeaseId,
-        client_request_id: "spawn-session-mode",
-        idempotency_key: "spawn-session-mode-idem",
-        metadata: {
-          ...sessionMetadata,
-          client_request_id: "spawn-session-mode",
-          idempotency_key: "spawn-session-mode-idem",
-          task_digest: sha256Hex("unsupported session mode"),
-        },
-      }),
-      "sessions_spawn mode session is not supported",
-    );
+  it("rejects malformed sessions_spawn mode values before spawning", async () => {
+    for (const mode of ["session", "bogus", null, 1, {}]) {
+      const gatewayLeaseId = await acquireLease();
+      expectInvalid(
+        await invoke("sessions_spawn", {
+          task: "unsupported session mode",
+          runtime: "subagent",
+          mode,
+          agentId: "ai-engineer",
+          gateway_lease_id: gatewayLeaseId,
+          client_request_id: `spawn-mode-${typeof mode}`,
+          idempotency_key: `spawn-mode-idem-${typeof mode}`,
+          metadata: {
+            ...sessionMetadata,
+            client_request_id: `spawn-mode-${typeof mode}`,
+            idempotency_key: `spawn-mode-idem-${typeof mode}`,
+            task_digest: sha256Hex("unsupported session mode"),
+          },
+        }),
+        "invalid enum: mode",
+      );
+    }
     expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 

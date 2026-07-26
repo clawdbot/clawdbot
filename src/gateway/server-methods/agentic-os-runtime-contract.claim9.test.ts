@@ -145,6 +145,7 @@ describe("Agentic OS runtime contract claim 9 regressions", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+    vi.restoreAllMocks();
     if (runtimeStateDir) {
       rmSync(runtimeStateDir, { recursive: true, force: true });
       runtimeStateDir = undefined;
@@ -168,6 +169,10 @@ describe("Agentic OS runtime contract claim 9 regressions", () => {
 
     expect(accepted.status).toBe("accepted");
     expect(accepted.session_key).toBe("agent:ai-engineer:subagent:real-child");
+    expect(spawnSubagentDirectMock.mock.calls[0]?.[1]).toMatchObject({
+      agentSessionKey: "agent:main:main",
+      requesterAgentIdOverride: "main",
+    });
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
     expect(
       payload(await invoke("sessions_spawn", spawnParamsFor(gatewayLeaseId))).session_key,
@@ -258,6 +263,23 @@ describe("Agentic OS runtime contract claim 9 regressions", () => {
       second.session_key,
     );
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("expires consumed allow lease replay records after the replay window", async () => {
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const gatewayLeaseId = await acquireLease();
+    const accepted = payload(await invoke("sessions_spawn", spawnParamsFor(gatewayLeaseId)));
+    expect(accepted.session_key).toBe("agent:ai-engineer:subagent:real-child");
+    expect(payload(await invoke("subagents.allowLease.status")).leases).toEqual([]);
+
+    vi.mocked(Date.now).mockReturnValue(now + 5 * 60 * 1000 + 1);
+    const reacquired = await acquireLease();
+
+    expect(reacquired).not.toBe(gatewayLeaseId);
+    expect(payload(await invoke("subagents.allowLease.status")).leases).toEqual([
+      expect.objectContaining({ gateway_lease_id: reacquired, status: "active" }),
+    ]);
   });
 
   it("scopes pending sessions_spawn replay identifiers by principal", async () => {

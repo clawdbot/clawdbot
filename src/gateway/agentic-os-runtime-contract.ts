@@ -168,10 +168,8 @@ function pruneExpiredLeases(now = Date.now()) {
     }
   }
   for (const [key, record] of acquireByIdempotencyKey) {
-    if (
-      record.released_at_ms &&
-      now - record.released_at_ms > AGENTIC_OS_RUNTIME_REPLAY_RETENTION_MS
-    ) {
+    const terminalAtMs = record.released_at_ms ?? record.consumed_at_ms;
+    if (terminalAtMs && now - terminalAtMs > AGENTIC_OS_RUNTIME_REPLAY_RETENTION_MS) {
       acquireByIdempotencyKey.delete(key);
       const clientLeaseKey = principalScopedKey(
         record.authenticatedPrincipalId,
@@ -278,7 +276,14 @@ export function acquireAgenticOsAllowLease(
   leasesByGatewayId.set(gatewayLeaseId, record);
   acquireByIdempotencyKey.set(idempotencyScopedKey, record);
   acquireByClientLeaseId.set(clientLeaseScopedKey, record);
-  persistRuntimeState();
+  try {
+    persistRuntimeState();
+  } catch (error) {
+    leasesByGatewayId.delete(gatewayLeaseId);
+    acquireByIdempotencyKey.delete(idempotencyScopedKey);
+    acquireByClientLeaseId.delete(clientLeaseScopedKey);
+    throw error;
+  }
   return leaseResponse(record);
 }
 
@@ -465,8 +470,8 @@ export async function spawnAgenticOsSession(
   }
   const taskName =
     typeof params.taskName === "string" && params.taskName ? params.taskName : undefined;
-  if (params.mode === "session") {
-    return rejectConflict("sessions_spawn mode session is not supported by this contract");
+  if (Object.hasOwn(params, "mode") && params.mode !== "run") {
+    return rejectConflict("invalid enum: mode");
   }
   const mode = "run";
   const cleanup =
@@ -574,7 +579,7 @@ export async function spawnAgenticOsSession(
             expectsCompletionMessage: false,
           },
           {
-            agentSessionKey: `agent:${lease.spawnOwner.requester_agent_id}`,
+            agentSessionKey: `agent:${lease.spawnOwner.requester_agent_id}:main`,
             requesterAgentIdOverride: lease.spawnOwner.requester_agent_id,
             authorizedTargetAgentId: lease.spawnOwner.agent_id,
           },

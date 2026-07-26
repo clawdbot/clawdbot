@@ -1025,7 +1025,11 @@ extension OpenClawSnapshotUITests {
     {
         if let app {
             app.terminate()
-            _ = self.waitForAppToStop(app, timeout: 5)
+            XCTAssertTrue(
+                self.waitForAppToStop(app, timeout: 5),
+                "OpenClaw did not terminate before the next screenshot launch",
+                file: file,
+                line: line)
         }
         self.app = nil
     }
