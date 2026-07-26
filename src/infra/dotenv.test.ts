@@ -257,6 +257,8 @@ describe("loadDotEnv", () => {
             "SMS_PUBLIC_WEBHOOK_URL=https://evil-sms.example.com/webhook",
             "ZALO_API_URL=http://evil-zalo.example.com/",
             "AWS_ACCESS_KEY_ID=workspace-access-key",
+            "AWS_ACCOUNT_ID=123456789012",
+            "AWS_ACCOUNT_ID_ENDPOINT_MODE=required",
             "AWS_BEARER_TOKEN_BEDROCK=workspace-bearer",
             "AWS_BEDROCK_SKIP_AUTH=1",
             "AWS_CONTAINER_AUTHORIZATION_TOKEN=workspace-token",
@@ -264,6 +266,8 @@ describe("loadDotEnv", () => {
             "AWS_CONTAINER_CREDENTIALS_FULL_URI=https://evil-credentials.example.com",
             "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI=/evil-credentials",
             "AWS_CONFIG_FILE=./attacker-aws-config",
+            "AWS_CREDENTIAL_EXPIRATION=2099-01-01T00:00:00Z",
+            "AWS_CREDENTIAL_SCOPE=workspace-scope",
             "AWS_EC2_METADATA_DISABLED=false",
             "AWS_EC2_METADATA_SERVICE_ENDPOINT=https://evil-imds.example.com",
             "AWS_EC2_METADATA_SERVICE_ENDPOINT_MODE=IPv6",
@@ -312,6 +316,8 @@ describe("loadDotEnv", () => {
         delete process.env.SMS_PUBLIC_WEBHOOK_URL;
         delete process.env.ZALO_API_URL;
         delete process.env.AWS_ACCESS_KEY_ID;
+        delete process.env.AWS_ACCOUNT_ID;
+        delete process.env.AWS_ACCOUNT_ID_ENDPOINT_MODE;
         delete process.env.AWS_BEARER_TOKEN_BEDROCK;
         delete process.env.AWS_BEDROCK_SKIP_AUTH;
         delete process.env.AWS_CONTAINER_AUTHORIZATION_TOKEN;
@@ -319,6 +325,8 @@ describe("loadDotEnv", () => {
         delete process.env.AWS_CONTAINER_CREDENTIALS_FULL_URI;
         delete process.env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI;
         delete process.env.AWS_CONFIG_FILE;
+        delete process.env.AWS_CREDENTIAL_EXPIRATION;
+        delete process.env.AWS_CREDENTIAL_SCOPE;
         delete process.env.AWS_EC2_METADATA_DISABLED;
         delete process.env.AWS_EC2_METADATA_SERVICE_ENDPOINT;
         delete process.env.AWS_EC2_METADATA_SERVICE_ENDPOINT_MODE;
@@ -367,6 +375,8 @@ describe("loadDotEnv", () => {
         expect(process.env.SMS_PUBLIC_WEBHOOK_URL).toBeUndefined();
         expect(process.env.ZALO_API_URL).toBeUndefined();
         expect(process.env.AWS_ACCESS_KEY_ID).toBeUndefined();
+        expect(process.env.AWS_ACCOUNT_ID).toBeUndefined();
+        expect(process.env.AWS_ACCOUNT_ID_ENDPOINT_MODE).toBeUndefined();
         expect(process.env.AWS_BEARER_TOKEN_BEDROCK).toBeUndefined();
         expect(process.env.AWS_BEDROCK_SKIP_AUTH).toBeUndefined();
         expect(process.env.AWS_CONTAINER_AUTHORIZATION_TOKEN).toBeUndefined();
@@ -374,6 +384,8 @@ describe("loadDotEnv", () => {
         expect(process.env.AWS_CONTAINER_CREDENTIALS_FULL_URI).toBeUndefined();
         expect(process.env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI).toBeUndefined();
         expect(process.env.AWS_CONFIG_FILE).toBeUndefined();
+        expect(process.env.AWS_CREDENTIAL_EXPIRATION).toBeUndefined();
+        expect(process.env.AWS_CREDENTIAL_SCOPE).toBeUndefined();
         expect(process.env.AWS_EC2_METADATA_DISABLED).toBeUndefined();
         expect(process.env.AWS_EC2_METADATA_SERVICE_ENDPOINT).toBeUndefined();
         expect(process.env.AWS_EC2_METADATA_SERVICE_ENDPOINT_MODE).toBeUndefined();
