@@ -27,14 +27,14 @@ export type MemoryManager = NonNullable<
   Awaited<ReturnType<typeof getMemorySearchManager>>["manager"]
 >;
 type MemoryManagerPurpose = Parameters<typeof getMemorySearchManager>[0]["purpose"];
+function getMemoryCommandSecretTargetIds(): Set<string> {
+  return new Set(["memory.search.remote.apiKey", "agents.entries.*.memory.search.remote.apiKey"]);
+}
 export async function loadMemoryCommandConfig(commandName: string) {
   const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
     config: getRuntimeConfig(),
     commandName,
-    targetIds: new Set([
-      "memory.search.remote.apiKey",
-      "agents.entries.*.memory.search.remote.apiKey",
-    ]),
+    targetIds: getMemoryCommandSecretTargetIds(),
   });
   return {
     config: resolvedConfig,
