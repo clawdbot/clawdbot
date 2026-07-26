@@ -1,7 +1,10 @@
 import type { ReactiveControllerHost } from "lit";
 import { t } from "../i18n/index.ts";
-import { reorderSessionCustomGroups } from "../lib/sessions/custom-groups.ts";
-import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
+import {
+  moveSessionSection,
+  normalizeSessionSectionOrder,
+  type SidebarSessionsGrouping,
+} from "../lib/sessions/grouping.ts";
 import {
   buildAgentMainSessionKey,
   parseAgentSessionKey,
@@ -29,6 +32,8 @@ export interface SessionOrganizerControllerHost extends ReactiveControllerHost {
     | "resetForStatusFilter"
   >;
   readonly onUpdateSidebarEntries?: (entries: string[]) => void;
+  readonly onUpdateSessionSectionOrder?: (order: string[]) => void;
+  readonly sessionSectionOrder: readonly string[];
   sessionsGrouping: SidebarSessionsGrouping;
   sessionsShowCron: boolean;
   sessionsStatusFilter: SidebarSessionStatusFilter;
@@ -447,7 +452,7 @@ export async function deleteSessionGroup(
 export async function reorderSessionGroup(
   host: SessionOrganizerControllerHost,
   source: string,
-  target: string,
+  targetSectionId: string,
   position: "before" | "after",
   scope: SidebarSessionMutationScope,
 ): Promise<void> {
@@ -455,12 +460,30 @@ export async function reorderSessionGroup(
     return;
   }
   try {
-    await scope.sessions.groupsPut(
-      reorderSessionCustomGroups(host.knownSessionGroups(), source, target, position),
+    // knownSessionGroups() is the full discovered set (gateway catalog plus
+    // row-discovered categories), so normalize only prunes deleted groups.
+    const knownGroups = host.knownSessionGroups();
+    const next = moveSessionSection(
+      normalizeSessionSectionOrder(host.sessionSectionOrder, knownGroups),
+      `category:${source}`,
+      targetSectionId,
+      position,
     );
-    if (host.sessionData.isSessionMutationScopeCurrent(scope)) {
-      host.requestUpdate();
+    const nextGroups = next.flatMap((token) =>
+      token.startsWith("category:") ? [token.slice("category:".length)] : [],
+    );
+    const groupOrderChanged =
+      nextGroups.length !== knownGroups.length ||
+      nextGroups.some((group, index) => group !== knownGroups[index]);
+    if (groupOrderChanged) {
+      // The gateway catalog is also the ordering contract for native clients.
+      await scope.sessions.groupsPut(nextGroups);
     }
+    if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+      return;
+    }
+    host.onUpdateSessionSectionOrder?.(next);
+    host.requestUpdate();
   } catch (error) {
     host.sessionData.publishSessionMutationError(scope, error);
   }

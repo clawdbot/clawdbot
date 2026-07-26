@@ -280,7 +280,11 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     return partitionSidebarVisibleSections({
       rows,
       grouping: this.sessionsGrouping,
-      knownGroups: this.sessionsGrouping === "category" ? this.knownSessionGroups() : undefined,
+      knownGroups: this.sessionsGrouping === "category" ? this.knownSessionGroups() : [],
+      // Raw stored order: the grouping layer normalizes it against the full
+      // discovered category set, so a catalog-lagging category cannot drop
+      // its persisted slot here.
+      sectionOrder: this.sessionSectionOrder,
       collapsedSections: this.collapsedSessionSections,
       hideEmptyCreatorFilteredGroup: (category, rowCount) =>
         this.hideEmptyCreatorFilteredGroup(category, rowCount),
