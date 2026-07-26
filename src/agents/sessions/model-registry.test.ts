@@ -1,6 +1,6 @@
 // Model registry tests cover models.json auth modes and plugin-owned model
 // catalog shards.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { getApiProvider } from "@openclaw/ai/internal/runtime";
@@ -655,6 +655,34 @@ describe("ModelRegistry models.json auth", () => {
 
     expect(registry.getError()).toBeUndefined();
     expect(registry.find("zai", "glm-5.1")).toBeUndefined();
+  });
+
+  it("rejects oversized models.json catalogs with a size-bound error", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-model-registry-"));
+    tempDirs.push(dir);
+    const file = join(dir, "models.json");
+    // Write a file larger than the 1 MB limit with a valid JSON prefix so the
+    // size check fires before parsing.
+    const header = JSON.stringify({ providers: {} });
+    const padding = Buffer.alloc(1024 * 1024 + 1 - header.length, " ");
+    writeFileSync(file, header + padding.toString());
+
+    const registry = ModelRegistry.create(AuthStorage.inMemory(), file);
+
+    expect(registry.getError()).toBeDefined();
+    expect(registry.getError()).toContain("exceeds");
+    expect(registry.getAvailable()).toHaveLength(0);
+  });
+
+  it.skipIf(process.platform === "win32")("keeps symlinked models.json catalogs working", () => {
+    const target = writeModelsJson({ providers: {} });
+    const file = join(dirname(target), "models-link.json");
+    symlinkSync(target, file);
+
+    const registry = ModelRegistry.create(AuthStorage.inMemory(), file);
+
+    expect(registry.getError()).toBeUndefined();
+    expect(registry.getAvailable()).toHaveLength(0);
   });
 });
 
