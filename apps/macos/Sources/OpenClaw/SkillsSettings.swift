@@ -767,7 +767,8 @@ final class SkillsSettingsModel {
             let report = try await GatewayConnection.shared.skillsStatus()
             self.skills = report.skills.sorted { $0.name < $1.name }
             self.hasLoaded = true
-        } catch {
+        } 
+        catch {
             self.error = error.localizedDescription
         }
         self.isLoading = false
