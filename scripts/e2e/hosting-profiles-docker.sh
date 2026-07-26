@@ -28,6 +28,13 @@ dump_scenario_log() {
   rm -f "$copied_log"
 }
 
+dump_readiness_response() {
+  local container_name="$1"
+  docker_e2e_docker_cmd exec "$container_name" node -e \
+    "fetch('http://127.0.0.1:$PORT/readyz').then(async (response) => console.log(response.status, await response.text()))" \
+    2>&1 || true
+}
+
 docker_e2e_build_or_reuse \
   "$IMAGE_NAME" \
   hosting-profiles \
@@ -69,6 +76,7 @@ run_scenario() {
     "${runtime_args[@]}" \
     -e "OPENCLAW_WORKSPACE_DIR=/tmp/hosting-profile-workspace" \
     -e "OPENCLAW_INSTANCE_ID=hosting-profile-$scenario" \
+    -e "OPENAI_API_KEY=fixture-openai-token" \
     -e "OPENCLAW_SKIP_CHANNELS=1" \
     -e "OPENCLAW_SKIP_GMAIL_WATCHER=1" \
     -e "OPENCLAW_SKIP_CRON=1" \
@@ -79,6 +87,7 @@ run_scenario() {
 
   if ! docker_e2e_wait_container_bash "$container_name" 180 0.5 \
     "source scripts/lib/openclaw-e2e-instance.sh; openclaw_e2e_probe_http http://127.0.0.1:$PORT/readyz $expected_status 1000"; then
+    dump_readiness_response "$container_name"
     dump_scenario_log "$container_name" /tmp/hosting-profiles.log
     exit 1
   fi
@@ -91,6 +100,7 @@ run_scenario() {
       'set -euo pipefail; source scripts/lib/openclaw-e2e-instance.sh; entry="$(openclaw_e2e_resolve_entrypoint)"; exec node "$entry" node run --host 127.0.0.1 --port 18789 --node-id hosting-profile-node --display-name "Hosting Profile Node" >/tmp/hosting-profiles-node.log 2>&1'
     if ! docker_e2e_wait_container_bash "$container_name" 180 0.5 \
       "node scripts/e2e/hosting-profiles-client.mjs node-unapproved http://127.0.0.1:$PORT/readyz >/dev/null 2>&1"; then
+      dump_readiness_response "$container_name"
       dump_scenario_log "$container_name" /tmp/hosting-profiles.log
       dump_scenario_log "$container_name" /tmp/hosting-profiles-node.log
       exit 1
@@ -99,6 +109,7 @@ run_scenario() {
       'set -euo pipefail; source scripts/lib/openclaw-e2e-instance.sh; entry="$(openclaw_e2e_resolve_entrypoint)"; pending="$(node "$entry" nodes pending --json)"; request_id="$(node -e "const requests=JSON.parse(process.argv[1]); process.stdout.write(requests[0]?.requestId ?? \"\")" "$pending")"; test -n "$request_id"; node "$entry" nodes approve "$request_id" --json >/dev/null'
     if ! docker_e2e_wait_container_bash "$container_name" 180 0.5 \
       "source scripts/lib/openclaw-e2e-instance.sh; openclaw_e2e_probe_http http://127.0.0.1:$PORT/readyz 200 1000"; then
+      dump_readiness_response "$container_name"
       dump_scenario_log "$container_name" /tmp/hosting-profiles.log
       dump_scenario_log "$container_name" /tmp/hosting-profiles-node.log
       exit 1
@@ -110,6 +121,7 @@ run_scenario() {
       'set +e; dd if=/dev/zero of=/tmp/hosting-profile-workspace/fill bs=64K status=none; code=$?; sync; test "$code" -ne 0'
     if ! docker_e2e_wait_container_bash "$container_name" 180 0.5 \
       "source scripts/lib/openclaw-e2e-instance.sh; openclaw_e2e_probe_http http://127.0.0.1:$PORT/readyz 503 1000"; then
+      dump_readiness_response "$container_name"
       dump_scenario_log "$container_name" /tmp/hosting-profiles.log
       exit 1
     fi
@@ -118,6 +130,7 @@ run_scenario() {
     docker_e2e_docker_cmd exec "$container_name" rm -f /tmp/hosting-profile-workspace/fill
     if ! docker_e2e_wait_container_bash "$container_name" 180 0.5 \
       "source scripts/lib/openclaw-e2e-instance.sh; openclaw_e2e_probe_http http://127.0.0.1:$PORT/readyz 200 1000"; then
+      dump_readiness_response "$container_name"
       dump_scenario_log "$container_name" /tmp/hosting-profiles.log
       exit 1
     fi
