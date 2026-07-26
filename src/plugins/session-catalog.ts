@@ -173,6 +173,10 @@ export function listAdoptedSessionCatalogSessions(params: {
   return adopted;
 }
 
+// `complete` is intentionally required, not optional-with-fallback: adoption and its
+// upstream baseline must share one single-flight operation, or concurrent continues
+// race to baseline the same thread. This helper shipped in no release tag yet
+// (added #113718), so no external plugin can depend on the older 3-field shape.
 export function createSessionCatalogAdoptionCoordinator<TResult extends { sessionKey: string }>() {
   const operations = new Map<string, Promise<TResult>>();
   return async (params: {
