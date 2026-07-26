@@ -31,12 +31,16 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { parseSqliteSessionEntryJson as parseSessionEntryRow } from "./session-accessor.sqlite-status.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
-import { collectSessionMaintenancePreserveKeys } from "./store-maintenance-preserve.js";
+import {
+  collectSessionMaintenancePreserveKeys,
+  collectSessionMaintenancePreserveKeysForStore,
+} from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
   pruneStaleModelRunEntries,
   pruneStaleEntries,
+  shouldPreserveMaintenanceEntry,
   shouldRunModelRunPrune,
   shouldRunSessionEntryMaintenance,
   type ResolvedSessionMaintenanceConfig,
@@ -79,11 +83,17 @@ function hasStaleSqliteSessionEntryCandidate(
       )
       .orderBy("updated_at", "asc"),
   ).rows;
-  return rows.some(
-    (row) =>
-      parseSessionEntryRow(row) !== null &&
-      !preserveKeys?.has(normalizeStoreSessionKey(row.session_key)),
-  );
+  return rows.some((row) => {
+    const entry = parseSessionEntryRow(row);
+    if (!entry) {
+      return false;
+    }
+    return !shouldPreserveMaintenanceEntry({
+      key: normalizeStoreSessionKey(row.session_key),
+      entry,
+      preserveKeys,
+    });
+  });
 }
 
 export function applySqliteSessionEntryMaintenance(
@@ -94,6 +104,7 @@ export function applySqliteSessionEntryMaintenance(
     forceMaintenance?: boolean;
     maintenanceConfig?: ResolvedSessionMaintenanceConfig;
     skipMaintenance?: boolean;
+    storePath: string;
   },
 ): SqliteSessionEntryMaintenancePlan {
   if (params.skipMaintenance) {
@@ -153,9 +164,11 @@ export function applySqliteSessionEntryMaintenance(
     }
   };
   const preserveKeys =
-    collectSessionMaintenancePreserveKeys(
-      collectSqliteSessionMaintenanceBaseKeys(store, params.activeSessionKey),
-    ) ?? new Set<string>();
+    collectSessionMaintenancePreserveKeysForStore({
+      storePath: params.storePath,
+      store,
+      baseKeys: collectSqliteSessionMaintenanceBaseKeys(store, params.activeSessionKey),
+    }) ?? new Set<string>();
   if (
     shouldRunModelRunPrune({
       maintenance,

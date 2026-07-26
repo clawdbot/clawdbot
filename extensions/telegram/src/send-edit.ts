@@ -14,11 +14,8 @@ import {
   warnTelegramRichBlocksDegradations,
 } from "./rich-plain-fallback.js";
 import {
-  createTelegramRequestWithDiag,
   isTelegramMessageHasNoTextError,
   isTelegramMessageNotModifiedError,
-  normalizeMessageId,
-  resolveAndPersistChatId,
   resolveTelegramApiContext,
   sendLogger,
   withTelegramApiContextLease,
@@ -26,6 +23,7 @@ import {
   type TelegramApiContext,
   type TelegramApiOverride,
 } from "./send-context.js";
+import { prepareTelegramOutbound } from "./send-outbound.js";
 import type { OpenClawConfig } from "./send.runtime.js";
 import { resolveMarkdownTableMode } from "./send.runtime.js";
 
@@ -85,26 +83,17 @@ async function editMessageReplyMarkupTelegramWithContext(
   opts: TelegramEditReplyMarkupOpts,
   context: TelegramApiContext,
 ): Promise<{ ok: true; messageId: string; chatId: string }> {
-  const { cfg, account, api } = context;
-  const rawTarget = String(chatIdInput);
-  const chatId = await resolveAndPersistChatId({
-    cfg,
-    api,
-    lookupTarget: rawTarget,
-    persistTarget: rawTarget,
-    verbose: opts.verbose,
-    gatewayClientScopes: opts.gatewayClientScopes,
-  });
-  const messageId = normalizeMessageId(messageIdInput);
-  const requestWithDiag = createTelegramRequestWithDiag({
-    cfg,
-    account,
-    retry: opts.retry,
-    verbose: opts.verbose,
+  const { api } = context;
+  const { chatId, messageId, request } = await prepareTelegramOutbound({
+    to: chatIdInput,
+    context,
+    opts,
+    messageIdInput,
+    request: { kind: "standard" },
   });
   const replyMarkup = buildInlineKeyboard(buttons) ?? { inline_keyboard: [] };
   try {
-    await requestWithDiag(
+    await request(
       () => api.editMessageReplyMarkup(chatId, messageId, { reply_markup: replyMarkup }),
       "editMessageReplyMarkup",
       {
@@ -141,29 +130,22 @@ async function editMessageTelegramWithContext(
   context: TelegramApiContext,
 ): Promise<{ ok: true; messageId: string; chatId: string }> {
   const { cfg, account, api } = context;
-  const rawTarget = String(chatIdInput);
-  const chatId = await resolveAndPersistChatId({
-    cfg,
-    api,
-    lookupTarget: rawTarget,
-    persistTarget: rawTarget,
-    verbose: opts.verbose,
-    gatewayClientScopes: opts.gatewayClientScopes,
-  });
-  const messageId = normalizeMessageId(messageIdInput);
-  const requestWithDiag = createTelegramRequestWithDiag({
-    cfg,
-    account,
-    retry: opts.retry,
-    verbose: opts.verbose,
-    shouldRetry: (err) =>
-      isRecoverableTelegramNetworkError(err, { context: "edit" }) || isTelegramServerError(err),
+  const { chatId, messageId, request } = await prepareTelegramOutbound({
+    to: chatIdInput,
+    context,
+    opts,
+    messageIdInput,
+    request: {
+      kind: "standard",
+      shouldRetry: (err) =>
+        isRecoverableTelegramNetworkError(err, { context: "edit" }) || isTelegramServerError(err),
+    },
   });
   const requestWithEditShouldLog = <T>(
     fn: () => Promise<T>,
     label?: string,
     shouldLog?: (err: unknown) => boolean,
-  ) => requestWithDiag(fn, label, shouldLog ? { shouldLog } : undefined);
+  ) => request(fn, label, shouldLog ? { shouldLog } : undefined);
 
   const textMode = opts.textMode ?? "markdown";
   // Caller-authored HTML edits keep legacy parse_mode HTML semantics too.

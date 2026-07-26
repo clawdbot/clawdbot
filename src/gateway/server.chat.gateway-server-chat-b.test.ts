@@ -500,6 +500,7 @@ describe("gateway server chat", () => {
           .mockResolvedValue({
             agentId: "main",
             agentDir: "/tmp/chat-history-agent",
+            workspaceDir: "/tmp/chat-history-workspace",
             config,
             entries: catalog,
             routeVariants: catalog,
@@ -729,6 +730,7 @@ describe("gateway server chat", () => {
       loadGatewayModelCatalogSnapshot: vi.fn(async () => ({
         agentId: "main",
         agentDir: "/tmp/chat-main-agent",
+        workspaceDir: "/tmp/chat-main-workspace",
         config,
         entries: [{ id: "main-only", name: "Main only", provider: "test" }],
         routeVariants: [],
@@ -788,6 +790,7 @@ describe("gateway server chat", () => {
         return {
           agentId: "main",
           agentDir: "/tmp/chat-main-agent",
+          workspaceDir: "/tmp/chat-main-workspace",
           config: initialConfig,
           entries: [{ id: "initial", name: "Initial", provider: "test" }],
           routeVariants: [],
@@ -846,6 +849,7 @@ describe("gateway server chat", () => {
         return {
           agentId: "main",
           agentDir: "/tmp/chat-main-agent",
+          workspaceDir: "/tmp/chat-main-workspace",
           config: initialConfig,
           entries: [
             {
@@ -1107,6 +1111,7 @@ describe("gateway server chat", () => {
               .mockResolvedValue({
                 agentId: "work",
                 agentDir: "/tmp/chat-work-agent",
+                workspaceDir: "/tmp/chat-work-workspace",
                 config,
                 ...catalogSnapshot,
               }),
@@ -1346,6 +1351,7 @@ describe("gateway server chat", () => {
             return {
               agentId: "work",
               agentDir: "/tmp/chat-work-agent",
+              workspaceDir: "/tmp/chat-work-workspace",
               config,
               entries,
               routeVariants: entries,
@@ -1421,6 +1427,7 @@ describe("gateway server chat", () => {
               model: {
                 primary: "minimax/MiniMax-M2.7-highspeed",
               },
+              tools: { swarm: { enabled: true } },
             },
           },
         },
@@ -1445,9 +1452,11 @@ describe("gateway server chat", () => {
       const metadata = await rpcReq<{
         commands?: Array<{ name?: string; textAliases?: string[] }>;
         models?: Array<{ id?: string; provider?: string }>;
+        swarmEnabled?: boolean;
       }>(ws, "chat.metadata", { agentId: "work" });
 
       expect(metadata.ok).toBe(true);
+      expect(metadata.payload?.swarmEnabled).toBe(true);
       expect(metadata.payload?.models).toEqual(
         expect.arrayContaining([
           expect.objectContaining({

@@ -180,6 +180,7 @@ export async function runNonInteractiveLocalSetup(params: {
     defaultWorkspaceDir: DEFAULT_WORKSPACE,
   });
   const workspaceConflict = resolveOnboardingWorkspaceConflict(baseConfig, requestedWorkspaceDir);
+  const workspaceDir = workspaceConflict?.currentWorkspaceDir ?? requestedWorkspaceDir;
   if (workspaceConflict) {
     runtime.error(
       [
@@ -195,6 +196,20 @@ export async function runNonInteractiveLocalSetup(params: {
     baseConfig,
     requestedWorkspaceDir,
   );
+  if (opts.skipBootstrap) {
+    nextConfig = applySkipBootstrapConfig(nextConfig);
+  }
+  const { ensureOnboardingAgent } = await import("../onboard-agent.js");
+  const created = await ensureOnboardingAgent({
+    config: nextConfig,
+    workspace: workspaceDir,
+    baseConfig,
+  });
+  nextConfig = applyLocalSetupWorkspaceConfig(created.config, requestedWorkspaceDir);
+  // Creating the first roster agent writes the config file, so the hash captured
+  // before this step no longer matches. Adopt the post-create hash; foreign
+  // writes are still rejected because we only trust the write we just made.
+  const effectiveBaseHash = created.configHash ?? baseHash;
   if (opts.skipBootstrap) {
     nextConfig = applySkipBootstrapConfig(nextConfig);
   }
@@ -260,7 +275,7 @@ export async function runNonInteractiveLocalSetup(params: {
   nextConfig = await commitNonInteractiveOnboardConfig({
     nextConfig,
     baseConfig,
-    baseHash,
+    baseHash: effectiveBaseHash,
     reset: opts.reset,
   });
   logConfigUpdated(runtime);

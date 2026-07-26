@@ -1048,6 +1048,11 @@ export async function runCliEntry(params: {
 
   const templCtx: TemplateContext = {
     ...ctx,
+    AttachmentPath: mediaPath,
+    AttachmentUrl: params.attachment.url ?? params.attachment.path ?? mediaPath,
+    AttachmentContentType: params.attachment.mime,
+    AttachmentDir: path.dirname(mediaPath),
+    AttachmentIndex: params.attachment.index,
     MediaPath: mediaPath,
     MediaUrl: params.attachment.url ?? params.attachment.path ?? mediaPath,
     MediaType: params.attachment.mime,

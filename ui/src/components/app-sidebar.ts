@@ -12,6 +12,7 @@ import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
+import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { sidebarPluginTabs } from "./app-sidebar-nav-menus.ts";
@@ -73,7 +74,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   private narrationLoad: Promise<void> | null = null;
   private readonly narrationSubscriptions = this.createNarrationSubscriptions();
 
-  @state() protected catalogProjectGrouping = loadStoredSidebarCatalogGrouping();
+  @state() catalogProjectGrouping = loadStoredSidebarCatalogGrouping();
 
   constructor() {
     super();
@@ -276,16 +277,15 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     this.onOpenNewSession?.(this.expandedAgentId());
   }
 
-  setVisibleSessionLimit(limit: number): void {
-    this.sessionData.setVisibleSessionLimit(limit);
+  setVisibleSessionLimit(sectionId: string, limit: number): void {
+    this.sessionData.setVisibleSessionLimit(sectionId, limit);
   }
 
   dismissSessionMutationError(): void {
     this.sessionData.dismissSessionMutationError();
   }
 
-  toggleCatalogProjectGrouping(): void {
-    const next = this.catalogProjectGrouping === "project" ? "none" : "project";
+  setCatalogProjectGrouping(next: CatalogProjectGrouping): void {
     storeSidebarCatalogGrouping(next);
     this.catalogProjectGrouping = next;
   }
@@ -317,13 +317,11 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
         sidebarRowsByKey.set(row.key, navigationState.toSidebarSession(row));
       }
     }
-    const { sections, expandedRows, visibleRows } = this.zonedVisibleSections(visibleSessions);
+    const { sections } = this.zonedVisibleSections(visibleSessions);
     return renderSessionList({
       host: this,
       empty: visibleSessions.length === 0,
       sections,
-      expandedRows,
-      visibleRowCount: visibleRows.length,
       showDraft:
         Boolean(this.draftSessionAgentId) &&
         normalizeAgentId(this.draftSessionAgentId) === expandedAgentId,
@@ -416,6 +414,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
         ${this.sidebarMenus.renderAgentMenu()} ${this.sidebarMenus.renderIdentityMenu()}
         ${this.sidebarMenus.renderSessionMenu()} ${this.sidebarMenus.catalogMenu.render()}
         ${this.sidebarMenus.renderSessionGroupMenu()} ${this.sidebarMenus.renderSessionSortMenu()}
+        ${this.sidebarMenus.renderCatalogViewMenu()}
       </aside>
     `;
   }

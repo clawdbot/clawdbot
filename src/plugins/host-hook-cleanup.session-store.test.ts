@@ -121,6 +121,7 @@ describe("plugin host cleanup session stores", () => {
     const unrelatedEntry: SessionEntry = {
       sessionId: "unrelated-session",
       updatedAt: unrelatedUpdatedAt,
+      delivery: { kind: "none" },
       pluginExtensions: {
         cleanup: { state: { keep: true } },
       },

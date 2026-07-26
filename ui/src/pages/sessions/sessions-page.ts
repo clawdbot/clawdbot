@@ -904,23 +904,6 @@ class SessionsPage extends OpenClawLightDomElement {
       const selectedKeys = new Set(this.selectedKeys);
       selectedKeys.delete(key);
       this.selectedKeys = selectedKeys;
-      if (
-        patch.archived === true &&
-        areUiSessionKeysEquivalent(key, scope.gateway.snapshot.sessionKey)
-      ) {
-        scope.gateway.setSessionKey(
-          buildAgentMainSessionKey({
-            agentId:
-              parseAgentSessionKey(key)?.agentId ??
-              scope.context.agentSelection.state.selectedId ??
-              "main",
-            mainKey: resolveUiConfiguredMainKey({
-              agentsList: scope.context.agents.state.agentsList,
-              hello: scope.gateway.snapshot.hello,
-            }),
-          }),
-        );
-      }
       return "completed";
     } catch (error) {
       if (this.isRequestScopeCurrent(scope)) {
@@ -936,7 +919,6 @@ class SessionsPage extends OpenClawLightDomElement {
     if (!scope) {
       return;
     }
-    const wasActive = areUiSessionKeysEquivalent(row.key, scope.gateway.snapshot.sessionKey);
     const result = await this.patchSession(row.key, { archived: true }, scope);
     if (result !== "completed" || !this.isRequestScopeCurrent(scope)) {
       return;
@@ -949,14 +931,11 @@ class SessionsPage extends OpenClawLightDomElement {
           if (!this.isRequestScopeCurrent(scope)) {
             return;
           }
-          const restored = await this.patchSession(
+          await this.patchSession(
             row.key,
             { archived: false, ...(row.pinned === true ? { pinned: true } : {}) },
             scope,
           );
-          if (restored === "completed" && wasActive && this.isRequestScopeCurrent(scope)) {
-            scope.gateway.setSessionKey(row.key);
-          }
         })();
       },
     });

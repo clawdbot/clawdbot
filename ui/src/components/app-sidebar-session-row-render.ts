@@ -63,11 +63,14 @@ export interface SessionListHost {
   >;
   readonly sidebarMenus: Pick<
     SidebarMenusController,
+    | "catalogViewMenuPosition"
+    | "catalogViewMenuTrigger"
     | "openSessionGroupMenu"
     | "openSessionMenu"
     | "sessionGroupMenu"
     | "sessionMenu"
     | "sessionSortMenuPosition"
+    | "toggleCatalogViewMenu"
     | "toggleSessionSortMenu"
   >;
   readonly sessionsStatusFilter: SidebarSessionStatusFilter;
@@ -102,13 +105,12 @@ export interface SessionListHost {
   finishSessionGroupDrag(): void;
   toggleSection(sectionId: string): void;
   openNewSession(): void;
-  setVisibleSessionLimit(limit: number): void;
+  setVisibleSessionLimit(sectionId: string, limit: number): void;
   clearSessionSelection(): void;
   handleSessionListDragOver(event: DragEvent): void;
   handleSessionListDragLeave(event: DragEvent): void;
   handleSessionListDrop(event: DragEvent): void;
   dismissSessionMutationError(): void;
-  toggleCatalogProjectGrouping(): void;
   openCatalogMenu(
     request: CatalogSessionMenuRequest,
     x: number,
@@ -155,7 +157,7 @@ export function renderRecentSession(params: {
       ? session.archivedBy
       : session.createdActor
     : undefined;
-  const { running, pinnedState, leadingIndicator } = renderSessionLeadingState(
+  const { running, leadingIndicator } = renderSessionLeadingState(
     session,
     pullRequestState,
     ownerActor,
@@ -274,7 +276,6 @@ export function renderRecentSession(params: {
             session.key,
           ),
         })}
-        ${pinnedState}
       </a>
       ${session.childSessionKeys.length > 0
         ? html`<button

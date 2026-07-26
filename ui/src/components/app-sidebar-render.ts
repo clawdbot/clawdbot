@@ -20,6 +20,7 @@ import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-n
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import type { SidebarWorkboardBoard } from "./app-sidebar-workboard.ts";
 import { icons } from "./icons.ts";
+import { renderSessionGlyph, renderSessionUnreadBadge } from "./session-glyph.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 
 type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
@@ -90,21 +91,15 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
   const outboxCount = host.outboxCountForSessionKey(mainKey);
   const active =
     host.activeRouteId === "chat" && areUiSessionKeysEquivalent(host.getRouteSessionKey(), mainKey);
-  const stateBadge = mainRow?.hasActiveRun
-    ? html`<openclaw-tooltip .content=${t("sessionsView.activeRun")}>
-        <span
-          class="session-run-spinner"
-          role="img"
-          aria-label=${t("sessionsView.activeRun")}
-        ></span>
-      </openclaw-tooltip>`
-    : mainRow?.unread === true && !active
-      ? html`<span
-          class="session-unread-dot"
-          role="img"
-          aria-label=${t("sessionsView.unread")}
-        ></span>`
-      : nothing;
+  const running = mainRow?.hasActiveRun === true;
+  const unread = mainRow?.unread === true && !active;
+  // Home shares the sidebar's leading-slot contract: run state rings its icon
+  // instead of drifting to the row edge, which stays reserved for counts.
+  const homeGlyph = renderSessionGlyph({
+    content: html`<span class="nav-item__icon" aria-hidden="true">${icons.home}</span>`,
+    running,
+    badge: unread ? renderSessionUnreadBadge() : nothing,
+  });
   return html`
     <a
       href=${`${pathForRoute("chat", host.basePath)}${searchForSession(mainKey)}`}
@@ -118,7 +113,11 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
         host.openMainSession(agentId);
       }}
     >
-      <span class="nav-item__icon" aria-hidden="true">${icons.home}</span>
+      ${running
+        ? html`<openclaw-tooltip .content=${t("sessionsView.activeRun")}
+            >${homeGlyph}</openclaw-tooltip
+          >`
+        : homeGlyph}
       <span class="nav-item__text">${t("nav.home")}</span>
       ${sessionHasBoard(mainKey)
         ? html`<openclaw-tooltip .content=${t("sessionsView.dashboardAvailable")}>
@@ -130,9 +129,8 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
             >
           </openclaw-tooltip>`
         : nothing}
-      ${stateBadge !== nothing || approvalNeeded || outboxCount > 0
+      ${approvalNeeded || outboxCount > 0
         ? html`<span class="nav-item__state sidebar-home-session-states">
-            ${stateBadge}
             ${approvalNeeded
               ? html`<openclaw-tooltip .content=${t("sessionsView.approvalNeeded")}>
                   <span

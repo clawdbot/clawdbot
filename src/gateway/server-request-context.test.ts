@@ -32,6 +32,7 @@ function makeContextParams(
     deps: {} as never,
     runtimeState,
     getRuntimeConfig: vi.fn(() => config),
+    sessionCompanion: {} as never,
     sessionObserver: {} as never,
     resolveTerminalLaunchPolicy: vi.fn(() => ({
       ok: false as const,
@@ -43,7 +44,9 @@ function makeContextParams(
     listSessionPendingApprovals: undefined,
     loadGatewayModelCatalog: vi.fn(async () => []),
     loadGatewayModelCatalogSnapshot: vi.fn(async () => ({
+      agentId: "main",
       agentDir: "/tmp/model-catalog-agent",
+      workspaceDir: "/tmp/model-catalog-workspace",
       config,
       entries: [],
       routeVariants: [],

@@ -14,6 +14,7 @@ describe("model catalog normalization", () => {
             headers: {
               "x-provider": "openai",
             },
+            defaultModel: " gpt-5.4 ",
             defaultUtilityModel: " gpt-5.6-luna ",
             models: [
               {
@@ -71,6 +72,7 @@ describe("model catalog normalization", () => {
                   sendSessionIdHeader: false,
                   supportsEagerToolInputStreaming: false,
                   supportsLongCacheRetention: true,
+                  supportsJsonSchemaResponseFormat: true,
                   requiresReasoningContentOnAssistantMessages: true,
                   supportsStore: "yes",
                   thinkingFormat: "together",
@@ -129,6 +131,7 @@ describe("model catalog normalization", () => {
           headers: {
             "x-provider": "openai",
           },
+          defaultModel: "gpt-5.4",
           defaultUtilityModel: "gpt-5.6-luna",
           models: [
             {
@@ -169,6 +172,7 @@ describe("model catalog normalization", () => {
                 sendSessionIdHeader: false,
                 supportsEagerToolInputStreaming: false,
                 supportsLongCacheRetention: true,
+                supportsJsonSchemaResponseFormat: true,
                 requiresReasoningContentOnAssistantMessages: true,
                 thinkingFormat: "together",
               },

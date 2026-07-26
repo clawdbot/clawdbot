@@ -47,7 +47,6 @@ export const CHECK_IDS = {
   policySandboxContainerRuntimeSocketMount: "policy/sandbox-container-runtime-socket-mount",
   policySandboxContainerUnconfinedProfile: "policy/sandbox-container-unconfined-profile",
   policySandboxBrowserCdpSourceRangeMissing: "policy/sandbox-browser-cdp-source-range-missing",
-  policyDataHandlingRedactionDisabled: "policy/data-handling-redaction-disabled",
   policyDataHandlingTelemetryContentCapture: "policy/data-handling-telemetry-content-capture",
   policyDataHandlingSessionRetentionNotEnforced:
     "policy/data-handling-session-retention-not-enforced",
@@ -120,7 +119,6 @@ export const POLICY_CHECK_IDS = [
   CHECK_IDS.policySandboxContainerRuntimeSocketMount,
   CHECK_IDS.policySandboxContainerUnconfinedProfile,
   CHECK_IDS.policySandboxBrowserCdpSourceRangeMissing,
-  CHECK_IDS.policyDataHandlingRedactionDisabled,
   CHECK_IDS.policyDataHandlingTelemetryContentCapture,
   CHECK_IDS.policyDataHandlingSessionRetentionNotEnforced,
   CHECK_IDS.policyDataHandlingSessionTranscriptMemory,

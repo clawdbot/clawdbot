@@ -15,7 +15,6 @@ import {
   type SessionListHost,
 } from "./app-sidebar-session-row-render.ts";
 import {
-  limitSidebarSessionRows,
   rowDemandsVisibility,
   RowVisibilityReason,
   SIDEBAR_SESSION_PAGE_SIZE,
@@ -26,6 +25,9 @@ import { icons } from "./icons.ts";
 
 type RenderableSessionSection = SidebarSessionSection<SidebarRecentSession> & {
   totalRowCount: number;
+  visibleRowCount: number;
+  visibleLimit: number;
+  collapsedVisibleRowCount: number;
 };
 
 type SessionCatalogRenderSnapshot = {
@@ -72,8 +74,6 @@ function renderSessionSection(params: {
   const collapsedAttentionDot =
     collapsed &&
     section.rows.some((row) => rowDemandsVisibility(row, RowVisibilityReason.Attention));
-  const acceptsSessions =
-    host.sessionsGrouping === "category" && (section.id === "ungrouped" || Boolean(group));
   const sectionClass = [
     "sidebar-recent-sessions__group",
     `sidebar-recent-sessions__group--zone-${zone}`,
@@ -84,7 +84,7 @@ function renderSessionSection(params: {
     host.sessionOrganizer.sessionDropTarget === section.id
       ? "sidebar-recent-sessions__group--session-drop"
       : "",
-    group && host.sessionOrganizer.sessionGroupDropTarget?.group === group
+    host.sessionOrganizer.sessionGroupDropTarget?.sectionId === section.id
       ? `sidebar-recent-sessions__group--group-drop-${host.sessionOrganizer.sessionGroupDropTarget.position}`
       : "",
   ]
@@ -94,15 +94,9 @@ function renderSessionSection(params: {
     <div
       class=${sectionClass}
       data-session-section=${section.id}
-      @dragover=${acceptsSessions || group
-        ? (event: DragEvent) => host.sectionDragOver(event, section.id, group)
-        : nothing}
-      @dragleave=${acceptsSessions || group
-        ? (event: DragEvent) => host.sectionDragLeave(event, section.id, group)
-        : nothing}
-      @drop=${acceptsSessions || group
-        ? (event: DragEvent) => host.sectionDrop(event, section.id, group)
-        : nothing}
+      @dragover=${(event: DragEvent) => host.sectionDragOver(event, section.id, group)}
+      @dragleave=${(event: DragEvent) => host.sectionDragLeave(event, section.id, group)}
+      @drop=${(event: DragEvent) => host.sectionDrop(event, section.id, group)}
     >
       ${html`
         <div
@@ -235,7 +229,7 @@ function renderSessionSection(params: {
                   ${section.rows.map((session) => renderSessionTree({ host, session }))}
                 </div>`
               : nothing}
-            ${trailing}
+            ${renderSessionPagination({ host, section })} ${trailing}
           `}
     </div>
   `;
@@ -258,13 +252,13 @@ function renderDraftSessionRow() {
 
 function renderSessionPagination(params: {
   host: SessionListHost;
-  rows: SidebarRecentSession[];
-  visible: number;
+  section: RenderableSessionSection;
 }) {
-  const { host, rows, visible } = params;
-  const canShowMore = visible < rows.length;
-  const collapsedVisible = limitSidebarSessionRows(rows, SIDEBAR_SESSION_PAGE_SIZE).length;
-  const canShowLess = visible > SIDEBAR_SESSION_SEE_LESS_THRESHOLD && visible > collapsedVisible;
+  const { host, section } = params;
+  const canShowMore = section.visibleRowCount < section.totalRowCount;
+  const canShowLess =
+    section.visibleRowCount > SIDEBAR_SESSION_SEE_LESS_THRESHOLD &&
+    section.visibleRowCount > section.collapsedVisibleRowCount;
   if (!canShowMore && !canShowLess) {
     return nothing;
   }
@@ -276,7 +270,10 @@ function renderSessionPagination(params: {
             class="sidebar-session-pagination__button"
             aria-label=${t("chat.selectors.loadMoreSessions")}
             @click=${() => {
-              host.setVisibleSessionLimit(visible + SIDEBAR_SESSION_PAGE_SIZE);
+              host.setVisibleSessionLimit(
+                section.id,
+                section.visibleLimit + SIDEBAR_SESSION_PAGE_SIZE,
+              );
             }}
           >
             ${t("chat.selectors.loadMoreSessions")}
@@ -289,7 +286,7 @@ function renderSessionPagination(params: {
             aria-label=${t("usage.details.collapse")}
             @click=${() => {
               host.clearSessionSelection();
-              host.setVisibleSessionLimit(SIDEBAR_SESSION_PAGE_SIZE);
+              host.setVisibleSessionLimit(section.id, SIDEBAR_SESSION_PAGE_SIZE);
             }}
           >
             ${t("usage.details.collapse")}
@@ -322,7 +319,14 @@ function renderSessionCatalogs(params: {
         display,
       }),
     onToggleSection: (sectionId) => host.toggleSection(sectionId),
-    onToggleProjectGrouping: () => host.toggleCatalogProjectGrouping(),
+    // aria-expanded must land on the one header whose menu is open, so the
+    // catalog id rides on the trigger's data attribute instead of a global flag.
+    viewMenuOpenCatalogId: host.sidebarMenus.catalogViewMenuPosition
+      ? (host.sidebarMenus.catalogViewMenuTrigger?.getAttribute("data-session-catalog-view-menu") ??
+        null)
+      : null,
+    creatorFilterActive: host.sessionCreatorFilterActive,
+    onOpenViewMenu: (trigger) => host.sidebarMenus.toggleCatalogViewMenu(trigger),
     onLoadMore: (catalogId) => void host.sessionData.loadMoreSessionCatalog(catalogId),
     onOpenNewSession: host.onOpenNewSession,
     onNavigate: host.onNavigate,
@@ -336,13 +340,16 @@ function renderSessionCatalogs(params: {
 function renderSessionListBody(params: {
   host: SessionListHost;
   sections: RenderableSessionSection[];
-  expandedRows: SidebarRecentSession[];
-  visibleRowCount: number;
   showDraft: boolean;
   codingTrailing?: TemplateResult | typeof nothing;
   codingTrailingPresent?: boolean;
 }) {
   const { host } = params;
+  // Categorized threads still need the global sort and new-thread actions,
+  // which belong to Threads even when that section has no rows of its own.
+  const hasCategorizedThreads = params.sections.some(
+    (section) => Boolean(section.category) && section.totalRowCount > 0,
+  );
   return html`
     ${params.sections.map((section) => {
       const showDraft = section.id === "ungrouped" && params.showDraft;
@@ -358,12 +365,13 @@ function renderSessionListBody(params: {
           trailing: params.codingTrailing ?? nothing,
         });
       }
-      // Threads hides its bare empty header unless it owns the collaborative
-      // creator filter; custom categories stay visible as drop targets.
+      // Hide an empty Threads header only when it does not own reachable
+      // actions for categorized threads, collaborators, or an active drag.
       if (
         section.id === "ungrouped" &&
         section.totalRowCount === 0 &&
         !showDraft &&
+        !hasCategorizedThreads &&
         !host.sessionOwnershipVisible &&
         host.sessionsStatusFilter === "active" &&
         host.sessionOrganizer.draggingSessionKey === null
@@ -372,11 +380,6 @@ function renderSessionListBody(params: {
       }
       return renderSessionSection({ host, section, showDraft });
     })}
-    ${renderSessionPagination({
-      host,
-      rows: params.expandedRows,
-      visible: params.visibleRowCount,
-    })}
   `;
 }
 
@@ -384,8 +387,6 @@ export function renderSessionList(params: {
   host: SessionListHost;
   empty: boolean;
   sections: RenderableSessionSection[];
-  expandedRows: SidebarRecentSession[];
-  visibleRowCount: number;
   showDraft: boolean;
   catalogs: SessionCatalogRenderSnapshot;
 }) {
@@ -424,8 +425,6 @@ export function renderSessionList(params: {
         ${renderSessionListBody({
           host,
           sections: params.sections,
-          expandedRows: params.expandedRows,
-          visibleRowCount: params.visibleRowCount,
           showDraft: params.showDraft,
           codingTrailing:
             host.sessionsStatusFilter === "archived"

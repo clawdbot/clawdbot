@@ -151,7 +151,10 @@ export function resolveCronSession(params: {
   const store =
     params.store ??
     Object.fromEntries(
-      listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+      listSessionEntries({ agentId: params.agentId, storePath }).map(({ sessionKey, entry }) => [
+        sessionKey,
+        entry,
+      ]),
     );
   const sourceSessionKey = params.sourceSessionKey?.trim();
   const sourceSessionDiffers = Boolean(sourceSessionKey && sourceSessionKey !== params.sessionKey);

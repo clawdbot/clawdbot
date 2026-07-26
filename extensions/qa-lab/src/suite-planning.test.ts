@@ -394,6 +394,50 @@ describe("qa suite planning helpers", () => {
     ).toEqual(["strict-live-lane"]);
   });
 
+  it.each([
+    { channelDriver: "qa-channel" as const, channel: undefined, expectedChannel: "qa-channel" },
+    { channelDriver: "crabline" as const, channel: "telegram", expectedChannel: "telegram" },
+  ])(
+    "selects the real channel streaming scenario for the $channelDriver driver",
+    ({ channelDriver, channel, expectedChannel }) => {
+      const scenario = readQaScenarioById("channel-message-flows");
+      const selected = selectQaFlowSuiteScenarios({
+        scenarios: [scenario],
+        scenarioIds: [scenario.id],
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        channelDriver,
+        channel,
+      });
+
+      expect(selected).toEqual([scenario]);
+      expect(
+        resolveQaSuiteScenarioChannel({
+          defaultChannel: expectedChannel,
+          explicitChannel: channel,
+          scenarios: selected,
+        }),
+      ).toBe(expectedChannel);
+    },
+  );
+
+  it("rejects channel streaming evidence on unsupported Crabline channels", () => {
+    const scenario = readQaScenarioById("channel-message-flows");
+
+    expect(() =>
+      selectQaFlowSuiteScenarios({
+        scenarios: [scenario],
+        scenarioIds: [scenario.id],
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        channelDriver: "crabline",
+        channel: "discord",
+      }),
+    ).toThrow(
+      "selected QA scenario(s) do not match the current QA lane: channel-message-flows (channel=qa-channel|telegram)",
+    );
+  });
+
   it("keeps explicitly requested scenarios in request order", () => {
     const scenarios = [
       makeQaSuiteTestScenario("first"),

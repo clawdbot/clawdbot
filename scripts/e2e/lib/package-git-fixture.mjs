@@ -26,7 +26,21 @@ function withoutAiRuntimeDependency(value) {
   return next.length > 0 ? next : undefined;
 }
 
+function ensureDependencyIgnores(root) {
+  const gitignorePath = path.join(root, ".gitignore");
+  const existing = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, "utf8") : "";
+  const lines = new Set(existing.split(/\r?\n/u));
+  const required = ["node_modules", "**/node_modules/", "pnpm-lock.yaml"];
+  const missing = required.filter((entry) => !lines.has(entry));
+  if (missing.length === 0) {
+    return;
+  }
+  const prefix = existing.length === 0 || existing.endsWith("\n") ? existing : `${existing}\n`;
+  fs.writeFileSync(gitignorePath, `${prefix}${missing.join("\n")}\n`);
+}
+
 function prepare(root) {
+  ensureDependencyIgnores(root);
   const packageJsonPath = path.join(root, "package.json");
   const packageJson = readJson(packageJsonPath);
   const aiRuntimeSource = path.join(root, "node_modules", "@openclaw", "ai");

@@ -12,6 +12,7 @@ import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import {
   prepareCdpPageSession,
   prepareCdpTargetSession,
+  readCdpMainFrameDocumentIdentity,
   type CdpActionTimeouts,
 } from "./cdp-page-session.js";
 import {
@@ -27,11 +28,23 @@ import {
   withCdpSocket,
 } from "./cdp.helpers.js";
 import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./navigation-guard.js";
-import { finalizeRoleSnapshot } from "./pw-role-snapshot.js";
+import { finalizeRoleSnapshot, type RoleSnapshotIdentityMode } from "./pw-role-snapshot.js";
 import { CONTENT_ROLES, INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
 
 export { appendCdpPath } from "./cdp.helpers.js";
 export { type CdpActionTimeouts, waitForCdpCommittedNavigationUrl } from "./cdp-page-session.js";
+
+/** Read the current main-frame loader identity from a page-level CDP target. */
+export async function getMainFrameDocumentIdentityViaCdp(opts: {
+  wsUrl: string;
+  timeoutMs?: number;
+}): Promise<string | undefined> {
+  return await withCdpSocket(
+    opts.wsUrl,
+    async (send) => await readCdpMainFrameDocumentIdentity(send),
+    { commandTimeoutMs: opts.timeoutMs ?? 5000 },
+  );
+}
 
 /** Normalize a reported CDP WebSocket URL against the configured CDP base URL. */
 export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
@@ -899,11 +912,13 @@ export async function snapshotRoleViaCdp(opts: {
   urls?: boolean;
   timeoutMs?: number;
   maxChars?: number;
+  delta?: { mode: RoleSnapshotIdentityMode; previousKeys?: ReadonlySet<string> };
 }): Promise<{
   snapshot: string;
   truncated?: boolean;
   refs: Record<string, CdpRoleRef>;
   stats: { lines: number; chars: number; refs: number; interactive: number };
+  newElements?: number;
 }> {
   return await withCdpSocket(
     opts.wsUrl,
@@ -923,6 +938,7 @@ export async function snapshotRoleViaCdp(opts: {
         snapshot,
         refs: built.refs,
         maxChars: opts.maxChars,
+        delta: opts.delta,
       });
     },
     { commandTimeoutMs: opts.timeoutMs ?? 5000, lookup: opts.lookup },

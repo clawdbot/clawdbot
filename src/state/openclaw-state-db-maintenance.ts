@@ -2,6 +2,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import {
   assertSqliteSchemaContains,
+  assertSqliteSchemaTablesPresent,
   type SqliteSchemaCompatibility,
 } from "../infra/sqlite-schema-contract.js";
 import {
@@ -10,6 +11,7 @@ import {
 } from "../infra/sqlite-user-version.js";
 import {
   OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
+  LAZY_ADDITIVE_STATE_TABLES,
   OPENCLAW_STATE_SCHEMA_VERSION,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db-contract.js";
@@ -17,6 +19,7 @@ import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.generated.js";
 
 const OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY = {
+  allowedMissingTables: LAZY_ADDITIVE_STATE_TABLES,
   allowedColumnDefinitions: {
     "diagnostic_events.sequence": ["sequence INTEGER NOT NULL DEFAULT 0"],
     "commitments.attempts": ["attempts INTEGER NOT NULL DEFAULT 0"],
@@ -29,6 +32,10 @@ const OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY = {
     "commitments.sensitivity": ["sensitivity TEXT NOT NULL DEFAULT 'normal'"],
     "commitments.source": ["source TEXT NOT NULL DEFAULT 'unknown'"],
     "commitments.suggested_text": ["suggested_text TEXT NOT NULL DEFAULT ''"],
+    "claw_package_refs.package_integrity": [
+      "package_integrity TEXT NOT NULL DEFAULT 'sha256:0000000000000000000000000000000000000000000000000000000000000000'",
+    ],
+    "claw_package_refs.updated_at_ms": ["updated_at_ms INTEGER NOT NULL DEFAULT 0"],
     "cron_jobs.created_at_ms": ["created_at_ms INTEGER NOT NULL DEFAULT 0"],
     "cron_jobs.enabled": ["enabled INTEGER NOT NULL DEFAULT 1"],
     "cron_jobs.name": ["name TEXT NOT NULL DEFAULT ''"],
@@ -42,8 +49,28 @@ const OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY = {
     "current_conversation_bindings.target_agent_id": [
       "target_agent_id TEXT NOT NULL DEFAULT 'main'",
     ],
+    "operator_approvals.resolution_ref": ["resolution_ref TEXT"],
   },
 } satisfies SqliteSchemaCompatibility;
+
+const STATE_V5_ADDITIVE_TABLES = [
+  "agent_database_leases",
+  "agent_deletion_journal",
+  "claw_cron_refs",
+  "claw_installs",
+  "claw_mcp_server_refs",
+  "claw_package_refs",
+  "claw_workspace_files",
+  "config_machine_state",
+  "cron_job_scratch",
+  "meeting_transcript_sessions",
+  "meeting_transcript_summaries",
+  "meeting_transcript_utterances",
+  "outbound_media_provenance",
+  "worker_environment_credentials",
+  "worker_transcript_commit_heads",
+  "worker_transcript_commits",
+] as const;
 
 /** Open shared SQLite database handle plus WAL maintenance lifecycle. */
 
@@ -131,6 +158,33 @@ export function assertOpenClawStateDatabaseForMaintenance(
     OPENCLAW_STATE_SCHEMA_SQL,
     OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
   );
+}
+
+/** Require every stable v5 table before the v6 additive migration can run. */
+export function assertOpenClawStateDatabaseV5ForMigration(
+  database: DatabaseSync,
+  options: { pathname: string },
+): void {
+  const userVersion = readSqliteUserVersion(database);
+  if (userVersion !== 5) {
+    throw new Error(
+      `OpenClaw state database ${options.pathname} uses schema version ${userVersion}; expected 5 before migrating it.`,
+    );
+  }
+  assertOpenClawStateDatabaseOwner(database, options);
+  const metadata = database
+    .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary' LIMIT 1")
+    .get() as { schema_version?: unknown } | undefined;
+  if (metadata?.schema_version !== 5) {
+    const schemaVersion =
+      typeof metadata?.schema_version === "number" ? metadata.schema_version : "invalid";
+    throw new Error(
+      `OpenClaw state database ${options.pathname} metadata schema version ${schemaVersion} does not match 5; repair the ownership metadata before migrating it.`,
+    );
+  }
+  assertSqliteSchemaTablesPresent(database, options.pathname, OPENCLAW_STATE_SCHEMA_SQL, {
+    allowedMissingTables: STATE_V5_ADDITIVE_TABLES,
+  });
 }
 
 export function resolveDatabasePath(options: OpenClawStateDatabaseOptions = {}): string {

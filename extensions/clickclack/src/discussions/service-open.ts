@@ -1,3 +1,4 @@
+import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 import {
@@ -5,7 +6,7 @@ import {
   isClickClackChannelNameConflict,
   type ClickClackClient,
 } from "../http-client.js";
-import type { ResolvedClickClackAccount } from "../types.js";
+import type { CoreConfig, ResolvedClickClackAccount } from "../types.js";
 import {
   clearDiscussionBindingGeneration,
   listPendingDiscussionOpens,
@@ -381,7 +382,10 @@ export async function openClickClackDiscussionBinding(
     }
     const nextBinding: ClickClackDiscussionBinding = {
       accountId: account.accountId,
-      agentId: resolveAgentIdFromSessionKey(sessionKey),
+      agentId: resolveAgentIdFromSessionKey(
+        sessionKey,
+        resolveDefaultAgentId(runtime.config.current() as CoreConfig),
+      ),
       sessionId: entry.sessionId,
       serverBaseUrl,
       credentialFingerprint,

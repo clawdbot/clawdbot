@@ -26,6 +26,7 @@ function loadNodeOs(): typeof NodeOs | null {
 // NEVER convert to top-level runtime imports - breaks browser/Vite builds
 const os = loadNodeOs();
 
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import {
   resolveTimerTimeoutMs,
   clampTimerTimeoutMs,
@@ -440,7 +441,7 @@ export const streamOpenAICodexResponses: StreamFunction<
             }
           }
           const tlsCertificateError = inspectTlsCertificateError(error);
-          lastError = toLintErrorObject(error, String(error));
+          lastError = toErrorObject(error, String(error));
           // Deterministic certificate failures cannot recover through backoff.
           if (
             attempt < maxRetries &&
@@ -1364,7 +1365,7 @@ async function* parseWebSocket(
     }
 
     if (failed) {
-      throw toLintErrorObject(failed, "Non-Error thrown");
+      throw toErrorObject(failed, "Non-Error thrown");
     }
     if (!sawCompletion) {
       throw new Error("WebSocket stream closed before response.completed");
@@ -1710,17 +1711,4 @@ function buildWebSocketHeaders(
   return headers;
 }
 
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

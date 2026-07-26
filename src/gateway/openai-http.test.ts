@@ -15,6 +15,10 @@ import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { enqueueCommandInLane } from "../process/command-queue.js";
+import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import { createDeferred } from "../test-utils/deferred.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import {
   agentCommand,
@@ -59,10 +63,17 @@ async function startServer(port: number, opts?: { openAiChatCompletionsEnabled?:
   });
 }
 
-async function startTokenServer(port: number, opts?: { openAiChatCompletionsEnabled?: boolean }) {
+async function startSharedSecretServer(
+  port: number,
+  mode: "token" | "password",
+  opts?: { openAiChatCompletionsEnabled?: boolean },
+) {
   return await startGatewayServer(port, {
     host: "127.0.0.1",
-    auth: { mode: "token", token: "secret" },
+    auth:
+      mode === "token"
+        ? { mode: "token", token: "secret" }
+        : { mode: "password", password: "secret" },
     controlUiEnabled: false,
     openAiChatCompletionsEnabled: opts?.openAiChatCompletionsEnabled ?? true,
   });
@@ -113,6 +124,7 @@ type FirstAgentCommandOptions = {
   message?: string;
   messageChannel?: string;
   model?: string;
+  senderIsOwner?: boolean;
   sessionKey?: string;
   streamParams?: {
     frequencyPenalty?: number;
@@ -2331,6 +2343,32 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     },
   );
 
+  it("keeps streamed agent work admitted after the HTTP handler returns", async () => {
+    const idleRootCount = getActiveGatewayRootWorkCount();
+    const continueAgent = createDeferred();
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async () => {
+      await continueAgent.promise;
+      const queued = await enqueueCommandInLane("openai-http-admission-probe", async () => true);
+      return { payloads: [{ text: queued ? "answer queued" : "unreachable" }] };
+    }) as never);
+
+    const res = await postChatCompletions(enabledPort, {
+      stream: true,
+      model: "openclaw",
+      messages: [{ role: "user", content: "hi" }],
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    continueAgent.resolve();
+
+    const streamed = parseSseDataLines(await res.text()).join("\n");
+    expect(streamed).toContain("answer queued");
+    expect(streamed).not.toContain("Error: internal error");
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount));
+  });
+
   it("buffers replaceable assistant events for streaming chat completions", async () => {
     const port = enabledPort;
     agentCommand.mockClear();
@@ -2629,32 +2667,164 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     expect(usageChunks).toHaveLength(0);
   });
 
-  it("accepts shared-secret bearer callers", async () => {
-    const port = await getFreePort();
-    const server = await startTokenServer(port);
-    try {
-      agentCommand.mockClear();
-      agentCommand.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+  it("preserves declared owner identity for streaming and non-streaming private callers", async () => {
+    for (const stream of [false, true]) {
+      for (const { scopes, senderIsOwner } of [
+        { scopes: "operator.write", senderIsOwner: false },
+        { scopes: "operator.admin, operator.write", senderIsOwner: true },
+      ]) {
+        agentCommand.mockClear();
+        agentCommand.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
 
-      const res = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
-        method: "POST",
-        headers: {
-          authorization: "Bearer secret",
-          "content-type": "application/json",
-          "x-openclaw-scopes": "operator.approvals",
-        },
-        body: JSON.stringify({
-          model: "openclaw",
-          messages: [{ role: "user", content: "hi" }],
-        }),
-      });
+        const res = await postChatCompletions(
+          enabledPort,
+          {
+            stream,
+            model: "openclaw",
+            messages: [{ role: "user", content: "hi" }],
+          },
+          {
+            "x-openclaw-scopes": scopes,
+            "x-openclaw-sender-is-owner": "true",
+          },
+        );
 
-      expect(res.status).toBe(200);
-      await res.text();
-    } finally {
-      await server.close({ reason: "openai token auth owner test done" });
+        expect(res.status).toBe(200);
+        await res.text();
+        expect(agentCommand).toHaveBeenCalledTimes(1);
+        expect(firstAgentCommandOptions()?.senderIsOwner).toBe(senderIsOwner);
+      }
     }
   });
+
+  it("preserves verified trusted-proxy owner identity for both response modes", async () => {
+    await withEnvAsync(
+      { OPENCLAW_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_PASSWORD: undefined },
+      async () => {
+        const port = await getFreePort();
+        let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+        const previousGatewayAuth = testState.gatewayAuth;
+        const trustedProxyAuth = {
+          mode: "trusted-proxy" as const,
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+            requiredHeaders: ["x-forwarded-proto"],
+            allowLoopback: true,
+          },
+        };
+        testState.gatewayAuth = trustedProxyAuth;
+        try {
+          await writeGatewayConfig({
+            gateway: {
+              auth: trustedProxyAuth,
+              trustedProxies: ["127.0.0.1"],
+            },
+          });
+          resetConfigRuntimeState();
+          server = await startGatewayServer(port, {
+            host: "127.0.0.1",
+            auth: trustedProxyAuth,
+            controlUiEnabled: false,
+            openAiChatCompletionsEnabled: true,
+          });
+
+          for (const stream of [false, true]) {
+            for (const { scopes, senderIsOwner } of [
+              { scopes: "operator.write", senderIsOwner: false },
+              { scopes: "operator.admin, operator.write", senderIsOwner: true },
+            ]) {
+              agentCommand.mockClear();
+              agentCommand.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+
+              const res = await postChatCompletions(
+                port,
+                {
+                  stream,
+                  model: "openclaw",
+                  messages: [{ role: "user", content: "hi" }],
+                },
+                {
+                  "x-forwarded-proto": "https",
+                  "x-forwarded-user": "operator@example.com",
+                  "x-openclaw-scopes": scopes,
+                  "x-openclaw-sender-is-owner": "true",
+                },
+              );
+
+              expect(res.status).toBe(200);
+              await res.text();
+              expect(agentCommand).toHaveBeenCalledTimes(1);
+              expect(firstAgentCommandOptions()?.senderIsOwner).toBe(senderIsOwner);
+            }
+          }
+
+          agentCommand.mockClear();
+          const unauthorized = await postChatCompletions(
+            port,
+            { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
+            {
+              "x-forwarded-proto": "https",
+              "x-openclaw-scopes": "operator.admin, operator.write",
+              "x-openclaw-sender-is-owner": "true",
+            },
+          );
+          expect(unauthorized.status).toBe(401);
+          await unauthorized.text();
+          expect(agentCommand).not.toHaveBeenCalled();
+        } finally {
+          await server?.close({ reason: "openai trusted-proxy auth owner test done" });
+          testState.gatewayAuth = previousGatewayAuth;
+          await writeGatewayConfig({});
+          resetConfigRuntimeState();
+        }
+      },
+    );
+  });
+
+  it.each(["token", "password"] as const)(
+    "preserves owner identity for streaming and non-streaming %s-authenticated callers",
+    async (mode) => {
+      const port = await getFreePort();
+      const server = await startSharedSecretServer(port, mode);
+      try {
+        for (const stream of [false, true]) {
+          agentCommand.mockClear();
+          agentCommand.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+
+          const res = await postChatCompletions(
+            port,
+            {
+              stream,
+              model: "openclaw",
+              messages: [{ role: "user", content: "hi" }],
+            },
+            {
+              authorization: "Bearer secret",
+              "x-openclaw-scopes": "operator.approvals",
+              "x-openclaw-sender-is-owner": "false",
+            },
+          );
+
+          expect(res.status).toBe(200);
+          await res.text();
+          expect(agentCommand).toHaveBeenCalledTimes(1);
+          expect(firstAgentCommandOptions()?.senderIsOwner).toBe(true);
+        }
+
+        agentCommand.mockClear();
+        const unauthorized = await postChatCompletions(
+          port,
+          { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
+          { authorization: "Bearer wrong", "x-openclaw-sender-is-owner": "true" },
+        );
+        expect(unauthorized.status).toBe(401);
+        await unauthorized.text();
+        expect(agentCommand).not.toHaveBeenCalled();
+      } finally {
+        await server.close({ reason: `openai ${mode} auth owner test done` });
+      }
+    },
+  );
 
   it("aborts agent command when streaming client disconnects", { timeout: 15_000 }, async () => {
     const port = enabledPort;

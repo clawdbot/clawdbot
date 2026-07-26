@@ -818,6 +818,13 @@ describe("browser chrome helpers", () => {
 describe("chrome executables", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
+    vi.spyOn(fs, "statSync").mockImplementation((candidate) => {
+      if (!fs.existsSync(candidate)) {
+        throw new Error("ENOENT");
+      }
+      return { isFile: () => true } as fs.Stats;
+    });
   });
 
   it("parses odd dotted browser version tokens using the last match", () => {

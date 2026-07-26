@@ -1293,7 +1293,9 @@ $0 \\"$1\\"" touch {marker}`,
 
     const scriptResult = evaluateExecAllowlist({
       analysis,
-      allowlist: entries.map((entry) => ({ ...entry, source: "allow-always" as const })),
+      allowlist: entries.map((entry) =>
+        Object.assign({}, entry, { source: "allow-always" as const }),
+      ),
       safeBins: resolveSafeBins(undefined),
       cwd: dir,
       env,

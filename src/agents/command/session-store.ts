@@ -13,6 +13,7 @@ import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-m
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveNonNegativeNumber } from "../../shared/number-coercion.js";
+import { resolveDefaultAgentId } from "../agent-scope.js";
 import { clearCliSession, setCliSessionBinding, setCliSessionId } from "../cli-session.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { clearMainSessionRecoveryAfterAgentRun } from "../main-session-recovery-clear.js";
@@ -141,6 +142,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
         entry,
         sessionKey,
         storePath,
+        defaultAgentId: resolveDefaultAgentId(cfg),
         newSessionId: sessionId,
       });
     next.usageFamilyKey = entry.usageFamilyKey ?? sessionKey;

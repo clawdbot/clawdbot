@@ -3163,8 +3163,8 @@ describe("image compression policy", () => {
       testing.resolveImageCompressionPolicy({
         cfg: {},
         imageModelConfig: {
-          primary: "anthropic/claude-opus-4-7",
-          fallbacks: ["anthropic/claude-sonnet-4-6"],
+          primary: "anthropic/claude-opus-4-8",
+          fallbacks: ["anthropic/claude-haiku-4-5"],
         },
         imageCount: 1,
       }),
@@ -3296,6 +3296,164 @@ describe("image compression policy", () => {
       }),
     ).resolves.toMatchObject({
       models: [{ maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" }],
+    });
+  });
+});
+
+type MockImageLoadWebMedia = Awaited<
+  ReturnType<
+    NonNullable<
+      NonNullable<Parameters<typeof testing.setProviderDepsForTest>[0]>["loadImageWebMediaRuntime"]
+    >
+  >
+>["loadWebMedia"];
+
+describe("image tool run abort", () => {
+  afterEach(() => {
+    imageProviderHarness.reset();
+    testing.setProviderDepsForTest();
+  });
+
+  function makeDescribeSpies() {
+    const describeImage = vi.fn(async (params: ImageDescriptionRequest) => ({
+      text: "ok",
+      model: params.model,
+    }));
+    const describeImages = vi.fn(async (params: ImagesDescriptionRequest) => ({
+      text: "ok",
+      model: params.model,
+    }));
+    return { describeImage, describeImages };
+  }
+
+  function installAbortImageDeps(
+    loadWebMedia: MockImageLoadWebMedia,
+    spies: ReturnType<typeof makeDescribeSpies>,
+    providers: MediaUnderstandingProvider[] = [minimaxProvider, moonshotProvider],
+  ) {
+    installImageUnderstandingProviderDeps(providers, {
+      loadImageWebMediaRuntime: async () => ({
+        loadWebMedia,
+        optimizeImageBufferForWebMedia: async ({ buffer, contentType, fileName }) => ({
+          buffer,
+          contentType: contentType ?? "image/png",
+          kind: "image",
+          fileName,
+        }),
+      }),
+      describeImageWithModel: spies.describeImage,
+      describeImagesWithModel: spies.describeImages,
+    });
+  }
+
+  it("forwards the run signal through the provider request contract", async () => {
+    vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
+    const loadWebMedia: MockImageLoadWebMedia = vi.fn(async () => ({
+      buffer: Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
+      contentType: "image/png",
+      kind: "image" as const,
+    }));
+    const spies = makeDescribeSpies();
+    installAbortImageDeps(loadWebMedia, spies, [{ id: "minimax", capabilities: ["image"] }]);
+    const controller = new AbortController();
+
+    await withTempAgentDir(async (agentDir) => {
+      const tool = createRequiredImageTool({ config: createMinimaxImageConfig(), agentDir });
+      await tool.execute(
+        "t1",
+        {
+          prompt: "Describe the images.",
+          images: ["https://example.test/a.png", "https://example.test/b.png"],
+        },
+        controller.signal,
+      );
+    });
+
+    expect(spies.describeImages).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: controller.signal }),
+    );
+  });
+
+  it("throws before downloading or calling the provider when the run signal is already aborted", async () => {
+    vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
+    const loadWebMedia: MockImageLoadWebMedia = vi.fn(async () => ({
+      buffer: Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
+      contentType: "image/png",
+      kind: "image" as const,
+    }));
+    const spies = makeDescribeSpies();
+    installAbortImageDeps(loadWebMedia, spies);
+
+    await withTempAgentDir(async (agentDir) => {
+      const tool = createRequiredImageTool({ config: createMinimaxImageConfig(), agentDir });
+      const controller = new AbortController();
+      controller.abort();
+
+      await expect(
+        tool.execute(
+          "t1",
+          {
+            prompt: "Describe the images.",
+            images: ["https://example.test/a.png", "https://example.test/b.png"],
+          },
+          controller.signal,
+        ),
+      ).rejects.toThrow();
+
+      // Aborted run must not spend bandwidth on downloads or a paid vision call.
+      expect(loadWebMedia).not.toHaveBeenCalled();
+      expect(spies.describeImage).not.toHaveBeenCalled();
+      expect(spies.describeImages).not.toHaveBeenCalled();
+    });
+  });
+
+  it("stops remaining downloads and skips the provider call when aborted mid-run", async () => {
+    vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
+    const controller = new AbortController();
+    let markDownloadStarted: (() => void) | undefined;
+    const downloadStarted = new Promise<void>((resolve) => {
+      markDownloadStarted = resolve;
+    });
+    const loadWebMedia: MockImageLoadWebMedia = vi.fn(async (_url, options) => {
+      const downloadSignal = options?.requestInit?.signal;
+      expect(downloadSignal).toBe(controller.signal);
+      markDownloadStarted?.();
+      return await new Promise<never>((_, reject) => {
+        downloadSignal?.addEventListener(
+          "abort",
+          () => reject(new Error("aborted", { cause: downloadSignal.reason })),
+          { once: true },
+        );
+      });
+    });
+    const spies = makeDescribeSpies();
+    installAbortImageDeps(loadWebMedia, spies);
+
+    await withTempAgentDir(async (agentDir) => {
+      const tool = createRequiredImageTool({ config: createMinimaxImageConfig(), agentDir });
+
+      const execution = tool.execute(
+        "t1",
+        {
+          prompt: "Describe the images.",
+          images: [
+            "https://example.test/a.png",
+            "https://example.test/b.png",
+            "https://example.test/c.png",
+          ],
+        },
+        controller.signal,
+      );
+      await downloadStarted;
+      controller.abort();
+
+      await expect(execution).rejects.toThrow();
+
+      // Only the first image is fetched; the loop exits before the rest and the
+      // paid vision provider is never called for the dead run.
+      expect(loadWebMedia).toHaveBeenCalledTimes(1);
+      expect(spies.describeImage).not.toHaveBeenCalled();
+      expect(spies.describeImages).not.toHaveBeenCalled();
     });
   });
 });

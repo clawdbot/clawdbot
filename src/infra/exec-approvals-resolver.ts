@@ -1,5 +1,4 @@
 // Resolves normalized exec approval policy without persistence side effects.
-import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import {
   DEFAULT_ASK,
   DEFAULT_AUTO_ALLOW_SKILLS,
@@ -159,7 +158,7 @@ export function resolveExecApprovalsFromFilePrepared(params: {
   const rawFile = params.rawFile;
   const file = params.file;
   const defaults = file.defaults ?? {};
-  const agentKey = params.agentId ?? DEFAULT_AGENT_ID;
+  const agentKey = params.agentId ?? "default";
   const agent = file.agents?.[agentKey] ?? {};
   const wildcard = file.agents?.["*"] ?? {};
   const rawAgent = rawFile.agents?.[agentKey] ?? {};

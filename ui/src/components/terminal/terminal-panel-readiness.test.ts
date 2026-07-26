@@ -80,7 +80,7 @@ describe("terminal panel readiness", () => {
       new CustomEvent("openclaw:terminal-toggle", { detail: { open: false } }),
     );
 
-    expect((panel as unknown as { open: boolean }).open).toBe(false);
+    expect(panel.terminalPanelOpen).toBe(false);
   });
 
   it("opens and co-attaches an agent terminal requested by ui.command", async () => {
