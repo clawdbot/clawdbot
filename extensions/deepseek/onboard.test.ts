@@ -13,6 +13,7 @@ describe("DeepSeek onboarding", () => {
     expect(resolveAgentModelPrimaryValue(config.agents?.defaults?.model)).toBe(
       DEEPSEEK_DEFAULT_MODEL_REF,
     );
+    expect(DEEPSEEK_DEFAULT_MODEL_REF).toBe("deepseek/deepseek-v4-pro");
     expect(config.agents?.defaults?.models).toEqual({
       [DEEPSEEK_DEFAULT_MODEL_REF]: { alias: "DeepSeek" },
     });

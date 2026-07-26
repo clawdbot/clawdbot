@@ -14,8 +14,9 @@ describe("Venice onboarding", () => {
     expect(resolveAgentModelPrimaryValue(config.agents?.defaults?.model)).toBe(
       VENICE_DEFAULT_MODEL_REF,
     );
+    expect(VENICE_DEFAULT_MODEL_REF).toBe("venice/zai-org-glm-4.7");
     expect(config.agents?.defaults?.models).toEqual({
-      [VENICE_DEFAULT_MODEL_REF]: { alias: "Kimi K2.6" },
+      [VENICE_DEFAULT_MODEL_REF]: { alias: "GLM 4.7" },
     });
   });
 });
