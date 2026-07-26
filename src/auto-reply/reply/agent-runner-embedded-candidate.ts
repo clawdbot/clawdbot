@@ -250,8 +250,9 @@ export async function runEmbeddedFallbackCandidate(params: {
         },
         onExecutionPhase: params.signalExecutionPhaseForTyping,
         onLaneWait: ({ waiting }) => {
-          if (waiting) {
-            markReplyOperationGlobalLaneWaitProgress(turn.replyOperation);
+          const replyOperation = turn.replyOperation;
+          if (waiting && replyOperation) {
+            markReplyOperationGlobalLaneWaitProgress(replyOperation);
           }
         },
         blockReplyBreak: turn.resolvedBlockStreamingBreak,
