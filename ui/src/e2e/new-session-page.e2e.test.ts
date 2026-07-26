@@ -1306,6 +1306,19 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await expect
         .poll(() => trigger.locator(".new-session-page__trigger-label").textContent())
         .toContain("target-repo");
+      const storedPreference = await page.evaluate(() => {
+        const key = Array.from({ length: localStorage.length }, (_, index) =>
+          localStorage.key(index),
+        ).find((candidate) => candidate?.startsWith("openclaw.new-session.preferences.v1:"));
+        if (!key) {
+          return null;
+        }
+        const value = JSON.parse(localStorage.getItem(key) ?? "null") as {
+          agents?: Record<string, unknown>;
+        } | null;
+        return value?.agents?.main ?? null;
+      });
+      expect(storedPreference).toMatchObject({ folder: TARGET_REPO });
     } finally {
       await context.close();
     }

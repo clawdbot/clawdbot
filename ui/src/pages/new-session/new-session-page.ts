@@ -571,6 +571,11 @@ class NewSessionPage extends OpenClawLightDomElement {
         this.persistPreference({ folder: workspace });
       }
     }
+    if (keepSelectedFolder && !this.execNode && !this.pendingCloud.sessionKey && this.agentId) {
+      // A folder picked before agents.list resolves has no stable preference
+      // owner. Persist it only after the final agent id is known.
+      this.persistPreference({ folder: this.folder, worktree: this.worktree });
+    }
     void this.loadNodes();
     this.modelControl.load(this.context, this.agentId, !catalog.isTarget(this.data), {
       agent: this.selectedAgent(),
@@ -1252,7 +1257,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       this.worktree = false;
     }
     this.worktreeName = "";
-    if (!this.execNode) {
+    if (!this.execNode && this.agentsHydrated) {
       this.persistPreference({ folder: this.folder, worktree: this.worktree });
     }
     this.maybeLoadBranches();
