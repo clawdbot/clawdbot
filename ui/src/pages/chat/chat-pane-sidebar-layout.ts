@@ -18,6 +18,7 @@ import {
   type SidebarColumn,
   type SidebarLayout,
   type SidebarPanel,
+  type SidebarSlotId,
 } from "./sidebar-layout.ts";
 
 const DETAIL_FULL_MESSAGE_MAX_CHARS = 500_000;
@@ -31,6 +32,7 @@ export function renderSidebarRegion(params: {
   focusVersion: number;
   layout: SidebarLayout;
   narrow: boolean;
+  panelMutationEnabled: Partial<Record<SidebarSlotId, boolean>>;
   panelTemplates: SidebarPanelTemplates;
   primary: TemplateResult;
   sessionKey: string;
@@ -53,6 +55,7 @@ export function renderSidebarRegion(params: {
       .layout=${params.layout}
       .panelTemplates=${params.panelTemplates}
       .panelOpenUrls=${{ discussion: params.discussionOpenUrl }}
+      .panelMutationEnabled=${params.panelMutationEnabled}
       .callbacks=${params.callbacks}
       .sessionKey=${params.sessionKey}
       .focusPanelId=${params.focusPanelId}

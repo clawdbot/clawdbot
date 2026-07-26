@@ -39,6 +39,8 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
   @property({ attribute: false }) layout: SidebarLayout = { columns: [] };
   @property({ attribute: false }) panelTemplates: SidebarPanelTemplates = {};
   @property({ attribute: false }) panelOpenUrls: Partial<Record<SidebarSlotId, string | null>> = {};
+  @property({ attribute: false }) panelMutationEnabled: Partial<Record<SidebarSlotId, boolean>> =
+    {};
   @property({ attribute: false }) callbacks: SidebarRegionCallbacks | null = null;
   @property() sessionKey = "";
   @property() focusPanelId = "";
@@ -122,6 +124,10 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     this.callbacks?.activatePanel(panelId);
   }
 
+  private canMutatePanel(slot: SidebarSlotId): boolean {
+    return this.panelMutationEnabled[slot] !== false;
+  }
+
   private renderHeader(column: SidebarColumn, activePanelId: string, narrow: boolean) {
     const active = column.panels.find((panel) => panel.id === activePanelId) ?? column.panels[0];
     if (!active) {
@@ -141,22 +147,25 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
           without-scroll-controls
           @wa-tab-show=${(event: CustomEvent<{ name: string }>) => this.activate(event.detail.name)}
         >
-          ${column.panels.map(
-            (panel) => html`
+          ${column.panels.map((panel) => {
+            const draggable = !narrow && this.canMutatePanel(panel.slot);
+            return html`
               <wa-tab
                 class="sidebar-column__tab"
                 panel=${panel.id}
                 data-panel-id=${panel.id}
-                .draggable=${!narrow}
-                title=${t("chat.sidebarColumns.drag", { panel: panelTitle(panel.slot) })}
+                .draggable=${draggable}
+                title=${draggable
+                  ? t("chat.sidebarColumns.drag", { panel: panelTitle(panel.slot) })
+                  : nothing}
                 @dragstart=${(event: DragEvent) =>
-                  narrow ? undefined : this.startDrag(event, panel.id)}
+                  draggable ? this.startDrag(event, panel.id) : undefined}
                 @dragend=${() => this.endDrag()}
               >
                 ${panelTitle(panel.slot)}
               </wa-tab>
-            `,
-          )}
+            `;
+          })}
         </wa-tab-group>
         <div class="sidebar-column__actions">
           ${openUrl
@@ -170,15 +179,17 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
                 >${icons.externalLink}</a
               >`
             : nothing}
-          <button
-            class="btn btn--ghost btn--icon"
-            type="button"
-            aria-label=${t("chat.sidebarColumns.close", { panel: panelTitle(active.slot) })}
-            title=${t("chat.sidebarColumns.close", { panel: panelTitle(active.slot) })}
-            @click=${() => this.callbacks?.closeSlot(active.slot)}
-          >
-            ${icons.x}
-          </button>
+          ${this.canMutatePanel(active.slot)
+            ? html`<button
+                class="btn btn--ghost btn--icon"
+                type="button"
+                aria-label=${t("chat.sidebarColumns.close", { panel: panelTitle(active.slot) })}
+                title=${t("chat.sidebarColumns.close", { panel: panelTitle(active.slot) })}
+                @click=${() => this.callbacks?.closeSlot(active.slot)}
+              >
+                ${icons.x}
+              </button>`
+            : nothing}
         </div>
       </div>
     `;
