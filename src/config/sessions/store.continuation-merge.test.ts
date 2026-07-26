@@ -1,13 +1,8 @@
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
-import {
-  clearSessionStoreCacheForTest,
-  loadSessionStore,
-  saveSessionStore,
-  resolveSessionStoreEntry,
-  updateSessionStore,
-} from "./store.js";
+import { loadSessionEntry, patchSessionEntry, replaceSessionEntry } from "./session-accessor.js";
+import { clearSessionStoreCacheForTest } from "./store-writer-state.js";
 import type { SessionEntry } from "./types.js";
 
 /**
@@ -16,15 +11,14 @@ import type { SessionEntry } from "./types.js";
  *
  * The production path lives in `src/auto-reply/reply/agent-runner.ts`
  * (`persistContinuationChainState`). It writes continuation-chain fields via
- * `updateSessionStore(...)` using a raw object spread:
+ * `patchSessionEntry(...)` using a partial patch:
  *
- *   store[key] = {
- *     ...existing,
+ *   {
  *     continuationChainCount,
  *     continuationChainStartedAt,
  *     continuationChainTokens,
  *     continuationChainId,
- *   };
+ *   }
  *
  * Two load-bearing invariants must hold:
  *
@@ -41,10 +35,7 @@ import type { SessionEntry } from "./types.js";
  */
 
 const SESSION_KEY = "agent:main:discord:channel:trap-443";
-// Recent enough that session-store maintenance won't prune the entry between
-// updateSessionStore calls (pruning evaluates `updatedAt` against the
-// configured retention window). Using `Date.now() - 60s` is comfortably
-// inside any sane prune window.
+// Recent enough that maintenance won't prune the entry between accessor calls.
 const SEEDED_UPDATED_AT = Date.now() - 60_000;
 
 type ContinuationChainPatch = {
@@ -55,7 +46,7 @@ type ContinuationChainPatch = {
 };
 
 /**
- * Mirror of `persistContinuationChainState`'s on-disk spread (agent-runner.ts).
+ * Mirror of `persistContinuationChainState`'s accessor patch (agent-runner.ts).
  * Kept inline so this test pins the exact byte-shape of the production path
  * without importing the entire agent-runner surface.
  */
@@ -64,27 +55,24 @@ async function persistChainSpread(
   sessionKey: string,
   patch: ContinuationChainPatch,
 ): Promise<void> {
-  await updateSessionStore(
-    storePath,
-    (store) => {
-      const resolved = resolveSessionStoreEntry({ store, sessionKey });
-      if (resolved.existing) {
-        store[resolved.normalizedKey] = {
-          ...resolved.existing,
-          continuationChainCount: patch.continuationChainCount,
-          continuationChainStartedAt: patch.continuationChainStartedAt,
-          continuationChainTokens: patch.continuationChainTokens,
-          continuationChainId: patch.continuationChainId,
-        };
-        for (const legacyKey of resolved.legacyKeys) {
-          delete store[legacyKey];
-        }
-      }
-    },
-    // Isolate the trap from background maintenance so we are asserting on
-    // the persist-spread byte-shape, not on prune-side effects.
-    { skipMaintenance: true },
+  await patchSessionEntry(
+    { storePath, sessionKey },
+    () => ({
+      continuationChainCount: patch.continuationChainCount,
+      continuationChainStartedAt: patch.continuationChainStartedAt,
+      continuationChainTokens: patch.continuationChainTokens,
+      continuationChainId: patch.continuationChainId,
+    }),
+    { preserveActivity: true },
   );
+}
+
+function loadSeededEntry(storePath: string): SessionEntry | undefined {
+  return loadSessionEntry({
+    storePath,
+    sessionKey: SESSION_KEY,
+    readConsistency: "latest",
+  });
 }
 
 describe("session store: continuation chain persist updatedAt churn guard", () => {
@@ -114,7 +102,7 @@ describe("session store: continuation chain persist updatedAt churn guard", () =
       updatedAt: SEEDED_UPDATED_AT,
       ...seededChain,
     };
-    await saveSessionStore(storePath, { [SESSION_KEY]: seededEntry }, { skipMaintenance: true });
+    await replaceSessionEntry({ storePath, sessionKey: SESSION_KEY }, seededEntry);
     clearSessionStoreCacheForTest();
   });
 
@@ -127,34 +115,30 @@ describe("session store: continuation chain persist updatedAt churn guard", () =
   });
 
   it("does not churn updatedAt when continuation chain fields are unchanged", async () => {
-    const before = loadSessionStore(storePath, { skipCache: true });
-    expect(before[SESSION_KEY]?.updatedAt).toBe(SEEDED_UPDATED_AT);
+    expect(loadSeededEntry(storePath)?.updatedAt).toBe(SEEDED_UPDATED_AT);
 
-    // Re-persist the SAME chain values via the production spread shape.
+    // Re-persist the same chain values via the production patch shape.
     await persistChainSpread(storePath, SESSION_KEY, seededChain);
 
-    const after = loadSessionStore(storePath, { skipCache: true });
+    const after = loadSeededEntry(storePath);
     expect(
-      after[SESSION_KEY]?.updatedAt,
+      after?.updatedAt,
       "updatedAt must not change when continuation-chain fields are byte-identical " +
-        "(persistContinuationChainState must not include updatedAt in its spread)",
+        "(persistContinuationChainState must preserve activity)",
     ).toBe(SEEDED_UPDATED_AT);
 
     // All chain fields must still equal the seeded values.
-    expect(after[SESSION_KEY]?.continuationChainCount).toBe(seededChain.continuationChainCount);
-    expect(after[SESSION_KEY]?.continuationChainStartedAt).toBe(
-      seededChain.continuationChainStartedAt,
-    );
-    expect(after[SESSION_KEY]?.continuationChainTokens).toBe(seededChain.continuationChainTokens);
-    expect(after[SESSION_KEY]?.continuationChainId).toBe(seededChain.continuationChainId);
+    expect(after?.continuationChainCount).toBe(seededChain.continuationChainCount);
+    expect(after?.continuationChainStartedAt).toBe(seededChain.continuationChainStartedAt);
+    expect(after?.continuationChainTokens).toBe(seededChain.continuationChainTokens);
+    expect(after?.continuationChainId).toBe(seededChain.continuationChainId);
   });
 
   it("round-trips unchanged continuation chain fields through the SQLite store", async () => {
     await persistChainSpread(storePath, SESSION_KEY, seededChain);
 
     clearSessionStoreCacheForTest();
-    const after = loadSessionStore(storePath, { skipCache: true });
-    expect(after[SESSION_KEY]).toMatchObject({
+    expect(loadSeededEntry(storePath)).toMatchObject({
       updatedAt: SEEDED_UPDATED_AT,
       ...seededChain,
     });
@@ -170,12 +154,12 @@ describe("session store: continuation chain persist updatedAt churn guard", () =
     await persistChainSpread(storePath, SESSION_KEY, mutated);
 
     clearSessionStoreCacheForTest();
-    const after = loadSessionStore(storePath, { skipCache: true });
+    const after = loadSeededEntry(storePath);
     expect(
-      after[SESSION_KEY]?.updatedAt,
+      after?.updatedAt,
       "updatedAt must be preserved even when chain tokens change — " +
-        "the spread in persistContinuationChainState carries chain fields only",
+        "the patch in persistContinuationChainState carries chain fields only",
     ).toBe(SEEDED_UPDATED_AT);
-    expect(after[SESSION_KEY]?.continuationChainTokens).toBe(mutated.continuationChainTokens);
+    expect(after?.continuationChainTokens).toBe(mutated.continuationChainTokens);
   });
 });

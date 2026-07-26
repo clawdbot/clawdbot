@@ -64,13 +64,16 @@ async function invokeArtifactHandler(
   options: { id?: string; context?: unknown } = {},
 ) {
   const responder = createResponder();
+  const defaultContext = {
+    getRuntimeConfig: () => ({ agents: { entries: { main: { default: true } } } }),
+  };
   await artifactsHandlers[method]?.({
     req: { type: "req", id: options.id ?? method, method, params: {} },
     params,
     client: null,
     isWebchatConnect: () => false,
     respond: responder.respond,
-    context: (options.context ?? {}) as never,
+    context: (options.context ?? defaultContext) as never,
   });
   return responder;
 }

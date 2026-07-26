@@ -3,7 +3,7 @@ title: "Runtime tool fixture — tavily_extract"
 scenario:
   id: runtime-tool-tavily-extract
   surface: runtime-tools
-  runtimeParityTier: optional
+  runtimePairLane: extended
   coverage:
     primary:
       - web-search.html-extraction

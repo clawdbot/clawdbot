@@ -9,7 +9,9 @@ import {
   resolveDefaultAgentId,
 } from "./agent-scope.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
+import { resolvePublishedModelCatalogOwner } from "./prepared-model-catalog-owner.js";
 import { PreparedModelCatalogConfigReplacedError } from "./prepared-model-catalog.errors.js";
+import type { ResolvedPublishedModelCatalogOwner } from "./prepared-model-catalog.types.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
@@ -30,6 +32,16 @@ export type LoadPreparedModelCatalogParams = {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 };
+
+type PreparedModelCatalogConfigPolicy = "exact" | "published";
+
+function acceptsPreparedSnapshotConfig(
+  snapshot: PreparedModelRuntimeSnapshot,
+  input: PreparedModelRuntimeInput,
+  policy: PreparedModelCatalogConfigPolicy,
+): boolean {
+  return policy === "published" || preparedModelRuntimeConfigsMatch(snapshot.config, input.config);
+}
 
 function resolveInputs(params: LoadPreparedModelCatalogParams = {}): {
   exact: PreparedModelRuntimeInput;
@@ -112,9 +124,9 @@ export function getPreparedModelCatalogSnapshot(
     : undefined;
 }
 
-/** Resolves the lifecycle owner used for a catalog read. */
-export async function loadPreparedModelCatalogOwnerSnapshot(
-  params: LoadPreparedModelCatalogParams = {},
+async function loadPreparedModelCatalogOwnerSnapshotWithPolicy(
+  params: LoadPreparedModelCatalogParams,
+  configPolicy: PreparedModelCatalogConfigPolicy,
 ): Promise<PreparedModelRuntimeSnapshot> {
   const { activationExact, activationFull, exact, full } = resolveInputs(params);
   if (params.readOnly) {
@@ -124,7 +136,7 @@ export async function loadPreparedModelCatalogOwnerSnapshot(
       try {
         // Full lifecycle owners include provider augmentation omitted by read-only fallback builds.
         const prepared = await prepareModelRuntimeSnapshot(candidate);
-        if (!preparedModelRuntimeConfigsMatch(prepared.config, candidate.config)) {
+        if (!acceptsPreparedSnapshotConfig(prepared, candidate, configPolicy)) {
           throw new PreparedModelCatalogConfigReplacedError(candidate.agentDir);
         }
         return prepared;
@@ -136,7 +148,7 @@ export async function loadPreparedModelCatalogOwnerSnapshot(
     }
     const lease = await acquireReadOnlyPreparedModelRuntime(activationExact);
     try {
-      if (!preparedModelRuntimeConfigsMatch(lease.snapshot.config, activationExact.config)) {
+      if (!acceptsPreparedSnapshotConfig(lease.snapshot, activationExact, configPolicy)) {
         throw new PreparedModelCatalogConfigReplacedError(activationExact.agentDir);
       }
       return lease.snapshot;
@@ -150,7 +162,7 @@ export async function loadPreparedModelCatalogOwnerSnapshot(
     for (const candidate of fullCandidates) {
       try {
         const preparedFull = await prepareModelRuntimeSnapshot(candidate);
-        if (preparedModelRuntimeConfigsMatch(preparedFull.config, full.config)) {
+        if (acceptsPreparedSnapshotConfig(preparedFull, full, configPolicy)) {
           return preparedFull;
         }
       } catch (error) {
@@ -162,7 +174,7 @@ export async function loadPreparedModelCatalogOwnerSnapshot(
   }
   try {
     const preparedExact = await prepareModelRuntimeSnapshot(exact);
-    if (preparedModelRuntimeConfigsMatch(preparedExact.config, exact.config)) {
+    if (acceptsPreparedSnapshotConfig(preparedExact, exact, configPolicy)) {
       return preparedExact;
     }
   } catch (error) {
@@ -173,7 +185,7 @@ export async function loadPreparedModelCatalogOwnerSnapshot(
   // Direct commands own a persistent standalone generation. During gateway lifetime, writable
   // publication belongs exclusively to startup/reload or agent-run admission.
   const activated = await activateStandalonePreparedModelRuntime(activationExact);
-  if (activated && preparedModelRuntimeConfigsMatch(activated.config, activationExact.config)) {
+  if (activated && acceptsPreparedSnapshotConfig(activated, activationExact, configPolicy)) {
     return activated;
   }
   if (activated) {
@@ -185,7 +197,7 @@ export async function loadPreparedModelCatalogOwnerSnapshot(
   // Lease a complete exact generation so provider catalog hooks remain visible for this read.
   const lease = await acquireAgentRunPreparedModelRuntime(activationFull);
   try {
-    if (!preparedModelRuntimeConfigsMatch(lease.snapshot.config, activationFull.config)) {
+    if (!acceptsPreparedSnapshotConfig(lease.snapshot, activationFull, configPolicy)) {
       throw new PreparedModelRuntimeOwnerNotPublishedError(
         `prepared model catalog owner was not published for the requested config (${activationFull.agentDir})`,
       );
@@ -194,6 +206,29 @@ export async function loadPreparedModelCatalogOwnerSnapshot(
   } finally {
     lease.release();
   }
+}
+
+/** Resolves the lifecycle owner for an exact caller-supplied config. */
+export async function loadPreparedModelCatalogOwnerSnapshot(
+  params: LoadPreparedModelCatalogParams = {},
+): Promise<PreparedModelRuntimeSnapshot> {
+  return await loadPreparedModelCatalogOwnerSnapshotWithPolicy(params, "exact");
+}
+
+/** Resolves the currently published owner when Gateway config changes during the read. */
+export async function loadPublishedPreparedModelCatalogOwnerSnapshot(
+  params: LoadPreparedModelCatalogParams = {},
+): Promise<PreparedModelRuntimeSnapshot> {
+  return await loadPreparedModelCatalogOwnerSnapshotWithPolicy(params, "published");
+}
+
+/** Resolves a complete published owner for long-lived runtime consumers. */
+export async function loadResolvedPublishedModelCatalogOwner(
+  params: LoadPreparedModelCatalogParams = {},
+): Promise<ResolvedPublishedModelCatalogOwner> {
+  return resolvePublishedModelCatalogOwner(
+    await loadPublishedPreparedModelCatalogOwnerSnapshot(params),
+  );
 }
 
 /** Reads one atomic catalog generation, activating a lifecycle owner when needed. */
@@ -207,4 +242,11 @@ export async function loadPreparedModelCatalog(
   params: LoadPreparedModelCatalogParams = {},
 ): Promise<ModelCatalogEntry[]> {
   return (await loadPreparedModelCatalogSnapshot(params)).entries;
+}
+
+/** Reads the committed owner generation for long-lived runtime work. */
+export async function loadPublishedPreparedModelCatalog(
+  params: LoadPreparedModelCatalogParams = {},
+): Promise<ModelCatalogEntry[]> {
+  return (await loadPublishedPreparedModelCatalogOwnerSnapshot(params)).modelCatalog.entries;
 }

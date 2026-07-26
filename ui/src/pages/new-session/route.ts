@@ -33,7 +33,7 @@ async function loadNewSessionData(
   const location = { ...requestedLocation, agentId };
   const plain = { ...location, model: "", catalogLabel: "" };
   const gateway = context.gateway.snapshot;
-  if (!gateway.connected || !gateway.client) {
+  if (gateway.phase !== "connected" || !gateway.client) {
     return plain;
   }
   const target = await resolveCreateTarget(gateway.client, location.catalogId, agentId);

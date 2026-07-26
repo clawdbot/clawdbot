@@ -160,8 +160,6 @@ export type OpenClawConfig = {
       theme?: "claw" | "knot" | "dash" | "custom";
       /** Light/dark preference. */
       themeMode?: "light" | "dark" | "system";
-      /** Text scale percentage stop. */
-      textScale?: 90 | 100 | 110 | 125 | 140;
       /** BCP 47 UI locale, e.g. "en" or "pt-BR". */
       locale?: string;
       /** Show model thinking output in chat. */
@@ -176,10 +174,6 @@ export type OpenClawConfig = {
       chatFollowUpMode?: "steer" | "queue";
       /** Ordered page and pinned-session entries shown in the Control UI sidebar. */
       sidebarEntries?: string[];
-      /** Maximum chat message width CSS value. */
-      chatMessageMaxWidth?: string;
-      /** Show live agent activity beneath running Control UI sidebar sessions. */
-      sidebarLiveActivity?: boolean;
       /** Expand advanced settings in schema-driven Control UI forms. */
       showAdvancedSettings?: boolean;
     };
@@ -285,12 +279,16 @@ export type ConfigFileSnapshot = {
   path: string;
   /** Lexical and canonical file paths reached while resolving $include directives. */
   includedPaths?: string[];
+  /** Include contribution provenance needed by authored-layer repair decisions. */
+  includeProvenance?: { agentRoster: boolean };
   /** Whether the config file exists on disk. */
   exists: boolean;
   /** Raw file contents before parsing; null when missing. */
   raw: string | null;
   /** Parsed JSON/JSONC/YAML value before schema normalization. */
   parsed: unknown;
+  /** Include/env-resolved source before raw compatibility migrations. */
+  sourceConfigBeforeMigrations?: ResolvedSourceConfig;
   /**
    * Config authored on disk after $include resolution and ${ENV} substitution,
    * but BEFORE runtime defaults are applied.

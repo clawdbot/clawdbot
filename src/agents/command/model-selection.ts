@@ -16,6 +16,10 @@ import {
   isModelSelectionLocked,
   repairProviderWrappedModelOverride,
 } from "../../sessions/model-overrides.js";
+import {
+  sessionDeliveryChannel,
+  sessionDeliveryOrigin,
+} from "../../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
@@ -239,20 +243,16 @@ export async function resolveEmbeddedModelSelection(params: {
     params.cfg.channels?.modelByChannel && !hasExplicitRunOverride
       ? resolveChannelModelOverride({
           cfg: params.cfg,
-          channel:
-            currentRunModelChannel ??
-            sessionEntry?.channel ??
-            sessionEntry?.lastChannel ??
-            sessionEntry?.origin?.provider,
+          channel: currentRunModelChannel ?? sessionDeliveryChannel(sessionEntry),
           groupId: channelOverrideGroupId,
-          groupChatType: sessionEntry?.chatType ?? sessionEntry?.origin?.chatType,
+          groupChatType: sessionEntry?.chatType ?? sessionDeliveryOrigin(sessionEntry)?.chatType,
           groupChannel: params.runContext.groupChannel ?? sessionEntry?.groupChannel,
           groupSubject: sessionEntry?.subject,
           parentSessionKey: sessionEntry?.parentSessionKey ?? params.sessionKey,
           directUserIds: [
-            sessionEntry?.origin?.nativeDirectUserId,
-            sessionEntry?.origin?.from,
-            sessionEntry?.origin?.to,
+            sessionDeliveryOrigin(sessionEntry)?.nativeDirectUserId,
+            sessionDeliveryOrigin(sessionEntry)?.from,
+            sessionDeliveryOrigin(sessionEntry)?.to,
           ],
         })
       : null;

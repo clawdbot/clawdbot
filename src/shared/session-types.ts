@@ -1,5 +1,3 @@
-import type { SessionCreatorIdentity } from "../../packages/gateway-protocol/src/schema/sessions.js";
-
 /** Agent identity fields returned by gateway session listing APIs. */
 type GatewayAgentIdentity = {
   name?: string;
@@ -64,7 +62,7 @@ export type SessionsListResultBase<TDefaults, TRow> = {
   nextOffset?: number | null;
   hasMore?: boolean;
   /** Complete creator facet for the filtered result, independent of pagination. */
-  creators?: SessionCreatorIdentity[];
+  creators?: Array<{ id: string; label?: string }>;
   defaults: TDefaults;
   sessions: TRow[];
 };

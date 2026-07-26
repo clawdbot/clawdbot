@@ -45,9 +45,9 @@ describe("venice provider plugin", () => {
 
     expect(
       provider.normalizeResolvedModel?.({
-        modelId: "venice/llama-3.3-70b",
+        modelId: "venice/qwen3-coder-480b-a35b-instruct-turbo",
         model: {
-          id: "llama-3.3-70b",
+          id: "qwen3-coder-480b-a35b-instruct-turbo",
           compat: {},
         },
       } as never),

@@ -25,7 +25,7 @@ import {
   sanitizeConfiguredModelProviderRequest,
   sanitizeConfiguredProviderRequest,
 } from "../agents/provider-request-config.js";
-import type { MsgContext } from "../auto-reply/templating.js";
+import type { RuntimeMsgContext as MsgContext, TemplateContext } from "../auto-reply/templating.js";
 import { applyTemplate } from "../auto-reply/templating.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { ModelProviderConfig, OpenClawConfig } from "../config/types.js";
@@ -1046,24 +1046,33 @@ export async function runCliEntry(params: {
   });
   const outputBase = path.join(outputDir, path.parse(mediaPath).name);
 
-  const templCtx: MsgContext = {
+  const templCtx: TemplateContext = {
     ...ctx,
+    AttachmentPath: mediaPath,
+    AttachmentUrl: params.attachment.url ?? params.attachment.path ?? mediaPath,
+    AttachmentContentType: params.attachment.mime,
+    AttachmentDir: path.dirname(mediaPath),
+    AttachmentIndex: params.attachment.index,
     MediaPath: mediaPath,
     MediaUrl: params.attachment.url ?? params.attachment.path ?? mediaPath,
     MediaType: params.attachment.mime,
     MediaDir: path.dirname(mediaPath),
-    MediaPaths: undefined,
-    MediaUrls: undefined,
-    MediaTypes: undefined,
-    MediaWorkspaceDir: undefined,
-    MediaTranscribedIndexes: undefined,
-    MediaStaged: undefined,
     OutputDir: outputDir,
     OutputBase: outputBase,
     Prompt: requestOverrides.prompt ?? prompt,
     ...(requestOverrides.language ? { Language: requestOverrides.language } : {}),
     MaxChars: maxChars,
   };
+  for (const key of [
+    "MediaPaths",
+    "MediaUrls",
+    "MediaTypes",
+    "MediaWorkspaceDir",
+    "MediaTranscribedIndexes",
+    "MediaStaged",
+  ]) {
+    delete (templCtx as unknown as Record<string, unknown>)[key];
+  }
   const argv = [command, ...args].map((part, index) =>
     index === 0 ? part : applyTemplate(part, templCtx),
   );

@@ -16,6 +16,7 @@ import {
   buildStatusMessage as buildStatusMessageRaw,
   type buildStatusMessage as BuildStatusMessage,
 } from "../status/status-message.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { createSuccessfulImageMediaDecision } from "./media-understanding.test-fixtures.js";
 import { buildCommandsMessage, buildCommandsMessagePaginated, buildHelpMessage } from "./status.js";
 
@@ -1048,7 +1049,7 @@ describe("buildStatusMessage", () => {
       sessionEntry: {
         sessionId: "abc",
         updatedAt: 0,
-        channel: "discord",
+        delivery: normalizeSessionDeliveryState({ context: { channel: "discord" } }),
         groupId: "123",
       },
       sessionKey: "agent:main:main",
@@ -1089,7 +1090,7 @@ describe("buildStatusMessage", () => {
       sessionEntry: {
         sessionId: "channel-context-window",
         updatedAt: 0,
-        channel: "discord",
+        delivery: normalizeSessionDeliveryState({ context: { channel: "discord" } }),
         groupId: "123",
         totalTokens: 49_000,
         totalTokensFresh: true,

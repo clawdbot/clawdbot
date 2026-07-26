@@ -1497,6 +1497,44 @@ function mockNdjsonReader(
   } as unknown as ReadableStreamDefaultReader<Uint8Array>;
 }
 
+function createPendingCancelNdjsonStream(lines: string[]) {
+  const encoder = new TextEncoder();
+  let markCancelStarted!: () => void;
+  let settleCancel!: () => void;
+  const cancelStarted = new Promise<void>((resolve) => {
+    markCancelStarted = resolve;
+  });
+  const cancelPending = new Promise<void>((resolve) => {
+    settleCancel = resolve;
+  });
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(`${lines.join("\n")}\n`));
+    },
+    cancel() {
+      markCancelStarted();
+      return cancelPending;
+    },
+  });
+  return {
+    cancelPending,
+    cancelStarted,
+    reader: stream.getReader(),
+    settleCancel,
+    stream,
+  };
+}
+
+function createClosedNdjsonStream(lines: string[]) {
+  const encoder = new TextEncoder();
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(`${lines.join("\n")}\n`));
+      controller.close();
+    },
+  });
+}
+
 async function expectDoneEventContent(lines: string[], expectedContent: unknown) {
   await withMockNdjsonFetch(lines, async () => {
     const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
@@ -1646,6 +1684,68 @@ describe("parseNdjsonStream", () => {
     expect(args?.retries).toBe(3);
     expect(args?.delayMs).toBe(2500);
   });
+
+  it("unlocks a real stream before pending cancellation settles on early break", async () => {
+    const source = createPendingCancelNdjsonStream([
+      '{"model":"m","created_at":"t","message":{"role":"assistant","content":"one"},"done":false}',
+      '{"model":"m","created_at":"t","message":{"role":"assistant","content":"two"},"done":true}',
+    ]);
+    let iterationFinished = false;
+
+    const iteration = (async () => {
+      for await (const chunk of parseNdjsonStream(source.reader)) {
+        expect(chunk.message.content).toBe("one");
+        break;
+      }
+      iterationFinished = true;
+    })();
+
+    await source.cancelStarted;
+    await iteration;
+    expect(iterationFinished).toBe(true);
+    expect(source.stream.locked).toBe(false);
+
+    source.settleCancel();
+    await source.cancelPending;
+  });
+
+  it("preserves a consumer error while unlocking a real stream", async () => {
+    const source = createPendingCancelNdjsonStream([
+      '{"model":"m","created_at":"t","message":{"role":"assistant","content":"one"},"done":false}',
+    ]);
+    const testError = new Error("consumer abort");
+
+    const iteration = (async () => {
+      for await (const chunk of parseNdjsonStream(source.reader)) {
+        void chunk;
+        throw testError;
+      }
+    })();
+
+    await source.cancelStarted;
+    await expect(iteration).rejects.toBe(testError);
+    expect(source.stream.locked).toBe(false);
+
+    source.settleCancel();
+    await source.cancelPending;
+  });
+
+  it("skips malformed NDJSON and unlocks after a valid terminal record", async () => {
+    const stream = createClosedNdjsonStream([
+      "not-json",
+      '{"model":"m","created_at":"t","message":{"role":"assistant","content":"done"},"done":true}',
+    ]);
+    const chunks = [];
+
+    for await (const chunk of parseNdjsonStream(stream.getReader())) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]?.done).toBe(true);
+    expect(ollamaStreamWarnMock).toHaveBeenCalledWith("Skipping malformed NDJSON line: not-json");
+    expect(stream.locked).toBe(false);
+  });
 });
 
 async function withMockNdjsonFetch(
@@ -1730,6 +1830,7 @@ async function createOllamaTestStream(params: {
   baseUrl: string;
   defaultHeaders?: Record<string, string>;
   model?: Record<string, unknown>;
+  context?: Record<string, unknown>;
   options?: {
     apiKey?: string;
     maxTokens?: number;
@@ -1737,6 +1838,7 @@ async function createOllamaTestStream(params: {
     signal?: AbortSignal;
     timeoutMs?: number;
     headers?: Record<string, string>;
+    responseFormat?: Record<string, unknown>;
   };
 }) {
   const streamFn = createOllamaStreamFn(params.baseUrl, params.defaultHeaders);
@@ -1748,9 +1850,9 @@ async function createOllamaTestStream(params: {
       contextWindow: 131072,
       ...params.model,
     } as unknown as Parameters<typeof streamFn>[0],
-    {
+    (params.context ?? {
       messages: [{ role: "user", content: "hello" }],
-    } as unknown as Parameters<typeof streamFn>[1],
+    }) as unknown as Parameters<typeof streamFn>[1],
     (params.options ?? {}) as unknown as Parameters<typeof streamFn>[2],
   );
 }
@@ -2487,6 +2589,145 @@ describe("createOllamaStreamFn", () => {
         }
         expect(requestBody.options?.num_ctx).toBeUndefined();
         expect(requestBody.options.num_predict).toBe(123);
+      },
+    );
+  });
+
+  it("maps responseFormat JSON Schema to native Ollama format", async () => {
+    await withMockNdjsonFetch(
+      ['{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":true}'],
+      async (fetchMock) => {
+        const schema = {
+          type: "object",
+          properties: { reply: { type: "string" } },
+          required: ["reply"],
+          additionalProperties: false,
+        };
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+          options: { responseFormat: schema },
+        });
+
+        await collectStreamEvents(stream);
+
+        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+        expect(JSON.parse(requestInit.body)).toMatchObject({ format: schema });
+      },
+    );
+  });
+
+  it("omits native Ollama format when responseFormat is absent", async () => {
+    await withMockNdjsonFetch(
+      ['{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":true}'],
+      async (fetchMock) => {
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+        });
+
+        await collectStreamEvents(stream);
+
+        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+        expect(JSON.parse(requestInit.body)).not.toHaveProperty("format");
+      },
+    );
+  });
+
+  it("keeps provider-shaped text response formats off the native Ollama wire", async () => {
+    await withMockNdjsonFetch(
+      ['{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":true}'],
+      async (fetchMock) => {
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+          options: { responseFormat: { type: "text" } },
+        });
+
+        await collectStreamEvents(stream);
+
+        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+        expect(JSON.parse(requestInit.body)).not.toHaveProperty("format");
+      },
+    );
+  });
+
+  it.each([
+    {
+      name: "cloud model through a local daemon",
+      baseUrl: "http://ollama-host:11434",
+      id: "gemma4:cloud",
+    },
+    { name: "hosted Ollama Cloud", baseUrl: "https://ollama.com/v1", id: "gemma4" },
+  ])("omits native Ollama format for $name", async ({ baseUrl, id }) => {
+    await withMockNdjsonFetch(
+      ['{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":true}'],
+      async (fetchMock) => {
+        const stream = await createOllamaTestStream({
+          baseUrl,
+          model: { id },
+          options: {
+            responseFormat: {
+              type: "object",
+              properties: { reply: { type: "string" } },
+              required: ["reply"],
+              additionalProperties: false,
+            },
+          },
+        });
+
+        await collectStreamEvents(stream);
+
+        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+        expect(JSON.parse(requestInit.body)).not.toHaveProperty("format");
+      },
+    );
+  });
+
+  it("lets native Ollama tools win over responseFormat", async () => {
+    await withMockNdjsonFetch(
+      ['{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":true}'],
+      async (fetchMock) => {
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+          context: {
+            messages: [{ role: "user", content: "weather" }],
+            tools: [
+              {
+                name: "weather",
+                description: "Get weather",
+                parameters: { type: "object", properties: {} },
+              },
+            ],
+          },
+          options: {
+            responseFormat: {
+              type: "object",
+              properties: { reply: { type: "string" } },
+              required: ["reply"],
+              additionalProperties: false,
+            },
+          },
+        });
+
+        await collectStreamEvents(stream);
+
+        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+        const body = JSON.parse(requestInit.body);
+        expect(body.tools).toHaveLength(1);
+        expect(body).not.toHaveProperty("format");
       },
     );
   });

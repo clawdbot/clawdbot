@@ -56,7 +56,7 @@ export type SidebarZoneEntry =
 
 // Keep the highest-value operational destinations visible on first use. Users
 // can still replace this route set through the customize menu.
-export const DEFAULT_SIDEBAR_ENTRIES = ["usage", "cron", "plugins"].map((route) =>
+export const DEFAULT_SIDEBAR_ENTRIES = ["cron", "plugins"].map((route) =>
   serializeSidebarEntry({ type: "route", route: route as SidebarNavRoute }),
 );
 
@@ -357,6 +357,32 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
 
 export function titleForRoute(routeId: NavigationRouteId): string {
   return t(NAVIGATION_COPY[routeId].titleKey);
+}
+
+/** Window/tab title, markers leftmost because tabs truncate from the right.
+ * Offline replaces the approval count (a stale queue is not actionable) and
+ * carries the pending-outbox total; titles already ending in the brand
+ * ("Ask OpenClaw") skip the suffix so it never reads "… OpenClaw — OpenClaw". */
+export function formatDocumentTitle(options: {
+  context: string;
+  attentionCount?: number;
+  offline?: boolean;
+  queuedCount?: number;
+}): string {
+  const base = options.context.endsWith("OpenClaw")
+    ? options.context
+    : `${options.context} — OpenClaw`;
+  if (options.offline) {
+    const queued =
+      options.queuedCount && options.queuedCount > 0
+        ? ` · ${t("connection.queuedCount", { count: String(options.queuedCount) })}`
+        : "";
+    return `(${t("common.offline")}${queued}) ${base}`;
+  }
+  if (options.attentionCount && options.attentionCount > 0) {
+    return `(${options.attentionCount}) ${base}`;
+  }
+  return base;
 }
 
 /**

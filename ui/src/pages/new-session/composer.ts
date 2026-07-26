@@ -13,6 +13,7 @@ import {
   renderChatAttachmentMenu,
 } from "../chat/components/chat-attachments.ts";
 import type { NewSessionAttachmentDraft } from "./attachment-draft.ts";
+import type { NewSessionVisibility } from "./create-params.ts";
 import type { NewSessionModelControl } from "./model-control.ts";
 
 type NewSessionComposerOptions = {
@@ -26,11 +27,38 @@ type NewSessionComposerOptions = {
   requiresModifier: boolean;
   submitting: boolean;
   messageLocked?: boolean;
+  visibility?: NewSessionVisibility;
+  draftAvailable?: boolean;
   onAttachmentsChange: (attachments: ChatAttachment[]) => void;
   onPendingReadsChange: (delta: 1 | -1) => void;
   onInput: (message: string) => void;
+  onVisibilityChange?: (visibility: NewSessionVisibility) => void;
   onSubmit: () => void;
 };
+
+/** Mutually exclusive visibility pills: selecting one clears the other, re-click returns to normal. */
+function renderVisibilityPill(params: {
+  mode: Exclude<NewSessionVisibility, "normal">;
+  icon: unknown;
+  label: string;
+  description: string;
+  options: NewSessionComposerOptions;
+}) {
+  const active = params.options.visibility === params.mode;
+  return html`
+    <button
+      type="button"
+      class="new-session-page__visibility ${active ? "new-session-page__visibility--active" : ""}"
+      role="switch"
+      aria-checked=${String(active)}
+      ?disabled=${params.options.submitting || params.options.messageLocked}
+      title=${params.description}
+      @click=${() => params.options.onVisibilityChange?.(active ? "normal" : params.mode)}
+    >
+      <span aria-hidden="true">${params.icon}</span>${params.label}
+    </button>
+  `;
+}
 
 export function renderDraftError(message: string) {
   return html`
@@ -169,13 +197,29 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
             </openclaw-tooltip>
           </div>
         </div>
-        ${options.modelControl && options.modelControl !== nothing
-          ? html`<div class="agent-chat__composer-footer">
-              <div class="agent-chat__composer-controls">
-                <div class="chat-composer-model-control">${options.modelControl}</div>
-              </div>
-            </div>`
-          : nothing}
+        <div class="agent-chat__composer-footer">
+          <div class="agent-chat__composer-controls">
+            ${options.modelControl && options.modelControl !== nothing
+              ? html`<div class="chat-composer-model-control">${options.modelControl}</div>`
+              : nothing}
+            ${options.draftAvailable
+              ? renderVisibilityPill({
+                  mode: "draft",
+                  icon: "👻",
+                  label: t("newSession.draft"),
+                  description: t("newSession.draftDescription"),
+                  options,
+                })
+              : nothing}
+            ${renderVisibilityPill({
+              mode: "incognito",
+              icon: icons.lock,
+              label: t("newSession.incognito"),
+              description: t("newSession.incognitoDescription"),
+              options,
+            })}
+          </div>
+        </div>
         ${options.pendingAttachmentReads > 0
           ? html`<span class="agent-chat__sr-only" role="status"
               >${t("newSession.readingAttachment")}</span
@@ -194,11 +238,14 @@ export function renderNewSessionDraftComposer(options: {
   context: import("../../app/context.ts").ApplicationContext | undefined;
   isCatalogTarget: boolean;
   message: string;
+  visibility?: NewSessionVisibility;
+  draftAvailable?: boolean;
   modelControl: NewSessionModelControl;
   requiresModifier: boolean;
   submitting: boolean;
   messageLocked?: boolean;
   onInput: (message: string) => void;
+  onVisibilityChange?: (visibility: NewSessionVisibility) => void;
   onSubmit: () => void;
 }) {
   const readSignal = options.attachmentDraft.readSignal;
@@ -207,6 +254,8 @@ export function renderNewSessionDraftComposer(options: {
     canSubmit: options.canSubmit,
     getAttachments: () => options.attachmentDraft.attachments,
     message: options.message,
+    visibility: options.visibility,
+    draftAvailable: options.draftAvailable,
     modelControl: options.isCatalogTarget
       ? nothing
       : options.modelControl.render({
@@ -227,6 +276,7 @@ export function renderNewSessionDraftComposer(options: {
     },
     onPendingReadsChange: (delta) => options.attachmentDraft.updatePending(readSignal, delta),
     onInput: options.onInput,
+    onVisibilityChange: options.onVisibilityChange,
     onSubmit: options.onSubmit,
   });
 }

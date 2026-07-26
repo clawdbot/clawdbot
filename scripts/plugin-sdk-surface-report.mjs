@@ -95,38 +95,47 @@ function readPluginSdkEntrypointBudgetEnv(name, fallback, env = process.env) {
 const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   core: 2,
   routing: 1,
-  health: 1,
+  health: 0,
   "channel-streaming": 54,
   "approval-gateway-runtime": 1,
   "approval-handler-runtime": 1,
-  "approval-reply-runtime": 1,
-  "config-runtime": 116,
-  "inbound-reply-dispatch": 26,
+  "approval-reply-runtime": 0,
+  "config-runtime": 115,
+  "config-contracts": 0,
+  "inbound-reply-dispatch": 24,
   "channel-reply-pipeline": 12,
-  "interactive-runtime": 13,
-  // Upstream 594 plus seven continuation diagnostic/runtime compatibility exports.
-  "infra-runtime": 601,
+  "interactive-runtime": 11,
+  // +3: canonical incognito classifier plus seven continuation/runtime compatibility exports.
+  "infra-runtime": 603,
   "ssrf-policy": 1,
   "ssrf-runtime": 1,
-  "media-runtime": 2,
+  // +1: deprecated agent media projection re-export during the media migration window.
+  "media-runtime": 3,
+  // +3: deprecated media projection type, builder, and local-roots compatibility re-export.
+  "agent-media-payload": 3,
+  // +2: deprecated media projection type and builder.
+  "reply-payload": 2,
   "text-runtime": 191,
   "agent-runtime": 2,
   "channel-secret-runtime": 23,
-  "agent-harness-runtime": 5,
+  "agent-harness-runtime": 4,
   "agent-config-primitives": 2,
   "command-auth": 78,
-  discord: 48,
+  discord: 47,
   matrix: 1,
-  "channel-inbound": 15,
+  // +4: deprecated media projection type, builder, and turn aliases.
+  "channel-inbound": 18,
   "channel-logging": 4,
   "channel-lifecycle": 23,
   "channel-message": 129,
-  "channel-pairing": 1,
-  "channel-policy": 8,
+  "channel-pairing": 0,
+  "channel-policy": 7,
   "channel-send-result": 1,
   "session-store-runtime": 4,
+  // +2: shipped Slack and Discord setup helpers retained through their package migration window.
+  "setup-runtime": 2,
   "group-access": 13,
-  "reply-history": 8,
+  "reply-history": 6,
   "messaging-targets": 12,
   "provider-auth": 19,
   "telegram-account": 3,
@@ -138,165 +147,77 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     publicEntrypoints: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS",
       // +1: session-discussion binds one external discussion provider to sessions.
-      140,
+      // +1: focused media-local-roots replacement for the legacy agent-media facade.
+      // +1: account-aware channel DM policy setup descriptors.
+      142,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      // +4: registerMcpServerConnectionResolver context/result/resolver/registration types (#106229).
-      // +2: materializeRequesterScopedMcpToolsForHarnessRun (agent-harness-runtime + compat mirror).
-      // +1: matchesNoProxy exposes canonical Undici-compatible bypass selection to plugins.
-      // +4: group scope encoder/key builder (channel-policy + compat mirror).
-      // +1: runDetachedWebhookWork gives post-ack work an independently tracked admission root.
-      // +9: app-guided provider setup context/candidate/hook types and their public mirrors.
-      // +3: atomic SQLite STRICT migration function, options, and result for plugin stores.
-      // Harvest: channel-ingress -64; dead channel-message dispatch aliases -23.
-      // Harvest: retired qa-live-transport-scenarios subpath -6.
-      // +12: typed plan step/status and checklist formatter across channel barrels.
-      // +8: plan-step ingress union and normalizer across channel barrels.
-      // Harvest: retired dual-field plan payload builder -1.
-      // +12: active plan-step consumers pinned through channel-outbound and mirrors.
-      // +6: app-guided provider setup types retained by plugin-entry and mirrors.
-      // +3: widget HTML validation helpers and tool input error.
-      // Used-union narrowing: 31 wildcard barrels drop to explicit used exports;
-      // proxy stream API and codex marker/scaffold pins retained.
-      // +2: generic channel retry runner and Retry-After parser.
-      // +1: shared speech-provider API key resolver.
-      // +32: shared channel setup, config-schema, policy, and status helpers.
-      // +2: shared channel replay-guard factory and claim handle.
-      // +6: lightweight speech settings types, normalizers, and config resolver.
-      // +4: unified implicit-mention config, schema, resolved policy, and resolver.
-      // Harvest: retired AudioConfig type -1.
-      // +4: bounded plugin blob store options, entry, entry info, and store types.
-      // +6: shared progress receipt tracker + compositor snapshot across channel barrels.
-      // +1: selectPreferredLocalModelId shares app-guided local model ranking across providers.
-      // +4: shared audio-energy stats and speech-threshold gate through realtime-voice.
-      // +2: supplemental sender decision and outbound text chunk sequencer.
-      // +2: shared realtime voice session harness through realtime-voice.
-      // +24: narrowed durable channel-ingress drain seam — factory, lifecycle binding,
-      // tuning constants, and telegram-consumed claim helpers with compat mirrors,
-      // after harvesting exports orphaned by the split-out WhatsApp adapter (#108656).
-      // +10: supplemental sender helpers plus host-owned SQLite lease contracts.
-      // Harvest: retired dual-field plan payload builder -1.
-      // +23: core channel, envelope, direct-DM, feedback, legacy-payload, and memory contracts.
-      // +81: meeting-runtime barrel: browser meeting-bot core behind MeetingPlatformAdapter.
-      // +3: question-gateway-runtime resolver plus request/result types.
-      // +1: async memory prompt preparation registration.
-      // +1: canonical memory host event normalization for SQLite storage.
-      // +1: centralized remember-across-conversations effective-default resolver.
-      // +4: gateway-backed harness question runner, claim/cancel helpers, and caller type.
-      // Harvest: internal question runtime exports -2.
-      // +10: diagnostic-runtime publishes unique diagnostic and trace helpers.
-      // +7: absorbed deprecated runtime compatibility exports.
-      // +1: ingress-effect-once factory.
-      // +1: shared persistent-dedupe claim loop.
-      // +3: bounded raw transcript cursor request, result, and reader.
-      // +3: bounded visible transcript cursor request, result, and reader.
-      // +1: explicit AgentModelPolicyConfig shared with provider setup surfaces.
-      // +1: AgentHarnessSessionSupersededError lets harness plugins stop stale-owner fallback.
-      // +1: AgentThinkingLevel shared by default-turn and compaction config.
-      // +9: shared ingress monitor factory and lifecycle/result contracts across
-      // channel-outbound and its two deprecated compatibility barrels.
-      // +1: SwarmConfig exposes the tools.swarm contract through config-types.
-      // +3: harness sessionFork capability params, result, and failure-code contracts.
-      // +2: upstream-link registry write/delete for harness-owned session forks.
-      // Harvest: mention-pattern schemas and helper exports -3.
-      // +1: config-backed main-session resolver for Gateway-hosted plugin services.
-      // +9: outbound echo identity type and record/query helpers across
-      // channel-outbound and its two compatibility barrels.
-      // Net +1: public session catalog locator types after the protocol cleanup harvest.
-      // +2: lifecycle-owned prepared model catalog sync and async readers.
-      // The cumulative notes above describe the pre-retirement surface; the merged graph
-      // measures upstream's 4,696 exports plus 17 retained continuation/runtime exports.
-      4713,
+      // +4: session discussion state, info, provider, and registration contracts.
+      // +2: structured media placeholder formatter and its text-fact contract.
+      // +2: narrow settled-turn finalization result and safe full-attempt projector.
+      // +1: channel-owned setup contract factory.
+      // +18: generic schema primitives needed by plugin-owned channel config schemas.
+      // +2: shared Teams reply-style and TTS schema leaves.
+      // +2: generic inbound-root and SCP-host schema validators.
+      // +2: attributed-range renderer and its options contract.
+      // +1: agent-harness transcript visibility projector.
+      // +1: outbound formatting capability profile.
+      // +3: plugin approval reviewer-detail cap/truncator and sanitize-with-status variant.
+      // +1: canonical incognito session classifier for storage-safe plugin behavior.
+      // +2: shipped Slack and Discord setup compatibility helpers.
+      // +3: typed channel partial-delivery error, creator, and structural guard.
+      // +1: closed attempt-terminal merge, normalization, and projection helper.
+      // +3: harness-native MCP App preview helper and its runtime/catalog contracts.
+      // +1: canonical unknown-value to Error coercion.
+      // +6: canonical session delivery normalization, access, and projection helpers.
+      // +5: focused media-local-roots helpers and typed hook media contracts.
+      // +1: model-independent agent-harness preflight failure contract.
+      // +3: channel DM policy factory and its account/patch callback contracts.
+      // +1: typed owner-required error for session store path resolution.
+      // +1: native approval messaging target resolver.
+      // +1: shared plugin SecretRef setup plan helper.
+      // +1: shared multi-claim ingress lifecycle fan-in.
+      4724,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
-      // +2: materializeRequesterScopedMcpToolsForHarnessRun (agent-harness-runtime + compat mirror).
-      // +4: group scope encoder/key builder (channel-policy + compat mirror).
-      // +1: atomic SQLite STRICT migration for plugin stores.
-      // +1: runDetachedWebhookWork gives post-ack work an independently tracked admission root.
-      // Harvest: channel-ingress -19; dead channel-message dispatch aliases -23.
-      // Harvest: retired qa-live-transport-scenarios subpath -3.
-      // +4: shared plan checklist formatter across channel barrels.
-      // +4: plan-step normalizer across channel barrels.
-      // Harvest: retired dual-field plan payload builder -1.
-      // +6: active plan-step helpers pinned through channel-outbound and mirrors.
-      // +2: widget HTML document detection and size assertion.
-      // Used-union narrowing of the 31 wildcard barrels.
-      // +2: generic channel retry runner and Retry-After parser.
-      // +1: shared speech-provider API key resolver.
-      // +24: shared channel setup, config-schema, policy, and status helpers.
-      // +1: shared channel replay-guard factory.
-      // +3: receipt tracker/snapshot callables across channel barrels.
-      // +3: lightweight speech settings normalizers and config resolver.
-      // +1: unified implicit-mention policy resolver.
-      // +1: selectPreferredLocalModelId shares app-guided local model ranking across providers.
-      // +3: PCM16/mu-law energy readers and speech-threshold gate factory.
-      // +2: supplemental sender decision and outbound text chunk sequencer.
-      // +1: shared realtime voice session harness through realtime-voice.
-      // +9: narrowed drain seam functions and compat mirrors after the
-      // WhatsApp-split harvest (#108656).
-      // +3: supplemental sender helpers plus the PluginStateLeaseRunner callback.
-      // Harvest: retired dual-field plan payload builder -1.
-      // +13: core channel, envelope, direct-DM, feedback, legacy-payload, and memory operations.
-      // +32: meeting-runtime barrel: browser meeting-bot core behind MeetingPlatformAdapter.
-      // +1: question-gateway-runtime resolver.
-      // +1: async memory prompt preparation registration.
-      // +1: canonical memory host event normalization for SQLite storage.
-      // +1: centralized remember-across-conversations effective-default resolver.
-      // +3: gateway-backed harness question runner and claim/cancel helpers.
-      // Harvest: internal question runtime callable -1.
-      // +3: diagnostic-runtime publishes continuation-tracer callables.
-      // +2: deprecated infra-runtime exposes generateChainId and removeSystemEvents.
-      // +1: ingress-effect-once factory.
-      // +1: shared persistent-dedupe claim loop.
-      // +1: bounded raw transcript cursor reader.
-      // +1: bounded visible transcript cursor reader.
-      // +3: shared ingress monitor factory across channel-outbound and compat mirrors.
-      // +2: upstream-link registry write/delete for harness-owned session forks.
-      // +1: config-backed main-session resolver for Gateway-hosted plugin services.
-      // +6: outbound echo record/query helpers across channel-outbound and mirrors.
-      // +2: lifecycle-owned prepared model catalog sync and async readers.
-      // The merged graph measures upstream's 2,846 callables plus five retained callables.
-      2851,
+      // +1: session discussion provider registration.
+      // +1: structured media placeholder formatter for text-only channel carriers.
+      // +1: settled-turn full-attempt projector.
+      // +1: channel-owned setup contract factory.
+      // +4: generic channel schema shape builders.
+      // +1: plugin-owned sensitive-schema registration.
+      // +2: generic inbound-root and SCP-host schema validators.
+      // +1: attributed-range renderer.
+      // +1: agent-harness transcript visibility projector.
+      // +2: plugin approval detail truncator and sanitize-with-status variant.
+      // +1: canonical incognito session classifier for storage-safe plugin behavior.
+      // +2: shipped Slack and Discord setup compatibility helpers.
+      // +2: channel partial-delivery error creator and structural guard.
+      // +1: harness-native MCP App preview helper.
+      // +1: canonical unknown-value to Error coercion.
+      // +6: canonical session delivery normalization, access, and projection helpers.
+      // +2: focused media-local-roots helpers.
+      // +3: channel DM policy factory and its account/patch callbacks.
+      // +1: native approval messaging target resolver.
+      // +1: shared multi-claim ingress lifecycle fan-in.
+      2862,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
-      // +2: group scope encoder/key builder mirrored by deprecated compat.
-      // Harvest: channel-ingress -8; dead channel-message dispatch aliases -23.
-      // +77: five zero-consumer subpaths enter their removal window.
-      // +9: typed plan exports and formatter through deprecated channel barrels.
-      // +6: plan-step ingress union and normalizer through deprecated channel barrels.
-      // +8: channel-outbound plan pins mirrored through deprecated barrels.
-      // Used-union narrowing drops inherited deprecated exports.
-      // +1: Telegram runner alias retained for plugin SDK compatibility.
-      // +8: shared channel helpers mirrored by deprecated barrels.
-      // +3: receipt/snapshot exports through deprecated channel barrels.
-      // +1: unified implicit-mention config type through deprecated config-types.
-      // +24: narrowed drain seam compat mirrors in the channel-message
-      // deprecation-window barrels (#108656).
-      // Harvest: retired dual-field plan payload builder -1; lower-only drift -8.
-      // +7: absorbed deprecated runtime compatibility exports.
-      // +1: AgentModelPolicyConfig mirrored by deprecated config-types.
-      // +6: ingress monitor lifecycle/result contracts through deprecated channel barrels.
-      // +1: AgentThinkingLevel mirrored by deprecated config-types.
-      // +1: SwarmConfig mirrored by deprecated config-types.
-      // +2: outbound echo helpers inherited by deprecated channel barrels.
-      // +1: lifecycle-owned prepared model catalog contract mirrored by agent-runtime compat.
-      // The merged graph measures upstream's 1,697 deprecated exports plus seven retained
-      // continuation/runtime compatibility exports.
-      1704,
+      // +3: canonical incognito classifier projected through deprecated compatibility barrels.
+      // +2: shipped Slack and Discord setup compatibility helpers.
+      // +10: named media legacy projection deprecations across public compatibility barrels.
+      1698,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
-      // Used-union narrowing removes 103 wildcard re-exports.
-      // Harvest: freeze the compat config-schema barrel to explicit exports -1;
-      // retire the Memory Core facade's event-store wildcard -1.
-      82,
+      83,
       env,
     ),
   };

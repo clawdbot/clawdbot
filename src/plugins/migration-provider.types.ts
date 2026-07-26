@@ -32,6 +32,13 @@ type MigrationItemAction =
   | "skip"
   | "manual";
 
+type MigrationApplyPhase = "before-promotion" | "after-promotion";
+
+/** Provider guarantee required before onboarding defers non-rollbackable effects. */
+type MigrationDeferredApplyContract = {
+  retrySafe: true;
+};
+
 export type MigrationItem = {
   id: string;
   kind: MigrationItemKind | (string & {});
@@ -42,6 +49,10 @@ export type MigrationItem = {
   message?: string;
   reason?: string;
   sensitive?: boolean;
+  /** Onboarding may defer non-rollbackable effects only for retry-safe providers. */
+  applyPhase?: MigrationApplyPhase;
+  /** Retry-safe deferred apply may report a non-mutating already-satisfied terminal result. */
+  deferredCompletion?: true;
   /** Core-owned source revision bound by reviewed embedded migration flows. */
   sourceRevision?: { algorithm: "sha256"; digest: string };
   details?: Record<string, unknown>;
@@ -85,9 +96,16 @@ type MigrationProviderPreparation = {
   dispose?: () => void | Promise<void>;
 };
 
+export type MigrationConfigRuntime = Pick<
+  NonNullable<PluginRuntime["config"]>,
+  "current" | "mutateConfigFile"
+>;
+
 export type MigrationProviderContext = {
   config: OpenClawConfig;
   runtime?: PluginRuntime;
+  /** Host-owned config mutation target for isolated embedded migration flows. */
+  configRuntime?: MigrationConfigRuntime;
   logger: PluginLogger;
   stateDir: string;
   /** Explicit destination agent for embedded migration surfaces such as Control UI. */
@@ -110,6 +128,8 @@ export type MigrationProviderPlugin = {
   description?: string;
   /** Item kinds this provider can expose without requiring a full plan. */
   supportedItemKinds?: readonly string[];
+  /** Required when this provider plans items for `after-promotion`. */
+  deferredApply?: MigrationDeferredApplyContract;
   detect?: (ctx: MigrationProviderContext) => MigrationDetection | Promise<MigrationDetection>;
   prepareApply?: (
     ctx: MigrationProviderContext,

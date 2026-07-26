@@ -34,9 +34,9 @@ function loadRoute(search: string): CustodianRouteData {
 function createContext(): ApplicationContext {
   const snapshot: ApplicationGatewaySnapshot = {
     client: null,
-    connected: false,
+    phase: "stopped",
     offlineStable: false,
-    reconnecting: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: "main",
     sessionKey: "main",

@@ -7,7 +7,6 @@ import { applyDerivedTags } from "./schema.tags.js";
 import { applyResolvedConfigTierHints } from "./schema.tiers.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { OpenClawSchema } from "./zod-schema.js";
-import { DiscordConfigSchema, TelegramConfigSchema } from "./zod-schema.providers-core.js";
 
 describe("config schema", () => {
   type SchemaInput = NonNullable<Parameters<typeof buildConfigSchema>[0]>;
@@ -589,10 +588,10 @@ describe("config schema", () => {
     const res = buildConfigSchema(heartbeatChannelInput);
 
     const defaultsHint = res.uiHints["agents.defaults.heartbeat.target"];
-    const listHint = res.uiHints["agents.list.*.heartbeat.target"];
+    const entryHint = res.uiHints["agents.entries.*.heartbeat.target"];
     expect(defaultsHint?.help).toContain("imessage");
     expect(defaultsHint?.help).toContain("last");
-    expect(listHint?.help).toContain("imessage");
+    expect(entryHint?.help).toContain("imessage");
   });
 
   it("caches merged schemas for identical plugin/channel metadata", () => {
@@ -623,12 +622,15 @@ describe("config schema", () => {
     );
   });
 
-  it("covers core config paths with derived tags", () => {
-    for (const [key, hint] of Object.entries(baseSchema.uiHints)) {
-      if (key.includes(".")) {
-        expect(hint.tags?.length ?? 0, `expected tags for ${key}`).toBeGreaterThan(0);
-      }
-    }
+  it("only derives the advanced tag from an explicit advanced hint", () => {
+    const tagged = applyDerivedTags({
+      "update.channel": { advanced: false },
+      "update.auto.enabled": { advanced: false },
+      "update.auto.interval": { advanced: true },
+    });
+    expect(tagged["update.channel"]?.tags).toEqual([]);
+    expect(tagged["update.auto.enabled"]?.tags).toEqual([]);
+    expect(tagged["update.auto.interval"]?.tags).toEqual(["performance", "advanced"]);
   });
 
   it("rejects removed Firecrawl config from the core web fetch schema", () => {
@@ -657,33 +659,6 @@ describe("config schema", () => {
         subagents: { model: { primary: "openai/gpt-5.5" } },
       }).success,
     ).toBe(false);
-  });
-
-  it("accepts progress commentary for shared progress streaming config", () => {
-    expect(
-      DiscordConfigSchema.safeParse({
-        streaming: {
-          mode: "progress",
-          progress: { commentary: true },
-        },
-      }).success,
-    ).toBe(true);
-
-    expect(
-      TelegramConfigSchema.safeParse({
-        streaming: {
-          mode: "progress",
-          progress: { commentary: true },
-        },
-      }).success,
-    ).toBe(true);
-  });
-
-  it("rejects retired Discord subagent progress config", () => {
-    expect(DiscordConfigSchema.safeParse({ subagentProgress: true }).success).toBe(false);
-    expect(DiscordConfigSchema.safeParse({ subagentProgress: { enabled: true } }).success).toBe(
-      false,
-    );
   });
 
   it("keeps per-agent model overrides limited to model selection", () => {
@@ -734,6 +709,7 @@ describe("config schema", () => {
       agents: {
         entries: {
           main: {
+            default: true,
             tools: {
               exec: {
                 commandHighlighting: false,
@@ -765,6 +741,7 @@ describe("config schema", () => {
       agents: {
         entries: {
           main: {
+            default: true,
             tools: {
               exec: {
                 reviewer: {
@@ -808,17 +785,13 @@ describe("config schema", () => {
     ).toBe(false);
   });
 
-  it("accepts experimental tool flags in the runtime zod schema", () => {
-    const parsed = ToolsSchema.parse({
-      experimental: {
-        planTool: true,
-      },
-    });
+  it("accepts the update_plan tool switch in the runtime zod schema", () => {
+    const parsed = ToolsSchema.parse({ updatePlan: false });
     if (!parsed) {
       throw new Error("expected parsed tools config");
     }
 
-    expect(parsed?.experimental?.planTool).toBe(true);
+    expect(parsed?.updatePlan).toBe(false);
   });
 
   it("accepts simplified Tool Search config in the runtime zod schema", () => {

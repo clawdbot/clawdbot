@@ -9,6 +9,10 @@ import {
 } from "openclaw/plugin-sdk/meeting-runtime";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import type {
+  TranscriptStartRequest,
+  TranscriptStopRequest,
+} from "openclaw/plugin-sdk/transcripts";
 import type { TeamsMeetingsConfig, TeamsMeetingsMode, TeamsMeetingsTransport } from "./config.js";
 import {
   testTeamsMeetingListening,
@@ -191,11 +195,24 @@ export class TeamsMeetingsRuntime {
       captureTranscript: async (session, options) =>
         await this.#captureTranscript(session, options),
       speakViaTransport: async () => undefined,
+      durableTranscripts: {
+        config: params.fullConfig.transcripts,
+        providerId: "teams",
+        providerName: "Microsoft Teams",
+      },
     });
   }
 
   list(): TeamsMeetingsSession[] {
     return this.#sessions.list();
+  }
+
+  async startTranscriptSource(request: TranscriptStartRequest) {
+    return await this.#sessions.startTranscriptSource(request);
+  }
+
+  async stopTranscriptSource(request: TranscriptStopRequest) {
+    return await this.#sessions.stopTranscriptSource(request);
   }
 
   ownsSession(agentId: string, sessionId: string): boolean {
@@ -424,6 +441,7 @@ export class TeamsMeetingsRuntime {
       const result = await recoverCurrentTeamsMeetingTab({
         runtime: this.params.runtime,
         config: this.params.config,
+        fullConfig: this.params.fullConfig,
         meetingSessionId: session.id,
         mode: session.mode,
         nodeId: session.chrome?.nodeId,

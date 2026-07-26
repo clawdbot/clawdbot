@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { effectiveBoardWidgetRows } from "../../lib/board/grid.ts";
+import {
+  boardChromeRowPx,
+  effectiveBoardWidgetRows,
+  exactBoardWidgetHeightPx,
+} from "../../lib/board/grid.ts";
 // Side-effect import: test-support only type-imports the component, so the
 // custom element must be registered here for mount() to render anything.
 import "./board-view.ts";
@@ -27,6 +31,46 @@ describe("board widget sizing", () => {
     expect(effectiveBoardWidgetRows(card, 101, 38)).toBe(3);
     expect(effectiveBoardWidgetRows(card, 150, 38)).toBe(4);
     expect(effectiveBoardWidgetRows(card, 150, 0)).toBe(3);
+  });
+
+  it("hugs auto cards to their exact content height inside the quantized cell", () => {
+    const card = boardWidget({ sizeH: 6 });
+    // Card inset adds 12px per edge; frameless/full-bleed report bare content.
+    expect(exactBoardWidgetHeightPx(card, 300)).toBe(324);
+    expect(exactBoardWidgetHeightPx({ ...card, presentation: "frameless" }, 300)).toBe(300);
+    // Short content hugs below the 2-row cell minimum: the cell keeps its
+    // minimum span, only the card shrinks.
+    expect(exactBoardWidgetHeightPx(card, 60)).toBe(84);
+    // At the 20-row cap the card fills the cell exactly and the body clips.
+    expect(exactBoardWidgetHeightPx(card, 10_000)).toBe(20 * 56 + 19 * 12);
+    // Coarse-pointer layouts keep the 38px bar in flow, joining the height.
+    expect(exactBoardWidgetHeightPx(card, 300, 38)).toBe(362);
+    expect(exactBoardWidgetHeightPx({ ...card, heightMode: "fixed" }, 300)).toBeUndefined();
+    expect(exactBoardWidgetHeightPx(card, undefined)).toBeUndefined();
+    expect(exactBoardWidgetHeightPx({ ...card, contentKind: "mcp-app" }, 300)).toBeUndefined();
+  });
+
+  it("pins the exact reported height on the card and re-fills while dragging", async () => {
+    const view = await mount();
+    const cell = view.querySelector("openclaw-board-widget-cell");
+    const frame = cell?.querySelector("iframe");
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: frame?.contentWindow ?? null,
+        data: { type: "openclaw:widget-size", height: 300 },
+      }),
+    );
+    const widget = boardWidget();
+    const expected = exactBoardWidgetHeightPx(widget, 300, boardChromeRowPx());
+    const section = () => cell?.querySelector<HTMLElement>(".board-widget");
+    await vi.waitFor(() => {
+      expect(section()?.getAttribute("style")).toContain(`height: ${expected}px`);
+      expect(section()?.getAttribute("style")).toContain("align-self: start");
+    });
+    // Gestures manipulate the quantized cell, so the card fills it again.
+    Reflect.set(cell ?? {}, "dragging", true);
+    await cell?.updateComplete;
+    expect(section()?.getAttribute("style")).not.toContain("align-self");
   });
 
   it("pins preset resizing and toggles height mode from the menu", async () => {

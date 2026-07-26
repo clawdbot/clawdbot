@@ -89,7 +89,7 @@ class WorkboardPage extends OpenClawLightDomElement {
       () => this.context?.gateway,
       (gateway) => {
         const handleSnapshot = (snapshot: ApplicationContext["gateway"]["snapshot"]) => {
-          if (snapshot.connected && snapshot.client) {
+          if (snapshot.phase === "connected" && snapshot.client) {
             this.ensureInitialData();
           } else if (this.context?.workboard) {
             // Teardown at the observed disconnect, not a later render that a fast reconnect may skip.
@@ -107,7 +107,11 @@ class WorkboardPage extends OpenClawLightDomElement {
       (gateway) =>
         gateway.subscribeEvents((event) => {
           const workboard = this.context?.workboard;
-          if (workboard && gateway.snapshot.connected && event.event === WORKBOARD_CHANGED_EVENT) {
+          if (
+            workboard &&
+            gateway.snapshot.phase === "connected" &&
+            event.event === WORKBOARD_CHANGED_EVENT
+          ) {
             handleWorkboardChanged(workboard, event.payload);
           }
         }),
@@ -150,7 +154,7 @@ class WorkboardPage extends OpenClawLightDomElement {
   private ensureInitialData() {
     const context = this.context;
     const gateway = context?.gateway.snapshot;
-    if (!context || !gateway?.connected || !gateway.client) {
+    if (!context || gateway?.phase !== "connected" || !gateway.client) {
       return;
     }
     if (!context.runtimeConfig.state.configSnapshot && !context.runtimeConfig.state.configLoading) {
@@ -173,7 +177,7 @@ class WorkboardPage extends OpenClawLightDomElement {
     const context = this.context;
     const gateway = context?.gateway.snapshot;
     const pluginEnabled = this.pluginEnabled();
-    if (!context || !gateway?.connected || !gateway.client || pluginEnabled !== true) {
+    if (!context || gateway?.phase !== "connected" || !gateway.client || pluginEnabled !== true) {
       if (context) {
         stopWorkboardLiveRefresh(context.workboard);
         stopWorkboardLifecycleRefresh(context.workboard);
@@ -362,7 +366,7 @@ class WorkboardPage extends OpenClawLightDomElement {
       ${renderWorkboard({
         host: context.workboard,
         client: gateway.client,
-        connected: gateway.connected,
+        connected: gateway.phase === "connected",
         canWrite: hasOperatorWriteAccess(auth),
         canGrant: hasOperatorApprovalsAccess(auth),
         canModelOverride: hasOperatorAdminAccess(auth),

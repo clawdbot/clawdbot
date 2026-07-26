@@ -81,11 +81,13 @@ Any model on [deepinfra.com](https://deepinfra.com/) works with the
 
 ```text
 deepinfra/deepseek-ai/DeepSeek-V4-Flash
-deepinfra/deepseek-ai/DeepSeek-V3.2
-deepinfra/MiniMaxAI/MiniMax-M2.5
-deepinfra/moonshotai/Kimi-K2.5
+deepinfra/deepseek-ai/DeepSeek-V4-Pro
+deepinfra/zai-org/GLM-5.2
+deepinfra/stepfun-ai/Step-3.7-Flash
+deepinfra/moonshotai/Kimi-K2.7-Code
+deepinfra/moonshotai/Kimi-K2.6
+deepinfra/nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B
 deepinfra/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B
-deepinfra/zai-org/GLM-5.1
 ...and many more
 ```
 

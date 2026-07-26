@@ -15,6 +15,7 @@ import { pathForRoute } from "../../app-route-paths.ts";
 import { icons } from "../../components/icons.ts";
 import {
   renderSettingsPage,
+  renderSettingsSegmented,
   renderSettingsSection,
   renderSettingsStatus,
 } from "../../components/settings-ui.ts";
@@ -34,6 +35,7 @@ import {
   parseSessionKeyParts,
 } from "../../lib/format.ts";
 import { formatSessionTokens } from "../../lib/presenter.ts";
+import { isCronSessionKey } from "../../lib/session-display.ts";
 import { formatGoalDetail, formatGoalSummary } from "../../lib/session-goal.ts";
 import { sessionModelMatchesDefaults } from "../../lib/session-model-defaults.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
@@ -288,14 +290,21 @@ const SESSION_KIND_ICONS = {
   group: icons.users,
   global: icons.globe,
   unknown: icons.circle,
-} satisfies Record<GatewaySessionRow["kind"], unknown>;
+} satisfies Record<GatewaySessionRow["kind"] | "cron", unknown>;
+
+// The server row kind never carries "cron" — cron is a key-shape fact, so the
+// display kind derives it from the key for the avatar, badge class, and label.
+function resolveSessionDisplayKind(row: GatewaySessionRow): GatewaySessionRow["kind"] | "cron" {
+  return isCronSessionKey(row.key) ? "cron" : row.kind;
+}
 
 // Kind glyph anchors each row; the dot mirrors isSessionRunActive so run
 // state also reads at the identity anchor while scanning the key column.
 function renderSessionAvatar(row: GatewaySessionRow) {
+  const displayKind = resolveSessionDisplayKind(row);
   return html`
-    <span class="session-avatar session-avatar--${row.kind}" aria-hidden="true">
-      ${SESSION_KIND_ICONS[row.kind] ?? icons.circle}
+    <span class="session-avatar session-avatar--${displayKind}" aria-hidden="true">
+      ${SESSION_KIND_ICONS[displayKind] ?? icons.circle}
       ${isSessionRunActive(row) ? html`<span class="session-avatar__status"></span>` : nothing}
     </span>
   `;
@@ -1294,33 +1303,21 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
               includeUnknown: checked,
             }),
         })}
-        <div
-          class="settings-segmented sessions-view-segment"
-          role="group"
-          aria-label=${t("sessionsView.sessionState")}
-        >
-          ${(["active", "archived", "all"] as const).map(
-            (statusFilter) => html`
-              <button
-                type="button"
-                class="settings-segmented__btn ${props.statusFilter === statusFilter
-                  ? "settings-segmented__btn--active"
-                  : ""}"
-                aria-pressed=${String(props.statusFilter === statusFilter)}
-                title=${statusFilter === "archived"
-                  ? t("sessionsView.archivedOnlyTooltip")
-                  : nothing}
-                @click=${() => props.onStatusFilterChange(statusFilter)}
-              >
-                ${statusFilter === "active"
-                  ? t("common.active")
-                  : statusFilter === "archived"
-                    ? t("sessionsView.archived")
-                    : t("sessionsView.all")}
-              </button>
-            `,
-          )}
-        </div>
+        ${renderSettingsSegmented<SessionArchivedFilter>({
+          value: props.statusFilter,
+          ariaLabel: t("sessionsView.sessionState"),
+          className: "sessions-view-segment",
+          options: [
+            { value: "active", label: t("common.active") },
+            {
+              value: "archived",
+              label: t("sessionsView.archived"),
+              title: t("sessionsView.archivedOnlyTooltip"),
+            },
+            { value: "all", label: t("sessionsView.all") },
+          ],
+          onChange: (value) => props.onStatusFilterChange(value),
+        })}
       </div>
       <span class="sessions-toolbar__divider" aria-hidden="true"></span>
       <label class="session-groupby">
@@ -1509,7 +1506,8 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
   const chatUrl = canLink
     ? `${pathForRoute("chat", props.basePath)}${searchForSession(row.key)}`
     : null;
-  const kindClass = `session-kind session-kind--${row.kind}`;
+  const displayKind = resolveSessionDisplayKind(row);
+  const kindClass = `session-kind session-kind--${displayKind}`;
   const rowClass = [
     "session-data-row",
     "session-data-row--expandable",
@@ -1625,7 +1623,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
       </td>
       ${categoryMode ? renderCategoryCell(row, props) : nothing}
       <td>
-        <span class=${kindClass}>${row.kind}</span>
+        <span class=${kindClass}>${resolveSessionDisplayKind(row)}</span>
       </td>
       <td class="session-status-col">
         <div class="session-status-stack">
@@ -1762,7 +1760,7 @@ function renderSessionDetailsRow(params: {
           </div>
           <div class="session-details-panel__badges">
             ${renderSessionStatusBadge(row)} ${renderSessionGoalStatus(row.goal)}
-            <span class=${kindClass}>${row.kind}</span>
+            <span class=${kindClass}>${resolveSessionDisplayKind(row)}</span>
           </div>
         </div>
 

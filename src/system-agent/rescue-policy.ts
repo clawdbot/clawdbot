@@ -1,7 +1,7 @@
+import { resolveAgentEntry } from "../agents/agent-scope-config.js";
 // OpenClaw rescue policy gates remote writes by owner, DM, sandbox, and YOLO posture.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveExecModePolicy } from "../infra/exec-approvals.js";
-import { normalizeAgentId } from "../routing/session-key.js";
 
 /**
  * Policy checks for remote OpenClaw rescue commands.
@@ -36,18 +36,8 @@ type SystemAgentRescuePolicyInput = {
   isDirectMessage: boolean;
 };
 
-function resolveAgentEntry(cfg: OpenClawConfig, agentId?: string) {
-  if (!agentId) {
-    return undefined;
-  }
-  const id = normalizeAgentId(agentId);
-  return cfg.agents?.list?.find(
-    (entry) => entry !== null && typeof entry === "object" && normalizeAgentId(entry.id) === id,
-  );
-}
-
 function resolveScopedExecConfig(cfg: OpenClawConfig, agentId?: string) {
-  return resolveAgentEntry(cfg, agentId)?.tools?.exec;
+  return agentId ? resolveAgentEntry(cfg, agentId)?.tools?.exec : undefined;
 }
 
 function resolveScopedSandboxMode(
@@ -55,7 +45,9 @@ function resolveScopedSandboxMode(
   agentId?: string,
 ): "off" | "non-main" | "all" {
   return (
-    resolveAgentEntry(cfg, agentId)?.sandbox?.mode ?? cfg.agents?.defaults?.sandbox?.mode ?? "off"
+    (agentId ? resolveAgentEntry(cfg, agentId)?.sandbox?.mode : undefined) ??
+    cfg.agents?.defaults?.sandbox?.mode ??
+    "off"
   );
 }
 

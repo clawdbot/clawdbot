@@ -10,7 +10,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { planManifestModelCatalogRows } from "../model-catalog/manifest-planner.js";
+import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -215,6 +215,10 @@ function overlayCatalogMetadata(
     ...(overlay.input !== undefined ? { input: overlay.input } : {}),
     ...(params ? { params } : {}),
     ...(overlay.mediaInput !== undefined ? { mediaInput: overlay.mediaInput } : {}),
+    ...(overlay.status !== undefined ? { status: overlay.status } : {}),
+    ...(overlay.statusReason !== undefined ? { statusReason: overlay.statusReason } : {}),
+    ...(overlay.replaces !== undefined ? { replaces: overlay.replaces } : {}),
+    ...(overlay.replacedBy !== undefined ? { replacedBy: overlay.replacedBy } : {}),
     compat: options?.preserveBaseCompat
       ? resolveCatalogOwnedModelCompat({
           catalogRoute: options.catalogCompatRoute ?? base,
@@ -362,8 +366,9 @@ export function loadManifestModelCatalog(params: {
         config: params.config,
       }),
   );
-  const plan = planManifestModelCatalogRows({
+  const plan = planEffectiveModelCatalogRows({
     registry: { plugins: eligiblePlugins },
+    config: params.config,
   });
   const rows = plan.rows.map((row) => {
     const entry: ModelCatalogEntry = {
@@ -371,6 +376,7 @@ export function loadManifestModelCatalog(params: {
       name: row.name,
       provider: row.provider,
       api: row.api,
+      status: row.status,
     };
     if (row.baseUrl) {
       entry.baseUrl = row.baseUrl;
@@ -390,6 +396,15 @@ export function loadManifestModelCatalog(params: {
     }
     if (row.compat) {
       entry.compat = row.compat;
+    }
+    if (row.statusReason) {
+      entry.statusReason = row.statusReason;
+    }
+    if (row.replaces?.length) {
+      entry.replaces = [...row.replaces];
+    }
+    if (row.replacedBy) {
+      entry.replacedBy = row.replacedBy;
     }
     return entry;
   });

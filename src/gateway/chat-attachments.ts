@@ -63,6 +63,16 @@ const TEXT_ONLY_OFFLOAD_LIMIT = 10;
 
 const DEFAULT_CHAT_ATTACHMENT_MAX_MB = 20;
 
+export function stripImageMediaMarkers(message: string, refs: readonly OffloadedRef[]): string {
+  return refs.reduce((projected, ref) => {
+    const marker = ref.mimeType.startsWith("image/") ? `\n[media attached: ${ref.mediaRef}]` : "";
+    const index = marker ? projected.lastIndexOf(marker) : -1;
+    return index < 0
+      ? projected
+      : projected.slice(0, index) + projected.slice(index + marker.length);
+  }, message);
+}
+
 export async function persistInboundImagesForTranscript(params: {
   images: ChatImageContent[];
   imageOrder: PromptImageOrderEntry[];
@@ -322,7 +332,13 @@ export async function parseMessageWithAttachments(
   const acceptNonImage = opts?.acceptNonImage !== false;
 
   if (!attachments || attachments.length === 0) {
-    return { message, images: [], imageOrder: [], media: [], offloadedRefs: [] };
+    return {
+      message,
+      images: [],
+      imageOrder: [],
+      media: [],
+      offloadedRefs: [],
+    };
   }
 
   const images: ChatImageContent[] = [];
@@ -404,7 +420,7 @@ export async function parseMessageWithAttachments(
       // would offload a file the runner later drops to null — a successful
       // response with a silently missing image. Reject here so the client
       // sees an explicit 4xx. Non-image attachments keep the full maxBytes
-      // ceiling because their host path (ctx.MediaPaths → Read/Bash) doesn't
+      // ceiling because their host path (media facts → Read/Bash) doesn't
       // load into the model.
       if (isImage && sizeBytes > MAX_IMAGE_BYTES) {
         throw new Error(
@@ -458,9 +474,7 @@ export async function parseMessageWithAttachments(
       savedMediaIds.push(savedMedia.id);
 
       const mediaRef = `media://inbound/${savedMedia.id}`;
-      if (isImage) {
-        updatedMessage += `\n[media attached: ${mediaRef}]`;
-      }
+      updatedMessage += `\n[media attached: ${mediaRef}]`;
       log?.info?.(
         shouldForceImageOffload && isImage
           ? `[Gateway] Offloaded image for text-only model. Saved: ${mediaRef}`

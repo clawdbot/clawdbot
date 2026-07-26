@@ -9,6 +9,7 @@ import {
 } from "../../infra/session-delivery-queue-storage.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.js";
 import { resolveContinuationRuntimeConfig } from "./config.js";
 import {
   DelegateTerminalChainStatePersistError,
@@ -317,7 +318,7 @@ export async function recoverAndReleaseStagedPostCompactionDelegates(options: {
     }
     recoveredSessions++;
     const chainState = loadContinuationChainState(entry);
-    const deliveryContext = entry?.deliveryContext;
+    const deliveryContext = deliveryContextFromSession(entry);
     const spawnCtx: PostCompactionSpawnContext = {
       agentSessionKey: sessionKey,
       ...(deliveryContext?.channel ? { agentChannel: deliveryContext.channel } : {}),

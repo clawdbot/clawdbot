@@ -6,7 +6,14 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { MsgContext } from "../templating.js";
-import { initSessionState } from "./session.js";
+import { finalizeInboundContext } from "./inbound-context.js";
+import { initSessionState as initSessionStateRaw } from "./session.js";
+
+const initSessionState = (
+  params: Omit<Parameters<typeof initSessionStateRaw>[0], "ctx"> & {
+    ctx: MsgContext;
+  },
+) => initSessionStateRaw({ ...params, ctx: finalizeInboundContext(params.ctx) });
 
 vi.mock("../../plugin-sdk/browser-maintenance.js", () => ({
   closeTrackedBrowserTabsForSessions: vi.fn(async () => 0),
@@ -140,10 +147,10 @@ describe("initSessionState - heartbeat should not trigger session reset", () => 
       commandAuthorized: true,
     });
 
-    // Assert: Session SHOULD be reset (new sessionId) because it's stale
+    // Assert: Session SHOULD reset in place because it's stale.
     expect(result.isNewSession).toBe(true);
     expect(result.resetTriggered).toBe(false); // Not a manual reset, but idle reset
-    expect(result.sessionId).not.toBe("original-session-id-12345");
+    expect(result.sessionId).toBe("original-session-id-12345");
   });
 
   it("should preserve session when Provider is 'heartbeat' even with daily reset mode", async () => {
@@ -215,7 +222,7 @@ describe("initSessionState - heartbeat should not trigger session reset", () => 
     });
 
     expect(userResult.isNewSession).toBe(true);
-    expect(userResult.sessionId).not.toBe("daily-session-id");
+    expect(userResult.sessionId).toBe("daily-session-id");
   });
 
   it("resets legacy daily sessions using the JSONL header even when updatedAt is fresh", async () => {
@@ -254,7 +261,7 @@ describe("initSessionState - heartbeat should not trigger session reset", () => 
     });
 
     expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).not.toBe("legacy-daily-session");
+    expect(result.sessionId).toBe("legacy-daily-session");
   });
 
   it("does not let heartbeat keep a legacy idle session fresh without lastInteractionAt", async () => {
@@ -301,7 +308,7 @@ describe("initSessionState - heartbeat should not trigger session reset", () => 
     });
 
     expect(userResult.isNewSession).toBe(true);
-    expect(userResult.sessionId).not.toBe("legacy-idle-session");
+    expect(userResult.sessionId).toBe("legacy-idle-session");
   });
 
   it("should handle cron-event provider same as heartbeat (no reset)", async () => {

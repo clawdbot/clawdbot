@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { BrowserConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
@@ -18,18 +19,16 @@ const BROWSER_HEADLESS_ENV_KEY = "OPENCLAW_BROWSER_HEADLESS";
 // Isolate the extension relay secret (read from stateDir/credentials) so the
 // extension-token assertions do not pick up a developer's real secret file.
 let isolatedStateDir = "";
-const prevStateDir = process.env.OPENCLAW_STATE_DIR;
-beforeEach(() => {
-  isolatedStateDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cfg-")));
-  process.env.OPENCLAW_STATE_DIR = isolatedStateDir;
+let openClawState: OpenClawTestState;
+beforeEach(async () => {
+  openClawState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-cfg-",
+  });
+  isolatedStateDir = openClawState.stateDir;
 });
-afterEach(() => {
-  if (prevStateDir === undefined) {
-    delete process.env.OPENCLAW_STATE_DIR;
-  } else {
-    process.env.OPENCLAW_STATE_DIR = prevStateDir;
-  }
-  fs.rmSync(isolatedStateDir, { recursive: true, force: true });
+afterEach(async () => {
+  await openClawState.cleanup();
 });
 
 /** Write a relay secret into the isolated state dir's credentials directory. */

@@ -20,6 +20,7 @@ import { QaSuiteInfraError } from "./errors.js";
 import { extractGatewayMessageText } from "./gateway-log-sentinel.js";
 import { resolveQaNodeExecPath } from "./node-exec.js";
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
+import { readSessionTranscriptSummary } from "./suite-runtime-agent-session.js";
 import { waitForGatewayHealthy, waitForTransportReady } from "./suite-runtime-gateway.js";
 import type { QaDreamingStatus, QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 import { resolveQaGatewayTimeoutWithGraceMs } from "./timer-timeouts.js";
@@ -56,6 +57,8 @@ const MANAGED_DREAMING_PROMPT = "__openclaw_memory_core_short_term_promotion_dre
 const QA_HISTORY_RETRY_DEFAULT_MS = 250;
 const QA_HISTORY_RETRY_MIN_MS = 100;
 const QA_HISTORY_RETRY_MAX_MS = 5_000;
+const QA_TRANSCRIPT_EVIDENCE_TIMEOUT_MS = 5_000;
+const QA_TRANSCRIPT_EVIDENCE_POLL_MS = 50;
 
 function stripAnsiCodes(text: string) {
   return text.replace(ANSI_ESCAPE_PATTERN, "");
@@ -602,6 +605,42 @@ async function forceMemoryIndex(params: {
   return result;
 }
 
+async function waitForPersistedTranscriptToolEvidence(
+  env: Pick<QaSuiteRuntimeEnv, "gateway">,
+  params: {
+    sessionKey: string;
+    toolName: string;
+    requireSuccessfulResult: boolean;
+  },
+) {
+  const startedAt = Date.now();
+  let lastError: unknown;
+  while (Date.now() - startedAt < QA_TRANSCRIPT_EVIDENCE_TIMEOUT_MS) {
+    try {
+      const summary = await readSessionTranscriptSummary(env, params.sessionKey, {
+        allowEmpty: true,
+      });
+      const completedCount = summary.completedToolCallCounts[params.toolName] ?? 0;
+      const successfulCount = summary.successfulToolCallCounts[params.toolName] ?? 0;
+      if (completedCount > 0 && (!params.requireSuccessfulResult || successfulCount > 0)) {
+        return;
+      }
+      lastError = undefined;
+    } catch (error) {
+      lastError = error;
+    }
+    const remainingMs = QA_TRANSCRIPT_EVIDENCE_TIMEOUT_MS - (Date.now() - startedAt);
+    if (remainingMs <= 0) {
+      break;
+    }
+    await sleep(Math.min(QA_TRANSCRIPT_EVIDENCE_POLL_MS, remainingMs));
+  }
+  throw new Error(
+    `timed out after ${QA_TRANSCRIPT_EVIDENCE_TIMEOUT_MS}ms waiting for persisted ${params.toolName} transcript evidence`,
+    lastError === undefined ? undefined : { cause: lastError },
+  );
+}
+
 async function runAgentPrompt(
   env: Pick<QaSuiteRuntimeEnv, "gateway" | "transport">,
   params: {
@@ -612,6 +651,8 @@ async function runAgentPrompt(
     provider?: string;
     model?: string;
     timeoutMs?: number;
+    transcriptToolName?: string;
+    requireSuccessfulTranscriptToolResult?: boolean;
     attachments?: Array<{
       mimeType: string;
       fileName: string;
@@ -625,6 +666,13 @@ async function runAgentPrompt(
     throw new Error(
       `agent.wait returned ${waited.status ?? "unknown"}: ${waited.error ?? "no error"}`,
     );
+  }
+  if (params.transcriptToolName) {
+    await waitForPersistedTranscriptToolEvidence(env, {
+      sessionKey: params.sessionKey,
+      toolName: params.transcriptToolName,
+      requireSuccessfulResult: params.requireSuccessfulTranscriptToolResult === true,
+    });
   }
   return {
     started,

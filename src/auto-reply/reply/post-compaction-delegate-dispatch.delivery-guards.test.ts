@@ -4,7 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as sessionAccessorModule from "../../config/sessions/session-accessor.js";
-import * as sessionStoreModule from "../../config/sessions/store.js";
+import * as sessionStoreModule from "../../config/sessions/store-writer-state.js";
 import type { SessionEntry, SessionPostCompactionDelegate } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {

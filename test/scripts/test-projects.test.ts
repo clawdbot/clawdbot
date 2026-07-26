@@ -298,6 +298,7 @@ describe("scripts/test-projects changed-target routing", () => {
         targets: [
           "extensions/codex/src/manifest.test.ts",
           "extensions/openai/openai-provider.test.ts",
+          "test/scripts/codex-client-version-contract.test.ts",
         ],
       });
     },
@@ -1068,25 +1069,6 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
-  it("routes code-mode namespace live repro changes through its regression test", () => {
-    expect(resolveChangedTestTargetPlan(["scripts/repro/code-mode-namespace-live.ts"])).toEqual({
-      mode: "targets",
-      targets: ["test/scripts/code-mode-namespace-live.test.ts"],
-    });
-  });
-
-  it("routes code-mode namespace live Docker repro changes through its regression tests", () => {
-    expect(
-      resolveChangedTestTargetPlan(["scripts/repro/code-mode-namespace-live-docker.sh"]),
-    ).toEqual({
-      mode: "targets",
-      targets: [
-        "test/scripts/code-mode-namespace-live.test.ts",
-        "test/scripts/docker-build-helper.test.ts",
-      ],
-    });
-  });
-
   it("routes group visible reply config changes through channel delivery regressions", () => {
     expect(
       resolveChangedTestTargetPlan([
@@ -1601,7 +1583,7 @@ describe("scripts/test-projects changed-target routing", () => {
 
   it("keeps package, release, and install tooling edits on owner tests", () => {
     const expectedTargets = new Map([
-      ["scripts/generate-npm-shrinkwrap.mjs", ["test/scripts/generate-npm-shrinkwrap.test.ts"]],
+      ["scripts/generate-npm-package-lock.mjs", ["test/scripts/generate-npm-package-lock.test.ts"]],
       ["scripts/npm-runner.d.mts", ["test/scripts/npm-runner.test.ts"]],
       ["scripts/pnpm-runner.d.mts", ["test/scripts/pnpm-runner.test.ts"]],
       [
@@ -2189,6 +2171,29 @@ describe("scripts/test-projects changed-target routing", () => {
           "test/scripts/release-upgrade-baseline.test.ts",
           "test/scripts/android-version.test.ts",
           "test/scripts/ios-version.test.ts",
+          "test/scripts/upgrade-survivor-baselines.test.ts",
+          "test/scripts/upgrade-survivor-config-recipe.test.ts",
+        ],
+      ],
+      [
+        "scripts/lib/release-version.mjs",
+        [
+          "test/release-version.test.ts",
+          "test/npm-publish-plan.test.ts",
+          "test/openclaw-npm-release-check.test.ts",
+          "test/openclaw-npm-postpublish-verify.test.ts",
+          "test/plugin-npm-release.test.ts",
+          "test/plugin-clawhub-release.test.ts",
+          "test/scripts/android-version.test.ts",
+          "test/scripts/android-pin-version.test.ts",
+          "test/scripts/docker-release-policy.test.ts",
+          "test/scripts/ios-version.test.ts",
+          "test/scripts/openclaw-npm-extended-stable-release.test.ts",
+          "test/scripts/openclaw-npm-publish.test.ts",
+          "test/scripts/release-preflight.test.ts",
+          "test/scripts/release-prepare.test.ts",
+          "test/scripts/release-upgrade-baseline.test.ts",
+          "test/scripts/release-version.test.ts",
           "test/scripts/upgrade-survivor-baselines.test.ts",
           "test/scripts/upgrade-survivor-config-recipe.test.ts",
         ],
@@ -2825,7 +2830,10 @@ describe("scripts/test-projects changed-target routing", () => {
       {
         config: "test/vitest/vitest.unit-fast-isolated.config.ts",
         forwardedArgs: [],
-        includePatterns: ["test/scripts/android-version.test.ts"],
+        includePatterns: [
+          "test/scripts/android-version.test.ts",
+          "test/scripts/ios-release-plan.test.ts",
+        ],
         watchMode: false,
       },
       {
@@ -2983,7 +2991,10 @@ describe("scripts/test-projects changed-target routing", () => {
       {
         config: "test/vitest/vitest.unit-fast-isolated.config.ts",
         forwardedArgs: [],
-        includePatterns: ["test/scripts/android-version.test.ts"],
+        includePatterns: [
+          "test/scripts/android-version.test.ts",
+          "test/scripts/ios-release-plan.test.ts",
+        ],
         watchMode: false,
       },
       {
@@ -3717,7 +3728,11 @@ describe("scripts/test-projects changed-target routing", () => {
   it("routes Google Meet CLI edits to the lightweight CLI tests", () => {
     expect(resolveChangedTestTargetPlan(["extensions/google-meet/src/cli.ts"])).toEqual({
       mode: "targets",
-      targets: ["extensions/google-meet/src/cli.test.ts"],
+      targets: [
+        "extensions/google-meet/src/cli-artifacts.test.ts",
+        "extensions/google-meet/src/cli-runtime.test.ts",
+        "extensions/google-meet/src/cli.test.ts",
+      ],
     });
   });
 
@@ -4890,6 +4905,16 @@ describe("scripts/test-projects full-suite sharding", () => {
         reason: "path-does-not-exist",
       },
     ]);
+  });
+
+  it("rejects unmatched extensionless test prefixes with the attempted pattern", () => {
+    const target = "extensions/telegram/src/no-such-prefix";
+    const [unmatched] = findUnmatchedExplicitTestTargets([target]);
+    expect(unmatched).toEqual({
+      target,
+      reason: "path-does-not-exist",
+      includePattern: `${target}{,.*}.{test,spec}.{js,jsx,ts,tsx,mjs,cjs,mts,cts}`,
+    });
   });
 
   it("rejects watch mode with multiple explicit leaf project config targets", () => {

@@ -42,7 +42,6 @@ import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
 import { detectSkillWorkshopToolPolicyDiagnostic } from "../skills/workshop/tool-policy-diagnostic.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import { removedWorkspacesStateCheck } from "./doctor-removed-workspaces-state-check.js";
-import { registerHealthCheck } from "./health-check-registry.js";
 import type { SplitHealthCheckInput } from "./health-check-runner-types.js";
 import type {
   HealthCheck,
@@ -575,7 +574,7 @@ const bootstrapSizeCheck: HealthCheck = {
         message: `${file.name} exceeds bootstrap limits and will be truncated.`,
         path: file.path,
         fixHint:
-          "Reduce the file size or tune `agents.list[].bootstrapMaxChars` / `bootstrapTotalMaxChars` for this agent, or the corresponding `agents.defaults.*` fallback.",
+          "Reduce the file size or tune `agents.entries.*.bootstrapMaxChars` / `bootstrapTotalMaxChars` for this agent, or the corresponding `agents.defaults.*` fallback.",
       });
     }
     for (const file of analysis.nearLimitFiles) {
@@ -588,7 +587,7 @@ const bootstrapSizeCheck: HealthCheck = {
         message: `${file.name} is near the configured bootstrap file limit.`,
         path: file.path,
         fixHint:
-          "Reduce the file size or tune `agents.list[].bootstrapMaxChars` for this agent, or `agents.defaults.bootstrapMaxChars` as fallback, for per-file limits.",
+          "Reduce the file size or tune `agents.entries.*.bootstrapMaxChars` for this agent, or `agents.defaults.bootstrapMaxChars` as fallback, for per-file limits.",
       });
     }
     if (analysis.totalNearLimit) {
@@ -598,7 +597,7 @@ const bootstrapSizeCheck: HealthCheck = {
         message: "Total bootstrap context is near the configured total limit.",
         path: workspaceDir,
         fixHint:
-          "Reduce bootstrap file sizes or tune `agents.list[].bootstrapTotalMaxChars` for this agent, or `agents.defaults.bootstrapTotalMaxChars` as fallback.",
+          "Reduce bootstrap file sizes or tune `agents.entries.*.bootstrapTotalMaxChars` for this agent, or `agents.defaults.bootstrapTotalMaxChars` as fallback.",
       });
     }
     return findings;
@@ -1264,23 +1263,6 @@ function createConvertedWorkflowChecks(
         ]
       : []),
   ];
-}
-
-let registered = false;
-
-/** @deprecated Core doctor flows use ordered doctor contributions; keep this only for SDK compatibility. */
-export function registerCoreHealthChecks(): void {
-  if (registered) {
-    return;
-  }
-  for (const check of CORE_HEALTH_CHECKS) {
-    registerHealthCheck(check);
-  }
-  registered = true;
-}
-
-export function resetCoreHealthChecksForTest(): void {
-  registered = false;
 }
 
 export function createCoreHealthChecks(

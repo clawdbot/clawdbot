@@ -53,8 +53,9 @@ import {
 } from "./anthropic-auth-headers.js";
 import {
   applyClaudeRequestContract,
-  prepareClaudeSonnet5RequestContext,
+  prepareClaudeNoPrefillRequestContext,
   resolveClaudeNativeThinkingLevelMap,
+  resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   requiresClaudeAdaptiveThinking,
   supportsClaudeAdaptiveThinking,
@@ -66,10 +67,10 @@ import {
 import { applyAnthropicRefusal } from "./anthropic-refusal.js";
 import {
   ANTHROPIC_SERVER_SIDE_FALLBACK_BETA,
-  CLAUDE_FABLE_5_FALLBACK_MODEL_COST,
+  ANTHROPIC_SERVER_SIDE_FALLBACKS,
   applyAnthropicFallbackBoundary,
-  buildAnthropicServerSideFallbacks,
   readAnthropicFallbackBoundary,
+  resolveAnthropicFallbackServingModelCost,
 } from "./anthropic-server-fallback.js";
 import {
   ANTHROPIC_OMITTED_REASONING_TEXT,
@@ -380,7 +381,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
   options?: AnthropicOptions,
 ) => {
   const stream = new AssistantMessageEventStream();
-  const requestContext = prepareClaudeSonnet5RequestContext(model, context);
+  const requestContext = prepareClaudeNoPrefillRequestContext(model, context);
   const requestOptions = normalizeAnthropicThinkingOptions(model, options);
 
   void (async () => {
@@ -559,7 +560,14 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
             // Cost intentionally mirrors top-level usage (serving attempt at
             // serving-model rates). A mid-stream decline's billed partial is
             // only in usage.iterations and is not folded in here.
-            costModel = { ...model, cost: CLAUDE_FABLE_5_FALLBACK_MODEL_COST };
+            costModel = {
+              ...model,
+              cost: resolveAnthropicFallbackServingModelCost({
+                requestedModelId: model.id,
+                servingModelId: fallbackBoundary.toModel,
+                requestedCost: model.cost,
+              }),
+            };
             calculateCost(costModel, output.usage);
             eventSink.push({ type: "start", partial: output });
             for (const [i, block] of blocks.entries()) {
@@ -946,7 +954,7 @@ export const streamSimpleAnthropic: StreamFunction<
         ? "low"
         : "high"
       : options?.reasoning;
-  if (resolveClaudeSonnet5ModelIdentity(model)) {
+  if (resolveClaudeOpus5ModelIdentity(model) || resolveClaudeSonnet5ModelIdentity(model)) {
     return streamAnthropic(model, context, {
       ...base,
       thinkingEnabled: true,
@@ -1018,7 +1026,11 @@ function isAnthropicPublicEndpoint(baseUrl: string | undefined): boolean {
  * identity) requests are excluded until the beta is verified there.
  */
 function supportsAnthropicServerSideFallback(model: Model<"anthropic-messages">): boolean {
-  if (!usesClaudeFable5MessagesContract(model) || model.provider !== "anthropic") {
+  if (
+    (!usesClaudeFable5MessagesContract(model) &&
+      resolveClaudeOpus5ModelIdentity(model) === undefined) ||
+    model.provider !== "anthropic"
+  ) {
     return false;
   }
   return isAnthropicPublicEndpoint(model.baseUrl);
@@ -1227,12 +1239,11 @@ async function buildParams(
     params.system = system;
   }
 
-  // Fable safety classifiers can decline benign-adjacent work; server-side
-  // fallback re-serves the same call on claude-opus-4-8 instead of failing
-  // the turn. Only set when createClient added the matching beta header.
+  // Fable 5 and Opus 5 safety classifiers can decline benign-adjacent work.
+  // Anthropic owns the per-category fallback recommendation so routing can
+  // evolve without a client release.
   if (serverSideFallback) {
-    (params as { fallbacks?: Array<{ model: string }> }).fallbacks =
-      buildAnthropicServerSideFallbacks();
+    (params as { fallbacks?: "default" }).fallbacks = ANTHROPIC_SERVER_SIDE_FALLBACKS;
   }
 
   // Thinking and post-4.6 Claude models reject custom temperature values.

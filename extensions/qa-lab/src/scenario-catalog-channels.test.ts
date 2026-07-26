@@ -67,6 +67,8 @@ describe("qa scenario catalog channel contracts", () => {
     );
     const storeReads = [...flow.matchAll(/readRawQaSessionStore/gu)].map((match) => match.index);
 
+    expect(flow).toContain("readSessionTranscriptSummary(env, sessionKey)");
+    expect(flow).not.toContain("waitForAgentHistoryReply");
     expect(completionWaits).toHaveLength(2);
     expect(storeReads).toHaveLength(2);
     expect(completionWaits.every((wait, index) => wait < (storeReads[index] ?? -1))).toBe(true);
@@ -100,10 +102,12 @@ describe("qa scenario catalog channel contracts", () => {
     expect(flow).toContain("String(memoryAfter) === config.seededMemory");
   });
 
-  it("enables Telegram previews for channel streaming evidence", () => {
-    const scenario = readQaScenarioById("channel-message-flows");
+  it("keeps channel streaming evidence portable across QA Channel and Crabline Telegram", () => {
+    const scenario = requireFlowScenario(readQaScenarioById("channel-message-flows"));
 
-    expect(scenario.coverage?.primary).toEqual([`${agentRuntime}.streaming-replies`]);
+    expect(scenario.execution.channel).toBeUndefined();
+    expect(scenario.execution.channels).toEqual(["qa-channel", "telegram"]);
+    expect(scenario.coverage?.primary).toEqual(["channels.streaming-final-reply"]);
     expect(scenario.coverage?.secondary).toEqual([`${agentRuntime}.streaming-replies-delivery`]);
     expect(scenario.gatewayConfigPatch).toMatchObject({
       channels: { telegram: { streaming: { mode: "partial" } } },

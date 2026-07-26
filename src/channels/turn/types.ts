@@ -19,6 +19,7 @@ import type {
 import type { GroupKeyResolution } from "../../config/sessions/types.js";
 import type { DmScope } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { OutboundPayloadDeliverySuppressionReason } from "../../infra/outbound/deliver-types.js";
 import type {
   DeliverOutboundPayloadsParams,
   DurableFinalDeliveryRequirements,
@@ -135,7 +136,7 @@ export type CommandFacts = {
 };
 
 /** Inbound media facts supplied to the agent context. */
-export type InboundMediaFacts = Omit<MediaFact, "workspaceDir">;
+export type InboundMediaFacts = Omit<MediaFact, "staged" | "workspaceDir">;
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -165,14 +166,28 @@ export type ChannelDeliveryIntent = {
   queuePolicy: OutboundDeliveryQueuePolicy;
 };
 
-/** Result returned after delivering one channel reply payload. */
-export type ChannelDeliveryResult = {
+/** Provider-accepted outcome for one logical channel reply payload. */
+export type ChannelDeliveryOutcome = {
   messageIds?: string[];
   receipt?: MessageReceipt;
   threadId?: string;
   replyToId?: string;
   visibleReplySent?: boolean;
+  /** Final provider-visible text used for this logical payload's terminal observation. */
+  content?: string;
+};
+
+/** Result returned after delivering one channel reply payload. */
+export type ChannelDeliveryResult = ChannelDeliveryOutcome & {
   deliveryIntent?: ChannelDeliveryIntent;
+  /** Intentional no-send outcome after payload policy or modifying hooks settle. */
+  suppression?: {
+    reason: OutboundPayloadDeliverySuppressionReason | "no_visible_result";
+    cancelReason?: string;
+    metadata?: Record<string, unknown>;
+  };
+  /** Same-payload native settlement; resolved fields override this result before observation. */
+  finalization?: Promise<ChannelDeliveryOutcome>;
 };
 
 /** Durable outbound delivery options available to channel turn delivery adapters. */
@@ -185,12 +200,23 @@ type ChannelTurnDurableDeliveryOptions = Pick<
   requiredCapabilities?: DurableFinalDeliveryRequirements;
 };
 
-/** Delivery adapter used by channel turns to send reply payloads. */
-export type ChannelEventDeliveryAdapter = {
+type ChannelDeliveryAdapterBase = {
+  /** Return null when channel policy intentionally suppresses this logical payload. */
   preparePayload?: (
     payload: ReplyPayload,
     info: ChannelDeliveryInfo,
-  ) => Promise<ReplyPayload> | ReplyPayload;
+  ) => MaybePromise<ReplyPayload | null>;
+  onDelivered?: (
+    payload: ReplyPayload,
+    info: ChannelDeliveryInfo,
+    result: ChannelDeliveryResult | void,
+  ) => Promise<void> | void;
+  /** Let core emit the one canonical `message_sent` after non-durable provider settlement. */
+  observeMessageSent?: true;
+  onError?: (err: unknown, info: { kind: string }) => void;
+};
+
+export type ChannelCoreManagedTurnDeliveryAdapter = ChannelDeliveryAdapterBase & {
   deliver: (
     payload: ReplyPayload,
     info: ChannelDeliveryInfo,
@@ -205,13 +231,31 @@ export type ChannelEventDeliveryAdapter = {
         | false
         | ChannelTurnDurableDeliveryOptions
         | Promise<false | ChannelTurnDurableDeliveryOptions>);
-  onDelivered?: (
+};
+
+/** Delivery adapter used by legacy caller-assembled channel turns. */
+export type ChannelEventDeliveryAdapter = ChannelCoreManagedTurnDeliveryAdapter;
+
+export type ChannelProviderOwnedMessageSendingDeliveryAdapter = ChannelDeliveryAdapterBase & {
+  /**
+   * Provider funnel that owns `message_sending` after its native payload preparation.
+   * Use only when delivery cannot declare its durable/direct branch before entering the
+   * provider funnel; core still owns `reply_payload_sending` for this routed turn.
+   */
+  deliverWithProviderMessageSending: (
     payload: ReplyPayload,
     info: ChannelDeliveryInfo,
-    result: ChannelDeliveryResult | void,
-  ) => Promise<void> | void;
-  onError?: (err: unknown, info: { kind: string }) => void;
+  ) => Promise<ChannelDeliveryResult | void>;
+  deliver?: never;
+  durable?: never;
 };
+
+/** Delivery adapter used by modern routed channel turns. */
+export type ChannelTurnDeliveryAdapter =
+  | (ChannelCoreManagedTurnDeliveryAdapter & {
+      deliverWithProviderMessageSending?: never;
+    })
+  | ChannelProviderOwnedMessageSendingDeliveryAdapter;
 
 /** Options for recording inbound session route state around a turn. */
 export type ChannelTurnRecordOptions = {
@@ -333,8 +377,15 @@ type InboundPreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> =
     runDispatchLifecycle: PreparedChannelTurnDispatchLifecycle;
   };
 
-export type ChannelTurnPlan = RoutedChannelTurn<
-  Omit<AssembledChannelTurn, "agentId" | "dispatchReplyWithBufferedBlockDispatcher">
+export type ChannelTurnPlan<
+  TDelivery extends ChannelTurnDeliveryAdapter = ChannelCoreManagedTurnDeliveryAdapter,
+> = RoutedChannelTurn<
+  Omit<
+    AssembledChannelTurn,
+    "agentId" | "delivery" | "dispatchReplyWithBufferedBlockDispatcher"
+  > & {
+    delivery: TDelivery;
+  }
 >;
 
 type PreparedChannelTurnPlan<TDispatchResult = DispatchFromConfigResult> = RoutedChannelTurn<
@@ -344,8 +395,11 @@ type PreparedChannelTurnPlan<TDispatchResult = DispatchFromConfigResult> = Route
 };
 
 /** Resolved turn shape returned by adapters before final run/dispatch handling. */
-export type ChannelTurnResolved<TDispatchResult = DispatchFromConfigResult> =
-  | ChannelTurnPlan
+export type ChannelTurnResolved<
+  TDispatchResult = DispatchFromConfigResult,
+  TDelivery extends ChannelTurnDeliveryAdapter = ChannelCoreManagedTurnDeliveryAdapter,
+> =
+  | ChannelTurnPlan<TDelivery>
   | PreparedChannelTurnPlan<TDispatchResult>
   | (AssembledChannelTurn & {
       admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
@@ -399,7 +453,11 @@ export type DispatchedChannelTurnResult<TDispatchResult = DispatchFromConfigResu
 };
 
 /** Adapter contract for ingesting, classifying, resolving, and finalizing raw channel events. */
-type ChannelTurnAdapter<TRaw, TDispatchResult = DispatchFromConfigResult> = {
+type ChannelTurnAdapter<
+  TRaw,
+  TDispatchResult = DispatchFromConfigResult,
+  TDelivery extends ChannelTurnDeliveryAdapter = ChannelCoreManagedTurnDeliveryAdapter,
+> = {
   ingest: (raw: TRaw) => Promise<NormalizedTurnInput | null> | NormalizedTurnInput | null;
   classify?: (input: NormalizedTurnInput) => Promise<ChannelEventClass> | ChannelEventClass;
   preflight?: (
@@ -415,16 +473,22 @@ type ChannelTurnAdapter<TRaw, TDispatchResult = DispatchFromConfigResult> = {
     input: NormalizedTurnInput,
     eventClass: ChannelEventClass,
     preflight: PreflightFacts,
-  ) => Promise<ChannelTurnResolved<TDispatchResult>> | ChannelTurnResolved<TDispatchResult>;
+  ) =>
+    | Promise<ChannelTurnResolved<TDispatchResult, TDelivery>>
+    | ChannelTurnResolved<TDispatchResult, TDelivery>;
   onFinalize?: (result: ChannelTurnResult<TDispatchResult>) => Promise<void> | void;
 };
 
 /** Parameters for running one raw channel event through the turn kernel. */
-export type RunChannelTurnParams<TRaw, TDispatchResult = DispatchFromConfigResult> = {
+export type RunChannelTurnParams<
+  TRaw,
+  TDispatchResult = DispatchFromConfigResult,
+  TDelivery extends ChannelTurnDeliveryAdapter = ChannelCoreManagedTurnDeliveryAdapter,
+> = {
   channel: string;
   accountId?: string;
   raw: TRaw;
-  adapter: ChannelTurnAdapter<TRaw, TDispatchResult>;
+  adapter: ChannelTurnAdapter<TRaw, TDispatchResult, TDelivery>;
   log?: (event: ChannelTurnLogEvent) => void;
   /** Canonical adoption lifecycle for this turn. */
   turnAdoptionLifecycle?: TurnAdoptionLifecycle;

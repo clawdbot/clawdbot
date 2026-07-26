@@ -97,9 +97,6 @@ export async function startGatewayEarlyRuntime(params: {
   chatQueuedTurns: GatewayMaintenanceParams["chatQueuedTurns"];
   restartRecoveryCandidates: GatewayMaintenanceParams["restartRecoveryCandidates"];
   chatRunState: GatewayMaintenanceParams["chatRunState"];
-  chatRunBuffers: GatewayMaintenanceParams["chatRunBuffers"];
-  chatDeltaSentAt: GatewayMaintenanceParams["chatDeltaSentAt"];
-  chatDeltaLastBroadcastLen: GatewayMaintenanceParams["chatDeltaLastBroadcastLen"];
   removeChatRun: GatewayMaintenanceParams["removeChatRun"];
   agentRunSeq: GatewayMaintenanceParams["agentRunSeq"];
   nodeSendToSession: GatewayMaintenanceParams["nodeSendToSession"];
@@ -187,9 +184,6 @@ export async function startGatewayEarlyRuntime(params: {
         chatQueuedTurns: params.chatQueuedTurns,
         restartRecoveryCandidates: params.restartRecoveryCandidates,
         chatRunState: params.chatRunState,
-        chatRunBuffers: params.chatRunBuffers,
-        chatDeltaSentAt: params.chatDeltaSentAt,
-        chatDeltaLastBroadcastLen: params.chatDeltaLastBroadcastLen,
         removeChatRun: params.removeChatRun,
         agentRunSeq: params.agentRunSeq,
         nodeSendToSession: params.nodeSendToSession,

@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import OpenClawChatUI
 import OpenClawKit
 import Testing
 @testable import OpenClaw
@@ -1062,6 +1063,26 @@ struct TalkModeManagerTests {
         #expect(TalkModeManager._test_latestAssistantText(
             messages: messages,
             runId: "missing-run") == nil)
+    }
+
+    @Test func `native Talk chat request inherits thinking policy`() {
+        let request = OpenClawChatGatewayRequests.sendMessage(
+            sessionKey: "agent:main:main",
+            agentID: nil,
+            expectedSessionRoutingContract: nil,
+            message: "hello",
+            thinking: TalkModeManager.chatThinkingOverride,
+            idempotencyKey: "talk-1",
+            attachments: [],
+            runTimeoutMs: 30000)
+
+        #expect(TalkModeManager.chatThinkingOverride == nil)
+        #expect(request.method == "chat.send")
+        #expect(request.params["message"]?.value as? String == "hello")
+        #expect(request.params["sessionKey"]?.value as? String == "agent:main:main")
+        #expect(request.params["idempotencyKey"]?.value as? String == "talk-1")
+        #expect(request.params["thinking"] == nil)
+        #expect(request.params["timeoutMs"]?.value as? Int == 30000)
     }
 
     @Test func `subscribes before sending chat completion request`() throws {

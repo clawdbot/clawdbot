@@ -1,13 +1,16 @@
+import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveOnboardingAgentTarget } from "../commands/onboard-agent-target.js";
 import type { GatewayAuthChoice, OnboardMode, OnboardOptions } from "../commands/onboard-types.js";
-import { resolveGatewayPort } from "../config/config.js";
+import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
+import { ConfigMutationConflictError, resolveGatewayPort } from "../config/config.js";
+import { createMergePatch } from "../config/io.write-prepare.js";
+import { applyMergePatch } from "../config/merge-patch.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeSecretInputString } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { withConsoleSubsystemsSuppressed } from "../logging/console.js";
 import {
   buildPluginCompatibilitySnapshotNotices,
   formatPluginCompatibilityNotice,
@@ -19,6 +22,7 @@ import { resolveUserPath } from "../utils.js";
 import { t } from "./i18n/index.js";
 import { runWizardWithPromptNavigation } from "./navigation-prompter.js";
 import type { WizardPrompter } from "./prompts.js";
+import { offerLiveModelVerification } from "./setup.inference-verification.js";
 import {
   detectSetupMigrationSources,
   listSetupMigrationOptions,
@@ -47,92 +51,6 @@ const loadOnboardConfigModule = createLazyRuntimeModule(
 
 function hasConfiguredDefaultModel(config: OpenClawConfig): boolean {
   return resolveAgentModelPrimaryValue(config.agents?.defaults?.model) !== undefined;
-}
-
-async function offerLiveModelVerification(params: {
-  config: OpenClawConfig;
-  opts: OnboardOptions;
-  prompter: WizardPrompter;
-  runtime: RuntimeEnv;
-  writeConfig: (config: OpenClawConfig) => Promise<OpenClawConfig>;
-  required?: boolean;
-}): Promise<{ config: OpenClawConfig; verified: boolean }> {
-  if (!params.required) {
-    const shouldTest = await params.prompter.confirm({
-      message: t("wizard.setup.testAiAccess"),
-      initialValue: true,
-    });
-    if (!shouldTest) {
-      return { config: params.config, verified: false };
-    }
-  }
-  const { verifySetupInferenceConfig } = await import("../system-agent/setup-inference.js");
-  const verify = async (candidate: SetupModelAuthCandidate) => {
-    const progress = params.prompter.progress(t("wizard.setup.testAiProgress"));
-    const result = await withConsoleSubsystemsSuppressed(() =>
-      verifySetupInferenceConfig({
-        config: candidate.config,
-        runtime: params.runtime,
-        authProfiles: candidate.authProfiles,
-      }),
-    );
-    progress.stop();
-    if (result.ok) {
-      await params.prompter.note(
-        t("wizard.setup.testAiSuccess", { seconds: (result.latencyMs / 1000).toFixed(1) }),
-        t("wizard.setup.testAiTitle"),
-      );
-    } else {
-      await params.prompter.note(
-        t("wizard.setup.testAiFailure", { reason: result.error }),
-        t("wizard.setup.testAiTitle"),
-      );
-    }
-    return result;
-  };
-
-  let candidate: SetupModelAuthCandidate = {
-    config: params.config,
-    authProfiles: [],
-    persistAuthProfiles: async () => {},
-  };
-  let shouldPersistCandidate = false;
-  while (true) {
-    const result = await verify(candidate);
-    if (result.ok) {
-      if (!shouldPersistCandidate) {
-        return { config: params.config, verified: true };
-      }
-      await candidate.persistAuthProfiles(result.authProfiles);
-      const config = await params.writeConfig(candidate.config);
-      return { config, verified: true };
-    }
-    if (result.authProfiles) {
-      candidate.authProfiles = result.authProfiles;
-    }
-    if (
-      !params.required &&
-      (await params.prompter.select({
-        message: t("wizard.setup.testAiFailureChoice"),
-        options: [
-          { value: "fix", label: t("wizard.setup.testAiFix") },
-          { value: "continue", label: t("wizard.setup.testAiContinue") },
-        ],
-      })) === "continue"
-    ) {
-      return { config: params.config, verified: false };
-    }
-
-    // Attempts N>1 share the same gate and staged credentials until the user replaces them.
-    candidate = await runSetupModelAuthStep({
-      config: params.config,
-      stagedCandidate: candidate,
-      opts: { ...params.opts, authChoice: undefined },
-      prompter: params.prompter,
-      runtime: params.runtime,
-    });
-    shouldPersistCandidate = true;
-  }
 }
 
 function isSetupImportFlowChoice(flow: SetupFlowChoice): boolean {
@@ -166,10 +84,9 @@ async function runSetupWizardOnce(
   await prompter.intro(t("wizard.setup.intro"));
 
   const snapshot = await readSetupConfigFileSnapshot();
+  let currentSetupSnapshot = snapshot;
   let baseConfig: OpenClawConfig = snapshot.valid
-    ? snapshot.exists
-      ? (snapshot.sourceConfig ?? snapshot.config)
-      : {}
+    ? (snapshot.runtimeConfig ?? snapshot.config)
     : {};
   baseConfig = await requireRiskAcknowledgement({ opts, prompter, config: baseConfig });
   // Ordinary onboard reruns must preserve existing agents.list / bindings. Only
@@ -317,10 +234,12 @@ async function runSetupWizardOnce(
   }
 
   const usedImportFlow = Boolean(opts.importFrom || isSetupImportFlowChoice(flow));
+  let acknowledgeMigrationPromotion: (() => Promise<void>) | undefined;
+  let importedInferenceVerified = false;
   if (usedImportFlow) {
     const importFrom = opts.importFrom ?? resolveImportProviderFromFlowChoice(flow);
     prompter.disableBackNavigation?.();
-    await runSetupMigrationImport({
+    const migrationOutcome = await runSetupMigrationImport({
       opts: {
         ...opts,
         ...(importFrom ? { importFrom } : {}),
@@ -330,16 +249,38 @@ async function runSetupWizardOnce(
       prompter,
       runtime,
       readConfigFile: readValidSetupConfigFile,
-      commitConfigFile: (cfg) => writeWizardConfigFile(cfg, { allowConfigSizeDrop: true }),
+      async commitConfigFile(cfg, expectedConfig) {
+        const latest = await readSetupConfigFileSnapshot();
+        if (!latest.valid) {
+          throw new Error("Migration target config became invalid. Run `openclaw doctor`.");
+        }
+        const latestConfig = latest.exists ? (latest.sourceConfig ?? latest.config) : {};
+        if (!isDeepStrictEqual(latestConfig, expectedConfig)) {
+          throw new ConfigMutationConflictError("config changed during migration promotion", {
+            currentHash: latest.hash ?? null,
+          });
+        }
+        return await writeWizardConfigFile(cfg, {
+          allowConfigSizeDrop: true,
+          baseSnapshot: latest,
+          ...(latest.hash !== undefined ? { baseHash: latest.hash } : {}),
+        });
+      },
       continueOnboarding: true,
     });
+    acknowledgeMigrationPromotion = migrationOutcome.acknowledgePromotion;
     const migratedSnapshot = await readSetupConfigFileSnapshot();
     if (!migratedSnapshot.valid) {
       throw new Error("Migration produced an invalid OpenClaw config. Run `openclaw doctor`.");
     }
-    baseConfig = migratedSnapshot.sourceConfig ?? migratedSnapshot.config;
+    currentSetupSnapshot = migratedSnapshot;
+    baseConfig = migratedSnapshot.runtimeConfig ?? migratedSnapshot.config;
     pendingPluginInstallMigrationBaseConfig = baseConfig;
-    keepExistingModelConfig ||= hasConfiguredDefaultModel(baseConfig);
+    const importedModelRef = resolveAgentModelPrimaryValue(baseConfig.agents?.defaults?.model);
+    importedInferenceVerified =
+      migrationOutcome.kind === "verified-inference" &&
+      importedModelRef === migrationOutcome.modelRef;
+    keepExistingModelConfig = importedInferenceVerified;
     flow = "quickstart";
   }
   const wizardFlow: WizardFlow = flow === "advanced" ? "advanced" : "quickstart";
@@ -565,29 +506,31 @@ async function runSetupWizardOnce(
 
   const { applyLocalSetupWorkspaceConfig, applySkipBootstrapConfig } =
     await loadOnboardConfigModule();
-  const { allowWorkspaceChange } = await resolveSetupWorkspaceSelection({
+  const hasAuthoredRoster = hasResolvedRosterBeforeMigrations(currentSetupSnapshot);
+  const { workspaceDir, allowWorkspaceChange } = await resolveSetupWorkspaceSelection({
     baseConfig,
     requestedWorkspaceDir,
     prompter,
+    hasAuthoredRoster,
   });
   let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(
     baseConfig,
     requestedWorkspaceDir,
-    { allowWorkspaceChange },
+    { allowWorkspaceChange: allowWorkspaceChange || !hasAuthoredRoster },
   );
   if (opts.skipBootstrap) {
     nextConfig = applySkipBootstrapConfig(nextConfig);
   }
-
+  const preModelAuthConfig = nextConfig;
+  let stagedModelAuth: SetupModelAuthCandidate | undefined;
   if (!keepExistingModelConfig) {
-    const modelAuth = await runSetupModelAuthStep({
+    stagedModelAuth = await runSetupModelAuthStep({
       config: nextConfig,
       opts,
       prompter,
       runtime,
     });
-    await modelAuth.persistAuthProfiles();
-    nextConfig = modelAuth.config;
+    nextConfig = stagedModelAuth.config;
   }
 
   const { configureGatewayForSetup } = await import("./setup.gateway-config.js");
@@ -601,35 +544,63 @@ async function runSetupWizardOnce(
     prompter,
     runtime,
   });
-  nextConfig = gateway.nextConfig;
-  const settings = gateway.settings;
-
-  // Persist auth + gateway decisions now: channel/search/skills steps can pair
-  // devices or install plugins, and a crash or cancel there must not force the
-  // user to redo provider setup from scratch.
-  nextConfig = await writeSetupConfigFile(nextConfig, {
-    allowConfigSizeDrop: false,
-  });
+  const onboard = (await import("../commands/onboard-agent.js")).ensureOnboardingConfig;
+  nextConfig = (await onboard(gateway.nextConfig, workspaceDir, usedImportFlow, baseConfig)).config;
 
   let liveModelVerified = false;
+  let setupConfigPersisted = false;
   // keepExistingModelConfig is latched before auth setup, so this distinguishes
   // a route supplied by the import from one configured normally after the import.
   if (
     opts.nonInteractive !== true &&
+    !importedInferenceVerified &&
     hasConfiguredDefaultModel(nextConfig) &&
     ((usedImportFlow && keepExistingModelConfig) || opts.authChoice !== "skip")
   ) {
+    const verificationTarget = resolveOnboardingAgentTarget(nextConfig);
     const verification = await offerLiveModelVerification({
       config: nextConfig,
+      ...(stagedModelAuth
+        ? {
+            initialCandidate: {
+              ...stagedModelAuth,
+              config: nextConfig,
+            },
+          }
+        : {}),
       opts,
       prompter,
       runtime,
+      workspaceDir: verificationTarget.workspaceDir,
       writeConfig: async (config) =>
         await writeSetupConfigFile(config, { allowConfigSizeDrop: false }),
       required: usedImportFlow && keepExistingModelConfig,
     });
     nextConfig = verification.config;
     liveModelVerified = verification.verified;
+    setupConfigPersisted = verification.persisted;
+    if (!verification.verified && verification.attempted && stagedModelAuth) {
+      // Gateway/roster decisions may be persisted after an optional failed probe, but the
+      // unverified model/auth delta must be removed atomically before that first write.
+      nextConfig = applyMergePatch(
+        nextConfig,
+        createMergePatch(stagedModelAuth.config, preModelAuthConfig),
+      ) as OpenClawConfig;
+    } else if (!verification.verified && stagedModelAuth) {
+      // Declining an optional probe is not a failed verification; keep the
+      // provider/model choice the user just made and persist it once here.
+      await stagedModelAuth.persistAuthProfiles();
+    }
+  } else if (stagedModelAuth) {
+    // Non-interactive setup has no live-verification step by contract.
+    await stagedModelAuth.persistAuthProfiles();
+  }
+
+  if (!setupConfigPersisted) {
+    // Persist gateway/roster decisions only after the interactive verification boundary.
+    nextConfig = await writeSetupConfigFile(nextConfig, {
+      allowConfigSizeDrop: false,
+    });
   }
 
   prompter.disableBackNavigation?.();
@@ -739,10 +710,11 @@ async function runSetupWizardOnce(
     hadExistingConfig: snapshot.exists,
     nextConfig,
     workspaceDir: onboardingTarget.workspaceDir,
-    settings,
+    settings: gateway.settings,
     prompter,
     runtime,
   });
+  await acknowledgeMigrationPromotion?.();
   if (finalizeResult.launchedTui) {
     runtime.exit(0);
   }

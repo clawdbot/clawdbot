@@ -70,9 +70,8 @@ vi.mock("./config-model-validation.js", () => ({
 
 vi.mock("../gateway/config-reload-plan.js", () => ({
   buildGatewayReloadPlan: (changedPaths: string[]) => {
-    const restartReasons = changedPaths.filter(
-      (changedPath) =>
-        changedPath.startsWith("models.pricing.") || changedPath.startsWith("plugins.load."),
+    const restartReasons = changedPaths.filter((changedPath) =>
+      changedPath.startsWith("plugins.load."),
     );
     const hotReasons = changedPaths.filter(
       (changedPath) =>
@@ -3987,34 +3986,6 @@ describe("config cli", () => {
       expectLogExcludes("Restart the gateway to apply.");
     });
 
-    it("keeps the restart hint for broad models writes that change pricing bootstrap", async () => {
-      const resolved: OpenClawConfig = {
-        models: {
-          pricing: {
-            enabled: false,
-          },
-          providers: {
-            openai: {
-              agentRuntime: { id: "node" },
-            },
-          },
-        },
-      } as unknown as OpenClawConfig;
-      setSnapshot(resolved, resolved);
-
-      await runConfigCommand([
-        "config",
-        "set",
-        "models",
-        '{"pricing":{"enabled":true},"providers":{"openai":{"agentRuntime":{"id":"node"}}}}',
-        "--strict-json",
-        "--replace",
-      ]);
-
-      expectLogIncludes("Updated models. Restart the gateway to apply.");
-      expectLogExcludes("Change will apply without restarting the gateway.");
-    });
-
     it("keeps the restart hint for broad plugins writes that change load paths", async () => {
       const resolved: OpenClawConfig = {
         plugins: {
@@ -4038,27 +4009,6 @@ describe("config cli", () => {
       ]);
 
       expectLogIncludes("Updated plugins. Restart the gateway to apply.");
-      expectLogExcludes("Change will apply without restarting the gateway.");
-    });
-
-    it("keeps the restart hint for broad models unsets that remove pricing bootstrap", async () => {
-      const resolved: OpenClawConfig = {
-        models: {
-          pricing: {
-            enabled: false,
-          },
-          providers: {
-            openai: {
-              agentRuntime: { id: "node" },
-            },
-          },
-        },
-      } as unknown as OpenClawConfig;
-      setSnapshot(resolved, resolved);
-
-      await runConfigCommand(["config", "unset", "models"]);
-
-      expectLogIncludes("Removed models. Restart the gateway to apply.");
       expectLogExcludes("Change will apply without restarting the gateway.");
     });
 

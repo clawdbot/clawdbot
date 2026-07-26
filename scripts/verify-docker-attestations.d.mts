@@ -15,6 +15,16 @@ export function parsePlatform(value: unknown): {
  * Collects missing/mismatched attestation errors for required image platforms.
  */
 export function collectDockerAttestationErrors(params: unknown): string[];
+export function verifyDockerAttestations(params: {
+  imageRefs: string[];
+  requiredPlatforms: Array<{
+    architecture: string;
+    os: string;
+    variant?: string;
+  }>;
+  execFileSyncImpl?: (command: string, args: string[], options: unknown) => string;
+  log?: (message: string) => void;
+}): void;
 export function inspectRaw(
   imageRef: unknown,
   params?: {

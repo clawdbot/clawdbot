@@ -75,4 +75,40 @@ describe("importClaudeHistory", () => {
     expect(assistantRow).toBeDefined();
     expect(assistantRow?.["__openclaw"]).toBeUndefined();
   });
+
+  it("omits empty native reasoning records instead of rendering a placeholder", async () => {
+    appended.length = 0;
+    await importClaudeHistory({
+      items: [
+        { type: "reasoning", content: [{ type: "thinking", thinking: "" }], uuid: "r-1" },
+        { type: "assistantMessage", text: "AUTH_OK", uuid: "a-1" },
+      ],
+      threadId: "thread-1",
+      sessionFile: "/tmp/unused.jsonl",
+      sessionId: "session-1",
+      sessionKey: "agent:main:catalog-adopt",
+      agentId: "main",
+      config: {} as OpenClawConfig,
+    });
+
+    expect(appended).toHaveLength(1);
+    expect(JSON.stringify(appended)).toContain("AUTH_OK");
+    expect(JSON.stringify(appended)).not.toContain("Unsupported Claude transcript item");
+  });
+
+  it("retains the placeholder for unsupported non-reasoning records", async () => {
+    appended.length = 0;
+    await importClaudeHistory({
+      items: [{ type: "toolCall", content: [{ type: "tool_use" }], uuid: "t-1" }],
+      threadId: "thread-1",
+      sessionFile: "/tmp/unused.jsonl",
+      sessionId: "session-1",
+      sessionKey: "agent:main:catalog-adopt",
+      agentId: "main",
+      config: {} as OpenClawConfig,
+    });
+
+    expect(appended).toHaveLength(1);
+    expect(JSON.stringify(appended)).toContain("Unsupported Claude transcript item");
+  });
 });

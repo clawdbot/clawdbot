@@ -3,7 +3,7 @@ title: "Runtime tool fixture — tavily_search"
 scenario:
   id: runtime-tool-tavily-search
   surface: runtime-tools
-  runtimeParityTier: optional
+  runtimePairLane: extended
   coverage:
     primary:
       - web-search.api-backed-providers

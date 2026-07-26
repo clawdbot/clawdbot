@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, vi } from "vitest";
 import type {
-  SessionCatalog,
   SessionCatalogPullRequestSummary,
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
@@ -19,7 +18,10 @@ import type {
   SidebarWorkboardBoard,
   SidebarWorkboardRenderers,
 } from "../components/app-sidebar-workboard.ts";
+import type { SessionDataController } from "../components/session-data-controller.ts";
+import type { SessionOrganizerController } from "../components/session-organizer-controller.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
+import { reconcileSessionHistory } from "../lib/sessions/reconcile.ts";
 import { createApplicationContextProvider } from "./application-context.ts";
 import { createStorageMock } from "./storage.ts";
 
@@ -38,8 +40,6 @@ export type SidebarLifecycleState = HTMLElement & {
   connected: boolean;
   offline: boolean;
   outboxCountForSession: (sessionKey: string) => number;
-  queuedOutboxCount: number;
-  lastError: string | null;
   terminalAvailable: boolean;
   catalogOpenTarget: "viewer" | "terminal";
   canPairDevice: boolean;
@@ -55,11 +55,8 @@ export type SidebarLifecycleState = HTMLElement & {
     routeId: string,
     options?: { pathname?: string; search?: string; hash?: string },
   ) => void;
-  sessionCatalogs: SessionCatalog[];
-  sessionRowsByAgent: Record<string, SessionsListResult["sessions"]>;
-  sessionCreatedOrder: Map<string, number>;
-  sessionsAgentId: string | null;
-  sessionsResult: SessionsListResult | null;
+  readonly sessionData: SessionDataController;
+  readonly sessionOrganizer: SessionOrganizerController;
   requestUpdate: () => void;
   updateComplete: Promise<boolean>;
   updateAvailable: { currentVersion: string; latestVersion: string; channel: string } | null;
@@ -83,9 +80,9 @@ export type TestSessionMenu = HTMLElement & {
 export function createGatewayHarness(client: GatewayBrowserClient) {
   let snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected: true,
+    phase: "connected",
     offlineStable: false,
-    reconnecting: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: "main",
     sessionKey: "agent:main:main",
@@ -159,6 +156,7 @@ export function createSessionState(agentId: string, keys: string[]): SessionStat
     error: null,
     deletedSessions: [],
     groups: [],
+    sectionOrder: [],
   };
 }
 
@@ -215,6 +213,17 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
   const list = vi.fn((_options?: Parameters<SessionCapability["list"]>[0]) =>
     Promise.resolve<SessionsListResult | null>(null),
   );
+  const reconcile = vi.fn<SessionCapability["reconcile"]>((row, defaults, options) => {
+    const result = reconcileSessionHistory(state.result, row, defaults, options);
+    if (result === state.result) {
+      return false;
+    }
+    state = { ...state, result };
+    for (const listener of listeners) {
+      listener(state);
+    }
+    return true;
+  });
   const sessions = {
     get state() {
       return state;
@@ -247,6 +256,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     delete: deleteSession,
     deleteMany,
     list,
+    reconcile,
     setCreatorFilter,
     refresh,
     refreshReplacement,
@@ -269,6 +279,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     deleteSession,
     deleteMany,
     list,
+    reconcile,
     setCreatorFilter,
     refresh,
     refreshReplacement,
@@ -332,6 +343,12 @@ export async function mountSidebar(
   sidebar.variant = variant;
   provider.append(sidebar);
   document.body.append(provider);
+  await sidebar.updateComplete;
+  await (
+    sidebar as unknown as {
+      sidebarMenus: { preloadMenuRenderer: () => Promise<unknown> };
+    }
+  ).sidebarMenus.preloadMenuRenderer();
   await sidebar.updateComplete;
   return { provider, sidebar, context };
 }

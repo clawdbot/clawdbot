@@ -1,53 +1,15 @@
 // Openai tests cover openclaw.plugin plugin behavior.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import {
+  OPENAI_GPT_55_MODEL_ID,
+  OPENAI_GPT_55_PRO_MODEL_ID,
+  OPENAI_GPT_56_MODEL_ID,
+  OPENAI_GPT_56_VARIANT_MODEL_IDS,
+} from "./model-route-contract.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildOpenAISetupProvider } from "./setup-api.js";
-
-const manifest = JSON.parse(
-  readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
-) as {
-  mediaUnderstandingProviderMetadata?: Record<
-    string,
-    {
-      capabilities?: string[];
-      defaultModels?: Record<string, string>;
-      autoPriority?: Record<string, number>;
-    }
-  >;
-  providerAuthChoices?: Array<{
-    provider?: string;
-    method?: string;
-    choiceLabel?: string;
-    choiceHint?: string;
-    choiceId?: string;
-    deprecatedChoiceIds?: string[];
-    assistantVisibility?: string;
-    groupId?: string;
-    groupLabel?: string;
-    groupHint?: string;
-  }>;
-  setup?: {
-    providers?: Array<{ id: string }>;
-  };
-  modelCatalog?: {
-    suppressions?: Array<{
-      provider?: string;
-      model?: string;
-      when?: {
-        baseUrlHosts?: string[];
-        providerConfigApiIn?: string[];
-      };
-    }>;
-  };
-  providerEndpoints?: Array<{
-    endpointClass?: string;
-    hosts?: string[];
-    hostSuffixes?: string[];
-  }>;
-  providerAuthAliases?: Record<string, string>;
-  legacyPluginIds?: string[];
-};
 
 const packageJson = JSON.parse(
   readFileSync(new URL("./package.json", import.meta.url), "utf8"),
@@ -109,7 +71,7 @@ function expectWizardFields(
 describe("OpenAI plugin manifest", () => {
   it("keeps runtime dependencies in the package manifest", () => {
     expect(packageJson.devDependencies?.["@openclaw/plugin-sdk"]).toBe("workspace:*");
-    expect(packageJson.dependencies?.ws).toBe("8.21.0");
+    expect(packageJson.dependencies?.ws).toBe("8.21.1");
   });
 
   it("exposes only current OpenAI login choices", () => {
@@ -117,13 +79,13 @@ describe("OpenAI plugin manifest", () => {
       (choice) => choice.choiceId === "openai",
     );
 
-    expect(openAiLogin?.deprecatedChoiceIds).toBeUndefined();
+    expect(openAiLogin && "deprecatedChoiceIds" in openAiLogin).toBe(false);
   });
 
   it("routes setup through the OpenAI setup runtime", () => {
-    expect(manifest.legacyPluginIds).toBeUndefined();
+    expect("legacyPluginIds" in manifest).toBe(false);
     expect(manifest.setup?.providers?.map((provider) => provider.id)).toEqual(["openai"]);
-    expect(manifest.providerAuthAliases).toBeUndefined();
+    expect("providerAuthAliases" in manifest).toBe(false);
   });
 
   it("classifies ChatGPT backend traffic with the supported OpenAI endpoint class", () => {
@@ -148,6 +110,24 @@ describe("OpenAI plugin manifest", () => {
     expect(metadata?.defaultModels?.audio).toBe("gpt-4o-transcribe");
     expect(metadata?.autoPriority?.image).toBe(20);
     expect(metadata?.autoPriority?.audio).toBe(20);
+  });
+
+  it("keeps million-token OpenAI models on the ordinary runtime budget by default", () => {
+    const models = manifest.modelCatalog?.providers?.openai?.models ?? [];
+    for (const id of [
+      OPENAI_GPT_56_MODEL_ID,
+      ...OPENAI_GPT_56_VARIANT_MODEL_IDS,
+      OPENAI_GPT_55_MODEL_ID,
+      OPENAI_GPT_55_PRO_MODEL_ID,
+    ]) {
+      expect(
+        models.find((model) => model.id === id),
+        id,
+      ).toMatchObject({
+        contextTokens: 272_000,
+        maxTokens: 128_000,
+      });
+    }
   });
 
   it("labels OpenAI API key and Codex auth choices without stale mixed OAuth wording", () => {

@@ -3,7 +3,7 @@ title: Plugin hook health sentinel
 scenario:
   id: plugin-hook-health-sentinel
   surface: runtime
-  runtimeParityTier: live-only
+  runtimePairLane: core
   coverage:
     primary:
       - plugins.activation-gateway-log-sentinel-plugin-hooks
@@ -24,6 +24,7 @@ scenario:
     kind: flow
     summary: Mark the gateway log cursor, run a simple agent turn that may invoke session_status, and fail on plugin hook crash sentinels.
     config:
+      requiredProviderMode: live-frontier
       expectedMarker: PLUGIN-HOOK-OK
 
 flow:

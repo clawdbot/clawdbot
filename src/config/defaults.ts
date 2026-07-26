@@ -9,9 +9,9 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
-  DEFAULT_AGENT_MAX_CONCURRENT,
   DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES,
   DEFAULT_SUBAGENT_MAX_CONCURRENT,
+  resolveAgentMaxConcurrent,
 } from "./agent-limits.js";
 import { normalizeAgentModelMapForConfig, normalizeAgentModelRefForConfig } from "./model-input.js";
 import {
@@ -32,7 +32,7 @@ const defaultWarnState: WarnState = { warned: false };
 
 export const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   // Anthropic (shared model runtime catalog uses "latest" ids without date suffix)
-  opus: "anthropic/claude-opus-4-8",
+  opus: "anthropic/claude-opus-5",
   sonnet: "anthropic/claude-sonnet-5",
 
   // OpenAI
@@ -454,7 +454,7 @@ export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
   let mutated = false;
   const nextDefaults = defaults ? { ...defaults } : {};
   if (!hasMax) {
-    nextDefaults.maxConcurrent = DEFAULT_AGENT_MAX_CONCURRENT;
+    nextDefaults.maxConcurrent = resolveAgentMaxConcurrent();
     mutated = true;
   }
 

@@ -22,7 +22,7 @@ import {
   isTerminalFailureChatSendAck,
   type ChatSendAck,
   type TerminalFailureChatSendAck,
-} from "./chat-send-contract.ts";
+} from "./chat-send-ack.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import {
@@ -81,10 +81,18 @@ export function chatMessagesContainQueuedSend(
   item: ChatQueueItem,
   userRoleOnly = false,
 ): boolean {
+  return findQueuedSendMessageIndex(messages, item, userRoleOnly) >= 0;
+}
+
+function findQueuedSendMessageIndex(
+  messages: unknown,
+  item: ChatQueueItem,
+  userRoleOnly = false,
+): number {
   if (!item.sendRunId) {
-    return false;
+    return -1;
   }
-  return (Array.isArray(messages) ? messages : []).some((message) => {
+  return (Array.isArray(messages) ? messages : []).findIndex((message) => {
     if (!message || typeof message !== "object" || Array.isArray(message)) {
       return false;
     }
@@ -159,16 +167,25 @@ export function preserveQueuedUserTurn(state: SteerLifecycleHost, item: ChatQueu
 export function retireSteeredChipsForTerminalRun(
   state: SteerLifecycleHost,
   runId: string | undefined,
-): void {
+): number | undefined {
   if (!runId) {
-    return;
+    return undefined;
   }
+  let firstPersistedSteerIndex: number | undefined;
   for (const item of state.chatQueue) {
     if (isAckedSteeredChip(item) && item.pendingRunId === runId) {
+      const persistedIndex = findQueuedSendMessageIndex(state.chatMessages, item, true);
+      if (
+        persistedIndex >= 0 &&
+        (firstPersistedSteerIndex === undefined || persistedIndex < firstPersistedSteerIndex)
+      ) {
+        firstPersistedSteerIndex = persistedIndex;
+      }
       preserveQueuedUserTurn(state, item);
     }
   }
   clearPendingQueueItemsForRun(state, runId);
+  return firstPersistedSteerIndex;
 }
 
 export function retireHistoryProvenSteeredChips(state: SteerLifecycleHost): void {

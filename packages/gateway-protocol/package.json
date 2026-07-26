@@ -22,7 +22,6 @@
   },
   "files": [
     "dist",
-    "npm-shrinkwrap.json",
     "LICENSE",
     "README.md",
     "CHANGELOG.md",
@@ -79,7 +78,7 @@
     "prepack": "pnpm run build && node --import tsx ../../scripts/protocol-gen.ts --out ./protocol.schema.json"
   },
   "dependencies": {
-    "typebox": "1.3.3"
+    "typebox": "1.3.6"
   },
   "engines": {
     "node": ">=22.19.0"

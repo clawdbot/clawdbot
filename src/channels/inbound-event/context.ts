@@ -319,32 +319,6 @@ function resolveChannelInboundSupplementalForFinalizer(params: {
   return isPromiseLike(resolved) ? resolved.then(finalizeQuote) : finalizeQuote(resolved);
 }
 
-/**
- * @deprecated Prefer `buildChannelInboundEventContext({ resolveSupplementalMedia: true })`
- * for channel inbound payloads.
- */
-export async function resolveChannelInboundSupplementalContext(params: {
-  supplemental?: ChannelInboundSupplementalFacts;
-  contextVisibility?: ContextVisibilityMode;
-  media?: readonly InboundMediaFacts[];
-  suppressSelfQuoteBody?: boolean;
-  suppressSelfQuoteMedia?: boolean;
-}): Promise<{
-  supplemental?: SupplementalContextFacts;
-  media: InboundMediaFacts[];
-  quoteHidden: boolean;
-}> {
-  const resolved = await resolveChannelInboundSupplementalForFinalizer({
-    ...params,
-    resolveSupplementalMedia: true,
-  });
-  return {
-    supplemental: resolved.supplemental,
-    media: [...(resolved.media ?? [])],
-    quoteHidden: Boolean(resolved.rawSupplemental?.quote && !resolved.supplemental?.quote),
-  };
-}
-
 function finalizePreparedChannelInboundContext<T extends Record<string, unknown>>(params: {
   originalContext: T;
   rawSupplemental?: SupplementalContextFacts | ChannelInboundSupplementalFacts;

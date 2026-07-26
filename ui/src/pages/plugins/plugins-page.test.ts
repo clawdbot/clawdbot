@@ -78,9 +78,9 @@ function createSnapshot(
 ): ApplicationGatewaySnapshot {
   return {
     client,
-    connected,
+    phase: connected ? "connected" : "reconnecting",
     offlineStable: false,
-    reconnecting: !connected,
+    canvasPluginSurfaceUrl: null,
     hello: {
       type: "hello-ok",
       protocol: 1,

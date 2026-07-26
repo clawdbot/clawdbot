@@ -3,6 +3,7 @@ import type { SessionMcpRuntime } from "../../agents/agent-bundle-mcp-types.js";
 import { updateMcpAppModelContext } from "../../agents/mcp-app-model-context.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { HEARTBEAT_RUN_SCOPE } from "../../infra/heartbeat-run-scope.js";
+import { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-run-activity.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions } from "../types.js";
 import {
@@ -48,6 +49,36 @@ describe("runAgentTurnWithFallback: run lifecycle and ownership", () => {
     expect(fallbackCall.abortSignal).toBe(replyOperation.abortSignal);
     expect(fallbackCall.sessionId).toBe("session");
     expect(embeddedCall.abortSignal).toBe(replyOperation.abortSignal);
+  });
+
+  it("records diagnostic progress from global-lane wait notifications", async () => {
+    const replyOperation = createReplyOperation({
+      sessionKey: "agent:main:global-lane-progress",
+      sessionId: "global-lane-progress",
+      resetTriggered: false,
+    });
+    replyOperation.markWaitingForGlobalLane();
+    let progressReasonDuringWait: string | undefined;
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      params.onLaneWait?.({ waitMs: 5_000, queuedAhead: 4, waiting: true });
+      progressReasonDuringWait = getDiagnosticSessionActivitySnapshot({
+        sessionId: replyOperation.sessionId,
+        sessionKey: replyOperation.key,
+      }).lastProgressReason;
+      return { payloads: [{ text: "ok" }], meta: {} };
+    });
+
+    try {
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      await runAgentTurnWithFallback({
+        ...createMinimalRunAgentTurnParams(),
+        replyOperation,
+      });
+
+      expect(progressReasonDuringWait).toBe("global_lane:waiting");
+    } finally {
+      replyOperation.complete();
+    }
   });
 
   it("revalidates thinking for each main-chat fallback candidate without mutating the run", async () => {

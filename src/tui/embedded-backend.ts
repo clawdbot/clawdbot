@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { agentCommandFromIngress } from "../agents/agent-command.js";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -169,7 +170,7 @@ const embeddedSessionStartupMigrationLog = {
 function hasProviderWildcardModelAllowlist(cfg: OpenClawConfig) {
   const modelMaps = [
     cfg.agents?.defaults?.models,
-    ...(cfg.agents?.list?.map((agent) => agent?.models) ?? []),
+    ...listAgentEntries(cfg).map((agent) => agent.models),
   ];
   return modelMaps.some((models) =>
     Object.keys(models ?? {}).some((key) => key.trim().endsWith("/*")),
@@ -769,6 +770,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
   async resetSession(key: string, reason?: "new" | "reset", opts?: { agentId?: string }) {
     await this.ready;
+    if (loadSessionEntryReadOnly(key, opts).entry?.incognito === true) {
+      throw new Error("Incognito sessions cannot reset in place.");
+    }
     const result = await performGatewaySessionReset({
       key,
       ...(opts?.agentId ? { agentId: opts.agentId } : {}),
@@ -777,6 +781,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
     });
     if (!result.ok) {
       throw new Error(result.error.message);
+    }
+    if ("incognitoDeleted" in result) {
+      return { ok: true as const, key: result.key, deleted: true as const };
     }
     return { ok: true as const, key: result.key, entry: result.entry, resolved: result.resolved };
   }
@@ -787,6 +794,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const result = await createGatewaySession({
       cfg,
       ...opts,
+      creation: { via: "operator", actor: { type: "human" } },
       emitCommandHooks: Boolean(opts.parentSessionKey),
       commandSource: "tui:embedded",
       loadGatewayModelCatalog: () => loadEmbeddedTuiModelCatalog(cfg),

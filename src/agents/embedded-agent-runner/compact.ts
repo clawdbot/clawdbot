@@ -103,7 +103,12 @@ import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import {
   selectAgentHarness,
   selectAgentHarnessForPreparedModelProviders,
+  type AgentHarnessPreparedModelProvider,
 } from "../harness/selection.js";
+import {
+  resolveAgentHarnessPreparedAuthSupport,
+  resolveAgentHarnessPreparedRouteSupport,
+} from "../harness/support.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import { prepareAgentMemoryPrompt } from "../memory-prompt-prepare.js";
 import {
@@ -182,7 +187,6 @@ import type {
   CompactionMessageMetrics,
 } from "./compact.types.js";
 import { dedupeDuplicateUserMessagesForCompaction } from "./compaction-duplicate-user-messages.js";
-import { buildCompactionHarnessModelProvider } from "./compaction-harness-model-provider.js";
 import {
   asCompactionHookRunner,
   buildBeforeCompactionHookMetrics,
@@ -260,6 +264,27 @@ function hasRealConversationContent(
   index: number,
 ): boolean {
   return isRealConversationMessage(msg, messages, index);
+}
+
+function buildCompactionHarnessModelProvider(params: {
+  model?: ProviderRuntimeModel;
+  plan?: AgentRuntimeAuthPlan;
+  attempt?: PreparedAgentRuntimeAuthAttempt;
+}): AgentHarnessPreparedModelProvider {
+  const route = params.plan?.modelRoute;
+  return {
+    api: route?.api ?? params.model?.api,
+    baseUrl: route?.baseUrl ?? params.model?.baseUrl,
+    ...resolveAgentHarnessPreparedRouteSupport(params.plan),
+    ...(params.plan
+      ? {
+          preparedAuth: resolveAgentHarnessPreparedAuthSupport({
+            plan: params.plan,
+            source: params.attempt?.kind === "implicit" ? undefined : params.attempt?.kind,
+          }),
+        }
+      : {}),
+  };
 }
 
 function resolveCompactionProviderStream(params: {

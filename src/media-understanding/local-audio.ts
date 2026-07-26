@@ -299,7 +299,7 @@ export async function inspectLocalAudioSelection(
     (await Promise.all(sherpaFiles.map(fileExists))).every(Boolean);
   const parakeetReady = Boolean(parakeetCommand) && platform === "darwin" && arch === "arm64";
   const parakeetArgs = [
-    "{{MediaPath}}",
+    "{{AttachmentPath}}",
     "--output-format",
     "txt",
     "--output-dir",
@@ -314,14 +314,14 @@ export async function inspectLocalAudioSelection(
     "-of",
     "{{OutputBase}}",
     "-nt",
-    "{{MediaPath}}",
+    "{{AttachmentPath}}",
   ];
   const sherpaArgs = [
     `--tokens=${sherpaFiles[0]}`,
     `--encoder=${sherpaFiles[1]}`,
     `--decoder=${sherpaFiles[2]}`,
     `--joiner=${sherpaFiles[3]}`,
-    "{{MediaPath}}",
+    "{{AttachmentPath}}",
   ];
   const pythonArgs = [
     "--model",
@@ -332,7 +332,7 @@ export async function inspectLocalAudioSelection(
     "{{OutputDir}}",
     "--verbose",
     "False",
-    "{{MediaPath}}",
+    "{{AttachmentPath}}",
   ];
 
   const candidates: LocalAudioCandidate[] = [

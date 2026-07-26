@@ -1,143 +1,126 @@
-// User-turn media persistence tests cover fact normalization and legacy row projection.
+// User-turn media persistence tests cover canonical fact normalization.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { readPersistedMediaFacts } from "../media/media-facts.js";
 import {
+  buildLateMediaAttachedProjection,
   buildPersistedUserTurnMediaInputsFromFields,
   buildPersistedUserTurnMessage,
 } from "./user-turn-transcript.js";
 
 describe("buildPersistedUserTurnMediaInputsFromFields", () => {
-  it("builds media facts from persisted parallel fields", () => {
+  it("builds media inputs from canonical persisted facts", () => {
     expect(
       buildPersistedUserTurnMediaInputsFromFields({
-        MediaPath: "/tmp/a.png",
-        MediaPaths: ["/tmp/a.png", "/tmp/b.jpg"],
-        MediaType: "image/png",
-        MediaTypes: ["image/png", "image/jpeg"],
-      }),
+        __openclaw: {
+          media: [
+            { path: "/tmp/a.png", contentType: "image/png" },
+            { url: "https://example.test/b.jpg", contentType: "image/jpeg" },
+          ],
+        },
+      } as never),
     ).toEqual([
       { path: "/tmp/a.png", contentType: "image/png" },
-      { path: "/tmp/b.jpg", contentType: "image/jpeg" },
+      { url: "https://example.test/b.jpg", contentType: "image/jpeg" },
     ]);
   });
 
-  it("uses url-backed media fields when no local path is present", () => {
-    expect(
-      buildPersistedUserTurnMediaInputsFromFields({
-        MediaUrl: "media://inbound/a.png",
-        MediaType: "image/png",
-      }),
-    ).toEqual([{ url: "media://inbound/a.png", contentType: "image/png" }]);
-  });
-
-  it("infers transcript media type from media path when explicit type is absent", () => {
-    expect(
-      buildPersistedUserTurnMediaInputsFromFields({
-        MediaPaths: ["/tmp/a.png", "https://example.test/report.pdf"],
-      }),
-    ).toEqual([
-      { path: "/tmp/a.png", contentType: "image/png" },
-      { path: "https://example.test/report.pdf", contentType: "application/pdf" },
-    ]);
-  });
-
-  it("does not reuse singular media type for later media paths", () => {
-    expect(
-      buildPersistedUserTurnMediaInputsFromFields({
-        MediaPath: "/tmp/a.png",
-        MediaPaths: ["/tmp/a.png", "/tmp/report.pdf"],
-        MediaType: "image/png",
-      }),
-    ).toEqual([
-      { path: "/tmp/a.png", contentType: "image/png" },
-      { path: "/tmp/report.pdf", contentType: "application/pdf" },
-    ]);
-  });
-
-  it("resolves staged legacy paths against the media workspace", () => {
+  it("resolves relative canonical paths against each fact workspace", () => {
     const workspaceDir = "/tmp/openclaw-user-turn-workspace";
     expect(
       buildPersistedUserTurnMediaInputsFromFields({
-        MediaPaths: ["media/inbound/a.png", "media/inbound/b.jpg"],
-        MediaTypes: ["image/png", "image/jpeg"],
-        MediaWorkspaceDir: workspaceDir,
-      }),
-    ).toEqual([
-      { path: path.join(workspaceDir, "media/inbound/a.png"), contentType: "image/png" },
-      { path: path.join(workspaceDir, "media/inbound/b.jpg"), contentType: "image/jpeg" },
-    ]);
+        __openclaw: {
+          media: [{ path: "media/inbound/a.png", contentType: "image/png", workspaceDir }],
+        },
+      } as never),
+    ).toEqual([{ path: path.join(workspaceDir, "media/inbound/a.png"), contentType: "image/png" }]);
   });
 
-  it("does not rewrite absolute or URL-like media paths", () => {
-    const workspaceDir = "/tmp/openclaw-user-turn-workspace";
-    const absolutePath = path.join(workspaceDir, "media/inbound/a.png");
-    expect(
-      buildPersistedUserTurnMediaInputsFromFields({
-        MediaPaths: [absolutePath, "media://inbound/b.jpg", "https://example.test/c.png"],
-        MediaTypes: ["image/png", "image/jpeg", "image/png"],
-        MediaWorkspaceDir: workspaceDir,
-      }),
-    ).toEqual([
-      { path: absolutePath, contentType: "image/png" },
-      { path: "media://inbound/b.jpg", contentType: "image/jpeg" },
-      { path: "https://example.test/c.png", contentType: "image/png" },
-    ]);
-  });
-
-  it("does not infer media from absent structured fields", () => {
+  it("does not consult legacy top-level fields after the versioned cutover", () => {
     expect(buildPersistedUserTurnMediaInputsFromFields(undefined)).toEqual([]);
-    expect(buildPersistedUserTurnMediaInputsFromFields({})).toEqual([]);
-    expect(buildPersistedUserTurnMediaInputsFromFields({ MediaTypes: ["image/png"] })).toEqual([]);
+    expect(buildPersistedUserTurnMediaInputsFromFields({} as never)).toEqual([]);
   });
+});
 
-  it("preserves aligned content-type holes while normalizing the row", () => {
-    const result = buildPersistedUserTurnMediaInputsFromFields({
-      MediaPaths: ["/media/a.bin", "/media/b.png"],
-      MediaTypes: ["", "image/png"],
-    });
-    expect(result).toHaveLength(2);
-    expect(result[0]).toMatchObject({ path: "/media/a.bin" });
-    expect(result[0]?.contentType).not.toBe("image/png");
-    expect(result[1]).toEqual({ path: "/media/b.png", contentType: "image/png" });
-  });
+describe("buildLateMediaAttachedProjection canonical persistence", () => {
+  it.each([
+    {
+      name: "legacy-only",
+      message: { MediaPath: "/media/legacy.png", MediaType: "image/png" },
+      expectedPath: undefined,
+    },
+    {
+      name: "facts-only",
+      message: { __openclaw: { media: [{ path: "/media/fact.png" }] } },
+      expectedPath: "/media/fact.png",
+    },
+    {
+      name: "both-equal",
+      message: {
+        MediaPath: "/media/equal.png",
+        __openclaw: { media: [{ path: "/media/equal.png" }] },
+      },
+      expectedPath: "/media/equal.png",
+    },
+    {
+      name: "both-conflict",
+      message: {
+        MediaPath: "/media/legacy-conflict.png",
+        __openclaw: { media: [{ path: "/media/canonical.png" }] },
+      },
+      expectedPath: "/media/canonical.png",
+    },
+    {
+      name: "sparse",
+      message: { __openclaw: { media: [{}, { path: "/media/sparse.png" }] } },
+      expectedPath: "/media/sparse.png",
+      expectedIndex: 1,
+    },
+    {
+      name: "type-only",
+      message: { __openclaw: { media: [{ contentType: "image/png" }] } },
+      expectedPath: undefined,
+    },
+    {
+      name: "media-only",
+      message: { content: "", __openclaw: { media: [{ path: "/media/media-only.png" }] } },
+      expectedPath: "/media/media-only.png",
+    },
+  ])("reconstructs $name rows from canonical facts first", (testCase) => {
+    const metadata = (testCase.message as { __openclaw?: Record<string, unknown> })["__openclaw"];
+    const projection = buildLateMediaAttachedProjection({
+      role: "user",
+      content: "",
+      ...testCase.message,
+      __openclaw: { ...metadata, lateMedia: true },
+    } as never);
+    const expectedIndex = "expectedIndex" in testCase ? (testCase.expectedIndex ?? 0) : 0;
 
-  it("preserves aligned path and URL holes while normalizing the row", () => {
-    expect(
-      buildPersistedUserTurnMediaInputsFromFields({
-        MediaPaths: ["/media/local.bin", ""],
-        MediaUrls: ["", "https://example.test/remote.png"],
-        MediaTypes: ["application/octet-stream", "image/png"],
-      }),
-    ).toEqual([
-      { path: "/media/local.bin", contentType: "application/octet-stream" },
-      { url: "https://example.test/remote.png", contentType: "image/png" },
-    ]);
-  });
-
-  it("keeps empty attachment slots aligned for a later writer", () => {
-    expect(
-      buildPersistedUserTurnMediaInputsFromFields({
-        MediaPaths: ["", "/media/b.png"],
-        MediaTypes: ["", "image/png"],
-      }),
-    ).toEqual([{}, { path: "/media/b.png", contentType: "image/png" }]);
+    expect(projection.media[expectedIndex]?.path).toBe(testCase.expectedPath);
+    expect(projection.text).toBe(
+      testCase.expectedPath ? `[media attached: ${testCase.expectedPath}]` : undefined,
+    );
   });
 });
 
 describe("buildPersistedUserTurnMessage media projection", () => {
   it.each([
     {
+      name: "zero attachments",
+      media: undefined,
+      expectedLegacy: {},
+      expectedMedia: undefined,
+    },
+    {
       name: "one attachment",
       media: [{ path: "/tmp/a.png", contentType: "image/png" }],
-      expected: {
-        role: "user",
-        content: "inspect",
-        timestamp: 123,
+      expectedLegacy: {
         MediaPath: "/tmp/a.png",
         MediaPaths: ["/tmp/a.png"],
         MediaType: "image/png",
         MediaTypes: ["image/png"],
       },
+      expectedMedia: [{ path: "/tmp/a.png", contentType: "image/png" }],
     },
     {
       name: "many attachments",
@@ -145,34 +128,203 @@ describe("buildPersistedUserTurnMessage media projection", () => {
         { path: " /tmp/a.png ", contentType: " image/png " },
         { url: " https://example.test/report.pdf ", contentType: " application/pdf " },
       ],
-      expected: {
-        role: "user",
-        content: "inspect",
-        timestamp: 123,
+      expectedLegacy: {
         MediaPath: "/tmp/a.png",
         MediaPaths: ["/tmp/a.png", "https://example.test/report.pdf"],
         MediaType: "image/png",
         MediaTypes: ["image/png", "application/pdf"],
       },
+      expectedMedia: [
+        { path: "/tmp/a.png", contentType: "image/png" },
+        { url: "https://example.test/report.pdf", contentType: "application/pdf" },
+      ],
     },
-  ])("keeps $name row bytes stable", ({ media, expected }) => {
+    {
+      name: "sparse aligned attachments",
+      media: [{}, { path: "/tmp/b.png", contentType: "image/png" }],
+      expectedLegacy: {
+        MediaPaths: ["", "/tmp/b.png"],
+        MediaTypes: ["", "image/png"],
+      },
+      expectedMedia: [{}, { path: "/tmp/b.png", contentType: "image/png" }],
+    },
+    {
+      name: "path-only attachment",
+      media: [{ path: "/tmp/inferred.png" }],
+      expectedLegacy: {
+        MediaPath: "/tmp/inferred.png",
+        MediaPaths: ["/tmp/inferred.png"],
+        MediaType: "image/png",
+        MediaTypes: ["image/png"],
+      },
+      expectedMedia: [{ path: "/tmp/inferred.png", contentType: "image/png" }],
+    },
+    {
+      name: "URL-only attachment",
+      media: [{ url: "https://example.test/remote.jpg", contentType: "image/jpeg" }],
+      expectedLegacy: {
+        MediaPath: "https://example.test/remote.jpg",
+        MediaPaths: ["https://example.test/remote.jpg"],
+        MediaType: "image/jpeg",
+        MediaTypes: ["image/jpeg"],
+      },
+      expectedMedia: [{ url: "https://example.test/remote.jpg", contentType: "image/jpeg" }],
+    },
+    {
+      name: "path plus distinct URL",
+      media: [
+        {
+          path: "/tmp/local.jpg",
+          url: "https://example.test/original.jpg",
+          contentType: "image/jpeg",
+        },
+      ],
+      expectedLegacy: {
+        MediaPath: "/tmp/local.jpg",
+        MediaPaths: ["/tmp/local.jpg"],
+        MediaType: "image/jpeg",
+        MediaTypes: ["image/jpeg"],
+      },
+      expectedMedia: [
+        {
+          path: "/tmp/local.jpg",
+          url: "https://example.test/original.jpg",
+          contentType: "image/jpeg",
+        },
+      ],
+    },
+    {
+      name: "explicit MIME",
+      media: [{ path: "/tmp/blob.bin", contentType: "application/x-openclaw" }],
+      expectedLegacy: {
+        MediaPath: "/tmp/blob.bin",
+        MediaPaths: ["/tmp/blob.bin"],
+        MediaType: "application/x-openclaw",
+        MediaTypes: ["application/x-openclaw"],
+      },
+      expectedMedia: [{ path: "/tmp/blob.bin", contentType: "application/x-openclaw" }],
+    },
+    {
+      name: "bare kind",
+      media: [{ kind: "image" }],
+      expectedLegacy: {},
+      expectedMedia: [{ kind: "image" }],
+    },
+    {
+      name: "provider MIME-like kind",
+      media: [{ path: "/tmp/provider.bin", kind: "provider/custom-media" }],
+      expectedLegacy: {
+        MediaPath: "/tmp/provider.bin",
+        MediaPaths: ["/tmp/provider.bin"],
+        MediaType: "provider/custom-media",
+        MediaTypes: ["provider/custom-media"],
+      },
+      expectedMedia: [{ path: "/tmp/provider.bin", contentType: "provider/custom-media" }],
+    },
+    {
+      name: "unknown non-MIME kind",
+      media: [{ path: "/tmp/photo.jpg", kind: "thumbnail" }],
+      expectedLegacy: {
+        MediaPath: "/tmp/photo.jpg",
+        MediaPaths: ["/tmp/photo.jpg"],
+        MediaType: "thumbnail",
+        MediaTypes: ["thumbnail"],
+      },
+      expectedMedia: [{ path: "/tmp/photo.jpg", contentType: "image/jpeg" }],
+    },
+    {
+      name: "transcribed attachment",
+      media: [{ path: "/tmp/voice.ogg", contentType: "audio/ogg", transcribed: true }],
+      expectedLegacy: {
+        MediaPath: "/tmp/voice.ogg",
+        MediaPaths: ["/tmp/voice.ogg"],
+        MediaType: "audio/ogg",
+        MediaTypes: ["audio/ogg"],
+      },
+      expectedMedia: [{ path: "/tmp/voice.ogg", contentType: "audio/ogg", transcribed: true }],
+    },
+    {
+      name: "workspace-relative attachment",
+      media: [
+        {
+          path: "media/inbound/a.png",
+          contentType: "image/png",
+          workspaceDir: "/tmp/workspace",
+        },
+      ],
+      expectedLegacy: {
+        MediaPath: path.join("/tmp/workspace", "media/inbound/a.png"),
+        MediaPaths: [path.join("/tmp/workspace", "media/inbound/a.png")],
+        MediaType: "image/png",
+        MediaTypes: ["image/png"],
+      },
+      expectedMedia: [
+        {
+          path: "media/inbound/a.png",
+          contentType: "image/png",
+          workspaceDir: "/tmp/workspace",
+        },
+      ],
+    },
+    {
+      name: "hydration-suppressed attachment",
+      media: [
+        {
+          path: "/tmp/described.png",
+          contentType: "image/png",
+          hydrationSuppressed: true,
+        },
+      ],
+      expectedLegacy: {
+        MediaPath: "/tmp/described.png",
+        MediaPaths: ["/tmp/described.png"],
+        MediaType: "image/png",
+        MediaTypes: ["image/png"],
+      },
+      expectedMedia: [
+        {
+          path: "/tmp/described.png",
+          contentType: "image/png",
+          hydrationSuppressed: true,
+        },
+      ],
+    },
+  ])("persists $name as canonical facts without legacy fields", ({ media, expectedMedia }) => {
     const message = buildPersistedUserTurnMessage({ text: "inspect", timestamp: 123, media });
-    expect(message).toEqual(expected);
-    expect(JSON.stringify(message)).toBe(JSON.stringify(expected));
+    expect(message).toMatchObject({ role: "user", content: "inspect", timestamp: 123 });
+    expect(message).not.toHaveProperty("MediaPath");
+    expect(message).not.toHaveProperty("MediaPaths");
+    expect(message).not.toHaveProperty("MediaType");
+    expect(message).not.toHaveProperty("MediaTypes");
+    expect(
+      (message as unknown as { __openclaw?: { media?: unknown } })["__openclaw"]?.media,
+    ).toEqual(expectedMedia);
   });
 
-  it("uses the aligned storage projection when an earlier fact has no path", () => {
-    const message = buildPersistedUserTurnMessage({
-      text: "inspect",
-      timestamp: 123,
-      media: [{ kind: "image" }, { path: "/tmp/b.png", contentType: "image/png" }],
-    });
-    expect(message).toEqual({
-      role: "user",
-      content: "inspect",
-      timestamp: 123,
-      MediaPaths: ["", "/tmp/b.png"],
-      MediaTypes: ["", "image/png"],
-    });
+  it("reads canonical persisted facts without merging disagreeing legacy fields", () => {
+    const message = {
+      MediaPath: "/legacy.png",
+      MediaType: "image/png",
+      __openclaw: {
+        media: [
+          {
+            path: "/canonical.ogg",
+            contentType: "audio/ogg",
+            transcribed: true,
+            messageId: "media-1",
+          },
+        ],
+      },
+    };
+
+    expect(readPersistedMediaFacts(message)).toEqual([
+      expect.objectContaining({
+        path: "/canonical.ogg",
+        contentType: "audio/ogg",
+        kind: "audio",
+        transcribed: true,
+        messageId: "media-1",
+      }),
+    ]);
   });
 });

@@ -3,7 +3,7 @@ title: WebChat direct reply routing
 scenario:
   id: webchat-direct-reply-routing
   surface: qa-channel
-  runtimeParityTier: live-only
+  runtimePairLane: core
   coverage:
     primary:
       - control-ui.chat-send-lifecycle-direct-reply-routing
@@ -27,6 +27,7 @@ scenario:
     kind: flow
     summary: Run a direct current-chat reply and inspect the actual transcript for self-message routing.
     config:
+      requiredProviderMode: live-frontier
       conversationId: qa-operator
       expectedMarker: WEBCHAT-DIRECT-REPLY-OK
       promptSnippet: Reply exactly

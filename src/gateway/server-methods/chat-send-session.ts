@@ -2,9 +2,13 @@ import { performance } from "node:perf_hooks";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
-import { resolveSessionRoutingContract } from "../../config/sessions/main-session.js";
+import {
+  resolveAgentMainSessionKey,
+  resolveSessionRoutingContract,
+} from "../../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { measureDiagnosticsTimelineSpanSync } from "../../infra/diagnostics-timeline.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
 import { isBrowserOperatorUiClient } from "../../utils/message-channel.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
@@ -35,16 +39,27 @@ function loadChatSendSessionContext(params: {
   const agentIdOverride = normalizeOptionalChatText(p.agentId);
   const clientRunId = p.idempotencyKey;
   const pendingChatSendKey = pendingChatSendDedupeKey(clientRunId);
+  const runtimeConfig = context.getRuntimeConfig?.();
   const requestedAgentId = resolveRequestedChatAgentId({
-    cfg: context.getRuntimeConfig?.(),
+    cfg: runtimeConfig,
     requestedSessionKey: rawSessionKey,
     agentId: agentIdOverride,
   });
+  // Outside configured global scope, `global` + agentId is the shipped webchat
+  // alias for that agent's main thread. Resolve it before every store lookup so
+  // reconnect replay cannot create a parallel literal `global` transcript.
+  const sessionLoadKey =
+    runtimeConfig &&
+    runtimeConfig.session?.scope !== "global" &&
+    rawSessionKey.trim().toLowerCase() === "global" &&
+    requestedAgentId
+      ? resolveAgentMainSessionKey({ cfg: runtimeConfig, agentId: requestedAgentId })
+      : rawSessionKey;
   const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
   const sessionLoadStartedAtMs = performance.now();
   const sessionLoadResult = measureDiagnosticsTimelineSpanSync(
     "gateway.chat_send.load_session",
-    () => loadSessionEntry(rawSessionKey, sessionLoadOptions),
+    () => loadSessionEntry(sessionLoadKey, sessionLoadOptions),
     {
       phase: "agent-turn",
       attributes: {
@@ -59,11 +74,14 @@ function loadChatSendSessionContext(params: {
   const expectedSessionRoutingContract = normalizeOptionalChatText(
     p.expectedSessionRoutingContract,
   );
+  const expectedLeafEntryId =
+    p.expectedLeafEntryId === null ? null : normalizeOptionalChatText(p.expectedLeafEntryId);
   const sessionRoutingChanged = (candidateConfig: OpenClawConfig) =>
     expectedSessionRoutingContract !== undefined &&
     expectedSessionRoutingContract.toLowerCase() !== resolveSessionRoutingContract(candidateConfig);
   return {
     rawSessionKey,
+    sessionLoadKey,
     clientRunId,
     pendingChatSendKey,
     sessionLoadOptions,
@@ -74,6 +92,7 @@ function loadChatSendSessionContext(params: {
     sessionKey,
     legacyKey,
     sessionRoutingChanged,
+    expectedLeafEntryId,
     requestedAgentId,
   };
 }
@@ -88,6 +107,9 @@ export function prepareChatSendSession(params: {
   const { request, client } = params;
   const { p, explicitOrigin, normalizedAttachments, turnKind, rawMessage } = request;
   const { cfg, sessionKey, entry, legacyKey, rawSessionKey, requestedAgentId } = loaded;
+  if (isIncognitoSessionKey(sessionKey) && !entry) {
+    return { ok: false as const, error: `Incognito session "${sessionKey}" was not found.` };
+  }
   const missingHarnessSessionError = resolveMissingAgentHarnessSessionError(sessionKey, entry);
   if (missingHarnessSessionError) {
     return { ok: false as const, error: missingHarnessSessionError };

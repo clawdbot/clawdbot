@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
 import {
   completeDeferredSessionMcpRuntimeRetirement,
   createBundleMcpJsonSchemaValidator,
@@ -35,7 +36,7 @@ vi.mock("./embedded-agent-mcp.js", () => ({
 }));
 
 const tempDirs: string[] = [];
-const appMetadataTempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirTracker = useAutoCleanupTempDirTracker(afterEach);
 
 type RuntimeFactoryOptions = NonNullable<
   Parameters<typeof testing.createSessionMcpRuntimeManager>[0]
@@ -65,6 +66,7 @@ async function writeListToolsMcpServer(params: {
   notifyListChangedAfterFirstList?: boolean;
   exitOnListCall?: number;
   listToolsMethodNotFound?: boolean;
+  listToolsJsonRpcErrorMessage?: string;
   callToolIsError?: boolean;
   callToolJsonRpcError?: boolean;
   resourceListJsonRpcError?: boolean;
@@ -86,6 +88,7 @@ const notifyListChangedOnInitialized = ${params.notifyListChangedOnInitialized =
 const notifyListChangedAfterFirstList = ${params.notifyListChangedAfterFirstList === true};
 const exitOnListCall = ${params.exitOnListCall ?? 0};
 const listToolsMethodNotFound = ${params.listToolsMethodNotFound === true};
+const listToolsJsonRpcErrorMessage = ${JSON.stringify(params.listToolsJsonRpcErrorMessage)};
 const tools = ${JSON.stringify(
       params.tools ?? [
         {
@@ -160,6 +163,15 @@ function handle(message) {
         jsonrpc: "2.0",
         id: message.id,
         error: { code: -32601, message: "Method not found" },
+      });
+      return;
+    }
+    if (listToolsJsonRpcErrorMessage) {
+      log("reject tools/list with configured error");
+      send({
+        jsonrpc: "2.0",
+        id: message.id,
+        error: { code: -32000, message: listToolsJsonRpcErrorMessage },
       });
       return;
     }
@@ -401,7 +413,7 @@ describe("session MCP runtime", () => {
   });
 
   it("catalogs canonical and deprecated MCP App tool metadata", async () => {
-    const tempDir = appMetadataTempDirs.make("bundle-mcp-app-metadata-");
+    const tempDir = tempDirTracker.make("bundle-mcp-app-metadata-");
     const serverPath = path.join(tempDir, "app-metadata.mjs");
     const logPath = path.join(tempDir, "server.log");
     await writeListToolsMcpServer({
@@ -987,6 +999,159 @@ describe("session MCP runtime", () => {
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("redacts credentials from MCP catalog diagnostics", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-diagnostic-redaction-"));
+    const serverPath = path.join(tempDir, "diagnostic-redaction.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    const secret = "test-diagnostic-token";
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      listToolsJsonRpcErrorMessage: `Authorization: Bearer ${secret}`,
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-diagnostic-redaction",
+      sessionKey: "agent:test:session-diagnostic-redaction",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            diagnostic: {
+              command: process.execPath,
+              args: [serverPath],
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog();
+      const diagnostic = catalog.diagnostics?.[0];
+      expect(diagnostic?.serverName).toBe("diagnostic");
+      expect(diagnostic?.message).toContain("Authorization: Bearer ");
+      expect(diagnostic?.message).toContain("…");
+      expect(diagnostic?.message).not.toContain(secret);
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("retries a failed MCP catalog without stalling healthy siblings", async () => {
+    const tempDir = tempDirTracker.make("bundle-mcp-catalog-retry-");
+    const retryServerPath = path.join(tempDir, "retry-list-tools.mjs");
+    const retryLogPath = path.join(tempDir, "retry-server.log");
+    const healthyServerPath = path.join(tempDir, "healthy-list-tools.mjs");
+    const healthyLogPath = path.join(tempDir, "healthy-server.log");
+    let nowMs = 10_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    await Promise.all([
+      writeListToolsMcpServer({
+        filePath: retryServerPath,
+        logPath: retryLogPath,
+        inputSchema: { type: "array", items: { type: "number" } },
+      }),
+      writeListToolsMcpServer({
+        filePath: healthyServerPath,
+        logPath: healthyLogPath,
+        tools: [
+          {
+            name: "healthy_tool",
+            inputSchema: { type: "object", properties: {} },
+          },
+        ],
+      }),
+    ]);
+
+    const staticRuntime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-catalog-retry",
+      sessionKey: "agent:test:session-catalog-retry",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            healthyServer: {
+              command: process.execPath,
+              args: [healthyServerPath],
+              connectionTimeoutMs: 2_000,
+            },
+            retryServer: {
+              command: process.execPath,
+              args: [retryServerPath],
+              connectionTimeoutMs: 2_000,
+            },
+          },
+        },
+      },
+    });
+    const scopedRuntime = makeRuntime(
+      [{ toolName: "scoped_tool", description: "Requester-scoped tool" }],
+      "scopedServer",
+    );
+    const scopedCatalog = await scopedRuntime.getCatalog();
+    scopedRuntime.getCatalog = async () => scopedCatalog;
+    scopedRuntime.peekCatalog = () => scopedCatalog;
+    const runtime = createCombinedSessionMcpRuntime({
+      sessionId: "session-catalog-retry",
+      workspaceDir: "/workspace",
+      parts: [staticRuntime, scopedRuntime],
+    });
+
+    try {
+      const failedCatalog = await runtime.getCatalog();
+      expect(Object.keys(failedCatalog.servers)).toEqual(["healthyServer", "scopedServer"]);
+      expect(failedCatalog.tools.map((tool) => tool.toolName)).toEqual([
+        "healthy_tool",
+        "scoped_tool",
+      ]);
+      expect(failedCatalog.diagnostics?.[0]?.serverName).toBe("retryServer");
+
+      await writeListToolsMcpServer({
+        filePath: retryServerPath,
+        logPath: retryLogPath,
+        initializeDelayMs: 500,
+      });
+      await expect(runtime.getCatalog()).resolves.toBe(failedCatalog);
+
+      nowMs += 5_001;
+      expect(runtime.peekCatalog()).toBe(failedCatalog);
+      const staleCatalog = await withTestTimeout(
+        runtime.getCatalog(),
+        300,
+        "catalog retry blocked the triggering turn",
+      );
+      expect(staleCatalog).toBe(failedCatalog);
+      expect(staleCatalog.diagnostics?.[0]?.serverName).toBe("retryServer");
+      await expect(runtime.callTool("healthyServer", "healthy_tool", {})).resolves.toMatchObject({
+        isError: false,
+      });
+
+      await waitForPredicate(
+        () => staticRuntime.peekCatalog()?.servers.retryServer !== undefined,
+        "background catalog recovery",
+        LIST_TOOLS_TEST_DEADLINE_MS,
+      );
+      const recoveredCatalog = await runtime.getCatalog();
+
+      expect(recoveredCatalog.diagnostics ?? []).toEqual([]);
+      expect(recoveredCatalog.servers.retryServer).toBeDefined();
+      expect(recoveredCatalog.tools.map((tool) => tool.toolName)).toEqual([
+        "healthy_tool",
+        "slow_tool",
+        "scoped_tool",
+      ]);
+      expect((await fs.readFile(healthyLogPath, "utf8")).match(/recv tools\/list/g)).toHaveLength(
+        1,
+      );
+      expect((await fs.readFile(retryLogPath, "utf8")).match(/recv tools\/list/g)).toHaveLength(2);
+    } finally {
+      nowSpy.mockRestore();
+      await runtime.dispose();
     }
   });
 

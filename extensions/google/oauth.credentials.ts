@@ -1,13 +1,14 @@
 // Google plugin module implements oauth.credentials behavior.
-import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync } from "node:fs";
 import type { Dirent } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
+import { readSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import { lowercasePreservingWhitespace } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CLIENT_ID_KEYS, CLIENT_SECRET_KEYS } from "./oauth.shared.js";
 
 type CredentialFs = {
   existsSync: (path: Parameters<typeof existsSync>[0]) => ReturnType<typeof existsSync>;
-  readFileSync: (path: Parameters<typeof readFileSync>[0], encoding: "utf8") => string;
+  readFileSync: (path: string, encoding: "utf8") => string;
   realpathSync: (path: Parameters<typeof realpathSync>[0]) => string;
   readdirSync: (
     path: Parameters<typeof readdirSync>[0],
@@ -17,7 +18,11 @@ type CredentialFs = {
 
 const defaultFs: CredentialFs = {
   existsSync,
-  readFileSync,
+  readFileSync: (path) =>
+    readSecretFileSync(path, "Gemini CLI OAuth credentials", {
+      maxBytes: 1024 * 1024,
+      rejectHardlinks: false,
+    }),
   realpathSync,
   readdirSync,
 };

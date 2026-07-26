@@ -1,5 +1,6 @@
 // Qa Lab tests cover slack live plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { testing as adapterTesting } from "./adapter.runtime.js";
 import { resolveSlackQaScenarioIds } from "./scenario-selection.js";
 import { resolveApprovalDecision } from "./slack-live.approvals.js";
 import {
@@ -49,6 +50,7 @@ const testing = {
   quiesceCodexApprovalAgentRun,
   resolveApprovalDecision,
   resolveCodexFileApprovalTargetPath,
+  resolveSlackRateLimitDelayMs: adapterTesting.resolveSlackRateLimitDelayMs,
   resolveSlackQaRuntimeEnv,
   runSlackTableInvalidBlocksFallbackScenario,
   waitForSlackNoReply,
@@ -78,6 +80,12 @@ function renderExpectedSlackTableAccessibleText(summaryText: string) {
 }
 
 describe("Slack live QA runtime helpers", () => {
+  it("converts Slack rate-limit retry seconds for the observer backoff", () => {
+    expect(testing.resolveSlackRateLimitDelayMs({ retryAfter: 10 })).toBe(10_000);
+    expect(testing.resolveSlackRateLimitDelayMs({ retryAfter: 0 })).toBeUndefined();
+    expect(testing.resolveSlackRateLimitDelayMs(new Error("network failed"))).toBeUndefined();
+  });
+
   beforeEach(() => {
     vi.useRealTimers();
   });

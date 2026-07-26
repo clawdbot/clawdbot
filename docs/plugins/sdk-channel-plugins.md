@@ -232,6 +232,15 @@ fetch can use `createHostedOutboundMediaStore(...)` from
 route parsing and token enforcement in the channel plugin; the shared helper
 only owns media loading, expiry metadata, chunk rows, and cleanup.
 
+Inbound attachments use ordered facts, not parallel `Media*` fields. Normalize
+channel records with `toInboundMediaFacts(...)` from
+`openclaw/plugin-sdk/channel-inbound` and pass them as `media` when building the
+inbound context. When a plugin must authorize local media reads, import
+`getAgentScopedMediaLocalRoots(...)` or
+`getAgentScopedMediaLocalRootsForSources(...)` from the focused
+`openclaw/plugin-sdk/media-local-roots` subpath. The old
+`agent-media-payload` builder/root facade is deprecated compatibility.
+
 ### Native payload shaping
 
 If your channel needs provider-specific shaping for `message(action="send")`,
@@ -391,6 +400,11 @@ Other approval helpers:
   lookup, transport-enabled check, target normalization, and turn-source
   target resolution. Do not use it to create core-owned channel policy
   defaults; pass the channel's documented default mode explicitly.
+- `createNativeApprovalMessagingTargetResolvers` centralizes channel matching
+  and `{ to, accountId, threadId }` normalization for messaging transports
+  whose native approval target is a channel-owned normalized destination.
+  Keep group authorization, approver mapping, and other transport policy in
+  the channel plugin.
 - `createChannelNativeOriginTargetResolver` uses the shared channel-route
   matcher by default for `{ to, accountId, threadId }` targets. Pass
   `targetsMatch` only when a channel has provider-specific equivalence rules,
@@ -835,6 +849,21 @@ unrelated inbound runtime helpers.
       when a native reply target was resolved, so payload helpers can preserve
       explicit reply tags without consuming an implicit single-use reply slot.
     </Accordion>
+
+    ### Group tool-policy adapters
+
+    A channel that implements `group.resolveToolPolicy` and supports
+    `toolsBySender` must forward the complete `ChannelGroupContext` to its
+    shared policy resolver. In particular, honor `senderPolicyMode: "never"`
+    by skipping sender-specific overlays at both the matched-group and wildcard
+    scopes while still applying the base `tools` policy.
+
+    OpenClaw sets this mode only for trusted non-ingress execution whose sender
+    authority was already captured in a server-owned envelope, such as an
+    explicitly capped scheduled run. Plugins must not derive the mode from
+    inbound metadata, persist it as channel state, or expose it as config. Add
+    an adapter test that proves the mode skips a wildcard `toolsBySender` entry
+    without dropping the matching base `tools` restriction.
 
   </Step>
 

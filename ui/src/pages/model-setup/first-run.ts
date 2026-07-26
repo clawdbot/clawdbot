@@ -55,7 +55,7 @@ export function startModelSetupFirstRunRedirect(params: {
     if (
       attempted ||
       redirected ||
-      !snapshot.connected ||
+      snapshot.phase !== "connected" ||
       !snapshot.client ||
       !hasOperatorAdminAccess(snapshot.hello?.auth ?? null) ||
       isGatewayMethodAdvertised(snapshot, "openclaw.setup.detect") !== true

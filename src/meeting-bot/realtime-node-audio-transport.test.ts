@@ -50,6 +50,13 @@ describe("node meeting realtime audio transport", () => {
     expect(transport.getHealth?.()).toEqual({
       consecutiveInputErrors: 0,
       lastInputError: undefined,
+      lastOutputLoopbackAt: undefined,
+      lastOutputLoopbackCorrelation: undefined,
+      lastOutputLoopbackPeak: undefined,
+      lastOutputLoopbackRms: undefined,
+      outputGeneration: 0,
+      outputLoopbackSignalBytes: 0,
+      verifiedOutputGeneration: undefined,
     });
 
     await transport.stop();
@@ -74,6 +81,13 @@ describe("node meeting realtime audio transport", () => {
     expect(transport.getHealth?.()).toEqual({
       consecutiveInputErrors: 5,
       lastInputError: "pullAudio base64 must be a valid audio payload",
+      lastOutputLoopbackAt: undefined,
+      lastOutputLoopbackCorrelation: undefined,
+      lastOutputLoopbackPeak: undefined,
+      lastOutputLoopbackRms: undefined,
+      outputGeneration: 0,
+      outputLoopbackSignalBytes: 0,
+      verifiedOutputGeneration: undefined,
     });
 
     await transport.stop();

@@ -10,6 +10,7 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   readTranscriptRawDelta,
+  replaceTranscriptEventsSync,
   upsertSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
@@ -120,6 +121,8 @@ describe("SessionManager.open", () => {
     const thinkingChangeId = sessionManager.appendThinkingLevelChange("high");
     const modelChangeId = sessionManager.appendModelChange("openai", "gpt-5.5");
     const compactionId = sessionManager.appendCompaction("summary", "assistant-1", 42);
+    const resetId = sessionManager.appendResetBoundary("new", assistantId);
+    expect(sessionManager.getBoundaryCount()).toBe(2);
 
     await expect(fs.stat(path.join(process.cwd(), marker))).rejects.toMatchObject({
       code: "ENOENT",
@@ -158,6 +161,12 @@ describe("SessionManager.open", () => {
         summary: "summary",
         type: "compaction",
       }),
+      expect.objectContaining({
+        firstKeptEntryId: assistantId,
+        id: resetId,
+        reason: "new",
+        type: "reset",
+      }),
     ]);
     const reopened = SessionManager.open(marker, dir, dir);
     expect(reopened.getEntries()).toEqual(
@@ -165,8 +174,72 @@ describe("SessionManager.open", () => {
         expect.objectContaining({ id: thinkingChangeId, type: "thinking_level_change" }),
         expect.objectContaining({ id: modelChangeId, type: "model_change" }),
         expect.objectContaining({ id: compactionId, type: "compaction" }),
+        expect.objectContaining({ id: resetId, type: "reset" }),
       ]),
     );
+  });
+
+  it("keeps stale appenders valid across a reset while snapshot replacement rotates generation", async () => {
+    const dir = await makeTempDir();
+    const scope = {
+      agentId: "main",
+      sessionId: "sqlite-reset-stale-appender",
+      sessionKey: "agent:main:dashboard:sqlite-reset-stale-appender",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    const marker = formatSqliteSessionFileMarker(scope);
+    await upsertSessionEntry(scope, {
+      sessionFile: marker,
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+    });
+    await appendTranscriptMessage(scope, {
+      eventId: "initial-user",
+      message: { role: "user", content: "before reset" },
+      parentId: null,
+    });
+    const cursor = readTranscriptRawDelta(scope);
+    expect(cursor.kind).toBe("page");
+    if (cursor.kind !== "page") {
+      throw new Error("expected initial raw cursor page");
+    }
+
+    const staleManager = SessionManager.open(marker, dir, dir);
+    const resetManager = SessionManager.open(marker, dir, dir);
+    resetManager.appendResetBoundary("reset");
+    expect(() =>
+      staleManager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "late append" }],
+        api: "openai-responses",
+        provider: "openai",
+        model: "gpt-5.5",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: Date.now(),
+      }),
+    ).not.toThrow();
+
+    const resumed = readTranscriptRawDelta(scope, { cursor: cursor.cursor });
+    expect(resumed.kind).toBe("page");
+    const events = await loadTranscriptEvents(scope);
+    expect(events.map((event) => (event as { type?: unknown }).type)).toContain("reset");
+    const context = JSON.stringify(SessionManager.open(marker, dir, dir).buildSessionContext());
+    expect(context).not.toContain("before reset");
+    expect(context).toContain("late append");
+
+    expect(replaceTranscriptEventsSync(scope, events)).toBe(true);
+    expect(readTranscriptRawDelta(scope, { cursor: cursor.cursor })).toMatchObject({
+      kind: "reset",
+      reason: "generation_mismatch",
+    });
   });
 
   it("persists a deduped runtime user entry before its SQLite descendants", async () => {
@@ -429,7 +502,7 @@ describe("SessionManager.open", () => {
     await upsertSessionEntry(
       { agentId: "main", sessionKey, storePath },
       {
-        channel: "dashboard",
+        delivery: { kind: "internal" },
         sessionFile: marker,
         sessionId,
         updatedAt: 10,
@@ -454,7 +527,7 @@ describe("SessionManager.open", () => {
     expect(branchedMarker).toContain(`sqlite:main:${branchedSessionId}:`);
     expect(branchedSessionId).not.toBe(sessionId);
     expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toMatchObject({
-      channel: "dashboard",
+      delivery: { kind: "internal" },
       sessionFile: branchedMarker,
       sessionId: branchedSessionId,
     });

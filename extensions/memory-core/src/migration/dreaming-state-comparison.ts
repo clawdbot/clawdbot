@@ -5,7 +5,7 @@ import { isDeepStrictEqual } from "node:util";
 import {
   normalizeDailyIngestionState,
   normalizeSessionIngestionState,
-} from "../dreaming-phases.js";
+} from "../dreaming-ingestion-state.js";
 import {
   DREAMING_DAILY_INGESTION_NAMESPACE,
   DREAMING_SESSION_INGESTION_FILES_NAMESPACE,

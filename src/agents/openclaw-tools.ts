@@ -16,6 +16,7 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
+import { filterToolsByClientCaps } from "./openclaw-tools.client-caps.js";
 import { createOpenClawContinuationTools } from "./openclaw-tools.continuation.js";
 import {
   isToolExplicitlyAllowedByFactoryPolicy,
@@ -79,22 +80,14 @@ import { createUpdatePlanTool } from "./tools/update-plan-tool.js";
 import { createVideoGenerateTool } from "./tools/video-generate-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
-/**
- * Drops tools whose requiredClientCaps the originating gateway client did not
- * declare. Capability availability is a hard fact, not policy: every tool
- * assembly path (core, plugin-only plans) must apply it or gated tools leak
- * onto surfaces that cannot render them.
- */
-export function filterToolsByClientCaps(
-  tools: AnyAgentTool[],
-  declaredClientCaps: string[] | undefined,
-): AnyAgentTool[] {
-  const clientCaps = new Set(declaredClientCaps ?? []);
-  return tools.filter(
-    (tool) => !tool.requiredClientCaps?.some((requiredCap) => !clientCaps.has(requiredCap)),
-  );
-}
-export function createOpenClawTools(options?: CreateOpenClawToolsOptions): AnyAgentTool[] {
+export { filterToolsByClientCaps } from "./openclaw-tools.client-caps.js";
+
+type CreateOpenClawToolsRuntimeOptions = CreateOpenClawToolsOptions & {
+  /** Trusted account used only for Gateway authorization; delivery keeps agentAccountId. */
+  gatewayCallerAccountId?: string;
+};
+
+export function createOpenClawTools(options?: CreateOpenClawToolsRuntimeOptions): AnyAgentTool[] {
   const resolvedConfig = options?.config;
   const runtimeSnapshot = getActiveSecretsRuntimeConfigSnapshot();
   const availabilityConfig = selectApplicableRuntimeConfig({
@@ -131,6 +124,9 @@ export function createOpenClawTools(options?: CreateOpenClawToolsOptions): AnyAg
     accountId: options?.agentAccountId,
     threadId: options?.agentThreadId,
   });
+  // Scheduled turns keep delivery routing live, but Gateway authorization remains bound to the
+  // authenticated creator account captured in the immutable scheduled authority envelope.
+  const gatewayCallerAccountId = options?.gatewayCallerAccountId ?? options?.agentAccountId;
   const runtimeWebTools = getActiveRuntimeWebToolsMetadata();
   const sandbox =
     options?.sandboxRoot && options?.sandboxFsBridge
@@ -267,6 +263,7 @@ export function createOpenClawTools(options?: CreateOpenClawToolsOptions): AnyAg
         sessionId: options?.sessionId,
         messageActionTurnCapability: options?.messageActionTurnCapability,
         config: options?.config,
+        preparedMessageToolCatalog: options?.preparedModelRuntime?.messageToolCatalog,
         currentChannelId: options?.currentChannelId,
         currentChatType: options?.currentChatType,
         currentMessagingTarget: options?.currentMessagingTarget,
@@ -328,11 +325,6 @@ export function createOpenClawTools(options?: CreateOpenClawToolsOptions): AnyAg
   const effectiveCallGateway = embedded ? createEmbeddedCallGateway() : callGateway;
   const includeUpdatePlanTool = shouldIncludeUpdatePlanToolForOpenClawTools({
     config: resolvedConfig,
-    agentSessionKey: options?.agentSessionKey,
-    agentId: options?.requesterAgentIdOverride,
-    modelProvider: options?.modelProvider,
-    modelId: options?.modelId,
-    pluginToolAllowlist: options?.pluginToolAllowlist,
     pluginToolDenylist: options?.pluginToolDenylist,
   });
   const includeAskUserTool = shouldIncludeAskUserToolForOpenClawTools({
@@ -363,6 +355,7 @@ export function createOpenClawTools(options?: CreateOpenClawToolsOptions): AnyAg
               ]),
           createCronTool({
             agentSessionKey: options?.agentSessionKey,
+            agentAccountId: gatewayCallerAccountId,
             currentDeliveryContext: {
               channel: options?.agentChannel,
               to: options?.currentChannelId ?? options?.agentTo,
@@ -417,7 +410,9 @@ export function createOpenClawTools(options?: CreateOpenClawToolsOptions): AnyAg
       agentId: sessionAgentId,
       agentAccountId: options?.agentAccountId,
     }),
-    ...(includeTranscriptsTool ? [createTranscriptsTool({ config: resolvedConfig })] : []),
+    ...(includeTranscriptsTool
+      ? [createTranscriptsTool({ agentId: sessionAgentId, config: resolvedConfig })]
+      : []),
     ...collectPresentOpenClawTools([imageGenerateTool, musicGenerateTool, videoGenerateTool]),
     ...(embedded
       ? []
@@ -514,12 +509,13 @@ export function createOpenClawTools(options?: CreateOpenClawToolsOptions): AnyAg
             config: resolvedConfig,
             senderIsOwner: options?.senderIsOwner,
           }),
+          // No explicit callGateway: the tool defaults to the same in-process
+          // caller, preserving the trusted creation stamp for agent roots.
           createSessionsSendTool({
             agentSessionKey: options?.agentSessionKey,
             agentChannel: options?.agentChannel,
             sandboxed: options?.sandboxed,
             config: resolvedConfig,
-            callGateway,
           }),
         ]),
     ...(includeSubagentSpawnTool
@@ -621,7 +617,10 @@ export function createOpenClawTools(options?: CreateOpenClawToolsOptions): AnyAg
   options?.recordToolPrepStage?.("openclaw-tools:client-capabilities");
 
   const hookAgentId = options?.requesterAgentIdOverride ?? sessionAgentId;
-  const wrapGatewayCallerIdentity = createGatewayToolCallerWrapper(hookAgentId, options);
+  const wrapGatewayCallerIdentity = createGatewayToolCallerWrapper(
+    hookAgentId,
+    options ? { ...options, agentAccountId: gatewayCallerAccountId } : options,
+  );
 
   if (options?.wrapBeforeToolCallHook === false) {
     return allTools.map(wrapGatewayCallerIdentity);

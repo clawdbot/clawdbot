@@ -22,9 +22,9 @@ function createGateway(connected: boolean): GatewayHarness {
   const client = {} as GatewayBrowserClient;
   let snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected,
+    phase: connected ? "connected" : "reconnecting",
     offlineStable: false,
-    reconnecting: !connected,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: "main",
     sessionKey: "main",
@@ -54,8 +54,7 @@ function createGateway(connected: boolean): GatewayHarness {
     setConnected(nextConnected) {
       snapshot = {
         ...snapshot,
-        connected: nextConnected,
-        reconnecting: !nextConnected,
+        phase: nextConnected ? "connected" : "reconnecting",
       };
       for (const listener of listeners) {
         listener(snapshot);

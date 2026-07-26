@@ -629,8 +629,6 @@ export async function runCliTurnCompactionLifecycle(params: {
     reserveTokens: settingsManager.getCompactionReserveTokens(),
     toolResultMaxChars: cliCompactionDeps.resolveLiveToolResultMaxChars({
       contextWindowTokens: contextTokenBudget,
-      cfg: params.cfg,
-      agentId: params.sessionAgentId,
     }),
   });
   const tokenSnapshot = resolveSessionTokenSnapshot(params.sessionEntry);

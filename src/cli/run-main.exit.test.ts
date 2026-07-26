@@ -487,7 +487,7 @@ describe("runCli exit behavior", () => {
     expect(disposeRegisteredAgentHarnessesMock).toHaveBeenCalledTimes(1);
   });
 
-  it("flushes requested one-shot exits after asynchronous teardown", async () => {
+  it("completes asynchronous teardown before returning to the outer entrypoint", async () => {
     const order: string[] = [];
     listRegisteredAgentHarnessesMock.mockReturnValueOnce([{ harness: { id: "copilot" } }]);
     disposeRegisteredAgentHarnessesMock.mockImplementationOnce(async () => {
@@ -497,14 +497,12 @@ describe("runCli exit behavior", () => {
     closeActiveMemorySearchManagersMock.mockImplementationOnce(async () => {
       order.push("memory");
     });
-    flushExitAfterOneShotOutputMock.mockImplementationOnce(() => {
-      order.push("exit");
-    });
     tryRouteCliMock.mockResolvedValueOnce(true);
 
     await runCli(["node", "openclaw", "models", "status", "--probe"]);
 
-    expect(order).toEqual(["harnesses", "memory", "exit"]);
+    expect(order).toEqual(["harnesses", "memory"]);
+    expect(flushExitAfterOneShotOutputMock).not.toHaveBeenCalled();
   });
 
   it("shows the standard spinner while loading the full CLI", async () => {
@@ -3789,7 +3787,7 @@ describe("runCli exit behavior", () => {
     await runCli(["node", "openclaw", "security", "--help"]);
 
     expect(requestExitAfterOneShotOutputMock).toHaveBeenCalledOnce();
-    expect(flushExitAfterOneShotOutputMock).toHaveBeenCalledOnce();
+    expect(flushExitAfterOneShotOutputMock).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(0);
     process.exitCode = exitCode;
   });
@@ -3805,7 +3803,7 @@ describe("runCli exit behavior", () => {
     await runCli(["node", "openclaw", "memory", "--help"]);
 
     expect(requestExitAfterOneShotOutputMock).toHaveBeenCalledOnce();
-    expect(flushExitAfterOneShotOutputMock).toHaveBeenCalledOnce();
+    expect(flushExitAfterOneShotOutputMock).not.toHaveBeenCalled();
   });
 
   it("loads the real primary command before rendering command help", async () => {

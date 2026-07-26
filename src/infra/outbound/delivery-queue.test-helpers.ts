@@ -2,8 +2,11 @@
 // stubs for queue/recovery tests.
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, vi } from "vitest";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 import type { DeliverFn, RecoveryLogger } from "./delivery-queue.js";
 
@@ -22,7 +25,16 @@ export function installDeliveryQueueTmpDirHooks(): { readonly tmpDir: () => stri
     fs.mkdirSync(tmpDir, { recursive: true });
   });
 
+  afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
+    if (tmpDir) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+      tmpDir = "";
+    }
+  });
+
   afterAll(() => {
+    closeOpenClawStateDatabaseForTest();
     if (!fixtureRoot) {
       return;
     }

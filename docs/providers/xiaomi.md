@@ -236,7 +236,7 @@ Token Plan:
 }
 ```
 
-Pricing comes from the bundled manifest (Token Plan models include tiered cache-read pricing), so the config example omits `cost`.
+Token Plan charges against a fixed subscription's Credits rather than per-token USD pricing, so its bundled catalog rows use zero USD cost and the config example omits `cost`.
 
 <AccordionGroup>
   <Accordion title="Auto-injection behavior">

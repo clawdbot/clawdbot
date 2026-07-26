@@ -1,6 +1,5 @@
 // Doctor health contribution tests cover plugin-provided health checks.
 import fs from "node:fs";
-import os from "node:os";
 import nodePath from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DoctorPrompter } from "../commands/doctor-prompter.js";
@@ -8,8 +7,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { LEGACY_SECRETREF_ENV_MARKER_PREFIX } from "../config/types.secrets.js";
 import { migrateLegacySecretRefEnvMarkers } from "../secrets/legacy-secretref-env-marker.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
-import "./doctor-tool-result-cap-advice.js";
 import { resolveDoctorContributionHealthChecks } from "./doctor-health-contributions.js";
 import {
   createDoctorHealthContribution,
@@ -104,8 +103,12 @@ const mocks = vi.hoisted(() => ({
   collectWorkspaceBackupTip: vi.fn((): string | undefined => undefined),
   shouldSuggestMemorySystem: vi.fn(async () => false),
   collectDiskSpaceHealthFindings: vi.fn((): readonly HealthFinding[] => []),
-  collectHeartbeatTemplateHealthFindings: vi.fn(async () => [] as unknown[]),
-  maybeRepairHeartbeatTemplate: vi.fn().mockResolvedValue(undefined),
+  collectHeartbeatCadenceMigrationFindings: vi.fn(async () => [] as unknown[]),
+  maybeMigrateHeartbeatCadenceToCron: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
+  collectHeartbeatScratchMigrationFindings: vi.fn(async () => [] as unknown[]),
+  maybeMigrateHeartbeatFilesToScratch: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
+  collectHeartbeatTaskMigrationFindings: vi.fn(async () => [] as unknown[]),
+  maybeMigrateHeartbeatTasksToCron: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
   collectWhatsappResponsivenessHealthFindings: vi.fn((): readonly HealthFinding[] => []),
   noteWhatsappResponsivenessHealth: vi.fn().mockResolvedValue(undefined),
   collectDevicePairingHealthFindings: vi.fn(async () => []),
@@ -290,7 +293,9 @@ vi.mock("../gateway/secret-input-paths.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../gateway/secret-input-paths.js")>();
   return {
     ...actual,
-    readGatewaySecretInputValue: (...args: Parameters<typeof actual.readGatewaySecretInputValue>) =>
+    readGatewaySecretInputValue: (
+      ...args: Parameters<typeof actual.readGatewaySecretInputValue>
+    ) =>
       mocks.readGatewaySecretInputValue.getMockImplementation()
         ? mocks.readGatewaySecretInputValue(...args)
         : actual.readGatewaySecretInputValue(...args),
@@ -396,9 +401,19 @@ vi.mock("../commands/doctor-disk-space.js", () => ({
   collectDiskSpaceHealthFindings: mocks.collectDiskSpaceHealthFindings,
 }));
 
-vi.mock("../commands/doctor-heartbeat-template-repair.js", () => ({
-  collectHeartbeatTemplateHealthFindings: mocks.collectHeartbeatTemplateHealthFindings,
-  maybeRepairHeartbeatTemplate: mocks.maybeRepairHeartbeatTemplate,
+vi.mock("../commands/doctor-heartbeat-cadence-migration.js", () => ({
+  collectHeartbeatCadenceMigrationFindings: mocks.collectHeartbeatCadenceMigrationFindings,
+  maybeMigrateHeartbeatCadenceToCron: mocks.maybeMigrateHeartbeatCadenceToCron,
+}));
+
+vi.mock("../commands/doctor-heartbeat-scratch-migration.js", () => ({
+  collectHeartbeatScratchMigrationFindings: mocks.collectHeartbeatScratchMigrationFindings,
+  maybeMigrateHeartbeatFilesToScratch: mocks.maybeMigrateHeartbeatFilesToScratch,
+}));
+
+vi.mock("../commands/doctor-heartbeat-task-migration.js", () => ({
+  collectHeartbeatTaskMigrationFindings: mocks.collectHeartbeatTaskMigrationFindings,
+  maybeMigrateHeartbeatTasksToCron: mocks.maybeMigrateHeartbeatTasksToCron,
 }));
 
 vi.mock("../commands/doctor-whatsapp-responsiveness.js", () => ({
@@ -662,10 +677,18 @@ describe("doctor health contributions", () => {
     mocks.collectWorkspaceStatusHealthFindings.mockResolvedValue([]);
     mocks.collectDiskSpaceHealthFindings.mockReset();
     mocks.collectDiskSpaceHealthFindings.mockReturnValue([]);
-    mocks.collectHeartbeatTemplateHealthFindings.mockReset();
-    mocks.collectHeartbeatTemplateHealthFindings.mockResolvedValue([]);
-    mocks.maybeRepairHeartbeatTemplate.mockReset();
-    mocks.maybeRepairHeartbeatTemplate.mockResolvedValue(undefined);
+    mocks.collectHeartbeatCadenceMigrationFindings.mockReset();
+    mocks.collectHeartbeatCadenceMigrationFindings.mockResolvedValue([]);
+    mocks.maybeMigrateHeartbeatCadenceToCron.mockReset();
+    mocks.maybeMigrateHeartbeatCadenceToCron.mockResolvedValue({ changes: [], warnings: [] });
+    mocks.collectHeartbeatScratchMigrationFindings.mockReset();
+    mocks.collectHeartbeatScratchMigrationFindings.mockResolvedValue([]);
+    mocks.maybeMigrateHeartbeatFilesToScratch.mockReset();
+    mocks.maybeMigrateHeartbeatFilesToScratch.mockResolvedValue({ changes: [], warnings: [] });
+    mocks.collectHeartbeatTaskMigrationFindings.mockReset();
+    mocks.collectHeartbeatTaskMigrationFindings.mockResolvedValue([]);
+    mocks.maybeMigrateHeartbeatTasksToCron.mockReset();
+    mocks.maybeMigrateHeartbeatTasksToCron.mockResolvedValue({ changes: [], warnings: [] });
     mocks.collectWhatsappResponsivenessHealthFindings.mockReset();
     mocks.collectWhatsappResponsivenessHealthFindings.mockReturnValue([]);
     mocks.noteWhatsappResponsivenessHealth.mockReset();
@@ -1303,54 +1326,79 @@ describe("doctor health contributions", () => {
     expect(mocks.loadModelCatalog).toHaveBeenCalledWith({ config: cfg, readOnly: true });
   });
 
-  it("repairs heartbeat templates before final config writes", () => {
+  it("materializes heartbeat cadence before scratch migration and final config writes", async () => {
     const ids = resolveDoctorHealthContributions().map((entry) => entry.id);
+    const cadenceIndex = ids.indexOf("doctor:heartbeat-cadence-migration");
+    const scratchIndex = ids.indexOf("doctor:heartbeat-scratch-migration");
 
-    expect(ids.indexOf("doctor:heartbeat-template-repair")).toBeGreaterThan(-1);
-    expect(ids.indexOf("doctor:heartbeat-template-repair")).toBeLessThan(
-      ids.indexOf("doctor:write-config"),
-    );
+    expect(cadenceIndex).toBeGreaterThan(-1);
+    expect(cadenceIndex).toBeLessThan(scratchIndex);
+    expect(scratchIndex).toBeLessThan(ids.indexOf("doctor:write-config"));
+
+    const contribution = requireDoctorContribution("doctor:heartbeat-cadence-migration");
+    const cfg = { agents: { defaults: { heartbeat: { every: "15m" } } } };
+    await contribution.run({
+      cfg,
+      prompter: buildDoctorPrompter(true),
+      env: { OPENCLAW_STATE_DIR: "/tmp/openclaw-state" },
+    } as unknown as DoctorContributionRunContext);
+
+    expect(mocks.maybeMigrateHeartbeatCadenceToCron).toHaveBeenCalledWith({
+      cfg,
+      shouldRepair: true,
+      env: { OPENCLAW_STATE_DIR: "/tmp/openclaw-state" },
+    });
   });
 
-  it("keeps heartbeat template lint opt-in for default lint selection", async () => {
-    const contributionChecks = await resolveDoctorContributionHealthChecks();
-    const heartbeatTemplateCheck = contributionChecks.find(
-      (check) => check.id === "core/doctor/heartbeat-template",
+  it("forwards the health-check environment to heartbeat cadence detection", async () => {
+    const checks = await resolveDoctorContributionHealthChecks();
+    const check = checks.find(
+      (candidate) => candidate.id === "core/doctor/heartbeat-cadence-migration",
     );
-    expect(heartbeatTemplateCheck).toMatchObject({ defaultEnabled: false });
-    expect(heartbeatTemplateCheck).toBeDefined();
+    expect(check).toBeDefined();
+    const cfg = { agents: { defaults: { heartbeat: { every: "15m" } } } };
+    const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-detector-state" };
 
-    const ctx = {
-      cfg: { agents: { defaults: { workspace: "/tmp/openclaw-workspace" } } },
+    await check!.detect({
       mode: "lint",
+      cfg,
+      env,
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-    } as const;
-    const checks = [heartbeatTemplateCheck!];
-
-    await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({
-      checksRun: 0,
-      checksSkipped: 1,
     });
-    expect(mocks.collectHeartbeatTemplateHealthFindings).not.toHaveBeenCalled();
 
-    mocks.collectHeartbeatTemplateHealthFindings.mockResolvedValueOnce([
-      {
-        checkId: "core/doctor/heartbeat-template",
-        severity: "warning",
-        message: "HEARTBEAT.md contains an older heartbeat documentation template.",
-        path: "/tmp/openclaw-workspace/HEARTBEAT.md",
-        requirement: "legacy-template",
-      },
-    ]);
+    expect(mocks.collectHeartbeatCadenceMigrationFindings).toHaveBeenCalledWith(cfg, env);
+  });
 
-    await expect(
-      runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/heartbeat-template"] }),
-    ).resolves.toMatchObject({
-      checksRun: 1,
-      checksSkipped: 0,
-      findings: [expect.objectContaining({ checkId: "core/doctor/heartbeat-template" })],
+  it("migrates heartbeat files before converting their task blocks", () => {
+    const ids = resolveDoctorHealthContributions().map((entry) => entry.id);
+    const cadenceIndex = ids.indexOf("doctor:heartbeat-cadence-migration");
+    const scratchIndex = ids.indexOf("doctor:heartbeat-scratch-migration");
+    const taskIndex = ids.indexOf("doctor:heartbeat-task-cron-migration");
+
+    expect(cadenceIndex).toBeGreaterThan(-1);
+    expect(scratchIndex).toBeGreaterThan(cadenceIndex);
+    expect(scratchIndex).toBeGreaterThan(-1);
+    expect(taskIndex).toBeGreaterThan(scratchIndex);
+    expect(taskIndex).toBeLessThan(ids.indexOf("doctor:write-config"));
+  });
+
+  it("forwards the health-check environment to heartbeat task detection", async () => {
+    const checks = await resolveDoctorContributionHealthChecks();
+    const check = checks.find(
+      (candidate) => candidate.id === "core/doctor/heartbeat-task-cron-migration",
+    );
+    expect(check).toBeDefined();
+    const cfg = { agents: { defaults: { heartbeat: { every: "15m" } } } };
+    const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-task-detector-state" };
+
+    await check!.detect({
+      mode: "lint",
+      cfg,
+      env,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
     });
-    expect(mocks.collectHeartbeatTemplateHealthFindings).toHaveBeenCalledWith(ctx.cfg);
+
+    expect(mocks.collectHeartbeatTaskMigrationFindings).toHaveBeenCalledWith(cfg, env);
   });
 
   it("exposes the Skill Workshop tool-policy check to doctor lint", async () => {
@@ -1750,12 +1798,10 @@ describe("doctor health contributions", () => {
     expect(contributionIds).toContain("core/doctor/legacy-plugin-dependencies");
     expect(contributionIds).toContain("core/doctor/stale-plugin-runtime-symlinks");
     expect(contributionIds).toContain("core/doctor/disk-space");
-    expect(contributionIds).toContain("core/doctor/heartbeat-template");
     expect(contributionIds).toContain("core/doctor/whatsapp-responsiveness");
     expect(contributionIds).toContain("core/doctor/device-pairing");
     expect(contributionIds).toContain("core/doctor/channel-plugin-blockers");
     expect(contributionIds).toContain("core/doctor/channel-preview-warnings");
-    expect(contributionIds).toContain("core/doctor/tool-result-cap");
     expect(contributionIds).toContain("core/doctor/systemd-linger");
     expect(contributionChecks.map((check) => check.id)).toEqual(contributionIds);
   });
@@ -1825,60 +1871,6 @@ describe("doctor health contributions", () => {
     expect(mocks.readSystemdUserLingerStatus).not.toHaveBeenCalled();
   });
 
-  it("keeps tool result cap opt-in for default lint selection", async () => {
-    const contributionChecks = await resolveDoctorContributionHealthChecks();
-    const toolResultCapCheck = contributionChecks.find(
-      (check) => check.id === "core/doctor/tool-result-cap",
-    );
-    expect(toolResultCapCheck).toMatchObject({ defaultEnabled: false });
-    expect(toolResultCapCheck).toBeDefined();
-
-    const ctx = {
-      cfg: {
-        agents: {
-          defaults: { contextLimits: { toolResultMaxChars: 16_000 } },
-        },
-      },
-      mode: "lint",
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-    } as const;
-    const detect = vi.fn(async () => [
-      {
-        checkId: "core/doctor/tool-result-cap",
-        severity: "warning" as const,
-        message: "Configured tool result cap overrides the model-window default.",
-        path: "agents.defaults.contextLimits.toolResultMaxChars",
-      },
-    ]);
-    // This case owns lint selection; the real cap detector is exercised below.
-    const checks = [{ ...toolResultCapCheck!, detect }];
-
-    await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({
-      checksRun: 0,
-      checksSkipped: 1,
-    });
-    expect(detect).not.toHaveBeenCalled();
-    await expect(
-      runDoctorLintChecks(ctx, { checks, includeAllChecks: true }),
-    ).resolves.toMatchObject({
-      checksRun: 1,
-      checksSkipped: 0,
-      findings: [
-        expect.objectContaining({
-          checkId: "core/doctor/tool-result-cap",
-          path: "agents.defaults.contextLimits.toolResultMaxChars",
-        }),
-      ],
-    });
-    await expect(
-      runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/tool-result-cap"] }),
-    ).resolves.toMatchObject({
-      checksRun: 1,
-      checksSkipped: 0,
-    });
-    expect(detect).toHaveBeenCalledTimes(2);
-  });
-
   it("keeps stale plugin-runtime symlinks opt-in for structured lint selection", async () => {
     const contributionChecks = await resolveDoctorContributionHealthChecks();
     const check = contributionChecks.find(
@@ -1926,63 +1918,14 @@ describe("doctor health contributions", () => {
     expect(mocks.collectStalePluginRuntimeSymlinkHealthFindings).toHaveBeenCalledTimes(1);
   });
 
-  it("reports agent findings for inherited default tool result caps", async () => {
-    const contributionChecks = await resolveDoctorContributionHealthChecks();
-    const toolResultCapCheck = contributionChecks.find(
-      (check) => check.id === "core/doctor/tool-result-cap",
-    );
-    expect(toolResultCapCheck).toBeDefined();
-
-    mocks.resolveAgentContextLimits.mockImplementation(
-      (cfg: { agents?: { defaults?: { contextLimits?: unknown } } }) =>
-        cfg.agents?.defaults?.contextLimits ?? {},
-    );
-    mocks.resolveDefaultModelForAgent.mockImplementation((...args: unknown[]) => {
-      const params = args[0] as { agentId?: string };
-      return params.agentId === "writer"
-        ? { provider: "openai", model: "gpt-5.5" }
-        : { provider: "local", model: "tiny" };
-    });
-    mocks.findModelCatalogEntry.mockImplementation((...args: unknown[]) => {
-      const params = args[1] as { modelId?: string };
-      return params.modelId === "gpt-5.5" ? { contextTokens: 200_000 } : { contextTokens: 8_000 };
-    });
-
-    const ctx = {
-      cfg: {
-        agents: {
-          defaults: { contextLimits: { toolResultMaxChars: 16_000 } },
-          list: [{ id: "writer" }],
-        },
-      },
-      mode: "lint" as const,
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-    };
-
-    await expect(
-      runDoctorLintChecks(ctx, {
-        checks: [toolResultCapCheck!],
-        onlyIds: ["core/doctor/tool-result-cap"],
-      }),
-    ).resolves.toMatchObject({
-      checksRun: 1,
-      findings: expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "core/doctor/tool-result-cap",
-          path: "agents.defaults.contextLimits.toolResultMaxChars",
-          target: "agents.list.writer",
-        }),
-      ]),
-    });
-  });
-
   it("keeps legacy plugin dependency lint opt-in and read-only", async () => {
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    const tempDir = fs.mkdtempSync(nodePath.join(os.tmpdir(), "openclaw-legacy-plugin-deps-lint-"));
-    const stateDir = nodePath.join(tempDir, "state");
+    const openClawState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-legacy-plugin-deps-lint-",
+    });
+    const stateDir = openClawState.stateDir;
     const legacyRuntimeRoot = nodePath.join(stateDir, "plugin-runtime-deps");
     fs.mkdirSync(legacyRuntimeRoot, { recursive: true });
-    process.env.OPENCLAW_STATE_DIR = stateDir;
     try {
       const contributionChecks = await resolveDoctorContributionHealthChecks();
       const check = contributionChecks.find(
@@ -2019,12 +1962,7 @@ describe("doctor health contributions", () => {
       });
       expect(fs.existsSync(legacyRuntimeRoot)).toBe(true);
     } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-      fs.rmSync(tempDir, { recursive: true, force: true });
+      await openClawState.cleanup();
     }
   });
 

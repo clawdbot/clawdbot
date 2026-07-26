@@ -4,11 +4,25 @@ import type {
   ProviderThinkingProfile,
 } from "openclaw/plugin-sdk/plugin-entry";
 
-export const KIMI_K3_MODEL_IDS = ["k3", "k3[1m]"] as const;
+export const KIMI_K3_MODEL_IDS = ["k3", "k3-256k"] as const;
+const KIMI_K3_LEGACY_MODEL_IDS = ["k3[1m]"] as const;
+
+const KIMI_K3_THINKING_LEVELS = [
+  { id: "off" },
+  { id: "minimal" },
+  { id: "low" },
+  { id: "medium" },
+  { id: "high" },
+  { id: "adaptive" },
+  { id: "xhigh" },
+  { id: "max" },
+] as const satisfies ProviderThinkingProfile["levels"];
 
 export function isKimiK3ModelId(modelId: string): boolean {
-  return KIMI_K3_MODEL_IDS.includes(
-    modelId.trim().toLowerCase() as (typeof KIMI_K3_MODEL_IDS)[number],
+  const normalized = modelId.trim().toLowerCase();
+  return (
+    KIMI_K3_MODEL_IDS.includes(normalized as (typeof KIMI_K3_MODEL_IDS)[number]) ||
+    KIMI_K3_LEGACY_MODEL_IDS.includes(normalized as (typeof KIMI_K3_LEGACY_MODEL_IDS)[number])
   );
 }
 
@@ -17,11 +31,8 @@ export function resolveThinkingProfile({
 }: ProviderDefaultThinkingPolicyContext): ProviderThinkingProfile {
   if (isKimiK3ModelId(modelId)) {
     return {
-      levels: [
-        { id: "off", label: "off" },
-        { id: "max", label: "max" },
-      ],
-      defaultLevel: "max",
+      levels: KIMI_K3_THINKING_LEVELS,
+      defaultLevel: "high",
       preserveWhenCatalogReasoningFalse: true,
     };
   }

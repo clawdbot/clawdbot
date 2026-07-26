@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   disposeAllSessionMcpRuntimes: vi.fn(async () => undefined),
   triggerInternalHook: vi.fn<TriggerInternalHookMock>(async (_eventValue) => undefined),
   disposeAllBundleLspRuntimes: vi.fn(async () => undefined),
+  drainRetainedEmbeddingProviders: vi.fn(async () => undefined),
   clearSessionSuspensionTimers: vi.fn(() => 0),
 }));
 const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
@@ -61,6 +62,10 @@ vi.mock("../agents/agent-bundle-lsp-runtime.js", async () => ({
     "../agents/agent-bundle-lsp-runtime.js",
   )),
   disposeAllBundleLspRuntimes: mocks.disposeAllBundleLspRuntimes,
+}));
+
+vi.mock("./embeddings-http.js", () => ({
+  drainRetainedOpenAiEmbeddingProviders: mocks.drainRetainedEmbeddingProviders,
 }));
 
 vi.mock("../agents/session-suspension.js", () => ({
@@ -163,6 +168,8 @@ describe("createGatewayCloseHandler", () => {
     mocks.triggerInternalHook.mockResolvedValue(undefined);
     mocks.disposeAllBundleLspRuntimes.mockClear();
     mocks.disposeAllBundleLspRuntimes.mockResolvedValue(undefined);
+    mocks.drainRetainedEmbeddingProviders.mockClear();
+    mocks.drainRetainedEmbeddingProviders.mockResolvedValue(undefined);
     mocks.clearSessionSuspensionTimers.mockReset();
     mocks.clearSessionSuspensionTimers.mockReturnValue(0);
   });
@@ -624,15 +631,17 @@ describe("createGatewayCloseHandler", () => {
     const controller = new AbortController();
     const agentController = new AbortController();
     const chatRunState = createChatRunState();
-    chatRunState.buffers.set("run-1", "partial reply");
-    chatRunState.deltaSentAt.set("run-1", Date.now());
-    chatRunState.deltaLastBroadcastLen.set("run-1", 3);
-    chatRunState.deltaLastBroadcastText.set("run-1", "par");
-    chatRunState.agentDeltaSentAt.set("run-1:assistant", Date.now());
-    chatRunState.bufferedAgentEvents.set("run-1:assistant", {
-      sessionKey: "session-1",
-      payload: {} as never,
-    });
+    const run = chatRunState.getOrCreate("run-1");
+    run.buffer = "partial reply";
+    run.deltaSentAt = Date.now();
+    run.deltaLastBroadcastLen = 3;
+    run.deltaLastBroadcastText = "par";
+    run.agentText = {
+      assistant: {
+        lastSentAt: Date.now(),
+        bufferedEvent: { sessionKey: "session-1", payload: {} as never },
+      },
+    };
     const chatAbortControllers = new Map([
       [
         "run-1",
@@ -686,12 +695,11 @@ describe("createGatewayCloseHandler", () => {
     expect(agentController.signal.aborted).toBe(true);
     expect(chatAbortControllers.has("run-1")).toBe(false);
     expect(chatAbortControllers.has("agent-run-1")).toBe(false);
-    expect(chatRunState.buffers.has("run-1")).toBe(false);
-    expect(chatRunState.deltaSentAt.has("run-1")).toBe(false);
-    expect(chatRunState.deltaLastBroadcastLen.has("run-1")).toBe(false);
-    expect(chatRunState.deltaLastBroadcastText.has("run-1")).toBe(false);
-    expect(chatRunState.agentDeltaSentAt.has("run-1:assistant")).toBe(false);
-    expect(chatRunState.bufferedAgentEvents.has("run-1:assistant")).toBe(false);
+    expect(chatRunState.runs.get("run-1")?.buffer).toBeUndefined();
+    expect(chatRunState.runs.get("run-1")?.deltaSentAt).toBeUndefined();
+    expect(chatRunState.runs.get("run-1")?.deltaLastBroadcastLen).toBeUndefined();
+    expect(chatRunState.runs.get("run-1")?.deltaLastBroadcastText).toBeUndefined();
+    expect(chatRunState.runs.get("run-1")?.agentText).toBeUndefined();
     expect(
       mocks.logWarn.mock.calls.some(([message]) =>
         String(message).includes(
@@ -937,7 +945,7 @@ describe("createGatewayCloseHandler", () => {
       ],
     ]);
     const chatRunState = createTestChatRunState();
-    const abortedRunsSet = vi.spyOn(chatRunState.abortedRuns, "set");
+    const completedRun = chatRunState.getOrCreate("completed-run");
     const markMainSessionsAbortedForRestart = vi.fn<MarkMainSessionsAbortedForRestart>(async () => {
       events.push("marker");
     });
@@ -1005,9 +1013,7 @@ describe("createGatewayCloseHandler", () => {
     expect(agentController.signal.aborted).toBe(true);
     expect(completedController.signal.aborted).toBe(true);
     expect(hiddenController.signal.aborted).toBe(true);
-    const completedMarker = abortedRunsSet.mock.calls.find(
-      ([runId]) => runId === "completed-run",
-    )?.[1];
+    const completedMarker = completedRun.abortMarker;
     expect(completedMarker).toEqual({
       abortedAtMs: expect.any(Number),
       sequence: expect.any(Number),
@@ -1412,6 +1418,10 @@ describe("createGatewayCloseHandler", () => {
   });
 
   it("unsubscribes lifecycle listeners and disposes bundle runtimes during shutdown", async () => {
+    const closeOrder: string[] = [];
+    mocks.drainRetainedEmbeddingProviders.mockImplementation(async () => {
+      closeOrder.push("embedding-providers");
+    });
     const lifecycleUnsub = vi.fn();
     const taskUnsub = vi.fn();
     const transcriptUnsub = vi.fn();
@@ -1422,6 +1432,13 @@ describe("createGatewayCloseHandler", () => {
         lifecycleUnsub,
         taskUnsub,
         transcriptUnsub,
+        httpServer: {
+          close: (callback: (err?: Error | null) => void) => {
+            closeOrder.push("http-server");
+            callback(null);
+          },
+          closeIdleConnections: vi.fn(),
+        } as never,
       }),
     );
 
@@ -1434,6 +1451,8 @@ describe("createGatewayCloseHandler", () => {
     expect(mocks.disposeAgentHarnesses).toHaveBeenCalledTimes(1);
     expect(mocks.disposeAllSessionMcpRuntimes).toHaveBeenCalledTimes(1);
     expect(mocks.disposeAllBundleLspRuntimes).toHaveBeenCalledTimes(1);
+    expect(mocks.drainRetainedEmbeddingProviders).toHaveBeenCalledTimes(1);
+    expect(closeOrder).toEqual(["http-server", "embedding-providers"]);
   });
 
   it("starts bundle MCP and LSP runtime disposal concurrently", async () => {
@@ -1494,6 +1513,23 @@ describe("createGatewayCloseHandler", () => {
     expect(
       mocks.logWarn.mock.calls.some(([message]) =>
         String(message).includes("bundle-lsp runtime disposal exceeded 5000ms"),
+      ),
+    ).toBe(true);
+  });
+
+  it("continues shutdown when retained embedding provider cleanup hangs", async () => {
+    vi.useFakeTimers();
+    mocks.drainRetainedEmbeddingProviders.mockReturnValue(new Promise(() => {}));
+    const close = createGatewayCloseHandler(createGatewayCloseTestDeps());
+
+    const closePromise = close({ reason: "test shutdown" });
+    await vi.advanceTimersByTimeAsync(5_000);
+    const result = await closePromise;
+
+    expect(result.warnings).toContain("embedding-providers");
+    expect(
+      mocks.logWarn.mock.calls.some(([message]) =>
+        String(message).includes("embedding-providers runtime disposal exceeded 5000ms"),
       ),
     ).toBe(true);
   });

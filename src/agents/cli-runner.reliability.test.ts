@@ -689,6 +689,9 @@ describe("runCliAgent reliability", () => {
         },
       ],
       imageOrder: ["offloaded", "inline"],
+      // Offloaded attachments are carried as structured facts; the trailing
+      // marker text is presentation only and is never parsed for hydration.
+      media: [{ url: `media://inbound/${mediaId}`, contentType: "image/png" }],
     };
 
     const result = await runPreparedCliAgent(context);
@@ -3615,8 +3618,9 @@ describe("runCliAgent reliability", () => {
         expect.objectContaining({
           role: "user",
           content: "recorder display prompt",
-          MediaPath: "/tmp/image.png",
-          MediaType: "image/png",
+          __openclaw: {
+            media: [expect.objectContaining({ path: "/tmp/image.png", contentType: "image/png" })],
+          },
           timestamp: 123,
           idempotencyKey: "cli-recorder:user",
         }),

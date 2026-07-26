@@ -78,6 +78,14 @@ export const SessionSchema = z
       })
       .strict()
       .optional(),
+    sharing: z
+      .object({
+        readOnly: z.boolean().optional(),
+        suggest: z.boolean().optional(),
+        drafts: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     maintenance: z
       .object({
         mode: z.enum(["enforce", "warn"]).optional(),

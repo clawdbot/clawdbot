@@ -6,6 +6,10 @@ import { isReplyRunAbortableForSignal } from "../../auto-reply/reply/reply-run-r
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
 import {
+  readSessionTranscriptActiveLeafEvents,
+  resolveSessionTranscriptActiveLeafEntryId,
+} from "../../config/sessions/session-accessor.js";
+import {
   claimAgentRunContext,
   clearAgentRunContext,
   getAgentEventLifecycleGeneration,
@@ -27,7 +31,11 @@ import {
   isRetryableUnadoptedChatClaim,
   resolveRestartSafeChatAdmission,
 } from "./chat-restart-recovery.js";
-import { respondChatSessionRoutingChanged } from "./chat-send-pre-admission.js";
+import {
+  ACTIVE_LEAF_CHANGED_ERROR_REASON,
+  respondChatActiveLeafChanged,
+  respondChatSessionRoutingChanged,
+} from "./chat-send-pre-admission.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { normalizeOptionalChatText, normalizeUnknownChatText } from "./chat-text-normalization.js";
@@ -45,6 +53,7 @@ export async function admitChatSend(params: {
   const { p, explicitOrigin, normalizedAttachments, turnKind } = request;
   const {
     rawSessionKey,
+    sessionLoadKey,
     clientRunId,
     pendingChatSendKey,
     sessionLoadOptions,
@@ -62,6 +71,7 @@ export async function admitChatSend(params: {
     timeoutMs,
     now,
     restartSafeRequest,
+    expectedLeafEntryId,
   } = session;
   const chatSendTraceAttributes = {
     runId: clientRunId,
@@ -125,7 +135,7 @@ export async function admitChatSend(params: {
   let reservationSuperseded = false;
   let supersedingResult: DedupeEntry | undefined;
   const assertChatWorkAdmissionAllowed = (commitOutcome: boolean) => {
-    if (context.chatAbortedRuns.has(clientRunId)) {
+    if (context.chatRunState.hasAbortMarker(clientRunId)) {
       return;
     }
     const pendingReservation = readPreRegisteredRun({
@@ -177,7 +187,7 @@ export async function admitChatSend(params: {
       }
       return;
     }
-    const latestSession = loadSessionEntry(rawSessionKey, sessionLoadOptions);
+    const latestSession = loadSessionEntry(sessionLoadKey, sessionLoadOptions);
     if (sessionRoutingChanged(latestSession.cfg)) {
       throw new Error(SESSION_ROUTING_CHANGED_ERROR_REASON);
     }
@@ -185,9 +195,35 @@ export async function admitChatSend(params: {
     if (entry && !latestEntry) {
       throw new Error(`Session "${sessionKey}" was deleted while starting work. Retry.`);
     }
+    if (commitOutcome && expectedLeafEntryId !== undefined) {
+      // Runtime session identity resolves through the canonical SQLite accessor;
+      // legacy/reset-archive files are read-only history fallbacks, never send targets.
+      const currentLeafEntryId = latestEntry?.sessionId
+        ? resolveSessionTranscriptActiveLeafEntryId(
+            readSessionTranscriptActiveLeafEvents({
+              agentId,
+              sessionId: latestEntry.sessionId,
+              sessionKey: latestSession.canonicalKey,
+              sessionEntry: latestEntry,
+              storePath: latestSession.storePath,
+            }),
+          )
+        : undefined;
+      // The lifecycle admission fence also blocks branch switching. Check the canonical
+      // transcript under that fence so a stale pane cannot dispatch onto another branch.
+      if ((currentLeafEntryId ?? null) !== expectedLeafEntryId) {
+        throw new Error(ACTIVE_LEAF_CHANGED_ERROR_REASON);
+      }
+    }
     // Admission can queue behind reset. Never route a request captured
-    // against the old session into the replacement transcript.
-    if (backingSessionId && latestEntry?.sessionId && latestEntry.sessionId !== backingSessionId) {
+    // against the old session into the replacement transcript. Expected-leaf sends
+    // defer this check to locked revalidation so branch rotation returns its typed error.
+    if (
+      backingSessionId &&
+      latestEntry?.sessionId &&
+      latestEntry.sessionId !== backingSessionId &&
+      (expectedLeafEntryId === undefined || commitOutcome)
+    ) {
       throw new Error(`Session "${sessionKey}" changed while starting work. Retry.`);
     }
     const retryableClaim = isRetryableUnadoptedChatClaim(latestEntry, clientRunId);
@@ -271,6 +307,10 @@ export async function admitChatSend(params: {
     clearPendingChatSendReservation();
     if (err instanceof Error && err.message === SESSION_ROUTING_CHANGED_ERROR_REASON) {
       respondChatSessionRoutingChanged(respond);
+      return { ok: false as const };
+    }
+    if (err instanceof Error && err.message === ACTIVE_LEAF_CHANGED_ERROR_REASON) {
+      respondChatActiveLeafChanged(respond);
       return { ok: false as const };
     }
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));

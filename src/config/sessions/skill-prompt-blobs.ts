@@ -18,7 +18,7 @@ type PersistedSessionStore = {
   changed: boolean;
 };
 
-export type SessionSkillPromptBlobProjection = {
+type SessionSkillPromptBlobProjection = {
   ref: SessionSkillPromptRef;
   path: string | null;
   prompt: string;
@@ -134,13 +134,6 @@ function readValidPromptBlob(storePath: string, ref: SessionSkillPromptRef): str
     validPromptBlobCache.delete(blobPath);
     return null;
   }
-}
-
-export function isSessionSkillPromptBlobReadable(
-  storePath: string,
-  ref: SessionSkillPromptRef,
-): boolean {
-  return readValidPromptBlob(storePath, ref) !== null;
 }
 
 async function ensurePromptBlob(storePath: string, prompt: string): Promise<SessionSkillPromptRef> {

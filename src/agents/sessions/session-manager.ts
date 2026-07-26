@@ -24,6 +24,7 @@ import type {
   NewSessionOptions,
   PromptReleasedSessionEntry,
   PromptReleasedSessionMergeResult,
+  ResetReason,
   SessionContext,
   SessionEntry,
   SessionHeader,
@@ -48,6 +49,8 @@ export type {
   LabelEntry,
   ModelChangeEntry,
   NewSessionOptions,
+  ResetEntry,
+  ResetReason,
   SessionContext,
   SessionEntry,
   SessionEntryBase,
@@ -162,6 +165,10 @@ export class SessionManager extends SessionManagerBranching {
     return super.appendCompaction(summary, firstKeptEntryId, tokensBefore, details, fromHook);
   }
 
+  override appendResetBoundary(reason: ResetReason, firstKeptEntryId?: string): string {
+    return super.appendResetBoundary(reason, firstKeptEntryId);
+  }
+
   override appendCustomEntry(customType: string, data?: unknown): string {
     return super.appendCustomEntry(customType, data);
   }
@@ -213,6 +220,10 @@ export class SessionManager extends SessionManagerBranching {
 
   override buildSessionContext(): SessionContext {
     return super.buildSessionContext();
+  }
+
+  override getBoundaryCount(): number {
+    return super.getBoundaryCount();
   }
 
   override getHeader(): SessionHeader | null {

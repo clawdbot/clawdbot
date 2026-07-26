@@ -10,6 +10,7 @@ import {
   type CronAddOptions,
   type CronServiceDeps,
   type CronUpdatePrecondition,
+  type CronUpdateOptions,
   type CronWakeMode,
   createCronServiceState,
 } from "./service/state.js";
@@ -105,16 +106,17 @@ export class CronService implements CronServiceContract {
     return await ops.add(this.state, input, opts);
   }
 
-  async update(id: string, patch: CronJobPatch) {
-    return await ops.update(this.state, id, patch);
+  async update(id: string, patch: CronJobPatch, opts?: CronUpdateOptions) {
+    return await ops.update(this.state, id, patch, opts);
   }
 
   async updateWithPrecondition(
     id: string,
     patch: CronJobPatch,
     precondition: CronUpdatePrecondition,
+    opts?: CronUpdateOptions,
   ) {
-    return await ops.updateWithPrecondition(this.state, id, patch, precondition);
+    return await ops.updateWithPrecondition(this.state, id, patch, precondition, opts);
   }
 
   async remove(id: string, opts?: { systemOwned?: boolean }) {
@@ -154,6 +156,17 @@ export class CronService implements CronServiceContract {
 
   async readJob(id: string): Promise<CronJob | undefined> {
     return await ops.readJob(this.state, id);
+  }
+
+  async readScratch(id: string) {
+    return await ops.readScratch(this.state, id);
+  }
+
+  async writeScratch(
+    id: string,
+    params: { content: string | null; expectedRevision?: number; sourceSha256?: string },
+  ) {
+    return await ops.writeScratch(this.state, id, params);
   }
 
   async recordExternalFailure(

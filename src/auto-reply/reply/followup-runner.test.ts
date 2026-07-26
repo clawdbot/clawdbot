@@ -38,11 +38,9 @@ let resolveQueuedReplyExecutionConfigActual:
 let createFollowupRunner: typeof import("./followup-runner.js").createFollowupRunner;
 let noOpRearmGuardForTest: typeof import("./no-op-rearm-guard.js");
 let clearRuntimeConfigSnapshot: typeof import("../../config/config.js").clearRuntimeConfigSnapshot;
-let loadSessionStore: typeof import("../../config/sessions/store.js").loadSessionStore;
-let saveSessionStore: typeof import("../../config/sessions/store.js").saveSessionStore;
 let loadSessionEntry: typeof import("../../config/sessions/session-accessor.js").loadSessionEntry;
 let replaceSessionEntrySync: typeof import("../../config/sessions/session-accessor.js").replaceSessionEntrySync;
-let clearSessionStoreCacheForTest: typeof import("../../config/sessions/store.js").clearSessionStoreCacheForTest;
+let clearSessionStoreCacheForTest: typeof import("../../config/sessions/store-writer-state.js").clearSessionStoreCacheForTest;
 let clearFollowupQueue: typeof import("./queue/state.js").clearFollowupQueue;
 let enqueueFollowupRun: typeof import("./queue.js").enqueueFollowupRun;
 let sessionRunAccounting: typeof import("./session-run-accounting.js");
@@ -336,8 +334,7 @@ async function persistRunSessionUsageForFollowupTest(
     return;
   }
   const registeredStore = FOLLOWUP_TEST_SESSION_STORES.get(storePath);
-  const store = registeredStore ?? loadSessionStore(storePath, { skipCache: true });
-  const entry = store[sessionKey];
+  const entry = registeredStore?.[sessionKey] ?? loadSessionEntry({ storePath, sessionKey });
   if (!entry) {
     return;
   }
@@ -379,11 +376,11 @@ async function persistRunSessionUsageForFollowupTest(
   if (params.cliSessionBinding && params.providerUsed && !preserveUserFacingRunState) {
     setCliSessionBinding(nextEntry, params.providerUsed, params.cliSessionBinding);
   }
-  store[sessionKey] = nextEntry;
   if (registeredStore) {
+    registeredStore[sessionKey] = nextEntry;
     return;
   }
-  await saveSessionStore(storePath, store);
+  replaceSessionEntrySync({ storePath, sessionKey }, nextEntry);
 }
 
 async function loadFreshFollowupRunnerModuleForTest() {
@@ -535,8 +532,7 @@ async function loadFreshFollowupRunnerModuleForTest() {
   noOpRearmGuardForTest = await import("./no-op-rearm-guard.js");
   ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
     await import("../../config/config.js"));
-  ({ clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } =
-    await import("../../config/sessions/store.js"));
+  ({ clearSessionStoreCacheForTest } = await import("../../config/sessions/store-writer-state.js"));
   ({ loadSessionEntry, replaceSessionEntrySync } =
     await import("../../config/sessions/session-accessor.js"));
   ({ clearFollowupQueue } = await import("./queue/state.js"));
@@ -3618,7 +3614,18 @@ describe("createFollowupRunner progress forwarding", () => {
     expect(routeReplyMock).not.toHaveBeenCalled();
   });
 
-  it("delivers queued fast auto progress for non-room-event message-tool-only turns", async () => {
+  it.each([
+    [
+      "delivers queued fast auto progress for non-room-event message-tool-only turns",
+      "user_request",
+      true,
+    ],
+    [
+      "suppresses queued fast auto progress for room-event message-tool-only turns",
+      "room_event",
+      false,
+    ],
+  ] as const)("%s", async (_name, currentInboundEventKind, shouldDeliverProgress) => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
@@ -3655,7 +3662,7 @@ describe("createFollowupRunner progress forwarding", () => {
 
     await runner(
       createQueuedRun({
-        currentInboundEventKind: "user_request",
+        currentInboundEventKind,
         originatingChannel: "discord",
         originatingTo: "channel:C1",
         originatingAccountId: "acct-1",
@@ -3674,6 +3681,10 @@ describe("createFollowupRunner progress forwarding", () => {
       }),
     );
 
+    if (!shouldDeliverProgress) {
+      expect(routeReplyMock).not.toHaveBeenCalled();
+      return;
+    }
     expect(routeReplyMock).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "discord",
@@ -3688,65 +3699,6 @@ describe("createFollowupRunner progress forwarding", () => {
         }),
       }),
     );
-  });
-
-  it("suppresses queued fast auto progress for room-event message-tool-only turns", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
-    const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
-      "../../infra/agent-events.js",
-    );
-    const runtimeConfig: OpenClawConfig = {
-      agents: {
-        defaults: {
-          models: {
-            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
-          },
-        },
-      },
-    };
-    runCliAgentMock.mockImplementationOnce((params: { runId?: string }) => {
-      realAgentEvents.emitAgentEvent({
-        runId: params.runId ?? "run-fast-followup",
-        stream: "tool",
-        data: { phase: "start", name: "bash", toolCallId: "call-1" },
-      });
-      vi.setSystemTime(7_100);
-      realAgentEvents.emitAgentEvent({
-        runId: params.runId ?? "run-fast-followup",
-        stream: "tool",
-        data: { phase: "result", name: "bash", toolCallId: "call-1" },
-      });
-      return { payloads: [], meta: { agentMeta: {} } };
-    });
-    const runner = createFollowupRunner({
-      typing: createMockTypingController(),
-      typingMode: "instant",
-      defaultModel: "anthropic/claude-opus-4-7",
-    });
-
-    await runner(
-      createQueuedRun({
-        currentInboundEventKind: "room_event",
-        originatingChannel: "discord",
-        originatingTo: "channel:C1",
-        originatingAccountId: "acct-1",
-        originatingThreadId: "thread-1",
-        run: {
-          config: runtimeConfig,
-          messageProvider: "discord",
-          provider: "anthropic",
-          model: "claude-opus-4-7",
-          sourceReplyDeliveryMode: "message_tool_only",
-          fastMode: "auto",
-          fastModeOverride: true,
-          fastModeAutoOnSeconds: 5,
-          fastModeAutoOnSecondsOverride: true,
-        },
-      }),
-    );
-
-    expect(routeReplyMock).not.toHaveBeenCalled();
   });
 
   it("drains fire-and-forget queued tool progress before final delivery", async () => {
@@ -3906,24 +3858,11 @@ describe("createFollowupRunner progress forwarding", () => {
     );
   });
 
-  it("forwards queued Codex command tool results as command output completion", async () => {
-    const onCommandOutput = vi.fn(async () => {});
-    const queued = createQueuedRun({
-      originatingChannel: "discord",
-      originatingTo: "channel:C1",
-      originatingAccountId: "acct-1",
-      originatingThreadId: "thread-1",
-      run: {
-        messageProvider: "discord",
-        verboseLevel: "on",
-      },
-    });
-
-    runEmbeddedAgentMock.mockImplementationOnce(
-      async (args: {
-        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
-      }) => {
-        await args.onAgentEvent?.({
+  it.each([
+    [
+      "forwards queued Codex command tool results as command output completion",
+      [
+        {
           stream: "tool",
           data: {
             phase: "result",
@@ -3931,57 +3870,28 @@ describe("createFollowupRunner progress forwarding", () => {
             toolCallId: "queued-exec",
             name: "exec",
             status: "completed",
-            result: {
-              exitCode: 0,
-              durationMs: 24,
-            },
+            result: { exitCode: 0, durationMs: 24 },
           },
-        });
-        return { payloads: [{ text: "final reply" }], meta: { agentMeta: {} } };
+        },
+      ],
+      {
+        itemId: "command:queued-exec",
+        phase: "end",
+        title: undefined,
+        toolCallId: "queued-exec",
+        name: "exec",
+        output: undefined,
+        status: "completed",
+        exitCode: 0,
+        durationMs: 24,
+        cwd: undefined,
       },
-    );
-
-    const runner = createFollowupRunner({
-      opts: { onCommandOutput },
-      typing: createMockTypingController(),
-      typingMode: "instant",
-      defaultModel: "claude",
-    });
-
-    await runner(queued);
-
-    expect(onCommandOutput).toHaveBeenCalledWith({
-      itemId: "command:queued-exec",
-      phase: "end",
-      title: undefined,
-      toolCallId: "queued-exec",
-      name: "exec",
-      output: undefined,
-      status: "completed",
-      exitCode: 0,
-      durationMs: 24,
-      cwd: undefined,
-    });
-  });
-
-  it("marks queued Codex command tool result errors as failed command output", async () => {
-    const onCommandOutput = vi.fn(async () => {});
-    const queued = createQueuedRun({
-      originatingChannel: "discord",
-      originatingTo: "channel:C1",
-      originatingAccountId: "acct-1",
-      originatingThreadId: "thread-1",
-      run: {
-        messageProvider: "discord",
-        verboseLevel: "on",
-      },
-    });
-
-    runEmbeddedAgentMock.mockImplementationOnce(
-      async (args: {
-        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
-      }) => {
-        await args.onAgentEvent?.({
+      true,
+    ],
+    [
+      "marks queued Codex command tool result errors as failed command output",
+      [
+        {
           stream: "tool",
           data: {
             phase: "result",
@@ -3989,53 +3899,23 @@ describe("createFollowupRunner progress forwarding", () => {
             toolCallId: "queued-exec",
             name: "exec",
             isError: true,
-            result: {
-              content: [{ type: "text", text: "command failed" }],
-            },
+            result: { content: [{ type: "text", text: "command failed" }] },
           },
-        });
-        return { payloads: [{ text: "final reply" }], meta: { agentMeta: {} } };
-      },
-    );
-
-    const runner = createFollowupRunner({
-      opts: { onCommandOutput },
-      typing: createMockTypingController(),
-      typingMode: "instant",
-      defaultModel: "claude",
-    });
-
-    await runner(queued);
-
-    expect(onCommandOutput).toHaveBeenCalledWith(
-      expect.objectContaining({
+        },
+      ],
+      {
         itemId: "command:queued-exec",
         phase: "end",
         toolCallId: "queued-exec",
         name: "exec",
         status: "failed",
-      }),
-    );
-  });
-
-  it("does not synthesize queued command output from bare exec tool results", async () => {
-    const onCommandOutput = vi.fn(async () => {});
-    const queued = createQueuedRun({
-      originatingChannel: "discord",
-      originatingTo: "channel:C1",
-      originatingAccountId: "acct-1",
-      originatingThreadId: "thread-1",
-      run: {
-        messageProvider: "discord",
-        verboseLevel: "on",
       },
-    });
-
-    runEmbeddedAgentMock.mockImplementationOnce(
-      async (args: {
-        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
-      }) => {
-        await args.onAgentEvent?.({
+      false,
+    ],
+    [
+      "does not synthesize queued command output from bare exec tool results",
+      [
+        {
           stream: "tool",
           data: {
             phase: "result",
@@ -4043,8 +3923,8 @@ describe("createFollowupRunner progress forwarding", () => {
             toolCallId: "queued-exec",
             isError: false,
           },
-        });
-        await args.onAgentEvent?.({
+        },
+        {
           stream: "command_output",
           data: {
             itemId: "command:queued-exec",
@@ -4055,7 +3935,31 @@ describe("createFollowupRunner progress forwarding", () => {
             status: "completed",
             exitCode: 0,
           },
-        });
+        },
+      ],
+      { itemId: "command:queued-exec", phase: "end", status: "completed" },
+      false,
+    ],
+  ] as const)("%s", async (_name, events, expectedCommandOutput, expectExactCall) => {
+    const onCommandOutput = vi.fn(async () => {});
+    const queued = createQueuedRun({
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+      originatingAccountId: "acct-1",
+      originatingThreadId: "thread-1",
+      run: {
+        messageProvider: "discord",
+        verboseLevel: "on",
+      },
+    });
+
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+      }) => {
+        for (const event of events) {
+          await args.onAgentEvent?.(event);
+        }
         return { payloads: [{ text: "final reply" }], meta: { agentMeta: {} } };
       },
     );
@@ -4070,13 +3974,11 @@ describe("createFollowupRunner progress forwarding", () => {
     await runner(queued);
 
     expect(onCommandOutput).toHaveBeenCalledTimes(1);
-    expect(onCommandOutput).toHaveBeenCalledWith(
-      expect.objectContaining({
-        itemId: "command:queued-exec",
-        phase: "end",
-        status: "completed",
-      }),
-    );
+    if (expectExactCall) {
+      expect(onCommandOutput).toHaveBeenCalledWith(expectedCommandOutput);
+      return;
+    }
+    expect(onCommandOutput).toHaveBeenCalledWith(expect.objectContaining(expectedCommandOutput));
   });
 
   it("suppresses queued follow-up progress when verbose progress is disabled", async () => {
@@ -4375,8 +4277,23 @@ describe("createFollowupRunner progress forwarding", () => {
     expect(onCommandOutput).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps queued tool-error fallbacks when the channel declines failed progress", async () => {
-    const onCommandOutput = vi.fn(async () => false as const);
+  it.each([
+    [
+      "keeps queued tool-error fallbacks when the channel declines failed progress",
+      "on",
+      "declines",
+    ],
+    [
+      "keeps queued full-verbose tool-error fallbacks available after failed progress",
+      "full",
+      "accepts",
+    ],
+    ["keeps queued tool-error fallbacks when failed progress has no callback", "on", "missing"],
+  ] as const)("%s", async (_name, verboseLevel, callbackMode) => {
+    const onCommandOutput =
+      callbackMode === "missing"
+        ? undefined
+        : vi.fn(async () => (callbackMode === "declines" ? (false as const) : undefined));
     let completedAfterEvent = false;
 
     runEmbeddedAgentMock.mockImplementationOnce(
@@ -4402,7 +4319,7 @@ describe("createFollowupRunner progress forwarding", () => {
     );
 
     const runner = createFollowupRunner({
-      opts: { onCommandOutput },
+      opts: onCommandOutput ? { onCommandOutput } : undefined,
       typing: createMockTypingController(),
       typingMode: "instant",
       defaultModel: "claude",
@@ -4413,96 +4330,15 @@ describe("createFollowupRunner progress forwarding", () => {
         run: {
           messageProvider: "discord",
           sourceReplyDeliveryMode: "message_tool_only",
-          verboseLevel: "on",
+          verboseLevel,
         },
       }),
     );
 
-    expect(onCommandOutput).toHaveBeenCalledTimes(1);
+    if (onCommandOutput) {
+      expect(onCommandOutput).toHaveBeenCalledTimes(1);
+    }
     expect(completedAfterEvent).toBe(true);
-  });
-
-  it("keeps queued full-verbose tool-error fallbacks available after failed progress", async () => {
-    const onCommandOutput = vi.fn(async () => {});
-
-    runEmbeddedAgentMock.mockImplementationOnce(
-      async (args: {
-        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
-        suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
-      }) => {
-        const shouldSuppress = args.suppressToolErrorWarnings as () => boolean | undefined;
-        expect(shouldSuppress()).toBeUndefined();
-        await args.onAgentEvent?.({
-          stream: "command_output",
-          data: {
-            phase: "end",
-            name: "exec",
-            status: "failed",
-            exitCode: 1,
-          },
-        });
-        expect(shouldSuppress()).toBeUndefined();
-        return { payloads: [], meta: { agentMeta: {} } };
-      },
-    );
-
-    const runner = createFollowupRunner({
-      opts: { onCommandOutput },
-      typing: createMockTypingController(),
-      typingMode: "instant",
-      defaultModel: "claude",
-    });
-
-    await runner(
-      createQueuedRun({
-        run: {
-          messageProvider: "discord",
-          sourceReplyDeliveryMode: "message_tool_only",
-          verboseLevel: "full",
-        },
-      }),
-    );
-
-    expect(onCommandOutput).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps queued tool-error fallbacks when failed progress has no callback", async () => {
-    runEmbeddedAgentMock.mockImplementationOnce(
-      async (args: {
-        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
-        suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
-      }) => {
-        const shouldSuppress = args.suppressToolErrorWarnings as () => boolean | undefined;
-        expect(shouldSuppress()).toBeUndefined();
-        await args.onAgentEvent?.({
-          stream: "command_output",
-          data: {
-            phase: "end",
-            name: "exec",
-            status: "failed",
-            exitCode: 1,
-          },
-        });
-        expect(shouldSuppress()).toBeUndefined();
-        return { payloads: [], meta: { agentMeta: {} } };
-      },
-    );
-
-    const runner = createFollowupRunner({
-      typing: createMockTypingController(),
-      typingMode: "instant",
-      defaultModel: "claude",
-    });
-
-    await runner(
-      createQueuedRun({
-        run: {
-          messageProvider: "discord",
-          sourceReplyDeliveryMode: "message_tool_only",
-          verboseLevel: "on",
-        },
-      }),
-    );
   });
 
   it("uses current session verbose state for queued follow-up progress", async () => {
@@ -4919,9 +4755,10 @@ describe("createFollowupRunner compaction", () => {
             if (registeredStore) {
               registeredStore[params.sessionKey] = updatedEntry;
             } else {
-              const store = loadSessionStore(params.storePath, { skipCache: true });
-              store[params.sessionKey] = updatedEntry;
-              await saveSessionStore(params.storePath, store);
+              replaceSessionEntrySync(
+                { storePath: params.storePath, sessionKey: params.sessionKey },
+                updatedEntry,
+              );
             }
           }
         }
@@ -5349,136 +5186,104 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     persistSpy.mockRestore();
   });
 
-  it("appends configured responseUsage footers during followup delivery", async () => {
-    const sessionKey = "main";
-    const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
-    const cfg = {
-      messages: {
-        responseUsage: "tokens",
-      },
-    } as OpenClawConfig;
+  it.each([
+    [
+      "appends configured responseUsage footers during followup delivery",
+      "main",
+      "tokens",
+      undefined,
+      undefined,
+      ["hello world!", "Usage:", "out"],
+      undefined,
+      undefined,
+    ],
+    [
+      "renders full responseUsage followup footers without exposing the session key",
+      "discord:channel:user",
+      "full",
+      undefined,
+      "model={model.display_name} tokens={usage.input_tokens|num}/{usage.output_tokens|num}",
+      ["hello world!", "model=claude-opus-4-6 tokens=1.0k/50"],
+      "discord:channel:user",
+      undefined,
+    ],
+    [
+      "keeps explicit responseUsage off during followup delivery",
+      "main",
+      "tokens",
+      "off",
+      undefined,
+      [],
+      undefined,
+      "hello world!",
+    ],
+  ] as const)(
+    "%s",
+    async (
+      _name,
+      sessionKey,
+      configuredResponseUsage,
+      sessionResponseUsage,
+      usageTemplateText,
+      expectedFragments,
+      excludedText,
+      exactText,
+    ) => {
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        ...(sessionResponseUsage ? { responseUsage: sessionResponseUsage } : {}),
+      };
+      const cfg = {
+        messages: {
+          responseUsage: configuredResponseUsage,
+          ...(usageTemplateText
+            ? {
+                usageTemplate: {
+                  output: { default: [{ text: usageTemplateText }] },
+                },
+              }
+            : {}),
+        },
+      } as OpenClawConfig;
 
-    const { onBlockReply } = await runMessagingCase({
-      agentResult: {
-        payloads: [{ text: "hello world!" }],
-        meta: {
-          agentMeta: {
-            usage: { input: 1_000, output: 50 },
-            model: "claude-opus-4-6",
-            provider: "anthropic",
+      const { onBlockReply } = await runMessagingCase({
+        agentResult: {
+          payloads: [{ text: "hello world!" }],
+          meta: {
+            agentMeta: {
+              usage: { input: 1_000, output: 50 },
+              model: "claude-opus-4-6",
+              provider: "anthropic",
+            },
           },
         },
-      },
-      runnerOverrides: {
-        sessionEntry,
-        sessionStore: { [sessionKey]: sessionEntry },
-        sessionKey,
-      },
-      queued: createQueuedRun({
-        run: {
-          config: cfg,
-          messageProvider: "discord",
+        runnerOverrides: {
+          sessionEntry,
+          sessionStore: { [sessionKey]: sessionEntry },
           sessionKey,
         },
-      }),
-    });
-
-    const payload = requireMockCallArg(onBlockReply, 0);
-    expect(payload.text).toContain("hello world!");
-    expect(payload.text).toContain("Usage:");
-    expect(payload.text).toContain("out");
-  });
-
-  it("renders full responseUsage followup footers without exposing the session key", async () => {
-    const sessionKey = "discord:channel:user";
-    const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
-    const cfg = {
-      messages: {
-        responseUsage: "full",
-        usageTemplate: {
-          output: {
-            default: [
-              {
-                text: "model={model.display_name} tokens={usage.input_tokens|num}/{usage.output_tokens|num}",
-              },
-            ],
+        queued: createQueuedRun({
+          run: {
+            config: cfg,
+            messageProvider: "discord",
+            sessionKey,
           },
-        },
-      },
-    } as OpenClawConfig;
+        }),
+      });
 
-    const { onBlockReply } = await runMessagingCase({
-      agentResult: {
-        payloads: [{ text: "hello world!" }],
-        meta: {
-          agentMeta: {
-            usage: { input: 1_000, output: 50 },
-            model: "claude-opus-4-6",
-            provider: "anthropic",
-          },
-        },
-      },
-      runnerOverrides: {
-        sessionEntry,
-        sessionStore: { [sessionKey]: sessionEntry },
-        sessionKey,
-      },
-      queued: createQueuedRun({
-        run: {
-          config: cfg,
-          messageProvider: "discord",
-          sessionKey,
-        },
-      }),
-    });
-
-    const payload = requireMockCallArg(onBlockReply, 0);
-    expect(payload.text).toContain("hello world!");
-    expect(payload.text).toContain("model=claude-opus-4-6 tokens=1.0k/50");
-    expect(payload.text).not.toContain(sessionKey);
-  });
-
-  it("keeps explicit responseUsage off during followup delivery", async () => {
-    const sessionKey = "main";
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      responseUsage: "off",
-    };
-    const cfg = {
-      messages: {
-        responseUsage: "tokens",
-      },
-    } as OpenClawConfig;
-
-    const { onBlockReply } = await runMessagingCase({
-      agentResult: {
-        payloads: [{ text: "hello world!" }],
-        meta: {
-          agentMeta: {
-            usage: { input: 1_000, output: 50 },
-            model: "claude-opus-4-6",
-            provider: "anthropic",
-          },
-        },
-      },
-      runnerOverrides: {
-        sessionEntry,
-        sessionStore: { [sessionKey]: sessionEntry },
-        sessionKey,
-      },
-      queued: createQueuedRun({
-        run: {
-          config: cfg,
-          messageProvider: "discord",
-          sessionKey,
-        },
-      }),
-    });
-
-    const payload = requireMockCallArg(onBlockReply, 0);
-    expect(payload.text).toBe("hello world!");
-  });
+      const payload = requireMockCallArg(onBlockReply, 0);
+      for (const fragment of expectedFragments) {
+        expect(payload.text).toContain(fragment);
+      }
+      if (excludedText) {
+        expect(payload.text).not.toContain(excludedText);
+      }
+      if (exactText) {
+        expect(payload.text).toBe(exactText);
+      }
+    },
+  );
 
   it("uses providerUsed for snapshot freshness when agent metadata overrides the run provider", async () => {
     const storePath = "/tmp/openclaw-followup-usage-provider.json";

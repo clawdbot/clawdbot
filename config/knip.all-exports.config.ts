@@ -56,7 +56,6 @@ const ROOT_TEST_ENTRY_GLOBS = [
   ...QA_SCENARIO_EXECUTION_ENTRIES,
   // The Voice Call QA scenario loads this fixture through a generated plugin directory.
   "test/e2e/qa-lab/runtime/fixtures/voice-call-runtime-plugin/index.js!",
-  "test/scripts/fixtures/secret-provider-integrations-harness.mjs!",
   // Loaded with cache-busting query strings so configuration fallback tests
   // get independent module initialization.
   "test/helpers/config/bundled-channel-config-runtime.ts!",

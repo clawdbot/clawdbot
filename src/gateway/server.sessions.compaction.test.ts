@@ -29,6 +29,7 @@ import {
 } from "../sessions/session-lifecycle-admission.js";
 import { resetTaskFlowRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import {
   embeddedRunMock,
   onceMessage,
@@ -963,10 +964,9 @@ test("sessions.compact releases queued post-compaction delegates after manual co
   await writeSessionStore({
     entries: {
       main: sessionStoreEntry("sess-post-compaction", {
-        deliveryContext: {
-          channel: "webchat",
-          to: "webchat:user-123",
-        },
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "webchat", to: "webchat:user-123" },
+        }),
       }),
     },
   });
@@ -996,7 +996,7 @@ test("sessions.compact releases queued post-compaction delegates after manual co
   resetTaskFlowRegistryForTests({ persist: false });
 });
 
-test("sessions.compact preserves legacy route fields when releasing post-compaction delegates", async () => {
+test("sessions.compact preserves canonical route fields when releasing post-compaction delegates", async () => {
   resetTaskFlowRegistryForTests({ persist: false });
   const { dir, storePath } = await createSessionStoreDir();
   await fs.writeFile(
@@ -1007,10 +1007,14 @@ test("sessions.compact preserves legacy route fields when releasing post-compact
   await writeSessionStore({
     entries: {
       main: sessionStoreEntry("sess-post-compaction-legacy", {
-        lastChannel: "telegram",
-        lastTo: "chat-123",
-        lastAccountId: "acct-1",
-        lastThreadId: "topic-9",
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            channel: "telegram",
+            to: "chat-123",
+            accountId: "acct-1",
+            threadId: "topic-9",
+          },
+        }),
       }),
     },
   });
@@ -1317,7 +1321,7 @@ test("sessions.reset waits for terminal compaction before replacing the session"
   expect(reset.ok).toBe(true);
   const resetSessionId = reset.payload?.entry.sessionId;
   expect(resetSessionId).toBeTruthy();
-  expect(resetSessionId).not.toBe("sess-compact-reset");
+  expect(resetSessionId).toBe("sess-compact-reset");
   const resetEntry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
   expect(resetEntry?.sessionId).toBe(resetSessionId);
   ws.close();

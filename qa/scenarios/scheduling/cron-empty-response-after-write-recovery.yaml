@@ -4,8 +4,8 @@ scenario:
   id: cron-empty-response-after-write-recovery
   surface: cron
   coverage:
-    primary: [runtime.empty-response-recovery]
-    secondary: [scheduling.cron, channels.qa-channel]
+    primary: [agent-runtime.failure-recovery-empty-response-recovery]
+    secondary: [automation.isolated-cron-execution, channels.qa-channel-final-reply]
   regressionRefs:
     - openclaw/openclaw#108738
   objective: Verify resolved announce delivery gets one safe finalization after a settled write.

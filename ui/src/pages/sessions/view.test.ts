@@ -226,17 +226,21 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    const buttons = container.querySelectorAll<HTMLButtonElement>(".sessions-view-segment button");
-    expect([...buttons].map((button) => button.textContent?.trim())).toEqual([
+    const radios = container.querySelectorAll<HTMLElement & { checked: boolean }>(
+      ".sessions-view-segment wa-radio",
+    );
+    expect([...radios].map((radio) => radio.textContent?.trim())).toEqual([
       "Active",
       "Archived",
       "All",
     ]);
-    expect(buttons[0]?.getAttribute("aria-pressed")).toBe("true");
-    expect(buttons[1]?.getAttribute("aria-pressed")).toBe("false");
-    expect(buttons[2]?.getAttribute("aria-pressed")).toBe("false");
+    expect([...radios].map((radio) => radio.checked)).toEqual([true, false, false]);
 
-    buttons[2]?.click();
+    const group = radios[2]?.closest<HTMLElement & { value: string }>("wa-radio-group");
+    if (group) {
+      group.value = "all";
+      group.dispatchEvent(new Event("change", { bubbles: true }));
+    }
 
     expect(onStatusFilterChange).toHaveBeenCalledWith("all");
   });
@@ -714,7 +718,7 @@ describe("sessions view", () => {
         buildProps(
           buildResult({
             key: "agent:main:cron:daily-digest",
-            kind: "cron",
+            kind: "direct",
             updatedAt: Date.now(),
           }),
         ),
@@ -1385,7 +1389,7 @@ describe("sessions view", () => {
             },
             {
               key: "agent:main:idle",
-              kind: "cron",
+              kind: "direct",
               updatedAt: 1,
               unread: true,
               totalTokens: 300,
@@ -1534,8 +1538,9 @@ describe("sessions view", () => {
         buildProps(
           buildMultiResult([
             {
-              key: "agent:main:live",
-              kind: "cron",
+              // Cron display kind derives from the key shape, never the wire kind.
+              key: "agent:main:cron:live",
+              kind: "direct",
               updatedAt: 2,
               hasActiveRun: true,
               status: "running",

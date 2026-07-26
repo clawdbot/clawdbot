@@ -115,10 +115,22 @@ describeControlUiE2e("Control UI agent page scope", () => {
       await gateway.waitForRequest("agents.list");
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.getByRole("button", { name: /Switch agent/ }).click();
-      await sidebar
-        .locator("wa-dropdown.sidebar-agent-menu")
-        .locator('wa-dropdown-item[value="agent:writer"]')
-        .click();
+      const agentMenu = sidebar.locator("wa-dropdown.sidebar-agent-menu");
+      // The card sits at the top of the sidebar: the menu drops below it so the
+      // agent you clicked (and its checkmark row) stays visible.
+      await expect
+        .poll(async () => {
+          const [card, menu] = await Promise.all([
+            sidebar.locator(".sidebar-agent-card__main").boundingBox(),
+            agentMenu.locator('[part~="menu"], .wa-dropdown__menu').first().boundingBox(),
+          ]);
+          if (!card || !menu) {
+            return null;
+          }
+          return { belowCard: menu.y >= card.y + card.height, leftAligned: menu.x <= card.x + 4 };
+        })
+        .toEqual({ belowCard: true, leftAligned: true });
+      await agentMenu.locator('wa-dropdown-item[value="agent:writer"]').click();
       await waitForRequest(gateway, "sessions.list", (params) => params.agentId === "writer");
       await expect
         .poll(async () =>
@@ -126,7 +138,12 @@ describeControlUiE2e("Control UI agent page scope", () => {
         )
         .toBe("Writer");
 
-      await sidebar.getByRole("link", { name: "Usage" }).click();
+      await sidebar.getByRole("link", { name: "Home" }).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/chat");
+      await sidebar.locator(".sidebar-identity-card").click();
+      await sidebar
+        .locator('wa-dropdown.sidebar-identity-menu wa-dropdown-item[value="command:usage"]')
+        .click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/usage");
       await waitForRequest(gateway, "sessions.usage", (params) => params.agentId === "writer");
       const pageScope = page.locator(".agent-scope-control openclaw-agent-select");

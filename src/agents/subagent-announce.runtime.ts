@@ -6,11 +6,99 @@
  */
 export { getRuntimeConfig, loadConfig } from "../config/config.js";
 export { resolveContinuationRuntimeConfig } from "../auto-reply/continuation/config.js";
-export {
-  readSessionEntry,
-  resolveAgentIdFromSessionKey,
-  resolveStorePath,
-} from "../config/sessions.js";
+export { resolveAgentIdFromSessionKey, resolveStorePath } from "../config/sessions.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import { normalizeDiagnosticTraceparent } from "../infra/diagnostic-trace-context-pure.js";
+import { summarizeSpawnError } from "./spawn-pipeline.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { splitModelRef } from "./subagent-spawn-plan.js";
+import { resolveGatewaySessionStoreTarget, upsertSessionEntry } from "./subagent-spawn.runtime.js";
+
+export type ContinuationSpawnParams = Pick<
+  SubagentRunRecord,
+  | "silentAnnounce"
+  | "wakeOnReturn"
+  | "continuationTargetSessionKey"
+  | "continuationTargetSessionKeys"
+  | "continuationFanoutMode"
+  | "traceparent"
+> & {
+  continuationDelegateFlowId?: string;
+  drainsContinuationDelegateQueue?: boolean;
+  continuationChainState?: {
+    count: number;
+    startedAt: number;
+    tokens: number;
+    chainId?: string;
+  };
+};
+
+function normalizeNonNegativeInteger(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return undefined;
+  }
+  return Math.floor(value);
+}
+
+export function buildContinuationSessionPatch(
+  params: ContinuationSpawnParams,
+): Partial<SessionEntry> {
+  const patch: Partial<SessionEntry> = {};
+  if (params.drainsContinuationDelegateQueue) {
+    patch.subagentRole = "orchestrator";
+    patch.subagentControlScope = "children";
+  }
+  const continuationTraceparent = normalizeDiagnosticTraceparent(params.traceparent);
+  if (continuationTraceparent) {
+    patch.continuationTraceparent = continuationTraceparent;
+  }
+  const chainState = params.continuationChainState;
+  if (chainState) {
+    patch.continuationChainCount = normalizeNonNegativeInteger(chainState.count);
+    patch.continuationChainStartedAt = normalizeNonNegativeInteger(chainState.startedAt);
+    patch.continuationChainTokens = normalizeNonNegativeInteger(chainState.tokens);
+    const chainId = chainState.chainId?.trim();
+    if (chainId) {
+      patch.continuationChainId = chainId;
+    }
+  }
+  return patch;
+}
+
+export async function persistInitialChildRuntimeState(params: {
+  cfg: Parameters<typeof resolveGatewaySessionStoreTarget>[0]["cfg"];
+  childSessionKey: string;
+  resolvedModel?: string;
+  continuationPatch: Partial<SessionEntry>;
+}): Promise<string | undefined> {
+  const { provider, model } = splitModelRef(params.resolvedModel);
+  const patch: Partial<SessionEntry> = {
+    ...params.continuationPatch,
+    ...(model ? { model } : {}),
+    ...(provider ? { modelProvider: provider } : {}),
+  };
+  if (Object.keys(patch).length === 0) {
+    return undefined;
+  }
+  try {
+    const target = resolveGatewaySessionStoreTarget({
+      cfg: params.cfg,
+      key: params.childSessionKey,
+    });
+    await upsertSessionEntry(
+      { storePath: target.storePath, sessionKey: target.canonicalKey },
+      patch,
+    );
+    return undefined;
+  } catch (error) {
+    return summarizeSpawnError(error);
+  }
+}
+
+export function readSessionEntry(storePath: string, sessionKey: string) {
+  return loadSessionEntry({ storePath, sessionKey });
+}
 export { callGateway } from "../gateway/call.js";
 export { readSessionMessagesAsync } from "../gateway/session-transcript-readers.js";
 export { dispatchGatewayMethodInProcess } from "../gateway/server-plugins.js";

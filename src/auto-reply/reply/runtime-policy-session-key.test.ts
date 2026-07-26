@@ -11,7 +11,7 @@ describe("resolveRuntimePolicySessionKey", () => {
       defaults: {
         sandbox: { mode: "non-main", scope: "agent" },
       },
-      list: [{ id: "main" }],
+      list: [{ id: "main", default: true }],
     },
   };
 

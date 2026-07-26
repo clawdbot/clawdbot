@@ -3,7 +3,7 @@ title: "Runtime tool fixture — direct message tool"
 scenario:
   id: runtime-tool-message-tool
   surface: runtime-tools
-  runtimeParityTier: optional
+  runtimePairLane: extended
   coverage:
     primary:
       - channels.message-tool-outbound

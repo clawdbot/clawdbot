@@ -16,7 +16,7 @@ type ModelFallbackTestApi = {
     hasFallbackCandidates: boolean;
     now: number;
     probeThrottleKey: string;
-    authRuntime: typeof import("./model-fallback-auth.runtime.js");
+    authRuntime: typeof import("./auth-profiles.runtime.js");
     authStore: AuthProfileStore;
     profileIds: string[];
   }): CooldownDecision;

@@ -67,6 +67,11 @@
       "class": "default-runtime-initially",
       "risk": ["provider-sdk", "network"]
     },
+    "@openclaw/ai": {
+      "owner": "core:ai-runtime",
+      "class": "core-runtime",
+      "risk": ["provider-routing", "model-io"]
+    },
     "@openclaw/fs-safe": {
       "owner": "core:filesystem-safety",
       "class": "core-runtime",
@@ -108,6 +113,11 @@
       "class": "core-runtime",
       "risk": ["env-loading"]
     },
+    "entities": {
+      "owner": "core:html-entities",
+      "class": "core-runtime",
+      "risk": ["parser", "untrusted-html"]
+    },
     "execa": {
       "owner": "core:process-execution",
       "class": "core-runtime",
@@ -142,6 +152,11 @@
       "owner": "core:git-utils",
       "class": "core-runtime",
       "risk": ["git-metadata-parser"]
+    },
+    "iconv-lite": {
+      "owner": "core:windows-launcher",
+      "class": "core-runtime",
+      "risk": ["encoding", "windows-launcher"]
     },
     "ignore": {
       "owner": "core:gitignore-matching",
@@ -189,6 +204,11 @@
       "class": "core-runtime",
       "risk": ["pattern-matching"]
     },
+    "ms": {
+      "owner": "core:duration-parsing",
+      "class": "core-runtime",
+      "risk": ["duration-parser"]
+    },
     "node-edge-tts": {
       "owner": "plugin:microsoft",
       "class": "plugin-runtime",
@@ -199,6 +219,16 @@
       "class": "default-runtime-initially",
       "risk": ["provider-sdk", "network"]
     },
+    "p-limit": {
+      "owner": "core:concurrency",
+      "class": "core-runtime",
+      "risk": ["concurrency"]
+    },
+    "p-map": {
+      "owner": "core:concurrency",
+      "class": "core-runtime",
+      "risk": ["concurrency"]
+    },
     "partial-json": {
       "owner": "core:llm-json-parsing",
       "class": "core-runtime",
@@ -208,6 +238,11 @@
       "owner": "core:browser",
       "class": "core-runtime",
       "risk": ["browser-automation", "cdp"]
+    },
+    "pretty-ms": {
+      "owner": "core:duration-formatting",
+      "class": "core-runtime",
+      "risk": ["formatting"]
     },
     "proper-lockfile": {
       "owner": "core:session-storage",
@@ -234,6 +269,11 @@
       "owner": "core:media",
       "class": "core-runtime",
       "risk": ["wasm", "parser", "untrusted-files", "native-tool-fallback"]
+    },
+    "semver": {
+      "owner": "core:versioning",
+      "class": "core-runtime",
+      "risk": ["version-parser"]
     },
     "sqlite-vec": {
       "owner": "capability:memory-sqlite-vec",

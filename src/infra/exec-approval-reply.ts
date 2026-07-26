@@ -6,8 +6,6 @@ import {
 import { isWellFormedApprovalId } from "../../packages/gateway-protocol/src/schema/approval-id.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type {
-  InteractiveReply,
-  InteractiveReplyButton,
   MessagePresentation,
   MessagePresentationAction,
   MessagePresentationButton,
@@ -229,22 +227,6 @@ export function buildTypedApprovalActionDescriptors(
   );
 }
 
-function buildApprovalInteractiveButtons(
-  descriptors: readonly ExecApprovalActionDescriptor[],
-): InteractiveReplyButton[] {
-  return descriptors.map((descriptor) => {
-    const action =
-      descriptor.action ??
-      ({ type: "command", command: descriptor.command } satisfies MessagePresentationAction);
-    return {
-      label: descriptor.label,
-      action,
-      ...(descriptor.action ? {} : { value: descriptor.command }),
-      style: descriptor.style,
-    };
-  });
-}
-
 function buildApprovalPresentationButtons(
   descriptors: readonly ExecApprovalActionDescriptor[],
 ): MessagePresentationButton[] {
@@ -327,16 +309,6 @@ export function buildTypedExecApprovalPresentation(params: {
     ask: params.ask,
     allowedDecisions: params.allowedDecisions,
   });
-}
-
-/**
- * @deprecated Use buildApprovalPresentationFromActionDescriptors.
- */
-export function buildApprovalInteractiveReplyFromActionDescriptors(
-  actions: readonly ExecApprovalActionDescriptor[],
-): InteractiveReply | undefined {
-  const buttons = buildApprovalInteractiveButtons(actions);
-  return buttons.length > 0 ? { blocks: [{ type: "buttons", buttons }] } : undefined;
 }
 
 export function getExecApprovalApproverDmNoticeText(): string {

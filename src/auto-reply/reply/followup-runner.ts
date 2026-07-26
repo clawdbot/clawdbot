@@ -59,6 +59,7 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { failQueuedDelegatesCreatedAtOrAfter } from "../continuation/delegate-store.js";
 import type { ChainState, ContinueWorkRequest } from "../continuation/types.js";
@@ -1989,7 +1990,9 @@ export function createFollowupRunner(params: {
             entry: activeSessionEntry,
             sessionKey: run.runtimePolicySessionKey ?? replySessionKey,
             channel:
-              queued.originatingChannel ?? run.messageProvider ?? activeSessionEntry?.channel,
+              queued.originatingChannel ??
+              run.messageProvider ??
+              sessionDeliveryChannel(activeSessionEntry),
             chatType: activeSessionEntry?.chatType,
           }),
         });
@@ -2042,7 +2045,9 @@ export function createFollowupRunner(params: {
             entry: activeSessionEntry,
             sessionKey: run.runtimePolicySessionKey ?? replySessionKey,
             channel:
-              queued.originatingChannel ?? run.messageProvider ?? activeSessionEntry?.channel,
+              queued.originatingChannel ??
+              run.messageProvider ??
+              sessionDeliveryChannel(activeSessionEntry),
             chatType: activeSessionEntry?.chatType,
           }),
         });
@@ -2067,7 +2072,10 @@ export function createFollowupRunner(params: {
         }
         warnPrivateMessageToolFinal({
           sessionKey: replySessionKey,
-          channel: queued.originatingChannel ?? run.messageProvider ?? activeSessionEntry?.channel,
+          channel:
+            queued.originatingChannel ??
+            run.messageProvider ??
+            sessionDeliveryChannel(activeSessionEntry),
           finalTextLength: assistantFinalText.trim().length,
         });
         const retryEnqueued =

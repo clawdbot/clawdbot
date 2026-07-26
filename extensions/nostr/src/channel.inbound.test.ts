@@ -50,13 +50,13 @@ function createMockBus() {
 function createRuntimeHarness() {
   const recordInboundSession = vi.fn(async () => {});
   const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async ({ dispatcherOptions }) => {
-    await dispatcherOptions.deliver({ text: "|a|b|" });
+    await dispatcherOptions.deliver({ text: "**Table:** [docs](https://example.com)" });
   });
   const runtime = {
     channel: {
       text: {
         resolveMarkdownTableMode: vi.fn(() => "off"),
-        convertMarkdownTables: vi.fn((text: string) => `converted:${text}`),
+        convertMarkdownTables: vi.fn((text: string) => text),
       },
       commands: {
         shouldComputeCommandAuthorized: vi.fn(() => true),
@@ -169,7 +169,8 @@ describe("nostr inbound gateway path", () => {
   it("routes allowed DMs through the standard reply pipeline", async () => {
     mocks.dispatchInboundDirectDm.mockImplementationOnce(
       async (params: Parameters<typeof DispatchInboundDirectDm>[0]) => {
-        await params.deliver({ text: "|a|b|" });
+        await params.deliver({ text: "**Table:** [docs](https://example.com)" });
+        await params.deliver({ text: "***" });
       },
     );
     const { cleanup } = await startGatewayHarness({
@@ -222,7 +223,7 @@ describe("nostr inbound gateway path", () => {
         turnAdoptionLifecycle: expect.objectContaining({ admission: "exclusive" }),
       }),
     );
-    expect(sendReply).toHaveBeenCalledWith("converted:|a|b|");
+    expect(sendReply).toHaveBeenCalledWith("Table: docs (https://example.com)");
 
     await cleanup.stop();
   });

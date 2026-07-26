@@ -8,7 +8,7 @@
   },
   "type": "module",
   "dependencies": {
-    "@anthropic-ai/sdk": "0.109.1",
+    "@anthropic-ai/sdk": "0.112.3",
     "@aws/bedrock-token-generator": "1.1.0"
   },
   "devDependencies": {

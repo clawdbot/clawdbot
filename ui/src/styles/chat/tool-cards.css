@@ -740,6 +740,13 @@
   overflow: hidden;
 }
 
+/* MCP Apps are responsive documents, so give them the assistant column instead
+   of letting the content-sized reply bubble collapse their iframe to ~300px. */
+.chat-group.assistant .chat-bubble:has(> .chat-tool-card__preview[data-content-kind="mcp-app"]) {
+  align-self: stretch;
+  width: 100%;
+}
+
 .chat-tool-card__preview-header {
   display: flex;
   align-items: center;
@@ -1161,6 +1168,17 @@
 
 .chat-working-indicator__elapsed {
   color: var(--muted);
+}
+
+.chat-working-indicator--continuation {
+  gap: 6px;
+  min-height: 0;
+  margin-top: 4px;
+}
+
+.chat-turn-recap--continuation {
+  margin-bottom: 0;
+  font-size: var(--control-ui-text-sm);
 }
 
 .chat-reading-indicator svg {

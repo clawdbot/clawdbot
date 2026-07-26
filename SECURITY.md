@@ -305,7 +305,9 @@ OpenClaw's web interface (Gateway Control UI + HTTP endpoints) is intended for *
 - Recommended: keep the Gateway **loopback-only** (`127.0.0.1` / `::1`).
   - Config: `gateway.bind="loopback"` (default).
   - CLI: `openclaw gateway run --bind loopback`.
-- `gateway.controlUi.dangerouslyDisableDeviceAuth` is intended for localhost-only break-glass use.
+- The retired `gateway.controlUi.dangerouslyDisableDeviceAuth` break-glass key is not a
+  current security option. Upgrade migration accepts it only from older config
+  versions and requires explicit self-pairing before normal enforcement resumes.
   - OpenClaw keeps deployment flexibility by design and does not hard-forbid non-local setups.
   - Non-local and other risky configurations are surfaced by `openclaw security audit` as dangerous findings.
   - This operator-selected tradeoff is by design and not, by itself, a security vulnerability.

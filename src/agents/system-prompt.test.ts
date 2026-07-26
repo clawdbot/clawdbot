@@ -354,6 +354,33 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain('[embed content_type="html" title="Status"]...[/embed]');
   });
 
+  it("teaches direct status answers only on the full Control UI surface", () => {
+    const defaultPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_spawn"],
+    });
+    const webchatPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_spawn"],
+      runtimeInfo: { channel: "webchat" },
+    });
+    const minimalWebchatPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_spawn"],
+      runtimeInfo: { channel: "webchat" },
+      promptMode: "minimal",
+    });
+
+    expect(defaultPrompt).not.toContain("## Control UI Session Companion");
+    expect(webchatPrompt).toContain("## Control UI Session Companion");
+    expect(webchatPrompt).toContain("read-only rail companion");
+    expect(webchatPrompt).toContain("do not spawn sub-agents or burn main-thread turns");
+    expect(webchatPrompt).toContain(
+      "Reserve `sessions_spawn` for delegated work with its own deliverable",
+    );
+    expect(minimalWebchatPrompt).not.toContain("## Control UI Session Companion");
+  });
+
   it("guides subagent workflows to avoid polling loops", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -993,12 +1020,12 @@ describe("buildAgentSystemPrompt", () => {
     expect(messagingPrompt).not.toContain("subagents(action=list)");
 
     expect(spawnOnlyPrompt).toContain(
-      '- Subagents: `sessions_spawn` with objective/output/write-scope/verification; stable handle needs `taskName`; isolated omits `context`, transcript needs `context:"fork"`.',
+      '- Subagents: `sessions_spawn` with objective/output/write-scope/verification; stable handle needs `taskName`, UI title `label`; isolated omits `context`, transcript needs `context:"fork"`.',
     );
     expect(spawnOnlyPrompt).not.toContain("manage already-spawned children");
 
     expect(orchestrationPrompt).toContain(
-      '- Subagents: `sessions_spawn` with objective/output/write-scope/verification; stable handle needs `taskName`; isolated omits `context`, transcript needs `context:"fork"`; `subagents(action=list)` only status/debug.',
+      '- Subagents: `sessions_spawn` with objective/output/write-scope/verification; stable handle needs `taskName`, UI title `label`; isolated omits `context`, transcript needs `context:"fork"`; `subagents(action=list)` only status/debug.',
     );
     expect(orchestrationWaitPrompt).toContain("wait via `sessions_yield`");
   });

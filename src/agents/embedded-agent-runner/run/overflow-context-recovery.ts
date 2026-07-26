@@ -6,6 +6,7 @@ import { formatErrorMessage } from "../../../infra/errors.js";
 import { requireSessionKeyOrSkip } from "../../../infra/session-keys.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
 import type { AssistantMessage } from "../../../llm/types.js";
+import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { resolveProcessToolScopeKey } from "../../agent-tools.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import {
@@ -143,7 +144,8 @@ export async function recoverEmbeddedRunOverflow(input: {
   }
 
   const providerPromptRejection =
-    contextOverflowError.source === "assistantError" || input.attempt.promptErrorSource === "prompt"
+    contextOverflowError.source === "assistantError" ||
+    projectAgentRunAttemptTerminal(input.attempt.terminal).promptErrorSource === "prompt"
       ? markLastProviderPromptContextRejected(getProviderPromptState(input.runParams.runId))
       : undefined;
 
@@ -377,8 +379,6 @@ export async function recoverEmbeddedRunOverflow(input: {
           contextWindowTokens: input.contextTokenBudget,
           maxCharsOverride: resolveLiveToolResultMaxChars({
             contextWindowTokens: input.contextTokenBudget,
-            cfg: runParams.config,
-            agentId: input.sessionAgentId,
           }),
           config: runParams.config,
           protectTrailingToolResults: true,
@@ -411,8 +411,6 @@ export async function recoverEmbeddedRunOverflow(input: {
   if (!input.state.toolResultTruncationAttempted) {
     const toolResultMaxChars = resolveLiveToolResultMaxChars({
       contextWindowTokens: input.contextTokenBudget,
-      cfg: runParams.config,
-      agentId: input.sessionAgentId,
     });
     const hasOversized = input.attempt.messagesSnapshot
       ? sessionLikelyHasOversizedToolResults({

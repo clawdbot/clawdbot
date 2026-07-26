@@ -76,11 +76,9 @@ import {
   scheduleContinuationWork,
 } from "../auto-reply/continuation/work-dispatch.js";
 import { setRuntimeConfigSnapshot, clearRuntimeConfigSnapshot } from "../config/config.js";
-import {
-  clearSessionStoreCacheForTest,
-  resolveStorePath,
-  saveSessionStore,
-} from "../config/sessions.js";
+import { resolveStorePath } from "../config/sessions.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
+import { saveLegacySessionStore as saveSessionStore } from "../infra/state-migrations.legacy-session-store.js";
 import { listTaskFlowsForOwnerKey } from "../tasks/task-flow-registry.js";
 import { resetTaskFlowRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import {

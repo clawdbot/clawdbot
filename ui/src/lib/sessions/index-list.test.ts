@@ -16,7 +16,7 @@ describe("session list requests", () => {
     const client = { request } as unknown as GatewayBrowserClient;
     const snapshot = {
       client,
-      connected: true,
+      phase: "connected" as const,
       sessionKey: "agent:main:main",
       assistantAgentId: "main",
       hello: null,
@@ -58,7 +58,7 @@ describe("session list requests", () => {
     const sessions = createSessionCapability({
       snapshot: {
         client: { request } as unknown as GatewayBrowserClient,
-        connected: true,
+        phase: "connected" as const,
         sessionKey: "agent:main:main",
         assistantAgentId: "main",
         hello: null,

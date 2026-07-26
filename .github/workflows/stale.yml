@@ -50,16 +50,22 @@ jobs:
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          permission-actions: read
+          permission-issues: write
+          permission-pull-requests: write
       - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         id: app-token-fallback
         continue-on-error: true
         with:
           app-id: "2971289"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          permission-actions: read
+          permission-issues: write
+          permission-pull-requests: write
       - name: Mark stale unassigned issues and pull requests (primary)
         id: stale-primary
         continue-on-error: true
-        uses: actions/stale@eb5cf3af3ac0a1aa4c9c45633dd1ae542a27a899 # v10
+        uses: actions/stale@1e223db275d687790206a7acac4d1a11bd6fe629 # v10
         with:
           repo-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           days-before-issue-stale: 14
@@ -92,7 +98,7 @@ jobs:
       - name: Mark stale assigned issues (primary)
         id: assigned-issue-stale-primary
         continue-on-error: true
-        uses: actions/stale@eb5cf3af3ac0a1aa4c9c45633dd1ae542a27a899 # v10
+        uses: actions/stale@1e223db275d687790206a7acac4d1a11bd6fe629 # v10
         with:
           repo-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           days-before-issue-stale: 30
@@ -116,7 +122,7 @@ jobs:
       - name: Mark stale assigned pull requests (primary)
         id: assigned-stale-primary
         continue-on-error: true
-        uses: actions/stale@eb5cf3af3ac0a1aa4c9c45633dd1ae542a27a899 # v10
+        uses: actions/stale@1e223db275d687790206a7acac4d1a11bd6fe629 # v10
         with:
           repo-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           days-before-issue-stale: -1
@@ -163,7 +169,7 @@ jobs:
             }
       - name: Mark stale unassigned issues and pull requests (fallback)
         if: (steps.stale-primary.outcome == 'failure' || steps.stale-state.outputs.has_state == 'true') && steps.app-token-fallback.outputs.token != ''
-        uses: actions/stale@eb5cf3af3ac0a1aa4c9c45633dd1ae542a27a899 # v10
+        uses: actions/stale@1e223db275d687790206a7acac4d1a11bd6fe629 # v10
         with:
           repo-token: ${{ steps.app-token-fallback.outputs.token }}
           days-before-issue-stale: 14
@@ -195,7 +201,7 @@ jobs:
             That channel is the escape hatch for high-quality PRs that get auto-closed.
       - name: Mark stale assigned issues (fallback)
         if: (steps.assigned-issue-stale-primary.outcome == 'failure' || steps.stale-state.outputs.has_state == 'true') && steps.app-token-fallback.outputs.token != ''
-        uses: actions/stale@eb5cf3af3ac0a1aa4c9c45633dd1ae542a27a899 # v10
+        uses: actions/stale@1e223db275d687790206a7acac4d1a11bd6fe629 # v10
         with:
           repo-token: ${{ steps.app-token-fallback.outputs.token }}
           days-before-issue-stale: 30
@@ -218,7 +224,7 @@ jobs:
           close-issue-reason: not_planned
       - name: Mark stale assigned pull requests (fallback)
         if: (steps.assigned-stale-primary.outcome == 'failure' || steps.stale-state.outputs.has_state == 'true') && steps.app-token-fallback.outputs.token != ''
-        uses: actions/stale@eb5cf3af3ac0a1aa4c9c45633dd1ae542a27a899 # v10
+        uses: actions/stale@1e223db275d687790206a7acac4d1a11bd6fe629 # v10
         with:
           repo-token: ${{ steps.app-token-fallback.outputs.token }}
           days-before-issue-stale: -1
@@ -252,6 +258,9 @@ jobs:
         with:
           app-id: "2971289"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          permission-issues: write
+          permission-metadata: read
+          permission-pull-requests: write
       - name: Backfill stale closures
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
@@ -500,6 +509,8 @@ jobs:
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          permission-issues: write
+          permission-metadata: read
       - name: Lock closed issues after 48h of no activity
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:

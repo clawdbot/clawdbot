@@ -78,9 +78,9 @@ function createGateway(): TestGateway {
   } as unknown as GatewayBrowserClient;
   const snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected: true,
+    phase: "connected",
     offlineStable: false,
-    reconnecting: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: null,
     sessionKey: "main",
@@ -250,7 +250,7 @@ describe("ChannelsPage lifecycle", () => {
 
     const load = page.importNostrProfile();
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
-    gateway.emit({ connected: false });
+    gateway.emit({ phase: "stopped" });
     expect(page.nostrProfileFormState).toBeNull();
 
     response.resolve(

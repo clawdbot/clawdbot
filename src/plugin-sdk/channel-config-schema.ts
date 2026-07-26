@@ -26,10 +26,12 @@ export {
   GroupPolicySchema,
   MarkdownConfigSchema,
   MentionPatternsPolicySchema,
+  MSTeamsReplyStyleSchema,
   ProviderCommandsSchema,
   ReplyToModeSchema,
   ReplyRuntimeConfigSchemaShape,
   TextChunkModeSchema,
+  TtsConfigSchema,
   requireAllowlistAllowFrom,
   requireOpenAllowFrom,
 } from "../config/zod-schema.core.js";
@@ -48,3 +50,5 @@ export {
 } from "../config/zod-schema.channel-messaging-common.js";
 export { ChannelImplicitMentionsSchema } from "../config/zod-schema.implicit-mentions.js";
 export { ToolPolicySchema } from "../config/zod-schema.agent-runtime.js";
+export { isSafeScpRemoteHost } from "../infra/scp-host.js";
+export { isValidInboundPathRootPattern } from "@openclaw/media-core/inbound-path-policy";

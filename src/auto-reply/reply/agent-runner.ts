@@ -83,6 +83,7 @@ import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../se
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import {
   normalizeDeliveryContext,
+  sessionDeliveryChannel,
   type DeliveryContext,
 } from "../../utils/delivery-context.shared.js";
 import {
@@ -297,7 +298,7 @@ function resolveSourceReplyPolicy(params: {
       params.sessionCtx.OriginatingChannel ??
       params.sessionCtx.Surface ??
       params.sessionCtx.Provider ??
-      params.sessionEntry?.channel,
+      sessionDeliveryChannel(params.sessionEntry),
     chatType: params.sessionEntry?.chatType,
   });
   return resolveSourceReplyVisibilityPolicy({
@@ -1113,14 +1114,7 @@ function enqueueCommitmentExtractionForTurn(params: {
   if (params.isHeartbeat) {
     return;
   }
-  const userText =
-    params.commandBody.trim() ||
-    params.sessionCtx.BodyStripped?.trim() ||
-    params.sessionCtx.BodyForCommands?.trim() ||
-    params.sessionCtx.CommandBody?.trim() ||
-    params.sessionCtx.RawBody?.trim() ||
-    params.sessionCtx.Body?.trim() ||
-    "";
+  const userText = params.commandBody.trim() || params.sessionCtx.agentText?.trim() || "";
   const assistantText = joinCommitmentAssistantText(params.payloads);
   const sessionKey = params.sessionKey ?? params.followupRun.run.sessionKey;
   const channel =
@@ -1460,6 +1454,7 @@ export async function runReplyAgent(replyParams: {
         steeringMode: "all",
         isInboundUserMessage: true,
         ...(followupRun.images?.length ? { images: followupRun.images } : {}),
+        ...(followupRun.imageOrder?.length ? { imageOrder: followupRun.imageOrder } : {}),
         ...(followupRun.media?.length ? { media: followupRun.media } : {}),
         ...(turnAdoptionLifecycle ? { waitForTranscriptCommit: true } : {}),
         ...(resolvedQueue.debounceMs !== undefined ? { debounceMs: resolvedQueue.debounceMs } : {}),
@@ -4077,7 +4072,7 @@ export async function runReplyAgent(replyParams: {
             sessionCtx.OriginatingChannel ??
             sessionCtx.Surface ??
             sessionCtx.Provider ??
-            activeSessionEntry?.channel,
+            sessionDeliveryChannel(activeSessionEntry),
           finalTextLength: assistantFinalText.trim().length,
         });
       }

@@ -163,6 +163,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
             claimHeartbeatOutcomeForRun({
               agentId: input.context.sessionAgentId,
               sessionKey: attempt.sessionKey,
+              storePath: attempt.sessionTarget?.storePath,
               runId: attempt.runId,
             }),
           )

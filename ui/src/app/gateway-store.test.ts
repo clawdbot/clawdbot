@@ -44,6 +44,11 @@ class FakeGatewayClient {
     this.stopped += 1;
   }
 
+  request = vi.fn(
+    (_method: string, _params: unknown): Promise<unknown> =>
+      Promise.reject(new Error("unexpected gateway request")),
+  );
+
   addEventListener() {
     return () => {};
   }
@@ -77,7 +82,7 @@ function createStore(
   return { gateway, clients, current };
 }
 
-describe("createApplicationGateway reconnecting snapshot", () => {
+describe("createApplicationGateway connection phase", () => {
   beforeEach(() => {
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("sessionStorage", createStorageMock());
@@ -96,14 +101,77 @@ describe("createApplicationGateway reconnecting snapshot", () => {
     vi.restoreAllMocks();
   });
 
-  it("keeps the first connect attempt on the login gate (not reconnecting)", () => {
+  it("follows stopped -> connecting -> connected -> reconnecting -> offline", () => {
     const { gateway, current } = createStore();
+
+    expect(gateway.snapshot.phase).toBe("stopped");
     gateway.start();
 
     expect(current().started).toBe(1);
     expect(current().opts.clientVersion).toBe("2026.7.19");
-    expect(gateway.snapshot.connected).toBe(false);
-    expect(gateway.snapshot.reconnecting).toBe(false);
+    expect(gateway.snapshot.phase).toBe("connecting");
+
+    current().opts.onHello?.(HELLO);
+    expect(gateway.snapshot.phase).toBe("connected");
+
+    current().opts.onClose?.({ code: 1006, reason: "socket lost", willRetry: true });
+    expect(gateway.snapshot.phase).toBe("reconnecting");
+
+    current().opts.onClose?.({ code: 4008, reason: "connect failed", willRetry: false });
+    expect(gateway.snapshot.phase).toBe("offline");
+  });
+
+  it("publishes the hello canvas URL synchronously and clears it on disconnect", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+    current().opts.onHello?.({
+      ...HELLO,
+      pluginSurfaceUrls: {
+        canvas: "https://canvas.test/__openclaw__/cap/hello",
+      },
+    });
+
+    expect(gateway.snapshot.canvasPluginSurfaceUrl).toBe(
+      "https://canvas.test/__openclaw__/cap/hello",
+    );
+
+    current().opts.onClose?.({ code: 1006, reason: "socket lost", willRetry: true });
+    expect(gateway.snapshot.canvasPluginSurfaceUrl).toBeNull();
+  });
+
+  it("does not let a superseded canvas refresh publish into the current snapshot", async () => {
+    let resolveRefresh: (value: unknown) => void = () => {};
+    const firstRefresh = new Promise<unknown>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    const { gateway, current } = createStore();
+    gateway.start();
+    const first = current();
+    first.request.mockReturnValueOnce(firstRefresh);
+    first.opts.onHello?.({
+      ...HELLO,
+      pluginSurfaceUrls: { canvas: "https://canvas.test/__openclaw__/cap/first" },
+    });
+    await vi.waitFor(() => expect(first.request).toHaveBeenCalledOnce());
+
+    gateway.connect();
+    current().opts.onHello?.({
+      ...HELLO,
+      pluginSurfaceUrls: { canvas: "https://canvas.test/__openclaw__/cap/current" },
+    });
+    resolveRefresh({
+      surface: "canvas",
+      pluginSurfaceUrls: { canvas: "https://canvas.test/__openclaw__/cap/stale-refresh" },
+      expiresAtMs: Date.now() + 60_000,
+    });
+    await new Promise<void>((resolve) => {
+      globalThis.setTimeout(resolve, 0);
+    });
+
+    expect(gateway.snapshot.canvasPluginSurfaceUrl).toBe(
+      "https://canvas.test/__openclaw__/cap/current",
+    );
+    gateway.stop();
   });
 
   it("stays on the gate when the first connect fails, even with auto-retry pending", () => {
@@ -112,22 +180,46 @@ describe("createApplicationGateway reconnecting snapshot", () => {
 
     current().opts.onClose?.({ code: 1006, reason: "refused", willRetry: true });
 
-    expect(gateway.snapshot.connected).toBe(false);
-    expect(gateway.snapshot.reconnecting).toBe(false);
+    expect(gateway.snapshot.phase).toBe("connecting");
     expect(gateway.snapshot.lastError).toContain("1006");
   });
 
-  it("marks transport drops after an established session as reconnecting", () => {
+  it("returns a never-connected terminal close to stopped", () => {
     const { gateway, current } = createStore();
     gateway.start();
-    current().opts.onHello?.(HELLO);
-    expect(gateway.snapshot.connected).toBe(true);
 
-    current().opts.onClose?.({ code: 1006, reason: "socket lost", willRetry: true });
+    current().opts.onClose?.({ code: 4008, reason: "connect failed", willRetry: false });
 
-    expect(gateway.snapshot.connected).toBe(false);
-    expect(gateway.snapshot.reconnecting).toBe(true);
+    expect(gateway.snapshot.phase).toBe("stopped");
+    expect(gateway.snapshot.lastError).toContain("4008");
   });
+
+  it.each(["stopped", "connecting", "connected", "reconnecting", "offline"] as const)(
+    "stop() resets %s to stopped",
+    (phase) => {
+      const { gateway, current } = createStore();
+      if (phase !== "stopped") {
+        gateway.start();
+      }
+      if (phase === "connected" || phase === "reconnecting" || phase === "offline") {
+        current().opts.onHello?.(HELLO);
+      }
+      if (phase === "reconnecting" || phase === "offline") {
+        current().opts.onClose?.({
+          code: 1006,
+          reason: "socket lost",
+          willRetry: phase === "reconnecting",
+        });
+      }
+      expect(gateway.snapshot.phase).toBe(phase);
+
+      gateway.stop();
+
+      expect(gateway.snapshot.phase).toBe("stopped");
+      expect(gateway.snapshot.client).toBeNull();
+      expect(gateway.snapshot.offlineStable).toBe(false);
+    },
+  );
 
   it("publishes a stable offline state only after a sustained disconnect", async () => {
     vi.useFakeTimers();
@@ -202,8 +294,7 @@ describe("createApplicationGateway reconnecting snapshot", () => {
 
     current().opts.onClose?.({ code: 4008, reason: "connect failed", willRetry: false });
 
-    expect(gateway.snapshot.connected).toBe(false);
-    expect(gateway.snapshot.reconnecting).toBe(false);
+    expect(gateway.snapshot.phase).toBe("offline");
   });
 
   it("keeps reconnecting across event-gap recovery with a fresh client", () => {
@@ -216,8 +307,7 @@ describe("createApplicationGateway reconnecting snapshot", () => {
     expect(clients).toHaveLength(2);
     expect(clients[0]?.stopped).toBe(1);
     expect(current().started).toBe(1);
-    expect(gateway.snapshot.reconnecting).toBe(true);
-    expect(gateway.snapshot.connected).toBe(false);
+    expect(gateway.snapshot.phase).toBe("reconnecting");
   });
 
   it("resets the session lineage on stop so the next start uses the gate again", () => {
@@ -226,12 +316,12 @@ describe("createApplicationGateway reconnecting snapshot", () => {
     current().opts.onHello?.(HELLO);
     gateway.stop();
 
-    expect(gateway.snapshot.reconnecting).toBe(false);
+    expect(gateway.snapshot.phase).toBe("stopped");
 
     gateway.start();
     current().opts.onClose?.({ code: 1006, reason: "refused", willRetry: true });
 
-    expect(gateway.snapshot.reconnecting).toBe(false);
+    expect(gateway.snapshot.phase).toBe("connecting");
   });
 
   it("ignores close callbacks from superseded clients", () => {
@@ -245,7 +335,7 @@ describe("createApplicationGateway reconnecting snapshot", () => {
     stale.opts.onClose?.({ code: 1006, reason: "stale", willRetry: false });
 
     // The superseded client cannot demote the fresh attempt's snapshot.
-    expect(gateway.snapshot.reconnecting).toBe(true);
+    expect(gateway.snapshot.phase).toBe("reconnecting");
   });
 
   it("projects only this browser connection's optional presence identity", () => {

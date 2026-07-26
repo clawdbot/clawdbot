@@ -456,6 +456,38 @@ describe("Claw status and remove", () => {
     });
   });
 
+  it("accepts the scheduler's default tool cap when removing a Claw cron job", async () => {
+    const current = await addFixture({ withCron: true });
+    const plan = await buildClawRemovePlan("worker", {
+      env: current.env,
+      config: current.getConfig(),
+    });
+    const ref = readClawCronRefs("worker", { env: current.env })[0]!;
+    const live = cronReadView("worker", ref);
+    const remove = vi.fn().mockResolvedValue({ ok: true });
+
+    const result = await applyClawRemovePlan(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+      env: current.env,
+      config: current.getConfig(),
+      commitConfig: current.commitConfig,
+      cronGateway: {
+        get: async () => ({
+          ...live,
+          payload: { ...live.payload, toolsAllow: ["*"] },
+        }),
+        remove,
+      },
+    });
+
+    expect(remove).toHaveBeenCalledWith(ref.schedulerJobId);
+    expect(result).toMatchObject({
+      status: "complete",
+      agentRemoved: true,
+      cronJobs: [{ manifestId: "daily-report", action: "removed" }],
+    });
+  });
+
   it("fails removal planning when source MCP config cannot be read", async () => {
     const current = await addFixture({ withCron: true });
 

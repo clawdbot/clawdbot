@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveQaParityPackScenarioIds } from "./agentic-parity.js";
+import { resolveQaRepoPath } from "./repo-path.js";
 import {
   listQaScenarioYamlPaths,
   readQaBootstrapScenarioCatalog,
@@ -91,6 +92,24 @@ describe("qa scenario catalog", () => {
     expect(recall.coverage?.primary).toContain(`${memory}.memory-recall`);
   });
 
+  it("keeps scenario documentation and code references backed by the repository", () => {
+    for (const scenario of readQaScenarioPack().scenarios) {
+      const referenceGroups = [
+        ["docsRefs", scenario.docsRefs],
+        ["codeRefs", scenario.codeRefs],
+      ] as const;
+
+      for (const [kind, references] of referenceGroups) {
+        for (const reference of references ?? []) {
+          const resolvedReference =
+            resolveQaRepoPath(import.meta.dirname, reference, "file") ??
+            resolveQaRepoPath(import.meta.dirname, reference, "directory");
+          expect(resolvedReference, `${scenario.id} ${kind} ${reference} exists`).not.toBeNull();
+        }
+      }
+    }
+  });
+
   it("exposes bootstrap data from the YAML pack", () => {
     const catalog = readQaBootstrapScenarioCatalog();
 
@@ -155,7 +174,10 @@ describe("qa scenario catalog", () => {
     expect(JSON.stringify(cronRestart.execution.flow)).toContain("liveTurnTimeoutMs(env, 180000)");
     expect(cronAuthority.execution.suiteIsolation).toBe("isolated");
     expect(cronAuthority.execution.retryCount).toBe(0);
-    expect(cronAuthority.runtimeParityTier).toBe("live-only");
+    expect(cronAuthority.runtimePairLane).toBe("core");
+    expect(cronAuthority.execution.config).toMatchObject({
+      requiredProviderMode: "live-frontier",
+    });
     expect(JSON.stringify(cronAuthority.gatewayConfigPatch)).toContain(
       "qa-cron-authority-operator",
     );
@@ -278,16 +300,16 @@ describe("qa scenario catalog", () => {
     }
   });
 
-  it("loads runtime parity tier metadata for first-hour and soak lanes", () => {
+  it("loads canonical runtime-pair lane metadata", () => {
     const firstHour = readQaScenarioById("runtime-first-hour-20-turn");
     const soak = readQaScenarioById("runtime-soak-100-turn");
 
-    expect(firstHour.runtimeParityTier).toBe("standard");
+    expect(firstHour.runtimePairLane).toBe("core");
     expect(readQaScenarioExecutionConfig(firstHour.id)).toMatchObject({
       runtimeParityComparison: "outcome-only",
       turnCount: 20,
     });
-    expect(soak.runtimeParityTier).toBe("soak");
+    expect(soak.runtimePairLane).toBe("soak");
     expect(readQaScenarioExecutionConfig(soak.id)).toMatchObject({ turnCount: 100 });
   });
 
@@ -302,12 +324,11 @@ describe("qa scenario catalog", () => {
         "codex-plugin-cold-install",
         "codex-plugin-pinned-new",
         "codex-plugin-pinned-old",
-        "plugin-manifest-contract-health",
       ].toSorted(),
     );
     for (const scenarioId of notApplicable) {
       const scenario = readQaScenarioById(scenarioId);
-      expect(scenario.runtimeParityTier).toBeDefined();
+      expect(scenario.runtimePairLane).toBeDefined();
       expect(scenario.runtimeParityUsage).toMatchObject({
         expectation: "not-applicable",
       });
@@ -319,7 +340,7 @@ describe("qa scenario catalog", () => {
     expect(readQaScenarioById("plugin-hook-health-sentinel").runtimeParityUsage).toBeUndefined();
   });
 
-  it("loads runtime tool fixture metadata for standard and optional lanes", () => {
+  it("loads runtime tool fixture metadata for core and extended lanes", () => {
     const applyPatch = readQaScenarioById("runtime-tool-apply-patch");
     const messageTool = readQaScenarioById("runtime-tool-message-tool");
     const tavilySearch = readQaScenarioById("runtime-tool-tavily-search");
@@ -327,10 +348,10 @@ describe("qa scenario catalog", () => {
     const webSearch = readQaScenarioById("runtime-tool-web-search");
     const imageGenerate = readQaScenarioById("runtime-tool-image-generate");
 
-    expect(applyPatch.runtimeParityTier).toBe("standard");
-    expect(messageTool.runtimeParityTier).toBe("optional");
-    expect(tavilySearch.runtimeParityTier).toBe("optional");
-    expect(imageGenerate.runtimeParityTier).toBe("optional");
+    expect(applyPatch.runtimePairLane).toBe("core");
+    expect(messageTool.runtimePairLane).toBe("extended");
+    expect(tavilySearch.runtimePairLane).toBe("extended");
+    expect(imageGenerate.runtimePairLane).toBe("extended");
     expect(readQaScenarioExecutionConfig(applyPatch.id)).toMatchObject({
       toolName: "apply_patch",
       toolCoverage: {
@@ -400,7 +421,8 @@ describe("qa scenario catalog", () => {
       | undefined;
 
     expect(scenario.sourcePath).toBe("qa/scenarios/runtime/codex-legacy-read-tool-vocabulary.yaml");
-    expect(scenario.runtimeParityTier).toBe("live-only");
+    expect(scenario.runtimePairLane).toBe("core");
+    expect(config).toMatchObject({ requiredProviderMode: "live-frontier" });
     expect(config?.runtimeParityComparison).toBe("codex-native-workspace");
     expect(config?.fixtureFile).toBe("LEGACY_READ_TOOL_FIXTURE.txt");
     expect(config?.expectedMarker).toBe("LEGACY_READ_TOOL_OK");
@@ -429,7 +451,6 @@ describe("qa scenario catalog", () => {
 
     for (const scenarioId of scenarioIds) {
       const scenario = readQaScenarioById(scenarioId);
-      expect(scenario.runtimeParityTier).toBe("live-only");
       expect(scenario.execution.flow?.steps.length).toBeGreaterThan(0);
       expect(scenario.coverage?.primary.length).toBeGreaterThan(0);
     }
@@ -446,14 +467,26 @@ describe("qa scenario catalog", () => {
     ).toContain('"alsoAllow":["qa_restart_wait","qa_restart_unsafe_probe"]');
     expect(gatewayRestartContract).toContain("plannedToolName === 'wait'");
     expect(gatewayRestartContract).toContain("lastAssistantToolNames?.includes('wait')");
-    expect(gatewayRestartContract).toContain('"taskTracking":false');
+    expect(gatewayRestartContract).toContain("restartRecoveryDeliveryContext");
+    expect(gatewayRestartContract).toContain("sendInbound");
+    expect(gatewayRestartContract).not.toContain("startAgentRun");
     expect(gatewayRestartContract).toContain('"restartGatewayWithConfigPatch"');
     expect(gatewayRestartContract).toContain("interruptedMatches.length === 1");
     expect(gatewayRestartContract).toContain("restartNotices.length === 0");
     expect(gatewayRestartContract).toContain("dispatching restart-safe recovery");
     expect(gatewayRestartContract).toContain("[OpenClaw heartbeat poll]");
     expect(gatewayRestartContract).toContain("liveTurnTimeoutMs(env, 180000)");
-    expect(gatewayRestartContract).toContain("dmScope: 'per-channel-peer'");
+    expect(gatewayRestartContract).toContain("id: `dm:${conversationId}`");
+    expect(gatewayRestartContract).toContain("dmScope: env.cfg.session?.dmScope");
+    expect(readQaScenarioById("gateway-restart-inflight-run").gatewayConfigPatch).toMatchObject({
+      plugins: {
+        slots: { memory: "none" },
+        entries: {
+          acpx: { enabled: false },
+          "memory-core": { enabled: false },
+        },
+      },
+    });
     const liveMultiRestart = readQaScenarioById("gateway-restart-multi-live");
     const liveMultiRestartContract = JSON.stringify(liveMultiRestart.execution.flow);
     expect(JSON.stringify(liveMultiRestart.gatewayConfigPatch)).toContain(
@@ -566,9 +599,9 @@ describe("qa scenario catalog", () => {
     }
   });
 
-  it("loads Codex plugin lifecycle scenarios into the standard runtime tier", () => {
+  it("loads Codex plugin lifecycle scenarios into the core runtime-pair lane", () => {
     const coldInstall = readQaScenarioById("codex-plugin-cold-install");
-    expect(coldInstall.runtimeParityTier).toBe("standard");
+    expect(coldInstall.runtimePairLane).toBe("core");
     expect(coldInstall.coverage?.primary).toEqual(["plugins.lifecycle-hot-install"]);
     expect(coldInstall.coverage?.secondary).toBeUndefined();
     expect(coldInstall.execution.kind).toBe("script");
@@ -577,7 +610,7 @@ describe("qa scenario catalog", () => {
 
     for (const scenarioId of fixtureScenarioIds) {
       const scenario = readQaScenarioById(scenarioId);
-      expect(scenario.runtimeParityTier).toBe("standard");
+      expect(scenario.runtimePairLane).toBe("core");
       expect(scenario.coverage?.primary.length).toBeGreaterThan(0);
       expect(scenario.execution.flow?.steps.length).toBe(1);
     }
@@ -591,7 +624,7 @@ describe("qa scenario catalog", () => {
   it("routes the Codex doctor migration row through the product-backed Vitest", () => {
     const scenario = readQaScenarioById("auth-profile-doctor-migration-safety");
 
-    expect(scenario.runtimeParityTier).toBeUndefined();
+    expect(scenario.runtimePairLane).toBeUndefined();
     expect(scenario.runtimeParityUsage).toBeUndefined();
     expect(scenario.execution).toMatchObject({
       kind: "vitest",
@@ -604,7 +637,7 @@ describe("qa scenario catalog", () => {
   it("routes the Codex mixed-profile row through the product-backed Vitest", () => {
     const scenario = readQaScenarioById("auth-profile-codex-mixed-profiles");
 
-    expect(scenario.runtimeParityTier).toBeUndefined();
+    expect(scenario.runtimePairLane).toBeUndefined();
     expect(scenario.runtimeParityUsage).toBeUndefined();
     expect(scenario.execution).toMatchObject({
       kind: "vitest",

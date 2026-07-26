@@ -65,11 +65,9 @@ vi.mock("../auto-reply/continuation/delegate-store.js", () => ({
 
 import { stagePostCompactionDelegate } from "../auto-reply/continuation/delegate-store.js";
 import { setRuntimeConfigSnapshot, clearRuntimeConfigSnapshot } from "../config/config.js";
-import {
-  clearSessionStoreCacheForTest,
-  resolveStorePath,
-  saveSessionStore,
-} from "../config/sessions.js";
+import { resolveStorePath } from "../config/sessions.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
+import { saveLegacySessionStore as saveSessionStore } from "../infra/state-migrations.legacy-session-store.js";
 import { drainSystemEventEntries, resetSystemEventsForTest } from "../infra/system-events.js";
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
 import * as subagentSpawn from "./subagent-spawn.js";

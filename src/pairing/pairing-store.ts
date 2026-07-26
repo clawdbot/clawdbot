@@ -1,7 +1,5 @@
 // Persists pairing challenges and approved channel account bindings in shared SQLite state.
 import crypto from "node:crypto";
-import os from "node:os";
-import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeNullableString,
@@ -10,11 +8,9 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { getPairingAdapter } from "../channels/plugins/pairing.js";
 import type { ChannelPairingAdapter } from "../channels/plugins/pairing.types.js";
-import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
-import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
-import { resolveAllowFromAccountId, safeAccountKey, safeChannelKey } from "./pairing-store-keys.js";
+import { resolveAllowFromAccountId } from "./pairing-store-keys.js";
 import {
   readChannelPairingState,
   readChannelPairingStateFromDatabase,
@@ -23,19 +19,6 @@ import {
   writeChannelPairingStateToDatabase,
 } from "./pairing-store-sqlite.js";
 import type { PairingChannel } from "./pairing-store.types.js";
-
-/** @deprecated Compatibility helper for doctor/plugin migrations of the retired JSON store. */
-export function resolveChannelAllowFromPath(
-  channel: PairingChannel,
-  env: NodeJS.ProcessEnv = process.env,
-  accountId?: string,
-): string {
-  const stateDir = resolveStateDir(env, () => resolveRequiredHomeDir(env, os.homedir));
-  const credentialsDir = resolveOAuthDir(env, stateDir);
-  const normalizedAccountId = normalizeOptionalString(accountId);
-  const suffix = normalizedAccountId ? `-${safeAccountKey(normalizedAccountId)}` : "";
-  return path.join(credentialsDir, `${safeChannelKey(channel)}${suffix}-allowFrom.json`);
-}
 
 const PAIRING_CODE_LENGTH = 8;
 const PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";

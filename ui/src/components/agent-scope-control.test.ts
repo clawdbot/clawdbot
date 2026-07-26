@@ -52,6 +52,61 @@ describe("renderAgentScopeControl", () => {
     container.remove();
   });
 
+  it("keeps semantic system agents out of roster and historical options", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    render(
+      renderAgentScopeControl({
+        agents: [
+          { id: "main", kind: "agent", name: "Main agent" },
+          { id: "ordinary-looking-id", kind: "system", name: "System" },
+          { id: "writer", kind: "agent", name: "Writer" },
+        ],
+        additionalAgentIds: ["ordinary-looking-id", "retired"],
+        selection: createSelection(vi.fn()),
+        selectedId: "ordinary-looking-id",
+      }),
+      container,
+    );
+
+    const select = container.querySelector<AgentSelectElement>("openclaw-agent-select");
+    await select?.updateComplete;
+    expect(select?.value).toBe("");
+    expect(select?.options.map((option) => option.value)).toEqual([
+      "",
+      "main",
+      "retired",
+      "writer",
+    ]);
+    container.remove();
+  });
+
+  it("uses the first selectable agent when a concrete selector receives a system id", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    render(
+      renderAgentScopeControl({
+        agents: [
+          { id: "main", kind: "agent", name: "Main agent" },
+          { id: "ordinary-looking-id", kind: "system", name: "System" },
+          { id: "writer", kind: "agent", name: "Writer" },
+        ],
+        selection: createSelection(vi.fn()),
+        allowAll: false,
+        selectedId: "ordinary-looking-id",
+      }),
+      container,
+    );
+
+    const select = container.querySelector<AgentSelectElement>("openclaw-agent-select");
+    await select?.updateComplete;
+    expect(select?.value).toBe("main");
+    expect(select?.options.map((option) => option.value)).toEqual(["main", "writer"]);
+    container.remove();
+  });
+
   it("supports a concrete-agent selector without an all-agents option", async () => {
     const container = document.createElement("div");
     document.body.append(container);

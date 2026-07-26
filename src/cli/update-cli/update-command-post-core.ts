@@ -35,6 +35,7 @@ import {
   type ControlPlaneUpdateSentinelMetaFile,
 } from "../../infra/update-control-plane-sentinel.js";
 import {
+  POST_CORE_UPDATE_ENV,
   POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV,
   type PreUpdateConfigRestoreInput,
 } from "../../infra/update-post-core-context.js";
@@ -44,6 +45,7 @@ import {
   loadInstalledPluginIndexInstallRecords,
   writePersistedInstalledPluginIndexInstallRecords,
 } from "../../plugins/installed-plugin-index-records.js";
+import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { runExec } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
@@ -81,13 +83,13 @@ import {
 } from "./update-command-service.js";
 
 const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
-export const POST_CORE_UPDATE_ENV = "OPENCLAW_UPDATE_POST_CORE";
+export { POST_CORE_UPDATE_ENV };
 export const POST_CORE_UPDATE_CHANNEL_ENV = "OPENCLAW_UPDATE_POST_CORE_CHANNEL";
 export const POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV = "OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL";
 export const POST_CORE_UPDATE_RESULT_PATH_ENV = "OPENCLAW_UPDATE_POST_CORE_RESULT_PATH";
 export const POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV =
   "OPENCLAW_UPDATE_POST_CORE_INSTALL_RECORDS_PATH";
-const POST_CORE_UPDATE_STARTED_AT_ENV = "OPENCLAW_UPDATE_POST_CORE_STARTED_AT_MS";
+export const POST_CORE_UPDATE_STARTED_AT_ENV = "OPENCLAW_UPDATE_POST_CORE_STARTED_AT_MS";
 const POST_CORE_UPDATE_RESULT_POLL_MS = 100;
 
 export async function reportPreMutationUpdateFailure(params: {
@@ -195,56 +197,58 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
     });
   }
 
-  const initialPluginUpdate = await withUpdateFinalizationEnv(async () => {
-    await createUpdateConfigSnapshot();
-    await doctorCommand(defaultRuntime, {
-      nonInteractive: true,
-      repair: true,
-      yes: opts.yes === true,
-    });
-    configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
-    if (requestedChannel) {
-      configSnapshot = await persistRequestedUpdateChannel({
-        configSnapshot,
-        requestedChannel,
+  const completedPluginUpdate = await withPluginLifecycleLease({}, async () => {
+    const initialPluginUpdate = await withUpdateFinalizationEnv(async () => {
+      await createUpdateConfigSnapshot();
+      await doctorCommand(defaultRuntime, {
+        nonInteractive: true,
+        repair: true,
+        yes: opts.yes === true,
       });
-    }
-    const restoredConfig = restoreDroppedPreUpdateChannels(configSnapshot, preFinalizeConfig);
-    configSnapshot = restoredConfig.snapshot;
-    const postDoctorStoredChannel = configSnapshot.valid
-      ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
-      : null;
-    const postDoctorChannel =
-      requestedChannel ??
-      postDoctorStoredChannel ??
-      storedChannel ??
-      effectiveChannel ??
-      DEFAULT_PACKAGE_CHANNEL;
-    const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
-    return await updatePluginsAfterCoreUpdate({
-      root,
-      channel: postDoctorChannel,
-      configSnapshot,
-      configChanged: restoredConfig.changed,
-      restoredAuthoredChannels: restoredConfig.authoredChannels,
-      opts: {
-        json: opts.json,
-        timeout: opts.timeout,
-        yes: opts.yes,
-        restart: false,
-        acknowledgeClawHubRisk: opts.acknowledgeClawHubRisk,
-      },
-      timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
-      pluginInstallRecords,
+      configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
+      if (requestedChannel) {
+        configSnapshot = await persistRequestedUpdateChannel({
+          configSnapshot,
+          requestedChannel,
+        });
+      }
+      const restoredConfig = restoreDroppedPreUpdateChannels(configSnapshot, preFinalizeConfig);
+      configSnapshot = restoredConfig.snapshot;
+      const postDoctorStoredChannel = configSnapshot.valid
+        ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
+        : null;
+      const postDoctorChannel =
+        requestedChannel ??
+        postDoctorStoredChannel ??
+        storedChannel ??
+        effectiveChannel ??
+        DEFAULT_PACKAGE_CHANNEL;
+      const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
+      return await updatePluginsAfterCoreUpdate({
+        root,
+        channel: postDoctorChannel,
+        configSnapshot,
+        configChanged: restoredConfig.changed,
+        restoredAuthoredChannels: restoredConfig.authoredChannels,
+        opts: {
+          json: opts.json,
+          timeout: opts.timeout,
+          yes: opts.yes,
+          restart: false,
+          acknowledgeClawHubRisk: opts.acknowledgeClawHubRisk,
+        },
+        timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+        pluginInstallRecords,
+      });
     });
-  });
-  const completedPluginUpdate = await completePostCorePluginUpdate({
-    root,
-    pluginUpdate: initialPluginUpdate,
-    freshDoctorRequired: initialPluginUpdate.changed,
-    yes: opts.yes === true,
-    json: opts.json === true,
-    timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+    return await completePostCorePluginUpdate({
+      root,
+      pluginUpdate: initialPluginUpdate,
+      freshDoctorRequired: initialPluginUpdate.changed,
+      yes: opts.yes === true,
+      json: opts.json === true,
+      timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+    });
   });
   const pluginUpdate = completedPluginUpdate.pluginUpdate;
   configSnapshot = completedPluginUpdate.configSnapshot;
@@ -427,8 +431,9 @@ function stopPostCoreUpdateChild(child: ChildProcess): void {
  */
 export function resolvePostCoreUpdateChildStdio(
   platform: NodeJS.Platform = process.platform,
+  jsonMode = false,
 ): "inherit" | "pipe" {
-  return platform === "win32" ? "pipe" : "inherit";
+  return platform === "win32" || jsonMode ? "pipe" : "inherit";
 }
 
 function preparePostCorePluginInstallRecordsForFreshProcess(params: {
@@ -512,7 +517,8 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
     }
     await writePostCorePluginInstallRecordsFile(installRecordsPath, pluginInstallRecords);
     await writePostCoreSourceConfigFile(sourceConfigPath, params.preUpdateConfig);
-    const childStdio = resolvePostCoreUpdateChildStdio();
+    const jsonMode = params.opts.json === true;
+    const childStdio = resolvePostCoreUpdateChildStdio(process.platform, jsonMode);
     const child = spawn(params.nodeRunner ?? resolveNodeRunner(), argv, {
       stdio: childStdio,
       env: {
@@ -534,9 +540,9 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
           : {}),
       },
     });
-    // When piped, relay child output to the parent process so terminal output is preserved.
+    // JSON callers own stdout, so child diagnostics must remain off that protocol stream.
     if (childStdio === "pipe") {
-      child.stdout?.pipe(process.stdout);
+      child.stdout?.pipe(jsonMode ? process.stderr : process.stdout);
       child.stderr?.pipe(process.stderr);
     }
 

@@ -1,5 +1,6 @@
 package ai.openclaw.app.accessibility
 
+import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.OpenClawTheme
 import android.content.Intent
 import android.os.Bundle
@@ -147,7 +148,11 @@ private fun AccessibilityDevScreen(
     snapshot = observed
     selectedRef = null
     textInput = ""
-    lastResult = ActionResult(ActionOutcomeCode.Completed, "Observed ${observed.nodes.size} nodes")
+    lastResult =
+      ActionResult(
+        ActionOutcomeCode.Completed,
+        nativeString("Observed nodes: \$count", observed.nodes.size),
+      )
     refreshForegroundPackage()
   }
 
@@ -162,7 +167,7 @@ private fun AccessibilityDevScreen(
     cancelDelayedObserve()
     delayedObserveRunning = false
     immediateObserveRunning = true
-    progressMessage = "Observing…"
+    progressMessage = nativeString("Observing…")
     coroutineScope.launch {
       val result = runCatching { captureSnapshot() }
       immediateObserveRunning = false
@@ -179,7 +184,11 @@ private fun AccessibilityDevScreen(
     delayedObserveRunning = true
     startDelayedObserve(
       { remaining ->
-        progressMessage = "Observing in ${remaining}s — switch to the target app"
+        progressMessage =
+          nativeString(
+            "Observing in \${remaining}s — switch to the target app",
+            remaining,
+          )
       },
       { result ->
         delayedObserveRunning = false
@@ -222,6 +231,9 @@ private fun AccessibilityDevScreen(
   val observeRunning = immediateObserveRunning || delayedObserveRunning
   val targetPackageMatches = canRunNodeActions(snapshot?.packageName, foregroundPackageName)
   val nodeActionsEnabled = targetPackageMatches && !observeRunning
+  val snapshotLabel = snapshot?.id ?: nativeString("none")
+  val snapshotPackage = snapshot?.packageName ?: nativeString("none")
+  val foregroundPackage = foregroundPackageName ?: nativeString("unknown")
   Surface(
     modifier =
       Modifier
@@ -234,19 +246,24 @@ private fun AccessibilityDevScreen(
       modifier = Modifier.fillMaxSize().padding(16.dp),
       verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-      Text("Accessibility executor", style = MaterialTheme.typography.headlineSmall)
+      Text(nativeString("Accessibility executor"), style = MaterialTheme.typography.headlineSmall)
       Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
       ) {
         Text(
-          text = if (connected) "Service connected" else "Service disabled",
+          text =
+            if (connected) {
+              nativeString("Service connected")
+            } else {
+              nativeString("Service disabled")
+            },
           color = if (connected) Color(0xFF2E7D32) else MaterialTheme.colorScheme.error,
           modifier = Modifier.weight(1f),
         )
         if (!connected) {
           OutlinedButton(onClick = openAccessibilitySettings) {
-            Text("Open settings")
+            Text(nativeString("Open settings"))
           }
         }
       }
@@ -256,37 +273,44 @@ private fun AccessibilityDevScreen(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
       ) {
         Button(onClick = ::startImmediateObservation, enabled = connected && !observeRunning) {
-          Text("Observe")
+          Text(nativeString("Observe"))
         }
         OutlinedButton(onClick = ::observeDelayed, enabled = connected && !observeRunning) {
-          Text("Observe in 3s")
+          Text(nativeString("Observe in 3s"))
         }
-        GlobalActionButton("Back", connected && !observeRunning) {
+        GlobalActionButton(nativeString("Back"), connected && !observeRunning) {
           actGlobal(GlobalActionName.Back)
         }
-        GlobalActionButton("Home", connected && !observeRunning) {
+        GlobalActionButton(nativeString("Home"), connected && !observeRunning) {
           actGlobal(GlobalActionName.Home)
         }
-        GlobalActionButton("Recents", connected && !observeRunning) {
+        GlobalActionButton(nativeString("Recents"), connected && !observeRunning) {
           actGlobal(GlobalActionName.Recents)
         }
       }
 
       Text(
-        text = "Snapshot: ${snapshot?.id ?: "none"}",
+        text = nativeString("Snapshot: \$snapshotLabel", snapshotLabel),
         style = MaterialTheme.typography.bodySmall,
         fontFamily = FontFamily.Monospace,
       )
       Text(
-        text = "Packages: snapshot=${snapshot?.packageName ?: "none"} foreground=${foregroundPackageName ?: "unknown"}",
+        text =
+          nativeString(
+            "Packages: snapshot=\$snapshotPackage foreground=\$foregroundPackage",
+            snapshotPackage,
+            foregroundPackage,
+          ),
         style = MaterialTheme.typography.bodySmall,
         fontFamily = FontFamily.Monospace,
       )
       Text(
         text =
           progressMessage ?: lastResult?.let { result ->
+            // Action messages are protocol diagnostics; keep them verbatim so UI evidence
+            // matches the mobile.ui result returned to the agent.
             listOfNotNull(result.code.value, result.message).joinToString(" — ")
-          } ?: "No action result",
+          } ?: nativeString("No action result"),
         style = MaterialTheme.typography.bodySmall,
         fontFamily = FontFamily.Monospace,
       )
@@ -346,11 +370,15 @@ private fun SelectedNodeControls(
       modifier = Modifier.padding(12.dp),
       verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-      Text("Selected ${node.ref}", style = MaterialTheme.typography.titleSmall)
+      Text(
+        nativeString("Selected \$reference", node.ref),
+        style = MaterialTheme.typography.titleSmall,
+      )
       if (showTargetMismatchNote) {
         Text(
-          "Node actions run only when the target app is foreground (validated via the remote path). " +
-            "Global actions and same-app actions work here.",
+          nativeString(
+            "Node actions run only when the target app is foreground (validated via the remote path). Global actions and same-app actions work here.",
+          ),
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -361,7 +389,7 @@ private fun SelectedNodeControls(
       ) {
         if ("activate" in node.actions) {
           Button(onClick = { act(MobileUiAction.Activate(node.ref)) }, enabled = actionsEnabled) {
-            Text("Activate")
+            Text(nativeString("Activate"))
           }
         }
         if ("scroll_forward" in node.actions) {
@@ -369,7 +397,7 @@ private fun SelectedNodeControls(
             onClick = { act(MobileUiAction.Scroll(node.ref, ScrollDirection.Forward)) },
             enabled = actionsEnabled,
           ) {
-            Text("Scroll forward")
+            Text(nativeString("Scroll forward"))
           }
         }
         if ("scroll_backward" in node.actions) {
@@ -377,7 +405,7 @@ private fun SelectedNodeControls(
             onClick = { act(MobileUiAction.Scroll(node.ref, ScrollDirection.Backward)) },
             enabled = actionsEnabled,
           ) {
-            Text("Scroll back")
+            Text(nativeString("Scroll back"))
           }
         }
       }
@@ -389,7 +417,7 @@ private fun SelectedNodeControls(
           OutlinedTextField(
             value = textInput,
             onValueChange = onTextInputChange,
-            label = { Text("Text") },
+            label = { Text(nativeString("Text")) },
             singleLine = true,
             enabled = actionsEnabled,
             modifier = Modifier.weight(1f),
@@ -398,7 +426,7 @@ private fun SelectedNodeControls(
             onClick = { act(MobileUiAction.SetText(node.ref, textInput)) },
             enabled = actionsEnabled,
           ) {
-            Text("Set text")
+            Text(nativeString("Set text"))
           }
         }
       }
@@ -417,6 +445,7 @@ private fun NodeRow(
   selected: Boolean,
   onSelect: () -> Unit,
 ) {
+  val selectionMarker = if (selected) "▶ " else ""
   Card(
     modifier = Modifier.fillMaxWidth().clickable(onClick = onSelect),
     shape = RoundedCornerShape(8.dp),
@@ -426,19 +455,43 @@ private fun NodeRow(
       verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
       Text(
-        text = "${if (selected) "▶ " else ""}${node.ref}  ${node.role}",
+        text =
+          selectionMarker +
+            nativeString(
+              "\$reference  \$role",
+              node.ref,
+              node.role,
+            ),
         style = MaterialTheme.typography.titleSmall,
         fontFamily = FontFamily.Monospace,
       )
-      node.text?.let { Text("text: $it", style = MaterialTheme.typography.bodySmall) }
-      node.contentDescription?.let { Text("description: $it", style = MaterialTheme.typography.bodySmall) }
+      node.text?.let {
+        Text(
+          nativeString("text: \$value", it),
+          style = MaterialTheme.typography.bodySmall,
+        )
+      }
+      node.contentDescription?.let {
+        Text(
+          nativeString("description: \$value", it),
+          style = MaterialTheme.typography.bodySmall,
+        )
+      }
       Text(
-        text = "bounds: ${node.boundsInScreen.flattenToString()}",
+        text =
+          nativeString(
+            "bounds: \$value",
+            node.boundsInScreen.flattenToString(),
+          ),
         style = MaterialTheme.typography.bodySmall,
         fontFamily = FontFamily.Monospace,
       )
       Text(
-        text = "actions: ${node.actions.joinToString().ifEmpty { "none" }}",
+        text =
+          nativeString(
+            "actions: \$value",
+            node.actions.joinToString().ifEmpty { nativeString("none") },
+          ),
         style = MaterialTheme.typography.bodySmall,
         fontFamily = FontFamily.Monospace,
       )

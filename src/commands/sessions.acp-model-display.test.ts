@@ -79,7 +79,7 @@ function useTempStateDir(): string {
 function writeAcpRuntimeMeta(sessionKey: string): void {
   writeAcpSessionMetaForMigration({
     sessionKey,
-    sessionId: "acp-bridge-session-id",
+    lifecycleRevision: undefined,
     meta: {
       backend: "copilot",
       agent: "copilot",

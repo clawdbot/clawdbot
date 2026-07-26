@@ -2,16 +2,18 @@ import { describe, expect, it } from "vitest";
 import { resolveSessionResetPolicy, type SessionEntry } from "../../config/sessions.js";
 import { buildAgentSessionPatch } from "./agent-session-patch.js";
 
-function buildPatch(touchInteraction: boolean) {
+function buildPatch(touchInteraction: boolean, opts?: { requestLabel?: string; label?: string }) {
   const now = 1_000;
   const entry: SessionEntry = {
     sessionId: "session",
     updatedAt: now,
     agentStatus: { note: "Need a password", attention: "key", expiresAt: now + 60_000 },
+    ...(opts?.label ? { label: opts.label } : {}),
   };
   return buildAgentSessionPatch({
     freshEntry: entry,
     initialEntry: entry,
+    ...(opts?.requestLabel ? { requestLabel: opts.requestLabel } : {}),
     cfg: {},
     sessionAgentId: "main",
     canonicalSessionKey: "agent:main:main",
@@ -31,59 +33,6 @@ function buildPatch(touchInteraction: boolean) {
 }
 
 describe("agent session patch", () => {
-  it("stamps a creator only when minting a new session", () => {
-    const patch = buildAgentSessionPatch({
-      freshEntry: undefined,
-      initialEntry: undefined,
-      cfg: {},
-      sessionAgentId: "main",
-      canonicalSessionKey: "agent:main:new",
-      storePath: "/tmp/openclaw-agent-creator-test.json",
-      normalizedSpawned: {},
-      requestDeliveryHint: undefined,
-      createdBy: { id: "profile-ada", label: "Ada" },
-      hasRestoredCronContinuation: false,
-      resetPolicy: resolveSessionResetPolicy({ resetType: "direct" }),
-      now: 1_000,
-      isSystemGatewayRun: false,
-      visibleRequest: true,
-      fallbackSessionId: "new-session",
-      touchInteraction: true,
-      failedSessionTranscriptMissing: () => false,
-    }).patch;
-
-    expect(patch.createdBy).toEqual({ id: "profile-ada", label: "Ada" });
-  });
-
-  it("clears a previous creator on an ownerless implicit rotation", () => {
-    const entry: SessionEntry = {
-      createdBy: { id: "profile-ada", label: "Ada" },
-      sessionId: "old-session",
-      updatedAt: 1,
-    };
-    const patch = buildAgentSessionPatch({
-      freshEntry: entry,
-      initialEntry: entry,
-      cfg: {},
-      sessionAgentId: "main",
-      canonicalSessionKey: "agent:main:main",
-      storePath: "/tmp/openclaw-agent-creator-rotation.json",
-      normalizedSpawned: {},
-      requestDeliveryHint: undefined,
-      hasRestoredCronContinuation: false,
-      resetPolicy: resolveSessionResetPolicy({ resetType: "direct" }),
-      now: 2,
-      isSystemGatewayRun: false,
-      visibleRequest: true,
-      fallbackSessionId: "new-session",
-      touchInteraction: true,
-      failedSessionTranscriptMissing: () => true,
-    }).patch;
-
-    expect(Object.hasOwn(patch, "createdBy")).toBe(true);
-    expect(patch.createdBy).toBeUndefined();
-  });
-
   it("clears agent status at the next human interaction boundary", () => {
     const patch = buildPatch(true);
     expect(Object.hasOwn(patch, "agentStatus")).toBe(true);
@@ -92,5 +41,17 @@ describe("agent session patch", () => {
 
   it("does not clear agent status for lifecycle-only patches", () => {
     expect(Object.hasOwn(buildPatch(false), "agentStatus")).toBe(false);
+  });
+
+  // Subagent spawn labels rely on run-start persistence; there is no post-run
+  // label patch anymore (see subagent-announce.ts).
+  it("persists the request label at run start", () => {
+    expect(buildPatch(false, { requestLabel: "Fix flaky auth test" }).label).toBe(
+      "Fix flaky auth test",
+    );
+  });
+
+  it("keeps the existing label when the request has none", () => {
+    expect(buildPatch(false, { label: "Existing" }).label).toBe("Existing");
   });
 });

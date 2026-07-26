@@ -278,6 +278,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   preDynamicStartupStages.mark("app-server-policy");
   preDynamicStartupStages.mark("native-hook-relay");
   const terminalState = {
+    turnSucceeded: false,
     explicitCancellationObserved: false,
     explicitCancellationReason: undefined as unknown,
     terminalOutcomeFrozen: false,

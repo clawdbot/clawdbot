@@ -19,6 +19,7 @@ import {
   type OffloadedRef,
   parseMessageWithAttachments,
   resolveChatAttachmentMaxBytes,
+  stripImageMediaMarkers,
   UnsupportedAttachmentError,
 } from "../chat-attachments.js";
 import { resolveGatewayModelSupportsImages } from "../session-utils.js";
@@ -55,23 +56,6 @@ function logAttachmentFailure(
     error: formatAttachmentFailureForLog(err),
     consoleMessage: `${label}: ${formatForLog(err)}`,
   });
-}
-
-function stripTrailingOffloadedMediaMarkers(message: string, refs: OffloadedRef[]): string {
-  if (refs.length === 0) {
-    return message;
-  }
-  const removableRefs = new Set(refs.map((ref) => ref.mediaRef));
-  const lines = message.split(/\r?\n/);
-  while (lines.length > 0) {
-    const last = lines[lines.length - 1]?.trim() ?? "";
-    const match = /^\[media attached:\s*(media:\/\/inbound\/[^\]\s]+)\]$/.exec(last);
-    if (!match?.[1] || !removableRefs.delete(match[1])) {
-      break;
-    }
-    lines.pop();
-  }
-  return lines.join("\n").trimEnd();
 }
 
 function isPdfOffloadedRef(ref: OffloadedRef): boolean {
@@ -256,21 +240,17 @@ export async function prepareChatSendAttachments(params: {
             supportsSessionModelImages ||
             explicitOriginTargetsAcpSession(explicitOrigin) ||
             explicitOriginTargetsPlugin;
-          const routeImageOffloadsAsMediaPaths = !supportsImages;
           const parsed = await parseMessageWithAttachments(inboundMessage, normalizedAttachments, {
             maxBytes: resolveChatAttachmentMaxBytes(cfg),
             log: context.logGateway,
             supportsImages,
             acceptNonImage: true,
           });
-          parsedMessage = stripTrailingOffloadedMediaMarkers(
-            parsed.message,
-            routeImageOffloadsAsMediaPaths
-              ? parsed.offloadedRefs.filter((ref) => ref.mimeType.startsWith("image/"))
-              : [],
-          );
+          parsedMessage = supportsImages
+            ? parsed.message
+            : stripImageMediaMarkers(parsed.message, parsed.offloadedRefs);
           parsedImages = parsed.images;
-          imageOrder = routeImageOffloadsAsMediaPaths ? [] : parsed.imageOrder;
+          imageOrder = parsed.imageOrder;
           offloadedRefs = parsed.offloadedRefs;
           ({
             paths: mediaPathOffloadPaths,
@@ -278,7 +258,7 @@ export async function prepareChatSendAttachments(params: {
             workspaceDir: mediaPathOffloadWorkspaceDir,
           } = await prestageMediaPathOffloads({
             offloadedRefs,
-            includeImageRefs: routeImageOffloadsAsMediaPaths,
+            includeImageRefs: !supportsImages,
             cfg,
             sessionKey,
             agentId,

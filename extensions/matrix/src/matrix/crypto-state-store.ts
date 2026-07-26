@@ -230,10 +230,10 @@ export function writeMatrixIdbSnapshotJson(params: {
   });
 }
 
-export async function hasMatrixIdbSnapshotStateInStore(params: {
+export async function readMatrixIdbSnapshotJsonFromStore(params: {
   store: Pick<PluginStateKeyedStore<MatrixIdbSnapshotRecord>, "lookup">;
-}): Promise<boolean> {
-  return (await readIdbSnapshotJsonFromAsyncStore(params.store)) !== null;
+}): Promise<string | null> {
+  return await readIdbSnapshotJsonFromAsyncStore(params.store);
 }
 
 export async function writeMatrixIdbSnapshotJsonToStore(params: {

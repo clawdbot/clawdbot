@@ -3,6 +3,7 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { GatewayClientIdSchema, GatewayClientModeSchema, NonEmptyString } from "./primitives.js";
+import { SessionVisibilitySchema } from "./sessions-sharing-values.js";
 import { SnapshotSchema, StateVersionSchema } from "./snapshot.js";
 
 export const GATEWAY_SERVER_CAPS = {
@@ -112,6 +113,11 @@ export const HelloOkSchema = closedObject({
     ),
   ),
   pluginSurfaceUrls: Type.Optional(Type.Record(NonEmptyString, NonEmptyString)),
+  deviceAuthMigration: Type.Optional(
+    closedObject({
+      pending: Type.Literal(true),
+    }),
+  ),
   auth: closedObject({
     deviceToken: Type.Optional(NonEmptyString),
     role: NonEmptyString,
@@ -132,6 +138,8 @@ export const HelloOkSchema = closedObject({
     maxPayload: Type.Integer({ minimum: 1 }),
     maxBufferedBytes: Type.Integer({ minimum: 1 }),
     tickIntervalMs: Type.Integer({ minimum: 1 }),
+    allowedSessionVisibilities: Type.Optional(Type.Array(SessionVisibilitySchema)),
+    hasMultipleSessionSharingIdentities: Type.Optional(Type.Boolean()),
   }),
 });
 

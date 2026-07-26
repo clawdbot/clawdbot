@@ -16,6 +16,7 @@ import {
   type MediaPlaceholderTextFact,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
+import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import {
   asDateTimestampMs,
@@ -508,69 +509,6 @@ export async function attachWebInboxToSocket(
       return (a.receiveOrder ?? 0) - (b.receiveOrder ?? 0);
     });
 
-  const buildFlushIngressLifecycle = (entries: QueuedInboundMessage[]) => {
-    const lifecycles = entries
-      .map((entry) => entry.turnAdoptionLifecycle)
-      .filter((lifecycle) => lifecycle !== undefined);
-    const [firstLifecycle] = lifecycles;
-    if (!firstLifecycle) {
-      return {
-        lifecycle: undefined,
-        settle: async () => {},
-        abandon: async () => {},
-      };
-    }
-    let handedOff = false;
-    const adoptAll = async () => {
-      for (const lifecycle of lifecycles) {
-        await lifecycle.onAdopted();
-      }
-    };
-    return {
-      lifecycle: {
-        abortSignal:
-          lifecycles.length === 1
-            ? firstLifecycle.abortSignal
-            : AbortSignal.any(lifecycles.map((lifecycle) => lifecycle.abortSignal)),
-        onAdopted: async () => {
-          handedOff = true;
-          await adoptAll();
-        },
-        onDeferred: () => {
-          handedOff = true;
-          for (const lifecycle of lifecycles) {
-            lifecycle.onDeferred();
-          }
-        },
-        onAdoptionFinalizing: () => {
-          for (const lifecycle of lifecycles) {
-            lifecycle.onAdoptionFinalizing();
-          }
-        },
-        onAbandoned: async () => {
-          handedOff = true;
-          await Promise.all(
-            lifecycles.map((lifecycle) => Promise.resolve(lifecycle.onAbandoned())),
-          );
-        },
-      } satisfies WhatsAppIngressLifecycle,
-      // Gated or otherwise terminal no-dispatch turns still own every merged claim.
-      settle: async () => {
-        if (!handedOff) {
-          await adoptAll();
-        }
-      },
-      abandon: async () => {
-        if (!handedOff) {
-          handedOff = true;
-          await Promise.all(
-            lifecycles.map((lifecycle) => Promise.resolve(lifecycle.onAbandoned())),
-          );
-        }
-      },
-    };
-  };
-
   const debouncer = createInboundDebouncer<QueuedInboundMessage>({
     debounceMs: inboundDebounceMs,
     buildKey: (msg) => msg.debounceKey ?? buildInboundDebounceKey(msg),
@@ -589,7 +527,9 @@ export async function attachWebInboxToSocket(
         if (!last) {
           return;
         }
-        const { lifecycle, settle, abandon } = buildFlushIngressLifecycle(orderedEntries);
+        const { lifecycle, settle, abandon } = fanInChannelIngressLifecycles(
+          orderedEntries.map((entry) => entry.turnAdoptionLifecycle),
+        );
         try {
           if (orderedEntries.length === 1) {
             await options.onMessage(attachWhatsAppIngressLifecycle(last, lifecycle));

@@ -61,6 +61,11 @@ function resolveWhatsAppTargetInfo(raw: string) {
   };
 }
 
+function resolveWhatsAppMessageActionTarget(params: { args: Record<string, unknown> }) {
+  const chatJid = params.args.chatJid;
+  return typeof chatJid === "string" ? normalizeWhatsAppMessagingTarget(chatJid) : undefined;
+}
+
 export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
   createChatChannelPlugin<ResolvedWhatsAppAccount>({
     pairing: {
@@ -155,6 +160,13 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
           (await loadWhatsAppDirectoryConfig()).listWhatsAppDirectoryGroupsLive(params),
       },
       actions: {
+        messageActionTargetAliases: {
+          react: {
+            aliases: ["chatJid", "messageId"],
+            deliveryTargetAliases: ["chatJid"],
+            resolveDeliveryTarget: resolveWhatsAppMessageActionTarget,
+          },
+        },
         describeMessageTool: ({ cfg, accountId }) =>
           describeWhatsAppMessageActions({ cfg, accountId }),
         supportsAction: ({ action }) => action === "react" || action === "upload-file",

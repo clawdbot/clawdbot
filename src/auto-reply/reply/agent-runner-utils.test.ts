@@ -417,8 +417,8 @@ describe("agent-runner-utils", () => {
       sessionCtx: {
         Provider: "telegram",
         To: "268300329",
-        MediaType: "audio/ogg; codecs=opus",
-        BodyForCommands: "<media:audio>",
+        media: [{ contentType: "audio/ogg; codecs=opus", kind: "audio" }],
+        BodyForCommands: "",
       },
       hasRepliedRef: undefined,
       provider: "openai",

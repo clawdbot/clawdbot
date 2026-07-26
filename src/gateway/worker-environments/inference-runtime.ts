@@ -1,4 +1,5 @@
 import { normalizeCodexResponsesBaseUrlForOpenAISdk } from "@openclaw/ai/transports";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TSchema } from "typebox";
 import type {
   WorkerInferenceContext,
@@ -129,40 +130,6 @@ function resolveWorkerInferenceAuthProfileMode(params: {
   }).profiles[params.profileId]?.type;
 }
 
-export function projectWorkerInferenceModelRouteConfig(params: {
-  config: OpenClawConfig;
-  provider: string;
-  modelId: string;
-  authMode?: string;
-}): OpenClawConfig {
-  const authRequirement = resolveProviderModelRouteAuthRequirement(params.authMode);
-  if (!authRequirement) {
-    return params.config;
-  }
-  const resolution = resolveProviderModelRoutes({
-    provider: params.provider,
-    modelId: params.modelId,
-    config: params.config,
-  });
-  if (resolution?.kind !== "routes") {
-    return params.config;
-  }
-  const route = resolution.routes.find(
-    (candidate) => candidate.authRequirement === authRequirement,
-  );
-  if (!route) {
-    return params.config;
-  }
-  // Worker placement owns the agent harness, while the gateway-owned profile
-  // owns the provider route. Keep those decisions separate or OAuth can be
-  // materialized as a public API-key endpoint and fail before the first token.
-  return projectProviderModelRouteConfig({
-    provider: params.provider,
-    config: params.config,
-    route,
-  });
-}
-
 const ERROR_MESSAGES = {
   "model-not-approved": "Model is not approved for this agent.",
   "invalid-context": "Inference context is invalid.",
@@ -185,10 +152,6 @@ function inferenceError(
     message: ERROR_MESSAGES[reason],
     ...(usage ? { usage: structuredClone(usage) } : {}),
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function copyTool(tool: NonNullable<WorkerInferenceContext["tools"]>[number]): Tool | undefined {
@@ -553,18 +516,36 @@ async function resolveApprovedModel(params: {
           : sessionProfileId
             ? { id: sessionProfileId, source: sessionProfileSource }
             : undefined;
-    const modelConfig = projectWorkerInferenceModelRouteConfig({
-      config: lifecycleConfig,
-      provider: resolved.ref.provider,
-      modelId: resolved.ref.model,
-      authMode: selectedProfile
-        ? dependencies.resolveAuthProfileMode({
-            config: lifecycleConfig,
-            agentDir,
-            profileId: selectedProfile.id,
-          })
-        : undefined,
-    });
+    let modelConfig = lifecycleConfig;
+    const authMode = selectedProfile
+      ? dependencies.resolveAuthProfileMode({
+          config: lifecycleConfig,
+          agentDir,
+          profileId: selectedProfile.id,
+        })
+      : undefined;
+    const authRequirement = resolveProviderModelRouteAuthRequirement(authMode);
+    const routeResolution = authRequirement
+      ? resolveProviderModelRoutes({
+          provider: resolved.ref.provider,
+          modelId: resolved.ref.model,
+          config: lifecycleConfig,
+        })
+      : undefined;
+    const route =
+      routeResolution?.kind === "routes"
+        ? routeResolution.routes.find((candidate) => candidate.authRequirement === authRequirement)
+        : undefined;
+    if (route) {
+      // Worker placement owns the agent harness, while the gateway-owned profile
+      // owns the provider route. Keep those decisions separate or OAuth can be
+      // materialized as a public API-key endpoint and fail before the first token.
+      modelConfig = projectProviderModelRouteConfig({
+        provider: resolved.ref.provider,
+        config: lifecycleConfig,
+        route,
+      });
+    }
     const modelResolver = bindSimpleCompletionModelResolverWorkspace(
       (provider, modelId, resolvedAgentDir, cfg, options) =>
         dependencies.resolveModel(provider, modelId, resolvedAgentDir, cfg, {
@@ -587,7 +568,6 @@ async function resolveApprovedModel(params: {
       ...(selectedProfile ? { preferredProfile: selectedProfile.id } : {}),
       ...(selectedProfile ? { bindAuthOwner: true } : {}),
       allowMissingApiKeyModes: ["aws-sdk"],
-      useAsyncModelResolution: true,
       modelResolver,
     });
     return {

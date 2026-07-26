@@ -569,6 +569,7 @@ async function createBootstrapWarningScenario(workspaceDir: string): Promise<Pro
         bootstrapMaxChars: 1_500,
         bootstrapTotalMaxChars: 2_200,
       },
+      entries: { main: { default: true } },
     },
   } satisfies OpenClawConfig;
   const largeAgents = "# AGENTS.md\n\n" + "Rules.\n".repeat(5_000);

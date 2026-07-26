@@ -23,7 +23,12 @@ import {
   type PluginDoctorStateMigrationDetection,
 } from "../plugins/doctor-contract-registry.js";
 import { resolveLegacyInstalledPluginIndexStorePath } from "../plugins/installed-plugin-index-store.js";
-import { DEFAULT_ACCOUNT_ID, DEFAULT_MAIN_KEY, normalizeAgentId } from "../routing/session-key.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  DEFAULT_MAIN_KEY,
+  LEGACY_IMPLICIT_AGENT_ID,
+  normalizeAgentId,
+} from "../routing/session-key.js";
 import {
   detectOpenClawStateDatabaseSchemaMigrations,
   repairOpenClawStateDatabaseSchema,
@@ -75,6 +80,11 @@ import {
   detectLegacyMcpOAuthStores,
   migrateLegacyMcpOAuthStores,
 } from "./state-migrations.mcp-oauth.js";
+import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
+import {
+  detectLegacyMeetingTranscripts,
+  migrateLegacyMeetingTranscripts,
+} from "./state-migrations.meeting-transcripts.js";
 import { mergeNotices } from "./state-migrations.messages.js";
 import {
   detectLegacyNodeHostConfig,
@@ -278,6 +288,15 @@ function createPluginDoctorStateMigrationContext(
   };
 }
 
+function resolveDoctorStateMigrationAgentId(cfg: OpenClawConfig): string {
+  try {
+    return normalizeAgentId(resolveDefaultAgentId(cfg));
+  } catch {
+    // Detection must still inspect malformed/pre-roster state so Doctor can repair it.
+    return LEGACY_IMPLICIT_AGENT_ID;
+  }
+}
+
 export async function detectLegacyStateMigrations(params: {
   cfg: OpenClawConfig;
   pluginDoctorConfig?: OpenClawConfig;
@@ -292,7 +311,7 @@ export async function detectLegacyStateMigrations(params: {
   const stateDir = resolveStateDir(env, homedir);
   const oauthDir = resolveOAuthDir(env, stateDir);
 
-  const targetAgentId = normalizeAgentId(resolveDefaultAgentId(params.cfg));
+  const targetAgentId = resolveDoctorStateMigrationAgentId(params.cfg);
   const rawMainKey = params.cfg.session?.mainKey;
   const targetMainKey =
     typeof rawMainKey === "string" && rawMainKey.trim().length > 0
@@ -459,6 +478,11 @@ export async function detectLegacyStateMigrations(params: {
   });
   const mcpOauth = detectLegacyMcpOAuthStores({
     stateDir,
+    doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
+  });
+  const meetingTranscripts = detectLegacyMeetingTranscripts({
+    stateDir,
+    env,
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
   });
   const restartSentinel = detectLegacyRestartSentinel({ stateDir });
@@ -657,6 +681,9 @@ export async function detectLegacyStateMigrations(params: {
   if (mcpOauth.hasLegacy) {
     preview.push("- MCP OAuth credentials: legacy JSON → shared SQLite state");
   }
+  if (meetingTranscripts.hasLegacy) {
+    preview.push("- Meeting transcripts: legacy JSON/JSONL files → shared SQLite state");
+  }
   if (restartSentinel.hasLegacy) {
     preview.push("- Restart sentinel: legacy JSON → shared SQLite state");
   }
@@ -767,6 +794,7 @@ export async function detectLegacyStateMigrations(params: {
     deviceAuth,
     deviceIdentity,
     mcpOauth,
+    meetingTranscripts,
     restartSentinel,
     workspace,
     webPush,
@@ -1046,6 +1074,12 @@ export async function runLegacyStateMigrations(params: {
     env,
     stateDir: detected.stateDir,
   });
+  const meetingTranscripts = await migrateLegacyMeetingTranscripts({
+    detected: detected.meetingTranscripts,
+    env,
+    stateDir: detected.stateDir,
+    now,
+  });
   const restartSentinel = await migrateLegacyRestartSentinel({
     detected: detected.restartSentinel,
     env,
@@ -1113,6 +1147,7 @@ export async function runLegacyStateMigrations(params: {
     deviceAuth,
     deviceIdentity,
     mcpOauth,
+    meetingTranscripts,
     restartSentinel,
     workspace,
     webPush,
@@ -1142,6 +1177,7 @@ export async function runLegacyStateMigrations(params: {
       ...deviceAuth.changes,
       ...deviceIdentity.changes,
       ...mcpOauth.changes,
+      ...meetingTranscripts.changes,
       ...restartSentinel.changes,
       ...workspace.changes,
       ...webPush.changes,
@@ -1178,6 +1214,7 @@ export async function runLegacyStateMigrations(params: {
       ...deviceAuth.warnings,
       ...deviceIdentity.warnings,
       ...mcpOauth.warnings,
+      ...meetingTranscripts.warnings,
       ...restartSentinel.warnings,
       ...workspace.warnings,
       ...webPush.warnings,
@@ -1249,6 +1286,22 @@ export async function autoMigrateLegacyState(params: {
       skipped: false,
       changes: [...stateDirResult.changes, ...stateSchema.changes],
       warnings: [...stateDirResult.warnings, ...stateSchema.warnings],
+      ...(stateDirResult.notices?.length ? { notices: stateDirResult.notices } : {}),
+    };
+  }
+  const mediaPersistence =
+    params.doctorOnlyStateMigrations === true
+      ? migrateLegacyMediaPersistence({ env: { ...env, OPENCLAW_STATE_DIR: stateDir } })
+      : { changes: [], warnings: [] };
+  if (mediaPersistence.warnings.length > 0) {
+    return {
+      migrated:
+        stateDirResult.migrated ||
+        stateSchema.changes.length > 0 ||
+        mediaPersistence.changes.length > 0,
+      skipped: false,
+      changes: [...stateDirResult.changes, ...stateSchema.changes, ...mediaPersistence.changes],
+      warnings: [...stateDirResult.warnings, ...stateSchema.warnings, ...mediaPersistence.warnings],
       ...(stateDirResult.notices?.length ? { notices: stateDirResult.notices } : {}),
     };
   }
@@ -1325,6 +1378,12 @@ export async function autoMigrateLegacyState(params: {
     stateDir: detected.stateDir,
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
   });
+  const meetingTranscripts = await migrateLegacyMeetingTranscripts({
+    detected: detected.meetingTranscripts,
+    env,
+    stateDir: detected.stateDir,
+    now: params.now,
+  });
   const hasCustomAgentDir = env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim();
   if (hasCustomAgentDir) {
     const pluginStateSidecar = await migrateLegacyPluginStateSidecar({
@@ -1383,6 +1442,7 @@ export async function autoMigrateLegacyState(params: {
     const changes = [
       ...stateDirResult.changes,
       ...stateSchema.changes,
+      ...mediaPersistence.changes,
       ...configMachineState.changes,
       ...orphanKeys.changes,
       ...acpSessionMetadata.changes,
@@ -1406,6 +1466,7 @@ export async function autoMigrateLegacyState(params: {
     const warnings = [
       ...stateDirResult.warnings,
       ...stateSchema.warnings,
+      ...mediaPersistence.warnings,
       ...configMachineState.warnings,
       ...detected.warnings,
       ...orphanKeys.warnings,
@@ -1434,6 +1495,7 @@ export async function autoMigrateLegacyState(params: {
       updateCheck,
       deviceAuth,
       deviceIdentity,
+      meetingTranscripts,
       restartSentinel,
       pluginPlans,
     ];
@@ -1443,6 +1505,7 @@ export async function autoMigrateLegacyState(params: {
       migrated:
         stateDirResult.migrated ||
         stateSchema.changes.length > 0 ||
+        mediaPersistence.changes.length > 0 ||
         configMachineState.changes.length > 0 ||
         orphanKeys.changes.length > 0 ||
         acpSessionMetadata.changes.length > 0 ||
@@ -1458,6 +1521,7 @@ export async function autoMigrateLegacyState(params: {
         currentConversationBindings.changes.length > 0 ||
         deviceAuth.changes.length > 0 ||
         deviceIdentity.changes.length > 0 ||
+        meetingTranscripts.changes.length > 0 ||
         restartSentinel.changes.length > 0 ||
         channelPairing.changes.length > 0 ||
         preSessionChannelPlans.changes.length > 0 ||
@@ -1492,21 +1556,25 @@ export async function autoMigrateLegacyState(params: {
     const changes = [
       ...stateDirResult.changes,
       ...stateSchema.changes,
+      ...mediaPersistence.changes,
       ...configMachineState.changes,
       ...orphanKeys.changes,
       ...acpSessionMetadata.changes,
       ...deviceAuth.changes,
       ...deviceIdentity.changes,
+      ...meetingTranscripts.changes,
     ];
     const warnings = [
       ...stateDirResult.warnings,
       ...stateSchema.warnings,
+      ...mediaPersistence.warnings,
       ...configMachineState.warnings,
       ...detected.warnings,
       ...orphanKeys.warnings,
       ...acpSessionMetadata.warnings,
       ...deviceAuth.warnings,
       ...deviceIdentity.warnings,
+      ...meetingTranscripts.warnings,
     ];
     const notices = [
       ...(stateDirResult.notices ?? []),
@@ -1519,11 +1587,13 @@ export async function autoMigrateLegacyState(params: {
       migrated:
         stateDirResult.migrated ||
         stateSchema.changes.length > 0 ||
+        mediaPersistence.changes.length > 0 ||
         configMachineState.changes.length > 0 ||
         orphanKeys.changes.length > 0 ||
         acpSessionMetadata.changes.length > 0 ||
         deviceAuth.changes.length > 0 ||
-        deviceIdentity.changes.length > 0,
+        deviceIdentity.changes.length > 0 ||
+        meetingTranscripts.changes.length > 0,
       skipped: false,
       changes,
       warnings,
@@ -1601,6 +1671,7 @@ export async function autoMigrateLegacyState(params: {
   const changes = [
     ...stateDirResult.changes,
     ...stateSchema.changes,
+    ...mediaPersistence.changes,
     ...configMachineState.changes,
     ...orphanKeys.changes,
     ...acpSessionMetadata.changes,
@@ -1616,6 +1687,7 @@ export async function autoMigrateLegacyState(params: {
     ...currentConversationBindings.changes,
     ...deviceAuth.changes,
     ...deviceIdentity.changes,
+    ...meetingTranscripts.changes,
     ...restartSentinel.changes,
     ...channelPairing.changes,
     ...preSessionChannelPlans.changes,
@@ -1628,6 +1700,7 @@ export async function autoMigrateLegacyState(params: {
   const warnings = [
     ...stateDirResult.warnings,
     ...stateSchema.warnings,
+    ...mediaPersistence.warnings,
     ...configMachineState.warnings,
     ...detected.warnings,
     ...orphanKeys.warnings,
@@ -1644,6 +1717,7 @@ export async function autoMigrateLegacyState(params: {
     ...currentConversationBindings.warnings,
     ...deviceAuth.warnings,
     ...deviceIdentity.warnings,
+    ...meetingTranscripts.warnings,
     ...restartSentinel.warnings,
     ...channelPairing.warnings,
     ...preSessionChannelPlans.warnings,
@@ -1660,6 +1734,7 @@ export async function autoMigrateLegacyState(params: {
     updateCheck,
     deviceAuth,
     deviceIdentity,
+    meetingTranscripts,
     restartSentinel,
     pluginPlans,
   ];
