@@ -107,7 +107,6 @@ describe("sessions.send completed subagent follow-up status", () => {
       chatAbortControllers: new Map(),
       broadcastToConnIds,
       getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
-      getSessionMessageSubscriberConnIds: () => new Set(["conn-1"]),
       getRuntimeConfig: () => ({}),
     } as unknown as GatewayRequestContext;
 

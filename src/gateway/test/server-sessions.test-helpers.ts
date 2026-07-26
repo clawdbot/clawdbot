@@ -705,7 +705,6 @@ export async function directSessionReq<TPayload = unknown>(
       chatQueuedTurns: new Map(),
       dedupe: new Map(),
       getSessionEventSubscriberConnIds: () => new Set<string>(),
-      getSessionMessageSubscriberConnIds: () => new Set<string>(),
       loadGatewayModelCatalog: async () => agentDiscoveryMock.models,
       getRuntimeConfig,
       ...opts?.context,

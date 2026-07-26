@@ -133,7 +133,6 @@ test("lists and patches session store via sessions.* RPC", async () => {
     chatQueuedTurns: new Map(),
     dedupe: new Map(),
     getSessionEventSubscriberConnIds: () => new Set<string>(),
-    getSessionMessageSubscriberConnIds: () => new Set<string>(),
     logGateway: { debug: vi.fn() },
     loadGatewayModelCatalog: async () => agentDiscoveryMock.models,
     getRuntimeConfig,

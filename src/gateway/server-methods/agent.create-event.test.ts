@@ -100,7 +100,6 @@ describe("agent handler session create events", () => {
           registerToolEventRecipient: vi.fn(),
           getRuntimeConfig: configMocks.getRuntimeConfig,
           getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
-          getSessionMessageSubscriberConnIds: () => new Set(["conn-1"]),
           broadcastToConnIds,
         } as never,
         client: null,
