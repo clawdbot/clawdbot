@@ -351,7 +351,6 @@ src/acp/translator.ts
 src/agents/acp-spawn-parent-stream.test.ts
 src/agents/acp-spawn-parent-stream.ts
 src/agents/acp-spawn.test.ts
-src/agents/acp-spawn.ts
 src/agents/agent-bundle-mcp-runtime.test.ts
 src/agents/agent-bundle-mcp-runtime.ts
 src/agents/agent-command.live-model-switch.test.ts

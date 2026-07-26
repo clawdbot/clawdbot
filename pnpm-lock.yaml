@@ -311,7 +311,7 @@ importers:
         specifier: 3.3.3
         version: 3.3.3
       lit-analyzer:
-        specifier: ^2.0.3
+        specifier: 2.0.3
         version: 2.0.3
       oxfmt:
         specifier: 0.60.0
@@ -326,7 +326,7 @@ importers:
         specifier: 1.61.1
         version: 1.61.1
       postcss-lit:
-        specifier: ^1.4.1
+        specifier: 1.4.1
         version: 1.4.1(jiti@2.7.0)(postcss@8.5.21)(supports-color@10.2.2)(tsx@4.23.1)(yaml@2.9.0)
       shiki:
         specifier: 4.3.1
@@ -338,10 +338,10 @@ importers:
         specifier: 5.0.0
         version: 5.0.0(supports-color@7.2.0)
       stylelint:
-        specifier: ^17.14.1
+        specifier: 17.14.1
         version: 17.14.1(supports-color@10.2.2)(typescript@6.0.3)
       stylelint-config-recommended:
-        specifier: ^18.0.0
+        specifier: 18.0.0
         version: 18.0.0(stylelint@17.14.1(supports-color@10.2.2)(typescript@6.0.3))
       tsdown:
         specifier: 0.22.1

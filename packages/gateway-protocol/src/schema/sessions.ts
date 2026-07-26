@@ -646,13 +646,20 @@ export const SessionsForkParamsSchema = closedObject({
   entryId: NonEmptyString,
 });
 
+const SessionEditorAttachmentSchema = closedObject({
+  mimeType: Type.String(),
+  data: Type.String(),
+});
+
 export const SessionsRewindResultSchema = closedObject({
   editorText: Type.Optional(Type.String()),
+  editorAttachments: Type.Optional(Type.Array(SessionEditorAttachmentSchema)),
 });
 
 export const SessionsForkResultSchema = closedObject({
   sessionKey: NonEmptyString,
   editorText: Type.Optional(Type.String()),
+  editorAttachments: Type.Optional(Type.Array(SessionEditorAttachmentSchema)),
 });
 
 export const SessionBranchSchema = closedObject({

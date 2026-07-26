@@ -6658,15 +6658,19 @@ public struct SessionsRewindParams: Codable, Sendable {
 
 public struct SessionsRewindResult: Codable, Sendable {
     public let editortext: String?
+    public let editorattachments: [[String: AnyCodable]]?
 
     public init(
-        editortext: String? = nil)
+        editortext: String? = nil,
+        editorattachments: [[String: AnyCodable]]? = nil)
     {
         self.editortext = editortext
+        self.editorattachments = editorattachments
     }
 
     private enum CodingKeys: String, CodingKey {
         case editortext = "editorText"
+        case editorattachments = "editorAttachments"
     }
 }
 
@@ -6695,18 +6699,22 @@ public struct SessionsForkParams: Codable, Sendable {
 public struct SessionsForkResult: Codable, Sendable {
     public let sessionkey: String
     public let editortext: String?
+    public let editorattachments: [[String: AnyCodable]]?
 
     public init(
         sessionkey: String,
-        editortext: String? = nil)
+        editortext: String? = nil,
+        editorattachments: [[String: AnyCodable]]? = nil)
     {
         self.sessionkey = sessionkey
         self.editortext = editortext
+        self.editorattachments = editorattachments
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
         case editortext = "editorText"
+        case editorattachments = "editorAttachments"
     }
 }
 
