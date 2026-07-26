@@ -143,7 +143,7 @@ describe("groupSidebarSessionRows", () => {
       [row({ key: "a", category: "Alpha" }), row({ key: "thread" })],
       { sectionOrder: ["work"] },
     );
-    expect(sections.map((section) => section.id)).toEqual(["work", "category:Alpha", "ungrouped"]);
+    expect(sections.map((section) => section.id)).toEqual(["category:Alpha", "work", "ungrouped"]);
   });
 
   it("keeps the default order for an empty stored order", () => {
