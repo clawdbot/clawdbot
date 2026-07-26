@@ -582,18 +582,18 @@ describe("post-compaction delegate dispatch extraction", () => {
       new URL("./post-compaction-delegate-delivery.ts", import.meta.url),
       "utf8",
     );
-    const restartSource = await fs.readFile(
-      new URL("../../gateway/server-restart-sentinel.ts", import.meta.url),
+    const restartDeliverySource = await fs.readFile(
+      new URL("../../gateway/server-restart-sentinel-delivery.ts", import.meta.url),
       "utf8",
     );
     const combinedSource = `${dispatchSource}\n${deliverySource}`;
 
     expect(dispatchSource).toContain('from "./post-compaction-delegate-delivery.js"');
     expect(deliverySource).not.toContain("post-compaction-delegate-dispatch");
-    expect(restartSource).toContain(
+    expect(restartDeliverySource).toContain(
       'from "../auto-reply/reply/post-compaction-delegate-delivery.js"',
     );
-    expect(restartSource).not.toContain(
+    expect(restartDeliverySource).not.toContain(
       'from "../auto-reply/reply/post-compaction-delegate-dispatch.js"',
     );
     expect(

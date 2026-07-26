@@ -28,6 +28,7 @@ const MONITORED_MODULES = [
   "src/auto-reply/reply/post-compaction-delegate-dispatch.ts",
   "src/auto-reply/reply/post-compaction-delegate-delivery.ts",
   "src/gateway/server-restart-sentinel.ts",
+  "src/gateway/server-restart-sentinel-delivery.ts",
   "src/auto-reply/continuation/delegate-dispatch.ts",
   "src/auto-reply/continuation/delegate-dispatch-recovery.ts",
   "src/auto-reply/continuation/post-compaction-staged-dispatch.ts",
@@ -288,10 +289,14 @@ describe("Project 84 owned topology contract", () => {
     );
     expectEdge(
       "src/gateway/server-restart-sentinel.ts",
+      "src/gateway/server-restart-sentinel-delivery.ts",
+    );
+    expectEdge(
+      "src/gateway/server-restart-sentinel-delivery.ts",
       "src/auto-reply/reply/post-compaction-delegate-delivery.ts",
     );
     expectNoEdge(
-      "src/gateway/server-restart-sentinel.ts",
+      "src/gateway/server-restart-sentinel-delivery.ts",
       "src/auto-reply/reply/post-compaction-delegate-dispatch.ts",
     );
   });
