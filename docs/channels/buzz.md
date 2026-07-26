@@ -89,9 +89,8 @@ disabled; the next setup run offers to reuse that identity.
 Every target room must contain the bot identity with the **Bot** role. An
 existing human member or ordinary room member role is not sufficient.
 
-Buzz desktop's room member picker searches published profiles and cannot add a
-newly generated bare OpenClaw identity by public key. Use the Buzz CLI as the
-existing human room owner or admin:
+Buzz desktop cannot reliably assign the Bot role to an externally managed
+OpenClaw identity. Use the Buzz CLI as the existing human room owner or admin:
 
 ```bash
 buzz channels add-member \
@@ -102,6 +101,16 @@ buzz channels add-member \
 
 Run that command as the existing human owner or admin. Never give OpenClaw that
 human private key.
+
+After the Gateway connects, OpenClaw publishes the configured Buzz channel
+account name as the bot's Buzz display name. If you skip optional account
+naming, the display name defaults to `OpenClaw`. This replaces the shortened
+public key in Buzz after its profile cache refreshes.
+
+Buzz displays `owner unavailable` when the bot profile has no valid NIP-OA
+owner attestation. This does not mean room access failed. When
+`channels.buzz.authTag` is configured, OpenClaw includes that attestation in the
+published profile so Buzz can show the verified human owner.
 
 The local Buzz `just dev` relay does not require separate relay membership by
 default. A hosted or closed relay may require the bot public key to be added to
@@ -196,6 +205,7 @@ Guided setup is recommended. The equivalent configuration looks like:
 {
   channels: {
     buzz: {
+      name: "OpenClaw",
       relayUrl: "wss://buzz.example.com",
       privateKey: "nsec1...",
       groupPolicy: "allowlist",

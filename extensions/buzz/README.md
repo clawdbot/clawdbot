@@ -80,14 +80,18 @@ The guided flow asks for your Buzz relay URL and creates a dedicated bot
 identity by default. Give the displayed **public key only** to a Buzz admin, who
 must add the identity to each room with the **Bot** role.
 
+After the Gateway connects, OpenClaw publishes the Buzz channel account name as
+the bot's Buzz display name. The default is `OpenClaw`. A configured NIP-OA
+`authTag` is preserved in that profile so Buzz can display its verified owner.
+
 OpenClaw immediately attempts authenticated room discovery. If room access is
 not ready, add the bot in Buzz and retry without leaving setup. You can also
 finish later: OpenClaw saves the identity with Buzz disabled, and the next setup
 run offers to reuse it instead of generating another key.
 
 For local Buzz development, `just dev` does not require separate relay
-membership by default. Buzz desktop's room member picker cannot add a newly
-generated bare identity by public key, so add the bot directly with the CLI:
+membership by default. Buzz desktop cannot reliably assign the Bot role to an
+externally managed identity, so add the bot directly with the CLI:
 
 ```bash
 buzz channels add-member \

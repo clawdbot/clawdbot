@@ -270,7 +270,7 @@ async function noteBuzzAccessInstructions(params: {
       `   Bot npub: ${npub}`,
       `   Bot hex public key: ${hex}`,
       "",
-      "Buzz desktop's room member picker searches published profiles and cannot add this newly generated bare identity.",
+      "Buzz desktop cannot reliably assign the Bot role to this externally managed identity.",
       "Use Buzz CLI as the existing human room owner/admin:",
       `buzz channels add-member --channel <ROOM_UUID> --pubkey ${hex} --role bot`,
       "",
@@ -315,6 +315,7 @@ export function createBuzzSetupWizard(
           [
             "You need a Buzz relay URL, a Buzz admin, and at least one target room.",
             "OpenClaw creates a dedicated bot identity and shares only its public key for approval.",
+            "After setup, the Buzz channel account name is published as the bot's Buzz display name.",
             `Docs: ${formatDocsLink("/channels/buzz", "channels/buzz")}`,
           ].join("\n"),
           "Before you set up Buzz",

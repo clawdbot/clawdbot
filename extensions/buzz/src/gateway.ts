@@ -38,6 +38,7 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
     throw new Error("Buzz requires at least one channels.buzz.groups entry");
   }
   const configuredChannelIds = new Set(channelIds);
+  const profileName = account.name?.trim() || "OpenClaw";
 
   let hasAttemptedSession = false;
   let reconnectAttempt = 0;
@@ -58,6 +59,7 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
         relayUrl: account.relayUrl,
         privateKey: account.privateKey,
         authTag: account.authTag,
+        profileName,
         channelIds,
         since: sessionSince,
         signal: ctx.abortSignal,
@@ -77,6 +79,12 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
         },
         onDedupeError: (error) => {
           ctx.log?.error?.(`[${account.accountId}] Buzz replay state failed: ${error.message}`);
+        },
+        onProfilePublished: () => {
+          ctx.log?.info?.(`[${account.accountId}] Buzz bot profile published as "${profileName}"`);
+        },
+        onProfileError: (error) => {
+          ctx.log?.warn?.(`[${account.accountId}] Buzz bot profile sync failed: ${error.message}`);
         },
       });
       connectedAt = Date.now();

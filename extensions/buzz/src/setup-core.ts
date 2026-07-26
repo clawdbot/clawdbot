@@ -4,6 +4,7 @@ import {
   type ChannelSetupInput,
 } from "openclaw/plugin-sdk/channel-setup";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { applyAccountNameToChannelSection } from "openclaw/plugin-sdk/setup";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup-runtime";
 import { decodeBuzzPrivateKey, resolveBuzzPublicKey } from "./types.js";
 
@@ -42,6 +43,13 @@ export function isSameBuzzIdentity(currentKey?: string, nextKey?: string): boole
 
 export const buzzSetupAdapter: ChannelSetupAdapter<BuzzSetupInput> = {
   resolveAccountId: () => DEFAULT_ACCOUNT_ID,
+  applyAccountName: ({ cfg, accountId, name }) =>
+    applyAccountNameToChannelSection({
+      cfg,
+      channelKey: "buzz",
+      accountId,
+      name,
+    }),
   validateInput: ({ accountId, input }) => {
     if (accountId !== DEFAULT_ACCOUNT_ID) {
       return "Buzz currently supports only the default account.";

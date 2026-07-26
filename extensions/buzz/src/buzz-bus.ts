@@ -5,6 +5,7 @@ import {
   parseBuzzMessageEvent,
   type BuzzInboundMessage,
 } from "./message-event.js";
+import { syncBuzzProfile } from "./profile.js";
 import { authenticateBuzzRelay, createBuzzAuthSigner, parseBuzzAuthTag } from "./relay-auth.js";
 import { decodeBuzzPrivateKey, resolveBuzzPublicKey } from "./types.js";
 
@@ -100,6 +101,9 @@ export async function startBuzzBus(options: {
   onMessageError?: (error: Error) => void;
   onFatalError?: (error: Error) => void;
   onDedupeError?: (error: Error) => void;
+  profileName?: string;
+  onProfilePublished?: (eventId: string) => void;
+  onProfileError?: (error: Error) => void;
   signal?: AbortSignal;
 }): Promise<BuzzBus> {
   const secretKey = decodeBuzzPrivateKey(options.privateKey);
@@ -180,6 +184,33 @@ export async function startBuzzBus(options: {
         },
       ),
     );
+    // Profile metadata is presentation-only. Synchronize it after message
+    // subscriptions are live so a slow profile query cannot delay Gateway readiness.
+    if (options.profileName?.trim()) {
+      void syncBuzzProfile({
+        relay,
+        secretKey,
+        publicKey,
+        displayName: options.profileName,
+        authTag,
+        signal: options.signal,
+      })
+        .then((result) => {
+          if (result.status === "published") {
+            options.onProfilePublished?.(result.eventId);
+          }
+        })
+        .catch((error: unknown) => {
+          if (options.signal?.aborted) {
+            return;
+          }
+          options.onProfileError?.(
+            error instanceof Error
+              ? error
+              : new Error("Buzz profile sync failed", { cause: error }),
+          );
+        });
+    }
 
     return bus;
   } catch (error) {
