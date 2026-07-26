@@ -120,7 +120,7 @@ observation-only.
 | ------------------------------- | ---------------------------------------------------------------------------------------- |
 | `before_model_resolve`          | Override provider or model before session messages load                                  |
 | `agent_turn_prepare`            | Consume queued plugin turn injections and add same-turn context before prompt hooks      |
-| `before_prompt_build`           | Add dynamic context or system-prompt text before the model call                          |
+| `before_prompt_build`           | Add prompt context or narrow the current turn's submitted tool surface                   |
 | **`before_agent_run`**          | Inspect the final prompt and session messages before model submission; can block the run |
 | **`before_agent_reply`**        | Short-circuit the model turn with a synthetic reply or silence                           |
 | **`before_agent_finalize`**     | Inspect the natural final answer and request one more model pass                         |
@@ -472,7 +472,14 @@ Use the phase-specific hooks for new plugins:
   Return `prependContext` or `appendContext`.
 - `before_prompt_build`: receives the current prompt and session messages.
   Return `prependContext`, `appendContext`, `systemPrompt`,
-  `prependSystemContext`, or `appendSystemContext`.
+  `prependSystemContext`, `appendSystemContext`, or `toolsAllow`. `toolsAllow`
+  can only narrow the host-resolved tool surface for the current turn; `[]`
+  submits no tools, while omitting it leaves the existing surface unchanged.
+  Restrictions returned by multiple hooks are intersected. The embedded runner
+  and Copilot harness apply this field to their turn-scoped submitted tool
+  surfaces. The Codex app-server harness does not currently alter its
+  thread-scoped dynamic tools because Codex `turn/start` has no dynamic-tool
+  override.
 - `heartbeat_prompt_contribution`: runs only for heartbeat turns and returns
   `prependContext` or `appendContext`. Intended for background monitors that
   need to summarize current state without changing user-initiated turns.

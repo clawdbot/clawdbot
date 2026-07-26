@@ -803,7 +803,7 @@ function shouldForceCopilotMessageTool(params: CopilotToolAttemptParams): boolea
  * so final filtering keeps aliases, groups, plugin policies, and glob
  * semantics identical to the in-tree embedded runner.
  */
-function filterCopilotToolsForAllowlist<T extends { name: string }>(
+export function filterCopilotToolsForAllowlist<T extends { name: string }>(
   tools: T[],
   toolsAllow?: string[],
 ): T[] {
