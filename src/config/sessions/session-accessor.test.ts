@@ -2975,7 +2975,7 @@ describe("session accessor seam", () => {
     await upsertSessionEntry(scope, {
       sessionId: scope.sessionId,
       updatedAt: 10,
-      customTitle: "private entry state",
+      lastRunError: "private entry state",
     });
     let predicateContext: unknown;
 
