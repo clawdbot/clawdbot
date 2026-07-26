@@ -1,5 +1,8 @@
+import { vi } from "vitest";
 import type { AgentEventPayload, AgentEventStream } from "../infra/agent-events.js";
+import { createChatRunState } from "./server-chat-state.js";
 import type { ChatRunRegistration, ChatRunState } from "./server-chat-state.js";
+import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 
 type AgentEventHandler = (event: AgentEventPayload) => void;
 
@@ -18,6 +21,13 @@ type AgentEventCase = readonly [
   data: Record<string, unknown>,
   overrides?: AgentEventOverrides,
 ];
+
+type TextTranscriptEventOptions = {
+  id?: string;
+  parentId?: string | null;
+  timestamp?: number;
+  message?: Record<string, unknown>;
+};
 
 export function emitAgentEvent(
   handler: AgentEventHandler,
@@ -55,4 +65,62 @@ export function registerNamedChatRun(
   overrides: Omit<ChatRunRegistration, "clientRunId" | "sessionKey"> = {},
 ) {
   registerChatRun(state, `run-${name}`, `session-${name}`, `client-${name}`, overrides);
+}
+
+export function createDirectChatContext(
+  overrides: Partial<GatewayRequestContext> = {},
+): GatewayRequestContext {
+  const config = {};
+  return {
+    loadGatewayModelCatalog: vi.fn().mockResolvedValue([]),
+    loadGatewayModelCatalogSnapshot: vi.fn().mockResolvedValue({
+      agentId: "main",
+      agentDir: "/tmp/chat-model-catalog-agent",
+      config,
+      entries: [],
+      routeVariants: [],
+    }),
+    logGateway: {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    },
+    agentRunSeq: new Map(),
+    chatAbortControllers: new Map(),
+    chatRunState: createChatRunState(),
+    addChatRun: vi.fn(),
+    removeChatRun: vi.fn(),
+    broadcast: vi.fn(),
+    broadcastToConnIds: vi.fn(),
+    getSessionEventSubscriberConnIds: () => new Set(),
+    nodeSendToSession: vi.fn(),
+    registerToolEventRecipient: vi.fn(),
+    getRuntimeConfig: () => config,
+    recoveryRuntime: {
+      dispatchAgent: vi.fn(),
+      waitForAgent: vi.fn(),
+      sendRecoveryNotice: vi.fn(),
+    },
+    dedupe: new Map(),
+    ...overrides,
+  } as unknown as GatewayRequestContext;
+}
+
+export function createTextTranscriptEvent(
+  role: "assistant" | "toolResult" | "user",
+  text: string,
+  options: TextTranscriptEventOptions = {},
+) {
+  const { id, parentId, timestamp = Date.now(), message = {} } = options;
+  return {
+    ...(id ? { id } : {}),
+    ...(parentId !== undefined ? { parentId } : {}),
+    message: {
+      role,
+      content: [{ type: "text", text }],
+      timestamp,
+      ...message,
+    },
+  };
 }

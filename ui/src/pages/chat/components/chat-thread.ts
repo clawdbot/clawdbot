@@ -31,13 +31,14 @@ import type {
   ChatStreamSegment,
   MessageGroup,
 } from "../../../lib/chat/chat-types.ts";
-import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import {
-  buildMoreDetailsSideCommand,
-  combineSideChatComposerDraft,
-} from "../../../lib/chat/side-question.ts";
+  buildCompanionQuestionPrefill,
+  buildMoreDetailsCompanionQuestion,
+} from "../../../lib/chat/companion-question.ts";
+import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
+import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalScopeConfigured,
@@ -45,9 +46,10 @@ import {
   resolveUiGlobalAliasAgentId,
   type UiSessionDefaultsHost,
 } from "../../../lib/sessions/session-key.ts";
-import { resolveTurnRecap } from "../chat-progress.ts";
+import { resolveTurnRecap, type TurnRecap } from "../chat-progress.ts";
 import type { ChatRunStartupStatus } from "../chat-run-startup.ts";
 import {
+  assistantGroupCanOwnActiveRunStatus,
   buildCachedChatItems,
   coalesceStreamRuns,
   collapseCompletedTurnWork,
@@ -77,6 +79,8 @@ import {
   renderStreamGroup,
   renderWorkGroupSummary,
   type MessageReplyTarget,
+  type StreamGroupOptions,
+  type StreamGroupPart,
 } from "./chat-message.ts";
 import { renderRealtimeTalkConversation } from "./chat-realtime-controls.ts";
 import { handleChatSelectionPointerUp, removeChatSelectionPopup } from "./chat-selection-popup.ts";
@@ -154,15 +158,13 @@ type ChatThreadProps = {
   onChatScroll?: (event: Event) => void;
   onHistoryIntent?: (event: Event) => void;
   onDraftChange: (next: string) => void;
-  /** Current composer draft; the selection popup preserves it when prefilling. */
-  getDraft?: () => string;
   onSend: () => void;
   onSetReply?: (target: MessageReplyTarget) => void;
   onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
   onForkMessage?: (entryId: string) => Promise<void> | void;
   onFocusComposer?: () => void;
-  /** Sends a detached /btw side question built from the selection popup. */
-  onSideQuestion?: (command: string) => void;
+  onCompanionQuestion?: (question: string) => void;
+  onCompanionPrefill?: (question: string) => void;
   onOpenSession?: (sessionKey: string) => void;
   /** Tasks-rail snapshot backing the post-turn running-tasks status row. */
   backgroundTasks?: BackgroundTasksProps;
@@ -229,13 +231,30 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
     this.threadInnerElement = element instanceof HTMLDivElement ? element : null;
   };
   private readonly measureRowRefs = new Map<string, (element?: Element) => void>();
+  private pruneDetachedRowsQueued = false;
   private measureRowRefFor(key: string): (element?: Element) => void {
     let callback = this.measureRowRefs.get(key);
     if (!callback) {
-      callback = (element?: Element) =>
-        this.virtualizerController
-          .getVirtualizer()
-          .measureElement(element instanceof HTMLElement ? element : null);
+      callback = (element?: Element) => {
+        if (element instanceof HTMLElement) {
+          this.virtualizerController.getVirtualizer().measureElement(element);
+          return;
+        }
+        // Re-stamps (e.g. the chat<->dashboard face switch) re-invoke each
+        // stable row ref as an (undefined, element) pair while the new subtree
+        // is still detached. measureElement(null) prunes every disconnected
+        // row, so calling it synchronously unobserves just-registered sibling
+        // rows and freezes their heights at the old pane width (overlapping
+        // bubbles). Defer until the commit lands so only removed rows prune.
+        if (this.pruneDetachedRowsQueued) {
+          return;
+        }
+        this.pruneDetachedRowsQueued = true;
+        queueMicrotask(() => {
+          this.pruneDetachedRowsQueued = false;
+          this.virtualizerController.getVirtualizer().measureElement(null);
+        });
+      };
       this.measureRowRefs.set(key, callback);
     }
     return callback;
@@ -611,10 +630,6 @@ export function renderChatSearchBar(
   `;
 }
 
-export function isChatThreadSearchOpen(paneId: string): boolean {
-  return getChatThreadState(paneId).searchOpen;
-}
-
 export function toggleChatThreadSearch(paneId: string, requestUpdate: () => void): void {
   const state = getChatThreadState(paneId);
   state.searchOpen = !state.searchOpen;
@@ -734,12 +749,7 @@ function removeReplyContextMenu(paneId?: string) {
 
 function stableReplyMessageId(senderLabel: string | undefined, text: string): string {
   const source = `${senderLabel ?? ""}\n${text}`;
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < source.length; index += 1) {
-    hash ^= source.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return `reply:${(hash >>> 0).toString(16)}`;
+  return `reply:${fnv1aUtf16(source).toString(16)}`;
 }
 
 function createReplyContextMenuButton(onClick: () => void): HTMLButtonElement {
@@ -772,22 +782,23 @@ function createMessageActionContextButton(params: {
 }
 
 function handleChatThreadSelectionPointerUp(event: PointerEvent, props: ChatThreadProps) {
-  if (typeof props.onSideQuestion !== "function") {
+  if (
+    typeof props.onCompanionQuestion !== "function" ||
+    typeof props.onCompanionPrefill !== "function"
+  ) {
     return;
   }
   handleChatSelectionPointerUp(event, {
     onMoreDetails: (selection) => {
-      const command = buildMoreDetailsSideCommand(selection);
-      if (command) {
-        props.onSideQuestion?.(command);
+      const question = buildMoreDetailsCompanionQuestion(selection);
+      if (question) {
+        props.onCompanionQuestion?.(question);
       }
     },
     onAskSideChat: (selection) => {
-      const draft = combineSideChatComposerDraft(selection, props.getDraft?.());
-      if (draft) {
-        props.onDraftChange(draft);
-        props.onRequestUpdate?.();
-        props.onFocusComposer?.();
+      const question = buildCompanionQuestionPrefill(selection);
+      if (question) {
+        props.onCompanionPrefill?.(question);
       }
     },
   });
@@ -1117,10 +1128,22 @@ function trackTranscriptRenderDependencies(
   return dependencies;
 }
 
-function guardChatRenderItems(state: ChatThreadState, render: (item: ChatRenderItem) => unknown) {
+function guardChatRenderItems(
+  state: ChatThreadState,
+  // Turn status ownership is decided by sibling rows, not by the owning row's
+  // own content: an unchanged reply that gains or loses the embedded working
+  // row / recap must re-render, or the stale copy stacks with the new owner.
+  statusOwnership: (item: ChatRenderItem) => string,
+  render: (item: ChatRenderItem) => unknown,
+) {
   return (item: ChatRenderItem) =>
-    guard([...chatRenderItemGuardDependencies(item), state.transcriptRenderContext], () =>
-      render(item),
+    guard(
+      [
+        ...chatRenderItemGuardDependencies(item),
+        state.transcriptRenderContext,
+        statusOwnership(item),
+      ],
+      () => render(item),
     );
 }
 
@@ -1221,6 +1244,11 @@ function renderChatThreadContents(
   const showLoadingSkeleton = props.loading && chatItems.length === 0;
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
+  const activeContinuationByGroupKey = new Map<
+    string,
+    { parts: StreamGroupPart[]; options: StreamGroupOptions }
+  >();
+  const turnRecapByGroupKey = new Map<string, TurnRecap>();
   const renderGroupItem = (item: MessageGroup) => {
     if (deleted.has(item.key)) {
       return nothing;
@@ -1285,9 +1313,23 @@ function renderChatThreadContents(
             }
           : undefined,
       rewindDisabled: Boolean(props.runActive || props.runWorking),
+      activeContinuation: activeContinuationByGroupKey.get(item.key),
+      turnRecap: turnRecapByGroupKey.get(item.key),
     });
   };
-  const renderItem = guardChatRenderItems(state, (item) => {
+  const statusOwnershipSignature = (item: ChatRenderItem): string => {
+    if (item.kind !== "group") {
+      return "";
+    }
+    const continuation = activeContinuationByGroupKey.get(item.key);
+    const recap = turnRecapByGroupKey.get(item.key);
+    // Part keys stand in for the continuation: its options mirror props that
+    // already invalidate every row through the shared render context.
+    return `${continuation?.parts.map((part) => part.key).join(" ") ?? ""}|${
+      recap ? `${recap.runtimeMs}:${recap.outputTokens ?? ""}` : ""
+    }`;
+  };
+  const renderItem = guardChatRenderItems(state, statusOwnershipSignature, (item) => {
     if (item.kind === "divider") {
       return renderChatDivider(item, props.onOpenSessionCheckpoints);
     }
@@ -1336,7 +1378,54 @@ function renderChatThreadContents(
     runWorking: Boolean(props.runWorking),
     searchActive: state.searchOpen && Boolean(state.searchQuery.trim()),
   });
-  const transcriptRows: ChatTranscriptRow[] = collapsedItems.map((item) => ({
+  // Watch/settle on actual indicator visibility (not runWorking): queued
+  // sends show the claw before the run starts, and the recap must never
+  // stack under a visible working row.
+  const workingIndicatorVisible = chatItems.some((item) => item.kind === "reading-indicator");
+  const turnRecap = resolveTurnRecap(props.sessionKey, workingIndicatorVisible, activeSession);
+  const transcriptItems = collapsedItems.filter((item, index) => {
+    if (item.kind !== "stream-run") {
+      return true;
+    }
+    const previous = collapsedItems[index - 1];
+    const isActiveStatusRun =
+      item.parts.some((part) => part.kind === "reading-indicator") &&
+      item.parts.every((part) => part.kind === "reading-indicator" || part.kind === "plan");
+    if (
+      previous?.kind !== "group" ||
+      !isActiveStatusRun ||
+      deleted.has(previous.key) ||
+      !assistantGroupCanOwnActiveRunStatus(previous)
+    ) {
+      return true;
+    }
+    // A reply and its still-running state are one turn-level presentation.
+    // Keeping the status in the reply avoids a second claw/assistant row.
+    activeContinuationByGroupKey.set(previous.key, {
+      parts: item.parts,
+      options: {
+        planStatus: props.planStatus,
+        planActive: Boolean(props.runActive),
+        startupPhase: props.startupStatus?.phase,
+        waitingApproval: props.waitingApproval,
+        runOutputTokens: props.runOutputTokens,
+      },
+    });
+    return false;
+  });
+  let turnRecapOwnerKey: string | null = null;
+  if (turnRecap !== null) {
+    const lastItem = transcriptItems.at(-1);
+    if (
+      lastItem?.kind === "group" &&
+      !deleted.has(lastItem.key) &&
+      assistantGroupCanOwnActiveRunStatus(lastItem)
+    ) {
+      turnRecapByGroupKey.set(lastItem.key, turnRecap);
+      turnRecapOwnerKey = lastItem.key;
+    }
+  }
+  const transcriptRows: ChatTranscriptRow[] = transcriptItems.map((item) => ({
     kind: "item",
     key: item.key,
     item,
@@ -1349,12 +1438,7 @@ function renderChatThreadContents(
       content: realtimeConversation,
     });
   }
-  // Watch/settle on actual indicator visibility (not runWorking): queued
-  // sends show the claw before the run starts, and the recap must never
-  // stack under a visible working row.
-  const workingIndicatorVisible = chatItems.some((item) => item.kind === "reading-indicator");
-  const turnRecap = resolveTurnRecap(props.sessionKey, workingIndicatorVisible, activeSession);
-  if (turnRecap !== null && !isEmpty && !showLoadingSkeleton) {
+  if (turnRecap !== null && turnRecapOwnerKey === null && !isEmpty && !showLoadingSkeleton) {
     transcriptRows.push({
       kind: "content",
       key: "turn-recap",

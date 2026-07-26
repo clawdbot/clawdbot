@@ -4,11 +4,15 @@ import path from "node:path";
 import {
   encodeIosAppStoreVersion,
   extractChangelogSection,
+  MAX_IOS_APP_STORE_REVISION,
   normalizeIosAppStoreRevision,
   normalizePinnedIosVersion,
 } from "./ios-version.ts";
 
 const IOS_BUILD_UPLOAD_STATES = ["AWAITING_UPLOAD", "PROCESSING", "FAILED", "COMPLETE"] as const;
+// 2026.7.2 is the last exact-version iOS release in App Store Connect.
+// Later exact CalVer values must not be confused with appended revision versions.
+const LAST_LEGACY_IOS_APP_STORE_VERSION = "2026.7.2";
 
 const EDITABLE_APP_STORE_VERSION_STATES = new Set([
   "PREPARE_FOR_SUBMISSION",
@@ -27,13 +31,13 @@ const RELEASED_APP_STORE_VERSION_STATES = new Set([
   "DEVELOPER_REMOVED_FROM_SALE",
 ]);
 
-export type IosRemoteAppStoreVersion = {
+type IosRemoteAppStoreVersion = {
   id: string;
   state: string;
   versionString: string;
 };
 
-export type IosRemoteBuildUpload = {
+type IosRemoteBuildUpload = {
   buildNumber: string;
   shortVersion: string;
   state: string;
@@ -100,20 +104,27 @@ export function decodeIosAppStoreVersion(
   gatewayVersion: string,
   appStoreVersion: string,
 ): DecodedVersion | null {
-  const gateway = parseVersionComponents(normalizePinnedIosVersion(gatewayVersion));
+  const canonicalGatewayVersion = normalizePinnedIosVersion(gatewayVersion);
+  const gateway = parseVersionComponents(canonicalGatewayVersion);
   const candidate = parseVersionComponents(appStoreVersion);
   if (!gateway || !candidate || gateway[0] !== candidate[0] || gateway[1] !== candidate[1]) {
     return null;
   }
   if (candidate[2] === gateway[2]) {
-    return { legacy: true, revision: 0 };
+    return compareAppStoreVersions(canonicalGatewayVersion, LAST_LEGACY_IOS_APP_STORE_VERSION) <= 0
+      ? { legacy: true, revision: 0 }
+      : null;
   }
-  const firstPackedPatch = gateway[2] * 100;
-  const revision = candidate[2] - firstPackedPatch;
-  if (revision < 0 || revision > 99) {
+  const gatewayPatch = gateway[2].toString();
+  const candidatePatch = candidate[2].toString();
+  if (!candidatePatch.startsWith(gatewayPatch)) {
     return null;
   }
-  return { legacy: false, revision };
+  const revision = candidatePatch.slice(gatewayPatch.length);
+  if (!/^\d$/u.test(revision)) {
+    return null;
+  }
+  return { legacy: false, revision: Number(revision) };
 }
 
 function normalizeBuildNumber(rawBuildNumber: string): number {
@@ -269,8 +280,10 @@ export function resolveIosReleasePlan(input: IosReleasePlanInput): IosReleasePla
     }
   }
 
-  if (revision > 99) {
-    throw new Error(`Gateway ${gatewayVersion} has exhausted App Store revisions 0 through 99.`);
+  if (revision > MAX_IOS_APP_STORE_REVISION) {
+    throw new Error(
+      `Gateway ${gatewayVersion} has exhausted App Store revisions 0 through ${MAX_IOS_APP_STORE_REVISION}.`,
+    );
   }
 
   const appStoreVersion = encodeIosAppStoreVersion(gatewayVersion, revision);

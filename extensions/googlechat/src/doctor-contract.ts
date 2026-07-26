@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   asObjectRecord,
   defineChannelAliasMigration,
+  defineKeyMoveMigration,
   hasLegacyAccountStreamingAliases,
   normalizeChannelConfigEntries,
 } from "openclaw/plugin-sdk/runtime-doctor";
@@ -30,43 +31,11 @@ function hasRetiredReactions(value: unknown): boolean {
   return Object.hasOwn(asObjectRecord(asObjectRecord(value)?.actions) ?? {}, "reactions");
 }
 
-function hasLegacyGoogleChatGroupAllowAlias(value: unknown): boolean {
-  const groups = asObjectRecord(asObjectRecord(value)?.groups);
-  if (!groups) {
-    return false;
-  }
-  return Object.values(groups).some((group) => Object.hasOwn(asObjectRecord(group) ?? {}, "allow"));
-}
-
-function normalizeGoogleChatGroups(params: {
-  groups: Record<string, unknown>;
-  pathPrefix: string;
-  changes: string[];
-}): { groups: Record<string, unknown>; changed: boolean } {
-  let changed = false;
-  const nextGroups = { ...params.groups };
-  for (const [groupId, groupValue] of Object.entries(params.groups)) {
-    const group = asObjectRecord(groupValue);
-    if (!group || !Object.hasOwn(group, "allow")) {
-      continue;
-    }
-    const nextGroup = { ...group };
-    if (nextGroup.enabled === undefined) {
-      nextGroup.enabled = group.allow;
-      params.changes.push(
-        `Moved ${params.pathPrefix}.${groupId}.allow → ${params.pathPrefix}.${groupId}.enabled.`,
-      );
-    } else {
-      params.changes.push(
-        `Removed ${params.pathPrefix}.${groupId}.allow (${params.pathPrefix}.${groupId}.enabled already set).`,
-      );
-    }
-    delete nextGroup.allow;
-    nextGroups[groupId] = nextGroup;
-    changed = true;
-  }
-  return { groups: nextGroups, changed };
-}
+const groupAllowMigration = defineKeyMoveMigration({
+  scope: ["groups", "*"],
+  from: ["allow"],
+  to: ["enabled"],
+});
 
 function normalizeGoogleChatEntry(params: {
   entry: Record<string, unknown>;
@@ -98,18 +67,9 @@ function normalizeGoogleChatEntry(params: {
     changed = true;
   }
 
-  const groups = asObjectRecord(updated.groups);
-  if (groups) {
-    const normalized = normalizeGoogleChatGroups({
-      groups,
-      pathPrefix: `${params.pathPrefix}.groups`,
-      changes: params.changes,
-    });
-    if (normalized.changed) {
-      updated = { ...updated, groups: normalized.groups };
-      changed = true;
-    }
-  }
+  const groups = groupAllowMigration.normalize({ ...params, entry: updated });
+  updated = groups.entry;
+  changed = changed || groups.changed;
 
   return { entry: updated, changed };
 }
@@ -142,13 +102,13 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
     path: ["channels", "googlechat"],
     message:
       'channels.googlechat.groups.<id>.allow is legacy; use channels.googlechat.groups.<id>.enabled instead. Run "openclaw doctor --fix".',
-    match: hasLegacyGoogleChatGroupAllowAlias,
+    match: groupAllowMigration.hasLegacy,
   },
   {
     path: ["channels", "googlechat", "accounts"],
     message:
       'channels.googlechat.accounts.<id>.groups.<id>.allow is legacy; use channels.googlechat.accounts.<id>.groups.<id>.enabled instead. Run "openclaw doctor --fix".',
-    match: (value) => hasLegacyAccountStreamingAliases(value, hasLegacyGoogleChatGroupAllowAlias),
+    match: (value) => hasLegacyAccountStreamingAliases(value, groupAllowMigration.hasLegacy),
   },
   ...streamingAliasMigration.legacyConfigRules,
 ];

@@ -18,13 +18,13 @@ the active release identity from the repository and App Store Connect.
 An iOS release has three independent identifiers:
 
 - gateway version `G = YYYY.M.P`, for example `2026.7.2`
-- App Store revision `R`, an integer from `0` through `99`
+- App Store revision `R`, a single digit from `0` through `9`
 - build number `B`, a positive integer scoped to the exact App Store version
 
-The App Store version packs the revision into the third numeric component:
+The App Store version appends the revision directly to the gateway patch with no padding:
 
 ```text
-AppStoreVersion(G, R) = YYYY.M.(P * 100 + R)
+AppStoreVersion(G, R) = YYYY.M.concat(P, R)
 ```
 
 Examples:
@@ -32,13 +32,15 @@ Examples:
 | Gateway | Revision | App Store version | Candidate builds |
 | --- | ---: | --- | --- |
 | `2026.7.2` | legacy `0` | `2026.7.2` | closed history |
-| `2026.7.2` | `1` | `2026.7.201` | `1`, `2`, `3` |
-| `2026.7.2` | `2` | `2026.7.202` | `1`, `2`, ... |
-| `2026.7.3` | `0` | `2026.7.300` | `1`, `2`, ... |
+| `2026.7.2` | `1` | `2026.7.21` | `1`, `2`, `3` |
+| `2026.7.2` | `2` | `2026.7.22` | `1`, `2`, ... |
+| `2026.7.3` | `0` | `2026.7.30` | `1`, `2`, ... |
 
-Historical exact versions are grandfathered as read-only release history. The
-release tooling does not target them again. All future uploads use the packed
-format, including revision zero.
+Historical exact versions through `2026.7.2` are grandfathered as read-only
+release history and consume revision zero for their gateway. That explicit
+cutover keeps later appended versions such as `2026.7.21` from being mistaken
+for a future gateway's exact legacy release. The release tooling does not target
+exact versions again; all future uploads use the appended single-digit format.
 
 ## Release commands
 
@@ -69,12 +71,12 @@ pnpm ios:release:archive -- --version 2026.7.2 --revision 1 --build-number 3
 Gateway `2026.7.2`, revision `1`, build `3` maps to:
 
 - `OpenClawCanonicalVersion = 2026.7.2`
-- `CFBundleShortVersionString = 2026.7.201`
+- `CFBundleShortVersionString = 2026.7.21`
 - `CFBundleVersion = 3`
 
 Local development builds continue using the normalized gateway version as the
 marketing version. Release preparation supplies the explicit revision and
-therefore the packed App Store version.
+therefore the appended App Store version.
 
 ## Revision and build lifecycle
 
@@ -109,7 +111,7 @@ processing, then fails the attempt rather than polling indefinitely.
 Production release notes require an exact App Store version heading:
 
 ```markdown
-## 2026.7.201
+## 2026.7.21
 
 - Fixed an iOS issue.
 ```
@@ -171,7 +173,7 @@ refs/openclaw/mobile-releases/ios/<CFBundleShortVersionString>-<CFBundleVersion>
 For example:
 
 ```text
-refs/openclaw/mobile-releases/ios/2026.7.201-3
+refs/openclaw/mobile-releases/ios/2026.7.21-3
 ```
 
 The ref is checked before archive/upload work and created only after App Store

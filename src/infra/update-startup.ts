@@ -10,6 +10,10 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  refreshRemoteModelCatalog,
+  REMOTE_MODEL_CATALOG_TTL_MS,
+} from "../model-catalog/remote-refresh.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -772,9 +776,10 @@ export function scheduleGatewayUpdateCheck(params: {
   isNixMode: boolean;
   onUpdateAvailableChange?: (updateAvailable: UpdateAvailable | null) => void;
 }): () => void {
+  const stopRemoteCatalogRefresh = scheduleRemoteModelCatalogRefresh(params);
   const channel = normalizeUpdateChannel(params.cfg.update?.channel) ?? DEFAULT_PACKAGE_CHANNEL;
   if (channel === "extended-stable" && params.cfg.update?.checkOnStart === false) {
-    return () => {};
+    return stopRemoteCatalogRefresh;
   }
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -803,7 +808,60 @@ export function scheduleGatewayUpdateCheck(params: {
 
   void tick();
   return () => {
+    stopRemoteCatalogRefresh();
     stopped = true;
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
+}
+
+function scheduleRemoteModelCatalogRefresh(params: {
+  cfg: OpenClawConfig;
+  log: { info: (msg: string, meta?: Record<string, unknown>) => void };
+}): () => void {
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let running = false;
+  let activeAbortController: AbortController | null = null;
+  const tick = async () => {
+    if (stopped || running) {
+      return;
+    }
+    running = true;
+    const abortController = new AbortController();
+    activeAbortController = abortController;
+    const result = await refreshRemoteModelCatalog({
+      config: params.cfg,
+      signal: abortController.signal,
+    });
+    if (activeAbortController === abortController) {
+      activeAbortController = null;
+    }
+    running = false;
+    if (stopped) {
+      return;
+    }
+    if (result.status === "error") {
+      params.log.info("remote model catalog refresh failed", { error: result.error });
+    } else if (result.status === "updated") {
+      params.log.info("remote model catalog updated; restart the Gateway to apply it", {
+        providers: result.providers,
+        models: result.models,
+        generatedAt: result.generatedAt,
+      });
+    }
+    const nextCheckInMs =
+      result.status === "fresh" ? result.nextCheckInMs : REMOTE_MODEL_CATALOG_TTL_MS;
+    timer = setTimeout(() => void tick(), nextCheckInMs);
+    timer.unref?.();
+  };
+  void tick();
+  return () => {
+    stopped = true;
+    activeAbortController?.abort();
+    activeAbortController = null;
     if (timer) {
       clearTimeout(timer);
       timer = null;

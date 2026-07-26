@@ -164,8 +164,8 @@ Versioning rules:
 - explicit `--version`, `--revision`, and `--build-number` values are checked overrides
 - `apps/ios/CHANGELOG.md` is the iOS-only changelog and release-note source
 - Gateway versions use CalVer: `YYYY.M.D`
-- Fastlane derives the App Store version as `YYYY.M.(D * 100 + revision)`
-- Gateway `2026.7.2`, revision `1` sets `CFBundleShortVersionString` to `2026.7.201`
+- Fastlane appends one unpadded revision digit: gateway `YYYY.M.D`, revision `R`, becomes `YYYY.M.DR`
+- Gateway `2026.7.2`, revision `1` sets `CFBundleShortVersionString` to `2026.7.21`
 - Fastlane resolves `CFBundleVersion` from the maximum awaiting, processing, failed, or complete build-upload record plus one
 - Run `pnpm ios:release:cut` after changing `## Unreleased`, then review and commit the exact encoded heading
 - `pnpm ios:version:check` validates that release notes can be generated from the iOS changelog

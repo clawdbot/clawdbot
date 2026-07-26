@@ -47,7 +47,13 @@ function applyLearnPromptToContext(ctx: HandleCommandsParams["ctx"], instruction
     BodyForCommands?: string;
     BodyForAgent?: string;
     BodyStripped?: string;
+    commandText?: string;
+    agentText?: string;
+    rawText?: string;
   };
+  mutableCtx.commandText = instruction;
+  mutableCtx.agentText = instruction;
+  mutableCtx.rawText = instruction;
   mutableCtx.Body = instruction;
   mutableCtx.RawBody = instruction;
   mutableCtx.CommandBody = instruction;

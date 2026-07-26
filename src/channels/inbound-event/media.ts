@@ -64,7 +64,10 @@ export function formatMediaPlaceholderText(media: readonly MediaPlaceholderTextF
     : `${tag} (${media.length} ${PLURAL_MEDIA_PLACEHOLDER_LABELS[kind]})`;
 }
 
-/** Legacy environment fields consumed by prompt/context builders. */
+/**
+ * Legacy environment fields consumed by prompt/context builders.
+ * @deprecated Pass ordered `InboundMediaFacts[]` as the context's `media` field.
+ */
 export type ChannelInboundMediaPayload = {
   [Key in keyof MediaFactLegacyProjection]: MediaFactLegacyProjection[Key];
 };
@@ -111,7 +114,10 @@ export function toHistoryMediaEntries(
   }));
 }
 
-/** Builds the legacy singular/plural environment projection. */
+/**
+ * Builds the legacy singular/plural environment projection.
+ * @deprecated Pass ordered facts as `media`; use `toInboundMediaFacts` to normalize inputs.
+ */
 export function buildChannelInboundMediaPayload(
   media: readonly InboundMediaFacts[] | null | undefined,
 ): ChannelInboundMediaPayload {

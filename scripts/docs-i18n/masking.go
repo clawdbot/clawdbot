@@ -354,7 +354,7 @@ func hasCompositeNumericLeadingContinuation(text string, position int) bool {
 		}
 		return position > 0 && isCompositeNumericWordByte(text[position-1])
 	}
-	return value == '.' || value == '-' || isCompositeNumericWordByte(value)
+	return value == '.' || isCompositeNumericWordByte(value)
 }
 
 func hasCompositeNumericContinuation(text string, position int) bool {

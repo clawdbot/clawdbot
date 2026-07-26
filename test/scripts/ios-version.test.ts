@@ -113,7 +113,7 @@ describe("resolveIosVersion", () => {
   it("prints an encoded App Store version for an explicit gateway revision", () => {
     const rootDir = writeIosFixture({
       packageVersion: "2026.7.2",
-      changelog: "# OpenClaw iOS Changelog\n\n## 2026.7.201\n\nRevision notes.\n",
+      changelog: "# OpenClaw iOS Changelog\n\n## 2026.7.21\n\nRevision notes.\n",
     });
     const result = spawnSync(
       process.execPath,
@@ -134,7 +134,7 @@ describe("resolveIosVersion", () => {
     );
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toBe("2026.7.201\n");
+    expect(result.stdout).toBe("2026.7.21\n");
     expect(result.stderr).toBe("");
   });
 
@@ -212,19 +212,19 @@ describe("resolveIosVersion", () => {
     });
   });
 
-  it("encodes App Store revisions into the gateway patch component", () => {
-    expect(encodeIosAppStoreVersion("2026.7.2", 0)).toBe("2026.7.200");
-    expect(encodeIosAppStoreVersion("2026.7.2", 1)).toBe("2026.7.201");
-    expect(encodeIosAppStoreVersion("2026.7.2", 99)).toBe("2026.7.299");
-    expect(encodeIosAppStoreVersion("2026.7.3", 0)).toBe("2026.7.300");
-    expect(encodeIosAppStoreVersion("2026.12.33", 4)).toBe("2026.12.3304");
+  it("appends one unpadded App Store revision digit to the gateway patch", () => {
+    expect(encodeIosAppStoreVersion("2026.7.2", 0)).toBe("2026.7.20");
+    expect(encodeIosAppStoreVersion("2026.7.2", 1)).toBe("2026.7.21");
+    expect(encodeIosAppStoreVersion("2026.7.2", 9)).toBe("2026.7.29");
+    expect(encodeIosAppStoreVersion("2026.7.3", 0)).toBe("2026.7.30");
+    expect(encodeIosAppStoreVersion("2026.12.33", 4)).toBe("2026.12.334");
   });
 
   it("rejects invalid App Store revisions", () => {
-    expect(() => normalizeIosAppStoreRevision("-1")).toThrow("integer from 0 to 99");
-    expect(() => normalizeIosAppStoreRevision("01")).toThrow("integer from 0 to 99");
-    expect(() => normalizeIosAppStoreRevision("100")).toThrow("integer from 0 to 99");
-    expect(() => normalizeIosAppStoreRevision("1.5")).toThrow("integer from 0 to 99");
+    expect(() => normalizeIosAppStoreRevision("-1")).toThrow("integer from 0 to 9");
+    expect(() => normalizeIosAppStoreRevision("01")).toThrow("integer from 0 to 9");
+    expect(() => normalizeIosAppStoreRevision("10")).toThrow("integer from 0 to 9");
+    expect(() => normalizeIosAppStoreRevision("1.5")).toThrow("integer from 0 to 9");
   });
 
   it("rejects semver-only package versions", () => {
@@ -306,7 +306,7 @@ describe("release note extraction", () => {
 
 Draft notes.
 
-## 2026.7.201
+## 2026.7.21
 
 - App Store revision notes.
 `,
@@ -334,7 +334,7 @@ Draft notes.
     const changelog = fs.readFileSync(path.join(rootDir, "apps", "ios", "CHANGELOG.md"), "utf8");
 
     expect(() => renderIosReleaseNotes(version, changelog)).toThrow(
-      "Unable to find iOS changelog notes for 2026.7.201",
+      "Unable to find iOS changelog notes for 2026.7.21",
     );
   });
 

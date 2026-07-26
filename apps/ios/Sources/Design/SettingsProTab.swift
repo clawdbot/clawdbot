@@ -193,6 +193,9 @@ struct SettingsProTab: View {
                     self.refreshNotificationSettings()
                 }
             }
+            .onChange(of: self.appModel.locationAuthorizationSnapshot) { _, _ in
+                self.refreshLocationPermissionSummary()
+            }
             .onChange(of: self.locationModeRaw) { _, newValue in
                 self.handleLocationModeChange(newValue)
             }

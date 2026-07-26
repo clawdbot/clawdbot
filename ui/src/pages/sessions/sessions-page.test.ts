@@ -83,6 +83,7 @@ function createGateway(client: GatewayBrowserClient): MutableGateway {
     client,
     phase: "connected",
     offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: null,
     sessionKey: "main",
@@ -215,14 +216,24 @@ describe("sessions page lifecycle", () => {
     });
 
     const archived = [
-      ...page.querySelectorAll<HTMLButtonElement>(".sessions-view-segment button"),
-    ].find((button) => button.textContent?.trim() === "Archived");
-    archived?.click();
+      ...page.querySelectorAll<HTMLElement & { checked: boolean }>(
+        ".sessions-view-segment wa-radio",
+      ),
+    ].find((radio) => radio.textContent?.trim() === "Archived");
+    const group = archived?.closest<HTMLElement & { value: string }>("wa-radio-group");
+    if (group) {
+      group.value = "archived";
+      group.dispatchEvent(new Event("change", { bubbles: true }));
+    }
     await page.updateComplete;
 
     expect(page.statusFilter).toBe("archived");
     expect(context.navigate).toHaveBeenCalledWith("sessions", { search: "?status=archived" });
-    expect(archived?.getAttribute("aria-pressed")).toBe("true");
+    expect(
+      [...page.querySelectorAll<HTMLElement & { checked: boolean }>("wa-radio")].find(
+        (radio) => radio.textContent?.trim() === "Archived",
+      )?.checked,
+    ).toBe(true);
   });
 
   it("re-enumerates all archived sessions before bulk deletion", async () => {
@@ -372,7 +383,7 @@ describe("sessions page lifecycle", () => {
     await toast.updateComplete;
     toast.querySelector<HTMLButtonElement>(".app-toast__action")?.click();
     await vi.waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(mutableGateway.setSessionKey).toHaveBeenLastCalledWith(key));
+    expect(mutableGateway.setSessionKey).not.toHaveBeenCalled();
 
     expect(patch).toHaveBeenNthCalledWith(1, key, { archived: true }, { agentId: undefined });
     expect(patch).toHaveBeenNthCalledWith(

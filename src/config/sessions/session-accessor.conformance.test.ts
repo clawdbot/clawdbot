@@ -7,6 +7,7 @@ import {
   writePersistedAuthProfileStateRaw,
 } from "../../agents/auth-profiles/sqlite.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
@@ -15,6 +16,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { readSessionArchiveContentSync } from "./archive-compression.js";
 import {
   appendTranscriptEvent,
@@ -1160,13 +1162,14 @@ describe("sqlite session normalization", () => {
       {
         agentHarnessId: "codex",
         chatType: "group",
-        channel: "discord",
-        deliveryContext: {
-          accountId: "acct-1",
-          channel: "discord",
-          threadId: "thread-1",
-          to: "group-1",
-        },
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            accountId: "acct-1",
+            channel: "discord",
+            threadId: "thread-1",
+            to: "group-1",
+          },
+        }),
         displayName: "Example group",
         endedAt: 90,
         model: "gpt-5.5",
@@ -1256,7 +1259,7 @@ describe("sqlite session normalization", () => {
     };
 
     await upsertSqliteSessionEntry(scope, {
-      channel: "telegram",
+      delivery: normalizeSessionDeliveryState({ context: { channel: "telegram" } }),
       chatType: "group",
       createdVia: "channel",
       createdActor: { type: "human", id: "telegram-sender" },
@@ -1277,7 +1280,7 @@ describe("sqlite session normalization", () => {
     );
 
     await upsertSqliteSessionEntry(scope, {
-      channel: "telegram",
+      delivery: normalizeSessionDeliveryState({ context: { channel: "telegram" } }),
       chatType: "group",
       displayName: "telegram:g-bucephalus-+-topics",
       sessionId: newSessionId,
@@ -1334,6 +1337,7 @@ describe("sqlite session normalization", () => {
     expect(loadSqliteSessionEntry(scope)).toEqual({
       sessionId: "restored-session",
       updatedAt: 20,
+      delivery: { kind: "none" },
     });
   });
 
@@ -1579,7 +1583,7 @@ describe("sqlite session normalization", () => {
     ).toEqual(["agent:main:newer", "agent:main:newest"]);
   });
 
-  it("preserves an active SQLite cron entry when durable entries exceed maxEntries", async () => {
+  it("preserves an admitted SQLite session when another session triggers maintenance", async () => {
     vi.mocked(getRuntimeConfig).mockReturnValue({
       session: {
         maintenance: {
@@ -1594,7 +1598,7 @@ describe("sqlite session normalization", () => {
       agentId: "main",
       env,
       sessionKey,
-      storePath: paths.sqlitePath,
+      storePath: paths.storePath,
     });
     const cronKey = "agent:main:cron:job-1";
     const cronEntry = {
@@ -1621,17 +1625,28 @@ describe("sqlite session normalization", () => {
     await patchSqliteSessionEntry(scopeFor(cronKey), () => cronEntry, {
       fallbackEntry: cronEntry,
       replaceEntry: true,
+      skipMaintenance: true,
     });
-    await patchSqliteSessionEntry(scopeFor(cronKey), () => ({
-      model: "gpt-5.5",
-      updatedAt: Date.now() + 1,
-    }));
+    const admission = await beginSessionWorkAdmission({
+      scope: paths.storePath,
+      identities: [cronKey, cronEntry.sessionId],
+      assertAllowed: () => {},
+    });
+    try {
+      const triggerKey = "agent:main:maintenance-trigger";
+      await patchSqliteSessionEntry(
+        scopeFor(triggerKey),
+        () => ({ sessionId: "trigger-session", updatedAt: Date.now() + 1 }),
+        {
+          fallbackEntry: { sessionId: "trigger-session", updatedAt: Date.now() + 1 },
+          replaceEntry: true,
+        },
+      );
 
-    expect(loadSqliteSessionEntry(scopeFor(cronKey))).toMatchObject({
-      lifecycleRevision: "cron-revision-1",
-      model: "gpt-5.5",
-      sessionId: "cron-session",
-    });
+      expect(loadSqliteSessionEntry(scopeFor(cronKey))).toMatchObject(cronEntry);
+    } finally {
+      admission.release();
+    }
   });
 
   it("keeps live entries and transcripts under byte pressure at save time", async () => {
@@ -1768,11 +1783,13 @@ describe("sqlite session normalization", () => {
         storePath: paths.sqlitePath,
       },
       {
-        deliveryContext: {
-          accountId: "acct-1",
-          channel: "matrix",
-          to: "!MixedCase:example.org",
-        },
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            accountId: "acct-1",
+            channel: "matrix",
+            to: "!MixedCase:example.org",
+          },
+        }),
         sessionId: "legacy-alias-session",
         updatedAt: 10,
       },
@@ -1901,6 +1918,7 @@ describe("sqlite session normalization", () => {
       entry_json: JSON.stringify({
         sessionId: "minimal-session",
         sessionStartedAt: 123,
+        delivery: { kind: "none" },
         updatedAt: 123,
       }),
       node_updated_at: 123,

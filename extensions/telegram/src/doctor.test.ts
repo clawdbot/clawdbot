@@ -639,7 +639,7 @@ describe("telegram doctor", () => {
           channels: {
             telegram: {
               replyToMode: "first",
-              streaming: false,
+              streaming: { mode: "off" },
             },
           },
         } as unknown as OpenClawConfig)

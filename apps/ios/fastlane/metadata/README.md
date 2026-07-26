@@ -48,7 +48,7 @@ Or set `APP_STORE_CONNECT_API_KEY_PATH`.
 - Release notes are generated from `apps/ios/CHANGELOG.md` into temporary Fastlane metadata during upload; use `pnpm ios:release:plan -- --json` and `pnpm ios:release:cut` to prepare the exact encoded section.
 - Do not check in `release_notes.txt` under locale metadata directories; the lane strips copied release-note files and writes the current generated en-US release notes when requested.
 - `apps/ios/APP-REVIEW-NOTES.md` is rendered to `apps/ios/build/app-review/APP-REVIEW-NOTES.pdf` and uploaded as the App Review attachment when metadata is uploaded.
-- Production release notes require the exact encoded App Store heading, such as `## 2026.7.201`; they do not fall back to the gateway or `## Unreleased` section.
+- Production release notes require the exact encoded App Store heading, such as `## 2026.7.21`; they do not fall back to the gateway or `## Unreleased` section.
 - Generated App Store release notes begin with the associated gateway version.
 - The release upload flow uploads release notes, screenshots, and the App Review PDF attachment before the IPA, and never submits for App Review.
 - `privacy_url.txt` is set to `https://openclaw.ai/privacy`.

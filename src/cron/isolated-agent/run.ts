@@ -12,6 +12,7 @@ import { expandToolGroups, normalizeToolName } from "../../agents/tool-policy.js
 import { deriveContextPromptTokens } from "../../agents/usage.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { HEARTBEAT_TOKEN, isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
+import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -70,6 +71,7 @@ import {
   mergeCronRunDiagnostics,
   toolsAllowRequestsWebSearch,
 } from "../run-diagnostics.js";
+import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { resolveCronAbortReasonText } from "../service/execution-errors.js";
 import { isDetachedCronSessionTarget, resolveCronDeliverySessionKey } from "../session-target.js";
 import type {
@@ -805,7 +807,7 @@ async function prepareCronRunContext(params: {
     };
   }
   const cfgWithAgentDefaults = resolvedModelSelection.cfgWithAgentDefaults;
-  const thinkingCatalog = modelOwner.catalog;
+  const thinkingCatalog = modelOwner.modelCatalog.entries;
   const ownerAgentConfig = resolveAgentConfig(modelOwner.config, modelOwner.agentId);
   const matchesDefaultFallbackAgentStringModel =
     typeof ownerAgentConfig?.model === "string" &&
@@ -878,7 +880,7 @@ async function prepareCronRunContext(params: {
   if (selectedPreflightCandidate && modelFallbacksOverride) {
     if (firstUnavailablePreflight?.status === "unavailable") {
       logWarn(
-        `[cron:${input.job.id}] Local provider preflight failed for ${firstUnavailablePreflight.provider}/${firstUnavailablePreflight.model} at ${firstUnavailablePreflight.baseUrl}; continuing with fallback ${selectedPreflightCandidate.provider}/${selectedPreflightCandidate.model}.`,
+        `[cron:${input.job.id}] ${firstUnavailablePreflight.reason}; continuing with fallback ${selectedPreflightCandidate.provider}/${selectedPreflightCandidate.model}.`,
       );
     }
     provider = selectedPreflightCandidate.provider;
@@ -1126,6 +1128,11 @@ async function prepareCronRunContext(params: {
           thinkingLevel: requestedThinkLevel,
           toolsAllow: agentPayload?.toolsAllow,
           toolsAllowIsDefault: agentPayload?.toolsAllowIsDefault,
+          scheduledToolPolicy: resolveCronScheduledToolPolicy({
+            toolsAllow: agentPayload?.toolsAllow,
+            scheduledToolPolicy: input.job.scheduledToolPolicy,
+            owner: input.job.owner,
+          }),
           cliSessionBindingFacts: {
             sourceReplyDeliveryMode: sourceDelivery.sourceReplyDeliveryMode,
             requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
@@ -1947,6 +1954,12 @@ export async function runCronIsolatedAgentTurn(params: {
         });
       } finally {
         prepared.context.sessionWorkAdmission.release();
+        // Browser ownership follows the detached run identity, not the stable cron job key.
+        await cleanupBrowserSessionsForLifecycleEnd({
+          cfg: prepared.context.cfgWithAgentDefaults,
+          sessionKeys: [prepared.context.runSessionKey],
+          onWarn: (message) => logWarn(`[cron:${params.job.id}] ${message}`),
+        });
       }
     }
   }

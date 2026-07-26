@@ -14,6 +14,10 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import {
+  deliveryContextFromSession,
+  sessionDeliveryOrigin,
+} from "../utils/delivery-context.shared.js";
 import { listSessionsFromStore } from "./session-utils.js";
 
 const TELEGRAM_DIRECT_KEY = "agent:main:telegram:direct:7463849194";
@@ -69,7 +73,7 @@ describe("Telegram direct session recreation after delete", () => {
         sessionId: "old-session",
         updatedAt: 1_700_000_000_000,
         chatType: "direct",
-        channel: "telegram",
+        delivery: { kind: "none" },
       },
     );
     await deleteSessionEntryLifecycle({
@@ -110,10 +114,10 @@ describe("Telegram direct session recreation after delete", () => {
       opts: {},
     });
 
-    expect(entry?.lastChannel).toBe("telegram");
-    expect(entry?.lastTo).toBe("telegram:7463849194");
-    expect(entry?.origin?.chatType).toBe("direct");
-    expect(entry?.origin?.provider).toBe("telegram");
+    expect(deliveryContextFromSession(entry)?.channel).toBe("telegram");
+    expect(deliveryContextFromSession(entry)?.to).toBe("telegram:7463849194");
+    expect(sessionDeliveryOrigin(entry)?.chatType).toBe("direct");
+    expect(sessionDeliveryOrigin(entry)?.provider).toBe("telegram");
     expect(listed.sessions.map((session) => session.key)).toContain(TELEGRAM_DIRECT_KEY);
   });
 });

@@ -24,6 +24,7 @@ describe("novita provider plugin", () => {
     expect(provider.aliases).toEqual(["novita-ai", "novitaai"]);
     expect(provider.envVars).toEqual(["NOVITA_API_KEY"]);
     expect(provider.auth?.map((method) => method.id)).toEqual(["api-key"]);
+    expect(provider.auth?.[0]?.starterModel).toBe("novita/deepseek/deepseek-v4-pro");
 
     const result = await provider.staticCatalog?.run({
       config: {},
@@ -32,6 +33,6 @@ describe("novita provider plugin", () => {
     } as never);
     const catalogProvider = requireCatalogProvider(result);
     expect(catalogProvider.baseUrl).toBe("https://api.novita.ai/openai/v1");
-    expect(catalogProvider.models?.map((model) => model.id)).toContain("deepseek/deepseek-v3-0324");
+    expect(catalogProvider.models?.map((model) => model.id)).toContain("deepseek/deepseek-v4-pro");
   });
 });

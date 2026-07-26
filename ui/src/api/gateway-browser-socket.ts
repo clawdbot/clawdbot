@@ -61,7 +61,8 @@ export function createBrowserGatewaySocket(
     send: (data) => socket.send(data),
     close: (code, reason) => {
       finishOpening();
-      socket.close(code, reason);
+      // Browser-initiated closes reject the shared protocol's 1008 policy code.
+      socket.close(code === 1008 ? 4008 : code, reason);
     },
   };
 }

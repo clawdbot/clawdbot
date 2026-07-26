@@ -313,6 +313,63 @@ describe("createNodesTool screen_record duration guardrails", () => {
     );
   });
 
+  it.each([
+    { name: "title only", input: { title: "Build complete" } },
+    { name: "body only", input: { body: "Deployment finished" } },
+    { name: "both fields", input: { title: "Build complete", body: "Deployment finished" } },
+    { name: "trimmed fields", input: { title: "  Build complete\t", body: "\n done  " } },
+    { name: "whitespace body", input: { title: "  Build complete  ", body: " \t " } },
+    { name: "whitespace title", input: { title: " \n ", body: "  Deployment finished  " } },
+  ])("serializes both required native strings for $name", async ({ input }) => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+
+    await createNodesTool().execute("call-notify", {
+      action: "notify",
+      node: "Office Mac",
+      ...input,
+      sound: "ding.aiff",
+      priority: "timeSensitive",
+      delivery: "overlay",
+    });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      {},
+      {
+        nodeId: "node-1",
+        command: "system.notify",
+        params: {
+          title: (input.title ?? "").trim(),
+          body: (input.body ?? "").trim(),
+          sound: "ding.aiff",
+          priority: "timeSensitive",
+          delivery: "overlay",
+        },
+        idempotencyKey: expect.stringMatching(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+        ),
+      },
+    );
+  });
+
+  it.each([
+    {},
+    { title: "", body: "" },
+    { title: " \t ", body: " \n " },
+    { title: " \t " },
+    { body: " \n " },
+  ] as const)("rejects empty notification %# before gateway invocation", async (input) => {
+    await expect(
+      createNodesTool().execute("call-notify-empty", {
+        action: "notify",
+        node: "Office Mac",
+        ...input,
+      }),
+    ).rejects.toThrow("title or body required");
+
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
   it.each(["screen_record", "camera_clip"])(
     "clamps %s to the tool duration limit and budgets both timeout layers",
     async (action) => {

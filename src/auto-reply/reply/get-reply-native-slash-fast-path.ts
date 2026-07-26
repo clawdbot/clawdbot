@@ -17,7 +17,7 @@ import {
 } from "../command-turn-context.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import { markCommandReplyForDelivery, type ReplyPayload } from "../reply-payload.js";
-import type { MsgContext } from "../templating.js";
+import type { FinalizedRuntimeMsgContext as MsgContext } from "../templating.js";
 import { normalizeThinkLevel, type ThinkLevel } from "../thinking.js";
 import {
   takeCommandSessionMetadataChangesFromTargets,
@@ -61,9 +61,7 @@ function resolveNativeSlashCommandName(ctx: MsgContext): string | undefined {
   if (!isNativeCommandTurn(commandTurn) && !isAuthorizedTextSlashCommandTurn(commandTurn)) {
     return undefined;
   }
-  const commandText = stripStructuralPrefixes(
-    ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "",
-  ).trim();
+  const commandText = stripStructuralPrefixes(ctx.commandText ?? "").trim();
   const match = commandText.match(/^\/([^\s:]+)(?::|\s|$)/);
   return normalizeOptionalString(match?.[1])?.toLowerCase();
 }

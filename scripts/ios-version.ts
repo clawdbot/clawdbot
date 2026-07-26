@@ -4,7 +4,7 @@ import { parseVersionQueryArgs } from "./lib/version-script-args.ts";
 
 function printUsage(): void {
   process.stdout.write(
-    "Usage: node --import tsx scripts/ios-version.ts [--json|--shell] [--field name] [--version YYYY.M.D] [--revision 0-99] [--root dir]\n\n",
+    "Usage: node --import tsx scripts/ios-version.ts [--json|--shell] [--field name] [--version YYYY.M.D] [--revision 0-9] [--root dir]\n\n",
   );
 }
 

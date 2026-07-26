@@ -30,10 +30,13 @@ import {
 
 type LoadedModel = {
   key: string;
+  llama: Llama;
   model: LlamaModel;
   context: LlamaContext;
   sequence: LlamaContextSequence;
 };
+
+type LlamaJsonSchemaInput = Parameters<Llama["createGrammarForJsonSchema"]>[0];
 
 // Process-owned, single-slot cache. A model/context pair lives until another
 // model replaces it or the process exits, bounding resident model memory.
@@ -92,6 +95,33 @@ function normalizeArguments(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+}
+
+async function resolveLlamaCppResponseGrammar(params: {
+  llama: Llama;
+  responseFormat: Record<string, unknown> | undefined;
+}) {
+  const responseFormat = params.responseFormat;
+  if (!responseFormat) {
+    return undefined;
+  }
+  if (Object.keys(responseFormat).length === 0) {
+    return await params.llama.getGrammarFor("json");
+  }
+  if (responseFormat.type === "json_object") {
+    return await params.llama.getGrammarFor("json");
+  }
+  if (responseFormat.type === "text") {
+    return undefined;
+  }
+  if (responseFormat.type === "json_schema") {
+    const envelope = normalizeArguments(responseFormat.json_schema);
+    const schema = normalizeArguments(envelope.schema);
+    return Object.keys(schema).length > 0
+      ? await params.llama.createGrammarForJsonSchema(schema as LlamaJsonSchemaInput)
+      : await params.llama.getGrammarFor("json");
+  }
+  return await params.llama.createGrammarForJsonSchema(responseFormat as LlamaJsonSchemaInput);
 }
 
 function mapContextToLlamaChatHistory(context: Context): ChatHistoryItem[] {
@@ -237,7 +267,7 @@ async function getLoadedModel(params: {
     // Serialized requests reuse this one sequence. Disposing/reallocating it per
     // turn races node-llama-cpp's asynchronous sequence-id reclamation.
     const sequence = context.getSequence();
-    loadedModel = { key, model, context, sequence };
+    loadedModel = { key, llama, model, context, sequence };
     return loadedModel;
   } catch (error) {
     await context?.dispose();
@@ -312,6 +342,7 @@ export function createLlamaCppStreamFn(params: { providerConfig?: ModelProviderC
           autoDisposeSequence: false,
         });
         const before = sequence.tokenMeter.getState();
+        const functions = mapToolsToLlamaFunctions(context);
         let textStarted = false;
         const partial = () =>
           buildMessage({
@@ -332,15 +363,31 @@ export function createLlamaCppStreamFn(params: { providerConfig?: ModelProviderC
           stream.push({ type: "text_delta", contentIndex: 0, delta });
         };
         try {
-          const result = await chat.generateResponse(mapContextToLlamaChatHistory(context), {
-            functions: mapToolsToLlamaFunctions(context),
-            documentFunctionParams: true,
+          // node-llama-cpp makes grammar and functions mutually exclusive. Tool
+          // turns keep function calling; constrained decoding is for tool-free turns.
+          const grammar =
+            functions || !options?.responseFormat
+              ? undefined
+              : await resolveLlamaCppResponseGrammar({
+                  llama: loaded.llama,
+                  responseFormat: options.responseFormat,
+                });
+          const generationOptions = {
             signal: options?.signal,
             maxTokens: options?.maxTokens ?? model.maxTokens,
             temperature: options?.temperature,
             customStopTriggers: options?.stop,
             onTextChunk: appendTextDelta,
-          });
+            ...(functions
+              ? { functions, documentFunctionParams: true as const }
+              : grammar
+                ? { grammar }
+                : {}),
+          };
+          const result = await chat.generateResponse(
+            mapContextToLlamaChatHistory(context),
+            generationOptions,
+          );
           if (result.metadata.stopReason === "abort" || signal?.aborted) {
             generationAborted = true;
             throw signal?.reason ?? new Error("Request was aborted");

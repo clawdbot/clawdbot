@@ -7,6 +7,7 @@ import {
   testing as sessionBindingServiceTesting,
   registerSessionBindingAdapter,
 } from "../infra/outbound/session-binding-service.js";
+import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import type {
@@ -19,12 +20,11 @@ import {
   dispatchGatewayMethodInProcess as runtimeDispatchGatewayMethodInProcess,
   sendMessage as runtimeSendMessage,
 } from "./subagent-announce-delivery.runtime.js";
+import { testing, deliverSubagentAnnouncement } from "./subagent-announce-delivery.test-support.js";
 import {
-  testing,
-  deliverSubagentAnnouncement,
+  resolveAnnounceOrigin,
   resolveSubagentCompletionOrigin,
-} from "./subagent-announce-delivery.test-support.js";
-import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
+} from "./subagent-announce-origin.js";
 import {
   createTaskCompletionEvent,
   expectDeliveryPath,
@@ -555,7 +555,12 @@ describe("resolveAnnounceOrigin threaded route targets", () => {
       expected: { channel: "topicchat", to: "topicchat:room-a" },
     },
   ])("$name", ({ stored, requester, expected }) => {
-    expect(resolveAnnounceOrigin(stored, requester)).toEqual(expected);
+    expect(
+      resolveAnnounceOrigin(
+        normalizeLegacySessionEntryDelivery(stored as unknown as SessionEntry),
+        requester,
+      ),
+    ).toEqual(expected);
   });
 });
 

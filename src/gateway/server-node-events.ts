@@ -23,6 +23,7 @@ import {
   NODE_PRESENCE_ACTIVITY_EVENT,
   normalizeNodePresenceAliveReason,
 } from "../shared/node-presence.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import {
   agentCommandFromIngress,
@@ -419,10 +420,7 @@ async function touchSessionStore(params: {
       reasoningLevel: params.entry?.reasoningLevel,
       systemSent: params.entry?.systemSent,
       sendPolicy: params.entry?.sendPolicy,
-      lastChannel: params.entry?.lastChannel,
-      lastTo: params.entry?.lastTo,
-      lastAccountId: params.entry?.lastAccountId,
-      lastThreadId: params.entry?.lastThreadId,
+      delivery: params.entry?.delivery,
     }),
   });
 }
@@ -785,11 +783,11 @@ export const handleNodeEvent = async (
       }
 
       if (deliverRequested && (!channel || !to)) {
-        const entryChannel =
-          typeof entry?.lastChannel === "string"
-            ? normalizeChannelId(entry.lastChannel)
-            : undefined;
-        const entryTo = normalizeOptionalString(entry?.lastTo) ?? "";
+        const entryContext = deliveryContextFromSession(entry);
+        const entryChannel = entryContext?.channel
+          ? normalizeChannelId(entryContext.channel)
+          : undefined;
+        const entryTo = normalizeOptionalString(entryContext?.to) ?? "";
         if (!channel && entryChannel) {
           channel = entryChannel;
         }

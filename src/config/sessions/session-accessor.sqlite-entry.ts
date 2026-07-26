@@ -4,6 +4,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   openOpenClawAgentDatabase,
@@ -321,6 +322,7 @@ export async function patchSqliteSessionEntry(
           archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
           maintenanceConfig: options.maintenanceConfig,
           skipMaintenance: options.skipMaintenance,
+          storePath: resolveSessionStorePathForScope(scope),
         }),
       );
       currentIdentity = readSqliteSessionIdentitySnapshot(writeDatabase, identityKeys);
@@ -405,6 +407,11 @@ export async function patchSqliteSessionEntryTarget(
           archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
           maintenanceConfig: options.maintenanceConfig,
           skipMaintenance: options.skipMaintenance,
+          storePath: resolveSessionStorePathForScope({
+            agentId: scope.agentId,
+            sessionKey: scope.target.canonicalKey,
+            storePath: scope.storePath,
+          }),
         }),
       );
       currentIdentity = readSqliteSessionIdentitySnapshot(writeDatabase, identityKeys);
@@ -467,11 +474,11 @@ export async function recordSqliteInboundSessionMeta(params: {
 export async function updateSqliteSessionLastRoute(params: {
   storePath: string;
   sessionKey: string;
-  channel?: SessionEntry["lastChannel"];
+  channel?: string;
   to?: string;
   accountId?: string;
   threadId?: string | number;
-  route?: SessionEntry["route"];
+  route?: ChannelRouteRef;
   deliveryContext?: DeliveryContext;
   ctx?: MsgContext;
   groupResolution?: GroupKeyResolution | null;

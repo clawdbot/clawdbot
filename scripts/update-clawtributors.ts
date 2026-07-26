@@ -314,7 +314,11 @@ const markdownLines: string[] = [];
 for (let i = 0; i < visibleEntries.length; i += PER_LINE) {
   const chunk = visibleEntries.slice(i, i + PER_LINE);
   const parts = chunk.map((entry) => {
-    return `[![${escapeMarkdownLabel(entry.display)}](${entry.avatar_url})](${entry.html_url})`;
+    // Fixed 48px tiles: GitHub's avatar resizer sometimes ignores `s=48`
+    // (default identicons come back 420px) and never upscales tiny source
+    // avatars, so markdown images render off-grid without explicit sizing.
+    const alt = escapeHtmlAttribute(entry.display);
+    return `<a href="${entry.html_url}"><img src="${entry.avatar_url}" width="48" height="48" alt="${alt}"></a>`;
   });
   markdownLines.push(parts.join(" "));
 }
@@ -836,8 +840,12 @@ function normalizeIdentifier(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
-function escapeMarkdownLabel(value: string): string {
-  return value.replace(/([\\[\]])/g, "\\$1");
+function escapeHtmlAttribute(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
 }
 
 function parseReadmeEntries(

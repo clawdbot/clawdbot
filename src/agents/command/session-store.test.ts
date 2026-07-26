@@ -94,7 +94,9 @@ async function withTempSessionStore<T>(
     return await run({ dir, storePath: path.join(dir, "sessions.json") });
   } finally {
     closeOpenClawAgentDatabasesForTest();
-    await fs.rm(dir, { recursive: true, force: true });
+    // SQLite teardown can race fixture removal on loaded CI hosts. Keep the
+    // retries bounded so persistent cleanup failures still surface.
+    await fs.rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });
   }
 }
 
@@ -2425,6 +2427,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       const replacementEntry: SessionEntry = {
         sessionId: "replacement-session-id",
         updatedAt: 2,
+        delivery: { kind: "none" },
         modelProvider: "openai",
         model: "gpt-5.5",
       };

@@ -31,6 +31,7 @@ import { getAgentRunContext } from "../../infra/agent-events.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { createDeferred } from "../../test-utils/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { createChatRunState } from "../server-chat-state.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -4321,16 +4322,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await createTranscriptFixture("openclaw-chat-send-origin-routing-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
-      deliveryContext: {
-        channel: "telegram",
-        to: "telegram:6812765697",
-        accountId: "default",
-        threadId: 42,
-      },
-      lastChannel: "telegram",
-      lastTo: "telegram:6812765697",
-      lastAccountId: "default",
-      lastThreadId: 42,
+      delivery: normalizeSessionDeliveryState({
+        context: {
+          channel: "telegram",
+          to: "telegram:6812765697",
+          accountId: "default",
+          threadId: 42,
+        },
+      }),
     };
     const respond = vi.fn();
     const context = createChatContext();
@@ -4411,14 +4410,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await createTranscriptFixture("openclaw-chat-send-feishu-origin-routing-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
-      deliveryContext: {
-        channel: "feishu",
-        to: "ou_feishu_direct_123",
-        accountId: "default",
-      },
-      lastChannel: "feishu",
-      lastTo: "ou_feishu_direct_123",
-      lastAccountId: "default",
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "feishu", to: "ou_feishu_direct_123", accountId: "default" },
+      }),
     };
     const respond = vi.fn();
     const context = createChatContext();
@@ -4444,14 +4438,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await createTranscriptFixture("openclaw-chat-send-per-account-channel-peer-routing-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
-      deliveryContext: {
-        channel: "telegram",
-        to: "telegram:6812765697",
-        accountId: "account-a",
-      },
-      lastChannel: "telegram",
-      lastTo: "telegram:6812765697",
-      lastAccountId: "account-a",
+      delivery: normalizeSessionDeliveryState({
+        context: {
+          channel: "telegram",
+          to: "telegram:6812765697",
+          accountId: "account-a",
+        },
+      }),
     };
     const respond = vi.fn();
     const context = createChatContext();
@@ -4477,14 +4470,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await createTranscriptFixture("openclaw-chat-send-legacy-channel-peer-routing-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
-      deliveryContext: {
-        channel: "telegram",
-        to: "telegram:6812765697",
-        accountId: "default",
-      },
-      lastChannel: "telegram",
-      lastTo: "telegram:6812765697",
-      lastAccountId: "default",
+      delivery: normalizeSessionDeliveryState({
+        context: {
+          channel: "telegram",
+          to: "telegram:6812765697",
+          accountId: "default",
+        },
+      }),
     };
     const respond = vi.fn();
     const context = createChatContext();
@@ -4510,16 +4502,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await createTranscriptFixture("openclaw-chat-send-legacy-thread-channel-peer-routing-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
-      deliveryContext: {
-        channel: "telegram",
-        to: "telegram:6812765697",
-        accountId: "default",
-        threadId: "42",
-      },
-      lastChannel: "telegram",
-      lastTo: "telegram:6812765697",
-      lastAccountId: "default",
-      lastThreadId: "42",
+      delivery: normalizeSessionDeliveryState({
+        context: {
+          channel: "telegram",
+          to: "telegram:6812765697",
+          accountId: "default",
+          threadId: "42",
+        },
+      }),
     };
     const respond = vi.fn();
     const context = createChatContext();
@@ -4546,14 +4536,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await createTranscriptFixture("openclaw-chat-send-main-no-cross-route-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
-      deliveryContext: {
-        channel: "discord",
-        to: "discord:1234567890",
-        accountId: "default",
-      },
-      lastChannel: "discord",
-      lastTo: "discord:1234567890",
-      lastAccountId: "default",
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "discord", to: "discord:1234567890", accountId: "default" },
+      }),
     };
     const respond = vi.fn();
     const context = createChatContext();
@@ -4578,14 +4563,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await createTranscriptFixture("openclaw-chat-send-main-ui-routes-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
-      deliveryContext: {
-        channel: "whatsapp",
-        to: "whatsapp:+8613800138000",
-        accountId: "default",
-      },
-      lastChannel: "whatsapp",
-      lastTo: "whatsapp:+8613800138000",
-      lastAccountId: "default",
+      delivery: normalizeSessionDeliveryState({
+        context: {
+          channel: "whatsapp",
+          to: "whatsapp:+8613800138000",
+          accountId: "default",
+        },
+      }),
     };
     const respond = vi.fn();
     const context = createChatContext();
@@ -4617,14 +4601,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await createTranscriptFixture("openclaw-chat-send-main-ui-deliver-no-route-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
-      deliveryContext: {
-        channel: "telegram",
-        to: "telegram:200482621",
-        accountId: "default",
-      },
-      lastChannel: "telegram",
-      lastTo: "telegram:200482621",
-      lastAccountId: "default",
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "telegram", to: "telegram:200482621", accountId: "default" },
+      }),
     };
     const respond = vi.fn();
     const context = createChatContext();
@@ -4659,14 +4638,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.mainSessionKey = "work";
     mockState.finalText = "ok";
     mockState.sessionEntry = {
-      deliveryContext: {
-        channel: "whatsapp",
-        to: "whatsapp:+8613800138000",
-        accountId: "default",
-      },
-      lastChannel: "whatsapp",
-      lastTo: "whatsapp:+8613800138000",
-      lastAccountId: "default",
+      delivery: normalizeSessionDeliveryState({
+        context: {
+          channel: "whatsapp",
+          to: "whatsapp:+8613800138000",
+          accountId: "default",
+        },
+      }),
     };
     const respond = vi.fn();
     const context = createChatContext();
@@ -4695,16 +4673,19 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
   });
 
-  it("chat.send falls back to origin provider metadata for configured main CLI delivery inheritance", async () => {
+  it("chat.send inherits canonical origin-backed routing for configured main CLI sessions", async () => {
     await createTranscriptFixture("openclaw-chat-send-config-main-origin-provider-routes-");
     mockState.mainSessionKey = "work";
     mockState.finalText = "ok";
     mockState.sessionEntry = {
-      origin: {
-        provider: "whatsapp",
-        accountId: "default",
-      },
-      lastTo: "whatsapp:+8613800138000",
+      delivery: normalizeSessionDeliveryState({
+        context: {
+          channel: "whatsapp",
+          to: "whatsapp:+8613800138000",
+          accountId: "default",
+        },
+        origin: { provider: "whatsapp", accountId: "default" },
+      }),
     };
     const respond = vi.fn();
     const context = createChatContext();
@@ -4733,17 +4714,20 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
   });
 
-  it("chat.send falls back to origin thread metadata for configured main CLI delivery inheritance", async () => {
+  it("chat.send inherits canonical origin-backed thread routing for configured main CLI sessions", async () => {
     await createTranscriptFixture("openclaw-chat-send-config-main-origin-thread-routes-");
     mockState.mainSessionKey = "work";
     mockState.finalText = "ok";
     mockState.sessionEntry = {
-      origin: {
-        provider: "telegram",
-        accountId: "default",
-        threadId: "42",
-      },
-      lastTo: "telegram:6812765697",
+      delivery: normalizeSessionDeliveryState({
+        context: {
+          channel: "telegram",
+          to: "telegram:6812765697",
+          accountId: "default",
+          threadId: "42",
+        },
+        origin: { provider: "telegram", accountId: "default", threadId: "42" },
+      }),
     };
     const respond = vi.fn();
     const context = createChatContext();
@@ -4779,14 +4763,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.mainSessionKey = "work";
     mockState.finalText = "ok";
     mockState.sessionEntry = {
-      deliveryContext: {
-        channel: "whatsapp",
-        to: "whatsapp:+8613800138000",
-        accountId: "default",
-      },
-      lastChannel: "whatsapp",
-      lastTo: "whatsapp:+8613800138000",
-      lastAccountId: "default",
+      delivery: normalizeSessionDeliveryState({
+        context: {
+          channel: "whatsapp",
+          to: "whatsapp:+8613800138000",
+          accountId: "default",
+        },
+      }),
     };
     const respond = vi.fn();
     const context = createChatContext();
@@ -4814,14 +4797,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await createTranscriptFixture("openclaw-chat-send-custom-no-cross-route-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
-      deliveryContext: {
-        channel: "discord",
-        to: "discord:1234567890",
-        accountId: "default",
-      },
-      lastChannel: "discord",
-      lastTo: "discord:1234567890",
-      lastAccountId: "default",
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "discord", to: "discord:1234567890", accountId: "default" },
+      }),
     };
     const respond = vi.fn();
     const context = createChatContext();
@@ -4847,14 +4825,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await createTranscriptFixture("openclaw-chat-send-no-deliver-internal-surface-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
-      deliveryContext: {
-        channel: "discord",
-        to: "user:1234567890",
-        accountId: "default",
-      },
-      lastChannel: "discord",
-      lastTo: "user:1234567890",
-      lastAccountId: "default",
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "discord", to: "user:1234567890", accountId: "default" },
+      }),
     };
     const respond = vi.fn();
     const context = createChatContext();
@@ -4879,14 +4852,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await createTranscriptFixture("openclaw-chat-send-webchat-channel-scoped-no-inherit-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
-      deliveryContext: {
-        channel: "imessage",
-        to: "+8619800001234",
-        accountId: "default",
-      },
-      lastChannel: "imessage",
-      lastTo: "+8619800001234",
-      lastAccountId: "default",
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "imessage", to: "+8619800001234", accountId: "default" },
+      }),
     };
     const respond = vi.fn();
     const context = createChatContext();
@@ -4922,14 +4890,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await createTranscriptFixture("openclaw-chat-send-ui-channel-scoped-inherit-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
-      deliveryContext: {
-        channel: "imessage",
-        to: "+8619800001234",
-        accountId: "default",
-      },
-      lastChannel: "imessage",
-      lastTo: "+8619800001234",
-      lastAccountId: "default",
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "imessage", to: "+8619800001234", accountId: "default" },
+      }),
     };
     const respond = vi.fn();
     const context = createChatContext();
@@ -5399,9 +5362,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(typeof mockState.savedMediaCalls[1]?.size).toBe("number");
       const userTurnInput = mockState.lastDispatchUserTurnInput as
         | {
+            __openclaw?: { media?: Array<{ contentType?: string; path?: string }> };
             content?: unknown;
-            MediaPaths?: string[];
-            MediaTypes?: string[];
           }
         | undefined;
       if (!userTurnInput) {
@@ -5409,11 +5371,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       }
       expect(findUserUpdate()).toBeUndefined();
       expect(userTurnInput.content).toBe("edit these");
-      expect(userTurnInput.MediaPaths).toEqual([
+      expect(userTurnInput["__openclaw"]?.media?.map((fact) => fact.path)).toEqual([
         "/tmp/chat-send-image-a.png",
         "/tmp/chat-send-image-b.jpg",
       ]);
-      expect(userTurnInput.MediaTypes).toEqual(["image/png", "image/jpeg"]);
+      expect(userTurnInput["__openclaw"]?.media?.map((fact) => fact.contentType)).toEqual([
+        "image/png",
+        "image/jpeg",
+      ]);
       expect(mockState.lastDispatchCtx?.media).toBeUndefined();
       expect(mockState.lastDispatchImages).toHaveLength(2);
     });
@@ -5451,9 +5416,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await waitForAssertion(() => {
       const userTurnInput = mockState.lastDispatchUserTurnInput as
         | {
+            __openclaw?: { media?: Array<{ contentType?: string; path?: string }> };
             content?: unknown;
-            MediaPaths?: string[];
-            MediaTypes?: string[];
           }
         | undefined;
       expect(mockState.lastDispatchImages).toBeUndefined();
@@ -5466,8 +5430,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(typeof mockState.savedMediaCalls[0]?.size).toBe("number");
       expect(findUserUpdate()).toBeUndefined();
       expect(userTurnInput?.content).toBe("summarize this");
-      expect(userTurnInput?.MediaPaths).toEqual(["/tmp/chat-send-brief.pdf"]);
-      expect(userTurnInput?.MediaTypes).toEqual(["application/pdf"]);
+      expect(userTurnInput?.["__openclaw"]?.media).toEqual([
+        expect.objectContaining({
+          path: "/tmp/chat-send-brief.pdf",
+          contentType: "application/pdf",
+        }),
+      ]);
     });
   });
 
@@ -5523,13 +5491,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await waitForAssertion(() => {
       const userTurnInput = mockState.lastDispatchUserTurnInput as
         | {
+            __openclaw?: { media?: Array<{ path?: string }> };
             content?: unknown;
-            MediaPaths?: string[];
           }
         | undefined;
       expect(findUserUpdate()).toBeUndefined();
       expect(userTurnInput?.content).toBe("edit both");
-      expect(userTurnInput?.MediaPaths).toEqual([
+      expect(userTurnInput?.["__openclaw"]?.media?.map((fact) => fact.path)).toEqual([
         "/tmp/chat-send-inline.png",
         "/tmp/offloaded-big.png",
       ]);

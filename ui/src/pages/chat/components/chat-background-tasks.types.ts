@@ -23,6 +23,7 @@ export type BackgroundTasksProps = {
   onToggleFinished: () => void;
   onRefresh: () => void;
   onCancel: (taskId: string) => void;
-  onToggleTask: (task: TaskSummary) => void;
+  onSelectTask: (task: TaskSummary) => void;
+  onBackToList: () => void;
   onOpenSession: (sessionKey: string) => void;
 };

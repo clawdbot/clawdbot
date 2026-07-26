@@ -87,6 +87,7 @@ const defaultResolvedCompat = {
   vercelGatewayRouting: {},
   zaiToolStream: false,
   supportsStrictMode: true,
+  supportsJsonSchemaResponseFormat: false,
   cacheControlFormat: undefined,
   sessionAffinity: "none",
   supportsPromptCacheKey: false,
@@ -109,6 +110,62 @@ beforeEach(() => {
 });
 
 describe("OpenAI-compatible completions compatibility", () => {
+  it("lets Ollama tools win over JSON Schema response formats", async () => {
+    const model = createModel({
+      id: "gemma4:e4b",
+      provider: "ollama",
+      baseUrl: "http://127.0.0.1:11434/v1",
+      compat: { supportsJsonSchemaResponseFormat: true },
+    });
+
+    await streamOpenAICompletions(
+      model,
+      {
+        messages: [userMessage],
+        tools: [
+          {
+            name: "weather",
+            description: "Get weather",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+      },
+      {
+        apiKey: "test",
+        responseFormat: {
+          type: "object",
+          properties: { reply: { type: "string" } },
+          required: ["reply"],
+          additionalProperties: false,
+        },
+      },
+    ).result();
+
+    expect(mockOpenAI.payloads[0]).toMatchObject({ tools: [expect.any(Object)] });
+    expect(mockOpenAI.payloads[0]).not.toHaveProperty("response_format");
+  });
+
+  it("omits JSON Schema response formats for hosted Ollama Cloud", async () => {
+    const model = createModel({
+      id: "gemma4",
+      provider: "ollama",
+      baseUrl: "https://ollama.com/v1",
+      compat: { supportsJsonSchemaResponseFormat: true },
+    });
+
+    await streamOpenAICompletions(model, context, {
+      apiKey: "test",
+      responseFormat: {
+        type: "object",
+        properties: { reply: { type: "string" } },
+        required: ["reply"],
+        additionalProperties: false,
+      },
+    }).result();
+
+    expect(mockOpenAI.payloads[0]).not.toHaveProperty("response_format");
+  });
+
   it.each([
     {
       name: "OpenRouter Anthropic",
@@ -161,7 +218,7 @@ describe("OpenAI-compatible completions compatibility", () => {
         provider: "openai",
         baseUrl: "https://api.openai.com/v1",
       }),
-      expected: defaultResolvedCompat,
+      expected: { ...defaultResolvedCompat, supportsJsonSchemaResponseFormat: true },
     },
     {
       name: "Azure OpenAI",
@@ -169,6 +226,15 @@ describe("OpenAI-compatible completions compatibility", () => {
         id: "gpt-5.6-luna",
         provider: "azure-openai",
         baseUrl: "https://example.openai.azure.com/openai/deployments/luna",
+      }),
+      expected: defaultResolvedCompat,
+    },
+    {
+      name: "OpenAI legacy model",
+      model: createModel({
+        id: "gpt-4-turbo",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
       }),
       expected: defaultResolvedCompat,
     },

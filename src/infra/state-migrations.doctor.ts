@@ -23,7 +23,12 @@ import {
   type PluginDoctorStateMigrationDetection,
 } from "../plugins/doctor-contract-registry.js";
 import { resolveLegacyInstalledPluginIndexStorePath } from "../plugins/installed-plugin-index-store.js";
-import { DEFAULT_ACCOUNT_ID, DEFAULT_MAIN_KEY, normalizeAgentId } from "../routing/session-key.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  DEFAULT_MAIN_KEY,
+  LEGACY_IMPLICIT_AGENT_ID,
+  normalizeAgentId,
+} from "../routing/session-key.js";
 import {
   detectOpenClawStateDatabaseSchemaMigrations,
   repairOpenClawStateDatabaseSchema,
@@ -75,6 +80,7 @@ import {
   detectLegacyMcpOAuthStores,
   migrateLegacyMcpOAuthStores,
 } from "./state-migrations.mcp-oauth.js";
+import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
 import {
   detectLegacyMeetingTranscripts,
   migrateLegacyMeetingTranscripts,
@@ -282,6 +288,15 @@ function createPluginDoctorStateMigrationContext(
   };
 }
 
+function resolveDoctorStateMigrationAgentId(cfg: OpenClawConfig): string {
+  try {
+    return normalizeAgentId(resolveDefaultAgentId(cfg));
+  } catch {
+    // Detection must still inspect malformed/pre-roster state so Doctor can repair it.
+    return LEGACY_IMPLICIT_AGENT_ID;
+  }
+}
+
 export async function detectLegacyStateMigrations(params: {
   cfg: OpenClawConfig;
   pluginDoctorConfig?: OpenClawConfig;
@@ -296,7 +311,7 @@ export async function detectLegacyStateMigrations(params: {
   const stateDir = resolveStateDir(env, homedir);
   const oauthDir = resolveOAuthDir(env, stateDir);
 
-  const targetAgentId = normalizeAgentId(resolveDefaultAgentId(params.cfg));
+  const targetAgentId = resolveDoctorStateMigrationAgentId(params.cfg);
   const rawMainKey = params.cfg.session?.mainKey;
   const targetMainKey =
     typeof rawMainKey === "string" && rawMainKey.trim().length > 0
@@ -1274,6 +1289,22 @@ export async function autoMigrateLegacyState(params: {
       ...(stateDirResult.notices?.length ? { notices: stateDirResult.notices } : {}),
     };
   }
+  const mediaPersistence =
+    params.doctorOnlyStateMigrations === true
+      ? migrateLegacyMediaPersistence({ env: { ...env, OPENCLAW_STATE_DIR: stateDir } })
+      : { changes: [], warnings: [] };
+  if (mediaPersistence.warnings.length > 0) {
+    return {
+      migrated:
+        stateDirResult.migrated ||
+        stateSchema.changes.length > 0 ||
+        mediaPersistence.changes.length > 0,
+      skipped: false,
+      changes: [...stateDirResult.changes, ...stateSchema.changes, ...mediaPersistence.changes],
+      warnings: [...stateDirResult.warnings, ...stateSchema.warnings, ...mediaPersistence.warnings],
+      ...(stateDirResult.notices?.length ? { notices: stateDirResult.notices } : {}),
+    };
+  }
   const pluginDoctorConfig = params.pluginDoctorConfig ?? params.cfg;
   const configMachineState = migrateLegacyConfigMachineState({
     config: pluginDoctorConfig,
@@ -1411,6 +1442,7 @@ export async function autoMigrateLegacyState(params: {
     const changes = [
       ...stateDirResult.changes,
       ...stateSchema.changes,
+      ...mediaPersistence.changes,
       ...configMachineState.changes,
       ...orphanKeys.changes,
       ...acpSessionMetadata.changes,
@@ -1434,6 +1466,7 @@ export async function autoMigrateLegacyState(params: {
     const warnings = [
       ...stateDirResult.warnings,
       ...stateSchema.warnings,
+      ...mediaPersistence.warnings,
       ...configMachineState.warnings,
       ...detected.warnings,
       ...orphanKeys.warnings,
@@ -1472,6 +1505,7 @@ export async function autoMigrateLegacyState(params: {
       migrated:
         stateDirResult.migrated ||
         stateSchema.changes.length > 0 ||
+        mediaPersistence.changes.length > 0 ||
         configMachineState.changes.length > 0 ||
         orphanKeys.changes.length > 0 ||
         acpSessionMetadata.changes.length > 0 ||
@@ -1522,6 +1556,7 @@ export async function autoMigrateLegacyState(params: {
     const changes = [
       ...stateDirResult.changes,
       ...stateSchema.changes,
+      ...mediaPersistence.changes,
       ...configMachineState.changes,
       ...orphanKeys.changes,
       ...acpSessionMetadata.changes,
@@ -1532,6 +1567,7 @@ export async function autoMigrateLegacyState(params: {
     const warnings = [
       ...stateDirResult.warnings,
       ...stateSchema.warnings,
+      ...mediaPersistence.warnings,
       ...configMachineState.warnings,
       ...detected.warnings,
       ...orphanKeys.warnings,
@@ -1551,6 +1587,7 @@ export async function autoMigrateLegacyState(params: {
       migrated:
         stateDirResult.migrated ||
         stateSchema.changes.length > 0 ||
+        mediaPersistence.changes.length > 0 ||
         configMachineState.changes.length > 0 ||
         orphanKeys.changes.length > 0 ||
         acpSessionMetadata.changes.length > 0 ||
@@ -1634,6 +1671,7 @@ export async function autoMigrateLegacyState(params: {
   const changes = [
     ...stateDirResult.changes,
     ...stateSchema.changes,
+    ...mediaPersistence.changes,
     ...configMachineState.changes,
     ...orphanKeys.changes,
     ...acpSessionMetadata.changes,
@@ -1662,6 +1700,7 @@ export async function autoMigrateLegacyState(params: {
   const warnings = [
     ...stateDirResult.warnings,
     ...stateSchema.warnings,
+    ...mediaPersistence.warnings,
     ...configMachineState.warnings,
     ...detected.warnings,
     ...orphanKeys.warnings,

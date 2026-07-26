@@ -90,6 +90,21 @@ describe("cron run diagnostics", () => {
     expect(summarizeCronRunDiagnostics(undefined)).toBeUndefined();
   });
 
+  it("bounds fallback summaries at valid UTF-16 boundaries", () => {
+    expect(
+      summarizeCronRunDiagnostics({
+        entries: [
+          {
+            ts: 1,
+            source: "exec",
+            severity: "error",
+            message: `${"s".repeat(1_998)}😀tail`,
+          },
+        ],
+      }),
+    ).toBe(`${"s".repeat(1_998)}…`);
+  });
+
   it("creates diagnostics from errors and prefers the latest error summary", () => {
     const first = createCronRunDiagnosticsFromError("cron-preflight", "first failure", {
       nowMs: () => 100,

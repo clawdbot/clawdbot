@@ -97,4 +97,22 @@ describe("agent selection", () => {
 
     expect(selection.state).toEqual({ selectedId: "ops", scopeId: "ops" });
   });
+
+  it("self-heals an unknown cold-load selection to the roster default", () => {
+    const gateway = createGateway("Main");
+    const roster = createRoster();
+    const selection = createAgentSelectionCapability(gateway.gateway, roster.roster);
+
+    roster.publish({
+      defaultId: "Roboclaw",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "roboclaw", kind: "agent" }],
+    });
+
+    expect(selection.state).toEqual({ selectedId: "roboclaw", scopeId: "roboclaw" });
+
+    selection.set("main");
+    expect(selection.state).toEqual({ selectedId: "roboclaw", scopeId: "roboclaw" });
+  });
 });

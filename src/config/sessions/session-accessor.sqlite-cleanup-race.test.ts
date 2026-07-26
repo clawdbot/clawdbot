@@ -104,6 +104,7 @@ describe("SQLite lifecycle cleanup races", () => {
     const currentEntry: SessionEntry = {
       sessionId: "current-planned-session",
       updatedAt: Date.now(),
+      delivery: { kind: "none" },
     };
     const currentEvent = {
       type: "session",

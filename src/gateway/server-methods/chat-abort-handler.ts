@@ -38,12 +38,14 @@ import {
 } from "./chat-text-normalization.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
-export async function handleChatAbortRequest({
-  params,
-  respond,
-  context,
-  client,
-}: GatewayRequestHandlerOptions): Promise<void> {
+type ChatAbortLifecycle = {
+  onAuthorizedAfterQueuedAbort?: () => boolean;
+};
+
+export async function handleChatAbortRequestWithLifecycle(
+  { params, respond, context, client }: GatewayRequestHandlerOptions,
+  lifecycle: ChatAbortLifecycle = {},
+): Promise<void> {
   if (!validateChatAbortParams(params)) {
     respond(
       false,
@@ -124,6 +126,7 @@ export async function handleChatAbortRequest({
       stopReason: "rpc",
       requester,
       preserveSideRuns,
+      onAuthorizedAfterQueuedAbort: lifecycle.onAuthorizedAfterQueuedAbort,
     });
     if (res.unauthorized) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
@@ -319,4 +322,8 @@ export async function handleChatAbortRequest({
     });
   }
   respondWithWorkerRuns(res.aborted ? [runId] : [], active.sessionId);
+}
+
+export async function handleChatAbortRequest(options: GatewayRequestHandlerOptions): Promise<void> {
+  await handleChatAbortRequestWithLifecycle(options);
 }

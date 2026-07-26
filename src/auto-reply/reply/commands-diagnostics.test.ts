@@ -6,6 +6,7 @@ import { createPluginRegistry } from "../../plugins/registry.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import { createBundledPluginRecord } from "../../plugins/status.test-fixtures.js";
 import type { OpenClawPluginCommandDefinition, PluginCommandContext } from "../../plugins/types.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 
 type PluginCommandHandler = OpenClawPluginCommandDefinition["handler"];
 import type { MsgContext } from "../templating.js";
@@ -456,7 +457,7 @@ describe("diagnostics command", () => {
             sessionId: "discord-session",
             sessionFile: "/tmp/discord.jsonl",
             updatedAt: 2,
-            channel: "discord",
+            delivery: normalizeSessionDeliveryState({ context: { channel: "discord" } }),
           },
         },
       }),

@@ -28,7 +28,7 @@ describe("resolveIosReleasePlan", () => {
   it("starts a new gateway at revision zero and build one", () => {
     expect(resolveIosReleasePlan(input())).toMatchObject({
       appStoreRevision: 0,
-      appStoreVersion: "2026.7.200",
+      appStoreVersion: "2026.7.20",
       buildNumber: 1,
       changelogStatus: "needs-cut",
       decision: "new-revision",
@@ -46,7 +46,7 @@ describe("resolveIosReleasePlan", () => {
 
     expect(plan).toMatchObject({
       appStoreRevision: 1,
-      appStoreVersion: "2026.7.201",
+      appStoreVersion: "2026.7.21",
       buildNumber: 1,
       decision: "new-revision",
     });
@@ -67,7 +67,7 @@ describe("resolveIosReleasePlan", () => {
 
     expect(plan).toMatchObject({
       appStoreRevision: 1,
-      appStoreVersion: "2026.7.201",
+      appStoreVersion: "2026.7.21",
       buildNumber: 1,
       decision: "new-revision",
     });
@@ -77,7 +77,7 @@ describe("resolveIosReleasePlan", () => {
     const plan = resolveIosReleasePlan(
       input({
         appStoreVersions: [
-          { id: "editable", state: "PREPARE_FOR_SUBMISSION", versionString: "2026.7.201" },
+          { id: "editable", state: "PREPARE_FOR_SUBMISSION", versionString: "2026.7.21" },
         ],
       }),
     );
@@ -99,7 +99,7 @@ describe("resolveIosReleasePlan", () => {
         buildUploads: [
           {
             buildNumber: "1",
-            shortVersion: "2026.7.201",
+            shortVersion: "2026.7.21",
             state: "FAILED",
           },
         ],
@@ -121,8 +121,8 @@ describe("resolveIosReleasePlan", () => {
             { id: "legacy", state: "READY_FOR_DISTRIBUTION", versionString: "2026.7.2" },
           ],
           buildUploads: [
-            { buildNumber: "1", shortVersion: "2026.7.201", state: "FAILED" },
-            { buildNumber: "1", shortVersion: "2026.7.202", state: "FAILED" },
+            { buildNumber: "1", shortVersion: "2026.7.21", state: "FAILED" },
+            { buildNumber: "1", shortVersion: "2026.7.22", state: "FAILED" },
           ],
         }),
       ),
@@ -135,11 +135,11 @@ describe("resolveIosReleasePlan", () => {
       const plan = resolveIosReleasePlan(
         input({
           appStoreVersions: [
-            { id: "editable", state: "READY_FOR_REVIEW", versionString: "2026.7.201" },
+            { id: "editable", state: "READY_FOR_REVIEW", versionString: "2026.7.21" },
           ],
           buildUploads: [
-            { buildNumber: "7", shortVersion: "2026.7.201", state },
-            { buildNumber: "3", shortVersion: "2026.7.201", state: "COMPLETE" },
+            { buildNumber: "7", shortVersion: "2026.7.21", state },
+            { buildNumber: "3", shortVersion: "2026.7.21", state: "COMPLETE" },
           ],
         }),
       );
@@ -152,7 +152,7 @@ describe("resolveIosReleasePlan", () => {
     expect(() =>
       resolveIosReleasePlan(
         input({
-          appStoreVersions: [{ id: "locked", state: "IN_REVIEW", versionString: "2026.7.201" }],
+          appStoreVersions: [{ id: "locked", state: "IN_REVIEW", versionString: "2026.7.21" }],
         }),
       ),
     ).toThrow("locked in state IN_REVIEW");
@@ -161,7 +161,7 @@ describe("resolveIosReleasePlan", () => {
       resolveIosReleasePlan(
         input({
           appStoreVersions: [
-            { id: "other", state: "PREPARE_FOR_SUBMISSION", versionString: "2026.7.300" },
+            { id: "other", state: "PREPARE_FOR_SUBMISSION", versionString: "2026.7.30" },
           ],
         }),
       ),
@@ -173,8 +173,8 @@ describe("resolveIosReleasePlan", () => {
       resolveIosReleasePlan(
         input({
           appStoreVersions: [
-            { id: "one", state: "PREPARE_FOR_SUBMISSION", versionString: "2026.7.201" },
-            { id: "two", state: "READY_FOR_REVIEW", versionString: "2026.7.202" },
+            { id: "one", state: "PREPARE_FOR_SUBMISSION", versionString: "2026.7.21" },
+            { id: "two", state: "READY_FOR_REVIEW", versionString: "2026.7.22" },
           ],
         }),
       ),
@@ -183,24 +183,22 @@ describe("resolveIosReleasePlan", () => {
     expect(() =>
       resolveIosReleasePlan(
         input({
-          buildUploads: [
-            { buildNumber: "1", shortVersion: "2026.7.200", state: "NEW_APPLE_STATE" },
-          ],
+          buildUploads: [{ buildNumber: "1", shortVersion: "2026.7.20", state: "NEW_APPLE_STATE" }],
         }),
       ),
     ).toThrow("Unknown App Store build upload state");
   });
 
-  it("fails after revision 99 is distributed", () => {
+  it("fails after revision 9 is distributed", () => {
     expect(() =>
       resolveIosReleasePlan(
         input({
           appStoreVersions: [
-            { id: "last", state: "READY_FOR_DISTRIBUTION", versionString: "2026.7.299" },
+            { id: "last", state: "READY_FOR_DISTRIBUTION", versionString: "2026.7.29" },
           ],
         }),
       ),
-    ).toThrow("exhausted App Store revisions 0 through 99");
+    ).toThrow("exhausted App Store revisions 0 through 9");
   });
 
   it("rejects a planned version older than released history from another gateway", () => {
@@ -225,27 +223,59 @@ describe("resolveIosReleasePlan", () => {
     );
   });
 
-  it("decodes only legacy or packed versions for the selected gateway", () => {
+  it("decodes only legacy or single-digit revision versions for the selected gateway", () => {
     expect(decodeIosAppStoreVersion("2026.7.2", "2026.7.2")).toEqual({
       legacy: true,
       revision: 0,
     });
-    expect(decodeIosAppStoreVersion("2026.7.2", "2026.7.299")).toEqual({
+    expect(decodeIosAppStoreVersion("2026.7.2", "2026.7.20")).toEqual({
       legacy: false,
-      revision: 99,
+      revision: 0,
     });
-    expect(decodeIosAppStoreVersion("2026.7.2", "2026.7.300")).toBeNull();
+    expect(decodeIosAppStoreVersion("2026.7.2", "2026.7.21")).toEqual({
+      legacy: false,
+      revision: 1,
+    });
+    expect(decodeIosAppStoreVersion("2026.7.2", "2026.7.29")).toEqual({
+      legacy: false,
+      revision: 9,
+    });
+    expect(decodeIosAppStoreVersion("2026.7.2", "2026.7.201")).toBeNull();
+    expect(decodeIosAppStoreVersion("2026.7.2", "2026.7.30")).toBeNull();
+    expect(decodeIosAppStoreVersion("2026.7.3", "2026.7.3")).toBeNull();
+    expect(decodeIosAppStoreVersion("2026.7.21", "2026.7.21")).toBeNull();
+    expect(decodeIosAppStoreVersion("2026.7.21", "2026.7.210")).toEqual({
+      legacy: false,
+      revision: 0,
+    });
+  });
+
+  it("does not mistake an appended version for a future gateway's legacy release", () => {
+    const plan = resolveIosReleasePlan(
+      input({
+        appStoreVersions: [
+          { id: "older", state: "READY_FOR_DISTRIBUTION", versionString: "2026.7.21" },
+        ],
+        gatewayVersion: "2026.7.21",
+      }),
+    );
+
+    expect(plan).toMatchObject({
+      appStoreRevision: 0,
+      appStoreVersion: "2026.7.210",
+      decision: "new-revision",
+    });
   });
 
   it("requires another cut when retry notes remain Unreleased", () => {
     const rootDir = writeIosFixture({
       packageVersion: "2026.7.2",
       changelog:
-        "# OpenClaw iOS Changelog\n\n## Unreleased\n\nRetry notes.\n\n## 2026.7.201\n\nOriginal notes.\n",
+        "# OpenClaw iOS Changelog\n\n## Unreleased\n\nRetry notes.\n\n## 2026.7.21\n\nOriginal notes.\n",
     });
     const plan = resolveIosReleasePlan({
       appStoreVersions: [
-        { id: "editable", state: "PREPARE_FOR_SUBMISSION", versionString: "2026.7.201" },
+        { id: "editable", state: "PREPARE_FOR_SUBMISSION", versionString: "2026.7.21" },
       ],
       buildUploads: [],
       gatewayVersion: "2026.7.2",
@@ -260,26 +290,26 @@ describe("cutIosReleaseChangelog", () => {
   it("cuts Unreleased notes into a new exact App Store version section", () => {
     const current =
       "# OpenClaw iOS Changelog\n\n## Unreleased\n\nNew notes.\n\n## 2026.7.2\n\nOld notes.\n";
-    const updated = cutIosReleaseChangelog(current, "2026.7.201");
+    const updated = cutIosReleaseChangelog(current, "2026.7.21");
 
-    expect(updated).toContain("## Unreleased\n\n## 2026.7.201\n\nNew notes.");
+    expect(updated).toContain("## Unreleased\n\n## 2026.7.21\n\nNew notes.");
     expect(updated).toContain("## 2026.7.2\n\nOld notes.");
-    expect(cutIosReleaseChangelog(updated, "2026.7.201")).toBe(updated);
+    expect(cutIosReleaseChangelog(updated, "2026.7.21")).toBe(updated);
   });
 
   it("merges retry notes into the existing release section", () => {
     const current =
-      "# OpenClaw iOS Changelog\n\n## Unreleased\n\nRetry fix.\n\n## 2026.7.201\n\nOriginal notes.\n";
-    const updated = cutIosReleaseChangelog(current, "2026.7.201");
+      "# OpenClaw iOS Changelog\n\n## Unreleased\n\nRetry fix.\n\n## 2026.7.21\n\nOriginal notes.\n";
+    const updated = cutIosReleaseChangelog(current, "2026.7.21");
 
-    expect(updated).toContain("## 2026.7.201\n\nRetry fix.\n\nOriginal notes.");
+    expect(updated).toContain("## 2026.7.21\n\nRetry fix.\n\nOriginal notes.");
   });
 
   it("preserves an existing release heading suffix", () => {
     const current =
-      "# OpenClaw iOS Changelog\n\n## Unreleased\n\nRetry fix.\n\n## 2026.7.201 - 2026-07-23\n\nOriginal notes.\n";
-    const updated = cutIosReleaseChangelog(current, "2026.7.201");
+      "# OpenClaw iOS Changelog\n\n## Unreleased\n\nRetry fix.\n\n## 2026.7.21 - 2026-07-23\n\nOriginal notes.\n";
+    const updated = cutIosReleaseChangelog(current, "2026.7.21");
 
-    expect(updated).toContain("## 2026.7.201 - 2026-07-23\n\nRetry fix.\n\nOriginal notes.");
+    expect(updated).toContain("## 2026.7.21 - 2026-07-23\n\nRetry fix.\n\nOriginal notes.");
   });
 });

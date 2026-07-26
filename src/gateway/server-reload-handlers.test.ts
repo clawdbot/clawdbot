@@ -1305,21 +1305,11 @@ describe("gateway hot reload model state", () => {
     const nextConfig = { mcp: { servers: {} } } as OpenClawConfig;
 
     await applyHotReload(
-      {
+      createHotTailPlan({
         changedPaths: ["mcp.servers.context7.command"],
-        restartGateway: false,
-        restartReasons: [],
         hotReasons: ["mcp.servers.context7.command"],
-        reloadHooks: false,
-        restartGmailWatcher: false,
-        restartCron: false,
-        restartHeartbeat: false,
-        restartHealthMonitor: false,
-        reloadPlugins: false,
-        restartChannels: new Set(),
         disposeMcpRuntimes: true,
-        noopPaths: [],
-      },
+      }),
       nextConfig,
     );
 
@@ -1343,21 +1333,10 @@ describe("gateway hot reload model state", () => {
     } as OpenClawConfig;
 
     await applyHotReload(
-      {
+      createHotTailPlan({
         changedPaths: ["agents.defaults.workspace"],
-        restartGateway: false,
-        restartReasons: [],
         hotReasons: ["agents.defaults.workspace"],
-        reloadHooks: false,
-        restartGmailWatcher: false,
-        restartCron: false,
-        restartHeartbeat: false,
-        restartHealthMonitor: false,
-        reloadPlugins: false,
-        restartChannels: new Set(),
-        disposeMcpRuntimes: false,
-        noopPaths: [],
-      },
+      }),
       nextConfig,
     );
 
@@ -1752,21 +1731,11 @@ describe("gateway hot reload commit policy", () => {
 
     await expect(
       applyHotReload(
-        {
+        createHotTailPlan({
           changedPaths: ["commands.restart", "hooks.enabled"],
-          restartGateway: false,
-          restartReasons: [],
           hotReasons: ["commands.restart", "hooks.enabled"],
           reloadHooks: true,
-          restartGmailWatcher: false,
-          restartCron: false,
-          restartHeartbeat: false,
-          restartHealthMonitor: false,
-          reloadPlugins: false,
-          restartChannels: new Set(),
-          disposeMcpRuntimes: false,
-          noopPaths: [],
-        },
+        }),
         { commands: { restart: true }, hooks: { enabled: true } },
       ),
     ).rejects.toThrow("hooks.enabled requires hooks.token");
@@ -2228,24 +2197,9 @@ describe("gateway restart deferral preflight", () => {
       ).toBe("recovery-pending");
 
       expect(
-        requestGatewayRestart(
-          {
-            changedPaths: ["gateway.auth"],
-            restartGateway: true,
-            restartReasons: ["gateway.auth"],
-            hotReasons: [],
-            reloadHooks: false,
-            restartGmailWatcher: false,
-            restartCron: false,
-            restartHeartbeat: false,
-            restartHealthMonitor: false,
-            reloadPlugins: false,
-            restartChannels: new Set(),
-            disposeMcpRuntimes: false,
-            noopPaths: [],
-          },
-          { gateway: { port: 18791 } },
-        ).status,
+        requestGatewayRestart(createGatewayRestartPlan("gateway.auth"), {
+          gateway: { port: 18791 },
+        }).status,
       ).toBe("accepted");
       await vi.advanceTimersByTimeAsync(1_000);
 
@@ -2410,21 +2364,11 @@ describe("gateway restart deferral preflight", () => {
     hoisted.activeEmbeddedRunCount.value = 1;
     vi.useFakeTimers();
     const reloadPromise = applyHotReload(
-      {
+      createHotTailPlan({
         changedPaths: ["channels.discord.token"],
-        restartGateway: false,
-        restartReasons: [],
         hotReasons: ["channels.discord.token"],
-        reloadHooks: false,
-        restartGmailWatcher: false,
-        restartCron: false,
-        restartHeartbeat: false,
-        restartHealthMonitor: false,
-        reloadPlugins: false,
         restartChannels: new Set(["discord"]),
-        disposeMcpRuntimes: false,
-        noopPaths: [],
-      },
+      }),
       {
         gateway: { reload: {} },
         channels: { discord: { token: "token" } },
@@ -2487,21 +2431,11 @@ describe("gateway restart deferral preflight", () => {
     hoisted.activeEmbeddedRunCount.value = 1;
     vi.useFakeTimers();
     const reloadPromise = applyHotReload(
-      {
+      createHotTailPlan({
         changedPaths: ["channels.telegram.botToken"],
-        restartGateway: false,
-        restartReasons: [],
         hotReasons: ["channels.telegram.botToken"],
-        reloadHooks: false,
-        restartGmailWatcher: false,
-        restartCron: false,
-        restartHeartbeat: false,
-        restartHealthMonitor: false,
-        reloadPlugins: false,
         restartChannels: new Set(["telegram"]),
-        disposeMcpRuntimes: false,
-        noopPaths: [],
-      },
+      }),
       {
         channels: { telegram: { botToken: "token" } },
       },
@@ -2636,21 +2570,11 @@ describe("gateway restart deferral preflight", () => {
 
 describe("gateway channel hot reload handlers", () => {
   function createChannelReloadPlan(channels: ChannelKind[]): GatewayReloadPlan {
-    return {
+    return createHotTailPlan({
       changedPaths: channels.map((channel) => `channels.${channel}.enabled`),
-      restartGateway: false,
-      restartReasons: [],
       hotReasons: ["channels"],
-      reloadHooks: false,
-      restartGmailWatcher: false,
-      restartCron: false,
-      restartHeartbeat: false,
-      restartHealthMonitor: false,
-      reloadPlugins: false,
       restartChannels: new Set(channels),
-      disposeMcpRuntimes: false,
-      noopPaths: [],
-    };
+    });
   }
 
   async function withChannelReloadsEnabled(run: () => Promise<void>) {
@@ -3098,58 +3022,29 @@ describe("gateway channel hot reload handlers", () => {
     }
   });
 
-  it("continues restarting later channels after a hot-reload stop failure", async () => {
+  it.each([
+    {
+      name: "stop",
+      expectedEvents: ["stop:telegram", "stop:discord", "start:discord"],
+    },
+    {
+      name: "start",
+      expectedEvents: ["stop:telegram", "start:telegram", "stop:discord", "start:discord"],
+    },
+  ])("continues restarting later channels after a hot-reload $name failure", async (testCase) => {
     const events: string[] = [];
     const setState = vi.fn();
     const logChannels = { info: vi.fn(), error: vi.fn() };
     const logReload = { info: vi.fn(), warn: vi.fn() };
     const stopChannel = vi.fn(async (channel: ChannelKind) => {
       events.push(`stop:${channel}`);
-      if (channel === "telegram") {
+      if (channel === "telegram" && testCase.name === "stop") {
         throw new Error("stop failed");
       }
     });
     const startChannel = vi.fn(async (channel: ChannelKind) => {
       events.push(`start:${channel}`);
-    });
-    const { applyHotReload } = createGatewayReloadHandlers({
-      setState,
-      startChannel,
-      stopChannel,
-      logChannels,
-      logReload,
-    });
-
-    await withGatewayRestartSignal(async (signalSpy) => {
-      await withChannelReloadsEnabled(async () => {
-        await expect(
-          applyHotReload(createChannelReloadPlan(["telegram", "discord"]), {}),
-        ).resolves.toBeUndefined();
-      });
-      expect(signalSpy).toHaveBeenCalledOnce();
-    });
-
-    expect(events).toEqual(["stop:telegram", "stop:discord", "start:discord"]);
-    expect(logChannels.error).toHaveBeenCalledWith(
-      "failed to restart telegram channel during hot reload: stop failed",
-    );
-    expect(setState).toHaveBeenCalledTimes(1);
-    expect(logReload.warn).toHaveBeenCalledWith(
-      "channel restart (telegram) failed after config commit; restarting gateway",
-    );
-  });
-
-  it("continues restarting later channels after a hot-reload start failure", async () => {
-    const events: string[] = [];
-    const setState = vi.fn();
-    const logChannels = { info: vi.fn(), error: vi.fn() };
-    const logReload = { info: vi.fn(), warn: vi.fn() };
-    const stopChannel = vi.fn(async (channel: ChannelKind) => {
-      events.push(`stop:${channel}`);
-    });
-    const startChannel = vi.fn(async (channel: ChannelKind) => {
-      events.push(`start:${channel}`);
-      if (channel === "telegram") {
+      if (channel === "telegram" && testCase.name === "start") {
         throw new Error("start failed");
       }
     });
@@ -3170,9 +3065,9 @@ describe("gateway channel hot reload handlers", () => {
       expect(signalSpy).toHaveBeenCalledOnce();
     });
 
-    expect(events).toEqual(["stop:telegram", "start:telegram", "stop:discord", "start:discord"]);
+    expect(events).toEqual(testCase.expectedEvents);
     expect(logChannels.error).toHaveBeenCalledWith(
-      "failed to restart telegram channel during hot reload: start failed",
+      `failed to restart telegram channel during hot reload: ${testCase.name} failed`,
     );
     expect(setState).toHaveBeenCalledTimes(1);
     expect(logReload.warn).toHaveBeenCalledWith(
@@ -3183,21 +3078,11 @@ describe("gateway channel hot reload handlers", () => {
 
 describe("gateway Gmail hot reload handlers", () => {
   function createGmailReloadPlan(): GatewayReloadPlan {
-    return {
+    return createHotTailPlan({
       changedPaths: ["hooks.gmail.account"],
-      restartGateway: false,
-      restartReasons: [],
       hotReasons: ["hooks.gmail.account"],
-      reloadHooks: false,
       restartGmailWatcher: true,
-      restartCron: false,
-      restartHeartbeat: false,
-      restartHealthMonitor: false,
-      reloadPlugins: false,
-      restartChannels: new Set<ChannelKind>(),
-      disposeMcpRuntimes: false,
-      noopPaths: [],
-    };
+    });
   }
 
   function createGmailConfig(account: string): OpenClawConfig {
@@ -3216,24 +3101,7 @@ describe("gateway Gmail hot reload handlers", () => {
       hooks: { enabled: true, gmail: { account: "next@example.com" } },
     } as never;
 
-    await applyHotReload(
-      {
-        changedPaths: ["hooks.gmail.account"],
-        restartGateway: false,
-        restartReasons: [],
-        hotReasons: ["hooks.gmail.account"],
-        reloadHooks: false,
-        restartGmailWatcher: true,
-        restartCron: false,
-        restartHeartbeat: false,
-        restartHealthMonitor: false,
-        reloadPlugins: false,
-        restartChannels: new Set(),
-        disposeMcpRuntimes: false,
-        noopPaths: [],
-      },
-      nextConfig,
-    );
+    await applyHotReload(createGmailReloadPlan(), nextConfig);
 
     expect(hoisted.refreshContextWindowCache).not.toHaveBeenCalled();
     expect(stopPostReadySidecars).toHaveBeenCalledBefore(hoisted.stopGmailWatcher);

@@ -1,13 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { AssistantMessage } from "../../llm/types.js";
+import type { EmbeddedRunAttemptResult } from "../embedded-agent-runner/run/types.js";
 import {
   assertSettledTurnFinalizationResult,
   projectSettledTurnFinalizationAttemptResult,
 } from "./settled-turn-finalization-result.js";
-import type {
-  AgentHarnessAttemptResult,
-  AgentHarnessSettledTurnFinalizationResult,
-} from "./types.js";
+import type { AgentHarnessSettledTurnFinalizationResult } from "./types.js";
 
 function assistantMessage(
   content: AssistantMessage["content"],
@@ -39,17 +37,11 @@ function safeResult(): AgentHarnessSettledTurnFinalizationResult {
 }
 
 function successfulAttempt(
-  overrides: Partial<AgentHarnessAttemptResult> = {},
-): AgentHarnessAttemptResult {
+  overrides: Partial<EmbeddedRunAttemptResult> = {},
+): EmbeddedRunAttemptResult {
   const assistant = safeResult().assistant;
   return {
-    aborted: false,
-    externalAbort: false,
-    timedOut: false,
-    idleTimedOut: false,
-    timedOutDuringCompaction: false,
-    promptError: null,
-    promptErrorSource: null,
+    terminal: { kind: "ok" },
     sessionIdUsed: "session-1",
     messagesSnapshot: [assistant],
     assistantTexts: ["done"],
@@ -139,7 +131,9 @@ describe("assertSettledTurnFinalizationResult", () => {
   it("rejects a failed full attempt even when it contains visible assistant text", () => {
     expect(() =>
       projectSettledTurnFinalizationAttemptResult(
-        successfulAttempt({ promptError: new Error("provider failed") }),
+        successfulAttempt({
+          terminal: { kind: "failed", source: "prompt", error: new Error("provider failed") },
+        }),
       ),
     ).toThrow("did not complete successfully");
   });

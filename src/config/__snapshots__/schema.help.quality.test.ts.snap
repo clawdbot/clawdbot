@@ -618,7 +618,6 @@ exports[`config tier coverage > keeps the curated common leaf set reviewable 1`]
   "ui.prefs.chatShowToolCalls",
   "ui.prefs.locale",
   "ui.prefs.showAdvancedSettings",
-  "ui.prefs.textScale",
   "ui.prefs.theme",
   "ui.prefs.themeMode",
   "update.auto.enabled",

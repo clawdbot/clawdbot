@@ -6,30 +6,34 @@
 import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
 import { resolveUserPath } from "../../utils.js";
-import { resolveDefaultAgentDir } from "../agent-scope-config.js";
 import {
   AUTH_PROFILE_FILENAME,
   AUTH_STATE_FILENAME,
   LEGACY_AUTH_FILENAME,
 } from "./path-constants.js";
+import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
+
+function resolveAuthAgentDir(agentDir?: string): string {
+  if (agentDir) {
+    return resolveUserPath(agentDir);
+  }
+  return resolveSharedMainAuthAgentDir();
+}
 
 /** Resolve the persisted auth profile store path for an agent dir. */
 export function resolveAuthStorePath(agentDir?: string): string {
-  const resolved = resolveUserPath(agentDir ?? resolveDefaultAgentDir({}));
-  return path.join(resolved, AUTH_PROFILE_FILENAME);
+  return path.join(resolveAuthAgentDir(agentDir), AUTH_PROFILE_FILENAME);
 }
 
 /** Resolve the legacy auth store path used by migration code. */
 export function resolveLegacyAuthStorePath(agentDir?: string): string {
-  const resolved = resolveUserPath(agentDir ?? resolveDefaultAgentDir({}));
-  return path.join(resolved, LEGACY_AUTH_FILENAME);
+  return path.join(resolveAuthAgentDir(agentDir), LEGACY_AUTH_FILENAME);
 }
 
 /** Resolve the auth-state sidecar path for usage/cooldown metadata. */
 export function resolveAuthStatePath(agentDir?: string): string {
-  const resolved = resolveUserPath(agentDir ?? resolveDefaultAgentDir({}));
-  return path.join(resolved, AUTH_STATE_FILENAME);
+  return path.join(resolveAuthAgentDir(agentDir), AUTH_STATE_FILENAME);
 }
 
 /** Resolve the user-facing auth profile database path. */

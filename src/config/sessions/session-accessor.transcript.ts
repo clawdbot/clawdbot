@@ -1,5 +1,4 @@
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import { patchSessionEntry } from "./session-accessor.entry.js";
 import {
   appendSqliteTranscriptEvent,
   appendSqliteTranscriptEventSync,
@@ -236,46 +235,33 @@ export async function trimSessionTranscriptForManualCompact(
   const maxLines = Math.max(1, Math.floor(params.maxLines));
   const maxTailLines = Math.max(0, maxLines - 1);
   let declined: SessionTranscriptManualTrimResult = { compacted: false, reason: "no transcript" };
-  const trimmed = await trimSqliteTranscriptForManualCompact(scope, (lines) => {
-    if (lines.length === 0) {
-      declined = { compacted: false, reason: "no transcript" };
-      return null;
-    }
-    if (lines.length <= maxLines) {
-      declined = { compacted: false, kept: lines.length };
-      return null;
-    }
-    const tailLines = lines.slice(1);
-    const retainedLines = normalizeManualCompactTranscriptLines(
-      lines[0],
-      maxTailLines > 0 ? tailLines.slice(-maxTailLines) : [],
-    );
-    if (!retainedLines) {
-      declined = { compacted: false, kept: 0 };
-      return null;
-    }
-    return retainedLines;
-  });
+  const trimmed = await trimSqliteTranscriptForManualCompact(
+    scope,
+    (lines) => {
+      if (lines.length === 0) {
+        declined = { compacted: false, reason: "no transcript" };
+        return null;
+      }
+      if (lines.length <= maxLines) {
+        declined = { compacted: false, kept: lines.length };
+        return null;
+      }
+      const tailLines = lines.slice(1);
+      const retainedLines = normalizeManualCompactTranscriptLines(
+        lines[0],
+        maxTailLines > 0 ? tailLines.slice(-maxTailLines) : [],
+      );
+      if (!retainedLines) {
+        declined = { compacted: false, kept: 0 };
+        return null;
+      }
+      return retainedLines;
+    },
+    params.nowMs === undefined ? {} : { nowMs: params.nowMs },
+  );
   if (!trimmed.trimmed) {
     return declined;
   }
-  await patchSessionEntry(
-    {
-      ...scope,
-      sessionKey: scope.sessionKey,
-      storePath: scope.storePath,
-    },
-    (entry) => {
-      delete entry.contextBudgetStatus;
-      delete entry.inputTokens;
-      delete entry.outputTokens;
-      delete entry.totalTokens;
-      delete entry.totalTokensFresh;
-      entry.updatedAt = params.nowMs ?? Date.now();
-      return entry;
-    },
-    { replaceEntry: true },
-  );
 
   return { archived: trimmed.archivedPath, compacted: true, kept: trimmed.kept };
 }

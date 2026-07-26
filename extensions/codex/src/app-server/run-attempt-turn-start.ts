@@ -4,7 +4,6 @@ import {
   runAgentCleanupStep,
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
-  type EmbeddedRunAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isIncognitoSessionKey } from "../incognito-session.js";
 import {
@@ -17,6 +16,7 @@ import {
   isInvalidCodexImagePayloadError,
 } from "./attempt-results.js";
 import { isCodexContextRestartSelectionChangedError } from "./attempt-startup.js";
+import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import type { CodexTurnStartResponse } from "./protocol.js";
 import { emitCodexAppServerEvent, runCodexAgentEndHook } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";

@@ -43,7 +43,7 @@ export async function listManualSetupInferenceOptions(
   if (snapshot.exists && !snapshot.valid) {
     throw new Error(invalidSetupConfigError(snapshot));
   }
-  const cfg = snapshot.exists && snapshot.valid ? (snapshot.runtimeConfig ?? snapshot.config) : {};
+  const cfg = snapshot.runtimeConfig ?? snapshot.config;
   const { workspace } = await resolveSetupInferenceWorkspace({
     configExists: snapshot.exists,
     configValid: snapshot.valid,
@@ -76,7 +76,7 @@ export async function detectSetupInference(
   if (snapshot.exists && !snapshot.valid) {
     throw new Error(invalidSetupConfigError(snapshot));
   }
-  const cfg = snapshot.exists && snapshot.valid ? (snapshot.runtimeConfig ?? snapshot.config) : {};
+  const cfg = snapshot.runtimeConfig ?? snapshot.config;
   const detected = await (deps.detectInferenceBackends ?? detectInferenceBackends)({ config: cfg });
   // Gemini CLI has no hard tool-off mode: wildcard exclusions can be
   // overridden by admin policy and do not stop discovery or MCP startup.

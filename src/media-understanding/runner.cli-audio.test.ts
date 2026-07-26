@@ -188,67 +188,80 @@ describe("media-understanding CLI audio entry", () => {
   it.each([
     { name: "one attachment", count: 1, leadingEmpty: false },
     { name: "many attachments after an empty slot", count: 2, leadingEmpty: true },
-  ])("projects singular template variables for $name", async ({ count, leadingEmpty }) => {
-    await withTempDir({ prefix: "openclaw-cli-media-template-" }, async (base) => {
-      const media = await Promise.all(
-        Array.from({ length: count }, async (_, index) => {
-          const mediaPath = path.join(base, `audio-${index}.wav`);
-          await fs.writeFile(mediaPath, createSafeAudioFixtureBuffer());
-          return {
-            path: mediaPath,
-            url: `media://inbound/audio-${index}.wav`,
-            contentType: index === 0 ? "audio/wav" : "audio/x-wav",
-          };
-        }),
-      );
-      const alignedMedia: Array<Partial<(typeof media)[number]>> = leadingEmpty
-        ? [{}, ...media]
-        : media;
-      const ctx = {
-        media: alignedMedia,
-      };
-      const attachments = normalizeMediaAttachments(ctx);
-      expect(attachments.map((attachment) => attachment.index)).toEqual(
-        leadingEmpty ? [1, 2] : [0],
-      );
-      const cache = createMediaAttachmentCache(attachments, {
-        localPathRoots: [base],
-        includeDefaultLocalPathRoots: false,
-      });
-      try {
-        for (const [callIndex, attachment] of attachments.entries()) {
-          await runCliEntry({
-            capability: "audio",
-            entry: {
-              type: "cli",
-              command: "mock-transcriber",
-              args: [
-                "{{MediaPath}}",
-                "{{MediaUrl}}",
-                "{{MediaType}}",
-                "{{MediaDir}}",
-                "{{MediaPaths}}",
-              ],
-            },
-            cfg: { tools: { media: { audio: {} } } } as OpenClawConfig,
-            ctx,
-            attachment,
-            cache,
-            config: {} as never,
-          });
-          expect(runExecMock.mock.calls[callIndex]?.[1]).toEqual([
-            media[callIndex]?.path,
-            media[callIndex]?.url,
-            media[callIndex]?.contentType,
-            base,
-            "",
-          ]);
+  ])(
+    "projects facts-first and deprecated template variables for $name",
+    async ({ count, leadingEmpty }) => {
+      await withTempDir({ prefix: "openclaw-cli-media-template-" }, async (base) => {
+        const media = await Promise.all(
+          Array.from({ length: count }, async (_, index) => {
+            const mediaPath = path.join(base, `audio-${index}.wav`);
+            await fs.writeFile(mediaPath, createSafeAudioFixtureBuffer());
+            return {
+              path: mediaPath,
+              url: `media://inbound/audio-${index}.wav`,
+              contentType: index === 0 ? "audio/wav" : "audio/x-wav",
+            };
+          }),
+        );
+        const alignedMedia: Array<Partial<(typeof media)[number]>> = leadingEmpty
+          ? [{}, ...media]
+          : media;
+        const ctx = {
+          media: alignedMedia,
+        };
+        const attachments = normalizeMediaAttachments(ctx);
+        expect(attachments.map((attachment) => attachment.index)).toEqual(
+          leadingEmpty ? [1, 2] : [0],
+        );
+        const cache = createMediaAttachmentCache(attachments, {
+          localPathRoots: [base],
+          includeDefaultLocalPathRoots: false,
+        });
+        try {
+          for (const [callIndex, attachment] of attachments.entries()) {
+            await runCliEntry({
+              capability: "audio",
+              entry: {
+                type: "cli",
+                command: "mock-transcriber",
+                args: [
+                  "{{AttachmentPath}}",
+                  "{{AttachmentUrl}}",
+                  "{{AttachmentContentType}}",
+                  "{{AttachmentDir}}",
+                  "{{AttachmentIndex}}",
+                  "{{MediaPath}}",
+                  "{{MediaUrl}}",
+                  "{{MediaType}}",
+                  "{{MediaDir}}",
+                  "{{MediaPaths}}",
+                ],
+              },
+              cfg: { tools: { media: { audio: {} } } } as OpenClawConfig,
+              ctx,
+              attachment,
+              cache,
+              config: {} as never,
+            });
+            expect(runExecMock.mock.calls[callIndex]?.[1]).toEqual([
+              media[callIndex]?.path,
+              media[callIndex]?.url,
+              media[callIndex]?.contentType,
+              base,
+              String(attachment.index),
+              media[callIndex]?.path,
+              media[callIndex]?.url,
+              media[callIndex]?.contentType,
+              base,
+              "",
+            ]);
+          }
+        } finally {
+          await cache.cleanup();
         }
-      } finally {
-        await cache.cleanup();
-      }
-    });
-  });
+      });
+    },
+  );
 
   it.each(transcriptFileCases)("reads $name transcript output", async (testCase) => {
     runExecMock.mockImplementationOnce(async (_command, args: string[]) => {

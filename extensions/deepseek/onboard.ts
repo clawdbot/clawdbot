@@ -1,32 +1,27 @@
-// Deepseek setup module handles plugin onboarding behavior.
+import { readManifestProviderDefaultModelRef } from "openclaw/plugin-sdk/provider-catalog-shared";
 import {
-  applyAgentDefaultModelPrimary,
-  applyProviderConfigWithModelCatalog,
+  createModelCatalogPresetAppliers,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
-import { buildDeepSeekModelDefinition, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL_CATALOG } from "./api.js";
+import { DEEPSEEK_BASE_URL, DEEPSEEK_MODEL_CATALOG } from "./models.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-export const DEEPSEEK_DEFAULT_MODEL_REF = "deepseek/deepseek-v4-flash";
+export const DEEPSEEK_DEFAULT_MODEL_REF = readManifestProviderDefaultModelRef(
+  manifest,
+  "deepseek",
+)!;
 
-function applyDeepSeekProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  const models = { ...cfg.agents?.defaults?.models };
-  models[DEEPSEEK_DEFAULT_MODEL_REF] = {
-    ...models[DEEPSEEK_DEFAULT_MODEL_REF],
-    alias: models[DEEPSEEK_DEFAULT_MODEL_REF]?.alias ?? "DeepSeek",
-  };
-
-  return applyProviderConfigWithModelCatalog(cfg, {
-    agentModels: models,
+const deepSeekPresetAppliers = createModelCatalogPresetAppliers({
+  primaryModelRef: DEEPSEEK_DEFAULT_MODEL_REF,
+  resolveParams: (_cfg: OpenClawConfig) => ({
     providerId: "deepseek",
     api: "openai-completions",
     baseUrl: DEEPSEEK_BASE_URL,
-    catalogModels: DEEPSEEK_MODEL_CATALOG.map(buildDeepSeekModelDefinition),
-  });
-}
+    catalogModels: structuredClone(DEEPSEEK_MODEL_CATALOG),
+    aliases: [{ modelRef: DEEPSEEK_DEFAULT_MODEL_REF, alias: "DeepSeek" }],
+  }),
+});
 
 export function applyDeepSeekConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return applyAgentDefaultModelPrimary(
-    applyDeepSeekProviderConfig(cfg),
-    DEEPSEEK_DEFAULT_MODEL_REF,
-  );
+  return deepSeekPresetAppliers.applyConfig(cfg);
 }

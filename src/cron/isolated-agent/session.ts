@@ -45,12 +45,10 @@ const AMBIENT_SESSION_CONTEXT_FIELDS = [
   "queueDebounceMs",
   "queueCap",
   "queueDrop",
-  "channel",
   "groupId",
   "subject",
   "groupChannel",
   "space",
-  "origin",
   "acp",
 ] as const satisfies readonly (keyof SessionEntry)[];
 
@@ -153,7 +151,10 @@ export function resolveCronSession(params: {
   const store =
     params.store ??
     Object.fromEntries(
-      listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+      listSessionEntries({ agentId: params.agentId, storePath }).map(({ sessionKey, entry }) => [
+        sessionKey,
+        entry,
+      ]),
     );
   const sourceSessionKey = params.sourceSessionKey?.trim();
   const sourceSessionDiffers = Boolean(sourceSessionKey && sourceSessionKey !== params.sessionKey);

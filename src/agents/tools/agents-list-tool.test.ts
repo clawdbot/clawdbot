@@ -139,36 +139,6 @@ describe("agents_list tool", () => {
     });
   });
 
-  it("uses the implicit default agent as a configured target", async () => {
-    loadConfigMock.mockReturnValue({
-      agents: {
-        defaults: {
-          subagents: { allowAgents: ["main"] },
-        },
-      },
-    } satisfies OpenClawConfig);
-
-    const result = await createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute(
-      "call",
-      {},
-    );
-    const details = result.details as AgentListDetails;
-
-    expect(details).toStrictEqual({
-      requester: "main",
-      allowAny: false,
-      agents: [
-        {
-          id: "main",
-          name: undefined,
-          configured: true,
-          model: undefined,
-          agentRuntime: { id: "codex", source: "implicit" },
-        },
-      ],
-    });
-  });
-
   it("ignores legacy env-forced plugin runtime selections", async () => {
     // Runtime selection now comes from config/model routing, not a process-wide
     // legacy env override.

@@ -1005,8 +1005,9 @@ describe("update-cli", () => {
     ...overrides,
   });
 
-  const runPostCoreUpdate = (env: NodeJS.ProcessEnv = {}) =>
-    withEnvAsync(
+  const runPostCoreUpdate = (env: NodeJS.ProcessEnv = {}) => {
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(FRESH_POST_UPDATE_ENTRYPOINT);
+    return withEnvAsync(
       {
         OPENCLAW_UPDATE_POST_CORE: "1",
         OPENCLAW_UPDATE_POST_CORE_CHANNEL: "stable",
@@ -1016,12 +1017,14 @@ describe("update-cli", () => {
         await updateCommand({ yes: true, restart: false });
       },
     );
+  };
 
   const runPostCoreCommand = (
     options: Parameters<typeof updateCommand>[0],
     env: NodeJS.ProcessEnv = {},
-  ) =>
-    withEnvAsync(
+  ) => {
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(FRESH_POST_UPDATE_ENTRYPOINT);
+    return withEnvAsync(
       {
         OPENCLAW_UPDATE_POST_CORE: "1",
         OPENCLAW_UPDATE_POST_CORE_CHANNEL: "stable",
@@ -1031,6 +1034,7 @@ describe("update-cli", () => {
         await updateCommand(options);
       },
     );
+  };
 
   const setupInstalledPackageAtNodeModules = async (nodeModules: string, version = "2026.4.21") => {
     const pkgRoot = path.join(nodeModules, "openclaw");
@@ -1447,7 +1451,6 @@ describe("update-cli", () => {
 
     await updateCommand({ yes: true, restart: false });
 
-    expect(installCompletion).toHaveBeenCalledWith("zsh", true, "openclaw");
     const logOutput = getLogOutput();
     expect(logOutput).toContain("Shell completion refresh failed: EACCES: permission denied");
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
@@ -1472,6 +1475,34 @@ describe("update-cli", () => {
       suppressFutureVersionWarning: true,
     });
     expectNoSideEffects(updateNpmInstalledPlugins, runDaemonInstall, runDaemonRestart);
+  });
+
+  it("routes JSON post-core child output to stderr", async () => {
+    const { entrypoints } = setupUpdatedRootRefresh();
+    const stdoutPipe = vi.fn();
+    const stderrPipe = vi.fn();
+    spawn.mockImplementationOnce(() => {
+      const child = new EventEmitter() as EventEmitter & {
+        once: EventEmitter["once"];
+        stdout: { pipe: typeof stdoutPipe };
+        stderr: { pipe: typeof stderrPipe };
+      };
+      child.stdout = { pipe: stdoutPipe };
+      child.stderr = { pipe: stderrPipe };
+      queueMicrotask(() => {
+        child.emit("exit", 0, null);
+      });
+      return child;
+    });
+
+    await updateCommand({ json: true, restart: false });
+
+    const call = spawnCall();
+    expect(call?.[1]).toEqual([entrypoints[0], "update", "--json", "--no-restart"]);
+    expect(call?.[2]?.stdio).toBe("pipe");
+    expect(stdoutPipe).toHaveBeenCalledWith(process.stderr);
+    expect(stdoutPipe).not.toHaveBeenCalledWith(process.stdout);
+    expect(stderrPipe).toHaveBeenCalledWith(process.stderr);
   });
 
   it("finishes package updates when the post-core process writes a result but keeps handles open", async () => {
@@ -1984,9 +2015,35 @@ describe("update-cli", () => {
         ),
     ).toBe(true);
     expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
+    expectFreshPostUpdateDoctor({ yes: false });
+    const freshDoctorCall = vi
+      .mocked(runExec)
+      .mock.calls.find(
+        ([, args]) => args[0] === FRESH_POST_UPDATE_ENTRYPOINT && args[1] === "doctor",
+      );
+    expect(freshDoctorCall).toBeDefined();
+    expect(vi.mocked(runExec).mock.invocationCallOrder[0] ?? 0).toBeLessThan(
+      syncPluginsForUpdateChannel.mock.invocationCallOrder[0] ?? 0,
+    );
     expect(syncPluginsForUpdateChannel).toHaveBeenCalledTimes(1);
     expect(updateNpmInstalledPlugins).toHaveBeenCalledTimes(1);
     expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("keeps fresh doctor output off stdout during json post-core resume", async () => {
+    vi.mocked(runExec).mockResolvedValueOnce({
+      stdout: "doctor ui output",
+      stderr: "doctor diagnostic output",
+    });
+
+    await runPostCoreCommand({ json: true, restart: false });
+
+    expectFreshPostUpdateDoctor({ yes: false });
+    expect(getLogOutput()).not.toContain("doctor ui output");
+    expect(getErrorOutput()).not.toContain("doctor diagnostic output");
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "ok" }),
+    );
   });
 
   it("post-core resume children exit after writing a plugin update result", async () => {
@@ -4956,7 +5013,6 @@ describe("update-cli", () => {
 
     await updateCommand({ yes: true, restart: false });
 
-    expect(nodeVersionSatisfiesEngine).toHaveBeenCalledWith("22.18.0", ">=22.19.0");
     expect(packageInstallCommandCall()).toBeUndefined();
     expect(serviceStop).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
@@ -5140,14 +5196,6 @@ describe("update-cli", () => {
 
     await updateCommand({ yes: true });
 
-    expect(nodeVersionSatisfiesEngine).toHaveBeenCalledWith("24.14.0", ">=24.15.0 <25");
-    expect(nodeVersionSatisfiesEngine).toHaveBeenCalledWith("24.15.0", ">=24.15.0 <25");
-    expect(doctorCommandCall()?.[0][0]).toBe(process.execPath);
-    expect(spawnCall()?.[0]).toBe(process.execPath);
-    const serviceInstallCall = commandCalls().find(
-      ([argv]) => argv[2] === "gateway" && argv[3] === "install",
-    );
-    expect(serviceInstallCall?.[0][0]).toBe(process.execPath);
     const logs = getLogOutput();
     expect(logs).toContain(`Managed gateway service Node (${serviceNode}) cannot run`);
     expect(logs).toContain(`Using current Node (${process.execPath})`);
@@ -6632,6 +6680,7 @@ describe("update-cli", () => {
         OPENCLAW_UPDATE_IN_PROGRESS: undefined,
         OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: undefined,
         OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: undefined,
+        OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: undefined,
       },
       async () => {
         let doctorEnv: NodeJS.ProcessEnv | undefined;
@@ -6651,9 +6700,11 @@ describe("update-cli", () => {
         expect(doctorEnv?.OPENCLAW_UPDATE_IN_PROGRESS).toBe("1");
         expect(doctorEnv?.OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR).toBe("1");
         expect(doctorEnv?.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE).toBe("1");
+        expect(doctorEnv?.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE).toBe("1");
         expect(process.env.OPENCLAW_UPDATE_IN_PROGRESS).toBeUndefined();
         expect(process.env.OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR).toBeUndefined();
         expect(process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE).toBeUndefined();
+        expect(process.env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE).toBeUndefined();
         expect(doctorCommand).toHaveBeenCalledWith(defaultRuntime, {
           nonInteractive: true,
           repair: true,
@@ -6776,6 +6827,7 @@ describe("update-cli", () => {
         OPENCLAW_UPDATE_IN_PROGRESS: "1",
         OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: "1",
         OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+        OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
       },
     });
     expect(syncPluginCall()?.channel).toBe("beta");

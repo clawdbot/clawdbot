@@ -2,6 +2,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { SessionOrigin } from "../../config/sessions/types.js";
+import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
+import { projectSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 
 vi.mock("../../config/sessions/paths.js", () => ({
   resolveStorePath: vi.fn().mockReturnValue("/tmp/test-store.json"),
@@ -43,7 +47,16 @@ import { resolveCronSession } from "./session.js";
 const NOW_MS = 1_737_600_000_000;
 
 type SessionStore = Record<string, SessionEntry>;
-type MockSessionStoreEntry = Partial<SessionEntry>;
+type MockSessionStoreEntry = Partial<SessionEntry> & {
+  deliveryContext?: DeliveryContext;
+  origin?: SessionOrigin;
+  channel?: string;
+  lastChannel?: string;
+  lastTo?: string;
+  lastAccountId?: string;
+  lastThreadId?: string | number;
+};
+type ProjectedSessionEntry = SessionEntry & ReturnType<typeof projectSessionDeliveryFields>;
 
 function resolveWithStoredEntry(params?: {
   sessionKey?: string;
@@ -55,11 +68,15 @@ function resolveWithStoredEntry(params?: {
   const sessionKey = params?.sessionKey ?? "webhook:stable-key";
   const sourceSessionKey = params?.sourceSessionKey;
   const store: SessionStore = params?.entry
-    ? ({ [sourceSessionKey ?? sessionKey]: params.entry as SessionEntry } as SessionStore)
+    ? {
+        [sourceSessionKey ?? sessionKey]: normalizeLegacySessionEntryDelivery(
+          params.entry as SessionEntry,
+        ),
+      }
     : {};
   vi.mocked(evaluateSessionFreshness).mockReturnValue({ fresh: params?.fresh ?? true });
 
-  return resolveCronSession({
+  const result = resolveCronSession({
     cfg: {} as OpenClawConfig,
     sessionKey,
     sourceSessionKey,
@@ -68,6 +85,13 @@ function resolveWithStoredEntry(params?: {
     forceNew: params?.forceNew,
     store,
   });
+  return {
+    ...result,
+    sessionEntry: {
+      ...result.sessionEntry,
+      ...projectSessionDeliveryFields(result.sessionEntry.delivery),
+    } as ProjectedSessionEntry,
+  };
 }
 
 describe("resolveCronSession", () => {
@@ -495,7 +519,7 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.authProfileOverrideCompactionCount).toBe(3);
     });
 
-    it("preserves ambient session context for non-isolated expiration rollovers", () => {
+    it("preserves non-delivery ambient session context for non-isolated expiration rollovers", () => {
       const result = resolveWithStoredEntry({
         entry: {
           sessionId: "existing-session-id-321",
@@ -513,8 +537,8 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.elevatedLevel).toBe("full");
       expect(result.sessionEntry.sendPolicy).toBe("deny");
       expect(result.sessionEntry.queueMode).toBe("collect");
-      expect(result.sessionEntry.channel).toBe("discord");
-      expect(result.sessionEntry.origin).toEqual({ provider: "discord", to: "old-channel" });
+      expect(result.sessionEntry.channel).toBeUndefined();
+      expect(result.sessionEntry.origin).toBeUndefined();
     });
 
     it("clears delivery routing metadata when session is stale", () => {

@@ -9,6 +9,7 @@ import {
 } from "../../config/sessions/conversation-registry.js";
 import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { bindOutboundSessionEntry } from "./outbound-session.js";
 
 describe("outbound session persistence", () => {
@@ -32,8 +33,10 @@ describe("outbound session persistence", () => {
         sessionId: "shared-main-session",
         updatedAt: 100,
         chatType: "direct",
-        deliveryContext: { channel: "discord", accountId: "default", to: "user:operator" },
-        origin: { provider: "discord", accountId: "default", from: "discord:operator" },
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "discord", accountId: "default", to: "user:operator" },
+          origin: { provider: "discord", accountId: "default", from: "discord:operator" },
+        }),
       },
     );
     const identity = buildConversationIdentity({

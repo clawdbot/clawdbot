@@ -21,6 +21,7 @@ import {
   createTestRegistry,
 } from "../test-utils/channel-plugins.js";
 import { typedCases } from "../test-utils/typed-cases.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import {
   type HeartbeatDeps,
   isHeartbeatEnabledForAgent,
@@ -454,15 +455,16 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     sessionId: "sid",
     updatedAt: Date.now(),
   };
+  const entryWithDelivery = (channel: string, to: string) => ({
+    ...baseEntry,
+    delivery: normalizeSessionDeliveryState({ context: { channel, to } }),
+  });
 
   it("resolves target variants across route and allowlist rules", () => {
     const cases: Array<{
       name: string;
       cfg: OpenClawConfig;
-      entry: typeof baseEntry & {
-        lastChannel?: "whatsapp" | "telegram" | "webchat";
-        lastTo?: string;
-      };
+      entry: typeof baseEntry & { delivery?: ReturnType<typeof normalizeSessionDeliveryState> };
       expected: ReturnType<typeof resolveHeartbeatDeliveryTarget>;
     }> = [
       {
@@ -480,7 +482,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
       {
         name: "target defaults to none when unset",
         cfg: {},
-        entry: { ...baseEntry, lastChannel: "whatsapp", lastTo: "120363401234567890@g.us" },
+        entry: entryWithDelivery("whatsapp", "120363401234567890@g.us"),
         expected: {
           channel: "none",
           reason: "target-none",
@@ -509,7 +511,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
       {
         name: "skip webchat last route",
         cfg: {},
-        entry: { ...baseEntry, lastChannel: "webchat", lastTo: "web" },
+        entry: entryWithDelivery("webchat", "web"),
         expected: {
           channel: "none",
           reason: "target-none",
@@ -524,7 +526,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
           agents: { defaults: { heartbeat: { target: "whatsapp", to: "+1999" } } },
           channels: { whatsapp: { allowFrom: ["120363401234567890@g.us", "+1666"] } },
         },
-        entry: { ...baseEntry, lastChannel: "whatsapp", lastTo: "+1222" },
+        entry: entryWithDelivery("whatsapp", "+1222"),
         expected: {
           channel: "none",
           reason: "no-target",
@@ -539,11 +541,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
           agents: { defaults: { heartbeat: { target: "last" } } },
           channels: { whatsapp: { allowFrom: ["120363401234567890@g.us"] } },
         },
-        entry: {
-          ...baseEntry,
-          lastChannel: "whatsapp",
-          lastTo: "whatsapp:120363401234567890@G.US",
-        },
+        entry: entryWithDelivery("whatsapp", "whatsapp:120363401234567890@G.US"),
         expected: {
           channel: "whatsapp",
           to: "120363401234567890@g.us",
@@ -581,7 +579,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
       {
         name: "allow direct target by default",
         cfg: { agents: { defaults: { heartbeat: { target: "last" } } } },
-        entry: { ...baseEntry, lastChannel: "telegram", lastTo: "5232990709" },
+        entry: entryWithDelivery("telegram", "5232990709"),
         expected: {
           channel: "telegram",
           to: "5232990709",
@@ -594,7 +592,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
       {
         name: "block direct target when directPolicy is block",
         cfg: { agents: { defaults: { heartbeat: { target: "last", directPolicy: "block" } } } },
-        entry: { ...baseEntry, lastChannel: "telegram", lastTo: "5232990709" },
+        entry: entryWithDelivery("telegram", "5232990709"),
         expected: {
           channel: "none",
           reason: "dm-blocked",
@@ -680,7 +678,12 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     expect(
       resolveHeartbeatDeliveryTarget({
         cfg,
-        entry: { ...baseEntry, lastChannel: "whatsapp", lastTo: "+1999" },
+        entry: {
+          ...baseEntry,
+          delivery: normalizeSessionDeliveryState({
+            context: { channel: "whatsapp", to: "+1999" },
+          }),
+        },
         heartbeat,
       }),
     ).toEqual({
@@ -1357,10 +1360,10 @@ describe("runHeartbeatOnce", () => {
     },
   );
 
-  it("does not surface a trailing legacy reasoning payload as the reply when includeReasoning is unset", async () => {
-    // With includeReasoning unset, a legacy "Reasoning:"-prefixed payload after
-    // the final answer must not become the visible heartbeat reply, and no
-    // separate Thinking message is sent. (#92242 review follow-up)
+  it("keeps a trailing legacy reasoning payload internal", async () => {
+    // A legacy "Reasoning:"-prefixed payload after the final answer must not
+    // become the visible heartbeat reply, and no separate Thinking message is
+    // sent. (#92242 review follow-up)
     const replySpy = vi.fn();
     try {
       const tmpDir = await createCaseDir("hb-legacy-reasoning-unset");
@@ -1457,12 +1460,11 @@ describe("runHeartbeatOnce", () => {
   type HeartbeatScratchState =
     | "empty"
     | "actionable"
-    | "legacy-comment-only"
     | "fenced-empty"
     | "fenced-actionable"
     | "missing";
 
-  async function runHeartbeatFileScenario(params: {
+  async function runHeartbeatScratchScenario(params: {
     fileState: HeartbeatScratchState;
     source?: "notifications-event";
     reason?: "interval" | "wake";
@@ -1479,13 +1481,8 @@ describe("runHeartbeatOnce", () => {
     const scratchContent =
       params.fileState === "empty"
         ? "# Heartbeat scratch\n\n## Tasks\n\n"
-        : params.fileState === "legacy-comment-only"
-          ? `# Keep this empty (or with only comments) to skip heartbeat API calls.
-
-# Add tasks below when you want the agent to check something periodically.
-`
-          : params.fileState === "fenced-empty"
-            ? `# Heartbeat scratch template
+        : params.fileState === "fenced-empty"
+          ? `# Heartbeat scratch template
 
 \`\`\`markdown
 # Keep this empty (or with only comments) to skip heartbeat API calls.
@@ -1493,16 +1490,16 @@ describe("runHeartbeatOnce", () => {
 # Add tasks below when you want the agent to check something periodically.
 \`\`\`
 `
-            : params.fileState === "actionable"
-              ? "# Heartbeat scratch\n\n- Check server logs\n- Review pending PRs\n"
-              : params.fileState === "fenced-actionable"
-                ? `\`\`\`markdown
+          : params.fileState === "actionable"
+            ? "# Heartbeat scratch\n\n- Check server logs\n- Review pending PRs\n"
+            : params.fileState === "fenced-actionable"
+              ? `\`\`\`markdown
 # Keep this empty when you want to skip.
 
 - Check server logs
 \`\`\`
 `
-                : null;
+              : null;
 
     const cfg: OpenClawConfig = {
       agents: {
@@ -1552,7 +1549,7 @@ describe("runHeartbeatOnce", () => {
   }
 
   it("injects actionable monitor scratch without workspace file guidance", async () => {
-    const { res, replySpy, sendWhatsApp } = await runHeartbeatFileScenario({
+    const { res, replySpy, sendWhatsApp } = await runHeartbeatScratchScenario({
       fileState: "actionable",
       reason: "interval",
       replyText: "Checked logs and PRs",
@@ -1568,35 +1565,6 @@ describe("runHeartbeatOnce", () => {
     } finally {
       replySpy.mockRestore();
     }
-  });
-
-  it("keeps legacy HEARTBEAT.md active until doctor migrates it", async () => {
-    const tmpDir = await createCaseDir("openclaw-hb-legacy-fallback");
-    const storePath = path.join(tmpDir, "sessions.json");
-    const workspaceDir = path.join(tmpDir, "workspace");
-    await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.writeFile(
-      path.join(workspaceDir, "HEARTBEAT.md"),
-      "# Legacy instructions\n\n- Check the deployment\n",
-      "utf8",
-    );
-    const legacyCronStore = path.join(tmpDir, "legacy-cron", "jobs.json");
-    await seedHeartbeatScratchForTest({ content: null, storePath: legacyCronStore });
-    const cfg = {
-      agents: { defaults: { workspace: workspaceDir, heartbeat: { every: "5m" } } },
-      cron: { store: legacyCronStore },
-      session: { store: storePath },
-    } as unknown as OpenClawConfig;
-    await seedWhatsAppSession(storePath, resolveMainSessionKey(cfg));
-    const replySpy = vi.fn().mockResolvedValue({ text: "Checked deployment" });
-
-    const result = await runHeartbeatOnce({
-      cfg,
-      deps: createHeartbeatDeps(vi.fn(), { getReplyFromConfig: replySpy }),
-    });
-
-    expect(result.status).toBe("ran");
-    expect(replyBody(replySpy).Body).toContain("Check the deployment");
   });
 
   it("reads heartbeat scratch from a configured cron store partition", async () => {
@@ -1771,14 +1739,6 @@ tasks:
         expectedReplyCalls: 0,
       },
       {
-        name: "legacy comment-only template + interval skips",
-        fileState: "legacy-comment-only",
-        expectedStatus: "skipped",
-        expectedSkipReason: "empty-heartbeat-file",
-        expectedSendCalls: 0,
-        expectedReplyCalls: 0,
-      },
-      {
         name: "fenced empty template + interval skips",
         fileState: "fenced-empty",
         expectedStatus: "skipped",
@@ -1870,7 +1830,7 @@ tasks:
       expectCronContext,
       ...scenario
     } of cases) {
-      const { res, replySpy, sendWhatsApp } = await runHeartbeatFileScenario(scenario);
+      const { res, replySpy, sendWhatsApp } = await runHeartbeatScratchScenario(scenario);
       try {
         expect(res.status, name).toBe(expectedStatus);
         if (res.status === "skipped") {

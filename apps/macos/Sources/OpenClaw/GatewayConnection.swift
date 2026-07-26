@@ -409,7 +409,11 @@ actor GatewayConnection {
             }
             throw CancellationError()
         }
-        return try await client.request(method: method, params: params, timeoutMs: timeoutMs)
+        let data = try await client.request(method: method, params: params, timeoutMs: timeoutMs)
+        guard await self.isCurrentRoute(route), self.client === client else {
+            throw CancellationError()
+        }
+        return data
     }
 
     /// Server-bound requests never reconfigure, reconnect, or cross onto a
@@ -424,11 +428,15 @@ actor GatewayConnection {
             throw OpenClawChatTransportSendError.notDispatched
         }
         do {
-            return try await lease.client.request(
+            let data = try await lease.client.request(
                 method: method,
                 params: params,
                 timeoutMs: timeoutMs,
                 ifCurrentConnectionGeneration: lease.socketGeneration)
+            guard await self.isCurrentServerLease(lease) else {
+                throw OpenClawChatTransportSendError.notDispatched
+            }
+            return data
         } catch is CancellationError {
             if Task.isCancelled {
                 throw CancellationError()
@@ -762,6 +770,18 @@ extension GatewayConnection {
               let snapshot = lastSnapshot
         else { return nil }
         return snapshot.supportsServerCapability(capability)
+    }
+
+    func supportsServerMethod(
+        _ method: String,
+        ifCurrentServerLease lease: ServerLease) async -> Bool?
+    {
+        guard await self.isCurrentServerLease(lease),
+              self.serverLeaseMatchesCurrentState(lease),
+              let snapshot = lastSnapshot
+        else { return nil }
+        let methods = snapshot.features["methods"]?.value as? [AnyCodable] ?? []
+        return methods.contains { ($0.value as? String) == method }
     }
 
     func isCurrentServerLease(_ lease: ServerLease) async -> Bool {

@@ -45,6 +45,7 @@ class AndroidScreenshotModeTest {
   fun mapsScenesToProductionShellDestinations() {
     assertEquals(HomeDestination.Connect, AndroidScreenshotScene.Home.homeDestination)
     assertEquals(HomeDestination.Chat, AndroidScreenshotScene.Chat.homeDestination)
+    assertEquals(HomeDestination.Chat, AndroidScreenshotScene.Swarm.homeDestination)
     assertEquals(HomeDestination.Settings, AndroidScreenshotScene.Settings.homeDestination)
     assertEquals(HomeDestination.Settings, AndroidScreenshotScene.VoiceWake.homeDestination)
   }

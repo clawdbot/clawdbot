@@ -24,6 +24,7 @@ import { findRestartRecoveryUnsafeChatAdmissionHook } from "../../plugins/restar
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
 import { isAgentHarnessSessionKey } from "../../sessions/agent-harness-session-key.js";
 import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import type { GatewayRecoveryRuntime } from "../server-instance-runtime.types.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -290,7 +291,7 @@ export function resolveRestartSafeChatAdmission(params: {
       now: params.now,
       resetOverride: resolveChannelResetConfig({
         sessionCfg: params.cfg.session,
-        channel: params.entry?.lastChannel ?? params.entry?.channel,
+        channel: sessionDeliveryChannel(params.entry),
       }),
       resetType: resolveSessionResetType({ sessionKey: params.sessionKey }),
       sessionCfg: params.cfg.session,

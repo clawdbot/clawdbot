@@ -3,6 +3,7 @@
  * These checks intentionally avoid loading secret-bearing credential payloads.
  */
 import fs from "node:fs";
+import { tryReadJsonSync } from "../../infra/json-files.js";
 import { evaluateStoredCredentialEligibility } from "./credential-state.js";
 import {
   resolveAuthStatePath,
@@ -25,14 +26,6 @@ function hasStoredAuthProfileFiles(agentDir?: string): boolean {
     fs.existsSync(resolveAuthStatePath(agentDir)) ||
     fs.existsSync(resolveLegacyAuthStorePath(agentDir))
   );
-}
-
-function readJsonFile(pathname: string): unknown {
-  try {
-    return JSON.parse(fs.readFileSync(pathname, "utf8")) as unknown;
-  } catch {
-    return null;
-  }
 }
 
 function normalizeProvider(provider: string): string {
@@ -153,13 +146,17 @@ export function hasAuthProfileStoreSourceForProvider(
     return true;
   }
   if (
-    rawStoreHasProviderProfile(readJsonFile(resolveAuthStorePath(agentDir)), provider, profileIds)
+    rawStoreHasProviderProfile(
+      tryReadJsonSync(resolveAuthStorePath(agentDir)),
+      provider,
+      profileIds,
+    )
   ) {
     return true;
   }
   if (
     rawStoreHasProviderProfile(
-      readJsonFile(resolveLegacyAuthStorePath(agentDir)),
+      tryReadJsonSync(resolveLegacyAuthStorePath(agentDir)),
       provider,
       profileIds,
     )
@@ -179,11 +176,11 @@ export function hasAuthProfileStoreSourceForProvider(
   if (runtimeStoreHasProviderProfile(mainRuntimeStore, provider, profileIds)) {
     return true;
   }
-  if (rawStoreHasProviderProfile(readJsonFile(resolveAuthStorePath()), provider, profileIds)) {
+  if (rawStoreHasProviderProfile(tryReadJsonSync(resolveAuthStorePath()), provider, profileIds)) {
     return true;
   }
   if (
-    rawStoreHasProviderProfile(readJsonFile(resolveLegacyAuthStorePath()), provider, profileIds)
+    rawStoreHasProviderProfile(tryReadJsonSync(resolveLegacyAuthStorePath()), provider, profileIds)
   ) {
     return true;
   }

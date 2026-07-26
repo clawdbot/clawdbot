@@ -1,5 +1,6 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import * as assistantIdentity from "../../app/assistant-identity.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
@@ -38,6 +39,7 @@ import {
   storedChatOutboxScopeKey,
 } from "./composer-persistence.ts";
 import { scheduleControlUiAfterPaint } from "./performance.ts";
+import { openSlot } from "./sidebar-layout.ts";
 
 beforeEach(() => {
   vi.spyOn(assistantIdentity, "loadLocalAssistantIdentity").mockReturnValue({
@@ -295,6 +297,56 @@ describe("ChatStateController render lifecycle", () => {
     expect(requestUpdate).toHaveBeenCalledOnce();
   });
 
+  it("forces one PR-chips refresh per PR link seen in the live stream", () => {
+    vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation(() => 1);
+    const refreshSessionPullRequests = vi.fn(() => Promise.resolve());
+    const state = {
+      chatMessages: [],
+      chatMessagesBySession: new Map(),
+      chatRunId: "run-1",
+      chatStream: null,
+      chatStreamRenderFrame: null,
+      chatStreamStartedAt: 1,
+      lastError: null,
+      pendingSessionMessageReloadSessionKey: null,
+      refreshSessionPullRequests,
+      requestUpdate: vi.fn(),
+      sessionKey: "main",
+    } as unknown as ChatPageHost;
+    const delta = (deltaText: string, runId = "run-1") =>
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: { state: "delta", runId, sessionKey: "main", deltaText },
+      });
+
+    delta("working on it ");
+    expect(refreshSessionPullRequests).not.toHaveBeenCalled();
+
+    // Issue links never carry chips.
+    delta("see https://github.com/openclaw/openclaw/issues/42 ");
+    expect(refreshSessionPullRequests).not.toHaveBeenCalled();
+
+    delta("opened https://github.com/openclaw/openclaw/pull/113840 for review ");
+    expect(refreshSessionPullRequests).toHaveBeenCalledTimes(1);
+    expect(refreshSessionPullRequests).toHaveBeenCalledWith({ refresh: true });
+
+    // One refresh reloads all of the branch's PRs; further links in the same
+    // run must not spend more GitHub quota.
+    delta("also https://github.com/openclaw/openclaw/pull/113900 ");
+    expect(refreshSessionPullRequests).toHaveBeenCalledTimes(1);
+
+    // Streaming may split a URL across chunks; the rolling tail rejoins it.
+    delta("continuing https://github.com/openclaw/openclaw/pu", "run-2");
+    expect(refreshSessionPullRequests).toHaveBeenCalledTimes(1);
+    delta("ll/113901 done", "run-2");
+    expect(refreshSessionPullRequests).toHaveBeenCalledTimes(2);
+
+    // A later run announcing the same PR (e.g. its merge) refreshes again.
+    delta("merged https://github.com/openclaw/openclaw/pull/113840 at last", "run-3");
+    expect(refreshSessionPullRequests).toHaveBeenCalledTimes(3);
+  });
+
   it("requests a render before selecting the commit promise", async () => {
     let resolveCommit: (value: boolean) => void = () => {};
     const nextCommit = new Promise<boolean>((resolve) => {
@@ -449,7 +501,6 @@ describe("session pull request refresh", () => {
       chatQueue: [],
       chatQueueByScope: {},
       chatRunId: null,
-      chatSideResultTerminalRuns: new Set(),
       chatStream: null,
       chatStreamRenderFrame: null,
       chatStreamSegments: [],
@@ -611,7 +662,6 @@ describe("image lightbox lifecycle", () => {
         current: {
           allowExternalEmbedUrls: false,
           assistantIdentity: { name: "Assistant" },
-          chatMessageMaxWidth: null,
           embedSandboxMode: "scripts",
           localMediaPreviewRoots: [],
         },
@@ -669,7 +719,6 @@ describe("route composer fallback", () => {
           dataUrl: "data:image/png;base64,AAA",
         },
       ],
-      chatSideResultTerminalRuns: new Set(),
       chatToolMessages: [],
       chatStreamSegments: [],
       toolStreamById: new Map(),
@@ -697,6 +746,16 @@ describe("route composer fallback", () => {
 
     expect(release).toHaveBeenCalledTimes(1);
     expect(state.imageLightbox).toBeNull();
+  });
+
+  it("clears transient detail content on a route switch", () => {
+    const { state } = createRouteState("");
+    state.sidebarContent = { kind: "markdown", content: "First session detail" };
+    state.sidebarLayout = openSlot({ columns: [] }, "detail");
+
+    resetChatStateForRouteSession(state, "agent:main:second");
+
+    expect(state.sidebarContent).toBeNull();
   });
 
   it("restores one atomic history snapshot when returning to a session", () => {
@@ -1383,6 +1442,46 @@ describe("resolveChatAvatarUrl", () => {
     } as unknown as ChatPageHost;
 
     expect(resolveChatAvatarUrl(state)).toBe("blob:authenticated-avatar");
+  });
+});
+
+describe("loadPageAssistantIdentity", () => {
+  it("loads the identity for the current session after a same-client route switch", async () => {
+    const request = vi.fn().mockResolvedValue({ name: "Second Session", agentId: "main" });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const context = {
+      agents: { state: { agentsList: null }, adoptList: vi.fn() },
+      agentSelection: { state: { selectedId: "main" } },
+      basePath: "",
+      config: {
+        current: {
+          allowExternalEmbedUrls: false,
+          assistantIdentity: { name: "Assistant" },
+          chatMessageMaxWidth: null,
+          embedSandboxMode: "scripts",
+          localMediaPreviewRoots: [],
+        },
+      },
+      gateway: { snapshot: { client, connected: true, hello: null } },
+      initialUserMessage: createInitialUserMessageHandoff(),
+      sessions: {},
+    } as unknown as ApplicationContext;
+    const state = createPageState(
+      context,
+      { invalidate: vi.fn(), afterCommit: () => () => {} },
+      { querySelector: () => null },
+    );
+    state.client = client;
+    state.connected = true;
+    state.assistantName = "First Session";
+    state.sessionKey = "agent:main:second";
+
+    await state.loadAssistantIdentity();
+
+    expect(request).toHaveBeenCalledWith("agent.identity.get", {
+      sessionKey: "agent:main:second",
+    });
+    expect(state.assistantName).toBe("Second Session");
   });
 });
 

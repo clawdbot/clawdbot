@@ -75,8 +75,8 @@ Release behavior:
 - `apps/ios/CHANGELOG.md` is the iOS-only changelog and release-note source.
 - The gateway version must use CalVer like `2026.7.2`.
 - Gateway `2026.7.2`, App Store revision `1` becomes:
-  - `CFBundleShortVersionString = 2026.7.201`
-  - `CFBundleVersion = next App Store Connect build number for 2026.7.201`
+  - `CFBundleShortVersionString = 2026.7.21`
+  - `CFBundleVersion = next App Store Connect build number for 2026.7.21`
 - Each App Store version has its own build sequence beginning at `1`.
 - Local defaults and release planning derive the gateway from root `package.json`; App Store Connect versions and build uploads determine the release revision and build.
 - See `apps/ios/VERSIONING.md` for the full workflow.
