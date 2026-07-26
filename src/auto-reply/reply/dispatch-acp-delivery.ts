@@ -251,6 +251,13 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       sourceSessionKey: deliverySessionKey,
       sourceEventKey: operationalReplySourceEventKey,
       sourceChannel: params.originatingChannel ?? params.ttsChannel ?? directChannel,
+      sourceConversationKey: JSON.stringify({
+        accountId: params.originatingAccountId ?? resolvedAccountId,
+        channel: params.originatingChannel ?? params.ttsChannel ?? directChannel,
+        from: params.ctx.From,
+        threadId: params.originatingThreadId,
+        to: params.originatingTo ?? params.ctx.To,
+      }),
       provider: params.ctx.Provider,
       surface: params.ctx.Surface,
       chatType: params.originatingChatType ?? params.ctx.ChatType,

@@ -478,6 +478,12 @@ export function createFollowupRunner(params: {
           runId: options.runId,
         }),
         sourceChannel: queued.originatingChannel ?? queued.run.messageProvider,
+        sourceConversationKey: JSON.stringify({
+          accountId: queued.originatingAccountId ?? queued.run.agentAccountId,
+          channel: queued.originatingChannel ?? queued.run.messageProvider,
+          threadId: queued.originatingThreadId,
+          to: queued.originatingTo,
+        }),
         provider: queued.run.messageProvider,
         surface: queued.originatingChannel,
         chatType: queued.originatingChatType ?? queued.run.chatType,

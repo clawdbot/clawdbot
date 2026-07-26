@@ -368,6 +368,12 @@ export async function finalizeHeartbeatOutcome(params: {
       sourceStorePath: storePath,
       sourceEventKey: `heartbeat:${startedAt}`,
       sourceChannel: delivery.channel,
+      sourceConversationKey: JSON.stringify({
+        accountId: delivery.accountId,
+        channel: delivery.channel,
+        threadId: delivery.threadId,
+        to: delivery.to,
+      }),
       provider: params.prepared.hasExecCompletion
         ? "exec-event"
         : params.prepared.hasCronEvents

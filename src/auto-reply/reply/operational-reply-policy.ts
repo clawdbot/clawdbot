@@ -126,6 +126,7 @@ function createOperationalReplyOnceKey(params: {
 
 function createOperationalReplyRedirectKey(params: {
   payload: ReplyPayload;
+  sourceConversationKey?: string;
   sourceEventKey: string;
   sourceSessionKey?: string;
 }): string {
@@ -133,6 +134,7 @@ function createOperationalReplyRedirectKey(params: {
     .createHash("sha256")
     .update(
       JSON.stringify({
+        conversationKey: params.sourceConversationKey ?? "unknown",
         sourceEventKey: params.sourceEventKey,
         sessionKey: params.sourceSessionKey ?? "unknown",
         kind: resolveOperationalReplyKind(params.payload),
@@ -451,11 +453,13 @@ async function redirectOperationalReply(params: {
   payload: ReplyPayload;
   redirectSessionKey: string;
   sourceChannel?: string;
+  sourceConversationKey?: string;
   sourceEventKey: string;
   sourceSessionKey?: string;
 }): Promise<void> {
   const idempotencyKey = createOperationalReplyRedirectKey({
     payload: params.payload,
+    sourceConversationKey: params.sourceConversationKey,
     sourceEventKey: params.sourceEventKey,
     sourceSessionKey: params.sourceSessionKey,
   });
@@ -523,6 +527,7 @@ export async function applyOperationalReplyPolicy(params: {
   sourceStorePath?: string;
   sourceEventKey: string;
   sourceChannel?: string;
+  sourceConversationKey?: string;
   provider?: string;
   surface?: string;
   chatType?: string;
@@ -587,6 +592,7 @@ export async function applyOperationalReplyPolicy(params: {
       payload: params.payload,
       redirectSessionKey: operationalReplyPolicy.redirectSessionKey,
       sourceChannel: params.sourceChannel,
+      sourceConversationKey: params.sourceConversationKey,
       sourceEventKey: params.sourceEventKey,
       sourceSessionKey: params.sourceSessionKey,
     });
