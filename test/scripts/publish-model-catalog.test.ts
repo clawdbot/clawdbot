@@ -23,7 +23,12 @@ afterEach(() => {
   }
 });
 
-function fixtureProvider(prefix: string, count: number) {
+function fixtureProvider(
+  prefix: string,
+  count: number,
+): {
+  models: Array<{ id: string; cost?: { input: number; output: number } }>;
+} {
   return { models: Array.from({ length: count }, (_, index) => ({ id: `${prefix}-${index}` })) };
 }
 
