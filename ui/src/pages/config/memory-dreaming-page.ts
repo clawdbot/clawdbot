@@ -34,7 +34,13 @@ class MemoryDreamingSettings extends OpenClawLightDomElement {
   // never blanks the tab for the plugin that ships dreaming.
   @state() private support: DreamingConfigPathSupport = "unknown";
   private supportPluginId: string | null = null;
-  private supportProbePluginId: string | null = null;
+  /**
+   * The in-flight capability probe, if any. Object identity is the generation:
+   * a plugin id alone cannot tell a current answer from a stale one, because
+   * both the slot owner and the connection can change while a lookup is
+   * outstanding (A -> B -> A, or a disconnect and reconnect on the same owner).
+   */
+  private supportProbe: { pluginId: string } | null = null;
 
   private readonly subscriptions = new SubscriptionsController(this)
     .watch(
@@ -55,7 +61,7 @@ class MemoryDreamingSettings extends OpenClawLightDomElement {
   override disconnectedCallback() {
     this.subscriptions.clear();
     this.supportPluginId = null;
-    this.supportProbePluginId = null;
+    this.supportProbe = null;
     super.disconnectedCallback();
   }
 
@@ -87,19 +93,24 @@ class MemoryDreamingSettings extends OpenClawLightDomElement {
       this.supportPluginId = pluginId;
       this.support = "unknown";
     }
-    if (
-      this.support !== "unknown" ||
-      this.supportProbePluginId === pluginId ||
-      !runtimeConfig.state.connected
-    ) {
+    const connected = runtimeConfig.state.connected;
+    // Abandoning the probe here is what makes the reconnect re-probe: leaving it
+    // armed would make this call look like "already in flight" and swallow the
+    // retry that an `unknown` answer requires.
+    if (this.supportProbe && (this.supportProbe.pluginId !== pluginId || !connected)) {
+      this.supportProbe = null;
+    }
+    if (this.support !== "unknown" || this.supportProbe || !connected) {
       return;
     }
-    this.supportProbePluginId = pluginId;
+    const probe = { pluginId };
+    this.supportProbe = probe;
     void resolveDreamingConfigPathSupport(runtimeConfig, pluginId).then((support) => {
-      if (this.supportProbePluginId === pluginId) {
-        this.supportProbePluginId = null;
+      if (this.supportProbe !== probe) {
+        return;
       }
-      if (this.isConnected && this.supportPluginId === pluginId) {
+      this.supportProbe = null;
+      if (this.isConnected) {
         this.support = support;
       }
     });
