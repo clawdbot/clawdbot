@@ -1230,7 +1230,7 @@ jobs:
           sudo chown -R root:root "$CANDIDATE_ROOT"
           sudo chmod -R go-w "$CANDIDATE_ROOT"
           sudo chmod -R a+rX "$CANDIDATE_ROOT"
-          # Older candidates stage their QA plugin runtime under .artifacts/qa-runtime.
+          # QA plugin runtime staging uses .artifacts/qa-runtime below its repo root.
           # Preserve the frozen tree while granting the isolated SUT this one scratch directory.
           candidate_artifacts_dir="${CANDIDATE_ROOT}/.artifacts"
           sudo install -d -o "$sut_uid" -g "$sut_gid" -m 0700 "$candidate_artifacts_dir"
