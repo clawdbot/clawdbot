@@ -475,6 +475,17 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         payload: visiblePayload,
         explicitCommandTurn: false,
       });
+    const allowOperationalSuppressionBypass =
+      isOperationalReply &&
+      !params.sendPolicyDenied &&
+      params.sourceReplyDeliveryMode === "message_tool_only" &&
+      params.suppressUserDeliveryBySourceReplyPolicy === true &&
+      params.ctx.InboundEventKind !== "room_event";
+    // Parent-owned and otherwise independent ACP runs stay private. Redirect
+    // policy has cross-session side effects, so enforce this boundary first.
+    if (params.suppressUserDelivery && !allowOperationalSuppressionBypass) {
+      return false;
+    }
     const policyResult = isOperationalReply
       ? await applyAcpOperationalReplyPolicy(visiblePayload)
       : ({ shouldDeliver: true } as const);
@@ -492,16 +503,6 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       if (hasOutboundReplyContent(visiblePayload, { trimText: true })) {
         await startReplyLifecycleOnce();
       } else {
-        return false;
-      }
-
-      const allowOperationalSuppressionBypass =
-        isOperationalReply &&
-        !params.sendPolicyDenied &&
-        params.sourceReplyDeliveryMode === "message_tool_only" &&
-        params.suppressUserDeliveryBySourceReplyPolicy === true &&
-        params.ctx.InboundEventKind !== "room_event";
-      if (params.suppressUserDelivery && !allowOperationalSuppressionBypass) {
         return false;
       }
 

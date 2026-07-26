@@ -2,6 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { markOperationalReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
@@ -833,7 +834,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     const dispatcher = createDispatcher();
     const coordinator = createAcpDispatchDeliveryCoordinator({
       cfg: createAcpTestConfig({
-        messages: { operationalReplies: { policy: "once" } },
+        messages: { operationalReplies: { policy: "redirect" } },
       }),
       ctx: buildTestCtx({
         Provider: "visiblechat",
@@ -848,10 +849,13 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
       shouldRouteToOriginating: false,
     });
 
-    const delivered = await coordinator.deliver("final", {
-      text: "private operational notice",
-      isStatusNotice: true,
-    });
+    const delivered = await coordinator.deliver(
+      "final",
+      markOperationalReplyPayloadForSourceSuppressionDelivery({
+        text: "private operational notice",
+        isStatusNotice: true,
+      }),
+    );
 
     expect(delivered).toBe(false);
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();

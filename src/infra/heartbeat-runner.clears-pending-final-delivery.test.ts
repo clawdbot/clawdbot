@@ -111,7 +111,11 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
       // Substantive reply text forces the post-success store write path
       // (heartbeat-runner.ts:~2120, `if (visibleSendSucceeded && !shouldSkipMain ...)`).
       const replyText = "Heartbeat update: everything is green.";
-      replySpy.mockResolvedValue({ text: replyText });
+      replySpy.mockResolvedValue({
+        text: replyText,
+        replyToId: "stale-parent",
+        replyToCurrent: true,
+      });
       const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", toJid: "jid" });
 
       const result = await runHeartbeatOnce({
@@ -121,6 +125,7 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
 
       expect(result.status).toBe("ran");
       expect(sendTelegram).toHaveBeenCalledTimes(1);
+      expect(sendTelegram.mock.calls[0]?.[2]).not.toHaveProperty("replyToId");
 
       const entry = await readEntry(storePath, sessionKey);
       expect(entry?.lastHeartbeatText).toBe(replyText);

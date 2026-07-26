@@ -349,9 +349,12 @@ export async function finalizeHeartbeatOutcome(params: {
 
   const mainDeliveryPayload = outcome.replyPayload
     ? copyReplyPayloadMetadata(outcome.replyPayload, {
-        ...outcome.replyPayload,
         text: normalized.text,
         mediaUrls,
+        ...(outcome.replyPayload.isError === true ? { isError: true } : {}),
+        ...(outcome.replyPayload.isStatusNotice === true ? { isStatusNotice: true } : {}),
+        ...(outcome.replyPayload.isFallbackNotice === true ? { isFallbackNotice: true } : {}),
+        ...(outcome.replyPayload.isCompactionNotice === true ? { isCompactionNotice: true } : {}),
       })
     : { text: normalized.text, mediaUrls };
   let policyResult: Awaited<ReturnType<typeof applyOperationalReplyPolicy>>;
