@@ -62,6 +62,10 @@ export type ResolveSubagentSpawnRequestResult =
 export function resolveSubagentSpawnRequest(
   params: SpawnSubagentParams,
   ctx: SpawnSubagentContext,
+  requestedAgent: {
+    initial?: string;
+    applyDefault: (agentId?: string) => string | undefined;
+  },
 ): ResolveSubagentSpawnRequestResult {
   const taskNameResult = normalizeSubagentTaskName(params.taskName);
   if (taskNameResult.error) {
@@ -74,7 +78,7 @@ export function resolveSubagentSpawnRequest(
     };
   }
   const taskName = taskNameResult.taskName;
-  let requestedAgentId = params.agentId?.trim();
+  const requestedAgentId = requestedAgent.initial;
 
   // Reject malformed agentId before normalizeAgentId can mangle it.
   // Without this gate, error-message strings like "Agent not found: xyz" pass
@@ -196,19 +200,23 @@ export function resolveSubagentSpawnRequest(
 
   const usingDefaultAgentId =
     params.collect === true && !requestedAgentId && Boolean(swarmConfig.defaultAgentId);
+  const effectiveRequestedAgentId = usingDefaultAgentId
+    ? requestedAgent.applyDefault(swarmConfig.defaultAgentId)
+    : requestedAgentId;
   if (usingDefaultAgentId) {
-    requestedAgentId = swarmConfig.defaultAgentId;
-    if (!isValidAgentId(requestedAgentId)) {
+    if (!isValidAgentId(effectiveRequestedAgentId)) {
       return {
         ok: false,
         result: {
           status: "error",
-          error: `tools.swarm.defaultAgentId contains invalid agentId "${requestedAgentId}".`,
+          error: `tools.swarm.defaultAgentId contains invalid agentId "${effectiveRequestedAgentId}".`,
         },
       };
     }
   }
-  const targetAgentId = requestedAgentId ? normalizeAgentId(requestedAgentId) : requesterAgentId;
+  const targetAgentId = effectiveRequestedAgentId
+    ? normalizeAgentId(effectiveRequestedAgentId)
+    : requesterAgentId;
   const configuredAgentIds = resolveConfiguredAgentIds(cfg);
   const explicitSwarmGroupId = normalizeOptionalString(params.groupId);
   const requesterRunId = normalizeOptionalString(ctx.requesterRunId);
@@ -238,7 +246,7 @@ export function resolveSubagentSpawnRequest(
       requesterSessionKey: requesterInternalKey,
       requesterAgentId,
       targetAgentId,
-      requestedAgentId,
+      requestedAgentId: effectiveRequestedAgentId,
       configuredAgentIds,
     });
   };
