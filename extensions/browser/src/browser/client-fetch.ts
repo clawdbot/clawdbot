@@ -151,6 +151,18 @@ const BROWSER_ERROR_BODY_LIMIT_BYTES = 16 * 1024;
 // `response/body` supports 5M characters; 32 MiB covers worst-case JSON escaping while staying bounded.
 const BROWSER_SUCCESS_BODY_LIMIT_BYTES = 32 * 1024 * 1024;
 
+function decodeBrowserControlResponseUtf8(body: Uint8Array, status: number): string {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(body);
+  } catch {
+    throw browserServiceErrorFromPayload(
+      undefined,
+      `Browser control response was not valid UTF-8 (HTTP ${status})`,
+      status,
+    );
+  }
+}
+
 function isRateLimitStatus(status: number): boolean {
   return status === 429;
 }
@@ -378,7 +390,7 @@ async function fetchHttpJson<T>(
       const body = await readResponseWithLimit(res, BROWSER_ERROR_BODY_LIMIT_BYTES).catch(
         () => undefined,
       );
-      const text = body ? new TextDecoder().decode(body) : "";
+      const text = body ? decodeBrowserControlResponseUtf8(body, res.status) : "";
       let parsed: unknown;
       if (text) {
         try {
@@ -393,7 +405,7 @@ async function fetchHttpJson<T>(
       onOverflow: ({ maxBytes }) =>
         new BrowserServiceError(`Browser control response exceeded ${maxBytes} bytes`),
     });
-    return JSON.parse(new TextDecoder().decode(body)) as T;
+    return JSON.parse(decodeBrowserControlResponseUtf8(body, res.status)) as T;
   } finally {
     clearTimeout(t);
     await release?.();

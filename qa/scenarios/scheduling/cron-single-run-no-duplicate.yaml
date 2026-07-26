@@ -20,7 +20,7 @@ scenario:
     - docs/channels/qa-channel.md
   codeRefs:
     - src/cron/service.ts
-    - src/cron/run-log.ts
+    - src/cron/task-run-history.ts
     - extensions/qa-lab/src/cron-run-wait.ts
     - extensions/qa-lab/src/suite-runtime-transport.ts
   execution:

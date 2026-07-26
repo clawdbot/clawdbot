@@ -59,9 +59,8 @@ longer package exports: `agent-runtime-test-contracts`,
 `plugin-test-runtime`, `provider-http-test-mocks`, `provider-test-contracts`,
 `reply-payload-testing`, `sqlite-runtime-testing`, `test-env`, `test-fixtures`,
 `test-live`, `test-live-auth`, `test-media-generation`,
-`test-media-understanding`, `test-node-mocks`, and `testing`. The private bundled helper surfaces
-`ssrf-runtime-internal` and `codex-native-task-runtime` are also repo-local
-only.
+`test-media-understanding`, `test-node-mocks`, and `testing`. The private bundled helper surface
+`ssrf-runtime-internal` is also repo-local only.
 
 ### Bundled plugin helper subpaths
 
@@ -77,6 +76,7 @@ deprecated for new code; see the per-row notes below.
     | `plugin-sdk/channel-core` | `defineChannelPluginEntry`, `defineSetupPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase`, `createChannelConfigUiHints` |
     | `plugin-sdk/json-schema-runtime` | Private-local after July 2026; Cached JSON Schema validation helper for plugin-owned schemas |
     | `plugin-sdk/channel-setup` | `defineChannelSetupContract`, channel-owned setup field/input types, `createOptionalChannelSetupSurface`, `createOptionalChannelSetupAdapter`, `createOptionalChannelSetupWizard`, plus `DEFAULT_ACCOUNT_ID`, `createTopLevelChannelDmPolicy`, `setSetupChannelEnabled`, `splitSetupEntries` |
+    | `plugin-sdk/channel-dm-policy` | `createChannelDmPolicy` for account-aware setup policy descriptors |
     | `plugin-sdk/setup` | Shared setup wizard helpers, setup translator, allowlist prompts, setup status builders |
     | `plugin-sdk/setup-runtime` | `defineChannelSetupContract`, `createSetupTranslator`, `createPatchedAccountSetupAdapter`, `createEnvPatchedAccountSetupAdapter`, `createSetupInputPresenceValidator`, `noteChannelLookupFailure`, `noteChannelLookupSummary`, `promptResolvedAllowFrom`, `splitSetupEntries`, `createAllowlistSetupWizardProxy`, `createDelegatedSetupWizardProxy` |
     | `plugin-sdk/setup-tools` | `formatCliCommand`, `detectBinary`, `extractArchive`, `resolveBrewExecutable`, `formatDocsLink`, `CONFIG_DIR` |
@@ -145,8 +145,8 @@ are private-local.
     | `plugin-sdk/provider-auth-result` | Private-local after July 2026; Standard OAuth auth-result builder |
     | `plugin-sdk/provider-env-vars` | Private-local after July 2026; Provider auth env-var lookup helpers |
     | `plugin-sdk/provider-auth` | `createProviderApiKeyAuthMethod`, `ensureApiKeyFromOptionEnvOrPrompt`, `upsertAuthProfile`, `upsertApiKeyProfile`, `writeOAuthCredentials`, OpenAI Codex auth-import helpers, deprecated `resolveOpenClawAgentDir` compatibility export |
-    | `plugin-sdk/provider-model-shared` | Private-local after July 2026; `ProviderReplayFamily`, `buildProviderReplayFamilyHooks`, `selectPreferredLocalModelId`, `normalizeModelCompat`, shared replay-policy builders, provider-endpoint helpers, and shared model-id normalization helpers |
-    | `plugin-sdk/provider-catalog-live-runtime` | Private-local after July 2026; Live provider model catalog helpers for guarded `/models`-style discovery: `buildLiveModelProviderConfig`, `fetchLiveProviderModelRows`, `getCachedLiveProviderModelRows`, `fetchLiveProviderModelIds`, `LiveModelCatalogHttpError`, `clearLiveCatalogCacheForTests`, model-id filtering, TTL cache, and static fallback |
+    | `plugin-sdk/provider-model-shared` | Private-local after July 2026; `ProviderReplayFamily`, `buildProviderReplayFamilyHooks`, `resolveFamilyForwardCompatModel`, `selectPreferredLocalModelId`, `normalizeModelCompat`, shared replay-policy builders, provider-endpoint helpers, and shared model-id normalization helpers |
+    | `plugin-sdk/provider-catalog-live-runtime` | Private-local after July 2026; Live provider model catalog helpers for guarded `/models`-style discovery: `buildLiveModelProviderConfig`, provider-owned `projectRows`, `fetchLiveProviderModelRows`, `getCachedLiveProviderModelRows`, `fetchLiveProviderModelIds`, `LiveModelCatalogHttpError`, `clearLiveCatalogCacheForTests`, TTL cache, and static fallback |
     | `plugin-sdk/provider-catalog-runtime` | Provider catalog augmentation runtime hook and plugin-provider registry seams for contract tests |
     | `plugin-sdk/provider-catalog-shared` | Private-local after July 2026; `findCatalogTemplate`, `buildSingleProviderApiKeyCatalog`, `buildManifestModelProviderConfig`, `supportsNativeStreamingUsageCompat`, `applyProviderNativeStreamingUsageCompat` |
     | `plugin-sdk/provider-http` | Private-local after July 2026; Generic provider HTTP/endpoint capability helpers, provider HTTP errors, and audio transcription multipart form helpers |
@@ -193,12 +193,12 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/command-detection` | Shared command detection helpers |
     | `plugin-sdk/command-primitives-runtime` | Lightweight command text predicates for hot channel paths |
     | `plugin-sdk/command-surface` | Private-local after July 2026; Command-body normalization and command-surface helpers |
-    | `plugin-sdk/allow-from` | `formatAllowFromLowercase` |
+    | `plugin-sdk/allow-from` | Allow-from parsing, normalization, resolution, and matching helpers |
     | `plugin-sdk/provider-auth-login-flow-runtime` | Private-local after July 2026; Lazy provider auth login flow helpers for private channel and Web UI device-code pairing |
     | `plugin-sdk/channel-secret-runtime` | Deprecated broad secret-contract surface (`collectSimpleChannelFieldAssignments`, `getChannelSurface`, `pushAssignment`, secret target types); prefer the focused subpaths below |
     | `plugin-sdk/channel-secret-basic-runtime` | Narrow secret-contract exports and target-registry builders for non-TTS channel/plugin secret surfaces |
     | `plugin-sdk/channel-secret-tts-runtime` | Private-local after July 2026; Narrow nested channel TTS secret assignment helpers |
-    | `plugin-sdk/secret-ref-runtime` | Narrow SecretRef typing, resolution, and plan-target path lookup for secret-contract/config parsing |
+    | `plugin-sdk/secret-ref-runtime` | Narrow SecretRef typing, resolution, and shared setup-plan construction for plugin-owned secret providers |
     | `plugin-sdk/security-runtime` | Deprecated broad barrel for trust, DM gating, root-bounded file/path helpers including create-only writes, sync/async atomic file replacement, sibling temp writes, cross-device move fallback, private file-store helpers, symlink-parent guards, external-content, sensitive text redaction, constant-time secret comparison, and secret-collection helpers; prefer focused security/SSRF/secret subpaths |
     | `plugin-sdk/ssrf-policy` | Host allowlist and private-network SSRF policy helpers |
     | `plugin-sdk/ssrf-dispatcher` | Private-local after July 2026; Narrow pinned-dispatcher helpers without the broad infra runtime surface |
@@ -216,7 +216,6 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/browser-config` | Private-local after July 2026; Supported browser config facade for normalized profile/defaults, CDP URL parsing, and browser-control auth helpers |
     | `plugin-sdk/agent-harness-task-runtime` | Private-local after July 2026; Generic task lifecycle and completion delivery helpers for harness-backed agents using a host-issued task scope |
     | `plugin-sdk/codex-mcp-projection` | Private-local after July 2026; Reserved bundled Codex helper for projecting user MCP server config into Codex thread config; not for third-party plugins |
-    | `plugin-sdk/codex-native-task-runtime` | Repo-local bundled Codex helper for native task mirror/runtime wiring; not a package export |
     | `plugin-sdk/channel-runtime-context` | Generic channel runtime-context registration and lookup helpers |
     | `plugin-sdk/matrix` | Deprecated Matrix compatibility facade for older third-party channel packages; new plugins should import `plugin-sdk/run-command` directly |
     | `plugin-sdk/runtime-store` | `createPluginRuntimeStore` |
@@ -285,7 +284,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/concurrency-runtime` | Private-local after July 2026; Bounded async task concurrency helper |
     | `plugin-sdk/dedupe-runtime` | In-memory and persistent-backed dedupe cache helpers |
     | `plugin-sdk/delivery-queue-runtime` | Private-local after July 2026; Outbound pending-delivery drain helper |
-    | `plugin-sdk/file-access-runtime` | Private-local after July 2026; Safe local-file and media-source path helpers |
+    | `plugin-sdk/file-access-runtime` | Private-local after July 2026; Safe local-file, temp-root, media-source path, and directory-durability helpers |
     | `plugin-sdk/heartbeat-runtime` | Private-local after July 2026; Heartbeat wake, event, and visibility helpers |
     | `plugin-sdk/expect-runtime` | Private-local after July 2026; Required-value assertion helper for provable runtime invariants |
     | `plugin-sdk/number-runtime` | Private-local after July 2026; Numeric coercion helper |
@@ -351,6 +350,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/provider-http-test-mocks` | Private-local after July 2026; Repo-local opt-in Vitest HTTP/auth mocks for provider tests that exercise `plugin-sdk/provider-http` |
     | `plugin-sdk/reply-payload-testing` | Repo-local helpers for attaching metadata to reply payload fixtures |
     | `plugin-sdk/sqlite-runtime-testing` | Repo-local SQLite lifecycle helpers for first-party tests |
+    | `plugin-sdk/test-state` | Repo-local isolated OpenClaw state, config, workspace, environment, and auth-profile fixtures for plugin tests |
     | `plugin-sdk/test-fixtures` | Repo-local generic CLI runtime capture, sandbox context, skill writer, agent-message, system-event, module reload, bundled plugin path, terminal-text, chunking, auth-token, and typed-case fixtures |
     | `plugin-sdk/test-node-mocks` | Repo-local focused Node builtin mock helpers for use inside Vitest `vi.mock("node:*")` factories |
   </Accordion>
@@ -384,7 +384,6 @@ usage endpoint failed or returned no usable usage data.
     | Subpath | Owner and purpose |
     | --- | --- |
     | `plugin-sdk/codex-mcp-projection` | Private-local after July 2026; Bundled Codex plugin helper for projecting user MCP server config into Codex app-server thread config (reserved package export) |
-    | `plugin-sdk/codex-native-task-runtime` | Bundled Codex plugin helper for mirroring Codex app-server native subagents into OpenClaw task state (repo-local only, not a package export) |
 
   </Accordion>
 </AccordionGroup>

@@ -18,6 +18,7 @@ import {
   planProviderMemoryImport,
 } from "../../commands/migrate/memory-import.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage as errorMessage } from "../../infra/errors.js";
 import { summarizeMigrationItems } from "../../plugin-sdk/migration.js";
 import type { MigrationItem, MigrationPlan, MigrationProviderPlugin } from "../../plugins/types.js";
 import { isValidAgentId, normalizeAgentId } from "../../routing/session-key.js";
@@ -29,10 +30,6 @@ const activeApplies = new Set<string>();
 
 function emptySummary() {
   return summarizeMigrationItems([]);
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 type CachedMemoryApply = {

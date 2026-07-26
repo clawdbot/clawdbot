@@ -66,16 +66,7 @@
             "reasoning": true,
             "contextWindow": 1048576,
             "maxTokens": 131072,
-            "cost": {
-              "input": 1,
-              "output": 3,
-              "cacheRead": 0.2,
-              "cacheWrite": 0,
-              "tieredPricing": [
-                { "input": 1, "output": 3, "cacheRead": 0.2, "cacheWrite": 0, "range": [0, 256000] },
-                { "input": 1, "output": 3, "cacheRead": 0.4, "cacheWrite": 0, "range": [256000] }
-              ]
-            }
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
           },
           {
             "id": "mimo-v2.5",
@@ -84,16 +75,7 @@
             "reasoning": true,
             "contextWindow": 1048576,
             "maxTokens": 131072,
-            "cost": {
-              "input": 0.4,
-              "output": 2,
-              "cacheRead": 0.08,
-              "cacheWrite": 0,
-              "tieredPricing": [
-                { "input": 0.4, "output": 2, "cacheRead": 0.08, "cacheWrite": 0, "range": [0, 256000] },
-                { "input": 0.4, "output": 2, "cacheRead": 0.16, "cacheWrite": 0, "range": [256000] }
-              ]
-            }
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
           }
         ]
       }

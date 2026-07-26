@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 318587,
-  "reason": "move presentation preferences to browser-local state",
-  "updatedAt": "2026-07-23"
+  "startupJsGzipBytes": 321792,
+  "reason": "multi-gateway footer subtitle plus accumulated main drift since last record; owner-approved landing (PR #114059); recorded on Linux (CI truth)",
+  "updatedAt": "2026-07-26"
 }

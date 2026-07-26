@@ -9,11 +9,7 @@ import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
-import {
-  hasStagedMediaProjection,
-  resolveMediaFacts,
-  resolveStagedMediaFacts,
-} from "../media/media-facts.js";
+import { normalizeMediaFacts } from "../media/media-facts.js";
 import type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
@@ -165,9 +161,7 @@ export function deriveInboundMessageHookContext(
     ctx.From ??
     internalSessionConversationId(channelId, ctx.SessionKey);
   const isGroup = Boolean(ctx.GroupSubject || ctx.GroupChannel);
-  const media = hasStagedMediaProjection(ctx)
-    ? resolveStagedMediaFacts(ctx)
-    : resolveMediaFacts(ctx);
+  const media = normalizeMediaFacts(ctx.media);
   const hookMedia = projectMessageHookMediaFacts(media);
   const compact = (values: Array<string | undefined>) => {
     const entries = values.filter((value): value is string => Boolean(value));

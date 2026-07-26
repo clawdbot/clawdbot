@@ -7,12 +7,9 @@ import {
   validateSecretsResolveParams,
   validateSecretsResolveResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { formatErrorMessage as errorMessage } from "../../infra/errors.js";
 import { isKnownCoreSecretTargetId, isKnownSecretTargetId } from "../../secrets/target-registry.js";
 import type { GatewayRequestHandlers } from "./types.js";
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function invalidSecretsResolveField(
   errors: ValidationError[] | null | undefined,

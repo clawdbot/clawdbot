@@ -86,12 +86,21 @@ function sameLogicalModel(
   return policy.resolveIdentity(a)?.key === identity.key;
 }
 
-function logicalIdentity(entry: ModelCatalogEntry, id: string, name?: string): ModelCatalogEntry {
+function logicalIdentity(
+  entry: ModelCatalogEntry,
+  id: string,
+  name?: string,
+  lifecycleEntry: ModelCatalogEntry = entry,
+): ModelCatalogEntry {
   return {
     id,
     name: name ?? id,
     provider: entry.provider,
     ...(entry.alias ? { alias: entry.alias } : {}),
+    ...(lifecycleEntry.status ? { status: lifecycleEntry.status } : {}),
+    ...(lifecycleEntry.statusReason ? { statusReason: lifecycleEntry.statusReason } : {}),
+    ...(lifecycleEntry.replaces ? { replaces: lifecycleEntry.replaces } : {}),
+    ...(lifecycleEntry.replacedBy ? { replacedBy: lifecycleEntry.replacedBy } : {}),
   };
 }
 
@@ -158,7 +167,12 @@ export function projectModelCatalogEntryForRoute(params: {
     policy,
     catalog: params.catalog,
   });
-  const projected = logicalIdentity(params.entry, identity.id, donor?.name ?? params.entry.name);
+  const projected = logicalIdentity(
+    params.entry,
+    identity.id,
+    donor?.name ?? params.entry.name,
+    donor ?? params.entry,
+  );
   return applyLogicalOverrides(
     {
       ...projected,

@@ -1,5 +1,5 @@
 // Reads provider thinking policy from the active runtime registry only.
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { matchesProviderPluginRef } from "./provider-registry-shared.js";
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingProfile,
@@ -28,19 +28,6 @@ type ThinkingHookParams<TContext> = {
   context: TContext;
 };
 
-function matchesProviderId(provider: ActiveThinkingProvider, providerId: string): boolean {
-  const normalized = normalizeProviderId(providerId);
-  if (!normalized) {
-    return false;
-  }
-  if (normalizeProviderId(provider.id) === normalized) {
-    return true;
-  }
-  return [...(provider.aliases ?? []), ...(provider.hookAliases ?? [])].some(
-    (alias) => normalizeProviderId(alias) === normalized,
-  );
-}
-
 function resolveActiveThinkingProvider(providerId: string): ActiveThinkingProvider | undefined {
   const state = (
     globalThis as typeof globalThis & {
@@ -48,7 +35,7 @@ function resolveActiveThinkingProvider(providerId: string): ActiveThinkingProvid
     }
   )[PLUGIN_REGISTRY_STATE];
   return state?.activeRegistry?.providers?.find((entry) =>
-    matchesProviderId(entry.provider, providerId),
+    matchesProviderPluginRef(entry.provider, providerId),
   )?.provider;
 }
 

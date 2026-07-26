@@ -28,17 +28,20 @@ extension OpenClawChatViewModel {
             applyTransportHealth(ok)
             if reconnected {
                 Task { [weak self] in await self?.refreshQuestions() }
+                Task { [weak self] in await self?.refreshSwarmCapability() }
             }
         case .tick:
             let context = self.currentSessionSnapshot()
             Task { await self.pollHealthIfNeeded(force: false, sessionSnapshot: context) }
         case let .sessionsChanged(change):
+            let swarmEvent = self.observeSwarmEvent(change)
+            let ownedSwarmActivityNote = swarmEvent && SelfContainedSwarmHelpers.isActivityNote(change)
             let projectedSessions = ChatSessionSidebarModel.applying(
                 sessionChange: change,
                 to: self.sessions)
             if let projectedSessions {
                 self.sessions = projectedSessions
-            } else if change.reason != "patch", change.reason != "command-metadata" {
+            } else if !ownedSwarmActivityNote, change.reason != "patch", change.reason != "command-metadata" {
                 let context = self.currentSessionSnapshot()
                 Task { await self.fetchSessions(limit: 50, sessionSnapshot: context) }
             }
@@ -99,8 +102,15 @@ extension OpenClawChatViewModel {
         case let .questionResolved(resolved):
             self.resolveQuestionEvent(resolved)
             self.reconcileQuestionsAfterEvent()
+        case .routeChanged:
+            self.swarmEnabled = false
+            self.resetSwarmProgress()
+            Task { [weak self] in await self?.refreshSwarmCapability() }
         case .seqGap:
             self.errorText = nil
+            self.swarmEnabled = false
+            self.resetSwarmProgress()
+            Task { [weak self] in await self?.refreshSwarmCapability() }
             self.invalidateHistorySnapshots()
             self.invalidateRunSnapshots()
             self.clearPendingRuns(reason: nil)
@@ -192,15 +202,21 @@ extension OpenClawChatViewModel {
         }
         if chat.state == "final" || chat.state == "aborted" || chat.state == "error" {
             self.invalidateHistorySnapshots()
-            self.updateActiveSessionRunWithoutChatSnapshot(false)
+            if isOurRun || self.pendingRuns.isEmpty {
+                self.updateActiveSessionRunWithoutChatSnapshot(false)
+            }
         }
         self.invalidateRunSnapshots()
         if !isOurRun {
             // Keep multiple clients in sync: if another client finishes a run for our session, refresh history.
             switch chat.state {
             case "final", "aborted", "error":
-                self.updateStreamingAssistantText(nil)
-                self.pendingToolCallsById = [:]
+                // An older external turn must not erase the stream or tools
+                // owned by the run this client is still actively following.
+                if self.pendingRuns.isEmpty {
+                    self.updateStreamingAssistantText(nil)
+                    self.pendingToolCallsById = [:]
+                }
                 if let runId = chat.runId {
                     self.clearPlan(for: runId)
                 }

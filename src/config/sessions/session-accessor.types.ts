@@ -38,6 +38,8 @@ export type SessionAccessScope = {
    * mutate the returned entry.
    */
   clone?: boolean;
+  /** Configured default owner for fixed-store SQLite target derivation. */
+  defaultAgentId?: string;
   /** Environment override used when resolving agent-scoped store paths in tests/tools. */
   env?: NodeJS.ProcessEnv;
   /** Set false for metadata-only reads that do not need hydrated prompt refs. */
@@ -651,6 +653,8 @@ export type SessionMessageCutMutationResult =
       key: string;
       entry: SessionEntry;
       editorText?: string;
+      editorAttachments?: Array<{ mimeType: string; data: string }>;
+      editorMediaRefs?: Array<{ path: string; contentType: string }>;
     }
   | { status: "missing-session" }
   | { status: "missing-entry" }

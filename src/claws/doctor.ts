@@ -324,7 +324,7 @@ export async function collectClawStateHealthFindings(
   }
   let database: OpenClawStateDatabase | undefined;
   try {
-    database = openExistingOpenClawStateDatabaseReadOnly(options);
+    database = await openExistingOpenClawStateDatabaseReadOnly(options);
     if (!database) {
       return [];
     }

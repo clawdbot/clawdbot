@@ -48,11 +48,12 @@
       "groq": {
         "baseUrl": "https://api.groq.com/openai/v1",
         "api": "openai-completions",
+        "defaultModel": "openai/gpt-oss-120b",
         "models": [
           {
             "id": "groq/compound",
             "name": "Compound",
-            "reasoning": true,
+            "reasoning": false,
             "input": ["text"],
             "contextWindow": 131072,
             "maxTokens": 8192,
@@ -66,7 +67,7 @@
           {
             "id": "groq/compound-mini",
             "name": "Compound Mini",
-            "reasoning": true,
+            "reasoning": false,
             "input": ["text"],
             "contextWindow": 131072,
             "maxTokens": 8192,
@@ -80,6 +81,8 @@
           {
             "id": "llama-3.1-8b-instant",
             "name": "Llama 3.1 8B Instant",
+            "status": "deprecated",
+            "replacedBy": "openai/gpt-oss-20b",
             "reasoning": false,
             "input": ["text"],
             "contextWindow": 131072,
@@ -94,6 +97,8 @@
           {
             "id": "llama-3.3-70b-versatile",
             "name": "Llama 3.3 70B Versatile",
+            "status": "deprecated",
+            "replacedBy": "openai/gpt-oss-120b",
             "reasoning": false,
             "input": ["text"],
             "contextWindow": 131072,
@@ -101,23 +106,6 @@
             "cost": {
               "input": 0.59,
               "output": 0.79,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            }
-          },
-          {
-            "id": "meta-llama/llama-4-scout-17b-16e-instruct",
-            "name": "Llama 4 Scout 17B",
-            "reasoning": false,
-            "input": ["text", "image"],
-            "mediaInput": {
-              "image": { "maxPixels": 33177600, "preferredSidePx": 2048, "tokenMode": "provider" }
-            },
-            "contextWindow": 131072,
-            "maxTokens": 8192,
-            "cost": {
-              "input": 0.11,
-              "output": 0.34,
               "cacheRead": 0,
               "cacheWrite": 0
             }
@@ -132,7 +120,7 @@
             "cost": {
               "input": 0.15,
               "output": 0.6,
-              "cacheRead": 0,
+              "cacheRead": 0.075,
               "cacheWrite": 0
             }
           },
@@ -146,7 +134,7 @@
             "cost": {
               "input": 0.075,
               "output": 0.3,
-              "cacheRead": 0,
+              "cacheRead": 0.0375,
               "cacheWrite": 0
             }
           },
@@ -165,15 +153,15 @@
             }
           },
           {
-            "id": "qwen/qwen3-32b",
-            "name": "Qwen3 32B",
+            "id": "qwen/qwen3.6-27b",
+            "name": "Qwen 3.6 27B",
             "reasoning": true,
-            "input": ["text"],
+            "input": ["text", "image"],
             "contextWindow": 131072,
-            "maxTokens": 40960,
+            "maxTokens": 16384,
             "cost": {
-              "input": 0.29,
-              "output": 0.59,
+              "input": 0.6,
+              "output": 3,
               "cacheRead": 0,
               "cacheWrite": 0
             }

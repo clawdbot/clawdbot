@@ -16,6 +16,7 @@ import {
   resolveAgentConfig,
   resolveAgentRuntimeLabel,
   resolveAgentTextAvatar,
+  resolveEffectiveModelFallbacks,
   resolveModelFallbacks,
   resolveModelLabel,
   resolveModelPrimary,
@@ -93,8 +94,7 @@ export function renderAgentOverview(params: {
   const effectivePrimary = entryPrimary ?? defaultPrimary ?? null;
   const selectedPrimary = isDefault ? effectivePrimary : entryPrimary;
   const modelFallbacks =
-    resolveModelFallbacks(config.entry?.model) ??
-    resolveModelFallbacks(config.defaults?.model) ??
+    resolveEffectiveModelFallbacks(config.entry?.model, config.defaults?.model) ??
     (configForm ? null : resolveModelFallbacks(agentModel));
   const fallbackChips = modelFallbacks ?? [];
   const skillFilter = Array.isArray(config.entry?.skills) ? config.entry?.skills : null;

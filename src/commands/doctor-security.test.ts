@@ -1,8 +1,11 @@
 // Doctor security tests cover security audit checks, config findings, and repair output.
-import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { ExecApprovalsFile } from "../infra/exec-approvals-core.js";
+import { saveExecApprovals } from "../infra/exec-approvals-store.js";
+import { testing as execApprovalsStoreTesting } from "../infra/exec-approvals-store.test-support.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 
 const note = vi.hoisted(() => vi.fn());
@@ -37,6 +40,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
   let prevToken: string | undefined;
   let prevPassword: string | undefined;
   let prevHome: string | undefined;
+  let prevStateDir: string | undefined;
   let prevServiceKind: string | undefined;
 
   beforeEach(() => {
@@ -47,6 +51,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
     prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
     prevPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
     prevHome = process.env.HOME;
+    prevStateDir = process.env.OPENCLAW_STATE_DIR;
     prevServiceKind = process.env.OPENCLAW_SERVICE_KIND;
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
@@ -69,6 +74,11 @@ describe("noteSecurityWarnings gateway exposure", () => {
     } else {
       process.env.HOME = prevHome;
     }
+    if (prevStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = prevStateDir;
+    }
     if (prevServiceKind === undefined) {
       delete process.env.OPENCLAW_SERVICE_KIND;
     } else {
@@ -84,12 +94,16 @@ describe("noteSecurityWarnings gateway exposure", () => {
   ): Promise<void> {
     await withTempDir({ prefix: "openclaw-doctor-security-" }, async (home) => {
       process.env.HOME = home;
-      await fs.mkdir(path.join(home, ".openclaw"), { recursive: true });
-      await fs.writeFile(
-        path.join(home, ".openclaw", "exec-approvals.json"),
-        JSON.stringify(file, null, 2),
-      );
-      await run();
+      process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
+      closeOpenClawStateDatabaseForTest();
+      execApprovalsStoreTesting.reset();
+      saveExecApprovals(file as ExecApprovalsFile);
+      try {
+        await run();
+      } finally {
+        closeOpenClawStateDatabaseForTest();
+        execApprovalsStoreTesting.reset();
+      }
     });
   }
 
@@ -300,7 +314,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
     await noteSecurityWarnings(cfg);
     const message = lastMessage();
     expect(message).toContain("disables approval forwarding only");
-    expect(message).toContain("exec-approvals.json");
+    expect(message).toContain("state/openclaw.sqlite#exec_approvals_config");
     expect(message).toContain("openclaw approvals get --gateway");
   });
 

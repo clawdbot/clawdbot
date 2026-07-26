@@ -6,6 +6,7 @@
  */
 import type { Model } from "@openclaw/llm-core";
 import type { AiProviderRequestCapabilities, AiProviderRequestPolicyInput } from "../host.js";
+import { isKnownOpenAIJsonSchemaModelId } from "../providers/openai-response-format.js";
 import { resolveProviderRequestCapabilities } from "./host-policy.js";
 
 type ProviderEndpointClass = string;
@@ -13,6 +14,7 @@ type ProviderRequestCapabilities = AiProviderRequestCapabilities;
 
 type OpenAICompletionsCompatDefaultsInput = {
   provider?: string;
+  modelId?: string;
   endpointClass: ProviderEndpointClass;
   knownProviderFamily: string;
   supportsNativeStreamingUsageCompat?: boolean;
@@ -29,6 +31,7 @@ type OpenAICompletionsCompatDefaults = {
   thinkingFormat: "openai" | "openrouter" | "deepseek" | "together" | "zai";
   visibleReasoningDetailTypes: string[];
   supportsStrictMode: boolean;
+  supportsJsonSchemaResponseFormat: boolean;
   requiresReasoningContentOnAssistantMessages: boolean;
   requiresNonEmptyUserOrAssistantMessage: boolean;
 };
@@ -48,6 +51,7 @@ function resolveOpenAICompletionsCompatDefaults(
 ): OpenAICompletionsCompatDefaults {
   const {
     provider,
+    modelId,
     endpointClass,
     knownProviderFamily,
     supportsNativeStreamingUsageCompat = false,
@@ -127,6 +131,10 @@ function resolveOpenAICompletionsCompatDefaults(
               : "openai",
     visibleReasoningDetailTypes: isOpenRouterLike ? ["response.output_text", "response.text"] : [],
     supportsStrictMode: !isZai && !usesConfiguredNonOpenAIEndpoint,
+    supportsJsonSchemaResponseFormat:
+      (endpointClass === "openai-public" ||
+        (isDefaultRoute && isDefaultRouteProvider(provider, "openai"))) &&
+      isKnownOpenAIJsonSchemaModelId(modelId),
     requiresReasoningContentOnAssistantMessages: isDeepSeek || isXiaomi,
     requiresNonEmptyUserOrAssistantMessage: isModelStudioLike,
   };
@@ -142,6 +150,7 @@ function resolveOpenAICompletionsCompatDefaultsFromCapabilities(
     | "usesExplicitProxyLikeEndpoint"
   > & {
     provider?: string;
+    modelId?: string;
   },
 ): OpenAICompletionsCompatDefaults {
   return resolveOpenAICompletionsCompatDefaults(input);
@@ -172,6 +181,7 @@ export function detectOpenAICompletionsCompat(
     capabilities,
     defaults: resolveOpenAICompletionsCompatDefaultsFromCapabilities({
       provider: model.provider,
+      modelId: model.id,
       ...capabilities,
     }),
   };

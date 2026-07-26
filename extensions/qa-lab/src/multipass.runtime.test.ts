@@ -154,6 +154,16 @@ describe("qa multipass runtime", () => {
     expect(script).toContain("/workspace/openclaw-host/.artifacts/qa-e2e/multipass-default-test");
   });
 
+  it("forwards fail-fast to the real guest QA suite command", async () => {
+    const script = await renderPersistedGuestScript({
+      outputDirName: "multipass-fail-fast-test",
+      failFast: true,
+      scenarioIds: ["channel-chat-baseline"],
+    });
+
+    expect(script).toContain("'--fail-fast'");
+  });
+
   it("redacts persisted credentials while forwarding them to the executable script", async () => {
     vi.stubEnv("OPENAI_API_KEY", TEST_ENV_VALUE);
     const { executableScript, persistedScript } = await captureGuestScriptsAtTransfer({

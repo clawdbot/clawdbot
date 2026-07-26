@@ -5,12 +5,11 @@ import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-sha
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-onboard";
 import { fetchWithSsrFGuard, type LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
+  OLLAMA_CLOUD_DEFAULT_MODELS,
   OLLAMA_DEFAULT_BASE_URL,
   OLLAMA_DEFAULT_CONTEXT_WINDOW,
   OLLAMA_DEFAULT_COST,
   OLLAMA_DEFAULT_MAX_TOKENS,
-  OLLAMA_GLM52_CLOUD_MODEL_ID,
-  OLLAMA_GLM52_CONTEXT_WINDOW,
   OLLAMA_LOCAL_CONTEXT_TOKENS,
 } from "./defaults.js";
 
@@ -292,11 +291,12 @@ export function isReasoningModelHeuristic(modelId: string): boolean {
 }
 
 function isKnownOllamaCloudReasoningModel(modelId: string): boolean {
-  const normalized = modelId.trim().toLowerCase();
-  return (
-    normalized === OLLAMA_GLM52_CLOUD_MODEL_ID ||
-    /^deepseek-v4-(?:flash|pro):cloud$/.test(normalized)
-  );
+  // Match both the canonical direct-host id and the local `:cloud` routing alias.
+  const normalized = modelId
+    .trim()
+    .toLowerCase()
+    .replace(/:cloud$/, "");
+  return normalized === "glm-5.2" || /^deepseek-v4-(?:flash|pro)$/.test(normalized);
 }
 
 export function buildOllamaModelDefinition(
@@ -313,10 +313,15 @@ export function buildOllamaModelDefinition(
       : capabilities.includes("thinking"));
   const compat =
     capabilities === undefined
-      ? { supportsTools: true, supportsUsageInStreaming: true }
+      ? {
+          supportsTools: true,
+          supportsUsageInStreaming: true,
+          supportsJsonSchemaResponseFormat: !isOllamaCloudModel(modelId),
+        }
       : {
           supportsTools: capabilities.includes("tools"),
           supportsUsageInStreaming: true,
+          supportsJsonSchemaResponseFormat: !isOllamaCloudModel(modelId),
         };
   return {
     id: modelId,
@@ -326,11 +331,26 @@ export function buildOllamaModelDefinition(
     cost: OLLAMA_DEFAULT_COST,
     contextWindow:
       contextWindow ??
-      (modelId.trim().toLowerCase() === OLLAMA_GLM52_CLOUD_MODEL_ID
-        ? OLLAMA_GLM52_CONTEXT_WINDOW
+      (modelId
+        .trim()
+        .toLowerCase()
+        .replace(/:cloud$/, "") === "glm-5.2"
+        ? 1_000_000
         : OLLAMA_DEFAULT_CONTEXT_WINDOW),
     maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
     compat,
+  };
+}
+
+export function buildDefaultOllamaCloudModelDefinition(
+  model: (typeof OLLAMA_CLOUD_DEFAULT_MODELS)[number],
+): ModelDefinitionConfig {
+  return {
+    ...buildOllamaModelDefinition(model.id, model.contextWindow, [...model.capabilities]),
+    compat: {
+      supportsTools: true,
+      supportsUsageInStreaming: true,
+    },
   };
 }
 

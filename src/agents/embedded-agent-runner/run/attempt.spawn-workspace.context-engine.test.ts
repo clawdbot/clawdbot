@@ -3576,7 +3576,7 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
 
     expect(submittedMessages.filter((message) => message.role === "user")).toEqual([
       expect.objectContaining({
-        content: expect.stringContaining('"name": "Alice"'),
+        content: expect.stringContaining('"name":"Alice"'),
         role: "user",
       }),
     ]);

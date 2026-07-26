@@ -73,6 +73,7 @@ function resolveExecConfigState(params: {
   execOverrides?: ExecPolicyOverrides;
   agentId?: string;
   sessionKey?: string;
+  scope?: { kind: "defaults" };
 }): {
   cfg: OpenClawConfig;
   host: ExecTarget;
@@ -82,11 +83,13 @@ function resolveExecConfigState(params: {
 } {
   const cfg = params.cfg ?? {};
   const resolvedAgentId =
-    params.agentId ??
-    resolveSessionAgentId({
-      sessionKey: params.sessionKey,
-      config: cfg,
-    });
+    params.scope?.kind === "defaults"
+      ? undefined
+      : (params.agentId ??
+        resolveSessionAgentId({
+          sessionKey: params.sessionKey,
+          config: cfg,
+        }));
   const globalExec = cfg.tools?.exec;
   const agentExec = resolvedAgentId
     ? resolveAgentConfig(cfg, resolvedAgentId)?.tools?.exec
@@ -132,6 +135,8 @@ export function resolveExecDefaults(params: {
   execOverrides?: ExecPolicyOverrides;
   agentId?: string;
   sessionKey?: string;
+  /** Resolve agents.defaults/tools.exec without applying any roster entry override. */
+  scope?: { kind: "defaults" };
   sandboxAvailable?: boolean;
   elevatedRequested?: boolean;
 }): {
