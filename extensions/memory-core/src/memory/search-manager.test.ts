@@ -508,6 +508,32 @@ describe("getMemorySearchManager caching", () => {
     expect(createQmdManagerMock.mock.calls).toHaveLength(2);
   });
 
+  it("blocks qmd reacquisition while a failed primary retires", async () => {
+    const agentId = "retry-agent-retirement";
+    const cfg = createQmdCfg(agentId);
+    const firstPrimary = createQmdManagerInstanceMock();
+    const secondPrimary = createQmdManagerInstanceMock();
+    const closeGate = createDeferred<void>();
+    firstPrimary.search.mockRejectedValueOnce(new Error("qmd query failed"));
+    firstPrimary.close.mockImplementationOnce(async () => await closeGate.promise);
+    createQmdManagerMock
+      .mockImplementationOnce(async () => firstPrimary)
+      .mockImplementationOnce(async () => secondPrimary);
+
+    const first = requireManager(await getMemorySearchManager({ cfg, agentId }));
+    await expect(first.search("hello")).resolves.toHaveLength(1);
+    await vi.waitFor(() => expect(firstPrimary.close).toHaveBeenCalledTimes(1));
+
+    const secondPromise = getMemorySearchManager({ cfg, agentId });
+    await Promise.resolve();
+    expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
+
+    closeGate.resolve();
+    const second = requireManager(await secondPromise);
+    expect(second).not.toBe(first);
+    expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
+  });
+
   it("falls back immediately when the qmd binary is unavailable", async () => {
     const cfg = createQmdCfg("missing-qmd");
     checkQmdBinaryAvailability.mockResolvedValueOnce({
@@ -1199,7 +1225,8 @@ describe("getMemorySearchManager caching", () => {
       agentId: retryAgentId,
       errorMessage: "qmd query failed",
     });
-    mockPrimary.close.mockImplementationOnce(async () => await new Promise(() => {}));
+    const retirementGate = createDeferred<void>();
+    mockPrimary.close.mockImplementationOnce(async () => await retirementGate.promise);
     const onDebug = vi.fn();
 
     try {
@@ -1210,6 +1237,7 @@ describe("getMemorySearchManager caching", () => {
       expect(mockPrimary.close).toHaveBeenCalledTimes(1);
       expect(fallbackSearch).toHaveBeenCalledTimes(1);
     } finally {
+      retirementGate.resolve();
       mockPrimary.close.mockImplementation(async () => {});
     }
   });

@@ -235,6 +235,20 @@ async function runMemorySearchManagerGlobalClose(operation: () => Promise<void>)
     MEMORY_SEARCH_MANAGER_CACHE_STORE.globalClosePromise = null;
   }
 }
+
+function retireQmdManagerInScope(scopeKey: string, manager: MemorySearchManager): void {
+  retainQmdManagerForCleanup(scopeKey, manager);
+  void runMemorySearchManagerScopeOperation(
+    scopeKey,
+    async () => {
+      await manager.close?.();
+      releaseRetainedQmdManager(scopeKey, manager);
+    },
+    { drainRetained: false },
+  ).catch((err: unknown) => {
+    log.warn(`failed to retire qmd memory manager: ${formatErrorMessage(err)}`);
+  });
+}
 const managerRuntimeLoader = createLazyRuntimeModule(() => import("../../manager-runtime.js"));
 const loadManagerRuntime = managerRuntimeLoader;
 
@@ -427,6 +441,7 @@ async function getMemorySearchManagerWithinLifecycle(
       const wrapper = new FallbackMemoryManager(
         {
           primary,
+          retirePrimary: () => retireQmdManagerInScope(scopeKey, primary),
           fallbackFactory: async () => {
             const { MemoryIndexManager } = await loadManagerRuntime();
             return await MemoryIndexManager.get(params);
@@ -795,6 +810,7 @@ class FallbackMemoryManager implements MemorySearchManager {
   constructor(
     private readonly deps: {
       primary: MemorySearchManager;
+      retirePrimary: () => void;
       fallbackFactory: () => Promise<Maybe<MemorySearchManager>>;
     },
     private readonly onClose?: () => void,
@@ -825,11 +841,9 @@ class FallbackMemoryManager implements MemorySearchManager {
         this.primaryFailed = true;
         this.lastError = formatErrorMessage(err);
         log.warn(`qmd memory failed; switching to builtin index: ${this.lastError}`);
+        this.deps.retirePrimary();
         // Evict the failed wrapper so the next request can retry QMD with a fresh manager.
         this.evictCacheEntry();
-        // Retirement must not delay the same-call builtin fallback. QMD owns
-        // its internal shutdown bounds; this close is best-effort cleanup.
-        void this.deps.primary.close?.().catch(() => {});
       }
     }
     // The fallback owns a fresh default budget. Release any outer QMD clock
