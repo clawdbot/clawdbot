@@ -28,7 +28,7 @@ export type ExecApprovalsMutationLeaseOwner = Pick<
   "assertOwnedInTransaction"
 >;
 
-export class ExecApprovalsMutationFencedError extends Error {
+class ExecApprovalsMutationFencedError extends Error {
   constructor() {
     super("Exec approvals cannot be changed while agent deletion is in progress; retry.");
     this.name = "ExecApprovalsMutationFencedError";

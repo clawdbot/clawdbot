@@ -16,7 +16,6 @@ import {
   ExecApprovalsMigrationRequiredError,
 } from "./exec-approvals-migration-gate.js";
 import {
-  ExecApprovalsMutationFencedError,
   readExecApprovalsConfigRow,
   serializeExecApprovals,
   snapshotFromExecApprovalsRow,
@@ -259,7 +258,7 @@ describe("exec approvals SQLite store", () => {
             agents: { ...file.agents, removed: { security: "full" } },
           }),
         }),
-      ).rejects.toBeInstanceOf(ExecApprovalsMutationFencedError);
+      ).rejects.toMatchObject({ name: "ExecApprovalsMutationFencedError" });
     } finally {
       finishCommit();
     }
@@ -289,7 +288,7 @@ describe("exec approvals SQLite store", () => {
           version: 1,
           agents: { kept: { security: "full" } },
         }),
-      ).toThrow(ExecApprovalsMutationFencedError);
+      ).toThrow("Exec approvals cannot be changed while agent deletion is in progress; retry.");
     } finally {
       finishCommit();
     }
