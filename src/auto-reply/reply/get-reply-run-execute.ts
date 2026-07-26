@@ -28,6 +28,7 @@ import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { normalizeToolProgressDetail } from "./prompt-session-context.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
+import { settleManagedSystemEventsAfterTurnAdoption } from "./session-system-events.js";
 import {
   buildChannelSourceTurnId,
   readChannelSourceTurnId,
@@ -46,6 +47,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     transcriptCommandBody,
     promptMedia,
     currentInboundContext,
+    managedSystemEventDeliveries,
     isRoomEvent,
     providedReplyOperation,
     preparedSessionState,
@@ -66,6 +68,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     params,
     runtimePolicySessionKey,
     isHeartbeat,
+    isContinuationWake,
     traceRunPhase,
     promptSessionCtx,
     inboundEventKind,
@@ -241,6 +244,9 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
           text: userTurnTranscriptText,
           senderIsOwner: command.senderIsOwner,
           ...(sourceTurnId ? { idempotencyKey: sourceTurnId } : {}),
+          ...(managedSystemEventDeliveries.size > 0
+            ? { sessionDeliveryAckIds: [...managedSystemEventDeliveries.keys()] }
+            : {}),
           ...(inputProvenance && !isHeartbeat ? { provenance: inputProvenance } : {}),
           ...(isHeartbeat
             ? { provenance: { kind: "internal_system" as const, sourceTool: "heartbeat" } }
@@ -295,16 +301,35 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   const replyPolicyChannel =
     (replyRoute.channel as OriginatingChannelType | undefined) ??
     (messageProvider as OriginatingChannelType | undefined);
+  const originalTurnAdoptionLifecycle = opts?.turnAdoptionLifecycle;
+  const effectiveTurnAdoptionLifecycle =
+    managedSystemEventDeliveries.size > 0
+      ? {
+          ...originalTurnAdoptionLifecycle,
+          onAdopted: async () => {
+            await settleManagedSystemEventsAfterTurnAdoption({
+              deliveries: managedSystemEventDeliveries.values(),
+              persistedMessage: userTurnTranscriptRecorder?.getPersistedMessage?.(),
+              onTurnAdopted: originalTurnAdoptionLifecycle?.onAdopted,
+            });
+          },
+        }
+      : originalTurnAdoptionLifecycle;
+  const effectiveOpts =
+    effectiveTurnAdoptionLifecycle === opts?.turnAdoptionLifecycle
+      ? opts
+      : { ...opts, turnAdoptionLifecycle: effectiveTurnAdoptionLifecycle };
   const followupRun = {
     prompt: queuedBody,
     transcriptPrompt: transcriptCommandBody,
     ...(userTurnTranscriptRecorder ? { userTurnTranscriptRecorder } : {}),
     currentInboundEventKind: inboundEventKind,
+    ...(userTurnTimestamp ? { currentInboundEventTimestampMs: userTurnTimestamp } : {}),
     currentInboundAudio: hasInboundAudio(sessionCtx),
     currentInboundContext,
     ...(queuedFollowupAbortSignal ? { abortSignal: queuedFollowupAbortSignal } : {}),
     deliveryCorrelations: opts?.queuedDeliveryCorrelations,
-    turnAdoptionLifecycle: opts?.turnAdoptionLifecycle,
+    turnAdoptionLifecycle: effectiveTurnAdoptionLifecycle,
     onReplyAdmissionWaitChange: opts?.onReplyAdmissionWaitChange,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
@@ -449,7 +474,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       return embeddedAgentRuntime?.isEmbeddedAgentRunActive(latestActiveSessionId) ?? false;
     },
     isStreaming,
-    opts,
+    opts: effectiveOpts,
     typing,
     sessionEntry: preparedSessionState.sessionEntry,
     sessionStore,
@@ -471,6 +496,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     typingMode,
     resetTriggered: effectiveResetTriggered,
     replyThreadingOverride,
+    isContinuationWake,
     replyOperation: providedReplyOperation,
   });
 }

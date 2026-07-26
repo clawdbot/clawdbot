@@ -21,6 +21,7 @@ import {
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
+import { createReplyContinuationController } from "./agent-runner-continuation.js";
 import {
   BLOCK_REPLY_SEND_TIMEOUT_MS,
   cleanupReplyAgentRun,
@@ -63,6 +64,7 @@ import {
   retireTerminalRestartRecoverySourceClaim,
 } from "./restart-recovery-claim.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
+import { resolveReplyHookTrigger } from "./run-provenance.js";
 import { buildChannelSourceTurnId, readChannelSourceTurnId } from "./source-turn-id.js";
 import { createTypingSignaler } from "./typing-mode.js";
 export async function runReplyAgent(
@@ -98,6 +100,7 @@ export async function runReplyAgent(
     typingMode,
     resetTriggered,
     replyThreadingOverride,
+    isContinuationWake,
     replyOperation: providedReplyOperation,
   } = params;
   // One lifecycle for all adoption sites in this run.
@@ -109,11 +112,15 @@ export async function runReplyAgent(
   const activeRunQueueMode = effectiveResetTriggered ? "interrupt" : resolvedQueue.mode;
 
   const isHeartbeat = opts?.isHeartbeat === true;
+  const hookTrigger = resolveReplyHookTrigger(opts);
   const replyOperationRunState = resolveReplyOperationRunState(opts);
   const traceAttributes = {
     provider: followupRun.run.provider,
     hasSessionKey: Boolean(sessionKey ?? followupRun.run.sessionKey),
-    isHeartbeat,
+    isHeartbeat:
+      isHeartbeat &&
+      opts?.reasoningPayloadsEnabled !== true &&
+      opts?.commentaryPayloadsEnabled !== true,
     queueMode: resolvedQueue.mode,
     isActive,
     blockStreamingEnabled,
@@ -238,7 +245,7 @@ export async function runReplyAgent(
         normalizeOptionalString(opts?.runId),
       "steered turn id",
     );
-    const trigger = "user";
+    const trigger = hookTrigger;
     const hookResult = await runBeforeAgentReplyForTurn({
       runId: steerRunId,
       trigger,
@@ -571,6 +578,17 @@ export async function runReplyAgent(
     },
     storePath,
   });
+  const continuation = createReplyContinuationController({
+    cfg,
+    sessionKey,
+    storePath,
+    isContinuationWake: isContinuationWake === true,
+    activeSessionStore,
+    getActiveSessionEntry: () => activeSessionEntry,
+    setActiveSessionEntry: (entry) => {
+      activeSessionEntry = entry;
+    },
+  });
   type SessionResetOptions = {
     failureLabel: string;
     buildLogMessage: (nextSessionId: string) => string;
@@ -623,10 +641,13 @@ export async function runReplyAgent(
       cfg,
       checkpointBeforeAgentReply,
       commandBody,
+      continuation,
       defaultModel,
       followupRun,
       getActiveIsNewSession: () => activeIsNewSession,
       getActiveSessionEntry: () => activeSessionEntry,
+      hookTrigger,
+      isContinuationWake: isContinuationWake === true,
       isHeartbeat,
       isRestartRecoveryArmed,
       opts,
@@ -680,6 +701,7 @@ export async function runReplyAgent(
     await cleanupReplyAgentRun({
       blockReplyPipeline,
       clearRestartRecoveryDeliveryClaim,
+      postCompactionDelegatesToPreserve: continuation.postCompactionDelegatesToPreserve,
       providedReplyOperation,
       queueKey,
       replyOperation,

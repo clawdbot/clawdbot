@@ -50,7 +50,10 @@ import {
   isSlackDirectRoutedThreadTurn,
   resolveRoutedDeliveryThreadId,
 } from "./routed-delivery-thread.js";
-import { drainFormattedSystemEvents } from "./session-system-events.js";
+import {
+  prepareFormattedSystemEvents,
+  type PreparedManagedSystemEventDelivery,
+} from "./session-system-events.js";
 
 export async function prepareReplyRunAdmission(context: PreparedReplyRunContext) {
   const {
@@ -132,18 +135,50 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     : !isNewSession && threadStarterBody
       ? `[Thread starter - for context]\n${threadStarterBody}`
       : undefined;
-  const drainedSystemEventBlocks: string[] = [];
+  const drainedSystemEventBlocks: Array<{ key?: string; text: string }> = [];
+  const seenSystemEventBlockKeys = new Set<string>();
+  const managedSystemEventDeliveries = new Map<string, PreparedManagedSystemEventDelivery>();
   const rebuildPromptBodies = async () => {
     if (!useFastReplyRuntime && heartbeatRunScope !== "commitment-only") {
-      const eventsBlock = await drainFormattedSystemEvents({
+      for (const deliveryId of managedSystemEventDeliveries.keys()) {
+        const blockKey = `session-delivery:${deliveryId}`;
+        seenSystemEventBlockKeys.delete(blockKey);
+        for (let index = drainedSystemEventBlocks.length - 1; index >= 0; index -= 1) {
+          if (drainedSystemEventBlocks[index]?.key === blockKey) {
+            drainedSystemEventBlocks.splice(index, 1);
+          }
+        }
+      }
+      managedSystemEventDeliveries.clear();
+      const preparedEvents = await prepareFormattedSystemEvents({
         cfg,
         sessionKey,
         isMainSession,
         isNewSession,
         suppressHeartbeatOwnedEvents: context.isHeartbeat,
       });
-      if (eventsBlock) {
-        drainedSystemEventBlocks.push(eventsBlock);
+      const managedDeliveryIds = preparedEvents.managedDeliveries.map((delivery) => delivery.id);
+      const suppliedRecorderAccepted =
+        !opts?.userTurnTranscriptRecorder ||
+        opts.userTurnTranscriptRecorder.replaceSessionDeliveryAckIds?.(managedDeliveryIds) === true;
+      const managedDeliveries = suppliedRecorderAccepted ? preparedEvents.managedDeliveries : [];
+      const deferredManagedBlockKeys = suppliedRecorderAccepted
+        ? undefined
+        : new Set(managedDeliveryIds.map((id) => `session-delivery:${id}`));
+      for (const delivery of managedDeliveries) {
+        managedSystemEventDeliveries.set(delivery.id, delivery);
+      }
+      for (const block of preparedEvents.blocks) {
+        if (block.key && deferredManagedBlockKeys?.has(block.key)) {
+          continue;
+        }
+        if (block.key) {
+          if (seenSystemEventBlockKeys.has(block.key)) {
+            continue;
+          }
+          seenSystemEventBlockKeys.add(block.key);
+        }
+        drainedSystemEventBlocks.push(block);
       }
     }
     const { activeGoalContext, inboundUserContext } = context.getInboundContext();
@@ -164,7 +199,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       inboundEventKind,
       sourceReplyDeliveryMode,
       threadContextNote,
-      systemEventBlocks: drainedSystemEventBlocks,
+      systemEventBlocks: drainedSystemEventBlocks.map((block) => block.text),
       media: opts?.media,
     });
   };
@@ -578,6 +613,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     transcriptCommandBody,
     promptMedia,
     currentInboundContext,
+    managedSystemEventDeliveries,
     isRoomEvent,
     providedReplyOperation,
     sessionIdFinal,
