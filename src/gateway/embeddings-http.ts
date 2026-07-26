@@ -469,8 +469,9 @@ export async function handleOpenAiEmbeddingsHttpRequest(
               }
             : undefined,
         }),
-      (provider) =>
-        requestedProviderNeedsCleanup || isLocalEmbeddingProvider({ cfg, provider: provider.id }),
+      (createdProvider) =>
+        requestedProviderNeedsCleanup ||
+        isLocalEmbeddingProvider({ cfg, provider: createdProvider.id }),
     );
     try {
       const embeddings = await provider.embedBatch(texts);
