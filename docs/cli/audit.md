@@ -13,10 +13,10 @@ Query the Gateway's metadata-only audit ledger for agent runs, tool actions, and
 opt-in message lifecycle records.
 
 The ledger is on by default for run and tool events. Set
-[`audit.enabled: false`](/gateway/configuration-reference#audit) and restart the
-Gateway to stop all new event records. Message records are separately disabled by
-default; set `audit.messages` to `direct` or `all` and restart the Gateway to
-record them. Existing records stay queryable until they expire (30 days).
+[`logging.audit.enabled: false`](/gateway/configuration-reference#audit) and
+restart the Gateway to stop all new event records. Message records are
+separately disabled by default; set `logging.audit.messages` to `direct` or
+`all` and restart the Gateway to record them. Existing records stay queryable until they expire (30 days).
 
 The ledger is separate from conversation transcripts: it records identity,
 ordering, provenance, action, status, and normalized outcome codes, but never

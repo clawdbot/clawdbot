@@ -101,7 +101,7 @@ Reminders created from an active chat preserve the live chat delivery target for
 Failure notifications resolve in this order:
 
 1. `delivery.failureDestination` on the job.
-2. Global `cron.failureDestination`.
+2. The global destination fields on `cron.failureAlert` (`mode`, `channel`, `to`, `accountId`). The retired `cron.failureDestination` block is merged into them by `openclaw doctor --fix`.
 3. The job's primary announce target (when neither of the above resolves to a concrete destination).
 
 <Note>

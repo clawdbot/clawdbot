@@ -87,8 +87,38 @@ describe("background tasks rail state", () => {
 
     const props = createBackgroundTasksProps(host, openSession);
     expect(props.collapsed).toBe(true);
+    expect(props.finishedCollapsed).toBe(true);
     expect(request).toHaveBeenCalledTimes(2);
     expect(props.tasks?.map((task) => task.id)).toEqual(["task-1"]);
+  });
+
+  it("keeps the later recent page's equally current running progress", async () => {
+    const recent = makeTask({
+      id: "task-1",
+      toolUseCount: 2,
+      lastToolName: "write",
+      progressSummary: "Finishing the concurrent task report",
+    });
+    const active = makeTask({
+      id: "task-1",
+      toolUseCount: 2,
+      lastToolName: "write",
+      progressSummary: "Preparing the concurrent task report",
+    });
+    const { host, request } = createHost({
+      request: (method, params) => {
+        expect(method).toBe("tasks.list");
+        const status = (params as { status?: string[] }).status;
+        return Promise.resolve({ tasks: [status ? active : recent] });
+      },
+    });
+
+    createBackgroundTasksProps(host, openSession);
+    await flushAsync();
+
+    expect(request.mock.calls[0]?.[1]).toMatchObject({ status: ["queued", "running"] });
+    expect(request.mock.calls[1]?.[1]).not.toHaveProperty("status");
+    expect(createBackgroundTasksProps(host, openSession).tasks).toEqual([recent]);
   });
 
   it("loads the snapshot when a task event arrives before any load", async () => {
@@ -201,9 +231,10 @@ describe("background tasks rail state", () => {
       );
     };
     host.requestUpdate = renderRail;
+    // finishedCollapsed defaults to true; back-navigation from a finished
+    // detail must expand the section so the returned-to row stays visible.
     const initialProps = createBackgroundTasksProps(host, openSession);
     initialProps.onToggleCollapsed();
-    initialProps.onToggleFinished();
     renderRail();
 
     const disclosure = container.querySelector<HTMLButtonElement>(
@@ -350,6 +381,81 @@ describe("background tasks rail events", () => {
     handleBackgroundTasksEvent(host, { action: "deleted", taskId: "task-1" });
     props = createBackgroundTasksProps(host, openSession);
     expect(props.tasks?.map((task) => task.id)).toEqual(["task-2"]);
+  });
+
+  it("applies an equally current authoritative terminal event correction", async () => {
+    const completed = makeTask({
+      id: "task-1",
+      status: "completed",
+      updatedAt: 2_000,
+      terminalSummary: "Previous terminal details",
+    });
+    const correction = makeTask({
+      id: "task-1",
+      status: "completed",
+      updatedAt: 2_000,
+      terminalSummary: "Authoritative terminal details",
+    });
+    const { host } = await loadedHost([completed]);
+
+    handleBackgroundTasksEvent(host, { action: "upserted", task: correction });
+
+    expect(createBackgroundTasksProps(host, openSession).tasks).toEqual([correction]);
+  });
+
+  it("does not roll back running tool activity from an equally current event", async () => {
+    const progress = makeTask({
+      id: "task-1",
+      updatedAt: 2_000,
+      toolUseCount: 2,
+      lastToolName: "write",
+    });
+    const stale = makeTask({
+      id: "task-1",
+      updatedAt: 2_000,
+      toolUseCount: 1,
+      lastToolName: "read",
+    });
+    const { host } = await loadedHost([progress]);
+
+    handleBackgroundTasksEvent(host, { action: "upserted", task: stale });
+
+    expect(createBackgroundTasksProps(host, openSession).tasks).toEqual([progress]);
+  });
+
+  it("preserves an opened prompt when a terminal event corrects its output", async () => {
+    const completed = makeTask({
+      id: "task-1",
+      status: "completed",
+      updatedAt: 2_000,
+      terminalSummary: "Previous terminal details",
+    });
+    const prompt = "Inspect the concurrent task owner";
+    const correction = makeTask({
+      id: "task-1",
+      status: "completed",
+      updatedAt: 2_000,
+      terminalSummary: "Authoritative terminal details",
+    });
+    const { host } = createHost({
+      request: (method) =>
+        method === "tasks.get"
+          ? Promise.resolve({ task: { ...completed, prompt } })
+          : Promise.resolve({ tasks: [completed] }),
+    });
+    createBackgroundTasksProps(host, openSession);
+    await flushAsync();
+    createBackgroundTasksProps(host, openSession).onSelectTask(completed);
+    await flushAsync();
+
+    handleBackgroundTasksEvent(host, { action: "upserted", task: correction });
+
+    const props = createBackgroundTasksProps(host, openSession);
+    expect(props.tasks?.[0]?.terminalSummary).toBe("Authoritative terminal details");
+    expect(props.taskDetails.get("task-1")).toMatchObject({
+      prompt,
+      terminalSummary: "Authoritative terminal details",
+    });
   });
 
   it("ignores upserts for other agents", async () => {
@@ -759,10 +865,9 @@ describe("running-tasks status row", () => {
     const row = container.querySelector(".chat-tasks-status");
     expect(row).not.toBeNull();
     expect(row?.querySelector("openclaw-elapsed-time")).not.toBeNull();
-    // The ticking timer must stay outside the polite live region.
-    expect(row?.querySelector(".chat-tasks-status__time")?.getAttribute("aria-hidden")).toBe(
-      "true",
-    );
+    const liveStatus = row?.querySelector('[role="status"]');
+    expect(liveStatus?.textContent?.trim()).toBe("1 running task");
+    expect(liveStatus?.querySelector("openclaw-elapsed-time")).toBeNull();
     const link = row?.querySelector<HTMLButtonElement>(".chat-tasks-status__link");
     expect(link?.textContent?.trim()).toBe("1 running task");
     link?.click();
@@ -810,7 +915,8 @@ describe("running-tasks status row", () => {
     );
 
     const preview = container.querySelector("openclaw-tooltip.chat-tasks-status__preview");
-    expect(preview?.querySelector(".chat-tasks-status")?.id).toBe("chat-tasks-status-test");
+    expect(preview?.firstElementChild?.classList.contains("chat-tasks-status__link")).toBe(true);
+    expect(container.querySelector(".chat-tasks-status")?.id).toBe("chat-tasks-status-test");
     expect(preview?.querySelector('.chat-tasks-preview[slot="content"]')).not.toBeNull();
     const titles = [...container.querySelectorAll(".chat-tasks-preview__title")].map((el) =>
       el.textContent?.trim(),

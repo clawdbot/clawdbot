@@ -88,6 +88,37 @@ describe("entry compile cache", () => {
     expect(path.basename(directory)).toMatch(/^\d+-\d+$/);
   });
 
+  it("invalidates a replaced installation without deleting shared compile caches", async () => {
+    const root = tempDirs.make("openclaw-compile-cache-package-reinstall-");
+    const packageJsonPath = path.join(root, "package.json");
+    const cacheRoot = path.join(root, ".node-cache");
+    await fs.writeFile(packageJsonPath, '{"version":"2026.4.29"}\n', "utf8");
+
+    const originalDirectory = resolveOpenClawCompileCacheDirectory({
+      env: { NODE_COMPILE_CACHE: cacheRoot },
+      installRoot: root,
+    });
+    await fs.mkdir(originalDirectory, { recursive: true });
+    const originalCacheEntry = path.join(originalDirectory, "keep.txt");
+    await fs.writeFile(originalCacheEntry, "previous cached installation\n", "utf8");
+
+    await fs.writeFile(
+      packageJsonPath,
+      '{"version":"2026.4.29","installation":"replacement"}\n',
+      "utf8",
+    );
+    const replacementDirectory = resolveOpenClawCompileCacheDirectory({
+      env: { NODE_COMPILE_CACHE: cacheRoot },
+      installRoot: root,
+    });
+
+    expect(replacementDirectory).toContain(path.join("openclaw", "2026.4.29"));
+    expect(replacementDirectory).not.toBe(originalDirectory);
+    await expect(fs.readFile(originalCacheEntry, "utf8")).resolves.toBe(
+      "previous cached installation\n",
+    );
+  });
+
   it("builds a one-shot no-cache respawn plan when source checkout inherits NODE_COMPILE_CACHE", async () => {
     const root = tempDirs.make("openclaw-compile-cache-respawn-");
     await fs.mkdir(path.join(root, "src"), { recursive: true });

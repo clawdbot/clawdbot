@@ -334,6 +334,8 @@ describe("Plugin ClawHub New workflow", () => {
       version: "0.23.1",
     });
     expect(materializerSource).toContain("npm ci");
+    expect(materializerSource).toContain('cd "${destination}"');
+    expect(materializerSource).not.toContain('--prefix "${destination}"');
     expect(materializerSource).toContain("--ignore-scripts");
     expect(materializerSource).toContain("--omit=dev");
     expect(materializerSource).toContain(

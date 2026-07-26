@@ -785,17 +785,13 @@ describe("config schema", () => {
     ).toBe(false);
   });
 
-  it("accepts experimental tool flags in the runtime zod schema", () => {
-    const parsed = ToolsSchema.parse({
-      experimental: {
-        planTool: true,
-      },
-    });
+  it("accepts the update_plan tool switch in the runtime zod schema", () => {
+    const parsed = ToolsSchema.parse({ updatePlan: false });
     if (!parsed) {
       throw new Error("expected parsed tools config");
     }
 
-    expect(parsed?.experimental?.planTool).toBe(true);
+    expect(parsed?.updatePlan).toBe(false);
   });
 
   it("accepts simplified Tool Search config in the runtime zod schema", () => {

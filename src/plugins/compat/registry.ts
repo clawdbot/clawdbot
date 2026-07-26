@@ -1,3 +1,4 @@
+import { DEPRECATION_MARKING_COMPAT_RECORDS } from "./deprecation-marking.js";
 import { MEDIA_LEGACY_PROJECTION_COMPAT_RECORD } from "./media-legacy-projection.js";
 // Plugin compatibility registry exposes known plugin compatibility metadata to doctor/update flows.
 import type { PluginCompatRecord } from "./types.js";
@@ -194,6 +195,7 @@ const BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS = BUNDLED_ONLY_PUBLIC_PLUGI
 const PLUGIN_COMPAT_RECORDS = [
   ...DEPRECATED_PLUGIN_SDK_SUBPATH_RECORDS,
   ...BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS,
+  ...DEPRECATION_MARKING_COMPAT_RECORDS,
   MEDIA_LEGACY_PROJECTION_COMPAT_RECORD,
   {
     code: "removed-global-api-provider-publication",
@@ -302,11 +304,17 @@ const PLUGIN_COMPAT_RECORDS = [
       "openclaw/plugin-sdk/session-store-runtime updateSessionStore",
       "openclaw/plugin-sdk/session-store-runtime resolveSessionFilePath",
       "openclaw/plugin-sdk/session-store-runtime resolveSessionStoreEntry",
+      "openclaw package root loadSessionStore",
+      "openclaw package root saveSessionStore",
     ],
     diagnostics: ["plugin SDK deprecation"],
-    tests: ["src/plugin-sdk/session-store-runtime.test.ts", "src/plugins/compat/registry.test.ts"],
+    tests: [
+      "src/plugin-sdk/session-store-runtime.test.ts",
+      "src/index.test.ts",
+      "src/plugins/compat/registry.test.ts",
+    ],
     releaseNote:
-      "The beta.5 session-store import set remains available for official plugins released with v2026.7.1-beta.5 while they migrate to row-level session access.",
+      "The beta.5 session-store import set and package-root whole-store aliases remain available while official plugins and package consumers migrate to row-level session access.",
   },
   {
     code: "removed-session-transcript-file-api",

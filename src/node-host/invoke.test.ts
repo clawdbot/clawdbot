@@ -8,6 +8,7 @@ import type { GatewayClient } from "../gateway/client.js";
 import { saveExecApprovals, type ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { SkillBinsProvider } from "./invoke-types.js";
 import { handleInvoke } from "./invoke.js";
@@ -674,8 +675,9 @@ describe("node host invoke", () => {
 
   it("forwards suppressNotifyOnExit on completed system.run events", async () => {
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-node-event-suppress-"));
+    const stateDir = path.join(tempHome, ".openclaw");
     try {
-      await withEnvAsync({ OPENCLAW_HOME: tempHome }, async () => {
+      await withEnvAsync({ OPENCLAW_HOME: tempHome, OPENCLAW_STATE_DIR: stateDir }, async () => {
         saveExecApprovals({
           version: 1,
           defaults: { security: "allowlist", ask: "on-miss", askFallback: "deny" },
@@ -736,6 +738,7 @@ describe("node host invoke", () => {
         });
       });
     } finally {
+      closeOpenClawStateDatabaseForTest();
       fs.rmSync(tempHome, { recursive: true, force: true });
     }
   });

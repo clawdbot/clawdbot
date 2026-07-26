@@ -320,12 +320,11 @@ async function drainPrefsQueue(client: GatewayBrowserClient): Promise<void> {
         return;
       }
       try {
+        const replacePaths = prefs.sidebarEntries !== undefined ? ["ui.prefs.sidebarEntries"] : [];
         await client.request("config.patch", {
           baseHash,
           raw: JSON.stringify({ ui: { prefs } }),
-          ...(prefs.sidebarEntries !== undefined
-            ? { replacePaths: ["ui.prefs.sidebarEntries"] }
-            : {}),
+          ...(replacePaths.length > 0 ? { replacePaths } : {}),
           note: "control-ui prefs sync",
         });
         staleConfigHashes.add(baseHash);

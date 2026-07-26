@@ -937,7 +937,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       page.on("pageerror", (error) => pageErrors.push(error.message));
       try {
         await installMockGateway(page);
-        await page.goto(`${realChatServer.baseUrl}chat`, {
+        await page.goto(`${realChatServer.baseUrl}chat/main`, {
           waitUntil: "domcontentloaded",
           timeout: APP_FIRST_RENDER_TIMEOUT_MS,
         });
@@ -996,7 +996,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             },
           ],
         });
-        await page.goto(`${realChatServer.baseUrl}chat`, {
+        await page.goto(`${realChatServer.baseUrl}chat/main`, {
           waitUntil: "domcontentloaded",
           timeout: APP_FIRST_RENDER_TIMEOUT_MS,
         });
@@ -1096,7 +1096,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             },
           ],
         });
-        await page.goto(`${realChatServer.baseUrl}chat`, {
+        await page.goto(`${realChatServer.baseUrl}chat/main`, {
           waitUntil: "domcontentloaded",
           timeout: APP_FIRST_RENDER_TIMEOUT_MS,
         });
@@ -1839,40 +1839,35 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     },
   );
 
-  it("stacks the detail sidebar below the thread in a narrow pane", async () => {
+  it("collapses sidebar columns into one tabbed column below the pane breakpoint", async () => {
     const page = await openBrowserPage(900, 700);
     try {
-      // A 620px pane inside a wide viewport: chat-pane sets the stacked class
-      // when the pane cannot fit chat + detail panel side by side.
       await page.setContent(
         `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
           <div style="width: 620px; height: 600px; display: flex;">
-            <div class="chat-split-container chat-split-container--open chat-split-container--stacked">
-              <div class="chat-main" style="flex: 0 1 60%">
-                <div class="chat-thread" role="log">
-                  <div class="chat-thread-inner">
-                    <div class="chat-group assistant">
-                      <div class="chat-avatar assistant">A</div>
-                      <div class="chat-group-messages">
-                        <div class="chat-bubble"><div class="chat-text">Stacked layout keeps the thread readable.</div></div>
-                      </div>
-                    </div>
+            <div class="sidebar-region sidebar-region--narrow">
+              <main class="sidebar-region__primary">Primary chat</main>
+              <section class="sidebar-column sidebar-column--collapsed">
+                <div class="sidebar-column__header">
+                  <div class="sidebar-column__tabs">
+                    <button class="sidebar-column__tab" aria-selected="true">Details</button>
+                    <button class="sidebar-column__tab" aria-selected="false">Discussion</button>
                   </div>
                 </div>
-              </div>
-              <section class="chat-sidebar"><div class="sidebar-panel">Detail panel</div></section>
+                <div class="sidebar-column__body">Active detail panel</div>
+              </section>
             </div>
           </div>
         </body></html>`,
       );
 
       await expectNoHorizontalOverflow(page);
-      const main = await getRect(page, ".chat-main");
-      const sidebar = await getRect(page, ".chat-sidebar");
-      expect(sidebar.top).toBeGreaterThanOrEqual(main.bottom - 1);
-      expect(Math.abs(sidebar.width - main.width)).toBeLessThanOrEqual(1);
+      const primary = await getRect(page, ".sidebar-region__primary");
+      const sidebar = await getRect(page, ".sidebar-column--collapsed");
+      expect(sidebar.top).toBeGreaterThanOrEqual(primary.bottom - 1);
+      expect(Math.abs(sidebar.width - primary.width)).toBeLessThanOrEqual(1);
       expect(sidebar.width).toBeGreaterThanOrEqual(618);
-      expect(sidebar.height).toBeGreaterThanOrEqual(160);
+      expect(await page.locator(".sidebar-column__tab").count()).toBe(2);
     } finally {
       await closeBrowserPage(page);
     }
@@ -2297,7 +2292,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           },
         ],
       });
-      await page.goto(`${realChatServer.baseUrl}chat`, {
+      await page.goto(`${realChatServer.baseUrl}chat/main`, {
         waitUntil: "domcontentloaded",
         timeout: APP_FIRST_RENDER_TIMEOUT_MS,
       });

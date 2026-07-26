@@ -1007,6 +1007,34 @@ function shouldPersistCanonicalAgentRoster(params: {
   );
 }
 
+function assertCanonicalAgentRosterRetainsEntries(params: {
+  currentConfig: unknown;
+  canonicalConfig: unknown;
+  allowedRemovals?: readonly string[];
+}): void {
+  const allowedRemovals = new Set(
+    (params.allowedRemovals ?? []).map((agentId) => normalizeAgentId(agentId)),
+  );
+  const canonicalIds = new Set(
+    listAgentEntries(params.canonicalConfig as OpenClawConfig).map((entry) =>
+      normalizeAgentId(entry.id),
+    ),
+  );
+  const droppedIds = listAgentEntries(params.currentConfig as OpenClawConfig)
+    .filter((entry) => {
+      const agentId = normalizeAgentId(entry.id);
+      return !canonicalIds.has(agentId) && !allowedRemovals.has(agentId);
+    })
+    .map((entry) => entry.id)
+    .toSorted();
+  if (droppedIds.length === 0) {
+    return;
+  }
+  throw new Error(
+    `Config write would drop agent roster entries without an explicit deletion: ${droppedIds.join(", ")}.`,
+  );
+}
+
 type ProjectedRosterValue = { present: false } | { present: true; value: unknown };
 
 function containsAuthoredRosterReference(value: unknown): boolean {
@@ -1591,6 +1619,7 @@ export function resolvePersistCandidateForWrite(params: {
   unsetPaths?: readonly string[][];
   explicitSetPaths?: readonly (readonly string[])[];
   explicitSetValueSource?: unknown;
+  allowedAgentRosterRemovals?: readonly string[];
   allowIncludeAncestorExplicitSetPaths?: boolean;
   modelIdNormalizationPolicies?: ReadonlyMap<string, ManifestModelIdNormalizationProvider>;
 }): unknown {
@@ -1676,6 +1705,15 @@ export function resolvePersistCandidateForWrite(params: {
         persistedCandidate: persisted,
       })
     : persisted;
+  if (persistCanonicalRoster) {
+    // A roster rewrite must never drop entries the mutation did not explicitly delete.
+    // A 2026-07-25 production incident lost agents.entries.main twice through silent rewrites.
+    assertCanonicalAgentRosterRetainsEntries({
+      currentConfig: params.sourceConfig,
+      canonicalConfig: withPreservedIncludes,
+      allowedRemovals: params.allowedAgentRosterRemovals,
+    });
+  }
   const withSchema = preserveRootSchemaUri({
     rootAuthoredConfig,
     nextConfig: params.nextConfig,

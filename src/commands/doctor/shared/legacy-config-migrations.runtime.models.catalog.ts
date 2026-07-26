@@ -10,6 +10,7 @@ import {
 } from "../../../agents/model-compat-catalog.js";
 import { getRecord, type LegacyConfigRule } from "../../../config/legacy.shared.js";
 import { isModelThinkingFormat } from "../../../config/types.models.js";
+// Doctor intentionally reads shipped catalogs only; remote rows must not influence migrations.
 import { planManifestModelCatalogRows } from "../../../model-catalog/manifest-planner.js";
 import { listOpenClawPluginManifestMetadata } from "../../../plugins/manifest-metadata-scan.js";
 

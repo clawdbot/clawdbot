@@ -10,33 +10,10 @@ export type SessionObserverEvent = {
   agentId?: string;
 };
 
-type SessionObserverAskErrorReason =
-  | "busy"
-  | "disabled"
-  | "not-subscribed"
-  | "rate-limited"
-  | "utility-model-unavailable"
-  | "model-unavailable";
-
-export class SessionObserverAskError extends Error {
-  constructor(
-    readonly reason: SessionObserverAskErrorReason,
-    message: string,
-    readonly retryAfterMs?: number,
-  ) {
-    super(message);
-    this.name = "SessionObserverAskError";
-  }
-}
-
-export type SessionObserverSnapshot = {
+export type SessionObserverCompanionSnapshot = {
   agentId: string;
   runId?: string;
   digest?: import("../../packages/gateway-protocol/src/schema/sessions.js").SessionObserverDigest;
-  notes: string[];
-};
-
-export type SessionObserverCompanionSnapshot = Omit<SessionObserverSnapshot, "notes"> & {
   notes: Array<{ sequence: number; text: string }>;
 };
 
@@ -44,10 +21,6 @@ export type SessionObserverService = {
   handleEvent: (event: SessionObserverEvent) => void;
   setConnectionVisibility: (connId: string, visible: boolean) => void;
   removeConnection: (connId: string) => void;
-  ask: (params: {
-    sessionKey: string;
-    question: string;
-    connId: string;
-  }) => Promise<{ answer: string; digestRevision?: number }>;
+  getCompanionSnapshot: (sessionKey: string) => SessionObserverCompanionSnapshot;
   dispose: () => void;
 };

@@ -10,6 +10,7 @@ import { BYTEPLUS_CODING_MODEL_CATALOG, BYTEPLUS_MODEL_CATALOG } from "./models.
 describe("byteplus plugin", () => {
   it("augments the catalog with bundled standard and plan models", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
+    expect(provider.auth?.[0]?.starterModel).toBe("byteplus-plan/ark-code-latest");
     const standardModel = expectDefined(BYTEPLUS_MODEL_CATALOG[0], "BytePlus standard model");
     const codingModel = expectDefined(BYTEPLUS_CODING_MODEL_CATALOG[0], "BytePlus coding model");
     const entries = await provider.augmentModelCatalog?.({

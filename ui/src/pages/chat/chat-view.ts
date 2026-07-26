@@ -40,26 +40,17 @@ import {
   renderBackgroundTasksRail,
   type BackgroundTasksProps,
 } from "./components/chat-background-tasks.ts";
+import type { ChatComposerDisabledBanner } from "./components/chat-composer-types.ts";
 import { isChatRunWorking, renderChatComposer } from "./components/chat-composer.ts";
-import {
-  inlineChatImageFromEvent,
-  openInlineChatImage,
-  renderChatImageLightbox,
-} from "./components/chat-image-lightbox.ts";
+import { inlineChatImageFromEvent, openInlineChatImage } from "./components/chat-image-lightbox.ts";
 import { renderChatPullRequests } from "./components/chat-pull-requests.ts";
-import { renderChatResizableDivider } from "./components/chat-resizable-divider.ts";
-import "./components/chat-sidebar.ts";
 import type { SessionRailMode } from "./components/chat-session-rail.ts";
 import { renderChatSessionSuggestions } from "./components/chat-session-suggestions.ts";
 import {
   renderSessionWorkspaceRail,
   type SessionWorkspaceProps,
 } from "./components/chat-session-workspace.ts";
-import type {
-  DetailFullMessageResult,
-  SidebarContent,
-  SidebarFullMessageRequest,
-} from "./components/chat-sidebar.ts";
+import type { SidebarContent } from "./components/chat-sidebar.ts";
 import { renderChatSwarmProgress } from "./components/chat-swarm-progress.ts";
 import { renderChatTaskSuggestions } from "./components/chat-task-suggestions.ts";
 import {
@@ -153,7 +144,7 @@ export type ChatProps = {
   onTypingChange?: (typing: boolean) => void;
   canSend: boolean;
   disabledReason: string | null;
-  disabledBanner?: { text: string; actionLabel: string; onAction: () => void };
+  disabledBanner?: ChatComposerDisabledBanner;
   error: string | null;
   runError?: { summary: string } | null;
   inlineApproval?: ExecApprovalRequest | null;
@@ -169,15 +160,6 @@ export type ChatProps = {
   sessionHost?: UiSessionDefaultsHost | null;
   providerUsage?: ProviderUsageDisplayProps;
   focusMode?: boolean;
-  onLoadSidebarFullMessage?: (
-    request: SidebarFullMessageRequest,
-  ) => Promise<DetailFullMessageResult | null | undefined>;
-  sidebarOpen?: boolean;
-  sidebarContent?: SidebarContent | null;
-  /** Pane too narrow for side-by-side chat + detail panel: stack them
-   * vertically instead (the divider flips to a horizontal handle). */
-  sidebarStacked?: boolean;
-  splitRatio?: number;
   canvasPluginSurfaceUrl?: string | null;
   boardProvider?: BoardProvider;
   embedSandboxMode?: EmbedSandboxMode;
@@ -197,10 +179,8 @@ export type ChatProps = {
   getAttachments?: () => ChatAttachment[];
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
   onAssistantAttachmentLoaded?: () => void;
-  imageLightbox?: ImageLightboxItem | null;
   onRequestOpenImage?: () => number;
   onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
-  onCloseImage?: () => void;
   showNewMessages?: boolean;
   onScrollToBottom?: (options?: { smooth?: boolean }) => void;
   onRefresh: () => void;
@@ -241,8 +221,6 @@ export type ChatProps = {
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   onRevealWorkspaceFile?: (path: string) => void;
-  onCloseSidebar?: () => void;
-  onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
   basePath?: string;
   gatewayUrl?: string;
@@ -287,9 +265,6 @@ function isImageLightboxEvent(event: Event): boolean {
 
 export function renderChat(props: ChatProps) {
   const requestUpdate = props.onRequestUpdate ?? (() => {});
-  const splitRatio = props.splitRatio ?? 0.6;
-  const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
-  const sidebarStacked = props.sidebarStacked === true;
   const workspaceCollapsed = props.sessionWorkspace?.collapsed !== false;
   const workspaceDockBottom = Boolean(
     props.sessionWorkspace &&
@@ -553,16 +528,11 @@ export function renderChat(props: ChatProps) {
             `
           : nothing}
         <div class="chat-workbench__main">
-          <div
-            class="chat-split-container ${sidebarOpen
-              ? "chat-split-container--open"
-              : ""} ${sidebarOpen && sidebarStacked ? "chat-split-container--stacked" : ""}"
-          >
+          <div class="chat-split-container">
             <div
               class="chat-main ${props.sessionRailDocked && props.sessionRailMode === "expanded"
                 ? "chat-main--rail-docked"
                 : ""}"
-              style="flex: ${sidebarOpen ? `0 1 ${splitRatio * 100}%` : "1 1 100%"}"
             >
               <div class="chat-main__conversation">
                 ${thread}
@@ -633,31 +603,9 @@ export function renderChat(props: ChatProps) {
                   `
                 : nothing}
             </div>
-
-            ${sidebarOpen
-              ? html`${renderChatResizableDivider({
-                    label: t("nav.resize"),
-                    orientation: sidebarStacked ? "horizontal" : "vertical",
-                    splitRatio,
-                    onResize: (event) => props.onSplitRatioChange?.(event.detail.splitRatio),
-                  })}
-                  <openclaw-chat-detail-panel
-                    class="chat-sidebar"
-                    .content=${props.sidebarContent ?? null}
-                    .loadFullMessage=${props.onLoadSidebarFullMessage ?? null}
-                    .canvasPluginSurfaceUrl=${props.canvasPluginSurfaceUrl ?? null}
-                    .embedSandboxMode=${props.embedSandboxMode ?? "scripts"}
-                    .allowExternalEmbedUrls=${props.allowExternalEmbedUrls ?? false}
-                    .onOpenWorkspaceFile=${props.onOpenWorkspaceFile ?? null}
-                    .onRevealInWorkspace=${props.onRevealWorkspaceFile ?? null}
-                    .onOpenImage=${props.onOpenImage ? openImmediateImage : null}
-                    @chat-detail-panel-close=${() => props.onCloseSidebar?.()}
-                  ></openclaw-chat-detail-panel> `
-              : nothing}
           </div>
         </div>
       </div>
-      ${renderChatImageLightbox(props.imageLightbox, props.onCloseImage)}
     </section>
   `;
 }

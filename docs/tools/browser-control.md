@@ -23,7 +23,7 @@ agent tools, but nothing listens on the loopback control port.
 - Status/start/stop: `GET /`, `GET /doctor`, `POST /start`, `POST /stop`, `POST /reset-profile`
 - Profiles: `GET /profiles`, `POST /profiles/create`, `DELETE /profiles/:name`
 - Tabs: `GET /tabs`, `POST /tabs/open`, `POST /tabs/focus`, `DELETE /tabs/:targetId`, `POST /tabs/action`
-- Snapshot/screenshot: `GET /snapshot`, `POST /screenshot`
+- Snapshot/screenshot/extract: `GET /snapshot`, `POST /screenshot`, `POST /extract`
 - Actions: `POST /navigate`, `POST /act`
 - Hooks: `POST /hooks/file-chooser`, `POST /hooks/dialog`
 - Downloads: `POST /download`, `POST /wait/download`
@@ -48,6 +48,27 @@ For tab endpoints, `targetId` is the compatibility field name. Prefer passing
 `suggestedTargetId` from `GET /tabs` or `POST /tabs/open`; labels and `tabId`
 handles such as `t1` are also accepted. Raw CDP target ids and unique raw
 target-id prefixes still work, but they are volatile diagnostic handles.
+
+### Page extraction
+
+The agent tool accepts `action="extract"` with required `query` and optional
+`targetId`, `timeoutMs`, `selector`, `ignoreSelectors`, and `schema`. `selector`
+is a CSS selector that limits capture to matching subtrees; a no-match response
+is an error and never falls back to the whole page. `ignoreSelectors` is an
+array of CSS selectors removed from the captured subtree before readable text
+conversion, so navigation, footers, ads, and banners do not consume the model
+context window. The reported `chars` count reflects the scoped, converted text.
+
+`schema` is a JSON Schema object for structured extraction. A successful result
+stores the validated value in `details.json` and shows compact JSON in the
+wrapped text block. Invalid JSON or a schema mismatch gets one correction retry;
+if that also fails, retry without `schema` or adjust the schema. Without
+`schema`, extraction keeps its free-text answer and `NOT_FOUND` behavior.
+
+The CLI mirrors these fields with `--selector <css>`, repeatable
+`--ignore-selector <css>`, and `--schema <json>`. The private `POST /extract`
+capture route accepts `targetId`, `timeoutMs`, `selector`, and
+`ignoreSelectors`; schema validation happens in the calling agent tool or CLI.
 
 If shared-secret gateway auth is configured, browser HTTP routes require auth too:
 
@@ -84,8 +105,8 @@ Other runtime failures may still return `{ "error": "<message>" }` without a
 
 ### Playwright requirement
 
-Some features (navigate/act/AI snapshot/role snapshot, element screenshots,
-PDF) require Playwright. If Playwright isn't installed, those endpoints return
+Some features (navigate/act/AI snapshot/role snapshot, extract, element
+screenshots, PDF) require Playwright. If Playwright isn't installed, those endpoints return
 a clear 501 error.
 
 What still works without Playwright:
@@ -107,6 +128,7 @@ What still needs Playwright:
 - AI snapshots that depend on Playwright's native AI snapshot format
 - CSS-selector element screenshots (`--element`)
 - full browser PDF export
+- page-question extraction
 
 Element screenshots also reject `--full-page`; the route returns `fullPage is
 not supported for element screenshots`.
@@ -198,6 +220,8 @@ openclaw browser snapshot --urls
 openclaw browser snapshot --selector "#main" --interactive
 openclaw browser snapshot --frame "iframe#main" --interactive
 openclaw browser snapshot --out snapshot.txt
+openclaw browser extract "What is the page's main conclusion?"
+openclaw browser extract "List the releases" --selector "main" --ignore-selector "nav" --schema '{"type":"array","items":{"type":"object"}}'
 openclaw browser console --level error
 openclaw browser errors --clear
 openclaw browser requests --filter api --clear
@@ -265,6 +289,12 @@ openclaw browser set device "iPhone 14"
 
 Notes:
 
+- Use `browser extract "<question>"` or agent-tool `action="extract"` when you
+  need an answer from the current page but do not need interaction refs. It
+  sanitizes readable page content, caps it at 80,000 characters, runs one
+  model call, and returns only the wrapped answer. The overall timeout defaults
+  to 60 seconds and is clamped to 5–120 seconds. If extraction fails, fall back
+  to `snapshot`; existing-session profiles do not support extraction.
 - The agent-facing `browser` tool exposes `action=download` (required `ref` and
   `path`) and `action=waitfordownload` (optional `path`). Both return the saved
   download URL, suggested filename, and guarded local path. Explicit download

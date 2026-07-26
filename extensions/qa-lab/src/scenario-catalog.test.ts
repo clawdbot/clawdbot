@@ -467,14 +467,26 @@ describe("qa scenario catalog", () => {
     ).toContain('"alsoAllow":["qa_restart_wait","qa_restart_unsafe_probe"]');
     expect(gatewayRestartContract).toContain("plannedToolName === 'wait'");
     expect(gatewayRestartContract).toContain("lastAssistantToolNames?.includes('wait')");
-    expect(gatewayRestartContract).toContain('"taskTracking":false');
+    expect(gatewayRestartContract).toContain("restartRecoveryDeliveryContext");
+    expect(gatewayRestartContract).toContain("sendInbound");
+    expect(gatewayRestartContract).not.toContain("startAgentRun");
     expect(gatewayRestartContract).toContain('"restartGatewayWithConfigPatch"');
     expect(gatewayRestartContract).toContain("interruptedMatches.length === 1");
     expect(gatewayRestartContract).toContain("restartNotices.length === 0");
     expect(gatewayRestartContract).toContain("dispatching restart-safe recovery");
     expect(gatewayRestartContract).toContain("[OpenClaw heartbeat poll]");
     expect(gatewayRestartContract).toContain("liveTurnTimeoutMs(env, 180000)");
-    expect(gatewayRestartContract).toContain("dmScope: 'per-channel-peer'");
+    expect(gatewayRestartContract).toContain("id: `dm:${conversationId}`");
+    expect(gatewayRestartContract).toContain("dmScope: env.cfg.session?.dmScope");
+    expect(readQaScenarioById("gateway-restart-inflight-run").gatewayConfigPatch).toMatchObject({
+      plugins: {
+        slots: { memory: "none" },
+        entries: {
+          acpx: { enabled: false },
+          "memory-core": { enabled: false },
+        },
+      },
+    });
     const liveMultiRestart = readQaScenarioById("gateway-restart-multi-live");
     const liveMultiRestartContract = JSON.stringify(liveMultiRestart.execution.flow);
     expect(JSON.stringify(liveMultiRestart.gatewayConfigPatch)).toContain(

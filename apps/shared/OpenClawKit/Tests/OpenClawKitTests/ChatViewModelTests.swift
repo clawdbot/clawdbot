@@ -276,6 +276,8 @@ private func makeViewModel(
     sendMessageStatus: String = "ok",
     waitForRunCompletionHook: (@Sendable (String, Int) async -> OpenClawChatRunObservation)? = nil,
     acquireSessionSettingsRouteLeaseHook: (@Sendable () async -> Void)? = nil,
+    swarmEnabledHook: (@Sendable (String) async throws -> Bool)? = nil,
+    listChildSessionsHook: (@Sendable (String) async throws -> [OpenClawChatSessionEntry])? = nil,
     healthResponses: [Bool] = [true],
     initialThinkingLevel: String? = nil,
     initialVerboseLevel: String? = nil,
@@ -322,6 +324,8 @@ private func makeViewModel(
         sendMessageStatus: sendMessageStatus,
         waitForRunCompletionHook: waitForRunCompletionHook,
         acquireSessionSettingsRouteLeaseHook: acquireSessionSettingsRouteLeaseHook,
+        swarmEnabledHook: swarmEnabledHook,
+        listChildSessionsHook: listChildSessionsHook,
         healthResponses: healthResponses)
     let vm = OpenClawChatViewModel(
         sessionKey: sessionKey,
@@ -651,6 +655,8 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     private let waitForRunCompletionHook:
         (@Sendable (String, Int) async -> OpenClawChatRunObservation)?
     private let acquireSessionSettingsRouteLeaseHook: (@Sendable () async -> Void)?
+    private let swarmEnabledHook: (@Sendable (String) async throws -> Bool)?
+    private let listChildSessionsHook: (@Sendable (String) async throws -> [OpenClawChatSessionEntry])?
     private let listQuestionsHook: (@Sendable () async throws -> [QuestionRecord])?
     private let getQuestionHook: (@Sendable (String) async throws -> QuestionRecord)?
     private let cancelQuestionHook: (@Sendable (String) async throws -> Void)?
@@ -685,6 +691,8 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         sendMessageStatus: String = "ok",
         waitForRunCompletionHook: (@Sendable (String, Int) async -> OpenClawChatRunObservation)? = nil,
         acquireSessionSettingsRouteLeaseHook: (@Sendable () async -> Void)? = nil,
+        swarmEnabledHook: (@Sendable (String) async throws -> Bool)? = nil,
+        listChildSessionsHook: (@Sendable (String) async throws -> [OpenClawChatSessionEntry])? = nil,
         listQuestionsHook: (@Sendable () async throws -> [QuestionRecord])? = nil,
         getQuestionHook: (@Sendable (String) async throws -> QuestionRecord)? = nil,
         cancelQuestionHook: (@Sendable (String) async throws -> Void)? = nil,
@@ -713,6 +721,8 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         self.sendMessageStatus = sendMessageStatus
         self.waitForRunCompletionHook = waitForRunCompletionHook
         self.acquireSessionSettingsRouteLeaseHook = acquireSessionSettingsRouteLeaseHook
+        self.swarmEnabledHook = swarmEnabledHook
+        self.listChildSessionsHook = listChildSessionsHook
         self.listQuestionsHook = listQuestionsHook
         self.getQuestionHook = getQuestionHook
         self.cancelQuestionHook = cancelQuestionHook
@@ -808,6 +818,14 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
 
     func abortRun(sessionKey _: String, runId: String) async throws {
         await self.state.abortedRunIdsAppend(runId)
+    }
+
+    func isSwarmEnabled(sessionKey: String) async throws -> Bool {
+        try await self.swarmEnabledHook?(sessionKey) ?? false
+    }
+
+    func listChildSessions(parentKey: String) async throws -> [OpenClawChatSessionEntry] {
+        try await self.listChildSessionsHook?(parentKey) ?? []
     }
 
     func listSessions(
@@ -1338,8 +1356,120 @@ private func chatQuestionRecord(
         answers: answers)
 }
 
+private actor SwarmCapabilityScript {
+    enum Step: Sendable {
+        case value(Bool)
+        case failure
+    }
+
+    private var steps: [Step]
+
+    init(_ steps: [Step]) {
+        self.steps = steps
+    }
+
+    func next() throws -> Bool {
+        guard !self.steps.isEmpty else { return false }
+        switch self.steps.removeFirst() {
+        case let .value(value):
+            return value
+        case .failure:
+            throw CancellationError()
+        }
+    }
+}
+
 @Suite(.serialized)
 struct ChatViewModelTests {
+    @Test @MainActor func `transient Swarm capability failure preserves state and retries until explicit false`() async throws {
+        let script = SwarmCapabilityScript([.value(true), .failure, .value(false)])
+        var child = sessionEntry(key: "agent:main:child", updatedAt: 1)
+        child.parentSessionKey = "main"
+        child.status = "running"
+        child.swarmGroupId = "swarm:main:turn-1"
+        let swarmChild = child
+        let transport = TestChatTransport(
+            historyResponses: [],
+            swarmEnabledHook: { _ in try await script.next() },
+            listChildSessionsHook: { _ in [swarmChild] })
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+
+        await viewModel.refreshSwarmCapability()
+        #expect(viewModel.swarmEnabled)
+        #expect(viewModel.swarmSessions.map(\.key) == ["agent:main:child"])
+
+        await viewModel.refreshSwarmCapability()
+        #expect(viewModel.swarmEnabled)
+        #expect(viewModel.swarmSessions.map(\.key) == ["agent:main:child"])
+
+        try await waitUntil("Swarm capability retry applies explicit false") {
+            await MainActor.run { !viewModel.swarmEnabled && viewModel.swarmSessions.isEmpty }
+        }
+    }
+
+    @Test @MainActor func `fresh Swarm lease rechecks capability before paging`() async {
+        let script = SwarmCapabilityScript([.value(true), .value(false)])
+        var child = sessionEntry(key: "agent:main:child", updatedAt: 1)
+        child.parentSessionKey = "main"
+        child.status = "running"
+        child.swarmGroupId = "swarm:main:turn-1"
+        let swarmChild = child
+        let transport = TestChatTransport(
+            historyResponses: [],
+            swarmEnabledHook: { _ in try await script.next() },
+            listChildSessionsHook: { _ in [swarmChild] })
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+
+        await viewModel.refreshSwarmCapability()
+        #expect(viewModel.swarmEnabled)
+        #expect(!viewModel.swarmSessions.isEmpty)
+
+        await viewModel.refreshSwarmSessions()
+        #expect(!viewModel.swarmEnabled)
+        #expect(viewModel.swarmSessions.isEmpty)
+    }
+
+    @Test @MainActor func `route change clears and revalidates Swarm state`() async throws {
+        let script = SwarmCapabilityScript([.value(true), .value(true)])
+        var child = sessionEntry(key: "agent:main:child", updatedAt: 1)
+        child.parentSessionKey = "main"
+        child.status = "running"
+        child.swarmGroupId = "swarm:main:turn-1"
+        let swarmChild = child
+        let transport = TestChatTransport(
+            historyResponses: [],
+            swarmEnabledHook: { _ in try await script.next() },
+            listChildSessionsHook: { _ in [swarmChild] })
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+
+        await viewModel.refreshSwarmCapability()
+        #expect(viewModel.swarmEnabled)
+        #expect(!viewModel.swarmSessions.isEmpty)
+
+        viewModel.handleTransportEvent(.routeChanged)
+        #expect(!viewModel.swarmEnabled)
+        #expect(viewModel.swarmSessions.isEmpty)
+        try await waitUntil("Swarm revalidates on the new route") {
+            await MainActor.run { viewModel.swarmEnabled && !viewModel.swarmSessions.isEmpty }
+        }
+    }
+
+    @Test @MainActor func `Swarm child lifecycle event still triggers canonical session refresh`() async throws {
+        let transport = TestChatTransport(historyResponses: [])
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.swarmEnabled = true
+
+        viewModel.handleTransportEvent(.sessionsChanged(.init(
+            sessionKey: "agent:main:child",
+            parentSessionKey: "main",
+            reason: "create",
+            swarmGroupId: "swarm:main:turn-1")))
+
+        try await waitUntil("child lifecycle refreshes sessions") {
+            await transport.listSessionsQueries().count == 1
+        }
+    }
+
     @Test @MainActor func `locally expired question remains in transcript`() {
         let viewModel = OpenClawChatViewModel(
             sessionKey: "main",

@@ -1230,6 +1230,11 @@ jobs:
           sudo chown -R root:root "$CANDIDATE_ROOT"
           sudo chmod -R go-w "$CANDIDATE_ROOT"
           sudo chmod -R a+rX "$CANDIDATE_ROOT"
+          # QA plugin runtime staging uses .artifacts/qa-runtime below its repo root.
+          # Preserve the frozen tree while granting the isolated SUT this one scratch directory.
+          candidate_artifacts_dir="${CANDIDATE_ROOT}/.artifacts"
+          sudo install -d -o "$sut_uid" -g "$sut_gid" -m 0700 "$candidate_artifacts_dir"
+          [[ "$(stat -c '%F:%a:%u:%g' "$candidate_artifacts_dir")" == "directory:700:${sut_uid}:${sut_gid}" ]]
           evidence_relative=".trusted-qa-evidence/release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           evidence_root="${CANDIDATE_ROOT}/${evidence_relative}"
           boundary_evidence_dir="${evidence_root}/process-boundary"
@@ -1277,6 +1282,7 @@ jobs:
             printf 'RUNNER_HOME=%q\n' "$runner_home"
             printf 'RUNNER_TEMP_DIR=%q\n' "$runner_temp"
             printf 'CANDIDATE_ROOT=%q\n' "$CANDIDATE_ROOT"
+            printf 'CANDIDATE_ARTIFACTS_DIR=%q\n' "$candidate_artifacts_dir"
             printf 'RUNTIME_ROOT=%q\n' "$runtime_root"
             printf 'NODE_BIN=%q\n' "$node_bin"
             printf 'PRELOAD_PATH=%q\n' "$preload"
@@ -1888,7 +1894,7 @@ jobs:
             unset "$key"
           done
           export SUT_UID SUT_GID RUNNER_UID RUNNER_GID RUNNER_HOME RUNNER_TEMP_DIR
-          export CANDIDATE_ROOT RUNTIME_ROOT NODE_BIN
+          export CANDIDATE_ROOT CANDIDATE_ARTIFACTS_DIR RUNTIME_ROOT NODE_BIN
           export PRELOAD_PATH RUNNER_SENTINEL TRUSTED_WORKSPACE EVIDENCE_ROOT
           export boundary_mode generation command_file identity_file sandbox_file
           export command_sha256 expected_env_keys_b64 sandbox_payload_b64
@@ -2045,6 +2051,7 @@ jobs:
                           ! -w "$CANDIDATE_ROOT/dist/index.js" &&
                           -r "${OPENCLAW_CONFIG_PATH:?}" &&
                           ! -w "$OPENCLAW_CONFIG_PATH" ]]
+                    [[ -d "${CANDIDATE_ARTIFACTS_DIR:?}" && -w "$CANDIDATE_ARTIFACTS_DIR" ]]
                     for writable_path in \
                       "${OPENCLAW_QA_TEMP_ROOT:?}/workspace" \
                       "${OPENCLAW_HOME:?}" \
@@ -2077,6 +2084,7 @@ jobs:
                     runtime_sandbox_payload_b64="$sandbox_payload_b64"
                     unset \
                       CANDIDATE_ROOT \
+                      CANDIDATE_ARTIFACTS_DIR \
                       EVIDENCE_ROOT \
                       NODE_BIN \
                       PRELOAD_PATH \

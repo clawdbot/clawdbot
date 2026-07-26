@@ -505,7 +505,6 @@ describe("channelsAddCommand", () => {
     expect(setupOptions().deferStatusUntilSelection).toBe(true);
     expect(setupOptions().skipStatusNote).toBe(true);
     expect(setupOptions().promptAccountIds).toBe(true);
-    expect(setupOptions().directEntryChannel).toBeUndefined();
     expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
     expect(channelWizardMocks.prompter.outro).toHaveBeenCalledWith("No channel changes made.");
   });
@@ -544,7 +543,7 @@ describe("channelsAddCommand", () => {
     expect(channelWizardMocks.prompter.outro).toHaveBeenCalledWith("Channels updated.");
   });
 
-  it("keeps a resolved guided channel as a picker highlight for non-CLI callers", async () => {
+  it("preselects an installable catalog channel in guided setup", async () => {
     const config: OpenClawConfig = { channels: {} };
     configMocks.readConfigFileSnapshot.mockResolvedValue({
       ...baseConfigSnapshot,
@@ -552,88 +551,13 @@ describe("channelsAddCommand", () => {
       config,
     });
     catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
-      {
-        ...createExternalChatCatalogEntry(),
-        origin: "workspace",
-        meta: {
-          ...createExternalChatCatalogEntry().meta,
-          aliases: ["ext"],
-        },
-      },
+      { ...createExternalChatCatalogEntry(), origin: "workspace" },
     ]);
 
-    await channelsAddCommand({ channel: "ext" }, runtime, { hasFlags: false });
+    await channelsAddCommand({ channel: "external-chat" }, runtime, { hasFlags: false });
 
     expect(setupOptions().initialSelection).toEqual(["external-chat"]);
-    expect(setupOptions().directEntryChannel).toBeUndefined();
-  });
-
-  it("opens a resolved installable catalog alias directly for the CLI caller", async () => {
-    const config: OpenClawConfig = { channels: {} };
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      sourceConfig: config,
-      config,
-    });
-    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
-      {
-        ...createExternalChatCatalogEntry(),
-        origin: "workspace",
-        meta: {
-          ...createExternalChatCatalogEntry().meta,
-          aliases: ["ext"],
-        },
-      },
-    ]);
-
-    await channelsAddCommand({ channel: "ext" }, runtime, { hasFlags: false, directEntry: true });
-
-    expect(setupOptions().initialSelection).toEqual(["external-chat"]);
-    expect(setupOptions().directEntryChannel).toBe("external-chat");
-  });
-
-  it("opens an exact channel id instead of an earlier plugin alias", async () => {
-    const config: OpenClawConfig = { channels: {} };
-    const aliasOwner = createChannelTestPluginBase({
-      id: "alias-owner",
-      label: "Alias Owner",
-    });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "alias-owner",
-          plugin: {
-            ...aliasOwner,
-            meta: { ...aliasOwner.meta, aliases: ["exact-id"] },
-          },
-          source: "test",
-        },
-      ]),
-    );
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      sourceConfig: config,
-      config,
-    });
-    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
-      {
-        ...createExternalChatCatalogEntry(),
-        id: "exact-id",
-        meta: {
-          ...createExternalChatCatalogEntry().meta,
-          id: "exact-id",
-          label: "Exact ID",
-          selectionLabel: "Exact ID",
-        },
-      },
-    ]);
-
-    await channelsAddCommand({ channel: "exact-id" }, runtime, {
-      hasFlags: false,
-      directEntry: true,
-    });
-
-    expect(setupOptions().directEntryChannel).toBe("exact-id");
+    expect(setupOptions().finishAfterInitialSelection).toBe(true);
   });
 
   it("exits quietly when guided channel setup is cancelled", async () => {

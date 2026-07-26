@@ -118,11 +118,7 @@ export const WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH = 800;
 // Widest the rail's grid column gets; a side-docked rail takes this from the
 // width available to the chat + detail-panel split.
 export const WORKSPACE_RAIL_MAX_WIDTH = 280;
-// .chat-main min-width (312) + divider + .chat-sidebar min-width (300) + slack;
-// below this the detail panel stacks under the thread.
-export const DETAIL_SIDEBAR_SIDE_MIN_WIDTH = 680;
 export const SESSION_RAIL_DOCK_MIN_WIDTH = 1080;
-
 export const NEW_SESSION_ACTIVE_RUN_MESSAGE =
   "Start a new thread after the active run or queued messages finish.";
 export const NEW_SESSION_LIST_LOADING_MESSAGE =

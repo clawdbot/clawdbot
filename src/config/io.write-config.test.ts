@@ -1608,6 +1608,54 @@ describe("config io write", () => {
     });
   });
 
+  it("forwards explicitly authorized agent roster removals", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify(
+          {
+            agents: {
+              entries: {
+                main: { default: true, workspace: "/srv/shared" },
+                ops: { workspace: "/srv/shared" },
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      await withEnvAsync(
+        {
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_TEST_FAST: "1",
+        },
+        async () => {
+          await writeConfigFile(
+            {
+              agents: {
+                entries: { main: { default: true, workspace: "/srv/shared" } },
+              },
+            },
+            {
+              allowedAgentRosterRemovals: ["ops"],
+              skipRuntimeSnapshotRefresh: true,
+            },
+          );
+        },
+      );
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as OpenClawConfig;
+      expect(persisted.agents?.entries).toEqual({
+        main: { default: true, workspace: "/srv/shared" },
+      });
+    });
+  });
+
   it("assigns distinct snapshot hashes to missing and empty root config", async () => {
     await withSuiteHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");

@@ -243,49 +243,6 @@ describe("session observer", () => {
     harness.observer.dispose();
   });
 
-  it("does not let an older model result overwrite a newer preamble", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    let resolveModel: ((value: ReturnType<typeof modelMessage>) => void) | undefined;
-    const completeModel = vi.fn(
-      () =>
-        new Promise<ReturnType<typeof modelMessage>>((resolve) => {
-          resolveModel = resolve;
-        }),
-    );
-    const harness = createHarness({ completeModel });
-    startAndAddToolNotes(harness.observer);
-    await vi.advanceTimersByTimeAsync(11_500);
-    harness.observer.handleEvent(
-      event({
-        stream: "item",
-        data: { kind: "preamble", phase: "update", progressText: "Checking files" },
-      }),
-    );
-    await vi.advanceTimersByTimeAsync(500);
-    expect(completeModel).toHaveBeenCalledOnce();
-
-    await vi.advanceTimersByTimeAsync(100);
-    harness.observer.handleEvent(
-      event({
-        stream: "item",
-        data: { kind: "preamble", phase: "update", progressText: "Running focused tests" },
-      }),
-    );
-    resolveModel?.(modelMessage({ headline: "Stale model summary", health: "on-track" }));
-    await flushObserver();
-    expect(
-      harness.broadcastToConnIds.mock.calls.some(
-        (call) => (call[1] as SessionObserverDigest).headline === "Stale model summary",
-      ),
-    ).toBe(false);
-    await vi.advanceTimersByTimeAsync(1_900);
-    expect(harness.broadcastToConnIds.mock.calls.at(-1)?.[1]).toMatchObject({
-      headline: "Running focused tests",
-    });
-    harness.observer.dispose();
-  });
-
   it("aborts a live assessment when the run becomes terminal", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
@@ -641,6 +598,45 @@ describe("session observer", () => {
     harness.observer.dispose();
   });
 
+  it("widens only critical health transitions to hidden session-list subscribers", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const healths = ["stuck", "stuck", "on-track", "stuck", "done", "failed"] as const;
+    const completeModel = vi.fn(async () => {
+      const health = healths[completeModel.mock.calls.length - 1] ?? "on-track";
+      return modelMessage({ headline: `Health: ${health}`, health });
+    });
+    const harness = createHarness({ completeModel });
+    harness.sessionEventSubscribers.subscribe("conn-background");
+
+    const publishNext = async (initial = false) => {
+      if (initial) {
+        startAndAddToolNotes(harness.observer);
+      } else {
+        for (let index = 0; index < 4; index += 1) {
+          harness.observer.handleEvent(
+            event({
+              stream: "tool",
+              data: { phase: "start", name: "read", args: { index } },
+            }),
+          );
+        }
+      }
+      await vi.advanceTimersByTimeAsync(12_000);
+      await flushObserver();
+      return harness.broadcastToConnIds.mock.calls.at(-1)?.[2] as ReadonlySet<string>;
+    };
+
+    expect(await publishNext(true)).toEqual(new Set(["conn-1", "conn-background"]));
+    expect(await publishNext()).toEqual(new Set(["conn-1"]));
+    expect(await publishNext()).toEqual(new Set(["conn-1"]));
+    expect(await publishNext()).toEqual(new Set(["conn-1", "conn-background"]));
+    expect(await publishNext()).toEqual(new Set(["conn-1"]));
+    expect(await publishNext()).toEqual(new Set(["conn-1"]));
+    expect(completeModel).toHaveBeenCalledTimes(6);
+    harness.observer.dispose();
+  });
+
   it("suspends when the last visible connection is removed", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
@@ -650,7 +646,7 @@ describe("session observer", () => {
     harness.observer.removeConnection("conn-1");
     await vi.advanceTimersByTimeAsync(12_000);
 
-    expect(harness.observer.getSnapshot("agent:main:session-1").notes).toEqual([]);
+    expect(harness.observer.getCompanionSnapshot("agent:main:session-1").notes).toEqual([]);
     expect(harness.completeModel).not.toHaveBeenCalled();
     harness.observer.dispose();
   });

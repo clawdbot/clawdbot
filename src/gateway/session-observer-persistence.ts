@@ -9,6 +9,7 @@ export function createSessionObserverDigestPersister(params: {
   now: () => number;
   persistDigest: PersistDigest;
   stillCurrent: (runId: string, sessionKey: string) => () => boolean;
+  onMissingEntry: (state: SessionObserverState) => void;
   onError: (state: SessionObserverState, error: unknown) => void;
 }) {
   const preamblePersistedAt = new WeakMap<SessionObserverState, number>();
@@ -36,6 +37,10 @@ export function createSessionObserverDigestPersister(params: {
           digest,
           stillCurrent: params.stillCurrent(state.runId, state.sessionKey),
         });
+        if (accepted === null) {
+          params.onMissingEntry(state);
+          return;
+        }
         if (accepted) {
           if (kind === "preamble") {
             preamblePersistedAt.set(state, params.now());

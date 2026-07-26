@@ -7,14 +7,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { withEnv } from "../../test-utils/env.js";
 import {
-  resolveAuthStatePath,
-  resolveAuthStatePathForDisplay,
-  resolveAuthStorePath,
-  resolveAuthStorePathForDisplay,
-  resolveLegacyAuthStorePath,
-} from "./path-resolve.js";
+  resolveLegacyAuthProfilesPath as resolveAuthStorePath,
+  resolveLegacyAuthStatePath as resolveAuthStatePath,
+  resolveLegacyFlatAuthPath as resolveLegacyAuthStorePath,
+} from "../../commands/doctor-auth-legacy-paths.js";
+import { withEnv } from "../../test-utils/env.js";
+import { resolveAuthStatePathForDisplay, resolveAuthStorePathForDisplay } from "./path-resolve.js";
 
 describe("path-resolve helpers (direct-import coverage attribution)", () => {
   let stateDir = "";

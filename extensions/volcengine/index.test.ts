@@ -13,6 +13,7 @@ import { DOUBAO_CODING_MODEL_CATALOG, DOUBAO_MODEL_CATALOG } from "./models.js";
 describe("volcengine plugin", () => {
   it("augments the catalog with bundled standard and plan models", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
+    expect(provider.auth?.[0]?.starterModel).toBe("volcengine-plan/ark-code-latest");
     const entries = await provider.augmentModelCatalog?.({
       env: process.env,
       entries: [],

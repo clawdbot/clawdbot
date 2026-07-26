@@ -1,3 +1,7 @@
+import type {
+  NativeGatewaysCapability,
+  NativeGatewaysSnapshot,
+} from "../../app/native-gateways.runtime.ts";
 import {
   consume,
   applicationContext,
@@ -38,12 +42,14 @@ import {
   type SessionCatalogHost,
   type SessionCatalogSession,
   type SessionDiscussionState,
+  type SessionDiscussionPanelConfig,
   type SessionRailMode,
   type SessionSharingRole,
   type SessionSuggestion,
   type SwarmRosterHydrator,
   type TaskSuggestion,
   type BoardChatDockSize,
+  type BoardFace,
 } from "./chat-pane-deps.ts";
 import {
   boardChatDockLayout,
@@ -69,6 +75,8 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) active = false;
   @property({ attribute: false }) draft?: string;
+  @property({ attribute: false }) routeFace: BoardFace = "chat";
+  @property({ attribute: false }) onFaceChange?: (face: BoardFace) => void;
   @property({ attribute: false }) onFocusPane?: (paneId: string) => void;
   @property({ attribute: false }) onPaneSessionChange?: (
     paneId: string,
@@ -78,6 +86,9 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @property({ attribute: false }) paneTitle = "";
   @property({ attribute: false }) narrow = false;
   @property({ attribute: false }) mergedChrome = false;
+  @property({ attribute: false }) nativeGateways?: NativeGatewaysCapability | null;
+  @property({ attribute: false }) gatewaysSnapshot?: NativeGatewaysSnapshot | null;
+  @property({ attribute: false }) onboarding = false;
   @property({ attribute: false }) onOpenSplitView?: () => void;
   @property({ attribute: false }) onSplitDown?: (paneId: string) => void;
   @property({ attribute: false }) onSplitRight?: (paneId: string) => void;
@@ -219,6 +230,14 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected readonly sessionDiscussionStates = new Map<string, SessionDiscussionState>();
   protected readonly sessionDiscussionOpenUrls = new Map<string, string | null>();
   protected readonly sessionDiscussionProbes = new Set<string>();
+  protected readonly sessionDiscussionPanels = new Map<
+    string,
+    {
+      generation: number;
+      canOpen: boolean;
+      config: SessionDiscussionPanelConfig;
+    }
+  >();
   protected headerRenameInitialLabel: string | null = null;
   protected headerRenameInitialValue = "";
   protected headerRenameSessionKey = "";

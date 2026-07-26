@@ -96,7 +96,40 @@ function resolveGatewaySessionStoreCandidates(
   };
 }
 
+/**
+ * Request-scoped store reuse.
+ *
+ * Sharing resolution runs once per listed row, and each run materialized every
+ * entry of a candidate store, making `sessions.list` quadratic in entries. A
+ * caller that resolves many keys against the same stores passes one cache so
+ * each store is materialized once. Entries are shared across rows within that
+ * request, so cached stores are read-only to their holder; the cache is never
+ * process-global, so it cannot serve a later request stale rows.
+ */
+export type GatewaySessionStoreCache = Map<string, Record<string, SessionEntry>>;
+
 function loadGatewaySessionLookupStore(
+  storePath: string,
+  clone: boolean | undefined,
+  agentId?: string,
+  options: { readOnly?: boolean; cache?: GatewaySessionStoreCache } = {},
+): Record<string, SessionEntry> {
+  const cache = options.cache;
+  const cacheKey = cache
+    ? `${storePath}\u0000${agentId ?? ""}\u0000${clone === false ? "0" : "1"}\u0000${options.readOnly ? "1" : "0"}`
+    : "";
+  if (cache) {
+    const cached = cache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+  }
+  const loaded = loadGatewaySessionLookupStoreUncached(storePath, clone, agentId, options);
+  cache?.set(cacheKey, loaded);
+  return loaded;
+}
+
+function loadGatewaySessionLookupStoreUncached(
   storePath: string,
   clone: boolean | undefined,
   agentId?: string,
@@ -126,6 +159,7 @@ function resolveGatewaySessionStoreLookup(params: {
   clone?: boolean;
   initialStore?: Record<string, SessionEntry>;
   readOnly?: boolean;
+  storeCache?: GatewaySessionStoreCache;
 }): {
   storePath: string;
   store: Record<string, SessionEntry>;
@@ -149,6 +183,7 @@ function resolveGatewaySessionStoreLookup(params: {
   const loadStore = (target: SessionStoreTarget) =>
     loadGatewaySessionLookupStore(target.storePath, params.clone, target.agentId, {
       readOnly: params.readOnly || !configured,
+      ...(params.storeCache ? { cache: params.storeCache } : {}),
     });
   const firstCandidate = candidates[0] ?? fallback;
   let selectedStorePath = firstCandidate.storePath;
@@ -196,6 +231,7 @@ function resolveExplicitDeletedLegacyMainStoreTarget(params: {
   key: string;
   clone?: boolean;
   readOnly?: boolean;
+  storeCache?: GatewaySessionStoreCache;
 }): GatewaySessionStoreTargetWithStore | null {
   const parsed = parseAgentSessionKey(params.key);
   const legacyAgentId = normalizeAgentId(parsed?.agentId);
@@ -232,6 +268,7 @@ function resolveExplicitDeletedLegacyMainStoreTarget(params: {
     }
     const store = loadGatewaySessionLookupStore(target.storePath, params.clone, target.agentId, {
       readOnly: true,
+      ...(params.storeCache ? { cache: params.storeCache } : {}),
     });
     const match = findFreshestStoreMatch(store, ...lookupSeeds);
     if (!match) {
@@ -269,6 +306,7 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
   clone?: boolean;
   readOnly?: boolean;
   store?: Record<string, SessionEntry>;
+  storeCache?: GatewaySessionStoreCache;
 }): GatewaySessionStoreTargetWithStore {
   const key = normalizeOptionalString(params.key) ?? "";
   const explicitDeletedMainTarget = resolveExplicitDeletedLegacyMainStoreTarget({
@@ -276,6 +314,7 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
     key,
     clone: params.clone,
     readOnly: params.readOnly,
+    ...(params.storeCache ? { storeCache: params.storeCache } : {}),
   });
   if (explicitDeletedMainTarget) {
     return explicitDeletedMainTarget;
@@ -298,6 +337,7 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
     // owners may materialize the process-lifetime incognito database.
     const store = loadGatewaySessionLookupStore(storePath, params.clone, agentId, {
       readOnly: true,
+      ...(params.storeCache ? { cache: params.storeCache } : {}),
     });
     return {
       agentId,
@@ -315,6 +355,7 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
     clone: params.clone,
     readOnly: params.readOnly,
     initialStore: params.store,
+    ...(params.storeCache ? { storeCache: params.storeCache } : {}),
   });
   if (canonicalKey === "global" || canonicalKey === "unknown") {
     const storeKeys = key && key !== canonicalKey ? [canonicalKey, key] : [key];

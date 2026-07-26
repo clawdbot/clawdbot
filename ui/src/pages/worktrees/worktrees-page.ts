@@ -4,7 +4,6 @@ import { state } from "lit/decorators.js";
 import type { WorktreeRecord } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { titleForRoute } from "../../app-navigation.ts";
-import { pathForRoute } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { renderSessionsHubHeader } from "../../components/sessions-hub-header.ts";
 import {
@@ -17,7 +16,7 @@ import {
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
-import { searchForSession } from "../../lib/sessions/index.ts";
+import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 
@@ -342,7 +341,11 @@ class WorktreesPage extends OpenClawLightDomElement {
 
   private renderOwner(record: WorktreeRecord) {
     if (record.ownerKind === "session" && record.ownerId) {
-      const href = `${pathForRoute("chat", this.context.basePath)}${searchForSession(record.ownerId)}`;
+      const href = sessionNavigationTarget({
+        context: this.context,
+        face: "chat",
+        sessionKey: record.ownerId,
+      }).href;
       return html`<a href=${href} title=${record.ownerId}>${t("worktrees.ownerSession")}</a>`;
     }
     if (record.ownerKind === "workboard") {
