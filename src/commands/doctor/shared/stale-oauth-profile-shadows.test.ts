@@ -41,10 +41,16 @@ function storeWith(profileId: string, credential: OAuthCredential): AuthProfileS
   };
 }
 
-async function writeRawAuthStore(agentDir: string, store: unknown): Promise<void> {
-  const authPath = resolveAuthStorePath(agentDir);
-  await fs.mkdir(path.dirname(authPath), { recursive: true });
-  await fs.writeFile(authPath, `${JSON.stringify(store, null, 2)}\n`, "utf8");
+async function writeRawAuthStore(
+  agentDir: string,
+  store: unknown,
+  options: { writeLegacy?: boolean } = {},
+): Promise<void> {
+  if (options.writeLegacy) {
+    const authPath = resolveAuthStorePath(agentDir);
+    await fs.mkdir(path.dirname(authPath), { recursive: true });
+    await fs.writeFile(authPath, `${JSON.stringify(store, null, 2)}\n`, "utf8");
+  }
   const canonical = coercePersistedAuthProfileStore(store);
   if (canonical) {
     saveAuthProfileStore(canonical, agentDir, {
@@ -269,22 +275,26 @@ describe("stale OAuth profile shadow doctor repair", () => {
     const profileId = "openai-codex:default";
     const now = Date.now();
     const childAgentDir = path.join(stateDir, "agents", "telegram", "agent");
-    await writeRawAuthStore(childAgentDir, {
-      version: 1,
-      profiles: {
-        [profileId]: {
-          type: "oauth",
-          provider: "openai-codex",
-          accountId: "acct-shared",
-          expires: now - 60_000,
-          oauthRef: {
-            source: "openclaw-credentials",
+    await writeRawAuthStore(
+      childAgentDir,
+      {
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type: "oauth",
             provider: "openai-codex",
-            id: "0123456789abcdef0123456789abcdef",
+            accountId: "acct-shared",
+            expires: now - 60_000,
+            oauthRef: {
+              source: "openclaw-credentials",
+              provider: "openai-codex",
+              id: "0123456789abcdef0123456789abcdef",
+            },
           },
         },
       },
-    });
+      { writeLegacy: true },
+    );
     saveAuthProfileStore(
       storeWith(
         profileId,
