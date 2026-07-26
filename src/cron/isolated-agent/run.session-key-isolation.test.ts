@@ -187,6 +187,7 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     expect(runRequest.promptCacheKey).toBeUndefined();
     expect(runRequest.bootstrapContextMode).toBeUndefined();
     expect(runRequest.bootstrapContextRunKind).toBe("cron");
+    expect(cleanupBrowserSessionsForLifecycleEndMock).not.toHaveBeenCalled();
   });
 
   it.each([
