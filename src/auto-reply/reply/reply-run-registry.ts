@@ -154,7 +154,7 @@ export type ReplyOperation = {
   readonly phase: ReplyOperationPhase;
   readonly result: ReplyOperationResult | null;
   /** Set when a stale-watchdog expiry forced this operation's run_stalled result. */
-  readonly staleExpiryReason: ReplyOperationStaleReason | undefined;
+  readonly staleExpiryReason?: ReplyOperationStaleReason;
   readonly startedAtMs: number;
   readonly lastActivityAtMs: number;
   /** True when this operation has owned the supplied session ID. */
