@@ -174,4 +174,72 @@ describe("config model reference validation", () => {
       expect(res.config.models?.providers?.myproxy?.models?.[0]?.id).toBe("vendor/modern-model");
     }
   });
+  it("accepts model policy refs whose segments carry boundary whitespace", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: {
+          defaults: {
+            modelPolicy: { allow: [" openai / gpt-5.5 ", "openai/ns /*"] },
+          },
+        },
+      },
+      { pluginValidation: "skip" },
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects nested exact refs whose model remainder keeps internal whitespace", () => {
+    // The runtime trims only the provider and the whole model remainder, so this ref
+    // would resolve to model id "anthropic /claude-haiku-4-5".
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: {
+          defaults: {
+            modelPolicy: { allow: ["clawrouter/anthropic /claude-haiku-4-5"] },
+          },
+        },
+      },
+      { pluginValidation: "skip" },
+    );
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("agents.defaults.modelPolicy.allow.0");
+    }
+  });
+
+  it("accepts nested exact refs padded only at the remainder boundary", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: {
+          defaults: {
+            modelPolicy: { allow: ["clawrouter/ anthropic/claude-haiku-4-5"] },
+          },
+        },
+      },
+      { pluginValidation: "skip" },
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("still rejects model policy refs with whitespace inside a segment", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: {
+          defaults: {
+            modelPolicy: { allow: ["openai/gpt 5.5"] },
+          },
+        },
+      },
+      { pluginValidation: "skip" },
+    );
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("agents.defaults.modelPolicy.allow.0");
+      expect(res.issues[0]?.message).toContain("invalid model policy ref");
+    }
+  });
 });
