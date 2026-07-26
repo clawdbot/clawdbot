@@ -96,6 +96,7 @@ type LockResult<T> = {
 };
 
 export interface AuthStorageBackend {
+  readonly migrationOwnerAgentDir?: string;
   withLock<T>(fn: (current: string | undefined) => LockResult<T>): T;
   withLockAsync<T>(fn: (current: string | undefined) => Promise<LockResult<T>>): Promise<T>;
 }
@@ -301,6 +302,7 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
  */
 export class FileAuthStorageBackend implements AuthStorageBackend {
   private readonly delegate: SqliteAuthStorageBackend;
+  readonly migrationOwnerAgentDir: string;
 
   constructor(authPath?: string) {
     if (!fileAuthStorageBackendWarningEmitted) {
@@ -311,7 +313,8 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
           "FileAuthStorageBackend(path) is deprecated; use AuthStorage.forAgent(agentDir). The compatibility adapter persists to SQLite and never reads or writes auth.json.",
       });
     }
-    this.delegate = new SqliteAuthStorageBackend(authPath ? dirname(authPath) : getAgentDir());
+    this.migrationOwnerAgentDir = authPath ? dirname(authPath) : getAgentDir();
+    this.delegate = new SqliteAuthStorageBackend(this.migrationOwnerAgentDir);
   }
 
   withLock<T>(fn: (current: string | undefined) => LockResult<T>): T {
@@ -357,7 +360,7 @@ export class AuthStorage {
 
   private constructor(storage: AuthStorageBackend, migrationOwnerAgentDir?: string) {
     this.storage = storage;
-    this.migrationOwnerAgentDir = migrationOwnerAgentDir;
+    this.migrationOwnerAgentDir = migrationOwnerAgentDir ?? storage.migrationOwnerAgentDir;
     this.reload();
   }
 

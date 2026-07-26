@@ -143,7 +143,7 @@ describe("SQLite auth storage", () => {
     expect(fs.existsSync(legacyPath)).toBe(false);
   });
 
-  it("keeps FileAuthStorageBackend as a deprecated SQLite-backed export", () => {
+  it("keeps FileAuthStorageBackend as a deprecated fail-closed SQLite adapter", async () => {
     const agentDir = makeAgentDir();
     const legacyPath = path.join(agentDir, "auth.json");
     const storage = AuthStorage.fromStorage(new FileAuthStorageBackend(legacyPath));
@@ -153,6 +153,10 @@ describe("SQLite auth storage", () => {
       key: "fake-openai-key",
     });
     expect(fs.existsSync(legacyPath)).toBe(false);
+    fs.writeFileSync(legacyPath, '{"openai":{"key":"fake-late"}}\n');
+    await expect(storage.getApiKey("openai")).rejects.toThrow(
+      "requires legacy credential migration",
+    );
   });
 
   it("reads materialized SecretRefs without persisting their resolved value", async () => {
