@@ -159,6 +159,32 @@ describe("SQLite auth storage", () => {
     );
   });
 
+  it("blocks ambient fallback when the compatibility backend cannot materialize SQLite refs", async () => {
+    const agentDir = makeAgentDir();
+    writePersistedAuthProfileStoreRaw(
+      {
+        version: 1,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            keyRef: { source: "env", provider: "default", id: "OPENAI_STORED_KEY" },
+          },
+        },
+      },
+      agentDir,
+    );
+    vi.stubEnv("OPENAI_API_KEY", "fake-ambient-key");
+
+    const storage = AuthStorage.fromStorage(
+      new FileAuthStorageBackend(path.join(agentDir, "auth.json")),
+    );
+
+    await expect(storage.getApiKey("openai")).rejects.toThrow(
+      "requires the active secrets runtime to materialize SecretRef credentials",
+    );
+  });
+
   it("reads materialized SecretRefs without persisting their resolved value", async () => {
     const agentDir = makeAgentDir();
     const keyRef = { source: "env" as const, provider: "default", id: "OPENAI_API_KEY" };

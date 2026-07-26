@@ -428,6 +428,17 @@ export class AuthStorage {
     this.errors.push(normalizedError);
   }
 
+  private getCanonicalLoadError(): Error | null {
+    if (!this.loadError) {
+      return null;
+    }
+    return this.migrationOwnerAgentDir ||
+      this.loadError instanceof AuthProfileMigrationRequiredError ||
+      this.loadError instanceof AuthProfileStoreUnreadableError
+      ? this.loadError
+      : null;
+  }
+
   private parseStorageData(content: string | undefined): AuthStorageData {
     if (!content) {
       return {};
@@ -681,13 +692,11 @@ export class AuthStorage {
       assertAuthProfileMigrationReady(this.migrationOwnerAgentDir);
     }
 
-    if (
-      this.loadError instanceof AuthProfileMigrationRequiredError ||
-      this.loadError instanceof AuthProfileStoreUnreadableError
-    ) {
+    const canonicalLoadError = this.getCanonicalLoadError();
+    if (canonicalLoadError) {
       // Canonical-store ownership blocks implicit env/config fallback. An
       // explicit runtime override above remains the only caller-owned escape.
-      throw this.loadError;
+      throw canonicalLoadError;
     }
 
     const cred = this.data[providerId];
@@ -727,11 +736,8 @@ export class AuthStorage {
             error instanceof AuthProfileMigrationRequiredError ||
             error instanceof AuthProfileStoreUnreadableError
               ? error
-              : this.loadError;
-          if (
-            canonicalStoreError instanceof AuthProfileMigrationRequiredError ||
-            canonicalStoreError instanceof AuthProfileStoreUnreadableError
-          ) {
+              : this.getCanonicalLoadError();
+          if (canonicalStoreError) {
             throw canonicalStoreError;
           }
           const updatedCred = this.data[providerId];

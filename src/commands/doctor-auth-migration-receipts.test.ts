@@ -89,11 +89,15 @@ describe("auth profile migration receipts", () => {
     recordAuthProfileMigrationImported(receipt);
     fs.writeFileSync(sourcePath, '{"changed":true}\n', "utf8");
 
-    expect(() => resumePendingAuthProfileMigrationArchives(state.env)).toThrow(
-      "legacy auth source changed after verification",
-    );
+    expect(resumePendingAuthProfileMigrationArchives(state.env)).toEqual([
+      "Retired an interrupted auth migration receipt for a changed source.",
+    ]);
     expect(fs.existsSync(sourcePath)).toBe(true);
     expect(fs.existsSync(receipt.archivePath)).toBe(false);
+    const row = openOpenClawStateDatabase({ env: state.env })
+      .db.prepare("SELECT status FROM migration_sources WHERE source_key = ?")
+      .get(receipt.sourceKey);
+    expect(row).toEqual({ status: "superseded" });
   });
 
   it("revalidates target credentials before resuming an archive", async () => {
@@ -114,10 +118,12 @@ describe("auth profile migration receipts", () => {
     target.prepare("DELETE FROM auth_profile_store").run();
     target.close();
 
-    expect(() => resumePendingAuthProfileMigrationArchives(state.env)).toThrow(
-      "auth profile migration target verification failed",
-    );
+    expect(resumePendingAuthProfileMigrationArchives(state.env)).toEqual([
+      "Reset an interrupted auth migration receipt for retry.",
+    ]);
     expect(fs.existsSync(sourcePath)).toBe(true);
+    const retry = { ...receipt, runId: `${receipt.sourceKey}:retry` };
+    expect(() => recordAuthProfileMigrationImported(retry)).not.toThrow();
   });
 
   it("revalidates target state before resuming an archive", async () => {
@@ -141,9 +147,9 @@ describe("auth profile migration receipts", () => {
     target.prepare("DELETE FROM auth_profile_state").run();
     target.close();
 
-    expect(() => resumePendingAuthProfileMigrationArchives(state.env)).toThrow(
-      "auth profile migration target verification failed",
-    );
+    expect(resumePendingAuthProfileMigrationArchives(state.env)).toEqual([
+      "Reset an interrupted auth migration receipt for retry.",
+    ]);
     expect(fs.existsSync(sourcePath)).toBe(true);
   });
 

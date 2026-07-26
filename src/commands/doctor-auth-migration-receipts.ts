@@ -99,7 +99,12 @@ function recordAuthProfileMigrationImported(
           .select(["last_run_id", "status"])
           .where("source_key", "=", receipt.sourceKey),
       );
-      if (existing && existing.last_run_id !== receipt.runId) {
+      if (
+        existing &&
+        existing.last_run_id !== receipt.runId &&
+        existing.status !== "retryable" &&
+        existing.status !== "superseded"
+      ) {
         throw new Error(
           `auth profile migration source already owned by ${existing.status} receipt`,
         );
@@ -144,6 +149,36 @@ function recordAuthProfileMigrationImported(
               report_json: reportJson(receipt),
             }),
           ),
+      );
+    },
+    { env: receipt.env },
+  );
+}
+
+function retirePendingAuthProfileMigrationReceipt(
+  receipt: AuthProfileMigrationSourceReceipt,
+  status: "retryable" | "superseded",
+  now = Date.now(),
+): void {
+  runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const kysely = getNodeSqliteKysely<MigrationDatabase>(db);
+      executeSqliteQuerySync(
+        db,
+        kysely
+          .updateTable("migration_runs")
+          .set({ status, finished_at: now })
+          .where("id", "=", receipt.runId)
+          .where("status", "=", "imported"),
+      );
+      executeSqliteQuerySync(
+        db,
+        kysely
+          .updateTable("migration_sources")
+          .set({ status })
+          .where("source_key", "=", receipt.sourceKey)
+          .where("last_run_id", "=", receipt.runId)
+          .where("status", "=", "imported"),
       );
     },
     { env: receipt.env },
@@ -334,7 +369,23 @@ export function resumePendingAuthProfileMigrationArchives(env?: NodeJS.ProcessEn
     const release = acquireLockSyncWithRetry(lockTarget);
     try {
       if (fs.existsSync(receipt.sourcePath)) {
-        verifyAuthProfileMigrationTarget(receipt);
+        const sourceBytes = fs.readFileSync(receipt.sourcePath);
+        if (digestBytes(sourceBytes) !== receipt.sourceSha256) {
+          // The imported receipt describes different bytes. Retire its claim so
+          // Doctor can process the current source under a new hash-owned run.
+          retirePendingAuthProfileMigrationReceipt(receipt, "superseded");
+          changes.push("Retired an interrupted auth migration receipt for a changed source.");
+          continue;
+        }
+        try {
+          verifyAuthProfileMigrationTarget(receipt);
+        } catch {
+          // The source is still authoritative, so let the normal migration path
+          // rebuild and reverify the target instead of wedging on a stale claim.
+          retirePendingAuthProfileMigrationReceipt(receipt, "retryable");
+          changes.push("Reset an interrupted auth migration receipt for retry.");
+          continue;
+        }
       }
       archiveAuthProfileMigrationSource(receipt);
       recordAuthProfileMigrationCompleted(

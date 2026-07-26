@@ -155,6 +155,47 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
     });
   });
 
+  it("defers shared OAuth while a higher-priority main credential remains pending", async () => {
+    const state = await makeTestState();
+    const authPath = await writeLegacyAuthProfilesJson(state, {
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "oauth",
+          provider: "openai",
+          oauthRef: {
+            id: "0123456789abcdef0123456789abcdef",
+            provider: "openai",
+          },
+        },
+      },
+    });
+    const oauthPath = await state.writeJson("credentials/oauth.json", {
+      openai: {
+        access: "fake-lower-priority-access",
+        refresh: "fake-lower-priority-refresh",
+        expires: 1_900_000_000_000,
+      },
+    });
+
+    const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
+      cfg: {},
+      prompter: makePrompter(true),
+      env: state.env,
+    });
+
+    expect(result.warnings).toEqual([
+      expect.stringContaining("legacy OAuth sidecar profile"),
+      expect.stringContaining("no importable auth profiles or state"),
+      expect.stringContaining("Deferred shared legacy OAuth migration"),
+    ]);
+    expect(loadPersistedAuthProfileStore(state.agentDir())).toBeNull();
+    expect(fs.existsSync(authPath)).toBe(true);
+    expect(fs.existsSync(oauthPath)).toBe(true);
+    expectNoMigratedArchive(authPath);
+    expectNoMigratedArchive(oauthPath);
+  });
+
   it("archives restored OAuth bytes without replaying a terminal receipt", async () => {
     const state = await makeTestState();
     const oauthPath = await state.writeJson("credentials/oauth.json", {
