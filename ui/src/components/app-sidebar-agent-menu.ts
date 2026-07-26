@@ -2,6 +2,7 @@
 // component inside the TS LOC ratchet.
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
+import type { AgentIdentityResult } from "../api/types.ts";
 import { titleForRoute, type NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import type { ThemeMode } from "../app/theme.ts";
@@ -57,6 +58,7 @@ type SidebarAgentMenuParams = {
   activeId: string;
   activeName: string;
   agents: readonly AgentMenuAgent[];
+  identities: ReadonlyMap<string, AgentIdentityResult>;
   filter: string;
   pinnedAgentIds: readonly string[];
   connected: boolean;
@@ -99,6 +101,7 @@ function sidebarAgentMenuRows(params: {
   activeId: string;
   filter: string;
   pinnedAgentIds: readonly string[];
+  identities: ReadonlyMap<string, AgentIdentityResult>;
 }) {
   const { agents, activeId } = params;
   const availableIds = new Set(agents.map((agent) => normalizeAgentId(agent.id)));
@@ -121,7 +124,9 @@ function sidebarAgentMenuRows(params: {
       const agentId = normalizeAgentId(entry.id);
       return (
         agentId.toLowerCase().includes(query) ||
-        normalizeAgentLabel(entry).toLowerCase().includes(query)
+        (params.identities.get(agentId)?.name?.trim() || normalizeAgentLabel(entry))
+          .toLowerCase()
+          .includes(query)
       );
     });
     return { rows, showFilter: true };
@@ -147,7 +152,8 @@ function sidebarAgentMenuRows(params: {
 
 function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams) {
   const agentId = normalizeAgentId(agent.id);
-  const label = normalizeAgentLabel(agent);
+  const identity = params.identities.get(agentId) ?? null;
+  const label = identity?.name?.trim() || normalizeAgentLabel(agent);
   const active = agentId === params.activeId;
   const unread = active ? 0 : params.agentUnreadCount(agentId);
   const approvals = params.agentApprovalCount(agentId);
@@ -165,7 +171,7 @@ function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams) {
       aria-checked=${String(active)}
       ${ref((element) => syncDropdownItemRadio(element, active))}
     >
-      <span slot="icon">${renderAgentSelectAvatar(option)}</span>
+      <span slot="icon">${renderAgentSelectAvatar(option, identity)}</span>
       ${renderAgentSelectCopy(option)}
       ${approvals > 0
         ? html`<span
