@@ -73,6 +73,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     ctx,
     deliverBindingPayload,
     dispatcher,
+    getDispatchReplyOperation,
     hookRunner,
     isInternalWebchatTurn,
     markIdle,
@@ -426,12 +427,20 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     });
   };
   const finishReplyOperationAbortedDispatch = (): DispatchFromConfigResult => {
+    const operation = getDispatchReplyOperation();
+    const queuedFinal =
+      operation?.result?.kind === "failed" && operation.result.code === "run_stalled"
+        ? dispatcher.sendFinalReply({
+            text: "⚠️ Your reply was dropped because the gateway was overloaded. Please retry.",
+            isError: true,
+          })
+        : false;
     commitInboundDedupeIfClaimed();
     recordProcessed("completed", { reason: "reply_operation_aborted" });
     markIdle("message_completed");
     completeDispatchReplyOperation();
     return attachSourceReplyDeliveryMode({
-      queuedFinal: false,
+      queuedFinal,
       counts: dispatcher.getQueuedCounts(),
     });
   };

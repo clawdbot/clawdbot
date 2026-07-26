@@ -3,6 +3,7 @@ import {
   MAX_TIMER_TIMEOUT_MS,
 } from "@openclaw/normalization-core/number-coercion";
 import type { CommandQueueEnqueueOptions } from "../../../process/command-queue.types.js";
+import { isMainSessionRestartRecoveryInputProvenance } from "../../../sessions/input-provenance.js";
 import { DEFAULT_AGENT_TIMEOUT_MS } from "../../timeout.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 
@@ -34,7 +35,11 @@ export function withEmbeddedRunLaneTimeout(
 
 export function resolveEmbeddedRunSessionQueuePriority(
   trigger: RunEmbeddedAgentParams["trigger"],
+  inputProvenance?: RunEmbeddedAgentParams["inputProvenance"],
 ): CommandQueueEnqueueOptions["priority"] {
+  if (isMainSessionRestartRecoveryInputProvenance(inputProvenance)) {
+    return "background";
+  }
   switch (trigger) {
     case "user":
     case "manual":
