@@ -52,12 +52,14 @@ import { renderSettingsSidebar } from "../components/settings-sidebar.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { i18n, isSupportedLocale, t } from "../i18n/index.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
+import type { BoardFace } from "../lib/board/settings.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import { pathForSessionKey } from "../lib/sessions/index.ts";
+import { sessionRouteNavigationOptions } from "../lib/sessions/route-navigation.ts";
 import {
   isUiGlobalSessionKey,
   normalizeAgentId,
@@ -958,21 +960,13 @@ class OpenClawShell extends OpenClawLightDomElement {
     }
   }
 
-  private chatNavigationOptions(options?: ApplicationNavigationOptions) {
+  private chatNavigationOptions(face: BoardFace, options?: ApplicationNavigationOptions) {
     const sessionKey = this.activeSessionKey.trim();
-    const face = this.routeState.routeId === "dashboard" ? "dashboard" : "chat";
+    const context = this.context;
     return (
       options ??
-      (sessionKey
-        ? {
-            pathname: pathForSessionKey(
-              face,
-              sessionKey,
-              this.context?.basePath ?? "",
-              undefined,
-              this.sessionMainKey(),
-            ),
-          }
+      (sessionKey && context
+        ? sessionRouteNavigationOptions({ context, face, sessionKey })
         : undefined)
     );
   }
@@ -992,13 +986,13 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.closeNavDrawer({ restoreFocus: true });
     context.navigate(
       routeId,
-      isSessionRouteId(routeId) ? this.chatNavigationOptions(options) : options,
+      isSessionRouteId(routeId) ? this.chatNavigationOptions(routeId, options) : options,
     );
   }
 
   private replaceChatWithCurrentSession() {
     const face = this.routeState.routeId === "dashboard" ? "dashboard" : "chat";
-    this.context?.replace(face, this.chatNavigationOptions());
+    this.context?.replace(face, this.chatNavigationOptions(face));
   }
 
   private isSettingsTakeover(): boolean {
@@ -1347,7 +1341,7 @@ class OpenClawShell extends OpenClawLightDomElement {
       return;
     }
     // Keep Chat's in-place draft path fast; other routes hand the draft through navigation.
-    const navigation = this.chatNavigationOptions();
+    const navigation = this.chatNavigationOptions("chat");
     const search = new URLSearchParams();
     search.set("draft", command.endsWith(" ") ? command : `${command} `);
     this.navigate("chat", { ...navigation, search: `?${search.toString()}` });

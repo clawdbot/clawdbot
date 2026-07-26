@@ -271,6 +271,59 @@ describe("loadChatRoute", () => {
     expect(list).not.toHaveBeenCalled();
   });
 
+  it("waits for configured session defaults before resolving an agent main route", async () => {
+    type GatewayListener = Parameters<ApplicationContext["gateway"]["subscribe"]>[0];
+    let listener: GatewayListener | null = null;
+    let snapshot = {
+      phase: "connecting",
+      client: null,
+      hello: null,
+    } as unknown as ApplicationContext["gateway"]["snapshot"];
+    const context = {
+      basePath: "",
+      gateway: {
+        get snapshot() {
+          return snapshot;
+        },
+        subscribe: (next: GatewayListener) => {
+          listener = next;
+          return () => undefined;
+        },
+      },
+      agents: { state: { agentsList: null } },
+    } as unknown as ApplicationContext;
+    const pending = loadChatRoute(
+      context,
+      { pathname: "/chat/research", search: "", hash: "" },
+      "chat",
+      new AbortController().signal,
+    );
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    snapshot = {
+      phase: "connected",
+      client: {},
+      hello: { snapshot: { sessionDefaults: { mainKey: "workspace" } } },
+    } as unknown as ApplicationContext["gateway"]["snapshot"];
+    const connectedListener = listener as GatewayListener | null;
+    if (!connectedListener) {
+      throw new Error("expected gateway subscription");
+    }
+    connectedListener(snapshot);
+
+    await expect(pending).resolves.toEqual({
+      kind: "session",
+      sessionKey: "agent:research:workspace",
+      draft: undefined,
+      face: "chat",
+    });
+  });
+
   it("treats a configured main key as a reserved literal", async () => {
     const { context, list } = contextFor(result([]), "workspace");
     await expect(
@@ -329,6 +382,28 @@ describe("loadChatRoute", () => {
       kind: "session",
       sessionKey: "catalog:claude:gateway%3Alocal:thread-2",
       agentId: "research",
+    });
+  });
+
+  it("loads synthetic catalog sessions in the dashboard namespace", async () => {
+    const { context } = contextFor(result([]));
+    await expect(
+      loadChatRoute(
+        context,
+        {
+          pathname: "/dashboard/research",
+          search: "?catalog=claude&host=gateway%3Alocal&thread=thread-2",
+          hash: "",
+        },
+        "dashboard",
+        new AbortController().signal,
+      ),
+    ).resolves.toEqual({
+      kind: "session",
+      sessionKey: "catalog:claude:gateway%3Alocal:thread-2",
+      agentId: "research",
+      draft: undefined,
+      face: "dashboard",
     });
   });
 });

@@ -290,7 +290,7 @@ export async function loadChatRoute(
   }
   const { target } = resolvedTarget;
   const catalogKey = catalogSessionKeyFromSearch(location.search);
-  if (face === "chat" && target.kind === "main" && catalogKey) {
+  if (target.kind === "main" && catalogKey) {
     return {
       kind: "session",
       sessionKey: buildCatalogSessionKey(catalogKey),
@@ -300,6 +300,7 @@ export async function loadChatRoute(
     };
   }
   if (target.kind === "main") {
+    await waitForGatewayClient(context, signal);
     return {
       kind: "session",
       sessionKey: mainSessionKey(context, target),

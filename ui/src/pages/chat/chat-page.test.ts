@@ -13,18 +13,31 @@ vi.mock("../../app/native-gateways.runtime.ts", () => ({
   nativeGatewaysCapability: () => nativeGateways.current,
 }));
 
+import type { ApplicationContext } from "../../app/context.ts";
 import type {
   NativeGatewaysCapability,
   NativeGatewaysSnapshot,
 } from "../../app/native-gateways.runtime.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { UI_COMMAND_EVENT } from "../../components/panel-toggle-contract.ts";
+import {
+  buildCatalogSessionKey,
+  catalogSessionSearch,
+  type CatalogSessionKey,
+} from "../../lib/sessions/catalog-key.ts";
 import { SESSION_DRAG_MIME } from "../../lib/sessions/drag.ts";
 import { pathForSessionKey } from "../../lib/sessions/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { ChatPage } from "./chat-page.ts";
+import { loadChatRoute } from "./route-loader.ts";
 
 const WORK_SESSION_KEY = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
+const CATALOG_KEY = {
+  catalogId: "claude",
+  hostId: "gateway:local",
+  threadId: "thread-1",
+} satisfies CatalogSessionKey;
+const CATALOG_SESSION_KEY = buildCatalogSessionKey(CATALOG_KEY);
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { SplitDropZone } from "./split-drop-zone.ts";
 import { insertPane, type ChatSplitLayout } from "./split-layout.ts";
@@ -41,6 +54,7 @@ type RenderedPane = HTMLElement & {
   gatewaysSnapshot: NativeGatewaysSnapshot | null;
   onOpenSplitView?: () => void;
   onClosePane?: (paneId: string) => void;
+  onFaceChange?: (face: "chat" | "dashboard") => void;
 };
 
 type RenderedDivider = HTMLElement & { orientation: "horizontal" | "vertical" };
@@ -106,21 +120,21 @@ function getDropIndicator(page: ChatPage) {
 function setNavigationContext(page: ChatPage) {
   const navigate = vi.fn();
   const replace = vi.fn();
-  const setAgent = vi.fn();
-  (
-    page as unknown as {
-      context: {
-        navigate: typeof navigate;
-        replace: typeof replace;
-        agentSelection: { set: typeof setAgent };
-      };
-    }
-  ).context = {
+  const agentSelectionState = { selectedId: "main" };
+  const setAgent = vi.fn((agentId: string) => {
+    agentSelectionState.selectedId = agentId;
+  });
+  const context = {
+    basePath: "",
+    sessions: { state: { result: null }, subscribe: () => () => undefined },
+    agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
+    gateway: { snapshot: { hello: null } },
     navigate,
     replace,
-    agentSelection: { set: setAgent },
-  };
-  return { navigate, replace, setAgent };
+    agentSelection: { state: agentSelectionState, set: setAgent },
+  } as unknown as ApplicationContext;
+  (page as unknown as { context: ApplicationContext }).context = context;
+  return { context, navigate, replace, setAgent };
 }
 
 function stubMatchMedia(matches: boolean) {
@@ -351,6 +365,58 @@ describe("chat page split layout host", () => {
     });
     page.data = { ...firstRouteData };
     expect(getRouteDraftForActivePane(page)).toBe("one-shot draft");
+  });
+
+  it("keeps catalog identity when consuming a route draft", async () => {
+    const page = new ChatPage();
+    const navigation = setNavigationContext(page);
+    page.data = {
+      sessionKey: CATALOG_SESSION_KEY,
+      agentId: "research",
+      draft: "one-shot catalog draft",
+    };
+    document.body.append(page);
+    await page.updateComplete;
+    await Promise.resolve();
+    await page.updateComplete;
+
+    const expectedSearch = catalogSessionSearch(CATALOG_KEY);
+    expect(navigation.replace).toHaveBeenCalledWith("chat", {
+      pathname: "/chat/research",
+      search: expectedSearch,
+    });
+    await expect(
+      loadChatRoute(
+        navigation.context,
+        { pathname: "/chat/research", search: expectedSearch, hash: "" },
+        "chat",
+        new AbortController().signal,
+      ),
+    ).resolves.toMatchObject({ kind: "session", sessionKey: CATALOG_SESSION_KEY });
+  });
+
+  it("keeps catalog identity while switching faces", async () => {
+    const page = new ChatPage();
+    const navigation = setNavigationContext(page);
+    page.data = { sessionKey: CATALOG_SESSION_KEY, agentId: "research", face: "chat" };
+    document.body.append(page);
+    await page.updateComplete;
+
+    const pane = page.querySelector<RenderedPane>("openclaw-chat-pane");
+    pane?.onFaceChange?.("dashboard");
+    const expectedSearch = catalogSessionSearch(CATALOG_KEY);
+    expect(navigation.navigate).toHaveBeenCalledWith("dashboard", {
+      pathname: "/dashboard/research",
+      search: expectedSearch,
+    });
+    await expect(
+      loadChatRoute(
+        navigation.context,
+        { pathname: "/dashboard/research", search: expectedSearch, hash: "" },
+        "dashboard",
+        new AbortController().signal,
+      ),
+    ).resolves.toMatchObject({ kind: "session", sessionKey: CATALOG_SESSION_KEY });
   });
 
   it("passes an empty session key while route data is still unresolved", async () => {

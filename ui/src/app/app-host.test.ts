@@ -193,6 +193,13 @@ type ShellRouteCommitState = {
   updateRouteState: (state: ReturnType<typeof selectShellRouteState>) => void;
 };
 
+type ShellSessionNavigationState = {
+  runtime: { context: ApplicationContext };
+  activeSessionKey: string;
+  routeState: { routeId?: RouteId };
+  navigate: (routeId: RouteId) => void;
+};
+
 function committedRouterState(
   routeId: RouteId,
   pathname: string,
@@ -328,6 +335,33 @@ describe("OpenClaw shell source initialization", () => {
 });
 
 describe("OpenClaw shell route session commits", () => {
+  it("builds session paths from the requested destination face", () => {
+    const navigate = vi.fn();
+    const shell = document.createElement(
+      "openclaw-app-shell",
+    ) as unknown as ShellSessionNavigationState;
+    shell.runtime = {
+      context: {
+        basePath: "",
+        agents: { state: { agentsList: { mainKey: "main" } } },
+        gateway: { snapshot: { hello: null } },
+        sessions: { state: { result: null } },
+        navigate,
+      } as unknown as ApplicationContext,
+    };
+    shell.activeSessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
+
+    shell.routeState = { routeId: "chat" };
+    shell.navigate("dashboard");
+    expect(navigate).toHaveBeenLastCalledWith("dashboard", {
+      pathname: "/dashboard/main/12345678",
+    });
+
+    shell.routeState = { routeId: "dashboard" };
+    shell.navigate("chat");
+    expect(navigate).toHaveBeenLastCalledWith("chat", { pathname: "/chat/main/12345678" });
+  });
+
   it("adopts a resolved chat session after path navigation from Tasks", () => {
     vi.stubGlobal("localStorage", createStorageMock());
     const setSessionKey = vi.fn();

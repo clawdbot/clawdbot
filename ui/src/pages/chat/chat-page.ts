@@ -13,7 +13,8 @@ import { t } from "../../i18n/index.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { readSessionDragData, sessionDragActive } from "../../lib/sessions/drag.ts";
-import { pathForSessionKey, resolveSessionKey } from "../../lib/sessions/index.ts";
+import { resolveSessionKey } from "../../lib/sessions/index.ts";
+import { sessionRouteNavigationOptions } from "../../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -365,18 +366,12 @@ export class ChatPage extends OpenClawLightDomElement {
     ) {
       return;
     }
-    const row = this.context.sessions?.state.result?.sessions.find((candidate) =>
-      areUiSessionKeysEquivalent(candidate.key, sessionKey),
-    );
-    const options = {
-      pathname: pathForSessionKey(
-        face,
-        row?.key ?? sessionKey,
-        this.context.basePath,
-        row,
-        this.context.agents?.state.agentsList?.mainKey,
-      ),
-    };
+    const options = sessionRouteNavigationOptions({
+      context: this.context,
+      face,
+      sessionKey,
+      agentId: this.data?.agentId,
+    });
     if (replace) {
       this.context.replace(face, options);
     } else {
