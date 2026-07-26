@@ -8788,6 +8788,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Shared spaces (recommended)
   - H2: Memory system (recommended)
   - H2: Tools
+  - H3: Local notes
   - H2: Backup tip (recommended)
   - H2: What OpenClaw does
   - H2: Core skills (enable in Settings → Skills)
