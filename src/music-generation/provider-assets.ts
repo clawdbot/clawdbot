@@ -3,13 +3,29 @@ import { maxBytesForKind } from "@openclaw/media-core/constants";
 import { extensionForMime } from "@openclaw/media-core/mime";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { readResponseWithLimit } from "../infra/http-body.js";
-import {
-  createProviderOperationDeadline,
-  createProviderOperationTimeoutResolver,
-  fetchProviderDownloadResponse,
-} from "../media-understanding/shared.js";
+import { readResponseTextPrefix, readResponseWithLimit } from "../infra/http-body.js";
+import { fetchWithTimeout } from "../media-understanding/shared.js";
+import { executeProviderOperationWithRetry } from "../provider-runtime/operation-retry.js";
 import type { GeneratedMusicAsset } from "./types.js";
+
+const GENERATED_MUSIC_ERROR_BODY_MAX_BYTES = 16 * 1024;
+
+function resolveGeneratedMusicDownloadBodyTimeout(params: {
+  provider: string;
+  timeoutMs: number;
+  deadlineMs: number;
+}) {
+  return {
+    chunkTimeoutMs: params.timeoutMs,
+    timeoutMs: Math.max(1, params.deadlineMs - Date.now()),
+    onIdleTimeout: ({ chunkTimeoutMs }: { chunkTimeoutMs: number }) =>
+      new Error(`${params.provider} generated music download stalled after ${chunkTimeoutMs}ms`),
+    onTimeout: () =>
+      new Error(
+        `${params.provider} generated music download timed out after ${params.timeoutMs}ms`,
+      ),
+  };
+}
 
 /**
  * Asset extraction and download helpers for music generation providers.
@@ -102,21 +118,52 @@ export async function downloadGeneratedMusicAsset(params: {
   index?: number;
   maxBytes?: number;
 }): Promise<GeneratedMusicAsset> {
-  const deadline = createProviderOperationDeadline({
-    timeoutMs: params.timeoutMs,
-    label: `${params.provider} generated music download`,
-  });
-  const timeoutMs = createProviderOperationTimeoutResolver({
-    deadline,
-    defaultTimeoutMs: params.timeoutMs,
-  });
-  const response = await fetchProviderDownloadResponse({
-    url: params.candidate.url,
-    init: { method: "GET" },
-    deadline,
-    fetchFn: params.fetchFn,
+  // One wall-clock deadline spans headers, non-2xx error-detail reads, and
+  // successful-body reads so a slow drip cannot reset chunk idle forever.
+  // Perform bounded status validation inside each retry attempt so transient
+  // HTTP statuses (429, 5xx) are retried by executeProviderOperationWithRetry
+  // before the download returns.
+  const deadlineMs = Date.now() + params.timeoutMs;
+  const makeBodyTimeout = () =>
+    resolveGeneratedMusicDownloadBodyTimeout({
+      provider: params.provider,
+      timeoutMs: params.timeoutMs,
+      deadlineMs,
+    });
+
+  const response = await executeProviderOperationWithRetry({
     provider: params.provider,
-    requestFailedMessage: params.requestFailedMessage,
+    stage: "download",
+    operation: async () => {
+      const res = await fetchWithTimeout(
+        params.candidate.url,
+        { method: "GET" },
+        Math.max(1, deadlineMs - Date.now()),
+        params.fetchFn,
+      );
+      if (!res.ok) {
+        // Retryable statuses skip diagnostic body reads so the shared
+        // wall-clock deadline is preserved for the retry attempt. A
+        // dripping 5xx body would otherwise consume the full deadline
+        // before the retry wrapper could start another attempt.
+        if (res.status === 500 || res.status === 502 || res.status === 503 || res.status === 504) {
+          await res.body?.cancel().catch(() => undefined);
+          throw new Error(`${params.requestFailedMessage} (HTTP ${res.status})`);
+        }
+        // Non-retryable statuses keep a bounded diagnostic read.
+        const prefix = await readResponseTextPrefix(
+          res,
+          GENERATED_MUSIC_ERROR_BODY_MAX_BYTES,
+          makeBodyTimeout(),
+        );
+        const detail = prefix.text.replace(/\s+/g, " ").trim();
+        throw new Error(
+          `${params.requestFailedMessage} (HTTP ${res.status})` +
+            (detail ? `: ${detail.length > 220 ? `${detail.slice(0, 219)}…` : detail}` : ""),
+        );
+      }
+      return res;
+    },
   });
   const mimeType =
     normalizeSpecificAudioMimeType(response.headers.get("content-type")) ??
@@ -126,11 +173,7 @@ export async function downloadGeneratedMusicAsset(params: {
   const maxBytes = params.maxBytes ?? maxBytesForKind("audio");
   return {
     buffer: await readResponseWithLimit(response, maxBytes, {
-      timeoutMs,
-      onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
-        new Error(
-          `${params.provider} generated music download timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`,
-        ),
+      ...makeBodyTimeout(),
       onOverflow: ({ maxBytes: maxBytesLocal }) =>
         new Error(`${params.provider} generated music download exceeds ${maxBytesLocal} bytes`),
     }),
