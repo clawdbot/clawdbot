@@ -155,7 +155,7 @@ export function validateDatedTodoReport(report, { expectedDate, repoRoot } = {})
   }
 }
 
-export function urgentKeys(text) {
+function urgentKeys(text) {
   const keys = new Set();
   let urgent = false;
   for (const line of String(text ?? "").split("\n")) {
@@ -178,7 +178,7 @@ export function urgentKeys(text) {
   return keys;
 }
 
-export function selectTrackingIssue(issues) {
+function selectTrackingIssue(issues) {
   return issues
     .filter(isTrustedTracker)
     .toSorted(
