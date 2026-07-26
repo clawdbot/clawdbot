@@ -915,6 +915,71 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     }
   });
 
+  it("shows the archived notice when an archived session is cold-loaded outside the active list", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const archived = sessionRow(
+      "agent:main:dashboard:cold-archive",
+      "Archived planning",
+      Date.parse("2026-07-01T16:00:00.000Z"),
+      { archived: true },
+    );
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.describe": { session: archived },
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:main", "Main", archived.updatedAt + 1),
+        ]),
+        "sessions.patch": {},
+      },
+      sessionArchiveFiltering: true,
+      sessionKey: archived.key,
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat?session=${encodeURIComponent(archived.key)}`);
+
+      const selectedRow = page.locator(
+        `.sidebar-recent-session[data-session-key="${archived.key}"]`,
+      );
+      await selectedRow.waitFor({ state: "visible", timeout: 10_000 });
+      await expect
+        .poll(() => selectedRow.getAttribute("class"))
+        .toContain("sidebar-recent-session--active");
+      await selectedRow.locator(".sidebar-session__archive-glyph").waitFor({ state: "visible" });
+      await expect.poll(() => page.getByText("Archived planning", { exact: true }).count()).toBe(2);
+
+      const archivedNotice = page.locator(".agent-chat__disabled-banner");
+      await archivedNotice.waitFor({ state: "visible", timeout: 10_000 });
+      await expect.poll(() => archivedNotice.textContent()).toContain("This session is archived.");
+      await expect.poll(() => page.locator(".agent-chat__input").count()).toBe(0);
+
+      await gateway.setMethodResponse("sessions.describe", {
+        session: { ...archived, archived: false },
+      });
+      await archivedNotice.getByRole("button", { name: "Unarchive" }).click();
+      await waitForPatch(
+        gateway,
+        (params) => params.key === archived.key && params.archived === false,
+      );
+      await gateway.emitGatewayEvent("sessions.changed", {
+        ...archived,
+        archived: false,
+        reason: "update",
+        sessionKey: archived.key,
+      });
+
+      await archivedNotice.waitFor({ state: "detached", timeout: 10_000 });
+      await page.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("keeps a session row when the Gateway reports no deletion", async () => {
     const context = await browser.newContext({
       locale: "en-US",
