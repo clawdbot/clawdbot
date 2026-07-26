@@ -45,7 +45,8 @@ export function applyEmbeddedAttemptSessionIdentity(params: {
         marker.sessionId,
       );
       const successorSessionKey =
-        retainedEntry?.sessionId === marker.sessionId
+        retainedEntry?.sessionId === marker.sessionId ||
+        retainedEntry?.sessionId === previousSessionId
           ? retainedSessionKey
           : (preferredMarkerSessionKey ??
             (markerMatches.length === 0 && !retainedEntry ? retainedSessionKey : undefined));

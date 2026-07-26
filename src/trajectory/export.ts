@@ -90,6 +90,21 @@ const MAX_TRAJECTORY_TOTAL_EVENTS = 250_000;
 const MAX_TRAJECTORY_SESSION_FILE_BYTES = 50 * 1024 * 1024;
 const MAX_TRAJECTORY_WARNING_ROWS = 20;
 
+function normalizeCompleteSessionTarget(
+  target: SessionTranscriptRuntimeTarget | undefined,
+): SessionTranscriptRuntimeTarget | undefined {
+  if (!target) {
+    return undefined;
+  }
+  const agentId = normalizeOptionalString(target.agentId);
+  const sessionId = normalizeOptionalString(target.sessionId);
+  const sessionKey = normalizeOptionalString(target.sessionKey);
+  const storePath = normalizeOptionalString(target.storePath);
+  return agentId && sessionId && sessionKey && storePath
+    ? { agentId, sessionId, sessionKey, storePath }
+    : undefined;
+}
+
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
@@ -200,15 +215,8 @@ async function readSessionEntries(params: {
   warnings: JsonlParseWarning[];
   rowByEntry: Map<FileEntry, number>;
 }> {
-  const target = params.sessionTarget
-    ? {
-        agentId: normalizeOptionalString(params.sessionTarget.agentId),
-        sessionId: normalizeOptionalString(params.sessionTarget.sessionId),
-        sessionKey: normalizeOptionalString(params.sessionTarget.sessionKey),
-        storePath: normalizeOptionalString(params.sessionTarget.storePath),
-      }
-    : undefined;
-  if (target?.agentId && target.sessionId && target.sessionKey && target.storePath) {
+  const target = normalizeCompleteSessionTarget(params.sessionTarget);
+  if (target) {
     if (
       target.sessionId !== params.sessionId ||
       (params.sessionKey !== undefined && target.sessionKey !== params.sessionKey)
@@ -453,7 +461,9 @@ async function readRuntimeTrajectoryEvents(params: {
   runtimeFile?: string;
   warnings: JsonlParseWarning[];
 }> {
-  const marker = params.sessionTarget ?? parseSqliteSessionFileMarker(params.sessionFile);
+  const marker =
+    normalizeCompleteSessionTarget(params.sessionTarget) ??
+    parseSqliteSessionFileMarker(params.sessionFile);
   if (marker && marker.sessionId !== params.sessionId) {
     throw new Error("Trajectory runtime target does not match the requested session");
   }
@@ -1178,11 +1188,8 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
   const redaction = buildTrajectoryExportRedaction({
     workspaceDir: params.workspaceDir,
   });
-  if (
-    params.sessionFile &&
-    !params.sessionTarget &&
-    !parseSqliteSessionFileMarker(params.sessionFile)
-  ) {
+  const sessionTarget = normalizeCompleteSessionTarget(params.sessionTarget);
+  if (params.sessionFile && !sessionTarget && !parseSqliteSessionFileMarker(params.sessionFile)) {
     const sessionStat = await fsp.stat(params.sessionFile);
     if (sessionStat.size > MAX_TRAJECTORY_SESSION_FILE_BYTES) {
       throw new Error(
@@ -1197,14 +1204,14 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
     warnings: sessionWarnings,
   } = await readSessionBranch({
     sessionFile: params.sessionFile,
-    sessionTarget: params.sessionTarget,
+    sessionTarget,
     sessionId: params.sessionId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
   });
   const runtimeParse = await readRuntimeTrajectoryEvents({
     runtimeFile: params.runtimeFile,
     sessionFile: params.sessionFile,
-    sessionTarget: params.sessionTarget,
+    sessionTarget,
     sessionId: params.sessionId,
   });
   const runtimeFile = runtimeParse.runtimeFile;

@@ -756,7 +756,8 @@ async function compactResolvedContextEngine(
               )
             : undefined;
           const markerSessionKey = marker
-            ? retainedMarkerEntry?.sessionId === marker.sessionId
+            ? retainedMarkerEntry?.sessionId === marker.sessionId ||
+              retainedMarkerEntry?.sessionId === runtimeTarget.sessionId
               ? runtimeTarget.sessionKey
               : (preferredMarkerSessionKey ??
                 (markerMatches.length === 0 && !retainedMarkerEntry

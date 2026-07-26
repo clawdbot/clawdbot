@@ -133,6 +133,34 @@ describe("createEmbeddedAttemptSessionLockController", () => {
     expect(events).toEqual(["nested:start", "nested:end", "second"]);
   });
 
+  it("serializes sibling nested writes in submission order", async () => {
+    let releaseFirst!: () => void;
+    const firstBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const events: string[] = [];
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: vi.fn(async () => ({ release: async () => undefined })),
+      lockOptions: { sessionFile: "agent:main:main" },
+    });
+
+    await controller.withSessionWriteLock(async () => {
+      const first = controller.withSessionWriteLock(async () => {
+        events.push("first:start");
+        await firstBlocked;
+        events.push("first:end");
+      });
+      const second = controller.withSessionWriteLock(() => {
+        events.push("second");
+      });
+      await vi.waitFor(() => expect(events).toEqual(["first:start"]));
+      releaseFirst();
+      await Promise.all([first, second]);
+    });
+
+    expect(events).toEqual(["first:start", "first:end", "second"]);
+  });
+
   it("terminally fences writes after a generic prompt reload failure", async () => {
     const reloadError = new Error("reload failed");
     const run = vi.fn();

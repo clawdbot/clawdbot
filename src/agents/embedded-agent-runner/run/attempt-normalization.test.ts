@@ -1,7 +1,19 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { applyEmbeddedAttemptSessionIdentity } from "./attempt-session-identity.js";
 
-function promptState() {
+const sessionAccessorMocks = vi.hoisted(() => ({
+  listSessionEntries: vi.fn(() => []),
+  loadSessionEntry: vi.fn(),
+}));
+
+vi.mock("../../../config/sessions/session-accessor.js", () => sessionAccessorMocks);
+
+beforeEach(() => {
+  sessionAccessorMocks.listSessionEntries.mockReset().mockReturnValue([]);
+  sessionAccessorMocks.loadSessionEntry.mockReset();
+});
+
+function promptState(storePath = "/tmp/sessions.json") {
   return {
     sessionId: "session-before",
     sessionFile: "agent:main:main",
@@ -9,7 +21,7 @@ function promptState() {
       agentId: "main",
       sessionId: "session-before",
       sessionKey: "agent:main:main",
-      storePath: "/tmp/sessions.json",
+      storePath,
     },
     adoptSessionId: vi.fn(),
   };
@@ -40,6 +52,27 @@ describe("applyEmbeddedAttemptSessionIdentity", () => {
     });
 
     expect(state.sessionTarget).toMatchObject({
+      agentId: "main",
+      sessionId: "session-after",
+      sessionKey: "agent:main:main",
+      storePath: "/tmp/sessions.json",
+    });
+  });
+
+  it("rebinds a legacy SQLite marker successor over the retained active entry", () => {
+    sessionAccessorMocks.loadSessionEntry.mockReturnValue({
+      sessionId: "session-before",
+      updatedAt: 1,
+    });
+    const state = promptState();
+
+    applyEmbeddedAttemptSessionIdentity({
+      sessionPromptState: state,
+      sessionIdUsed: "session-after",
+      sessionFileUsed: "sqlite:main:session-after:/tmp/sessions.json",
+    });
+
+    expect(state.sessionTarget).toEqual({
       agentId: "main",
       sessionId: "session-after",
       sessionKey: "agent:main:main",

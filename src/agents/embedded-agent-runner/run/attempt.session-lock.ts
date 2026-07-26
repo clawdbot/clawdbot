@@ -91,18 +91,46 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   let reloadFailed = false;
   let reloadFailure: unknown;
   let disposePromise: Promise<void> | undefined;
-  type LifecycleOwner = { active: boolean; pendingOperations: Set<Promise<void>> };
+  type LifecycleOwner = {
+    active: boolean;
+    nestedPending: number;
+    nestedTail: Promise<void>;
+    pendingOperations: Set<Promise<void>>;
+  };
+  const createLifecycleOwner = (): LifecycleOwner => ({
+    active: true,
+    nestedPending: 0,
+    nestedTail: Promise.resolve(),
+    pendingOperations: new Set(),
+  });
   const lifecycleOwner = new AsyncLocalStorage<LifecycleOwner>();
   const serializeLifecycle = async <T>(run: () => Promise<T> | T): Promise<T> => {
     const inheritedOwner = lifecycleOwner.getStore();
     if (inheritedOwner?.active) {
-      const operation = (async () => await run())();
+      const previousNested = inheritedOwner.nestedTail;
+      const waitForPrevious = inheritedOwner.nestedPending > 0 ? previousNested : Promise.resolve();
+      inheritedOwner.nestedPending += 1;
+      const operation = waitForPrevious.then(async () => {
+        const childOwner = createLifecycleOwner();
+        try {
+          return await lifecycleOwner.run(childOwner, async () => await run());
+        } finally {
+          while (childOwner.pendingOperations.size > 0) {
+            await Promise.all(childOwner.pendingOperations);
+          }
+          childOwner.active = false;
+        }
+      });
       const settlement = operation.then(
         () => undefined,
         () => undefined,
       );
+      inheritedOwner.nestedTail = settlement;
       inheritedOwner.pendingOperations.add(settlement);
-      void settlement.finally(() => inheritedOwner.pendingOperations.delete(settlement));
+      void settlement.finally(() => {
+        inheritedOwner.nestedPending -= 1;
+        inheritedOwner.pendingOperations.delete(settlement);
+      });
       return await operation;
     }
     const previous = lifecycle;
@@ -111,7 +139,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       release = resolve;
     });
     await previous;
-    const owner: LifecycleOwner = { active: true, pendingOperations: new Set() };
+    const owner = createLifecycleOwner();
     try {
       return await lifecycleOwner.run(owner, async () => await run());
     } finally {

@@ -4355,6 +4355,61 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     });
   });
 
+  it("rebinds a deprecated SQLite marker successor over the retained active entry", async () => {
+    const maintain = vi.fn(async (_params?: unknown) => ({
+      changed: false,
+      bytesFreed: 0,
+      rewrittenEntries: 0,
+    }));
+    const delegatedSessionId = "delegated-marker-session";
+    const dir = await mkdtemp(join(tmpdir(), "openclaw-compaction-marker-successor-"));
+    const storePath = join(dir, "sessions.json");
+    const marker = `sqlite:main:${delegatedSessionId}:${storePath}`;
+    resolveContextEngineMock.mockResolvedValue({
+      info: { ownsCompaction: false },
+      compact: contextEngineCompactMock,
+      maintain,
+    } as never);
+    contextEngineCompactMock.mockResolvedValue({
+      ok: true,
+      compacted: true,
+      result: {
+        sessionFile: marker,
+        sessionId: delegatedSessionId,
+      },
+    } as never);
+    try {
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey: TEST_SESSION_KEY, storePath },
+        { sessionId: TEST_SESSION_ID, updatedAt: 1 },
+      );
+
+      await compactEmbeddedAgentSession(
+        wrappedCompactionArgs({
+          sessionTarget: {
+            agentId: "main",
+            sessionId: TEST_SESSION_ID,
+            sessionKey: TEST_SESSION_KEY,
+            storePath,
+          },
+        }),
+      );
+
+      expectRecordFields(mockCallArg(maintain), {
+        sessionId: delegatedSessionId,
+        sessionTarget: expect.objectContaining({
+          agentId: "main",
+          sessionId: delegatedSessionId,
+          sessionKey: TEST_SESSION_KEY,
+          storePath,
+        }),
+      });
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+      await rm(dir, { force: true, recursive: true });
+    }
+  });
+
   it("rejects conflicting structured successor session ids", async () => {
     resolveContextEngineMock.mockResolvedValue({
       info: { ownsCompaction: false },
