@@ -275,9 +275,12 @@ describe("startDebugProxyServer", () => {
     const responseBody = `pressure-${"x".repeat(1024)}`;
     const origin = await startLargeBodyOrigin(responseBody);
     const proxy = await startDebugProxyServer({ settings });
-    const originalWrite = ServerResponse.prototype.write as (...args: unknown[]) => boolean;
-    const originalPause = IncomingMessage.prototype.pause;
-    const originalResume = IncomingMessage.prototype.resume;
+    const originalWrite = Object.getOwnPropertyDescriptor(ServerResponse.prototype, "write")
+      ?.value as (...args: unknown[]) => boolean;
+    const originalPause = Object.getOwnPropertyDescriptor(IncomingMessage.prototype, "pause")
+      ?.value as typeof IncomingMessage.prototype.pause;
+    const originalResume = Object.getOwnPropertyDescriptor(IncomingMessage.prototype, "resume")
+      ?.value as typeof IncomingMessage.prototype.resume;
     let forcedBackpressure = false;
     let upstreamPauseCount = 0;
     let upstreamResumeCount = 0;
