@@ -13,6 +13,7 @@ export type {
 } from "../plugins/session-catalog.js";
 export {
   createSessionCatalogAdoptionCoordinator,
+  importSessionCatalogHistory,
   isExternalUserText,
   listAdoptedSessionCatalogSessions,
   normalizeUserText,

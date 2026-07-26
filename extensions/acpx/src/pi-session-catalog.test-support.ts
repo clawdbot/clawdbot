@@ -126,17 +126,30 @@ export function capturePiContinuationCatalog() {
         sessionId: "adopted-pi-session",
         updatedAt: Date.now(),
         pluginOwnerId: "acpx",
+        initializationPending: true as const,
         ...(params.label ? { label: params.label } : {}),
         ...(params.spawnedCwd ? { spawnedCwd: params.spawnedCwd } : {}),
         pluginExtensions: params.initialEntry.pluginExtensions,
       };
       entries.push({ sessionKey, entry });
-      return {
+      const created = {
         key: sessionKey,
         agentId: params.agentId ?? "main",
         sessionId: entry.sessionId,
         entry,
       };
+      try {
+        const finalPatch = await params.afterCreate?.(created);
+        entry.pluginExtensions = finalPatch?.pluginExtensions ?? entry.pluginExtensions;
+        delete (entry as { initializationPending?: true }).initializationPending;
+        return created;
+      } catch (error) {
+        entries.splice(
+          entries.findIndex((candidate) => candidate.entry === entry),
+          1,
+        );
+        throw error;
+      }
     },
   );
   registerPiSessionCatalog({
