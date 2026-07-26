@@ -64,6 +64,16 @@ Defines the long-term philosophy, values, and operating principles of OpenClaw.
 
 ---
 
+## Development Governance
+
+OPENCLAW_DEVELOPMENT_DIRECTIVE.md
+
+Defines the mandatory development-only workflow, operator acceptance gate,
+product reliability requirements, mobile asset-management vision, evidence
+standards, and production authorization boundary.
+
+---
+
 ## Disaster Recovery
 
 RESTORE_MANIFEST.md
@@ -176,6 +186,7 @@ The maintained documentation library is located under `docs/`.
 - `docs/foundation/PROJECT_OVERVIEW.md`
 - `docs/foundation/SOUL.md`
 - `docs/foundation/AI_GOVERNANCE_MANIFEST.md`
+- `docs/foundation/OPENCLAW_DEVELOPMENT_DIRECTIVE.md`
 - `docs/foundation/RESTORE_MANIFEST.md`
 - `docs/foundation/OPERATIONS_RUNBOOK.md`
 
