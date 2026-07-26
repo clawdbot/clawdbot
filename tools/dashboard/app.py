@@ -1436,7 +1436,15 @@ def latest_backup_html():
     """
 
 
-RANCHBRAIN_ENV_FILE = Path.home() / ".openclaw/credentials/chat-agent.env"
+RANCHBRAIN_ENV_FILES = (
+    Path(
+        os.environ.get(
+            "OPENCLAW_RANCHBRAIN_ENV_FILE",
+            Path.home() / ".openclaw/credentials/chat-agent.env",
+        )
+    ),
+    Path.home() / ".openclaw/credentials/ai-intelligence-dev.env",
+)
 RANCHBRAIN_REVIEW_TOOL = Path.home() / "ai/projects/openclaw/tools/ranchbrain/ranchbrain-review.py"
 OPENCLAW_PYTHON = Path.home() / "ai/projects/openclaw/.venv/bin/python"
 
@@ -1444,10 +1452,14 @@ OPENCLAW_PYTHON = Path.home() / "ai/projects/openclaw/.venv/bin/python"
 def load_ranchbrain_env():
     values = {}
 
-    if not RANCHBRAIN_ENV_FILE.is_file():
+    env_file = next(
+        (path for path in RANCHBRAIN_ENV_FILES if path.is_file()),
+        None,
+    )
+    if env_file is None:
         return values
 
-    for raw_line in RANCHBRAIN_ENV_FILE.read_text().splitlines():
+    for raw_line in env_file.read_text().splitlines():
         line = raw_line.strip()
 
         if not line or line.startswith("#") or "=" not in line:
@@ -1470,6 +1482,18 @@ def ranchbrain_db():
         password=env.get("OPENCLAW_DB_PASSWORD", ""),
         connect_timeout=8,
     )
+
+
+def ranchbrain_schema_is_ready():
+    conn = ranchbrain_db()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT to_regclass('public.long_term_memory');")
+        row = cur.fetchone()
+        return bool(row and row[0])
+    finally:
+        cur.close()
+        conn.close()
 
 
 def get_ranchbrain_counts():
@@ -1663,6 +1687,23 @@ button {{
 @app.route("/ranchbrain")
 def ranchbrain_dashboard():
     try:
+        if not ranchbrain_schema_is_ready():
+            body = """
+<div class="panel" style="border-left:7px solid #fbbf24;">
+  <h2>Development Database Setup Required</h2>
+  <p>
+    RanchBrain is connected to the approved development PostgreSQL service,
+    but its <code>long_term_memory</code> schema has not been initialized.
+  </p>
+  <p>
+    No production data was queried or copied, and no inferred schema was
+    created. RanchBrain will remain read-only and unavailable here until an
+    authoritative migration is added and approved for development.
+  </p>
+</div>
+"""
+            return ranchbrain_shell("RanchBrain", body)
+
         counts = get_ranchbrain_counts()
         approved = get_ranchbrain_notes("ranchbrain_note")
 

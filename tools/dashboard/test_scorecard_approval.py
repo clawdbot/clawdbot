@@ -563,6 +563,49 @@ class ScorecardDashboardTests(unittest.TestCase):
         self.assertEqual(disk["status"], "Intel Mini probe unavailable")
         self.assertIsNone(disk["pct_num"])
 
+    def test_ranchbrain_uses_existing_development_database_credentials(self):
+        missing_chat_env = Path(self.temp.name) / "chat-agent.env"
+        development_env = Path(self.temp.name) / "ai-intelligence-dev.env"
+        development_env.write_text(
+            "\n".join(
+                [
+                    "OPENCLAW_DB_HOST=127.0.0.1",
+                    "OPENCLAW_DB_PORT=55432",
+                    "OPENCLAW_DB_NAME=openclaw_ai_dev",
+                    "OPENCLAW_DB_USER=openclaw_ai",
+                    "OPENCLAW_DB_PASSWORD=test-only",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        with mock.patch.object(
+            dashboard,
+            "RANCHBRAIN_ENV_FILES",
+            (missing_chat_env, development_env),
+        ):
+            values = dashboard.load_ranchbrain_env()
+
+        self.assertEqual(values["OPENCLAW_DB_PORT"], "55432")
+        self.assertEqual(values["OPENCLAW_DB_NAME"], "openclaw_ai_dev")
+
+    def test_ranchbrain_missing_schema_is_clear_and_non_failing(self):
+        with (
+            mock.patch.object(
+                dashboard,
+                "ranchbrain_schema_is_ready",
+                return_value=False,
+            ),
+            mock.patch.object(dashboard, "get_ranchbrain_counts") as counts,
+        ):
+            rendered = dashboard.ranchbrain_dashboard()
+
+        counts.assert_not_called()
+        self.assertIn("Development Database Setup Required", rendered)
+        self.assertIn("long_term_memory", rendered)
+        self.assertIn("No production data was queried or copied", rendered)
+        self.assertNotIn("connection refused", rendered.lower())
+
     def test_queue_selects_an_older_undecided_archived_evaluation(self):
         archived = dashboard.AI_EVALUATION_PATH.parent / (
             "evaluation-lab-pipeline-0.json"

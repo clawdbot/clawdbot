@@ -296,6 +296,25 @@ Promotion remains a separate action with explicit decision-ID confirmation.
 The review queue does not generate synthetic evaluations. A new Evaluation Lab
 report becomes the next review item.
 
+## 11. RanchBrain Database
+
+The deployment-local RanchBrain dashboard reads PostgreSQL settings from the
+first available configured credential file:
+
+1. `OPENCLAW_RANCHBRAIN_ENV_FILE`, defaulting to
+   `~/.openclaw/credentials/chat-agent.env`;
+2. development fallback
+   `~/.openclaw/credentials/ai-intelligence-dev.env`.
+
+This keeps RanchBrain on the approved development database and prevents a
+silent fallback to an unrelated PostgreSQL port.
+
+Before querying notes, the dashboard checks for
+`public.long_term_memory`. If the authoritative RanchBrain schema has not been
+initialized, the page returns a clear development-setup notice rather than a
+raw database error. The dashboard does not infer a schema or copy production
+data.
+
 ### Scorecard routes
 
 | Route                                       | Purpose                               |
@@ -307,7 +326,7 @@ report becomes the next review item.
 | `POST /ai-scorecard/reject`                 | Record pipeline rejection             |
 | `POST /ai-scorecard/promote`                | Promote an approved scorecard         |
 
-## 11. Gaps and Observations
+## 12. Gaps and Observations
 
 1. **Dead code:** `build_system_health()` result is unused; service grid is missing from UI.
 2. **Performance:** Deep model checks are operator-triggered so normal dashboard
