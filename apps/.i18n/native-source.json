@@ -21091,7 +21091,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1521,
+      "line": 1526,
       "path": "apps/ios/Sources/Design/IPadWorkboardScreen.swift",
       "source": "No cards dispatched.",
       "surface": "apple",
@@ -21099,7 +21099,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1533,
+      "line": 1538,
       "path": "apps/ios/Sources/Design/IPadWorkboardScreen.swift",
       "source": "%@ dispatched.",
       "surface": "apple",
@@ -21107,7 +21107,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1537,
+      "line": 1542,
       "path": "apps/ios/Sources/Design/IPadWorkboardScreen.swift",
       "source": "%@ dispatched: %@.",
       "surface": "apple",
@@ -21115,7 +21115,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1561,
+      "line": 1566,
       "path": "apps/ios/Sources/Design/IPadWorkboardScreen.swift",
       "source": "%@ started",
       "surface": "apple",
@@ -21123,7 +21123,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1562,
+      "line": 1567,
       "path": "apps/ios/Sources/Design/IPadWorkboardScreen.swift",
       "source": "%@ promoted",
       "surface": "apple",
@@ -21131,7 +21131,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1563,
+      "line": 1568,
       "path": "apps/ios/Sources/Design/IPadWorkboardScreen.swift",
       "source": "%@ reclaimed",
       "surface": "apple",
@@ -21139,7 +21139,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1564,
+      "line": 1569,
       "path": "apps/ios/Sources/Design/IPadWorkboardScreen.swift",
       "source": "%@ orchestrated",
       "surface": "apple",
@@ -21147,7 +21147,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1565,
+      "line": 1570,
       "path": "apps/ios/Sources/Design/IPadWorkboardScreen.swift",
       "source": "%@ blocked",
       "surface": "apple",
@@ -21155,7 +21155,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1566,
+      "line": 1571,
       "path": "apps/ios/Sources/Design/IPadWorkboardScreen.swift",
       "source": "%@ failed",
       "surface": "apple",

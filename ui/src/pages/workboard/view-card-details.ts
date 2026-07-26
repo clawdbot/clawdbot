@@ -363,8 +363,7 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
                 ></openclaw-workboard-card-dashboard>
               `
             : nothing}
-          ${renderDependencyDetailList(dependencies)}
-          ${renderProofDetails(card)}
+          ${renderDependencyDetailList(dependencies)} ${renderProofDetails(card)}
           ${detailSections.map(([title, values]) => renderDetailList(title, values))}
 
           <section class="workboard-detail__section">
