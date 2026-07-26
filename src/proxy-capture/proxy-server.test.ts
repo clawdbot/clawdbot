@@ -403,7 +403,7 @@ describe("startDebugProxyServer", () => {
       this: ServerResponse,
       ...args: unknown[]
     ): boolean {
-      const wrote = originalWrite.apply(this, args);
+      const wrote = Reflect.apply(originalWrite, this, args) as boolean;
       const requestUrl = (this as ServerResponse & { req?: IncomingMessage }).req?.url ?? "";
       if (!forcedBackpressure && requestUrl.startsWith("http://") && args[0] instanceof Buffer) {
         forcedBackpressure = true;
