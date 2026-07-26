@@ -203,6 +203,8 @@ struct DashboardManagerGatewayTargetTests {
         let frame = NSRect(x: 180, y: 180, width: 960, height: 720)
         controller.window?.setFrame(frame, display: false)
         controller.show()
+        // CI display bounds clamp window frames during show, so preserve the post-clamp source frame.
+        let sourceFrame = try #require(controller.window).frame
         let entries = DashboardGatewayTestEntries.withProfiles(["studio"])
         let manager = DashboardManager._testMake(gatewayEntriesProvider: { entries })
         manager.configure(updater: DashboardGatewayTestUpdater())
@@ -214,12 +216,13 @@ struct DashboardManagerGatewayTargetTests {
 
         #expect(manager._testController() === controller)
         #expect(manager._testMainTarget() == .profile("studio"))
-        #expect(controller.window?.frame == frame)
+        #expect(controller.window?.frame == sourceFrame)
         let auxiliaryWindows = manager._testAuxiliaryWindows()
         #expect(auxiliaryWindows.count == 1)
         let auxiliary = try #require(auxiliaryWindows.first)
         #expect(auxiliary.target == .primary)
         #expect(auxiliary.controller !== controller)
+        #expect(auxiliary.controller.window !== controller.window)
         #expect(auxiliary.controller.window?.frameAutosaveName != controller.window?.frameAutosaveName)
         #expect(!auxiliary.controller._testUpdateBridgeAvailable)
     }
@@ -270,6 +273,8 @@ struct DashboardManagerGatewayTargetTests {
         let frame = NSRect(x: 190, y: 190, width: 940, height: 700)
         controller.window?.setFrame(frame, display: false)
         controller.show()
+        // CI display bounds clamp window frames during show, so compare replacement against the actual source frame.
+        let sourceFrame = try #require(controller.window).frame
         let entries = DashboardGatewayTestEntries.withProfiles(["studio"])
         let manager = DashboardManager._testMake(
             profileEndpointProvider: { profileID in
@@ -288,7 +293,7 @@ struct DashboardManagerGatewayTargetTests {
         #expect(manager.frontmostDashboardTarget == .profile("studio"))
         #expect(manager._testController() !== controller)
         #expect(manager._testController()?.currentURL.port == 60002)
-        #expect(manager._testController()?.window?.frame == frame)
+        #expect(manager._testController()?.window?.frame == sourceFrame)
     }
 
     @Test func `main menu switch opens requested gateway when no dashboard exists`() async {
