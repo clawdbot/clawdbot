@@ -661,6 +661,41 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     expect(createEmbeddingProviderMock).toHaveBeenCalledTimes(createsBefore + 2);
   });
 
+  it("serializes cleanup when a remote request creates a local provider", async () => {
+    let releaseClose: () => void = () => {};
+    const closeGate = new Promise<void>((resolve) => {
+      releaseClose = resolve;
+    });
+    closeEmbeddingProviderMock.mockImplementationOnce(async () => {
+      await closeGate;
+    });
+    createEmbeddingProviderMock.mockResolvedValueOnce({
+      provider: {
+        id: "local",
+        model: "local-embed",
+        embedQuery: async () => [0.1, 0.2],
+        embedBatch: embedBatchMock,
+        close: closeEmbeddingProviderMock,
+      },
+    });
+    const createsBefore = createEmbeddingProviderMock.mock.calls.length;
+    const closesBefore = closeEmbeddingProviderMock.mock.calls.length;
+
+    const firstPromise = postEmbeddings({ model: "openclaw/default", input: "first" });
+    await vi.waitFor(() =>
+      expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(closesBefore + 1),
+    );
+    const secondPromise = postEmbeddings({ model: "openclaw/default", input: "second" });
+    await Promise.resolve();
+    expect(createEmbeddingProviderMock).toHaveBeenCalledTimes(createsBefore + 1);
+
+    releaseClose();
+    const [first, second] = await Promise.all([firstPromise, secondPromise]);
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(createEmbeddingProviderMock).toHaveBeenCalledTimes(createsBefore + 2);
+  });
+
   it("does not bypass local cleanup with a model override", async () => {
     Reflect.set(openAiAdapter, "transport", "local");
     let releaseClose: () => void = () => {};

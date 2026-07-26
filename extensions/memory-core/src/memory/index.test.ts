@@ -1651,6 +1651,46 @@ describe("memory index", () => {
     expect(third).toBe(second);
   });
 
+  it("does not reuse a cached manager after direct close starts", async () => {
+    let releaseProviderClose: () => void = () => {};
+    providerCloseGate = new Promise<void>((resolve) => {
+      releaseProviderClose = resolve;
+    });
+    const cfg = createCfg({
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const first = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+    managersForCleanup.add(first);
+    await first.probeEmbeddingAvailability();
+
+    const closePromise = first.close();
+    const replacementPromise = getMemorySearchManager({ cfg, agentId: "main" }).then((result) =>
+      requireManager(result),
+    );
+    let replacementSettled = false;
+    void replacementPromise.then(
+      () => {
+        replacementSettled = true;
+      },
+      () => {
+        replacementSettled = true;
+      },
+    );
+    try {
+      await vi.waitFor(() => expect(providerCloseCalls).toBe(1));
+      await Promise.resolve();
+      expect(replacementSettled).toBe(false);
+    } finally {
+      releaseProviderClose();
+      providerCloseGate = null;
+    }
+
+    await closePromise;
+    const replacement = await replacementPromise;
+    managersForCleanup.add(replacement);
+    expect(replacement === first).toBe(false);
+  });
+
   it("serializes concurrent acquisitions with different cache identities", async () => {
     const firstCfg = createCfg({
       model: "first-model",

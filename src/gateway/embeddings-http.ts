@@ -73,13 +73,13 @@ const EMBEDDING_PROVIDER_ADMISSION_TAILS = new Map<string, Promise<void>>();
 async function acquireEmbeddingProviderLease(
   scopeKey: string,
   create: () => Promise<MemoryEmbeddingProvider>,
-  holdForCleanup: boolean,
+  holdForCleanup: (provider: MemoryEmbeddingProvider) => boolean,
 ): Promise<{ provider: MemoryEmbeddingProvider; release: () => void }> {
   const previous = EMBEDDING_PROVIDER_ADMISSION_TAILS.get(scopeKey) ?? Promise.resolve();
   const createLease = async () => {
     await drainEmbeddingProviderRetirements(scopeKey);
     const provider = await create();
-    if (!holdForCleanup) {
+    if (!holdForCleanup(provider)) {
       return { provider, lifecycle: Promise.resolve(), release: () => {} };
     }
     let release: () => void = () => {};
@@ -445,7 +445,7 @@ export async function handleOpenAiEmbeddingsHttpRequest(
     return true;
   }
   const providerScopeKey = JSON.stringify([agentId, target.provider]);
-  const holdProviderForCleanup = isLocalEmbeddingProvider({
+  const requestedProviderNeedsCleanup = isLocalEmbeddingProvider({
     cfg,
     provider: target.provider,
   });
@@ -469,7 +469,8 @@ export async function handleOpenAiEmbeddingsHttpRequest(
               }
             : undefined,
         }),
-      holdProviderForCleanup,
+      (provider) =>
+        requestedProviderNeedsCleanup || isLocalEmbeddingProvider({ cfg, provider: provider.id }),
     );
     try {
       const embeddings = await provider.embedBatch(texts);

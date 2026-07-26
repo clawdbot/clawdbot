@@ -594,7 +594,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     await closeMemoryIndexManagersForScopeUnlocked({
       agentId,
       purpose,
-      ...(cachedManager?.closed ? {} : { exceptKey: key }),
+      ...(cachedManager?.closing || cachedManager?.closed ? {} : { exceptKey: key }),
     });
     return await getOrCreate();
   }
