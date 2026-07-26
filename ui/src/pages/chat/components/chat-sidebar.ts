@@ -1281,7 +1281,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
       ? Math.min(this.fileSearchMatchIndex, matches.length - 1)
       : 0;
     return html`
-      <div @click=${this.handlePanelClick}>
+      <div class="sidebar-detail-panel__frame" @click=${this.handlePanelClick}>
         ${renderMarkdownSidebar({
           content: this.visibleContent,
           error: this.error,

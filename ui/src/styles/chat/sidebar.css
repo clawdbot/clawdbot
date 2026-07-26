@@ -1306,10 +1306,25 @@ openclaw-chat-sidebar-region,
 }
 
 /* Sidebar Panel */
+/*
+ * Frame wrapping the detail panel inside openclaw-chat-detail-panel.
+ * The host is bounded (flex: 1 1 0; min-height: 0; overflow: hidden), so this
+ * wrapper must be a flex column that fills it — otherwise it grows to content
+ * height and the bounded host clips it, leaving .sidebar-content unscrollable.
+ */
+.sidebar-detail-panel__frame {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+
 .sidebar-panel {
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 0;
   background: var(--panel);
 }
 
