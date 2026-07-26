@@ -20,10 +20,7 @@ import {
 } from "./dispatch-from-config.events.js";
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import type { PrepareDispatchExecutionReadyState } from "./dispatch-from-config.prepare-execution.js";
-import {
-  isOperationalReplyPayload,
-  markOperationalReplyPolicyDelivered,
-} from "./operational-reply-policy.js";
+import { isOperationalReplyPayload } from "./operational-reply-policy.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 
 export async function executeDispatch(state: PrepareDispatchExecutionReadyState) {
@@ -90,6 +87,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     sendPolicy,
     sendPolicyDenied,
     settleDirectOperationalPolicyAfterDispatch,
+    settleRoutedOperationalPolicyAfterDispatch,
     sessionAgentId,
     sessionStableSourceReplyDeliveryMode,
     sessionTtsAuto,
@@ -341,8 +339,10 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       return;
                     }
                     if (shouldRouteToOriginating) {
-                      const delivered = await sendPayloadAsync(deliveryPayload, undefined, false);
-                      await markOperationalReplyPolicyDelivered(policyResult, delivered);
+                      await settleRoutedOperationalPolicyAfterDispatch(
+                        deliveryPayload,
+                        policyResult,
+                      );
                     } else {
                       markInboundDedupeReplayUnsafe();
                       const delivered = await settleDirectOperationalPolicyAfterDispatch(
@@ -593,13 +593,11 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       return;
                     }
                     if (shouldRouteToOriginating) {
-                      const delivered = await sendPayloadAsync(
+                      await settleRoutedOperationalPolicyAfterDispatch(
                         normalizedPayload,
-                        context?.abortSignal,
-                        false,
-                        "block",
+                        policyResult,
+                        { abortSignal: context?.abortSignal, kind: "block" },
                       );
-                      await markOperationalReplyPolicyDelivered(policyResult, delivered);
                     } else {
                       markInboundDedupeReplayUnsafe();
                       const delivered = await settleDirectOperationalPolicyAfterDispatch(

@@ -117,7 +117,13 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
       await markOperationalReplyPolicyDelivered(policyResult, false);
       return false;
     }
-    const delivered = await deliverBindingPayload(noticePayload, mode, transcriptOwner);
+    let delivered: boolean;
+    try {
+      delivered = await deliverBindingPayload(noticePayload, mode, transcriptOwner);
+    } catch (error) {
+      await markOperationalReplyPolicyDelivered(policyResult, false);
+      throw error;
+    }
     await markOperationalReplyPolicyDelivered(policyResult, delivered);
     return delivered;
   };

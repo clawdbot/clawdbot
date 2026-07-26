@@ -94,10 +94,11 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
   const settleRoutedOperationalPolicyAfterDispatch = async (
     payload: ReplyPayload,
     policyResult: Awaited<ReturnType<typeof applyDispatchOperationalReplyPolicy>>,
+    options?: { abortSignal?: AbortSignal; kind?: "block" },
   ): Promise<boolean> => {
     let delivered: boolean;
     try {
-      delivered = await sendPayloadAsync(payload, undefined, false);
+      delivered = await sendPayloadAsync(payload, options?.abortSignal, false, options?.kind);
     } catch (error) {
       await markOperationalReplyPolicyDelivered(policyResult, false);
       throw error;
@@ -548,6 +549,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
       maybeSendWorkingStatus,
       sendPlanUpdate,
       settleDirectOperationalPolicyAfterDispatch,
+      settleRoutedOperationalPolicyAfterDispatch,
       summarizeApprovalLabel,
       summarizePatchLabel,
       cleanBlockTtsDirectiveText,

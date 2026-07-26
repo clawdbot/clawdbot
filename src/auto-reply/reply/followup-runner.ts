@@ -492,6 +492,43 @@ export function createFollowupRunner(params: {
       return true;
     };
     for (const [payloadIndex, payload] of policyCandidatePayloads.entries()) {
+      if (!shouldRouteToOriginating && !opts?.onBlockReply) {
+        defaultRuntime.error?.(
+          "followup queue: completed with payloads but no origin route or visible dispatcher is available",
+        );
+        return false;
+      }
+      const providerRoute = deliveryPlan.resolveFollowupRoute({
+        payload,
+        originatingChannel,
+        originatingTo,
+        originRoutable: Boolean(shouldRouteToOriginating),
+        dispatcherAvailable: Boolean(opts?.onBlockReply),
+      });
+      if (providerRoute?.route === "drop") {
+        logVerbose(
+          `followup queue: provider hook dropped payload route reason=${providerRoute.reason ?? "unspecified"}`,
+        );
+        continue;
+      }
+      const deliveryRoute =
+        providerRoute?.route === "origin" && shouldRouteToOriginating
+          ? "origin"
+          : providerRoute?.route === "dispatcher" && opts?.onBlockReply
+            ? "dispatcher"
+            : shouldRouteToOriginating
+              ? "origin"
+              : opts?.onBlockReply
+                ? "dispatcher"
+                : undefined;
+      if (deliveryRoute === "dispatcher") {
+        await typingSignals.signalTextDelta(payload.text);
+        // The dispatcher owns operational policy for this path. Applying it
+        // here too would reserve `once` before the dispatcher can deliver it.
+        const delivered = await sendDispatcherPayload(payload);
+        deliveredAnyPayload = delivered || deliveredAnyPayload;
+        continue;
+      }
       const policyResult = await applyFollowupPayloadPolicy(payload, payloadIndex, replyKind);
       if (!policyResult.shouldDeliver) {
         continue;
@@ -504,38 +541,7 @@ export function createFollowupRunner(params: {
           : undefined;
       };
       try {
-        if (!shouldRouteToOriginating && !opts?.onBlockReply) {
-          defaultRuntime.error?.(
-            "followup queue: completed with payloads but no origin route or visible dispatcher is available",
-          );
-          return false;
-        }
-        const providerRoute = deliveryPlan.resolveFollowupRoute({
-          payload,
-          originatingChannel,
-          originatingTo,
-          originRoutable: Boolean(shouldRouteToOriginating),
-          dispatcherAvailable: Boolean(opts?.onBlockReply),
-        });
-        if (providerRoute?.route === "drop") {
-          logVerbose(
-            `followup queue: provider hook dropped payload route reason=${providerRoute.reason ?? "unspecified"}`,
-          );
-          continue;
-        }
-        const deliveryRoute =
-          providerRoute?.route === "origin" && shouldRouteToOriginating
-            ? "origin"
-            : providerRoute?.route === "dispatcher" && opts?.onBlockReply
-              ? "dispatcher"
-              : shouldRouteToOriginating
-                ? "origin"
-                : opts?.onBlockReply
-                  ? "dispatcher"
-                  : undefined;
         await typingSignals.signalTextDelta(payload.text);
-
-        // Route to originating channel if set, otherwise fall back to dispatcher.
         if (deliveryRoute === "origin" && isRoutableChannel(originatingChannel) && originatingTo) {
           const payloadMetadata = getReplyPayloadMetadata(payload);
           const hasTranscriptOwner =
@@ -568,11 +574,13 @@ export function createFollowupRunner(params: {
             });
             if (opts?.onBlockReply) {
               if (origin && origin === provider) {
-                const delivered = await sendDispatcherPayload(payload);
-                const policySettle = settleOperationalPolicy(delivered);
+                const policySettle = settleOperationalPolicy(false);
                 if (policySettle) {
                   await policySettle;
                 }
+                // The dispatcher applies and settles its own policy after the
+                // origin reservation is released.
+                const delivered = await sendDispatcherPayload(payload);
                 deliveredAnyPayload = delivered || deliveredAnyPayload;
               } else {
                 crossChannelRouteFailureNeedsNotice = true;
@@ -596,13 +604,6 @@ export function createFollowupRunner(params: {
               routedAnyCrossChannelPayloadToOrigin = true;
             }
           }
-        } else if (deliveryRoute === "dispatcher") {
-          const delivered = await sendDispatcherPayload(payload);
-          const policySettle = settleOperationalPolicy(delivered);
-          if (policySettle) {
-            await policySettle;
-          }
-          deliveredAnyPayload = delivered || deliveredAnyPayload;
         }
       } finally {
         if (!policySettled) {
