@@ -47,7 +47,6 @@ describe("buildHostingProfileConditions", () => {
         ref: "openclaw/hosting-profile/selected",
         kind: "openclaw.hosting-profile",
         id: "container",
-        generation: "1",
         parentRef: "openclaw/gateway/current",
       },
     ]);

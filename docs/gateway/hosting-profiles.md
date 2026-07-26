@@ -64,17 +64,19 @@ Gateway startup.
 
 ## Readiness identity
 
-The canonical result identifies the Gateway lifecycle, selected profile, and any observed managed
-nodes through the shared readiness subject package. A host may assign the Gateway lifecycle an
-opaque stable ID:
+The canonical result identifies the host workload, process, Gateway serving lifecycle, selected
+profile, and bounded observed nodes through the shared readiness subject package. A host may add a
+workload-level correlation value:
 
 ```bash
-OPENCLAW_INSTANCE_ID=tenant-42/scout-primary \
+OPENCLAW_INSTANCE_ID=workload-7 \
   openclaw gateway run --hosting-profile container
 ```
 
-When omitted, OpenClaw generates an ID for the Gateway serving lifecycle. It remains stable across
-readiness evaluations, config reload, and drain, and changes when the Gateway process restarts.
+OpenClaw one-way fingerprints that host value before projection. It does not replace the
+OpenClaw-generated process or Gateway IDs. The host value follows the host workload's renewal
+boundary; the process ID changes at process start, and the Gateway ID changes at each serving
+lifecycle start while remaining stable across readiness evaluation, reload, and drain.
 
 Readiness, health, and status report `profileContractVersion: 1`, the selected `profile`, its
 selection source (`argument`, `environment`, or `config`), and an

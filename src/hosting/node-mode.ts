@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveNodeCommandAllowlist } from "../gateway/node-command-policy.js";
 import type { NodeSession } from "../gateway/node-registry.js";
@@ -8,6 +9,7 @@ import type { NodeModeReadinessEvidence } from "./profiles.js";
 const DEFAULT_NODE_MODE_PAIRING_CACHE_TTL_MS = 1_000;
 const DEFAULT_NODE_MODE_TIMEOUT_MS = 1_000;
 const MAX_NODE_MODE_PAIRING_READS = 2;
+const MAX_NODE_MODE_RELATED_SUBJECTS = 16;
 
 type NodeModeReadinessParams = {
   config: OpenClawConfig;
@@ -32,11 +34,14 @@ function commandSet(value: unknown): Set<string> {
 
 function nodeReadinessSubject(nodeId: string, pairingGeneration?: string): ReadinessSubject {
   const digest = createHash("sha256").update(nodeId).digest("hex").slice(0, 24);
+  const generation = pairingGeneration
+    ? `sha256:${createHash("sha256").update(pairingGeneration).digest("hex")}`
+    : undefined;
   return {
     ref: `openclaw/node/${digest}`,
     kind: "openclaw.node",
     id: digest,
-    ...(pairingGeneration ? { generation: pairingGeneration } : {}),
+    ...(generation ? { generation } : {}),
     parentRef: CORE_READINESS_SUBJECT_REFS.nodeController,
   };
 }
@@ -68,6 +73,19 @@ async function resolveNodeModeReadinessEvidenceWith(
       ).length;
     }
     const connectedCount = connectedPairedNodes.length;
+    const connectedNodeIds = new Set(connectedPairedNodes.map((node) => node.nodeId));
+    const subjects = pairing.paired
+      .map((node) => ({
+        connected: connectedNodeIds.has(node.nodeId),
+        subject: nodeReadinessSubject(node.nodeId, node.pairingGeneration),
+      }))
+      .toSorted(
+        (left, right) =>
+          Number(left.connected) - Number(right.connected) ||
+          left.subject.ref.localeCompare(right.subject.ref),
+      )
+      .slice(0, MAX_NODE_MODE_RELATED_SUBJECTS)
+      .map((entry) => entry.subject);
     return {
       pairing: {
         pairedCount: pairing.paired.length,
@@ -84,9 +102,7 @@ async function resolveNodeModeReadinessEvidenceWith(
       controlChannel: {
         connectedCount,
       },
-      subjects: pairing.paired.map((node) =>
-        nodeReadinessSubject(node.nodeId, node.pairingGeneration),
-      ),
+      subjects,
     };
   } catch {
     const connectedCount = 0;
@@ -195,4 +211,3 @@ export function createNodeModeReadinessEvidenceResolver(
     }
   };
 }
-import { createHash } from "node:crypto";

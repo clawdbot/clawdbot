@@ -66,6 +66,8 @@ describe("resolveNodeModeReadinessEvidence", () => {
     expect(evidence.targets?.connectedCount).toBe(0);
     expect(evidence.controlChannel?.connectedCount).toBe(0);
     expect(evidence.commandApproval?.configured).toBe(false);
+    expect(evidence.subjects?.[0]?.generation).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(evidence.subjects?.[0]?.generation).not.toContain("generation-2");
   });
 
   it("applies the canonical command deny policy to paired commands", async () => {
@@ -146,6 +148,24 @@ describe("resolveNodeModeReadinessEvidence", () => {
       configured: false,
       approvedCommandCount: 0,
     });
+  });
+
+  it("bounds related node subjects without losing aggregate fleet counts", async () => {
+    const paired = Array.from({ length: 17 }, (_, index) => ({
+      nodeId: `node-${index}`,
+      commands: ["system.run"],
+    }));
+    const connectedNodes = paired.map((node) => ({ ...node }) as never);
+    listNodePairing.mockResolvedValue({ paired, pending: [] });
+
+    const evidence = await resolveNodeModeReadinessEvidence({
+      config: {},
+      connectedNodes,
+    });
+
+    expect(evidence.pairing?.pairedCount).toBe(17);
+    expect(evidence.targets?.connectedCount).toBe(17);
+    expect(evidence.subjects).toHaveLength(16);
   });
 
   it("coalesces pairing reads while reevaluating live sessions and config", async () => {
