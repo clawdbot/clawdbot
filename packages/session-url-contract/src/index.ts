@@ -67,7 +67,10 @@ function encodePathSegment(segment: string): string {
   if (segment === "..") {
     return "~dotdot";
   }
-  const encoded = encodeURIComponent(segment);
+  // encodeURIComponent leaves "." alone, so a key segment like "release.js" would
+  // reach the server looking like a static asset request and never hit the SPA.
+  // pathForWorkboardBoard escapes dots for the same reason.
+  const encoded = encodeURIComponent(segment).replaceAll(".", "%2E");
   return encoded.startsWith("~") ? `~${encoded}` : encoded;
 }
 
@@ -105,7 +108,7 @@ export function buildControlUiSessionPath(params: BuildControlUiSessionPathParam
     return null;
   }
   const namespace = `${normalizeBasePath(params.basePath)}/${params.namespace}`;
-  const encodedAgentId = encodeURIComponent(agentId);
+  const encodedAgentId = encodePathSegment(agentId);
   const rest = parsed?.rest ?? rawKey;
   const normalizedRest = rest.toLowerCase();
   const mainKey = optionalString(params.mainKey)?.toLowerCase() ?? DEFAULT_MAIN_KEY;

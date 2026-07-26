@@ -54,7 +54,10 @@ function encodePathSegment(segment: string): string {
   if (segment === "..") {
     return "~dotdot";
   }
-  const encoded = encodeURIComponent(segment);
+  // encodeURIComponent leaves "." alone, so a key segment like "release.js" would
+  // reach the server looking like a static asset request and never hit the SPA.
+  // Mirrors packages/session-url-contract; keep both encoders identical.
+  const encoded = encodeURIComponent(segment).replaceAll(".", "%2E");
   return encoded.startsWith("~") ? `~${encoded}` : encoded;
 }
 
@@ -100,7 +103,7 @@ function sessionPath(params: {
     return null;
   }
   const namespace = `${normalizeBasePath(params.basePath)}/chat`;
-  const encodedAgentId = encodeURIComponent(agentId);
+  const encodedAgentId = encodePathSegment(agentId);
   const rest = parsed?.rest ?? rawKey;
   const normalizedRest = rest.toLowerCase();
   const mainKey = optionalString(params.mainKey)?.toLowerCase() ?? DEFAULT_MAIN_KEY;

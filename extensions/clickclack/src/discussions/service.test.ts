@@ -35,6 +35,14 @@ const SESSION_URL_CONTRACT_CASES = [
     expectedPath: "/chat/research/telegram/12345",
   },
   {
+    // Dots must be percent-escaped or the server treats the URL as a static asset
+    // request and it never reaches the SPA on refresh or via an external link.
+    sessionKey: "channel:release.js",
+    agentId: "research",
+    mainKey: undefined,
+    expectedPath: "/chat/research/channel/release%2Ejs",
+  },
+  {
     sessionKey: "agent:main:control-link",
     agentId: "main",
     mainKey: undefined,
