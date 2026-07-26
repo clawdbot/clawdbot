@@ -1,7 +1,3 @@
-import {
-  controlUiSessionKeyUuid,
-  controlUiUniqueShortIdPrefix,
-} from "@openclaw/session-url-contract";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { notFound } from "@openclaw/uirouter";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -20,12 +16,14 @@ import {
 } from "../../lib/sessions/catalog-key.ts";
 import {
   buildAgentMainSessionKey,
+  parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
 
 const SESSION_REF_SEARCH_LIMIT = 20;
 const SESSION_REF_SEARCH_MAX_PAGES = 5;
+const SESSION_UUID_SUFFIX_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/iu;
 
 type SessionCandidate = {
   agentId: string;
@@ -61,10 +59,39 @@ const resolutionCache = new WeakMap<
   Map<string, Promise<SessionPrefixResolution | null>>
 >();
 
+function sessionKeyUuid(sessionKey: string): string | null {
+  const uuid = parseAgentSessionKey(sessionKey)?.rest.match(SESSION_UUID_SUFFIX_RE)?.[1];
+  return uuid ? uuid.toLowerCase().replaceAll("-", "") : null;
+}
+
+function uniqueShortIdPrefix(
+  value: string,
+  candidates: readonly string[],
+  truncated: boolean,
+): string | null {
+  const uuid = value.toLowerCase().replaceAll("-", "");
+  if (!/^[0-9a-f]{8,32}$/u.test(uuid)) {
+    return null;
+  }
+  if (truncated) {
+    return uuid;
+  }
+  const normalizedCandidates = candidates.map((candidate) =>
+    candidate.toLowerCase().replaceAll("-", ""),
+  );
+  for (let length = 8; length <= uuid.length; length += 1) {
+    const prefix = uuid.slice(0, length);
+    if (normalizedCandidates.filter((candidate) => candidate.startsWith(prefix)).length === 1) {
+      return prefix;
+    }
+  }
+  return uuid;
+}
+
 function sessionPrefixMatches(result: SessionsListResult, shortId: string): GatewaySessionRow[] {
   const prefix = shortId.toLowerCase().replaceAll("-", "");
   return result.sessions.filter((row) => {
-    const keyUuid = controlUiSessionKeyUuid(row.key);
+    const keyUuid = sessionKeyUuid(row.key);
     return keyUuid?.startsWith(prefix) === true;
   });
 }
@@ -218,12 +245,12 @@ function candidatesForResolution(
   draft: string | undefined,
 ): SessionCandidate[] {
   const resolvedRows = resolution.sessions.flatMap((row) => {
-    const uuid = controlUiSessionKeyUuid(row.key);
+    const uuid = sessionKeyUuid(row.key);
     return uuid ? [{ row, uuid }] : [];
   });
   const uuids = resolvedRows.map(({ uuid }) => uuid);
   return resolvedRows.flatMap(({ row, uuid }) => {
-    const prefix = controlUiUniqueShortIdPrefix(uuid, uuids, resolution.truncated);
+    const prefix = uniqueShortIdPrefix(uuid, uuids, resolution.truncated);
     if (!prefix) {
       return [];
     }

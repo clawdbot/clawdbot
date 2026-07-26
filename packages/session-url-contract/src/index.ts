@@ -132,39 +132,8 @@ function controlUiSessionSlug(displayName: string | undefined | null): string {
   return tokens.join("-").slice(0, SESSION_SLUG_MAX_LENGTH).replace(/-+$/gu, "");
 }
 
-export function controlUiSessionKeyUuid(sessionKey: string | undefined | null): string | null {
-  const rawKey = optionalString(sessionKey);
-  const rest = rawKey ? agentSessionKeyParts(rawKey)?.rest : undefined;
-  const uuid = rest?.match(SESSION_UUID_SUFFIX_RE)?.[1];
-  return uuid ? uuid.toLowerCase().replaceAll("-", "") : null;
-}
-
 function controlUiShortIdFromSessionRef(sessionRef: string): string | null {
   return sessionRef.match(SHORT_SESSION_REF_RE)?.[1]?.toLowerCase() ?? null;
-}
-
-export function controlUiUniqueShortIdPrefix(
-  value: string,
-  candidates: readonly string[],
-  truncated = false,
-): string | null {
-  const uuid = value.toLowerCase().replaceAll("-", "");
-  if (!/^[0-9a-f]{8,32}$/u.test(uuid)) {
-    return null;
-  }
-  if (truncated) {
-    return uuid;
-  }
-  const normalizedCandidates = candidates.map((candidate) =>
-    candidate.toLowerCase().replaceAll("-", ""),
-  );
-  for (let length = 8; length <= uuid.length; length += 1) {
-    const prefix = uuid.slice(0, length);
-    if (normalizedCandidates.filter((candidate) => candidate.startsWith(prefix)).length === 1) {
-      return prefix;
-    }
-  }
-  return uuid;
 }
 
 function buildControlUiLiteralSessionKey(
@@ -198,7 +167,8 @@ export function buildControlUiSessionPath(params: BuildControlUiSessionPathParam
   ) {
     return `${namespace}/${encodedAgentId}`;
   }
-  const uuid = parsed ? controlUiSessionKeyUuid(rawKey) : null;
+  const matchedUuid = parsed?.rest.match(SESSION_UUID_SUFFIX_RE)?.[1];
+  const uuid = matchedUuid?.toLowerCase().replaceAll("-", "") ?? null;
   if (uuid) {
     const requestedLength = params.shortIdLength ?? 8;
     let length = Math.min(uuid.length, Math.max(8, Math.floor(requestedLength)));
