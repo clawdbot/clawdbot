@@ -449,6 +449,9 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       for (const release of pendingDecisionReleases.get(key) ?? []) {
         release();
       }
+      // Synchronous bypass is the urgent control lane: /stop and /abort must
+      // overtake active delivery so they can interrupt it. Ordinary decisions
+      // stay on the serialized decision chain below.
       return enqueueResolved(item, key, synchronousBypass, undefined, generation);
     }
     const rawDecisionPromise = Promise.resolve(rawDecision);

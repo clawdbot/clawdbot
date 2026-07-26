@@ -61,7 +61,10 @@ import {
   requireAdmittedWhatsAppInboundMessage,
   requireWhatsAppInboundAdmission,
 } from "./admission.js";
-import { resolveWhatsAppInboundMaxBufferAgeMs } from "./debounce.js";
+import {
+  resolveWhatsAppInboundMaxBufferAgeMs,
+  resolveWhatsAppPrimaryInboundMedia,
+} from "./debounce.js";
 import { isRecentOutboundMessage, rememberRecentOutboundMessage } from "./dedupe.js";
 import {
   createWhatsAppDurableInboundMessageId,
@@ -626,7 +629,7 @@ export async function attachWebInboxToSocket(
                 ...last.payload,
                 body: combinedBody,
                 commandBody: combinedCommandBody,
-                media: combinedMediaItems[0],
+                media: resolveWhatsAppPrimaryInboundMedia(combinedMediaItems),
                 mediaItems: combinedMediaItems.length > 0 ? combinedMediaItems : undefined,
               },
               group: combinedGroup,

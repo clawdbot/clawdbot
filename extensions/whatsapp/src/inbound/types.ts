@@ -91,7 +91,7 @@ export type WhatsAppInboundGroupContext = {
   };
 };
 
-type WhatsAppInboundMedia = {
+export type WhatsAppInboundMedia = {
   path?: string;
   type?: string;
   fileName?: string;

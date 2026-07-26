@@ -1,7 +1,15 @@
 import { normalizeWebInboundMessage } from "./message-aliases.js";
-import type { WebInboundMessageInput } from "./types.js";
+import type { WebInboundMessageInput, WhatsAppInboundMedia } from "./types.js";
 
 export const MAX_WHATSAPP_PLUGIN_DEBOUNCE_MS = 5 * 60_000;
+
+export function resolveWhatsAppPrimaryInboundMedia(
+  mediaItems: readonly WhatsAppInboundMedia[],
+): WhatsAppInboundMedia | undefined {
+  // The singular compatibility alias must point at a transferable attachment
+  // when a batch also contains metadata-only media entries.
+  return mediaItems.find((entry) => entry.path || entry.url) ?? mediaItems[0];
+}
 
 export function hasWhatsAppInboundMedia(msg: WebInboundMessageInput): boolean {
   const normalized = normalizeWebInboundMessage(msg);

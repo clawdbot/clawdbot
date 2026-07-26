@@ -1,6 +1,7 @@
 import { isControlCommandMessage } from "openclaw/plugin-sdk/command-detection";
 import type { PluginHookInboundDebounceResult } from "openclaw/plugin-sdk/plugin-entry";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { getPrimaryIdentityId } from "../../identity.js";
 import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
 import {
@@ -81,5 +82,11 @@ export function resolveWhatsAppInboundDebounceDecision(params: {
         action: "debounce" as const,
         debounceMs: Math.min(requestedMs, MAX_WHATSAPP_PLUGIN_DEBOUNCE_MS),
       };
+    })
+    .catch(() => {
+      defaultRuntime.error(
+        "whatsapp: inbound debounce hook failed; using the channel default decision",
+      );
+      return defaultDecision;
     });
 }
