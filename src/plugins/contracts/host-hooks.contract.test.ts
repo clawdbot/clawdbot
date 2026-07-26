@@ -367,6 +367,54 @@ describe("host-hook fixture plugin contract", () => {
     });
   });
 
+  it("runs trusted policies with the owning plugin and active agent scopes", async () => {
+    const { config, registry } = createPluginRegistryFixture();
+    const observedScopes: Array<ReturnType<typeof getPluginRuntimeGatewayRequestScope>> = [];
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "usage-policy",
+        name: "Usage Policy",
+        origin: "bundled",
+      }),
+      register(api) {
+        api.registerTrustedToolPolicy({
+          id: "inspect-usage",
+          description: "Read scoped provider usage",
+          async evaluate() {
+            await Promise.resolve();
+            observedScopes.push(getPluginRuntimeGatewayRequestScope());
+          },
+        });
+      },
+    });
+    setActivePluginRegistry(registry.registry);
+
+    await withPluginRuntimePluginScope(
+      { pluginId: "ambient-plugin", agentId: "ambient-agent" },
+      async () =>
+        await runTrustedToolPolicies(
+          { toolName: "read", params: {} },
+          { toolName: "read", agentId: "work" },
+        ),
+    );
+
+    expect(observedScopes[0]).toMatchObject({
+      pluginId: "usage-policy",
+      agentId: "work",
+    });
+
+    await withPluginRuntimePluginScope(
+      { pluginId: "ambient-plugin", agentId: "ambient-agent" },
+      async () =>
+        await runTrustedToolPolicies({ toolName: "read", params: {} }, { toolName: "read" }),
+    );
+
+    expect(observedScopes[1]).toMatchObject({ pluginId: "usage-policy" });
+    expect(observedScopes[1]?.agentId).toBeUndefined();
+  });
+
   it("diagnoses malformed trusted policy registrations", () => {
     const { config, registry } = createPluginRegistryFixture();
     registerTestPlugin({

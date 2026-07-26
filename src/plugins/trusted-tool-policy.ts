@@ -16,6 +16,7 @@ import type {
   PluginTrustedToolPolicyRegistryRegistration,
 } from "./registry-types.js";
 import { getActivePluginRegistry } from "./runtime.js";
+import { withPluginRuntimePluginScope } from "./runtime/gateway-request-scope.js";
 
 type TrustedPolicyRegistration = PluginTrustedToolPolicyRegistryRegistration;
 type TrustedToolPolicyRegistry =
@@ -268,7 +269,17 @@ export async function runTrustedToolPolicies(
 
     let decision: Awaited<ReturnType<PluginTrustedToolPolicyRegistration["evaluate"]>>;
     try {
-      decision = await policy.policy.evaluate(buildEvent(), policyCtx);
+      // Policies can call agent-scoped runtime APIs. Bind the registration owner and host agent;
+      // clearing a missing agent prevents ambient scope from reading another agent's state.
+      decision = await withPluginRuntimePluginScope(
+        {
+          pluginId,
+          agentId: policyCtx.agentId ?? null,
+          pluginSource: registration.source,
+          pluginOrigin: registration.origin,
+        },
+        () => policy.policy.evaluate(buildEvent(), policyCtx),
+      );
     } catch {
       return trustedPolicyFailureResult(registration, "policy evaluation failed");
     }
