@@ -3094,6 +3094,39 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   line-height: 1.2;
 }
 
+.sidebar-identity-card__subtitle--gateway {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sidebar-identity-card__gateway-health {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.sidebar-identity-card__gateway-health[data-health="ok"] {
+  background: var(--ok);
+}
+
+.sidebar-identity-card__gateway-health[data-health="error"] {
+  background: var(--danger);
+}
+
+.sidebar-identity-card__gateway-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-identity-card__gateway-primary {
+  flex: none;
+}
+
 .sidebar-identity-card__status {
   position: absolute;
   width: 1px;

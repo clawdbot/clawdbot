@@ -7,6 +7,7 @@ import {
 } from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import { sessionHasPendingApproval } from "../app/approval-presentation.ts";
+import { isNativeWebChromeHost } from "../app/native-web-chrome.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
@@ -31,6 +32,43 @@ type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
   getRouteSessionKey(): string;
   renderPinnedSidebarSession(session: SidebarRecentSession): unknown;
 };
+
+type SidebarNativeGateway = {
+  id: string;
+  name: string;
+  isPrimary: boolean;
+  health: "ok" | "error" | "unknown";
+};
+
+type SidebarNativeGatewaysSnapshot = {
+  gateways: SidebarNativeGateway[];
+  currentId: string;
+};
+
+// Display-only: read the injected global directly; the capability module must stay
+// chat-chunk-owned to protect the QA smoke startup budget.
+function readSidebarNativeGateway(): SidebarNativeGateway | null {
+  if (!isNativeWebChromeHost()) {
+    return null;
+  }
+  const snapshot = (
+    window as Window & { __OPENCLAW_NATIVE_GATEWAYS__?: SidebarNativeGatewaysSnapshot }
+  )["__OPENCLAW_NATIVE_GATEWAYS__"];
+  if (!snapshot || !Array.isArray(snapshot.gateways) || snapshot.gateways.length < 2) {
+    return null;
+  }
+  return snapshot.gateways.find((gateway) => gateway.id === snapshot.currentId) ?? null;
+}
+
+function sidebarNativeGatewayHealthLabel(health: SidebarNativeGateway["health"]): string {
+  if (health === "ok") {
+    return t("chat.sessionHeader.gatewayPicker.connected");
+  }
+  if (health === "error") {
+    return t("chat.sessionHeader.gatewayPicker.unreachable");
+  }
+  return t("chat.sessionHeader.gatewayPicker.unknown");
+}
 
 export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
   const { activeId: cardAgentId, agent: cardAgent, agents: cardAgents } = host.activeChipAgent();
@@ -179,6 +217,15 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
     ...(selfUser ?? { id: "account", name: selfLabel }),
     watchedSessions: [],
   };
+  const gateway = host.offline ? null : readSidebarNativeGateway();
+  const identityMenuLabel = gateway
+    ? t("nav.gatewayFooterMenuLabel", {
+        account: selfLabel,
+        gateway: gateway.name,
+        health: sidebarNativeGatewayHealthLabel(gateway.health),
+        primary: gateway.isPrimary ? `, ${t("nav.gatewayPrimaryTag")}` : "",
+      })
+    : t("profilePage.identity.menuButtonLabel", { name: selfLabel });
   return html`
     <div class="sidebar-footer-bar">
       <openclaw-tooltip .content=${selfLabel}>
@@ -187,7 +234,7 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
           class="sidebar-identity-card"
           aria-haspopup="menu"
           aria-expanded=${String(host.sidebarMenus.identityMenuPosition !== null)}
-          aria-label=${t("profilePage.identity.menuButtonLabel", { name: selfLabel })}
+          aria-label=${identityMenuLabel}
           @click=${(event: MouseEvent) =>
             host.sidebarMenus.toggleIdentityMenu(event.currentTarget as HTMLElement)}
         >
@@ -198,7 +245,23 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
               ? html`<span class="sidebar-identity-card__subtitle" aria-hidden="true"
                   >${t("connection.reconnecting")}</span
                 >`
-              : nothing}
+              : gateway
+                ? html`<span
+                    class="sidebar-identity-card__subtitle sidebar-identity-card__subtitle--gateway"
+                    aria-hidden="true"
+                  >
+                    <span
+                      class="sidebar-identity-card__gateway-health"
+                      data-health=${gateway.health}
+                    ></span>
+                    <span class="sidebar-identity-card__gateway-name">${gateway.name}</span>
+                    ${gateway.isPrimary
+                      ? html`<span class="sidebar-identity-card__gateway-primary"
+                          >· ${t("nav.gatewayPrimaryTag")}</span
+                        >`
+                      : nothing}
+                  </span>`
+                : nothing}
           </span>
           <span class="sidebar-identity-card__chevron" aria-hidden="true"
             >${icons.chevronDown}</span

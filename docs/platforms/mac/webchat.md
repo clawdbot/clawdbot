@@ -49,7 +49,9 @@ configured Gateways. Choose a Gateway to replace the current dashboard in the
 same window, or Option-click it to open a separate dashboard window. **Set as
 primary…** makes the viewed token-authenticated profile the Mac app's primary
 Gateway after confirmation; this resets Talk Mode, canvas, and chat
-connections. Password-only profiles can be viewed but cannot be made primary.
+connections. While connected, the sidebar footer also shows the current Gateway
+and marks it when it is primary. Password-only profiles can be viewed but cannot
+be made primary.
 
 ## Quick Chat bar
 

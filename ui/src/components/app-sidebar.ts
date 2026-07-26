@@ -73,6 +73,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   private narration: SidebarSessionNarrationController | null = null;
   private narrationLoad: Promise<void> | null = null;
   private readonly narrationSubscriptions = this.createNarrationSubscriptions();
+  private readonly nativeGatewaysChanged = () => this.requestUpdate();
 
   @state() catalogProjectGrouping = loadStoredSidebarCatalogGrouping();
 
@@ -122,6 +123,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   }
 
   override disconnectedCallback() {
+    window.removeEventListener("openclaw:native-gateways-changed", this.nativeGatewaysChanged);
     this.narration?.disconnect();
     super.disconnectedCallback();
   }
@@ -203,6 +205,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   override connectedCallback() {
     super.connectedCallback();
+    window.addEventListener("openclaw:native-gateways-changed", this.nativeGatewaysChanged);
     // The decorative pet's large module stays out of startup and upgrades in place.
     // Its first visit is at least 15 seconds after load, so idle loading cannot miss one.
     sidebarChromeImport.schedule();
