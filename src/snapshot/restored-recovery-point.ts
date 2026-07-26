@@ -4,9 +4,9 @@ import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { stableStringify } from "../agents/stable-stringify.js";
 import { sha256File, sha256Hex } from "../infra/crypto-digest.js";
+import { requireDirectorySync, syncDirectory } from "../infra/directory-durability.js";
 import { ensureAbsoluteDirectory, FsSafeError, root } from "../infra/fs-safe.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
-import { syncDirectoryBestEffort } from "../infra/sqlite-snapshot.js";
 import { isValidAgentId, normalizeAgentId } from "../routing/session-key.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -437,7 +437,7 @@ async function writeRecord(filePath: string, value: unknown): Promise<void> {
   } finally {
     await handle.close();
   }
-  await syncDirectoryBestEffort(path.dirname(filePath));
+  requireDirectorySync(await syncDirectory(path.dirname(filePath)), "Restore journal");
 }
 
 async function readJsonIfPresent(rootPath: string, relativePath: string): Promise<unknown> {

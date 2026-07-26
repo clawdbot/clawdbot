@@ -18,6 +18,7 @@ import { resolveGatewayAuth } from "./auth.js";
 import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
 import { isLoopbackHost } from "./net.js";
 import { createNodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
+import type { RestoredAdmissionStartup } from "./restored-admission.js";
 import { resolveGatewayPluginConfig } from "./runtime-plugin-config.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import { createGatewayControlUiRootLifecycle } from "./server-control-ui-root.js";
@@ -80,6 +81,7 @@ export async function prepareGatewayKernelState(params: {
   loadWorkerPlacementStartupModule: () => Promise<
     typeof import("./server-worker-placement-startup.js")
   >;
+  restoredStartup: RestoredAdmissionStartup | null;
 }) {
   const {
     bootstrap,
@@ -93,6 +95,7 @@ export async function prepareGatewayKernelState(params: {
     resolveChannelRuntime: getChannelRuntime,
     loadWorkerEnvironmentStartupModule,
     loadWorkerPlacementStartupModule,
+    restoredStartup,
   } = params;
   const {
     pluginBootstrap,
@@ -403,6 +406,7 @@ export async function prepareGatewayKernelState(params: {
     sidecarsReady: minimalTestGateway,
     pendingReason: "startup-sidecars",
     dispatchReady: false,
+    restoredAdmissionReady: restoredStartup === null,
   };
   const lifecycle = { closePreludeStarted: false };
   let releaseStartupAccountStarts = () => {};
@@ -436,13 +440,16 @@ export async function prepareGatewayKernelState(params: {
       : {}),
   });
   channelManager.setAutostartSuppression(opts.channelAutostartSuppression ?? null);
-  const sidecarStartup = opts.sidecarStartup ?? "start";
+  const sidecarStartup = restoredStartup ? "start" : (opts.sidecarStartup ?? "start");
   const isGatewayStartupPending = () =>
-    !startupState.sidecarsReady && !lifecycle.closePreludeStarted;
+    !lifecycle.closePreludeStarted &&
+    (!startupState.restoredAdmissionReady ||
+      (!startupState.sidecarsReady && sidecarStartup === "start"));
   const startupCheckerDeps = {
     startedAt: serverStartedAt,
     getStartupPending: isGatewayStartupPending,
-    getStartupPendingReason: () => startupState.pendingReason,
+    getStartupPendingReason: () =>
+      startupState.restoredAdmissionReady ? startupState.pendingReason : "restored-admission",
     getGatewayDraining: () => lifecycle.closePreludeStarted || isGatewayDraining(),
   };
   const getStartup = createStartupChecker(startupCheckerDeps);
@@ -453,6 +460,11 @@ export async function prepareGatewayKernelState(params: {
     shouldSkipChannelReadiness: () =>
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS),
+  });
+  const getRestoredOwnerReadiness = createReadinessChecker({
+    channelManager,
+    startedAt: serverStartedAt,
+    getGatewayDraining: () => lifecycle.closePreludeStarted || isGatewayDraining(),
   });
   const watchNodeRequestHandler: {
     current?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
@@ -593,6 +605,8 @@ export async function prepareGatewayKernelState(params: {
     channelManager,
     sidecarStartup,
     isGatewayStartupPending,
+    restoredStartup,
+    getRestoredOwnerReadiness,
     pluginGatewayContext,
     watchNodeRequestHandler,
     createHttpTransportOptions,

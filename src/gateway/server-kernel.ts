@@ -5,6 +5,7 @@ import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { clearSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import type { RestoredAdmissionStartup } from "./restored-admission.js";
 import { startGatewayCoreRuntime } from "./server-core-runtime.js";
 import { prepareGatewayKernelRequestRuntime } from "./server-kernel-request-runtime.js";
 import { prepareGatewayLifecycle } from "./server-lifecycle.js";
@@ -120,7 +121,11 @@ export async function resetPreparedModelCatalogForTestCore(): Promise<void> {
 }
 
 /** Builds the Gateway kernel and internal dispatch surface without creating HTTP servers. */
-export async function createGatewayKernel(port = 18789, opts: GatewayServerOptions = {}) {
+export async function createGatewayKernel(
+  port = 18789,
+  opts: GatewayServerOptions = {},
+  restoredStartup: RestoredAdmissionStartup | null = null,
+) {
   ensureOpenClawCliOnPath();
   let lifecycleRuntime: Awaited<ReturnType<typeof prepareGatewayLifecycle>> | undefined;
   try {
@@ -144,6 +149,7 @@ export async function createGatewayKernel(port = 18789, opts: GatewayServerOptio
       resolveChannelRuntime: getChannelRuntime,
       loadWorkerEnvironmentStartupModule,
       loadWorkerPlacementStartupModule,
+      restoredStartup,
     });
     // An in-place update may replace every hashed chunk before SIGTERM arrives.
     // Resolve and retain the complete shutdown graph while the install is healthy.
