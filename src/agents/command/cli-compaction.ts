@@ -473,6 +473,15 @@ async function compactNativeHarnessCliTranscript(params: {
     const nativeHarnessId = params.sessionEntry.agentHarnessId?.trim();
     const modelSelectionLocked = params.sessionEntry.modelSelectionLocked === true;
     const authProfileId = params.sessionEntry.authProfileOverride?.trim() || undefined;
+    const compactHarnessSession = (
+      request: Parameters<typeof cliCompactionDeps.maybeCompactAgentHarnessSession>[0],
+    ) =>
+      cliCompactionDeps.maybeCompactAgentHarnessSession(
+        request,
+        normalizeOptionalAgentRuntimeId(nativeHarnessId) === "codex"
+          ? { nativeCompactionRequest: "after_context_engine" }
+          : undefined,
+      );
     await cliCompactionDeps.ensureSelectedAgentHarnessPlugin({
       provider: params.provider,
       modelId: params.model,
@@ -484,7 +493,7 @@ async function compactNativeHarnessCliTranscript(params: {
     });
     result = await compactWithSafetyTimeout(
       (abortSignal) =>
-        cliCompactionDeps.maybeCompactAgentHarnessSession({
+        compactHarnessSession({
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
           sessionFile: params.sessionFile,
