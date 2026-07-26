@@ -140,8 +140,9 @@ describe("generate-npm-package-lock", () => {
     expect(exactVersionFromOverrideSpec("^8.4.0")).toBeNull();
   });
 
-  it("pins same-line pnpm lock versions to the newest locked patch", () => {
-    expect(pnpmLockOverrideVersionForVersions(new Set(["3.972.38", "3.972.39"]))).toBe("3.972.39");
+  it("keeps every multi-version pnpm lock fork scoped to its parent", () => {
+    expect(pnpmLockOverrideVersionForVersions(new Set(["3.972.38"]))).toBe("3.972.38");
+    expect(pnpmLockOverrideVersionForVersions(new Set(["3.972.38", "3.972.39"]))).toBeNull();
     expect(pnpmLockOverrideVersionForVersions(new Set(["3.972.39", "3.973.0"]))).toBeNull();
     expect(pnpmLockOverrideVersionForVersions(new Set(["3.972.39", "4.0.0"]))).toBeNull();
   });
