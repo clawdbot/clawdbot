@@ -20,6 +20,7 @@ function createProps(overrides: Partial<MemoryViewProps> = {}): MemoryViewProps 
       { id: "memory-lancedb", label: "Memory LanceDB" },
     ],
     engineSelection: { kind: "auto", engineId: "memory-core" },
+    engineState: "enabled",
     engineBusy: false,
     engineError: null,
     onEngineChange: vi.fn(),

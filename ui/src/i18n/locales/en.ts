@@ -2126,6 +2126,10 @@ export const en: TranslationMap = {
       offHint: "Memory is switched off in config: plugins.slots.memory is set to none.",
       catalogUnavailable: "Connect to the gateway to change the memory engine.",
       changeFailed: "Could not change the memory engine",
+      disabledTitle: "This engine is disabled",
+      disabledHint:
+        "The memory slot points at this plugin, but the plugin itself is disabled, so memory is not running.",
+      enable: "Enable",
     },
     backend: {
       title: "Backend",

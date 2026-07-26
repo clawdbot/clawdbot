@@ -22,6 +22,8 @@ import {
 import {
   memoryVisibleSchemaKeys,
   resolveMemoryBackend,
+  MEMORY_BACKEND_ANCHOR_ID,
+  MEMORY_CURATED_SCHEMA_KEYS,
   MEMORY_SEARCH_TAB_SCHEMA_KEYS,
 } from "./memory.ts";
 import {
@@ -265,21 +267,23 @@ function visibleMemorySchema(
 }
 
 /**
- * The Memory page splits `memory.*` across tabs, so a bare section destination
- * drops the searcher on Overview, whose editor omits `memory.search`. Only a hit
- * the Search tab alone can show re-routes; a section-level match (key, label,
- * description) is symmetric across slices and stays on Overview.
+ * The Memory page splits `memory.*` across tabs and lifts `memory.backend` out
+ * of the editor into a curated row, so the bare section destination can land on
+ * a tab or an editor slice that omits the matched control. Only a hit one
+ * surface alone can show re-routes; a section-level match (key, label,
+ * description) is symmetric across slices and keeps the default destination.
  */
-function memoryTabSearchParam(params: {
+function memoryDestination(params: {
   key: string;
   schema: JsonSchema;
   value: unknown;
   hints: ConfigUiHints;
   query: string;
-}): string {
+  editorHash: string;
+}): { search: string; hash: string } {
   const properties = params.schema.properties;
   if (!properties) {
-    return "";
+    return { search: "", hash: params.editorHash };
   }
   const sliceMatches = (keys: readonly string[]) => {
     const sliced = Object.fromEntries(
@@ -297,10 +301,18 @@ function memoryTabSearchParam(params: {
       })
     );
   };
-  const others = Object.keys(properties).filter(
-    (child) => !MEMORY_SEARCH_TAB_SCHEMA_KEYS.includes(child),
-  );
-  return sliceMatches(MEMORY_SEARCH_TAB_SCHEMA_KEYS) && !sliceMatches(others) ? "&tab=search" : "";
+  const onlySliceMatches = (keys: readonly string[]) =>
+    sliceMatches(keys) &&
+    !sliceMatches(Object.keys(properties).filter((child) => !keys.includes(child)));
+  if (onlySliceMatches(MEMORY_SEARCH_TAB_SCHEMA_KEYS)) {
+    return { search: "&tab=search", hash: params.editorHash };
+  }
+  // memoryVisibleSchemaKeys drops `backend` when no engine renders the curated
+  // row, so a match here always has the anchor on the page to scroll to.
+  if (onlySliceMatches(MEMORY_CURATED_SCHEMA_KEYS)) {
+    return { search: "", hash: `#${MEMORY_BACKEND_ANCHOR_ID}` };
+  }
+  return { search: "", hash: params.editorHash };
 }
 
 function routeForConfigSection(key: string): RouteId {
@@ -389,21 +401,23 @@ export function findSettingsSearchBlocks(params: {
       continue;
     }
     const encodedKey = encodeURIComponent(key);
-    const tabParam =
+    const editorHash = `#config-section-${encodedKey}`;
+    const destination =
       routeId === "memory"
-        ? memoryTabSearchParam({
+        ? memoryDestination({
             key,
             schema: sectionSchema,
             value: value[key],
             hints: params.uiHints,
             query: params.query,
+            editorHash,
           })
-        : "";
+        : { search: "", hash: editorHash };
     matches.push({
       routeId,
       label: meta?.label ?? sectionSchema.title ?? key,
-      search: `?section=${encodedKey}${matchesAdvanced ? "&advanced=1" : ""}${tabParam}`,
-      hash: `#config-section-${encodedKey}`,
+      search: `?section=${encodedKey}${matchesAdvanced ? "&advanced=1" : ""}${destination.search}`,
+      hash: destination.hash,
     });
   }
   return matches;

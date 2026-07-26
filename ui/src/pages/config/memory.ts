@@ -25,18 +25,18 @@ export type MemoryEngineOption = {
 };
 
 /**
- * Enablement as the page actually knows it. `loading` and `unknown` exist so a
- * catalog that was never read cannot render as a definite "Disabled"; only a
- * successful read distinguishes the two real states.
+ * Enablement as the page actually knows it, shared by the engine row and the
+ * add-on rows. `loading` and `unknown` exist so a catalog that was never read
+ * cannot render as a definite "Disabled"; only a successful read decides.
  */
-export type MemoryAddonState = "enabled" | "disabled" | "loading" | "unknown";
+export type MemoryPluginState = "enabled" | "disabled" | "loading" | "unknown";
 
 /** Additive memory plugin: no `kind`, so it layers on top of whichever engine wins the slot. */
 export type MemoryAddonRow = {
   id: string;
   label: string;
   description: string;
-  state: MemoryAddonState;
+  state: MemoryPluginState;
 };
 
 /**
@@ -55,6 +55,12 @@ export type MemoryViewProps = {
   onTabChange: (tab: MemoryTab) => void;
   engineOptions: readonly MemoryEngineOption[];
   engineSelection: MemoryEngineSelection;
+  /**
+   * What the catalog says about the plugin the slot names. The slot and plugin
+   * enablement are independent config surfaces, so the named owner can be
+   * disabled and memory silently off; only `enabled` means it is running.
+   */
+  engineState: MemoryPluginState;
   engineBusy: boolean;
   /** Last failed engine write, so a rejected change is not just a snap-back. */
   engineError: string | null;
@@ -73,6 +79,9 @@ export type MemoryViewProps = {
 };
 
 export const MEMORY_PANEL_ID = "memory-settings-panel";
+
+/** Scroll target for `memory.backend`, which Overview curates out of the editor. */
+export const MEMORY_BACKEND_ANCHOR_ID = "memory-backend";
 
 const MEMORY_TABS: readonly MemoryTab[] = ["overview", "search", "dreaming"];
 
@@ -172,6 +181,7 @@ function renderEngineSection(props: MemoryViewProps) {
           onChange: (value) => props.onEngineChange(value || null),
         }),
       })}
+      ${renderDisabledEngineRow(props, engineId)}
       ${props.engineError === null
         ? nothing
         : renderSettingsRow({
@@ -183,6 +193,30 @@ function renderEngineSection(props: MemoryViewProps) {
   );
 }
 
+/**
+ * The segmented control shows the slot owner, which stays selected even when
+ * that plugin is disabled — so re-picking it fires no change event and there
+ * would be no way back. This row is the only path that re-enables the owner.
+ */
+function renderDisabledEngineRow(props: MemoryViewProps, engineId: string | null) {
+  if (engineId === null || props.engineState !== "disabled") {
+    return nothing;
+  }
+  return renderSettingsRow({
+    title: t("memoryPage.engine.disabledTitle"),
+    description: t("memoryPage.engine.disabledHint"),
+    control: html`
+      <button
+        class="btn btn--sm"
+        ?disabled=${props.engineBusy}
+        @click=${() => props.onEngineChange(engineId)}
+      >
+        ${t("memoryPage.engine.enable")}
+      </button>
+    `,
+  });
+}
+
 function renderBackendSection(props: MemoryViewProps) {
   // builtin/qmd is resolved by the memory runtime the slot owner registers
   // (resolveActiveMemoryBackendConfig in src/plugins/memory-runtime.ts). An
@@ -190,32 +224,36 @@ function renderBackendSection(props: MemoryViewProps) {
   if (props.backend === null) {
     return nothing;
   }
-  return renderSettingsSection(
-    { title: t("memoryPage.backend.title"), description: t("memoryPage.backend.description") },
-    renderSettingsRow({
-      title: t("memoryPage.backend.rowTitle"),
-      description:
-        props.backend === "qmd"
-          ? t("memoryPage.backend.qmdHint")
-          : t("memoryPage.backend.builtinHint"),
-      stacked: true,
-      control: renderSettingsSegmented<MemoryBackend>({
-        value: props.backend,
-        options: [
-          { value: "builtin", label: t("memoryPage.backend.builtin") },
-          { value: "qmd", label: t("memoryPage.backend.qmd") },
-        ],
-        disabled: props.backendBusy,
-        ariaLabel: t("memoryPage.backend.rowTitle"),
-        onChange: (value) => props.onBackendChange(value),
+  // Anchor target for settings search: `backend` is curated out of the schema
+  // editor, so it has no `#config-section-*` id of its own to scroll to.
+  return html`<div id=${MEMORY_BACKEND_ANCHOR_ID}>
+    ${renderSettingsSection(
+      { title: t("memoryPage.backend.title"), description: t("memoryPage.backend.description") },
+      renderSettingsRow({
+        title: t("memoryPage.backend.rowTitle"),
+        description:
+          props.backend === "qmd"
+            ? t("memoryPage.backend.qmdHint")
+            : t("memoryPage.backend.builtinHint"),
+        stacked: true,
+        control: renderSettingsSegmented<MemoryBackend>({
+          value: props.backend,
+          options: [
+            { value: "builtin", label: t("memoryPage.backend.builtin") },
+            { value: "qmd", label: t("memoryPage.backend.qmd") },
+          ],
+          disabled: props.backendBusy,
+          ariaLabel: t("memoryPage.backend.rowTitle"),
+          onChange: (value) => props.onBackendChange(value),
+        }),
       }),
-    }),
-  );
+    )}
+  </div>`;
 }
 
 // Only `enabled` is a positive claim; the other three are deliberately muted so
 // an unread catalog never looks like a decided "off".
-function renderAddonStatus(state: MemoryAddonState) {
+function renderAddonStatus(state: MemoryPluginState) {
   switch (state) {
     case "enabled":
       return renderSettingsStatus({ kind: "ok", label: t("common.enabled") });
@@ -345,6 +383,13 @@ export function narrowMemorySchema(schema: unknown, keys: readonly string[]): un
  * a match cannot land on a tab whose editor omits the field it matched.
  */
 export const MEMORY_SEARCH_TAB_SCHEMA_KEYS: readonly string[] = ["search"];
+
+/**
+ * The `memory.*` children Overview renders as curated rows instead of through
+ * the embedded editor. They have no `#config-section-*` id, so settings search
+ * routes their deep links to MEMORY_BACKEND_ANCHOR_ID.
+ */
+export const MEMORY_CURATED_SCHEMA_KEYS: readonly string[] = ["backend"];
 
 /** Which `memory.*` children the embedded editor shows for a tab. */
 export function memorySchemaKeysForTab(

@@ -21,7 +21,7 @@ import {
   resolveMemoryEngineSelection,
   selectedEngineId,
   type MemoryAddonRow,
-  type MemoryAddonState,
+  type MemoryPluginState,
   type MemoryEngineOption,
   type MemoryEngineSelection,
   type MemoryTab,
@@ -77,10 +77,10 @@ function isMemoryEngine(plugin: PluginCatalogItem): boolean {
   return plugin.installed && plugin.kind?.includes("memory") === true;
 }
 
-function addonState(
+function pluginState(
   catalog: MemoryCatalog,
   entry: PluginCatalogItem | undefined,
-): MemoryAddonState {
+): MemoryPluginState {
   switch (catalog.kind) {
     case "loading":
       return "loading";
@@ -168,6 +168,20 @@ class MemorySettingsPage extends OpenClawLightDomElement {
       .toSorted((left, right) => left.label.localeCompare(right.label));
   }
 
+  /** Catalog verdict on the plugin the slot names; `off` has no owner to report. */
+  private engineState(selection: MemoryEngineSelection): MemoryPluginState {
+    const engineId = selectedEngineId(selection);
+    if (engineId === null) {
+      return "unknown";
+    }
+    const catalog = this.catalog;
+    const entry =
+      catalog.kind === "ready"
+        ? catalog.plugins.find((plugin) => plugin.id === engineId)
+        : undefined;
+    return pluginState(catalog, entry);
+  }
+
   private addonRows(): MemoryAddonRow[] {
     const catalog = this.catalog;
     return MEMORY_ADDON_PLUGINS.map((addon) => {
@@ -179,7 +193,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
         id: addon.id,
         label: t(addon.labelKey),
         description: entry?.description ?? addon.id,
-        state: addonState(catalog, entry),
+        state: pluginState(catalog, entry),
       };
     });
   }
@@ -192,8 +206,16 @@ class MemorySettingsPage extends OpenClawLightDomElement {
    * that plugin anywhere else would silently switch memory back on.
    */
   private async changeEngine(engineId: string | null, currentSelection: MemoryEngineSelection) {
-    if (this.engineBusy || engineId === selectedEngineId(currentSelection)) {
+    if (this.engineBusy) {
       return;
+    }
+    // Re-picking the current selection is a no-op only when it is already in
+    // effect: Off always is, but a named owner the catalog reports as disabled
+    // is not, and re-picking it is the one path that turns it back on.
+    if (engineId === selectedEngineId(currentSelection)) {
+      if (engineId === null || this.engineState(currentSelection) === "enabled") {
+        return;
+      }
     }
     if (!engineId) {
       this.engineError = null;
@@ -238,6 +260,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
       },
       engineOptions: options,
       engineSelection,
+      engineState: this.engineState(engineSelection),
       engineBusy: this.engineBusy,
       engineError: this.engineError,
       onEngineChange: (nextEngineId) => void this.changeEngine(nextEngineId, engineSelection),

@@ -136,6 +136,43 @@ describe("MemorySettingsPage engine slot", () => {
     }
   });
 
+  it("offers an enable action when the slot owner is disabled", async () => {
+    const setEnabled = vi.fn(() => Promise.resolve({}));
+    const { element } = createPage({
+      configObject: {},
+      catalog: [engine("memory-core", false)],
+      setEnabled,
+    });
+    document.body.append(element);
+    try {
+      await waitForFast(() => expect(element.textContent).toContain("This engine is disabled"));
+
+      // The control already shows memory-core selected, so re-picking it fires no
+      // change event; without this button the owner could never be re-enabled.
+      const enable = [...element.querySelectorAll("button")].find(
+        (button) => button.textContent?.trim() === "Enable",
+      );
+      enable?.click();
+      await waitForFast(() => expect(setEnabled).toHaveBeenCalled());
+    } finally {
+      element.remove();
+    }
+  });
+
+  it("keeps the enable action hidden once the owner is running", async () => {
+    const { element } = createPage({
+      configObject: {},
+      catalog: [engine("memory-core", true)],
+    });
+    document.body.append(element);
+    try {
+      await waitForFast(() => expect(activeEngine(element)).toBe("memory-core"));
+      expect(element.textContent).not.toContain("This engine is disabled");
+    } finally {
+      element.remove();
+    }
+  });
+
   it("persists Off as the none slot so it survives a config refresh", async () => {
     const patchForm = vi.fn();
     const setEnabled = vi.fn(() => Promise.resolve({}));

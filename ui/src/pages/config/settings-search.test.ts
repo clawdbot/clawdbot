@@ -59,7 +59,7 @@ describe("findSettingsSearchBlocks", () => {
     ]);
   });
 
-  it("routes the memory section to its own page instead of AI & Agents", () => {
+  it("routes a curated backend match to the anchor above the editor", () => {
     const matches = findSettingsSearchBlocks({
       query: "backend",
       schema: {
@@ -77,11 +77,13 @@ describe("findSettingsSearchBlocks", () => {
       uiHints: { "memory.backend": { advanced: false } },
     });
 
+    // `backend` is curated out of the schema editor, so #config-section-memory
+    // would scroll past the control the searcher matched.
     expect(matches).toEqual([
       expect.objectContaining({
         routeId: "memory",
         search: "?section=memory",
-        hash: "#config-section-memory",
+        hash: "#memory-backend",
       }),
     ]);
   });
@@ -119,7 +121,8 @@ describe("findSettingsSearchBlocks", () => {
       expect.objectContaining({ routeId: "memory", search: "?section=memory&tab=search" }),
     ]);
 
-    // A section-level hit is not exclusive to one tab, so it stays on Overview.
+    // A section-level hit is not exclusive to one tab or to the curated rows, so
+    // it keeps the default Overview editor destination.
     const sectionWide = findSettingsSearchBlocks({
       query: "memory",
       schema: memorySchema,
@@ -127,7 +130,26 @@ describe("findSettingsSearchBlocks", () => {
       uiHints,
     }).filter((block) => block.routeId === "memory");
     expect(sectionWide).toEqual([
-      expect.objectContaining({ routeId: "memory", search: "?section=memory" }),
+      expect.objectContaining({
+        routeId: "memory",
+        search: "?section=memory",
+        hash: "#config-section-memory",
+      }),
+    ]);
+
+    // Curated-only: the anchor wins, and the search tab is not selected.
+    const backendOnly = findSettingsSearchBlocks({
+      query: "backend",
+      schema: memorySchema,
+      value: {},
+      uiHints,
+    });
+    expect(backendOnly).toEqual([
+      expect.objectContaining({
+        routeId: "memory",
+        search: "?section=memory",
+        hash: "#memory-backend",
+      }),
     ]);
   });
 
