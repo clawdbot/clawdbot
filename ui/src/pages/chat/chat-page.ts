@@ -1,5 +1,4 @@
 import { consume } from "@lit/context";
-import { expectDefined } from "@openclaw/normalization-core";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
@@ -20,7 +19,7 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/chat.css";
 import "./chat-pane.ts";
-import type { ChatRouteData } from "./route-loader.ts";
+import type { SessionChatRouteData } from "./route-loader.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import {
   resolveSplitDropZone,
@@ -38,24 +37,11 @@ import {
   resizePanes,
   setActivePane,
   setPaneSession,
+  splitRatio,
+  splitWeight,
   type ChatSplitLayout,
   type ChatSplitPane,
 } from "./split-layout.ts";
-
-function splitWeight(weights: number[], index: number, context: string): number {
-  return expectDefined(weights[index], context);
-}
-
-function splitRatio(weights: number[], index: number, context: string): number {
-  const before = splitWeight(weights, index, `${context} before divider`);
-  const after = splitWeight(weights, index + 1, `${context} after divider`);
-  return before / (before + after);
-}
-
-type SessionChatRouteData = Omit<Extract<ChatRouteData, { kind: "session" }>, "face" | "kind"> & {
-  face?: BoardFace;
-  kind?: "session";
-};
 
 const NARROW_SPLIT_QUERY = "(max-width: 1099px)";
 
@@ -81,8 +67,7 @@ export class ChatPage extends OpenClawLightDomElement {
     );
   private mediaQuery: MediaQueryList | null = null;
   private mobileNavMediaQuery: MediaQueryList | null = null;
-  // Light-DOM enter/leave events bubble from every nested child, so only clear
-  // the shared preview after the whole balanced drag has left the page.
+  // Clear the shared preview only after balanced Light-DOM drag events leave the page.
   private dragDepth = 0;
   private dragFrame = 0;
   private pendingDragOver: { pane: ChatPaneElement; x: number; y: number } | null = null;
@@ -549,7 +534,6 @@ export class ChatPage extends OpenClawLightDomElement {
     return data.draft;
   }
 
-  /** Each pane owns its in-flow header so workspace state stays pane-local. */
   private renderPaneCell(
     pane: ChatSplitPane,
     active: boolean,

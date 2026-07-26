@@ -46,6 +46,14 @@ export type ChatRouteData =
       face: BoardFace;
     };
 
+export type SessionChatRouteData = Omit<
+  Extract<ChatRouteData, { kind: "session" }>,
+  "face" | "kind"
+> & {
+  face?: BoardFace;
+  kind?: "session";
+};
+
 type SessionPrefixResolution =
   | { kind: "not-found" }
   | { kind: "unique"; session: GatewaySessionRow }
