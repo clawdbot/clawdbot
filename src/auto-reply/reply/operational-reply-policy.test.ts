@@ -18,7 +18,10 @@ import {
   isOperationalReplyPayload,
   markOperationalReplyPolicyDelivered,
 } from "./operational-reply-policy.js";
-import { clearOperationalReplyPolicyStateForTest } from "./operational-reply-policy.test-support.js";
+import {
+  clearOperationalReplyPolicyStateForTest,
+  formatOperationalReplyRedirectTextForTest,
+} from "./operational-reply-policy.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -157,6 +160,23 @@ describe("operational reply policy", () => {
         sourceEventKey: "event-1",
       }),
     ).resolves.toMatchObject({ intentionalSilence: true, shouldDeliver: false });
+  });
+
+  it("preserves media references in redirected notices", () => {
+    const text = formatOperationalReplyRedirectTextForTest({
+      payload: {
+        text: "generated evidence",
+        mediaUrl: "https://example.test/one.png",
+        mediaUrls: ["https://example.test/two.png"],
+      },
+      sourceChannel: "telegram",
+      sourceEventKey: "event-1",
+      sourceSessionKey: "agent:main:telegram:direct:user",
+    });
+
+    expect(text).toContain("generated evidence");
+    expect(text).toContain("media: https://example.test/one.png");
+    expect(text).toContain("media: https://example.test/two.png");
   });
 
   it("fails redirect before source suppression when no target is available", async () => {

@@ -48,7 +48,10 @@ function clearOperationalReplyPolicyStateForTest(): void {
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[
     Symbol.for("openclaw.operationalReplyPolicyTestApi")
-  ] = { clearOperationalReplyPolicyStateForTest };
+  ] = {
+    clearOperationalReplyPolicyStateForTest,
+    formatOperationalReplyRedirectText,
+  };
 }
 
 export function resolveOperationalReplyPolicy(cfg: OpenClawConfig): {
@@ -437,6 +440,14 @@ function formatOperationalReplyRedirectText(params: {
   const sourceChannel = normalizeOptionalString(params.sourceChannel) ?? "unknown";
   const sourceEventKey = normalizeOptionalString(params.sourceEventKey);
   const text = normalizeOptionalString(params.payload.text) ?? "[non-text operational notice]";
+  const mediaUrls = [
+    ...(normalizeOptionalString(params.payload.mediaUrl)
+      ? [normalizeOptionalString(params.payload.mediaUrl) as string]
+      : []),
+    ...(params.payload.mediaUrls ?? [])
+      .map((url) => normalizeOptionalString(url))
+      .filter((url): url is string => Boolean(url)),
+  ];
   return [
     "OpenClaw operational notice",
     `sourceSessionKey: ${sourceSessionKey}`,
@@ -445,6 +456,7 @@ function formatOperationalReplyRedirectText(params: {
     `kind: ${kind}`,
     "",
     text,
+    ...mediaUrls.map((url) => `media: ${url}`),
   ].join("\n");
 }
 
@@ -464,6 +476,8 @@ async function redirectOperationalReply(params: {
     sourceSessionKey: params.sourceSessionKey,
   });
   try {
+    // This helper persists an openclaw/delivery-mirror transcript artifact.
+    // Embedded runtimes filter that model before provider-history replay.
     const result = await appendAssistantMessageToSessionTranscript({
       sessionKey: params.redirectSessionKey,
       agentId: resolveSessionAgentId({
