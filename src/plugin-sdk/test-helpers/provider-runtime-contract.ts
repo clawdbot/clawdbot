@@ -44,12 +44,19 @@ function createManifestModelFactory(providerId: string, catalog: unknown) {
     if (!model) {
       throw new Error(`Missing ${providerId} manifest model ${modelId}`);
     }
+    const input = model.input.filter(
+      (item): item is "text" | "image" => item === "text" || item === "image",
+    );
+    if (input.length !== model.input.length) {
+      throw new Error(`Unsupported ${providerId} manifest model input for ${modelId}`);
+    }
     return createModel({
       ...model,
       id: model.id,
       provider: providerId,
       baseUrl: model.baseUrl ?? provider.baseUrl,
       api: model.api ?? provider.api,
+      input,
       ...overrides,
     });
   };
