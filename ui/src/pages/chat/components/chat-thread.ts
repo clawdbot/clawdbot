@@ -46,15 +46,17 @@ import {
   resolveUiGlobalAliasAgentId,
   type UiSessionDefaultsHost,
 } from "../../../lib/sessions/session-key.ts";
-import { resolveTurnRecap } from "../chat-progress.ts";
+import { resolveTurnRecap, type TurnRecap } from "../chat-progress.ts";
 import type { ChatRunStartupStatus } from "../chat-run-startup.ts";
 import {
+  assistantGroupCanOwnActiveRunStatus,
   buildCachedChatItems,
   coalesceStreamRuns,
   collapseCompletedTurnWork,
   deletedChatItemsSignature,
   getExpandedToolCards,
   getExpandedUserMessages,
+  messageGroupStartsTurnBoundary,
   persistedMessageEntryId,
   resetChatThreadState,
   stableBooleanMapSignature,
@@ -78,6 +80,8 @@ import {
   renderStreamGroup,
   renderWorkGroupSummary,
   type MessageReplyTarget,
+  type StreamGroupOptions,
+  type StreamGroupPart,
 } from "./chat-message.ts";
 import { renderRealtimeTalkConversation } from "./chat-realtime-controls.ts";
 import { handleChatSelectionPointerUp, removeChatSelectionPopup } from "./chat-selection-popup.ts";
@@ -1229,6 +1233,11 @@ function renderChatThreadContents(
   const showLoadingSkeleton = props.loading && chatItems.length === 0;
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
+  const activeContinuationByGroupKey = new Map<
+    string,
+    { parts: StreamGroupPart[]; options: StreamGroupOptions }
+  >();
+  const turnRecapByGroupKey = new Map<string, TurnRecap>();
   const renderGroupItem = (item: MessageGroup) => {
     if (deleted.has(item.key)) {
       return nothing;
@@ -1293,6 +1302,8 @@ function renderChatThreadContents(
             }
           : undefined,
       rewindDisabled: Boolean(props.runActive || props.runWorking),
+      activeContinuation: activeContinuationByGroupKey.get(item.key),
+      turnRecap: turnRecapByGroupKey.get(item.key),
     });
   };
   const renderItem = guardChatRenderItems(state, (item) => {
@@ -1344,7 +1355,61 @@ function renderChatThreadContents(
     runWorking: Boolean(props.runWorking),
     searchActive: state.searchOpen && Boolean(state.searchQuery.trim()),
   });
-  const transcriptRows: ChatTranscriptRow[] = collapsedItems.map((item) => ({
+  // Watch/settle on actual indicator visibility (not runWorking): queued
+  // sends show the claw before the run starts, and the recap must never
+  // stack under a visible working row.
+  const workingIndicatorVisible = chatItems.some((item) => item.kind === "reading-indicator");
+  const turnRecap = resolveTurnRecap(props.sessionKey, workingIndicatorVisible, activeSession);
+  const transcriptItems = collapsedItems.filter((item, index) => {
+    if (item.kind !== "stream-run") {
+      return true;
+    }
+    const previous = collapsedItems[index - 1];
+    const isActiveStatusRun =
+      item.parts.some((part) => part.kind === "reading-indicator") &&
+      item.parts.every((part) => part.kind === "reading-indicator" || part.kind === "plan");
+    if (
+      previous?.kind !== "group" ||
+      !isActiveStatusRun ||
+      deleted.has(previous.key) ||
+      !assistantGroupCanOwnActiveRunStatus(previous)
+    ) {
+      return true;
+    }
+    // A reply and its still-running state are one turn-level presentation.
+    // Keeping the status in the reply avoids a second claw/assistant row.
+    activeContinuationByGroupKey.set(previous.key, {
+      parts: item.parts,
+      options: {
+        planStatus: props.planStatus,
+        planActive: Boolean(props.runActive),
+        startupPhase: props.startupStatus?.phase,
+        waitingApproval: props.waitingApproval,
+        runOutputTokens: props.runOutputTokens,
+      },
+    });
+    return false;
+  });
+  let turnRecapOwnerKey: string | null = null;
+  if (turnRecap !== null) {
+    for (let index = transcriptItems.length - 1; index >= 0; index -= 1) {
+      const item = transcriptItems[index];
+      if (!item || item.kind !== "group") {
+        continue;
+      }
+      if (assistantGroupCanOwnActiveRunStatus(item)) {
+        if (!deleted.has(item.key)) {
+          turnRecapByGroupKey.set(item.key, turnRecap);
+          turnRecapOwnerKey = item.key;
+        }
+        break;
+      }
+      if (messageGroupStartsTurnBoundary(item)) {
+        break;
+      }
+    }
+  }
+  const transcriptRows: ChatTranscriptRow[] = transcriptItems.map((item) => ({
     kind: "item",
     key: item.key,
     item,
@@ -1357,12 +1422,7 @@ function renderChatThreadContents(
       content: realtimeConversation,
     });
   }
-  // Watch/settle on actual indicator visibility (not runWorking): queued
-  // sends show the claw before the run starts, and the recap must never
-  // stack under a visible working row.
-  const workingIndicatorVisible = chatItems.some((item) => item.kind === "reading-indicator");
-  const turnRecap = resolveTurnRecap(props.sessionKey, workingIndicatorVisible, activeSession);
-  if (turnRecap !== null && !isEmpty && !showLoadingSkeleton) {
+  if (turnRecap !== null && turnRecapOwnerKey === null && !isEmpty && !showLoadingSkeleton) {
     transcriptRows.push({
       kind: "content",
       key: "turn-recap",

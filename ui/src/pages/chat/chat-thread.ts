@@ -17,7 +17,12 @@ import { sanitizeStreamText } from "./chat-thread-items.ts";
 import { getOrCreateSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 
 export { isPendingSendMessage, persistedMessageEntryId } from "./chat-thread-items.ts";
-export { coalesceStreamRuns, collapseCompletedTurnWork } from "./chat-thread-grouping.ts";
+export {
+  assistantGroupCanOwnActiveRunStatus,
+  coalesceStreamRuns,
+  collapseCompletedTurnWork,
+  messageGroupStartsTurnBoundary,
+} from "./chat-thread-grouping.ts";
 
 type CachedChatItems = {
   input: BuildChatItemsProps | null;

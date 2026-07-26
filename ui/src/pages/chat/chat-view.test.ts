@@ -28,6 +28,7 @@ import {
   registerChatAttachmentPayload as registerStoredChatAttachmentPayload,
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
+import * as chatProgress from "./chat-progress.ts";
 import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
 import * as chatThread from "./chat-thread.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
@@ -2022,13 +2023,14 @@ describe("chat loading skeleton", () => {
       present: { ".chat-reading-indicator": null },
     },
     {
-      name: "keeps the working spark below a rendered response while the run continues",
+      name: "keeps continuing-run status inside the rendered response",
       props: {
         canAbort: true,
         messages: [{ role: "assistant", content: "Finished answer", timestamp: 1 }],
         stream: null,
       },
-      present: { ".chat-reading-indicator": null, ".chat-group": "Finished answer" },
+      present: { ".chat-group": "Finished answer" },
+      counts: { ".chat-group": 1, ".chat-stream-run": 0 },
     },
     {
       name: "drops the working spark once the run reaches a terminal status",
@@ -2087,6 +2089,58 @@ describe("chat loading skeleton", () => {
     for (const [selector, count] of Object.entries(counts)) {
       expect(container.querySelectorAll(selector)).toHaveLength(count);
     }
+  });
+
+  it("routes live and completed status into the existing assistant turn", () => {
+    renderChatView({
+      canAbort: true,
+      messages: [{ role: "assistant", content: "Finished answer", timestamp: 1 }],
+      stream: null,
+    });
+
+    expect(renderMessageGroupMock).toHaveBeenCalledTimes(1);
+    expect(renderMessageGroupMock.mock.calls[0]?.[1]).toMatchObject({
+      activeContinuation: {
+        parts: [{ kind: "reading-indicator", key: "reading:test", startedAt: 1 }],
+      },
+    });
+
+    renderMessageGroupMock.mockClear();
+    vi.spyOn(chatProgress, "resolveTurnRecap").mockReturnValue({
+      runtimeMs: 5_000,
+      outputTokens: 42,
+    });
+    const container = renderChatView({
+      messages: [{ role: "assistant", content: "Finished answer", timestamp: 1 }],
+    });
+
+    expect(renderMessageGroupMock).toHaveBeenCalledTimes(1);
+    expect(renderMessageGroupMock.mock.calls[0]?.[1]).toMatchObject({
+      turnRecap: { runtimeMs: 5_000, outputTokens: 42 },
+    });
+    expect(container.querySelector(".chat-turn-recap")).toBeNull();
+  });
+
+  it("keeps live status standalone when the preceding response is hidden", () => {
+    const sessionKey = "deleted-active-status";
+    renderChatView({
+      sessionKey,
+      messages: [{ role: "assistant", content: "Hidden answer", timestamp: 1 }],
+    });
+    const onDelete = renderMessageGroupMock.mock.calls[0]?.[1].onDelete;
+    expect(onDelete).toBeTypeOf("function");
+    onDelete?.();
+    renderMessageGroupMock.mockClear();
+
+    const container = renderChatView({
+      canAbort: true,
+      sessionKey,
+      messages: [{ role: "assistant", content: "Hidden answer", timestamp: 1 }],
+      stream: null,
+    });
+
+    expect(renderMessageGroupMock).not.toHaveBeenCalled();
+    expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
   });
 
   it("shows prompt-bar progress beside context usage while the current session send is awaiting acknowledgement", () => {

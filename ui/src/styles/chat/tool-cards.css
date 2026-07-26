@@ -1170,6 +1170,17 @@
   color: var(--muted);
 }
 
+.chat-working-indicator--continuation {
+  gap: 6px;
+  min-height: 0;
+  margin-top: 4px;
+}
+
+.chat-turn-recap--continuation {
+  margin-bottom: 0;
+  font-size: var(--control-ui-text-sm);
+}
+
 .chat-reading-indicator svg {
   width: 18px;
   height: 18px;
