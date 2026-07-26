@@ -228,6 +228,31 @@ class ScorecardDashboardTests(unittest.TestCase):
         self.assertNotIn("Approve Evaluation", rendered)
         self.assertNotIn("Reject Evaluation", rendered)
 
+    def test_all_models_view_remains_available_after_rejection(self):
+        dashboard.AI_APPROVAL_PATH.write_text(
+            json.dumps(
+                {
+                    "decision": "rejected",
+                    "decision_id": "decision-rejected",
+                    "pipeline_id": "pipeline-1",
+                }
+            )
+        )
+        dashboard.request.args = {"view": "all"}
+
+        rendered = dashboard.ai_scorecard()
+
+        self.assertIn("Promotion-Eligible Winners", rendered)
+        self.assertIn("Open Approval / Reject Queue", rendered)
+        self.assertNotIn("No pending scorecard reviews", rendered)
+
+    def test_navigation_separates_scorecard_and_review_queue(self):
+        rendered = dashboard.openclaw_shared_navigation()
+
+        self.assertIn("/ai-scorecard?view=all", rendered)
+        self.assertIn(">All Models Scorecard<", rendered)
+        self.assertIn(">Review Queue<", rendered)
+
     def test_queue_selects_an_older_undecided_archived_evaluation(self):
         archived = dashboard.AI_EVALUATION_PATH.parent / (
             "evaluation-lab-pipeline-0.json"

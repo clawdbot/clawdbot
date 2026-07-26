@@ -1116,7 +1116,8 @@ def openclaw_shared_navigation():
         ("/", "Overview"),
         ("/ranchbrain", "RanchBrain"),
         ("/ranchbrain/review", "Notes"),
-        ("/ai-scorecard", "AI Model Scorecard"),
+        ("/ai-scorecard?view=all", "All Models Scorecard"),
+        ("/ai-scorecard", "Review Queue"),
         ("/documentation", "Foundational Documentation"),
         ("/pdf", "PDF"),
         ("/backup-recovery", "Backup & Recovery Center"),
@@ -1647,7 +1648,7 @@ def ai_scorecard():
 </div>
 """
 
-        if decision == "rejected":
+        if decision == "rejected" and request.args.get("view") != "all":
             completed_note = str(approval.get("note") or "").strip()
             note_line = (
                 "<p><b>Decision note:</b> "
@@ -1691,8 +1692,18 @@ def ai_scorecard():
 """
             return ranchbrain_shell("AI Model Scorecard Review Queue", body)
 
+        queue_link = """
+<div class="panel" style="border:2px solid #64748b;">
+  <h2>Scorecard Navigation</h2>
+  <a href="/ai-scorecard"
+     style="display:inline-block;background:#2563eb;color:white;
+            padding:11px 16px;border-radius:7px;text-decoration:none;
+            font-weight:bold;">Open Approval / Reject Queue</a>
+</div>
+"""
         body = f"""
 {notice}
+{queue_link}
 <div class="panel">
   <h2>Current Evaluation</h2>
   <p><b>Pipeline:</b> {html_module.escape(pipeline_id or 'unavailable')}</p>

@@ -223,6 +223,10 @@ Current `app.py` is a **simplified single-page** layout vs. earlier multi-tab ve
 The deployment-local dashboard includes an operator review surface at
 `/ai-scorecard`.
 
+The shared navigation separates the read-only **All Models Scorecard** view
+from the actionable **Review Queue** so returning to the scorecard never
+depends on whether a pending decision exists.
+
 The review workflow:
 
 - discovers immutable `evaluation-lab-*.json` reports and displays the oldest
@@ -253,6 +257,7 @@ report becomes the next review item.
 
 | Route                                       | Purpose                               |
 | ------------------------------------------- | ------------------------------------- |
+| `GET /ai-scorecard?view=all`                | Main all-model scorecard and history  |
 | `GET /ai-scorecard`                         | Current pending review or empty queue |
 | `GET /ai-scorecard/evidence/<benchmark_id>` | Read-only decision evidence           |
 | `POST /ai-scorecard/approve`                | Record pipeline approval              |

@@ -450,7 +450,8 @@ The scorecard exposes read-only evidence for each recommendation and must
 distinguish executed evidence from development fixtures or missing reports.
 The dashboard discovers archived Evaluation Lab reports, orders undecided
 pipelines deterministically, and advances to the next pipeline after a
-decision. Evidence links remain bound to the selected pipeline. When no
+decision. The main all-model scorecard and the actionable review queue have
+separate navigation targets. Evidence links remain bound to the selected pipeline. When no
 undecided report remains, the dashboard preserves completed decisions and shows
 an empty review queue. It must not create synthetic review items to keep the
 queue populated.
