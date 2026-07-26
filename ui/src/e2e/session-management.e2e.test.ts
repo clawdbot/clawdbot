@@ -1387,10 +1387,20 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
           .indexOf(element),
       );
       expect(moveToGroupIndex).toBeGreaterThanOrEqual(0);
+      // Submenu ARIA is ready before Web Awesome finishes opening the dropdown.
+      // Wait for its focus contract so navigation keys cannot outrun the menu.
+      await expect
+        .poll(() =>
+          page.locator("openclaw-session-menu > wa-dropdown > wa-dropdown-item:focus").count(),
+        )
+        .toBe(1);
       await page.keyboard.press("Home");
       for (let index = 0; index < moveToGroupIndex; index += 1) {
         await page.keyboard.press("ArrowDown");
       }
+      await expect
+        .poll(() => moveToGroup.evaluate((element) => element === document.activeElement))
+        .toBe(true);
       await page.keyboard.press("ArrowRight");
       await expect.poll(() => moveToGroup.getAttribute("aria-expanded")).toBe("true");
       page.once("dialog", (dialog) => void dialog.accept("Gamma"));
