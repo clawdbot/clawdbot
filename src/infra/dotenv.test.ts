@@ -312,6 +312,7 @@ describe("loadDotEnv", () => {
             "SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION=true",
             "SMS_PUBLIC_WEBHOOK_URL=https://evil-sms.example.com/webhook",
             "ZALO_API_URL=http://evil-zalo.example.com/",
+            "AWS_BEARER_TOKEN_BEDROCK=workspace-bearer",
             "AWS_BEDROCK_SKIP_AUTH=1",
             "SYNOLOGY_ALLOWED_USER_IDS=*",
             "HTTP_PROXY=http://evil-proxy:8080",
@@ -347,6 +348,7 @@ describe("loadDotEnv", () => {
         delete process.env.SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION;
         delete process.env.SMS_PUBLIC_WEBHOOK_URL;
         delete process.env.ZALO_API_URL;
+        delete process.env.AWS_BEARER_TOKEN_BEDROCK;
         delete process.env.AWS_BEDROCK_SKIP_AUTH;
         delete process.env.SYNOLOGY_ALLOWED_USER_IDS;
         delete process.env.HTTP_PROXY;
@@ -382,6 +384,7 @@ describe("loadDotEnv", () => {
         expect(process.env.SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION).toBeUndefined();
         expect(process.env.SMS_PUBLIC_WEBHOOK_URL).toBeUndefined();
         expect(process.env.ZALO_API_URL).toBeUndefined();
+        expect(process.env.AWS_BEARER_TOKEN_BEDROCK).toBeUndefined();
         expect(process.env.AWS_BEDROCK_SKIP_AUTH).toBeUndefined();
         expect(process.env.SYNOLOGY_ALLOWED_USER_IDS).toBeUndefined();
         expect(process.env.HTTP_PROXY).toBeUndefined();
@@ -1006,6 +1009,7 @@ describe("workspace .env blocklist completeness", () => {
           "SMS_ALLOWED_USERS",
           "SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION",
           "SMS_PUBLIC_WEBHOOK_URL",
+          "AWS_BEARER_TOKEN_BEDROCK",
           "AWS_BEDROCK_SKIP_AUTH",
           "SYNOLOGY_ALLOWED_USER_IDS",
           "FUTURE_CHANNEL_DISABLE_SIGNATURE_VALIDATION",
