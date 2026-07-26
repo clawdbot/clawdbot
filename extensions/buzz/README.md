@@ -103,8 +103,8 @@ another key.
 
 One discovered room is selected automatically. With several rooms, setup asks
 which rooms to use and which one is the default outbound target. Fresh setup
-requires mentions, accepts messages from current room members, verifies the
-saved configuration, and does not post a test message.
+accepts normal messages from current room members without requiring a composer
+mention, verifies the saved configuration, and does not post a test message.
 
 For local Buzz development, `just dev` does not require separate relay
 membership by default. Buzz desktop cannot reliably assign the Bot role to an
@@ -127,9 +127,10 @@ also require community membership before room membership can be granted.
 - Generated bot keys follow OpenClaw's current plaintext config convention.
 - Existing keys can use plaintext or an existing `env`, `file`, or `exec`
   SecretRef.
-- Fresh guided setup requires mentions and accepts current members of the
-  selected rooms. Manual configuration can additionally restrict activation to
-  specific member public keys.
+- Fresh guided setup accepts normal messages from current members of the
+  selected rooms. Manual configuration can require mentions when the Buzz
+  client can address the bot, or restrict activation to specific member public
+  keys.
 - OpenClaw keeps an in-memory copy of Buzz's relay-signed room roster and
   refreshes it on membership changes; it does not query the relay for each
   message or poll from the Gateway.

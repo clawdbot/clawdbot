@@ -81,9 +81,9 @@ The setup flow walks through the following steps:
 6. OpenClaw saves the configuration and silently verifies the authenticated
    room when the Gateway is running.
 
-Fresh setup requires mentions and accepts messages from current members of the
-configured rooms. Existing explicit mention and sender-allowlist settings are
-preserved when setup is rerun.
+Fresh setup accepts normal messages from current members of the configured
+rooms without requiring a composer mention. Existing explicit mention and
+sender-allowlist settings are preserved when setup is rerun.
 
 The automatic room-access wait is bounded. If access is not granted in time,
 setup remains open and offers authenticated Retry/Back controls. Every retry
@@ -209,7 +209,7 @@ Buzz applies two independent controls:
   room ingress, or additionally restrict room members to selected Buzz public
   keys.
 
-Fresh guided setup requires a mention and allows current members of the selected
+Fresh guided setup allows normal messages from current members of the selected
 rooms. OpenClaw loads Buzz's relay-signed room roster before accepting messages,
 checks membership in memory before persistent dedupe or agent work, and refreshes
 the roster after Buzz membership-change events. There is no per-message relay
@@ -217,6 +217,8 @@ query or Gateway polling.
 
 Use `groupPolicy: "allowlist"` with `groupAllowFrom` in manual configuration
 when only specific room members should be able to activate the agent.
+Set `requireMention: true` only when the Buzz client used by those members can
+address the bot identity.
 
 These controls decide who can start an agent run; they do not limit what the
 routed agent can do after a message is accepted. Treat room messages as
@@ -237,7 +239,7 @@ Guided setup is recommended. The equivalent configuration looks like:
       groupPolicy: "open",
       groups: {
         "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c": {
-          requireMention: true,
+          requireMention: false,
         },
       },
       defaultTo: "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c",

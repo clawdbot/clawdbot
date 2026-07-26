@@ -434,7 +434,8 @@ export function createBuzzSetupWizard(
             roomId,
             {
               enabled: configuredGroups[roomId]?.enabled ?? true,
-              requireMention: configuredGroups[roomId]?.requireMention ?? true,
+              requireMention:
+                configuredGroups[roomId]?.requireMention ?? (useFreshAccessDefaults ? false : true),
             },
           ]),
         ),

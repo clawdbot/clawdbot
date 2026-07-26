@@ -90,8 +90,8 @@ describe("Buzz guided setup", () => {
       groupPolicy: "open",
       groupAllowFrom: undefined,
       groups: {
-        [ROOM_A]: { enabled: true, requireMention: true },
-        [ROOM_B]: { enabled: true, requireMention: true },
+        [ROOM_A]: { enabled: true, requireMention: false },
+        [ROOM_B]: { enabled: true, requireMention: false },
       },
       defaultTo: ROOM_B,
     });
