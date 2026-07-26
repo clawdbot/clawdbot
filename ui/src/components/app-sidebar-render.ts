@@ -60,16 +60,6 @@ function readSidebarNativeGateway(): SidebarNativeGateway | null {
   return snapshot.gateways.find((gateway) => gateway.id === snapshot.currentId) ?? null;
 }
 
-function sidebarNativeGatewayHealthLabel(health: SidebarNativeGateway["health"]): string {
-  if (health === "ok") {
-    return t("chat.sessionHeader.gatewayPicker.connected");
-  }
-  if (health === "error") {
-    return t("chat.sessionHeader.gatewayPicker.unreachable");
-  }
-  return t("chat.sessionHeader.gatewayPicker.unknown");
-}
-
 export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
   const { activeId: cardAgentId, agent: cardAgent, agents: cardAgents } = host.activeChipAgent();
   const menuUnread = cardAgents.some((entry) => {
@@ -218,11 +208,11 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
     watchedSessions: [],
   };
   const gateway = host.offline ? null : readSidebarNativeGateway();
+  // Health is visual-only here by budget decision; the header picker owns health accessibility.
   const identityMenuLabel = gateway
     ? t("nav.gatewayFooterMenuLabel", {
         account: selfLabel,
         gateway: gateway.name,
-        health: sidebarNativeGatewayHealthLabel(gateway.health),
         primary: gateway.isPrimary ? `, ${t("nav.gatewayPrimaryTag")}` : "",
       })
     : t("profilePage.identity.menuButtonLabel", { name: selfLabel });
