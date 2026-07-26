@@ -1,4 +1,5 @@
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 
 export function resolveWorkerTurnTranscriptTarget(
   turn: Pick<SessionPlacementTurnParams, "agentId" | "sessionId" | "sessionKey" | "sessionTarget">,
@@ -13,9 +14,11 @@ export function resolveWorkerTurnTranscriptTarget(
   if (turn.sessionTarget.sessionId && turn.sessionTarget.sessionId !== turn.sessionId) {
     throw new Error("Cloud worker transcript identity does not match the active turn");
   }
+  const targetKeyAgentId = parseAgentSessionKey(turn.sessionTarget.sessionKey)?.agentId;
   if (
     (turn.agentId && turn.sessionTarget.agentId !== turn.agentId) ||
-    (turn.sessionKey && turn.sessionTarget.sessionKey !== turn.sessionKey)
+    (turn.sessionKey && turn.sessionTarget.sessionKey !== turn.sessionKey) ||
+    (targetKeyAgentId && targetKeyAgentId !== turn.sessionTarget.agentId)
   ) {
     throw new Error("Cloud worker transcript identity does not match the active turn");
   }

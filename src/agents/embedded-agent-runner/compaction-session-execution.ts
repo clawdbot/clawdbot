@@ -111,6 +111,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       (await acquireOwnedSessionTranscriptWriteLock({
         sessionFile: params.sessionFile,
         sessionKey: params.sessionKey,
+        sessionTarget: params.sessionTarget,
       })) ??
       (await acquireSessionWriteLock({
         sessionFile: params.sessionFile,

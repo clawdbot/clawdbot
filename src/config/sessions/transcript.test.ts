@@ -420,6 +420,12 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       {
         sessionFile,
         sessionKey,
+        sessionTarget: {
+          agentId: "main",
+          sessionId,
+          sessionKey,
+          storePath: fixture.storePath(),
+        },
         withSessionWriteLock: async (run) => {
           events.push("lock");
           return await run();
@@ -466,6 +472,49 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
     expect(result).toBe("ok");
     expect(events).toEqual(["write"]);
+  });
+
+  it("does not reuse owned write locks for the same key in another transcript target", async () => {
+    const cases = [
+      [
+        { agentId: "main", sessionKey: "global", storePath: "/tmp/main.sqlite" },
+        { agentId: "worker", sessionKey: "global", storePath: "/tmp/worker.sqlite" },
+      ],
+      [
+        { agentId: "main", sessionKey: "global" },
+        { agentId: "worker", sessionKey: "global" },
+      ],
+    ] as const;
+
+    for (const [ownerTarget, otherTarget] of cases) {
+      const events: string[] = [];
+      const result = await withOwnedSessionTranscriptWrites(
+        {
+          sessionFile: ownerTarget.sessionKey,
+          sessionKey: ownerTarget.sessionKey,
+          sessionTarget: ownerTarget,
+          withSessionWriteLock: async (run) => {
+            events.push("lock");
+            return await run();
+          },
+        },
+        async () =>
+          await runWithOwnedSessionTranscriptWriteLock(
+            {
+              sessionFile: otherTarget.sessionKey,
+              sessionKey: otherTarget.sessionKey,
+              sessionTarget: otherTarget,
+            },
+            () => {
+              events.push("write");
+              return "ok";
+            },
+          ),
+      );
+
+      expect(result).toBe("ok");
+      expect(events).toEqual(["write"]);
+    }
   });
 
   it("keeps matching owned transcript appends locked from bound callbacks", async () => {

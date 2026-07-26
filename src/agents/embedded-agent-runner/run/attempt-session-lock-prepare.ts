@@ -18,7 +18,10 @@ type OwnedTranscriptWriteContext = Parameters<typeof withOwnedSessionTranscriptW
 type WithOwnedSessionWriteLock = <T>(operation: () => Promise<T> | T) => Promise<T>;
 
 export async function prepareEmbeddedAttemptSessionLock(input: {
-  attempt: Pick<EmbeddedRunAttemptParams, "abortSignal" | "config" | "sessionFile" | "sessionKey">;
+  attempt: Pick<
+    EmbeddedRunAttemptParams,
+    "abortSignal" | "config" | "sessionFile" | "sessionKey" | "sessionTarget"
+  >;
   externalAbortController: {
     arm: () => void;
     throwIfFiredAfterPrepCleanup: () => Promise<void>;
@@ -76,6 +79,7 @@ export async function prepareEmbeddedAttemptSessionLock(input: {
   const ownedTranscriptWriteContext: OwnedTranscriptWriteContext = {
     sessionFile: attempt.sessionFile,
     sessionKey: attempt.sessionKey,
+    sessionTarget: attempt.sessionTarget,
     canAdvanceSessionEntryCache: (snapshot) =>
       sessionLockController.canAdvanceSessionEntryCache(snapshot),
     publishSessionFileSnapshot: (snapshot) =>

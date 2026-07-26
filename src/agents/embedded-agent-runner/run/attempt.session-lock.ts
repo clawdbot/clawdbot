@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type {
   OwnedSessionTranscriptCacheSnapshot,
   OwnedSessionTranscriptWriteOptions,
+  SessionTranscriptWriteLockTarget,
 } from "../../../config/sessions/transcript-write-context.js";
 import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import type { acquireSessionWriteLock } from "../../session-write-lock.js";
@@ -318,6 +319,7 @@ export function installPromptSubmissionLockRelease(params: {
   reacquireAfterPrompt: () => Promise<void>;
   sessionFile?: string;
   sessionKey?: string;
+  sessionTarget?: SessionTranscriptWriteLockTarget;
   withSessionWriteLock?: <T>(
     run: () => Promise<T> | T,
     options?: OwnedSessionTranscriptWriteOptions<T>,
@@ -346,6 +348,7 @@ export function installPromptSubmissionLockRelease(params: {
           {
             sessionFile: params.sessionFile,
             sessionKey: params.sessionKey,
+            sessionTarget: params.sessionTarget,
             withSessionWriteLock: params.withSessionWriteLock,
             canAdvanceSessionEntryCache: params.canAdvanceSessionEntryCache,
             publishSessionFileSnapshot: params.publishSessionFileSnapshot,

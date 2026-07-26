@@ -71,6 +71,7 @@ describe("worker turn launcher", () => {
   it.each([
     ["agent", { agentId: "other", sessionKey: "agent:main:main" }],
     ["session key", { agentId: "main", sessionKey: "agent:main:other" }],
+    ["target key agent", { agentId: "main", sessionKey: "agent:other:main" }],
   ])("rejects a transcript target with a different %s", (_label, identity) => {
     expect(() =>
       resolveWorkerTurnTranscriptTarget({
