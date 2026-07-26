@@ -757,6 +757,7 @@ describe("startGatewayPostAttachRuntime", () => {
 
   it("waits for restored admission completion before publishing sidecar readiness", async () => {
     const events: string[] = [];
+    const stopSidecars: Array<() => Promise<void>> = [];
 
     await startGatewayPostAttachRuntime({
       ...createPostAttachParams(),
@@ -766,9 +767,16 @@ describe("startGatewayPostAttachRuntime", () => {
       onSidecarsReady: () => {
         events.push("sidecars-ready");
       },
+      onPostReadySidecars: (sidecars) => {
+        stopSidecars.push(...sidecars.map((sidecar) => async () => await sidecar.stop()));
+      },
+      onGatewayLifetimeSidecars: (sidecars) => {
+        stopSidecars.push(...sidecars.map((sidecar) => async () => await sidecar.stop()));
+      },
     });
 
     expect(events).toEqual(["restored-admission", "sidecars-ready"]);
+    await Promise.all(stopSidecars.map(async (stop) => await stop()));
   });
 
   it("reports internal hook load failures without copying the error into the summary", async () => {
