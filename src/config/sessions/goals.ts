@@ -133,6 +133,9 @@ function accountGoalUsage(
   const nextTokensUsed = addTokenCounts(tokensUsed, delta);
   const next: SessionGoal = {
     ...goal,
+    // Preserve the legacy projection contract where an omitted freshness flag meant a trusted
+    // baseline. A cursor likewise proves that a comparable baseline has been established.
+    ...(cursor !== undefined ? { tokenStartFresh: true } : {}),
     ...(shouldAdoptFreshBaseline ? { tokenStart: totalTokens, tokenStartFresh: true } : {}),
     ...(totalTokens !== undefined && !shouldHoldPendingBaseline
       ? { tokenCursor: totalTokens }
