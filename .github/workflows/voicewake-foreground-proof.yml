@@ -102,6 +102,19 @@ jobs:
             "$pnpm_bin" install --frozen-lockfile --ignore-scripts --store-dir "$isolated_store"
           git diff --exit-code --quiet
 
+      - name: Build candidate Gateway runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          env -i \
+            HOME="$RUNNER_TEMP/voicewake-proof-build-home" \
+            LANG="C.UTF-8" \
+            LC_ALL="C.UTF-8" \
+            PATH="$PATH" \
+            node scripts/run-node.mjs --help
+          [[ -f dist/index.js ]]
+          git diff --exit-code --quiet
+
       - name: Run isolated foreground proof
         id: proof
 

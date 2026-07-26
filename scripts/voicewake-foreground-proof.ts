@@ -245,6 +245,7 @@ function createGatewayEnv(params: {
 
 function startGateway(params: {
   configPath: string;
+  entrypoint: string;
   homeDir: string;
   port: number;
   stateDir: string;
@@ -255,9 +256,7 @@ function startGateway(params: {
   const child = spawn(
     process.execPath,
     [
-      "--import",
-      "tsx",
-      path.resolve("src/entry.ts"),
+      params.entrypoint,
       "gateway",
       "run",
       "--allow-unconfigured",
@@ -392,6 +391,8 @@ async function writeArtifact(params: {
 async function main(): Promise<void> {
   const artifactDir = path.resolve(requireEnv(PROOF_ARTIFACT_DIR_ENV));
   const candidateSha = requireEnv(PROOF_CANDIDATE_SHA_ENV);
+  const entrypoint = path.resolve("dist/index.js");
+  await fs.access(entrypoint);
   const temporaryRoot = await fs.realpath(
     await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-voicewake-proof-")),
   );
@@ -436,7 +437,7 @@ async function main(): Promise<void> {
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const port = await allocateLoopbackPort();
-      const gateway = startGateway({ configPath, homeDir, port, stateDir });
+      const gateway = startGateway({ configPath, entrypoint, homeDir, port, stateDir });
       child = gateway.child;
       const readiness = await waitForGatewayReady({
         gateway,
