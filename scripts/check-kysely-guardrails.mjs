@@ -119,6 +119,9 @@ const rawSqliteAllowPathGroups = {
     "src/tasks/task-registry.store.sqlite.ts",
     "src/tui/tui-last-session.ts",
   ],
+  "connection-local SQLite session cache freshness probe": [
+    "src/config/sessions/session-accessor.sqlite-entry.ts",
+  ],
 };
 
 const rawSqliteAllowPathReasons = new Map();

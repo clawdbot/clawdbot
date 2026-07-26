@@ -1,4 +1,28 @@
+import fs from "node:fs";
+
 // Provides small synchronous config cache helpers.
+
+type FileStatSnapshot = {
+  ctimeNs?: bigint;
+  mtimeNs?: bigint;
+  sizeBytes?: number;
+};
+
+export function getFileStatSnapshot(filePath: string): FileStatSnapshot {
+  try {
+    const stat = fs.statSync(filePath, { bigint: true });
+    return {
+      ctimeNs: stat.ctimeNs,
+      mtimeNs: stat.mtimeNs,
+      sizeBytes: Number(stat.size),
+    };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return {};
+    }
+    throw error;
+  }
+}
 
 /** Returns whether a TTL keeps cache reads and writes active. */
 export function isCacheEnabled(ttlMs: number): boolean {
