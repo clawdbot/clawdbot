@@ -4,25 +4,12 @@ import { icons } from "../../../components/icons.ts";
 import "../../../components/working-phrase.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
-import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { formatCompactTokenCount, formatDurationCompact } from "../../../lib/format.ts";
 import type { TurnRecap } from "../chat-progress.ts";
 import type { ChatRunStartupPhase } from "../chat-run-startup.ts";
+import { selectWorkingClawSurprise } from "./chat-working-indicator-surprise.ts";
 
-// One salt per page load keeps each run stable while varying the animation between visits.
-// The default stance just claws in place; the busier stances stay rare on purpose.
-const STANCE_SALT = Math.trunc(Math.random() * 0xffffffff);
-const STANCES: Array<[stance: string, weight: number]> = [
-  ["", 63],
-  ["chat-reading-indicator--southpaw", 19],
-  ["chat-reading-indicator--flurry", 5],
-  ["chat-reading-indicator--spin", 4],
-  ["chat-reading-indicator--shadowbox", 3],
-  ["chat-reading-indicator--backflip", 2],
-  ["chat-reading-indicator--zen", 2],
-  ["chat-reading-indicator--drummer", 1],
-  ["chat-reading-indicator--peekaboo", 1],
-];
+// Almost every run uses the default loop; an alternate move fires once, then yields back to it.
 const STARTUP_STATUS_LABEL_KEYS = {
   preparing_workspace: "chat.startupStatus.preparingWorkspace",
   provisioning_environment: "chat.startupStatus.provisioningEnvironment",
@@ -44,18 +31,6 @@ function renderLiveOutputTokens(outputTokens: number | null | undefined) {
       ${t("chat.outputTokens", { count: formatCompactTokenCount(outputTokens) })}
     </span>
   `;
-}
-
-function stanceClass(key: string): string {
-  const total = STANCES.reduce((sum, [, weight]) => sum + weight, 0);
-  let roll = ((((fnv1aUtf16(key) ^ STANCE_SALT) >>> 0) % 1000) / 1000) * total;
-  for (const [stance, weight] of STANCES) {
-    roll -= weight;
-    if (roll <= 0) {
-      return stance;
-    }
-  }
-  return "";
 }
 
 export function renderChatWorkingIndicator(
@@ -81,7 +56,9 @@ export function renderChatWorkingIndicator(
         ? nothing
         : html`
             <div
-              class="chat-bubble chat-reading-indicator ${stanceClass(part.key)}"
+              class="chat-bubble chat-reading-indicator ${selectWorkingClawSurprise(part.key, {
+                eligible: !waitingApproval,
+              })}"
               aria-hidden="true"
             >
               ${icons.claw}
