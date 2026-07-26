@@ -46,10 +46,18 @@ export type PluginManifestChannelConfig = {
   schema: JsonSchemaObject;
   uiHints?: Record<string, PluginConfigUiHint>;
   runtime?: ChannelConfigRuntimeSchema;
+  reload?: PluginManifestChannelReload;
   label?: string;
   description?: string;
   preferOver?: string[];
   commands?: PluginManifestChannelCommandDefaults;
+};
+
+export type PluginManifestChannelReload = {
+  configPrefixes?: string[];
+  noopPrefixes?: string[];
+  accountIndexReloadPaths?: string[];
+  accountScopedRestart?: boolean;
 };
 
 export type PluginManifestChannelCommandDefaults = {

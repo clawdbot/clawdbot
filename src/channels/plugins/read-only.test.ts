@@ -97,6 +97,7 @@ function writeExternalSetupChannelPlugin(
     manifestChannelConfig?: boolean;
     manifestChannelDescription?: string;
     manifestChannelLabel?: string;
+    manifestChannelReload?: boolean;
     setupRequiresRuntime?: boolean;
     setupChannelId?: string;
   } = {},
@@ -160,6 +161,14 @@ function writeExternalSetupChannelPlugin(
                         sensitive: true,
                       },
                     },
+                    ...(options.manifestChannelReload
+                      ? {
+                          reload: {
+                            configPrefixes: [],
+                            accountIndexReloadPaths: [`channels.${id}.channelConfigUpdatedAt`],
+                          },
+                        }
+                      : {}),
                     label: options.manifestChannelLabel ?? "External Chat Manifest",
                     description: options.manifestChannelDescription ?? "manifest config",
                     preferOver: ["legacy-external-chat"],
@@ -765,6 +774,39 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       accountId: "default",
     });
     expectRecordFields(accountFields.config, { token: "configured" });
+    expect(fs.existsSync(setupMarker)).toBe(false);
+    expect(fs.existsSync(fullMarker)).toBe(false);
+  });
+
+  it("exposes manifest reload markers on read-only channel plugins", () => {
+    const { pluginDir, fullMarker, setupMarker } = writeExternalSetupChannelPlugin({
+      pluginId: "external-chat-plugin",
+      channelId: "external-chat",
+      manifestChannelConfig: true,
+      manifestChannelReload: true,
+      setupRequiresRuntime: false,
+    });
+    const plugins = listReadOnlyChannelPluginsForConfig(
+      {
+        channels: {
+          "external-chat": { token: "configured" },
+        },
+        plugins: {
+          load: { paths: [pluginDir] },
+          allow: ["external-chat-plugin"],
+        },
+      } as never,
+      {
+        env: { ...process.env },
+        includePersistedAuthState: false,
+      },
+    );
+
+    const plugin = plugins.find((entry) => entry.id === "external-chat");
+    expect(plugin?.reload).toEqual({
+      configPrefixes: [],
+      accountIndexReloadPaths: ["channels.external-chat.channelConfigUpdatedAt"],
+    });
     expect(fs.existsSync(setupMarker)).toBe(false);
     expect(fs.existsSync(fullMarker)).toBe(false);
   });

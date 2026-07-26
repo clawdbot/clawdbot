@@ -479,6 +479,9 @@ function mergeCatalogChannelConfigs(params: {
             ...((value.runtime ?? catalogValue.runtime)
               ? { runtime: value.runtime ?? catalogValue.runtime }
               : {}),
+            ...((value.reload ?? catalogValue.reload)
+              ? { reload: value.reload ?? catalogValue.reload }
+              : {}),
             ...((value.label ?? catalogValue.label)
               ? { label: value.label ?? catalogValue.label }
               : {}),
