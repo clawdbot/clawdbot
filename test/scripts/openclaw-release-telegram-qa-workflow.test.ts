@@ -61,7 +61,9 @@ function requireRun(jobName: string, name: string): string {
 }
 
 function extractHereDocument(script: string, delimiter: string): string {
-  const match = script.match(new RegExp(`<<'${delimiter}'\\n([\\s\\S]*?)\\n${delimiter}(?:\\n|$)`, "u"));
+  const match = script.match(
+    new RegExp(`<<'${delimiter}'\\n([\\s\\S]*?)\\n${delimiter}(?:\\n|$)`, "u"),
+  );
   if (!match?.[1]) {
     throw new Error(`Expected ${delimiter} heredoc`);
   }
@@ -82,7 +84,8 @@ function runIdentityVerification(params: {
     invocation === "dispatch"
       ? trustedWorkflowRef
       : `${repository}/.github/workflows/openclaw-release-checks.yml@refs/heads/release-ci/test`;
-  const workflowRefName = invocation === "dispatch" ? "refs/heads/main" : "refs/heads/release-ci/test";
+  const workflowRefName =
+    invocation === "dispatch" ? "refs/heads/main" : "refs/heads/release-ci/test";
   const workdir = tempDirs.make("openclaw-telegram-identity-");
   const fakeBin = join(workdir, "bin");
   const githubOutput = join(workdir, "github-output");
@@ -108,37 +111,45 @@ function runIdentityVerification(params: {
   const token = ["{}", JSON.stringify(payload), "signature"]
     .map((part) => Buffer.from(part).toString("base64url"))
     .join(".");
-  writeFileSync(join(fakeBin, "curl"), "#!/usr/bin/env bash\nprintf '%s\\n' \"$FAKE_OIDC_JSON\"\n", {
-    mode: 0o755,
-  });
-  return spawnSync("bash", ["-c", requireRun("trusted_identity", "Verify dispatched-main identity")], {
-    cwd: workdir,
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      ACTIONS_ID_TOKEN_REQUEST_TOKEN: "test-token",
-      ACTIONS_ID_TOKEN_REQUEST_URL: "https://example.invalid/oidc?",
-      CALLER_WORKFLOW_REF: workflowRef,
-      CALLER_WORKFLOW_SHA: workflowSha,
-      EXPECTED_TRUSTED_WORKFLOW_SHA: params.expectedTrustedWorkflowSha,
-      FAKE_OIDC_JSON: JSON.stringify({ value: token }),
-      GITHUB_EVENT_NAME: "workflow_dispatch",
-      GITHUB_OUTPUT: githubOutput,
-      GITHUB_REF: workflowRefName,
-      GITHUB_REPOSITORY: repository,
-      GITHUB_SHA: workflowSha,
-      JOB_CONTEXT: JSON.stringify({
-        workflow_ref: trustedWorkflowRef,
-        workflow_repository: repository,
-        workflow_sha: params.expectedTrustedWorkflowSha,
-      }),
-      PATH: `${fakeBin}:${process.env.PATH}`,
-      TARGET_REF: "refs/heads/release/2026.7.1",
-      TARGET_SHA: "a".repeat(40),
-      WORKFLOW_REF: workflowRef,
-      WORKFLOW_SHA: workflowSha,
+  writeFileSync(
+    join(fakeBin, "curl"),
+    "#!/usr/bin/env bash\nprintf '%s\\n' \"$FAKE_OIDC_JSON\"\n",
+    {
+      mode: 0o755,
     },
-  });
+  );
+  return spawnSync(
+    "bash",
+    ["-c", requireRun("trusted_identity", "Verify dispatched-main identity")],
+    {
+      cwd: workdir,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        ACTIONS_ID_TOKEN_REQUEST_TOKEN: "test-token",
+        ACTIONS_ID_TOKEN_REQUEST_URL: "https://example.invalid/oidc?",
+        CALLER_WORKFLOW_REF: workflowRef,
+        CALLER_WORKFLOW_SHA: workflowSha,
+        EXPECTED_TRUSTED_WORKFLOW_SHA: params.expectedTrustedWorkflowSha,
+        FAKE_OIDC_JSON: JSON.stringify({ value: token }),
+        GITHUB_EVENT_NAME: "workflow_dispatch",
+        GITHUB_OUTPUT: githubOutput,
+        GITHUB_REF: workflowRefName,
+        GITHUB_REPOSITORY: repository,
+        GITHUB_SHA: workflowSha,
+        JOB_CONTEXT: JSON.stringify({
+          workflow_ref: trustedWorkflowRef,
+          workflow_repository: repository,
+          workflow_sha: params.expectedTrustedWorkflowSha,
+        }),
+        PATH: `${fakeBin}:${process.env.PATH}`,
+        TARGET_REF: "refs/heads/release/2026.7.1",
+        TARGET_SHA: "a".repeat(40),
+        WORKFLOW_REF: workflowRef,
+        WORKFLOW_SHA: workflowSha,
+      },
+    },
+  );
 }
 
 function runAdvisoryStatus(overrides: Record<string, string> = {}) {
@@ -261,19 +272,23 @@ exit 64
 `,
     { mode: 0o755 },
   );
-  return spawnSync("bash", ["-c", requireRun("build_candidate", "Validate candidate release provenance")], {
-    cwd: workdir,
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      FAKE_METADATA: JSON.stringify(metadata),
-      GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN: "HTTP 5[0-9][0-9]",
-      GITHUB_REPOSITORY: "openclaw/openclaw",
-      PATH: `${fakeBin}:${process.env.PATH}`,
-      TARGET_REF: "refs/heads/release/2026.7.1",
-      TARGET_SHA: candidateSha,
+  return spawnSync(
+    "bash",
+    ["-c", requireRun("build_candidate", "Validate candidate release provenance")],
+    {
+      cwd: workdir,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        FAKE_METADATA: JSON.stringify(metadata),
+        GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN: "HTTP 5[0-9][0-9]",
+        GITHUB_REPOSITORY: "openclaw/openclaw",
+        PATH: `${fakeBin}:${process.env.PATH}`,
+        TARGET_REF: "refs/heads/release/2026.7.1",
+        TARGET_SHA: candidateSha,
+      },
     },
-  });
+  );
 }
 
 describe("release Telegram QA workflow", () => {
@@ -304,7 +319,9 @@ describe("release Telegram QA workflow", () => {
       "set -euo pipefail\nnode scripts/release-telegram-qa.mjs advisory-status",
     );
     for (const [jobName, value] of Object.entries(workflow().jobs ?? {})) {
-      for (const checkout of value.steps?.filter((candidate) => candidate.uses?.startsWith("actions/checkout@")) ?? []) {
+      for (const checkout of value.steps?.filter((candidate) =>
+        candidate.uses?.startsWith("actions/checkout@"),
+      ) ?? []) {
         expect(checkout.with?.["persist-credentials"], `${jobName}:${checkout.name}`).toBe(false);
       }
     }
@@ -368,13 +385,21 @@ describe("release Telegram QA workflow", () => {
     writeFileSync(scriptPath, source);
     const records = [
       { 0: '{"subsystem":"gateway"}', 1: "ordinary info", _meta: { logLevelName: "INFO" } },
-      { 0: '{"subsystem":"agents/embedded"}', 1: "embedded run start: safe", _meta: { logLevelName: "DEBUG" } },
-      { 0: '{"subsystem":"agents/embedded"}', 1: "private trace", _meta: { logLevelName: "TRACE" } },
+      {
+        0: '{"subsystem":"agents/embedded"}',
+        1: "embedded run start: safe",
+        _meta: { logLevelName: "DEBUG" },
+      },
+      {
+        0: '{"subsystem":"agents/embedded"}',
+        1: "private trace",
+        _meta: { logLevelName: "TRACE" },
+      },
     ];
     const result = spawnSync(process.execPath, ["--import", "tsx", scriptPath, outputPath], {
       cwd: process.cwd(),
       encoding: "utf8",
-      input: `${records.map(JSON.stringify).join("\n")}\n`,
+      input: `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
     });
     expect(result.status, result.stderr).toBe(0);
     const output = readFileSync(outputPath, "utf8");
@@ -399,16 +424,23 @@ describe("release Telegram QA workflow", () => {
       utimesSync(path, index + 1, index + 1);
       return path;
     });
-    const result = spawnSync("bash", ["-c", `set -euo pipefail\n${selector}\nprintf '%s\\0' "\${gateway_logs[@]}"`], {
-      encoding: "utf8",
-      env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH}`, RUNTIME_ROOT: runtimeRoot },
-    });
+    const result = spawnSync(
+      "bash",
+      ["-c", `set -euo pipefail\n${selector}\nprintf '%s\\0' "\${gateway_logs[@]}"`],
+      {
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH}`, RUNTIME_ROOT: runtimeRoot },
+      },
+    );
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout.toString().split("\0").filter(Boolean)).toEqual(paths.slice(4).reverse());
   });
 
   it("keeps generated SUT programs syntactically valid", () => {
-    const createSut = requireRun("run_telegram", "Create isolated Telegram SUT identity and launcher");
+    const createSut = requireRun(
+      "run_telegram",
+      "Create isolated Telegram SUT identity and launcher",
+    );
     const launcher = extractHereDocument(createSut, "LAUNCHER");
     expect(spawnSync("bash", ["-n"], { encoding: "utf8", input: launcher }).status).toBe(0);
     const preload = extractHereDocument(createSut, "PRELOAD");
@@ -417,6 +449,9 @@ describe("release Telegram QA workflow", () => {
     writeFileSync(preloadPath, preload);
     const env = { ...process.env };
     delete env.OPENCLAW_QA_SUT_PREENTRY_STOP;
-    expect(spawnSync(process.execPath, ["--import", preloadPath, "-e", ""], { encoding: "utf8", env }).status).not.toBe(0);
+    expect(
+      spawnSync(process.execPath, ["--import", preloadPath, "-e", ""], { encoding: "utf8", env })
+        .status,
+    ).not.toBe(0);
   });
 });

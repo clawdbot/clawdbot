@@ -21,9 +21,12 @@ function appendOutput(lines) {
 
 function advisoryStatus() {
   const env = process.env;
-  const cancelled = [env.IDENTITY_RESULT, env.BUILD_RESULT, env.ATTESTATION_RESULT, env.RUN_RESULT].includes(
-    "cancelled",
-  );
+  const cancelled = [
+    env.IDENTITY_RESULT,
+    env.BUILD_RESULT,
+    env.ATTESTATION_RESULT,
+    env.RUN_RESULT,
+  ].includes("cancelled");
   const succeeded = [
     env.IDENTITY_STATUS,
     env.BUILD_STATUS,
