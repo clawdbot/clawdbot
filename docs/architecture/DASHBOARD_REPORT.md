@@ -146,6 +146,30 @@ Browser → Flask (0.0.0.0:5051)
 - Thresholds: Healthy &lt;80%, Warning 80–90%, Critical &gt;90%.
 - Disk usage over time chart from `trends.csv`.
 
+### Reference Document Storage
+
+- PostgreSQL is authoritative for reference-document metadata. The
+  `reference_documents` registry records the external storage root, relative
+  path, original filename, category, MIME type, title, notes, byte size,
+  SHA-256 checksum, page count, encryption state, source host, and storage
+  state.
+- PDF binaries remain on the Intel Mini external drive under
+  `/mnt/ai-storage/openclaw-documents`; the development VM does not mount that
+  production storage.
+- Remote uploads first land in
+  `/mnt/ai-storage/.openclaw-upload-staging` with a random temporary name.
+  The Intel Mini recalculates SHA-256, rejects checksum mismatches and
+  conflicting destinations, and uses an atomic rename into the final library.
+- Final filenames include a checksum prefix. An existing PostgreSQL record
+  with the same storage root and SHA-256 is treated as a duplicate and is not
+  uploaded again.
+- If PostgreSQL metadata recording fails after a newly created file is placed,
+  the route removes only that newly created file. Existing matching files are
+  never removed by compensation logic.
+- The migration helper refuses databases whose names do not end in `_dev`.
+  Production schema migration remains a separate, explicitly approved
+  deployment step.
+
 ### Manual Backup
 
 - **Backup Now** → POST `/backup`.

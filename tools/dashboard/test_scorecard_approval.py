@@ -1058,5 +1058,134 @@ Kind          : Network
         action.assert_not_called()
 
 
+class PdfUploadHardeningTests(unittest.TestCase):
+    def test_relative_path_rejects_traversal_hidden_and_wrong_type(self):
+        for path in (
+            "../secret.pdf",
+            "Assets/../secret.pdf",
+            "Assets/.hidden.pdf",
+            "Assets/manual.txt",
+            "Unknown/manual.pdf",
+        ):
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                dashboard.pdf_library_validate_relative_path(path)
+
+    def test_remote_destination_is_content_addressed(self):
+        destination = dashboard.pdf_upload_remote_destination(
+            "Assets",
+            "tractor manual.pdf",
+            "a" * 64,
+        )
+        self.assertEqual(destination, "Assets/tractor manual-aaaaaaaaaaaa.pdf")
+
+    def test_pdf_validation_returns_checksum(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "manual.pdf"
+            path.write_bytes(b"%PDF-test-content")
+            reader = types.SimpleNamespace(
+                pages=[object()],
+                is_encrypted=False,
+            )
+            with mock.patch.object(dashboard, "PdfReader", return_value=reader):
+                result = dashboard.pdf_upload_validate(path)
+
+        import hashlib
+        self.assertEqual(
+            result["sha256"],
+            hashlib.sha256(b"%PDF-test-content").hexdigest(),
+        )
+        self.assertEqual(result["page_count"], 1)
+
+    def test_interrupted_scp_cleans_staging_file(self):
+        failed = types.SimpleNamespace(
+            returncode=1,
+            stderr="copy interrupted",
+            stdout="",
+        )
+        with (
+            mock.patch.object(dashboard, "ai_storage_ssh") as ssh,
+            mock.patch.object(dashboard.subprocess, "run", return_value=failed),
+            mock.patch.object(
+                dashboard,
+                "pdf_upload_cleanup_remote_stage",
+            ) as cleanup,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "copy interrupted"):
+                dashboard.pdf_upload_copy_remote(
+                    Path("/tmp/manual.pdf"),
+                    "Assets/manual-aaaaaaaaaaaa.pdf",
+                    "a" * 64,
+                )
+
+        self.assertGreaterEqual(ssh.call_count, 1)
+        cleanup.assert_called_once()
+
+    def test_remote_finalize_uses_staging_checksum_and_atomic_replace(self):
+        completed = types.SimpleNamespace(returncode=0, stderr="", stdout="")
+        with (
+            mock.patch.object(
+                dashboard,
+                "ai_storage_ssh",
+                side_effect=["", "created"],
+            ) as ssh,
+            mock.patch.object(dashboard.subprocess, "run", return_value=completed),
+        ):
+            created = dashboard.pdf_upload_copy_remote(
+                Path("/tmp/manual.pdf"),
+                "Assets/manual-aaaaaaaaaaaa.pdf",
+                "a" * 64,
+            )
+
+        self.assertTrue(created)
+        command = ssh.call_args_list[1].args[0]
+        encoded = command.split('b64decode("', 1)[1].split('"', 1)[0]
+        import base64
+        program = base64.b64decode(encoded).decode()
+        self.assertIn("hashlib.sha256", program)
+        self.assertIn("os.replace(stage, destination)", program)
+        self.assertIn("checksum mismatch", program)
+
+    def test_duplicate_lookup_is_parameterized(self):
+        cursor = mock.Mock()
+        cursor.fetchone.return_value = ("Assets/manual.pdf", "Manual")
+        connection = mock.Mock()
+        connection.cursor.return_value = cursor
+        with mock.patch.object(dashboard, "ranchbrain_db", return_value=connection):
+            duplicate = dashboard.pdf_upload_find_duplicate("b" * 64)
+
+        self.assertEqual(duplicate["relative_path"], "Assets/manual.pdf")
+        query, parameters = cursor.execute.call_args.args
+        self.assertIn("sha256 = %s", query)
+        self.assertEqual(parameters, (str(dashboard.PDF_DOCUMENT_ROOT), "b" * 64))
+        connection.close.assert_called_once()
+
+    def test_metadata_write_rolls_back_on_database_failure(self):
+        cursor = mock.Mock()
+        cursor.execute.side_effect = RuntimeError("database unavailable")
+        connection = mock.Mock()
+        connection.cursor.return_value = cursor
+        metadata = {
+            "relative_path": "Assets/manual.pdf",
+            "original_filename": "manual.pdf",
+            "category": "Assets",
+            "title": "Manual",
+            "notes": "",
+            "size_bytes": 100,
+            "sha256": "c" * 64,
+            "page_count": 1,
+            "encrypted": False,
+            "source_host": "intelmini",
+        }
+        with (
+            mock.patch.object(dashboard, "ranchbrain_db", return_value=connection),
+            self.assertRaisesRegex(RuntimeError, "database unavailable"),
+        ):
+            dashboard.pdf_upload_record(metadata)
+
+        connection.rollback.assert_called_once()
+        connection.commit.assert_not_called()
+        connection.close.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

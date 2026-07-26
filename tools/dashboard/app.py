@@ -21,6 +21,8 @@ import re
 import json
 import time
 import base64
+import hashlib
+import uuid
 import psycopg2
 import html as html_module
 
@@ -3133,6 +3135,7 @@ def ai_storage_read_text(root_path, relative_path, timeout=30):
 PDF_DOCUMENT_ROOT = Path("/mnt/ai-storage/openclaw-documents")
 PDF_METADATA_ROOT = PDF_DOCUMENT_ROOT / ".metadata"
 PDF_UPLOAD_LOG = PDF_METADATA_ROOT / "uploads.jsonl"
+PDF_REMOTE_STAGING_ROOT = Path("/mnt/ai-storage/.openclaw-upload-staging")
 
 PDF_UPLOAD_CATEGORIES = (
     "Assets",
@@ -3185,7 +3188,7 @@ def pdf_upload_safe_destination(category, original_name):
     return destination
 
 
-def pdf_upload_remote_destination(category, original_name):
+def pdf_upload_remote_destination(category, original_name, sha256):
     if category not in PDF_UPLOAD_CATEGORIES:
         raise ValueError("Invalid document category.")
 
@@ -3196,41 +3199,9 @@ def pdf_upload_remote_destination(category, original_name):
     if Path(safe_name).suffix.lower() != ".pdf":
         raise ValueError("Only PDF files may be uploaded.")
 
-    categories_json = json.dumps(list(PDF_UPLOAD_CATEGORIES))
-    encoded_category = base64.b64encode(category.encode("utf-8")).decode("ascii")
-    encoded_name = base64.b64encode(safe_name.encode("utf-8")).decode("ascii")
-    remote_program = (
-        "import base64, json, os\n"
-        "from datetime import datetime\n"
-        "from pathlib import Path\n"
-        "root = Path('/mnt/ai-storage/openclaw-documents')\n"
-        f"categories = {categories_json}\n"
-        f"category = base64.b64decode('{encoded_category}').decode('utf-8')\n"
-        f"safe_name = base64.b64decode('{encoded_name}').decode('utf-8')\n"
-        "if category not in categories:\n"
-        "    raise SystemExit('invalid category')\n"
-        "directory = root / category\n"
-        "directory.mkdir(parents=True, exist_ok=True)\n"
-        "destination = directory / safe_name\n"
-        "if destination.exists():\n"
-        "    stem = destination.stem\n"
-        "    suffix = destination.suffix\n"
-        "    timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')\n"
-        "    destination = directory / f'{stem}-{timestamp}{suffix}'\n"
-        "    counter = 1\n"
-        "    while destination.exists():\n"
-        "        destination = directory / f'{stem}-{timestamp}-{counter}{suffix}'\n"
-        "        counter += 1\n"
-        "print(str(destination.relative_to(root)).replace('\\\\', '/'))\n"
-    )
-    encoded_program = base64.b64encode(remote_program.encode("utf-8")).decode("ascii")
-    remote_command = (
-        "python3 -c 'import base64;"
-        f'exec(base64.b64decode("{encoded_program}"))'
-        "'"
-    )
-    relative_path = str(ai_storage_ssh(remote_command, timeout=20)).strip()
-    return pdf_library_validate_relative_path(relative_path)
+    digest_suffix = str(sha256)[:12]
+    stored_name = f"{Path(safe_name).stem}-{digest_suffix}.pdf"
+    return pdf_library_validate_relative_path(f"{category}/{stored_name}")
 
 
 def pdf_upload_validate(path):
@@ -3266,44 +3237,91 @@ def pdf_upload_validate(path):
         "size_bytes": size,
         "page_count": page_count,
         "encrypted": bool(reader.is_encrypted),
+        "sha256": pdf_upload_sha256(path),
     }
 
 
+def pdf_upload_sha256(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def pdf_upload_find_duplicate(sha256):
+    conn = ranchbrain_db()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT relative_path, title
+            FROM reference_documents
+            WHERE storage_root = %s
+              AND sha256 = %s
+              AND storage_state = 'available'
+            LIMIT 1
+            """,
+            (str(PDF_DOCUMENT_ROOT), sha256),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        return {"relative_path": row[0], "title": row[1]}
+    finally:
+        cur.close()
+        conn.close()
+
+
 def pdf_upload_record(metadata):
-    PDF_METADATA_ROOT.mkdir(parents=True, exist_ok=True)
+    conn = ranchbrain_db()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            INSERT INTO reference_documents (
+                storage_root, relative_path, original_filename, category,
+                document_type, mime_type, title, notes, size_bytes, sha256,
+                page_count, encrypted, source_host, storage_state
+            ) VALUES (
+                %s, %s, %s, %s, 'pdf', 'application/pdf', %s, %s,
+                %s, %s, %s, %s, %s, 'available'
+            )
+            """,
+            (
+                str(PDF_DOCUMENT_ROOT),
+                metadata["relative_path"],
+                metadata["original_filename"],
+                metadata["category"],
+                metadata["title"],
+                metadata["notes"],
+                metadata["size_bytes"],
+                metadata["sha256"],
+                metadata["page_count"],
+                metadata["encrypted"],
+                metadata["source_host"],
+            ),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
 
-    with PDF_UPLOAD_LOG.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(metadata, ensure_ascii=False) + "\n")
 
-
-def pdf_upload_record_remote(metadata):
-    encoded = base64.b64encode(
-        json.dumps(metadata, ensure_ascii=False).encode("utf-8")
-    ).decode("ascii")
-    remote_program = (
-        "import base64, os\n"
-        "from pathlib import Path\n"
-        "root = Path('/mnt/ai-storage/openclaw-documents')\n"
-        "meta = root / '.metadata'\n"
-        "meta.mkdir(parents=True, exist_ok=True)\n"
-        f"line = base64.b64decode('{encoded}').decode('utf-8') + '\\n'\n"
-        "with (meta / 'uploads.jsonl').open('a', encoding='utf-8') as handle:\n"
-        "    handle.write(line)\n"
-    )
-    encoded_program = base64.b64encode(remote_program.encode("utf-8")).decode("ascii")
-    remote_command = (
-        "python3 -c 'import base64;"
-        f'exec(base64.b64decode("{encoded_program}"))'
-        "'"
-    )
-    ai_storage_ssh(remote_command, timeout=20)
-
-
-def pdf_upload_copy_remote(local_path, relative_path):
+def pdf_upload_copy_remote(local_path, relative_path, expected_sha256):
     relative = pdf_library_validate_relative_path(relative_path)
+    upload_token = uuid.uuid4().hex
+    staging_path = PDF_REMOTE_STAGING_ROOT / f"{upload_token}.part"
+    ai_storage_ssh(
+        "mkdir -p -- /mnt/ai-storage/.openclaw-upload-staging",
+        timeout=20,
+    )
     remote_target = (
         f"{INTELMINI_STORAGE_USER}@{INTELMINI_STORAGE_HOST}:"
-        f"{PDF_DOCUMENT_ROOT / relative}"
+        f"{staging_path}"
     )
     result = subprocess.run(
         [
@@ -3327,10 +3345,75 @@ def pdf_upload_copy_remote(local_path, relative_path):
         check=False,
     )
     if result.returncode != 0:
+        pdf_upload_cleanup_remote_stage(staging_path)
         detail = (result.stderr or result.stdout or "").strip().splitlines()
         raise RuntimeError(
             detail[-1] if detail else "Remote PDF copy to Intel Mini failed."
         )
+    encoded_stage = base64.b64encode(str(staging_path).encode()).decode("ascii")
+    encoded_relative = base64.b64encode(relative.encode()).decode("ascii")
+    remote_program = (
+        "import base64, hashlib, os\n"
+        "from pathlib import Path\n"
+        f"stage = Path(base64.b64decode('{encoded_stage}').decode())\n"
+        "root = Path('/mnt/ai-storage/openclaw-documents')\n"
+        f"relative = base64.b64decode('{encoded_relative}').decode()\n"
+        "destination = root / relative\n"
+        "digest = hashlib.sha256()\n"
+        "with stage.open('rb') as handle:\n"
+        "    for chunk in iter(lambda: handle.read(1024 * 1024), b''):\n"
+        "        digest.update(chunk)\n"
+        f"if digest.hexdigest() != '{expected_sha256}':\n"
+        "    stage.unlink(missing_ok=True)\n"
+        "    raise SystemExit('uploaded PDF checksum mismatch')\n"
+        "destination.parent.mkdir(parents=True, exist_ok=True)\n"
+        "if destination.exists():\n"
+        "    existing = hashlib.sha256(destination.read_bytes()).hexdigest()\n"
+        "    stage.unlink(missing_ok=True)\n"
+        f"    if existing != '{expected_sha256}':\n"
+        "        raise SystemExit('destination collision with different content')\n"
+        "    print('existing')\n"
+        "else:\n"
+        "    os.replace(stage, destination)\n"
+        "    print('created')\n"
+    )
+    encoded_program = base64.b64encode(remote_program.encode()).decode("ascii")
+    try:
+        finalization = ai_storage_ssh(
+            "python3 -c 'import base64;"
+            f'exec(base64.b64decode("{encoded_program}"))'
+            "'",
+            timeout=60,
+        )
+    except Exception:
+        pdf_upload_cleanup_remote_stage(staging_path)
+        raise
+    return str(finalization).strip() == "created"
+
+
+def pdf_upload_cleanup_remote_stage(staging_path):
+    encoded = base64.b64encode(str(staging_path).encode()).decode("ascii")
+    try:
+        ai_storage_ssh(
+            "python3 -c 'import base64,pathlib;"
+            f"p=pathlib.Path(base64.b64decode(\"{encoded}\").decode());"
+            "p.unlink(missing_ok=True)'",
+            timeout=15,
+        )
+    except Exception:
+        pass
+
+
+def pdf_upload_remove_remote(relative_path):
+    relative = pdf_library_validate_relative_path(relative_path)
+    encoded = base64.b64encode(relative.encode()).decode("ascii")
+    ai_storage_ssh(
+        "python3 -c 'import base64,pathlib;"
+        "root=pathlib.Path(\"/mnt/ai-storage/openclaw-documents\");"
+        f"p=base64.b64decode(\"{encoded}\").decode();"
+        "(root/p).unlink(missing_ok=True)'",
+        timeout=15,
+    )
 
 
 def pdf_library_validate_relative_path(relative_path):
@@ -3414,11 +3497,24 @@ def documentation_upload_pdf():
                 )
                 upload.save(temporary_path)
                 validation = pdf_upload_validate(temporary_path)
+                duplicate = pdf_upload_find_duplicate(validation["sha256"])
+                if duplicate:
+                    temporary_path.unlink(missing_ok=True)
+                    temporary_path = None
+                    raise ValueError(
+                        "This PDF is already stored as "
+                        f"{duplicate['relative_path']}."
+                    )
                 relative_path = pdf_upload_remote_destination(
                     category,
                     upload.filename,
+                    validation["sha256"],
                 )
-                pdf_upload_copy_remote(temporary_path, relative_path)
+                remote_file_created = pdf_upload_copy_remote(
+                    temporary_path,
+                    relative_path,
+                    validation["sha256"],
+                )
                 metadata = {
                     "uploaded_at": datetime.now().astimezone().isoformat(),
                     "original_filename": str(upload.filename),
@@ -3430,24 +3526,17 @@ def documentation_upload_pdf():
                     "size_bytes": validation["size_bytes"],
                     "page_count": validation["page_count"],
                     "encrypted": validation["encrypted"],
+                    "sha256": validation["sha256"],
+                    "source_host": INTELMINI_STORAGE_HOST,
                 }
                 try:
-                    pdf_upload_record_remote(metadata)
+                    pdf_upload_record(metadata)
                 except Exception:
-                    # Best-effort cleanup of remote file if metadata write fails.
-                    try:
-                        encoded = base64.b64encode(
-                            relative_path.encode("utf-8")
-                        ).decode("ascii")
-                        ai_storage_ssh(
-                            "python3 -c 'import base64,os;"
-                            f"p=base64.b64decode(\"{encoded}\").decode();"
-                            "os.unlink(os.path.join("
-                            "\"/mnt/ai-storage/openclaw-documents\",p))'",
-                            timeout=15,
-                        )
-                    except Exception:
-                        pass
+                    if remote_file_created:
+                        try:
+                            pdf_upload_remove_remote(relative_path)
+                        except Exception:
+                            pass
                     raise
                 temporary_path.unlink(missing_ok=True)
                 temporary_path = None
@@ -3463,6 +3552,14 @@ def documentation_upload_pdf():
 
                 upload.save(temporary_path)
                 validation = pdf_upload_validate(temporary_path)
+                duplicate = pdf_upload_find_duplicate(validation["sha256"])
+                if duplicate:
+                    temporary_path.unlink(missing_ok=True)
+                    temporary_path = None
+                    raise ValueError(
+                        "This PDF is already stored as "
+                        f"{duplicate['relative_path']}."
+                    )
 
                 temporary_path.replace(final_path)
                 temporary_path = None
@@ -3480,6 +3577,8 @@ def documentation_upload_pdf():
                     "size_bytes": validation["size_bytes"],
                     "page_count": validation["page_count"],
                     "encrypted": validation["encrypted"],
+                    "sha256": validation["sha256"],
+                    "source_host": os.uname().nodename,
                 }
 
                 try:

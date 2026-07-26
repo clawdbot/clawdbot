@@ -58,6 +58,16 @@ history, error handling, rollback protection, and data integrity. Important
 actions must be reviewable, and potentially consequential changes must remain
 under operator control.
 
+Structured application data, asset records, workflow state, approvals, audit
+history, and reference-document metadata must use PostgreSQL as the
+authoritative store. Large source artifacts—including PDFs, notes, photographs,
+manuals, invoices, and related reference files—must be stored on the external
+4 TB drive attached to the Intel Mini. PostgreSQL records must retain each
+artifact's storage path, content checksum, source identity, and evidence
+metadata. Uploads must use validation, duplicate detection, temporary staging,
+checksum verification, and atomic final placement so an interrupted operation
+cannot present a partial file as complete.
+
 The overall objective is a trustworthy, easy-to-use platform that turns voice
 input, quick selections, asset records, manuals, and maintenance history into
 accurate and actionable property-management information.
