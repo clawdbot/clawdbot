@@ -1008,8 +1008,6 @@ describe("workspace .env blocklist completeness", () => {
           "SMS_PUBLIC_WEBHOOK_URL",
           "AWS_BEDROCK_SKIP_AUTH",
           "SYNOLOGY_ALLOWED_USER_IDS",
-          "FUTURE_CHANNEL_ALLOWED_USERS",
-          "FUTURE_CHANNEL_ALLOWED_USER_IDS",
           "FUTURE_CHANNEL_DISABLE_SIGNATURE_VALIDATION",
           "FUTURE_PLUGIN_DANGEROUSLY_ALLOW_UNTRUSTED",
           "FUTURE_PROVIDER_SKIP_AUTH",
@@ -1075,6 +1073,7 @@ describe("workspace .env blocklist completeness", () => {
             "MY_APP_KEY=user-value",
             "APP_GITHUB_REPO=openclaw/openclaw",
             "APP_URL=https://project.example.com",
+            "APP_ALLOWED_USERS=alice,bob",
             "DATABASE_URL_CUSTOM=pg://localhost",
             "MY_SKIP_AUTHORS=notes",
             "VITE_DISABLE_AUTHENTICATION=false",
@@ -1084,6 +1083,7 @@ describe("workspace .env blocklist completeness", () => {
         delete process.env.MY_APP_KEY;
         delete process.env.APP_GITHUB_REPO;
         delete process.env.APP_URL;
+        delete process.env.APP_ALLOWED_USERS;
         delete process.env.DATABASE_URL_CUSTOM;
         delete process.env.MY_SKIP_AUTHORS;
         delete process.env.VITE_DISABLE_AUTHENTICATION;
@@ -1093,6 +1093,7 @@ describe("workspace .env blocklist completeness", () => {
         expect(process.env.MY_APP_KEY).toBe("user-value");
         expect(process.env.APP_GITHUB_REPO).toBe("openclaw/openclaw");
         expect(process.env.APP_URL).toBe("https://project.example.com");
+        expect(process.env.APP_ALLOWED_USERS).toBe("alice,bob");
         expect(process.env.DATABASE_URL_CUSTOM).toBe("pg://localhost");
         expect(process.env.MY_SKIP_AUTHORS).toBe("notes");
         expect(process.env.VITE_DISABLE_AUTHENTICATION).toBe("false");

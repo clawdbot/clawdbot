@@ -196,7 +196,6 @@ const BLOCKED_WORKSPACE_DOTENV_TOKEN_SEQUENCES = [
   ["DISABLE", "TLS"],
   ["SKIP", "AUTH"],
 ];
-const BLOCKED_WORKSPACE_DOTENV_ACCESS_CONTROL_SUFFIXES = ["_ALLOWED_USER_IDS", "_ALLOWED_USERS"];
 const BLOCKED_WORKSPACE_DOTENV_PREFIXES = [
   "ANTHROPIC_API_KEY_",
   "CLAWHUB_",
@@ -253,7 +252,6 @@ function shouldBlockWorkspaceDotEnvKey(
     BLOCKED_WORKSPACE_DOTENV_PREFIXES.some((prefix) => upper.startsWith(prefix)) ||
     BLOCKED_WORKSPACE_DOTENV_SUFFIXES.some((suffix) => upper.endsWith(suffix)) ||
     hasBlockedWorkspaceDotEnvTokenSequence(upper) ||
-    BLOCKED_WORKSPACE_DOTENV_ACCESS_CONTROL_SUFFIXES.some((suffix) => upper.endsWith(suffix)) ||
     getProviderAuthBlockedKeys().has(upper)
   );
 }
