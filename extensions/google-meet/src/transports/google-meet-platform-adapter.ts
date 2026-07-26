@@ -58,18 +58,18 @@ function parsePermissionGrantNotes(result: unknown): string[] {
   return notes;
 }
 
-const manualActionCategories: Record<string, MeetingManualActionCategory> = {
-  "browser-control-unavailable": "browser-control-unavailable",
-  "google-login-required": "login-required",
-  "meet-admission-required": "admission-required",
-  "meet-audio-choice-required": "audio-choice-required",
-  "meet-locale-required": "locale-required",
-  "meet-permission-required": "permission-required",
-  "meet-session-conflict": "session-conflict",
-};
+const manualActionCategories = new Map<string, MeetingManualActionCategory>([
+  ["browser-control-unavailable", "browser-control-unavailable"],
+  ["google-login-required", "login-required"],
+  ["meet-admission-required", "admission-required"],
+  ["meet-audio-choice-required", "audio-choice-required"],
+  ["meet-locale-required", "locale-required"],
+  ["meet-permission-required", "permission-required"],
+  ["meet-session-conflict", "session-conflict"],
+]);
 
 function classifyManualActionReason(reason: string): MeetingManualActionCategory {
-  return Object.hasOwn(manualActionCategories, reason) ? manualActionCategories[reason] : "custom";
+  return manualActionCategories.get(reason) ?? "custom";
 }
 
 export const GOOGLE_MEET_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
