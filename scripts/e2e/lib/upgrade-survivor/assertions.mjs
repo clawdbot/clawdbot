@@ -20,7 +20,7 @@ const SCENARIOS = new Set([
   "meeting-transcripts-sqlite",
   "versioned-runtime-deps",
   "cron-scheduled-authority",
-  "auth-profile-v2026.7.2-beta.5",
+  "auth-profile-v2026-7-2-beta-5",
 ]);
 
 const PERSONA_FILES = new Map([
@@ -310,7 +310,7 @@ function seedState() {
   if (scenario === "cron-scheduled-authority") {
     seedLegacyCronScheduledAuthority(stateDir);
   }
-  if (scenario === "auth-profile-v2026.7.2-beta.5") {
+  if (scenario === "auth-profile-v2026-7-2-beta-5") {
     const fixture = readJson(
       path.join(
         process.cwd(),
@@ -568,7 +568,7 @@ function assertStateSurvived() {
   if (scenario === "cron-scheduled-authority") {
     assertCronScheduledAuthorityMigrated(stateDir, stage);
   }
-  if (scenario === "auth-profile-v2026.7.2-beta.5") {
+  if (scenario === "auth-profile-v2026-7-2-beta-5") {
     assertAuthProfileMigrationSurvived(stateDir, stage);
   }
   const legacyRuntimeRoot = path.join(stateDir, "plugin-runtime-deps");

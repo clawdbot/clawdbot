@@ -6,17 +6,13 @@ import { shortenHomePath } from "../../utils.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 
-export const AUTH_PROFILE_MIGRATION_REQUIRED_CODE = "AUTH_PROFILE_MIGRATION_REQUIRED" as const;
-export const AUTH_PROFILE_MIGRATION_COMMAND = "openclaw doctor --fix" as const;
+const AUTH_PROFILE_MIGRATION_REQUIRED_CODE = "AUTH_PROFILE_MIGRATION_REQUIRED" as const;
+const AUTH_PROFILE_MIGRATION_COMMAND = "openclaw doctor --fix" as const;
 const log = createSubsystemLogger("auth-profiles/persistence");
 
-export type LegacyAuthProfileSourceKind =
-  | "auth-profiles"
-  | "auth-state"
-  | "legacy-auth"
-  | "legacy-oauth";
+type LegacyAuthProfileSourceKind = "auth-profiles" | "auth-state" | "legacy-auth" | "legacy-oauth";
 
-export type LegacyAuthProfileSource = {
+type LegacyAuthProfileSource = {
   kind: LegacyAuthProfileSourceKind;
   path: string;
 };

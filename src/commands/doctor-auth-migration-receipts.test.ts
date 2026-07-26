@@ -14,10 +14,21 @@ import {
   archiveAuthProfileMigrationSource,
   createAuthProfileMigrationSourceReceipt,
   digestAuthProfileMigrationValue,
-  recordAuthProfileMigrationCompleted,
-  recordAuthProfileMigrationImported,
   resumePendingAuthProfileMigrationArchives,
 } from "./doctor-auth-migration-receipts.js";
+
+type MigrationReceiptTestApi = {
+  recordAuthProfileMigrationImported: (
+    receipt: ReturnType<typeof createAuthProfileMigrationSourceReceipt>,
+  ) => void;
+  recordAuthProfileMigrationCompleted: (
+    receipt: ReturnType<typeof createAuthProfileMigrationSourceReceipt>,
+  ) => void;
+};
+
+const { recordAuthProfileMigrationImported, recordAuthProfileMigrationCompleted } = (
+  globalThis as Record<PropertyKey, unknown>
+)[Symbol.for("openclaw.authProfileMigrationReceiptsTestApi")] as MigrationReceiptTestApi;
 
 describe("auth profile migration receipts", () => {
   const states: OpenClawTestState[] = [];

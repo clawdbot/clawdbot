@@ -8,6 +8,7 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -16,6 +17,10 @@ import {
 
 const MIGRATION_KIND = "auth-profile-json-to-sqlite-v2";
 type MigrationDatabase = Pick<OpenClawStateDatabase, "migration_runs" | "migration_sources">;
+type AuthProfileTargetDatabase = Pick<
+  OpenClawAgentKyselyDatabase,
+  "auth_profile_store" | "auth_profile_state"
+>;
 
 export type AuthProfileMigrationSourceReceipt = {
   sourceKey: string;
@@ -80,7 +85,7 @@ export function digestAuthProfileMigrationValue(value: unknown): string {
   return digestBytes(Buffer.from(JSON.stringify(value) ?? "<undefined>"));
 }
 
-export function recordAuthProfileMigrationImported(
+function recordAuthProfileMigrationImported(
   receipt: AuthProfileMigrationSourceReceipt,
   now = Date.now(),
 ): void {
@@ -145,7 +150,7 @@ export function recordAuthProfileMigrationImported(
   );
 }
 
-export function recordAuthProfileMigrationCompleted(
+function recordAuthProfileMigrationCompleted(
   receipt: AuthProfileMigrationSourceReceipt,
   now = Date.now(),
   status: "completed" | "archived-unparsed" = "completed",
@@ -216,10 +221,15 @@ function verifyAuthProfileMigrationTarget(receipt: AuthProfileMigrationSourceRec
   }
   const db = openNodeSqliteDatabase(receipt.targetDatabasePath, { readOnly: true });
   try {
+    const kysely = getNodeSqliteKysely<AuthProfileTargetDatabase>(db);
     if (receipt.expectedProfileSha256) {
-      const row = db
-        .prepare("SELECT store_json FROM auth_profile_store WHERE store_key = 'primary'")
-        .get() as { store_json?: unknown } | undefined;
+      const row = executeSqliteQueryTakeFirstSync(
+        db,
+        kysely
+          .selectFrom("auth_profile_store")
+          .select("store_json")
+          .where("store_key", "=", "primary"),
+      );
       const store = typeof row?.store_json === "string" ? JSON.parse(row.store_json) : null;
       for (const [profileId, expectedSha256] of Object.entries(receipt.expectedProfileSha256)) {
         if (digestAuthProfileMigrationValue(store?.profiles?.[profileId]) !== expectedSha256) {
@@ -228,9 +238,13 @@ function verifyAuthProfileMigrationTarget(receipt: AuthProfileMigrationSourceRec
       }
     }
     if (receipt.expectedStateSha256) {
-      const row = db
-        .prepare("SELECT state_json FROM auth_profile_state WHERE state_key = 'primary'")
-        .get() as { state_json?: unknown } | undefined;
+      const row = executeSqliteQueryTakeFirstSync(
+        db,
+        kysely
+          .selectFrom("auth_profile_state")
+          .select("state_json")
+          .where("state_key", "=", "primary"),
+      );
       const state = typeof row?.state_json === "string" ? JSON.parse(row.state_json) : null;
       if (digestAuthProfileMigrationValue(state) !== receipt.expectedStateSha256) {
         throw new Error("auth profile migration target verification failed");
@@ -345,21 +359,6 @@ function isRecordOfStrings(value: unknown): value is Record<string, string> {
   );
 }
 
-export function hasCompletedAuthProfileMigrationReceipt(
-  sourceKey: string,
-  env?: NodeJS.ProcessEnv,
-): boolean {
-  const database = openOpenClawStateDatabase({ env });
-  const row = executeSqliteQueryTakeFirstSync(
-    database.db,
-    getNodeSqliteKysely<MigrationDatabase>(database.db)
-      .selectFrom("migration_sources")
-      .select("status")
-      .where("source_key", "=", sourceKey),
-  );
-  return row?.status === "completed";
-}
-
 export function hasTerminalAuthProfileMigrationReceipt(
   sourceKey: string,
   env?: NodeJS.ProcessEnv,
@@ -373,4 +372,13 @@ export function hasTerminalAuthProfileMigrationReceipt(
       .where("source_key", "=", sourceKey),
   );
   return row?.status === "completed" || row?.status === "archived-unparsed";
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.authProfileMigrationReceiptsTestApi")
+  ] = {
+    recordAuthProfileMigrationImported,
+    recordAuthProfileMigrationCompleted,
+  };
 }
