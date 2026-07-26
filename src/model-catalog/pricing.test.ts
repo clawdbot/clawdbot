@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveModelCostConfig } from "../utils/usage-format.js";
+import {
+  resolveModelCostConfig,
+  resolveModelCostConfigFingerprint,
+} from "../utils/usage-format.js";
 import {
   resetRemoteModelCatalogOverlayForTest,
   setRemoteModelCatalogOverlaySourcesForTest,
@@ -93,6 +96,9 @@ describe("hosted model pricing", () => {
         model: "gpt-external",
       }),
     ).toBeUndefined();
+    expect(resolveModelCostConfigFingerprint(configFor("https://api.openai.com/v1"))).not.toBe(
+      resolveModelCostConfigFingerprint(configFor("http://127.0.0.1:8080/v1")),
+    );
     expect(
       resolveModelCostConfig({
         config: configFor("http://127.0.0.1:8080/v1"),

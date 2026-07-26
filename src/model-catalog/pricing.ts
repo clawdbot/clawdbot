@@ -141,6 +141,7 @@ function buildPricingContext(config: OpenClawConfig): PricingContext {
   const fingerprint = JSON.stringify({
     catalog: [...catalog.entries()].toSorted(([a], [b]) => a.localeCompare(b)),
     hosted: Object.entries(hosted).toSorted(([a], [b]) => a.localeCompare(b)),
+    policies: [...policies.entries()].toSorted(([a], [b]) => a.localeCompare(b)),
   });
   return { snapshot, catalog, hosted, normalizedHosted, policies, fingerprint };
 }
@@ -305,7 +306,6 @@ export function resolveCatalogModelPricing(params: {
     manifestPlugins: context.snapshot?.plugins,
   });
   if (
-    context.policies.get(normalized.provider)?.external === false ||
     !allowsHostedPricing(config, normalized.provider, normalized.model, context.snapshot?.plugins)
   ) {
     return undefined;
@@ -373,5 +373,16 @@ export function resolveHostedModelPricing(params: {
 }
 
 export function modelCatalogPricingFingerprint(config?: OpenClawConfig): string {
-  return getPricingContext(config ?? EMPTY_CONFIG).fingerprint;
+  const resolvedConfig = config ?? EMPTY_CONFIG;
+  const context = getPricingContext(resolvedConfig);
+  const configuredEndpoints = Object.entries(resolvedConfig.models?.providers ?? {})
+    .toSorted(([a], [b]) => a.localeCompare(b))
+    .map(([provider, providerConfig]) => ({
+      provider,
+      baseUrl: providerConfig.baseUrl,
+      models: providerConfig.models
+        .map((model) => ({ id: model.id, baseUrl: model.baseUrl }))
+        .toSorted((a, b) => a.id.localeCompare(b.id)),
+    }));
+  return JSON.stringify({ pricing: context.fingerprint, configuredEndpoints });
 }
