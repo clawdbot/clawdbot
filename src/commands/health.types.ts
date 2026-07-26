@@ -1,5 +1,4 @@
 // Shared summary types returned by gateway health and rendered by the CLI.
-import type { GatewayModelPricingHealth } from "../gateway/model-pricing-cache.types.js";
 /** Health snapshot for one configured channel account. */
 export type ChannelAccountHealthSummary = {
   accountId: string;
@@ -72,10 +71,13 @@ export type DeliveryQueueHealthSummary = {
     count: number;
     oldestFailedAt?: number;
   }>;
+  ingressFailed?: Array<{
+    channelId: string;
+    accountId: string;
+    count: number;
+    oldestFailedAt?: number;
+  }>;
 };
-
-/** Optional model pricing cache health reported by the gateway. */
-type ModelPricingHealthSummary = GatewayModelPricingHealth;
 
 /** Config hot-reload watcher status, present only when a reloader is running. */
 type ConfigReloadHealthSummary = {
@@ -91,7 +93,6 @@ export type HealthSummary = {
   plugins?: PluginHealthSummary;
   contextEngines?: ContextEngineHealthSummary;
   deliveryQueues?: DeliveryQueueHealthSummary;
-  modelPricing?: ModelPricingHealthSummary;
   configReload?: ConfigReloadHealthSummary;
   channels: Record<string, ChannelHealthSummary>;
   channelOrder: string[];

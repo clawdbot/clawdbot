@@ -107,7 +107,7 @@ async function processEvent(params: {
   // under the same safe correlation id before dispatching any model work.
   const messageClient = correlationId
     ? createClickClackClient({
-        baseUrl: params.account.baseUrl,
+        baseUrl: params.account.apiEndpoint,
         token: params.account.token,
         correlationId,
       })
@@ -178,7 +178,7 @@ export async function startClickClackGatewayAccount(
     throw new Error(`ClickClack is not configured for account "${configuredAccount.accountId}"`);
   }
   const client = createClickClackClient({
-    baseUrl: configuredAccount.baseUrl,
+    baseUrl: configuredAccount.apiEndpoint,
     token: configuredAccount.token,
   });
   const workspaceId = await resolveWorkspaceId(client, configuredAccount.workspace);

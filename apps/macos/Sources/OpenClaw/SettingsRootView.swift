@@ -28,13 +28,13 @@ struct SettingsRootView: View {
         let initial = initialTab ?? .general
         self.state = state
         self.updater = updater
-        self._selectedTab = State(initialValue: initial)
-        self._cachedTabs = State(initialValue: [initial])
-        self._inferenceConfiguration = State(initialValue: configuredInferenceModel.map {
+        _selectedTab = State(initialValue: initial)
+        _cachedTabs = State(initialValue: [initial])
+        _inferenceConfiguration = State(initialValue: configuredInferenceModel.map {
             .loaded($0)
         } ?? .loading)
-        self._trackedInferenceGatewayID = State(initialValue: nil)
-        self._deferredTab = State(initialValue: nil)
+        _trackedInferenceGatewayID = State(initialValue: nil)
+        _deferredTab = State(initialValue: nil)
     }
 
     var body: some View {
@@ -217,8 +217,11 @@ struct SettingsRootView: View {
             AnyView(GeneralSettings(state: self.state, page: .general, isActive: self.selectedTab == tab))
         case .connection:
             AnyView(GeneralSettings(state: self.state, page: .connection, isActive: self.selectedTab == tab))
+        case .gateways:
+            AnyView(GatewaySettings())
         case .permissions:
             AnyView(PermissionsSettings(
+                state: self.state,
                 status: self.permissionMonitor.status,
                 refresh: self.refreshPerms,
                 showOnboarding: { DebugActions.restartOnboarding() }))
@@ -321,7 +324,7 @@ struct SettingsRootView: View {
             self.inferenceConfiguration = Self.configurationAfterInferenceRefresh(
                 current: self.inferenceConfiguration,
                 result: .confirmed(model))
-            if let deferredTab = self.deferredTab {
+            if let deferredTab {
                 self.selectRequestedTab(deferredTab)
             }
         } catch is CancellationError {
@@ -441,8 +444,8 @@ struct SettingsTabGroup: Identifiable {
 
     static func defaultGroups(showDebug: Bool, showSystemAgent: Bool) -> [SettingsTabGroup] {
         let basicTabs: [SettingsTab] = showSystemAgent
-            ? [.general, .connection, .permissions, .voiceWake, .systemAgent]
-            : [.general, .connection, .permissions, .voiceWake]
+            ? [.general, .connection, .gateways, .permissions, .voiceWake, .systemAgent]
+            : [.general, .connection, .gateways, .permissions, .voiceWake]
         var groups = [
             SettingsTabGroup(title: "Basics", tabs: basicTabs),
             SettingsTabGroup(title: "Automation", tabs: [.channels, .skills, .cron, .execApprovals]),
@@ -460,7 +463,7 @@ struct SettingsTabGroup: Identifiable {
 }
 
 enum SettingsTab: CaseIterable, Identifiable, Hashable {
-    case general, connection, permissions, voiceWake, systemAgent, channels, skills, cron
+    case general, connection, gateways, permissions, voiceWake, systemAgent, channels, skills, cron
     case execApprovals, sessions, instances, config, debug, about
     static let windowWidth: CGFloat = 1120
     static let windowHeight: CGFloat = 790
@@ -473,6 +476,7 @@ enum SettingsTab: CaseIterable, Identifiable, Hashable {
         switch self {
         case .general: "General"
         case .connection: "Connection"
+        case .gateways: "Gateways"
         case .permissions: "Permissions"
         case .voiceWake: "Voice & Talk"
         case .systemAgent: "OpenClaw"
@@ -480,7 +484,7 @@ enum SettingsTab: CaseIterable, Identifiable, Hashable {
         case .skills: "Skills"
         case .cron: "Cron Jobs"
         case .execApprovals: "Exec Approvals"
-        case .sessions: "Sessions"
+        case .sessions: "Threads"
         case .instances: "Instances"
         case .config: "Config"
         case .debug: "Debug"
@@ -492,6 +496,7 @@ enum SettingsTab: CaseIterable, Identifiable, Hashable {
         switch self {
         case .general: "gearshape"
         case .connection: "point.3.connected.trianglepath.dotted"
+        case .gateways: "server.rack"
         case .permissions: "lock.shield"
         case .voiceWake: "waveform.circle"
         case .systemAgent: "lifepreserver"

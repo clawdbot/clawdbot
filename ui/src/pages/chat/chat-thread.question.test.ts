@@ -12,7 +12,7 @@ function prompt(status: QuestionPrompt["status"]): QuestionPrompt {
     id: "question-1",
     questions: [
       {
-        id: "format",
+        questionId: "format",
         header: "Format",
         question: "Which format?",
         options: [{ label: "Compact" }, { label: "Detailed" }],
@@ -75,7 +75,7 @@ describe("question chat items", () => {
 
   it("renders answered and skipped prompts as compact summary lines", () => {
     const answered = prompt("answered");
-    answered.answers = { answers: { format: { answers: ["Compact"] } } };
+    answered.answers = { answers: { format: ["Compact"] } };
     const skipped = prompt("cancelled");
     const container = document.createElement("div");
 
@@ -94,7 +94,7 @@ describe("question chat items", () => {
   it("keeps supplied answer labels when another client resolved the question", () => {
     const answered = prompt("answered");
     answered.answeredElsewhere = true;
-    answered.answers = { answers: { format: { answers: ["Detailed"] } } };
+    answered.answers = { answers: { format: ["Detailed"] } };
     const container = document.createElement("div");
 
     render(renderChatQuestionSummary(answered), container);

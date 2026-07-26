@@ -34,6 +34,22 @@ export type GatewayReloadPlan = {
   noopPaths: string[];
 };
 
+export function isNoopGatewayReloadPlan(plan: GatewayReloadPlan): boolean {
+  return (
+    !plan.restartGateway &&
+    plan.hotReasons.length === 0 &&
+    !plan.reloadHooks &&
+    !plan.restartGmailWatcher &&
+    !plan.restartCron &&
+    !plan.restartHeartbeat &&
+    !plan.restartHealthMonitor &&
+    !plan.reloadPlugins &&
+    !plan.disposeMcpRuntimes &&
+    plan.restartChannels.size === 0 &&
+    (plan.restartChannelAccounts?.size ?? 0) === 0
+  );
+}
+
 type ReloadRule = {
   prefix: string;
   kind: "restart" | "hot" | "none";
@@ -73,25 +89,6 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
   // permissions) and the bootstrap availability flag, both fixed at document
   // load, plus live PTYs — none can hot-update a connected client, so a change
   // must restart the gateway (clients reconnect with a fresh page and CSP).
-  {
-    prefix: "gateway.channelHealthCheckMinutes",
-    kind: "hot",
-    actions: ["restart-health-monitor"],
-  },
-  {
-    prefix: "gateway.channelStaleEventThresholdMinutes",
-    kind: "hot",
-    actions: ["restart-health-monitor"],
-  },
-  {
-    prefix: "gateway.channelMaxRestartsPerHour",
-    kind: "hot",
-    actions: ["restart-health-monitor"],
-  },
-  // Diagnostics heartbeat reads these from current runtime config.
-  { prefix: "diagnostics.stuckSessionWarnMs", kind: "none" },
-  { prefix: "diagnostics.stuckSessionAbortMs", kind: "none" },
-  { prefix: "diagnostics.memoryPressureSnapshot", kind: "hot" },
   { prefix: "hooks.gmail", kind: "hot", actions: ["restart-gmail-watcher"] },
   { prefix: "hooks", kind: "hot", actions: ["reload-hooks"] },
   {
@@ -105,29 +102,22 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
     actions: ["restart-heartbeat"],
   },
   {
-    prefix: "agents.defaults.model",
+    prefix: "agents.defaults.modelPolicy",
     kind: "hot",
     actions: ["restart-heartbeat"],
   },
   {
-    prefix: "models.pricing",
-    kind: "restart",
+    prefix: "agents.defaults.model",
+    kind: "hot",
+    actions: ["restart-heartbeat"],
   },
   {
     prefix: "models",
     kind: "hot",
     actions: ["restart-heartbeat"],
   },
-  // Auth cooldown readers resolve values from the active runtime config for each
-  // auth failure decision, so cooldown tuning needs a snapshot refresh but not
-  // a gateway restart.
-  { prefix: "auth.cooldowns", kind: "hot" },
-  // Worktree cleanup limits are read from the runtime config at each gc pass
-  // (hourly sweep and worktrees.gc), so a Settings stepper edit needs only a
-  // snapshot refresh; a restart here would drop live sessions per click.
-  { prefix: "worktrees", kind: "hot" },
   {
-    prefix: "agents.list",
+    prefix: "agents.entries",
     kind: "hot",
     actions: ["restart-heartbeat"],
   },

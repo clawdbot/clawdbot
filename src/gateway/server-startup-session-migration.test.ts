@@ -244,6 +244,11 @@ describe("runStartupSessionMigration", () => {
           importedTranscriptEvents: 0,
           issues: [
             {
+              code: "entry_invalid",
+              message: "Session entry is missing a valid sessionId.",
+              sessionKey: "agent:main:cron:legacy-stub",
+            },
+            {
               code: "transcript_malformed",
               message: "/tmp/bad.jsonl: SyntaxError",
               sessionKey: "agent:main:main",
@@ -264,7 +269,7 @@ describe("runStartupSessionMigration", () => {
         archivedUnreferencedJsonlFiles: 0,
         importedEntries: 0,
         importedTranscriptEvents: 0,
-        issues: 1,
+        issues: 2,
         legacyEntries: 1,
         sqliteEntries: 0,
         targets: 1,
@@ -280,9 +285,9 @@ describe("runStartupSessionMigration", () => {
       deps: makeDeps(migrate, 0, runDoctorSessionSqlite),
     });
 
-    expect(firstLogMessage(log.warn, "malformed transcript warning")).toContain(
-      "session SQLite migration warnings",
-    );
+    const warning = firstLogMessage(log.warn, "legacy file warnings");
+    expect(warning).toContain("session SQLite migration warnings");
+    expect(warning).toContain("[entry_invalid] agent:main:cron:legacy-stub");
   });
 
   it("classifies corrupt SQLite startup failures with recovery guidance", async () => {

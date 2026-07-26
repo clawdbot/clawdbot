@@ -9,6 +9,7 @@ import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
+  missingScopeErrorShape,
   type TalkSpeakParams,
   validateTalkCatalogParams,
   validateTalkConfigParams,
@@ -19,6 +20,10 @@ import {
   withSpeakerSelectionCompat,
   withSpeakerSelectionFallbackCompat,
 } from "../../../packages/speech-core/speaker.js";
+import {
+  CODE_HEAVY_SPOKEN_FALLBACK,
+  isCodeHeavySpeechText,
+} from "../../../packages/speech-core/src/speech-text.js";
 import { getVoiceProviderConfig } from "../../../packages/speech-core/voice-models.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { redactConfigObject } from "../../config/redact-snapshot.js";
@@ -39,7 +44,11 @@ import {
   canonicalizeRealtimeVoiceProviderId,
   listRealtimeVoiceProviders,
 } from "../../talk/provider-registry.js";
-import { resolveConfiguredRealtimeVoiceProvider } from "../../talk/provider-resolver.js";
+import {
+  isRealtimeVoiceProviderConfigured,
+  resolveConfiguredRealtimeVoiceProvider,
+  resolveRealtimeVoiceProviderCapabilities,
+} from "../../talk/provider-resolver.js";
 import {
   canonicalizeSpeechProviderId,
   getSpeechProvider,
@@ -51,7 +60,7 @@ import {
   synthesizeSpeech,
   type TtsDirectiveOverrides,
 } from "../../tts/tts.js";
-import { ADMIN_SCOPE, TALK_SECRETS_SCOPE } from "../operator-scopes.js";
+import { ADMIN_SCOPE, READ_SCOPE, TALK_SECRETS_SCOPE } from "../operator-scopes.js";
 import { resolveConfiguredSecretInputString } from "../resolve-configured-secret-input-string.js";
 import { formatForLog } from "../ws-log.js";
 import { inferSpeechMimeType } from "./speech-mime.js";
@@ -188,7 +197,7 @@ function buildTalkTtsConfig(
   }
 
   const baseTts = withTalkBaseTtsSpeakerSelectionCompat(
-    asOptionalRecord(config.messages?.tts) ?? {},
+    asOptionalRecord(config.tts) ?? {},
   ) as TtsConfig;
   const providerConfig = withSpeakerSelectionFallbackCompat(resolved.config);
   const resolvedProviderConfig =
@@ -213,10 +222,7 @@ function buildTalkTtsConfig(
     providerConfig,
     cfg: {
       ...config,
-      messages: {
-        ...config.messages,
-        tts: talkTts,
-      },
+      tts: talkTts,
     },
   };
 }
@@ -238,6 +244,8 @@ function buildTalkCatalog(config: OpenClawConfig) {
   );
   const activeTranscriptionProvider = transcriptionSelection.activeProvider;
   const realtimeConfig = buildTalkRealtimeConfig(config);
+  const realtimeSurface =
+    realtimeConfig.transport === "gateway-relay" ? "bridge" : "browser-session";
   const realtimeSelection = resolveCatalogProviderSelection(
     canonicalizeRealtimeVoiceProviderId(realtimeConfig.provider, config),
     () =>
@@ -246,6 +254,7 @@ function buildTalkCatalog(config: OpenClawConfig) {
         configuredProviderId: realtimeConfig.provider,
         providerConfigs: realtimeConfig.providers,
         defaultModel: realtimeConfig.model,
+        surface: realtimeSurface,
       }).provider.id,
   );
   const activeRealtimeProvider = realtimeSelection.activeProvider;
@@ -342,15 +351,28 @@ function buildTalkCatalog(config: OpenClawConfig) {
         const providerConfig =
           provider.resolveConfig?.({ cfg: config, rawConfig: rawConfigWithModel }) ??
           rawConfigWithModel;
-        const capabilities = provider.capabilities;
+        const capabilities = resolveRealtimeVoiceProviderCapabilities({
+          provider,
+          providerConfig,
+          cfg: config,
+          surface: realtimeSurface,
+        });
         const entry: Record<string, unknown> = {
           id: provider.id,
           label: provider.label,
           configured: configuredOrFalse(() =>
-            provider.isConfigured({ cfg: config, providerConfig }),
+            isRealtimeVoiceProviderConfigured({
+              provider,
+              cfg: config,
+              providerConfig,
+              surface: realtimeSurface,
+            }),
           ),
           modes: ["realtime"],
-          brains: capabilities?.supportsToolCalls === false ? ["none"] : ["agent-consult"],
+          brains:
+            capabilities?.supportsToolCalls === false && capabilities.handlesAgentConsult !== true
+              ? ["none"]
+              : ["agent-consult"],
           supportsBrowserSession: Boolean(
             capabilities?.supportsBrowserSession ?? provider.createBrowserSession,
           ),
@@ -513,10 +535,10 @@ async function resolveTalkResponseFromConfig(params: {
 
   const speechProvider = getSpeechProvider(provider, params.runtimeConfig);
   const sourceBaseTts = withTalkBaseTtsSpeakerSelectionCompat(
-    asOptionalRecord(params.sourceConfig.messages?.tts) ?? {},
+    asOptionalRecord(params.sourceConfig.tts) ?? {},
   );
   const runtimeBaseTts = withTalkBaseTtsSpeakerSelectionCompat(
-    asOptionalRecord(params.runtimeConfig.messages?.tts) ?? {},
+    asOptionalRecord(params.runtimeConfig.tts) ?? {},
   );
   const sourceProviderConfig = withSpeakerSelectionFallbackCompat(sourceResolved?.config);
   const runtimeProviderConfig = withSpeakerSelectionFallbackCompat(runtimeResolved?.config);
@@ -727,7 +749,10 @@ export const talkHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${TALK_SECRETS_SCOPE}`),
+        missingScopeErrorShape({
+          missingScope: TALK_SECRETS_SCOPE,
+          requiredScopes: [READ_SCOPE, TALK_SECRETS_SCOPE],
+        }),
       );
       return;
     }
@@ -807,8 +832,9 @@ export const talkHandlers: GatewayRequestHandlers = {
         runtimeConfig,
         typedParams,
       );
+      const speechText = isCodeHeavySpeechText(text) ? CODE_HEAVY_SPOKEN_FALLBACK : text;
       const result = await synthesizeSpeech({
-        text,
+        text: speechText,
         cfg: setup.cfg,
         overrides,
         disableFallback: true,
@@ -854,8 +880,8 @@ export const talkHandlers: GatewayRequestHandlers = {
       respond(false, undefined, talkSpeakError("synthesis_failed", formatForLog(err)));
     }
   },
-  "talk.mode": ({ params, respond, context, client, isWebchatConnect }) => {
-    if (client && isWebchatConnect(client.connect) && !context.hasConnectedTalkNode()) {
+  "talk.mode": async ({ params, respond, context, client, isWebchatConnect }) => {
+    if (client && isWebchatConnect(client.connect) && !(await context.hasConnectedTalkNode())) {
       respond(
         false,
         undefined,

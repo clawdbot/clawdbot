@@ -2,8 +2,14 @@
  * Core tool catalog and profile defaults.
  * Drives built-in profile allowlists, group expansion, and UI section metadata
  * for OpenClaw-owned tools.
+ *
+ * This module is bundled into the Control UI via tool-policy-shared. Keep it
+ * pure data + tiny pure functions: a value import of server config/runtime
+ * modules here drags the whole gateway graph into the ui build and breaks it.
  */
 import {
+  AGENTS_WAIT_TOOL_DISPLAY_SUMMARY,
+  ASK_USER_TOOL_DISPLAY_SUMMARY,
   CRON_TOOL_DISPLAY_SUMMARY,
   EXEC_TOOL_DISPLAY_SUMMARY,
   PROCESS_TOOL_DISPLAY_SUMMARY,
@@ -220,6 +226,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "sessions_spawn",
     description: SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY,
     sectionId: "sessions",
+    profiles: ["coding", "messaging"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "agents_wait",
+    label: "agents_wait",
+    description: AGENTS_WAIT_TOOL_DISPLAY_SUMMARY,
+    sectionId: "sessions",
     profiles: ["coding"],
     includeInOpenClawGroup: true,
   },
@@ -228,7 +242,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "sessions_yield",
     description: "End turn to receive sub-agent results",
     sectionId: "sessions",
-    profiles: ["coding"],
+    profiles: ["coding", "messaging"],
     includeInOpenClawGroup: true,
   },
   {
@@ -236,7 +250,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "subagents",
     description: "Background work: subagents, media gen, cron runs. list/cancel.",
     sectionId: "sessions",
-    profiles: ["coding"],
+    profiles: ["coding", "messaging"],
     includeInOpenClawGroup: true,
   },
   {
@@ -280,6 +294,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "dashboard",
+    label: "dashboard",
+    description: "Read and arrange the session dashboard",
+    sectionId: "ui",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "terminal",
     label: "terminal",
     description: "Own visible gateway terminal",
@@ -297,7 +319,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "show_widget",
     label: "show_widget",
-    description: "Show an interactive widget on supported chat surfaces",
+    description: "Show an interactive widget on chat or an auto-fitting dashboard",
     sectionId: "ui",
     profiles: [],
     includeInOpenClawGroup: true,
@@ -351,6 +373,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "mobile_ui",
+    label: "mobile_ui",
+    description: "Observe and control a paired Android app",
+    sectionId: "nodes",
+    profiles: [],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "agents_list",
     label: "agents_list",
     description: "List agents",
@@ -388,6 +418,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: UPDATE_PLAN_TOOL_DISPLAY_SUMMARY,
     sectionId: "agents",
     profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "ask_user",
+    label: "ask_user",
+    description: ASK_USER_TOOL_DISPLAY_SUMMARY,
+    sectionId: "agents",
+    profiles: ["coding", "messaging"],
     includeInOpenClawGroup: true,
   },
   {
@@ -513,11 +551,16 @@ export function resolveCoreToolProfilePolicy(profile?: string): ToolProfilePolic
 }
 
 /** Lists core tools grouped into UI sections. */
-export function listCoreToolSections(): CoreToolSection[] {
+export function listCoreToolSections(params?: { swarmEnabled?: boolean }): CoreToolSection[] {
+  // Callers resolve the swarm gate and pass the fact in; resolving config here
+  // would couple this ui-shared module to the server graph.
+  const swarmEnabled = params?.swarmEnabled === true;
   return CORE_TOOL_SECTION_ORDER.map((section) => ({
     id: section.id,
     label: section.label,
-    tools: CORE_TOOL_DEFINITIONS.filter((tool) => tool.sectionId === section.id).map((tool) => ({
+    tools: CORE_TOOL_DEFINITIONS.filter(
+      (tool) => tool.sectionId === section.id && (tool.id !== "agents_wait" || swarmEnabled),
+    ).map((tool) => ({
       id: tool.id,
       label: tool.label,
       description: tool.description,

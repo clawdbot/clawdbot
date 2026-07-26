@@ -225,25 +225,29 @@ describe("commands registry", () => {
     ]);
   });
 
-  it("keeps /login text-enabled while limiting native registration to Telegram", () => {
+  it("registers /login natively for Discord, Slack, and Telegram", () => {
     const command = requireChatCommand("login");
     expect(command.textAliases).toEqual(["/login"]);
     expect(command.nativeName).toBe("login");
-    expect(command.nativeProviders).toEqual(["telegram"]);
+    expect(command.nativeProviders).toEqual(["discord", "slack", "telegram"]);
 
     expect(nativeNameSet(listNativeCommandSpecs()).has("login")).toBe(false);
+    for (const provider of ["discord", "slack"] as const) {
+      setActivePluginRegistry(createNativeCommandsRegistry(provider));
+      expect(nativeNameSet(listNativeCommandSpecs({ provider })).has("login")).toBe(true);
+      expect(
+        findCommandByNativeName("login", provider, {
+          includeBundledChannelFallback: false,
+        })?.key,
+      ).toBe("login");
+    }
     expect(
       findCommandByNativeName("login", "telegram", {
         includeBundledChannelFallback: false,
       })?.key,
     ).toBe("login");
     expect(
-      findCommandByNativeName("login", "discord", {
-        includeBundledChannelFallback: false,
-      }),
-    ).toBeUndefined();
-    expect(
-      findCommandByNativeName("login", "slack", {
+      findCommandByNativeName("login", "signal", {
         includeBundledChannelFallback: false,
       }),
     ).toBeUndefined();

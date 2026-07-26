@@ -16,7 +16,7 @@ describe("OpenClawSchema cloudWorkers config", () => {
     expect(parseCloudWorkers({})).toStrictEqual({});
   });
 
-  it("accepts provider-owned settings and stored lifetime policy", () => {
+  it("accepts provider-owned settings", () => {
     expect(
       parseCloudWorkers({
         profiles: {
@@ -31,10 +31,6 @@ describe("OpenClawSchema cloudWorkers config", () => {
                 provider: "default",
                 id: "/cloud-workers/development/privateKey",
               },
-            },
-            lifetime: {
-              idleTimeoutMinutes: 60,
-              maxLifetimeMinutes: 1440,
             },
           },
         },
@@ -53,10 +49,6 @@ describe("OpenClawSchema cloudWorkers config", () => {
               provider: "default",
               id: "/cloud-workers/development/privateKey",
             },
-          },
-          lifetime: {
-            idleTimeoutMinutes: 60,
-            maxLifetimeMinutes: 1440,
           },
         },
       },

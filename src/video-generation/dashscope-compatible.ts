@@ -1,5 +1,8 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+// DashScope-compatible video provider adapts DashScope-style generation APIs.
+import { readResponseWithLimit } from "../infra/http-body.js";
+import { resolveGeneratedMediaMaxBytes } from "../media/configured-max-bytes.js";
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
@@ -11,10 +14,7 @@ import {
   resolveProviderOperationTimeoutMs,
   waitProviderOperationPollInterval,
   type ProviderOperationTimeoutMs,
-} from "openclaw/plugin-sdk/provider-http";
-// DashScope-compatible video provider adapts DashScope-style generation APIs.
-import { readResponseWithLimit } from "../infra/http-body.js";
-import { resolveGeneratedMediaMaxBytes } from "../media/configured-max-bytes.js";
+} from "../plugin-sdk/provider-http.js";
 import type {
   GeneratedVideoAsset,
   VideoGenerationProviderCapabilities,

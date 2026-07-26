@@ -71,7 +71,7 @@ function resolveMessagePrefix(
   agentId: string,
   opts?: { configured?: string; hasAllowFrom?: boolean; fallback?: string },
 ): string {
-  const configured = opts?.configured ?? cfg.messages?.messagePrefix;
+  const configured = opts?.configured;
   if (configured !== undefined) {
     return configured;
   }
@@ -127,7 +127,7 @@ export function resolveResponsePrefix(
     }
   }
 
-  // L4: Global level
+  // L3: Retained fallback for implicit and custom channels that have no block to migrate.
   const configured = cfg.messages?.responsePrefix;
   if (configured !== undefined) {
     if (configured === "auto") {
@@ -135,6 +135,7 @@ export function resolveResponsePrefix(
     }
     return configured;
   }
+
   return undefined;
 }
 

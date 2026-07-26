@@ -12,7 +12,6 @@ import {
   saveAuthProfileStore,
 } from "../auth-profiles.js";
 import { PLUGIN_MODEL_CATALOG_GENERATED_BY } from "../plugin-model-catalog.js";
-import { resetModelDiscoveryCacheForTest } from "./model-discovery-cache.test-support.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
 
 const PLUGIN_MODEL_CATALOG_FILE = "catalog.json";
@@ -33,6 +32,11 @@ const resolveManifestModelCatalogProviderAliasMetadataMock = vi.hoisted(() =>
 );
 const resolveRuntimeSyntheticAuthProviderRefsMock = vi.hoisted(() => vi.fn((): string[] => []));
 const resolveRuntimeExternalAuthProviderRefsMock = vi.hoisted(() => vi.fn((): string[] => []));
+const preparedSnapshotState = vi.hoisted(() => ({
+  enabled: true,
+  getInputs: [] as Array<Record<string, unknown>>,
+  snapshots: new Map<string, unknown>(),
+}));
 
 vi.mock("../model-suppression.js", () => {
   // Mirrors the canonical manifest-driven suppression in
@@ -142,6 +146,49 @@ vi.mock("../model-suppression.js", () => {
   };
 });
 
+vi.mock("../prepared-model-runtime.js", async () => {
+  const discovery = await import("../agent-model-discovery.js");
+  const discoveryContext = await import("../model-discovery-context.js");
+  const createSnapshot = (input: {
+    agentId?: string;
+    agentDir: string;
+    config?: OpenClawConfig;
+    workspaceDir?: string;
+  }) => {
+    const workspaceDir = discoveryContext.resolveModelWorkspaceDir(
+      input.config,
+      input.workspaceDir,
+    );
+    const key = `${input.agentId ?? ""}\u0000${input.agentDir}\u0000${workspaceDir ?? ""}`;
+    const current = preparedSnapshotState.snapshots.get(key);
+    if (current) {
+      return current;
+    }
+    const authStorage = discovery.discoverAuthStorage(input.agentDir);
+    const modelRegistry = discovery.discoverModels(authStorage, input.agentDir, {
+      ...(input.config ? { config: input.config } : {}),
+      ...(workspaceDir ? { workspaceDir } : {}),
+    });
+    if (!("fork" in modelRegistry)) {
+      Object.assign(modelRegistry, { fork: () => modelRegistry });
+    }
+    const snapshot = {
+      ...(workspaceDir ? { workspaceDir } : {}),
+      createStores: () => ({ authStorage, modelRegistry }),
+    };
+    preparedSnapshotState.snapshots.set(key, snapshot);
+    return snapshot;
+  };
+  return {
+    getPreparedModelRuntimeSnapshot: (input: Parameters<typeof createSnapshot>[0]) => {
+      preparedSnapshotState.getInputs.push(input);
+      return preparedSnapshotState.enabled ? createSnapshot(input) : undefined;
+    },
+    loadPreparedModelRuntimeSnapshot: async (input: Parameters<typeof createSnapshot>[0]) =>
+      createSnapshot(input),
+  };
+});
+
 vi.mock("../agent-model-discovery.js", () => ({
   discoverAuthStorage: vi.fn(() => ({ mocked: true })),
   discoverModels: vi.fn(() => ({ find: vi.fn(() => null) })),
@@ -196,8 +243,10 @@ import {
 } from "./model.test-harness.js";
 
 beforeEach(() => {
+  preparedSnapshotState.enabled = true;
+  preparedSnapshotState.getInputs.length = 0;
+  preparedSnapshotState.snapshots.clear();
   clearRuntimeAuthProfileStoreSnapshots();
-  resetModelDiscoveryCacheForTest();
   resetMockDiscoverModels(discoverModels);
   vi.mocked(discoverModels).mockClear();
   vi.mocked(discoverAuthStorage).mockClear();
@@ -225,6 +274,22 @@ beforeEach(() => {
       ...(transport ? { transport } : {}),
     };
   });
+});
+
+it("rejects synchronous resolution before lifecycle publication", () => {
+  preparedSnapshotState.enabled = false;
+
+  expect(() =>
+    resolveModel(
+      "openai",
+      "gpt-5.5",
+      "/tmp/unpublished-agent",
+      {},
+      {
+        runtimeHooks: createRuntimeHooks(),
+      },
+    ),
+  ).toThrow("prepared model runtime is not published for synchronous model resolution");
 });
 
 function createRuntimeHooks() {
@@ -260,6 +325,26 @@ function resolveModelForTest(
     authStorage: { mocked: true } as never,
     modelRegistry: discoverModels({ mocked: true } as never, resolvedAgentDir),
     runtimeHooks: createRuntimeHooks(),
+  });
+}
+
+function mockDiscoveredGroqModel(maxTokensSource?: "configured" | "discovered") {
+  mockDiscoveredModel(discoverModels, {
+    provider: "groq",
+    modelId: "llama-3.3-70b-versatile",
+    templateModel: {
+      provider: "groq",
+      id: "llama-3.3-70b-versatile",
+      name: "Llama 3.3 70B",
+      api: "openai-completions",
+      baseUrl: "https://api.groq.com/openai/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 131_072,
+      maxTokens: 32_768,
+      ...(maxTokensSource ? { maxTokensSource } : {}),
+    },
   });
 }
 
@@ -342,7 +427,57 @@ describe("resolveModel", () => {
     expect(discoverModels).toHaveBeenCalledTimes(1);
   });
 
-  it("invalidates agent discovery stores when provider route config changes", async () => {
+  it("looks up the lifecycle owner before applying a derived workspace", async () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "openai",
+      modelId: "gpt-5.5",
+      templateModel: {
+        provider: "openai",
+        ...makeModel("gpt-5.5"),
+      },
+    });
+    const cfg = {
+      agents: { defaults: { workspace: "/tmp/config-derived-workspace" } },
+    } as OpenClawConfig;
+
+    const result = await resolveModelAsync("openai", "gpt-5.5", "/tmp/agent", cfg, {
+      agentId: "main",
+      runtimeHooks: createRuntimeHooks(),
+    });
+
+    expectResolvedModel(result);
+    expect(preparedSnapshotState.getInputs[0]).toEqual(
+      expect.objectContaining({ agentId: "main", agentDir: "/tmp/agent" }),
+    );
+    expect(preparedSnapshotState.getInputs[0]).not.toHaveProperty("workspaceDir");
+  });
+
+  it("keeps prepared discovery generations separate for agents sharing directories", async () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "openai",
+      modelId: "gpt-5.5",
+      templateModel: {
+        provider: "openai",
+        ...makeModel("gpt-5.5"),
+      },
+    });
+
+    const first = await resolveModelAsync("openai", "gpt-5.5", "/tmp/agent", undefined, {
+      agentId: "agent-a",
+      runtimeHooks: createRuntimeHooks(),
+    });
+    const second = await resolveModelAsync("openai", "gpt-5.5", "/tmp/agent", undefined, {
+      agentId: "agent-b",
+      runtimeHooks: createRuntimeHooks(),
+    });
+
+    expectResolvedModel(first);
+    expectResolvedModel(second);
+    expect(discoverAuthStorage).toHaveBeenCalledTimes(2);
+    expect(discoverModels).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps lifecycle discovery stable when request route config changes", async () => {
     mockDiscoveredModel(discoverModels, {
       provider: "openai",
       modelId: "gpt-5.5",
@@ -381,11 +516,11 @@ describe("resolveModel", () => {
 
     expectResolvedModel(first);
     expectResolvedModel(second);
-    expect(discoverAuthStorage).toHaveBeenCalledTimes(2);
-    expect(discoverModels).toHaveBeenCalledTimes(2);
+    expect(discoverAuthStorage).toHaveBeenCalledTimes(1);
+    expect(discoverModels).toHaveBeenCalledTimes(1);
   });
 
-  it("invalidates agent discovery stores when generated plugin catalogs change", async () => {
+  it("does not poll generated plugin catalogs between lifecycle generations", async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-model-cache-plugin-"));
     const agentDir = path.join(rootDir, "agent");
     fs.mkdirSync(agentDir, { recursive: true });
@@ -416,10 +551,10 @@ describe("resolveModel", () => {
 
     expectResolvedModel(first);
     expectResolvedModel(second);
-    expect(discoverModels).toHaveBeenCalledTimes(2);
+    expect(discoverModels).toHaveBeenCalledTimes(1);
   });
 
-  it("invalidates agent discovery stores when inherited default auth changes", async () => {
+  it("reuses inherited auth from one lifecycle generation", async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-model-cache-"));
     const agentDir = path.join(rootDir, "agent");
     const defaultAgentDir = path.join(rootDir, "default-agent");
@@ -459,11 +594,11 @@ describe("resolveModel", () => {
 
     expectResolvedModel(first);
     expectResolvedModel(second);
-    expect(discoverAuthStorage).toHaveBeenCalledTimes(2);
-    expect(discoverModels).toHaveBeenCalledTimes(2);
+    expect(discoverAuthStorage).toHaveBeenCalledTimes(1);
+    expect(discoverModels).toHaveBeenCalledTimes(1);
   });
 
-  it("uses the resolved default agent workspace for cached model discovery", () => {
+  it("uses the resolved default agent workspace for prepared model discovery", () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-model-workspace-"));
     const agentDir = path.join(rootDir, "agent");
     const workspaceDir = path.join(rootDir, "workspace");
@@ -538,7 +673,7 @@ describe("resolveModel", () => {
     },
   );
 
-  it("invalidates agent discovery stores when implicit main auth changes without config", async () => {
+  it("does not poll implicit main auth during request resolution", async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-model-cache-state-"));
     const agentDir = path.join(rootDir, "agents", "worker", "agent");
     const mainAgentDir = path.join(rootDir, "agents", "main", "agent");
@@ -572,15 +707,15 @@ describe("resolveModel", () => {
 
         expectResolvedModel(first);
         expectResolvedModel(second);
-        expect(discoverAuthStorage).toHaveBeenCalledTimes(2);
-        expect(discoverModels).toHaveBeenCalledTimes(2);
+        expect(discoverAuthStorage).toHaveBeenCalledTimes(1);
+        expect(discoverModels).toHaveBeenCalledTimes(1);
       });
     } finally {
       fs.rmSync(rootDir, { recursive: true, force: true });
     }
   });
 
-  it("does not cache agent discovery stores while runtime auth snapshots are active", async () => {
+  it("keeps runtime auth snapshots inside the lifecycle generation", async () => {
     replaceRuntimeAuthProfileStoreSnapshots([
       {
         store: {
@@ -609,11 +744,11 @@ describe("resolveModel", () => {
 
     expectResolvedModel(first);
     expectResolvedModel(second);
-    expect(discoverAuthStorage).toHaveBeenCalledTimes(2);
-    expect(discoverModels).toHaveBeenCalledTimes(2);
+    expect(discoverAuthStorage).toHaveBeenCalledTimes(1);
+    expect(discoverModels).toHaveBeenCalledTimes(1);
   });
 
-  it("does not cache agent discovery stores while plugin auth overlays are active", async () => {
+  it("keeps plugin auth overlays inside the lifecycle generation", async () => {
     resolveRuntimeSyntheticAuthProviderRefsMock.mockReturnValue(["runtime-provider"]);
     resolveRuntimeExternalAuthProviderRefsMock.mockReturnValue(["external-provider"]);
     mockDiscoveredModel(discoverModels, {
@@ -634,8 +769,8 @@ describe("resolveModel", () => {
 
     expectResolvedModel(first);
     expectResolvedModel(second);
-    expect(discoverAuthStorage).toHaveBeenCalledTimes(2);
-    expect(discoverModels).toHaveBeenCalledTimes(2);
+    expect(discoverAuthStorage).toHaveBeenCalledTimes(1);
+    expect(discoverModels).toHaveBeenCalledTimes(1);
   });
 
   it("skips OpenClaw auth and model discovery during dynamic model resolution", async () => {
@@ -1396,12 +1531,78 @@ describe("resolveModel", () => {
     expect(model.baseUrl).toBe("https://token-plan-sgp.xiaomimimo.com/v1");
     expect(model.contextWindow).toBe(1_048_576);
     expect(model.maxTokens).toBe(32_000);
+    expectRecordFields(model, { maxTokensSource: "discovered" });
     expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith({
       provider: "xiaomi-token-plan",
       modelId: "mimo-v2.5-pro",
       cfg,
       workspaceDir: expect.any(String),
       includeRuntimeDiscovery: true,
+    });
+  });
+
+  it("preserves configured maxTokens provenance from model discovery", () => {
+    mockDiscoveredGroqModel("configured");
+
+    const result = resolveModelForTest("groq", "llama-3.3-70b-versatile", "/tmp/agent");
+    const model = expectResolvedModel(result);
+
+    expectRecordFields(model, {
+      maxTokens: 32_768,
+      maxTokensSource: "configured",
+    });
+  });
+
+  it("marks a provider-level maxTokens override as configured", () => {
+    mockDiscoveredGroqModel();
+    const cfg = {
+      models: {
+        providers: {
+          groq: {
+            baseUrl: "https://api.groq.com/openai/v1",
+            api: "openai-completions",
+            maxTokens: 2_048,
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("groq", "llama-3.3-70b-versatile", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result);
+
+    expectRecordFields(model, {
+      maxTokens: 2_048,
+      maxTokensSource: "configured",
+    });
+  });
+
+  it("marks a configured-model top-level maxTokens override as configured", () => {
+    mockDiscoveredGroqModel();
+    const cfg = {
+      models: {
+        providers: {
+          groq: {
+            baseUrl: "https://api.groq.com/openai/v1",
+            api: "openai-completions",
+            models: [
+              {
+                id: "llama-3.3-70b-versatile",
+                name: "Llama 3.3 70B",
+                maxTokens: 4_096,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("groq", "llama-3.3-70b-versatile", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result);
+
+    expectRecordFields(model, {
+      maxTokens: 4_096,
+      maxTokensSource: "configured",
     });
   });
 
@@ -1494,7 +1695,7 @@ describe("resolveModel", () => {
     expect(model.compat).toEqual(
       expect.objectContaining({
         supportsUsageInStreaming: true,
-        supportsReasoningEffort: false,
+        supportsReasoningEffort: true,
         maxTokensField: "max_tokens",
       }),
     );
@@ -2728,6 +2929,41 @@ describe("resolveModel", () => {
         thinkingFormat: "qwen-chat-template",
       }),
     );
+  });
+
+  it("does not derive reasoning from ignored compat on a catalog-owned vLLM route", () => {
+    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
+      ...makeModel("Qwen/Qwen3-8B"),
+      provider: "vllm",
+      api: "openai-completions",
+      baseUrl: "http://localhost:9000",
+      reasoning: false,
+      compat: { supportsStrictMode: false },
+    });
+    const cfg = {
+      models: {
+        providers: {
+          vllm: {
+            baseUrl: "http://localhost:9000",
+            api: "openai-completions",
+            models: [
+              {
+                id: "Qwen/Qwen3-8B",
+                name: "Qwen/Qwen3-8B",
+                compat: { thinkingFormat: "qwen-chat-template" },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("vllm", "Qwen/Qwen3-8B", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model?.reasoning).toBe(false);
+    expect(result.model?.compat).toEqual(expect.objectContaining({ supportsStrictMode: false }));
+    expect(result.model?.compat).not.toHaveProperty("thinkingFormat");
   });
 
   it("infers reasoning for matching vLLM Qwen compat fallback models", () => {

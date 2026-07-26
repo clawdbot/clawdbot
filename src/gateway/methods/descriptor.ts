@@ -30,6 +30,7 @@ export type GatewayMethodDescriptor = {
   handler: GatewayMethodHandler;
   scope: GatewayMethodScope;
   owner: GatewayMethodOwner;
+  since?: string;
   startup?: GatewayMethodStartupAvailability;
   controlPlaneWrite?: boolean;
   advertise?: boolean;

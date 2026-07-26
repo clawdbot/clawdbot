@@ -63,6 +63,8 @@ export function prepareEmbeddedAttemptToolBase(params: {
     attempt.toolsAllow,
     {
       forceMessageTool: forceDirectMessageTool,
+      forceToolNames:
+        attempt.swarmCollector && attempt.swarmOutputSchema ? ["structured_output"] : undefined,
     },
   );
   const toolsEnabled = supportsModelTools(attempt.model);
@@ -167,7 +169,11 @@ export function prepareEmbeddedAttemptToolBase(params: {
     skillsSnapshot: params.skillsSnapshot,
     sandboxToolPolicy: params.sandbox?.tools,
     runtimeToolAllowlist: effectiveToolsAllow,
+    inheritRuntimeToolAllowlist: true,
     runtimePluginToolGrant: attempt.runtimePluginToolGrant,
+    inputProvenance: attempt.inputProvenance,
+    trustedInternalHandoff: attempt.trustedInternalHandoff,
+    scheduledToolPolicy: attempt.scheduledToolPolicy,
   });
   const localModelLeanEnabled = isLocalModelLeanEnabled({
     config: attempt.config,
@@ -243,6 +249,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
           oneShotCliRun: attempt.oneShotCliRun,
           toolSearchCatalogRef,
           agentDir: params.agentDir,
+          preparedModelRuntime: attempt.preparedModelRuntime,
           cwd: params.effectiveCwd,
           workspaceDir: params.effectiveWorkspace,
           spawnWorkspaceDir,
@@ -290,6 +297,8 @@ export function prepareEmbeddedAttemptToolBase(params: {
           taskSuggestionDeliveryMode: attempt.taskSuggestionDeliveryMode,
           inboundEventKind: attempt.currentInboundEventKind,
           disableMessageTool: attempt.disableMessageTool,
+          swarmCollector: attempt.swarmCollector,
+          swarmOutputSchema: attempt.swarmOutputSchema,
           forceMessageTool: attempt.forceMessageTool,
           enableHeartbeatTool: attempt.enableHeartbeatTool,
           forceHeartbeatTool: attempt.forceHeartbeatTool,
@@ -302,6 +311,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
           skillsSnapshot: params.skillsSnapshot,
           skillUsagePaths: params.skillUsagePaths,
           conversationCapabilityProfile: runtimeCapabilityProfile,
+          scheduledToolPolicy: attempt.scheduledToolPolicy,
           onYield: params.onYield,
         });
         params.markCoreToolStage("attempt:create-openclaw-coding-tools");

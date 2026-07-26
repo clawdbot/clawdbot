@@ -1,7 +1,13 @@
 import { html, nothing, type TemplateResult } from "lit";
 import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
+import {
+  hasProviderBrandIcon,
+  renderProviderBrandIcon,
+  renderProviderFallbackIcon,
+} from "../../components/provider-icon.ts";
 import { t } from "../../i18n/index.ts";
 import "../../styles/model-setup.css";
+import { listModelSetupPrepareOptions, type ModelSetupPrepareOption } from "./prepare-options.ts";
 import type {
   ModelSetupActivationState,
   ModelSetupPageState,
@@ -13,24 +19,42 @@ import { renderModelSetupWizard } from "./wizard-view.ts";
 
 type Candidate = SystemAgentSetupDetectResult["candidates"][number];
 type AuthOption = NonNullable<SystemAgentSetupDetectResult["authOptions"]>[number];
+type SetupIconEntry = {
+  brandId?: string;
+  label: string;
+  icon?: string;
+};
+
+export function resolveSetupBrandIcon(entry: SetupIconEntry): string | null {
+  // Only new Gateways provide authoritative local brand identity. Legacy
+  // payloads stay on their remote artwork path instead of guessing from labels.
+  return entry.brandId && hasProviderBrandIcon(entry.brandId) ? entry.brandId : null;
+}
 
 function renderProviderIcon(
   props: Pick<ModelSetupViewProps, "iconUrls" | "onIconError">,
-  icon: string | undefined,
-  label: string,
+  entry: SetupIconEntry,
   className = "",
 ) {
-  const blobUrl = icon ? props.iconUrls[icon] : undefined;
-  if (!icon || !blobUrl) {
-    return nothing;
+  const localBrand = resolveSetupBrandIcon(entry);
+  if (localBrand) {
+    return renderProviderBrandIcon(localBrand, {
+      className: `model-setup__icon ${className}`.trim(),
+    });
+  }
+  const blobUrl = entry.icon ? props.iconUrls[entry.icon] : undefined;
+  if (!entry.icon || !blobUrl) {
+    return renderProviderFallbackIcon(entry.label, {
+      className: `model-setup__icon ${className}`.trim(),
+    });
   }
   return html`<img
     class=${`model-setup__icon ${className}`.trim()}
     src=${blobUrl}
-    alt=${label}
+    alt=${entry.label}
     width="24"
     height="24"
-    @error=${() => props.onIconError(icon)}
+    @error=${() => props.onIconError(entry.icon!)}
   />`;
 }
 
@@ -39,9 +63,11 @@ type ModelSetupViewProps = {
   activation: ModelSetupActivationState;
   verify: ModelSetupVerifyState;
   wizard: ModelSetupWizardState;
+  wizardMode: "auth" | "prepare";
   wizardValue: unknown;
   canAdmin: boolean;
   canVerify: boolean;
+  canPrepare: boolean;
   gatewayTooOld: boolean;
   actionsDisabled: boolean;
   manualProviderId: string;
@@ -53,6 +79,7 @@ type ModelSetupViewProps = {
   onVerify: () => void;
   onActivateCandidate: (candidate: Candidate) => void;
   onStartAuth: (option: AuthOption) => void;
+  onStartPrepare: (option: ModelSetupPrepareOption) => void;
   onManualProviderChange: (providerId: string) => void;
   onManualApiKeyChange: (apiKey: string) => void;
   onManualConnect: () => void;
@@ -138,7 +165,7 @@ function renderCandidateRows(props: ModelSetupViewProps, result: SystemAgentSetu
             <div class="model-setup__row" data-candidate-kind=${candidate.kind}>
               <div class="model-setup__row-main">
                 <div class="model-setup__row-title">
-                  ${renderProviderIcon(props, candidate.icon, candidate.label)}
+                  ${renderProviderIcon(props, candidate)}
                   <strong>${candidate.label}</strong>
                   <span class="model-setup__chip">${candidateStatus(candidate)}</span>
                 </div>
@@ -191,12 +218,7 @@ function renderEmptyState(props: ModelSetupViewProps, result: SystemAgentSetupDe
         ${installs.map(
           (install) => html`
             <div class="model-setup__recommendation" data-recommended-install=${install.id}>
-              ${renderProviderIcon(
-                props,
-                install.icon,
-                install.label,
-                "model-setup__icon--recommendation",
-              )}
+              ${renderProviderIcon(props, install, "model-setup__icon--recommendation")}
               <div class="model-setup__row-main">
                 <strong>${install.label}</strong>
                 <div class="muted">${install.hint}</div>
@@ -284,7 +306,7 @@ function renderAuthRow(props: ModelSetupViewProps, option: AuthOption) {
   return html`
     <div class="model-setup__row" data-auth-choice=${option.id}>
       <div class="model-setup__provider-copy">
-        ${renderProviderIcon(props, option.icon, option.label)}
+        ${renderProviderIcon(props, option)}
         <div>
           <strong>${option.label}</strong>
           ${option.groupLabel ? html`<div class="muted">${option.groupLabel}</div>` : nothing}
@@ -337,6 +359,47 @@ function renderSignIn(props: ModelSetupViewProps, result: SystemAgentSetupDetect
   `;
 }
 
+function renderPrepare(props: ModelSetupViewProps, result: SystemAgentSetupDetectResult) {
+  if (!props.canPrepare) {
+    return nothing;
+  }
+  const options = listModelSetupPrepareOptions(result);
+  if (options.length === 0) {
+    return nothing;
+  }
+  return html`
+    <section class="settings-section">
+      <div class="settings-section__header">
+        <h2>${t("modelSetup.prepare.title")}</h2>
+      </div>
+      <p class="muted">${t("modelSetup.prepare.intro")}</p>
+      <div class="model-setup__rows">
+        ${options.map(
+          (option) => html`
+            <div class="model-setup__row" data-prepare-choice=${option.id}>
+              <div class="model-setup__provider-copy">
+                ${renderProviderIcon(props, option)}
+                <div>
+                  <strong>${option.label}</strong>
+                  ${option.hint ? html`<div class="muted">${option.hint}</div>` : nothing}
+                </div>
+              </div>
+              <button
+                type="button"
+                class="btn"
+                ?disabled=${props.actionsDisabled}
+                @click=${() => props.onStartPrepare(option)}
+              >
+                ${t("modelSetup.prepare.button")}
+              </button>
+            </div>
+          `,
+        )}
+      </div>
+    </section>
+  `;
+}
+
 function renderManual(props: ModelSetupViewProps, result: SystemAgentSetupDetectResult) {
   const provider = result.manualProviders.find((entry) => entry.id === props.manualProviderId);
   const targetId = `manual:${props.manualProviderId}`;
@@ -354,7 +417,7 @@ function renderManual(props: ModelSetupViewProps, result: SystemAgentSetupDetect
         <label class="field">
           <span>${t("modelSetup.manual.provider")}</span>
           <div class="model-setup__manual-provider">
-            ${renderProviderIcon(props, provider?.icon, provider?.label ?? "")}
+            ${provider ? renderProviderIcon(props, provider) : nothing}
             <select
               ?disabled=${props.actionsDisabled}
               @change=${(event: Event) =>
@@ -430,7 +493,8 @@ function renderReady(props: ModelSetupViewProps, result: SystemAgentSetupDetectR
   }
   return html`
     ${current} ${renderEmptyState(props, result)} ${renderCandidateRows(props, result)}
-    ${renderUnavailable(result)} ${renderSignIn(props, result)} ${renderManual(props, result)}
+    ${renderUnavailable(result)} ${renderPrepare(props, result)} ${renderSignIn(props, result)}
+    ${renderManual(props, result)}
   `;
 }
 
@@ -478,6 +542,7 @@ export function renderModelSetup(props: ModelSetupViewProps): TemplateResult {
       ${body}
     </div>
     ${renderModelSetupWizard({
+      mode: props.wizardMode,
       state: props.wizard,
       value: props.wizardValue,
       onValueChange: props.onWizardValueChange,

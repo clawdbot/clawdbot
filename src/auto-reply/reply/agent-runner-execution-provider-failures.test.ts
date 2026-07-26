@@ -39,6 +39,19 @@ function createOverloadSummaryError() {
   });
 }
 
+const OPENAI_SERVICE_UNAVAILABLE_MESSAGE =
+  "unexpected status 503 Service Unavailable: Service Unavailable, url: https://chatgpt.com/backend-api/codex/responses, cf-ray: qa-test-AMS, auth error: 503, auth error code: biscuit_baker_service_me_circuit_open";
+
+function createOpenAiServiceUnavailableError() {
+  return new FailoverError("LLM request timed out.", {
+    reason: "timeout",
+    provider: "openai",
+    model: "gpt-5.6",
+    status: 408,
+    rawError: OPENAI_SERVICE_UNAVAILABLE_MESSAGE,
+  });
+}
+
 describe("runAgentTurnWithFallback: provider failures", () => {
   it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
     "keeps raw runner failure boilerplate out of $label chats",
@@ -187,6 +200,89 @@ describe("runAgentTurnWithFallback: provider failures", () => {
     },
   );
 
+  it.each(["group", "channel"] as const)(
+    "surfaces provider HTTP 503 failures in Discord %s chats without replaying after tool execution",
+    async (chatType) => {
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+        params.onExecutionPhase?.({ phase: "tool_execution_started", tool: "exec" });
+        throw createOpenAiServiceUnavailableError();
+      });
+
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const result = await runAgentTurnWithFallback(
+        createMinimalRunAgentTurnParams({
+          sessionCtx: {
+            Provider: "discord",
+            Surface: "discord",
+            ChatType: chatType,
+            GroupSubject: "agent group",
+            GroupChannel: "#general",
+            MessageSid: "msg",
+          } as unknown as TemplateContext,
+        }),
+      );
+
+      expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+      expect(result.kind).toBe("final");
+      if (result.kind === "final") {
+        expect(result.payload.isError).toBe(true);
+        expect(result.payload.text).toBe(PROVIDER_INTERNAL_ERROR_USER_MESSAGE);
+        expect(result.payload.text).not.toBe(SILENT_REPLY_TOKEN);
+        expect(result.payload.text).not.toContain(OPENAI_SERVICE_UNAVAILABLE_MESSAGE);
+        expect(getReplyPayloadMetadata(result.payload)).toMatchObject({
+          deliverDespiteSourceReplySuppression: true,
+        });
+      }
+    },
+  );
+
+  it("retries a provider HTTP 503 before output and delivers the recovered response", async () => {
+    vi.useFakeTimers();
+    state.runEmbeddedAgentMock
+      .mockRejectedValueOnce(createOpenAiServiceUnavailableError())
+      .mockResolvedValueOnce({
+        payloads: [{ text: "Recovered response" }],
+        meta: {},
+      });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const resultPromise = runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        sessionCtx: createNonDirectFailureSessionCtx(NON_DIRECT_FAILURE_SURFACE_CASES[0]),
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(2_500);
+    const result = await resultPromise;
+
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+    expect(result.kind).toBe("success");
+    if (result.kind === "success") {
+      expect(result.runResult.payloads).toEqual([{ text: "Recovered response" }]);
+    }
+  });
+
+  it("surfaces a sanitized provider HTTP 503 notice after the safe retry is exhausted", async () => {
+    vi.useFakeTimers();
+    state.runEmbeddedAgentMock.mockRejectedValue(createOpenAiServiceUnavailableError());
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const resultPromise = runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        sessionCtx: createNonDirectFailureSessionCtx(NON_DIRECT_FAILURE_SURFACE_CASES[1]),
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(2_500);
+    const result = await resultPromise;
+
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.isError).toBe(true);
+      expect(result.payload.text).toBe(PROVIDER_INTERNAL_ERROR_USER_MESSAGE);
+      expect(result.payload.text).not.toContain(OPENAI_SERVICE_UNAVAILABLE_MESSAGE);
+    }
+  });
+
   it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
     "surfaces provider authentication failures in $label chats",
     async (testCase) => {
@@ -235,7 +331,9 @@ describe("runAgentTurnWithFallback: provider failures", () => {
       if (result.kind === "final") {
         expect(result.payload.isError).toBe(true);
         expect(result.payload.text).not.toBe(SILENT_REPLY_TOKEN);
-        expect(result.payload.text).toContain("rate-limited");
+        expect(result.payload.text).toBe(
+          "⚠️ The model request was rate-limited. Please try again in a few minutes.",
+        );
       }
     },
   );
@@ -270,6 +368,35 @@ describe("runAgentTurnWithFallback: provider failures", () => {
       }
     },
   );
+
+  it("scopes fallback exhaustion copy to the attempted models", () => {
+    const payload = buildKnownAgentRunFailureReplyPayload({
+      err: Object.assign(new Error("fallback exhausted"), {
+        name: "FallbackSummaryError",
+        attempts: [
+          {
+            provider: "anthropic",
+            model: "claude-opus-4-1",
+            error: "rate limited",
+            reason: "rate_limit",
+          },
+          {
+            provider: "openai",
+            model: "gpt-5.5",
+            error: "overloaded",
+            reason: "overloaded",
+          },
+        ],
+        soonestCooldownExpiry: null,
+      }),
+      sessionCtx: createMinimalRunAgentTurnParams().sessionCtx,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(payload?.text).toBe(
+      "⚠️ All attempted models were rate-limited or overloaded. Please try again in a few minutes.",
+    );
+  });
 
   it("surfaces typed periodic rate-limit details through known failure payloads in group chats", () => {
     const periodicLimitMessage = "You've hit your weekly limit · resets 6pm (UTC)";

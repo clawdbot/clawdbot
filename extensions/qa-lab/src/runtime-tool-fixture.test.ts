@@ -5,6 +5,7 @@ import path from "node:path";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { QaSuiteInfraError } from "./errors.js";
 import { runRuntimeToolFixture } from "./runtime-tool-fixture.js";
 import { readRawQaSessionStore } from "./suite-runtime-agent-session.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
@@ -181,12 +182,16 @@ describe("runtime tool fixture", () => {
     );
     const createdKeys: string[] = [];
     const promptKeys: string[] = [];
+    const promptEvidence: Array<{
+      requireSuccessfulTranscriptToolResult?: boolean;
+      transcriptToolName?: string;
+    }> = [];
     const readEffectiveTools = vi.fn(async (_env, sessionKey: string) => {
       expect(sessionKey).toBe("agent:qa:runtime-tool:read:happy");
       return new Set(["read"]);
     });
 
-    await runRuntimeToolFixture(
+    const details = await runRuntimeToolFixture(
       env,
       {
         toolName: "read",
@@ -203,6 +208,10 @@ describe("runtime tool fixture", () => {
         readEffectiveTools,
         runAgentPrompt: vi.fn(async (_env, params) => {
           promptKeys.push(params.sessionKey);
+          promptEvidence.push({
+            transcriptToolName: params.transcriptToolName,
+            requireSuccessfulTranscriptToolResult: params.requireSuccessfulTranscriptToolResult,
+          });
           return {};
         }),
         fetchJson: vi.fn(),
@@ -218,6 +227,45 @@ describe("runtime tool fixture", () => {
       "agent:qa:runtime-tool:read:happy",
       "agent:qa:runtime-tool:read:failure",
     ]);
+    expect(promptEvidence).toEqual([
+      { transcriptToolName: "read", requireSuccessfulTranscriptToolResult: true },
+      { transcriptToolName: "read", requireSuccessfulTranscriptToolResult: undefined },
+    ]);
+    expect(details).toContain("RUNTIME_PARITY_SESSION_KEY=agent:qa:runtime-tool:read:happy");
+    expect(details).toContain("RUNTIME_PARITY_SESSION_KEY=agent:qa:runtime-tool:read:failure");
+  });
+
+  it("retains both fixture session keys when the failure prompt throws", async () => {
+    const env = await makeEnv();
+    const infraError = new QaSuiteInfraError("agent_wait_failed", "failure prompt did not settle");
+    const runAgentPrompt = vi.fn().mockResolvedValueOnce({}).mockRejectedValueOnce(infraError);
+
+    const result = runRuntimeToolFixture(
+      env,
+      {
+        toolName: "read",
+        toolCoverage: {
+          bucket: "openclaw-dynamic-integration",
+          expectedLayer: "openclaw-dynamic",
+        },
+      },
+      {
+        createSession: vi.fn(async (_env, _label, key) => key),
+        readEffectiveTools: vi.fn(async () => new Set(["read"])),
+        runAgentPrompt,
+        fetchJson: vi.fn(),
+        ensureImageGenerationConfigured: vi.fn(),
+      },
+    );
+    await expect(result).rejects.toBeInstanceOf(QaSuiteInfraError);
+    await expect(result).rejects.toMatchObject({ code: "agent_wait_failed", cause: infraError });
+    await expect(result).rejects.toThrow(
+      [
+        "RUNTIME_PARITY_SESSION_KEY=agent:qa:runtime-tool:read:happy",
+        "RUNTIME_PARITY_SESSION_KEY=agent:qa:runtime-tool:read:failure",
+        "failure prompt did not settle",
+      ].join("\n"),
+    );
   });
 
   it("requires live runtime tool fixtures to produce transcript tool output", async () => {
@@ -536,6 +584,11 @@ describe("runtime tool fixture", () => {
         },
       ]);
 
+    const transcriptToolNames: Array<string | undefined> = [];
+    const runAgentPrompt = vi.fn(async (_env: unknown, params: { transcriptToolName?: string }) => {
+      transcriptToolNames.push(params.transcriptToolName);
+      return {};
+    });
     const details = await runRuntimeToolFixture(
       env,
       {
@@ -551,7 +604,7 @@ describe("runtime tool fixture", () => {
       {
         createSession: vi.fn(async (_env, _label, key) => key!),
         readEffectiveTools: vi.fn(async () => new Set<string>()),
-        runAgentPrompt: vi.fn(async () => ({})),
+        runAgentPrompt,
         fetchJson,
         ensureImageGenerationConfigured: vi.fn(),
       },
@@ -560,6 +613,8 @@ describe("runtime tool fixture", () => {
     expect(details).toContain("codex-native-workspace read");
     expect(details).toContain("OpenClaw dynamic exposure is intentionally omitted");
     expect(details).toContain("mock provider happy planned args (diagnostic only)");
+    expect(runAgentPrompt).toHaveBeenCalledTimes(2);
+    expect(transcriptToolNames).toEqual([undefined, undefined]);
   });
 
   it("reports Codex-native async planned-only happy fixtures without dereferencing missing output", async () => {
@@ -1083,7 +1138,13 @@ describe("runtime tool fixture", () => {
           ensureImageGenerationConfigured: vi.fn(),
         },
       ),
-    ).rejects.toThrow("expected mock happy-path successful tool output for read");
+    ).rejects.toThrow(
+      [
+        "RUNTIME_PARITY_SESSION_KEY=agent:qa:runtime-tool:read:happy",
+        "RUNTIME_PARITY_SESSION_KEY=agent:qa:runtime-tool:read:failure",
+        "expected mock happy-path successful tool output for read",
+      ].join("\n"),
+    );
   });
 
   it("requires mock failure fixtures to produce failure-shaped tool output", async () => {

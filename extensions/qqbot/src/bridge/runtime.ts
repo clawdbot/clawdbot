@@ -22,5 +22,5 @@ export { getQQBotRuntime, setQQBotRuntime };
 
 /** Type-narrowed getter for engine/ modules that need GatewayPluginRuntime. */
 export function getQQBotRuntimeForEngine(): GatewayPluginRuntime {
-  return getQQBotRuntime() as GatewayPluginRuntime;
+  return getQQBotRuntime() as unknown as GatewayPluginRuntime;
 }

@@ -25,13 +25,6 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
   });
 
   it("can restore reserveTokens after a simulated resource loader reload drops them below floor", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          compaction: { reserveTokensFloor: DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR },
-        },
-      },
-    } as const;
     let reserve = 16_384;
     const keep = 20_000;
     const settingsManager = {
@@ -46,7 +39,6 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
 
     const first = applyAgentCompactionSettingsFromConfig({
       settingsManager,
-      cfg,
       contextTokenBudget: 100_000,
     });
     expect(first.compaction.reserveTokens).toBe(DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR);
@@ -54,7 +46,6 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
     reserve = 16_384;
     const second = applyAgentCompactionSettingsFromConfig({
       settingsManager,
-      cfg,
       contextTokenBudget: 100_000,
     });
     expect(second.compaction.reserveTokens).toBe(DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR);
@@ -76,30 +67,6 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
     expect(result.didOverride).toBe(false);
     expect(result.compaction.reserveTokens).toBe(32_000);
     expect(settingsManager.applyOverrides).not.toHaveBeenCalled();
-  });
-
-  it("applies explicit reserveTokens but still enforces floor", () => {
-    const settingsManager = {
-      getCompactionReserveTokens: () => 10_000,
-      getCompactionKeepRecentTokens: () => 20_000,
-      applyOverrides: vi.fn(),
-    };
-
-    const result = applyAgentCompactionSettingsFromConfig({
-      settingsManager,
-      cfg: {
-        agents: {
-          defaults: {
-            compaction: { reserveTokens: 12_000, reserveTokensFloor: 20_000 },
-          },
-        },
-      },
-    });
-
-    expect(result.compaction.reserveTokens).toBe(20_000);
-    expect(settingsManager.applyOverrides).toHaveBeenCalledWith({
-      compaction: { reserveTokens: 20_000 },
-    });
   });
 
   it("applies keepRecentTokens when explicitly configured", () => {
@@ -184,35 +151,6 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
     expect(shouldCompact(1, 16_384, { enabled: true, ...result.compaction })).toBe(false);
   });
 
-  it("applies capped floor over user-configured reserveTokens when default floor exceeds context window", () => {
-    const settingsManager = {
-      getCompactionReserveTokens: () => 16_384,
-      getCompactionKeepRecentTokens: () => 20_000,
-      applyOverrides: vi.fn(),
-    };
-
-    // User sets reserveTokens=2048 but NOT reserveTokensFloor (default 20_000 applies).
-    // Pre-fix: target = max(2048, 20_000) = 20_000 → exceeds 16_384 context → infinite loop.
-    // Post-fix: floor capped to 8_384 → target = max(2048, 8_384) = 8_384 → works.
-    const result = applyAgentCompactionSettingsFromConfig({
-      settingsManager,
-      cfg: {
-        agents: {
-          defaults: {
-            compaction: { reserveTokens: 2_048 },
-          },
-        },
-      },
-      contextTokenBudget: 16_384,
-    });
-
-    expect(result.didOverride).toBe(true);
-    expect(result.compaction.reserveTokens).toBe(8_384); // capped floor wins over user's 2_048
-    expect(settingsManager.applyOverrides).toHaveBeenCalledWith({
-      compaction: { reserveTokens: 8_384 },
-    });
-  });
-
   it("applies capped floor when current reserve is below it on small-context models", () => {
     // Simulate an embedded runner default of 4 096 with a 16 384 context window.
     // minPromptBudget = min(8_000, floor(16_384 * 0.5)) = 8_000.
@@ -232,64 +170,6 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
     expect(result.compaction.reserveTokens).toBe(8_384);
     expect(settingsManager.applyOverrides).toHaveBeenCalledWith({
       compaction: { reserveTokens: 8_384 },
-    });
-  });
-
-  it("respects user-configured reserveTokens below capped floor for small models", () => {
-    const settingsManager = {
-      getCompactionReserveTokens: () => 16_384,
-      getCompactionKeepRecentTokens: () => 20_000,
-      applyOverrides: vi.fn(),
-    };
-
-    // User explicitly sets reserveTokens=2048 and reserveTokensFloor=0.
-    // With contextTokenBudget=16384, the capped floor = min(0, 8192) = 0.
-    // targetReserveTokens = max(2048, 0) = 2048.
-    const result = applyAgentCompactionSettingsFromConfig({
-      settingsManager,
-      cfg: {
-        agents: {
-          defaults: {
-            compaction: { reserveTokens: 2_048, reserveTokensFloor: 0 },
-          },
-        },
-      },
-      contextTokenBudget: 16_384,
-    });
-
-    expect(result.compaction.reserveTokens).toBe(2_048);
-    expect(result.compaction.keepRecentTokens).toBe(20_000);
-    expect(settingsManager.applyOverrides).toHaveBeenCalledWith({
-      compaction: { reserveTokens: 2_048 },
-    });
-  });
-
-  it("caps an explicit reserve even when the configured floor is disabled", () => {
-    const settingsManager = {
-      getCompactionReserveTokens: () => 16_384,
-      getCompactionKeepRecentTokens: () => 20_000,
-      applyOverrides: vi.fn(),
-    };
-
-    const result = applyAgentCompactionSettingsFromConfig({
-      settingsManager,
-      cfg: {
-        agents: {
-          defaults: {
-            compaction: {
-              reserveTokens: 20_000,
-              reserveTokensFloor: 0,
-              keepRecentTokens: 15_000,
-            },
-          },
-        },
-      },
-      contextTokenBudget: 16_000,
-    });
-
-    expect(result.compaction).toEqual({ reserveTokens: 8_000, keepRecentTokens: 15_000 });
-    expect(settingsManager.applyOverrides).toHaveBeenCalledWith({
-      compaction: { reserveTokens: 8_000, keepRecentTokens: 15_000 },
     });
   });
 
@@ -538,14 +418,9 @@ describe("applyAgentAutoCompactionGuard", () => {
 
   it("preserves configured reserve tokens when disabling embedded auto-compaction", () => {
     const settingsManager = SettingsManager.inMemory({
-      compaction: { enabled: true, reserveTokens: 16_384 },
+      compaction: { enabled: true, reserveTokens: 50_000 },
     });
 
-    applyAgentCompactionSettingsFromConfig({
-      settingsManager,
-      cfg: { agents: { defaults: { compaction: { reserveTokensFloor: 50_000 } } } },
-      contextTokenBudget: 200_000,
-    });
     const result = applyAgentAutoCompactionGuard({
       settingsManager,
       compactionMode: "safeguard",

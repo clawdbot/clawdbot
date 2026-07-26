@@ -341,4 +341,123 @@ describe("OpenAI Realtime Video Talk", () => {
     await expect(enabling).resolves.toBeUndefined();
     expect(videoStop).toHaveBeenCalledOnce();
   });
+
+  it("switches an active camera and updates the capture stream", async () => {
+    const audioTrack = { stop: vi.fn() } as unknown as MediaStreamTrack;
+    const frontStop = vi.fn();
+    const frontTrack = Object.assign(new EventTarget(), {
+      stop: frontStop,
+      readyState: "live",
+      getSettings: () => ({ deviceId: "front" }),
+    }) as unknown as MediaStreamTrack;
+    const backTrack = Object.assign(new EventTarget(), {
+      stop: vi.fn(),
+      readyState: "live",
+      getSettings: () => ({ deviceId: "back" }),
+    }) as unknown as MediaStreamTrack;
+    const audio = {
+      getAudioTracks: () => [audioTrack],
+      getTracks: () => [audioTrack],
+    } as unknown as MediaStream;
+    const frontCamera = {
+      getVideoTracks: () => [frontTrack],
+      getTracks: () => [frontTrack],
+    } as unknown as MediaStream;
+    const backCamera = {
+      getVideoTracks: () => [backTrack],
+      getTracks: () => [backTrack],
+    } as unknown as MediaStream;
+    const getUserMedia = vi
+      .fn()
+      .mockResolvedValueOnce(audio)
+      .mockResolvedValueOnce(frontCamera)
+      .mockResolvedValueOnce(backCamera);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+    const onVideoStream = vi.fn();
+    const context = {
+      client: {} as never,
+      sessionKey: "main",
+      callbacks: { onVideoStream },
+      videoDeviceId: "front",
+    };
+    const transport = new WebRtcSdpRealtimeTalkTransport(
+      { provider: "openai", transport: "webrtc", clientSecret: "test-client-secret" },
+      context,
+    );
+
+    await transport.start();
+    await transport.setVideoEnabled(true);
+    await transport.switchCamera("back");
+
+    expect(getUserMedia).toHaveBeenNthCalledWith(2, {
+      video: { deviceId: { exact: "front" } },
+    });
+    expect(getUserMedia).toHaveBeenNthCalledWith(3, {
+      video: { deviceId: { exact: "back" } },
+    });
+    expect(frontStop).toHaveBeenCalledOnce();
+    expect(onVideoStream).toHaveBeenLastCalledWith(backCamera);
+
+    transport.stop();
+  });
+
+  it("restores the previous camera when a live switch fails", async () => {
+    const audioTrack = { stop: vi.fn() } as unknown as MediaStreamTrack;
+    const firstFrontTrack = Object.assign(new EventTarget(), {
+      stop: vi.fn(),
+      readyState: "live",
+      getSettings: () => ({ deviceId: "front" }),
+    }) as unknown as MediaStreamTrack;
+    const restoredFrontTrack = Object.assign(new EventTarget(), {
+      stop: vi.fn(),
+      readyState: "live",
+      getSettings: () => ({ deviceId: "front" }),
+    }) as unknown as MediaStreamTrack;
+    const audio = {
+      getAudioTracks: () => [audioTrack],
+      getTracks: () => [audioTrack],
+    } as unknown as MediaStream;
+    const firstFrontCamera = {
+      getVideoTracks: () => [firstFrontTrack],
+      getTracks: () => [firstFrontTrack],
+    } as unknown as MediaStream;
+    const restoredFrontCamera = {
+      getVideoTracks: () => [restoredFrontTrack],
+      getTracks: () => [restoredFrontTrack],
+    } as unknown as MediaStream;
+    const getUserMedia = vi
+      .fn()
+      .mockResolvedValueOnce(audio)
+      .mockResolvedValueOnce(firstFrontCamera)
+      .mockRejectedValueOnce(new DOMException("missing", "OverconstrainedError"))
+      .mockResolvedValueOnce(restoredFrontCamera);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+    const onVideoStream = vi.fn();
+    const context = {
+      client: {} as never,
+      sessionKey: "main",
+      callbacks: { onVideoStream },
+      videoDeviceId: "front",
+    };
+    const transport = new WebRtcSdpRealtimeTalkTransport(
+      { provider: "openai", transport: "webrtc", clientSecret: "test-client-secret" },
+      context,
+    );
+
+    await transport.start();
+    await transport.setVideoEnabled(true);
+    await expect(transport.switchCamera("missing")).rejects.toThrow(
+      "The selected camera is unavailable",
+    );
+
+    expect(getUserMedia).toHaveBeenNthCalledWith(4, {
+      video: { deviceId: { exact: "front" } },
+    });
+    expect(context.videoDeviceId).toBe("front");
+    expect(onVideoStream).toHaveBeenLastCalledWith(restoredFrontCamera);
+
+    transport.stop();
+  });
 });

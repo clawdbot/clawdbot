@@ -4,13 +4,14 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { styleHealthChannelLine } from "../../packages/terminal-core/src/health-style.js";
 import { isRich } from "../../packages/terminal-core/src/theme.js";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { inspectChannelAccount } from "../channels/account-inspection.js";
 import { redactChannelStatusSummaryBaseUrl } from "../channels/account-snapshot-fields.js";
 import {
   resolveChannelAccountConfigured,
   resolveChannelAccountEnabled,
 } from "../channels/account-summary.js";
+import { countFailedChannelIngressQueueEntries } from "../channels/message/ingress-queue.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import { buildChannelAccountSnapshotFromAccount } from "../channels/plugins/status.js";
@@ -35,8 +36,6 @@ import {
 } from "../gateway/channel-health-policy.js";
 import type { GatewayHotReloadStatus } from "../gateway/config-reload-status.types.js";
 import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
-import { getGatewayModelPricingHealth } from "../gateway/model-pricing-cache-state.js";
-import { isGatewayModelPricingEnabled } from "../gateway/model-pricing-config.js";
 import type { ChannelRuntimeSnapshot } from "../gateway/server-channel-runtime.types.js";
 import { info } from "../globals.js";
 import { countFailedDeliveryQueueEntries } from "../infra/delivery-queue-sqlite.js";
@@ -213,19 +212,6 @@ function formatEventLoopHealthLine(summary: HealthSummary): string | null {
   }`;
 }
 
-/** Formats optional model-pricing cache degradation for text health output. */
-export function formatModelPricingHealthLine(summary: HealthSummary): string | null {
-  const modelPricing = summary.modelPricing;
-  if (!modelPricing || modelPricing.state === "disabled") {
-    return null;
-  }
-  if (modelPricing.state === "ok") {
-    return null;
-  }
-  const detail = modelPricing.detail ? ` (${modelPricing.detail})` : "";
-  return `Model pricing: warning (optional pricing refresh degraded)${detail}`;
-}
-
 function buildContextEngineHealthSummary(): ContextEngineHealthSummary | undefined {
   const quarantined: ContextEngineHealthSummary["quarantined"] = [];
   for (const entry of listContextEngineQuarantines()) {
@@ -253,12 +239,13 @@ export function formatContextEngineHealthLine(summary: HealthSummary): string | 
   return `Context engine: warning (${quarantined.length} quarantined; downgraded to legacy: ${engines})`;
 }
 
-/** Builds dead-lettered delivery queue health; shared with cached gateway responses. */
+/** Builds dead-lettered inbound and outbound queue health for cached gateway responses. */
 export function buildDeliveryQueueHealthSummary(): DeliveryQueueHealthSummary | undefined {
-  // Dead-lettered deliveries are retained in SQLite for diagnostics but had no
-  // health surface; a storage read failure must not take health down with it.
+  // Queue health reads are diagnostic; a storage failure must not take the
+  // gateway health endpoint down with it.
+  let failed: DeliveryQueueHealthSummary["failed"] = [];
   try {
-    const failed = countFailedDeliveryQueueEntries().map((queue) => {
+    failed = countFailedDeliveryQueueEntries().map((queue) => {
       const entry: DeliveryQueueHealthSummary["failed"][number] = {
         queueName: queue.queueName,
         count: queue.count,
@@ -268,11 +255,32 @@ export function buildDeliveryQueueHealthSummary(): DeliveryQueueHealthSummary | 
       }
       return entry;
     });
-    return failed.length > 0 ? { failed } : undefined;
   } catch (error) {
-    debugHealth(undefined, "delivery queue health read failed", error);
+    debugHealth(undefined, "outbound delivery queue health read failed", error);
+  }
+  let ingressFailed: NonNullable<DeliveryQueueHealthSummary["ingressFailed"]> = [];
+  try {
+    ingressFailed = countFailedChannelIngressQueueEntries().map((queue) => {
+      const entry: NonNullable<DeliveryQueueHealthSummary["ingressFailed"]>[number] = {
+        channelId: queue.channelId,
+        accountId: queue.accountId,
+        count: queue.count,
+      };
+      if (queue.oldestFailedAt != null) {
+        entry.oldestFailedAt = queue.oldestFailedAt;
+      }
+      return entry;
+    });
+  } catch (error) {
+    debugHealth(undefined, "channel ingress queue health read failed", error);
+  }
+  if (failed.length === 0 && ingressFailed.length === 0) {
     return undefined;
   }
+  return {
+    failed,
+    ...(ingressFailed.length > 0 ? { ingressFailed } : {}),
+  };
 }
 
 /** Formats dead-lettered delivery queue entries for text health output. */
@@ -281,11 +289,17 @@ export function formatDeliveryQueueHealthLine(
   now = Date.now(),
 ): string | null {
   const failed = summary.deliveryQueues?.failed ?? [];
-  if (failed.length === 0) {
+  const ingressFailed = summary.deliveryQueues?.ingressFailed ?? [];
+  if (failed.length === 0 && ingressFailed.length === 0) {
     return null;
   }
-  const counts = failed.map((queue) => `${queue.queueName}: ${queue.count}`).join(", ");
-  const oldest = failed
+  const counts = [
+    ...failed.map((queue) => `${queue.queueName}: ${queue.count}`),
+    ...ingressFailed.map(
+      (queue) => `inbound ${queue.channelId}/${queue.accountId}: ${queue.count}`,
+    ),
+  ].join(", ");
+  const oldest = [...failed, ...ingressFailed]
     .map((queue) => queue.oldestFailedAt)
     .filter((value): value is number => typeof value === "number");
   const oldestNote =
@@ -306,7 +320,7 @@ const resolveHeartbeatSummary = (cfg: OpenClawConfig, agentId: string) =>
 
 const resolveAgentOrder = (cfg: OpenClawConfig) => {
   const defaultAgentId = resolveDefaultAgentId(cfg);
-  const entries = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  const entries = listAgentEntries(cfg);
   const seen = new Set<string>();
   const ordered: Array<{ id: string; name?: string }> = [];
 
@@ -337,11 +351,22 @@ const resolveAgentOrder = (cfg: OpenClawConfig) => {
 };
 
 const buildSessionSummary = async (storePath: string, agentId?: string) => {
-  const { listSessionEntries } = await import("../config/sessions/session-accessor.js");
-  const sessions = listSessionEntries({
-    ...(agentId ? { agentId } : {}),
-    storePath,
-  })
+  const { listSessionEntriesReadOnly } = await import("../config/sessions/session-accessor.js");
+  const { isTransientSqliteError } = await import("../infra/unhandled-rejections.js");
+  let listed: ReturnType<typeof listSessionEntriesReadOnly>;
+  try {
+    listed = listSessionEntriesReadOnly({
+      ...(agentId ? { agentId } : {}),
+      storePath,
+    });
+  } catch (error) {
+    if (!isTransientSqliteError(error)) {
+      throw error;
+    }
+    // Health is best-effort: an empty snapshot beats failing on a transient lock.
+    listed = [];
+  }
+  const sessions = listed
     .filter(({ sessionKey }) => sessionKey !== "global" && sessionKey !== "unknown")
     .map(({ sessionKey, entry }) => ({ key: sessionKey, updatedAt: entry?.updatedAt ?? 0 }))
     .toSorted((a, b) => b.updatedAt - a.updatedAt);
@@ -748,7 +773,6 @@ export async function getHealthSnapshot(params?: {
     ...(params?.configReloadHotReloadStatus
       ? { configReload: { hotReloadStatus: params.configReloadHotReloadStatus } }
       : {}),
-    modelPricing: getGatewayModelPricingHealth({ enabled: isGatewayModelPricingEnabled(cfg) }),
     channels,
     channelOrder,
     channelLabels,
@@ -974,10 +998,6 @@ export async function healthCommand(
     const eventLoopLine = formatEventLoopHealthLine(summary);
     if (eventLoopLine) {
       runtime.log(styleHealthChannelLine(eventLoopLine, rich));
-    }
-    const modelPricingLine = formatModelPricingHealthLine(summary);
-    if (modelPricingLine) {
-      runtime.log(styleHealthChannelLine(modelPricingLine, rich));
     }
     const contextEngineLine = formatContextEngineHealthLine(summary);
     if (contextEngineLine) {

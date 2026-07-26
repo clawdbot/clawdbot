@@ -1,5 +1,6 @@
 // Codex tests cover client plugin behavior.
 import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { inc as incrementSemver } from "semver";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CodexAppServerClient,
@@ -10,7 +11,7 @@ import { resetSharedCodexAppServerClientForTests } from "./shared-client.js";
 import { createClientHarness } from "./test-support.js";
 import { MAX_CODEX_APP_SERVER_VERSION, MIN_CODEX_APP_SERVER_VERSION } from "./version.js";
 
-const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 600_000;
+const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 660_000;
 
 describe("CodexAppServerClient", () => {
   const clients: CodexAppServerClient[] = [];
@@ -387,10 +388,14 @@ describe("CodexAppServerClient", () => {
   });
 
   it("blocks stable Codex app-server versions newer than generated schemas", async () => {
+    const newerVersion = incrementSemver(MAX_CODEX_APP_SERVER_VERSION, "patch");
+    if (!newerVersion) {
+      throw new Error(`invalid maximum Codex app-server version: ${MAX_CODEX_APP_SERVER_VERSION}`);
+    }
     const { harness, initializing, outbound } = startInitialize();
     harness.send({
       id: outbound.id,
-      result: { userAgent: "openclaw/0.145.0 (macOS; test)" },
+      result: { userAgent: `openclaw/${newerVersion} (macOS; test)` },
     });
 
     await expect(initializing).rejects.toThrow(
@@ -585,8 +590,10 @@ describe("CodexAppServerClient", () => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const harness = createClientHarness();
     clients.push(harness.client);
-    harness.client.addRequestHandler((request) => {
+    let requestSignal: AbortSignal | undefined;
+    harness.client.addRequestHandler((request, signal) => {
       if (request.method === "item/tool/call") {
+        requestSignal = signal;
         return new Promise<never>(() => {});
       }
       return undefined;
@@ -608,6 +615,7 @@ describe("CodexAppServerClient", () => {
         ],
       },
     });
+    expect(requestSignal?.aborted).toBe(true);
     expect(warn).toHaveBeenCalledWith("codex app-server server request timed out", {
       id: "srv-timeout",
       method: "item/tool/call",

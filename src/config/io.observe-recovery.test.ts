@@ -35,7 +35,7 @@ describe("config observe recovery", () => {
   const clobberedUpdateChannelConfig = { update: { channel: "beta" } };
   const clobberedUpdateChannelRaw = `${JSON.stringify(clobberedUpdateChannelConfig, null, 2)}\n`;
   const recoverableTelegramConfig = {
-    meta: { lastTouchedAt: "2026-04-22T00:00:00.000Z" },
+    meta: { lastTouchedVersion: "2026.4.22" },
     update: { channel: "beta" },
     gateway: { mode: "local" },
     channels: { telegram: { enabled: true, dmPolicy: "pairing", groupPolicy: "allowlist" } },
@@ -316,7 +316,7 @@ describe("config observe recovery", () => {
     await withSuiteHome(async (home) => {
       const { deps, configPath, auditPath, warn } = makeDeps(home);
       await seedConfigBackup(configPath, {
-        meta: { lastTouchedAt: "2026-04-22T00:00:00.000Z" },
+        meta: { lastTouchedVersion: "2026.4.22" },
         update: { channel: "beta" },
         browser: { enabled: true },
         gateway: { mode: "local", auth: { mode: "token", token: "secret-token" } },
@@ -361,7 +361,7 @@ describe("config observe recovery", () => {
       const { deps, configPath, auditPath } = makeDeps(home);
       await seedConfigBackup(configPath, recoverableTelegramConfig);
       const clobbered = await writeConfigRaw(configPath, {
-        meta: { lastTouchedAt: "2026-04-22T00:00:00.000Z" },
+        meta: { lastTouchedVersion: "2026.4.22" },
         update: { channel: "beta" },
         channels: { telegram: { enabled: true, dmPolicy: "pairing", groupPolicy: "allowlist" } },
       });
@@ -428,7 +428,7 @@ describe("config observe recovery", () => {
         },
       });
       const clobbered = await writeConfigRaw(configPath, {
-        meta: { lastTouchedAt: "2026-04-22T00:00:00.000Z" },
+        meta: { lastTouchedVersion: "2026.4.22" },
         gateway: { mode: "local" },
       });
 

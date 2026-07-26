@@ -249,6 +249,19 @@ describe("runDaemonRestart health checks", () => {
     );
   }
 
+  async function runUnmanagedStop(opts: { json?: boolean; force?: boolean } = { json: true }) {
+    let outcome: unknown;
+    runServiceStop.mockImplementation(
+      async (params: {
+        onNotLoaded?: (ctx: { stdout: NodeJS.WritableStream }) => Promise<unknown>;
+      }) => {
+        outcome = await params.onNotLoaded?.({ stdout: process.stdout });
+      },
+    );
+    await runDaemonStop(opts);
+    return outcome;
+  }
+
   beforeAll(async () => {
     ({ runDaemonStart, runDaemonRestart, runDaemonStop } = await import("./lifecycle.js"));
   });
@@ -707,25 +720,20 @@ describe("runDaemonRestart health checks", () => {
   });
 
   it("signals an unmanaged gateway process on stop", async () => {
-    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200, 4200, 4300]);
-    runServiceStop.mockImplementation(
-      async (params: {
-        onNotLoaded?: (ctx: { stdout: NodeJS.WritableStream }) => Promise<unknown>;
-      }) => {
-        await params.onNotLoaded?.({ stdout: process.stdout });
-      },
-    );
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4300, 4300, 4400]);
 
-    await runDaemonStop({ json: true });
+    await runUnmanagedStop();
 
     expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(18789);
-    expect(signalVerifiedGatewayPidSync).toHaveBeenCalledWith(4200, "SIGTERM");
     expect(signalVerifiedGatewayPidSync).toHaveBeenCalledWith(4300, "SIGTERM");
+    expect(signalVerifiedGatewayPidSync).toHaveBeenCalledWith(4400, "SIGTERM");
+    // Verified listeners win over the lock owner (pid 4200) when lsof can see them.
+    expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalledWith(4200, "SIGTERM");
     expect(appendGatewayLifecycleAudit).toHaveBeenCalledWith({
       action: "stop",
       source: "cli",
       mode: "sigterm",
-      pid: 4200,
+      pid: 4300,
     });
   });
 
@@ -760,15 +768,8 @@ describe("runDaemonRestart health checks", () => {
   it("allows forced non-interactive unmanaged stop fallback", async () => {
     isTerminalInteractive.mockReturnValue(false);
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
-    runServiceStop.mockImplementation(
-      async (params: {
-        onNotLoaded?: (ctx: { stdout: NodeJS.WritableStream }) => Promise<unknown>;
-      }) => {
-        await params.onNotLoaded?.({ stdout: process.stdout });
-      },
-    );
 
-    await runDaemonStop({ json: true, force: true });
+    await runUnmanagedStop({ json: true, force: true });
 
     expect(signalVerifiedGatewayPidSync).toHaveBeenCalledWith(4200, "SIGTERM");
   });
@@ -789,15 +790,8 @@ describe("runDaemonRestart health checks", () => {
   it("stops a running disabled systemd unit through the service manager", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     service.readRuntime.mockResolvedValue({ status: "running" });
-    runServiceStop.mockImplementation(
-      async (params: {
-        onNotLoaded?: (ctx: { stdout: NodeJS.WritableStream }) => Promise<unknown>;
-      }) => {
-        await params.onNotLoaded?.({ stdout: process.stdout });
-      },
-    );
 
-    await runDaemonStop({ json: true });
+    await runUnmanagedStop();
 
     expect(service.stop).toHaveBeenCalledWith(
       expect.objectContaining({ env: process.env, stdout: process.stdout }),
@@ -811,6 +805,37 @@ describe("runDaemonRestart health checks", () => {
     expect(service.readCommand).not.toHaveBeenCalled();
     expect(loadConfig).not.toHaveBeenCalled();
     expect(resolveGatewayPort).not.toHaveBeenCalled();
+  });
+
+  it("stops the locked gateway owner when listener discovery finds nothing", async () => {
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
+    formatGatewayPidList.mockImplementation((pids) => pids.join(", "));
+
+    const outcome = await runUnmanagedStop();
+
+    expect(signalVerifiedGatewayPidSync).toHaveBeenCalledWith(4200, "SIGTERM");
+    expect(appendGatewayLifecycleAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "stop", mode: "sigterm", pid: 4200 }),
+    );
+    expect(outcome).toEqual({
+      result: "stopped",
+      message: "Gateway stop signal sent to unmanaged process on port 18789: 4200.",
+    });
+  });
+
+  it("stops the active lock port when the configured port has drifted", async () => {
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
+    readActiveGatewayLockIdentity.mockResolvedValue({
+      pid: 4300,
+      createdAt: "2026-07-16T12:00:00.000Z",
+      port: 39_471,
+    });
+
+    await runUnmanagedStop();
+
+    expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(39_471);
+    expect(signalVerifiedGatewayPidSync).toHaveBeenCalledWith(4300, "SIGTERM");
+    expect(service.readCommand).not.toHaveBeenCalled();
   });
 
   it("signals a single unmanaged gateway process on restart", async () => {
@@ -1071,15 +1096,9 @@ describe("runDaemonRestart health checks", () => {
     });
     stopSystemdService.mockResolvedValue(undefined);
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
-    runServiceStop.mockImplementation(
-      async (params: {
-        onNotLoaded?: (ctx: { stdout: NodeJS.WritableStream }) => Promise<unknown>;
-      }) => {
-        await params.onNotLoaded?.({ stdout: process.stdout });
-      },
+    await expect(runUnmanagedStop()).resolves.toEqual(
+      expect.objectContaining({ result: "stopped" }),
     );
-
-    await expect(runDaemonStop({ json: true })).resolves.toBeUndefined();
     expect(stopSystemdService).toHaveBeenCalled();
     expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
   });
@@ -1097,15 +1116,7 @@ describe("runDaemonRestart health checks", () => {
       ),
     );
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
-    runServiceStop.mockImplementation(
-      async (params: {
-        onNotLoaded?: (ctx: { stdout: NodeJS.WritableStream }) => Promise<unknown>;
-      }) => {
-        await params.onNotLoaded?.({ stdout: process.stdout });
-      },
-    );
-
-    await expect(runDaemonStop({ json: true })).rejects.toThrow(
+    await expect(runUnmanagedStop()).rejects.toThrow(
       /sudo systemctl stop openclaw-gateway\.service/,
     );
     expect(stopSystemdService).toHaveBeenCalled();
@@ -1114,16 +1125,12 @@ describe("runDaemonRestart health checks", () => {
 
   it("skips unmanaged signaling for pids that are not live gateway processes", async () => {
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
-    runServiceStop.mockImplementation(
-      async (params: {
-        onNotLoaded?: (ctx: { stdout: NodeJS.WritableStream }) => Promise<unknown>;
-      }) => {
-        await params.onNotLoaded?.({ stdout: process.stdout });
-      },
-    );
+    readActiveGatewayLockIdentity.mockResolvedValue(undefined);
 
-    await runDaemonStop({ json: true });
+    const outcome = await runUnmanagedStop();
 
     expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
+    expect(appendGatewayLifecycleAudit).not.toHaveBeenCalled();
+    expect(outcome).toBeNull();
   });
 });

@@ -14,6 +14,7 @@ import {
 import { listQaRunnerCliContributions } from "./qa-runner-runtime.js";
 
 const ORIGINAL_ENV = {
+  OPENCLAW_ENABLE_PRIVATE_QA_CLI: process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI,
   OPENCLAW_DISABLE_BUNDLED_PLUGINS: process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS,
   OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
   OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
@@ -140,5 +141,48 @@ describe("plugin-sdk qa-runner-runtime linked plugin smoke", () => {
         },
       },
     ]);
+  });
+
+  it("ignores operator runner metadata and state during private QA discovery", () => {
+    const stateDir = makeTempDir("openclaw-private-qa-operator-state-");
+    const pluginDir = path.join(stateDir, "extensions", "operator-runner");
+    const stateDatabasePath = path.join(stateDir, "openclaw.sqlite");
+    const stateDatabaseSentinel = "operator-state-must-remain-unopened";
+
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(stateDatabasePath, stateDatabaseSentinel, "utf8");
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "operator-runner",
+        qaRunners: [{ commandName: "operator-sentinel" }],
+        configSchema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {},
+        },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/operator-runner",
+        type: "module",
+        openclaw: { extensions: ["./index.js"] },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "export default {};\n", "utf8");
+
+    process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = "1";
+    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "0";
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    process.env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
+
+    const contributions = listQaRunnerCliContributions();
+
+    expect(contributions.some((runner) => runner.pluginId === "operator-runner")).toBe(false);
+    expect(fs.readFileSync(stateDatabasePath, "utf8")).toBe(stateDatabaseSentinel);
   });
 });

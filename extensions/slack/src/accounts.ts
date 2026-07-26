@@ -10,8 +10,6 @@ import {
 import {
   mapAllowFromEntries,
   normalizeChannelDmPolicy,
-  resolveChannelDmAllowFrom,
-  resolveChannelDmPolicy,
   type ChannelDmPolicy,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
@@ -63,7 +61,7 @@ export function resolveSlackOperationToken(
 const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("slack", {
   hasImplicitDefaultAccount: (cfg) => {
     const slack = cfg.channels?.slack;
-    if (slack?.identity === "user") {
+    if (slack?.postAs === "user") {
       const hasUserToken =
         hasConfiguredAccountValue(slack.userToken) ||
         hasConfiguredAccountValue(process.env.SLACK_USER_TOKEN);
@@ -202,10 +200,7 @@ export function resolveSlackAccountAllowFrom(params: {
   );
   const accountConfig = resolveSlackAccountConfig(params.cfg, accountId);
   const rootConfig = params.cfg.channels?.slack as SlackAccountConfig | undefined;
-  const allowFrom = resolveChannelDmAllowFrom({
-    account: accountConfig as Record<string, unknown> | undefined,
-    parent: rootConfig as Record<string, unknown> | undefined,
-  });
+  const allowFrom = accountConfig?.allowFrom ?? rootConfig?.allowFrom;
   return allowFrom ? mapAllowFromEntries(allowFrom) : undefined;
 }
 
@@ -232,12 +227,7 @@ export function resolveSlackAccountDmPolicy(params: {
   );
   const accountConfig = resolveSlackAccountConfig(params.cfg, accountId);
   const rootConfig = params.cfg.channels?.slack as SlackAccountConfig | undefined;
-  const policy = resolveChannelDmPolicy({
-    account: accountConfig as Record<string, unknown> | undefined,
-    parent: rootConfig as Record<string, unknown> | undefined,
-    defaultPolicy: "pairing",
-  });
-  return normalizeChannelDmPolicy(policy);
+  return normalizeChannelDmPolicy(accountConfig?.dmPolicy ?? rootConfig?.dmPolicy ?? "pairing");
 }
 
 export function resolveSlackAccount(params: {
@@ -249,7 +239,7 @@ export function resolveSlackAccount(params: {
   );
   const baseEnabled = params.cfg.channels?.slack?.enabled !== false;
   const merged = mergeSlackAccountConfig(params.cfg, accountId);
-  const identity = merged.identity ?? "bot";
+  const identity = merged.postAs ?? "bot";
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
   const mode = merged.mode ?? "socket";

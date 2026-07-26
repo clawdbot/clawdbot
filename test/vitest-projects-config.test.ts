@@ -212,7 +212,7 @@ describe("projects vitest config", () => {
     ]);
   });
 
-  it("keeps the root ui lane aligned with the shared jsdom setup", () => {
+  it("keeps the root ui lane on the shared non-isolated runner", () => {
     const config = createUiVitestConfig();
     const testConfig = requireTestConfig(config);
     expect(testConfig.environment).toBe("jsdom");

@@ -99,6 +99,29 @@ from a different install, the updater prints both roots and the managed
 service's Node path, and checks that Node version against the target release's
 `engines.node` requirement before replacing the package.
 
+## Source-checkout servers (reference script)
+
+Teams running a gateway directly from a git checkout on a server can update it
+with `scripts/update-gateway.sh` from inside that checkout. It is the reference
+for an efficient source-server update: it restores tracked build outputs that
+`pnpm build` rewrites, fails closed on any other local changes, fast-forwards
+`main` (or rebases a local server branch onto `origin/main`), installs
+dependencies, builds clean, and restarts the gateway.
+
+```bash
+ssh you@server 'cd /path/to/openclaw && scripts/update-gateway.sh'
+```
+
+Override the restart for custom service units, or skip it entirely:
+
+```bash
+OPENCLAW_UPDATE_RESTART_CMD='systemctl --user restart openclaw-gateway.service' scripts/update-gateway.sh
+OPENCLAW_UPDATE_RESTART_CMD='' scripts/update-gateway.sh
+```
+
+For a plain single-user source install, prefer `openclaw update --channel dev`
+instead — it manages the checkout, build, and gateway restart for you.
+
 ## Alternative: re-run the installer
 
 ```bash
@@ -229,20 +252,17 @@ Off by default. Enable it in `~/.openclaw/openclaw.json`:
     channel: "stable",
     auto: {
       enabled: true,
-      stableDelayHours: 6,
-      stableJitterHours: 12,
-      betaCheckIntervalHours: 1,
     },
   },
 }
 ```
 
-| Channel           | Behavior                                                                                                                                     |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `stable`          | Waits `stableDelayHours` (default: 6), then applies with deterministic jitter across `stableJitterHours` (default: 12) for a spread rollout. |
-| `extended-stable` | Checks for a read-only update hint on startup and every 24 hours when `checkOnStart` is enabled. Never applies automatically.                |
-| `beta`            | Checks every `betaCheckIntervalHours` (default: 1) and applies immediately.                                                                  |
-| `dev`             | No automatic apply. Use `openclaw update` manually.                                                                                          |
+| Channel           | Behavior                                                                                                                      |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `stable`          | Applies after a built-in delay with deterministic jitter for a spread rollout.                                                |
+| `extended-stable` | Checks for a read-only update hint on startup and every 24 hours when `checkOnStart` is enabled. Never applies automatically. |
+| `beta`            | Checks on a built-in interval and applies immediately.                                                                        |
+| `dev`             | No automatic apply. Use `openclaw update` manually.                                                                           |
 
 The gateway also logs an update hint on startup (disable with
 `update.checkOnStart: false`). Stored extended-stable selections use this

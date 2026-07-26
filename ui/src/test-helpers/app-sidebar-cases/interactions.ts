@@ -19,29 +19,6 @@ import {
 import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.ts";
 
-function createDataTransferStub() {
-  const data = new Map<string, string>();
-  return {
-    get types() {
-      return [...data.keys()];
-    },
-    setData: (type: string, value: string) => void data.set(type, value),
-    getData: (type: string) => data.get(type) ?? "",
-    effectAllowed: "none",
-    dropEffect: "none",
-  };
-}
-
-function dispatchDragEvent(
-  target: Element,
-  type: "dragstart" | "dragover" | "drop",
-  dataTransfer: ReturnType<typeof createDataTransferStub>,
-) {
-  const event = new Event(type, { bubbles: true, cancelable: true });
-  Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
-  target.dispatchEvent(event);
-}
-
 describe("AppSidebar multi-select", () => {
   const KEYS = ["agent:main:main", "agent:main:a", "agent:main:b", "agent:main:c"];
 
@@ -134,18 +111,22 @@ describe("AppSidebar multi-select", () => {
     menu.querySelector<HTMLButtonElement>('[data-shortcut="a"]')?.click();
 
     await waitForFast(() => expect(harness.patch).toHaveBeenCalledTimes(2));
+    // Each row defers its canonical list refresh; the batch pays one refresh at
+    // the end instead of a full sessions.list round trip per archived row.
     expect(harness.patch).toHaveBeenNthCalledWith(
       1,
       "agent:main:a",
       { archived: true },
-      { agentId: "main" },
+      { agentId: "main", deferListRefresh: true },
     );
     expect(harness.patch).toHaveBeenNthCalledWith(
       2,
       "agent:main:b",
       { archived: true },
-      { agentId: "main" },
+      { agentId: "main", deferListRefresh: true },
     );
+    await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledTimes(1));
+    expect(harness.refreshReplacement).toHaveBeenCalledWith("main");
   });
 
   it("deletes the selection in one batch after a single confirm", async () => {
@@ -196,7 +177,10 @@ describe("AppSidebar transient menus", () => {
   // through the top-layer surface host instead of plain fixed divs.
   it("hosts the session sort menu in the top-layer menu surface", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("main", ["agent:main:main", "agent:main:task"]),
+    );
 
     const trigger = sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort");
     if (!trigger) {
@@ -212,7 +196,10 @@ describe("AppSidebar transient menus", () => {
 
   it("ignores a stale sort-menu hide after opening its replacement", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("main", ["agent:main:main", "agent:main:task"]),
+    );
     const trigger = sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort");
     if (!trigger) {
       throw new Error("expected sort menu trigger");
@@ -252,7 +239,7 @@ describe("AppSidebar transient menus", () => {
     await sidebar.updateComplete;
     const firstMenu = sidebar.querySelector<HTMLElement>(".sidebar-agent-menu");
     const settingsItem = firstMenu?.querySelector<HTMLElement>(
-      'wa-dropdown-item[value="command:settings"]',
+      'wa-dropdown-item[value="command:agent-settings"]',
     );
     expect(firstMenu).not.toBeNull();
     expect(settingsItem).not.toBeNull();
@@ -333,49 +320,6 @@ describe("AppSidebar transient menus", () => {
   });
 });
 
-describe("AppSidebar custom group reordering", () => {
-  async function mountWithGroups(groups: string[]) {
-    const client = {} as GatewayBrowserClient;
-    const gateway = createGateway(client);
-    const harness = createSessionsHarness("main", ["agent:main:main"]);
-    const { sidebar } = await mountSidebar(gateway, harness.sessions);
-    sidebar.connected = true;
-    harness.publish({ groups });
-    await sidebar.updateComplete;
-    return { sidebar, harness };
-  }
-
-  function groupHeader(sidebar: SidebarLifecycleState, sectionId: string) {
-    const header = sidebar.querySelector(
-      `[data-session-section="${sectionId}"] .sidebar-recent-sessions__head`,
-    );
-    if (!header) {
-      throw new Error(`expected header for section ${sectionId}`);
-    }
-    return header;
-  }
-
-  it("marks custom group headers draggable but keeps smart sections static", async () => {
-    const { sidebar } = await mountWithGroups(["Alpha", "Beta"]);
-
-    expect(groupHeader(sidebar, "category:Alpha").getAttribute("draggable")).toBe("true");
-    expect(groupHeader(sidebar, "ungrouped").getAttribute("draggable")).toBe("false");
-  });
-
-  it("persists the new catalog order when a group header drops onto another group", async () => {
-    const { sidebar, harness } = await mountWithGroups(["Alpha", "Beta", "Gamma"]);
-    const dataTransfer = createDataTransferStub();
-
-    dispatchDragEvent(groupHeader(sidebar, "category:Gamma"), "dragstart", dataTransfer);
-    const alphaSection = sidebar.querySelector('[data-session-section="category:Alpha"]');
-    if (!alphaSection) {
-      throw new Error("expected Alpha section");
-    }
-    dispatchDragEvent(alphaSection, "drop", dataTransfer);
-
-    expect(harness.groupsPut).toHaveBeenCalledWith(["Gamma", "Alpha", "Beta"]);
-  });
-});
 describe("AppSidebar catalog session rows", () => {
   const catalogList = (
     sessions: Array<Record<string, unknown>>,
@@ -421,7 +365,7 @@ describe("AppSidebar catalog session rows", () => {
     return { sidebar, request };
   }
 
-  it("renders local and paired-node rows under persistent host headings", async () => {
+  it("renders local rows directly and keeps paired-node rows under their host heading", async () => {
     vi.useFakeTimers();
     try {
       const { sidebar } = await mountWithCatalog(
@@ -469,9 +413,9 @@ describe("AppSidebar catalog session rows", () => {
       const section = sidebar.querySelector('[data-session-section="catalog:codex"]');
       const local = section?.querySelector('[data-session-catalog-host="gateway:local"]');
       const node = section?.querySelector('[data-session-catalog-host="node:devbox"]');
-      expect(local?.querySelector(".sidebar-session-catalog-host__label")?.textContent).toBe(
-        "Local Codex",
-      );
+      // Counts only render while a catalog section is collapsed.
+      expect(section?.querySelector(".sidebar-session-group-count")).toBeNull();
+      expect(local?.querySelector(".sidebar-session-catalog-host__head")).toBeNull();
       expect(local?.textContent).toContain("Local session");
       expect(local?.textContent).not.toContain("Node session");
       expect(node?.querySelector(".sidebar-session-catalog-host__label")?.textContent).toBe(
@@ -479,6 +423,14 @@ describe("AppSidebar catalog session rows", () => {
       );
       expect(node?.textContent).toContain("Node session");
       expect(node?.textContent).not.toContain("Local session");
+
+      // Collapsing the catalog surfaces the row count as the closed-state indicator.
+      section?.querySelector<HTMLButtonElement>(".sidebar-session-group-toggle")?.click();
+      await sidebar.updateComplete;
+      const collapsedSection = sidebar.querySelector('[data-session-section="catalog:codex"]');
+      expect(
+        collapsedSection?.querySelector(".sidebar-session-group-count")?.textContent?.trim(),
+      ).toBe("2");
     } finally {
       vi.useRealTimers();
     }
@@ -598,7 +550,7 @@ describe("AppSidebar catalog session rows", () => {
           {
             threadId: "thread-1",
             name: "Release checklist",
-            openClawSessionKey: "agent:main:adopted-codex",
+            sessionKey: "agent:main:adopted-codex",
           },
         ]),
         ["agent:main:main", "agent:main:adopted-codex"],

@@ -1,4 +1,5 @@
 /** Process-local registry for SecretRef owners isolated during cold startup. */
+import type { SecretRefSource } from "../config/types.secrets.js";
 import {
   describeSecretResolutionError,
   isSecretResolutionError,
@@ -31,6 +32,13 @@ export type DegradedSecretOwner = {
   paths: string[];
   refKeys: string[];
   reason: string;
+  /** Shared provider failure that made this owner unavailable. Runtime-internal diagnostic data. */
+  providerFailures?: Array<{
+    source: SecretRefSource;
+    provider: string;
+  }>;
+  /** Ref-scoped failure retained when this owner also has a provider-scoped outage. */
+  refFailureReason?: string;
 };
 
 /** SecretRef identities resolved for one owner in an active runtime snapshot. */

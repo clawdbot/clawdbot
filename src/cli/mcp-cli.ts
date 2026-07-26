@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringifiedOptionalString,
@@ -196,12 +197,6 @@ const SENSITIVE_HEADER_NAMES = new Set([
 
 const SENSITIVE_KEY_PATTERN =
   /(?:^|[_-])(api[_-]?key|authorization|bearer|password|secret|token)$/i;
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 function issue(level: McpDoctorIssue["level"], message: string): McpDoctorIssue {
   return { level, message };
@@ -547,15 +542,37 @@ function buildMcpProbeConfig(params: {
   };
 }
 
+const DEFAULT_MCP_PROBE_INITIALIZE_TIMEOUT_MS = 5_000;
+
+function applyMcpProbeInitializeTimeout(server: Record<string, unknown>): Record<string, unknown> {
+  if (
+    typeof server.connectionTimeoutMs === "number" &&
+    Number.isFinite(server.connectionTimeoutMs) &&
+    server.connectionTimeoutMs > 0
+  ) {
+    return server;
+  }
+  return {
+    ...server,
+    connectionTimeoutMs: DEFAULT_MCP_PROBE_INITIALIZE_TIMEOUT_MS,
+  };
+}
+
 async function probeMcpServersOrFail(params: {
   config: OpenClawConfig;
   servers: Record<string, Record<string, unknown>>;
   path: string;
 }): Promise<ReturnType<typeof formatMcpProbeResult>> {
+  const probeServers = Object.fromEntries(
+    Object.entries(params.servers).map(([name, server]) => [
+      name,
+      applyMcpProbeInitializeTimeout(server),
+    ]),
+  );
   const runtime = createSessionMcpRuntime({
     sessionId: "openclaw-cli-mcp-probe",
     workspaceDir: process.cwd(),
-    cfg: buildMcpProbeConfig({ config: params.config, servers: params.servers }),
+    cfg: buildMcpProbeConfig({ config: params.config, servers: probeServers }),
     manifestRegistry: { plugins: [] },
   });
   try {
@@ -969,11 +986,20 @@ export function registerMcpCli(program: Command) {
         if (opts.parallel) {
           server.supportsParallelToolCalls = true;
         }
-        setOptionalField(server, "timeout", parsePositiveNumberOption(opts.timeout, "--timeout"));
+        const requestTimeoutSeconds = parsePositiveNumberOption(opts.timeout, "--timeout");
         setOptionalField(
           server,
-          "connectTimeout",
-          parsePositiveNumberOption(opts.connectTimeout, "--connect-timeout"),
+          "requestTimeoutMs",
+          requestTimeoutSeconds === undefined ? undefined : requestTimeoutSeconds * 1_000,
+        );
+        const connectionTimeoutSeconds = parsePositiveNumberOption(
+          opts.connectTimeout,
+          "--connect-timeout",
+        );
+        setOptionalField(
+          server,
+          "connectionTimeoutMs",
+          connectionTimeoutSeconds === undefined ? undefined : connectionTimeoutSeconds * 1_000,
         );
         const include = parseCsvList(opts.include);
         const exclude = parseCsvList(opts.exclude);
@@ -1157,17 +1183,23 @@ export function registerMcpCli(program: Command) {
           }
         }
         if (opts.clearTimeouts) {
-          delete next.timeout;
-          delete next.connectTimeout;
-          delete next.connect_timeout;
           delete next.requestTimeoutMs;
           delete next.connectionTimeoutMs;
         }
-        setOptionalField(next, "timeout", parsePositiveNumberOption(opts.timeout, "--timeout"));
+        const requestTimeoutSeconds = parsePositiveNumberOption(opts.timeout, "--timeout");
         setOptionalField(
           next,
-          "connectTimeout",
-          parsePositiveNumberOption(opts.connectTimeout, "--connect-timeout"),
+          "requestTimeoutMs",
+          requestTimeoutSeconds === undefined ? undefined : requestTimeoutSeconds * 1_000,
+        );
+        const connectionTimeoutSeconds = parsePositiveNumberOption(
+          opts.connectTimeout,
+          "--connect-timeout",
+        );
+        setOptionalField(
+          next,
+          "connectionTimeoutMs",
+          connectionTimeoutSeconds === undefined ? undefined : connectionTimeoutSeconds * 1_000,
         );
         if (opts.parallel === true) {
           next.supportsParallelToolCalls = true;

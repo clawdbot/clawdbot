@@ -26,6 +26,7 @@ function loadNodeOs(): typeof NodeOs | null {
 // NEVER convert to top-level runtime imports - breaks browser/Vite builds
 const os = loadNodeOs();
 
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import {
   resolveTimerTimeoutMs,
   clampTimerTimeoutMs,
@@ -60,6 +61,7 @@ import {
 } from "../utils/stream-first-event-timeout.js";
 import { createSseByteGuard } from "../utils/streaming-byte-guard.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
+import { inspectTlsCertificateError } from "../utils/tls-certificate-errors.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import { supportsOpenAITemperature } from "./openai-reasoning-effort.js";
 import {
@@ -142,6 +144,32 @@ function isRetryableError(status: number, errorText: string): boolean {
   return /rate.?limit|overloaded|service.?unavailable|upstream.?connect|connection.?refused/i.test(
     errorText,
   );
+}
+
+function resolveHttpRetryDelayMs(response: Response, attempt: number): number {
+  const fallbackMs = BASE_DELAY_MS * 2 ** attempt;
+  const retryAfterMs = response.headers.get("retry-after-ms");
+  if (retryAfterMs) {
+    const trimmed = retryAfterMs.trim();
+    const millis = Number(trimmed);
+    if (/^\d+(?:\.\d+)?$/.test(trimmed) && Number.isFinite(millis)) {
+      return clampTimerTimeoutMs(millis, 0) ?? fallbackMs;
+    }
+  }
+
+  const retryAfter = response.headers.get("retry-after");
+  if (!retryAfter) {
+    return fallbackMs;
+  }
+  const trimmed = retryAfter.trim();
+  const seconds = Number(trimmed);
+  if (/^\d+$/.test(trimmed) && Number.isFinite(seconds)) {
+    return clampTimerTimeoutMs(seconds * 1000, 0) ?? fallbackMs;
+  }
+  const retryAt = parseRetryAfterHttpDateMs(trimmed);
+  return retryAt === undefined
+    ? fallbackMs
+    : (clampTimerTimeoutMs(retryAt - Date.now(), 0) ?? fallbackMs);
 }
 
 function resolveRequestTimeoutMs(options?: OpenAICodexResponsesOptions): number | undefined {
@@ -373,60 +401,25 @@ export const streamOpenAICodexResponses: StreamFunction<
           throw new Error("Request was aborted");
         }
 
+        let attemptResponse: Response;
+        let errorText: string;
         try {
-          response = await fetch(resolveCodexUrl(model.baseUrl), {
+          attemptResponse = await fetch(resolveCodexUrl(model.baseUrl), {
             method: "POST",
             headers: sseHeaders,
             body: sseBody,
             signal: activeSignal,
           });
+          response = attemptResponse;
           await options?.onResponse?.(
-            { status: response.status, headers: headersToRecord(response.headers) },
+            { status: attemptResponse.status, headers: headersToRecord(attemptResponse.headers) },
             model,
           );
 
-          if (response.ok) {
+          if (attemptResponse.ok) {
             break;
           }
-
-          const errorText = await readChatGptResponsesErrorTextLimited(response);
-          if (attempt < maxRetries && isRetryableError(response.status, errorText)) {
-            let delayMs = BASE_DELAY_MS * 2 ** attempt;
-
-            const retryAfterMs = response.headers.get("retry-after-ms");
-            if (retryAfterMs !== null) {
-              const trimmedRetryAfterMs = retryAfterMs.trim();
-              const millis = Number(trimmedRetryAfterMs);
-              if (/^\d+(?:\.\d+)?$/.test(trimmedRetryAfterMs) && Number.isFinite(millis)) {
-                delayMs = clampTimerTimeoutMs(millis, 0) ?? delayMs;
-              }
-            } else {
-              const retryAfter = response.headers.get("retry-after");
-              if (retryAfter) {
-                const trimmedRetryAfter = retryAfter.trim();
-                const seconds = Number(trimmedRetryAfter);
-                if (/^\d+$/.test(trimmedRetryAfter) && Number.isFinite(seconds)) {
-                  delayMs = clampTimerTimeoutMs(seconds * 1000, 0) ?? delayMs;
-                } else {
-                  const retryAt = parseRetryAfterHttpDateMs(trimmedRetryAfter);
-                  if (retryAt !== undefined) {
-                    delayMs = clampTimerTimeoutMs(retryAt - Date.now(), 0) ?? delayMs;
-                  }
-                }
-              }
-            }
-
-            await sleepWithAbort(delayMs, activeSignal);
-            continue;
-          }
-
-          // Parse error for friendly message on final attempt or non-retryable error
-          const fakeResponse = new Response(errorText, {
-            status: response.status,
-            statusText: response.statusText,
-          });
-          const info = await parseErrorResponse(fakeResponse);
-          throw new Error(info.friendlyMessage || info.message);
+          errorText = await readChatGptResponsesErrorTextLimited(attemptResponse);
         } catch (error) {
           if (error instanceof Error) {
             if (
@@ -447,15 +440,32 @@ export const streamOpenAICodexResponses: StreamFunction<
               throw new Error(`Request timed out after ${requestTimeoutMs}ms`, { cause: error });
             }
           }
-          lastError = error instanceof Error ? error : new Error(String(error));
-          // Network errors are retryable
-          if (attempt < maxRetries && !lastError.message.includes("usage limit")) {
+          const tlsCertificateError = inspectTlsCertificateError(error);
+          lastError = toErrorObject(error, String(error));
+          // Deterministic certificate failures cannot recover through backoff.
+          if (
+            attempt < maxRetries &&
+            !lastError.message.includes("usage limit") &&
+            !tlsCertificateError
+          ) {
             const delayMs = BASE_DELAY_MS * 2 ** attempt;
             await sleepWithAbort(delayMs, activeSignal);
             continue;
           }
           throw lastError;
         }
+
+        if (attempt < maxRetries && isRetryableError(attemptResponse.status, errorText)) {
+          await sleepWithAbort(resolveHttpRetryDelayMs(attemptResponse, attempt), activeSignal);
+          continue;
+        }
+
+        const info = parseErrorResponseText(
+          errorText,
+          attemptResponse.status,
+          attemptResponse.statusText,
+        );
+        throw new Error(info.friendlyMessage || info.message);
       }
 
       if (!response?.ok) {
@@ -1355,7 +1365,7 @@ async function* parseWebSocket(
     }
 
     if (failed) {
-      throw toLintErrorObject(failed, "Non-Error thrown");
+      throw toErrorObject(failed, "Non-Error thrown");
     }
     if (!sawCompletion) {
       throw new Error("WebSocket stream closed before response.completed");
@@ -1579,11 +1589,12 @@ async function readChatGptResponsesErrorTextLimited(response: Response): Promise
   return text;
 }
 
-async function parseErrorResponse(
-  response: Response,
-): Promise<{ message: string; friendlyMessage?: string }> {
-  const raw = await readChatGptResponsesErrorTextLimited(response);
-  let message = raw || response.statusText || "Request failed";
+function parseErrorResponseText(
+  raw: string,
+  status: number,
+  statusText: string,
+): { message: string; friendlyMessage?: string } {
+  let message = raw || statusText || "Request failed";
   let friendlyMessage: string | undefined;
 
   try {
@@ -1601,7 +1612,7 @@ async function parseErrorResponse(
       const code = err.code || err.type || "";
       if (
         /usage_limit_reached|usage_not_included|rate_limit_exceeded/i.test(code) ||
-        response.status === 429
+        status === 429
       ) {
         const plan = err.plan_type ? ` (${err.plan_type.toLowerCase()} plan)` : "";
         const mins = err.resets_at
@@ -1700,17 +1711,4 @@ function buildWebSocketHeaders(
   return headers;
 }
 
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

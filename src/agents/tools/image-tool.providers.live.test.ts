@@ -158,9 +158,16 @@ function createLiveConfig(testCase: LiveProviderCase): OpenClawConfig {
     },
     tools: {
       media: {
+        models: [
+          {
+            provider: testCase.provider,
+            model: testCase.model,
+            timeoutSeconds: 90,
+            capabilities: ["image"],
+          },
+        ],
         image: {
           timeoutSeconds: 90,
-          models: [{ provider: testCase.provider, model: testCase.model, timeoutSeconds: 90 }],
         },
       },
     },

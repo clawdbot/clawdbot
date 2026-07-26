@@ -3,7 +3,6 @@
  * combines explicit policy, configured models, defaults, and runtime
  * auth-backed availability.
  */
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   ModelAuthAvailabilityEvaluation,
@@ -103,6 +102,19 @@ function dedupeLogicalModelCatalogEntries(
     seen.add(key);
     return true;
   });
+}
+
+function isPickerVisibleCatalogEntry(
+  entry: ModelCatalogEntry,
+  configuredKeys: ReadonlySet<string>,
+  routePolicy: ModelCatalogRoutePolicy,
+): boolean {
+  // Deprecated and disabled rows stay selectable but are picker-hidden.
+  // Exact configured refs always remain visible so pinned models never disappear.
+  return (
+    (entry.status !== "deprecated" && entry.status !== "disabled") ||
+    configuredKeys.has(resolveLogicalKey(entry, routePolicy))
+  );
 }
 
 /**
@@ -301,7 +313,9 @@ export async function resolveLogicalVisibleModelCatalog(params: {
     const key = resolveLogicalKey(entry, params.routePolicy);
     const preferredKey = preferredKeys.has(key);
     const wildcardRoute =
-      policy.allowAny || policy.providerWildcards.has(normalizeProviderId(entry.provider));
+      policy.allowAny ||
+      (policy.hasProviderWildcards &&
+        policy.allowsByWildcard({ provider: entry.provider, model: entry.id }));
     if (!preferredKey && !wildcardRoute) {
       continue;
     }
@@ -331,5 +345,8 @@ export async function resolveLogicalVisibleModelCatalog(params: {
   }
   // Physical route rows can share one logical provider/id. Selected-route rows
   // must lead this merge so dedupe cannot retain sibling-route metadata instead.
-  return await projectEntries([...preferred, ...kept, ...retained, ...routeBacked]);
+  const projected = await projectEntries([...preferred, ...kept, ...retained, ...routeBacked]);
+  return projected.filter((entry) =>
+    isPickerVisibleCatalogEntry(entry, configuredKeys, params.routePolicy),
+  );
 }

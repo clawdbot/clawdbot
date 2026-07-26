@@ -10,6 +10,7 @@ import {
 } from "../infra/diagnostic-events.js";
 import type { GatewayAuthResult } from "./auth.js";
 import {
+  buildMissingScopeForbiddenBody,
   readJsonBodyOrError,
   sendGatewayAuthFailure,
   sendInvalidRequest,
@@ -119,6 +120,18 @@ describe("sendJson", () => {
     expect(res.statusCode).toBe(201);
     expect(setHeader).toHaveBeenCalledWith("Content-Type", "application/json; charset=utf-8");
     expect(end).toHaveBeenCalledWith(JSON.stringify({ ok: true }));
+  });
+});
+
+describe("buildMissingScopeForbiddenBody", () => {
+  it("preserves the legacy response when no concrete scope is available", () => {
+    expect(buildMissingScopeForbiddenBody(undefined)).toEqual({
+      ok: false,
+      error: {
+        type: "forbidden",
+        message: "missing scope: undefined",
+      },
+    });
   });
 });
 

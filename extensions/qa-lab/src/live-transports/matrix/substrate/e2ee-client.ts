@@ -26,6 +26,7 @@ import { buildMatrixQaMessageContent } from "./client-message-content.js";
 import {
   MATRIX_QA_E2EE_SYNC_FILTER,
   prepareMatrixQaE2eeStorage,
+  runMatrixQaE2eeClientOperation,
   shouldRecordMatrixQaObservedEventUpdate,
   type MatrixQaE2eeActorId,
 } from "./e2ee-client-internals.js";
@@ -391,6 +392,13 @@ export async function createMatrixQaE2eeScenarioClient(
     }
     return client.crypto;
   };
+  const runClientOperation = <T>(label: string, run: () => Promise<T>) =>
+    runMatrixQaE2eeClientOperation({
+      label,
+      run,
+      stop: () => client.stopWithoutPersist(),
+      timeoutMs: params.timeoutMs,
+    });
 
   return {
     async acceptVerification(id) {
@@ -452,16 +460,17 @@ export async function createMatrixQaE2eeScenarioClient(
       return await requireCrypto().scanVerificationQr(id, qrDataBase64);
     },
     async sendTextMessage(opts) {
-      return await client.sendMessage(
-        opts.roomId,
-        buildMatrixQaMessageContent(opts) as MessageEventContent,
+      return await runClientOperation("Matrix E2EE text send", () =>
+        client.sendMessage(opts.roomId, buildMatrixQaMessageContent(opts) as MessageEventContent),
       );
     },
     async sendNoticeMessage(opts) {
-      return await client.sendMessage(opts.roomId, {
-        ...buildMatrixQaMessageContent(opts),
-        msgtype: "m.notice",
-      } as MessageEventContent);
+      return await runClientOperation("Matrix E2EE notice send", () =>
+        client.sendMessage(opts.roomId, {
+          ...buildMatrixQaMessageContent(opts),
+          msgtype: "m.notice",
+        } as MessageEventContent),
+      );
     },
     async sendImageMessage(opts) {
       const encrypted = await requireCrypto().encryptMedia(opts.buffer);
@@ -471,19 +480,21 @@ export async function createMatrixQaE2eeScenarioClient(
         opts.fileName,
       );
       const file: EncryptedFile = { url: contentUri, ...encrypted.file };
-      return await client.sendMessage(opts.roomId, {
-        ...buildMatrixQaMessageContent({
-          body: opts.body,
-          mentionUserIds: opts.mentionUserIds,
-        }),
-        file,
-        filename: opts.fileName,
-        info: {
-          mimetype: opts.contentType,
-          size: opts.buffer.byteLength,
-        },
-        msgtype: "m.image",
-      } as MessageEventContent);
+      return await runClientOperation("Matrix E2EE image send", () =>
+        client.sendMessage(opts.roomId, {
+          ...buildMatrixQaMessageContent({
+            body: opts.body,
+            mentionUserIds: opts.mentionUserIds,
+          }),
+          file,
+          filename: opts.fileName,
+          info: {
+            mimetype: opts.contentType,
+            size: opts.buffer.byteLength,
+          },
+          msgtype: "m.image",
+        } as MessageEventContent),
+      );
     },
     async startVerification(id, method) {
       return await requireCrypto().startVerification(id, method);

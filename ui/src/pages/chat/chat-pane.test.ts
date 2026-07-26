@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { render, type TemplateResult } from "lit";
+import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   SessionCatalogSession,
@@ -8,90 +8,30 @@ import type {
   SessionsCatalogListResult,
   SessionsCatalogReadResult,
   TaskSuggestion,
-  TaskSuggestionEvent,
   TaskSuggestionsAcceptResult,
   TaskSuggestionsListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import { buildCatalogSessionKey, type CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import "./chat-pane.ts";
+import {
+  createSessionContext,
+  createTestChatPane,
+  type TestChatPane,
+} from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import type { SidebarContent } from "./components/chat-sidebar.ts";
 import { cacheChatSessionSnapshot, type ChatMessageCache } from "./session-message-cache.ts";
+import { openSlot } from "./sidebar-layout.ts";
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
-
-type TestChatPane = HTMLElement & {
-  catalogMessages: unknown[];
-  active: boolean;
-  chatMessagesBySession?: ChatMessageCache;
-  chatState: { attach: (state: ChatPageHost) => void };
-  context: ApplicationContext;
-  state: ChatPageHost;
-  connectedClient: GatewayBrowserClient | null;
-  applyGatewaySnapshot: (snapshot: ApplicationContext["gateway"]["snapshot"]) => void;
-  connectedCallback: () => void;
-  connectionGeneration: number;
-  createSession: () => Promise<boolean>;
-  disconnectedCallback: () => void;
-  acceptTaskSuggestion: (suggestion: TaskSuggestion) => Promise<void>;
-  handleDocumentKeydown: (event: KeyboardEvent) => void;
-  handleTaskSuggestionEvent: (event: TaskSuggestionEvent) => void;
-  refreshTaskSuggestions: () => Promise<void>;
-  taskSuggestions: TaskSuggestion[];
-  onPaneSessionChange?: (paneId: string, sessionKey: string) => void;
-  sessionKey: string;
-  paneTitle: string;
-  catalogSession: SessionCatalogSession | null;
-  catalogItemMessage: (item: SessionCatalogTranscriptItem) => Record<string, unknown> | null;
-  handleTranscriptScroll: (event: Event) => void;
-  handleTranscriptHistoryIntent: (event: Event) => void;
-  historyAutoLoadBlocked: boolean;
-  historyObserverArmed: boolean;
-  transcriptScrollTop: number | null;
-  syncHistoryObserver: () => void;
-  loadCatalogSession: (key: CatalogSessionKey, older: boolean) => Promise<boolean>;
-  prependUniqueNativeMessages: (messages: unknown[], current: unknown[]) => unknown[];
-  prependUniqueCatalogMessages: (messages: unknown[]) => unknown[];
-  loadOlderMessages: () => Promise<void>;
-  hasOlderMessages: () => boolean;
-  loadingOlder: boolean;
-  catalogCursor: string | undefined;
-  olderCursorsSeen: Set<string>;
-  olderOffsetsSeen: Set<number>;
-  headerEditing: boolean;
-  headerRenameValue: string;
-  beginHeaderRename: (row: GatewaySessionRow) => void;
-  cancelHeaderRename: () => void;
-  commitHeaderRename: () => void;
-  handleHeaderMenuAction: (
-    action: "reveal" | "copy-path" | "copy-branch",
-    row: GatewaySessionRow,
-    workspaceRoot: string | null,
-    branch: string | null,
-    copy?: (value: string) => Promise<boolean>,
-  ) => void;
-  loadHeaderMenuData: (
-    row: GatewaySessionRow,
-    agentWorkspace: string | undefined,
-    workspaceGit: boolean,
-  ) => Promise<void>;
-  renderPaneHeader: (
-    workspace: ReturnType<typeof createSessionWorkspaceProps>,
-    tasks: ReturnType<typeof createBackgroundTasksProps>,
-    row: undefined,
-    catalog: boolean,
-    agentWorkspace: undefined,
-    workspaceGit: boolean,
-  ) => TemplateResult;
-};
 
 const suggestion: TaskSuggestion = {
   id: "task_123",
@@ -123,23 +63,6 @@ function dispatchSidebarShortcut(pane: TestChatPane, shiftKey = true) {
   return event;
 }
 
-function createSessionContext(
-  client: GatewayBrowserClient,
-  sessions: SessionCapability,
-): ApplicationContext {
-  return {
-    gateway: {
-      snapshot: {
-        client,
-        connected: true,
-        hello: { features: { methods: ["taskSuggestions.list"] } },
-      },
-    },
-    agents: { state: { agentsList: null } },
-    sessions,
-  } as unknown as ApplicationContext;
-}
-
 function createInitializationContext(): ApplicationContext {
   return {
     basePath: "",
@@ -158,57 +81,14 @@ function createInitializationContext(): ApplicationContext {
         localMediaPreviewRoots: [],
         embedSandboxMode: "strict",
         allowExternalEmbedUrls: false,
-        chatMessageMaxWidth: null,
         terminalEnabled: false,
       },
     },
     agentSelection: { state: { selectedId: "main" } },
     agents: { state: { agentsList: null } },
+    initialUserMessage: createInitialUserMessageHandoff(),
     sessions: {},
   } as unknown as ApplicationContext;
-}
-
-function createTestChatPane(params: { client: GatewayBrowserClient; sessions: SessionCapability }) {
-  const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
-  Object.defineProperty(pane, "isConnected", {
-    configurable: true,
-    value: true,
-  });
-  const requestUpdate = vi.fn();
-  const state = {
-    agentsList: null,
-    assistantAgentId: null,
-    chatError: null,
-    chatHistoryPagination: { hasMore: false },
-    chatLoading: false,
-    chatMessages: [],
-    chatQueue: [],
-    chatRunId: null,
-    chatSending: false,
-    chatStream: null,
-    client: params.client,
-    connected: true,
-    connectionEpoch: 4,
-    hello: null,
-    lastError: null,
-    requestUpdate,
-    sessionKey: "agent:main:current",
-    sessions: params.sessions,
-    sessionsError: null,
-    sessionsLoading: false,
-    sidebarContent: null,
-    sidebarOpen: false,
-    // Minimal scroll host so scheduleChatScroll is a no-op instead of throwing.
-    chatScrollGeneration: 0,
-    chatScrollCommitCleanup: null,
-    handleChatScroll: vi.fn(),
-    renderLifecycle: { afterCommit: () => () => {}, invalidate: () => {} },
-  } as unknown as ChatPageHost;
-  pane.context = createSessionContext(params.client, params.sessions);
-  pane.state = state;
-  pane.connectedClient = params.client;
-  pane.connectionGeneration = 4;
-  return { pane, requestUpdate, state };
 }
 
 function nativeHistoryMessage(seq: number, text = `message ${seq}`) {
@@ -218,6 +98,133 @@ function nativeHistoryMessage(seq: number, text = `message ${seq}`) {
     __openclaw: { seq },
   };
 }
+
+describe("chat pane pull request refresh", () => {
+  it("forwards an explicit refresh and publishes live PR state", async () => {
+    const request = vi.fn().mockResolvedValue({
+      pullRequests: [
+        {
+          number: 111532,
+          owner: "openclaw",
+          repo: "openclaw",
+          branch: "claude/pr-detection",
+          title: "Detect pull requests",
+          url: "https://github.com/openclaw/openclaw/pull/111532",
+          state: "open",
+        },
+      ],
+      rateLimited: false,
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const epoch = Symbol("pr-refresh");
+    const setPullRequestSummary = vi.fn();
+    const sessions = {
+      capturePullRequestEpoch: vi.fn(() => epoch),
+      setPullRequestSummary,
+    } as unknown as SessionCapability;
+    const { pane } = createTestChatPane({ client, sessions });
+    pane.context.gateway.snapshot.hello = {
+      features: { methods: ["controlUi.sessionPullRequests"] },
+    } as never;
+
+    await pane.refreshSessionPullRequests({ refresh: true });
+
+    expect(request).toHaveBeenCalledWith(
+      "controlUi.sessionPullRequests",
+      expect.objectContaining({ sessionKey: "agent:main:current", refresh: true }),
+    );
+    expect(setPullRequestSummary).toHaveBeenCalledWith(
+      "agent:main:current",
+      { numbers: [111532], state: "open" },
+      epoch,
+    );
+  });
+
+  it("clears the pane snapshot when the Gateway source disconnects", () => {
+    const client = {} as GatewayBrowserClient;
+    const { pane } = createTestChatPane({
+      client,
+      sessions: {
+        capturePullRequestEpoch: vi.fn(() => Symbol("pr-refresh")),
+        setPullRequestSummary: vi.fn(),
+      } as unknown as SessionCapability,
+    });
+    pane.sessionPullRequests = [
+      {
+        number: 111532,
+        owner: "openclaw",
+        repo: "openclaw",
+        branch: "claude/pr-detection",
+        title: "Detect pull requests",
+        url: "https://github.com/openclaw/openclaw/pull/111532",
+        state: "open",
+      },
+    ];
+
+    pane.applyGatewaySnapshot({
+      ...pane.context.gateway.snapshot,
+      phase: "reconnecting" as const,
+    });
+
+    expect(pane.sessionPullRequests).toEqual([]);
+  });
+
+  it("preserves shared PR state for an empty rate-limited snapshot", async () => {
+    const request = vi.fn().mockResolvedValue({ pullRequests: [], rateLimited: true });
+    const setPullRequestSummary = vi.fn();
+    const { pane } = createTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessions: {
+        capturePullRequestEpoch: vi.fn(() => Symbol("pr-refresh")),
+        setPullRequestSummary,
+      } as unknown as SessionCapability,
+    });
+    pane.context.gateway.snapshot.hello = {
+      features: { methods: ["controlUi.sessionPullRequests"] },
+    } as never;
+
+    await pane.refreshSessionPullRequests();
+
+    expect(setPullRequestSummary).not.toHaveBeenCalled();
+  });
+
+  it("clears shared live PR state after the PR settles", async () => {
+    const request = vi.fn().mockResolvedValue({
+      pullRequests: [
+        {
+          number: 111532,
+          owner: "openclaw",
+          repo: "openclaw",
+          branch: "claude/pr-detection",
+          title: "Detect pull requests",
+          url: "https://github.com/openclaw/openclaw/pull/111532",
+          state: "merged",
+        },
+      ],
+      rateLimited: false,
+    });
+    const epoch = Symbol("pr-refresh");
+    const setPullRequestSummary = vi.fn();
+    const { pane } = createTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessions: {
+        capturePullRequestEpoch: vi.fn(() => epoch),
+        setPullRequestSummary,
+      } as unknown as SessionCapability,
+    });
+    pane.context.gateway.snapshot.hello = {
+      features: { methods: ["controlUi.sessionPullRequests"] },
+    } as never;
+
+    await pane.refreshSessionPullRequests();
+
+    expect(setPullRequestSummary).toHaveBeenCalledWith(
+      "agent:main:current",
+      { numbers: [111532], state: "merged" },
+      epoch,
+    );
+  });
+});
 
 describe("chat pane header state", () => {
   it("commits a trimmed label and clears with null", async () => {
@@ -536,7 +543,7 @@ describe("chat pane initialization", () => {
     const snapshot = {
       ...pane.context.gateway.snapshot,
       client,
-      connected: true,
+      phase: "connected" as const,
       hello,
       sessionKey: canonicalSessionKey,
     };
@@ -589,7 +596,7 @@ describe("chat pane keyboard shortcuts", () => {
     pane.active = true;
     state.connected = false;
     state.sidebarContent = canvasContent;
-    state.sidebarOpen = true;
+    state.sidebarLayout = openSlot({ columns: [] }, "detail");
 
     expect(createSessionWorkspaceProps(state).collapsed).toBe(true);
 
@@ -597,14 +604,14 @@ describe("chat pane keyboard shortcuts", () => {
 
     expect(expandEvent.defaultPrevented).toBe(true);
     expect(createSessionWorkspaceProps(state).collapsed).toBe(false);
-    expect(state.sidebarOpen).toBe(true);
+    expect(state.sidebarLayout.columns[0]?.panels[0]?.slot).toBe("detail");
     expect(state.sidebarContent).toBe(canvasContent);
 
     const collapseEvent = dispatchSidebarShortcut(pane);
 
     expect(collapseEvent.defaultPrevented).toBe(true);
     expect(createSessionWorkspaceProps(state).collapsed).toBe(true);
-    expect(state.sidebarOpen).toBe(true);
+    expect(state.sidebarLayout.columns[0]?.panels[0]?.slot).toBe("detail");
     expect(state.sidebarContent).toBe(canvasContent);
 
     const mainSidebarEvent = dispatchSidebarShortcut(pane, false);

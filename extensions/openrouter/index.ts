@@ -23,6 +23,7 @@ import { buildOpenRouterMusicGenerationProvider } from "./music-generation-provi
 import { createOpenRouterOAuthAuthMethod } from "./oauth.js";
 import { applyOpenrouterConfig, OPENROUTER_DEFAULT_MODEL_REF } from "./onboard.js";
 import {
+  buildOpenrouterLiveProvider,
   buildOpenrouterProvider,
   isOpenRouterProxyReasoningUnsupportedModel,
   normalizeOpenRouterBaseUrl,
@@ -31,10 +32,7 @@ import {
 import { resolveOpenRouterExtraParamsForTransport } from "./provider-routing.js";
 import { buildOpenRouterSpeechProvider } from "./speech-provider.js";
 import { wrapOpenRouterProviderStream } from "./stream.js";
-import {
-  resolveOpenRouterThinkingProfile,
-  supportsOpenRouterXHighThinking,
-} from "./thinking-policy.js";
+import { resolveOpenRouterThinkingProfile } from "./thinking-policy.js";
 import { fetchOpenRouterUsage } from "./usage.js";
 import {
   buildOpenRouterVideoGenerationProvider,
@@ -315,15 +313,16 @@ export default definePluginEntry({
       catalog: {
         order: "simple",
         run: async (ctx) => {
-          const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
+          const auth = ctx.resolveProviderApiKey(PROVIDER_ID);
+          const apiKey = auth.apiKey;
           if (!apiKey) {
             return null;
           }
           return {
-            provider: {
-              ...buildOpenrouterProvider(),
+            provider: await buildOpenrouterLiveProvider({
               apiKey,
-            },
+              discoveryApiKey: auth.discoveryApiKey,
+            }),
           };
         },
       },
@@ -358,7 +357,6 @@ export default definePluginEntry({
       ...passthroughGeminiReplayHooks,
       buildReplayPolicy: buildOpenRouterReplayPolicy,
       resolveReasoningOutputMode: () => "native",
-      supportsXHighThinking: ({ modelId }) => supportsOpenRouterXHighThinking(modelId),
       resolveThinkingProfile: ({ modelId }) => resolveOpenRouterThinkingProfile(modelId),
       isModernModelRef: () => true,
       resolveSystemPromptContribution: resolveOpenRouterFusionPromptContribution,

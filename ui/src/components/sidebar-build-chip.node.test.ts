@@ -9,6 +9,7 @@ function buildInfo(overrides: Partial<ControlUiBuildInfo> = {}): ControlUiBuildI
   return {
     version: "2026.7.10",
     commit: COMMIT,
+    commitAt: null,
     builtAt: BUILT_AT,
     branch: "main",
     dirty: false,

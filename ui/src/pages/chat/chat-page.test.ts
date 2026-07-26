@@ -4,10 +4,19 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// The dedicated jsdom context keeps this host-only mock from sharing the
-// production tag registry with component tests.
-vi.mock("./chat-pane.ts", () => ({}));
+const nativeGateways = vi.hoisted(() => ({ current: null as NativeGatewaysCapability | null }));
 
+// The dedicated unit-mock-registry project keeps this complete, side-effect-only
+// module mock from sharing a worker's mock registry with component tests.
+vi.mock("./chat-pane.ts", () => ({}));
+vi.mock("../../app/native-gateways.runtime.ts", () => ({
+  nativeGatewaysCapability: () => nativeGateways.current,
+}));
+
+import type {
+  NativeGatewaysCapability,
+  NativeGatewaysSnapshot,
+} from "../../app/native-gateways.runtime.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { UI_COMMAND_EVENT } from "../../components/panel-toggle-contract.ts";
 import { SESSION_DRAG_MIME } from "../../lib/sessions/drag.ts";
@@ -26,6 +35,8 @@ type RenderedPane = HTMLElement & {
   paneTitle: string;
   narrow: boolean;
   mergedChrome: boolean;
+  nativeGateways: NativeGatewaysCapability | null;
+  gatewaysSnapshot: NativeGatewaysSnapshot | null;
   onOpenSplitView?: () => void;
   onClosePane?: (paneId: string) => void;
 };
@@ -119,6 +130,7 @@ function stubMatchMedia(matches: boolean) {
 
 describe("chat page split layout host", () => {
   beforeEach(() => {
+    nativeGateways.current = null;
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("sessionStorage", createStorageMock());
     localStorage.clear();
@@ -133,6 +145,7 @@ describe("chat page split layout host", () => {
 
   it("renders one chrome-free active pane in classic mode", async () => {
     const page = new ChatPage();
+    setNavigationContext(page);
     page.data = { sessionKey: "main", draft: "hello" };
     document.body.append(page);
     await page.updateComplete;
@@ -149,6 +162,33 @@ describe("chat page split layout host", () => {
     expect(page.querySelector("resizable-divider")).toBeNull();
     // The always-on pane header owns the classic split-view opener.
     expect(typeof itemAt(panes, 0, "rendered pane").onOpenSplitView).toBe("function");
+  });
+
+  it("passes the chat-owned gateway capability only to the rightmost pane", async () => {
+    const gatewaySnapshot: NativeGatewaysSnapshot = {
+      gateways: [],
+      currentId: "primary",
+    };
+    nativeGateways.current = {
+      snapshot: gatewaySnapshot,
+      subscribe: () => () => undefined,
+      select: vi.fn(),
+      openWindow: vi.fn(),
+      setPrimary: vi.fn(),
+      openSettings: vi.fn(),
+    };
+    const page = new ChatPage();
+    page.data = { sessionKey: "main" };
+    document.body.append(page);
+    setLayout(page, createSplitLayout("main"));
+    await page.updateComplete;
+
+    const panes = [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")];
+    expect(panes).toHaveLength(2);
+    expect(panes[0]?.nativeGateways).toBeNull();
+    expect(panes[0]?.gatewaysSnapshot).toBeNull();
+    expect(panes[1]?.nativeGateways).toBe(nativeGateways.current);
+    expect(panes[1]?.gatewaysSnapshot).toBe(gatewaySnapshot);
   });
 
   it("passes merged chrome from the shared mobile-nav query", async () => {
@@ -270,6 +310,7 @@ describe("chat page split layout host", () => {
 
   it("hands each route-provided draft to the active pane only once", async () => {
     const page = new ChatPage();
+    const navigation = setNavigationContext(page);
     const firstRouteData = { sessionKey: "main", draft: "one-shot draft" };
     page.data = firstRouteData;
     expect(getRouteDraftForActivePane(page)).toBe("one-shot draft");
@@ -280,6 +321,10 @@ describe("chat page split layout host", () => {
     await page.updateComplete;
 
     expect(getRouteDraftForActivePane(page)).toBeUndefined();
+    expect(navigation.replace).toHaveBeenCalledOnce();
+    expect(navigation.replace).toHaveBeenCalledWith("chat", {
+      search: searchForSession("main"),
+    });
     page.data = { ...firstRouteData };
     expect(getRouteDraftForActivePane(page)).toBe("one-shot draft");
   });
@@ -388,7 +433,7 @@ describe("chat page split layout host", () => {
 
     const paneTitles = () =>
       [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")].map((pane) => pane.paneTitle);
-    expect(paneTitles()).toEqual(["Main Session", "Main Session"]);
+    expect(paneTitles()).toEqual(["Main Thread", "Main Thread"]);
 
     // Rows arrive under the canonical agent key while the route still says
     // "main"; hello-default resolution plus equivalence matching must find

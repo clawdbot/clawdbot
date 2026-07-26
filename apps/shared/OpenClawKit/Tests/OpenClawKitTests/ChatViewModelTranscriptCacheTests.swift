@@ -85,7 +85,12 @@ private actor TestTranscriptCache: OpenClawChatTranscriptCache {
         self.storedSessionsCallCount += 1
     }
 
-    func storeTranscript(sessionKey: String, messages: [OpenClawChatMessage]) async {
+    func storeCanonicalTranscript(
+        sessionKey: String,
+        agentID _: String?,
+        messages: [OpenClawChatMessage],
+        canonicalMessageIdempotencyKeys _: Set<String>) async
+    {
         self.transcripts[sessionKey] = messages
         self.storedTranscriptSessionKeys.append(sessionKey)
         self.storedTranscripts.append(messages)

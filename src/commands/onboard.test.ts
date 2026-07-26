@@ -2,14 +2,79 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatCliCommand } from "../cli/command-format.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ProviderAuthMethod } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { setupWizardCommand } from "./onboard.js";
+
+type ConfigSnapshotStub = {
+  exists: boolean;
+  valid: boolean;
+  config: OpenClawConfig;
+  sourceConfig?: OpenClawConfig;
+};
+
+type ProviderAuthMethodNonInteractiveValidationContext = Parameters<
+  NonNullable<ProviderAuthMethod["validateNonInteractive"]>
+>[0];
 
 const mocks = vi.hoisted(() => ({
   runInteractiveSetup: vi.fn(async () => {}),
   runGuidedOnboarding: vi.fn(async () => {}),
   runNonInteractiveSetup: vi.fn(async () => {}),
-  readConfigFileSnapshot: vi.fn(async () => ({ exists: false, valid: false, config: {} })),
+  resolvePluginProviders: vi.fn(() => [
+    {
+      id: "anthropic",
+      label: "Anthropic",
+      auth: [
+        {
+          id: "setup-token",
+          label: "Setup token",
+          kind: "token",
+          wizard: { choiceId: "setup-token" },
+          run: vi.fn(),
+          runNonInteractive: vi.fn(),
+          validateNonInteractive: vi.fn(
+            async (ctx: ProviderAuthMethodNonInteractiveValidationContext) => {
+              if (ctx.opts.tokenExpiresIn === "nope") {
+                ctx.runtime.error("Invalid --token-expires-in: invalid duration");
+                ctx.runtime.exit(1);
+                return false;
+              }
+              return Boolean(ctx.opts.token);
+            },
+          ),
+        },
+        {
+          id: "api-key",
+          label: "API key",
+          kind: "api_key",
+          wizard: { choiceId: "apiKey" },
+          run: vi.fn(),
+          runNonInteractive: vi.fn(),
+          validateNonInteractive: vi.fn(
+            async (ctx: ProviderAuthMethodNonInteractiveValidationContext) =>
+              Boolean(
+                await ctx.resolveApiKey({
+                  provider: "anthropic",
+                  flagValue:
+                    typeof ctx.opts.anthropicApiKey === "string"
+                      ? ctx.opts.anthropicApiKey
+                      : undefined,
+                  flagName: "--anthropic-api-key",
+                  envVar: "ANTHROPIC_API_KEY",
+                }),
+              ),
+          ),
+        },
+      ],
+    },
+  ]),
+  readConfigFileSnapshot: vi.fn<() => Promise<ConfigSnapshotStub>>(async () => ({
+    exists: false,
+    valid: false,
+    config: {},
+  })),
   handleReset: vi.fn(async () => {}),
 }));
 
@@ -27,9 +92,15 @@ vi.mock("./onboard-non-interactive.js", () => ({
 
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
+  resolveGatewayPort: () => 18_789,
 }));
 
-vi.mock("./onboard-helpers.js", () => ({
+vi.mock("../plugins/provider-auth-choice.runtime.js", () => ({
+  resolvePluginProviders: mocks.resolvePluginProviders,
+}));
+
+vi.mock("./onboard-helpers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./onboard-helpers.js")>()),
   DEFAULT_WORKSPACE: "~/.openclaw/workspace",
   handleReset: mocks.handleReset,
 }));
@@ -59,6 +130,7 @@ function expectResetCall(params: { scope: string; runtime: RuntimeEnv; workspace
 
 describe("setupWizardCommand", () => {
   afterEach(() => {
+    vi.unstubAllEnvs();
     vi.clearAllMocks();
     mocks.readConfigFileSnapshot.mockResolvedValue({ exists: false, valid: false, config: {} });
   });
@@ -143,6 +215,92 @@ describe("setupWizardCommand", () => {
     );
   });
 
+  it("uses the parsed workspace for a full reset when the config schema is invalid", async () => {
+    const runtime = makeRuntime();
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: false,
+      config: {},
+      sourceConfig: {
+        agents: {
+          defaults: {
+            workspace: "/tmp/openclaw-invalid-config-workspace",
+          },
+        },
+      },
+    });
+
+    await setupWizardCommand(
+      {
+        reset: true,
+        resetScope: "full",
+      },
+      runtime,
+    );
+
+    expect(mocks.handleReset).toHaveBeenCalledWith(
+      "full",
+      path.resolve("/tmp/openclaw-invalid-config-workspace"),
+      runtime,
+    );
+    expect(mocks.handleReset).not.toHaveBeenCalledWith(
+      "full",
+      path.resolve("~/.openclaw/workspace"),
+      runtime,
+    );
+  });
+
+  it("does not fall back to the default workspace when invalid config names no valid path", async () => {
+    const runtime = makeRuntime();
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: false,
+      config: {},
+      sourceConfig: {
+        agents: {
+          defaults: {
+            workspace: 42,
+          },
+        },
+      } as unknown as OpenClawConfig,
+    });
+
+    await setupWizardCommand(
+      {
+        reset: true,
+        resetScope: "full",
+      },
+      runtime,
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Configured workspace is invalid. Pass --workspace with the workspace to remove, or use a narrower --reset-scope.",
+    );
+    expect(mocks.handleReset).not.toHaveBeenCalled();
+  });
+
+  it("requires an explicit workspace for a full reset when config is unreadable", async () => {
+    const runtime = makeRuntime();
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: false,
+      config: {},
+    });
+
+    await setupWizardCommand(
+      {
+        reset: true,
+        resetScope: "full",
+      },
+      runtime,
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Cannot determine the configured workspace from an unreadable config. Pass --workspace with the workspace to remove, or use a narrower --reset-scope.",
+    );
+    expect(mocks.handleReset).not.toHaveBeenCalled();
+  });
+
   it("accepts explicit --reset-scope full", async () => {
     const runtime = makeRuntime();
 
@@ -175,6 +333,354 @@ describe("setupWizardCommand", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(mocks.handleReset).not.toHaveBeenCalled();
     expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
+    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+  });
+
+  it("fails fast for invalid non-interactive --mode before reset", async () => {
+    const runtime = makeRuntime();
+
+    await setupWizardCommand(
+      {
+        reset: true,
+        nonInteractive: true,
+        acceptRisk: true,
+        mode: "typo" as never,
+      },
+      runtime,
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      `Invalid --mode "typo". Use "local" or "remote", or run ${formatCliCommand("openclaw onboard")} for interactive setup.`,
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.handleReset).not.toHaveBeenCalled();
+    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+  });
+
+  it("fails fast for an empty non-interactive --mode before reset", async () => {
+    const runtime = makeRuntime();
+
+    await setupWizardCommand(
+      {
+        reset: true,
+        nonInteractive: true,
+        acceptRisk: true,
+        mode: "" as never,
+      },
+      runtime,
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      `Invalid --mode "". Use "local" or "remote", or run ${formatCliCommand("openclaw onboard")} for interactive setup.`,
+    );
+    expect(mocks.handleReset).not.toHaveBeenCalled();
+  });
+
+  it("validates a remote URL before reset", async () => {
+    const runtime = makeRuntime();
+
+    await setupWizardCommand(
+      {
+        reset: true,
+        nonInteractive: true,
+        acceptRisk: true,
+        mode: "remote",
+        remoteUrl: "https://example.com",
+      },
+      runtime,
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(expect.any(String));
+    expect(mocks.handleReset).not.toHaveBeenCalled();
+    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: "unsupported flow",
+      options: { flow: "bogus" as never },
+      expectedError: "Invalid --flow",
+    },
+    {
+      label: "malformed remote URL",
+      options: { mode: "remote" as const, remoteUrl: "garbage" },
+      expectedError: "URL must start with ws:// or wss://",
+    },
+    {
+      label: "non-WebSocket remote URL",
+      options: { mode: "remote" as const, remoteUrl: "https://example.invalid" },
+      expectedError: "URL must start with ws:// or wss://",
+    },
+    {
+      label: "unsupported daemon runtime while daemon install is skipped",
+      options: { daemonRuntime: "bogus" as never, installDaemon: false },
+      expectedError: "Invalid --daemon-runtime",
+    },
+    {
+      label: "unsupported node manager",
+      options: { nodeManager: "bogus" as never },
+      expectedError: "Invalid --node-manager",
+    },
+  ])(
+    "rejects $label before non-interactive setup without reset",
+    async ({ options, expectedError }) => {
+      const runtime = makeRuntime();
+
+      await setupWizardCommand({ nonInteractive: true, acceptRisk: true, ...options }, runtime);
+
+      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(expectedError));
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mocks.handleReset).not.toHaveBeenCalled();
+      expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+      expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
+      expect(mocks.runGuidedOnboarding).not.toHaveBeenCalled();
+    },
+  );
+
+  it("validates dependent gateway options before reset", async () => {
+    const runtime = makeRuntime();
+
+    await setupWizardCommand(
+      {
+        reset: true,
+        nonInteractive: true,
+        acceptRisk: true,
+        gatewayAuth: "password",
+      },
+      runtime,
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Missing --gateway-password for password auth. Pass --gateway-password or use --gateway-auth token.",
+    );
+    expect(mocks.handleReset).not.toHaveBeenCalled();
+    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+  });
+
+  it("validates gateway token env refs before reset", async () => {
+    const runtime = makeRuntime();
+
+    await setupWizardCommand(
+      {
+        reset: true,
+        gatewayTokenRefEnv: "MISSING_GATEWAY_TOKEN_ENV",
+      },
+      runtime,
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining('Environment variable "MISSING_GATEWAY_TOKEN_ENV" is missing'),
+    );
+    expect(mocks.handleReset).not.toHaveBeenCalled();
+    expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
+  });
+
+  it("rejects conflicting gateway token inputs before reset", async () => {
+    const previous = process.env.OPENCLAW_GATEWAY_TOKEN;
+    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token";
+    const runtime = makeRuntime();
+
+    try {
+      await setupWizardCommand(
+        {
+          reset: true,
+          gatewayToken: "plaintext-token",
+          gatewayTokenRefEnv: "OPENCLAW_GATEWAY_TOKEN",
+        },
+        runtime,
+      );
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = previous;
+      }
+    }
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Use either --gateway-token or --gateway-token-ref-env"),
+    );
+    expect(mocks.handleReset).not.toHaveBeenCalled();
+    expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
+  });
+
+  it("validates dependent auth-choice options before reset", async () => {
+    const runtime = makeRuntime();
+
+    await setupWizardCommand(
+      {
+        reset: true,
+        nonInteractive: true,
+        acceptRisk: true,
+        authChoice: "token",
+        token: "value",
+      },
+      runtime,
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      'Auth choice "token" requires --token-provider in non-interactive setup.',
+    );
+    expect(mocks.handleReset).not.toHaveBeenCalled();
+    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+  });
+
+  it("validates a required setup token before reset", async () => {
+    const runtime = makeRuntime();
+
+    await setupWizardCommand(
+      {
+        reset: true,
+        nonInteractive: true,
+        acceptRisk: true,
+        authChoice: "setup-token",
+        tokenProvider: "anthropic",
+      },
+      runtime,
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      'Auth choice "setup-token" requires --token in non-interactive setup.',
+    );
+    expect(mocks.handleReset).not.toHaveBeenCalled();
+    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+  });
+
+  it("validates setup-token expiry before reset", async () => {
+    const runtime = makeRuntime();
+
+    await setupWizardCommand(
+      {
+        reset: true,
+        nonInteractive: true,
+        acceptRisk: true,
+        authChoice: "setup-token",
+        tokenProvider: "anthropic",
+        token: "test-token",
+        tokenExpiresIn: "nope",
+      },
+      runtime,
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith("Invalid --token-expires-in: invalid duration");
+    expect(mocks.handleReset).not.toHaveBeenCalled();
+    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+  });
+
+  it("validates the token provider before reset", async () => {
+    const runtime = makeRuntime();
+
+    await setupWizardCommand(
+      {
+        reset: true,
+        nonInteractive: true,
+        acceptRisk: true,
+        authChoice: "token",
+        tokenProvider: "typo",
+        token: "value",
+      },
+      runtime,
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      'Auth choice "token" was not matched to provider "typo".',
+    );
+    expect(mocks.handleReset).not.toHaveBeenCalled();
+    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+  });
+
+  it("validates a provider-specific API key before reset", async () => {
+    const runtime = makeRuntime();
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+
+    await setupWizardCommand(
+      {
+        reset: true,
+        nonInteractive: true,
+        acceptRisk: true,
+        authChoice: "apiKey",
+        tokenProvider: "anthropic",
+        anthropicApiKey: "",
+      },
+      runtime,
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      `Missing --anthropic-api-key (or ANTHROPIC_API_KEY in env). Export ANTHROPIC_API_KEY, pass --anthropic-api-key, or run ${formatCliCommand("openclaw onboard")} for interactive setup.`,
+    );
+    expect(mocks.handleReset).not.toHaveBeenCalled();
+    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+  });
+
+  it("validates an inferred custom auth choice before reset", async () => {
+    const runtime = makeRuntime();
+
+    await setupWizardCommand(
+      {
+        reset: true,
+        nonInteractive: true,
+        acceptRisk: true,
+        customBaseUrl: "https://example.com/v1",
+      },
+      runtime,
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      [
+        'Auth choice "custom-api-key" requires a base URL and model ID.',
+        "Use --custom-base-url and --custom-model-id.",
+      ].join("\n"),
+    );
+    expect(mocks.handleReset).not.toHaveBeenCalled();
+    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+  });
+
+  it("validates custom credential storage before reset", async () => {
+    const runtime = makeRuntime();
+    vi.stubEnv("CUSTOM_API_KEY", "");
+
+    await setupWizardCommand(
+      {
+        reset: true,
+        nonInteractive: true,
+        acceptRisk: true,
+        customBaseUrl: "https://example.com/v1",
+        customModelId: "test-model",
+        customApiKey: "test-token",
+        secretInputMode: "ref",
+      },
+      runtime,
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      [
+        "--custom-api-key cannot be used with --secret-input-mode ref unless CUSTOM_API_KEY is set in env.",
+        "Set CUSTOM_API_KEY in env and omit --custom-api-key, or use --secret-input-mode plaintext.",
+      ].join("\n"),
+    );
+    expect(mocks.handleReset).not.toHaveBeenCalled();
+    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+  });
+
+  it("rejects migration import before reset because provider input is not preplanned", async () => {
+    const runtime = makeRuntime();
+
+    await setupWizardCommand(
+      {
+        reset: true,
+        nonInteractive: true,
+        acceptRisk: true,
+        flow: "import",
+        importFrom: "hermes",
+      },
+      runtime,
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Migration import cannot be combined with --reset because provider input must be planned before any state is removed. Run the import without --reset.",
+    );
+    expect(mocks.handleReset).not.toHaveBeenCalled();
     expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
   });
 

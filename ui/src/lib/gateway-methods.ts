@@ -12,3 +12,18 @@ export function isGatewayMethodAdvertised(
   }
   return methods.includes(method);
 }
+
+export function isGatewayCapabilityAdvertised(
+  host: {
+    hello?: {
+      features?: { capabilities?: string[] } | null;
+    } | null;
+  },
+  capability: string,
+): boolean | null {
+  const capabilities = host.hello?.features?.capabilities;
+  if (!Array.isArray(capabilities)) {
+    return null;
+  }
+  return capabilities.includes(capability);
+}

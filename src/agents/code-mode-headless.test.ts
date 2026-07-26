@@ -19,9 +19,15 @@ function fakeTool(name: string, execute: AnyAgentTool["execute"]): AnyAgentTool 
   };
 }
 
-function createHeadlessHarness(tools: AnyAgentTool[] = []): ToolSearchToolContext {
+function createHeadlessHarness(
+  tools: AnyAgentTool[] = [],
+  options: { swarmEnabled?: boolean } = {},
+): ToolSearchToolContext {
   const config = {
-    tools: { codeMode: { enabled: false, timeoutMs: 60_000 } },
+    tools: {
+      codeMode: { enabled: false, timeoutMs: 60_000 },
+      ...(options.swarmEnabled ? { swarm: true } : {}),
+    },
   } as never;
   const catalogRef = createToolSearchCatalogRef();
   registerHeadlessToolSearchCatalog({ catalogRef, tools });
@@ -86,6 +92,17 @@ describe("headless Code Mode", () => {
     expect(result.toolCallCount).toBe(2);
     expect(first.execute).toHaveBeenCalledOnce();
     expect(second.execute).toHaveBeenCalledOnce();
+  });
+
+  it("does not expose collector globals without resumable snapshot state", async () => {
+    const result = expectCompleted(
+      await runCodeModeScriptHeadless({
+        ctx: createHeadlessHarness([], { swarmEnabled: true }),
+        code: "return [typeof agents, typeof phase, typeof log];",
+      }),
+    );
+
+    expect(result.value).toEqual(["undefined", "undefined", "undefined"]);
   });
 
   it("injects deeply frozen trigger state and emits replacement state through json", async () => {
@@ -176,6 +193,27 @@ describe("headless Code Mode", () => {
     expect(tool.execute).toHaveBeenCalledOnce();
   });
 
+  it("honors cron payload tool budgets above the old headless cap", async () => {
+    const tool = fakeTool("budgeted", async () => jsonResult({ ok: true }));
+    const result = expectCompleted(
+      await runCodeModeScriptHeadless({
+        ctx: createHeadlessHarness([tool]),
+        code: `
+          for (let index = 0; index < 129; index += 1) {
+            await tools.call("openclaw:core:budgeted", {});
+          }
+          return true;
+        `,
+        maxToolCalls: 200,
+        wallClockMs: 120_000,
+      }),
+    );
+
+    expect(result.value).toBe(true);
+    expect(result.toolCallCount).toBe(129);
+    expect(tool.execute).toHaveBeenCalledTimes(129);
+  });
+
   it("enforces one wall-clock deadline across worker and tool legs", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const toolStarted = createDeferred();
@@ -209,6 +247,39 @@ describe("headless Code Mode", () => {
     const result = expectFailed(await resultPromise);
 
     expect(result.code).toBe("timeout");
+    expect(result.toolCallCount).toBe(1);
+  });
+
+  it("honors cron payload wall-clock limits above the old headless cap", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const toolStarted = createDeferred();
+    const slow = fakeTool("slow_leg", async () => {
+      toolStarted.resolve();
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 330_000);
+      });
+      return jsonResult({ ok: true });
+    });
+    const resultPromise = runCodeModeScriptHeadless({
+      ctx: createHeadlessHarness([slow]),
+      code: `
+        await tools.call("openclaw:core:slow_leg", {});
+        return true;
+      `,
+      wallClockMs: 360_000,
+    });
+
+    await toolStarted.promise;
+    let settled = false;
+    void resultPromise.finally(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    const result = expectCompleted(await resultPromise);
+    expect(result.value).toBe(true);
     expect(result.toolCallCount).toBe(1);
   });
 

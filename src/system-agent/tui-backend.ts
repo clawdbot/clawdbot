@@ -222,12 +222,16 @@ class SystemAgentTuiBackend implements TuiBackend {
       defaultId: SYSTEM_AGENT_ID,
       mainKey: "main",
       scope: "per-sender",
-      agents: [{ id: SYSTEM_AGENT_ID, name: "OpenClaw" }],
+      agents: [{ id: SYSTEM_AGENT_ID, kind: "system", name: "OpenClaw" }],
     };
   }
 
   async patchSession(opts: SessionsPatchParams): Promise<SessionsPatchResult> {
-    const model = splitModelRef(typeof opts.model === "string" ? opts.model : undefined);
+    if (opts.model !== undefined) {
+      throw new Error(
+        "OpenClaw cannot change the model inside its active verified session. Exit and run `openclaw onboard`, then start OpenClaw again.",
+      );
+    }
     return {
       ok: true,
       path: "openclaw",
@@ -236,13 +240,8 @@ class SystemAgentTuiBackend implements TuiBackend {
         sessionId: "openclaw",
         displayName: "OpenClaw",
         updatedAt: Date.now(),
-        ...(model.model ? { model: model.model } : {}),
-        ...(model.provider ? { modelProvider: model.provider } : {}),
       },
-      resolved: {
-        modelProvider: model.provider,
-        model: model.model,
-      },
+      resolved: {},
     };
   }
 
@@ -504,15 +503,18 @@ async function requireTuiVerifiedInference(
   try {
     const route = await resolveSystemAgentVerifiedInferenceRoute(binding, opts.deps);
     if (route) {
-      const [{ loadModelCatalog }, { resolveThinkingDefault }] = await Promise.all([
-        import("../agents/model-catalog.js"),
+      const [{ loadPreparedModelCatalog }, { resolveThinkingDefault }] = await Promise.all([
+        import("../agents/prepared-model-catalog.js"),
         import("../agents/model-thinking-default.js"),
       ]);
       // Catalog metadata improves the label but must not become a new startup
       // dependency after this exact inference route has already been verified.
-      const catalog = await loadModelCatalog({ config: route.runConfig, readOnly: true }).catch(
-        () => undefined,
-      );
+      const catalog = await loadPreparedModelCatalog({
+        config: route.runConfig,
+        agentId: route.agentId,
+        agentDir: route.agentDir,
+        readOnly: true,
+      }).catch(() => undefined);
       const model = splitModelRef(route.modelLabel);
       return {
         model: model.model,

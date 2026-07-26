@@ -76,6 +76,7 @@ export const BOUNDARY_CHECKS = [
     ["run", "lint:extensions:telegram-grammy-types"],
   ],
   ["lint:ui:no-raw-window-open", "pnpm", ["lint:ui:no-raw-window-open"]],
+  ["native-state-schema-version", "node", ["scripts/check-native-state-schema-version.mjs"]],
 ].map(([label, command, args]) => ({ label, command, args }));
 
 /**

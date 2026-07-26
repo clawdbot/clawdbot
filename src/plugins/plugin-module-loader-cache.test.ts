@@ -452,7 +452,6 @@ describe("getCachedPluginModuleLoader", () => {
       importerUrl: "file:///repo/src/plugins/public-surface-loader.ts",
       loaderFilename: "file:///repo/src/plugins/public-surface-loader.ts",
       aliasMap: {
-        "openclaw/plugin-sdk": "/repo/dist/plugin-sdk/root-alias.cjs",
         "openclaw/plugin-sdk/core": "/repo/dist/plugin-sdk/core.js",
       },
       createLoader: asPluginModuleLoaderFactory(createJiti),
@@ -682,7 +681,7 @@ describe("getCachedPluginModuleLoader", () => {
       modulePath: "/repo/dist/extensions/demo/api.js",
       importerUrl: "file:///repo/src/plugins/bundled-capability-runtime.ts",
       loaderFilename: "file:///repo/src/plugins/bundled-capability-runtime.ts",
-      aliasMap: { "openclaw/plugin-sdk": "/repo/shim.js" },
+      aliasMap: { "openclaw/plugin-sdk/core": "/repo/core.js" },
       tryNative: false,
       createLoader: asPluginModuleLoaderFactory(createJiti),
     });

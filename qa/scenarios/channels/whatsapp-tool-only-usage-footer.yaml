@@ -2,11 +2,13 @@ title: WhatsApp tool-only usage footer
 
 scenario:
   id: whatsapp-tool-only-usage-footer
-  surface: channel-framework
-  category: channel-framework.channel-actions-commands-and-approvals
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
   coverage:
-    primary: [telemetry.model-usage]
-    secondary: [channels.native-commands]
+    primary:
+      - observability.model-usage
+    secondary:
+      - channels.channel-native-commands
   objective: Verify WhatsApp usage mode decorates a message-tool-only visible reply.
   successCriteria:
     - The usage command enables token footer mode.

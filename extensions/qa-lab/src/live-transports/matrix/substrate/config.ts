@@ -39,6 +39,9 @@ type MatrixQaToolConfigOverrides = {
 type MatrixQaAudioConfigOverrides = NonNullable<
   NonNullable<NonNullable<OpenClawConfig["tools"]>["media"]>["audio"]
 >;
+type MatrixQaMediaModelsOverrides = NonNullable<
+  NonNullable<NonNullable<OpenClawConfig["tools"]>["media"]>["models"]
+>;
 type MatrixQaGroupConfigOverrides = {
   allowBots?: MatrixQaAllowBotsMode;
   enabled?: boolean;
@@ -58,10 +61,6 @@ type MatrixQaThreadBindingsConfigOverrides = {
   maxAgeHours?: number;
   spawnSessions?: boolean;
   defaultSpawnContext?: "isolated" | "fork";
-  /** @deprecated Use spawnSessions instead. */
-  spawnAcpSessions?: boolean;
-  /** @deprecated Use spawnSessions instead. */
-  spawnSubagentSessions?: boolean;
 };
 type MatrixQaExecApprovalsConfigOverrides = {
   agentFilter?: string[];
@@ -97,6 +96,7 @@ export type MatrixQaConfigOverrides = {
   threadBindings?: MatrixQaThreadBindingsConfigOverrides;
   threadReplies?: MatrixQaThreadRepliesMode;
   audio?: MatrixQaAudioConfigOverrides;
+  mediaModels?: MatrixQaMediaModelsOverrides;
   toolProfile?: "coding" | "messaging" | "minimal";
 };
 
@@ -601,7 +601,7 @@ export function buildMatrixQaConfig(
       : {};
 
   const toolsConfig =
-    params.overrides?.toolProfile || params.overrides?.audio
+    params.overrides?.toolProfile || params.overrides?.audio || params.overrides?.mediaModels
       ? {
           ...baseCfg.tools,
           ...(params.overrides?.toolProfile
@@ -609,14 +609,19 @@ export function buildMatrixQaConfig(
                 profile: params.overrides.toolProfile,
               }
             : {}),
-          ...(params.overrides?.audio
+          ...(params.overrides?.audio || params.overrides?.mediaModels
             ? {
                 media: {
                   ...baseCfg.tools?.media,
-                  audio: {
-                    ...baseCfg.tools?.media?.audio,
-                    ...params.overrides.audio,
-                  },
+                  ...(params.overrides.mediaModels ? { models: params.overrides.mediaModels } : {}),
+                  ...(params.overrides.audio
+                    ? {
+                        audio: {
+                          ...baseCfg.tools?.media?.audio,
+                          ...params.overrides.audio,
+                        },
+                      }
+                    : {}),
                 },
               }
             : {}),

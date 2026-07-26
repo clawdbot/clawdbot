@@ -115,7 +115,7 @@ final class QuickChatWindowPicker {
         windowService: (any WindowManagementServiceProtocol)? = nil,
         screenCaptureService: (any ScreenCaptureServiceProtocol)? = nil,
         permissionStatusProvider: @escaping PermissionStatusProvider = {
-            await PermissionManager.status([.screenRecording])[.screenRecording] == true
+            await PermissionManager.grantedStatus([.screenRecording])[.screenRecording] == true
         },
         permissionGrantProvider: @escaping PermissionGrantProvider = {
             _ = await PermissionManager.ensure([.screenRecording], interactive: true)

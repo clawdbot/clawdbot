@@ -1,5 +1,7 @@
 import type {
   CodexThread,
+  CodexThreadForkParams,
+  CodexThreadForkResponse,
   CodexThreadListParams,
   CodexThreadListResponse,
   CodexThreadTurnsListParams,
@@ -11,6 +13,8 @@ export type CodexSessionCatalogSession = {
   threadId: string;
   sessionId?: string;
   name?: string | null;
+  /** Display-only fallback kept separate so title search never scans prompt previews. */
+  fallbackName?: string;
   cwd?: string;
   status: string;
   activeFlags?: string[];
@@ -22,7 +26,7 @@ export type CodexSessionCatalogSession = {
   cliVersion?: string;
   gitBranch?: string;
   /** Existing locked OpenClaw chat already mapped to this native source thread. */
-  openClawSessionKey?: string;
+  sessionKey?: string;
   archived: boolean;
 };
 
@@ -40,11 +44,13 @@ export type CodexSessionCatalogPageParams = {
 };
 
 export type CodexSessionCatalogControl = {
+  clientId?: string;
   connectionFingerprint?: string;
   withPinnedConnection<T>(run: (control: CodexSessionCatalogControl) => Promise<T>): Promise<T>;
   listPage(params: CodexSessionCatalogPageParams): Promise<CodexSessionCatalogPage>;
   listDescendantPage(params: CodexThreadListParams): Promise<CodexThreadListResponse>;
   listTurnPage(params: CodexThreadTurnsListParams): Promise<CodexThreadTurnsListResponse>;
+  forkThread(params: CodexThreadForkParams): Promise<CodexThreadForkResponse>;
   readThread(threadId: string, includeTurns?: boolean): Promise<CodexThread>;
   archiveThread(threadId: string): Promise<void>;
 };

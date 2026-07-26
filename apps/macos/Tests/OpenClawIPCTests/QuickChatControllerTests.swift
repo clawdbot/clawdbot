@@ -68,10 +68,12 @@ struct QuickChatControllerTests {
                     ])
             },
             agentIdentityProvider: { _ in .placeholder },
-            sendProvider: { _, _, _, _, _ in "ok" },
+            sendProvider: { _, _, _, _, _, _ in "ok" },
             permissionStatusProvider: { _ in [:] },
             permissionGrantProvider: { _ in [:] },
-            connectionGateProvider: { .available })
+            connectionGateProvider: { .available },
+            modelControlsProvider: { _ in .testFixture },
+            modelPatchProvider: { _, _ in nil })
         let controller = QuickChatController(
             enableUI: false,
             model: model,
@@ -121,7 +123,7 @@ struct QuickChatControllerTests {
                     agents: [AgentSummary(id: "main", name: "Main")])
             },
             agentIdentityProvider: { _ in .placeholder },
-            sendProvider: { _, _, _, _, _ in "ok" },
+            sendProvider: { _, _, _, _, _, _ in "ok" },
             permissionStatusProvider: { capabilities in
                 Dictionary(uniqueKeysWithValues: capabilities.map { ($0, $0 != .notifications) })
             },
@@ -129,7 +131,9 @@ struct QuickChatControllerTests {
                 await latch.wait()
                 return Dictionary(uniqueKeysWithValues: capabilities.map { ($0, true) })
             },
-            connectionGateProvider: { .available })
+            connectionGateProvider: { .available },
+            modelControlsProvider: { _ in .testFixture },
+            modelPatchProvider: { _, _ in nil })
         let controller = QuickChatController(enableUI: false, model: model, monitoringEnabled: false)
         controller.present()
         guard let id = model.activePresentationID else {
@@ -165,7 +169,7 @@ struct QuickChatControllerTests {
                     agents: [AgentSummary(id: "main", name: "Main")])
             },
             agentIdentityProvider: { _ in .placeholder },
-            sendProvider: { _, _, _, _, _ in "ok" },
+            sendProvider: { _, _, _, _, _, _ in "ok" },
             permissionStatusProvider: { capabilities in
                 Dictionary(uniqueKeysWithValues: capabilities.map { ($0, true) })
             },
@@ -173,7 +177,9 @@ struct QuickChatControllerTests {
                 Dictionary(uniqueKeysWithValues: capabilities.map { ($0, true) })
             },
             connectionGateProvider: { .available },
-            textContextCaptureProvider: { await latch.wait() })
+            textContextCaptureProvider: { await latch.wait() },
+            modelControlsProvider: { _ in .testFixture },
+            modelPatchProvider: { _, _ in nil })
         let controller = QuickChatController(enableUI: false, model: model, monitoringEnabled: false)
         controller.present()
         guard let id = model.activePresentationID else {
@@ -216,10 +222,12 @@ struct QuickChatControllerTests {
                     agents: [AgentSummary(id: "main", name: "Main")])
             },
             agentIdentityProvider: { _ in .placeholder },
-            sendProvider: { _, _, _, _, _ in "ok" },
+            sendProvider: { _, _, _, _, _, _ in "ok" },
             permissionStatusProvider: { _ in [:] },
             permissionGrantProvider: { _ in [:] },
-            connectionGateProvider: { .available })
+            connectionGateProvider: { .available },
+            modelControlsProvider: { _ in .testFixture },
+            modelPatchProvider: { _, _ in nil })
     }
 }
 

@@ -157,7 +157,8 @@ class SettingsScreensTest {
   fun devicePairingAdminCopySeparatesPairingFromNodeApproval() {
     val text = devicePairingAdminUnavailableText()
 
-    assertEquals(true, text.contains("approve new phone pairing"))
+    assertEquals(true, text.contains("openclaw devices list"))
+    assertEquals(true, text.contains("Gateway host"))
     assertEquals(true, text.contains("Node capability approval is separate"))
     assertEquals(true, text.contains("nodes approve <request id>"))
   }

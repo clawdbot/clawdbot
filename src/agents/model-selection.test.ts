@@ -7,6 +7,7 @@ import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import { isModelKeyAllowedBySet } from "./model-selection-shared.js";
 import {
   buildAllowedModelSet,
+  buildConfiguredAllowlistKeys,
   buildConfiguredModelCatalog,
   inferUniqueProviderFromConfiguredModels,
   parseModelRef,
@@ -148,6 +149,7 @@ const EXPLICIT_ALLOWLIST_CONFIG = {
       models: {
         "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
       },
+      modelPolicy: { allow: ["anthropic/claude-sonnet-4-6"] },
     },
   },
 } as OpenClawConfig;
@@ -162,6 +164,15 @@ const ANTHROPIC_OPUS_CATALOG = [
     provider: "anthropic",
     id: "claude-opus-4-6",
     name: "Claude Opus 4.6",
+    reasoning: true,
+  },
+];
+
+const ANTHROPIC_OPUS_5_CATALOG = [
+  {
+    provider: "anthropic",
+    id: "claude-opus-5",
+    name: "Claude Opus 5",
     reasoning: true,
   },
 ];
@@ -213,6 +224,15 @@ function resolveAnthropicOpusThinking(cfg: OpenClawConfig) {
   });
 }
 
+function resolveAnthropicOpus5Thinking(cfg: OpenClawConfig) {
+  return resolveThinkingDefault({
+    cfg,
+    provider: "anthropic",
+    model: "claude-opus-5",
+    catalog: ANTHROPIC_OPUS_5_CATALOG,
+  });
+}
+
 function resolveAnthropicOpus47Thinking(cfg: OpenClawConfig) {
   return resolveThinkingDefault({
     cfg,
@@ -261,6 +281,7 @@ function createAgentFallbackConfig(params: {
         models: {
           "openai/gpt-4o": {},
         },
+        modelPolicy: { allow: ["openai/gpt-4o"] },
         model: {
           primary: params.primary ?? "openai/gpt-4o",
           fallbacks: params.fallbacks ?? [],
@@ -1044,6 +1065,45 @@ describe("model-selection", () => {
     });
   });
 
+  describe("buildConfiguredAllowlistKeys", () => {
+    it("resolves per-agent policy aliases to the enforcement key", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.5" },
+          },
+          list: [
+            {
+              id: "research",
+              models: {
+                "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+              },
+              modelPolicy: { allow: ["sonnet"] },
+            },
+          ],
+        },
+      } as OpenClawConfig;
+
+      const keys = buildConfiguredAllowlistKeys({
+        cfg,
+        defaultProvider: "openai",
+        agentId: "research",
+      });
+      const policy = createModelVisibilityPolicy({
+        cfg,
+        catalog: [],
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.5",
+        agentId: "research",
+      });
+
+      expect(keys).toEqual(new Set(["anthropic/claude-sonnet-4-6"]));
+      expect(keys?.has("openai/sonnet")).toBe(false);
+      expect(policy.allowsKey("anthropic/claude-sonnet-4-6")).toBe(true);
+      expect(policy.allowsKey("openai/sonnet")).toBe(false);
+    });
+  });
+
   describe("buildAllowedModelSet", () => {
     it("keeps explicitly allowlisted models even when missing from bundled catalog", () => {
       const result = buildAllowedModelSet({
@@ -1072,6 +1132,7 @@ describe("model-selection", () => {
             models: {
               "openai/gpt-test-z": { alias: "GPT Test Z Alias" },
             },
+            modelPolicy: { allow: ["openai/gpt-test-z"] },
           },
         },
         models: {
@@ -1110,7 +1171,7 @@ describe("model-selection", () => {
       ]);
     });
 
-    it("overlays configured provider metadata after manifest model normalization", () => {
+    it("keeps compat catalog-owned while overlaying metadata after manifest normalization", () => {
       const cfg: OpenClawConfig = {
         models: {
           providers: {
@@ -1142,7 +1203,6 @@ describe("model-selection", () => {
           name: "Configured Llama Fast",
           contextWindow: 128_000,
           reasoning: true,
-          compat: { thinkingFormat: "qwen" },
         },
       ]);
     });
@@ -1206,6 +1266,7 @@ describe("model-selection", () => {
               "openai/*": {},
               "vllm/*": {},
             },
+            modelPolicy: { allow: ["openai/*", "vllm/*"] },
           },
         },
       } as unknown as OpenClawConfig;
@@ -1243,6 +1304,7 @@ describe("model-selection", () => {
             models: {
               "openai/*": {},
             },
+            modelPolicy: { allow: ["openai/*"] },
           },
         },
       } as unknown as OpenClawConfig;
@@ -1268,6 +1330,7 @@ describe("model-selection", () => {
               "openai/*": {},
               "anthropic/claude-sonnet-4-6": {},
             },
+            modelPolicy: { allow: ["openai/*", "anthropic/claude-sonnet-4-6"] },
           },
         },
       } as unknown as OpenClawConfig;
@@ -1308,6 +1371,7 @@ describe("model-selection", () => {
               "vllm/*": {},
               "vllm/manual": {},
             },
+            modelPolicy: { allow: ["vllm/*", "vllm/manual"] },
           },
         },
       } as unknown as OpenClawConfig;
@@ -1338,6 +1402,7 @@ describe("model-selection", () => {
               "openai/*": {},
               "google/gemini-test": {},
             },
+            modelPolicy: { allow: ["openai/*", "google/gemini-test"] },
           },
         },
       } as unknown as OpenClawConfig;
@@ -1369,6 +1434,7 @@ describe("model-selection", () => {
               "anthropic/claude-sonnet-4-6": {},
               "openai/*": {},
             },
+            modelPolicy: { allow: ["anthropic/claude-sonnet-4-6", "openai/*"] },
           },
         },
       } as unknown as OpenClawConfig;
@@ -1401,6 +1467,7 @@ describe("model-selection", () => {
             models: {
               "modelscope/Qwen/Qwen3.5-35B-A3B": {},
             },
+            modelPolicy: { allow: ["modelscope/Qwen/Qwen3.5-35B-A3B"] },
           },
         },
       } as unknown as OpenClawConfig;
@@ -1433,6 +1500,7 @@ describe("model-selection", () => {
             models: {
               "nvidia/moonshotai/kimi-k2.5": { alias: "Kimi K2.5 (NVIDIA)" },
             },
+            modelPolicy: { allow: ["nvidia/moonshotai/kimi-k2.5"] },
           },
         },
         models: {
@@ -1477,7 +1545,7 @@ describe("model-selection", () => {
       ]);
     });
 
-    it("includes fallback models in allowed set", () => {
+    it("keeps fallback models separate from explicit override authorization", () => {
       const cfg = createAgentFallbackConfig({
         fallbacks: ["anthropic/claude-sonnet-4-6", "google/gemini-3-pro"],
       });
@@ -1490,8 +1558,11 @@ describe("model-selection", () => {
       });
 
       expect(result.allowedKeys.has("openai/gpt-4o")).toBe(true);
-      expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(true);
-      expect(result.allowedKeys.has("google/gemini-3.1-pro-preview")).toBe(true);
+      expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(false);
+      expect(result.allowedKeys.has("google/gemini-3.1-pro-preview")).toBe(false);
+      expect(result.automaticFallbackKeys).toEqual(
+        new Set(["anthropic/claude-sonnet-4-6", "google/gemini-3.1-pro-preview"]),
+      );
       expect(result.allowAny).toBe(false);
     });
 
@@ -1524,13 +1595,36 @@ describe("model-selection", () => {
       });
 
       expect(result.allowedKeys.has("openai/gpt-4o")).toBe(true);
-      expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(true);
+      expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(false);
       expect(result.allowedKeys.has("google/gemini-3.1-pro-preview")).toBe(false);
+      expect(result.automaticFallbackKeys).toEqual(new Set(["anthropic/claude-sonnet-4-6"]));
       expect(result.allowAny).toBe(false);
     });
   });
 
   describe("resolveAllowedModelRef", () => {
+    it("keeps deprecated catalog refs selectable", () => {
+      const result = resolveAllowedModelRef({
+        cfg: {} as OpenClawConfig,
+        catalog: [
+          {
+            provider: "openai",
+            id: "gpt-5.5",
+            name: "GPT-5.5",
+            status: "deprecated",
+            replacedBy: "gpt-5.6",
+          },
+        ],
+        raw: "openai/gpt-5.5",
+        defaultProvider: "openai",
+      });
+
+      expect(result).toEqual({
+        key: "openai/gpt-5.5",
+        ref: { provider: "openai", model: "gpt-5.5" },
+      });
+    });
+
     it("accepts explicit allowlist refs absent from bundled catalog", () => {
       const result = resolveAllowedModelRef({
         cfg: EXPLICIT_ALLOWLIST_CONFIG,
@@ -2714,6 +2808,18 @@ describe("model-selection", () => {
           model: "deepseek-v4-pro",
         }),
       ).toBe("off");
+    });
+
+    it("defaults explicitly configured Anthropic Opus 5 to high adaptive thinking", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-5" },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(resolveAnthropicOpus5Thinking(cfg)).toBe("high");
     });
 
     it("keeps thinking off by default for explicitly configured Anthropic Opus 4.7", () => {

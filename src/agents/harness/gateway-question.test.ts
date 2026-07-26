@@ -141,7 +141,7 @@ describe("gateway harness questions", () => {
 
   it("returns an answer that wins a registration cancellation race", async () => {
     const registration = deferred<{ id: string }>();
-    const answers = { answers: { answer: { answers: ["Continue"] } } };
+    const answers = { answers: { answer: ["Continue"] } };
     let resolveCount = 0;
     const gatewayCall: AgentHarnessQuestionGatewayCall = async (method) => {
       if (method === "question.request") {
@@ -184,7 +184,7 @@ describe("gateway harness questions", () => {
   });
 
   it("returns an answer recovered after the request response is lost", async () => {
-    const answers = { answers: { answer: { answers: ["Continue"] } } };
+    const answers = { answers: { answer: ["Continue"] } };
     const requestError = new Error("request response lost");
     const gatewayCall: AgentHarnessQuestionGatewayCall = async (method) => {
       if (method === "question.request") {
@@ -218,7 +218,7 @@ describe("gateway harness questions", () => {
     const registration = deferred<{ id: string }>();
     const answer = deferred<{
       status: "answered";
-      answers: { answers: Record<string, { answers: string[] }> };
+      answers: { answers: Record<string, string[]> };
     }>();
     const gatewayCall: AgentHarnessQuestionGatewayCall = async (method, _opts, params) => {
       if (method === "question.request") {
@@ -228,9 +228,8 @@ describe("gateway harness questions", () => {
         return await answer.promise;
       }
       if (method === "question.resolve") {
-        const resolvedAnswers = (
-          params as { answers?: { answers: Record<string, { answers: string[] }> } }
-        ).answers;
+        const resolvedAnswers = (params as { answers?: { answers: Record<string, string[]> } })
+          .answers;
         if (!resolvedAnswers) {
           return { status: "cancelled" };
         }
@@ -261,7 +260,7 @@ describe("gateway harness questions", () => {
 
     await expect(run).resolves.toEqual({
       status: "answered",
-      answers: { answers: { answer: { answers: ["Continue"] } } },
+      answers: { answers: { answer: ["Continue"] } },
     });
     expect(onBlockReply).not.toHaveBeenCalled();
   });
@@ -298,7 +297,7 @@ describe("gateway harness questions", () => {
   it("accepts a later text answer after cancellation fails", async () => {
     const answer = deferred<{
       status: "answered";
-      answers: { answers: Record<string, { answers: string[] }> };
+      answers: { answers: Record<string, string[]> };
     }>();
     let cancelAttempts = 0;
     const gatewayCall: AgentHarnessQuestionGatewayCall = async (method, _opts, params) => {
@@ -309,9 +308,8 @@ describe("gateway harness questions", () => {
         return await answer.promise;
       }
       if (method === "question.resolve") {
-        const resolvedAnswers = (
-          params as { answers?: { answers: Record<string, { answers: string[] }> } }
-        ).answers;
+        const resolvedAnswers = (params as { answers?: { answers: Record<string, string[]> } })
+          .answers;
         if (!resolvedAnswers) {
           cancelAttempts += 1;
           throw new Error("temporary gateway failure");
@@ -348,7 +346,7 @@ describe("gateway harness questions", () => {
 
     await expect(run).resolves.toEqual({
       status: "answered",
-      answers: { answers: { answer: { answers: ["Continue"] } } },
+      answers: { answers: { answer: ["Continue"] } },
     });
     expect(cancelAttempts).toBe(1);
   });
@@ -356,7 +354,7 @@ describe("gateway harness questions", () => {
   it("returns a gateway answer without waiting for stalled prompt delivery", async () => {
     const answer = deferred<{
       status: "answered";
-      answers: { answers: Record<string, { answers: string[] }> };
+      answers: { answers: Record<string, string[]> };
     }>();
     const gatewayCall: AgentHarnessQuestionGatewayCall = async (method, _opts, params) => {
       if (method === "question.request") {
@@ -366,8 +364,7 @@ describe("gateway harness questions", () => {
         return await answer.promise;
       }
       if (method === "question.resolve") {
-        const answers = (params as { answers?: { answers: Record<string, { answers: string[] }> } })
-          .answers;
+        const answers = (params as { answers?: { answers: Record<string, string[]> } }).answers;
         if (answers) {
           answer.resolve({ status: "answered", answers });
           return { status: "answered", answers };
@@ -398,14 +395,14 @@ describe("gateway harness questions", () => {
         text: "Continue",
       }),
     ).resolves.toBe(true);
-    const answers = { answers: { answer: { answers: ["Continue"] } } };
+    const answers = { answers: { answer: ["Continue"] } };
 
     await expect(run).resolves.toEqual({ status: "answered", answers });
     expect(deliverySignal?.aborted).toBe(true);
   });
 
   it("does not deliver a prompt for an already-terminal gateway question", async () => {
-    const answers = { answers: { answer: { answers: ["Continue"] } } };
+    const answers = { answers: { answer: ["Continue"] } };
     const gatewayCall: AgentHarnessQuestionGatewayCall = async (method, _opts, params) => {
       if (method === "question.request") {
         return { id: (params as { id: string }).id };

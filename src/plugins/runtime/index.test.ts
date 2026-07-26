@@ -46,7 +46,6 @@ function createGatewaySubagentRuntime() {
     run: vi.fn(),
     waitForRun: vi.fn(),
     getSessionMessages: vi.fn(),
-    getSession: vi.fn(),
     deleteSession: vi.fn(),
   };
 }
@@ -302,7 +301,7 @@ describe("plugin runtime command execution", () => {
 
   it.each([
     {
-      name: "exposes runtime.mediaUnderstanding helpers and keeps stt as an alias",
+      name: "exposes runtime.mediaUnderstanding helpers",
       assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
         expectFunctionKeys(runtime.mediaUnderstanding as Record<string, unknown>, [
           "runFile",
@@ -311,9 +310,7 @@ describe("plugin runtime command execution", () => {
           "extractStructuredWithModel",
           "describeVideoFile",
         ]);
-        expect(runtime.mediaUnderstanding.transcribeAudioFile).toBe(
-          runtime.stt.transcribeAudioFile,
-        );
+        expect(runtime.mediaUnderstanding.transcribeAudioFile).toBeTypeOf("function");
       },
     },
     {
@@ -335,7 +332,7 @@ describe("plugin runtime command execution", () => {
       },
     },
     {
-      name: "exposes canonical runtime.tasks task runtimes while keeping legacy TaskFlow aliases",
+      name: "exposes canonical runtime.tasks task runtimes",
       assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
         expectFunctionKeys(runtime.tasks.runs as Record<string, unknown>, [
           "bindSession",
@@ -349,12 +346,6 @@ describe("plugin runtime command execution", () => {
           "bindSession",
           "fromToolContext",
         ]);
-        expectFunctionKeys(runtime.tasks.flow as Record<string, unknown>, [
-          "bindSession",
-          "fromToolContext",
-        ]);
-        expect(runtime.tasks.managedFlows).toBe(runtime.tasks.flow);
-        expect(runtime.taskFlow).toBe(runtime.tasks.managedFlows);
       },
     },
     {

@@ -121,16 +121,15 @@ export function createTelegramBotCore(
     });
   const finalFetch = createTelegramClientFetch({
     fetchImpl: asTelegramClientFetch(telegramTransport.fetch),
-    timeoutSeconds: telegramCfg?.timeoutSeconds,
     shutdownSignal: opts.fetchAbortSignal,
     transport: telegramTransport,
   });
 
   const timeoutSeconds = resolveTelegramClientTimeoutSeconds({
-    value: telegramCfg?.timeoutSeconds,
+    value: undefined,
     minimum: resolveTelegramClientTimeoutMinimumSeconds([
       opts.minimumClientTimeoutSeconds,
-      resolveTelegramOutboundClientTimeoutFloorSeconds(telegramCfg?.timeoutSeconds),
+      resolveTelegramOutboundClientTimeoutFloorSeconds(undefined),
     ]),
   });
   const apiRoot = normalizeOptionalString(telegramCfg.apiRoot);

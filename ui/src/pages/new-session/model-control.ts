@@ -78,7 +78,7 @@ export class NewSessionModelControl {
     const normalizedAgentId = normalizeAgentId(agentId);
     const requestId = ++this.requestToken;
     this.catalog = [];
-    if (!snapshot?.connected || !client || !normalizedAgentId || !enabled) {
+    if (snapshot?.phase !== "connected" || !client || !normalizedAgentId || !enabled) {
       this.loading = false;
       this.notify();
       return;
@@ -174,7 +174,7 @@ export class NewSessionModelControl {
     return renderChatModelControls({
       activeRunId: null,
       agentDefaultModel,
-      connected: snapshot?.connected === true,
+      connected: snapshot?.phase === "connected",
       gatewayAvailable: Boolean(snapshot?.client),
       loading: false,
       modelCatalog: this.catalog,

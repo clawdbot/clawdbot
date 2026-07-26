@@ -548,7 +548,6 @@ describe("registerPluginCommand", () => {
     const env = {
       ...process.env,
       OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
-      OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY: "1",
     };
 
     expect(getPluginCommandSpecs("discord", { env })).toStrictEqual([]);
@@ -1166,6 +1165,49 @@ describe("registerPluginCommand", () => {
     });
 
     expectUnsupportedBindingApiResult(result);
+  });
+
+  it("uses the stable originating target for plugin conversation commands", async () => {
+    const resolveCommandConversation = vi.fn(() => null);
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "slack", label: "Slack" }),
+            bindings: { resolveCommandConversation },
+          },
+        },
+      ]),
+    );
+    const handler = vi.fn(async () => ({ text: "ok" }));
+
+    await executePluginCommand({
+      command: {
+        name: "control",
+        description: "Control a binding",
+        acceptsArgs: false,
+        handler,
+        pluginId: "demo-plugin",
+      },
+      channel: "slack",
+      senderId: "U123",
+      isAuthorizedSender: true,
+      commandBody: "/control",
+      config: {} as never,
+      from: "slack:U123",
+      to: "changed-runtime-target",
+      originatingTo: "user:U123",
+      accountId: "default",
+    });
+
+    expect(resolveCommandConversation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        originatingTo: "user:U123",
+        commandTo: "changed-runtime-target",
+      }),
+    );
   });
 
   it("passes host session identity through to the plugin command context", async () => {

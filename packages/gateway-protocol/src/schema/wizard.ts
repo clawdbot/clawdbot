@@ -24,7 +24,7 @@ export const WizardStartParamsSchema = closedObject({
 });
 
 /** Client answer payload for the current wizard step. */
-export const WizardAnswerSchema = closedObject({
+const WizardAnswerSchema = closedObject({
   stepId: NonEmptyString,
   value: Type.Optional(Type.Unknown()),
 });
@@ -47,7 +47,7 @@ export const WizardCancelParamsSchema = WizardSessionIdParamsSchema;
 export const WizardStatusParamsSchema = WizardSessionIdParamsSchema;
 
 /** Selectable value shown in a choice-based wizard step. */
-export const WizardStepOptionSchema = closedObject({
+const WizardStepOptionSchema = closedObject({
   value: Type.Unknown(),
   label: NonEmptyString,
   hint: Type.Optional(Type.String()),

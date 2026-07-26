@@ -31,6 +31,7 @@ export {
   type ConfigIoDeps,
   type ConfigSnapshotReadMeasure,
   type ConfigSnapshotReadOptions,
+  type ConfigWriteAuditOrigin,
   type ConfigWriteNotification,
   type ConfigWriteOptions,
   type ConfigWriteResult,

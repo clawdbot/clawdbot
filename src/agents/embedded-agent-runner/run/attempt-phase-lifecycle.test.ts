@@ -63,6 +63,7 @@ describe("embedded attempt phase lifecycle state", () => {
         getCompactionCount: () => 0,
         getCurrentAttemptAssistant: () => undefined,
         getUsageTotals: () => undefined,
+        getLastAssistantUsage: () => undefined,
       } as never,
       state: {
         promptError: null,
@@ -148,5 +149,51 @@ describe("embedded attempt phase lifecycle state", () => {
         event: expect.objectContaining({ success: false }),
       }),
     );
+  });
+
+  it("skips agent_end side effects for settled-turn finalization", async () => {
+    await completeEmbeddedAttemptAfterTurn({
+      attempt: {
+        operation: "settled-tool-finalization",
+        runId: "run-1",
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+      } as never,
+      activeSession: {} as never,
+      sessionManager: { appendCustomEntry: vi.fn() } as never,
+      sessionLockController: { waitForSessionEvents: async () => undefined } as never,
+      withOwnedSessionWriteLock: async (operation) => await operation(),
+      state: {
+        promptError: null,
+        yieldAborted: false,
+        sessionIdUsed: "session-1",
+        messagesSnapshot: [],
+        prePromptMessageCount: 0,
+        contextEngineAfterTurnCheckpoint: null,
+        compactionOccurredThisAttempt: false,
+      },
+      readLifecycleState: () => ({
+        aborted: false,
+        timedOut: false,
+        idleTimedOut: false,
+        timedOutDuringCompaction: false,
+      }),
+      runtime: {
+        effectiveWorkspace: "/tmp/workspace",
+        agentDir: "/tmp/agent",
+        sessionAgentId: "main",
+        resolveActiveContextEnginePluginId: () => undefined,
+        shouldRecordCompletedBootstrapTurn: false,
+        cacheTrace: null,
+        anthropicPayloadLogger: null,
+        hookAgentId: "main",
+        diagnosticTrace: { traceId: "trace-1", spanId: "span-1" } as never,
+        skillWorkshopAvailable: false,
+        hookRunner: null,
+        promptStartedAt: Date.now(),
+      },
+    });
+
+    expect(hoisted.runAgentEndSideEffects).not.toHaveBeenCalled();
   });
 });

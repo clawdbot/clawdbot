@@ -19,8 +19,10 @@ export type { SystemAgentOperation };
 /** Result returned by the operation executor. */
 export type SystemAgentOperationResult = {
   applied: boolean;
-  /** Setup created or preserved BOOTSTRAP.md for the agent's first turn. */
+  /** Creation created or preserved BOOTSTRAP.md for the agent's first turn. */
   bootstrapPending?: boolean;
+  /** Agent created by this operation, when applicable. */
+  agentId?: string;
   exitsInteractive?: boolean;
   message?: string;
   nextInput?: string;
@@ -37,17 +39,7 @@ export type SystemAgentCommandDeps = {
   resolveApiKeyForProvider?: typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
   formatOverview?: SystemAgentOverviewFormatter;
   loadOverview?: SystemAgentOverviewLoader;
-  runAgentsAdd?: (
-    opts: {
-      name?: string;
-      workspace?: string;
-      model?: string;
-      nonInteractive?: boolean;
-      json?: boolean;
-    },
-    runtime: RuntimeEnv,
-    params?: { hasFlags?: boolean },
-  ) => Promise<void>;
+  createAgent?: typeof import("../agents/agent-create.js").createAgent;
   runConfigSet?: (opts: {
     path?: string;
     value?: string;

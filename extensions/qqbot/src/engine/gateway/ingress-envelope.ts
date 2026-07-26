@@ -109,22 +109,3 @@ export function inspectQQBotIngressEnvelope(rawEnvelope: string): QQBotIngressEn
     payload,
   };
 }
-
-export function parseQQBotClaimedEnvelope(params: {
-  rawEnvelope: string;
-  claimedId: string;
-  claimedLaneKey?: string;
-}): QQBotIngressEnvelopeFacts {
-  const facts = inspectQQBotIngressEnvelope(params.rawEnvelope);
-  if (!facts) {
-    throw new QQBotIngressPayloadError(
-      `QQBot ingress row ${params.claimedId} is not a turn-producing create event.`,
-    );
-  }
-  if (facts.eventId !== params.claimedId || facts.laneKey !== params.claimedLaneKey) {
-    throw new QQBotIngressPayloadError(
-      `QQBot ingress row ${params.claimedId} changed identity after durable admission.`,
-    );
-  }
-  return facts;
-}

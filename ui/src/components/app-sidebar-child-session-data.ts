@@ -1,49 +1,10 @@
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { GatewaySessionRow } from "../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
+import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
+export { fetchChildSessionRows } from "../lib/sessions/child-session-data.ts";
 
 const MAX_SESSION_LINEAGE_DEPTH = 16;
-
-export async function fetchChildSessionRows(params: {
-  sessions: SessionCapability;
-  parentKey: string;
-  isCurrent: () => boolean;
-}): Promise<GatewaySessionRow[] | null> {
-  const rows: GatewaySessionRow[] = [];
-  const seenOffsets = new Set<number>();
-  let offset = 0;
-  while (!seenOffsets.has(offset)) {
-    seenOffsets.add(offset);
-    const result = await params.sessions.list({
-      spawnedBy: params.parentKey,
-      ...(offset > 0 ? { offset } : {}),
-      limit: 20,
-      includeGlobal: false,
-      includeUnknown: false,
-      configuredAgentsOnly: true,
-    });
-    if (!params.isCurrent()) {
-      return null;
-    }
-    if (!result) {
-      throw new Error("child session list returned no result");
-    }
-    const runtimeSampledAt = Date.now();
-    for (const row of result.sessions) {
-      if (!rows.some((candidate) => candidate.key === row.key)) {
-        rows.push({ ...row, runtimeSampledAt });
-      }
-    }
-    const hasMore =
-      result.hasMore ?? (typeof result.totalCount === "number" && rows.length < result.totalCount);
-    const nextOffset = result.nextOffset ?? rows.length;
-    if (!hasMore || nextOffset <= offset) {
-      break;
-    }
-    offset = nextOffset;
-  }
-  return rows;
-}
 
 export function collectKnownSessionRows(
   rootRows: readonly GatewaySessionRow[],
@@ -110,7 +71,7 @@ export async function fetchSessionLineage(params: {
   return { rowsByParent, topmostRow, lookupFailed };
 }
 
-export function mergeChildSessionRows(
+function mergeChildSessionRows(
   current: Readonly<Record<string, readonly GatewaySessionRow[]>>,
   additions: Readonly<Record<string, readonly GatewaySessionRow[]>>,
 ): Record<string, GatewaySessionRow[]> {
@@ -127,4 +88,65 @@ export function mergeChildSessionRows(
     merged[parentKey] = children;
   }
   return merged;
+}
+
+export function publishActiveSessionLineage(
+  owner: {
+    activeSessionLineageRoot: GatewaySessionRow | null;
+    childSessionRowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>>;
+    context?: { sessions: Pick<SessionCapability, "reconcile"> };
+    sessionsResult: SessionsListResult | null;
+  },
+  sessionKey: string,
+  lineage: NonNullable<Awaited<ReturnType<typeof fetchSessionLineage>>>,
+): void {
+  owner.childSessionRowsByParent = mergeChildSessionRows(
+    owner.childSessionRowsByParent,
+    lineage.rowsByParent,
+  );
+  owner.activeSessionLineageRoot = lineage.topmostRow;
+  // Prefer the fetched lineage on ties, but keep a newer child-list snapshot
+  // so a delayed describe cannot regress already-settled run state.
+  const selectedRow = [
+    lineage.topmostRow,
+    ...Object.values(lineage.rowsByParent).flat(),
+    ...collectKnownSessionRows(
+      owner.sessionsResult?.sessions ?? [],
+      owner.childSessionRowsByParent,
+    ).values(),
+  ]
+    .filter(
+      (row): row is GatewaySessionRow =>
+        row != null && areUiSessionKeysEquivalent(row.key, sessionKey),
+    )
+    .reduce<GatewaySessionRow | undefined>((freshest, row) => {
+      return !freshest || (row.updatedAt ?? 0) > (freshest.updatedAt ?? 0) ? row : freshest;
+    }, undefined);
+  if (selectedRow) {
+    // The active list intentionally omits archived rows. Publish the routed
+    // descriptor so the chat pane and header share the sidebar's cold-load truth.
+    owner.context?.sessions.reconcile(selectedRow, owner.sessionsResult?.defaults, {
+      archivedFilter: "all",
+    });
+  }
+}
+
+export function evictArchivedSessionLineage(
+  owner: Parameters<typeof publishActiveSessionLineage>[0],
+  sessionKey: string | null,
+): void {
+  if (!sessionKey) {
+    return;
+  }
+  const selectedRow =
+    owner.sessionsResult?.sessions.find((row) => areUiSessionKeysEquivalent(row.key, sessionKey)) ??
+    [owner.activeSessionLineageRoot, ...Object.values(owner.childSessionRowsByParent).flat()].find(
+      (row): row is GatewaySessionRow =>
+        row != null && areUiSessionKeysEquivalent(row.key, sessionKey),
+    );
+  if (selectedRow?.archived === true) {
+    owner.context?.sessions.reconcile(selectedRow, owner.sessionsResult?.defaults, {
+      archivedFilter: "active",
+    });
+  }
 }

@@ -3,7 +3,11 @@ import http from "node:http";
 import https from "node:https";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
-import { parseQaTarget, type QaTargetParts } from "openclaw/plugin-sdk/qa-channel-protocol";
+import {
+  buildQaTarget,
+  parseQaTarget,
+  type QaTargetParts,
+} from "openclaw/plugin-sdk/qa-channel-protocol";
 import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type {
@@ -16,7 +20,7 @@ import type {
   QaBusToolCall,
 } from "./protocol.js";
 
-export { parseQaTarget };
+export { buildQaTarget, parseQaTarget };
 
 export type {
   QaBusAttachment,
@@ -150,17 +154,6 @@ export function resolveQaTargetThread(params: {
     target,
     ...(threadId ? { threadId } : {}),
   };
-}
-
-export function buildQaTarget(params: {
-  chatType: "direct" | "channel" | "group";
-  conversationId: string;
-  threadId?: string | null;
-}) {
-  if (params.threadId) {
-    return `thread:${params.conversationId}/${params.threadId}`;
-  }
-  return `${params.chatType === "direct" ? "dm" : params.chatType}:${params.conversationId}`;
 }
 
 export async function pollQaBus(params: {

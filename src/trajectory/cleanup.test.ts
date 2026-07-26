@@ -170,4 +170,34 @@ describe("trajectory cleanup", () => {
       expect((await fs.stat(unsafeExternalRuntime)).isFile()).toBe(true);
     });
   });
+
+  it("ignores oversized trajectory pointers while still removing the sidecar", async () => {
+    await withTempDir({ prefix: "openclaw-trajectory-cleanup-" }, async (dir) => {
+      const sessionId = "session-oversized-pointer";
+      const sessionsDir = path.join(dir, "sessions");
+      const storePath = path.join(sessionsDir, "sessions.json");
+      const sessionFile = path.join(sessionsDir, `${sessionId}.jsonl`);
+      const externalRuntime = path.join(dir, "external", `${sessionId}.jsonl`);
+      const pointerPath = resolveTrajectoryPointerFilePath(sessionFile);
+      await fs.mkdir(sessionsDir, { recursive: true });
+      await fs.mkdir(path.dirname(externalRuntime), { recursive: true });
+      await fs.writeFile(externalRuntime, runtimeEvent(sessionId), "utf8");
+      await fs.writeFile(
+        pointerPath,
+        `${pointerFile(sessionId, externalRuntime)}${" ".repeat(64 * 1024)}`,
+        "utf8",
+      );
+
+      const removed = await removeSessionTrajectoryArtifacts({
+        sessionId,
+        sessionFile,
+        storePath,
+        restrictToStoreDir: true,
+      });
+
+      expect(removed).toEqual([{ kind: "pointer", path: pointerPath }]);
+      expect((await fs.stat(externalRuntime)).isFile()).toBe(true);
+      await expectPathMissing(pointerPath);
+    });
+  });
 });

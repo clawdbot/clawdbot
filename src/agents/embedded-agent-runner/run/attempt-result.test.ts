@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { completeEmbeddedAttemptResult } from "./attempt-result.js";
 
 function completeResult(params?: {
+  latestMcpAppChannelView?: { viewId: string };
   clientToolCallSlots?: Array<{
     toolCallId: string;
     name: string;
@@ -39,6 +40,7 @@ function completeResult(params?: {
       getLastAssistantTextMessageIndex: () => undefined,
       getLastCompactionTokensAfter: () => undefined,
       getLastToolError: () => undefined,
+      getLatestMcpAppChannelView: () => params?.latestMcpAppChannelView,
       getMessagingToolSentMediaUrls: () => [],
       getMessagingToolSentTargets: () => [],
       getMessagingToolSentTexts: () => [],
@@ -52,15 +54,7 @@ function completeResult(params?: {
       toolMetas: params?.toolMetas ?? [],
     } as never,
     state: {
-      aborted: false,
-      externalAbort: false,
-      timedOut: false,
-      idleTimedOut: false,
-      timedOutDuringCompaction: false,
-      timedOutDuringToolExecution: false,
-      timedOutByRunBudget: false,
-      promptError: null,
-      promptErrorSource: null,
+      terminal: { kind: "ok" },
       sessionIdUsed: "session-1",
       messagesSnapshot: [],
       yieldDetected: false,
@@ -138,5 +132,13 @@ describe("attempt result projection", () => {
     expect(completeResult({ pendingToolMediaReply: { audioAsVoice: true } }).toolAudioAsVoice).toBe(
       true,
     );
+  });
+
+  it("projects the latest MCP App channel view without result data", () => {
+    expect(
+      completeResult({
+        latestMcpAppChannelView: { viewId: "view-latest" },
+      }).latestMcpAppChannelView,
+    ).toEqual({ viewId: "view-latest" });
   });
 });

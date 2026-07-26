@@ -1,6 +1,5 @@
 // OpenAI Responses shared helpers map runtime messages, tools, and stream events.
 import { randomUUID } from "node:crypto";
-import type OpenAI from "openai";
 import type {
   ResponseCreateParamsStreaming,
   ResponseFunctionCallOutputItemList,
@@ -21,7 +20,6 @@ import type {
   Context,
   Model,
   SimpleStreamOptions,
-  StopReason,
   StreamOptions,
   TextContent,
   TextSignatureV1,
@@ -56,6 +54,10 @@ import {
   isResponsesTextContentPartType,
   resolveResponsesMessageSnapshotCollapse,
 } from "./openai-responses-stream-compat.js";
+import {
+  mapResponsesTerminalUsage,
+  resolveResponsesTerminalStopReason,
+} from "./openai-responses-terminal-usage.js";
 import {
   createResponsesToolCallTracker,
   readResponsesToolCallItemIdentity,
@@ -121,10 +123,6 @@ type ResponsesOutputItemDoneEvent = Extract<
   ResponseStreamEvent,
   { type: "response.output_item.done" }
 >;
-type ResponsesInputTokensDetails = {
-  cached_tokens?: number;
-  cache_write_tokens?: number;
-};
 type AzureResponsesContentPartAddedEvent = Omit<ResponsesContentPartAddedEvent, "part"> & {
   part: AzureResponsesTextContentPart;
 };
@@ -964,20 +962,10 @@ export async function processResponsesStream<TApi extends Api>(
     if (response.id) {
       output.responseId = response.id;
     }
-    if (response.usage) {
-      const inputTokenDetails = response.usage.input_tokens_details as
-        | ResponsesInputTokensDetails
-        | null
-        | undefined;
-      const cachedTokens = inputTokenDetails?.cached_tokens || 0;
-      const cacheWriteTokens = inputTokenDetails?.cache_write_tokens || 0;
+    const mappedUsage = mapResponsesTerminalUsage(response.usage);
+    if (mappedUsage) {
       output.usage = {
-        // OpenAI includes cache reads and writes in input_tokens, so split both priced buckets.
-        input: Math.max(0, (response.usage.input_tokens || 0) - cachedTokens - cacheWriteTokens),
-        output: response.usage.output_tokens || 0,
-        cacheRead: cachedTokens,
-        cacheWrite: cacheWriteTokens,
-        totalTokens: response.usage.total_tokens || 0,
+        ...mappedUsage,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
       };
     }
@@ -988,17 +976,14 @@ export async function processResponsesStream<TApi extends Api>(
         : (response.service_tier ?? options.serviceTier);
       options.applyServiceTierPricing(output.usage, serviceTier);
     }
-    if (
-      response.status === "incomplete" &&
-      response.incomplete_details?.reason === "content_filter"
-    ) {
-      output.stopReason = "error";
-      output.errorMessage = "Provider incomplete_reason: content_filter";
-    } else {
-      output.stopReason = mapStopReason(response.status);
-    }
-    if (output.content.some((block) => block.type === "toolCall") && output.stopReason === "stop") {
-      output.stopReason = "toolUse";
+    const terminal = resolveResponsesTerminalStopReason({
+      status: response.status,
+      incompleteReason: response.incomplete_details?.reason,
+      hasToolCall: output.content.some((block) => block.type === "toolCall"),
+    });
+    output.stopReason = terminal.stopReason;
+    if (terminal.errorMessage) {
+      output.errorMessage = terminal.errorMessage;
     }
   };
 
@@ -1415,26 +1400,4 @@ export async function processResponsesStream<TApi extends Api>(
   }
 }
 
-function mapStopReason(status: OpenAI.Responses.ResponseStatus | undefined): StopReason {
-  if (!status) {
-    return "stop";
-  }
-  switch (status) {
-    case "completed":
-      return "stop";
-    case "incomplete":
-      return "length";
-    case "failed":
-    case "cancelled":
-      return "error";
-    // These two are wonky ...
-    case "in_progress":
-    case "queued":
-      return "stop";
-    default: {
-      const exhaustive: never = status;
-      throw new Error(`Unhandled stop reason: ${String(exhaustive)}`);
-    }
-  }
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

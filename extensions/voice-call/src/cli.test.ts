@@ -26,6 +26,8 @@ function captureStdout() {
 describe("voice-call CLI status fallback", () => {
   afterEach(() => {
     callGatewayFromCliMock.mockReset();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   function buildProgram(
@@ -144,5 +146,47 @@ describe("voice-call CLI status fallback", () => {
       }),
     ).rejects.toThrow("voicecall continue timed out waiting for gateway operation");
     expect(callGatewayFromCliMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds a withheld continue.result RPC to the overall poll deadline", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    callGatewayFromCliMock
+      .mockResolvedValueOnce({
+        operationId: "op-1",
+        status: "pending",
+        pollTimeoutMs: 1_500,
+      })
+      .mockResolvedValueOnce({ status: "pending" })
+      .mockImplementationOnce(
+        async (_method: string, opts: { timeout: string }) =>
+          await new Promise((_, reject) => {
+            setTimeout(
+              () => reject(new Error(`gateway timeout after ${opts.timeout}ms`)),
+              Number(opts.timeout),
+            );
+          }),
+      );
+
+    const program = buildProgram({}, { transcriptTimeoutMs: 100 });
+    const startedAtMs = Date.now();
+    const execution = program.parseAsync(
+      ["voicecall", "continue", "--call-id", "call-1", "--message", "hello"],
+      { from: "user" },
+    );
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(callGatewayFromCliMock).toHaveBeenNthCalledWith(
+      3,
+      "voicecall.continue.result",
+      { json: true, timeout: "500" },
+      { operationId: "op-1" },
+      { progress: false },
+    );
+    const rejected = expect(execution).rejects.toThrow("gateway timeout after 500ms");
+    await vi.advanceTimersByTimeAsync(500);
+    await rejected;
+    expect(Date.now() - startedAtMs).toBe(1_500);
   });
 });

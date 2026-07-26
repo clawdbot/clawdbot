@@ -36,6 +36,13 @@ export class ReefRelayError extends Error {
   }
 }
 
+class ReefRelayUnavailableError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = "ReefRelayUnavailableError";
+  }
+}
+
 export function isDefinitiveReefRegistrationFailure(error: unknown): boolean {
   return (
     error instanceof ReefRelayError &&
@@ -46,8 +53,36 @@ export function isDefinitiveReefRegistrationFailure(error: unknown): boolean {
   );
 }
 
+export function isRetryableReefRelayFailure(error: unknown): boolean {
+  if (error instanceof ReefRelayError) {
+    return error.status === 408 || error.status === 429 || error.status >= 500;
+  }
+  return (
+    error instanceof ReefRelayUnavailableError ||
+    (error instanceof Error && error.name === "TimeoutError")
+  );
+}
+
 export function isReefOwnershipRejection(error: unknown): boolean {
   return error instanceof ReefRelayError && error.message === "unknown_handle";
+}
+
+async function readReefRelaySuccessJson<T>(response: Response, signal?: AbortSignal): Promise<T> {
+  try {
+    return await readProviderJsonResponse<T>(response, "reef.relay", {
+      maxBytes: REEF_RELAY_JSON_MAX_BYTES,
+    });
+  } catch (error) {
+    if (signal?.aborted) {
+      throw signal.reason;
+    }
+    // Undici surfaces socket loss during response-body consumption as a
+    // TypeError even though fetch already resolved with response headers.
+    if (error instanceof TypeError) {
+      throw new ReefRelayUnavailableError(error);
+    }
+    throw error;
+  }
 }
 
 export class ReefTransportClient {
@@ -194,12 +229,20 @@ export class ReefTransportClient {
       url,
     });
     try {
-      const response = await this.fetcher(url, {
-        method,
-        headers: { ...headers, ...(bytes.length ? { "content-type": "application/json" } : {}) },
-        ...(bytes.length ? { body: bytes as BodyInit } : {}),
-        signal: timeout.signal,
-      });
+      let response: Response;
+      try {
+        response = await this.fetcher(url, {
+          method,
+          headers: { ...headers, ...(bytes.length ? { "content-type": "application/json" } : {}) },
+          ...(bytes.length ? { body: bytes as BodyInit } : {}),
+          signal: timeout.signal,
+        });
+      } catch (error) {
+        if (timeout.signal?.aborted) {
+          throw timeout.signal.reason;
+        }
+        throw new ReefRelayUnavailableError(error);
+      }
       if (!response.ok) {
         let message = `relay HTTP ${response.status}`;
         try {
@@ -223,9 +266,7 @@ export class ReefTransportClient {
       if (response.status === 204) {
         return undefined as T;
       }
-      return await readProviderJsonResponse<T>(response, "reef.relay", {
-        maxBytes: REEF_RELAY_JSON_MAX_BYTES,
-      });
+      return await readReefRelaySuccessJson<T>(response, timeout.signal);
     } finally {
       timeout.cleanup();
     }

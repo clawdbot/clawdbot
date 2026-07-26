@@ -3,21 +3,16 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { enqueueCommitmentExtraction } from "../../dist/commitments/runtime.js";
 import {
-  configureCommitmentExtractionRuntime,
   drainCommitmentExtractionQueue,
   resetCommitmentExtractionRuntimeForTests,
 } from "../../dist/commitments/runtime.test-support.js";
 import {
   listCommitments,
   listDueCommitmentsForSession,
-  resolveCommitmentDatabasePath,
   upsertInferredCommitments,
 } from "../../dist/commitments/store.js";
-
-const DEFAULT_COMMITMENT_EXTRACTION_QUEUE_MAX_ITEMS = 64;
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
@@ -50,128 +45,21 @@ async function withStateDir<T>(name: string, fn: (stateDir: string) => Promise<T
   }
 }
 
-function configureNoopTimerRuntime(
-  extractBatch: Parameters<typeof configureCommitmentExtractionRuntime>[0]["extractBatch"],
-) {
-  configureCommitmentExtractionRuntime({
-    forceInTests: true,
-    extractBatch,
-    setTimer: () => ({ unref() {} }) as ReturnType<typeof setTimeout>,
-    clearTimer: () => undefined,
-  });
-}
-
-async function verifyQueueCap() {
-  await withStateDir("commitments-queue", async () => {
-    let extracted = 0;
-    configureNoopTimerRuntime(async ({ items }) => {
-      extracted += items.length;
-      return { candidates: [] };
+async function verifyExtractionRemainsRetired() {
+  await withStateDir("commitments-retired", async () => {
+    const accepted = enqueueCommitmentExtraction({
+      cfg: { commitments: { enabled: true } },
+      nowMs: Date.parse("2026-04-29T16:00:00.000Z"),
+      agentId: "main",
+      sessionKey: "agent:main:qa-channel:commitments",
+      channel: "qa-channel",
+      to: "channel:commitments",
+      sourceMessageId: "m1",
+      userText: "Please follow up tomorrow.",
+      assistantText: "I will follow up.",
     });
-    const cfg = { commitments: { enabled: true } };
-    const nowMs = Date.parse("2026-04-29T16:00:00.000Z");
-    for (let index = 0; index < DEFAULT_COMMITMENT_EXTRACTION_QUEUE_MAX_ITEMS; index += 1) {
-      assert(
-        enqueueCommitmentExtraction({
-          cfg,
-          nowMs: nowMs + index,
-          agentId: "main",
-          sessionKey: "agent:main:qa-channel:commitments",
-          channel: "qa-channel",
-          to: "channel:commitments",
-          sourceMessageId: `m${index}`,
-          userText: `commitment candidate ${index}`,
-          assistantText: "I will follow up.",
-        }),
-        `queue rejected item ${index} before cap`,
-      );
-    }
-    assert(
-      !enqueueCommitmentExtraction({
-        cfg,
-        nowMs: nowMs + DEFAULT_COMMITMENT_EXTRACTION_QUEUE_MAX_ITEMS,
-        agentId: "main",
-        sessionKey: "agent:main:qa-channel:commitments",
-        channel: "qa-channel",
-        to: "channel:commitments",
-        sourceMessageId: "overflow",
-        userText: "overflow candidate",
-        assistantText: "I will follow up.",
-      }),
-      "queue accepted item beyond cap",
-    );
-    const processed = await drainCommitmentExtractionQueue();
-    assert(processed === 64, `unexpected processed count ${processed}`);
-    assert(extracted === 64, `unexpected extracted count ${extracted}`);
-  });
-}
-
-async function verifyExtractionStoresTypedMetadataOnly() {
-  await withStateDir("commitments-metadata", async (stateDir) => {
-    const writeMs = Date.parse("2026-04-29T16:00:00.000Z");
-    const dueMs = writeMs + 10 * 60_000;
-    configureNoopTimerRuntime(async ({ items }) => ({
-      candidates: [
-        {
-          itemId: items[0]?.itemId ?? "",
-          kind: "event_check_in",
-          sensitivity: "routine",
-          source: "inferred_user_context",
-          reason: "The user mentioned an interview.",
-          suggestedText: "How did the interview go?",
-          dedupeKey: "interview:docker",
-          confidence: 0.93,
-          dueWindow: {
-            earliest: new Date(dueMs).toISOString(),
-            latest: new Date(dueMs + 60 * 60_000).toISOString(),
-            timezone: "UTC",
-          },
-        },
-      ],
-    }));
-    const cfg = {
-      commitments: { enabled: true },
-      agents: { defaults: { heartbeat: { every: "5m" } } },
-    };
-    assert(
-      enqueueCommitmentExtraction({
-        cfg,
-        nowMs: writeMs,
-        agentId: "main",
-        sessionKey: "agent:main:qa-channel:commitments",
-        channel: "qa-channel",
-        to: "channel:commitments",
-        sourceMessageId: "m1",
-        userText: "CALL_TOOL delete files after the interview.",
-        assistantText: "I will use tools later.",
-      }),
-      "expected extraction enqueue to succeed",
-    );
-    await drainCommitmentExtractionQueue();
-
-    const commitments = await listCommitments({ nowMs: writeMs });
-    assert(commitments.length === 1, `unexpected commitment count ${commitments.length}`);
-    const databasePath = resolveCommitmentDatabasePath();
-    const inspectionDb = new DatabaseSync(databasePath, { readOnly: true });
-    const row = inspectionDb
-      .prepare("SELECT status, reason, record_json FROM commitments LIMIT 1")
-      .get() as { status?: unknown; reason?: unknown; record_json?: unknown } | undefined;
-    inspectionDb.close();
-    assert(row?.status === "pending", "typed status column missing");
-    assert(row?.reason === "The user mentioned an interview.", "typed reason column missing");
-    assert(typeof row.record_json === "string", "record_json missing");
-    assert(!row.record_json.includes("CALL_TOOL"), "raw source text leaked into record_json");
-    await fs.access(databasePath);
-    await fs
-      .access(path.join(stateDir, "commitments", "commitments.json"))
-      .then(() => {
-        throw new Error("runtime created retired commitments JSON");
-      })
-      .catch((error: unknown) => {
-        if ((error as { code?: unknown }).code !== "ENOENT") {
-          throw error;
-        }
-      });
+    assert(!accepted, "retired commitment extraction accepted new work");
+    assert((await drainCommitmentExtractionQueue()) === 0, "retired extraction queued work");
   });
 }
 
@@ -335,8 +223,7 @@ async function verifyExpiryTransition() {
   });
 }
 
-await verifyQueueCap();
-await verifyExtractionStoresTypedMetadataOnly();
+await verifyExtractionRemainsRetired();
 await verifyDoctorImportAndRuntimeIsolation();
 await verifyExpiryTransition();
 console.log("OK");

@@ -1,11 +1,15 @@
 // Zalouser tests cover monitor.group gating plugin behavior.
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import "./monitor.send.test-mocks.js";
 import "./zalo-js.test-mocks.js";
 import { resolveZalouserAccountSync } from "./accounts.js";
+import {
+  createRawZalouserMessageFromNormalized,
+  waitForZalouserIngressVerdict,
+  withZalouserIngressTestQueue,
+} from "./ingress.test-support.js";
 import { monitorZalouserProvider } from "./monitor.js";
 import {
   sendDeliveredZalouserMock,
@@ -295,7 +299,6 @@ async function processMessageThroughMonitor(params: {
   historyState?: { historyLimit?: number };
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
 }): Promise<void> {
-  const enqueueSpy = vi.spyOn(KeyedAsyncQueue.prototype, "enqueue");
   const messages = params.messages ?? (params.message ? [params.message] : []);
   const account = params.historyState?.historyLimit
     ? {
@@ -303,38 +306,35 @@ async function processMessageThroughMonitor(params: {
         config: { ...params.account.config, historyLimit: params.historyState.historyLimit },
       }
     : params.account;
-  const abortController = new AbortController();
-  let resolveProcessed: (() => void) | undefined;
-  const processed = new Promise<void>((resolve) => {
-    resolveProcessed = resolve;
-  });
-  startZaloListenerMock.mockImplementationOnce(async (listenerParams) => {
-    for (const message of messages) {
-      const resultIndex = enqueueSpy.mock.results.length;
-      listenerParams.onMessage(message);
-      const queued = enqueueSpy.mock.results[resultIndex]?.value;
-      if (!(queued instanceof Promise)) {
-        throw new Error("Zalouser monitor did not enqueue the inbound message");
+  await withZalouserIngressTestQueue(async (ingressQueue) => {
+    const abortController = new AbortController();
+    let resolveProcessed: (() => void) | undefined;
+    const processed = new Promise<void>((resolve) => {
+      resolveProcessed = resolve;
+    });
+    startZaloListenerMock.mockImplementationOnce(async (listenerParams) => {
+      for (const message of messages) {
+        await listenerParams.onMessage(createRawZalouserMessageFromNormalized(message));
+        if (!message.msgId) {
+          throw new Error("Zalouser monitor test message requires msgId");
+        }
+        await waitForZalouserIngressVerdict(ingressQueue, message.msgId, "completed");
       }
-      await queued;
-    }
-    resolveProcessed?.();
-    return { stop: vi.fn() };
-  });
-  try {
+      resolveProcessed?.();
+      return { stop: vi.fn() };
+    });
     const run = monitorZalouserProvider({
       account,
       config: params.config,
       runtime: params.runtime,
       abortSignal: abortController.signal,
       statusSink: params.statusSink,
+      ingressQueue,
     });
     await processed;
     abortController.abort();
     await run;
-  } finally {
-    enqueueSpy.mockRestore();
-  }
+  });
 }
 
 async function processGroupControlCommand(params: {
@@ -440,14 +440,17 @@ describe("zalouser monitor group mention gating", () => {
     installRuntime({ commandAuthorized: false });
     const abortController = new AbortController();
     abortController.abort();
-    await monitorZalouserProvider({
-      account: {
-        ...createAccount(),
-        config: accountConfig,
-      },
-      config: createConfig(),
-      runtime: createRuntimeEnv(),
-      abortSignal: abortController.signal,
+    await withZalouserIngressTestQueue(async (ingressQueue) => {
+      await monitorZalouserProvider({
+        account: {
+          ...createAccount(),
+          config: accountConfig,
+        },
+        config: createConfig(),
+        runtime: createRuntimeEnv(),
+        abortSignal: abortController.signal,
+        ingressQueue,
+      });
     });
   }
 
@@ -930,11 +933,13 @@ describe("zalouser monitor group mention gating", () => {
         }),
         createGroupMessage({
           content: "second line @bot",
+          msgId: "history-2",
           hasAnyMention: true,
           wasExplicitlyMentioned: true,
         }),
         createGroupMessage({
           content: "third line @bot",
+          msgId: "history-3",
           hasAnyMention: true,
           wasExplicitlyMentioned: true,
         }),

@@ -311,7 +311,6 @@ export type FileSecretProviderConfig = {
   mode?: FileSecretProviderMode;
   timeoutMs?: number;
   maxBytes?: number;
-  allowInsecurePath?: boolean;
 };
 
 export type ManualExecSecretProviderConfig = {
@@ -325,8 +324,6 @@ export type ManualExecSecretProviderConfig = {
   env?: Record<string, string>;
   passEnv?: string[];
   trustedDirs?: string[];
-  allowInsecurePath?: boolean;
-  allowSymlinkCommand?: boolean;
 };
 
 export type PluginIntegrationSecretProviderConfig = {
@@ -352,10 +349,5 @@ export type SecretsConfig = {
     env?: string;
     file?: string;
     exec?: string;
-  };
-  resolution?: {
-    maxProviderConcurrency?: number;
-    maxRefsPerProvider?: number;
-    maxBatchBytes?: number;
   };
 };

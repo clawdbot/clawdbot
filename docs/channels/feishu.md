@@ -36,6 +36,12 @@ The wizard also asks for the API domain (Feishu vs Lark) and the group policy. I
   </Step>
 </Steps>
 
+## Inbound durability
+
+OpenClaw durably queues authenticated `im.message.receive_v1` and `drive.notice.comment_add_v1` envelopes before agent dispatch. Pending or retryable events survive a Gateway restart, remain serialized per chat or document, and use Feishu's event ID to suppress duplicate queue entries while the active or retained completion record exists.
+
+If a WebSocket event cannot be persisted after bounded retries, OpenClaw closes that socket and forces a fresh authenticated connection instead of continuing past an uncommitted turn. Other Feishu event types, including reactions and VC meeting invitations, use their normal event paths and do not receive this durable-queue guarantee.
+
 ## Access control
 
 ### Direct messages
@@ -222,13 +228,24 @@ Feishu/Lark does not support native slash-command menus, so send these as plain 
 7. Check logs: `openclaw logs --follow`
 
 Subscribing to `vc.bot.meeting_invited_v1` only delivers the event. Automatic joins are
-default-off; enable them globally or for one account:
+default-off. To enable them globally:
 
 ```json5
 {
   channels: {
     feishu: {
       vcAutoJoin: true,
+    },
+  },
+}
+```
+
+To enable only one account, omit the top-level switch and set the account override:
+
+```json5
+{
+  channels: {
+    feishu: {
       accounts: {
         meetings: { vcAutoJoin: true },
       },
@@ -243,6 +260,10 @@ tool configured for app identity with the
 `vc:meeting.bot.join:write` scope. For example, the official
 [`lark-cli` VC agent skill](https://github.com/larksuite/cli/tree/main/skills/lark-vc-agent)
 provides `vc +meeting-join`.
+
+<Warning>
+The official `lark-cli` VC agent skill currently marks meeting-bot actions as a limited beta. If the tool returns `ErrNotInGray` or error code `20017`, the app or tenant has not been enabled for that beta; use the early-access guidance in the linked skill before troubleshooting ordinary scope grants.
+</Warning>
 
 ### QR setup does not react in the Feishu mobile app
 
@@ -290,7 +311,7 @@ provides `vc +meeting-join`.
 ```
 
 `defaultAccount` controls which account is used when outbound APIs do not specify an `accountId`. Account entries inherit top-level settings; most top-level keys can be overridden per account.
-`accounts.<id>.tts` uses the same shape as `messages.tts` and deep-merges over global TTS config, so multi-bot Feishu setups can keep shared provider credentials globally while overriding only voice, model, persona, or auto mode per account.
+`accounts.<id>.tts` uses the same shape as `tts` and deep-merges over global TTS config, so multi-bot Feishu setups can keep shared provider credentials globally while overriding only voice, model, persona, or auto mode per account.
 
 ### Message limits
 
@@ -621,13 +642,14 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.accounts.<id>.appId`                    | App ID                                                                               | -                                    |
 | `channels.feishu.accounts.<id>.appSecret`                | App Secret                                                                           | -                                    |
 | `channels.feishu.accounts.<id>.domain`                   | Per-account domain override                                                          | `feishu`                             |
-| `channels.feishu.accounts.<id>.tts`                      | Per-account TTS override                                                             | `messages.tts`                       |
+| `channels.feishu.accounts.<id>.tts`                      | Per-account TTS override                                                             | `tts`                                |
 | `channels.feishu.dmPolicy`                               | DM policy (`pairing`, `allowlist`, `open`)                                           | `pairing`                            |
 | `channels.feishu.allowFrom`                              | DM allowlist (open_id list)                                                          | -                                    |
 | `channels.feishu.groupPolicy`                            | Group policy (`open`, `allowlist`, `disabled`)                                       | `allowlist`                          |
 | `channels.feishu.groupAllowFrom`                         | Group allowlist                                                                      | -                                    |
 | `channels.feishu.groupSenderAllowFrom`                   | Sender allowlist applied to all groups                                               | -                                    |
 | `channels.feishu.requireMention`                         | Require @mention in groups                                                           | `true` (`false` when policy `open`)  |
+| `channels.feishu.allowBots`                              | Accept other bots that mention this bot, with bot-loop protection                    | `false`                              |
 | `channels.feishu.groups.<chat_id>.requireMention`        | Per-group @mention override; explicit IDs also admit the group in allowlist mode     | inherited                            |
 | `channels.feishu.groups.<chat_id>.enabled`               | Enable/disable a specific group                                                      | `true`                               |
 | `channels.feishu.groups.<chat_id>.allowFrom`             | Per-group sender allowlist (overrides `groupSenderAllowFrom`)                        | -                                    |

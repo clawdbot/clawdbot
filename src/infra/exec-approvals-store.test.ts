@@ -4,6 +4,12 @@ import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  AgentDeletionCommitUncertainError,
+  beginAgentDeletion,
+  claimCompletedAgentDeletion,
+} from "../agents/agent-lifecycle-registry.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { makeTempDir } from "./exec-approvals-test-helpers.js";
 
@@ -14,6 +20,7 @@ vi.mock("./jsonl-socket.js", () => ({
 }));
 
 import type { ExecApprovalsFile } from "./exec-approvals.js";
+import { buildHashedArgPatternFromArgv } from "./exec-command-resolution.js";
 
 type ExecApprovalsModule = typeof import("./exec-approvals.js");
 
@@ -27,6 +34,7 @@ let normalizeExecApprovals: ExecApprovalsModule["normalizeExecApprovals"];
 let persistAllowAlwaysDecisionSync: ExecApprovalsModule["persistAllowAlwaysDecision"];
 let persistAllowAlwaysPatterns: ExecApprovalsModule["persistAllowAlwaysPatterns"];
 let readExecApprovalsSnapshot: ExecApprovalsModule["readExecApprovalsSnapshot"];
+let withAgentExecApprovalsRemoved: ExecApprovalsModule["withAgentExecApprovalsRemoved"];
 let recordAllowlistMatchesUseSync: ExecApprovalsModule["recordAllowlistMatchesUse"];
 let requestExecApprovalViaSocket: ExecApprovalsModule["requestExecApprovalViaSocket"];
 let restoreExecApprovalsSnapshotLocked: ExecApprovalsModule["restoreExecApprovalsSnapshotLocked"];
@@ -54,6 +62,7 @@ beforeAll(async () => {
   persistAllowAlwaysDecisionSync = module.persistAllowAlwaysDecision;
   persistAllowAlwaysPatterns = module.persistAllowAlwaysPatterns;
   readExecApprovalsSnapshot = module.readExecApprovalsSnapshot;
+  withAgentExecApprovalsRemoved = module.withAgentExecApprovalsRemoved;
   recordAllowlistMatchesUseSync = module.recordAllowlistMatchesUse;
   requestExecApprovalViaSocket = module.requestExecApprovalViaSocket;
   restoreExecApprovalsSnapshotLocked = module.restoreExecApprovalsSnapshotLocked;
@@ -74,6 +83,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   testEnvSnapshot.restore();
+  closeOpenClawStateDatabaseForTest();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -488,6 +498,208 @@ describe("exec approvals store helpers", () => {
     expect(fs.readFileSync(approvalsPath, "utf8")).toBe("");
   });
 
+  it("removes only the deleted agent policy so recreating the id inherits nothing", async () => {
+    const dir = createHomeDir();
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "deny", ask: "off" },
+      agents: {
+        "deleted-agent": {
+          security: "allowlist",
+          allowlist: [{ pattern: "/usr/bin/old-tool" }],
+        },
+        "other-agent": {
+          security: "allowlist",
+          allowlist: [{ pattern: "/usr/bin/keep-tool" }],
+        },
+      },
+    });
+
+    await expect(
+      withAgentExecApprovalsRemoved("Deleted-Agent", async () => "committed"),
+    ).resolves.toBe("committed");
+
+    const persisted = readApprovalsFile(dir);
+    expect(persisted.agents?.["deleted-agent"]).toBeUndefined();
+    expect(persisted.agents?.["other-agent"]?.allowlist).toEqual([
+      expect.objectContaining({ pattern: "/usr/bin/keep-tool" }),
+    ]);
+    const recreatedPolicy = resolveExecApprovalsSync("deleted-agent");
+    expect(recreatedPolicy.agent.security).toBe("deny");
+    expect(recreatedPolicy.allowlist).toEqual([]);
+  });
+
+  it("does not create an approvals file when the deleted agent has no policy", async () => {
+    const dir = createHomeDir();
+
+    await expect(
+      withAgentExecApprovalsRemoved("missing-agent", async () => "committed"),
+    ).resolves.toBe("committed");
+
+    expect(fs.existsSync(approvalsFilePath(dir))).toBe(false);
+  });
+
+  it("restores the deleted policy when the roster commit fails", async () => {
+    const dir = createHomeDir();
+    saveExecApprovals({
+      version: 1,
+      agents: {
+        "deleted-agent": {
+          security: "allowlist",
+          allowlist: [{ pattern: "/usr/bin/old-tool" }],
+        },
+        "other-agent": {
+          security: "allowlist",
+          allowlist: [{ pattern: "/usr/bin/keep-tool" }],
+        },
+      },
+    });
+
+    await expect(
+      withAgentExecApprovalsRemoved("deleted-agent", async () => {
+        expect(readApprovalsFile(dir).agents?.["deleted-agent"]).toBeUndefined();
+        throw new Error("config commit failed");
+      }),
+    ).rejects.toThrow("config commit failed");
+
+    const restored = readApprovalsFile(dir);
+    expect(restored.agents?.["deleted-agent"]?.allowlist).toEqual([
+      expect.objectContaining({ pattern: "/usr/bin/old-tool" }),
+    ]);
+    expect(restored.agents?.["other-agent"]?.allowlist).toEqual([
+      expect.objectContaining({ pattern: "/usr/bin/keep-tool" }),
+    ]);
+  });
+
+  it("rejects a late policy write until the deleted id is recreated", async () => {
+    createHomeDir();
+    const deletion = beginAgentDeletion({
+      agentId: "deleted-agent",
+      agentDir: "/agents/deleted-agent",
+      workspaceDir: "/workspaces/deleted-agent",
+      sessionsDir: "/sessions/deleted-agent",
+    });
+    try {
+      await withAgentExecApprovalsRemoved("deleted-agent", async () => {
+        deletion.commit();
+      });
+
+      await expect(
+        updateExecApprovals({
+          update: (file) => ({
+            ...file,
+            agents: {
+              ...file.agents,
+              "deleted-agent": { security: "allowlist" },
+            },
+          }),
+        }),
+      ).rejects.toThrow("agent deleted-agent is deleted");
+
+      deletion.finish();
+      await expect(
+        updateExecApprovals({
+          update: (file) => ({
+            ...file,
+            agents: {
+              ...file.agents,
+              "deleted-agent": { security: "allowlist" },
+            },
+          }),
+        }),
+      ).rejects.toThrow("agent deleted-agent is deleted");
+      expect(claimCompletedAgentDeletion("deleted-agent", deletion.entry.operationId)).toBe(true);
+      await expect(
+        updateExecApprovals({
+          update: (file) => ({
+            ...file,
+            agents: {
+              ...file.agents,
+              "deleted-agent": { security: "allowlist" },
+            },
+          }),
+        }),
+      ).resolves.not.toBeNull();
+    } finally {
+      deletion.finish();
+    }
+  });
+
+  it("rejects generic removal of a fenced agent policy", async () => {
+    const dir = createHomeDir();
+    saveExecApprovals({
+      version: 1,
+      agents: { "deleted-agent": { security: "deny" } },
+    });
+    const deletion = beginAgentDeletion({
+      agentId: "deleted-agent",
+      agentDir: "/agents/deleted-agent",
+      workspaceDir: "/workspaces/deleted-agent",
+      sessionsDir: "/sessions/deleted-agent",
+    });
+    try {
+      await expect(
+        updateExecApprovals({
+          update: (file) => ({ ...file, agents: {} }),
+        }),
+      ).rejects.toThrow("agent deleted-agent is deleted");
+      expect(readApprovalsFile(dir).agents?.["deleted-agent"]?.security).toBe("deny");
+    } finally {
+      deletion.rollback();
+    }
+  });
+
+  it("rejects an in-place update to a fenced agent policy", async () => {
+    const dir = createHomeDir();
+    saveExecApprovals({
+      version: 1,
+      agents: { "deleted-agent": { security: "deny" } },
+    });
+    const deletion = beginAgentDeletion({
+      agentId: "deleted-agent",
+      agentDir: "/agents/deleted-agent",
+      workspaceDir: "/workspaces/deleted-agent",
+      sessionsDir: "/sessions/deleted-agent",
+    });
+    try {
+      await expect(
+        updateExecApprovals({
+          update: (file) => {
+            file.agents = { "deleted-agent": { security: "full" } };
+            return file;
+          },
+        }),
+      ).rejects.toThrow("agent deleted-agent is deleted");
+      expect(readApprovalsFile(dir).agents?.["deleted-agent"]?.security).toBe("deny");
+    } finally {
+      deletion.rollback();
+    }
+  });
+
+  it("does not restore removed policy when roster commit outcome is uncertain", async () => {
+    const dir = createHomeDir();
+    saveExecApprovals({
+      version: 1,
+      agents: { "deleted-agent": { security: "allowlist" } },
+    });
+    const deletion = beginAgentDeletion({
+      agentId: "deleted-agent",
+      agentDir: "/agents/deleted-agent",
+      workspaceDir: "/workspaces/deleted-agent",
+      sessionsDir: "/sessions/deleted-agent",
+    });
+    try {
+      await expect(
+        withAgentExecApprovalsRemoved("deleted-agent", async () => {
+          throw new AgentDeletionCommitUncertainError(new Error("config outcome unknown"));
+        }),
+      ).rejects.toThrow("config outcome unknown");
+      expect(readApprovalsFile(dir).agents?.["deleted-agent"]).toBeUndefined();
+    } finally {
+      deletion.rollback();
+    }
+  });
+
   it("restores a matching real-store snapshot", async () => {
     const dir = createHomeDir();
     saveExecApprovals({ version: 1, defaults: { security: "deny" }, agents: {} });
@@ -609,6 +821,65 @@ describe("exec approvals store helpers", () => {
     });
 
     expect(loadExecApprovals().defaults).toMatchObject({ security: "deny", ask: "off" });
+  });
+
+  it("returns the persisted policy when the sync lock is held by this process", () => {
+    // A same-process async lock holder makes the sync lock fail instantly;
+    // that contention must not degrade a valid yolo policy to deny.
+    const dir = createHomeDir();
+    const approvalsPath = approvalsFilePath(dir);
+    fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+    fs.writeFileSync(
+      approvalsPath,
+      '{"version":1,"defaults":{"security":"full","ask":"off"},"agents":{}}\n',
+      "utf8",
+    );
+    const lockPath = `${approvalsPath}.lock`;
+    fs.writeFileSync(lockPath, `${JSON.stringify({ pid: process.pid })}\n`, { mode: 0o600 });
+    try {
+      expect(loadExecApprovals().defaults).toMatchObject({ security: "full", ask: "off" });
+    } finally {
+      fs.rmSync(lockPath, { force: true });
+    }
+  });
+
+  it("stays fail-closed when the sync lock is held by another process", async () => {
+    // A foreign holder may be mid-revocation; deny is the only assertable state.
+    const dir = createHomeDir();
+    const approvalsPath = approvalsFilePath(dir);
+    fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+    fs.writeFileSync(
+      approvalsPath,
+      '{"version":1,"defaults":{"security":"full","ask":"off"},"agents":{}}\n',
+      "utf8",
+    );
+    const lockPath = `${approvalsPath}.lock`;
+    // A live child guarantees a foreign pid even when the runner is PID 1.
+    const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30_000)"], {
+      stdio: "ignore",
+    });
+    fs.writeFileSync(lockPath, `${JSON.stringify({ pid: child.pid })}\n`, { mode: 0o600 });
+    try {
+      expect(loadExecApprovals().defaults).toMatchObject({ security: "deny", ask: "off" });
+    } finally {
+      fs.rmSync(lockPath, { force: true });
+      child.kill("SIGKILL");
+      await once(child, "exit");
+    }
+  });
+
+  it("stays fail-closed for malformed persisted policy while the sync lock is held", () => {
+    const dir = createHomeDir();
+    const approvalsPath = approvalsFilePath(dir);
+    fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+    fs.writeFileSync(approvalsPath, "{invalid", "utf8");
+    const lockPath = `${approvalsPath}.lock`;
+    fs.writeFileSync(lockPath, `${JSON.stringify({ pid: process.pid })}\n`, { mode: 0o600 });
+    try {
+      expect(loadExecApprovals().defaults).toMatchObject({ security: "deny", ask: "off" });
+    } finally {
+      fs.rmSync(lockPath, { force: true });
+    }
   });
 
   it("keeps synchronous and locked resolution fail-closed for malformed persisted policy", async () => {
@@ -1854,6 +2125,7 @@ describe("exec approvals store helpers", () => {
       approvals,
       agentId: "worker",
       commandText: "/usr/bin/tool ok",
+      platform: "linux",
       segments: [
         {
           raw: "/usr/bin/tool ok",
@@ -1874,13 +2146,38 @@ describe("exec approvals store helpers", () => {
       ],
     });
 
-    expect(completePatterns).toEqual([{ pattern: "/usr/bin/tool" }]);
+    const expectedArgPattern = buildHashedArgPatternFromArgv(["/usr/bin/tool", "ok"]);
+    expect(completePatterns).toEqual([
+      { pattern: "/usr/bin/tool", argPattern: expectedArgPattern },
+    ]);
+    expect(expectedArgPattern).not.toContain("ok");
     let allowlist = allowlistEntries(dir, "worker");
     expect(allowlist.map((entry) => entry.pattern)).toEqual([
       "/usr/bin/tool",
       expect.stringMatching(/^=node-command:[0-9a-f]{16}$/),
     ]);
     expect(allowlist.some((entry) => entry.lastUsedCommand === "/usr/bin/tool ok")).toBe(false);
+
+    vi.spyOn(Date, "now").mockReturnValue(654_323);
+    recordAllowlistMatchesUseSync({
+      approvals: readExecApprovalsSnapshot().file,
+      agentId: "worker",
+      matches: [
+        { pattern: "/usr/bin/tool", source: "allow-always", argPattern: expectedArgPattern },
+      ],
+      command: "/usr/bin/tool ok",
+      resolvedPath: "/usr/bin/tool",
+    });
+    allowlist = allowlistEntries(dir, "worker");
+    const hashedEntry = allowlist.find((entry) => entry.pattern === "/usr/bin/tool");
+    expect(hashedEntry).toMatchObject({
+      pattern: "/usr/bin/tool",
+      source: "allow-always",
+      argPattern: expectedArgPattern,
+      lastUsedAt: 654_323,
+      lastResolvedPath: "/usr/bin/tool",
+    });
+    expect(hashedEntry).not.toHaveProperty("lastUsedCommand");
 
     const partialPatterns = persistAllowAlwaysPatterns({
       approvals,

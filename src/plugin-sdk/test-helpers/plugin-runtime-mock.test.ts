@@ -198,7 +198,7 @@ describe("createPluginRuntimeMock", () => {
     );
   });
 
-  it("rejects top-level adoption lifecycles for prepared turns", async () => {
+  it("rejects prepared turns whose dispatch does not own top-level adoption", async () => {
     const recordInboundSession = vi.fn(async () => undefined);
     const runDispatch = vi.fn(async () => ({ visibleReplySent: true }));
     const runtime = createPluginRuntimeMock({
@@ -225,11 +225,15 @@ describe("createPluginRuntimeMock", () => {
             },
             recordInboundSession,
             runDispatch,
+            runDispatchLifecycle: {
+              turnAdoptionLifecycle: undefined,
+              onDispatchSkipped: vi.fn(),
+            },
           })),
         },
       }),
     ).rejects.toThrow(
-      "runChannelInboundEvent cannot apply turnAdoptionLifecycle to a prepared turn",
+      "runChannelInboundEvent prepared turn runDispatchLifecycle must own the top-level turnAdoptionLifecycle",
     );
 
     expect(recordInboundSession).not.toHaveBeenCalled();
@@ -312,6 +316,10 @@ describe("createPluginRuntimeMock", () => {
             SessionKey: "agent:main:test:direct:u1",
           },
           runDispatch,
+          runDispatchLifecycle: {
+            turnAdoptionLifecycle: undefined,
+            onDispatchSkipped: vi.fn(),
+          },
         })),
       },
     });

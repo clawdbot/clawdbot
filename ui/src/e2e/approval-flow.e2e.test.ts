@@ -108,7 +108,7 @@ describeControlUiE2e("Control UI approval flow", () => {
     await currentPage.getByRole("button", { name: "Stop generating" }).waitFor();
 
     await composer.fill("/approve approval-123 allow-once");
-    await currentPage.getByRole("button", { name: "Steer into the active run" }).click();
+    await currentPage.getByRole("button", { name: "Send message" }).click();
 
     await expect
       .poll(async () => (await gateway.getRequests("chat.send")).length, { timeout: 10_000 })

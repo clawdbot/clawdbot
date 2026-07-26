@@ -9,8 +9,6 @@ import {
   MAX_TIMER_TIMEOUT_SECONDS,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-
 export type CacheEntry<T> = {
   value: T;
   expiresAt: number;
@@ -39,7 +37,9 @@ export function resolveCacheTtlMs(value: unknown, fallbackMinutes: number): numb
 }
 
 export function normalizeCacheKey(value: string): string {
-  return normalizeLowercaseStringOrEmpty(value);
+  // Request paths and query values can be case-sensitive; only surrounding
+  // whitespace is non-semantic when callers compose cache keys.
+  return value.trim();
 }
 
 export function readCache<T>(

@@ -110,7 +110,7 @@ describe("qa docker harness", () => {
         entries?: Record<string, { enabled?: boolean }>;
       };
     };
-    expect(configText).toContain('"allowInsecureAuth": true');
+    expect(configText).not.toContain('"allowInsecureAuth"');
     expect(configText).toContain('"pluginToolsMcpBridge": true');
     expect(configText).toContain('"openClawToolsMcpBridge": true');
     expect(configText).toContain("/app/dist/control-ui");

@@ -149,10 +149,10 @@ extension SettingsProTab {
         self.selectGatewayCredentialTarget(entry.stableID, allowManualOverride: false)
     }
 
-    func forgetPendingGateway() {
+    func forgetPendingGateway() async {
         guard let entry = self.pendingForgetGateway else { return }
         self.pendingForgetGateway = nil
-        guard self.gatewayController.forgetGateway(stableID: entry.stableID) else {
+        guard await self.gatewayController.forgetGateway(stableID: entry.stableID) else {
             self.setupStatusText = String(
                 format: String(localized: "Could not forget %@."),
                 entry.name)
@@ -241,25 +241,25 @@ extension SettingsProTab {
 
     func refreshLocationPermissionSummary(desiredMode modeOverride: OpenClawLocationMode? = nil) {
         let mode = modeOverride ?? OpenClawLocationMode(rawValue: self.locationModeRaw) ?? .off
-        let manager = CLLocationManager()
+        let authorization = self.appModel.locationAuthorizationSnapshot
         self.locationPermissionRefreshID &+= 1
         let refreshID = self.locationPermissionRefreshID
         let currentSummary = self.locationPermissionSummary
         self.locationPermissionSummary = LocationPermissionSummary(
             desiredMode: mode,
             locationServicesEnabled: currentSummary.locationServicesEnabled,
-            authorizationStatus: manager.authorizationStatus,
-            accuracyAuthorization: manager.accuracyAuthorization)
+            authorizationStatus: authorization.authorizationStatus,
+            accuracyAuthorization: authorization.accuracyAuthorization)
         Task {
             let locationServicesEnabled = await Self.locationServicesEnabled()
             guard refreshID == self.locationPermissionRefreshID else { return }
-            let latestManager = CLLocationManager()
+            let latestAuthorization = self.appModel.locationAuthorizationSnapshot
             let latestMode = modeOverride ?? OpenClawLocationMode(rawValue: self.locationModeRaw) ?? .off
             self.locationPermissionSummary = LocationPermissionSummary(
                 desiredMode: latestMode,
                 locationServicesEnabled: locationServicesEnabled,
-                authorizationStatus: latestManager.authorizationStatus,
-                accuracyAuthorization: latestManager.accuracyAuthorization)
+                authorizationStatus: latestAuthorization.authorizationStatus,
+                accuracyAuthorization: latestAuthorization.accuracyAuthorization)
         }
     }
 
@@ -704,12 +704,12 @@ extension SettingsProTab {
         guard let mode = self.pendingLocationMode else { return }
         Task {
             let locationServicesEnabled = await Self.locationServicesEnabled()
-            let manager = CLLocationManager()
+            let authorization = self.appModel.locationAuthorizationSnapshot
             let summary = LocationPermissionSummary(
                 desiredMode: mode,
                 locationServicesEnabled: locationServicesEnabled,
-                authorizationStatus: manager.authorizationStatus,
-                accuracyAuthorization: manager.accuracyAuthorization)
+                authorizationStatus: authorization.authorizationStatus,
+                accuracyAuthorization: authorization.accuracyAuthorization)
             self.locationPermissionSummary = summary
             let unavailableStatus = self.locationSettingsPresentation(selectedMode: mode).statusText
             self.pendingLocationMode = nil
@@ -933,6 +933,7 @@ extension SettingsProTab {
     func title(for route: SettingsRoute) -> String {
         switch route {
         case .gateway: String(localized: "Gateway")
+        case .systemAgent: String(localized: "OpenClaw")
         case .appleWatch: String(localized: "Apple Watch")
         case .approvals: String(localized: "Approvals")
         case .permissions: String(localized: "Permissions")

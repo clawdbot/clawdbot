@@ -1,9 +1,16 @@
 // Post-selection model/auth sanity checks shown during onboarding and agent setup.
 import { normalizeProviderIdForAuth } from "@openclaw/model-catalog-core/provider-id";
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { createModelAuthAvailabilityResolver } from "../agents/model-auth-availability.js";
-import { loadModelCatalogSnapshot, type ModelCatalogEntry } from "../agents/model-catalog.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import { publishPreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.js";
 import { buildProviderAuthRecoveryHint } from "../agents/provider-auth-recovery-hint.js";
 import { canonicalizeProviderModelId } from "../agents/provider-model-route.js";
 import type { ModelApi } from "../config/types.models.js";
@@ -157,10 +164,26 @@ export async function warnIfModelConfigLooksOff(
     agentId: options?.agentId,
   });
   const warnings: string[] = [];
+  const validationAgentId = options?.agentId ?? resolveDefaultAgentId(config);
   const snapshot =
     options?.validateCatalog === false
       ? { entries: [], routeVariants: [] }
-      : await loadModelCatalogSnapshot({ config, useCache: false });
+      : (
+          await publishPreparedModelRuntimeSnapshot(
+            {
+              config,
+              agentId: validationAgentId,
+              agentDir:
+                options?.agentDir ??
+                (options?.agentId
+                  ? resolveAgentDir(config, options.agentId)
+                  : resolveDefaultAgentDir(config)),
+              inheritedAuthDir: resolveDefaultAgentDir(config),
+              workspaceDir: resolveAgentWorkspaceDir(config, validationAgentId),
+            },
+            { force: true, provenance: "explicit" },
+          )
+        ).modelCatalog;
   const catalog = snapshot.entries;
   const catalogFacts = resolveDefaultModelCatalogFacts(config, catalog, {
     ...(options?.agentId ? { agentId: options.agentId } : {}),

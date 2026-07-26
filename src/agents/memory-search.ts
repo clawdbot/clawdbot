@@ -136,6 +136,7 @@ const DEFAULT_MMR_LAMBDA = 0.7;
 const DEFAULT_TEMPORAL_DECAY_ENABLED = false;
 const DEFAULT_TEMPORAL_DECAY_HALF_LIFE_DAYS = 30;
 const DEFAULT_CACHE_ENABLED = true;
+const DEFAULT_CACHE_MAX_ENTRIES = undefined;
 const DEFAULT_SOURCES: Array<"memory" | "sessions"> = ["memory"];
 const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
 const DEFAULT_REMOTE_BATCH_POLL_INTERVAL_MS = 2_000;
@@ -246,11 +247,10 @@ function mergeConfig(
     overrideRemote?.baseUrl ||
     overrideRemote?.apiKey ||
     overrideRemote?.headers ||
-    overrideRemote?.nonBatchConcurrency != null ||
     defaultRemote?.baseUrl ||
     defaultRemote?.apiKey ||
     defaultRemote?.headers ||
-    defaultRemote?.nonBatchConcurrency != null,
+    false,
   );
   const includeRemote =
     hasRemoteConfig ||
@@ -258,27 +258,16 @@ function mergeConfig(
     fallbackAdapter?.transport === "remote";
   const batch = {
     enabled: overrideRemote?.batch?.enabled ?? defaultRemote?.batch?.enabled ?? false,
-    wait: overrideRemote?.batch?.wait ?? defaultRemote?.batch?.wait ?? true,
-    concurrency: Math.max(
-      1,
-      overrideRemote?.batch?.concurrency ?? defaultRemote?.batch?.concurrency ?? 2,
-    ),
-    pollIntervalMs: resolveRemoteBatchPollIntervalMs(
-      overrideRemote?.batch?.pollIntervalMs,
-      defaultRemote?.batch?.pollIntervalMs,
-    ),
-    timeoutMinutes: resolveRemoteBatchTimeoutMinutes(
-      overrideRemote?.batch?.timeoutMinutes,
-      defaultRemote?.batch?.timeoutMinutes,
-    ),
+    wait: true,
+    concurrency: 2,
+    pollIntervalMs: resolveRemoteBatchPollIntervalMs(undefined, undefined),
+    timeoutMinutes: resolveRemoteBatchTimeoutMinutes(undefined, undefined),
   };
   const remote = includeRemote
     ? {
         baseUrl: overrideRemote?.baseUrl ?? defaultRemote?.baseUrl,
         apiKey: overrideRemote?.apiKey ?? defaultRemote?.apiKey,
         headers: overrideRemote?.headers ?? defaultRemote?.headers,
-        nonBatchConcurrency:
-          overrideRemote?.nonBatchConcurrency ?? defaultRemote?.nonBatchConcurrency,
         batch,
       }
     : undefined;
@@ -292,8 +281,6 @@ function mergeConfig(
   const outputDimensionality = overrides?.outputDimensionality ?? defaults?.outputDimensionality;
   const local = {
     modelPath: overrides?.local?.modelPath ?? defaults?.local?.modelPath,
-    modelCacheDir: overrides?.local?.modelCacheDir ?? defaults?.local?.modelCacheDir,
-    contextSize: overrides?.local?.contextSize ?? defaults?.local?.contextSize,
   };
   const configuredSources = overrides?.sources ?? defaults?.sources;
   const searchSources = normalizeSources(
@@ -324,14 +311,14 @@ function mergeConfig(
     tokenizer: overrides?.store?.fts?.tokenizer ?? defaults?.store?.fts?.tokenizer ?? "unicode61",
   };
   const store = {
-    driver: overrides?.store?.driver ?? defaults?.store?.driver ?? "sqlite",
+    driver: "sqlite" as const,
     databasePath: resolveOpenClawAgentSqlitePath({ agentId, env: process.env }),
     fts,
     vector,
   };
   const chunking = {
-    tokens: overrides?.chunking?.tokens ?? defaults?.chunking?.tokens ?? DEFAULT_CHUNK_TOKENS,
-    overlap: overrides?.chunking?.overlap ?? defaults?.chunking?.overlap ?? DEFAULT_CHUNK_OVERLAP,
+    tokens: DEFAULT_CHUNK_TOKENS,
+    overlap: DEFAULT_CHUNK_OVERLAP,
   };
   const sync = resolveSyncConfig(defaults, overrides);
   const query = {
@@ -339,46 +326,22 @@ function mergeConfig(
     minScore: overrides?.query?.minScore ?? defaults?.query?.minScore ?? DEFAULT_MIN_SCORE,
   };
   const hybrid = {
-    enabled:
-      overrides?.query?.hybrid?.enabled ??
-      defaults?.query?.hybrid?.enabled ??
-      DEFAULT_HYBRID_ENABLED,
-    vectorWeight:
-      overrides?.query?.hybrid?.vectorWeight ??
-      defaults?.query?.hybrid?.vectorWeight ??
-      DEFAULT_HYBRID_VECTOR_WEIGHT,
-    textWeight:
-      overrides?.query?.hybrid?.textWeight ??
-      defaults?.query?.hybrid?.textWeight ??
-      DEFAULT_HYBRID_TEXT_WEIGHT,
-    candidateMultiplier:
-      overrides?.query?.hybrid?.candidateMultiplier ??
-      defaults?.query?.hybrid?.candidateMultiplier ??
-      DEFAULT_HYBRID_CANDIDATE_MULTIPLIER,
+    enabled: DEFAULT_HYBRID_ENABLED,
+    vectorWeight: DEFAULT_HYBRID_VECTOR_WEIGHT,
+    textWeight: DEFAULT_HYBRID_TEXT_WEIGHT,
+    candidateMultiplier: DEFAULT_HYBRID_CANDIDATE_MULTIPLIER,
     mmr: {
-      enabled:
-        overrides?.query?.hybrid?.mmr?.enabled ??
-        defaults?.query?.hybrid?.mmr?.enabled ??
-        DEFAULT_MMR_ENABLED,
-      lambda:
-        overrides?.query?.hybrid?.mmr?.lambda ??
-        defaults?.query?.hybrid?.mmr?.lambda ??
-        DEFAULT_MMR_LAMBDA,
+      enabled: DEFAULT_MMR_ENABLED,
+      lambda: DEFAULT_MMR_LAMBDA,
     },
     temporalDecay: {
-      enabled:
-        overrides?.query?.hybrid?.temporalDecay?.enabled ??
-        defaults?.query?.hybrid?.temporalDecay?.enabled ??
-        DEFAULT_TEMPORAL_DECAY_ENABLED,
-      halfLifeDays:
-        overrides?.query?.hybrid?.temporalDecay?.halfLifeDays ??
-        defaults?.query?.hybrid?.temporalDecay?.halfLifeDays ??
-        DEFAULT_TEMPORAL_DECAY_HALF_LIFE_DAYS,
+      enabled: DEFAULT_TEMPORAL_DECAY_ENABLED,
+      halfLifeDays: DEFAULT_TEMPORAL_DECAY_HALF_LIFE_DAYS,
     },
   };
   const cache = {
     enabled: overrides?.cache?.enabled ?? defaults?.cache?.enabled ?? DEFAULT_CACHE_ENABLED,
-    maxEntries: overrides?.cache?.maxEntries ?? defaults?.cache?.maxEntries,
+    maxEntries: DEFAULT_CACHE_MAX_ENTRIES,
   };
 
   const overlap = clampNumber(chunking.overlap, 0, Math.max(0, chunking.tokens - 1));
@@ -460,33 +423,20 @@ function mergeConfig(
 }
 
 function resolveSyncConfig(
-  defaults: MemorySearchConfig | undefined,
-  overrides: MemorySearchConfig | undefined,
+  _defaults: MemorySearchConfig | undefined,
+  _overrides: MemorySearchConfig | undefined,
 ): ResolvedMemorySearchSyncConfig {
   return {
-    onSessionStart: overrides?.sync?.onSessionStart ?? defaults?.sync?.onSessionStart ?? true,
-    onSearch: overrides?.sync?.onSearch ?? defaults?.sync?.onSearch ?? true,
-    watch: overrides?.sync?.watch ?? defaults?.sync?.watch ?? true,
-    watchDebounceMs:
-      overrides?.sync?.watchDebounceMs ??
-      defaults?.sync?.watchDebounceMs ??
-      DEFAULT_WATCH_DEBOUNCE_MS,
-    intervalMinutes: overrides?.sync?.intervalMinutes ?? defaults?.sync?.intervalMinutes ?? 0,
-    embeddingBatchTimeoutSeconds:
-      overrides?.sync?.embeddingBatchTimeoutSeconds ?? defaults?.sync?.embeddingBatchTimeoutSeconds,
+    onSessionStart: true,
+    onSearch: true,
+    watch: true,
+    watchDebounceMs: DEFAULT_WATCH_DEBOUNCE_MS,
+    intervalMinutes: 0,
+    embeddingBatchTimeoutSeconds: undefined,
     sessions: {
-      deltaBytes:
-        overrides?.sync?.sessions?.deltaBytes ??
-        defaults?.sync?.sessions?.deltaBytes ??
-        DEFAULT_SESSION_DELTA_BYTES,
-      deltaMessages:
-        overrides?.sync?.sessions?.deltaMessages ??
-        defaults?.sync?.sessions?.deltaMessages ??
-        DEFAULT_SESSION_DELTA_MESSAGES,
-      postCompactionForce:
-        overrides?.sync?.sessions?.postCompactionForce ??
-        defaults?.sync?.sessions?.postCompactionForce ??
-        true,
+      deltaBytes: DEFAULT_SESSION_DELTA_BYTES,
+      deltaMessages: DEFAULT_SESSION_DELTA_MESSAGES,
+      postCompactionForce: true,
     },
   };
 }
@@ -495,8 +445,8 @@ export function resolveMemorySearchConfig(
   cfg: OpenClawConfig,
   agentId: string,
 ): ResolvedMemorySearchConfig | null {
-  const defaults = cfg.agents?.defaults?.memorySearch;
-  const overrides = resolveAgentConfig(cfg, agentId)?.memorySearch;
+  const defaults = cfg.memory?.search;
+  const overrides = resolveAgentConfig(cfg, agentId)?.memory?.search;
   const resolved = mergeConfig(cfg, defaults, overrides, agentId);
   if (!resolved.enabled) {
     return null;
@@ -517,12 +467,12 @@ export function resolveMemorySearchConfig(
       (!multimodalProvider && getEmbeddingProvider(resolved.provider, cfg)))
   ) {
     throw new Error(
-      "agents.*.memorySearch.multimodal requires a provider adapter that supports multimodal embeddings for the configured model.",
+      "memory.search.multimodal requires a provider adapter that supports multimodal embeddings for the configured model.",
     );
   }
   if (multimodalActive && resolved.fallback !== "none") {
     throw new Error(
-      'agents.*.memorySearch.multimodal does not support memorySearch.fallback. Set fallback to "none".',
+      'memory.search.multimodal does not support memory.search.fallback. Set fallback to "none".',
     );
   }
   return resolved;
@@ -532,8 +482,8 @@ export function resolveMemorySearchSyncConfig(
   cfg: OpenClawConfig,
   agentId: string,
 ): ResolvedMemorySearchSyncConfig | null {
-  const defaults = cfg.agents?.defaults?.memorySearch;
-  const overrides = resolveAgentConfig(cfg, agentId)?.memorySearch;
+  const defaults = cfg.memory?.search;
+  const overrides = resolveAgentConfig(cfg, agentId)?.memory?.search;
   const enabled = overrides?.enabled ?? defaults?.enabled ?? true;
   if (!enabled) {
     return null;

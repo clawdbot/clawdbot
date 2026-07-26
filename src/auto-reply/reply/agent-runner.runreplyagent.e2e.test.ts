@@ -74,6 +74,7 @@ const state = vi.hoisted(() => ({
   beforeAgentReplyRunMock: vi.fn(),
   compactEmbeddedAgentSessionMock: vi.fn(),
   getChannelPluginMock: vi.fn(),
+  materializeMcpAppChannelPresentationMock: vi.fn(),
   queueEmbeddedAgentMessageMock: vi.fn(),
   runEmbeddedAgentMock: vi.fn(),
 }));
@@ -206,6 +207,11 @@ vi.mock("../../agents/embedded-agent-runner/runs.js", () => ({
   },
 }));
 
+vi.mock("../../gateway/mcp-app-channel-action.js", () => ({
+  materializeMcpAppChannelPresentation: (params: unknown) =>
+    state.materializeMcpAppChannelPresentationMock(params),
+}));
+
 vi.mock("./queue.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./queue.js")>()),
   enqueueFollowupRun: vi.fn(),
@@ -238,6 +244,7 @@ beforeEach(() => {
   state.beforeAgentReplyRunMock.mockReset();
   state.queueEmbeddedAgentMessageMock.mockReturnValue(false);
   state.getChannelPluginMock.mockReset();
+  state.materializeMcpAppChannelPresentationMock.mockReset();
   vi.mocked(enqueueFollowupRun).mockReset().mockReturnValue(true);
   vi.mocked(refreshQueuedFollowupSession).mockReset();
   vi.mocked(scheduleFollowupDrain).mockReset();
@@ -727,6 +734,45 @@ describe("runReplyAgent active steering", () => {
     expect(state.beforeAgentReplyRunMock).not.toHaveBeenCalled();
     expect(onAdopted).toHaveBeenCalledOnce();
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+  });
+});
+
+describe("runReplyAgent MCP App channel action", () => {
+  it("materializes the latest view on the final channel payload", async () => {
+    const presentation = {
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Weather app",
+              action: {
+                type: "web-app",
+                url: "https://node.tailnet.ts.net/__openclaw__/mcp-app#opaque-ticket",
+              },
+            },
+          ],
+        },
+      ],
+    };
+    state.materializeMcpAppChannelPresentationMock.mockReturnValue(presentation);
+    state.runEmbeddedAgentMock.mockResolvedValue({
+      payloads: [{ text: "The forecast is sunny." }, { text: "NO_REPLY" }],
+      latestMcpAppChannelView: { viewId: "view-latest" },
+      meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+    });
+    const { run } = createMinimalRun({
+      sessionCtx: { Provider: "telegram", OriginatingChannel: "telegram" },
+      runOverrides: { messageProvider: "telegram" },
+    });
+
+    await expect(run()).resolves.toEqual(
+      expect.objectContaining({ text: "The forecast is sunny.", presentation }),
+    );
+    expect(state.materializeMcpAppChannelPresentationMock).toHaveBeenCalledWith({
+      sessionKey: "main",
+      view: { viewId: "view-latest" },
+    });
   });
 });
 
@@ -4431,15 +4477,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       runOverrides: {
         provider: "anthropic",
         model: "claude-opus-4-7",
-        config: {
-          agents: {
-            defaults: {
-              cliBackends: {
-                "claude-cli": { command: "claude" },
-              },
-            },
-          },
-        },
+        config: {},
       },
     });
     await run();
@@ -4474,7 +4512,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       throw new Error("expected payload");
     }
     expect(payload.text).toContain("Auto-compaction could not recover this turn");
-    expect(payload.text).toContain("reserveTokensFloor");
+    expect(payload.text).toContain("fresh session or using a model with a larger context window");
     expect(payload.text).toContain("/new");
   });
 
@@ -4497,7 +4535,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       throw new Error("expected payload");
     }
     expect(payload.text).toContain("Auto-compaction could not recover this turn");
-    expect(payload.text).toContain("reserveTokensFloor");
+    expect(payload.text).toContain("fresh session or using a model with a larger context window");
     expect(payload.text).toContain("/new");
   });
 

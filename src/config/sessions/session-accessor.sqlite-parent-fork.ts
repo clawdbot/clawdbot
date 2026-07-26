@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { derivePromptTokens, normalizeUsage } from "../../agents/usage.js";
 import type {
   SessionParentForkDecision,
@@ -152,10 +153,6 @@ function selectParentForkTokenEstimateEvents(
     appendPath,
     appendParentId: tree.appendParentId,
   }).nodes.flatMap((node) => node.entry);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function normalizePositiveTokenCount(value: unknown): number | undefined {

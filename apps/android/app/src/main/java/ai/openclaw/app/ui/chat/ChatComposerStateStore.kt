@@ -194,6 +194,16 @@ internal class ChatComposerStateStore(
       }
     }
 
+  fun replaceAttachments(
+    owner: ChatComposerOwner,
+    candidates: List<PendingAttachment>,
+  ) {
+    synchronized(lock) {
+      val omitted = attachmentStore.replace(owner, candidates)
+      recordAttachmentOmissionLocked(owner, omitted, ChatComposerAttachmentNotice.Image)
+    }
+  }
+
   fun addAuthorizedAttachments(
     owner: ChatComposerOwner,
     mediaAuthorizationId: String,
@@ -248,6 +258,11 @@ internal class ChatComposerStateStore(
     owner: ChatComposerOwner,
     omitted: Int,
   ) = synchronized(lock) { recordAttachmentOmissionLocked(owner, omitted, ChatComposerAttachmentNotice.Image) }
+
+  fun reportAttachmentOmission(
+    owner: ChatComposerOwner,
+    omitted: Int,
+  ) = synchronized(lock) { recordAttachmentOmissionLocked(owner, omitted, ChatComposerAttachmentNotice.Attachment) }
 
   /** Migrates every state surface and returns aliases owned by external queues. */
   fun resolveAliases(

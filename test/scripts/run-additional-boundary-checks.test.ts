@@ -246,6 +246,14 @@ describe("run-additional-boundary-checks", () => {
     });
   });
 
+  it("keeps native and Node state schema versions aligned in CI", () => {
+    expect(BOUNDARY_CHECKS).toContainEqual({
+      label: "native-state-schema-version",
+      command: "node",
+      args: ["scripts/check-native-state-schema-version.mjs"],
+    });
+  });
+
   it("buffers grouped output and reports aggregate failures", async () => {
     const buffer = createOutputBuffer();
     const failures = await runChecks(

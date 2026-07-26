@@ -10,6 +10,7 @@ import {
   replaceSlashCommands,
   type SlashCommandDef,
 } from "../../lib/chat/commands.ts";
+import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
 import {
   scopedAgentIdForSession,
   visibleSessionMatches,
@@ -192,17 +193,27 @@ export function shouldQueueLocalSlashCommand(name: string): boolean {
   return !["stop", "export-session", "steer", "redirect", "new"].includes(name);
 }
 
-async function confirmConversationResetForCurrentSession(
+export async function confirmConversationResetForCurrentSession(
   host: ChatCommandHost,
+  target?: { sessionKey: string; agentId?: string },
 ): Promise<"confirmed" | "cancelled" | "deferred"> {
+  const resetSessionKey = target?.sessionKey ?? host.sessionKey;
+  const targetIsCurrent = target
+    ? () => visibleSessionMatches(host, target.sessionKey, target.agentId)
+    : () =>
+        host.sessionKey === resetSessionKey ||
+        areUiSessionKeysEquivalent(host.sessionKey, resetSessionKey);
+  if (!targetIsCurrent()) {
+    return "deferred";
+  }
   if (!host.confirmConversationReset) {
     return "confirmed";
   }
-  const resetSessionKey = host.sessionKey;
-  if (!(await host.confirmConversationReset())) {
-    return "cancelled";
+  const confirmed = await host.confirmConversationReset();
+  if (!targetIsCurrent()) {
+    return target ? "deferred" : "cancelled";
   }
-  if (!areUiSessionKeysEquivalent(host.sessionKey, resetSessionKey)) {
+  if (!confirmed) {
     return "cancelled";
   }
   return host.chatRunId ? "deferred" : "confirmed";
@@ -316,7 +327,13 @@ export async function dispatchChatSlashCommand(
   }
 
   if (result.pendingCurrentRun && host.chatRunId && targetIsCurrent()) {
-    enqueuePendingRunMessage(host, `/${name} ${args}`.trim(), host.chatRunId);
+    enqueuePendingRunMessage(
+      host,
+      `/${name} ${args}`.trim(),
+      host.chatRunId,
+      undefined,
+      resolveCurrentUserIdentity(host.hello, host.client?.instanceId) ?? undefined,
+    );
   }
 
   if (result.sessionPatch && "modelOverride" in result.sessionPatch) {

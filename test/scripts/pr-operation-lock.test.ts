@@ -129,8 +129,10 @@ function installPrCliFixture(repoDir: string) {
     "scripts/pr-lib/common.sh",
     "scripts/pr-lib/changelog.sh",
     "scripts/pr-lib/gates.sh",
+    "scripts/pr-lib/ci-dispatch.mjs",
     "scripts/pr-lib/push.sh",
     "scripts/pr-lib/review.sh",
+    "scripts/pr-lib/review-artifacts.mjs",
     "scripts/pr-lib/prepare-core.sh",
     "scripts/pr-lib/merge.sh",
   ];
@@ -1009,6 +1011,41 @@ describePosix("scripts/pr per-PR operation lock", () => {
     expect(result.stderr).not.toContain("Retaining the operation lock");
   });
 
+  it("releases a failed lock while the child is still in validation phase", async () => {
+    const repoDir = createRepo();
+    const fixture = writeOperationFixture(repoDir, "failed-validation.sh", [
+      "acquire_pr_operation_lock 42",
+      "begin_pr_operation_validation_phase",
+      "exit 3",
+    ]);
+    const result = await runSupervisedFixture(repoDir, fixture);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(3);
+    expect(refExists(repoDir)).toBe(false);
+    expect(result.stderr).not.toContain("Retaining the operation lock");
+  });
+
+  it("retains a failed lock after the child leaves validation phase", async () => {
+    const repoDir = createRepo();
+    const fixture = writeOperationFixture(repoDir, "failed-after-side-effects.sh", [
+      "acquire_pr_operation_lock 42",
+      "begin_pr_operation_validation_phase",
+      "mark_pr_operation_side_effects_started",
+      "exit 3",
+    ]);
+    const result = await runSupervisedFixture(repoDir, fixture);
+    const ownerOid = refOid(repoDir);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(3);
+    expect(result.stderr).toContain("reason: child exited with code 3");
+    expect(refOid(repoDir)).toBe(ownerOid);
+
+    const recovered = runLockShell(repoDir, [
+      `recover_pr_operation_lock 42 '${ownerOid}' --confirmed-no-running-tools`,
+    ]);
+    expect(recovered.status, `${recovered.stdout}\n${recovered.stderr}`).toBe(0);
+  });
+
   it("reports the child exit code when retaining a failed operation", async () => {
     const repoDir = createRepo();
     const fixture = writeOperationFixture(repoDir, "failed-operation.sh", [
@@ -1027,6 +1064,69 @@ describePosix("scripts/pr per-PR operation lock", () => {
     ]);
     expect(recovered.status, `${recovered.stdout}\n${recovered.stderr}`).toBe(0);
     expect(refExists(repoDir)).toBe(false);
+  });
+
+  it("does not re-enter validation after side effects have started", async () => {
+    const repoDir = createRepo();
+    const fixture = writeOperationFixture(repoDir, "failed-after-forged-validation.sh", [
+      "acquire_pr_operation_lock 42",
+      "begin_pr_operation_validation_phase",
+      "mark_pr_operation_side_effects_started",
+      "notify_pr_operation_phase validation-started",
+      "exit 3",
+    ]);
+    const result = await runSupervisedFixture(repoDir, fixture);
+    const ownerOid = refOid(repoDir);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(3);
+    expect(result.stderr).toContain("reason: child exited with code 3");
+    expect(refOid(repoDir)).toBe(ownerOid);
+
+    const recovered = runLockShell(repoDir, [
+      `recover_pr_operation_lock 42 '${ownerOid}' --confirmed-no-running-tools`,
+    ]);
+    expect(recovered.status, `${recovered.stdout}\n${recovered.stderr}`).toBe(0);
+  });
+
+  it("retains a validation-phase lock when the child exits through a trapped signal", async () => {
+    const repoDir = createRepo();
+    const fixture = writeOperationFixture(repoDir, "signaled-validation.sh", [
+      "trap 'exit 143' TERM",
+      "acquire_pr_operation_lock 42",
+      "begin_pr_operation_validation_phase",
+      "kill -TERM $$",
+    ]);
+    const result = await runSupervisedFixture(repoDir, fixture);
+    const ownerOid = refOid(repoDir);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(143);
+    expect(result.stderr).toContain("reason: child exited with code 143");
+    expect(refOid(repoDir)).toBe(ownerOid);
+
+    const recovered = runLockShell(repoDir, [
+      `recover_pr_operation_lock 42 '${ownerOid}' --confirmed-no-running-tools`,
+    ]);
+    expect(recovered.status, `${recovered.stdout}\n${recovered.stderr}`).toBe(0);
+  });
+
+  it("retains a validation-phase lock for untrapped signal exit statuses", async () => {
+    const repoDir = createRepo();
+    const fixture = writeOperationFixture(repoDir, "killed-validation.sh", [
+      "acquire_pr_operation_lock 42",
+      "begin_pr_operation_validation_phase",
+      "exit 137",
+    ]);
+    const result = await runSupervisedFixture(repoDir, fixture);
+    const ownerOid = refOid(repoDir);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(137);
+    expect(result.stderr).toContain("reason: child exited with code 137");
+    expect(refOid(repoDir)).toBe(ownerOid);
+
+    const recovered = runLockShell(repoDir, [
+      `recover_pr_operation_lock 42 '${ownerOid}' --confirmed-no-running-tools`,
+    ]);
+    expect(recovered.status, `${recovered.stdout}\n${recovered.stderr}`).toBe(0);
   });
 
   it("releases the lock after the operation deletes its runner worktree", async () => {

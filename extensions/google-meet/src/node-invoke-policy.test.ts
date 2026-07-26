@@ -127,6 +127,7 @@ describe("Google Meet node invoke policy", () => {
     for (const params of [
       { action: "pullAudio" },
       { action: "pushAudio", bridgeId: "bridge-1" },
+      { action: "pushAudio", bridgeId: "bridge-1", base64: "not-base64!" },
       { action: "clearAudio", bridgeId: "" },
       { action: "stopByUrl" },
       { action: "stopByUrl", url: "https://example.com/not-meet" },

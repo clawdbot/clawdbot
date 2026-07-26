@@ -1,3 +1,4 @@
+import type { MediaPlaceholderTextFact } from "openclaw/plugin-sdk/channel-inbound";
 // Whatsapp plugin module implements identity behavior.
 import { jidToE164, normalizeE164 } from "./text-runtime.js";
 
@@ -20,6 +21,7 @@ export type WhatsAppSelfIdentity = {
 export type WhatsAppReplyContext = {
   id?: string;
   body: string;
+  media?: MediaPlaceholderTextFact;
   sender?: WhatsAppIdentity | null;
 };
 

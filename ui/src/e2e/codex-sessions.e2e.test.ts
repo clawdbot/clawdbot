@@ -1,6 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser } from "playwright";
+import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { SessionsCatalogHostEvent } from "../../../packages/gateway-protocol/src/index.ts";
 import {
@@ -27,6 +27,14 @@ const uiProofArtifactDir = path.join(
   "control-ui-e2e",
   "native-session-discovery",
 );
+
+async function expandCodingSection(page: Page) {
+  const toggle = page.locator('[data-session-section="work"] .sidebar-session-group-toggle');
+  await toggle.waitFor({ state: "visible" });
+  if ((await toggle.getAttribute("aria-expanded")) === "false") {
+    await toggle.click();
+  }
+}
 
 suite("Codex native session catalog", () => {
   beforeAll(async () => {
@@ -91,6 +99,106 @@ suite("Codex native session catalog", () => {
     await page.close();
   });
 
+  it("separates native catalogs from live Coding rows", async () => {
+    const page = await browser.newPage({
+      deviceScaleFactor: 2,
+      viewport: { height: 900, width: 1280 },
+    });
+    await page.addInitScript(
+      (key) => localStorage.removeItem(key),
+      collapsedSessionSectionsStorageKey,
+    );
+    await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
+      methodResponses: {
+        "sessions.list": {
+          count: 1,
+          defaults: {
+            contextTokens: null,
+            model: "gpt-5.5",
+            modelProvider: "openai",
+          },
+          path: "",
+          sessions: [
+            {
+              contextTokens: null,
+              displayName: "Understanding Startup Phases and Delays",
+              hasActiveRun: true,
+              key: "agent:main:startup-phases",
+              kind: "direct",
+              label: "Understanding Startup Phases and Delays",
+              model: "gpt-5.5",
+              modelProvider: "openai",
+              status: "running",
+              totalTokens: 0,
+              updatedAt: Date.now(),
+              worktree: {
+                id: "startup-phases",
+                branch: "startup-phases",
+                repoRoot: "/workspace/openclaw",
+              },
+            },
+          ],
+          ts: Date.now(),
+        },
+        "sessions.catalog.list": {
+          catalogs: [
+            {
+              id: "codex",
+              label: "Codex",
+              capabilities: { continueSession: true, archive: true, createSession: true },
+              hosts: [
+                {
+                  hostId: "gateway:local",
+                  label: "Local Codex",
+                  kind: "gateway",
+                  connected: true,
+                  sessions: [
+                    {
+                      threadId: "thread-startup",
+                      name: "Trace startup labels to code paths",
+                      cwd: "/workspace/openclaw",
+                      status: "idle",
+                      archived: false,
+                      canContinue: true,
+                      canArchive: true,
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.evaluate(() => document.documentElement.setAttribute("data-theme-mode", "dark"));
+      await expandCodingSection(page);
+      const workSection = page.locator('[data-session-section="work"]');
+      const liveRows = workSection.locator(":scope > .sidebar-recent-sessions__list");
+      const catalog = workSection.locator(':scope > [data-session-section="catalog:codex"]');
+      await catalog.waitFor({ state: "visible" });
+      const [liveRowsBox, catalogBox] = await Promise.all([
+        liveRows.boundingBox(),
+        catalog.boundingBox(),
+      ]);
+      expect(liveRowsBox).not.toBeNull();
+      expect(catalogBox).not.toBeNull();
+      expect(Math.round(catalogBox!.y - (liveRowsBox!.y + liveRowsBox!.height))).toBe(10);
+      if (captureUiProofEnabled) {
+        await mkdir(uiProofArtifactDir, { recursive: true });
+        await workSection.screenshot({
+          animations: "disabled",
+          path: path.join(uiProofArtifactDir, "06-coding-catalog-spacing.png"),
+        });
+      }
+    } finally {
+      await page.close();
+    }
+  });
+
   it("shows a completed host while the aggregate catalog request is still pending", async () => {
     const page = await browser.newPage({ viewport: { height: 900, width: 1280 } });
     const gateway = await installMockGateway(page, {
@@ -135,6 +243,7 @@ suite("Codex native session catalog", () => {
         },
       } satisfies SessionsCatalogHostEvent);
 
+      await expandCodingSection(page);
       await page.getByText("Progressive node result", { exact: true }).waitFor();
       expect((await gateway.getRequests("sessions.catalog.list")).length).toBe(1);
       if (captureUiProofEnabled) {
@@ -183,6 +292,7 @@ suite("Codex native session catalog", () => {
                       archived: false,
                       canContinue: true,
                       canArchive: true,
+                      createdActor: { type: "human", id: "profile-ada", label: "Ada" },
                     },
                     {
                       threadId: "thread-worktree",
@@ -192,6 +302,7 @@ suite("Codex native session catalog", () => {
                       archived: false,
                       canContinue: true,
                       canArchive: true,
+                      createdActor: { type: "human", id: "profile-zoe", label: "Zoe" },
                     },
                     {
                       threadId: "thread-other",
@@ -245,6 +356,7 @@ suite("Codex native session catalog", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
+      await expandCodingSection(page);
       const section = page.locator('[data-session-section="catalog:codex"]');
       await section.waitFor({ state: "visible" });
       await expect.poll(() => section.locator("[data-session-catalog-host]").count()).toBe(2);
@@ -275,8 +387,15 @@ suite("Codex native session catalog", () => {
       // Counts only render while a section is collapsed.
       expect(await section.locator(".sidebar-session-group-count").count()).toBe(0);
 
-      const groupingToggle = section.locator('[data-session-catalog-grouping-toggle="codex"]');
-      await groupingToggle.click();
+      // Header actions are hover-revealed; hover the head so the button
+      // regains pointer events before the click, mirroring the Threads menus.
+      const catalogHead = section.locator(".sidebar-recent-sessions__head");
+      const viewMenuButton = section.locator('[data-session-catalog-view-menu="codex"]');
+      await catalogHead.hover();
+      await viewMenuButton.click();
+      await page
+        .getByRole("menuitemradio", { name: "None" })
+        .evaluate((element) => (element as HTMLElement).click());
       await expect.poll(() => projectHeads.count()).toBe(0);
       expect(await section.locator("[data-session-key]").count()).toBe(4);
       expect(
@@ -290,7 +409,35 @@ suite("Codex native session catalog", () => {
         });
       }
 
-      await groupingToggle.click();
+      // Person mode groups adopted (attributed) sessions and leaves native
+      // threads without a creator in the flat tail.
+      await catalogHead.hover();
+      await viewMenuButton.click();
+      await page
+        .getByRole("menuitemradio", { name: "Person" })
+        .evaluate((element) => (element as HTMLElement).click());
+      await expect.poll(() => projectHeads.count()).toBe(2);
+      expect(
+        await section
+          .locator('[data-session-catalog-project="person:profile-ada"]')
+          .locator(".sidebar-session-catalog-project__label")
+          .textContent(),
+      ).toBe("Ada");
+      expect(
+        await section
+          .locator('[data-session-catalog-project="person:profile-zoe"]')
+          .locator(".sidebar-session-catalog-project__label")
+          .textContent(),
+      ).toBe("Zoe");
+      expect(
+        await page.evaluate((key) => localStorage.getItem(key), catalogGroupingStorageKey),
+      ).toBe("person");
+
+      await catalogHead.hover();
+      await viewMenuButton.click();
+      await page
+        .getByRole("menuitemradio", { name: "Project" })
+        .evaluate((element) => (element as HTMLElement).click());
       await expect.poll(() => projectHeads.count()).toBe(2);
       expect(
         await page.evaluate((key) => localStorage.getItem(key), catalogGroupingStorageKey),
@@ -441,6 +588,7 @@ suite("Codex native session catalog", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
+      await expandCodingSection(page);
       const warning = page.locator(
         '[data-session-section="catalog:codex"] .sidebar-session-group-toggle',
       );
@@ -555,6 +703,7 @@ suite("Codex native session catalog", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
+      await expandCodingSection(page);
       await expect
         .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
         .toBe(1);
@@ -627,6 +776,7 @@ suite("Codex native session catalog", () => {
       },
     });
     await page.goto(`${server.baseUrl}chat`);
+    await expandCodingSection(page);
     await page.getByText("Release checklist", { exact: true }).click();
     await expect.poll(() => page.getByText("prepare release", { exact: true }).count()).toBe(1);
     const composer = page.locator(".agent-chat__composer-combobox > textarea");

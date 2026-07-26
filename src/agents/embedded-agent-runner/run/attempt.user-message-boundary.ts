@@ -49,6 +49,13 @@ export function readFirstUserText(content: unknown): string | undefined {
   return firstTextBlock?.text;
 }
 
+export function hasNonBlankUserText(content: unknown): boolean {
+  return typeof content === "string"
+    ? Boolean(content.trim())
+    : Array.isArray(content) &&
+        content.some((block) => Boolean(readFirstUserText([block])?.trim()));
+}
+
 function contentMatchesTimestampOverride(
   content: unknown,
   override: CurrentUserTimestampMatch,

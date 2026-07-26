@@ -106,7 +106,7 @@ struct GeneralSettings: View {
 
                 SettingsCardRow(
                     title: "Quick Chat shortcut",
-                    subtitle: "Global shortcut that opens a floating chat bar for the main session.",
+                    subtitle: "Global shortcut that opens a floating chat bar for the main thread.",
                     showsDivider: false)
                 {
                     KeyboardShortcuts.Recorder(for: .toggleQuickChat)
@@ -479,7 +479,10 @@ struct GeneralSettings: View {
     }
 
     private var controlChannelRow: some View {
-        SettingsCardRow(title: "Control channel", subtitle: self.controlChannelSubtitle) {
+        SettingsCardRow(
+            title: "Control channel",
+            subtitle: self.controlChannelSubtitle.map(SettingsTextValue.verbatim))
+        {
             Text(self.controlStatusLine)
                 .font(.caption.weight(.semibold))
                 .padding(.horizontal, 8)

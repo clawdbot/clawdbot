@@ -8,10 +8,24 @@ import {
   buildLiveCronProbeMessage,
   createLiveCronProbeSpec,
   isClaudeLikeLiveAgent,
+  resolveOpenClawCliProcessArgs,
   shouldRunLiveImageProbe,
 } from "./live-agent-probes.js";
 
 describe("live-agent-probes", () => {
+  it("uses the source runner when packaged CLI output is absent", () => {
+    expect(resolveOpenClawCliProcessArgs(["cron", "list"], false)).toEqual([
+      "scripts/run-node.mjs",
+      "cron",
+      "list",
+    ]);
+    expect(resolveOpenClawCliProcessArgs(["cron", "list"], true)).toEqual([
+      "openclaw.mjs",
+      "cron",
+      "list",
+    ]);
+  });
+
   it("only special-cases Claude-like retry prompts", () => {
     expect(isClaudeLikeLiveAgent("claude")).toBe(true);
     expect(isClaudeLikeLiveAgent("claude-cli")).toBe(true);
@@ -74,11 +88,17 @@ describe("live-agent-probes", () => {
       }),
     ).toContain("previous OpenClaw cron MCP tool call was cancelled");
     const args = JSON.parse(spec.argsJson) as {
-      job?: { sessionTarget?: string; agentId?: string; sessionKey?: string };
+      job?: {
+        sessionTarget?: string;
+        agentId?: string;
+        sessionKey?: string;
+        delivery?: { mode?: string };
+      };
     };
     expect(args.job?.sessionTarget).toBe("session:agent:codex:acp:test");
     expect(args.job?.agentId).toBe("codex");
     expect(args.job?.sessionKey).toBe("agent:codex:acp:test");
+    expect(args.job?.delivery).toEqual({ mode: "none" });
   });
 
   it("builds a cron probe spec when the process clock is outside the Date range", () => {

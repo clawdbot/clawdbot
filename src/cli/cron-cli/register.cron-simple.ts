@@ -3,17 +3,15 @@ import {
   resolvePositiveTimerTimeoutMs,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
-import type { CronDeliveryPreview, CronJob } from "../../cron/types.js";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { defaultRuntime } from "../../runtime.js";
 import { sleep } from "../../utils/sleep.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parseDurationMs } from "../parse-duration.js";
+import { findCronJobByIdOrName } from "./list-jobs.js";
 import {
-  coerceCronDeliveryPreviews,
   enrichCronJsonWithStatus,
   handleCronCliError,
   printCronJson,
@@ -21,8 +19,6 @@ import {
   warnIfCronSchedulerDisabled,
 } from "./shared.js";
 
-const CRON_SHOW_PAGE_SIZE = 200;
-const CRON_SHOW_LOOKUP_MAX_PAGES = 50;
 const CRON_RUN_WAIT_TIMEOUT_DEFAULT = "10m";
 const CRON_RUN_WAIT_POLL_INTERVAL_DEFAULT = "2s";
 
@@ -84,47 +80,6 @@ async function waitForCronRunCompletion(params: {
   }
 }
 
-function findCronJobInPage(jobs: CronJob[], idOrName: string): CronJob | undefined {
-  const needle = normalizeLowercaseStringOrEmpty(idOrName);
-  return jobs.find(
-    (job) =>
-      normalizeLowercaseStringOrEmpty(job.id) === needle ||
-      normalizeLowercaseStringOrEmpty(job.name) === needle,
-  );
-}
-
-async function loadCronJobForShow(
-  opts: GatewayRpcOpts,
-  idOrName: string,
-): Promise<{ job?: CronJob; deliveryPreview?: CronDeliveryPreview }> {
-  let offset = 0;
-  for (let page = 0; page < CRON_SHOW_LOOKUP_MAX_PAGES; page += 1) {
-    const res = await callGatewayFromCli("cron.list", opts, {
-      includeDisabled: true,
-      limit: CRON_SHOW_PAGE_SIZE,
-      offset,
-    });
-    const listed = res as {
-      jobs?: CronJob[];
-      hasMore?: boolean;
-      nextOffset?: number | null;
-    };
-    const jobs = listed.jobs ?? [];
-    const job = findCronJobInPage(jobs, idOrName);
-    if (job) {
-      return { job, deliveryPreview: coerceCronDeliveryPreviews(res).get(job.id) };
-    }
-    if (!listed.hasMore || typeof listed.nextOffset !== "number") {
-      return {};
-    }
-    if (listed.nextOffset <= offset) {
-      throw new Error("cron.list pagination did not advance while looking up cron job");
-    }
-    offset = listed.nextOffset;
-  }
-  throw new Error("cron.list pagination exceeded maximum pages while looking up cron job");
-}
-
 function registerCronToggleCommand(params: {
   cron: Command;
   name: "enable" | "disable";
@@ -143,6 +98,11 @@ function registerCronToggleCommand(params: {
             patch: { enabled: params.enabled },
           });
           printCronJson(res);
+          if (!params.enabled && process.stderr.isTTY) {
+            process.stderr.write(
+              `Note: 'openclaw cron list' hides disabled jobs by default. Use 'openclaw cron list --all' to see this job, or 'openclaw cron enable <id>' to re-enable it.\n`,
+            );
+          }
           await warnIfCronSchedulerDisabled(opts);
         } catch (err) {
           handleCronCliError(err);
@@ -206,7 +166,9 @@ export function registerCronSimpleCommands(cron: Command) {
       .option("--json", "Output JSON", false)
       .action(async (id, opts) => {
         try {
-          const { job, deliveryPreview } = await loadCronJobForShow(opts, String(id));
+          const { job, deliveryPreview } = await findCronJobByIdOrName(opts, String(id), {
+            includeDeliveryPreview: !opts.json,
+          });
           if (!job) {
             throw new Error(`cron job not found: ${String(id)}`);
           }

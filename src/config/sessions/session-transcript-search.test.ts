@@ -74,7 +74,8 @@ function search(query: string, options: { limit?: number; sessionKeys?: string[]
 async function waitForSearchReconcile(query: string): Promise<void> {
   await vi.waitFor(() => expect(search(query).indexing).toBe(false), {
     interval: 10,
-    timeout: 5_000,
+    // Compact CI shards can delay the asynchronous index worker beyond five seconds.
+    timeout: 15_000,
   });
 }
 

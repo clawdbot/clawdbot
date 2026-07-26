@@ -2,11 +2,11 @@ title: Docker agents delete shared workspace
 
 scenario:
   id: docker-agents-delete-shared-workspace
-  surface: docker-podman-hosting
-  category: docker-podman-hosting.agent-sandbox-and-tooling
+  surface: containers
+  category: containers.agent-sandbox-and-tooling
   coverage:
     primary:
-      - docker.backed-agent-sandbox-support
+      - containers.docker-backed-agent-sandbox-support
   objective: Verify Docker-hosted agent workspace deletion keeps shared workspace state safe while running against the package-installed image.
   successCriteria:
     - The Docker lane starts from an empty OpenClaw state.

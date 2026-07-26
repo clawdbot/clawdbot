@@ -5,6 +5,7 @@
  */
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "./agent-run-terminal-outcome.js";
 import { wrapPromptDataBlock } from "./sanitize-for-prompt.js";
@@ -48,7 +49,7 @@ const defaultSubagentAnnounceOutputDeps: SubagentAnnounceOutputDeps = {
 let subagentAnnounceOutputDeps: SubagentAnnounceOutputDeps = defaultSubagentAnnounceOutputDeps;
 
 function isFastTestMode() {
-  return process.env.OPENCLAW_TEST_FAST === "1";
+  return isFastTestRuntimeEnv();
 }
 
 type SubagentOutputSnapshot = {

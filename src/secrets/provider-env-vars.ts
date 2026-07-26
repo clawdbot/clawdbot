@@ -205,13 +205,6 @@ function resolveManifestProviderAuthEnvVarCandidatesFromSnapshot(
     if (!shouldUsePluginProviderEnvVars(plugin, params)) {
       continue;
     }
-    if (plugin.providerAuthEnvVars) {
-      for (const [providerId, keys] of Object.entries(plugin.providerAuthEnvVars).toSorted(
-        ([left], [right]) => left.localeCompare(right),
-      )) {
-        appendUniqueEnvVarCandidates(candidates, providerId, keys);
-      }
-    }
     for (const provider of plugin.setup?.providers ?? []) {
       appendUniqueEnvVarCandidates(candidates, provider.id, provider.envVars ?? []);
     }

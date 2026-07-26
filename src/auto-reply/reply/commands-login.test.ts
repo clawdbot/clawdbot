@@ -114,7 +114,7 @@ describe("handleLoginCommand", () => {
   it("registers /login as a built-in command handler", () => {
     expect(buildBuiltinChatCommands().find((entry) => entry.key === "login")).toMatchObject({
       nativeName: "login",
-      nativeProviders: ["telegram"],
+      nativeProviders: ["discord", "slack", "telegram"],
       textAliases: ["/login"],
       scope: "both",
     });

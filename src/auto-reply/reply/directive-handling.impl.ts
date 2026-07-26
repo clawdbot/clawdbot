@@ -70,6 +70,7 @@ export async function handleDirectiveOnly(
     defaultProvider,
     defaultModel,
     aliasIndex,
+    policyAliasIndex,
     allowedModelKeys,
     allowedModelCatalog,
     resetModelOverride,
@@ -129,6 +130,8 @@ export async function handleDirectiveOnly(
     defaultProvider,
     defaultModel,
     aliasIndex,
+    policyAliasIndex,
+    allowedModelKeys,
     allowedModelCatalog,
     resetModelOverride,
     workspaceDir: params.workspaceDir,
@@ -149,6 +152,7 @@ export async function handleDirectiveOnly(
     allowedModelKeys,
     allowedModelCatalog,
     provider,
+    agentId: activeAgentId,
   });
   if (modelResolution.errorText) {
     return { text: modelResolution.errorText };

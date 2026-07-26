@@ -34,7 +34,9 @@ import { MAX_CODEX_APP_SERVER_VERSION, MIN_CODEX_APP_SERVER_VERSION } from "./ve
 const CODEX_APP_SERVER_PARSE_LOG_MAX = 500;
 const CODEX_APP_SERVER_PARSE_BUFFER_MAX = 8 * 1024 * 1024;
 const CODEX_APP_SERVER_PARSE_BUFFER_MAX_LINES = 1_000;
-const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 600_000;
+// agents_wait can use a 600s inner budget plus 30s handler grace. Keep the
+// app-server request guard outside that window so Codex receives the tool result.
+const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 660_000;
 const CODEX_APP_SERVER_STDERR_TAIL_MAX = 2_000;
 const CODEX_APP_SERVER_OVERLOADED_ERROR_CODE = -32_001;
 const CODEX_APP_SERVER_OVERLOAD_MAX_RETRIES = 3;
@@ -59,6 +61,11 @@ export function getCodexAppServerClientInstanceId(client: object): string {
   const created = randomUUID();
   CODEX_APP_SERVER_CLIENT_INSTANCE_IDS.set(client, created);
   return created;
+}
+
+export function resolveCodexAppServerClientInstanceId(client: object): string {
+  const getInstanceId = (client as { getInstanceId?: () => string }).getInstanceId;
+  return getInstanceId?.call(client) ?? getCodexAppServerClientInstanceId(client);
 }
 
 /** RPC error wrapper that preserves app-server error code and data. */
@@ -204,6 +211,7 @@ export function isCodexAppServerConnectionClosedError(error: unknown): boolean {
 
 type CodexServerRequestHandler = (
   request: Required<Pick<RpcRequest, "id" | "method">> & { params?: JsonValue },
+  signal?: AbortSignal,
 ) => Promise<JsonValue | undefined> | JsonValue | undefined;
 
 /** Notification handler registered on a Codex app-server client. */
@@ -870,15 +878,16 @@ export class CodexAppServerClient {
   private async runServerRequestHandlers(
     request: Required<Pick<RpcRequest, "id" | "method">> & { params?: JsonValue },
   ): Promise<JsonValue | undefined> {
+    const controller = new AbortController();
     const timeoutResponse = timeoutServerRequestResponse(request);
     if (!timeoutResponse) {
-      return await this.runServerRequestHandlersWithoutTimeout(request);
+      return await this.runServerRequestHandlersWithoutTimeout(request, controller.signal);
     }
 
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
       return await Promise.race([
-        this.runServerRequestHandlersWithoutTimeout(request),
+        this.runServerRequestHandlersWithoutTimeout(request, controller.signal),
         new Promise<JsonValue>((resolve) => {
           timeout = setTimeout(() => {
             embeddedAgentLog.warn("codex app-server server request timed out", {
@@ -886,6 +895,7 @@ export class CodexAppServerClient {
               method: request.method,
               timeoutMs: CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS,
             });
+            controller.abort(new Error("codex app-server server request timed out"));
             resolve(timeoutResponse);
           }, CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS);
           timeout.unref?.();
@@ -900,9 +910,13 @@ export class CodexAppServerClient {
 
   private async runServerRequestHandlersWithoutTimeout(
     request: Required<Pick<RpcRequest, "id" | "method">> & { params?: JsonValue },
+    signal: AbortSignal,
   ): Promise<JsonValue | undefined> {
     for (const handler of this.requestHandlers) {
-      const result = await handler(request);
+      if (signal.aborted) {
+        return undefined;
+      }
+      const result = await handler(request, signal);
       if (result !== undefined) {
         return result;
       }

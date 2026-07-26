@@ -340,6 +340,10 @@ export function dispatchGatewayCronFinishedNotifications(params: {
 }): void {
   const webhookToken = normalizeOptionalString(params.webhookToken);
   const redactedWebhookEvent = redactCommandCronEventForExternalDelivery(params.evt, params.job);
+  const completionSummary =
+    params.job?.payload.kind === "script"
+      ? normalizeOptionalString(redactedWebhookEvent.summary)
+      : params.evt.summary;
   const webhookTargets = resolveCronWebhookTargets({
     delivery:
       params.job?.delivery && typeof params.job.delivery.mode === "string"
@@ -377,7 +381,9 @@ export function dispatchGatewayCronFinishedNotifications(params: {
     );
   }
 
-  if (params.evt.summary) {
+  // Script notify is carried as the completion summary, so its absence uses
+  // the same silent-summary suppression path as NO_REPLY output.
+  if (completionSummary) {
     for (const webhookTarget of webhookTargets) {
       const payload = buildCronFinishedWebhookPayload(redactedWebhookEvent);
       // Completion notification fanout is best-effort; the cron service has

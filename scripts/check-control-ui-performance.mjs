@@ -6,13 +6,25 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 const KIB = 1024;
+const STARTUP_JS_BASELINE_RATCHET_BYTES = 4096;
+const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
+const DEFAULT_STARTUP_BUDGET_BASELINE_PATH = path.resolve(
+  SCRIPT_DIR,
+  "../config/control-ui-startup-budget-baseline.json",
+);
+
+// This absorbs measured local-to-Linux gzip variance, but landed changes can
+// still consume the tolerance. The fixed JS ceiling bounds cumulative creep.
+export const CONTROL_UI_STARTUP_JS_GZIP_TOLERANCE_BYTES = 1024;
 
 // Small, explicit headroom over the optimized baseline. Budget changes should
 // accompany an intentional loading or chunking decision.
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze({
   startupJsRequests: 18,
   startupCssRequests: 1,
-  startupJsGzipBytes: 310 * KIB,
+  // 317 KiB preserves headroom after the device-auth upgrade hook and sidebar
+  // session-render extraction (2026-07); the migration UI itself remains lazy.
+  startupJsGzipBytes: 317 * KIB,
   // 45 KiB CSS ceilings maintainer-approved 2026-07 alongside the interleaved
   // sidebar zone styling; headroom over the ~36.5 KiB post-diet baseline.
   startupCssGzipBytes: 45 * KIB,
@@ -123,6 +135,8 @@ export function collectControlUiPerformanceMetrics(distDir) {
 export function evaluateControlUiPerformanceBudgets(
   metrics,
   budgets = CONTROL_UI_PERFORMANCE_BUDGETS,
+  startupBudgetBaseline = null,
+  startupJsTolerance = CONTROL_UI_STARTUP_JS_GZIP_TOLERANCE_BYTES,
 ) {
   const checks = [
     ["startup JS requests", metrics.startup.js.requests, budgets.startupJsRequests, "count"],
@@ -132,9 +146,23 @@ export function evaluateControlUiPerformanceBudgets(
     ["largest JS gzip", metrics.largest.js.gzipBytes, budgets.largestJsGzipBytes, "bytes"],
     ["largest CSS gzip", metrics.largest.css.gzipBytes, budgets.largestCssGzipBytes, "bytes"],
   ];
-  return checks.flatMap(([metric, actual, limit, unit]) =>
+  const violations = checks.flatMap(([metric, actual, limit, unit]) =>
     actual > limit ? [{ metric, actual, limit, unit }] : [],
   );
+  if (
+    startupBudgetBaseline &&
+    metrics.startup.js.gzipBytes > startupBudgetBaseline.startupJsGzipBytes + startupJsTolerance
+  ) {
+    violations.push({
+      metric: "startup JS gzip vs baseline",
+      actual: metrics.startup.js.gzipBytes,
+      limit: startupBudgetBaseline.startupJsGzipBytes + startupJsTolerance,
+      unit: "bytes",
+      baseline: startupBudgetBaseline.startupJsGzipBytes,
+      tolerance: startupJsTolerance,
+    });
+  }
+  return violations;
 }
 
 export function formatControlUiPerformanceBytes(bytes) {
@@ -150,6 +178,9 @@ function formatAssetSummary(summary) {
 }
 
 function formatViolation(violation) {
+  if (violation.baseline !== undefined && violation.tolerance !== undefined) {
+    return `${violation.metric}: ${violation.actual} B exceeds baseline ${violation.baseline} B + tolerance ${violation.tolerance} B (limit ${violation.limit} B); intentionally raise the baseline with node scripts/check-control-ui-performance.mjs --update-baseline --reason "<reason>"`;
+  }
   const actual =
     violation.unit === "bytes"
       ? formatControlUiPerformanceBytes(violation.actual)
@@ -168,17 +199,40 @@ function formatViolation(violation) {
 export function formatControlUiPerformanceReport(
   metrics,
   budgets = CONTROL_UI_PERFORMANCE_BUDGETS,
+  startupBudgetBaseline = null,
+  startupJsTolerance = CONTROL_UI_STARTUP_JS_GZIP_TOLERANCE_BYTES,
 ) {
-  const violations = evaluateControlUiPerformanceBudgets(metrics, budgets);
+  const violations = evaluateControlUiPerformanceBudgets(
+    metrics,
+    budgets,
+    startupBudgetBaseline,
+    startupJsTolerance,
+  );
   const lines = [
     "Control UI performance:",
     `  startup JS: ${formatAssetSummary(metrics.startup.js)} (limits: ${formatRequestCount(budgets.startupJsRequests)}, ${formatControlUiPerformanceBytes(budgets.startupJsGzipBytes)} gzip)`,
+  ];
+  if (startupBudgetBaseline) {
+    lines.push(
+      `  startup JS gzip vs baseline: ${metrics.startup.js.gzipBytes} B (baseline ${startupBudgetBaseline.startupJsGzipBytes} B + tolerance ${startupJsTolerance} B, ceiling ${budgets.startupJsGzipBytes} B)`,
+    );
+  }
+  lines.push(
     `  startup CSS: ${formatAssetSummary(metrics.startup.css)} (limits: ${formatRequestCount(budgets.startupCssRequests)}, ${formatControlUiPerformanceBytes(budgets.startupCssGzipBytes)} gzip)`,
     `  largest JS: ${metrics.largest.js.file}, ${formatControlUiPerformanceBytes(metrics.largest.js.gzipBytes)} gzip (limit: ${formatControlUiPerformanceBytes(budgets.largestJsGzipBytes)})`,
     `  largest CSS: ${metrics.largest.css.file}, ${formatControlUiPerformanceBytes(metrics.largest.css.gzipBytes)} gzip (limit: ${formatControlUiPerformanceBytes(budgets.largestCssGzipBytes)})`,
     `  all JS: ${formatAssetSummary(metrics.total.js)}`,
     `  all CSS: ${formatAssetSummary(metrics.total.css)}`,
-  ];
+  );
+  if (
+    startupBudgetBaseline &&
+    metrics.startup.js.gzipBytes + STARTUP_JS_BASELINE_RATCHET_BYTES <
+      startupBudgetBaseline.startupJsGzipBytes
+  ) {
+    lines.push(
+      `  hint: startup JS gzip is more than ${STARTUP_JS_BASELINE_RATCHET_BYTES} B below the ${startupBudgetBaseline.startupJsGzipBytes} B baseline; lower it with node scripts/check-control-ui-performance.mjs --update-baseline --reason "<reason>"`,
+    );
+  }
   if (violations.length > 0) {
     lines.push(
       "  violations:",
@@ -188,24 +242,117 @@ export function formatControlUiPerformanceReport(
   return lines.join("\n");
 }
 
-export function runControlUiPerformanceCheck(distDir, budgets = CONTROL_UI_PERFORMANCE_BUDGETS) {
+function baselineUpdateCommand() {
+  return 'node scripts/check-control-ui-performance.mjs --update-baseline --reason "<reason>"';
+}
+
+function isIsoDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/u.test(value)) {
+    return false;
+  }
+  const date = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(date.valueOf()) && date.toISOString().slice(0, 10) === value;
+}
+
+function readControlUiStartupBudgetBaseline(baselinePath) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(baselinePath, "utf8"));
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      !Number.isSafeInteger(parsed.startupJsGzipBytes) ||
+      parsed.startupJsGzipBytes < 0 ||
+      typeof parsed.reason !== "string" ||
+      parsed.reason.trim().length === 0 ||
+      typeof parsed.updatedAt !== "string" ||
+      !isIsoDate(parsed.updatedAt)
+    ) {
+      throw new Error("expected startupJsGzipBytes, non-empty reason, and YYYY-MM-DD updatedAt");
+    }
+    return {
+      startupJsGzipBytes: parsed.startupJsGzipBytes,
+      reason: parsed.reason,
+      updatedAt: parsed.updatedAt,
+    };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Cannot read Control UI startup budget baseline ${baselinePath}: ${detail}. Regenerate it with ${baselineUpdateCommand()}.`,
+      { cause: error },
+    );
+  }
+}
+
+function writeControlUiStartupBudgetBaseline(baselinePath, startupJsGzipBytes, reason) {
+  const baseline = {
+    startupJsGzipBytes,
+    reason,
+    updatedAt: new Date().toISOString().slice(0, 10),
+  };
+  fs.writeFileSync(baselinePath, `${JSON.stringify(baseline, null, 2)}\n`);
+  return baseline;
+}
+
+export function runControlUiPerformanceCheck(
+  distDir,
+  budgets = CONTROL_UI_PERFORMANCE_BUDGETS,
+  baselinePath = DEFAULT_STARTUP_BUDGET_BASELINE_PATH,
+) {
+  const startupBudgetBaseline = readControlUiStartupBudgetBaseline(baselinePath);
   const metrics = collectControlUiPerformanceMetrics(distDir);
+  const violations = evaluateControlUiPerformanceBudgets(metrics, budgets, startupBudgetBaseline);
+  const report = formatControlUiPerformanceReport(metrics, budgets, startupBudgetBaseline);
   return {
     metrics,
     budgets,
-    violations: evaluateControlUiPerformanceBudgets(metrics, budgets),
-    report: formatControlUiPerformanceReport(metrics, budgets),
+    startupBudgetBaseline,
+    startupJsTolerance: CONTROL_UI_STARTUP_JS_GZIP_TOLERANCE_BYTES,
+    violations,
+    report,
   };
 }
 
 function main(argv = process.argv.slice(2)) {
-  const unknown = argv.filter((arg) => arg !== "--json");
-  if (unknown.length > 0) {
-    throw new Error(`Unknown option: ${unknown[0]}`);
+  let json = false;
+  let updateBaseline = false;
+  let reason;
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--json") {
+      json = true;
+    } else if (arg === "--update-baseline") {
+      updateBaseline = true;
+    } else if (arg === "--reason") {
+      reason = argv[index + 1];
+      if (!reason || reason.trim().length === 0 || reason.startsWith("--")) {
+        throw new Error("--reason requires a non-empty value");
+      }
+      index += 1;
+    } else {
+      throw new Error(`Unknown option: ${arg}`);
+    }
   }
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  const result = runControlUiPerformanceCheck(path.resolve(here, "../dist/control-ui"));
-  if (argv.includes("--json")) {
+  if (reason !== undefined && !updateBaseline) {
+    throw new Error("--reason requires --update-baseline");
+  }
+  if (json && updateBaseline) {
+    throw new Error("--json cannot be combined with --update-baseline");
+  }
+  const distDir = path.resolve(SCRIPT_DIR, "../dist/control-ui");
+  if (updateBaseline) {
+    const metrics = collectControlUiPerformanceMetrics(distDir);
+    const baseline = writeControlUiStartupBudgetBaseline(
+      DEFAULT_STARTUP_BUDGET_BASELINE_PATH,
+      metrics.startup.js.gzipBytes,
+      reason ?? "manual baseline update",
+    );
+    process.stdout.write(
+      `Updated config/control-ui-startup-budget-baseline.json to ${baseline.startupJsGzipBytes} B (${baseline.reason}).\n`,
+    );
+    return;
+  }
+  const result = runControlUiPerformanceCheck(distDir);
+  if (json) {
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   } else {
     process.stdout.write(`${result.report}\n`);

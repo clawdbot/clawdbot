@@ -52,6 +52,10 @@ import {
   formatTaskStatusDetail,
   formatTaskStatusTitle,
 } from "../tasks/task-status.js";
+import {
+  deliveryContextFromSession,
+  sessionDeliveryOrigin,
+} from "../utils/delivery-context.shared.js";
 // Status text helpers render runtime status summaries for CLI output.
 import { resolveUsageCredentialType } from "./codex-synthetic-usage.js";
 import {
@@ -86,8 +90,8 @@ function resolveStatusChannelFeatureLine(params: {
   const telegramConfig = params.cfg.channels?.telegram;
   const accountId = normalizeAccountId(
     params.statusAccountId ??
-      params.sessionEntry?.lastAccountId ??
-      params.sessionEntry?.origin?.accountId ??
+      deliveryContextFromSession(params.sessionEntry)?.accountId ??
+      sessionDeliveryOrigin(params.sessionEntry)?.accountId ??
       telegramConfig?.defaultAccount,
   );
   const accountConfig = resolveNormalizedAccountEntry(
@@ -317,6 +321,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     provider,
     model,
     contextTokens,
+    thinkingCatalog,
     resolvedThinkLevel,
     resolvedFastMode,
     resolvedVerboseLevel,
@@ -646,6 +651,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
           provider: selectedLookupProvider,
           model: selectedLookupModel,
           level: requestedThinkLevel,
+          catalog: thinkingCatalog,
           agentRuntime: effectiveHarness,
           // Status uses loaded provider facts unless Codex needs OpenAI's static thinking contract.
           providerPolicySource:

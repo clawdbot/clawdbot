@@ -27,6 +27,7 @@ import {
   buildSidebarAttentionItems,
   type SidebarAttentionItem,
 } from "./sidebar-attention-items.ts";
+import "./tooltip.ts";
 
 // Reloads are connection-scoped; a visibility change only refetches after the
 // snapshot is older than this, so tab switches stay free of request bursts.
@@ -47,6 +48,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) onOpenApprovals?: () => void;
 
   private loadedClient: GatewayBrowserClient | null = null;
+  private loadGeneration = 0;
   private loadedAtMs = 0;
   private dismissedScope: string | null = null;
   private idleRefreshTimer: ReturnType<typeof globalThis.setInterval> | null = null;
@@ -101,6 +103,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       this.idleRefreshTimer = null;
     }
     this.subscriptions.clear();
+    this.loadGeneration += 1;
     this.loadedClient = null;
     super.disconnectedCallback();
   }
@@ -112,7 +115,8 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       this.dismissedScope = gatewayUrl;
       this.dismissed = loadDismissals(gatewayUrl);
     }
-    if (!snapshot.connected || !snapshot.client) {
+    if (snapshot.phase !== "connected" || !snapshot.client) {
+      this.loadGeneration += 1;
       this.loadedClient = null;
       this.cronJobs = [];
       this.modelAuthStatus = null;
@@ -122,15 +126,23 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       return;
     }
     this.loadedClient = snapshot.client;
-    void this.load(gateway, snapshot.client);
+    // Stale refreshes reuse the same client, so identity alone cannot retire
+    // an older completion once the replacement load starts.
+    const generation = ++this.loadGeneration;
+    void this.load(gateway, snapshot.client, generation);
   }
 
-  private async load(gateway: ApplicationContext["gateway"], client: GatewayBrowserClient) {
+  private async load(
+    gateway: ApplicationContext["gateway"],
+    client: GatewayBrowserClient,
+    generation: number,
+  ) {
     const isCurrent = () =>
       this.isConnected &&
+      this.loadGeneration === generation &&
       this.loadedClient === client &&
       gateway.snapshot.client === client &&
-      gateway.snapshot.connected;
+      gateway.snapshot.phase === "connected";
     const cron = createInitialCronState({ client, connected: true });
     await Promise.allSettled([
       loadCronJobsPage(cron).then(() => {
@@ -194,7 +206,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
   }
 
   override render() {
-    if (!this.context?.gateway.snapshot.connected) {
+    if (this.context?.gateway.snapshot.phase !== "connected") {
       return nothing;
     }
     const items = buildSidebarAttentionItems({
@@ -211,24 +223,28 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
         ${items.map(
           (item) => html`
             <div class="sidebar-attention__item sidebar-attention__item--${item.severity}">
-              <button
-                type="button"
-                class="sidebar-attention__open"
-                title=${item.label}
-                @click=${() => this.open(item)}
-              >
-                <span class="sidebar-attention__icon" aria-hidden="true">${icons[item.icon]}</span>
-                <span class="sidebar-attention__label">${item.label}</span>
-              </button>
-              <button
-                type="button"
-                class="sidebar-attention__dismiss"
-                title=${t("common.dismiss")}
-                aria-label=${t("common.dismiss")}
-                @click=${() => this.dismiss(item)}
-              >
-                ${icons.x}
-              </button>
+              <openclaw-tooltip .content=${item.label}>
+                <button
+                  type="button"
+                  class="sidebar-attention__open"
+                  @click=${() => this.open(item)}
+                >
+                  <span class="sidebar-attention__icon" aria-hidden="true"
+                    >${icons[item.icon]}</span
+                  >
+                  <span class="sidebar-attention__label">${item.label}</span>
+                </button>
+              </openclaw-tooltip>
+              <openclaw-tooltip .content=${t("common.dismiss")}>
+                <button
+                  type="button"
+                  class="sidebar-attention__dismiss"
+                  aria-label=${t("common.dismiss")}
+                  @click=${() => this.dismiss(item)}
+                >
+                  ${icons.x}
+                </button>
+              </openclaw-tooltip>
             </div>
           `,
         )}

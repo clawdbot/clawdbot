@@ -8,6 +8,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { onAgentEvent } from "../infra/agent-events.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -28,7 +29,10 @@ import {
   type ExecAuthorizationPlan,
 } from "../infra/exec-authorization-plan.js";
 import { buildAuthorizedShellCommandFromPlan } from "../infra/exec-authorization-render.js";
-import { resolvePolicyTargetCandidatePath } from "../infra/exec-command-resolution.js";
+import {
+  buildHashedArgPatternFromArgv,
+  resolvePolicyTargetCandidatePath,
+} from "../infra/exec-command-resolution.js";
 import { createSafeGatewayRestartPreflight } from "../infra/restart-coordinator.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -158,6 +162,7 @@ const commitExecAuthorizationMock = vi.hoisted(() => vi.fn(async () => undefined
 const resolveApprovalDecisionOrUndefinedMock = vi.hoisted(() =>
   vi.fn(async (): Promise<string | null | undefined> => undefined),
 );
+const runAbortedApprovalError = vi.hoisted(() => new Error("run aborted"));
 const resolveExecHostApprovalContextMock = vi.hoisted(() =>
   vi.fn(
     (): MockExecHostApprovalContext => ({
@@ -215,6 +220,7 @@ vi.mock("./bash-tools.exec-approval-request.js", () => ({
   buildExecApprovalRequesterContext: vi.fn(() => ({})),
   buildExecApprovalTurnSourceContext: vi.fn(() => ({})),
   registerExecApprovalRequestForHostOrThrow: vi.fn(async () => undefined),
+  isExecApprovalRunAbortedError: (error: unknown) => error === runAbortedApprovalError,
 }));
 
 vi.mock("./bash-tools.exec-host-shared.js", () => ({
@@ -521,9 +527,72 @@ describe("processGatewayAllowlist", () => {
     });
   }
 
-  it("still requires approval when allowlist execution plan is unavailable despite durable trust", async () => {
+  it("denies shell-expansion plan misses immediately when asking is off and fallback denies", async () => {
+    const command = "grep -il needle -r /tmp --include=*.md";
+    const authorizationPlan = await planShellAuthorization({
+      command,
+      env: { PATH: "/usr/bin:/bin" },
+    });
+    expect(authorizationPlan.ok).toBe(true);
+    if (!authorizationPlan.ok) {
+      throw new Error(authorizationPlan.reason);
+    }
+    const segments = authorizationPlan.groups.flatMap((group) =>
+      group.candidates.map((candidate) => candidate.sourceSegment),
+    );
+    evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
+      allowlistMatches: [{ pattern: "/usr/bin/grep" }],
+      analysisOk: true,
+      allowlistSatisfied: true,
+      segments,
+      segmentAllowlistEntries: [{ pattern: "/usr/bin/grep" }],
+      segmentSatisfiedBy: ["allowlist"],
+      authorizationPlan,
+    });
+    const captured = captureSecurityEvents();
+
+    let result: Awaited<ReturnType<typeof runGatewayAllowlist>>;
+    try {
+      result = await runGatewayAllowlist({ command });
+    } finally {
+      captured.stop();
+    }
+
+    expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
+    expect(result!.deniedResult?.content[0]).toEqual(
+      expect.objectContaining({
+        text: expect.stringContaining("ask-fallback-deny: execution-plan-miss"),
+      }),
+    );
+    expect(captured.events).toHaveLength(1);
+    expect(captured.events[0]).toMatchObject({
+      action: "exec.approval.denied",
+      outcome: "denied",
+      reason: "ask-fallback-deny: execution-plan-miss",
+      policy: {
+        id: "exec.approval",
+        decision: "deny",
+        reason: "ask-fallback-deny: execution-plan-miss",
+      },
+      attributes: {
+        security: "allowlist",
+        ask: "off",
+        segment_count: 1,
+      },
+    });
+  });
+
+  it("still requires approval for unavailable allowlist plans when ask is on-miss", async () => {
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "allowlist",
+      hostAsk: "on-miss",
+      askFallback: "deny",
+    });
+
     const result = await runGatewayAllowlist({
       command: "echo ok",
+      ask: "on-miss",
     });
 
     expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
@@ -1360,6 +1429,7 @@ describe("processGatewayAllowlist", () => {
       env,
       autoReview: false,
     });
+    const expectedGitArgPattern = buildHashedArgPatternFromArgv(["/usr/bin/git", "status"]);
 
     expect(result.pendingResult?.details.status).toBe("approval-pending");
     expect(resolveExecApprovalAllowedDecisionsMock).toHaveBeenCalledWith({
@@ -1367,7 +1437,7 @@ describe("processGatewayAllowlist", () => {
       allowAlwaysPersistence: {
         kind: "patterns",
         commandText: "sh -c 'git status'",
-        patterns: [{ pattern: "/usr/bin/git", argPattern: undefined }],
+        patterns: [{ pattern: "/usr/bin/git", argPattern: expectedGitArgPattern }],
       },
     });
     expect(buildExecApprovalPendingToolResultMock).toHaveBeenCalledWith(
@@ -1384,7 +1454,7 @@ describe("processGatewayAllowlist", () => {
         allowAlwaysDecision: {
           kind: "patterns",
           commandText: "sh -c 'git status'",
-          patterns: [{ pattern: "/usr/bin/git", argPattern: undefined }],
+          patterns: [{ pattern: "/usr/bin/git", argPattern: expectedGitArgPattern }],
         },
       }),
     );
@@ -2051,6 +2121,42 @@ EOF`,
   });
 
   it.each([
+    { decision: "allow-once", deniedReason: null },
+    { decision: "deny", deniedReason: "user-denied" },
+  ] as const)("emits inline approval park and clear events for $decision", async (testCase) => {
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(testCase.decision);
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: testCase.decision === "allow-once",
+      deniedReason: testCase.deniedReason,
+    });
+    const events: Array<Record<string, unknown>> = [];
+    const unsubscribe = onAgentEvent((event) => {
+      if (event.runId === "run-inline" && event.stream === "lifecycle") {
+        events.push(event.data);
+      }
+    });
+
+    try {
+      await runGatewayAllowlist({
+        command: "pwd",
+        turnSourceChannel: "webchat",
+        runId: "run-inline",
+        toolCallId: "tool-inline",
+        sessionKey: "agent:main:main",
+        sessionId: "session-inline",
+      });
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events).toEqual([
+      { phase: "waiting-approval", approvalId: "req-1", toolCallId: "tool-inline" },
+      { phase: "approval-resolved", approvalId: "req-1", toolCallId: "tool-inline" },
+    ]);
+  });
+
+  it.each([
     ["telegram"],
     ["slack"],
     ["discord"],
@@ -2279,6 +2385,99 @@ EOF`,
       expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledTimes(1);
     });
     expect(runExecProcessMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("warns detached approval followups after a supervisor timeout", async () => {
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+    const outcome = {
+      status: "failed" as const,
+      exitCode: null,
+      exitReason: "overall-timeout" as const,
+      timedOut: true,
+      aggregated: "",
+      reason: "Command timed out.",
+    } satisfies ExecApprovalFollowupOutcome;
+    runExecProcessMock.mockResolvedValue({
+      session: { id: "sess-timeout" },
+      promise: Promise.resolve(outcome),
+    });
+    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
+
+    const result = await runGatewayAllowlist({
+      command: "side-effecting-command",
+      turnSourceChannel: "feishu",
+    });
+
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    await vi.waitFor(() => {
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledOnce();
+    });
+    expect(requireSentFollowupText(0)).toContain(
+      "external side effects may already have completed",
+    );
+    expect(requireSentFollowupText(0)).toContain("Verify the resulting state before retrying");
+  });
+
+  it("drops detached execution and follow-up when the owning run is aborted", async () => {
+    resolveApprovalDecisionOrUndefinedMock.mockRejectedValue(runAbortedApprovalError);
+    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
+
+    const result = await runGatewayAllowlist({
+      command: "find . -maxdepth 1",
+      turnSourceChannel: "feishu",
+      runId: "run-aborted",
+      toolCallId: "tool-aborted",
+    });
+
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    await vi.waitFor(() => {
+      expect(resolveApprovalDecisionOrUndefinedMock).toHaveBeenCalledOnce();
+    });
+    expect(commitExecAuthorizationMock).not.toHaveBeenCalled();
+    expect(runExecProcessMock).not.toHaveBeenCalled();
+    expect(sendExecApprovalFollowupResultMock).not.toHaveBeenCalled();
+  });
+
+  it("drops an allowed detached execution when abort wins before consumption", async () => {
+    let resolveApproval: (decision: ExecApprovalDecision) => void = () => {};
+    resolveApprovalDecisionOrUndefinedMock.mockReturnValue(
+      new Promise<ExecApprovalDecision>((resolve) => {
+        resolveApproval = resolve;
+      }),
+    );
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
+    const abortController = new AbortController();
+
+    const result = await runGatewayAllowlist({
+      command: "find . -maxdepth 1",
+      turnSourceChannel: "feishu",
+      runId: "run-aborted-after-allow",
+      toolCallId: "tool-aborted-after-allow",
+      signal: abortController.signal,
+    });
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    await vi.waitFor(() => {
+      expect(resolveApprovalDecisionOrUndefinedMock).toHaveBeenCalledOnce();
+    });
+
+    abortController.abort();
+    resolveApproval("allow-once");
+    await vi.waitFor(() => {
+      expect(createExecApprovalDecisionStateMock).toHaveBeenCalledOnce();
+    });
+    expect(commitExecAuthorizationMock).not.toHaveBeenCalled();
+    expect(runExecProcessMock).not.toHaveBeenCalled();
+    expect(sendExecApprovalFollowupResultMock).not.toHaveBeenCalled();
   });
 
   it("keeps the fire-and-forget path for headless cron approval followups", async () => {

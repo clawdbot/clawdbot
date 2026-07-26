@@ -1,5 +1,6 @@
 // Telegram dispatch dedupe, replay settlement, and synthetic-message helpers.
 import type { Message } from "grammy/types";
+import { formatMediaPlaceholderText } from "openclaw/plugin-sdk/channel-inbound";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type {
   TelegramAmbientTranscriptWatermark,
@@ -15,7 +16,7 @@ import {
 import {
   buildSenderName,
   getTelegramTextParts,
-  resolveTelegramMediaPlaceholder,
+  resolveTelegramPrimaryMedia,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import {
@@ -161,8 +162,8 @@ export function createTelegramMessageLifecycleRuntime({
   ): string | undefined => {
     const lines = messages.map((msg) => {
       const text = getTelegramTextParts(msg).text.trim();
-      const body =
-        text || resolveTelegramMediaPlaceholder(msg) || "[User sent media without caption]";
+      const media = resolveTelegramPrimaryMedia(msg);
+      const body = text || formatMediaPlaceholderText(media ? [{ kind: media.kind }] : [{}]);
       const messageId = msg.message_id ? `#${msg.message_id}` : undefined;
       const sender = buildSenderName(msg);
       const prefix = [messageId, sender].filter(Boolean).join(" ");

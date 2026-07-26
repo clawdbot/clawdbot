@@ -24,7 +24,8 @@ import { emitSlackMessageSentHooks } from "../message-sent-hook.js";
 import {
   buildSlackNativeDataAccessibilityText,
   hasSlackNativeDataBlock,
-  isSlackInvalidBlocksError,
+  isSlackInvalidBlocksResponse,
+  isSlackNativeResponseUrlRejection,
 } from "../native-data-blocks.js";
 import {
   buildSlackNativeDataDeliveryPlan,
@@ -565,7 +566,7 @@ export async function deliverSlackSlashReplies(params: {
   const deliverNativeFallback = async (messages: readonly SlackFormattingDisabledMessage[]) => {
     for (const message of messages) {
       const response = await respond(message);
-      if (isSlackInvalidBlocksError(response)) {
+      if (await isSlackInvalidBlocksResponse(response)) {
         throw new Error("Slack rejected the native-data fallback blocks with invalid_blocks.");
       }
     }
@@ -593,9 +594,9 @@ export async function deliverSlackSlashReplies(params: {
         let rejectedNativeBlocks = false;
         try {
           const response = await respond(planned.message);
-          rejectedNativeBlocks = isSlackInvalidBlocksError(response);
+          rejectedNativeBlocks = await isSlackInvalidBlocksResponse(response);
         } catch (error) {
-          if (!isSlackInvalidBlocksError(error)) {
+          if (!isSlackNativeResponseUrlRejection(error)) {
             throw error;
           }
           rejectedNativeBlocks = true;

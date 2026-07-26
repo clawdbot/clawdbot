@@ -79,7 +79,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     runInput.laneController;
   const {
     requestedModelId,
-    beforeAgentStartResult,
     expectedHarnessArtifact,
     nativeModelOwned,
     authStorage,
@@ -128,6 +127,8 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     harnessId: runtime.agentHarness.id,
     harnessRuntime: runtime.agentHarness.id,
     preparedAuthPlan: runtime.activePreparedAuthPlan,
+    metadataSnapshot: runtime.pluginMetadataSnapshot,
+    providerRuntimeHandle: runtime.providerRuntimeHandle,
     config: params.config,
     workspaceDir,
     agentDir,
@@ -176,6 +177,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
       workspaceDir,
       isCanonicalWorkspace,
       agentDir,
+      preparedModelRuntime: runInput.preparedModelRuntime,
       contextEngine: nativeModelOwned ? undefined : contextEngine,
       contextTokenBudget: runtime.contextTokenBudget,
       contextWindowInfo: runtime.contextWindowInfo,
@@ -200,7 +202,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
         : undefined,
       modelRegistry,
       agentId: workspaceResolution.agentId,
-      beforeAgentStartResult,
       thinkLevel: runtime.thinkLevel,
       fastMode: attemptFastMode,
       fastModeStartedAtMs,

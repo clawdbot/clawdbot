@@ -11,6 +11,8 @@ import { Command, CommanderError } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerPathCli } from "./cli.js";
 
+const JSONC_INPUT_LIMIT_BYTES = 16 * 1024 * 1024;
+
 type PathCommandOptions = {
   readonly json?: boolean;
   readonly human?: boolean;
@@ -255,6 +257,21 @@ describe("openclaw path CLI", () => {
       await pathResolveCommand(undefined, { json: true }, rt);
       expect(rt.exitCode).toBe(1);
       expect(stderrText(rt)).toContain("missing required argument");
+    });
+
+    it("rejects oversized multibyte JSONC with the typed diagnostic", async () => {
+      const filePath = join(workspaceDir, "oversized.json");
+      const content = `"${"界".repeat(Math.floor(JSONC_INPUT_LIMIT_BYTES / 3) + 1)}"`;
+      writeFileSync(filePath, content, "utf-8");
+      const rt = createTestRuntime();
+
+      await pathResolveCommand("oc://oversized.json/value", { cwd: workspaceDir, json: true }, rt);
+
+      expect(rt.exitCode).toBe(2);
+      expect(stdoutText(rt)).toBe("");
+      expect(JSON.parse(stderrText(rt))).toMatchObject({
+        error: { code: "OC_JSONC_INPUT_TOO_LARGE" },
+      });
     });
   });
 

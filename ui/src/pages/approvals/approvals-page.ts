@@ -163,8 +163,8 @@ class ApprovalsPage extends OpenClawLightDomElement {
 
   private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
     const clientChanged = snapshot.client !== this.client;
-    const connectionChanged = snapshot.connected !== this.connected;
-    this.connected = snapshot.connected;
+    const connectionChanged = (snapshot.phase === "connected") !== this.connected;
+    this.connected = snapshot.phase === "connected";
     if (clientChanged) {
       this.client = snapshot.client;
       this.requestGeneration += 1;
@@ -178,11 +178,11 @@ class ApprovalsPage extends OpenClawLightDomElement {
       this.requestGeneration += 1;
       this.loading = false;
       this.loadingMore = false;
-      if (snapshot.connected) {
+      if (snapshot.phase === "connected") {
         this.hasLoaded = false;
       }
     }
-    if (snapshot.connected && snapshot.client && !this.hasLoaded && !this.loading) {
+    if (snapshot.phase === "connected" && snapshot.client && !this.hasLoaded && !this.loading) {
       void this.loadPage(true);
     }
   }
@@ -209,7 +209,7 @@ class ApprovalsPage extends OpenClawLightDomElement {
       this.connected &&
       this.gatewaySource === gateway &&
       this.context.gateway === gateway &&
-      gateway.snapshot.connected &&
+      gateway.snapshot.phase === "connected" &&
       this.client === client &&
       this.requestGeneration === generation;
     try {

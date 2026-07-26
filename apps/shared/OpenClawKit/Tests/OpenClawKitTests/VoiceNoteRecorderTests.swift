@@ -227,6 +227,7 @@ final class VoiceNoteRecorderTests: XCTestCase {
         XCTAssertFalse(OpenClawChatMicButton.dictationActionEnabled(
             isComposerEnabled: true,
             isAvailable: false,
+            isPending: false,
             isActive: false,
             isTalkActive: false,
             isVoiceNoteCaptureActive: false))
@@ -276,27 +277,50 @@ final class VoiceNoteRecorderTests: XCTestCase {
         XCTAssertFalse(OpenClawChatMicButton.dictationActionEnabled(
             isComposerEnabled: true,
             isAvailable: true,
+            isPending: false,
             isActive: false,
             isTalkActive: true,
             isVoiceNoteCaptureActive: false))
         XCTAssertFalse(OpenClawChatMicButton.dictationActionEnabled(
             isComposerEnabled: true,
             isAvailable: true,
+            isPending: false,
             isActive: false,
             isTalkActive: false,
             isVoiceNoteCaptureActive: true))
         XCTAssertTrue(OpenClawChatMicButton.dictationActionEnabled(
             isComposerEnabled: false,
             isAvailable: false,
+            isPending: false,
             isActive: true,
             isTalkActive: true,
             isVoiceNoteCaptureActive: true))
         XCTAssertFalse(OpenClawChatMicButton.dictationActionEnabled(
             isComposerEnabled: false,
             isAvailable: true,
+            isPending: false,
             isActive: false,
             isTalkActive: false,
             isVoiceNoteCaptureActive: false))
+    }
+
+    func testUnifiedMicCancelsPendingDictationStart() {
+        XCTAssertEqual(OpenClawChatMicButton.dictationPrimaryAction(
+            isPending: true,
+            isActive: false), .cancel)
+        XCTAssertEqual(OpenClawChatMicButton.dictationPrimaryAction(
+            isPending: true,
+            isActive: true), .finish)
+        XCTAssertEqual(OpenClawChatMicButton.dictationPrimaryAction(
+            isPending: false,
+            isActive: false), .start)
+        XCTAssertTrue(OpenClawChatMicButton.dictationActionEnabled(
+            isComposerEnabled: false,
+            isAvailable: false,
+            isPending: true,
+            isActive: false,
+            isTalkActive: true,
+            isVoiceNoteCaptureActive: true))
     }
 
     func testCompactTalkControlYieldsToLocalVoiceCapture() {

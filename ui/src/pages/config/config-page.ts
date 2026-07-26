@@ -6,7 +6,8 @@ import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
-import type { FastMode } from "../../api/types.ts";
+import type { FastMode, ModelCatalogEntry } from "../../api/types.ts";
+import { titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute, type RouteId } from "../../app-route-paths.ts";
 import {
   applicationContext,
@@ -27,15 +28,20 @@ import { startThemeTransition } from "../../app/theme-transition.ts";
 import { resolveTheme, type ThemeMode, type ThemeName } from "../../app/theme.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { i18n, isSupportedLocale, t, type Locale } from "../../i18n/index.ts";
+import { resolveModelPrimary } from "../../lib/agents/display.ts";
 import { resolveControlUiServerQueueMode } from "../../lib/chat/follow-up-mode.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { loadModels } from "../chat/models.ts";
 import {
+  discoverRealtimeTalkCameras,
   discoverRealtimeTalkInputs,
+  type RealtimeTalkCameraDevice,
   type RealtimeTalkInputDevice,
 } from "../chat/realtime-talk-input.ts";
+import { switchActiveRealtimeTalkCameras } from "../chat/realtime-talk.ts";
 import {
   configSectionKeysForPage,
   SCOPED_CONFIG_SECTION_KEYS,
@@ -45,6 +51,10 @@ import { renderMcp } from "./mcp.ts";
 import { renderQuickSettings } from "./quick.ts";
 import { configTargetIdFromHash, type ConfigRouteData } from "./route-data.ts";
 import { renderSecurity, type SecurityOverview } from "./security.ts";
+import {
+  buildSessionObserverTogglePatch,
+  buildSessionObserverUtilityModelPatch,
+} from "./session-observer-settings.ts";
 import {
   createConfigViewState,
   renderConfig,
@@ -60,22 +70,13 @@ type ConfigSelection = { activeSection: string | null; activeSubsection: string 
 // across devices is owned by app/server-prefs.ts, not by this type.
 type ConfigPageSetting =
   | "textScale"
+  | "sidebarLiveActivity"
+  | "chatMessageMaxWidth"
+  | "showAdvancedSettings"
   | "chatSendShortcut"
   | "chatFollowUpMode"
-  | "catalogOpenTarget";
-
-const CONFIG_PAGE_I18N_KEYS = {
-  config: "config",
-  communications: "communications",
-  appearance: "appearance",
-  notifications: "notifications",
-  security: "security",
-  automation: "automation",
-  mcp: "mcp",
-  infrastructure: "infrastructure",
-  "ai-agents": "aiAgents",
-  advanced: "advanced",
-} as const satisfies Record<ConfigPageId, string>;
+  | "catalogOpenTarget"
+  | "composerHoldToRecord";
 
 // Sections relocated by the settings restructure, keyed by "<oldPage>:<section>".
 // Kept so pre-restructure bookmarks and generated links still land somewhere
@@ -156,9 +157,7 @@ export function configSelectionFromSearch(pageId: ConfigPageId, search: string):
 function configPageTitle(pageId: ConfigPageId): string {
   // The takeover sidebar is titled "Settings"; the general page header reads
   // like its sibling sections instead of repeating it.
-  return pageId === "config"
-    ? t("nav.settingsGeneral")
-    : t(`tabs.${CONFIG_PAGE_I18N_KEYS[pageId]}`);
+  return pageId === "config" ? t("nav.settingsGeneral") : titleForRoute(pageId);
 }
 
 function extractQuickSettingsSecurity(config: unknown): SecurityOverview {
@@ -224,10 +223,23 @@ export class ConfigPage extends OpenClawLightDomElement {
   @state() private settings = loadSettings();
   @state() private systemInfo: SystemInfoResult | null = null;
   @state() private systemInfoUnavailable = false;
+  @state() private sessionObserverModels: ModelCatalogEntry[] = [];
+  @state() private sessionObserverModelsUnavailable = false;
   @state() private microphoneDevices: RealtimeTalkInputDevice[] = [];
+  @state() private microphonePermissionRequired = true;
   @state() private microphoneLoading = false;
   @state() private microphoneError: string | null = null;
   private microphoneLoaded = false;
+  private microphoneRefreshRequestsPermission = false;
+  private microphonePermissionRefreshPending = false;
+  @state() private cameraDevices: RealtimeTalkCameraDevice[] = [];
+  @state() private cameraPermissionRequired = true;
+  @state() private cameraLoading = false;
+  @state() private cameraError: string | null = null;
+  private cameraLoaded = false;
+  private cameraRefreshRequestsPermission = false;
+  private cameraPermissionRefreshPending = false;
+  private cameraSelectionRequest = 0;
   @state() private formModes: Record<ConfigPageId, ConfigFormMode> = {
     config: "form",
     communications: "form",
@@ -265,6 +277,9 @@ export class ConfigPage extends OpenClawLightDomElement {
   private systemInfoClient: GatewayBrowserClient | null = null;
   private systemInfoLoading = false;
   private systemInfoRequestId = 0;
+  private sessionObserverModelsClient: GatewayBrowserClient | null = null;
+  private readonly sessionObserverModelLoads = new WeakMap<GatewayBrowserClient, Promise<void>>();
+  private readonly sessionObserverModelFailures = new WeakSet<GatewayBrowserClient>();
   private readonly systemInfoPolling = new PollController(
     this,
     SYSTEM_INFO_POLL_INTERVAL_MS,
@@ -339,20 +354,32 @@ export class ConfigPage extends OpenClawLightDomElement {
     }
     this.syncSystemInfoPolling();
     this.scrollToPendingRouteTarget();
-    // Device labels stay hidden until the user grants mic permission; the
-    // refresh button next to the picker requests it explicitly.
+    // Device labels stay hidden until the user grants media permission; each
+    // refresh button next to a picker requests its permission explicitly.
     if (this.pageId === "appearance" && !this.microphoneLoaded) {
       this.microphoneLoaded = true;
       void this.refreshMicrophones(false);
     }
+    if (this.pageId === "appearance" && !this.cameraLoaded) {
+      this.cameraLoaded = true;
+      void this.refreshCameras(false);
+    }
   }
 
   private async refreshMicrophones(requestPermission: boolean) {
+    if (this.microphoneLoading) {
+      if (requestPermission && !this.microphoneRefreshRequestsPermission) {
+        this.microphonePermissionRefreshPending = true;
+      }
+      return;
+    }
     this.microphoneLoading = true;
+    this.microphoneRefreshRequestsPermission = requestPermission;
     this.microphoneError = null;
     try {
       const result = await discoverRealtimeTalkInputs(requestPermission);
       this.microphoneDevices = result.devices;
+      this.microphonePermissionRequired = result.permissionRequired;
       this.microphoneError = result.warning;
     } catch (error) {
       // Discovery is best-effort in blocked/inactive contexts; a rejection
@@ -360,6 +387,38 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.microphoneError = error instanceof Error ? error.message : String(error);
     } finally {
       this.microphoneLoading = false;
+      this.microphoneRefreshRequestsPermission = false;
+    }
+    if (this.microphonePermissionRefreshPending) {
+      this.microphonePermissionRefreshPending = false;
+      await this.refreshMicrophones(true);
+    }
+  }
+
+  private async refreshCameras(requestPermission: boolean) {
+    if (this.cameraLoading) {
+      if (requestPermission && !this.cameraRefreshRequestsPermission) {
+        this.cameraPermissionRefreshPending = true;
+      }
+      return;
+    }
+    this.cameraLoading = true;
+    this.cameraRefreshRequestsPermission = requestPermission;
+    this.cameraError = null;
+    try {
+      const result = await discoverRealtimeTalkCameras(requestPermission);
+      this.cameraDevices = result.devices;
+      this.cameraPermissionRequired = result.permissionRequired;
+      this.cameraError = result.warning;
+    } catch (error) {
+      this.cameraError = error instanceof Error ? error.message : String(error);
+    } finally {
+      this.cameraLoading = false;
+      this.cameraRefreshRequestsPermission = false;
+    }
+    if (this.cameraPermissionRefreshPending) {
+      this.cameraPermissionRefreshPending = false;
+      await this.refreshCameras(true);
     }
   }
 
@@ -413,7 +472,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   }
 
   private isSystemInfoVisible(): boolean {
-    return this.pageId === "config";
+    return this.pageId === "config" || this.pageId === "appearance";
   }
 
   private synchronizeRuntimeConfig(runtimeConfig: ApplicationContext["runtimeConfig"]) {
@@ -447,6 +506,9 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.systemInfoClient = null;
       this.systemInfo = null;
       this.systemInfoUnavailable = false;
+      this.sessionObserverModelsClient = null;
+      this.sessionObserverModels = [];
+      this.sessionObserverModelsUnavailable = false;
     }
     this.handleSystemInfoGatewaySnapshot(gateway.snapshot);
   }
@@ -464,11 +526,14 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.invalidateSystemInfoRequest();
       this.systemInfo = null;
       this.systemInfoUnavailable = false;
-    } else if (!snapshot.connected) {
+      this.sessionObserverModelsClient = null;
+      this.sessionObserverModels = [];
+      this.sessionObserverModelsUnavailable = false;
+    } else if (snapshot.phase !== "connected") {
       this.invalidateSystemInfoRequest();
       this.systemInfo = null;
     }
-    if (snapshot.connected && snapshot.hello) {
+    if (snapshot.phase === "connected" && snapshot.hello) {
       this.systemInfoUnavailable = !hasSystemInfo;
       if (!hasSystemInfo) {
         this.invalidateSystemInfoRequest();
@@ -484,7 +549,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.isConnected &&
       this.isSystemInfoVisible() &&
       !this.systemInfoUnavailable &&
-      gateway.connected &&
+      gateway.phase === "connected" &&
       supportsSystemInfo(gateway.hello) &&
       gateway.client != null;
     if (!shouldPoll) {
@@ -513,7 +578,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       requestId === this.systemInfoRequestId &&
       this.systemInfoGatewaySource === gatewaySource &&
       this.context.gateway === gatewaySource &&
-      gateway.connected &&
+      gateway.phase === "connected" &&
       gateway.client === client
     );
   }
@@ -526,7 +591,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     const gateway = gatewaySource.snapshot;
     const client = gateway.client;
     if (
-      !gateway.connected ||
+      gateway.phase !== "connected" ||
       !client ||
       !this.isSystemInfoVisible() ||
       this.systemInfoUnavailable ||
@@ -543,6 +608,9 @@ export class ConfigPage extends OpenClawLightDomElement {
         return;
       }
       this.systemInfo = response as SystemInfoResult;
+      if (this.pageId === "appearance") {
+        void this.ensureSessionObserverModels(client);
+      }
     } catch (error) {
       if (!this.isCurrentSystemInfoRequest(requestId, client, gatewaySource)) {
         return;
@@ -557,6 +625,51 @@ export class ConfigPage extends OpenClawLightDomElement {
         this.systemInfoLoading = false;
       }
     }
+  }
+
+  private ensureSessionObserverModels(client: GatewayBrowserClient): Promise<void> {
+    if (
+      this.sessionObserverModelsClient === client ||
+      this.sessionObserverModelFailures.has(client)
+    ) {
+      return Promise.resolve();
+    }
+    const existing = this.sessionObserverModelLoads.get(client);
+    if (existing) {
+      return existing;
+    }
+    const gatewaySource = this.systemInfoGatewaySource;
+    const promise = loadModels(client)
+      .then((models) => {
+        if (
+          this.isConnected &&
+          this.systemInfoGatewaySource === gatewaySource &&
+          this.context.gateway.snapshot.client === client
+        ) {
+          this.sessionObserverModels = models;
+          this.sessionObserverModelsClient = client;
+          this.sessionObserverModelsUnavailable = false;
+        }
+      })
+      .catch(() => {
+        this.sessionObserverModelFailures.add(client);
+        if (
+          this.isConnected &&
+          this.systemInfoGatewaySource === gatewaySource &&
+          this.context.gateway.snapshot.client === client
+        ) {
+          this.sessionObserverModels = [];
+          this.sessionObserverModelsClient = null;
+          this.sessionObserverModelsUnavailable = true;
+        }
+      })
+      .finally(() => {
+        if (this.sessionObserverModelLoads.get(client) === promise) {
+          this.sessionObserverModelLoads.delete(client);
+        }
+      });
+    this.sessionObserverModelLoads.set(client, promise);
+    return promise;
   }
 
   private navigate(routeId: RouteId) {
@@ -587,10 +700,15 @@ export class ConfigPage extends OpenClawLightDomElement {
       themeMode: next.themeMode,
       customTheme: next.customTheme,
       textScale: next.textScale,
+      sidebarLiveActivity: next.sidebarLiveActivity,
+      chatMessageMaxWidth: next.chatMessageMaxWidth,
+      showAdvancedSettings: next.showAdvancedSettings,
       chatSendShortcut: next.chatSendShortcut,
       chatFollowUpMode: next.chatFollowUpMode,
       catalogOpenTarget: next.catalogOpenTarget,
       realtimeTalkInputDeviceId: next.realtimeTalkInputDeviceId,
+      realtimeTalkVideoDeviceId: next.realtimeTalkVideoDeviceId,
+      composerHoldToRecord: next.composerHoldToRecord,
       lobsterPetVisits: next.lobsterPetVisits,
       lobsterPetSounds: next.lobsterPetSounds,
     });
@@ -642,6 +760,23 @@ export class ConfigPage extends OpenClawLightDomElement {
       ...this.settings,
       realtimeTalkInputDeviceId: deviceId.trim() || undefined,
     });
+  }
+
+  private async selectCamera(deviceId: string) {
+    const request = ++this.cameraSelectionRequest;
+    const videoDeviceId = deviceId.trim() || undefined;
+    this.cameraError = null;
+    this.applySettings({
+      ...this.settings,
+      realtimeTalkVideoDeviceId: videoDeviceId,
+    });
+    try {
+      await switchActiveRealtimeTalkCameras(videoDeviceId);
+    } catch (error) {
+      if (request === this.cameraSelectionRequest) {
+        this.cameraError = error instanceof Error ? error.message : String(error);
+      }
+    }
   }
 
   private openCustomThemeImport() {
@@ -720,6 +855,15 @@ export class ConfigPage extends OpenClawLightDomElement {
     );
     const activeSection = this.pageId === "mcp" ? "mcp" : selection.activeSection;
     const activeSubsection = this.pageId === "mcp" ? null : selection.activeSubsection;
+    const gatewayConfig = asConfigRecord(configObject.gateway);
+    const controlUiConfig = asConfigRecord(gatewayConfig?.controlUi);
+    const agentsDefaults = asConfigRecord(asConfigRecord(configObject.agents)?.defaults);
+    const sessionObserverBusy =
+      !configState.connected ||
+      configState.configSaving ||
+      configState.configApplying ||
+      this.isUpdateBusy() ||
+      !hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null);
     const props: ConfigProps = {
       raw: configState.configRaw,
       originalRaw: configState.configRawOriginal,
@@ -783,6 +927,39 @@ export class ConfigPage extends OpenClawLightDomElement {
       onOpenCustomThemeImport: () => this.openCustomThemeImport(),
       textScale: this.settings.textScale ?? 100,
       setTextScale: (value) => this.setSetting("textScale", normalizeTextScale(value)),
+      sidebarLiveActivity: this.settings.sidebarLiveActivity !== false,
+      setSidebarLiveActivity: (enabled) => this.setSetting("sidebarLiveActivity", enabled),
+      chatMessageMaxWidth: this.settings.chatMessageMaxWidth,
+      setChatMessageMaxWidth: (value) => this.setSetting("chatMessageMaxWidth", value),
+      showAdvancedSettings: this.settings.showAdvancedSettings === true,
+      setShowAdvancedSettings: (enabled) => this.setSetting("showAdvancedSettings", enabled),
+      forceShowAdvanced: this.pageId === "advanced",
+      forceAdvancedSection: this.routeData?.advanced ? this.routeData.section : null,
+      sessionObserverEnabled: controlUiConfig?.sessionObserver !== false,
+      sessionObserverUtilityModel:
+        typeof agentsDefaults?.utilityModel === "string" ? agentsDefaults.utilityModel : undefined,
+      sessionObserverResolvedModel: this.systemInfo?.defaultAgentUtilityModel,
+      sessionObserverModels: this.sessionObserverModels,
+      sessionObserverModelsUnavailable: this.sessionObserverModelsUnavailable,
+      sessionObserverDisabled: sessionObserverBusy,
+      setSessionObserverEnabled: (enabled) => {
+        void runtimeConfig.patch({
+          raw: buildSessionObserverTogglePatch(enabled),
+          note: t("configView.sessionObserver.toggleNote"),
+        });
+      },
+      setSessionObserverUtilityModel: (modelSelection) => {
+        void runtimeConfig
+          .patch({
+            raw: buildSessionObserverUtilityModelPatch(modelSelection),
+            note: t("configView.sessionObserver.modelNote"),
+          })
+          .then((saved) => {
+            if (saved) {
+              void this.loadSystemInfo();
+            }
+          });
+      },
       lobsterPetVisits: this.settings.lobsterPetVisits !== false,
       setLobsterPetVisits: (enabled) =>
         this.applySettings({ ...this.settings, lobsterPetVisits: enabled }),
@@ -802,12 +979,24 @@ export class ConfigPage extends OpenClawLightDomElement {
       setCatalogOpenTarget: (value) => this.setSetting("catalogOpenTarget", value),
       microphone: {
         devices: this.microphoneDevices,
+        permissionRequired: this.microphonePermissionRequired,
         selectedDeviceId: this.settings.realtimeTalkInputDeviceId ?? "",
         loading: this.microphoneLoading,
         error: this.microphoneError,
       },
+      composerHoldToRecord: this.settings.composerHoldToRecord !== false,
+      setComposerHoldToRecord: (enabled) => this.setSetting("composerHoldToRecord", enabled),
       onMicrophoneRefresh: () => void this.refreshMicrophones(true),
       onMicrophoneSelect: (deviceId) => this.selectMicrophone(deviceId),
+      camera: {
+        devices: this.cameraDevices,
+        permissionRequired: this.cameraPermissionRequired,
+        selectedDeviceId: this.settings.realtimeTalkVideoDeviceId ?? "",
+        loading: this.cameraLoading,
+        error: this.cameraError,
+      },
+      onCameraRefresh: () => void this.refreshCameras(true),
+      onCameraSelect: (deviceId) => void this.selectCamera(deviceId),
       gatewayUrl: this.context.gateway.connection.gatewayUrl,
       assistantName: this.context.config.current.assistantIdentity.name,
       configPath: configState.configSnapshot?.path ?? null,
@@ -866,7 +1055,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   private renderQuickConfig(configObject: Record<string, unknown>) {
     const runtimeConfig = this.context.runtimeConfig;
     const agentsDefaults = asConfigRecord(asConfigRecord(configObject.agents)?.defaults);
-    const model = typeof agentsDefaults?.model === "string" ? agentsDefaults.model : "default";
+    const model = resolveModelPrimary(agentsDefaults?.model) ?? "default";
     const thinkingLevel =
       typeof agentsDefaults?.thinkingDefault === "string" ? agentsDefaults.thinkingDefault : "off";
     const fastMode = agentsDefaults?.fastMode;

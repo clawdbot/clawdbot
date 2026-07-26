@@ -1,5 +1,4 @@
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
-import { streamSimple } from "../../llm/stream.js";
 import type { AssistantMessage, Model } from "../../llm/types.js";
 import type {
   Agent,
@@ -36,6 +35,7 @@ import {
   type TurnStartEvent,
 } from "./extensions/index.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
+import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import type { ModelRegistry } from "./model-registry.js";
 import type { PromptTemplate } from "./prompt-templates.js";
 import type { ResourceLoader } from "./resource-loader.js";
@@ -77,6 +77,7 @@ export abstract class AgentSessionBase {
   protected compactionAbortController: AbortController | undefined = undefined;
   protected autoCompactionAbortController: AbortController | undefined = undefined;
   protected overflowRecoveryAttempted = false;
+  protected contextOverflowRecoveryOwner: "session" | "caller";
 
   // Branch summarization state
   protected branchSummaryAbortController: AbortController | undefined = undefined;
@@ -146,6 +147,7 @@ export abstract class AgentSessionBase {
       reason: "startup",
     };
     this.withExternalSessionWriteLock = config.withSessionWriteLock;
+    this.contextOverflowRecoveryOwner = config.contextOverflowRecoveryOwner ?? "session";
   }
 
   /** Model registry for API key resolution and model discovery */
@@ -183,7 +185,10 @@ export abstract class AgentSessionBase {
     apiKey?: string;
     headers?: Record<string, string>;
   }> {
-    if (this.agent.streamFn === streamSimple) {
+    if (
+      this.agent.streamFn ===
+      getModelRegistryRuntime(this.sessionModelRegistry).llmRuntime.streamSimple
+    ) {
       return this.getRequiredRequestAuth(model);
     }
 

@@ -601,14 +601,6 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
           ...(allowIpv6UniqueLocalRange ? { allowIpv6UniqueLocalRange } : {}),
         }
       : undefined;
-  const cacheKey = normalizeCacheKey(
-    `fetch:${params.url}:${params.extractMode}:${params.maxChars}${params.providerCacheKey ? `:provider:${params.providerCacheKey}` : ""}${allowRfc2544BenchmarkRange ? ":allow-rfc2544" : ""}${allowIpv6UniqueLocalRange ? ":allow-ipv6-ula" : ""}${useTrustedEnvProxy ? ":trusted-env-proxy" : ""}`,
-  );
-  const cached = readCache(FETCH_CACHE, cacheKey);
-  if (cached) {
-    return { ...cached.value, cached: true };
-  }
-
   let parsedUrl: URL;
   try {
     parsedUrl = new URL(params.url);
@@ -617,6 +609,13 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   }
   if (!["http:", "https:"].includes(parsedUrl.protocol)) {
     throw new Error("Invalid URL: must be http or https");
+  }
+  const cacheKey = normalizeCacheKey(
+    `fetch:${parsedUrl.href}:${params.extractMode}:${params.maxChars}${params.providerCacheKey ? `:provider:${params.providerCacheKey}` : ""}${allowRfc2544BenchmarkRange ? ":allow-rfc2544" : ""}${allowIpv6UniqueLocalRange ? ":allow-ipv6-ula" : ""}${useTrustedEnvProxy ? ":trusted-env-proxy" : ""}`,
+  );
+  const cached = readCache(FETCH_CACHE, cacheKey);
+  if (cached) {
+    return { ...cached.value, cached: true };
   }
 
   const start = Date.now();

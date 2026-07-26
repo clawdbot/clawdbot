@@ -504,6 +504,7 @@ describe("cron store", () => {
     job.state = {
       nextRunAtMs: job.createdAtMs,
       startupCatchupAtMs: job.createdAtMs,
+      pacedNextRunAtMs: job.createdAtMs,
       queuedAtMs: job.createdAtMs + 1,
     };
 
@@ -516,10 +517,12 @@ describe("cron store", () => {
     expect(JSON.parse(queuedRow.state_json)).toMatchObject({
       queuedAtMs: job.createdAtMs + 1,
       startupCatchupAtMs: job.createdAtMs,
+      pacedNextRunAtMs: job.createdAtMs,
     });
     expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
       queuedAtMs: job.createdAtMs + 1,
       startupCatchupAtMs: job.createdAtMs,
+      pacedNextRunAtMs: job.createdAtMs,
     });
 
     job.state.queuedAtMs = undefined;

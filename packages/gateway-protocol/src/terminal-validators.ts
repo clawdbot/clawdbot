@@ -2,7 +2,6 @@ import { lazyCompile } from "./protocol-validator.js";
 import {
   TerminalAttachParamsSchema,
   TerminalCloseParamsSchema,
-  TerminalEventSchema,
   TerminalInputParamsSchema,
   TerminalOpenParamsSchema,
   TerminalResizeParamsSchema,
@@ -19,4 +18,3 @@ export const validateTerminalAttachParams = lazyCompile(TerminalAttachParamsSche
 export const validateTerminalTextParams = lazyCompile(TerminalTextParamsSchema);
 export const validateTerminalUploadParams = lazyCompile(TerminalUploadParamsSchema);
 export const validateTerminalUploadResult = lazyCompile(TerminalUploadResultSchema);
-export const validateTerminalEvent = lazyCompile(TerminalEventSchema);

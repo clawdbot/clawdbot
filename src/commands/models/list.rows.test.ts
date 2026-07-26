@@ -16,8 +16,8 @@ vi.mock("../../agents/model-suppression.js", () => ({
   shouldSuppressBuiltInModelFromManifest: mocks.shouldSuppressBuiltInModelFromManifest,
 }));
 
-vi.mock("../../agents/model-catalog.js", () => ({
-  loadModelCatalogSnapshot: mocks.loadModelCatalogSnapshot,
+vi.mock("../../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalogSnapshot: mocks.loadModelCatalogSnapshot,
 }));
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
@@ -658,6 +658,7 @@ describe("appendAuthenticatedCatalogRows", () => {
       context: {
         cfg: {},
         agentDir: "/tmp/openclaw-agent",
+        workspaceDir: "/tmp/openclaw-workspace",
         authIndex: {
           evaluateModelAuth: () => ({
             availability: undefined,
@@ -676,6 +677,12 @@ describe("appendAuthenticatedCatalogRows", () => {
       key: "local-openai/local-model",
       local: true,
       available: true,
+    });
+    expect(mocks.loadModelCatalogSnapshot).toHaveBeenCalledWith({
+      config: {},
+      agentDir: "/tmp/openclaw-agent",
+      workspaceDir: "/tmp/openclaw-workspace",
+      readOnly: true,
     });
   });
 

@@ -241,6 +241,7 @@ export async function runCliFallbackCandidate(params: {
             config: params.runtimeConfig,
             prompt: turn.commandBody,
             transcriptPrompt: turn.transcriptCommandBody,
+            media: turn.followupRun.media,
             suppressNextUserMessagePersistence: params.suppressQueuedUserPersistenceForCandidate,
             userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
             onUserMessagePersisted: params.notifyUserMessagePersisted,

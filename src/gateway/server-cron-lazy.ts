@@ -2,7 +2,7 @@
 // Defers scheduler startup until cron is touched by runtime or API handlers.
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveCronJobsStorePath } from "../cron/store.js";
+import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import type { GatewayCronState } from "./server-cron.js";
@@ -27,7 +27,7 @@ type LoadedGatewayCronState = {
 /** Creates a cron state proxy that imports the real cron service on first use. */
 export function createLazyGatewayCronState(params: LazyGatewayCronParams): GatewayCronState {
   const env = params.env ?? process.env;
-  const storePath = resolveCronJobsStorePath(params.cfg.cron?.store, env);
+  const storePath = resolveCronJobsStorePathFromConfig(params.cfg, env);
   const cronEnabled = env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
   let loaded: LoadedGatewayCronState | null = null;
   let stopped = false;
@@ -137,17 +137,21 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
           resolved.underlyingStarted = false;
           resolved.state.cron.stop();
           resolved.state.stopExitWatchers?.();
+          await resolved.state.stopStreamWatchers?.();
           return;
         }
         if (schedulingPaused) {
           resolved.state.cron.pauseScheduling();
           resolved.schedulingPaused = true;
         }
-        // Arm on-exit watchers for jobs loaded from the store at startup (no
+        // Arm process watchers for jobs loaded from the store at startup (no
         // change event fires for already-persisted jobs).
         try {
           if (resolved.state.cronEnabled) {
-            await resolved.state.reconcileExitWatchers?.();
+            await Promise.all([
+              resolved.state.reconcileExitWatchers?.(),
+              resolved.state.reconcileStreamWatchers?.(),
+            ]);
           }
         } catch (err) {
           resolved.phase = startCancelled() ? "stopped" : "started";
@@ -158,6 +162,7 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
           resolved.underlyingStarted = false;
           resolved.state.cron.stop();
           resolved.state.stopExitWatchers?.();
+          await resolved.state.stopStreamWatchers?.();
           return;
         }
         resolved.phase = "started";
@@ -181,6 +186,7 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
         loaded.underlyingStarted = false;
         loaded.state.cron.stop();
         loaded.state.stopExitWatchers?.();
+        void loaded.state.stopStreamWatchers?.().catch(() => {});
         return;
       }
       const loading = cronStateLoader.peek();
@@ -196,8 +202,27 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
             resolved.underlyingStarted = false;
             resolved.state.cron.stop();
             resolved.state.stopExitWatchers?.();
+            void resolved.state.stopStreamWatchers?.().catch(() => {});
           })
           .catch(() => {});
+      }
+    },
+    async stopAndDrain() {
+      stopped = true;
+      lifecycleGeneration += 1;
+      releaseSchedulingResumeWaiters();
+      const resolved = loaded ?? (cronStateLoader.peek() ? await cronStateLoader.peek() : null);
+      if (!resolved) {
+        return;
+      }
+      resolved.phase = "stopped";
+      resolved.underlyingStarted = false;
+      if (resolved.state.cron.stopAndDrain) {
+        await resolved.state.cron.stopAndDrain();
+      } else {
+        resolved.state.cron.stop();
+        resolved.state.stopExitWatchers?.();
+        await resolved.state.stopStreamWatchers?.();
       }
     },
     pauseScheduling() {
@@ -244,6 +269,9 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
     async remove(id) {
       return await (await load()).state.cron.remove(id);
     },
+    async removeAgentJobsTransactional(agentId, commit) {
+      return await (await load()).state.cron.removeAgentJobsTransactional(agentId, commit);
+    },
     async run(id, mode, opts) {
       return await (await load()).state.cron.run(id, mode, opts);
     },
@@ -258,6 +286,12 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
     },
     async readJob(id) {
       return await (await load()).state.cron.readJob(id);
+    },
+    async readScratch(id) {
+      return await (await load()).state.cron.readScratch(id);
+    },
+    async writeScratch(id, write) {
+      return await (await load()).state.cron.writeScratch(id, write);
     },
     getDefaultAgentId() {
       if (!loaded) {

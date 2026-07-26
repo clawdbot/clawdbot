@@ -48,7 +48,7 @@ describe("slack doctor", () => {
       cfg: {
         channels: {
           slack: {
-            identity: "user",
+            postAs: "user",
             userToken: "test-user-token",
             appToken: "test-app-token",
           },
@@ -78,7 +78,7 @@ describe("slack doctor", () => {
       cfg: {
         channels: {
           slack: {
-            identity: "user",
+            postAs: "user",
             userToken: "test-user-token",
             appToken: "test-app-token",
           },
@@ -96,12 +96,12 @@ describe("slack doctor", () => {
   it.each([
     {
       name: "Socket Mode app token",
-      slack: { identity: "user", userToken: "test-user-token" },
+      slack: { postAs: "user", userToken: "test-user-token" },
       expected: "requires appToken for companion-app events",
     },
     {
       name: "HTTP signing secret",
-      slack: { identity: "user", mode: "http", userToken: "test-user-token" },
+      slack: { postAs: "user", mode: "http", userToken: "test-user-token" },
       expected: "requires signingSecret for companion-app events",
     },
   ])("warns when user identity is missing the $name", async ({ slack, expected }) => {

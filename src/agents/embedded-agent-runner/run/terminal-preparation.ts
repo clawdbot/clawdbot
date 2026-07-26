@@ -105,6 +105,7 @@ export function prepareEmbeddedRunTerminal(input: {
     assistantTexts: attempt.assistantTexts,
     assistantMessageIndex: attempt.lastAssistantTextMessageIndex,
     assistantTranscriptOwned: attempt.assistantTranscriptOwned,
+    assistantTranscriptIdempotencyKey: attempt.assistantTranscriptIdempotencyKey,
     toolMetas: attempt.toolMetas,
     lastAssistant: payloadAssistant,
     currentAssistant: attempt.yieldDetected ? null : (payloadAssistant ?? null),
@@ -138,6 +139,9 @@ export function prepareEmbeddedRunTerminal(input: {
   const payloadsWithToolMedia = mergeAttemptToolMediaPayloads({
     payloads,
     toolMediaUrls: attempt.toolMediaUrls,
+    // Preserve harness provenance through terminal delivery. Without it,
+    // message-tool-only routes silently drop native runtime artifacts.
+    hostOwnedToolMediaUrls: attempt.hostOwnedToolMediaUrls,
     toolAudioAsVoice: attempt.toolAudioAsVoice,
     toolTrustedLocalMedia: attempt.toolTrustedLocalMedia,
     sourceReplyDeliveryMode: runParams.sourceReplyDeliveryMode,

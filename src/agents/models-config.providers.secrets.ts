@@ -13,6 +13,7 @@ import { resolveProviderEnvAuthLookupMaps } from "./model-auth-env-vars.js";
 import {
   isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
+  resolveOAuthApiKeyMarker,
   resolveNonEnvSecretRefApiKeyMarker,
 } from "./model-auth-markers.js";
 import {
@@ -26,6 +27,7 @@ import {
   type ProviderAuthResolver,
 } from "./models-config.providers.secret-helpers.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
+import type { AuthStorageData } from "./sessions/index.js";
 
 export type {
   ProviderApiKeyResolver,
@@ -48,6 +50,42 @@ type ProviderAuthLookupCaches = {
 
 function resolveAuthProfileStoreInput(input: AuthProfileStoreInput) {
   return typeof input === "function" ? input() : input;
+}
+
+/** Create a resolver over the credential map already selected for one lifecycle generation. */
+export function createProviderApiKeyResolverFromPreparedCredentials(
+  env: NodeJS.ProcessEnv,
+  credentials: Readonly<AuthStorageData>,
+  config?: OpenClawConfig,
+): ProviderApiKeyResolver {
+  const resolveConfiguredOrEnvironment = createProviderApiKeyResolver(
+    env,
+    { version: 1, profiles: {} },
+    config,
+  );
+  const getLookupCaches = createProviderAuthLookupCaches(env, config);
+  return (provider: string) => {
+    const authProvider = resolveProviderIdForAuthFromCaches(provider, getLookupCaches());
+    // Discovery already collapsed profile and environment precedence into this generation.
+    // Rechecking ambient env first would make catalog augmentation describe a different account.
+    const credential = credentials[authProvider];
+    if (!credential) {
+      return resolveConfiguredOrEnvironment(provider);
+    }
+    if (credential.type === "oauth") {
+      return {
+        apiKey: resolveOAuthApiKeyMarker(authProvider),
+        discoveryApiKey: toDiscoveryApiKey(credential.access),
+      };
+    }
+    if (!credential.key.trim()) {
+      return resolveConfiguredOrEnvironment(provider);
+    }
+    return {
+      apiKey: credential.key,
+      discoveryApiKey: toDiscoveryApiKey(credential.key),
+    };
+  };
 }
 
 function createProviderAuthLookupCaches(

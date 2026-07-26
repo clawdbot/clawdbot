@@ -5,30 +5,37 @@ import {
 } from "../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { callGateway } from "../../gateway/call.js";
+import { isPathInside } from "../../infra/path-guards.js";
 import {
   isValidAgentId,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
+import { resolveUserPath } from "../../utils.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { listAgentIds, resolveAgentConfig } from "../agent-scope.js";
 import { resolveSubagentSpawnModelSelection } from "../model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
+import { resolveSpawnedWorkspaceInheritance } from "../spawned-context.js";
 import { getSubagentDepthFromSessionStore } from "../subagent-depth.js";
 import { countActiveRunsForSession, registerSubagentRun } from "../subagent-registry.js";
 import { resolveSubagentSpawnOwnership } from "../subagent-spawn-ownership.js";
 import { resolveConfiguredSubagentRunTimeoutSeconds } from "../subagent-spawn-plan.js";
 import { resolveSubagentTargetPolicy } from "../subagent-target-policy.js";
 import { normalizeToolModelOverride, readStringParam, ToolInputError } from "./common.js";
-import { callInProcessGatewayTool, type InProcessGatewayCaller } from "./in-process-gateway.js";
+import {
+  callInProcessGatewayTool,
+  callInProcessGatewayToolWithCreation,
+  type InProcessGatewayCaller,
+} from "./in-process-gateway.js";
 import { reserveVisibleChildSlot } from "./sessions-spawn-visible-admission.js";
 
 export const VISIBLE_SESSIONS_SPAWN_SCHEMA = {
   visible: Type.Optional(
     Type.Boolean({
-      description: "visible: user sees session in UI. Use when user asked or talks via web/app.",
+      description:
+        "Persistent UI session; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs; unavailable with inherited tool allow/denylist.",
     }),
   ),
   worktree: Type.Optional(Type.Boolean({ description: "Visible session worktree" })),
@@ -59,31 +66,8 @@ type VisibleSessionsSpawnOptions = VisibleSessionsSpawnDeps & {
   inheritedToolDenylist?: string[];
 };
 
-export function summarizeSessionsSpawnError(error: unknown): string {
+function summarizeSessionsSpawnError(error: unknown): string {
   return error instanceof Error ? error.message : typeof error === "string" ? error : "error";
-}
-
-export function resolveTrackedSpawnMode(params: {
-  requestedMode?: "run" | "session";
-  threadRequested: boolean;
-}): "run" | "session" {
-  return params.requestedMode ?? (params.threadRequested ? "session" : "run");
-}
-
-export async function cleanupUntrackedAcpSession(sessionKey: string): Promise<void> {
-  const key = sessionKey.trim();
-  if (!key) {
-    return;
-  }
-  try {
-    await callGateway({
-      method: "sessions.delete",
-      params: { key, deleteTranscript: true, emitLifecycleHooks: false },
-      timeoutMs: 10_000,
-    });
-  } catch {
-    // Best-effort cleanup only.
-  }
 }
 
 async function deleteVisibleSession(
@@ -115,28 +99,64 @@ export async function maybeSpawnVisibleSession(params: {
   const worktreeName = readStringParam(params.raw, "worktreeName");
   const worktreeBaseRef = readStringParam(params.raw, "worktreeBaseRef");
   if (params.raw.visible !== true) {
-    if (worktree || worktreeName || worktreeBaseRef) {
-      throw new ToolInputError("worktree options require visible=true");
+    const visibleOnlyParams = [
+      ["worktree", worktree],
+      ["worktreeName", worktreeName],
+      ["worktreeBaseRef", worktreeBaseRef],
+    ] as const;
+    const providedVisibleOnlyParams = visibleOnlyParams
+      .filter(([, value]) => value !== undefined && value !== false)
+      .map(([name]) => name);
+    if (providedVisibleOnlyParams.length > 0) {
+      throw new ToolInputError(
+        `Parameters require visible=true: ${providedVisibleOnlyParams.join(", ")}`,
+      );
     }
     return undefined;
   }
-  if (params.runtime !== "subagent") {
-    throw new ToolInputError('visible=true supports runtime="subagent" only');
-  }
+  const modelOverride = normalizeToolModelOverride(readStringParam(params.raw, "model"));
+  const requestedCwd = readStringParam(params.raw, "cwd");
+  const spawnedCwd = requestedCwd ? resolveUserPath(requestedCwd) : undefined;
   const unsupported = [
-    ["model", normalizeToolModelOverride(readStringParam(params.raw, "model"))],
-    ["thinking", readStringParam(params.raw, "thinking")],
-    ["cwd", readStringParam(params.raw, "cwd")],
-    ["thread", params.raw.thread === true ? true : undefined],
-    ["mode", params.raw.mode],
-    ["context", params.raw.context],
-    ["lightContext", params.raw.lightContext === true ? true : undefined],
-    ["attachments", Array.isArray(params.raw.attachments) ? params.raw.attachments : undefined],
-    ["attachAs", params.raw.attachAs],
+    [
+      "runtime",
+      params.runtime === "subagent" ? undefined : params.runtime,
+      'supports runtime="subagent" only',
+    ],
+    [
+      "thinking",
+      readStringParam(params.raw, "thinking"),
+      "thinking overrides are not wired to the sessions.create path",
+    ],
+    [
+      "thread",
+      params.raw.thread === true ? true : undefined,
+      "visible sessions route to the dashboard, not a channel thread",
+    ],
+    ["mode", params.raw.mode, "visible sessions are persistent dashboard sessions"],
+    [
+      "lightContext",
+      params.raw.lightContext === true ? true : undefined,
+      "bootstrap staging is not wired to the sessions.create path",
+    ],
+    [
+      "attachments",
+      Array.isArray(params.raw.attachments) ? params.raw.attachments : undefined,
+      "attachment staging is not wired to the sessions.create path",
+    ],
+    [
+      "attachAs",
+      params.raw.attachAs,
+      "attachment staging is not wired to the sessions.create path",
+    ],
   ] as const;
-  const unsupportedEntry = unsupported.find(([, value]) => value !== undefined);
-  if (unsupportedEntry) {
-    throw new ToolInputError(`${unsupportedEntry[0]} unavailable with visible=true`);
+  const unsupportedEntries = unsupported.filter(([, value]) => value !== undefined);
+  if (unsupportedEntries.length > 0) {
+    throw new ToolInputError(
+      `Parameters unavailable with visible=true: ${unsupportedEntries
+        .map(([name, , reason]) => `${name}: ${reason}`)
+        .join("; ")}`,
+    );
   }
 
   const cfg = params.options?.config ?? getRuntimeConfig();
@@ -146,7 +166,8 @@ export async function maybeSpawnVisibleSession(params: {
   ) {
     return {
       status: "forbidden",
-      error: "Visible sessions unavailable with inherited tool restrictions.",
+      error:
+        "Visible sessions unavailable with inherited tool restrictions. This session was spawned with a tool allow/denylist; visible sessions require an unrestricted session.",
     };
   }
   const ownership = resolveSubagentSpawnOwnership({
@@ -185,6 +206,13 @@ export async function maybeSpawnVisibleSession(params: {
   const targetAgentId = params.requestedAgentId
     ? normalizeAgentId(params.requestedAgentId)
     : requesterAgentId;
+  if (params.raw.context === "fork" && targetAgentId !== requesterAgentId) {
+    return {
+      status: "error",
+      error:
+        'context="fork" currently requires the same target agent as the requester; use context="isolated" for cross-agent spawns.',
+    };
+  }
   const targetPolicy = resolveSubagentTargetPolicy({
     requesterAgentId,
     targetAgentId,
@@ -197,10 +225,8 @@ export async function maybeSpawnVisibleSession(params: {
   if (!targetPolicy.ok) {
     return { status: "forbidden", error: targetPolicy.error };
   }
-  const resolvedModel = resolveSubagentSpawnModelSelection({
-    cfg,
-    agentId: targetAgentId,
-  });
+  const resolvedModel =
+    modelOverride ?? resolveSubagentSpawnModelSelection({ cfg, agentId: targetAgentId });
   const runTimeoutSeconds = resolveConfiguredSubagentRunTimeoutSeconds({ cfg });
   const requesterRuntime = resolveSandboxRuntimeStatus({ cfg, sessionKey: requesterKey });
   const childRuntime = resolveSandboxRuntimeStatus({
@@ -216,11 +242,33 @@ export async function maybeSpawnVisibleSession(params: {
         : 'sessions_spawn sandbox="require" needs sandboxed target.',
     };
   }
+  const spawnedWorkspaceDir = resolveSpawnedWorkspaceInheritance({
+    config: cfg,
+    targetAgentId,
+  });
+  const spawnedWorkspaceCwd = spawnedWorkspaceDir
+    ? resolveUserPath(spawnedWorkspaceDir)
+    : undefined;
+  // Sandbox mounts only the target workspace; cwd must stay within that boundary.
+  if (
+    childRuntime.sandboxed &&
+    spawnedCwd &&
+    (!spawnedWorkspaceCwd || !isPathInside(spawnedWorkspaceCwd, spawnedCwd))
+  ) {
+    return {
+      status: "forbidden",
+      error:
+        "cwd override is not supported outside the target agent workspace for sandboxed visible session runs",
+    };
+  }
 
   const reservation = reserveVisibleChildSlot({
     controllerSessionKey: requesterKey,
     maxChildren,
-    countActiveRuns: params.options?.countActiveRuns ?? countActiveRunsForSession,
+    countActiveRuns: (sessionKey) =>
+      (params.options?.countActiveRuns ?? countActiveRunsForSession)(sessionKey, {
+        collect: false,
+      }),
   });
   if (!reservation.ok) {
     return {
@@ -230,7 +278,14 @@ export async function maybeSpawnVisibleSession(params: {
   }
   try {
     const gatewayCall = params.options?.callGateway ?? callInProcessGatewayTool;
-    const response = await gatewayCall<{
+    const createGatewayCall: InProcessGatewayCaller =
+      params.options?.callGateway ??
+      ((method, requestParams) =>
+        callInProcessGatewayToolWithCreation(method, requestParams, {
+          via: "spawn",
+          actor: { type: "agent", id: requesterKey },
+        }));
+    const response = await createGatewayCall<{
       key?: string;
       runStarted?: boolean;
       runId?: string;
@@ -241,6 +296,11 @@ export async function maybeSpawnVisibleSession(params: {
       model: resolvedModel,
       task: params.task,
       parentSessionKey: requesterKey,
+      // Declared spawn lineage: without it the child persists as a depth-0 root
+      // and could spawn past maxSpawnDepth.
+      spawnDepth: callerDepth + 1,
+      ...(params.raw.context === "fork" ? { fork: true } : {}),
+      ...(spawnedCwd ? { cwd: spawnedCwd } : {}),
       ...(worktree ? { worktree: true } : {}),
       ...(worktreeName ? { worktreeName } : {}),
       ...(worktreeBaseRef ? { worktreeBaseRef } : {}),

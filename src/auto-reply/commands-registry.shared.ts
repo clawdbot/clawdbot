@@ -302,7 +302,7 @@ export function buildBuiltinChatCommands(
     defineChatCommand({
       key: "login",
       nativeName: "login",
-      nativeProviders: ["telegram"],
+      nativeProviders: ["discord", "slack", "telegram"],
       description: "Pair Codex login.",
       textAlias: "/login",
       category: "management",

@@ -1,5 +1,10 @@
+import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
 // Nextcloud Talk plugin module implements setup core behavior.
-import type { ChannelSetupAdapter, ChannelSetupInput } from "openclaw/plugin-sdk/channel-setup";
+import {
+  defineChannelSetupContract,
+  type ChannelSetupAdapter,
+  type ChannelSetupInput,
+} from "openclaw/plugin-sdk/channel-setup";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
@@ -12,7 +17,6 @@ import {
   promptParsedAllowFromForAccount,
   resolveSetupAccountId,
   createSetupTranslator,
-  type ChannelSetupDmPolicy,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
@@ -28,11 +32,13 @@ type NextcloudSetupInput = ChannelSetupInput & {
   baseUrl?: string;
   secret?: string;
   secretFile?: string;
+  url?: string;
+  password?: string;
 };
 type NextcloudTalkSection = NonNullable<CoreConfig["channels"]>["nextcloud-talk"];
 
-function addWildcardAllowFrom(allowFrom?: Array<string | number> | null): string[] {
-  return mergeAllowFromEntries(allowFrom, ["*"]);
+function readOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 export function normalizeNextcloudTalkBaseUrl(value: string | undefined): string {
@@ -168,42 +174,34 @@ async function promptNextcloudTalkAllowFromForAccount(params: {
   });
 }
 
-export const nextcloudTalkDmPolicy: ChannelSetupDmPolicy = {
+export const nextcloudTalkDmPolicy = createChannelDmPolicy({
   label: "Nextcloud Talk",
   channel,
-  policyKey: "channels.nextcloud-talk.dmPolicy",
-  allowFromKey: "channels.nextcloud-talk.allowFrom",
-  resolveConfigKeys: (cfg, accountId) =>
-    (accountId ?? resolveDefaultNextcloudTalkAccountId(cfg as CoreConfig)) !== DEFAULT_ACCOUNT_ID
-      ? {
-          policyKey: `channels.nextcloud-talk.accounts.${accountId ?? resolveDefaultNextcloudTalkAccountId(cfg as CoreConfig)}.dmPolicy`,
-          allowFromKey: `channels.nextcloud-talk.accounts.${accountId ?? resolveDefaultNextcloudTalkAccountId(cfg as CoreConfig)}.allowFrom`,
-        }
-      : {
-          policyKey: "channels.nextcloud-talk.dmPolicy",
-          allowFromKey: "channels.nextcloud-talk.allowFrom",
-        },
-  getCurrent: (cfg, accountId) =>
+  resolveAccount: (cfg, accountId) =>
     resolveNextcloudTalkAccount({
       cfg: cfg as CoreConfig,
       accountId: accountId ?? resolveDefaultNextcloudTalkAccountId(cfg as CoreConfig),
-    }).config.dmPolicy ?? "pairing",
-  setPolicy: (cfg, policy, accountId) => {
-    const resolvedAccountId = accountId ?? resolveDefaultNextcloudTalkAccountId(cfg as CoreConfig);
-    const resolved = resolveNextcloudTalkAccount({
-      cfg: cfg as CoreConfig,
-      accountId: resolvedAccountId,
-    });
-    return setNextcloudTalkAccountConfig(cfg as CoreConfig, resolvedAccountId, {
-      dmPolicy: policy,
-      ...(policy === "open" ? { allowFrom: addWildcardAllowFrom(resolved.config.allowFrom) } : {}),
-    });
-  },
+    }),
+  applyPatch: ({ cfg, account, patch }) =>
+    setNextcloudTalkAccountConfig(cfg as CoreConfig, account.accountId, patch),
   promptAllowFrom: promptNextcloudTalkAllowFromForAccount,
-};
+});
 
 export const nextcloudTalkSetupAdapter: ChannelSetupAdapter = {
+  singleAccountKeysToMove: ["rooms"],
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
+  prepareAccountConfigInput: ({ input }) => {
+    const setupInput = input as NextcloudSetupInput;
+    return {
+      ...setupInput,
+      baseUrl: setupInput.baseUrl ?? readOptionalString(setupInput.url),
+      secret:
+        setupInput.secret ??
+        readOptionalString(setupInput.token) ??
+        readOptionalString(setupInput.password),
+      secretFile: setupInput.secretFile ?? readOptionalString(setupInput.tokenFile),
+    };
+  },
   applyAccountName: ({ cfg, accountId, name }) =>
     applyAccountNameToChannelSection({
       cfg,
@@ -252,3 +250,46 @@ export const nextcloudTalkSetupAdapter: ChannelSetupAdapter = {
     return setNextcloudTalkAccountConfig(next as CoreConfig, accountId, patch);
   },
 };
+
+export const nextcloudTalkSetupContract = defineChannelSetupContract({
+  fields: {
+    baseUrl: {
+      kind: "string",
+      cli: { flags: "--base-url <url>", description: "Nextcloud base URL" },
+    },
+    url: {
+      kind: "string",
+      cli: { flags: "--url <url>", description: "Legacy Nextcloud base URL alias" },
+    },
+    secret: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--secret <secret>", description: "Nextcloud Talk bot secret" },
+    },
+    token: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--token <secret>", description: "Legacy Nextcloud bot secret alias" },
+    },
+    password: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--password <secret>", description: "Legacy Nextcloud bot secret alias" },
+    },
+    secretFile: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--secret-file <path>", description: "Nextcloud Talk bot secret file" },
+    },
+    tokenFile: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--token-file <path>", description: "Legacy Nextcloud bot secret file alias" },
+    },
+    useEnv: {
+      kind: "boolean",
+      cli: { flags: "--use-env", description: "Use Nextcloud Talk environment credentials" },
+    },
+  },
+  legacyAdapter: nextcloudTalkSetupAdapter,
+});

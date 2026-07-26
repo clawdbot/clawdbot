@@ -1,12 +1,41 @@
 // @vitest-environment node
 // Control UI tests cover message normalizer behavior.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { normalizeMessage } from "./message-normalizer.ts";
+import {
+  isStandaloneToolMessageForDisplay,
+  isToolResultMessage,
+  normalizeMessage,
+} from "./message-normalizer.ts";
 
 const SENDER_METADATA_BLOCK =
   'Sender (untrusted metadata):\n```json\n{"label":"openclaw-control-ui","id":"openclaw-control-ui"}\n```';
 
 describe("message-normalizer", () => {
+  // Regression: gateway/transcript events can carry a null/undefined or
+  // non-object entry (e.g. a transcript row without a `message`). `typeof
+  // m.role` still reads `.role` off the object, so an undefined entry threw
+  // "Cannot read properties of undefined (reading 'role')" inside the gateway
+  // event handler. These entry points must degrade to a safe default instead.
+  describe("malformed input never throws", () => {
+    it.each([undefined, null, "raw string", 42, true])(
+      "normalizeMessage(%o) yields role 'unknown' without throwing",
+      (input) => {
+        expect(() => normalizeMessage(input)).not.toThrow();
+        expect(normalizeMessage(input).role).toBe("unknown");
+      },
+    );
+
+    it.each([undefined, null, "raw string", 42, true])(
+      "tool-message predicates return false for %o without throwing",
+      (input) => {
+        expect(() => isToolResultMessage(input)).not.toThrow();
+        expect(() => isStandaloneToolMessageForDisplay(input)).not.toThrow();
+        expect(isToolResultMessage(input)).toBe(false);
+        expect(isStandaloneToolMessageForDisplay(input)).toBe(false);
+      },
+    );
+  });
+
   describe("normalizeMessage", () => {
     beforeEach(() => {
       vi.useFakeTimers();
@@ -602,5 +631,83 @@ describe("message-normalizer", () => {
 
       expect(result.senderLabel).toBe("Iris");
     });
+
+    it("formats durable sender metadata for transcript attribution", () => {
+      const emailSender = normalizeMessage({
+        role: "user",
+        content: "Prompt from Alice",
+        __openclaw: { senderId: "alice@example.com" },
+      });
+      expect(emailSender.senderLabel).toBe("alice");
+      expect(emailSender.sender).toEqual({ id: "alice@example.com" });
+      expect(
+        normalizeMessage({
+          role: "user",
+          content: "Prompt from a profile",
+          __openclaw: { senderId: "profile_123", senderName: "Alice Example" },
+        }).senderLabel,
+      ).toBe("Alice Example");
+    });
+  });
+});
+
+describe("sender label opaque-id stripping", () => {
+  it("strips a baked profile-UUID suffix and preserves it as sender identity", () => {
+    const normalized = normalizeMessage({
+      role: "user",
+      content: "hi",
+      senderLabel: "steipete (c3e32452-0467-47e5-aafa-233cd5dae29f)",
+    });
+    expect(normalized.senderLabel).toBe("steipete");
+    // Legacy rows have no structured sender; the UUID from the label is the
+    // only author key, so it must survive as non-display identity.
+    expect(normalized.sender).toEqual({
+      id: "c3e32452-0467-47e5-aafa-233cd5dae29f",
+      name: "steipete",
+    });
+  });
+
+  it("prefers durable metadata identity over the legacy label identity", () => {
+    const normalized = normalizeMessage({
+      role: "user",
+      content: "hi",
+      senderLabel: "steipete (c3e32452-0467-47e5-aafa-233cd5dae29f)",
+      __openclaw: { senderId: "meta-profile", senderName: "Meta Name" },
+    });
+    expect(normalized.sender).toEqual({ id: "meta-profile", name: "Meta Name" });
+    expect(normalized.senderLabel).toBe("steipete");
+  });
+
+  it("keeps human-meaningful parenthesized suffixes", () => {
+    expect(
+      normalizeMessage({
+        role: "user",
+        content: "hi",
+        senderLabel: "Peter (+436641234567)",
+      }).senderLabel,
+    ).toBe("Peter (+436641234567)");
+  });
+
+  it("keeps a label that is only a UUID rather than emptying it", () => {
+    expect(
+      normalizeMessage({
+        role: "user",
+        content: "hi",
+        senderLabel: "(c3e32452-0467-47e5-aafa-233cd5dae29f)",
+      }).senderLabel,
+    ).toBe("(c3e32452-0467-47e5-aafa-233cd5dae29f)");
+  });
+
+  it("attributes a bare-UUID legacy label to that profile", () => {
+    const normalized = normalizeMessage({
+      role: "user",
+      content: "hi",
+      senderLabel: "c3e32452-0467-47e5-aafa-233cd5dae29f",
+    });
+    // Nameless legacy senders keep the UUID as last-resort display, but the
+    // row still attributes (and resolves its avatar) to that profile instead
+    // of falling back to the local viewer identity.
+    expect(normalized.senderLabel).toBe("c3e32452-0467-47e5-aafa-233cd5dae29f");
+    expect(normalized.sender).toEqual({ id: "c3e32452-0467-47e5-aafa-233cd5dae29f" });
   });
 });

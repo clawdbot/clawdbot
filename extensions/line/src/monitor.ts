@@ -27,17 +27,13 @@ import { createLineBot } from "./bot.js";
 import { processLineMessage } from "./markdown-to-line.js";
 import { resolveLineDurableReplyOptions } from "./monitor-durable.js";
 import { buildLineMediaMessage } from "./outbound-media.js";
-import { sendLineReplyChunks } from "./reply-chunks.js";
 import { getLineRuntime } from "./runtime.js";
 import {
   createFlexMessage,
   createLocationMessage,
   createQuickReplyItems,
-  createTextMessageWithQuickReplies,
   getUserDisplayName,
-  pushMessageLine,
   pushMessagesLine,
-  pushTextMessageWithQuickReplies,
   replyMessageLine,
   showLoadingAnimation,
 } from "./send.js";
@@ -231,12 +227,8 @@ export async function monitorLineProvider(
                       buildTemplateMessageFromPayload,
                       processLineMessage,
                       chunkMarkdownText,
-                      sendLineReplyChunks,
                       replyMessageLine,
-                      pushMessageLine,
-                      pushTextMessageWithQuickReplies,
                       createQuickReplyItems,
-                      createTextMessageWithQuickReplies,
                       pushMessagesLine,
                       createFlexMessage,
                       buildMediaMessage: buildLineMediaMessage,

@@ -10,7 +10,7 @@ const QUESTION_RESOLVED_ENTRY_GRACE_MS = 15_000;
 
 const questions: Question[] = [
   {
-    id: "choice",
+    questionId: "choice",
     header: "Choice",
     question: "Which option?",
     options: [
@@ -20,33 +20,39 @@ const questions: Question[] = [
     isOther: true,
   },
 ];
-const answers = { answers: { choice: { answers: ["Two"] } } };
+const answers = { answers: { choice: ["Two"] } };
 
 const invalidAnswerCases: Array<[string, Question[], QuestionAnswers, string]> = [
   ["an empty answer map", questions, { answers: {} }, "choice"],
   [
+    "a prototype-key question id with no submitted answer",
+    [{ ...questions[0]!, questionId: "constructor" }],
+    { answers: {} },
+    "constructor",
+  ],
+  [
     "an unknown question id",
     questions,
-    { answers: { choice: { answers: ["Two"] }, unknown: { answers: ["value"] } } },
+    { answers: { choice: ["Two"], unknown: ["value"] } },
     "unknown",
   ],
   [
     "a missing question answer",
-    [...questions, { ...questions[0]!, id: "second" }],
+    [...questions, { ...questions[0]!, questionId: "second" }],
     answers,
     "second",
   ],
-  ["an empty string", questions, { answers: { choice: { answers: ["  "] } } }, "choice"],
+  ["an empty string", questions, { answers: { choice: ["  "] } }, "choice"],
   [
     "multiple values for a single-select question",
     questions,
-    { answers: { choice: { answers: ["One", "Two"] } } },
+    { answers: { choice: ["One", "Two"] } },
     "choice",
   ],
   [
     "a value outside the declared options",
     [{ ...questions[0]!, isOther: false }],
-    { answers: { choice: { answers: ["Three"] } } },
+    { answers: { choice: ["Three"] } },
     "choice",
   ],
 ];
@@ -69,7 +75,7 @@ describe("QuestionManager", () => {
     const first = manager.request({ questions, timeoutMs: 10_000, agentId: "main" });
     vi.setSystemTime(1_001);
     const second = manager.request({
-      questions: [{ ...questions[0]!, id: "other" }],
+      questions: [{ ...questions[0]!, questionId: "other" }],
       timeoutMs: 10_000,
       sessionKey: "agent:main:main",
     });
@@ -119,22 +125,22 @@ describe("QuestionManager", () => {
       questions: [{ ...questions[0]!, isOther: false }],
       timeoutMs: 10_000,
     });
-    expect(
-      manager.resolve(strict.id, { answers: { choice: { answers: ["  Two  "] } } }),
-    ).toMatchObject({ status: "answered" });
+    expect(manager.resolve(strict.id, { answers: { choice: ["  Two  "] } })).toMatchObject({
+      status: "answered",
+    });
 
     const open = manager.request({ questions, timeoutMs: 10_000 });
-    expect(
-      manager.resolve(open.id, { answers: { choice: { answers: ["custom"] } } }),
-    ).toMatchObject({ status: "answered" });
+    expect(manager.resolve(open.id, { answers: { choice: ["custom"] } })).toMatchObject({
+      status: "answered",
+    });
 
     const freeText = manager.request({
       questions: [{ ...questions[0]!, options: [], isOther: false }],
       timeoutMs: 10_000,
     });
-    expect(
-      manager.resolve(freeText.id, { answers: { choice: { answers: ["custom"] } } }),
-    ).toMatchObject({ status: "answered" });
+    expect(manager.resolve(freeText.id, { answers: { choice: ["custom"] } })).toMatchObject({
+      status: "answered",
+    });
   });
 
   it("times out one waiter without resolving the question", async () => {
@@ -207,7 +213,7 @@ describe("answer canonicalization", () => {
     const record = localManager.request({
       questions: [
         {
-          id: "pick",
+          questionId: "pick",
           header: "Pick",
           question: "Pick one",
           options: [{ label: "Two" }, { label: "Three" }],
@@ -217,11 +223,11 @@ describe("answer canonicalization", () => {
       timeoutMs: 60_000,
     });
     const result = localManager.resolve(record.id, {
-      answers: { pick: { answers: ["  Two  "] } },
+      answers: { pick: ["  Two  "] },
     });
     expect(result).toEqual({
       status: "answered",
-      answers: { answers: { pick: { answers: ["Two"] } } },
+      answers: { answers: { pick: ["Two"] } },
     });
     localManager.reset();
   });

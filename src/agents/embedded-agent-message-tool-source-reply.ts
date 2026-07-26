@@ -84,7 +84,12 @@ function recordHasDeliveredMessageId(record: Record<string, unknown>): boolean {
     const normalized = normalizeStatus(value);
     return Boolean(normalized && !NON_DELIVERY_MESSAGE_IDS.has(normalized));
   };
-  if (hasDeliveredId(record.messageId) || hasDeliveredId(record.pollId)) {
+  const message = asRecord(record.message);
+  if (
+    hasDeliveredId(record.messageId) ||
+    hasDeliveredId(record.pollId) ||
+    hasDeliveredId(message.id)
+  ) {
     return true;
   }
   const receipt = record.receipt;

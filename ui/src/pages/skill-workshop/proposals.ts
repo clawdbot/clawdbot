@@ -326,7 +326,7 @@ export async function loadSkillWorkshopProposals(
 ): Promise<void> {
   const snapshot = context.gateway.snapshot;
   const client = snapshot.client;
-  if (!client || !snapshot.connected) {
+  if (!client || snapshot.phase !== "connected") {
     return;
   }
   const requestAgentId = skillWorkshopAgentParams(context).agentId;
@@ -380,7 +380,11 @@ async function loadSkillWorkshopProposalDetail(
 ): Promise<boolean> {
   const snapshot = context.gateway.snapshot;
   const client = snapshot.client;
-  if (!client || !snapshot.connected || state.skillWorkshopInspectingKey === proposalId) {
+  if (
+    !client ||
+    snapshot.phase !== "connected" ||
+    state.skillWorkshopInspectingKey === proposalId
+  ) {
     return false;
   }
   const existing = state.skillWorkshopProposals.find((proposal) => proposal.key === proposalId);
@@ -455,7 +459,7 @@ export async function runSkillWorkshopLifecycleAction(
 ): Promise<void> {
   const snapshot = context.gateway.snapshot;
   const client = snapshot.client;
-  if (!client || !snapshot.connected || state.skillWorkshopActionBusy) {
+  if (!client || snapshot.phase !== "connected" || state.skillWorkshopActionBusy) {
     return;
   }
   const previous = state.skillWorkshopProposals.find((proposal) => proposal.key === proposalId);

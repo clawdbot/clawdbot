@@ -18,6 +18,10 @@ import {
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
+import {
+  MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
+  readWorkspaceBootstrapFile,
+} from "./workspace-bootstrap-read.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "./workspace-default.js";
 import {
   assertNoUnmigratedWorkspaceState,
@@ -34,10 +38,7 @@ import {
   type WorkspaceStateSnapshot,
   type WorkspaceSetupState,
 } from "./workspace-state-store.js";
-import {
-  resolveWorkspaceTemplateDir,
-  resolveWorkspaceTemplateSearchDirs,
-} from "./workspace-templates.js";
+import { resolveWorkspaceTemplateSearchDirs } from "./workspace-templates.js";
 export {
   DEFAULT_AGENT_WORKSPACE_DIR,
   resolveDefaultAgentWorkspaceDir,
@@ -61,7 +62,6 @@ const TRANSIENT_WORKSPACE_READ_MESSAGE = /Unknown system error -(?:11|4)\b/i;
 
 const workspaceTemplateCache = new Map<string, Promise<string>>();
 let gitAvailabilityPromise: Promise<boolean> | null = null;
-const MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES = 2 * 1024 * 1024;
 
 // File content cache keyed by stable file identity to avoid stale reads.
 const workspaceFileCache = new Map<string, { content: string; identity: string }>();
@@ -84,7 +84,7 @@ async function readWorkspaceFileWithGuards(params: {
   try {
     // A transient FS race (EAGAIN/EWOULDBLOCK/EINTR under load) on the open or
     // read must not drop the agent's bootstrap file for the turn — this reader
-    // runs every turn for AGENTS/SOUL/HEARTBEAT/etc. Retry the whole open+read so
+    // runs every turn for AGENTS/SOUL/TOOLS/etc. Retry the whole open+read so
     // each attempt uses a fresh fd (retrying readFileSync on the same fd could
     // return truncated content after a partial read); the inode-identity guard
     // in openRootFile still protects against a swapped file between attempts.
@@ -115,7 +115,7 @@ async function readWorkspaceFileWithGuards(params: {
         }
 
         try {
-          const content = syncFs.readFileSync(opened.fd, "utf-8");
+          const content = await readWorkspaceBootstrapFile(opened.fd);
           workspaceFileCache.set(params.filePath, { content, identity });
           return { ok: true, content };
         } finally {
@@ -147,10 +147,7 @@ async function loadTemplate(name: string): Promise<string> {
   }
 
   const pending = (async () => {
-    const templateDirs =
-      name === DEFAULT_HEARTBEAT_FILENAME
-        ? [await resolveWorkspaceTemplateDir()]
-        : await resolveWorkspaceTemplateSearchDirs();
+    const templateDirs = await resolveWorkspaceTemplateSearchDirs();
     const triedPaths: string[] = [];
     for (const templateDir of templateDirs) {
       const templatePath = path.join(templateDir, name);
@@ -184,7 +181,6 @@ export type WorkspaceBootstrapFileName =
   | typeof DEFAULT_TOOLS_FILENAME
   | typeof DEFAULT_IDENTITY_FILENAME
   | typeof DEFAULT_USER_FILENAME
-  | typeof DEFAULT_HEARTBEAT_FILENAME
   | typeof DEFAULT_BOOTSTRAP_FILENAME
   | typeof DEFAULT_MEMORY_FILENAME;
 
@@ -214,7 +210,6 @@ const VALID_BOOTSTRAP_NAMES: ReadonlySet<string> = new Set([
   DEFAULT_TOOLS_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_USER_FILENAME,
-  DEFAULT_HEARTBEAT_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
   DEFAULT_MEMORY_FILENAME,
 ]);
@@ -223,7 +218,6 @@ const OPTIONAL_BOOTSTRAP_FILENAMES: ReadonlySet<string> = new Set([
   DEFAULT_SOUL_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_USER_FILENAME,
-  DEFAULT_HEARTBEAT_FILENAME,
 ]);
 
 export const WORKSPACE_VANISHED_ERROR_CODE = "WORKSPACE_VANISHED";
@@ -380,7 +374,7 @@ async function workspaceRequiredBootstrapLooksCustomized(
   dir: string,
   opts?: { generatedHashes?: ReadonlyMap<string, string> },
 ): Promise<boolean> {
-  const fileNames = [DEFAULT_AGENTS_FILENAME, DEFAULT_TOOLS_FILENAME, DEFAULT_HEARTBEAT_FILENAME];
+  const fileNames = [DEFAULT_AGENTS_FILENAME, DEFAULT_TOOLS_FILENAME];
   const generatedHashes = opts?.generatedHashes;
   if (generatedHashes && generatedHashes.size > 0) {
     for (const fileName of fileNames) {
@@ -496,7 +490,6 @@ async function collectGeneratedBootstrapHashes(dir: string): Promise<Map<string,
     DEFAULT_TOOLS_FILENAME,
     DEFAULT_IDENTITY_FILENAME,
     DEFAULT_USER_FILENAME,
-    DEFAULT_HEARTBEAT_FILENAME,
   ];
   for (const fileName of fileNames) {
     try {
@@ -609,7 +602,6 @@ async function workspaceSetupStateHasSurvivalEvidence(params: {
     DEFAULT_TOOLS_FILENAME,
     DEFAULT_IDENTITY_FILENAME,
     DEFAULT_USER_FILENAME,
-    DEFAULT_HEARTBEAT_FILENAME,
   ].every((fileName) => generatedHashes.has(fileName));
 }
 
@@ -694,7 +686,7 @@ export async function ensureAgentWorkspace(params?: {
   ensureBootstrapFiles?: boolean;
   /**
    * List of optional bootstrap filenames to skip writing.
-   * Applies only to SOUL.md, USER.md, HEARTBEAT.md, IDENTITY.md.
+   * Applies only to SOUL.md, USER.md, IDENTITY.md.
    * Required workspace setup such as AGENTS.md and TOOLS.md still runs.
    */
   skipOptionalBootstrapFiles?: string[];
@@ -705,7 +697,6 @@ export async function ensureAgentWorkspace(params?: {
   toolsPath?: string;
   identityPath?: string;
   userPath?: string;
-  heartbeatPath?: string;
   bootstrapPath?: string;
   bootstrapPending?: boolean;
   identityPathCreated?: boolean;
@@ -762,10 +753,9 @@ export async function ensureAgentWorkspace(params?: {
   const toolsPath = path.join(dir, DEFAULT_TOOLS_FILENAME);
   const identityPath = path.join(dir, DEFAULT_IDENTITY_FILENAME);
   const userPath = path.join(dir, DEFAULT_USER_FILENAME);
-  const heartbeatPath = path.join(dir, DEFAULT_HEARTBEAT_FILENAME);
 
   const isBrandNewWorkspace = await (async () => {
-    const templatePaths = [agentsPath, soulPath, toolsPath, identityPath, userPath, heartbeatPath];
+    const templatePaths = [agentsPath, soulPath, toolsPath, identityPath, userPath];
     const paths = [...templatePaths, path.join(dir, "memory")];
     const existing = await Promise.all(
       paths.map(async (p) => {
@@ -832,15 +822,14 @@ export async function ensureAgentWorkspace(params?: {
   const toolsTemplate = await loadTemplate(DEFAULT_TOOLS_FILENAME);
   const identityTemplate = await loadTemplate(DEFAULT_IDENTITY_FILENAME);
   const userTemplate = await loadTemplate(DEFAULT_USER_FILENAME);
-  const heartbeatTemplate = await loadTemplate(DEFAULT_HEARTBEAT_FILENAME);
   // Template and filesystem checks above are async. Another process may have
   // completed setup while they ran, so optional-file policy needs fresh state.
   initialState = readCanonicalWorkspaceStateSnapshot(dir);
   const skipOptionalBootstrapFiles = new Set(params?.skipOptionalBootstrapFiles ?? []);
   // When the workspace is already configured, skip optional bootstrap files to
-  // prevent subagent spawns from recreating root-level SOUL.md, USER.md,
-  // IDENTITY.md, or HEARTBEAT.md that were removed intentionally or only exist
-  // under agent-specific subdirectories.
+  // prevent subagent spawns from recreating root-level SOUL.md, USER.md, or
+  // IDENTITY.md that were removed intentionally or only exist under agent-specific
+  // subdirectories.
   if (initialState.setup.setupCompletedAt) {
     for (const filename of OPTIONAL_BOOTSTRAP_FILENAMES) {
       skipOptionalBootstrapFiles.add(filename);
@@ -859,9 +848,6 @@ export async function ensureAgentWorkspace(params?: {
     : false;
   if (shouldWriteBootstrapFile(DEFAULT_USER_FILENAME)) {
     await writeFileIfMissing(userPath, userTemplate);
-  }
-  if (shouldWriteBootstrapFile(DEFAULT_HEARTBEAT_FILENAME)) {
-    await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
   }
 
   let state = readCanonicalWorkspaceStateSnapshot(dir).setup;
@@ -936,7 +922,6 @@ export async function ensureAgentWorkspace(params?: {
     toolsPath,
     identityPath,
     userPath,
-    heartbeatPath,
     bootstrapPath,
     bootstrapPending: !state.setupCompletedAt && bootstrapExists,
     identityPathCreated,
@@ -969,10 +954,6 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
     {
       name: DEFAULT_USER_FILENAME,
       filePath: path.join(resolvedDir, DEFAULT_USER_FILENAME),
-    },
-    {
-      name: DEFAULT_HEARTBEAT_FILENAME,
-      filePath: path.join(resolvedDir, DEFAULT_HEARTBEAT_FILENAME),
     },
     {
       name: DEFAULT_BOOTSTRAP_FILENAME,

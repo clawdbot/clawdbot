@@ -12,6 +12,7 @@ import {
   recoverConfigFromLastKnownGood,
 } from "../config/io.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
+import { resolveCanonicalConfigPath } from "../config/paths.js";
 import type { ConfigFileSnapshot, LegacyConfigIssue } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -40,6 +41,23 @@ const loadLegacyCronRepair = createLazyRuntimeModule(
 );
 const startupPreflightTraceStartedAt = performance.now();
 
+function withLegacyCronWebhook(
+  config: OpenClawConfig,
+  legacyConfig: OpenClawConfig | undefined,
+): OpenClawConfig {
+  const legacyCron = legacyConfig?.cron as Record<string, unknown> | undefined;
+  if (!legacyCron || !Object.hasOwn(legacyCron, "webhook")) {
+    return config;
+  }
+  return {
+    ...config,
+    cron: {
+      ...config.cron,
+      webhook: legacyCron.webhook,
+    },
+  } as OpenClawConfig;
+}
+
 async function measureStartupPreflightStep<T>(name: string, run: () => T | Promise<T>): Promise<T> {
   if (!isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE)) {
     return await run();
@@ -63,8 +81,8 @@ async function maybeMigrateLegacyConfig(): Promise<string[]> {
     return changes;
   }
 
-  const targetDir = path.join(home, ".openclaw");
-  const targetPath = path.join(targetDir, "openclaw.json");
+  const targetPath = resolveCanonicalConfigPath();
+  const targetDir = path.dirname(targetPath);
   try {
     await fs.access(targetPath);
     return changes;
@@ -407,6 +425,7 @@ export async function runDoctorConfigPreflight(
   let startupMigrationHeartbeatError: unknown;
   const startupMigrationWarnings: string[] = [];
   const cronCodexRuntimePolicyTargets: CronCodexRuntimePolicyTarget[] = [];
+  let doctorMediaPersistenceAttempted = false;
   const noteStartupStateMigrationResult = (result: {
     changes: string[];
     warnings: string[];
@@ -573,7 +592,10 @@ export async function runDoctorConfigPreflight(
             repairLegacyCronStoreWithoutPrompt,
           } = await loadLegacyCronRepair();
           const cronResult = await repairLegacyCronStoreWithoutPrompt({
-            cfg: stateMigrationInput.cfg,
+            cfg: withLegacyCronWebhook(
+              stateMigrationInput.cfg,
+              stateMigrationInput.pluginDoctorConfig,
+            ),
             migrateCodexModelRefs: false,
           });
           noteStartupStateMigrationResult(cronResult);
@@ -584,17 +606,17 @@ export async function runDoctorConfigPreflight(
             cronCodexRuntimePolicyTargets.push(...cronCodexPlan.targets);
             noteStartupStateMigrationResult({ changes: [], warnings: cronCodexPlan.warnings });
           }
-          noteStartupStateMigrationResult(
-            await autoMigrateLegacyState({
-              cfg: stateMigrationInput.cfg,
-              ...(stateMigrationInput.pluginDoctorConfig
-                ? { pluginDoctorConfig: stateMigrationInput.pluginDoctorConfig }
-                : {}),
-              env: process.env,
-              recoverCorruptTargetStore: options.recoverCorruptTargetStore,
-              doctorOnlyStateMigrations: options.doctorOnlyStateMigrations,
-            }),
-          );
+          const legacyStateResult = await autoMigrateLegacyState({
+            cfg: stateMigrationInput.cfg,
+            ...(stateMigrationInput.pluginDoctorConfig
+              ? { pluginDoctorConfig: stateMigrationInput.pluginDoctorConfig }
+              : {}),
+            env: process.env,
+            recoverCorruptTargetStore: options.recoverCorruptTargetStore,
+            doctorOnlyStateMigrations: options.doctorOnlyStateMigrations,
+          });
+          doctorMediaPersistenceAttempted = options.doctorOnlyStateMigrations === true;
+          noteStartupStateMigrationResult(legacyStateResult);
         } else if (stateMigrationInput.pluginDoctorConfig) {
           noteStartupStateMigrationResult(
             await autoMigrateLegacyPluginDoctorState({
@@ -616,7 +638,17 @@ export async function runDoctorConfigPreflight(
         );
       }
     }
-
+    if (
+      stateMigrations &&
+      stateMigrationsAllowed &&
+      freshConfigGuardAllowed &&
+      options.doctorOnlyStateMigrations === true &&
+      !doctorMediaPersistenceAttempted
+    ) {
+      noteStartupStateMigrationResult(
+        stateMigrations.migrateLegacyMediaPersistence({ env: process.env }),
+      );
+    }
     if (startupCheckpoint) {
       if (shouldRecordStartupCheckpoint) {
         if (startupMigrationHeartbeatError) {

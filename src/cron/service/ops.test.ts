@@ -22,6 +22,95 @@ const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-service-ops-seam",
 });
 
+describe("scheduled tool policy provenance", () => {
+  it("stamps trusted and authenticated-account creates", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-07-23T12:00:00.000Z");
+    const state = createOkIsolatedCronState({ storePath, now });
+    const base = {
+      enabled: true,
+      schedule: { kind: "every" as const, everyMs: 60_000 },
+      sessionTarget: "isolated" as const,
+      wakeMode: "now" as const,
+      payload: { kind: "agentTurn" as const, message: "run", toolsAllow: ["write"] },
+    };
+
+    const trusted = await add(state, { ...base, name: "trusted" });
+    expect(trusted.scheduledToolPolicy).toEqual({ version: 1, mode: "trusted" });
+
+    const account = await add(
+      state,
+      {
+        ...base,
+        name: "account",
+        owner: {
+          agentId: "main",
+          sessionKey: "agent:main:discord:group:ops",
+          accountId: "work",
+        },
+      },
+      {
+        scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
+          ownerSessionKey: "agent:main:discord:group:ops",
+          ownerAccountId: "work",
+        },
+      },
+    );
+    expect(account.scheduledToolPolicy).toEqual({
+      version: 1,
+      mode: "account",
+      ownerSessionKey: "agent:main:discord:group:ops",
+      ownerAccountId: "work",
+    });
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+  });
+
+  it("keeps routine legacy edits restrictive and adopts authority on an explicit tool edit", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-07-23T12:00:00.000Z");
+    const state = createOkIsolatedCronState({ storePath, now });
+    const created = await add(state, {
+      name: "legacy",
+      enabled: true,
+      owner: {
+        agentId: "main",
+        sessionKey: "agent:main:discord:group:ops",
+        accountId: "work",
+      },
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "run", toolsAllow: ["write"] },
+    });
+    delete created.scheduledToolPolicy;
+
+    const routine = await update(state, created.id, { description: "routine" });
+    expect(routine.scheduledToolPolicy).toBeUndefined();
+
+    const reauthorized = await update(
+      state,
+      created.id,
+      { payload: { kind: "agentTurn", toolsAllow: ["write"] } },
+      {
+        scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
+          ownerSessionKey: "agent:main:discord:group:ops",
+          ownerAccountId: "work",
+        },
+      },
+    );
+    expect(reauthorized.scheduledToolPolicy?.mode).toBe("account");
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+  });
+});
+
 async function withStateDirForStorePath<T>(
   storePath: string,
   runWithStateDir: () => Promise<T>,
@@ -304,7 +393,7 @@ describe("cron service ops seam coverage", () => {
     const state = createCronServiceState({
       storePath,
       cronEnabled: true,
-      cronConfig: { webhook: "https://example.invalid/cron" },
+      cronConfig: { webhook: "https://example.invalid/cron" } as never,
       log: logger,
       nowMs: () => now,
       enqueueSystemEvent: vi.fn(),
@@ -407,6 +496,7 @@ describe("cron service ops seam coverage", () => {
     await withStateDirForStorePath(storePath, async () => {
       const job = createInterruptedMainJob(now);
       job.trigger = { script: "json({ fire: true })", once: true };
+      job.payload = { kind: "script", script: "return { state: { cursor: 'payload' } }" };
       job.state.triggerState = { cursor: "old" };
       await writeCronStoreSnapshot({ storePath, jobs: [job] });
       const events: CronEvent[] = [];
@@ -434,6 +524,7 @@ describe("cron service ops seam coverage", () => {
         taskRunId,
         job,
         triggerEval: { fired: true, stateChanged: true, state: { cursor: "new" } },
+        scriptResult: { scriptStateChanged: true, scriptState: { cursor: "payload" } },
         event: {
           jobId: job.id,
           action: "finished",
@@ -456,7 +547,13 @@ describe("cron service ops seam coverage", () => {
         startedAt,
         terminalSummary: "completed before crash",
         endedAt,
-        detail: { kind: "cron-run", status: "ok", triggerFired: true },
+        detail: {
+          kind: "cron-run",
+          status: "ok",
+          triggerFired: true,
+          scriptStateChanged: true,
+          scriptState: { cursor: "payload" },
+        },
       });
       const persisted = await loadCronStore(storePath);
       expect(persisted.jobs[0]).toMatchObject({
@@ -470,7 +567,7 @@ describe("cron service ops seam coverage", () => {
           lastDeliveryStatus: "delivered",
           lastTriggerEvalAtMs: endedAt,
           lastTriggerFireAtMs: endedAt,
-          triggerState: { cursor: "new" },
+          triggerState: { cursor: "payload" },
         },
       });
       expect(persisted.jobs[0]?.state.runningAtMs).toBeUndefined();
@@ -650,6 +747,44 @@ describe("cron service ops seam coverage", () => {
       });
       expect(findTaskByRunId(manualRunId)).toBeUndefined();
     });
+  });
+
+  it("persists successful script state from a manual run", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-07-18T12:00:00.000Z");
+    const job: CronJob = {
+      id: "manual-script-state",
+      name: "manual script state",
+      enabled: true,
+      createdAtMs: now - 60_000,
+      updatedAtMs: now - 60_000,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: now - 60_000 },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "script", script: "return { state: { revision: 2 } }" },
+      state: { nextRunAtMs: now - 1, triggerState: { revision: 1 } },
+    };
+    await writeCronStoreSnapshot({ storePath, jobs: [job] });
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      cronConfig: { triggers: { enabled: true } },
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      runScriptJob: vi.fn(async () => ({
+        status: "ok" as const,
+        stateChanged: true,
+        state: { revision: 2 },
+      })),
+    });
+
+    await expect(run(state, job.id)).resolves.toEqual({ ok: true, ran: true });
+
+    const persisted = await loadCronStore(storePath);
+    expect(persisted.jobs[0]?.state.triggerState).toEqual({ revision: 2 });
   });
 
   it("records timed out manual runs as timed_out in the shared task registry", async () => {

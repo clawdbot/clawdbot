@@ -26,48 +26,6 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
     });
   });
 
-  it("uses precomputed agent-start context without a global hook runner", async () => {
-    const result = await resolveAgentHarnessBeforePromptBuildResult({
-      prompt: "hello",
-      developerInstructions: "base instructions",
-      messages: [],
-      ctx: {
-        agentId: "agent-1",
-        sessionKey: "session-1",
-        workspaceDir: "/workspace",
-      },
-      beforeAgentStartResult: {
-        prependContext: "cached context",
-        systemPrompt: "cached instructions",
-      },
-    });
-
-    expect(result).toEqual({
-      prompt: "cached context\n\nhello",
-      developerInstructions: "cached instructions",
-      promptInputRange: { start: 16, end: 21 },
-    });
-  });
-
-  it("keeps an empty input range between prepended and appended context", async () => {
-    const result = await resolveAgentHarnessBeforePromptBuildResult({
-      prompt: "",
-      developerInstructions: "base instructions",
-      messages: [],
-      ctx: {},
-      beforeAgentStartResult: {
-        appendContext: "appended context",
-        prependContext: "prepended context",
-      },
-    });
-
-    expect(result).toEqual({
-      prompt: "prepended context\n\nappended context",
-      developerInstructions: "base instructions",
-      promptInputRange: { start: 17, end: 17 },
-    });
-  });
-
   it("runs heartbeat_prompt_contribution on a heartbeat turn and prepends its contribution", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([
@@ -108,13 +66,6 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
             return { prependContext: "prompt context" };
           },
         },
-        {
-          hookName: "before_agent_start",
-          handler: () => {
-            calls.push("before_agent_start");
-            return { prependContext: "agent-start context" };
-          },
-        },
       ]),
     );
 
@@ -125,10 +76,8 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
       ctx: { trigger: "heartbeat", agentId: "agent-1", sessionKey: "session-1" },
     });
 
-    expect(calls).toEqual(["heartbeat", "before_prompt_build", "before_agent_start"]);
-    expect(result.prompt).toBe(
-      "heartbeat context\n\nprompt context\n\nagent-start context\n\nhello",
-    );
+    expect(calls).toEqual(["heartbeat", "before_prompt_build"]);
+    expect(result.prompt).toBe("heartbeat context\n\nprompt context\n\nhello");
   });
 
   it("skips heartbeat_prompt_contribution off a heartbeat turn", async () => {

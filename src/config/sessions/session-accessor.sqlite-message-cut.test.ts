@@ -3,13 +3,20 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
+  deliveryContextFromSession,
+  normalizeSessionDeliveryState,
+} from "../../utils/delivery-context.shared.js";
+import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   forkSessionAtMessage,
+  listSessionBranches,
   loadSessionEntry,
   loadTranscriptEvents,
   readSessionTranscriptMessageEventCount,
+  readSessionTranscriptMessageEvents,
   rewindSessionToMessage,
+  switchSessionBranch,
   upsertSessionEntry,
 } from "./session-accessor.js";
 
@@ -22,7 +29,7 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-async function createSession() {
+async function createSession(options: { activeLeafTarget?: string } = {}) {
   const stateDir = tempDirs.make("openclaw-message-cut-");
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
   const sessionId = "message-cut-source";
@@ -34,9 +41,13 @@ async function createSession() {
     cliSessionIds: { "claude-cli": "claude-conversation" },
     compactionCount: 2,
     contextTokens: 100_000,
-    deliveryContext: { channel: "telegram", to: "chat-123" },
-    lastChannel: "telegram",
-    lastTo: "chat-123",
+    createdVia: "operator",
+    createdActor: { type: "human", id: "profile-1" },
+    createdAt: 1_000,
+    delivery: normalizeSessionDeliveryState({
+      context: { channel: "telegram", to: "chat-123" },
+    }),
+    forkSource: { sessionKey: "agent:main:root", sessionId: "root-session" },
     lifecycleRevision: "source-lifecycle-revision",
     modelOverride: "gpt-5",
     modelOverrideSource: "user",
@@ -65,7 +76,19 @@ async function createSession() {
       id: "user-2",
       parentId: "assistant-1",
       timestamp: "2026-07-18T00:00:03.000Z",
-      message: { role: "user", content: [{ type: "text", text: "second prompt" }] },
+      message: {
+        role: "user",
+        content: [
+          { type: "text", text: "second prompt" },
+          { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+        ],
+        __openclaw: {
+          media: [
+            { path: "/state/media/inbound/stored-image.png", contentType: "image/png" },
+            { path: "/state/media/inbound/notes.txt", contentType: "text/plain" },
+          ],
+        },
+      },
     },
     {
       type: "message",
@@ -86,13 +109,14 @@ async function createSession() {
       id: "active-leaf",
       parentId: "off-path-user",
       timestamp: "2026-07-18T00:00:06.000Z",
-      targetId: "assistant-2",
+      targetId: options.activeLeafTarget ?? "assistant-2",
     },
   ]) {
     if (event.type === "message") {
       await appendTranscriptMessage(scope, {
         eventId: event.id,
         message: event.message,
+        now: Date.parse(event.timestamp),
         parentId: event.parentId,
       });
     } else {
@@ -103,6 +127,80 @@ async function createSession() {
 }
 
 describe("SQLite session message cuts", () => {
+  it("lists every DAG tip with active state, headline, count, and timestamp", async () => {
+    const { env } = await createSession({ activeLeafTarget: "assistant-1" });
+
+    await expect(listSessionBranches({ agentId, env, sessionKey })).resolves.toEqual({
+      status: "ok",
+      branches: [
+        {
+          leafEntryId: "assistant-1",
+          headline: "first answer",
+          messageCount: 2,
+          updatedAt: "2026-07-18T00:00:02.000Z",
+          active: true,
+        },
+        {
+          leafEntryId: "off-path-user",
+          headline: "inactive prompt",
+          messageCount: 2,
+          updatedAt: "2026-07-18T00:00:05.000Z",
+          active: false,
+        },
+        {
+          leafEntryId: "assistant-2",
+          headline: "second answer",
+          messageCount: 4,
+          updatedAt: "2026-07-18T00:00:04.000Z",
+          active: false,
+        },
+      ],
+    });
+  });
+
+  it("switches to another tip and rebuilds the active-path projection", async () => {
+    const { env } = await createSession();
+
+    const result = await switchSessionBranch({
+      agentId,
+      env,
+      leafEntryId: "off-path-user",
+      sessionKey,
+    });
+
+    expect(result).toMatchObject({ status: "created", key: sessionKey });
+    if (result.status !== "created") {
+      throw new Error("expected branch switch result");
+    }
+    const activeEventIds = readSessionTranscriptMessageEvents({
+      agentId,
+      env,
+      sessionId: result.entry.sessionId,
+      sessionKey,
+    }).map(({ event }) =>
+      event && typeof event === "object" && "id" in event ? event.id : undefined,
+    );
+    expect(activeEventIds).toEqual(["user-1", "off-path-user"]);
+    expect(result.entry).toMatchObject({
+      agentHarnessId: undefined,
+      claudeCliSessionId: undefined,
+      cliSessionBindings: undefined,
+      cliSessionIds: undefined,
+    });
+  });
+
+  it.each([
+    ["unknown", "missing-entry"],
+    ["user-1", "not-branch-tip"],
+    ["assistant-2", "already-active"],
+  ])("rejects branch switch target %s with %s", async (leafEntryId, status) => {
+    const { env } = await createSession();
+
+    await expect(
+      switchSessionBranch({ agentId, env, leafEntryId, sessionKey }),
+    ).resolves.toMatchObject({ status });
+  });
+
   it("rewinds by repointing the active leaf and returns the editor text", async () => {
     const { env } = await createSession();
 
@@ -117,6 +215,10 @@ describe("SQLite session message cuts", () => {
       status: "created",
       key: sessionKey,
       editorText: "second prompt",
+      editorAttachments: [{ mimeType: "image/png", data: "aW1hZ2U=" }],
+      editorMediaRefs: [
+        { path: "/state/media/inbound/stored-image.png", contentType: "image/png" },
+      ],
     });
     if (result.status !== "created") {
       throw new Error("expected rewind result");
@@ -132,8 +234,32 @@ describe("SQLite session message cuts", () => {
       cliSessionIds: undefined,
       compactionCount: undefined,
       contextTokens: undefined,
+      createdVia: "operator",
+      createdActor: { type: "human", id: "profile-1" },
+      createdAt: 1_000,
+      forkSource: { sessionKey: "agent:main:root", sessionId: "root-session" },
+      previousSessionId: "message-cut-source",
     });
-    expect(result.entry.deliveryContext).toEqual({ channel: "telegram", to: "chat-123" });
+    expect(deliveryContextFromSession(result.entry)).toEqual({
+      channel: "telegram",
+      to: "chat-123",
+      accountId: undefined,
+    });
+  });
+
+  it("omits editor attachments for a text-only message", async () => {
+    const { env } = await createSession();
+
+    const result = await rewindSessionToMessage({
+      agentId,
+      env,
+      entryId: "user-1",
+      sessionKey,
+    });
+
+    expect(result).toMatchObject({ status: "created", editorText: "first prompt" });
+    expect(result).not.toHaveProperty("editorAttachments");
+    expect(result).not.toHaveProperty("editorMediaRefs");
   });
 
   it("rewinds the stored row when its canonical key differs", async () => {
@@ -174,6 +300,10 @@ describe("SQLite session message cuts", () => {
       status: "created",
       key: targetKey,
       editorText: "second prompt",
+      editorAttachments: [{ mimeType: "image/png", data: "aW1hZ2U=" }],
+      editorMediaRefs: [
+        { path: "/state/media/inbound/stored-image.png", contentType: "image/png" },
+      ],
     });
     if (result.status !== "created") {
       throw new Error("expected fork result");
@@ -192,10 +322,18 @@ describe("SQLite session message cuts", () => {
     expect(loadSessionEntry(scope)?.sessionId).toBe(scope.sessionId);
     expect(result.entry.lifecycleRevision).not.toBe("source-lifecycle-revision");
     expect(result.entry.cliSessionBindings).toBeUndefined();
-    expect(result.entry.deliveryContext).toBeUndefined();
-    expect(result.entry.lastChannel).toBeUndefined();
-    expect(result.entry.lastTo).toBeUndefined();
+    expect(deliveryContextFromSession(result.entry)).toBeUndefined();
     expect(result.entry.parentSessionKey).toBe(canonicalSourceKey);
+    expect(result.entry.previousSessionId).toBeUndefined();
+    expect(result.entry.forkedFromParent).toBeUndefined();
+    expect(result.entry.createdVia).toBeUndefined();
+    expect(result.entry.createdActor).toBeUndefined();
+    expect(result.entry.createdAt).toBeUndefined();
+    expect(result.entry.forkSource).toEqual({
+      sessionKey: canonicalSourceKey,
+      sessionId: "message-cut-source",
+      entryId: "user-2",
+    });
     expect(result.entry).toMatchObject({
       modelOverride: "gpt-5",
       modelOverrideSource: "user",
@@ -227,6 +365,12 @@ describe("SQLite session message cuts", () => {
 
     await expect(
       rewindSessionToMessage({ agentId, env, entryId: "user-2", sessionKey }),
+    ).resolves.toMatchObject({ status: "unsupported-storage" });
+    await expect(listSessionBranches({ agentId, env, sessionKey })).resolves.toMatchObject({
+      status: "unsupported-storage",
+    });
+    await expect(
+      switchSessionBranch({ agentId, env, leafEntryId: "assistant-2", sessionKey }),
     ).resolves.toMatchObject({ status: "unsupported-storage" });
   });
 });

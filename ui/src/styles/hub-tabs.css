@@ -1,0 +1,95 @@
+/* Page hubs use quiet text tabs on a hairline track so route navigation stays
+   distinct from segmented filters inside each page. */
+wa-tab-group.hub-tabs {
+  --track-color: color-mix(in srgb, var(--border) 60%, transparent);
+  --indicator-color: var(--accent);
+}
+
+wa-tab-group.hub-tabs::part(body) {
+  display: none;
+}
+
+wa-tab-group.hub-tabs::part(tabs) {
+  gap: var(--space-2);
+}
+
+wa-tab.hub-tab {
+  font-size: var(--control-ui-text-sm);
+  font-weight: 550;
+  color: var(--muted);
+  transition: color var(--duration-normal) var(--ease-out);
+}
+
+/* Neutralize wa-tab's stock 1em padding; keep a slim nav-tab hit area. */
+wa-tab.hub-tab::part(base) {
+  padding: var(--space-1) var(--space-2) var(--space-2);
+  gap: 6px;
+  font: inherit;
+  color: inherit;
+}
+
+wa-tab.hub-tab:hover {
+  color: var(--text);
+}
+
+wa-tab.hub-tab[active] {
+  color: var(--text-strong);
+}
+
+wa-tab.hub-tab:focus-visible {
+  outline: none;
+  border-radius: var(--radius-sm);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+/* Web Awesome also draws its stock focus ring on the inner base part;
+   without this reset both rings render at once. */
+wa-tab.hub-tab:focus-visible::part(base) {
+  outline: none;
+}
+
+/* Equal outer columns keep the Sessions hub tabs centered when the Threads
+   route adds its trailing agent selector and Worktrees leaves that slot empty. */
+.content-header.sessions-hub-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+}
+
+.sessions-hub-header__title,
+.sessions-hub-header__actions {
+  min-width: 0;
+}
+
+.sessions-hub-header__actions {
+  justify-self: end;
+}
+
+@media (min-width: 769px) and (max-width: 1024px) {
+  .content-header.sessions-hub-header {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "title actions"
+      "tabs tabs";
+    row-gap: var(--space-2);
+    max-height: none;
+  }
+
+  .sessions-hub-header__title {
+    grid-area: title;
+  }
+
+  .sessions-hub-tabs {
+    grid-area: tabs;
+    justify-self: center;
+  }
+
+  .sessions-hub-header__actions {
+    grid-area: actions;
+  }
+}
+
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .content-header.sessions-hub-header {
+    display: none;
+  }
+}

@@ -125,6 +125,256 @@ function streamedErrorResponse(body: string, limit: number) {
 }
 
 describe("ClickClack HTTP client", () => {
+  it("creates, updates, and reads managed discussion channels", async () => {
+    const channel = {
+      id: "chn_discussion",
+      route_id: "discussion-route",
+      workspace_id: "wsp_1",
+      name: "release-planning",
+      kind: "public",
+      created_at: "2026-07-19T00:00:00.000Z",
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ channel }, { status: 201 }))
+      .mockResolvedValueOnce(Response.json({ channel }))
+      .mockResolvedValueOnce(
+        Response.json({ messages: [], oldest_seq: 0, newest_seq: 0, has_older: false }),
+      );
+    const client = createClickClackClient({
+      baseUrl: "https://clickclack.example",
+      token: "fake",
+      fetch: fetchMock,
+    });
+
+    await client.createChannel("wsp_1", {
+      name: "release-planning",
+      kind: "public",
+      external_managed: true,
+      external_ref: "agent:main:main",
+      external_url: "https://control.example/chat?session=agent%3Amain%3Amain",
+      sidebar_section: "Sessions",
+    });
+    await client.updateChannel("chn_discussion", {
+      archived: true,
+      name: "release-done",
+      sidebar_section: "Archive",
+    });
+    await client.latestChannelMessages("chn_discussion", 30);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "https://clickclack.example/api/workspaces/wsp_1/channels",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(requestBodyJson(fetchMock.mock.calls[0]?.[1])).toEqual({
+      name: "release-planning",
+      kind: "public",
+      external_managed: true,
+      external_ref: "agent:main:main",
+      external_url: "https://control.example/chat?session=agent%3Amain%3Amain",
+      sidebar_section: "Sessions",
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "https://clickclack.example/api/channels/chn_discussion",
+      expect.objectContaining({ method: "PATCH" }),
+    );
+    expect(requestBodyJson(fetchMock.mock.calls[1]?.[1])).toEqual({
+      archived: true,
+      name: "release-done",
+      sidebar_section: "Archive",
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "https://clickclack.example/api/channels/chn_discussion/messages?limit=200",
+      expect.any(Object),
+    );
+  });
+
+  it("merges recent thread replies into the global latest-message window", async () => {
+    const root = {
+      id: "msg_root",
+      workspace_id: "wsp_1",
+      channel_id: "chn_discussion",
+      author_id: "usr_root",
+      thread_root_id: "msg_root",
+      channel_seq: 10,
+      body: "Old root",
+      body_format: "markdown" as const,
+      created_at: "2026-07-19T10:00:00.000Z",
+      thread_state: {
+        root_message_id: "msg_root",
+        reply_count: 1,
+        last_reply_at: "2026-07-19T13:00:00.000Z",
+        last_reply_author_ids: ["usr_reply"],
+      },
+    };
+    const newerRoot = {
+      ...root,
+      id: "msg_newer",
+      author_id: "usr_newer",
+      thread_root_id: "msg_newer",
+      channel_seq: 11,
+      body: "New root",
+      created_at: "2026-07-19T12:00:00.000Z",
+      thread_state: {
+        root_message_id: "msg_newer",
+        reply_count: 0,
+        last_reply_author_ids: [],
+      },
+    };
+    const reply = {
+      ...root,
+      id: "msg_reply",
+      author_id: "usr_reply",
+      parent_message_id: "msg_root",
+      thread_seq: 1,
+      body: "Recent reply",
+      created_at: "2026-07-19T13:00:00.000Z",
+      thread_state: undefined,
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({
+          messages: [newerRoot],
+          oldest_seq: 11,
+          newest_seq: 11,
+          has_older: true,
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          messages: [root],
+          oldest_seq: 10,
+          newest_seq: 10,
+          has_older: false,
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({ root, replies: [reply], thread_state: root.thread_state }),
+      );
+    const client = createClickClackClient({
+      baseUrl: "https://clickclack.example",
+      token: "fake",
+      fetch: fetchMock,
+    });
+
+    const result = await client.latestChannelMessages("chn_discussion", 2);
+
+    expect(result).toEqual({
+      messages: [
+        expect.objectContaining({ id: "msg_newer" }),
+        expect.objectContaining({ id: "msg_reply" }),
+      ],
+      truncated: false,
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "https://clickclack.example/api/channels/chn_discussion/messages?limit=200&before_seq=11",
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "https://clickclack.example/api/messages/msg_root/thread?limit=200",
+      expect.any(Object),
+    );
+  });
+
+  it("fails closed when a capped thread response cannot contain the latest replies", async () => {
+    const root = {
+      id: "msg_root",
+      workspace_id: "wsp_1",
+      channel_id: "chn_discussion",
+      author_id: "usr_root",
+      thread_root_id: "msg_root",
+      channel_seq: 1,
+      body: "Root",
+      body_format: "markdown" as const,
+      created_at: "2026-07-19T10:00:00.000Z",
+      thread_state: {
+        root_message_id: "msg_root",
+        reply_count: 201,
+        last_reply_at: "2026-07-19T13:00:00.000Z",
+        last_reply_author_ids: ["usr_reply"],
+      },
+    };
+    const oldestReply = {
+      ...root,
+      id: "msg_oldest_reply",
+      parent_message_id: "msg_root",
+      thread_seq: 1,
+      body: "Oldest reply",
+      created_at: "2026-07-19T10:01:00.000Z",
+      thread_state: undefined,
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({
+          messages: [root],
+          oldest_seq: 1,
+          newest_seq: 1,
+          has_older: false,
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({ root, replies: [oldestReply], thread_state: root.thread_state }),
+      );
+    const client = createClickClackClient({
+      baseUrl: "https://clickclack.example",
+      token: "fake",
+      fetch: fetchMock,
+    });
+
+    const result = await client.latestChannelMessages("chn_discussion", 30);
+
+    expect(result).toEqual({ messages: [root], truncated: true });
+  });
+
+  it("bounds discussion history pagination and reports truncation", async () => {
+    let sequence = 1_000;
+    const fetchMock = vi.fn(async () => {
+      const current = sequence;
+      sequence -= 1;
+      return Response.json({
+        messages: [
+          {
+            id: `msg_${current}`,
+            workspace_id: "wsp_1",
+            channel_id: "chn_discussion",
+            author_id: "usr_1",
+            thread_root_id: `msg_${current}`,
+            channel_seq: current,
+            body: `Message ${current}`,
+            body_format: "markdown",
+            created_at: `2026-07-19T10:00:${String(current % 60).padStart(2, "0")}.000Z`,
+            thread_state: {
+              root_message_id: `msg_${current}`,
+              reply_count: 0,
+              last_reply_author_ids: [],
+            },
+          },
+        ],
+        oldest_seq: current,
+        newest_seq: current,
+        has_older: true,
+      });
+    });
+    const client = createClickClackClient({
+      baseUrl: "https://clickclack.example",
+      token: "fake",
+      fetch: fetchMock,
+    });
+
+    const result = await client.latestChannelMessages("chn_discussion", 1);
+
+    expect(result.truncated).toBe(true);
+    expect(result.messages).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(8);
+  });
+
   it("replaces the authenticated bot command menu", async () => {
     const botCommand = {
       id: "botcmd_1",
@@ -271,6 +521,39 @@ describe("ClickClack HTTP client", () => {
     expect(streamed.text).not.toHaveBeenCalled();
     expect(streamed.cancel).toHaveBeenCalledTimes(1);
     expect(streamed.releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it("redacts non-2xx response details with built-in patterns", async () => {
+    const fieldA = ["access", "token"].join("_");
+    const fieldB = ["client", "secret"].join("_");
+    const valueA = ["redact", "fixture", "a", "123"].join("_");
+    const valueB = ["redact", "fixture", "b", "123"].join("_");
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            safe: "diagnostic",
+            [fieldA]: valueA,
+            [fieldB]: valueB,
+          }),
+          { status: 502 },
+        ),
+    );
+    const client = createClickClackClient({
+      baseUrl: "https://clickclack.example",
+      token: "test-token",
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+
+    let message = "";
+    try {
+      await client.me();
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain('"safe":"diagnostic"');
+    expect(message).not.toContain(valueA);
+    expect(message).not.toContain(valueB);
   });
 
   it("POSTs durable activity rows with kind and turn_id", async () => {

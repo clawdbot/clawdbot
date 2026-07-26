@@ -5,7 +5,12 @@ import { resolveOnboardingMode } from "../../app/onboarding-mode.ts";
 
 export type CustodianRouteData = {
   onboarding: boolean;
+  intent: "new-agent" | null;
 };
+
+function resolveCustodianIntent(search: string): CustodianRouteData["intent"] {
+  return new URLSearchParams(search).get("intent") === "new-agent" ? "new-agent" : null;
+}
 
 export const page = definePage({
   id: "custodian",
@@ -13,6 +18,7 @@ export const page = definePage({
   loaderDeps: (_context: ApplicationContext, location: RouteLocation) => location.search,
   loader: (_context: ApplicationContext, { location }): CustodianRouteData => ({
     onboarding: resolveOnboardingMode(location.search),
+    intent: resolveCustodianIntent(location.search),
   }),
   component: () =>
     import("./custodian-page.ts").then(() =>

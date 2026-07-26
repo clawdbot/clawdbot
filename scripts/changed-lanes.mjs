@@ -1,4 +1,3 @@
-// Classifies changed files into CI lanes and release metadata scopes.
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
@@ -45,6 +44,7 @@ export const RELEASE_METADATA_PATHS = new Set([
   "apps/android/version.json",
   "apps/ios/CHANGELOG.md",
   "apps/macos/Sources/OpenClaw/Resources/Info.plist",
+  "docs/.generated/config-baseline.counts.json",
   "docs/.generated/config-baseline.sha256",
   "docs/install/updating.md",
   "package.json",
@@ -84,16 +84,10 @@ export function createEmptyChangedLanes() {
   };
 }
 
-/** @internal Shared repository-script contract. */
 export function isChangedLaneTestPath(changedPath) {
   return getChangedPathFacts(normalizeChangedPath(changedPath)).isChangedLaneTest;
 }
 
-/**
- * @param {string[]} changedPaths
- * @param {{ packageJsonChangeKind?: "liveDockerTooling" | "tooling" | null }} [options]
- * @returns {ChangedLaneResult}
- */
 /**
  * Classifies a list of changed paths into docs, app, extension, core, and tooling lanes.
  * @internal Shared repository-script contract.
@@ -256,10 +250,6 @@ export function detectChangedLanes(changedPaths, options = {}) {
 }
 
 /**
- * @param {{ paths: string[]; base: string; head?: string; staged?: boolean; mergeHeadFirstParent?: boolean }} params
- * @returns {ChangedLaneResult}
- */
-/**
  * Classifies changed paths with optional package.json before/after contents.
  * @internal Shared repository-script contract.
  */
@@ -282,10 +272,6 @@ export function detectChangedLanesForPaths(params) {
   return detectChangedLanes(params.paths, { packageJsonChangeKind });
 }
 
-/**
- * @param {{ base: string; head?: string; includeWorktree?: boolean; cwd?: string; mergeHeadFirstParent?: boolean }} params
- * @returns {string[]}
- */
 /**
  * Lists changed paths from git for a base/head comparison.
  */

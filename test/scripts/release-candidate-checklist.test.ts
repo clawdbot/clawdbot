@@ -1,7 +1,9 @@
+import { execFileSync } from "node:child_process";
 // Release Candidate Checklist tests cover release candidate checklist script behavior.
-import { readFileSync } from "node:fs";
-import { dirname } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import {
   buildReleaseCandidateState,
@@ -14,6 +16,8 @@ import {
   isDirectReleaseCandidateExecution,
   parseArgs,
   parseRunIdFromDispatchOutput,
+  preflightCorePackageTarballs,
+  preflightDependencyTarballs,
   reconcileReleaseCandidateState,
   releaseBranchForTag,
   resolveArtifactName,
@@ -24,9 +28,14 @@ import {
   validateCandidateReleaseNotes,
   validateFullManifest,
   validateNpmPreflightRunSource,
+  validateParallelsRegistryPackageArtifact,
   validatePreflightManifest,
+  validateTrustedToolingPin,
   validateWindowsSourceRelease,
 } from "../../scripts/release-candidate-checklist.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), init);
@@ -198,13 +207,44 @@ describe("release candidate checklist", () => {
     expect(source).toContain(
       '[join(toolingRoot, "scripts/release-candidate-checklist.mjs"), ...argv]',
     );
+    expect(source).toContain("[TRUSTED_TOOLING_SHA_ENV]: trustedToolingSha");
     expect(source).toContain("cwd: targetRoot");
     expect(source).toContain('"worktree", "remove", "--force", toolingRoot');
     expect(source).toContain(
-      "const trustedToolingSha = fetchTrustedWorkflowSha(options.workflowRef, TOOLING_ROOT)",
+      "const latestTrustedToolingSha = fetchTrustedWorkflowSha(options.workflowRef, TOOLING_ROOT)",
     );
     expect(source).toContain('targetHeadSha: gitRevParse("HEAD", targetRoot)');
     expect(source).toContain("toolingTrackedStatus: gitTrackedStatus(TOOLING_ROOT)");
+  });
+
+  it("keeps the exact pinned trusted tooling valid when main advances", () => {
+    const isAncestor = vi.fn(() => true);
+
+    expect(
+      validateTrustedToolingPin({
+        toolingSha: "a".repeat(40),
+        pinnedToolingSha: "a".repeat(40),
+        latestTrustedToolingSha: "b".repeat(40),
+        isAncestor,
+      }),
+    ).toBe("a".repeat(40));
+    expect(isAncestor).toHaveBeenCalledWith("a".repeat(40), "b".repeat(40));
+    expect(() =>
+      validateTrustedToolingPin({
+        toolingSha: "a".repeat(40),
+        pinnedToolingSha: "b".repeat(40),
+        latestTrustedToolingSha: "b".repeat(40),
+        isAncestor: () => true,
+      }),
+    ).toThrow("does not match pinned tooling");
+    expect(() =>
+      validateTrustedToolingPin({
+        toolingSha: "a".repeat(40),
+        pinnedToolingSha: "a".repeat(40),
+        latestTrustedToolingSha: "c".repeat(40),
+        isAncestor: () => false,
+      }),
+    ).toThrow("pinned release candidate tooling");
   });
 
   it("validates the exact tag changelog before dispatching the release matrix", () => {
@@ -502,6 +542,7 @@ describe("release candidate checklist", () => {
         ".artifacts/preflight/openclaw.tgz",
         [".artifacts/preflight/openclaw-ai.tgz"],
         "/trusted",
+        [".artifacts/preflight/openclaw-codex.tgz"],
       ),
     ).toEqual([
       "exec",
@@ -511,8 +552,93 @@ describe("release candidate checklist", () => {
       ".artifacts/preflight/openclaw.tgz",
       "--dependency-tarball",
       ".artifacts/preflight/openclaw-ai.tgz",
+      "--registry-package-tarball",
+      ".artifacts/preflight/openclaw-codex.tgz",
       "--json",
     ]);
+  });
+
+  it("accepts repeatable candidate registry package artifacts", () => {
+    expect(
+      parseArgs([
+        "--tag",
+        "v2026.7.1-beta.3",
+        "--parallels-registry-package-artifact",
+        "/tmp/codex-artifact",
+        "--parallels-registry-package-artifact",
+        "/tmp/matrix-artifact",
+      ]).parallelsRegistryPackageArtifactDirs,
+    ).toEqual(["/tmp/codex-artifact", "/tmp/matrix-artifact"]);
+  });
+
+  it("binds Parallels registry packages to plugin preflight manifests", () => {
+    const artifactDir = tempDirs.make("openclaw-plugin-preflight-");
+    const tarballName = "openclaw-codex-2026.7.1-beta.3.tgz";
+    const tarballPath = join(artifactDir, tarballName);
+    const sourceDir = join(artifactDir, "source");
+    const packageDir = join(sourceDir, "package");
+    mkdirSync(packageDir, { recursive: true });
+    writeFileSync(
+      join(packageDir, "package.json"),
+      `${JSON.stringify({ name: "@openclaw/codex", version: "2026.7.1-beta.3" })}\n`,
+    );
+    execFileSync("tar", ["-czf", tarballPath, "-C", sourceDir, "package"]);
+    rmSync(sourceDir, { force: true, recursive: true });
+    const tarballSha256 = createHash("sha256").update(readFileSync(tarballPath)).digest("hex");
+    const manifestPath = join(artifactDir, "plugin-publication-manifest.json");
+    const manifest = {
+      schema: "openclaw.plugin-publication-artifact/v1",
+      schemaVersion: 1,
+      targetSha: "candidate-sha",
+      package: { name: "@openclaw/codex", version: "2026.7.1-beta.3" },
+      artifact: {
+        name: "plugin-npm-package-codex",
+        tarball: tarballName,
+        sha256: tarballSha256,
+      },
+    };
+    writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`);
+
+    expect(
+      validateParallelsRegistryPackageArtifact(artifactDir, {
+        targetSha: "candidate-sha",
+        targetVersion: "2026.7.1-beta.3",
+      }),
+    ).toMatchObject({
+      artifactName: "plugin-npm-package-codex",
+      packageName: "@openclaw/codex",
+      packageVersion: "2026.7.1-beta.3",
+      tarballPath,
+      tarballSha256,
+    });
+    mkdirSync(packageDir, { recursive: true });
+    writeFileSync(
+      join(packageDir, "package.json"),
+      `${JSON.stringify({ name: "@openclaw/matrix", version: "2026.7.1-beta.3" })}\n`,
+    );
+    execFileSync("tar", ["-czf", tarballPath, "-C", sourceDir, "package"]);
+    rmSync(sourceDir, { force: true, recursive: true });
+    const mismatchedSha256 = createHash("sha256").update(readFileSync(tarballPath)).digest("hex");
+    writeFileSync(
+      manifestPath,
+      `${JSON.stringify({
+        ...manifest,
+        artifact: { ...manifest.artifact, sha256: mismatchedSha256 },
+      })}\n`,
+    );
+    expect(() =>
+      validateParallelsRegistryPackageArtifact(artifactDir, {
+        targetSha: "candidate-sha",
+        targetVersion: "2026.7.1-beta.3",
+      }),
+    ).toThrow("tarball identity mismatch");
+    writeFileSync(manifestPath, `${JSON.stringify({ ...manifest, targetSha: "other-sha" })}\n`);
+    expect(() =>
+      validateParallelsRegistryPackageArtifact(artifactDir, {
+        targetSha: "candidate-sha",
+        targetVersion: "2026.7.1-beta.3",
+      }),
+    ).toThrow("artifact identity is invalid");
   });
 
   it("requires exact dependency tarball metadata in npm preflight manifests", () => {
@@ -555,6 +681,103 @@ describe("release candidate checklist", () => {
         params,
       ),
     ).toThrow("invalid dependency tarball metadata");
+  });
+
+  it("prefers the complete core package tarball set with legacy manifest fallback", () => {
+    const legacyTarball = {
+      packageName: "@openclaw/ai",
+      packageVersion: "2026.7.1-beta.3",
+      tarballName: "openclaw-ai-2026.7.1-beta.3.tgz",
+      tarballSha256: "ai-sha",
+    };
+    const gatewayProtocolTarball = {
+      packageName: "@openclaw/gateway-protocol",
+      packageVersion: "2026.7.1-beta.3",
+      tarballName: "openclaw-gateway-protocol-2026.7.1-beta.3.tgz",
+      tarballSha256: "protocol-sha",
+    };
+
+    expect(
+      preflightCorePackageTarballs({
+        corePackageTarballs: [legacyTarball, gatewayProtocolTarball],
+        dependencyTarballs: [legacyTarball],
+      }),
+    ).toEqual([legacyTarball, gatewayProtocolTarball]);
+    expect(preflightCorePackageTarballs({ dependencyTarballs: [legacyTarball] })).toEqual([
+      legacyTarball,
+    ]);
+    expect(() =>
+      preflightCorePackageTarballs({
+        corePackageTarballs: null,
+        dependencyTarballs: [legacyTarball],
+      }),
+    ).toThrow("missing dependency tarball metadata");
+  });
+
+  it("passes only root dependency tarballs to Parallels with legacy fallback", () => {
+    const aiTarball = {
+      packageName: "@openclaw/ai",
+      packageVersion: "2026.7.1-beta.3",
+      tarballName: "openclaw-ai-2026.7.1-beta.3.tgz",
+      tarballSha256: "ai-sha",
+    };
+    const gatewayProtocolTarball = {
+      packageName: "@openclaw/gateway-protocol",
+      packageVersion: "2026.7.1-beta.3",
+      tarballName: "openclaw-gateway-protocol-2026.7.1-beta.3.tgz",
+      tarballSha256: "protocol-sha",
+    };
+    const gatewayClientTarball = {
+      packageName: "@openclaw/gateway-client",
+      packageVersion: "2026.7.1-beta.3",
+      tarballName: "openclaw-gateway-client-2026.7.1-beta.3.tgz",
+      tarballSha256: "client-sha",
+    };
+    const corePackageTarballs = [aiTarball, gatewayProtocolTarball, gatewayClientTarball];
+
+    expect(
+      preflightDependencyTarballs({
+        corePackageTarballs,
+        dependencyTarballs: [aiTarball],
+      }),
+    ).toEqual([aiTarball]);
+    expect(preflightDependencyTarballs({ corePackageTarballs })).toEqual(corePackageTarballs);
+    const manifest = {
+      releaseTag: "v2026.7.1-beta.3",
+      releaseSha: "candidate-sha",
+      npmDistTag: "beta",
+      tarballName: "openclaw-2026.7.1-beta.3.tgz",
+      tarballSha256: "root-sha",
+      corePackageTarballs,
+      dependencyTarballs: [aiTarball],
+    };
+    const params = {
+      tag: manifest.releaseTag,
+      targetSha: manifest.releaseSha,
+      npmDistTag: manifest.npmDistTag,
+    };
+    expect(() => validatePreflightManifest(manifest, params)).not.toThrow();
+    expect(() =>
+      validatePreflightManifest(
+        {
+          ...manifest,
+          dependencyTarballs: [
+            {
+              ...aiTarball,
+              tarballName: gatewayProtocolTarball.tarballName,
+              tarballSha256: gatewayProtocolTarball.tarballSha256,
+            },
+          ],
+        },
+        params,
+      ),
+    ).toThrow("does not match the core package manifest");
+    expect(() =>
+      preflightDependencyTarballs({
+        corePackageTarballs,
+        dependencyTarballs: null,
+      }),
+    ).toThrow("missing dependency tarball metadata");
   });
 
   it("trusts the npm workflow SHA while binding the candidate through its manifest", () => {

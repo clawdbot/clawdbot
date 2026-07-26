@@ -270,7 +270,8 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
     const { remote } = deps.createRemoteRouteHarness(fetchMock);
     const opened = await remote.openTab("https://1.example");
     expect(opened.targetId).toBe("T1");
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/json/version");
   });
 
   it("passes configured remote CDP timeouts when opening tabs through raw CDP", async () => {
@@ -303,7 +304,6 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
       ssrfPolicy: {
         allowPrivateNetwork: true,
         allowedHostnames: ["1.1.1.1"],
-        hostnameAllowlist: ["1.1.1.1"],
       },
       waitForNavigationResult: true,
       timeouts: {

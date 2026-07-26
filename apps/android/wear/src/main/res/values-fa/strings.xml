@@ -1,0 +1,87 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <string name="app_name" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw"</string>
+    <string name="chat" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"گفتگو"</string>
+    <string name="session" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"نشست"</string>
+    <string name="model" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مدل"</string>
+    <string name="previous_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s قبلی"</string>
+    <string name="next_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s بعدی"</string>
+    <string name="controls" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"کنترل‌ها"</string>
+    <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"صحبت"</string>
+    <string name="real_time_audio_failed" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"پخش صدا در ساعت ناموفق بود"</string>
+    <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"دیکته"</string>
+    <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"زنده"</string>
+    <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"رشته گفتگو"</string>
+    <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← بکشید →"</string>
+    <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"نگه دارید"</string>
+    <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ضربه بزنید"</string>
+    <string name="double_tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"دو بار ضربه بزنید"</string>
+    <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"برای مشاهده گفتگو در اینجا، Live را شروع کنید."</string>
+    <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جدید"</string>
+    <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تایپ"</string>
+    <string name="message" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"پیام"</string>
+    <string name="message_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"پیام به عامل"</string>
+    <string name="send" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ارسال"</string>
+    <string name="speak_to_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"با عامل خود صحبت کنید"</string>
+    <string name="stop_speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"توقف صحبت"</string>
+    <string name="speak_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"خواندن آخرین پاسخ"</string>
+    <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"در حال صحبت"</string>
+    <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"در حال گوش‌دادن"</string>
+    <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"در حال اتصال"</string>
+    <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"در حال فکرکردن"</string>
+    <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"در حال تایپ"</string>
+    <string name="sending" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"در حال ارسال"</string>
+    <string name="agent_working" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"عامل در حال کار است"</string>
+    <string name="error" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"خطا"</string>
+    <string name="ready" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"آماده"</string>
+    <string name="you" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"شما"</string>
+    <string name="agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"عامل"</string>
+    <string name="system" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"سیستم"</string>
+    <string name="start_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"شروع گفتگو"</string>
+    <string name="start_conversation_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"با ساعت خود صحبت کنید یا تایپ کنید. تلفن جفت‌شده پیام را از طریق نشست احراز هویت‌شده OpenClaw ارسال می‌کند."</string>
+    <string name="current_session" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"نشست فعلی"</string>
+    <string name="appearance" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ظاهر"</string>
+    <string name="theme_dark" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تیره"</string>
+    <string name="theme_light" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"روشن"</string>
+    <string name="auto_speak" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"خواندن خودکار پاسخ‌ها"</string>
+    <string name="reply_alerts" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"هشدارهای پاسخ"</string>
+    <string name="enable_alerts" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"فعال‌کردن هشدارها"</string>
+    <string name="abort_run" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لغو اجرا"</string>
+    <string name="open_notification_settings" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"بازکردن تنظیمات اعلان‌ها"</string>
+    <string name="on" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"روشن"</string>
+    <string name="off" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"خاموش"</string>
+    <string name="connection" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"اتصال"</string>
+    <string name="gateway" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway"</string>
+    <string name="security_boundary" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"امنیت"</string>
+    <string name="phone_controlled" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"کنترل‌شده با تلفن"</string>
+    <string name="phone_controlled_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"اعتبارنامه‌ها و هویت Gateway روی تلفن جفت‌شده باقی می‌مانند. ساعت فقط از Wear Data Layer استفاده می‌کند."</string>
+    <string name="checking_phone" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"در حال بررسی تلفن"</string>
+    <string name="reading_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"در حال خواندن عامل‌ها، نشست‌ها و گفت‌وگو"</string>
+    <string name="phone_ready" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تلفن آماده است"</string>
+    <string name="gateway_connected" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway متصل است"</string>
+    <string name="gateway_offline" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway آفلاین است"</string>
+    <string name="gateway_offline_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway را در OpenClaw روی تلفن جفت‌شده دوباره متصل کنید."</string>
+    <string name="open_phone_app" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw را روی تلفن باز کنید"</string>
+    <string name="phone_not_ready_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ساعت هیچ‌گاه Gateway را راه‌اندازی یا احراز هویت نمی‌کند."</string>
+    <string name="phone_unavailable" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تلفن در دسترس نیست"</string>
+    <string name="phone_unavailable_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تلفن جفت‌شده را نزدیک نگه دارید و برنامه سازگار OpenClaw را نصب کنید."</string>
+    <string name="selection_not_found" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"گزینه انتخاب‌شده دیگر در دسترس نیست"</string>
+    <string name="message_not_sent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"عملیات پذیرفته نشد"</string>
+    <string name="something_went_wrong" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مشکلی پیش آمد"</string>
+    <string name="refresh_and_try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"فهرست‌ها را تازه‌سازی و دوباره تلاش کنید."</string>
+    <string name="try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"از ساعت دوباره تلاش کنید."</string>
+    <string name="update_required" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"به‌روزرسانی لازم است"</string>
+    <string name="update_required_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw را هم در تلفن و هم در ساعت به‌روزرسانی کنید."</string>
+    <string name="refresh" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تازه‌سازی"</string>
+    <string name="retry" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تلاش دوباره"</string>
+    <string name="notification_channel_name" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"پاسخ‌های OpenClaw"</string>
+    <string name="notification_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"پاسخ"</string>
+    <string name="notification_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"پاسخ OpenClaw"</string>
+    <string name="notification_reply_failed_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"پاسخ ارسال نشد"</string>
+    <string name="notification_reply_failed_text" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تلفن در دسترس نیست. برای تلاش دوباره، روی پاسخ بزنید."</string>
+    <string name="notification_phone_changed_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"برای پاسخ دادن، OpenClaw را باز کنید"</string>
+    <string name="notification_phone_changed_text" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تلفن ترجیحی شما تغییر کرده است. پیش از پاسخ دادن، برنامه را باز کنید تا نشست دوباره بارگیری شود."</string>
+    <string name="tile_label" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw"</string>
+    <string name="tile_description" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"نشست‌ها را باز کنید و از طریق تلفن جفت‌شده خود پاسخ دهید"</string>
+    <string name="tile_open" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"باز کردن"</string>
+    <string name="tile_phone_proxy" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"پروکسی تلفن"</string>
+</resources>

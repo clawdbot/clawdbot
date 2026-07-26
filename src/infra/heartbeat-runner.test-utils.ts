@@ -8,8 +8,14 @@ import { resolveMainSessionKey } from "../config/sessions.js";
 import { listSessionEntries, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { writeCronJobScratch } from "../cron/scratch-store.js";
+import { CronService } from "../cron/service.js";
+import { resolveCronJobsStorePath } from "../cron/store.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { HeartbeatDeps } from "./heartbeat-runner.js";
 
 // Heartbeat test utilities seed session stores and temporary heartbeat prompts
@@ -18,6 +24,9 @@ type HeartbeatSessionSeed = Partial<SessionEntry> & {
   lastChannel: string;
   lastProvider: string;
   lastTo: string;
+  deliveryContext?: DeliveryContext;
+  lastAccountId?: string;
+  lastThreadId?: string | number;
 };
 
 type HeartbeatReplyFn = NonNullable<HeartbeatDeps["getReplyFromConfig"]>;
@@ -29,18 +38,72 @@ function createHeartbeatReplySpy(): HeartbeatReplySpy {
   return replySpy;
 }
 
+/** Seed one system heartbeat monitor and its private scratch in the test state DB. */
+export async function seedHeartbeatScratchForTest(params: {
+  content: string | null;
+  agentId?: string;
+  storePath?: string;
+}): Promise<string> {
+  const agentId = params.agentId ?? "main";
+  const storePath = params.storePath ?? resolveCronJobsStorePath();
+  const noop = () => {};
+  const cron = new CronService({
+    storePath,
+    cronEnabled: false,
+    defaultAgentId: "main",
+    log: { debug: noop, info: noop, warn: noop, error: noop },
+    enqueueSystemEvent: () => false,
+    requestHeartbeat: noop,
+    runIsolatedAgentJob: async () => ({ status: "skipped", error: "test" }),
+  });
+  const result = await cron.add(
+    {
+      declarationKey: `heartbeat:${agentId}`,
+      displayName: `Heartbeat (${agentId})`,
+      name: `heartbeat-${agentId}`,
+      agentId,
+      enabled: true,
+      schedule: { kind: "every", everyMs: 30 * 60_000, anchorMs: 0 },
+      payload: { kind: "heartbeat" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+    },
+    { enabledExplicit: true, systemOwned: true },
+  );
+  const job = "job" in result ? result.job : result;
+  writeCronJobScratch({ storePath, jobId: job.id, content: params.content });
+  return job.id;
+}
+
 /** Write a single heartbeat session entry through the SQLite session accessor. */
 export async function seedSessionStore(
   storePath: string,
   sessionKey: string,
   session: HeartbeatSessionSeed,
 ): Promise<void> {
+  const {
+    deliveryContext,
+    lastAccountId,
+    lastChannel,
+    lastProvider: _lastProvider,
+    lastThreadId,
+    lastTo,
+    ...entry
+  } = session;
   await replaceSessionEntry(
     { storePath, sessionKey },
     {
       sessionId: session.sessionId ?? "sid",
       updatedAt: session.updatedAt ?? Date.now(),
-      ...session,
+      ...entry,
+      delivery: normalizeSessionDeliveryState({
+        context: {
+          channel: deliveryContext?.channel ?? lastChannel,
+          to: deliveryContext?.to ?? lastTo,
+          accountId: deliveryContext?.accountId ?? lastAccountId,
+          threadId: deliveryContext?.threadId ?? lastThreadId,
+        },
+      }),
     },
   );
 }
@@ -74,18 +137,20 @@ export async function withTempHeartbeatSandbox<T>(
   },
 ): Promise<T> {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), options?.prefix ?? "openclaw-hb-"));
-  await fs.writeFile(path.join(tmpDir, "HEARTBEAT.md"), "- Check status\n", "utf-8");
   const storePath = path.join(tmpDir, "sessions.json");
   const replySpy = createHeartbeatReplySpy();
   const previousEnv = new Map<string, string | undefined>();
-  for (const envName of options?.unsetEnvVars ?? []) {
+  const envNames = new Set(["OPENCLAW_STATE_DIR", ...(options?.unsetEnvVars ?? [])]);
+  for (const envName of envNames) {
     previousEnv.set(envName, process.env[envName]);
-    process.env[envName] = "";
+    process.env[envName] = envName === "OPENCLAW_STATE_DIR" ? path.join(tmpDir, "state") : "";
   }
+  await seedHeartbeatScratchForTest({ content: "- Check status\n" });
   try {
     return await fn({ tmpDir, storePath, replySpy });
   } finally {
     replySpy.mockReset();
+    closeOpenClawStateDatabaseForTest();
     for (const [envName, previousValue] of previousEnv.entries()) {
       if (previousValue === undefined) {
         delete process.env[envName];

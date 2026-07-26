@@ -17,6 +17,10 @@
           - "docs/nodes/camera.md"
           - "docs/nodes/location-command.md"
           - "docs/platforms/linux.md"
+"plugin: cua-computer":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/cua-computer/**"
 "plugin: pixverse":
   - changed-files:
       - any-glob-to-any-file:
@@ -64,6 +68,12 @@
           - "extensions/teams-meetings/**"
           - "docs/plugins/teams-meetings.md"
           - "docs/plugins/reference/teams-meetings.md"
+"plugin: zoom":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/zoom-meetings/**"
+          - "docs/plugins/zoom-meetings.md"
+          - "docs/plugins/reference/zoom-meetings.md"
 "plugin: workboard":
   - changed-files:
       - any-glob-to-any-file:

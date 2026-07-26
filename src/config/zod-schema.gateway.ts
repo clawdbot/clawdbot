@@ -1,8 +1,4 @@
 import { z } from "zod";
-import {
-  isValidControlUiChatMessageMaxWidth,
-  normalizeControlUiChatMessageMaxWidth,
-} from "./control-ui-css.js";
 import { SecretInputSchema } from "./zod-schema.core.js";
 import {
   GatewayRemoteConfigSchema,
@@ -13,7 +9,7 @@ import { sensitive } from "./zod-schema.sensitive.js";
 
 export const GatewayConfigSchema = z
   .strictObject({
-    port: z.number().int().positive().optional(),
+    port: z.number().int().min(1).max(65_535).optional(),
     mode: z.union([z.literal("local"), z.literal("remote")]).optional(),
     bind: z
       .union([
@@ -27,26 +23,19 @@ export const GatewayConfigSchema = z
     customBindHost: z.string().optional(),
     controlUi: z
       .strictObject({
+        // Shipped legacy input. Doctor removes it after recording migration state.
+        dangerouslyDisableDeviceAuth: z.boolean().optional(),
         enabled: z.boolean().optional(),
         basePath: z.string().optional(),
         root: z.string().optional(),
         toolTitles: z.boolean().optional(),
+        sessionObserver: z.boolean().optional(),
         embedSandbox: z
           .union([z.literal("strict"), z.literal("scripts"), z.literal("trusted")])
           .optional(),
         allowExternalEmbedUrls: z.boolean().optional(),
-        chatMessageMaxWidth: z
-          .string()
-          .transform((value) => normalizeControlUiChatMessageMaxWidth(value))
-          .refine((value) => isValidControlUiChatMessageMaxWidth(value), {
-            message:
-              "Expected a CSS width value such as 960px, 82%, min(1280px, 82%), or calc(100% - 2rem)",
-          })
-          .optional(),
         allowedOrigins: z.array(z.string()).optional(),
         dangerouslyAllowHostHeaderOriginFallback: z.boolean().optional(),
-        allowInsecureAuth: z.boolean().optional(),
-        dangerouslyDisableDeviceAuth: z.boolean().optional(),
       })
       .optional(),
     terminal: z
@@ -83,6 +72,12 @@ export const GatewayConfigSchema = z
             requiredHeaders: z.array(z.string()).optional(),
             allowUsers: z.array(z.string()).optional(),
             allowLoopback: z.boolean().optional(),
+            deviceAutoApprove: z
+              .strictObject({
+                enabled: z.boolean().optional(),
+                scopes: z.array(z.string().min(1)).optional(),
+              })
+              .optional(),
           })
           .optional(),
       })
@@ -95,10 +90,6 @@ export const GatewayConfigSchema = z
         allow: z.array(z.string()).optional(),
       })
       .optional(),
-    handshakeTimeoutMs: z.number().int().min(1).optional(),
-    channelHealthCheckMinutes: z.number().int().min(0).optional(),
-    channelStaleEventThresholdMinutes: z.number().int().min(1).optional(),
-    channelMaxRestartsPerHour: z.number().int().min(1).optional(),
     tailscale: z
       .strictObject({
         mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),
@@ -110,11 +101,7 @@ export const GatewayConfigSchema = z
     remote: GatewayRemoteConfigSchema,
     reload: z
       .strictObject({
-        mode: z
-          .union([z.literal("off"), z.literal("restart"), z.literal("hot"), z.literal("hybrid")])
-          .optional(),
-        debounceMs: z.number().int().min(0).optional(),
-        deferralTimeoutMs: z.number().int().min(0).optional(),
+        mode: z.union([z.literal("off"), z.literal("hybrid")]).optional(),
       })
       .optional(),
     tls: z
@@ -143,9 +130,6 @@ export const GatewayConfigSchema = z
             chatCompletions: z
               .strictObject({
                 enabled: z.boolean().optional(),
-                maxBodyBytes: z.number().int().positive().optional(),
-                maxImageParts: z.number().int().nonnegative().optional(),
-                maxTotalImageBytes: z.number().int().positive().optional(),
                 images: z
                   .strictObject({
                     ...ResponsesEndpointUrlFetchShape,
@@ -156,7 +140,6 @@ export const GatewayConfigSchema = z
             responses: z
               .strictObject({
                 enabled: z.boolean().optional(),
-                maxBodyBytes: z.number().int().positive().optional(),
                 maxUrlParts: z.number().int().nonnegative().optional(),
                 files: z
                   .strictObject({
@@ -230,29 +213,14 @@ export const GatewayConfigSchema = z
             enabled: z.boolean().optional(),
           })
           .optional(),
-        skills: z
+        allowSkills: z.boolean().optional(),
+        commands: z
           .strictObject({
-            enabled: z.boolean().optional(),
+            allow: z.array(z.string()).optional(),
+            deny: z.array(z.string()).optional(),
           })
           .optional(),
-        allowCommands: z.array(z.string()).optional(),
-        denyCommands: z.array(z.string()).optional(),
       })
       .optional(),
-  })
-  .superRefine((gateway, ctx) => {
-    const effectiveHealthCheckMinutes = gateway.channelHealthCheckMinutes ?? 5;
-    if (
-      gateway.channelStaleEventThresholdMinutes != null &&
-      effectiveHealthCheckMinutes !== 0 &&
-      gateway.channelStaleEventThresholdMinutes < effectiveHealthCheckMinutes
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["channelStaleEventThresholdMinutes"],
-        message:
-          "channelStaleEventThresholdMinutes should be >= channelHealthCheckMinutes to avoid delayed stale detection",
-      });
-    }
   })
   .optional();

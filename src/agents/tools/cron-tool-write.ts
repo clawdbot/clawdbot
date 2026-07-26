@@ -21,6 +21,8 @@ export function assertNoCronShellExecution(value: unknown): void {
       "cron on-exit schedules cannot be created or edited through the agent cron tool; use the CLI or Gateway API.",
     );
   }
+  // Stream argv is authorized by the Gateway's cron.triggers.enabled gate,
+  // matching trigger-script trust rather than ordinary agent exec policy.
 }
 
 async function prepareCronJobUpdateForGateway(params: {

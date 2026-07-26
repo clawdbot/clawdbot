@@ -6,6 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
  * debounce drains, and force individual collection when cross-channel ordering matters.
  */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { isFastTestRuntimeEnv } from "../infra/env.js";
 
 /** Mutable summary state for a capped queue. */
 type QueueSummaryState = {
@@ -167,7 +168,7 @@ export function waitForQueueDebounce(
   },
   abortSignal?: AbortSignal,
 ): Promise<void> {
-  if (process.env.OPENCLAW_TEST_FAST === "1") {
+  if (isFastTestRuntimeEnv()) {
     // Tests use this escape hatch so debounce logic does not slow deterministic queue specs.
     return Promise.resolve();
   }

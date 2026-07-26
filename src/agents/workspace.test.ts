@@ -826,19 +826,13 @@ describe("ensureAgentWorkspace", () => {
     await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(false);
   });
 
-  it("writes the clean HEARTBEAT runtime template into new workspaces", async () => {
+  it("no longer seeds HEARTBEAT.md into new workspaces", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
 
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
 
-    const heartbeat = await fs.readFile(path.join(tempDir, DEFAULT_HEARTBEAT_FILENAME), "utf-8");
-    expect(heartbeat).not.toContain("```");
-    expect(heartbeat).toContain(
-      "# Keep this file empty (or with only comments) to skip heartbeat API calls.",
-    );
-    expect(heartbeat).toContain(
-      "# Add tasks below when you want the agent to check something periodically.",
-    );
+    // Heartbeat monitor context lives in cron scratch now; new workspaces get no file.
+    await expectPathMissing(path.join(tempDir, DEFAULT_HEARTBEAT_FILENAME));
   });
 
   it("does not recreate optional bootstrap files when workspace setup is already completed", async () => {
@@ -870,7 +864,6 @@ describe("ensureAgentWorkspace", () => {
     await fs.unlink(path.join(tempDir, DEFAULT_SOUL_FILENAME));
     await fs.unlink(path.join(tempDir, DEFAULT_IDENTITY_FILENAME));
     await fs.unlink(path.join(tempDir, DEFAULT_USER_FILENAME));
-    await fs.unlink(path.join(tempDir, DEFAULT_HEARTBEAT_FILENAME));
     await writeWorkspaceFile({
       dir: tempDir,
       name: DEFAULT_AGENTS_FILENAME,
@@ -1004,30 +997,33 @@ describe("loadWorkspaceBootstrapFiles", () => {
       content: "# AGENTS.md\n\nkeep me\n",
     });
 
-    const originalReadFileSync = syncFs.readFileSync.bind(syncFs);
-    let readFileSyncCalls = 0;
+    // The bounded fd reader consumes the descriptor via fs.read; inject the
+    // transient failure at that seam.
+    const originalRead = syncFs.read.bind(syncFs);
+    let readCalls = 0;
     let threwTransient = false;
-    const readSpy = vi.spyOn(syncFs, "readFileSync").mockImplementation(((
-      target: unknown,
-      options: unknown,
-    ) => {
-      readFileSyncCalls += 1;
+    const readSpy = vi.spyOn(syncFs, "read").mockImplementation(((...args: unknown[]) => {
+      readCalls += 1;
       if (!threwTransient) {
         threwTransient = true;
-        throw Object.assign(new Error("Unknown system error -11: read"), {
-          code: "EAGAIN",
-          errno: -11,
-        });
+        const callback = args.at(-1) as (error: Error) => void;
+        callback(
+          Object.assign(new Error("Unknown system error -11: read"), {
+            code: "EAGAIN",
+            errno: -11,
+          }),
+        );
+        return;
       }
-      return originalReadFileSync(target as never, options as never);
-    }) as typeof syncFs.readFileSync);
+      (originalRead as (...forwarded: unknown[]) => void)(...args);
+    }) as typeof syncFs.read);
 
     try {
       const files = await loadWorkspaceBootstrapFiles(tempDir);
       expect(threwTransient).toBe(true);
       // The retry re-opens and reads again, so the failed first read is followed
       // by at least one more successful read.
-      expect(readFileSyncCalls).toBeGreaterThanOrEqual(2);
+      expect(readCalls).toBeGreaterThanOrEqual(2);
       const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
       expect(agents?.missing).toBe(false);
       expect(agents?.content).toContain("keep me");
@@ -1044,12 +1040,15 @@ describe("loadWorkspaceBootstrapFiles", () => {
       content: "# AGENTS.md\n",
     });
 
-    const readSpy = vi.spyOn(syncFs, "readFileSync").mockImplementation((() => {
-      throw Object.assign(new Error("Unknown system error -11: read"), {
-        code: "EAGAIN",
-        errno: -11,
-      });
-    }) as typeof syncFs.readFileSync);
+    const readSpy = vi.spyOn(syncFs, "read").mockImplementation(((...args: unknown[]) => {
+      const callback = args.at(-1) as (error: Error) => void;
+      callback(
+        Object.assign(new Error("Unknown system error -11: read"), {
+          code: "EAGAIN",
+          errno: -11,
+        }),
+      );
+    }) as typeof syncFs.read);
 
     try {
       // Unlike the template check, this reader returns an io failure (not a
@@ -1142,7 +1141,6 @@ describe("filterBootstrapFilesForSession", () => {
     { name: "TOOLS.md", path: "/w/TOOLS.md", content: "", missing: false },
     { name: "IDENTITY.md", path: "/w/IDENTITY.md", content: "", missing: false },
     { name: "USER.md", path: "/w/USER.md", content: "", missing: false },
-    { name: "HEARTBEAT.md", path: "/w/HEARTBEAT.md", content: "", missing: false },
     { name: "BOOTSTRAP.md", path: "/w/BOOTSTRAP.md", content: "", missing: false },
     { name: "MEMORY.md", path: "/w/MEMORY.md", content: "", missing: false },
   ];

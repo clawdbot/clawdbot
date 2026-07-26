@@ -1,10 +1,9 @@
-// Telegram plugin module builds transport-shared durable ingress drains.
-import type { ChannelIngressDrain } from "openclaw/plugin-sdk/channel-outbound";
+// Telegram plugin module builds transport-shared durable ingress monitors.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { TelegramBotInfo } from "./bot-info.js";
 import type { TelegramMessageProcessingResult } from "./bot-processing-outcome.js";
 import {
-  createTelegramIngressDrain,
+  createTelegramIngressMonitor,
   resolveTelegramAdoptionStallTimeoutMs,
   type TelegramIngressDrainLifecycle,
 } from "./telegram-ingress-drain.js";
@@ -14,14 +13,16 @@ type TelegramSpooledBot = {
   handleUpdate: (update: never) => Promise<void>;
 };
 
-type CreateTelegramTransportIngressDrainParams = {
+type CreateTelegramTransportIngressMonitorParams = {
   spoolDir: string;
   bot: TelegramSpooledBot;
   cfg: OpenClawConfig;
   accountId: string;
   botInfo?: TelegramBotInfo;
   adoptionStallTimeoutMs?: number;
+  pollIntervalMs?: number;
   onLog?: (message: string) => void;
+  onError?: (error: unknown) => void;
   abortSignal?: AbortSignal;
   /**
    * Optional override for full dispatch (tests). Default: bot.handleUpdate under
@@ -34,24 +35,26 @@ type CreateTelegramTransportIngressDrainParams = {
 };
 
 /**
- * One drain for polling + webhook: claim → dispatch with turnAdoptionLifecycle →
- * complete at adoption. Transport code only enqueues then pumps drainOnce().
+ * One monitor for polling + webhook: channel-owned append, shared claim →
+ * dispatch with turnAdoptionLifecycle → complete at adoption.
  */
-export function createTelegramTransportIngressDrain(
-  params: CreateTelegramTransportIngressDrainParams,
-): ChannelIngressDrain {
+export function createTelegramTransportIngressMonitor(
+  params: CreateTelegramTransportIngressMonitorParams,
+) {
   const queue = openTelegramIngressQueue(params.spoolDir);
   const adoptionStallTimeoutMs = resolveTelegramAdoptionStallTimeoutMs({
     configured: params.adoptionStallTimeoutMs,
     env: process.env,
   });
-  return createTelegramIngressDrain({
+  return createTelegramIngressMonitor({
     queue,
     cfg: params.cfg,
     accountId: params.accountId,
     botInfo: params.botInfo,
     adoptionStallTimeoutMs,
+    ...(params.pollIntervalMs === undefined ? {} : { pollIntervalMs: params.pollIntervalMs }),
     ...(params.onLog ? { onLog: params.onLog } : {}),
+    ...(params.onError ? { onError: params.onError } : {}),
     ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
     dispatch: async (update, lifecycle) => {
       if (params.dispatchUpdate) {

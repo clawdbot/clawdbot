@@ -1,3 +1,5 @@
+import { expect } from "vitest";
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveCliBackendConfig } from "../agents/cli-backends.js";
 // OpenClaw test helpers build runtime environments for rescue tests.
 import {
@@ -6,8 +8,11 @@ import {
   fingerprintResolvedAuthProfileCredential,
   fingerprintResolvedProviderAuth,
 } from "../agents/execution-auth-binding.js";
+import { resolveCliRuntimeExecutionProvider } from "../agents/model-runtime-aliases.js";
+import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { listSystemAgentAuditEntriesForTests } from "./audit.test-support.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import {
   createSystemAgentVerifiedInferenceBinding,
@@ -20,11 +25,70 @@ type SystemAgentVerifiedInferenceTestFixture = {
   deps: SystemAgentVerifiedInferenceDeps;
 };
 
+export function readLastSystemAgentAuditEntry(): unknown {
+  return listSystemAgentAuditEntriesForTests().at(-1)?.value;
+}
+
+export function requireTestRecord(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null) {
+    throw new Error(`${label} was not an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+export function expectTestRecordFields(
+  record: Record<string, unknown>,
+  fields: Record<string, unknown>,
+): void {
+  for (const [key, value] of Object.entries(fields)) {
+    expect(record[key]).toEqual(value);
+  }
+}
+
+export function expectSystemAgentAuditRecord(
+  audit: unknown,
+  fields: Record<string, unknown>,
+  detailFields: Record<string, unknown>,
+): void {
+  const auditRecord = requireTestRecord(audit, "audit record");
+  expectTestRecordFields(auditRecord, fields);
+  expectTestRecordFields(requireTestRecord(auditRecord.details, "audit details"), detailFields);
+}
+
 /** Build exact, revalidatable proof for a test config without reading host credentials. */
 export async function createSystemAgentVerifiedInferenceTestFixture(
   config: OpenClawConfig,
 ): Promise<SystemAgentVerifiedInferenceTestFixture> {
-  const configuredRoute = await resolveSystemAgentConfiguredRouteFromConfig(config);
+  const routeAgentId = resolveDefaultAgentId(config);
+  const selection = resolveSimpleCompletionSelectionForAgent({
+    cfg: config,
+    agentId: routeAgentId,
+  });
+  const selectedProfileId = selection?.profileId;
+  const cliExecutionProvider = selection
+    ? resolveCliRuntimeExecutionProvider({
+        provider: selection.provider,
+        cfg: config,
+        agentId: routeAgentId,
+        modelId: selection.modelId,
+        ...(selectedProfileId ? { authProfileId: selectedProfileId } : {}),
+      })
+    : undefined;
+  const selectedCredential =
+    selectedProfileId && selection
+      ? ({
+          type: "api_key",
+          provider: cliExecutionProvider ?? selection.runtimeProvider ?? selection.provider,
+          key: "test-key",
+        } as const)
+      : undefined;
+  const loadAuthProfileStoreForRuntime = (() => ({
+    version: 1,
+    profiles: selectedProfileId ? { [selectedProfileId]: selectedCredential } : {},
+  })) as never;
+  const configuredRoute = await resolveSystemAgentConfiguredRouteFromConfig(config, undefined, {
+    loadAuthProfileStoreForRuntime,
+  });
   if (!configuredRoute) {
     throw new Error("missing test route");
   }
@@ -53,6 +117,7 @@ export async function createSystemAgentVerifiedInferenceTestFixture(
     configuredRoute.provider === "claude-cli" ? "anthropic" : undefined,
   ].filter((id, index, ids): id is string => Boolean(id) && ids.indexOf(id) === index);
   const deps: SystemAgentVerifiedInferenceDeps = {
+    loadAuthProfileStoreForRuntime,
     ensureAuthProfileStore: (() => ({
       version: 1,
       profiles: profileId ? { [profileId]: credential } : {},
@@ -103,6 +168,7 @@ export async function createSystemAgentVerifiedInferenceTestFixture(
           bundleMcpMode: backend.bundleMcpMode,
           authEpochMode: backend.authEpochMode,
           nativeToolMode: backend.nativeToolMode,
+          toolAvailabilityEnforcement: backend.toolAvailabilityEnforcement,
           sideQuestionToolMode: backend.sideQuestionToolMode,
         },
         ...(profileId ? { authProfileId: profileId } : {}),
@@ -154,6 +220,9 @@ export async function createSystemAgentVerifiedInferenceTestFixture(
       ...(profileId ? { authProfileId: profileId } : {}),
       authFingerprint,
       agentHarnessId,
+      modelId: configuredRoute.model,
+      modelApi:
+        configuredRoute.provider === "anthropic" ? "anthropic-messages" : "openai-responses",
       ...(agentHarnessId === "openclaw"
         ? {}
         : {

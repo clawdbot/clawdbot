@@ -14,11 +14,13 @@ import {
   resetCliAuthEpochTestDeps,
   setCliAuthEpochTestDeps,
 } from "./cli-auth-epoch.test-support.js";
+import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import { resolveCliExecutableIdentity } from "./cli-executable-identity.js";
 
 describe("resolveCliAuthEpoch", () => {
   afterEach(() => {
     resetCliAuthEpochTestDeps();
+    cliBackendsTesting.resetDepsForTest();
   });
 
   function expectCliAuthEpoch(
@@ -982,15 +984,23 @@ describe("resolveCliAuthEpoch", () => {
   });
 
   function cliConfig(command: string): OpenClawConfig {
-    return {
-      agents: {
-        defaults: {
-          cliBackends: {
-            "claude-cli": { command },
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          pluginId: "anthropic",
+          config: { command },
+          runtimeArtifact: {
+            kind: "bundled-package-tree",
+            packageName: "@fixture/claude-cli",
+            entrypoint: "command",
+            nativeExecutableNames: ["claude", "claude.exe"],
           },
         },
-      },
-    };
+      ],
+    });
+    return {};
   }
 
   function copyNativeExecutable(filePath: string, source = process.execPath): void {

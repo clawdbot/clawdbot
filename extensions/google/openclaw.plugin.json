@@ -46,6 +46,9 @@
     }
   },
   "modelCatalog": {
+    "discovery": {
+      "google": "runtime"
+    },
     "suppressions": [
       {
         "provider": "google",
@@ -755,9 +758,6 @@
       },
       "nativeDocumentInputs": ["pdf"]
     }
-  },
-  "configContracts": {
-    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
   },
   "configSchema": {
     "type": "object",

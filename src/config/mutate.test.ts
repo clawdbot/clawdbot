@@ -12,6 +12,7 @@ import {
   mutateConfigFile,
   replaceConfigFile,
   transformConfigFileWithRetry,
+  withConfigMutationExclusive,
 } from "./mutate.js";
 import { resolveConfigPath } from "./paths.js";
 import {
@@ -426,6 +427,34 @@ describe("config mutate helpers", () => {
       },
       { baseSnapshot: fresh, expectedConfigPath: fresh.path, afterWrite: { mode: "auto" } },
     );
+  });
+
+  it("allows nested mutation helpers while holding the exclusive config lock", async () => {
+    const configPath = resolveConfigPath();
+    const snapshot = createSnapshot({
+      hash: "hash-1",
+      path: configPath,
+      sourceConfig: { agents: { list: [] } },
+    });
+    ioMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
+      snapshot,
+      writeOptions: { expectedConfigPath: configPath },
+    });
+    ioMocks.writeConfigFile.mockResolvedValue(undefined);
+
+    const result = await withConfigMutationExclusive(async () => {
+      return await transformConfigFileWithRetry({
+        maxAttempts: 1,
+        transform: (config) => ({
+          nextConfig: { ...config, agents: { list: [{ id: "work" }] } },
+          result: "created",
+        }),
+      });
+    });
+
+    expect(result.result).toBe("created");
+    expect(ioMocks.readConfigFileSnapshotForWrite).toHaveBeenCalledTimes(2);
+    expect(ioMocks.writeConfigFile).toHaveBeenCalledOnce();
   });
 
   it("rejects stale replace attempts when the base hash changed", async () => {

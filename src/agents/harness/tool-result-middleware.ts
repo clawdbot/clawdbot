@@ -481,7 +481,6 @@ export function createAgentToolResultMiddlewareRunner(
   ctx: AgentToolResultMiddlewareContext,
   handlers?: AgentToolResultMiddleware[],
 ) {
-  const middlewareContext = { ...ctx, harness: ctx.harness ?? ctx.runtime };
   let resolvedHandlers = handlers;
   const resolvedHandlersLoader = createLazyPromiseLoader(async () => {
     const { loadAgentToolResultMiddlewaresForRuntime } =
@@ -518,7 +517,7 @@ export function createAgentToolResultMiddlewareRunner(
       let current = sanitizeToolResultForMiddleware(event.result);
       for (const handler of handlersForRun) {
         try {
-          const next = await handler({ ...event, result: current }, middlewareContext);
+          const next = await handler({ ...event, result: current }, ctx);
           // Middleware may mutate event.result in place for legacy runtime parity.
           // Validate the current object after every handler so in-place writes
           // cannot bypass the same shape and size bounds as returned results.

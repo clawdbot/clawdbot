@@ -20,7 +20,6 @@ import {
   pluginRegistryIssueToHealthFinding,
   pluginRegistryIssueToRepairEffect,
 } from "./doctor-plugin-registry.js";
-import { DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV } from "./doctor/shared/plugin-registry-migration.js";
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: vi.fn(),
@@ -471,22 +470,6 @@ describe("maybeRepairPluginRegistryState", () => {
         origin: "global",
       }),
     ]);
-  });
-
-  it("does not repair when registry migration is disabled", async () => {
-    const stateDir = makeTempDir();
-
-    const nextConfig = await maybeRepairPluginRegistryState({
-      stateDir,
-      env: hermeticEnv({
-        [DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV]: "1",
-      }),
-      config: {},
-      prompter: { shouldRepair: true },
-    });
-
-    expect(nextConfig).toStrictEqual({});
-    expect(vi.mocked(note).mock.calls.join("\n")).toContain(DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV);
   });
 
   it("warns about stale managed npm packages that shadow bundled plugins", async () => {

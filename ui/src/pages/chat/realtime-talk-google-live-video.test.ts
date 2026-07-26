@@ -58,7 +58,7 @@ class FakeAudioContext {
   async close(): Promise<void> {}
 }
 
-function createTransport(callbacks: RealtimeTalkCallbacks) {
+function createTransport(callbacks: RealtimeTalkCallbacks, videoDeviceId?: string) {
   return new GoogleLiveRealtimeTalkTransport(
     {
       provider: "google",
@@ -79,6 +79,7 @@ function createTransport(callbacks: RealtimeTalkCallbacks) {
       callbacks,
       client: { request: vi.fn(), addEventListener: vi.fn() } as never,
       sessionKey: "main",
+      videoDeviceId,
     },
   );
 }
@@ -313,5 +314,60 @@ describe("Google Live Video Talk", () => {
     expect(audioStop).toHaveBeenCalledOnce();
     expect(videoStop).toHaveBeenCalledOnce();
     expect(FakeGoogleLiveWebSocket.instance?.readyState).toBe(3);
+  });
+
+  it("switches an active camera and keeps video frame capture running", async () => {
+    const audioTrack = { stop: vi.fn() } as unknown as MediaStreamTrack;
+    const frontStop = vi.fn();
+    const frontTrack = Object.assign(new EventTarget(), {
+      stop: frontStop,
+      readyState: "live",
+      enabled: true,
+      muted: false,
+      getSettings: () => ({ deviceId: "front" }),
+    }) as unknown as MediaStreamTrack;
+    const backTrack = Object.assign(new EventTarget(), {
+      stop: vi.fn(),
+      readyState: "live",
+      enabled: true,
+      muted: false,
+      getSettings: () => ({ deviceId: "back" }),
+    }) as unknown as MediaStreamTrack;
+    const audio = {
+      getAudioTracks: () => [audioTrack],
+      getTracks: () => [audioTrack],
+    } as unknown as MediaStream;
+    const frontCamera = {
+      getVideoTracks: () => [frontTrack],
+      getTracks: () => [frontTrack],
+    } as unknown as MediaStream;
+    const backCamera = {
+      getVideoTracks: () => [backTrack],
+      getTracks: () => [backTrack],
+    } as unknown as MediaStream;
+    const getUserMedia = vi
+      .fn()
+      .mockResolvedValueOnce(audio)
+      .mockResolvedValueOnce(frontCamera)
+      .mockResolvedValueOnce(backCamera);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+    const onVideoStream = vi.fn();
+    const transport = createTransport({ onVideoStream }, "front");
+
+    await transport.start();
+    await transport.setVideoEnabled(true);
+    await transport.switchCamera("back");
+
+    expect(getUserMedia).toHaveBeenNthCalledWith(2, {
+      video: { deviceId: { exact: "front" } },
+    });
+    expect(getUserMedia).toHaveBeenNthCalledWith(3, {
+      video: { deviceId: { exact: "back" } },
+    });
+    expect(frontStop).toHaveBeenCalledOnce();
+    expect(onVideoStream).toHaveBeenLastCalledWith(backCamera);
+
+    transport.stop();
   });
 });

@@ -19,7 +19,7 @@ rollups:
       score: 72
       label: Beta
 surfaces:
-  - id: gateway-runtime
+  - id: gateway
     name: Gateway runtime
     family: core
     level:
@@ -187,7 +187,7 @@ surfaces:
           supported: true
           reason: human_override
           human_override: true
-  - id: cli-install-update-onboard-doctor
+  - id: cli
     name: CLI
     family: core
     level:
@@ -289,7 +289,7 @@ surfaces:
           supported: true
           reason: human_override
           human_override: true
-  - id: plugin-sdk-and-bundled-plugin-architecture
+  - id: plugins
     name: Plugins
     family: core
     level:
@@ -413,7 +413,7 @@ surfaces:
           supported: false
           reason: none
           human_override: false
-  - id: agent-runtime-and-provider-execution
+  - id: agent-runtime
     name: Agent Runtime
     family: core
     level:
@@ -537,7 +537,7 @@ surfaces:
           supported: true
           reason: human_override
           human_override: true
-  - id: session-memory-and-context-engine
+  - id: session-memory
     name: Session, memory, and context engine
     family: core
     level:
@@ -661,7 +661,7 @@ surfaces:
           supported: true
           reason: human_override
           human_override: true
-  - id: channel-framework
+  - id: channels
     name: Channel framework
     family: core
     level:
@@ -774,7 +774,7 @@ surfaces:
           supported: true
           reason: human_override
           human_override: true
-  - id: security-auth-pairing-and-secrets
+  - id: security
     name: Security, auth, pairing, and secrets
     family: core
     level:
@@ -865,7 +865,7 @@ surfaces:
           supported: true
           reason: human_override
           human_override: true
-  - id: telemetry-diagnostics-and-observability
+  - id: observability
     name: Observability
     family: core
     level:
@@ -945,7 +945,7 @@ surfaces:
           supported: true
           reason: human_override
           human_override: true
-  - id: automation-cron-hooks-tasks-polling
+  - id: automation
     name: "Automation: cron, hooks, tasks, polling"
     family: core
     level:
@@ -1036,7 +1036,7 @@ surfaces:
           supported: false
           reason: none
           human_override: false
-  - id: media-understanding-and-media-generation
+  - id: media
     name: Media understanding and media generation
     family: core
     level:
@@ -1127,7 +1127,7 @@ surfaces:
           supported: false
           reason: none
           human_override: false
-  - id: voice-and-realtime-talk
+  - id: voice
     name: Voice and realtime talk
     family: core
     level:
@@ -1218,7 +1218,7 @@ surfaces:
           supported: false
           reason: none
           human_override: false
-  - id: browser-control-ui-and-webchat
+  - id: control-ui
     name: Gateway Web App
     family: core
     level:
@@ -1309,7 +1309,7 @@ surfaces:
           supported: false
           reason: none
           human_override: false
-  - id: tui-and-terminal-ux
+  - id: tui
     name: TUI
     family: core
     level:
@@ -1389,7 +1389,7 @@ surfaces:
           supported: false
           reason: none
           human_override: false
-  - id: clawhub-and-external-plugin-distribution
+  - id: clawhub
     name: ClawHub
     family: core
     level:
@@ -1458,7 +1458,7 @@ surfaces:
           supported: false
           reason: none
           human_override: false
-  - id: openclaw-app-sdk
+  - id: app-sdk
     name: OpenClaw App SDK
     family: core
     level:
@@ -1549,7 +1549,7 @@ surfaces:
           supported: false
           reason: none
           human_override: false
-  - id: macos-gateway-host
+  - id: macos-host
     name: macOS Gateway host
     family: platform-app
     level:
@@ -1651,7 +1651,7 @@ surfaces:
           supported: false
           reason: none
           human_override: false
-  - id: macos-companion-app
+  - id: macos-app
     name: macOS companion app
     family: platform-app
     level:
@@ -1764,7 +1764,7 @@ surfaces:
           supported: false
           reason: none
           human_override: false
-  - id: linux-gateway-host
+  - id: linux-host
     name: Linux Gateway host
     family: platform-app
     level:
@@ -1844,7 +1844,7 @@ surfaces:
           supported: false
           reason: none
           human_override: false
-  - id: linux-companion-app
+  - id: linux-app
     name: Linux companion app
     family: platform-app
     level:
@@ -1924,7 +1924,7 @@ surfaces:
           supported: false
           reason: none
           human_override: false
-  - id: windows-via-wsl2
+  - id: wsl
     name: Windows via WSL2
     family: platform-app
     level:
@@ -2015,7 +2015,7 @@ surfaces:
           supported: false
           reason: none
           human_override: false
-  - id: native-windows-cli-and-gateway
+  - id: windows
     name: Native Windows
     family: platform-app
     level:
@@ -2084,7 +2084,7 @@ surfaces:
           supported: false
           reason: none
           human_override: false
-  - id: native-windows-companion-app
+  - id: windows-app
     name: Native Windows companion app
     family: platform-app
     level:
@@ -2164,7 +2164,7 @@ surfaces:
           supported: false
           reason: none
           human_override: false
-  - id: android-app
+  - id: android
     name: Android app
     family: platform-app
     level:
@@ -2266,7 +2266,7 @@ surfaces:
           supported: false
           reason: none
           human_override: false
-  - id: ios-app
+  - id: ios
     name: iOS app
     family: platform-app
     level:
@@ -2379,7 +2379,7 @@ surfaces:
           supported: false
           reason: none
           human_override: false
-  - id: watchos-companion-surfaces
+  - id: watchos
     name: watchOS companion surfaces
     family: platform-app
     level:
@@ -2459,7 +2459,7 @@ surfaces:
           supported: false
           reason: none
           human_override: false
-  - id: raspberry-pi-small-linux-devices
+  - id: small-linux
     name: Raspberry Pi and small Linux devices
     family: platform-app
     level:
@@ -2528,7 +2528,7 @@ surfaces:
           supported: false
           reason: none
           human_override: false
-  - id: docker-podman-hosting
+  - id: containers
     name: Docker and Podman hosting
     family: platform-app
     level:
@@ -2597,7 +2597,7 @@ surfaces:
           supported: false
           reason: none
           human_override: false
-  - id: kubernetes-hosting
+  - id: kubernetes
     name: Kubernetes hosting
     family: platform-app
     level:
@@ -2666,7 +2666,7 @@ surfaces:
           supported: false
           reason: none
           human_override: false
-  - id: nix-install-path
+  - id: nix
     name: Nix install path
     family: platform-app
     level:
@@ -3488,7 +3488,7 @@ surfaces:
           supported: false
           reason: none
           human_override: false
-  - id: mattermost-line-irc-nextcloud-talk-nostr-twitch-tlon-synology-chat
+  - id: community-channels
     name: Mattermost, LINE, IRC, Nextcloud Talk, Nostr, Twitch, Tlon, Synology Chat
     family: channel
     level:
@@ -3557,7 +3557,7 @@ surfaces:
           supported: false
           reason: none
           human_override: false
-  - id: feishu-qq-bot-wechat-yuanbao-zalo-zalo-personal-regional-channels
+  - id: regional-channels
     name: Feishu, QQ Bot, WeChat, Yuanbao, Zalo, Zalo Personal, regional channels
     family: channel
     level:
@@ -3626,7 +3626,7 @@ surfaces:
           supported: false
           reason: none
           human_override: false
-  - id: voice-call-channel
+  - id: voice-call
     name: Voice Call channel
     family: channel
     level:
@@ -3706,7 +3706,7 @@ surfaces:
           supported: false
           reason: none
           human_override: false
-  - id: openai-codex-provider-path
+  - id: openai
     name: OpenAI and Codex provider path
     family: provider-tool
     level:
@@ -3786,7 +3786,7 @@ surfaces:
           supported: false
           reason: none
           human_override: false
-  - id: anthropic-provider-path
+  - id: anthropic
     name: Anthropic provider path
     family: provider-tool
     level:
@@ -3866,7 +3866,7 @@ surfaces:
           supported: false
           reason: none
           human_override: false
-  - id: google-provider-path
+  - id: google-ai
     name: Google provider path
     family: provider-tool
     level:
@@ -3946,7 +3946,7 @@ surfaces:
           supported: false
           reason: none
           human_override: false
-  - id: openrouter-provider-path
+  - id: openrouter
     name: OpenRouter provider path
     family: provider-tool
     level:
@@ -4015,7 +4015,7 @@ surfaces:
           supported: false
           reason: none
           human_override: false
-  - id: local-model-providers-ollama-vllm-sglang-lm-studio
+  - id: local-models
     name: "Local model providers: Ollama, vLLM, SGLang, LM Studio"
     family: provider-tool
     level:
@@ -4095,7 +4095,7 @@ surfaces:
           supported: false
           reason: none
           human_override: false
-  - id: long-tail-hosted-providers
+  - id: hosted-providers
     name: Long-tail hosted providers
     family: provider-tool
     level:
@@ -4153,7 +4153,7 @@ surfaces:
           supported: false
           reason: none
           human_override: false
-  - id: web-search-tools
+  - id: web-search
     name: Web search tools
     family: provider-tool
     level:
@@ -4222,7 +4222,7 @@ surfaces:
           supported: false
           reason: none
           human_override: false
-  - id: browser-automation-and-exec-sandbox-tools
+  - id: tools
     name: Browser automation, exec, and sandbox tools
     family: provider-tool
     level:
@@ -4280,7 +4280,7 @@ surfaces:
           supported: true
           reason: human_override
           human_override: true
-  - id: image-video-music-generation-tools
+  - id: media-generation
     name: Image, video, and music generation tools
     family: provider-tool
     level:

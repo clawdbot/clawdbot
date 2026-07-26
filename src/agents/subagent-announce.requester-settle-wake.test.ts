@@ -105,11 +105,18 @@ function transitionBatch(runIds: readonly string[], state: RequesterSettleWakeBa
   }
 }
 
-function completeBatch(runIds: readonly string[]): void {
-  completeBatchSpy(runIds);
+function completeBatch(runIds: readonly string[], rearmGeneration?: number): void {
+  if (rearmGeneration === undefined) {
+    completeBatchSpy(runIds);
+  } else {
+    completeBatchSpy(runIds, rearmGeneration);
+  }
   const selected = new Set(runIds);
   for (const entry of listedRequesterRuns()) {
-    if (selected.has(entry.runId)) {
+    if (
+      selected.has(entry.runId) &&
+      entry.requesterSettleWake?.rearmGeneration === rearmGeneration
+    ) {
       entry.requesterSettleWake = undefined;
     }
   }
@@ -359,15 +366,51 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(deliverSpy).not.toHaveBeenCalled();
   });
 
-  it("does not add a wake turn after a single delivered completion", async () => {
+  it("does not add a wake turn for an ordinary frozen single completion", async () => {
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
-      makeSettledChild({ runId: "run-b", delivery: { status: "delivered" } }),
+      makeSettledChild({
+        runId: "run-b",
+        delivery: { status: "delivered" },
+        requesterSettleWake: {
+          status: "dispatching",
+          attemptCount: 1,
+          batchRunIds: ["run-b"],
+          requesterYieldBatch: true,
+        },
+      }),
     ]);
 
     const woke = await maybeWakeRequesterAfterAllChildrenSettled(wakeParams());
 
     expect(woke).toBe(false);
     expect(deliverSpy).not.toHaveBeenCalled();
+  });
+
+  it("wakes after a requester yields with one already-delivered completion", async () => {
+    const child = makeSettledChild({
+      runId: "run-b",
+      delivery: { status: "delivered" },
+      requesterSettleWake: {
+        status: "pending",
+        attemptCount: 0,
+        batchRunIds: ["run-b"],
+        requesterYieldBatch: true,
+        afterRequesterYield: true,
+        rearmGeneration: 1,
+      },
+    });
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
+
+    const woke = await maybeWakeRequesterAfterAllChildrenSettled(
+      wakeParams({ settledEntry: child }),
+    );
+
+    expect(woke).toBe(true);
+    expect(deliverSpy).toHaveBeenCalledOnce();
+    expect(deliveredCallArg().directIdempotencyKey).toBe(
+      `announce:requester-settle:${REQUESTER}:run-b:yield-1`,
+    );
+    expect(completeBatchSpy).toHaveBeenCalledWith(["run-b"], 1);
   });
 
   it("wakes for a single required completion whose announce never delivered", async () => {

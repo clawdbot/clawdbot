@@ -26,6 +26,12 @@ async function makeOoxmlZip(opts: { mainMime: string; partPath: string }): Promi
   return await zip.generateAsync({ type: "nodebuffer" });
 }
 
+// file-type classifies this generic ISO-BMFF brand as video/mp4 without track metadata.
+const ISOM_BRAND_BUFFER = Buffer.from(
+  "0000001c6674797069736f6d0000000069736f6d0000000000000000",
+  "hex",
+);
+
 describe("mime detection", () => {
   async function expectDetectedMime(params: {
     input: Parameters<typeof detectMime>[0];
@@ -221,10 +227,51 @@ describe("mime detection", () => {
     });
   });
 
-  it("preserves audio metadata when an MP4 extension cannot identify track kind", async () => {
-    await expectDetectedMime({
-      input: { filePath: "voice.mp4", headerMime: "audio/mp4" },
+  it.each([
+    {
+      name: "audio/mp4 header",
+      filePath: "voice.mp4",
+      headerMime: "audio/mp4",
       expected: "audio/mp4",
+    },
+    {
+      name: "audio/x-m4a header",
+      filePath: "voice.m4a",
+      headerMime: "audio/x-m4a",
+      expected: "audio/x-m4a",
+    },
+    {
+      name: "audio/m4a header",
+      filePath: "voice.m4a",
+      headerMime: "audio/m4a",
+      expected: "audio/m4a",
+    },
+    {
+      name: "m4a extension",
+      filePath: "voice.m4a",
+      headerMime: undefined,
+      expected: "audio/x-m4a",
+    },
+    {
+      name: "mp4 extension without an audio hint",
+      filePath: "clip.mp4",
+      headerMime: undefined,
+      expected: "video/mp4",
+    },
+    {
+      name: "audio/aac elementary-stream metadata",
+      filePath: "voice.aac",
+      headerMime: "audio/aac",
+      expected: "video/mp4",
+    },
+  ] as const)("resolves ambiguous isom-brand bytes from $name", async (testCase) => {
+    await expectDetectedMime({
+      input: {
+        buffer: ISOM_BRAND_BUFFER,
+        filePath: testCase.filePath,
+        headerMime: testCase.headerMime,
+      },
+      expected: testCase.expected,
     });
   });
 
@@ -381,6 +428,7 @@ describe("extensionForMime", () => {
     { mime: "audio/x-wav", expected: ".wav" },
     { mime: "audio/webm", expected: ".webm" },
     { mime: "audio/x-m4a", expected: ".m4a" },
+    { mime: "audio/m4a", expected: ".m4a" },
     { mime: "audio/mp4", expected: ".m4a" },
     { mime: "video/x-msvideo", expected: ".avi" },
     { mime: "video/mp4", expected: ".mp4" },

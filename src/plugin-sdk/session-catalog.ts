@@ -11,11 +11,22 @@ export type {
   SessionUpstreamKind,
   SessionUpstreamProbe,
 } from "../plugins/session-catalog.js";
+export {
+  createSessionCatalogAdoptionCoordinator,
+  isExternalUserText,
+  listAdoptedSessionCatalogSessions,
+  normalizeUserText,
+  sessionCatalogAdoptedSessionKey,
+  sessionCatalogAdoptedSourceKey,
+} from "../plugins/session-catalog.js";
+export { importSessionCatalogHistory } from "../plugins/session-catalog-history-import.js";
 export type {
   SessionCatalog,
   SessionCatalogCapabilities,
   SessionCatalogDescriptor,
   SessionCatalogHost,
+  SessionCatalogLocator,
+  SessionCatalogPullRequestSummary,
   SessionCatalogSession,
   SessionCatalogTranscriptItem,
   SessionsCatalogArchiveParams,
@@ -27,6 +38,10 @@ export type {
   SessionsCatalogReadParams,
   SessionsCatalogReadResult,
 } from "../../packages/gateway-protocol/src/schema/sessions-catalog.js";
+export {
+  deleteSessionUpstreamLink,
+  upsertSessionUpstreamLink,
+} from "../sessions/session-upstream-links.js";
 export {
   classifyClaudeCliHistoryMessage,
   classifyClaudeCliHistoryLine,

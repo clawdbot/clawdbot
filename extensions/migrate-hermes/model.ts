@@ -4,6 +4,7 @@ import {
   resolveDefaultAgentId,
   setAgentEffectiveModelPrimary,
 } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveMigrationConfigRuntime } from "openclaw/plugin-sdk/migration";
 import type { MigrationItem, MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import { readString } from "./helpers.js";
 import {
@@ -368,7 +369,7 @@ export async function applyModelItem(
     return item;
   }
   try {
-    const configApi = ctx.runtime?.config;
+    const configApi = resolveMigrationConfigRuntime(ctx);
     if (!configApi?.current || !configApi.mutateConfigFile) {
       return hermesItemError(item, HERMES_REASON_CONFIG_RUNTIME_UNAVAILABLE);
     }

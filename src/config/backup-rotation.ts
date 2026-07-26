@@ -1,5 +1,6 @@
 // Rotates config backup files while preserving recent recovery points.
 import path from "node:path";
+import { logVerbose } from "../globals.js";
 
 const CONFIG_BACKUP_COUNT = 5;
 
@@ -77,8 +78,11 @@ async function cleanOrphanBackups(configPath: string, ioFs: BackupRotationFs): P
   let entries: string[];
   try {
     entries = await ioFs.readdir(dir);
-  } catch {
-    return; // best-effort
+  } catch (error) {
+    // best-effort: surface the reason so operators can see why orphan cleanup
+    // did not run instead of silently accumulating backups (#105199).
+    logVerbose(`config orphan backup cleanup skipped: cannot read ${dir}: ${String(error)}`);
+    return;
   }
 
   for (const entry of entries) {
@@ -89,8 +93,11 @@ async function cleanOrphanBackups(configPath: string, ioFs: BackupRotationFs): P
     if (validSuffixes.has(suffix)) {
       continue;
     }
-    await ioFs.unlink(path.join(dir, entry)).catch(() => {
-      // best-effort
+    const orphanPath = path.join(dir, entry);
+    await ioFs.unlink(orphanPath).catch((error: unknown) => {
+      // best-effort: log so a locked/undeletable orphan does not accumulate
+      // silently and slowly exhaust disk without any operator signal (#105199).
+      logVerbose(`config orphan backup cleanup failed to remove ${orphanPath}: ${String(error)}`);
     });
   }
 }

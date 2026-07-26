@@ -8,7 +8,7 @@ const record: QuestionRecord = {
   status: "pending",
   questions: [
     {
-      id: "target",
+      questionId: "target",
       header: "Target",
       question: "Deploy where?",
       options: [{ label: "Staging" }, { label: "Production" }],
@@ -28,7 +28,7 @@ describe("question channel runtime", () => {
     const event = {
       id: record.id,
       status: "answered" as const,
-      answers: { answers: { target: { answers: ["Production"] } } },
+      answers: { answers: { target: ["Production"] } },
     };
     runtime.handleResolved(event);
     runtime.handleResolved(event);
@@ -60,7 +60,7 @@ describe("question channel runtime", () => {
     runtime.handleResolved({
       id: record.id,
       status: "answered",
-      answers: { answers: { target: { answers: ["@everyone secret-ish text"] } } },
+      answers: { answers: { target: ["@everyone secret-ish text"] } },
     });
 
     await vi.waitFor(() => expect(finalize).toHaveBeenCalledWith("Answered"));
@@ -111,7 +111,7 @@ describe("terminal status labels", () => {
       id: "ask_q",
       questions: [
         {
-          id: "deploy",
+          questionId: "deploy",
           header: "Deploy",
           question: "Where?",
           options: [{ label: "Staging" }, { label: "Production" }],
@@ -121,7 +121,7 @@ describe("terminal status labels", () => {
       createdAtMs: 1,
       expiresAtMs: 2,
       status: "answered",
-      answers: { answers: { deploy: { answers: ["Staging"] } } },
+      answers: { answers: { deploy: ["Staging"] } },
     };
     const finalize = vi.fn();
     const runtime = createQuestionChannelRuntime();
@@ -130,7 +130,7 @@ describe("terminal status labels", () => {
     runtime.handleResolved({
       id: "ask_q",
       status: "answered",
-      answers: { answers: { deploy: { answers: ["Staging"] } } },
+      answers: { answers: { deploy: ["Staging"] } },
     });
 
     await vi.waitFor(() => expect(finalize).toHaveBeenCalledWith("Answered: Staging"));

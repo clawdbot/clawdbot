@@ -54,7 +54,9 @@ describe("describeBrowserScreenshot", () => {
         {
           cfg: {
             tools: {
-              media: { image: { models: [{ provider: "openai", model: "gpt-vision" }] } },
+              media: {
+                models: [{ provider: "openai", model: "gpt-vision", capabilities: ["image"] }],
+              },
             },
           },
           filePath,
@@ -77,9 +79,7 @@ describe("describeBrowserScreenshot", () => {
         cfg: {
           tools: {
             media: {
-              image: {
-                models: [{ provider: "openai", model: "gpt-vision" }],
-              },
+              models: [{ provider: "openai", model: "gpt-vision", capabilities: ["image"] }],
             },
           },
         },
@@ -141,7 +141,9 @@ describe("describeBrowserScreenshot", () => {
       {
         cfg: {
           tools: {
-            media: { image: { models: [{ provider: "openai", model: "gpt-vision" }] } },
+            media: {
+              models: [{ provider: "openai", model: "gpt-vision", capabilities: ["image"] }],
+            },
           },
         },
         filePath: "/tmp/screenshot.png",

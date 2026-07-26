@@ -46,7 +46,7 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "approvals",
-    description: "Manage exec approvals (gateway or node host)",
+    description: "Manage approval policy and pending requests",
     hasSubcommands: true,
     parentDefaultHelp: true,
   },
@@ -68,6 +68,12 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
   {
     name: "devices",
     description: "Device pairing and auth tokens",
+    hasSubcommands: true,
+    parentDefaultHelp: true,
+  },
+  {
+    name: "users",
+    description: "Manage durable user profiles and email aliases",
     hasSubcommands: true,
     parentDefaultHelp: true,
   },

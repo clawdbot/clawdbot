@@ -3,7 +3,7 @@ import {
   installMissingStylesheetRecovery,
   installStaleChunkReloadListener,
   isStaleChunkImportError,
-  retryStaleChunkReload,
+  retryStaleChunkReloadWhenReachable,
   scheduleStaleChunkReload,
 } from "./stale-chunk-reload.ts";
 
@@ -196,7 +196,7 @@ describe("scheduleStaleChunkReload", () => {
     vi.useFakeTimers();
     const reload = vi.fn();
     const fetchMock = stubHangingDocumentFetch();
-    const retry = retryStaleChunkReload({ reload });
+    const retry = retryStaleChunkReloadWhenReachable({ reload, timeoutMs: 0 });
 
     await Promise.resolve();
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -219,30 +219,73 @@ describe("scheduleStaleChunkReload", () => {
     const storage = memoryStorage();
 
     const automatic = scheduleStaleChunkReload({ now: () => 1000, storage, reload });
-    const manual = retryStaleChunkReload({ reload });
+    const manual = retryStaleChunkReloadWhenReachable({ reload, timeoutMs: 0 });
     await Promise.resolve();
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
     firstProbe.resolve(new Response(null, { status: 503 }));
     await expect(Promise.all([automatic, manual])).resolves.toEqual([false, false]);
-    await expect(retryStaleChunkReload({ reload })).resolves.toBe(true);
+    await expect(retryStaleChunkReloadWhenReachable({ reload, timeoutMs: 0 })).resolves.toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(reload).toHaveBeenCalledTimes(1);
   });
 });
 
-describe("retryStaleChunkReload", () => {
+describe("retryStaleChunkReloadWhenReachable single-shot", () => {
   it("reloads without the rate guard when the gateway is reachable", async () => {
     const reload = vi.fn();
     stubDocumentFetch(new Response(null, { status: 200 }));
-    await expect(retryStaleChunkReload({ reload })).resolves.toBe(true);
+    await expect(retryStaleChunkReloadWhenReachable({ reload, timeoutMs: 0 })).resolves.toBe(true);
     expect(reload).toHaveBeenCalledTimes(1);
   });
 
   it("does not reload while the gateway is unreachable", async () => {
     const reload = vi.fn();
     stubDocumentFetch(new Response(null, { status: 503 }));
-    await expect(retryStaleChunkReload({ reload })).resolves.toBe(false);
+    await expect(retryStaleChunkReloadWhenReachable({ reload, timeoutMs: 0 })).resolves.toBe(false);
+    expect(reload).not.toHaveBeenCalled();
+  });
+});
+
+describe("retryStaleChunkReloadWhenReachable", () => {
+  it("reloads immediately when the gateway already answers", async () => {
+    const reload = vi.fn();
+    const probe = vi.fn().mockResolvedValue(true);
+    await expect(retryStaleChunkReloadWhenReachable({ reload, probe })).resolves.toBe(true);
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(probe).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits out a restarting gateway and then reloads", async () => {
+    // The stale chunk exists because the gateway just restarted, so the first
+    // probes legitimately fail; declining here is what stranded the user.
+    const reload = vi.fn();
+    const probe = vi
+      .fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValue(true);
+    const wait = vi.fn().mockResolvedValue(undefined);
+    await expect(
+      retryStaleChunkReloadWhenReachable({ reload, probe, wait, intervalMs: 5 }),
+    ).resolves.toBe(true);
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(probe).toHaveBeenCalledTimes(3);
+    expect(wait).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives up at the deadline without navigating into an error page", async () => {
+    const reload = vi.fn();
+    const probe = vi.fn().mockResolvedValue(false);
+    const wait = vi.fn().mockResolvedValue(undefined);
+    let clock = 0;
+    const now = () => {
+      clock += 400;
+      return clock;
+    };
+    await expect(
+      retryStaleChunkReloadWhenReachable({ reload, probe, wait, now, timeoutMs: 1_000 }),
+    ).resolves.toBe(false);
     expect(reload).not.toHaveBeenCalled();
   });
 });
@@ -400,4 +443,53 @@ describe("installMissingStylesheetRecovery", () => {
       uninstall();
     }
   });
+});
+
+describe("retryStaleChunkReloadWhenReachable deadline enforcement", () => {
+  it("resolves at the deadline even when the probe never settles", async () => {
+    vi.useFakeTimers();
+    try {
+      const reload = vi.fn();
+      // A caller-supplied probe need not time out itself; the bound must still
+      // hold or the pending UI would be stranded forever.
+      const probe = vi.fn(() => new Promise<boolean>(() => {}));
+      const pending = retryStaleChunkReloadWhenReachable({
+        reload,
+        probe,
+        timeoutMs: 5_000,
+      });
+      await vi.advanceTimersByTimeAsync(6_000);
+      await expect(pending).resolves.toBe(false);
+      expect(reload).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+it("never starts an unbounded probe once the wait carried past the deadline", async () => {
+  const reload = vi.fn();
+  let calls = 0;
+  // A second probe would hang forever; the loop must not start one, or the
+  // caller's disabled Reload button would be stranded past its own bound.
+  const probe = vi.fn(async () => {
+    calls += 1;
+    return calls === 1 ? false : new Promise<boolean>(() => {});
+  });
+  let clock = 0;
+  const wait = vi.fn(async () => {
+    clock += 10_000;
+  });
+
+  await expect(
+    retryStaleChunkReloadWhenReachable({
+      reload,
+      probe,
+      wait,
+      now: () => clock,
+      timeoutMs: 5_000,
+    }),
+  ).resolves.toBe(false);
+  expect(probe).toHaveBeenCalledTimes(1);
+  expect(reload).not.toHaveBeenCalled();
 });

@@ -1,7 +1,8 @@
 // Control UI tests cover agents panels tools skills behavior.
 import { render } from "lit";
 import { describe, expect, it } from "vitest";
-import { renderAgentTools } from "./panels-tools-skills.ts";
+import type { SkillStatusEntry } from "../../api/types.ts";
+import { renderAgentSkills, renderAgentTools } from "./panels-tools-skills.ts";
 
 function createBaseParams(overrides: Partial<Parameters<typeof renderAgentTools>[0]> = {}) {
   return {
@@ -340,7 +341,7 @@ describe("agents tools panel (browser)", () => {
       { label: "Access", value: "Enabled by the current profile." },
       { label: "Source", value: "Plugin: voice-call" },
       { label: "Default Presets", value: "full" },
-      { label: "Current Session", value: "Not available in this chat session right now." },
+      { label: "Current Thread", value: "Not available in this chat thread right now." },
     ]);
   });
 
@@ -425,5 +426,73 @@ describe("agents tools panel (browser)", () => {
     expect(tool.open).toBe(true);
 
     container.remove();
+  });
+});
+
+describe("agents skills panel (browser)", () => {
+  it("explains an unsatisfied one-of binary requirement", async () => {
+    const container = document.createElement("div");
+    const skill: SkillStatusEntry = {
+      name: "Coding Agent",
+      description: "Delegate coding work to an available coding CLI.",
+      source: "openclaw-bundled",
+      bundled: true,
+      filePath: "/tmp/skills/coding-agent/SKILL.md",
+      baseDir: "/tmp/skills/coding-agent",
+      skillKey: "coding-agent",
+      always: false,
+      disabled: false,
+      blockedByAllowlist: false,
+      blockedByAgentFilter: false,
+      eligible: false,
+      requirements: {
+        bins: [],
+        anyBins: ["claude", "codex", "opencode"],
+        env: [],
+        config: [],
+        os: [],
+      },
+      missing: {
+        bins: [],
+        anyBins: ["claude", "codex", "opencode"],
+        env: [],
+        config: [],
+        os: [],
+      },
+      configChecks: [],
+      install: [{ id: "node-codex", kind: "node", label: "Install Codex CLI", bins: ["codex"] }],
+    };
+
+    render(
+      renderAgentSkills({
+        agentId: "main",
+        report: {
+          workspaceDir: "/tmp/workspace",
+          managedSkillsDir: "/tmp/skills",
+          skills: [skill],
+        },
+        loading: false,
+        error: null,
+        activeAgentId: "main",
+        configForm: { agents: { list: [{ id: "main" }] } },
+        configLoading: false,
+        configSaving: false,
+        configDirty: false,
+        filter: "",
+        onFilterChange: () => undefined,
+        onRefresh: () => undefined,
+        onToggle: () => undefined,
+        onClear: () => undefined,
+        onDisableAll: () => undefined,
+        onConfigReload: () => undefined,
+        onConfigSave: () => undefined,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.querySelector(".agent-skill-row")?.textContent).toContain(
+      "bin:any of (claude, codex, opencode)",
+    );
   });
 });

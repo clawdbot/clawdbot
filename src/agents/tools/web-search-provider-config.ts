@@ -1,7 +1,7 @@
 /**
  * Provider-scoped web-search config helpers.
  *
- * Bridges legacy top-level credentials with plugin-owned provider configuration.
+ * Projects plugin-owned provider configuration into the tool-local search shape.
  */
 import { resolvePluginWebSearchConfig } from "../../config/plugin-web-search-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -46,37 +46,26 @@ export function setScopedCredentialValue(
   (scoped as Record<string, unknown>).apiKey = value;
 }
 
-/** Merges plugin web-search config into a provider-scoped legacy-compatible shape. */
+/** Projects plugin web-search config into the provider-scoped tool-local shape. */
 export function mergeScopedSearchConfig(
   searchConfig: Record<string, unknown> | undefined,
   key: string,
   pluginConfig: Record<string, unknown> | undefined,
   options?: { mirrorApiKeyToTopLevel?: boolean },
 ): Record<string, unknown> | undefined {
+  const next: Record<string, unknown> = { ...searchConfig };
+  delete next.apiKey;
+  if (isLegacyWebSearchProviderConfigKey(key)) {
+    delete next[key];
+  }
   if (!pluginConfig) {
-    return searchConfig;
+    return Object.keys(next).length > 0 ? next : undefined;
   }
 
-  const currentScoped =
-    searchConfig?.[key] &&
-    typeof searchConfig[key] === "object" &&
-    !Array.isArray(searchConfig[key])
-      ? (searchConfig[key] as Record<string, unknown>)
-      : {};
-  const next: Record<string, unknown> = { ...searchConfig };
-  const existingDescriptor = searchConfig
-    ? Object.getOwnPropertyDescriptor(searchConfig, key)
-    : undefined;
-  const shouldHideRuntimeInjectedLegacyShape =
-    isLegacyWebSearchProviderConfigKey(key) && existingDescriptor === undefined;
-
-  // Runtime-injected legacy provider keys should be addressable but absent from JSON writes.
+  // Provider-local projections are runtime-only and must never reserialize into tools.web.search.
   Object.defineProperty(next, key, {
-    value: {
-      ...currentScoped,
-      ...pluginConfig,
-    },
-    enumerable: !shouldHideRuntimeInjectedLegacyShape,
+    value: { ...pluginConfig },
+    enumerable: false,
     configurable: true,
     writable: true,
   });

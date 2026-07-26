@@ -46,7 +46,7 @@ Fallback execution is turn-local. The reply runner persists only fallback notice
 The selection source controls whether the fallback chain is allowed:
 
 - **Configured default**: `agents.defaults.model.primary` uses `agents.defaults.model.fallbacks`.
-- **Agent primary**: `agents.list[].model` is strict unless that agent's model object includes its own `fallbacks`. Use `fallbacks: []` to make the strict behavior explicit, or a non-empty list to opt that agent into model fallback.
+- **Agent primary**: `agents.entries.*.model` is strict unless that agent's model object includes its own `fallbacks`. Use `fallbacks: []` to make the strict behavior explicit, or a non-empty list to opt that agent into model fallback.
 - **Runtime fallback**: the fallback candidate applies only to the current turn. The next turn starts from the selected primary again. OpenClaw still recognizes previously stored `modelOverrideSource: "auto"` entries, probes their configured origin every 5 minutes, and clears them once the origin recovers. `/new`, `/reset`, and `sessions.reset` also clear those entries.
 - **User session override**: `/model`, the model picker, `session_status(model=...)`, and `sessions.patch` write `modelOverrideSource: "user"`. This is an exact session selection. If the selected provider/model fails before producing a reply, OpenClaw reports the failure instead of answering from an unrelated configured fallback.
 - **Legacy session override**: older session entries may have `modelOverride` without `modelOverrideSource`. OpenClaw treats those as user overrides so an explicit old selection is not silently converted into fallback behavior.
@@ -129,7 +129,10 @@ When a provider has multiple profiles, OpenClaw chooses an order like this:
 If no explicit order is configured, OpenClaw uses a round-robin order:
 
 - **Primary key:** profile type (**OAuth, then static token, then API key**).
-- **Secondary key:** `usageStats.lastUsed` (oldest first, within each type).
+- **Secondary key for OAuth:** profiles with a currently usable access token before
+  profiles whose access token is expired. Expired OAuth profiles stay eligible so
+  the runtime can refresh them when no usable peer is available.
+- **Next key:** `usageStats.lastUsed` (oldest first, within each type/state tier).
 - **Cooldown/disabled profiles** are moved to the end, ordered by soonest expiry.
 
 ### Session stickiness (cache-friendly)
@@ -174,7 +177,9 @@ When a profile fails due to auth/rate-limit errors (or a timeout that looks like
   <Accordion title="What lands in the rate-limit / timeout bucket">
     That rate-limit bucket is broader than plain `429`: it also includes provider messages such as `Too many concurrent requests`, `ThrottlingException`, `concurrency limit reached`, `workers_ai ... quota limit exceeded`, `throttled`, `resource exhausted`, and periodic usage-window limits such as `weekly limit reached` or `monthly limit exhausted`.
 
-    Format/invalid-request errors are usually terminal because retrying the same payload would fail the same way, so OpenClaw surfaces them instead of rotating auth profiles. Known retry-repair paths can opt in explicitly: for example Cloud Code Assist tool call ID validation failures are sanitized and retried once through the `allowFormatRetry` policy. OpenAI-compatible stop-reason errors such as `Unhandled stop reason: error`, `stop reason: error`, and `reason: error` are classified as timeout/failover signals.
+    Format/invalid-request errors are usually terminal because retrying the same payload would fail the same way, so OpenClaw surfaces them instead of rotating auth profiles. Known retry-repair paths can opt in explicitly: for example Cloud Code Assist tool call ID validation failures are sanitized and retried once through the `allowFormatRetry` policy.
+
+    OpenAI-compatible **provider-completed** stop/finish reasons such as `Unhandled stop reason: error`, `stop reason: error`, `reason: error`, and `Provider finish_reason: error` are classified as **`server_error`** (HTTP-like status 500), not timeout. They remain failover-eligible for model/profile rotation, but diagnostics keep the provider finish-reason text instead of rewriting the user copy to "LLM request timed out." Transport-shaped finish reasons such as `Provider finish_reason: abort`, `network_error`, and `malformed_response` stay in the timeout/failover bucket (status 408).
 
     Generic server text can also land in that timeout bucket when the source matches a known transient pattern. For example, the bare model runtime stream-wrapper message `An unknown error occurred` is treated as failover-worthy for every provider because the shared model runtime emits it when provider streams end with `stopReason: "aborted"` or `stopReason: "error"` without specific details. JSON `api_error` payloads with transient server text such as `internal server error`, `unknown error, 520`, `upstream error`, or `backend error` are also treated as failover-worthy timeouts.
 
@@ -200,7 +205,7 @@ Regular (non-billing, non-auth-permanent) cooldowns scale with the profile's rec
 - 2nd failure: 1 minute
 - 3rd+ failure: 5 minutes (cap)
 
-Counters reset once the profile's failure window has passed (`auth.cooldowns.failureWindowHours`, default 24).
+Counters reset once the profile's built-in failure window has passed.
 
 State is stored in the per-agent SQLite auth state under `usageStats`:
 
@@ -240,19 +245,6 @@ State is stored in the per-agent SQLite auth state:
   }
 }
 ```
-
-Defaults (`auth.cooldowns.*`):
-
-| Key                           | Default | Purpose                                                                     |
-| ----------------------------- | ------- | --------------------------------------------------------------------------- |
-| `billingBackoffHours`         | 5       | Base billing backoff, doubles per billing failure                           |
-| `billingMaxHours`             | 24      | Billing backoff cap                                                         |
-| `authPermanentBackoffMinutes` | 10      | Base backoff for high-confidence permanent-auth failures                    |
-| `authPermanentMaxMinutes`     | 60      | Cap for that backoff                                                        |
-| `failureWindowHours`          | 24      | Failure counters reset if no failures occur in this window                  |
-| `overloadedProfileRotations`  | 1       | Same-provider profile rotations allowed before model fallback on overload   |
-| `overloadedBackoffMs`         | 0       | Fixed delay before an overloaded rotation retry                             |
-| `rateLimitedProfileRotations` | 1       | Same-provider profile rotations allowed before model fallback on rate limit |
 
 Overloaded and rate-limit errors are handled more aggressively than billing cooldowns: by default, OpenClaw allows one same-provider auth-profile retry, then switches to the next configured model fallback without waiting.
 
@@ -360,11 +352,6 @@ That cooldown summary is model-aware:
 See [Gateway configuration](/gateway/configuration) for:
 
 - `auth.profiles` / `auth.order`
-- `auth.cooldowns.billingBackoffHours` / `auth.cooldowns.billingBackoffHoursByProvider`
-- `auth.cooldowns.billingMaxHours` / `auth.cooldowns.failureWindowHours`
-- `auth.cooldowns.authPermanentBackoffMinutes` / `auth.cooldowns.authPermanentMaxMinutes`
-- `auth.cooldowns.overloadedProfileRotations` / `auth.cooldowns.overloadedBackoffMs`
-- `auth.cooldowns.rateLimitedProfileRotations`
 - `agents.defaults.model.primary` / `agents.defaults.model.fallbacks`
 - `agents.defaults.imageModel` routing
 

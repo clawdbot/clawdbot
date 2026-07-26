@@ -2,10 +2,11 @@
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   MATRIX_QA_E2EE_SYNC_FILTER,
   prepareMatrixQaE2eeStorage,
+  runMatrixQaE2eeClientOperation,
   shouldRecordMatrixQaObservedEventUpdate,
 } from "./e2ee-client-internals.js";
 import { findMatrixQaObservedEventMatch } from "./events.js";
@@ -14,10 +15,38 @@ const testing = {
   MATRIX_QA_E2EE_SYNC_FILTER,
   findMatrixQaObservedEventMatch,
   prepareMatrixQaE2eeStorage,
+  runMatrixQaE2eeClientOperation,
   shouldRecordMatrixQaObservedEventUpdate,
 };
 
 describe("matrix qa e2ee client storage", () => {
+  it("stops a disposable client when an E2EE operation exceeds its scenario timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const stop = vi.fn();
+      const operation = testing.runMatrixQaE2eeClientOperation({
+        label: "Matrix E2EE text send",
+        run: () =>
+          new Promise<string>(() => {
+            // Intentionally pending so the timeout owns settlement.
+          }),
+        stop,
+        timeoutMs: 150_000,
+      });
+      const rejection = expect(operation).rejects.toThrow(
+        "Matrix E2EE text send timed out after 150000ms",
+      );
+
+      await vi.advanceTimersByTimeAsync(150_000);
+
+      await rejection;
+      expect(stop).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("filters receipt noise without suppressing room state or timeline events", () => {
     expect(testing.MATRIX_QA_E2EE_SYNC_FILTER).toEqual({
       room: {

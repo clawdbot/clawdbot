@@ -8,7 +8,6 @@ import {
   type ProviderAuthMethod,
   type ProviderAuthMethodNonInteractiveContext,
   type ProviderResolveDynamicModelContext,
-  type ProviderRuntimeModel,
   type ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -21,9 +20,11 @@ import {
   upsertAuthProfileWithLock,
   validateApiKeyInput,
 } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { buildOpenAICompatibleProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import {
   buildProviderReplayFamilyHooks,
-  normalizeModelCompat,
+  resolveFamilyForwardCompatModel,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   createPayloadPatchStreamWrapper,
@@ -36,12 +37,20 @@ import { detectZaiEndpoint, type ZaiEndpointId } from "./detect.js";
 import { zaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { buildZaiModelDefinition, resolveZaiBaseUrl } from "./model-definitions.js";
 import { applyZaiConfig, applyZaiProviderConfig, resolveZaiModelId } from "./onboard.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { isGlm52ModelId, resolveThinkingProfile } from "./provider-policy-api.js";
 
 const PROVIDER_ID = "zai";
 const GLM5_TEMPLATE_MODEL_ID = "glm-4.7";
 const PROFILE_ID = "zai:default";
 type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
+
+function buildZaiCatalogProvider() {
+  return buildManifestModelProviderConfig({
+    providerId: PROVIDER_ID,
+    catalog: manifest.modelCatalog.providers.zai,
+  });
+}
 
 function resolveDeprecatedPiAgentAuthPath(env: NodeJS.ProcessEnv): string {
   const home = env.HOME?.trim() || env.USERPROFILE?.trim() || os.homedir();
@@ -80,41 +89,34 @@ async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams)
   }
 }
 
-function resolveGlm5ForwardCompatModel(
-  ctx: ProviderResolveDynamicModelContext,
-): ProviderRuntimeModel | undefined {
-  const trimmedModelId = ctx.modelId.trim();
-  if (!normalizeLowercaseStringOrEmpty(trimmedModelId).startsWith("glm-5")) {
-    return undefined;
-  }
-
-  const existing = ctx.modelRegistry.find(
-    PROVIDER_ID,
-    trimmedModelId,
-  ) as ProviderRuntimeModel | null;
-  if (existing) {
-    return existing;
-  }
-
-  const def = buildZaiModelDefinition({ id: trimmedModelId });
-  const template = ctx.modelRegistry.find(
-    PROVIDER_ID,
-    GLM5_TEMPLATE_MODEL_ID,
-  ) as ProviderRuntimeModel | null;
-  return normalizeModelCompat({
-    ...template,
-    id: def.id,
-    name: def.name,
-    // Native models must never fall through to the OpenAI SDK's default host.
-    baseUrl: ctx.providerConfig?.baseUrl ?? template?.baseUrl ?? resolveZaiBaseUrl(),
-    api: "openai-completions",
-    provider: PROVIDER_ID,
-    reasoning: def.reasoning,
-    input: def.input,
-    cost: def.cost,
-    contextWindow: def.contextWindow,
-    maxTokens: def.maxTokens,
-  } as ProviderRuntimeModel);
+function resolveGlm5ForwardCompatModel(ctx: ProviderResolveDynamicModelContext) {
+  return resolveFamilyForwardCompatModel({
+    providerId: PROVIDER_ID,
+    ctx,
+    cases: [
+      {
+        match: (id) => id.startsWith("glm-5"),
+        templateIds: [GLM5_TEMPLATE_MODEL_ID],
+        patch: ({ modelId, template }) => {
+          const def = buildZaiModelDefinition({ id: modelId });
+          return {
+            name: def.name,
+            // Native models must never fall through to the OpenAI SDK's default host.
+            baseUrl: ctx.providerConfig?.baseUrl ?? template?.baseUrl ?? resolveZaiBaseUrl(),
+            api: "openai-completions",
+            provider: PROVIDER_ID,
+            reasoning: def.reasoning,
+            input: def.input as ("text" | "image")[],
+            cost: def.cost,
+            contextWindow: def.contextWindow,
+            maxTokens: def.maxTokens,
+          };
+        },
+      },
+    ],
+    preserveExisting: true,
+    synthesize: true,
+  });
 }
 
 function isTrueParam(value: unknown): boolean {
@@ -384,7 +386,25 @@ export default definePluginEntry({
           endpoint: "cn",
         }),
       ],
+      catalog: {
+        order: "simple",
+        run: (ctx) =>
+          buildOpenAICompatibleProviderCatalog({
+            ctx,
+            providerId: PROVIDER_ID,
+            buildProvider: buildZaiCatalogProvider,
+            allowExplicitBaseUrl: true,
+          }),
+      },
+      staticCatalog: {
+        order: "simple",
+        run: async () => ({ provider: buildZaiCatalogProvider() }),
+      },
       resolveDynamicModel: (ctx) => resolveGlm5ForwardCompatModel(ctx),
+      matchesContextOverflowError: ({ errorMessage }) =>
+        /\b(?:tokens? in request more than max tokens? allowed|prompt exceeds max(?:imum)? length)\b/i.test(
+          errorMessage,
+        ),
       ...buildProviderReplayFamilyHooks({
         family: "openai-compatible",
         dropReasoningFromHistory: false,

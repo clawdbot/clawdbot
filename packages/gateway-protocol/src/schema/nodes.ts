@@ -50,10 +50,15 @@ export const NodePresenceAlivePayloadSchema = closedObject({
 });
 
 /** Recent operator input activity reported by an interactive node. */
-export const NodePresenceActivityPayloadSchema = closedObject({
-  idleSeconds: Type.Integer({ minimum: 0, maximum: 2_592_000 }),
-  saturated: Type.Optional(Type.Boolean()),
-});
+export const NodePresenceActivityPayloadSchema = Type.Union([
+  closedObject({
+    idleSeconds: Type.Integer({ minimum: 0, maximum: 2_592_000 }),
+    saturated: Type.Optional(Type.Boolean()),
+  }),
+  closedObject({
+    action: Type.Literal("clear"),
+  }),
+]);
 
 /** Normalized result for node-originated events after gateway dispatch. */
 export const NodeEventResultSchema = closedObject({
@@ -185,7 +190,7 @@ export const NodePendingDrainParamsSchema = closedObject({
 });
 
 /** One queued node-work item returned by pending-work drain calls. */
-export const NodePendingDrainItemSchema = closedObject({
+const NodePendingDrainItemSchema = closedObject({
   id: NonEmptyString,
   type: NodePendingWorkTypeSchema,
   priority: Type.String({ enum: ["default", "normal", "high"] }),

@@ -146,16 +146,22 @@ export type ChannelOutboundTargetRef = {
   threadId?: string | number | null;
 };
 
-export type ChannelOutboundFormattedContext = ChannelOutboundContext & {
+type ChannelOutboundFormattedContext = ChannelOutboundContext & {
   abortSignal?: AbortSignal;
 };
 
-export type ChannelOutboundChunkContext = {
+type ChannelOutboundChunkContext = {
   formatting?: OutboundDeliveryFormattingOptions;
 };
 
 type ChannelOutboundNormalizePayloadParams = {
   payload: ReplyPayload;
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+};
+
+type ChannelOutboundNormalizePayloadBatchParams = {
+  payloads: readonly { index: number; payload: ReplyPayload }[];
   cfg: OpenClawConfig;
   accountId?: string | null;
 };
@@ -189,6 +195,10 @@ export type ChannelOutboundAdapter = {
   supportsPollDurationSeconds?: boolean;
   supportsAnonymousPolls?: boolean;
   normalizePayload?: (params: ChannelOutboundNormalizePayloadParams) => ReplyPayload | null;
+  /** Normalize an ordered batch in place. Return one entry per input; null suppresses that send. */
+  normalizePayloadBatch?: (
+    params: ChannelOutboundNormalizePayloadBatchParams,
+  ) => ReadonlyArray<ReplyPayload | null>;
   sendTextOnlyErrorPayloads?: boolean;
   shouldSkipPlainTextSanitization?: (params: { payload: ReplyPayload }) => boolean;
   resolveEffectiveTextChunkLimit?: (params: {

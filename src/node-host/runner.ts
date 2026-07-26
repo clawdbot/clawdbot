@@ -239,7 +239,6 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     url,
     token: token || undefined,
     password: password || undefined,
-    preauthHandshakeTimeoutMs: cfg.gateway?.handshakeTimeoutMs,
     instanceId: nodeId,
     clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
     clientDisplayName: displayName,
@@ -356,9 +355,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   process.once("SIGINT", onSigint);
   process.once("SIGTERM", onSigterm);
 
-  const readinessPromise = startGatewayClientWhenEventLoopReady(client, {
-    clientOptions: { preauthHandshakeTimeoutMs: cfg.gateway?.handshakeTimeoutMs },
-  });
+  const readinessPromise = startGatewayClientWhenEventLoopReady(client);
   let readiness;
   try {
     readiness = await readinessPromise;

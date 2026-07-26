@@ -3,6 +3,7 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helper
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedIrcAccount } from "./accounts.js";
 import { handleIrcInbound } from "./inbound.js";
+import type { IrcIngressLifecycle } from "./irc-ingress.js";
 import type { RuntimeEnv } from "./runtime-api.js";
 import { setIrcRuntime } from "./runtime.js";
 import type { CoreConfig, IrcInboundMessage } from "./types.js";
@@ -194,6 +195,48 @@ describe("irc inbound behavior", () => {
       coreRuntime.channel.inbound.dispatchReply as unknown as { mock: { calls: unknown[][] } }
     ).mock.calls[0]?.[0] as { replyPipeline?: unknown } | undefined;
     expect(assembledRequest?.replyPipeline).toEqual({});
+  });
+
+  it("binds durable completion to reply-lane adoption", async () => {
+    const coreRuntime = createPluginRuntimeMock();
+    setIrcRuntime(coreRuntime as never);
+    const onAdopted = vi.fn(async () => undefined);
+    const turnAdoptionLifecycle: IrcIngressLifecycle = {
+      abortSignal: new AbortController().signal,
+      onAdopted,
+      onDeferred: vi.fn(),
+      onAdoptionFinalizing: vi.fn(),
+      onAbandoned: vi.fn(async () => undefined),
+    };
+
+    const result = await handleIrcInbound({
+      message: createMessage(),
+      account: createAccount({
+        config: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          groupPolicy: "allowlist",
+          groupAllowFrom: [],
+        },
+      }),
+      config: { channels: { irc: {} } } as CoreConfig,
+      runtime: createRuntimeEnv(),
+      turnAdoptionLifecycle,
+      sendReply: vi.fn(async () => {}),
+    });
+
+    const dispatchReply = coreRuntime.channel.reply
+      .dispatchReplyWithBufferedBlockDispatcher as unknown as { mock: { calls: unknown[][] } };
+    const replyOptions = (
+      dispatchReply.mock.calls[0]?.[0] as
+        | { replyOptions?: { turnAdoptionLifecycle?: IrcIngressLifecycle } }
+        | undefined
+    )?.replyOptions;
+    expect(replyOptions?.turnAdoptionLifecycle).toEqual(
+      expect.objectContaining({ abortSignal: turnAdoptionLifecycle.abortSignal }),
+    );
+    expect(onAdopted).toHaveBeenCalledOnce();
+    expect(result).toEqual({ kind: "completed" });
   });
 
   it("uses channel:# prefix for group channel From and OriginatingTo fields", async () => {

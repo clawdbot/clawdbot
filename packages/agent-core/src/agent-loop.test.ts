@@ -12,6 +12,10 @@ import {
   type Message,
   type Model,
 } from "./llm.js";
+import {
+  getAgentToolExecutionContext,
+  type AgentToolExecutionContext,
+} from "./tool-execution-context.js";
 import type {
   AgentContext,
   AgentEvent,
@@ -977,6 +981,57 @@ describe("agentLoop tool termination", () => {
       },
     };
   }
+
+  it("persists and passes a local turn id when the provider omits one", async () => {
+    let turn = 0;
+    const toolCall = { type: "toolCall" as const, id: "call_0", name: "exec", arguments: {} };
+    const assistantMessage = { ...makeAssistantMessage([toolCall]), responseId: " " };
+    const executionContexts: AgentToolExecutionContext[] = [];
+    const persistedAssistantMessages: AssistantMessage[] = [];
+    const execTool: AgentTool = {
+      ...makeTool("exec", []),
+      execute: async () => {
+        const executionContext = getAgentToolExecutionContext();
+        if (executionContext) {
+          executionContexts.push(executionContext);
+        }
+        return { content: [{ type: "text", text: "ok" }], details: { ok: true } };
+      },
+    };
+    const streamFn: StreamFn = () => {
+      turn += 1;
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message =
+          turn === 1 ? assistantMessage : makeAssistantMessage([{ type: "text", text: "done" }]);
+        stream.push({
+          type: "done",
+          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+          message,
+        });
+        stream.end();
+      });
+      return stream;
+    };
+
+    await runAgentLoop(
+      [{ role: "user", content: "run", timestamp: 1 }],
+      { systemPrompt: "", messages: [], tools: [execTool] },
+      config,
+      (event) => {
+        if (event.type === "message_end" && event.message.role === "assistant") {
+          persistedAssistantMessages.push(event.message);
+        }
+      },
+      undefined,
+      streamFn,
+    );
+
+    const toolTurnId = executionContexts[0]?.assistantMessage.turnId;
+    expect(toolTurnId).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(executionContexts[0]?.toolCall).toBe(toolCall);
+    expect(persistedAssistantMessages[0]?.turnId).toBe(toolTurnId);
+  });
 
   it("marks lifecycle events from the concrete hidden tool instance", async () => {
     let turn = 0;

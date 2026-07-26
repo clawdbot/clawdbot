@@ -1,0 +1,87 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <string name="app_name" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw"</string>
+    <string name="chat" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"चैट"</string>
+    <string name="session" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"सत्र"</string>
+    <string name="model" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"मॉडल"</string>
+    <string name="previous_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"पिछला %1$s"</string>
+    <string name="next_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"अगला %1$s"</string>
+    <string name="controls" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"नियंत्रण"</string>
+    <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"बोलें"</string>
+    <string name="real_time_audio_failed" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"वॉच ऑडियो विफल रहा"</string>
+    <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"बोलकर लिखें"</string>
+    <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"लाइव"</string>
+    <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"थ्रेड"</string>
+    <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← स्वाइप करें →"</string>
+    <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"दबाकर रखें"</string>
+    <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"टैप करें"</string>
+    <string name="double_tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"दो बार टैप करें"</string>
+    <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"बातचीत यहाँ देखने के लिए Live शुरू करें।"</string>
+    <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"नया"</string>
+    <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"टाइप करें"</string>
+    <string name="message" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"संदेश"</string>
+    <string name="message_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"एजेंट को संदेश भेजें"</string>
+    <string name="send" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"भेजें"</string>
+    <string name="speak_to_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"अपने एजेंट से बात करें"</string>
+    <string name="stop_speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"बोलना बंद करें"</string>
+    <string name="speak_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"नवीनतम उत्तर सुनें"</string>
+    <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"बोल रहा है"</string>
+    <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"सुन रहा है"</string>
+    <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"कनेक्ट हो रहा है"</string>
+    <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"सोच रहा है"</string>
+    <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"टाइप कर रहा है"</string>
+    <string name="sending" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"भेज रहा है"</string>
+    <string name="agent_working" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"एजेंट काम कर रहा है"</string>
+    <string name="error" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"त्रुटि"</string>
+    <string name="ready" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"तैयार"</string>
+    <string name="you" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"आप"</string>
+    <string name="agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"एजेंट"</string>
+    <string name="system" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"सिस्टम"</string>
+    <string name="start_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"बातचीत शुरू करें"</string>
+    <string name="start_conversation_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"अपनी घड़ी पर बोलें या टाइप करें। युग्मित फ़ोन अपने प्रमाणित OpenClaw सत्र के माध्यम से संदेश भेजता है।"</string>
+    <string name="current_session" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"वर्तमान सत्र"</string>
+    <string name="appearance" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"दिखावट"</string>
+    <string name="theme_dark" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"गहरा"</string>
+    <string name="theme_light" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"हल्का"</string>
+    <string name="auto_speak" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"जवाब अपने-आप बोलकर सुनाएँ"</string>
+    <string name="reply_alerts" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"जवाब के अलर्ट"</string>
+    <string name="enable_alerts" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"अलर्ट चालू करें"</string>
+    <string name="abort_run" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"रन रोकें"</string>
+    <string name="open_notification_settings" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"नोटिफ़िकेशन सेटिंग खोलें"</string>
+    <string name="on" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"चालू"</string>
+    <string name="off" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"बंद"</string>
+    <string name="connection" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"कनेक्शन"</string>
+    <string name="gateway" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway"</string>
+    <string name="security_boundary" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"सुरक्षा"</string>
+    <string name="phone_controlled" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"फ़ोन द्वारा नियंत्रित"</string>
+    <string name="phone_controlled_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway के क्रेडेंशियल और पहचान युग्मित फ़ोन पर ही रहते हैं। घड़ी केवल Wear Data Layer का उपयोग करती है।"</string>
+    <string name="checking_phone" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"फ़ोन की जाँच की जा रही है"</string>
+    <string name="reading_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"एजेंट, सत्र और चैट पढ़े जा रहे हैं"</string>
+    <string name="phone_ready" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"फ़ोन तैयार है"</string>
+    <string name="gateway_connected" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway कनेक्ट है"</string>
+    <string name="gateway_offline" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway ऑफ़लाइन है"</string>
+    <string name="gateway_offline_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"जोड़े गए फ़ोन पर OpenClaw में Gateway को फिर से कनेक्ट करें।"</string>
+    <string name="open_phone_app" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"फ़ोन पर OpenClaw खोलें"</string>
+    <string name="phone_not_ready_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"घड़ी कभी भी स्वयं Gateway को शुरू या प्रमाणित नहीं करती है।"</string>
+    <string name="phone_unavailable" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"फ़ोन से संपर्क नहीं हो पा रहा है"</string>
+    <string name="phone_unavailable_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"जोड़े गए फ़ोन को पास रखें और उससे मेल खाने वाला OpenClaw ऐप इंस्टॉल करें।"</string>
+    <string name="selection_not_found" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"चयन अब उपलब्ध नहीं है"</string>
+    <string name="message_not_sent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"कार्रवाई स्वीकार नहीं की गई"</string>
+    <string name="something_went_wrong" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"कुछ गड़बड़ी हुई"</string>
+    <string name="refresh_and_try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"सूचियाँ रीफ़्रेश करके फिर से प्रयास करें।"</string>
+    <string name="try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"घड़ी से फिर से प्रयास करें।"</string>
+    <string name="update_required" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"अपडेट आवश्यक है"</string>
+    <string name="update_required_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"फ़ोन और घड़ी, दोनों पर OpenClaw अपडेट करें।"</string>
+    <string name="refresh" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"रीफ़्रेश करें"</string>
+    <string name="retry" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"फिर से प्रयास करें"</string>
+    <string name="notification_channel_name" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw के जवाब"</string>
+    <string name="notification_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"जवाब दें"</string>
+    <string name="notification_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw का जवाब"</string>
+    <string name="notification_reply_failed_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"जवाब नहीं भेजा गया"</string>
+    <string name="notification_reply_failed_text" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"फ़ोन उपलब्ध नहीं है। फिर से कोशिश करने के लिए जवाब दें पर टैप करें।"</string>
+    <string name="notification_phone_changed_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"जवाब देने के लिए OpenClaw खोलें"</string>
+    <string name="notification_phone_changed_text" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"आपका पसंदीदा फ़ोन बदल गया है। जवाब देने से पहले सत्र को फिर से लोड करने के लिए ऐप खोलें।"</string>
+    <string name="tile_label" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw"</string>
+    <string name="tile_description" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"सत्र खोलें और अपने युग्मित फ़ोन के ज़रिए जवाब दें"</string>
+    <string name="tile_open" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"खोलें"</string>
+    <string name="tile_phone_proxy" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"फ़ोन प्रॉक्सी"</string>
+</resources>

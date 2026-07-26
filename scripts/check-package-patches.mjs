@@ -8,8 +8,6 @@ import { fileURLToPath } from "node:url";
 import YAML from "yaml";
 
 const ALLOWED_PATCHED_DEPENDENCIES = new Map([
-  // Remove after fs-safe ships pinned-write fsync with best-effort EPERM handling.
-  ["@openclaw/fs-safe@0.4.1", "patches/@openclaw__fs-safe@0.4.1.patch"],
   ["baileys@7.0.0-rc12", "patches/baileys@7.0.0-rc12.patch"],
   ["baileys@7.0.0-rc13", "patches/baileys@7.0.0-rc13.patch"],
 ]);

@@ -208,7 +208,7 @@ when set):
 | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | `state/openclaw.sqlite` (`node_host_config`)             | Client instance ID, display name, and Gateway connection metadata. The client sends this ID as `instanceId`.                     |
 | `state/openclaw.sqlite` (`device_identities`, `primary`) | Signed Ed25519 keypair and derived device ID. For signed connections, this device ID is the routed node ID and pairing identity. |
-| `identity/device-auth.json`                              | Paired device tokens, keyed by cryptographic device ID and role.                                                                 |
+| `state/openclaw.sqlite` (`device_auth_tokens`)           | Paired device tokens, keyed by cryptographic device ID and role.                                                                 |
 
 `--node-id` changes only the client instance ID in shared SQLite state. It does
 not change the cryptographic device ID or clear pairing auth. Migrating a retired
@@ -234,15 +234,14 @@ The two request IDs are distinct. An applicable trusted-CIDR policy can
 auto-approve the first-time device-pairing step; command-surface approval remains
 a separate check.
 
-Older OpenClaw releases stored node-host state in `node.json` and the signed
-identity in `identity/device.json`. Stop the node host and run
+Older OpenClaw releases stored node-host state in `node.json`, the signed
+identity in `identity/device.json`, and paired auth in
+`identity/device-auth.json`. Stop the node host and run
 `openclaw doctor --fix` once; Doctor claims each retired source, validates it,
 imports and verifies the canonical SQLite row, then removes the old file. Normal
 node commands fail closed with this repair instruction while either retired file
-or an interrupted Doctor claim remains. Keep `state/openclaw.sqlite` and
-`identity/device-auth.json` private; they contain the device keypair and auth
-tokens. Device auth remains a separate store and is not rewritten by the
-identity migration.
+or an interrupted Doctor claim remains. Keep `state/openclaw.sqlite` private;
+it contains the device keypair and auth tokens.
 
 ## Exec approvals
 

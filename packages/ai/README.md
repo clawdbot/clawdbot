@@ -14,15 +14,16 @@ registerBuiltInApiProviders(runtime.registry);
 
 Provider-neutral contracts, validation, diagnostics, and event streams are
 available from the package root and focused subpaths such as
-`@openclaw/ai/event-stream` and `@openclaw/ai/validation`. No second OpenClaw
-runtime package is required.
+`@openclaw/ai/event-stream`, `@openclaw/ai/transports`, and
+`@openclaw/ai/validation`. No second OpenClaw runtime package is required.
 
 Provider ids, credentials, model catalogs, retries, and failover remain
 application concerns. OpenClaw supplies those policies around this package.
 Host policy (request fetch guarding, secret redaction, strict-tool defaults,
-diagnostics logging) can be injected with `configureAiTransportHost`; the
-defaults are inert.
+provider plugin hooks, and diagnostics logging) can be injected with
+`configureAiTransportHost`; the defaults are inert.
 
-`@openclaw/ai/internal/*` subpaths exist for the OpenClaw application itself.
+The explicit `@openclaw/ai/internal/anthropic`, `openai`, `retry-after`,
+`runtime`, and `shared` subpaths exist for the OpenClaw application itself.
 They carry no semver guarantee and can change or disappear in any release; do
 not depend on them outside OpenClaw.

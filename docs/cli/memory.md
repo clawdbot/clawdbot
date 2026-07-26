@@ -24,7 +24,7 @@ Related: [Memory](/concepts/memory) concept, [Dreaming](/concepts/dreaming),
 openclaw memory status [--agent <id>] [--deep] [--index] [--fix] [--json] [--verbose]
 ```
 
-Without `--agent`, runs for every agent in `agents.list`; if no agent list is
+Without `--agent`, runs for every agent in `agents.entries`; if no agent list is
 configured, falls back to the default agent.
 
 | Flag        | Effect                                                                                                                                                                                                                                                                                                    |
@@ -40,7 +40,7 @@ scheduled sweeps never seem to run, the managed dreaming cron depends on the
 default agent's heartbeat firing to trigger reconciliation. See
 [Dreaming](/concepts/dreaming) for scheduling details.
 
-Status also lists any extra search paths from `agents.defaults.memorySearch.extraPaths`.
+Status also lists any extra search paths from `memory.search.extraPaths`.
 
 ## `memory index`
 

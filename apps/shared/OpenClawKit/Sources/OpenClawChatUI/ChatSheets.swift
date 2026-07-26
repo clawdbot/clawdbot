@@ -2,7 +2,7 @@ import Observation
 import SwiftUI
 
 @MainActor
-struct ChatSessionsSheet: View {
+public struct ChatSessionsSheet: View {
     private enum SessionScope: String, CaseIterable, Identifiable {
         case active
         case archived
@@ -35,6 +35,10 @@ struct ChatSessionsSheet: View {
     @State private var inspectedSession: OpenClawChatSessionEntry?
     @State private var isPresentingGroups = false
 
+    public init(viewModel: OpenClawChatViewModel) {
+        self.viewModel = viewModel
+    }
+
     /// Live view-model sessions serve the default active list; search and the
     /// archived scope fetch one-shot lists (server-side search with local
     /// cached fallback inside the view model).
@@ -58,7 +62,7 @@ struct ChatSessionsSheet: View {
         "\(self.scope.rawValue)|\(self.trimmedSearchText.lowercased())"
     }
 
-    var body: some View {
+    public var body: some View {
         NavigationStack {
             List(selection: self.$selectedSessionKeys) {
                 Section {
@@ -85,8 +89,8 @@ struct ChatSessionsSheet: View {
                     self.emptyState
                 }
             }
-            .searchable(text: self.$searchText, prompt: "Search sessions")
-            .navigationTitle("Sessions")
+            .searchable(text: self.$searchText, prompt: "Search threads")
+            .navigationTitle("Threads")
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if self.isSelecting, self.scope == .active {
                     self.batchActionBar
@@ -143,13 +147,13 @@ struct ChatSessionsSheet: View {
                 self.batchErrors = self.batchErrors.filter { self.displayedSessionKeys.contains($0.key) }
             }
             .alert(
-                "Rename Session",
+                "Rename Thread",
                 isPresented: Binding(
                     get: { self.renameTarget != nil },
                     set: {
                         if !$0 { self.renameTarget = nil }
                     })) {
-                TextField("Session name", text: self.$renameText)
+                TextField("Thread name", text: self.$renameText)
                     .font(OpenClawChatTypography.body)
                 Button {
                     if let target = self.renameTarget {
@@ -175,16 +179,16 @@ struct ChatSessionsSheet: View {
                 ChatSessionInspectorSheet(viewModel: self.viewModel, session: session)
             }
             .confirmationDialog(
-                "Delete selected sessions?",
+                "Delete selected threads?",
                 isPresented: Binding(
                     get: { self.pendingBatchAction == .delete },
                     set: { if !$0 { self.pendingBatchAction = nil } }))
             {
-                Button("Delete Sessions", role: .destructive) {
+                Button("Delete Threads", role: .destructive) {
                     Task { await self.runBatch(.delete) }
                 }
             } message: {
-                Text("Each selected session and its transcript will be removed from the gateway.")
+                Text("Each selected thread and its transcript will be removed from the gateway.")
                     .font(OpenClawChatTypography.body)
             }
         }
@@ -219,7 +223,7 @@ struct ChatSessionsSheet: View {
                 Image(systemName: "folder")
             }
         }
-        .help("Manage session groups")
+        .help("Manage thread groups")
     }
 
     private var selectButton: some View {
@@ -238,7 +242,7 @@ struct ChatSessionsSheet: View {
             if self.isLoadingScoped {
                 ProgressView()
             } else {
-                Text(self.scope == .archived ? "No archived sessions" : "No sessions found")
+                Text(self.scope == .archived ? "No archived threads" : "No threads found")
                     .font(OpenClawChatTypography.body)
                     .foregroundStyle(.secondary)
             }

@@ -121,6 +121,7 @@ describe("test-projects args", () => {
         includePatterns: [
           "src/agents/openai-transport-stream.base.test.ts",
           "src/agents/openai-transport-stream.deepseek-and-shaping.test.ts",
+          "src/agents/openai-transport-stream.incomplete-output.test.ts",
           "src/agents/openai-transport-stream.inline-reasoning-and-tool-calls.test.ts",
           "src/agents/openai-transport-stream.reasoning-and-cache.test.ts",
           "src/agents/openai-transport-stream.replay-and-tools.test.ts",
@@ -224,11 +225,11 @@ describe("test-projects args", () => {
   });
 
   it("routes plugin-sdk targets to the plugin-sdk config", () => {
-    expect(buildVitestRunPlans(["src/plugin-sdk/anthropic-vertex-auth-presence.test.ts"])).toEqual([
+    expect(buildVitestRunPlans(["src/plugin-sdk/migration-runtime.test.ts"])).toEqual([
       {
         config: "test/vitest/vitest.plugin-sdk.config.ts",
         forwardedArgs: [],
-        includePatterns: ["src/plugin-sdk/anthropic-vertex-auth-presence.test.ts"],
+        includePatterns: ["src/plugin-sdk/migration-runtime.test.ts"],
         watchMode: false,
       },
     ]);
@@ -577,22 +578,25 @@ describe("test-projects args", () => {
     );
   });
 
-  it("preserves explicit Vitest filesystem module cache paths", () => {
-    const specs = [
+  it("splits an explicit Vitest filesystem module cache root", () => {
+    const [spec] = applyParallelVitestCachePaths(
+      [
+        {
+          config: "test/vitest/vitest.gateway.config.ts",
+          env: {},
+        },
+      ],
       {
-        config: "test/vitest/vitest.gateway.config.ts",
-        env: {},
-      },
-    ];
-
-    expect(
-      applyParallelVitestCachePaths(specs, {
         cwd: "/repo",
         env: {
           OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "/tmp/cache",
         },
-      }),
-    ).toBe(specs);
+      },
+    );
+
+    expect(spec?.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe(
+      "/tmp/cache/0-test-vitest-vitest.gateway.config.ts",
+    );
   });
 
   it("routes cli targets to the cli config", () => {
@@ -653,6 +657,7 @@ describe("test-projects args", () => {
         includePatterns: [
           "extensions/memory-core/src/memory/index.test.ts",
           "extensions/memory-core/src/memory/manager.fts-only-reindex.test.ts",
+          "extensions/memory-core/src/memory/manager.legacy-migration-cleanup.test.ts",
           "extensions/memory-core/src/memory/manager.reindex-recovery.test.ts",
           "extensions/memory-core/src/memory/manager.self-heal-missing-identity.test.ts",
         ],

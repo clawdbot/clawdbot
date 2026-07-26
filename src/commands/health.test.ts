@@ -13,7 +13,6 @@ import {
   formatContextEngineHealthLine,
   formatDeliveryQueueHealthLine,
   formatHealthChannelLines,
-  formatModelPricingHealthLine,
   healthCommand,
 } from "./health.js";
 
@@ -426,31 +425,6 @@ describe("healthCommand", () => {
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
-  it("formats degraded model-pricing health as a warning", () => {
-    const snapshot = createHealthSummary({
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-    });
-    snapshot.modelPricing = {
-      state: "degraded",
-      sources: [
-        {
-          source: "openrouter",
-          state: "degraded",
-          lastFailureAt: Date.now(),
-          detail: "OpenRouter pricing fetch failed: TypeError: fetch failed",
-        },
-      ],
-      detail: "OpenRouter pricing fetch failed: TypeError: fetch failed",
-      lastFailureAt: Date.now(),
-    };
-
-    expect(formatModelPricingHealthLine(snapshot)).toBe(
-      "Model pricing: warning (optional pricing refresh degraded) (OpenRouter pricing fetch failed: TypeError: fetch failed)",
-    );
-  });
-
   it("formats per-account probe timings", () => {
     const summary = createHealthSummary({
       channels: {
@@ -569,6 +543,25 @@ describe("formatDeliveryQueueHealthLine", () => {
 
     expect(formatDeliveryQueueHealthLine(summary, 7_290_000)).toBe(
       "Delivery queue: warning (dead-lettered entries — outbound: 3, session: 1; oldest 2h ago)",
+    );
+  });
+
+  it("summarizes dead-lettered ingress entries per channel account", () => {
+    const summary = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    summary.deliveryQueues = {
+      failed: [],
+      ingressFailed: [
+        { channelId: "line", accountId: "default", count: 1, oldestFailedAt: 90_000 },
+        { channelId: "telegram", accountId: "ops", count: 2 },
+      ],
+    };
+
+    expect(formatDeliveryQueueHealthLine(summary, 7_290_000)).toBe(
+      "Delivery queue: warning (dead-lettered entries — inbound line/default: 1, inbound telegram/ops: 2; oldest 2h ago)",
     );
   });
 

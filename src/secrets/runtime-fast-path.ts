@@ -15,7 +15,7 @@ import {
 import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
-import { resolveOAuthPath } from "../config/paths.js";
+import { resolveOAuthPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
@@ -37,7 +37,6 @@ const RUNTIME_PATH_ENV_KEYS = [
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_AGENT_DIR",
-  "OPENCLAW_TEST_FAST",
 ] as const;
 
 /**
@@ -117,7 +116,14 @@ function hasCandidateAuthProfileStoreSources(params: {
   agentDirs?: string[];
 }): boolean {
   const candidateDirs = resolveCandidateAgentDirs(params);
-  const mainAgentDir = resolveUserPath(resolveDefaultAgentDir({}, params.env), params.env);
+  // The shipped no-argument auth store is fixed at agents/main/agent even when
+  // another roster entry is default, so the fast path must probe it separately.
+  const mainAgentDir = path.join(
+    resolveStateDir(params.env as NodeJS.ProcessEnv),
+    "agents",
+    "main",
+    "agent",
+  );
   return (
     candidateDirs.some((agentDir) => hasCandidateAuthProfileStoreSource(agentDir)) ||
     hasCandidateAuthProfileStoreSource(mainAgentDir) ||
@@ -170,7 +176,7 @@ function hasRuntimeWebToolConfigSurface(config: OpenClawConfig): boolean {
     (web as { fetch?: { enabled?: unknown } }).fetch?.enabled === false;
   if (web && typeof web === "object" && !Array.isArray(web)) {
     const webRecord = web as Record<string, unknown>;
-    if ("search" in webRecord || "x_search" in webRecord) {
+    if ("search" in webRecord) {
       return true;
     }
     if (

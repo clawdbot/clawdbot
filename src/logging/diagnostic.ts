@@ -81,8 +81,6 @@ const webhookStats = {
 };
 
 const DEFAULT_STUCK_SESSION_WARN_MS = 120_000;
-const MIN_STUCK_SESSION_WARN_MS = 1_000;
-const MAX_STUCK_SESSION_WARN_MS = 24 * 60 * 60 * 1000;
 const MIN_STALLED_EMBEDDED_RUN_ABORT_MS = 5 * 60_000;
 const STALLED_EMBEDDED_RUN_ABORT_WARN_MULTIPLIER = 3;
 const RECENT_DIAGNOSTIC_ACTIVITY_MS = 120_000;
@@ -132,6 +130,11 @@ type StartDiagnosticHeartbeatOptions = {
   sampleLiveness?: SampleDiagnosticLiveness;
   recoverStuckSession?: RecoverStuckSession;
   startupGraceMs?: number;
+  /** Keeps fake-timer recovery tests fast without reopening runtime config tuning. */
+  testTimings?: {
+    stuckSessionWarnMs: number;
+    stuckSessionAbortMs: number;
+  };
 };
 
 function resolveDiagnosticSessionStorePaths(config?: OpenClawConfig): string[] | undefined {
@@ -144,10 +147,6 @@ function resolveDiagnosticSessionStorePaths(config?: OpenClawConfig): string[] |
   } catch {
     return undefined;
   }
-}
-
-function shouldWriteCriticalMemoryPressureBundle(config?: OpenClawConfig): boolean {
-  return config?.diagnostics?.memoryPressureSnapshot === true;
 }
 
 let diagnosticLivenessMonitor: EventLoopDelayMonitor | null = null;
@@ -237,6 +236,17 @@ function pushLimitedDiagnosticLabel(labels: string[], label: string, limit = 5):
   }
 }
 
+function resolveDiagnosticQueuedBacklog(state: {
+  activeQueuedTurn?: boolean;
+  queueDepth: number;
+  state: SessionStateValue;
+}): number {
+  return Math.max(
+    0,
+    state.queueDepth - (state.state === "processing" && state.activeQueuedTurn ? 1 : 0),
+  );
+}
+
 function getDiagnosticWorkSnapshot(now = Date.now()): DiagnosticWorkSnapshot {
   let activeCount = 0;
   let waitingCount = 0;
@@ -253,10 +263,7 @@ function getDiagnosticWorkSnapshot(now = Date.now()): DiagnosticWorkSnapshot {
       waitingCount += 1;
       pushLimitedDiagnosticLabel(waitingLabels, formatDiagnosticWorkLabel(state, now));
     }
-    const queuedBacklog = Math.max(
-      0,
-      state.queueDepth - (state.state === "processing" && state.activeQueuedTurn ? 1 : 0),
-    );
+    const queuedBacklog = resolveDiagnosticQueuedBacklog(state);
     if (queuedBacklog > 0) {
       pushLimitedDiagnosticLabel(queuedLabels, formatDiagnosticWorkLabel(state, now));
     }
@@ -476,31 +483,12 @@ function formatDiagnosticWorkLabels(work: DiagnosticWorkSnapshot): string {
   return parts.join(" ");
 }
 
-export function resolveStuckSessionWarnMs(config?: OpenClawConfig): number {
-  const raw = config?.diagnostics?.stuckSessionWarnMs;
-  if (typeof raw !== "number" || !Number.isFinite(raw)) {
-    return DEFAULT_STUCK_SESSION_WARN_MS;
-  }
-  const rounded = Math.floor(raw);
-  if (rounded < MIN_STUCK_SESSION_WARN_MS || rounded > MAX_STUCK_SESSION_WARN_MS) {
-    return DEFAULT_STUCK_SESSION_WARN_MS;
-  }
-  return rounded;
+export function resolveStuckSessionWarnMs(): number {
+  return DEFAULT_STUCK_SESSION_WARN_MS;
 }
 
-export function resolveStuckSessionAbortMs(
-  config: OpenClawConfig | undefined,
-  stuckSessionWarnMs: number,
-): number {
-  const raw = config?.diagnostics?.stuckSessionAbortMs;
-  if (typeof raw !== "number" || !Number.isFinite(raw)) {
-    return resolveStalledEmbeddedRunAbortMs(stuckSessionWarnMs);
-  }
-  const rounded = Math.floor(raw);
-  if (rounded <= 0) {
-    return resolveStalledEmbeddedRunAbortMs(stuckSessionWarnMs);
-  }
-  return Math.max(stuckSessionWarnMs, rounded);
+export function resolveStuckSessionAbortMs(stuckSessionWarnMs: number): number {
+  return resolveStalledEmbeddedRunAbortMs(stuckSessionWarnMs);
 }
 
 function resolveStalledEmbeddedRunAbortMs(stuckSessionWarnMs: number): number {
@@ -1022,9 +1010,10 @@ export function logSessionAttention(
   );
   const stuckSessionAbortMs =
     params.abortThresholdMs ?? resolveStalledEmbeddedRunAbortMs(params.thresholdMs);
+  const queueDepth = resolveDiagnosticQueuedBacklog(state);
   const classification = classifySessionAttention({
     state: state.state as "idle" | "processing" | "waiting" | undefined,
-    queueDepth: state.queueDepth,
+    queueDepth,
     activity,
     staleMs: params.thresholdMs,
     stuckSessionAbortMs,
@@ -1090,11 +1079,11 @@ export function logSessionAttention(
   const message = `${label}: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
     state.sessionKey ?? "unknown"
   } state=${params.state} age=${Math.round(params.ageMs / 1000)}s queueDepth=${
-    state.queueDepth
+    queueDepth
   } reason=${classification.reason} classification=${classification.classification}${
     classification.activeWorkKind ? ` activeWorkKind=${classification.activeWorkKind}` : ""
   }${detailFields ? ` ${detailFields}` : ""} recovery=${recoveryEligible ? "checking" : "none"}`;
-  if (classification.eventType === "session.long_running" && state.queueDepth <= 0) {
+  if (classification.eventType === "session.long_running" && queueDepth <= 0) {
     diag.debug(message);
   } else {
     diag.warn(message);
@@ -1104,7 +1093,7 @@ export function logSessionAttention(
     sessionKey: state.sessionKey,
     state: params.state,
     ageMs: params.ageMs,
-    queueDepth: state.queueDepth,
+    queueDepth,
     reason: classification.reason,
     ...sessionAttentionFields({ classification, activity }),
   };
@@ -1237,8 +1226,9 @@ export function startDiagnosticHeartbeat(
         heartbeatConfig = undefined;
       }
     }
-    const stuckSessionWarnMs = resolveStuckSessionWarnMs(heartbeatConfig);
-    const stuckSessionAbortMs = resolveStuckSessionAbortMs(heartbeatConfig, stuckSessionWarnMs);
+    const stuckSessionWarnMs = opts?.testTimings?.stuckSessionWarnMs ?? resolveStuckSessionWarnMs();
+    const stuckSessionAbortMs =
+      opts?.testTimings?.stuckSessionAbortMs ?? resolveStuckSessionAbortMs(stuckSessionWarnMs);
     const compactionSafetyTimeoutMs = resolveCompactionTimeoutMs(heartbeatConfig);
     const now = Date.now();
     const heartbeatElapsedMs =
@@ -1273,7 +1263,7 @@ export function startDiagnosticHeartbeat(
     } else {
       emitDiagnosticMemorySample({
         emitSample: shouldRecordMemorySample,
-        writeCriticalBundle: shouldWriteCriticalMemoryPressureBundle(heartbeatConfig),
+        writeCriticalBundle: false,
         resolveSessionStorePaths: () => resolveDiagnosticSessionStorePaths(heartbeatConfig),
       });
     }
@@ -1358,7 +1348,7 @@ export function startDiagnosticHeartbeat(
             sessionKey: state.sessionKey,
             sessionFile: state.sessionFile,
             ageMs: attentionAgeMs,
-            queueDepth: state.queueDepth,
+            queueDepth: resolveDiagnosticQueuedBacklog(state),
             expectedState: state.state,
             stateGeneration: state.generation,
             ...(activeAbortEligible

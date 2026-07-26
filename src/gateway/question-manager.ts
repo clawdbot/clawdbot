@@ -242,22 +242,28 @@ export class QuestionManager {
   /** Validates answers against stored questions and returns them in canonical form. */
   private validateAnswers(questions: Question[], answers: QuestionAnswers): QuestionAnswers {
     const submittedIds = Object.keys(answers.answers);
-    const questionsById = new Map(questions.map((question) => [question.id, question]));
+    const questionsById = new Map(questions.map((question) => [question.questionId, question]));
     const unknownId = submittedIds.find((id) => !questionsById.has(id));
     if (unknownId) {
       throw this.invalidAnswer(unknownId, "is not part of this request");
     }
+    // Canonical rebuilds every key as an own property, so downstream readers of
+    // resolved answers can index the record directly without prototype checks.
     const canonical: QuestionAnswers = { answers: {} };
     for (const question of questions) {
-      const values = answers.answers[question.id]?.answers;
+      // Object.hasOwn: the id grammar admits "constructor"; a plain index read
+      // would return the inherited prototype member instead of undefined.
+      const values = Object.hasOwn(answers.answers, question.questionId)
+        ? answers.answers[question.questionId]
+        : undefined;
       if (!values || values.length === 0) {
-        throw this.invalidAnswer(question.id, "requires an answer");
+        throw this.invalidAnswer(question.questionId, "requires an answer");
       }
       if (values.some((value) => !value.trim())) {
-        throw this.invalidAnswer(question.id, "contains an empty answer");
+        throw this.invalidAnswer(question.questionId, "contains an empty answer");
       }
       if (!question.multiSelect && values.length > 1) {
-        throw this.invalidAnswer(question.id, "does not allow multiple answers");
+        throw this.invalidAnswer(question.questionId, "does not allow multiple answers");
       }
       // Store the declared option label when a value matches trim-insensitively;
       // downstream renderers compare answers to option labels exactly.
@@ -270,9 +276,9 @@ export class QuestionManager {
         !question.isOther &&
         canonicalValues.some((value) => !question.options.some((option) => option.label === value))
       ) {
-        throw this.invalidAnswer(question.id, "contains an unknown option");
+        throw this.invalidAnswer(question.questionId, "contains an unknown option");
       }
-      canonical.answers[question.id] = { answers: canonicalValues };
+      canonical.answers[question.questionId] = canonicalValues;
     }
     return canonical;
   }

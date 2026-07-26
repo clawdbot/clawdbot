@@ -11,6 +11,7 @@ import {
   withProfileOperationLease,
 } from "../server-context.lifecycle.js";
 import type { BrowserServerState, ProfileRuntimeState } from "../server-context.types.js";
+import { deliverPageShare } from "./page-share.js";
 import { type ExtensionRelayHandle, startExtensionRelayServer } from "./relay-server.js";
 
 const log = createSubsystemLogger("browser").child("extension-relay");
@@ -138,6 +139,7 @@ async function ensureDesiredRelay(params: {
         handle = await startExtensionRelayServer({
           port: profile.cdpPort,
           token,
+          onPageShare: (payload) => deliverPageShare(payload),
         });
         actor.cleanupRelays.add(handle);
         signal.throwIfAborted();

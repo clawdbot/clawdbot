@@ -115,6 +115,7 @@ merge_verify() {
     echo "Re-run prepare to refresh prep artifacts and gates: scripts/pr-prepare run $pr"
     echo "Note: docs/changelog-only follow-ups reuse prior gate results automatically."
 
+    mark_pr_operation_side_effects_started
     git fetch origin "pull/$pr/head" >/dev/null 2>&1 || true
     if git cat-file -e "${PREP_HEAD_SHA}^{commit}" 2>/dev/null && git cat-file -e "${pr_head_sha}^{commit}" 2>/dev/null; then
       echo "HEAD delta (expected...current):"
@@ -125,6 +126,7 @@ merge_verify() {
     exit 1
   fi
 
+  mark_pr_operation_side_effects_started
   gh pr checks "$pr" --required --watch --fail-fast >.local/merge-checks-watch.log 2>&1 || true
   local checks_json
   local checks_err_file

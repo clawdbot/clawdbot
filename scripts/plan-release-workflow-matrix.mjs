@@ -130,6 +130,11 @@ const LIVE_MODEL_PROVIDERS = [
     profiles: "full",
   },
   {
+    provider_label: "Z.ai",
+    providers: "zai",
+    profiles: "full",
+  },
+  {
     provider_label: "Fireworks",
     providers: "fireworks",
     profiles: "full",

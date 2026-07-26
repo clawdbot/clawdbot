@@ -280,20 +280,6 @@ describe("external gateway supervision lifecycle", () => {
     });
   });
 
-  it("waits indefinitely for owner release when drain timeout is zero", async () => {
-    loadConfig.mockReturnValue({ gateway: { reload: { deferralTimeoutMs: 0 } } });
-
-    await runDaemonRestart({ json: true });
-
-    expect(waitForGatewayHealthyListener).toHaveBeenCalledWith({
-      port: 18_789,
-      attempts: 120,
-      delayMs: 500,
-      previousLockIdentity: gatewayLockIdentity,
-      waitIndefinitelyForPreviousOwner: true,
-    });
-  });
-
   it("refuses a restart when the lock owner does not match the listener", async () => {
     readActiveGatewayLockIdentity.mockResolvedValue({
       ...gatewayLockIdentity,

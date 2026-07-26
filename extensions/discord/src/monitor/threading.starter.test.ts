@@ -8,6 +8,7 @@ type ResolvedThreadStarter = NonNullable<Awaited<ReturnType<typeof resolveDiscor
 
 type ThreadStarterRestMessage = {
   content?: string | null;
+  attachments?: unknown[];
   embeds?: Array<{ title?: string | null; description?: string | null }>;
   message_snapshots?: Array<{
     message?: {
@@ -17,6 +18,7 @@ type ThreadStarterRestMessage = {
       sticker_items?: unknown[];
     };
   }>;
+  sticker_items?: unknown[];
   author?: {
     id?: string | null;
     username?: string | null;
@@ -229,7 +231,8 @@ describe("resolveDiscordThreadStarter", () => {
 
     const starter = requireThreadStarter(result);
     expect(starter.text).toContain("[Forwarded message]");
-    expect(starter.text).toContain("<media:image> (1 image)");
+    expect(starter.text).toContain("<media:image>");
+    expect(starter.text).not.toContain("(1 image)");
   });
 
   it("preserves forwarded sticker placeholders in thread starter context", async () => {
@@ -252,7 +255,25 @@ describe("resolveDiscordThreadStarter", () => {
 
     const starter = requireThreadStarter(result);
     expect(starter.text).toContain("[Forwarded message]");
-    expect(starter.text).toContain("<media:sticker> (1 sticker)");
+    expect(starter.text).toContain("<media:sticker>");
+    expect(starter.text).not.toContain("(1 sticker)");
+  });
+
+  it("renders native media for attachment-only thread starters", async () => {
+    const { result } = await resolveStarter({
+      message: createStarterMessage({
+        attachments: [
+          {
+            id: "a1",
+            filename: "starter.png",
+            content_type: "image/png",
+            url: "https://cdn.discordapp.com/starter.png",
+          },
+        ],
+      }),
+    });
+
+    expect(requireThreadStarter(result).text).toBe("<media:image>");
   });
 
   it("uses the thread id as the message channel id for forum parents", async () => {

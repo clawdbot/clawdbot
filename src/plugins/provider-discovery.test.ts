@@ -6,17 +6,15 @@ import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types
 import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
-  runProviderCatalog,
   runProviderStaticCatalog,
 } from "./provider-discovery.js";
 import * as providerDiscoveryModule from "./provider-discovery.js";
-import type { ProviderCatalogResult, ProviderDiscoveryOrder, ProviderPlugin } from "./types.js";
+import type { ProviderCatalogOrder, ProviderPlugin } from "./types.js";
 
 function makeProvider(params: {
   id: string;
   label?: string;
-  order?: ProviderDiscoveryOrder;
-  mode?: "catalog" | "discovery";
+  order?: ProviderCatalogOrder;
   aliases?: string[];
   hookAliases?: string[];
 }): ProviderPlugin {
@@ -30,7 +28,7 @@ function makeProvider(params: {
     auth: [],
     ...(params.aliases ? { aliases: params.aliases } : {}),
     ...(params.hookAliases ? { hookAliases: params.hookAliases } : {}),
-    ...(params.mode === "discovery" ? { discovery: hook } : { catalog: hook }),
+    catalog: hook,
   };
 }
 
@@ -61,7 +59,7 @@ function makeModel(id: string): ModelDefinitionConfig {
 
 function expectGroupedProviderIds(
   providers: readonly ProviderPlugin[],
-  expected: Record<ProviderDiscoveryOrder | "late", readonly string[]>,
+  expected: Record<ProviderCatalogOrder | "late", readonly string[]>,
 ) {
   const grouped = groupPluginDiscoveryProvidersByOrder([...providers]);
   const actual = {
@@ -71,34 +69,6 @@ function expectGroupedProviderIds(
     late: grouped.late.map((provider) => provider.id),
   };
   expect(actual).toEqual(expected);
-}
-
-function createCatalogRuntimeContext() {
-  return {
-    config: {},
-    env: {},
-    resolveProviderApiKey: () => ({ apiKey: undefined }),
-    resolveProviderAuth: () => ({
-      apiKey: undefined,
-      discoveryApiKey: undefined,
-      mode: "none" as const,
-      source: "none" as const,
-    }),
-  };
-}
-
-function createCatalogProvider(params: {
-  id?: string;
-  catalogRun?: () => Promise<ProviderCatalogResult>;
-  discoveryRun?: () => Promise<ProviderCatalogResult>;
-}) {
-  return {
-    id: params.id ?? "demo",
-    label: "Demo",
-    auth: [],
-    ...(params.catalogRun ? { catalog: { run: params.catalogRun } } : {}),
-    ...(params.discoveryRun ? { discovery: { run: params.discoveryRun } } : {}),
-  };
 }
 
 function expectNormalizedDiscoveryResult(params: {
@@ -120,18 +90,6 @@ type NormalizePluginDiscoveryResultCase = {
   result: Parameters<typeof normalizePluginDiscoveryResult>[0]["result"];
   expected: Record<string, unknown>;
 };
-
-async function expectProviderCatalogResult(params: {
-  provider: ProviderPlugin;
-  expected: Record<string, unknown>;
-}) {
-  await expect(
-    runProviderCatalog({
-      provider: params.provider,
-      ...createCatalogRuntimeContext(),
-    }),
-  ).resolves.toEqual(params.expected);
-}
 
 describe("resolveInstalledPluginProviderContributionIds", () => {
   it("keeps current production callers off the ambiguous runtime-discovery alias", () => {
@@ -168,18 +126,6 @@ describe("groupPluginDiscoveryProvidersByOrder", () => {
         profile: ["profile"],
         paired: ["paired"],
         late: ["late-a", "late-b"],
-      },
-    },
-    {
-      name: "uses the legacy discovery hook when catalog is absent",
-      providers: [
-        makeProvider({ id: "legacy", label: "Legacy", order: "profile", mode: "discovery" }),
-      ],
-      expected: {
-        simple: [],
-        profile: ["legacy"],
-        paired: [],
-        late: [],
       },
     },
   ] as const)("$name", ({ providers, expected }) => {
@@ -486,29 +432,5 @@ describe("runProviderStaticCatalog", () => {
     });
     expect(seenContexts[0]).not.toHaveProperty("agentDir");
     expect(seenContexts[0]).not.toHaveProperty("workspaceDir");
-  });
-});
-
-describe("runProviderCatalog", () => {
-  it("prefers catalog over discovery when both exist", async () => {
-    const catalogRun = async () => ({
-      provider: makeModelProviderConfig({ baseUrl: "http://catalog.example/v1" }),
-    });
-    const discoveryRun = async () => ({
-      provider: makeModelProviderConfig({ baseUrl: "http://discovery.example/v1" }),
-    });
-
-    await expectProviderCatalogResult({
-      provider: createCatalogProvider({
-        catalogRun,
-        discoveryRun,
-      }),
-      expected: {
-        provider: {
-          baseUrl: "http://catalog.example/v1",
-          models: [],
-        },
-      },
-    });
   });
 });

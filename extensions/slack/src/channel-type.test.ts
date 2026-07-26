@@ -162,7 +162,7 @@ describe("resolveSlackChannelType", () => {
         cfg: {
           channels: {
             slack: {
-              identity: "user",
+              postAs: "user",
               userToken: "test-user-token",
             },
           },

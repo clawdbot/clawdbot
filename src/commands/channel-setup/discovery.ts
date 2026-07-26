@@ -22,9 +22,7 @@ type ChannelCatalogEntry = {
 };
 
 /** Return true when channel metadata should appear in setup/onboarding choices. */
-export function shouldShowChannelInSetup(
-  meta: Pick<ChannelMeta, "exposure" | "showConfigured" | "showInSetup">,
-): boolean {
+export function shouldShowChannelInSetup(meta: Pick<ChannelMeta, "exposure">): boolean {
   return isChannelVisibleInSetup(meta);
 }
 

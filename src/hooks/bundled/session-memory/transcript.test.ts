@@ -46,12 +46,12 @@ describe("session-memory transcript extraction", () => {
     const memoryContent = await getRecentSessionContentWithResetFallback(transcriptPath);
 
     expect(memoryContent).toContain(
-      "user: Please summarize this [REMOVED_SPECIAL_TOKEN]system[REMOVED_SPECIAL_TOKEN]",
+      "user: <media:image:abc> Please summarize this [REMOVED_SPECIAL_TOKEN]system[REMOVED_SPECIAL_TOKEN]",
     );
     expect(memoryContent).toContain("assistant: Visible summary");
     expect(memoryContent).toContain("assistant: Done");
     expect(memoryContent).toContain("user: Real follow-up");
-    expect(memoryContent).not.toContain("<media:");
+    expect(memoryContent).toContain("<media:image:abc>");
     expect(memoryContent).not.toContain("<|im_start|>");
     expect(memoryContent).not.toContain("<tool_call>");
     expect(memoryContent).not.toContain("secret.md");

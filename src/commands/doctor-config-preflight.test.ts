@@ -2,8 +2,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { applyCliProfileEnv } from "../cli/profile.js";
 import { promoteConfigSnapshotToLastKnownGood, readConfigFileSnapshot } from "../config/config.js";
-import { withTempHome, writeOpenClawConfig } from "../config/test-helpers.js";
+import { withEnvOverride, withTempHome, writeOpenClawConfig } from "../config/test-helpers.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -29,6 +30,13 @@ function readConfigHealthRow(env: NodeJS.ProcessEnv, configPath: string) {
   );
 }
 
+async function writeLegacyConfig(home: string): Promise<string> {
+  const legacyPath = path.join(home, ".clawdbot", "clawdbot.json");
+  await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+  await fs.writeFile(legacyPath, '{"gateway":{"mode":"local"}}\n', "utf-8");
+  return legacyPath;
+}
+
 describe("runDoctorConfigPreflight", () => {
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
@@ -46,6 +54,84 @@ describe("runDoctorConfigPreflight", () => {
       });
 
       expect(readConfigHealthRow({ ...process.env, HOME: home }, configPath)).toBeUndefined();
+    });
+  });
+
+  it("migrates legacy config into the active state directory", async () => {
+    await withTempHome(async (home) => {
+      await writeLegacyConfig(home);
+      const stateDir = await fs.realpath(await fs.mkdtemp(path.join(home, "custom-state-")));
+      const configPath = path.join(stateDir, "openclaw.json");
+      const defaultConfigPath = path.join(home, ".openclaw", "openclaw.json");
+
+      await withEnvOverride(
+        {
+          OPENCLAW_CONFIG_PATH: undefined,
+          OPENCLAW_PROFILE: undefined,
+          OPENCLAW_STATE_DIR: stateDir,
+        },
+        async () => {
+          const preflight = await runDoctorConfigPreflight({
+            migrateState: false,
+            invalidConfigNote: false,
+          });
+
+          expect(preflight.snapshot.path).toBe(configPath);
+          await expect(fs.readFile(configPath, "utf-8")).resolves.toContain('"mode":"local"');
+          await expect(fs.access(defaultConfigPath)).rejects.toMatchObject({ code: "ENOENT" });
+        },
+      );
+    });
+  });
+
+  it("migrates legacy config into an explicit config path", async () => {
+    await withTempHome(async (home) => {
+      await writeLegacyConfig(home);
+      const configRoot = await fs.realpath(await fs.mkdtemp(path.join(home, "custom-config-")));
+      const configPath = path.join(configRoot, "nested", "custom-openclaw.json");
+
+      await withEnvOverride(
+        {
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_PROFILE: undefined,
+          OPENCLAW_STATE_DIR: undefined,
+        },
+        async () => {
+          const preflight = await runDoctorConfigPreflight({
+            migrateState: false,
+            invalidConfigNote: false,
+          });
+
+          expect(preflight.snapshot.path).toBe(configPath);
+          await expect(fs.readFile(configPath, "utf-8")).resolves.toContain('"mode":"local"');
+        },
+      );
+    });
+  });
+
+  it("migrates legacy config into the selected profile", async () => {
+    await withTempHome(async (home) => {
+      await writeLegacyConfig(home);
+      const profileStateDir = path.join(home, ".openclaw-work");
+      const configPath = path.join(profileStateDir, "openclaw.json");
+
+      await withEnvOverride(
+        {
+          OPENCLAW_CONFIG_PATH: undefined,
+          OPENCLAW_PROFILE: undefined,
+          OPENCLAW_STATE_DIR: undefined,
+        },
+        async () => {
+          applyCliProfileEnv({ profile: "work", homedir: () => home });
+          const preflight = await runDoctorConfigPreflight({
+            migrateState: false,
+            invalidConfigNote: false,
+          });
+
+          expect(preflight.snapshot.path).toBe(configPath);
+          await expect(fs.readFile(configPath, "utf-8")).resolves.toContain('"mode":"local"');
+        },
+      );
     });
   });
 

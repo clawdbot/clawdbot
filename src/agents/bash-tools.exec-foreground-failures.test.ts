@@ -196,7 +196,10 @@ describe("exec foreground failures", () => {
     expect(supervisorMock.spawn.mock.calls[0]?.[0]?.timeoutMs).toBe(1_000);
     const text = requireTextContent(result);
     expect(text).toMatch(/timed out/i);
-    expect(text).toMatch(/re-run with a higher timeout/i);
+    expect(text).toContain("external side effects may already have completed");
+    expect(text).toContain("Verify the resulting state before retrying");
+    expect(text).toContain("Do not automatically rerun non-idempotent commands");
+    expect(text).toContain("known to be safe to retry");
     const details = requireFailedDetails(result.details);
     expect(details.exitCode).toBeNull();
     expect(details.exitSignal).toBe("SIGKILL");

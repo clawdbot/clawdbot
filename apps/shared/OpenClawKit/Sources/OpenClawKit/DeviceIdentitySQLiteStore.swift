@@ -5,7 +5,11 @@ import OpenClawNativeState
 import SQLite3
 
 enum DeviceIdentitySQLiteStore {
-    private static let busyTimeoutMilliseconds: Int32 = 5000
+    // Parallel test bursts serialize first-time identity creation behind the
+    // exclusive coordinator; 5s starved late waiters on loaded CI runners and
+    // failed whichever identity-dependent tests lost the race. Uncontended
+    // production access never waits this long.
+    private static let busyTimeoutMilliseconds: Int32 = 30000
     private static let maximumLegacyIdentityBytes = 64 * 1024
     private static let maximumLegacyAuthBytes = 4 * 1024 * 1024
     private static let doctorClaimSuffix = ".doctor-importing"

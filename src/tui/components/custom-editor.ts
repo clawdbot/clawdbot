@@ -103,10 +103,8 @@ export class CustomEditor extends Editor {
       this.onCtrlC();
       return;
     }
-    if (matchesKey(data, Key.ctrl("d"))) {
-      if (this.getText().length === 0 && this.onCtrlD) {
-        this.onCtrlD();
-      }
+    if (matchesKey(data, Key.ctrl("d")) && this.getText().length === 0 && this.onCtrlD) {
+      this.onCtrlD();
       return;
     }
 

@@ -193,7 +193,7 @@ function hasPotentialSlackNamedPolicy(params: {
 }
 
 function resolveSlackDmReadAllowed(account: ResolvedSlackAccount): boolean {
-  const dmPolicy = account.config.dmPolicy ?? account.config.dm?.policy ?? "pairing";
+  const dmPolicy = account.config.dmPolicy ?? "pairing";
   return account.config.dm?.enabled !== false && dmPolicy !== "disabled";
 }
 

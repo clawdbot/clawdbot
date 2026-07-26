@@ -35,6 +35,7 @@ import { clearPluginRuntimeArtifactResolutionMemo } from "./plugin-runtime-artif
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import { setActivePluginRegistry } from "./runtime.js";
 import { validateJsonSchemaValue } from "./schema-validator.js";
+import { clearSessionDiscussionProvider } from "./session-discussion-registry.js";
 import { hasKind } from "./slots.js";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
 import type { PluginLogger } from "./types.js";
@@ -174,6 +175,7 @@ export function clearActivatedPluginRuntimeState(): void {
   clearEmbeddingProviders();
   clearMemoryEmbeddingProviders();
   clearMemoryPluginState();
+  clearSessionDiscussionProvider();
 }
 
 class PluginLoadFailureError extends Error {
@@ -291,6 +293,7 @@ export function createManifestPluginRecord(params: {
     name: manifestRecord.name ?? manifestRecord.id,
     description: manifestRecord.description,
     version: manifestRecord.version,
+    builtWithOpenClawVersion: candidate.packageManifest?.build?.openclawVersion?.trim(),
     packageName: manifestRecord.packageName,
     format: manifestRecord.format,
     bundleFormat: manifestRecord.bundleFormat,
@@ -308,6 +311,8 @@ export function createManifestPluginRecord(params: {
     providerIds: manifestRecord.providers,
     configSchema: Boolean(manifestRecord.configSchema),
     contracts: manifestRecord.contracts,
+    dashboard: manifestRecord.dashboard,
+    mcpServers: manifestRecord.mcpServers,
   });
 }
 

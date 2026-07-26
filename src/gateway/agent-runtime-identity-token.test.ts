@@ -66,6 +66,45 @@ describe("agent runtime identity token", () => {
     });
   });
 
+  it("round-trips the authenticated turn-source account", async () => {
+    useTempHome();
+    const runtimeToken = await importRuntimeTokenModule();
+    const token = await runtimeToken.mintAgentRuntimeIdentityToken({
+      agentId: "main",
+      sessionKey: "session-1",
+      turnSourceAccountId: " Work ",
+    });
+
+    await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toEqual({
+      kind: "agentRuntime",
+      agentId: "main",
+      sessionKey: "session-1",
+      turnSourceAccountId: "work",
+    });
+  });
+
+  it("round-trips a short-lived cron self-management capability", async () => {
+    useTempHome();
+    const runtimeToken = await importRuntimeTokenModule();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1000);
+    const token = await runtimeToken.mintAgentRuntimeIdentityToken({
+      agentId: "ops",
+      sessionKey: "agent:ops:cron:job-1:run:run-1",
+      cronSelfManagementJobId: " job-1 ",
+    });
+
+    await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token, 60_999)).resolves.toEqual({
+      kind: "agentRuntime",
+      agentId: "ops",
+      sessionKey: "agent:ops:cron:job-1:run:run-1",
+      cronSelfManagementContext: { jobId: "job-1", expiresAtMs: 61_000 },
+    });
+    await expect(
+      runtimeToken.verifyAgentRuntimeIdentityToken(token, 61_000),
+    ).resolves.toBeUndefined();
+    nowSpy.mockRestore();
+  });
+
   it("does not mint local credentials while rejecting invalid presented tokens", async () => {
     const home = useTempHome();
     const runtimeToken = await importRuntimeTokenModule();

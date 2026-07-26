@@ -2,13 +2,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  buildMattermostFlushIngressLifecycle,
   createMattermostIngressMonitor,
   type MattermostIngressLifecycle,
 } from "./monitor-ingress.js";
@@ -383,11 +383,14 @@ describe("Mattermost durable ingress", () => {
         }
         return await enqueue(...args);
       };
-      const ingress = startMonitor(queue, vi.fn());
+      const dispatch = vi.fn();
+      const ingress = startMonitor(queue, dispatch);
       try {
         // Two transient failures absorb into the bounded retry.
         await ingress.receive(postedEvent({ postId: "post-retry" }));
-        expect(await queue.listPending({ limit: "all" })).toHaveLength(1);
+        await ingress.waitForIdle();
+        expect(failures).toBe(0);
+        expect(dispatch).toHaveBeenCalledOnce();
 
         // A persistent failure escalates so the websocket can tear down loudly.
         failures = Number.POSITIVE_INFINITY;
@@ -490,10 +493,7 @@ describe("Mattermost merged ingress lifecycle", () => {
   it("fans adoption out to every constituent claim", async () => {
     const first = testLifecycle();
     const second = testLifecycle();
-    const merged = buildMattermostFlushIngressLifecycle([
-      { turnAdoptionLifecycle: first.lifecycle },
-      { turnAdoptionLifecycle: second.lifecycle },
-    ]);
+    const merged = fanInChannelIngressLifecycles([first.lifecycle, second.lifecycle]);
 
     merged.lifecycle?.onDeferred();
     await merged.lifecycle?.onAdopted();
@@ -508,10 +508,7 @@ describe("Mattermost merged ingress lifecycle", () => {
   it("completes all claims when a gated flush never dispatches", async () => {
     const first = testLifecycle();
     const second = testLifecycle();
-    const merged = buildMattermostFlushIngressLifecycle([
-      { turnAdoptionLifecycle: first.lifecycle },
-      { turnAdoptionLifecycle: second.lifecycle },
-    ]);
+    const merged = fanInChannelIngressLifecycles([first.lifecycle, second.lifecycle]);
 
     await merged.settle();
 
