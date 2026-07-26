@@ -1156,6 +1156,7 @@ def ranchbrain_shell(title, body):
 <html>
 <head>
 <title>{html_module.escape(title)}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
 body {{
   background:#1e293b;
@@ -1194,6 +1195,37 @@ body {{
   color:#cbd5e1;
   margin-top:10px;
   font-size:14px;
+  overflow-wrap:anywhere;
+}}
+.table-scroll {{
+  width:100%;
+  overflow-x:auto;
+}}
+table.dashboard-table {{
+  width:100%;
+  min-width:640px;
+  border-collapse:collapse;
+  table-layout:fixed;
+}}
+table.dashboard-table th,
+table.dashboard-table td {{
+  padding:11px 12px;
+  text-align:left;
+  vertical-align:top;
+  border-bottom:1px solid #475569;
+  overflow-wrap:anywhere;
+}}
+table.dashboard-table th {{
+  color:#e2e8f0;
+  background:#334155;
+  border-bottom:2px solid #64748b;
+  font-weight:bold;
+}}
+table.dashboard-table tbody tr:hover td {{
+  background:#2f4057;
+}}
+table.dashboard-table code {{
+  white-space:normal;
   overflow-wrap:anywhere;
 }}
 button {{
@@ -1750,17 +1782,17 @@ def ai_scorecard():
   <h2>All Registered Models</h2>
   <p>This inventory includes production, fallback, evaluation, watch, local,
      and cloud models from the authoritative model registry.</p>
-  <div style="overflow-x:auto;">
-    <table class="all-models-table"
-           style="width:100%;min-width:900px;border-collapse:collapse;
+  <div class="table-scroll">
+    <table class="dashboard-table all-models-table"
+           style="width:100%;min-width:820px;border-collapse:collapse;
                   table-layout:fixed;">
       <colgroup>
         <col style="width:19%;">
-        <col style="width:22%;">
+        <col style="width:21%;">
         <col style="width:17%;">
-        <col style="width:12%;">
-        <col style="width:17%;">
-        <col style="width:13%;">
+        <col style="width:14%;">
+        <col style="width:15%;">
+        <col style="width:14%;">
       </colgroup>
       <tr>
         <th style="padding:12px;text-align:left;border-bottom:2px solid #64748b;">Model</th>
@@ -1790,18 +1822,30 @@ def ai_scorecard():
 </div>
 <div class="panel">
   <h2>Promotion-Eligible Winners</h2>
-  <table style="width:100%;border-collapse:collapse;">
-    <tr><th>Benchmark</th><th>Model</th><th>Status</th><th>Evidence</th></tr>
-    {eligible_rows}
-  </table>
+  <div class="table-scroll">
+    <table class="dashboard-table winners-table">
+      <colgroup>
+        <col style="width:22%;"><col style="width:22%;">
+        <col style="width:16%;"><col style="width:40%;">
+      </colgroup>
+      <tr><th>Benchmark</th><th>Model</th><th>Status</th><th>Evidence</th></tr>
+      {eligible_rows}
+    </table>
+  </div>
 </div>
 {actions}
 <div class="panel">
   <h2>Promotion Audit History</h2>
-  <table style="width:100%;border-collapse:collapse;">
-    <tr><th>Applied</th><th>Decision</th><th>Status</th><th>Changes</th></tr>
-    {audit_rows}
-  </table>
+  <div class="table-scroll">
+    <table class="dashboard-table audit-table">
+      <colgroup>
+        <col style="width:20%;"><col style="width:28%;">
+        <col style="width:14%;"><col style="width:38%;">
+      </colgroup>
+      <tr><th>Applied</th><th>Decision</th><th>Status</th><th>Changes</th></tr>
+      {audit_rows}
+    </table>
+  </div>
 </div>
 """
         return ranchbrain_shell("AI Model Scorecard", body)
@@ -1967,17 +2011,27 @@ def ai_scorecard_evidence(benchmark_id):
 {prompt_panel}
 <div class="panel">
   <h2>Deterministic Validation</h2>
-  <table style="width:100%;border-collapse:collapse;">
-    <tr><th>Model</th><th>Result</th><th>Findings</th></tr>
-    {validation_rows}
-  </table>
+  <div class="table-scroll">
+    <table class="dashboard-table evidence-table">
+      <colgroup>
+        <col style="width:25%;"><col style="width:15%;"><col style="width:60%;">
+      </colgroup>
+      <tr><th>Model</th><th>Result</th><th>Findings</th></tr>
+      {validation_rows}
+    </table>
+  </div>
 </div>
 <div class="panel">
   <h2>Reviewer Scores and Findings</h2>
-  <table style="width:100%;border-collapse:collapse;">
-    <tr><th>Model</th><th>Score</th><th>Findings</th></tr>
-    {review_rows}
-  </table>
+  <div class="table-scroll">
+    <table class="dashboard-table evidence-table">
+      <colgroup>
+        <col style="width:25%;"><col style="width:15%;"><col style="width:60%;">
+      </colgroup>
+      <tr><th>Model</th><th>Score</th><th>Findings</th></tr>
+      {review_rows}
+    </table>
+  </div>
 </div>
 <h2>Original Model Responses</h2>
 {response_panels}
@@ -3531,16 +3585,28 @@ button:hover {{
 }}
 table {{
     width:100%;
+    min-width:720px;
     border-collapse:collapse;
+    table-layout:fixed;
 }}
 th, td {{
     border-bottom:1px solid #475569;
-    padding:10px;
+    padding:11px 12px;
     text-align:left;
     vertical-align:top;
+    overflow-wrap:anywhere;
 }}
 th {{
-    color:#cbd5e1;
+    color:#e2e8f0;
+    background:#334155;
+    border-bottom:2px solid #64748b;
+}}
+tbody tr:hover td {{
+    background:#2f4057;
+}}
+code {{
+    white-space:normal;
+    overflow-wrap:anywhere;
 }}
 .notice {{
     padding:14px;

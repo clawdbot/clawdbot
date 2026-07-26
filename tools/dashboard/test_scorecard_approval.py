@@ -269,9 +269,11 @@ class ScorecardDashboardTests(unittest.TestCase):
         self.assertIn("All Registered Models", rendered)
         self.assertIn("Gemma 3 12B", rendered)
         self.assertIn("Claude", rendered)
-        self.assertIn('class="all-models-table"', rendered)
+        self.assertIn('class="dashboard-table all-models-table"', rendered)
         self.assertIn("table-layout:fixed", rendered)
-        self.assertIn("overflow-x:auto", rendered)
+        self.assertIn('class="table-scroll"', rendered)
+        self.assertIn('class="dashboard-table winners-table"', rendered)
+        self.assertIn('class="dashboard-table audit-table"', rendered)
         self.assertIn("Open Approval / Reject Queue", rendered)
         self.assertNotIn("No pending scorecard reviews", rendered)
 
