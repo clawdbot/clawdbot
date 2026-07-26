@@ -1570,12 +1570,30 @@ def ai_scorecard():
             has_scores = model_id in (snapshot["scorecard"] or {}).get("models", {})
             all_model_rows += f"""
 <tr>
-  <td>{html_module.escape(str(model.get('display_name', model_id)))}</td>
-  <td><code>{html_module.escape(model_id)}</code></td>
-  <td>{html_module.escape(str(model.get('provider', 'unknown')))}</td>
-  <td>{html_module.escape(str(model.get('deployment', 'unknown')))}</td>
-  <td>{html_module.escape(str(model.get('status', 'unknown')))}</td>
-  <td>{'Available' if has_scores else 'Not scored'}</td>
+  <td style="padding:11px 12px;text-align:left;vertical-align:top;
+             border-bottom:1px solid #475569;">{
+      html_module.escape(str(model.get('display_name', model_id)))
+  }</td>
+  <td style="padding:11px 12px;text-align:left;vertical-align:top;
+             border-bottom:1px solid #475569;overflow-wrap:anywhere;">
+    <code>{html_module.escape(model_id)}</code>
+  </td>
+  <td style="padding:11px 12px;text-align:left;vertical-align:top;
+             border-bottom:1px solid #475569;">{
+      html_module.escape(str(model.get('provider', 'unknown')))
+  }</td>
+  <td style="padding:11px 12px;text-align:left;vertical-align:top;
+             border-bottom:1px solid #475569;">{
+      html_module.escape(str(model.get('deployment', 'unknown')))
+  }</td>
+  <td style="padding:11px 12px;text-align:left;vertical-align:top;
+             border-bottom:1px solid #475569;overflow-wrap:anywhere;">{
+      html_module.escape(str(model.get('status', 'unknown')))
+  }</td>
+  <td style="padding:11px 12px;text-align:left;vertical-align:top;
+             border-bottom:1px solid #475569;">{
+      'Available' if has_scores else 'Not scored'
+  }</td>
 </tr>
 """
         if not all_model_rows:
@@ -1732,13 +1750,29 @@ def ai_scorecard():
   <h2>All Registered Models</h2>
   <p>This inventory includes production, fallback, evaluation, watch, local,
      and cloud models from the authoritative model registry.</p>
-  <table style="width:100%;border-collapse:collapse;">
-    <tr>
-      <th>Model</th><th>Registry ID</th><th>Provider</th>
-      <th>Deployment</th><th>Status</th><th>Scorecard</th>
-    </tr>
-    {all_model_rows}
-  </table>
+  <div style="overflow-x:auto;">
+    <table class="all-models-table"
+           style="width:100%;min-width:900px;border-collapse:collapse;
+                  table-layout:fixed;">
+      <colgroup>
+        <col style="width:19%;">
+        <col style="width:22%;">
+        <col style="width:17%;">
+        <col style="width:12%;">
+        <col style="width:17%;">
+        <col style="width:13%;">
+      </colgroup>
+      <tr>
+        <th style="padding:12px;text-align:left;border-bottom:2px solid #64748b;">Model</th>
+        <th style="padding:12px;text-align:left;border-bottom:2px solid #64748b;">Registry ID</th>
+        <th style="padding:12px;text-align:left;border-bottom:2px solid #64748b;">Provider</th>
+        <th style="padding:12px;text-align:left;border-bottom:2px solid #64748b;">Deployment</th>
+        <th style="padding:12px;text-align:left;border-bottom:2px solid #64748b;">Status</th>
+        <th style="padding:12px;text-align:left;border-bottom:2px solid #64748b;">Scorecard</th>
+      </tr>
+      {all_model_rows}
+    </table>
+  </div>
 </div>
 """
         body = f"""
