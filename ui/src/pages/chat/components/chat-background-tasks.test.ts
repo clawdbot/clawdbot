@@ -87,6 +87,7 @@ describe("background tasks rail state", () => {
 
     const props = createBackgroundTasksProps(host, openSession);
     expect(props.collapsed).toBe(true);
+    expect(props.finishedCollapsed).toBe(true);
     expect(request).toHaveBeenCalledTimes(2);
     expect(props.tasks?.map((task) => task.id)).toEqual(["task-1"]);
   });
@@ -201,9 +202,10 @@ describe("background tasks rail state", () => {
       );
     };
     host.requestUpdate = renderRail;
+    // finishedCollapsed defaults to true; back-navigation from a finished
+    // detail must expand the section so the returned-to row stays visible.
     const initialProps = createBackgroundTasksProps(host, openSession);
     initialProps.onToggleCollapsed();
-    initialProps.onToggleFinished();
     renderRail();
 
     const disclosure = container.querySelector<HTMLButtonElement>(
