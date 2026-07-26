@@ -1,8 +1,12 @@
 /** Tests phase-scoped plugin hooks and hook registration ordering. */
 import { beforeEach, describe, expect, it } from "vitest";
 import { createHookRunner } from "./hooks.js";
-import { addStaticTestHooks } from "./hooks.test-fixtures.js";
+import { addStaticTestHooks, createHookRunnerWithRegistry } from "./hooks.test-fixtures.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "./runtime/gateway-request-scope.js";
 import type {
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildResult,
@@ -121,5 +125,146 @@ describe("phase hooks merger", () => {
     },
   ] as const)("$name", async ({ hookName, hooks, expected }) => {
     await expectPhaseHookMerge({ hookName, hooks, expected });
+  });
+
+  it("scopes modifying, claiming, and void agent hooks to their plugin and agent", async () => {
+    const scopes: Record<
+      string,
+      { pluginId?: string; agentId?: string; pluginSource?: string } | undefined
+    > = {};
+    const captureScope = (hookName: string) => {
+      const scope = getPluginRuntimeGatewayRequestScope();
+      scopes[hookName] = scope
+        ? {
+            pluginId: scope.pluginId,
+            agentId: scope.agentId,
+            pluginSource: scope.pluginSource,
+          }
+        : undefined;
+    };
+    const { runner } = createHookRunnerWithRegistry([
+      {
+        hookName: "before_prompt_build",
+        pluginId: "mutator-plugin",
+        priority: 10,
+        handler: (_event, ctx) => {
+          captureScope("mutator_plugin");
+          (ctx as { agentId: string }).agentId = "spoofed";
+          return {};
+        },
+      },
+      {
+        hookName: "before_prompt_build",
+        pluginId: "prompt-plugin",
+        handler: async () => {
+          await Promise.resolve();
+          captureScope("before_prompt_build");
+          return {};
+        },
+      },
+      {
+        hookName: "before_agent_reply",
+        pluginId: "reply-plugin",
+        handler: () => {
+          captureScope("before_agent_reply");
+          return { handled: false };
+        },
+      },
+      {
+        hookName: "agent_end",
+        pluginId: "end-plugin",
+        handler: () => {
+          captureScope("agent_end");
+        },
+      },
+    ]);
+
+    await runner.runBeforePromptBuild({ prompt: "test", messages: [] }, { agentId: "codex" });
+    await runner.runBeforeAgentReply({ cleanedBody: "test" }, { agentId: "codex" });
+    await runner.runAgentEnd({ messages: [], success: true }, { agentId: "codex" });
+
+    expect(scopes).toEqual({
+      mutator_plugin: {
+        pluginId: "mutator-plugin",
+        agentId: "codex",
+        pluginSource: "test",
+      },
+      before_prompt_build: {
+        pluginId: "prompt-plugin",
+        agentId: "codex",
+        pluginSource: "test",
+      },
+      before_agent_reply: {
+        pluginId: "reply-plugin",
+        agentId: "codex",
+        pluginSource: "test",
+      },
+      agent_end: {
+        pluginId: "end-plugin",
+        agentId: "codex",
+        pluginSource: "test",
+      },
+    });
+  });
+
+  it("scopes specialized hook runners to their plugin and trusted agent", async () => {
+    const scopes: Record<string, { pluginId?: string; agentId?: string } | undefined> = {};
+    const captureScope = (hookName: string) => {
+      const scope = getPluginRuntimeGatewayRequestScope();
+      scopes[hookName] = scope
+        ? {
+            pluginId: scope.pluginId,
+            agentId: scope.agentId,
+          }
+        : undefined;
+    };
+    const { runner } = createHookRunnerWithRegistry([
+      {
+        hookName: "inbound_claim",
+        pluginId: "target-plugin",
+        handler: () => {
+          captureScope("targeted_claim");
+          return { handled: false };
+        },
+      },
+      {
+        hookName: "reply_payload_sending",
+        pluginId: "payload-plugin",
+        handler: () => {
+          captureScope("reply_payload_sending");
+        },
+      },
+      {
+        hookName: "before_message_write",
+        pluginId: "sync-plugin",
+        handler: () => {
+          captureScope("before_message_write");
+        },
+      },
+    ]);
+
+    await runner.runInboundClaimForPluginOutcome(
+      "target-plugin",
+      { content: "test", channel: "test" },
+      { channelId: "test", agentId: "codex" },
+    );
+    await withPluginRuntimeGatewayRequestScope(
+      { agentId: "codex", isWebchatConnect: () => false },
+      () =>
+        runner.runReplyPayloadSending(
+          { payload: { text: "test" }, kind: "final" },
+          { channelId: "test" },
+        ),
+    );
+    runner.runBeforeMessageWrite(
+      { message: { role: "user", content: "test", timestamp: 1 } },
+      { agentId: "codex" },
+    );
+
+    expect(scopes).toEqual({
+      targeted_claim: { pluginId: "target-plugin", agentId: "codex" },
+      reply_payload_sending: { pluginId: "payload-plugin", agentId: "codex" },
+      before_message_write: { pluginId: "sync-plugin", agentId: "codex" },
+    });
   });
 });
