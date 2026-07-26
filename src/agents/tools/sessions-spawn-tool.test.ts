@@ -1,6 +1,7 @@
 // sessions_spawn tool tests cover model-visible schema gating, ACP/subagent
 // dispatch, and result details for spawned child sessions.
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_SECONDS } from "@openclaw/normalization-core/number-coercion";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
@@ -250,17 +251,28 @@ describe("sessions_spawn tool", () => {
     expect(schema.properties?.runtime?.enum).toEqual(["subagent", "acp"]);
   });
 
-  it("does not expose timeout override fields to the model", () => {
+  it("exposes the canonical timeout override to the model", () => {
     const tool = createSessionsSpawnTool();
     const schema = tool.parameters as {
       properties?: {
         runTimeoutSeconds?: unknown;
-        timeoutSeconds?: unknown;
+        timeoutSeconds?: {
+          type?: string;
+          minimum?: number;
+          maximum?: number;
+          description?: string;
+        };
       };
     };
 
     expect(schema.properties?.runTimeoutSeconds).toBeUndefined();
-    expect(schema.properties?.timeoutSeconds).toBeUndefined();
+    expect(schema.properties?.timeoutSeconds).toMatchObject({
+      type: "integer",
+      minimum: 0,
+      maximum: MAX_TIMER_TIMEOUT_SECONDS,
+    });
+    expect(schema.properties?.timeoutSeconds?.description).toContain("overrides");
+    expect(schema.properties?.timeoutSeconds?.description).toContain("HANDOFF_TIMEOUT_SECONDS");
   });
 
   it("hides and rejects swarm parameters while tools.swarm is disabled", async () => {
@@ -1065,6 +1077,7 @@ describe("sessions_spawn tool", () => {
       agentId: "main",
       model: "anthropic/claude-sonnet-4-6",
       thinking: "medium",
+      timeoutSeconds: 14_400,
       cwd: "/workspace/requester",
       thread: true,
       mode: "session",
@@ -1083,7 +1096,7 @@ describe("sessions_spawn tool", () => {
     expect(spawnArgs.model).toBe("anthropic/claude-sonnet-4-6");
     expect(spawnArgs.thinking).toBe("medium");
     expect(spawnArgs.cwd).toBe("/workspace/requester");
-    expect(spawnArgs).not.toHaveProperty("runTimeoutSeconds");
+    expect(spawnArgs.runTimeoutSeconds).toBe(14_400);
     expect(spawnArgs.thread).toBe(true);
     expect(spawnArgs.mode).toBe("session");
     expect(spawnArgs.cleanup).toBe("keep");
@@ -1234,23 +1247,99 @@ describe("sessions_spawn tool", () => {
     expect(result.details).not.toHaveProperty("role");
   });
 
-  it.each([
-    "runTimeoutSeconds",
-    "timeoutSeconds",
-    "run_timeout_seconds",
-    "timeout_seconds",
-  ] as const)("rejects stale timeout override argument %s", async (timeoutParam) => {
+  it.each(["runTimeoutSeconds", "run_timeout_seconds"] as const)(
+    "rejects stale timeout override argument %s",
+    async (timeoutParam) => {
+      const tool = createSessionsSpawnTool({
+        agentSessionKey: "agent:main:main",
+      });
+
+      await expect(
+        tool.execute("call-stale-timeout-override", {
+          task: "do thing",
+          [timeoutParam]: 2,
+        }),
+      ).rejects.toThrow(
+        `sessions_spawn does not support "${timeoutParam}". Use "timeoutSeconds" for a per-call run timeout.`,
+      );
+
+      expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("requires an explicit per-call timeout for a declared handoff contract", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
     });
 
     await expect(
-      tool.execute("call-stale-timeout-override", {
-        task: "do thing",
-        [timeoutParam]: 2,
+      tool.execute("call-missing-handoff-timeout", {
+        task: "do thing\nHANDOFF_TIMEOUT_SECONDS: 7200",
       }),
     ).rejects.toThrow(
-      `sessions_spawn does not support per-call "${timeoutParam}". Configure agents.defaults.subagents.runTimeoutSeconds instead.`,
+      "sessions_spawn requires timeoutSeconds when the task declares HANDOFF_TIMEOUT_SECONDS.",
+    );
+
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a per-call timeout that differs from the handoff contract", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await expect(
+      tool.execute("call-mismatched-handoff-timeout", {
+        task: "do thing\nHANDOFF_TIMEOUT_SECONDS: 7200",
+        timeoutSeconds: 3600,
+      }),
+    ).rejects.toThrow(
+      "sessions_spawn timeoutSeconds (3600) must match HANDOFF_TIMEOUT_SECONDS (7200).",
+    );
+
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("forwards a matching declared timeout to native subagent spawn", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await tool.execute("call-matching-handoff-timeout", {
+      task: "do thing\nHANDOFF_TIMEOUT_SECONDS: 7200",
+      timeoutSeconds: 7200,
+    });
+
+    const spawnArgs = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 0, "spawnSubagentDirect");
+    expect(spawnArgs.runTimeoutSeconds).toBe(7200);
+  });
+
+  it("normalizes the snake-case per-call timeout alias", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await tool.execute("call-snake-case-timeout", {
+      task: "do thing",
+      timeout_seconds: 7200,
+    });
+
+    const spawnArgs = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 0, "spawnSubagentDirect");
+    expect(spawnArgs.runTimeoutSeconds).toBe(7200);
+  });
+
+  it("rejects a per-call timeout above the timer-safe maximum", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await expect(
+      tool.execute("call-oversized-timeout", {
+        task: "do thing",
+        timeoutSeconds: MAX_TIMER_TIMEOUT_SECONDS + 1,
+      }),
+    ).rejects.toThrow(
+      `timeoutSeconds must be an integer between 0 and ${MAX_TIMER_TIMEOUT_SECONDS}.`,
     );
 
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
@@ -1323,6 +1412,7 @@ describe("sessions_spawn tool", () => {
       task: "investigate the failing CI run",
       agentId: "codex",
       cwd: "/workspace",
+      timeoutSeconds: 14_400,
       thread: true,
       mode: "session",
       streamTo: "parent",
@@ -1337,7 +1427,7 @@ describe("sessions_spawn tool", () => {
     expect(spawnArgs.task).toBe("investigate the failing CI run");
     expect(spawnArgs.agentId).toBe("codex");
     expect(spawnArgs.cwd).toBe("/workspace");
-    expect(spawnArgs).not.toHaveProperty("runTimeoutSeconds");
+    expect(spawnArgs.runTimeoutSeconds).toBe(14_400);
     expect(spawnArgs.thread).toBe(true);
     expect(spawnArgs.mode).toBe("session");
     expect(spawnArgs.cleanup).toBe("keep");

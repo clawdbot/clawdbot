@@ -264,9 +264,10 @@ openclaw config set plugins.entries.acpx.config.timeoutSeconds 180
 ```
 
 Runtime turns use OpenClaw agent/run timeouts, including `/acp timeout`.
-`sessions_spawn` does not accept per-call timeout overrides; the operator path
-is `agents.defaults.subagents.runTimeoutSeconds`. Restart the gateway after
-changing `timeoutSeconds`.
+`sessions_spawn.timeoutSeconds` overrides
+`agents.defaults.subagents.runTimeoutSeconds` for one spawned run. When the
+task declares `HANDOFF_TIMEOUT_SECONDS`, the per-call value is required and
+must match it.
 
 ### Health probe agent configuration
 

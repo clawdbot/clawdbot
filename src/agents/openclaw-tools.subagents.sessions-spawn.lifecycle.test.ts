@@ -318,6 +318,57 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     expect(childAgentCall?.timeoutMs).toBe(125_000);
   });
 
+  it("honors a per-call timeout above the global default on the native spawn path", async () => {
+    const perCallTimeoutSeconds = 14_400;
+    const ctx = setupSessionsSpawnGatewayMock({
+      includeChatHistory: true,
+      agentWaitResult: { status: "ok", startedAt: 1000, endedAt: 2000 },
+    });
+    setSessionsSpawnConfigOverride({
+      session: { mainKey: "main", scope: "per-sender" },
+      messages: { queue: {} },
+      agents: {
+        defaults: {
+          subagents: {
+            runTimeoutSeconds: 1_800,
+          },
+        },
+      },
+    });
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "main",
+      agentChannel: "whatsapp",
+    });
+
+    const result = await tool.execute("call-per-run-timeout", {
+      task: `long build\nHANDOFF_TIMEOUT_SECONDS: ${perCallTimeoutSeconds}`,
+      timeoutSeconds: perCallTimeoutSeconds,
+    });
+
+    expectAcceptedRunDetails(result.details);
+    const child = ctx.getChild();
+    const childAgentCall = ctx.calls.find((call) => {
+      const params = call.params as { lane?: string } | undefined;
+      return call.method === "agent" && params?.lane === "subagent";
+    });
+    expect(childAgentCall?.params).toMatchObject({
+      timeout: perCallTimeoutSeconds,
+      lane: "subagent",
+    });
+    if (!child.sessionKey) {
+      throw new Error("missing child sessionKey");
+    }
+    expect(getLatestSubagentRunByChildSessionKey(child.sessionKey)?.runTimeoutSeconds).toBe(
+      perCallTimeoutSeconds,
+    );
+    await waitForSessionsSpawnEvent("per-call timeout reaches native wait path", () =>
+      ctx.waitCalls.some((call) => call.runId === child.runId),
+    );
+    expect(ctx.waitCalls.find((call) => call.runId === child.runId)?.timeoutMs).toBe(
+      perCallTimeoutSeconds * 1_000,
+    );
+  });
+
   it("sessions_spawn retires bundle MCP runtime when run-mode cleanup completes", async () => {
     let resumeAnnounceFlow: ((value: boolean) => void) | undefined;
     let announceFlowStarted: (() => void) | undefined;

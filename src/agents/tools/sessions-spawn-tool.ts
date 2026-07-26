@@ -3,6 +3,7 @@
  *
  * Starts subagent or ACP-backed sessions with inherited tool policy and delivery context.
  */
+import { MAX_TIMER_TIMEOUT_SECONDS } from "@openclaw/normalization-core/number-coercion";
 import { Type } from "typebox";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import {
@@ -44,6 +45,7 @@ import type { AnyAgentTool } from "./common.js";
 import {
   jsonResult,
   normalizeToolModelOverride,
+  readNonNegativeIntegerParam,
   readStringParam,
   ToolInputError,
 } from "./common.js";
@@ -67,10 +69,8 @@ const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
   "replyTo",
   "reply_to",
 ] as const;
-const UNSUPPORTED_SESSIONS_SPAWN_TIMEOUT_PARAM_KEYS = [
-  "runTimeoutSeconds",
-  "timeoutSeconds",
-] as const;
+const UNSUPPORTED_SESSIONS_SPAWN_TIMEOUT_PARAM_KEYS = ["runTimeoutSeconds"] as const;
+const HANDOFF_TIMEOUT_CONTRACT_PATTERN = /^\s*HANDOFF_TIMEOUT_SECONDS\s*:\s*([^\r\n]*)\s*$/gim;
 
 type AcpSpawnModule = typeof import("../acp-spawn.js");
 
@@ -99,6 +99,54 @@ type SessionsSpawnThreadAvailability = {
 
 function hasAnyThreadAvailability(availability: SessionsSpawnThreadAvailability): boolean {
   return availability.subagent || availability.acp;
+}
+
+function resolveSessionsSpawnRunTimeoutSeconds(
+  params: Record<string, unknown>,
+  task: string,
+): number | undefined {
+  const runTimeoutSeconds = readNonNegativeIntegerParam(params, "timeoutSeconds", {
+    max: MAX_TIMER_TIMEOUT_SECONDS,
+    message: `timeoutSeconds must be an integer between 0 and ${MAX_TIMER_TIMEOUT_SECONDS}.`,
+  });
+  const declaredValues = Array.from(
+    task.matchAll(HANDOFF_TIMEOUT_CONTRACT_PATTERN),
+    (match) => match[1]?.trim() ?? "",
+  );
+  if (declaredValues.length === 0) {
+    return runTimeoutSeconds;
+  }
+  const declaredTimeouts = declaredValues.map((value) => {
+    if (!/^(?:0|[1-9]\d*)$/.test(value)) {
+      throw new ToolInputError(
+        "HANDOFF_TIMEOUT_SECONDS must declare a non-negative integer number of seconds.",
+      );
+    }
+    const timeout = Number(value);
+    if (!Number.isSafeInteger(timeout) || timeout > MAX_TIMER_TIMEOUT_SECONDS) {
+      throw new ToolInputError(
+        `HANDOFF_TIMEOUT_SECONDS must declare an integer between 0 and ${MAX_TIMER_TIMEOUT_SECONDS}.`,
+      );
+    }
+    return timeout;
+  });
+  const declaredTimeoutSeconds = declaredTimeouts[0];
+  if (declaredTimeouts.some((value) => value !== declaredTimeoutSeconds)) {
+    throw new ToolInputError(
+      "Conflicting HANDOFF_TIMEOUT_SECONDS values were declared in the spawn task.",
+    );
+  }
+  if (runTimeoutSeconds === undefined) {
+    throw new ToolInputError(
+      "sessions_spawn requires timeoutSeconds when the task declares HANDOFF_TIMEOUT_SECONDS.",
+    );
+  }
+  if (runTimeoutSeconds !== declaredTimeoutSeconds) {
+    throw new ToolInputError(
+      `sessions_spawn timeoutSeconds (${runTimeoutSeconds}) must match HANDOFF_TIMEOUT_SECONDS (${declaredTimeoutSeconds}).`,
+    );
+  }
+  return runTimeoutSeconds;
 }
 
 function resolveSessionsSpawnThreadAvailability(opts?: {
@@ -153,6 +201,14 @@ function createSessionsSpawnToolSchema(params: {
     model: Type.Optional(Type.String()),
     thinking: Type.Optional(
       Type.String({ description: "Thinking override; unavailable with visible=true." }),
+    ),
+    timeoutSeconds: Type.Optional(
+      Type.Integer({
+        minimum: 0,
+        maximum: MAX_TIMER_TIMEOUT_SECONDS,
+        description:
+          "Run timeout in seconds; overrides agents.defaults.subagents.runTimeoutSeconds. Must match HANDOFF_TIMEOUT_SECONDS when declared in task.",
+      }),
     ),
     cwd: Type.Optional(Type.String()),
     ...(params.threadAvailable
@@ -331,10 +387,11 @@ export function createSessionsSpawnTool(
         const providedTimeoutParam =
           resolveSnakeCaseParamKey(params, unsupportedTimeoutParam) ?? unsupportedTimeoutParam;
         throw new ToolInputError(
-          `sessions_spawn does not support per-call "${providedTimeoutParam}". Configure agents.defaults.subagents.runTimeoutSeconds instead.`,
+          `sessions_spawn does not support "${providedTimeoutParam}". Use "timeoutSeconds" for a per-call run timeout.`,
         );
       }
       const task = readStringParam(params, "task", { required: true });
+      const runTimeoutSeconds = resolveSessionsSpawnRunTimeoutSeconds(params, task);
       const taskNameResult = normalizeSubagentTaskName(params.taskName);
       if (taskNameResult.error) {
         return jsonResult({
@@ -371,6 +428,7 @@ export function createSessionsSpawnTool(
         runtime,
         requestedAgentId,
         sandbox,
+        runTimeoutSeconds,
         options: opts,
       });
       if (visibleResult) {
@@ -445,6 +503,7 @@ export function createSessionsSpawnTool(
             resumeSessionId,
             model: modelOverride,
             thinking: thinkingOverrideRaw,
+            runTimeoutSeconds,
             cwd,
             mode: mode === "run" || mode === "session" ? mode : undefined,
             thread,
@@ -485,6 +544,7 @@ export function createSessionsSpawnTool(
           agentId: requestedAgentId,
           model: modelOverride,
           thinking: thinkingOverrideRaw,
+          runTimeoutSeconds,
           collect: hasCollectParam ? collect : undefined,
           outputSchema:
             params.outputSchema && typeof params.outputSchema === "object"

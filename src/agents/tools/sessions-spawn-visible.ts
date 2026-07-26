@@ -93,6 +93,7 @@ export async function maybeSpawnVisibleSession(params: {
   runtime: "subagent" | "acp";
   requestedAgentId?: string;
   sandbox: "inherit" | "require";
+  runTimeoutSeconds?: number;
   options?: VisibleSessionsSpawnOptions;
 }): Promise<Record<string, unknown> | undefined> {
   const worktree = params.raw.worktree === true;
@@ -138,6 +139,11 @@ export async function maybeSpawnVisibleSession(params: {
       "lightContext",
       params.raw.lightContext === true ? true : undefined,
       "bootstrap staging is not wired to the sessions.create path",
+    ],
+    [
+      "timeoutSeconds",
+      params.runTimeoutSeconds,
+      "initial dashboard run timeout is not wired to the sessions.create path",
     ],
     [
       "attachments",
