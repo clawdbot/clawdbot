@@ -147,8 +147,9 @@ describe("ClickClack discussion service", () => {
     expect(qualifiedHarness.store.lookup(qualifiedKey)).toMatchObject({ agentId: "worker" });
   });
 
-  it("uses the account agent for unscoped session links", async () => {
+  it("uses the account agent for unscoped links without changing the configured owner", async () => {
     const harness = createHarness({ label: "Telegram peer" });
+    harness.config.agents = { list: [{ id: "ops", default: true }] };
     harness.config.channels!.clickclack!.agentId = "research";
 
     await harness.service.open("telegram:12345");
@@ -159,11 +160,16 @@ describe("ClickClack discussion service", () => {
         external_url: "https://control.example/control/chat/research/telegram/12345",
       }),
     );
-    expect(harness.store.lookup("telegram:12345")).toMatchObject({ agentId: "research" });
+    expect(harness.store.lookup("telegram:12345")).toMatchObject({ agentId: "ops" });
 
-    harness.config.channels!.clickclack!.agentId = "ops";
     await harness.service.reconcile("telegram:12345");
     expect(harness.updateChannel).not.toHaveBeenCalled();
+
+    harness.config.channels!.clickclack!.agentId = "writer";
+    await harness.service.reconcile("telegram:12345");
+    expect(harness.updateChannel).toHaveBeenCalledWith("chn_discussion", {
+      external_url: "https://control.example/control/chat/writer/telegram/12345",
+    });
   });
 
   it("uses the configured main key when building control links", async () => {

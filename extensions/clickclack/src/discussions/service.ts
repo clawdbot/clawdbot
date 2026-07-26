@@ -334,11 +334,13 @@ export class ClickClackDiscussionService {
     const deleted = entry === undefined;
     const label = entry ? resolveDiscussionLabel(entry.label, sessionKey) : binding.label;
     const section = entry?.category?.trim() || account.discussions.section;
+    // Binding ownership follows global session routing; unscoped link decoration
+    // follows the ClickClack account agent so reconciliation keeps the URL stable.
     const externalUrl =
       controlSessionUrl(
         account.discussions.controlUrlBase,
         sessionKey,
-        binding.agentId,
+        account.agentId ?? "main",
         this.#currentConfig().session?.mainKey,
         label,
       ) ?? "";
