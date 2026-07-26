@@ -51,6 +51,7 @@ const spawnByIdempotencyKey = new Map<string, SessionRecord>();
 const spawnByClientRequestId = new Map<string, SessionRecord>();
 const spawnPendingByIdempotencyKey = new Map<string, SpawnPending>();
 const spawnPendingByClientRequestId = new Map<string, SpawnPending>();
+const ACCEPTED_SPAWN_PERSIST_ATTEMPTS = 3;
 
 type RuntimeSnapshot = {
   leases: LeaseRecord[];
@@ -105,9 +106,17 @@ function hydrateRuntimeSnapshot(snapshot: RuntimeSnapshot): void {
     }
   }
   for (const session of snapshot.sessions) {
+    const idempotencyScopedKey = principalScopedKey(
+      session.authenticatedPrincipalId,
+      session.idempotencyKey,
+    );
+    const clientRequestScopedKey = principalScopedKey(
+      session.authenticatedPrincipalId,
+      session.clientRequestId,
+    );
     sessionsByKey.set(session.sessionKey, session);
-    spawnByIdempotencyKey.set(session.idempotencyKey, session);
-    spawnByClientRequestId.set(session.clientRequestId, session);
+    spawnByIdempotencyKey.set(idempotencyScopedKey, session);
+    spawnByClientRequestId.set(clientRequestScopedKey, session);
   }
 }
 
@@ -130,6 +139,19 @@ function persistRuntimeState(): void {
   ensureRuntimeStateLoaded();
   saveAgenticOsRuntimeSnapshot(snapshotRuntimeState());
   loadedSnapshotPath = runtimeSnapshotPath();
+}
+
+function persistAcceptedSpawn(): void {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < ACCEPTED_SPAWN_PERSIST_ATTEMPTS; attempt += 1) {
+    try {
+      persistRuntimeState();
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
 }
 
 function rejectConflict(message: string): never {
@@ -175,11 +197,19 @@ function pruneExpiredLeases(now = Date.now()) {
       continue;
     }
     sessionsByKey.delete(sessionKey);
-    if (spawnByIdempotencyKey.get(record.idempotencyKey) === record) {
-      spawnByIdempotencyKey.delete(record.idempotencyKey);
+    const idempotencyScopedKey = principalScopedKey(
+      record.authenticatedPrincipalId,
+      record.idempotencyKey,
+    );
+    if (spawnByIdempotencyKey.get(idempotencyScopedKey) === record) {
+      spawnByIdempotencyKey.delete(idempotencyScopedKey);
     }
-    if (spawnByClientRequestId.get(record.clientRequestId) === record) {
-      spawnByClientRequestId.delete(record.clientRequestId);
+    const clientRequestScopedKey = principalScopedKey(
+      record.authenticatedPrincipalId,
+      record.clientRequestId,
+    );
+    if (spawnByClientRequestId.get(clientRequestScopedKey) === record) {
+      spawnByClientRequestId.delete(clientRequestScopedKey);
     }
     changed = true;
   }
@@ -441,8 +471,22 @@ export async function spawnAgenticOsSession(
   const mode = "run";
   const cleanup =
     params.cleanup === "delete" || params.cleanup === "keep" ? params.cleanup : undefined;
+  if (
+    Object.hasOwn(params, "cleanup") &&
+    params.cleanup !== "delete" &&
+    params.cleanup !== "keep"
+  ) {
+    return rejectConflict("invalid enum: cleanup");
+  }
   const context =
     params.context === "fork" || params.context === "isolated" ? params.context : undefined;
+  if (
+    Object.hasOwn(params, "context") &&
+    params.context !== "fork" &&
+    params.context !== "isolated"
+  ) {
+    return rejectConflict("invalid enum: context");
+  }
   if (Object.hasOwn(params, "lightContext") && typeof params.lightContext !== "boolean") {
     return rejectConflict("invalid boolean: lightContext");
   }
@@ -461,38 +505,28 @@ export async function spawnAgenticOsSession(
     agentId,
     metadata,
   });
-  const existingByIdempotency = spawnByIdempotencyKey.get(idempotencyKey);
+  const idempotencyScopedKey = principalScopedKey(authenticatedPrincipalId, idempotencyKey);
+  const clientRequestScopedKey = principalScopedKey(authenticatedPrincipalId, clientRequestId);
+  const existingByIdempotency = spawnByIdempotencyKey.get(idempotencyScopedKey);
   if (existingByIdempotency) {
-    if (existingByIdempotency.authenticatedPrincipalId !== authenticatedPrincipalId) {
-      return rejectConflict("sessions_spawn belongs to a different authenticated principal");
-    }
     if (existingByIdempotency.fingerprint !== fingerprint) {
       return rejectConflict("conflicting sessions_spawn idempotency_key");
     }
     return spawnProjectionPayload(existingByIdempotency);
   }
-  const existingByClientRequest = spawnByClientRequestId.get(clientRequestId);
+  const existingByClientRequest = spawnByClientRequestId.get(clientRequestScopedKey);
   if (existingByClientRequest) {
-    if (existingByClientRequest.authenticatedPrincipalId !== authenticatedPrincipalId) {
-      return rejectConflict("sessions_spawn belongs to a different authenticated principal");
-    }
     return rejectConflict("conflicting sessions_spawn client_request_id");
   }
-  const pendingByIdempotency = spawnPendingByIdempotencyKey.get(idempotencyKey);
+  const pendingByIdempotency = spawnPendingByIdempotencyKey.get(idempotencyScopedKey);
   if (pendingByIdempotency) {
-    if (pendingByIdempotency.authenticatedPrincipalId !== authenticatedPrincipalId) {
-      return rejectConflict("sessions_spawn belongs to a different authenticated principal");
-    }
     if (pendingByIdempotency.fingerprint !== fingerprint) {
       return rejectConflict("conflicting sessions_spawn idempotency_key");
     }
     return spawnProjectionPayload(await pendingByIdempotency.promise);
   }
-  const pendingByClientRequest = spawnPendingByClientRequestId.get(clientRequestId);
+  const pendingByClientRequest = spawnPendingByClientRequestId.get(clientRequestScopedKey);
   if (pendingByClientRequest) {
-    if (pendingByClientRequest.authenticatedPrincipalId !== authenticatedPrincipalId) {
-      return rejectConflict("sessions_spawn belongs to a different authenticated principal");
-    }
     return rejectConflict("conflicting sessions_spawn client_request_id");
   }
   const lease = leasesByGatewayId.get(gatewayLeaseId);
@@ -570,13 +604,20 @@ export async function spawnAgenticOsSession(
           created_at_ms: Date.now(),
         };
         sessionsByKey.set(sessionKey, record);
-        spawnByIdempotencyKey.set(idempotencyKey, record);
-        spawnByClientRequestId.set(clientRequestId, record);
+        spawnByIdempotencyKey.set(idempotencyScopedKey, record);
+        spawnByClientRequestId.set(clientRequestScopedKey, record);
         lease.consumed_at_ms = Date.now();
         delete lease.spawn_reserved_at_ms;
         delete lease.spawn_reservation_fingerprint;
         leasesByGatewayId.delete(gatewayLeaseId);
-        persistRuntimeState();
+        try {
+          persistAcceptedSpawn();
+        } catch {
+          // The child is already authoritative once the runner accepts it. Keep
+          // replay state in memory and report the accepted session instead of a
+          // false failure. Transient snapshot failures were durably retried
+          // above before reaching this irreversible fallback.
+        }
         return record;
       } catch (error) {
         if (lease.spawn_reservation_fingerprint === fingerprint) {
@@ -591,13 +632,13 @@ export async function spawnAgenticOsSession(
       }
     })(),
   };
-  spawnPendingByIdempotencyKey.set(idempotencyKey, pending);
-  spawnPendingByClientRequestId.set(clientRequestId, pending);
+  spawnPendingByIdempotencyKey.set(idempotencyScopedKey, pending);
+  spawnPendingByClientRequestId.set(clientRequestScopedKey, pending);
   try {
     return spawnProjectionPayload(await pending.promise);
   } finally {
-    spawnPendingByIdempotencyKey.delete(idempotencyKey);
-    spawnPendingByClientRequestId.delete(clientRequestId);
+    spawnPendingByIdempotencyKey.delete(idempotencyScopedKey);
+    spawnPendingByClientRequestId.delete(clientRequestScopedKey);
   }
 }
 

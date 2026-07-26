@@ -188,7 +188,7 @@ export async function loadSessionCostSummariesFromCache(params: {
       formatDay: dayFormatter,
     });
   });
-  if (staleFiles.size > 0 && cachedFiles === 0) {
+  if (params.requestRefresh !== false && staleFiles.size > 0 && cachedFiles === 0) {
     const result = await refreshCostUsageCache({
       config: params.config,
       agentId: params.agentId,

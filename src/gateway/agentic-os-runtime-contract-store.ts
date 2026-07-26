@@ -8,6 +8,13 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 
 const SNAPSHOT_KEY = "agentic-os-runtime-contract-v1";
 type RuntimeSnapshotDatabase = Pick<OpenClawStateKyselyDatabase, "agentic_os_runtime_snapshots">;
+const AGENTIC_OS_RUNTIME_SNAPSHOTS_TABLE_SQL = `
+CREATE TABLE IF NOT EXISTS agentic_os_runtime_snapshots (
+  key TEXT PRIMARY KEY,
+  payload_json TEXT NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+) STRICT
+`;
 
 type AgenticOsRuntimeSnapshot = {
   leases: unknown[];
@@ -15,12 +22,17 @@ type AgenticOsRuntimeSnapshot = {
   sessions: unknown[];
 };
 
+function ensureAgenticOsRuntimeSnapshotsTable(database: { db: { exec(sql: string): void } }): void {
+  database.db.exec(AGENTIC_OS_RUNTIME_SNAPSHOTS_TABLE_SQL);
+}
+
 export function runtimeSnapshotPath(): string {
   return resolveOpenClawStateSqlitePath(process.env);
 }
 
 export function loadAgenticOsRuntimeSnapshot(): AgenticOsRuntimeSnapshot | undefined {
   const database = openOpenClawStateDatabase();
+  ensureAgenticOsRuntimeSnapshotsTable(database);
   const row = executeSqliteQuerySync(
     database.db,
     getNodeSqliteKysely<RuntimeSnapshotDatabase>(database.db)
@@ -36,6 +48,7 @@ export function loadAgenticOsRuntimeSnapshot(): AgenticOsRuntimeSnapshot | undef
 export function saveAgenticOsRuntimeSnapshot(snapshot: AgenticOsRuntimeSnapshot): void {
   runOpenClawStateWriteTransaction(
     (database) => {
+      ensureAgenticOsRuntimeSnapshotsTable(database);
       executeSqliteQuerySync(
         database.db,
         getNodeSqliteKysely<RuntimeSnapshotDatabase>(database.db)

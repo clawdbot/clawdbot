@@ -237,6 +237,16 @@ describe("session cost usage", () => {
     );
 
     await withStateDir(root, async () => {
+      const disabled = await loadSessionCostSummariesFromCache({
+        sessions: [{ sessionId, sessionFile }],
+        requestRefresh: false,
+      });
+
+      expect(disabled.cacheStatus.status).toBe("stale");
+      expect(disabled.cacheStatus.cachedFiles).toBe(0);
+      expect(disabled.cacheStatus.pendingFiles).toBe(1);
+      expect(disabled.summaries[0]).toBeNull();
+
       const result = await loadSessionCostSummariesFromCache({
         sessions: [{ sessionId, sessionFile }],
       });

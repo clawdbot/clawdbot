@@ -1068,6 +1068,36 @@ describe("openclaw state database", () => {
     ).toThrow();
   });
 
+  it("opens current-version databases that predate lazy Agentic OS snapshots", async () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = openOpenClawStateDatabase(options).path;
+    closeOpenClawStateDatabaseForTest();
+
+    const raw = new (requireNodeSqlite().DatabaseSync)(databasePath);
+    raw.exec("DROP TABLE agentic_os_runtime_snapshots;");
+    raw.close();
+
+    expect(() => openOpenClawStateDatabase(options)).not.toThrow();
+    closeOpenClawStateDatabaseForTest();
+
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    try {
+      const store = await import("../gateway/agentic-os-runtime-contract-store.js");
+      store.saveAgenticOsRuntimeSnapshot({ leases: [], releaseReplays: [], sessions: [] });
+      const reopened = openOpenClawStateDatabase(options);
+      expect(
+        reopened.db
+          .prepare(
+            "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'agentic_os_runtime_snapshots'",
+          )
+          .get(),
+      ).toEqual({ present: 1 });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("drops unreleased transient verification history on open", () => {
     const stateDir = createTempStateDir();
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };

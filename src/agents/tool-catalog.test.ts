@@ -30,6 +30,35 @@ describe("tool-catalog", () => {
     expect(ids({ swarmEnabled: true })).toContain("agents_wait");
   });
 
+  it("advertises complete model-facing session tool parameters", () => {
+    const tools = new Map(
+      listCoreToolSections()
+        .flatMap((section) => section.tools)
+        .map((tool) => [tool.id, tool]),
+    );
+
+    expect(tools.get("sessions_list")?.parameters).toEqual([
+      "kinds",
+      "limit",
+      "activeMinutes",
+      "messageLimit",
+      "label",
+      "agentId",
+      "search",
+      "archived",
+      "includeDerivedTitles",
+      "includeLastMessage",
+    ]);
+    expect(tools.get("sessions_history")?.parameters).toEqual([
+      "sessionKey",
+      "limit",
+      "offset",
+      "messageId",
+      "sessionId",
+      "includeTools",
+    ]);
+  });
+
   it("includes code_execution, web_search, x_search, web_fetch, and update_plan in the coding profile policy", () => {
     const policy = requireCoreToolProfilePolicy("coding");
     expect(policy.allow).toEqual([

@@ -173,7 +173,18 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
     sectionId: "sessions",
     profiles: ["coding", "messaging"],
-    parameters: [],
+    parameters: [
+      "kinds",
+      "limit",
+      "activeMinutes",
+      "messageLimit",
+      "label",
+      "agentId",
+      "search",
+      "archived",
+      "includeDerivedTitles",
+      "includeLastMessage",
+    ],
     includeInOpenClawGroup: true,
   },
   {
@@ -182,7 +193,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY,
     sectionId: "sessions",
     profiles: ["coding", "messaging"],
-    parameters: ["sessionKey", "limit", "includeTools"],
+    parameters: ["sessionKey", "limit", "offset", "messageId", "sessionId", "includeTools"],
     includeInOpenClawGroup: true,
   },
   {
