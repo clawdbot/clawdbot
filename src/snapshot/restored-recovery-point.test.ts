@@ -22,6 +22,7 @@ import {
   type RecoveryPointSqliteSnapshot,
 } from "./recovery-point.js";
 import {
+  loadRestoredAdmissionDescriptor,
   parseRestoredRecoveryPointRequest,
   RESTORED_RECOVERY_POINT_REQUEST_VERSION,
   restoreAcceptedRecoveryPoint,
@@ -149,6 +150,36 @@ describe("restored recovery-point admission", () => {
     await expect(
       fs.access(resolveOpenClawStateSqlitePath(fixture.destinationEnv)),
     ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it.each(["intent.json", "result.json"])(
+    "quarantines malformed durable %s instead of throwing raw JSON errors",
+    async (recordName) => {
+      const fixture = await createFixture();
+      const journalPath = path.join(fixture.request.journalRoot, operationId(fixture.request));
+      await fs.mkdir(journalPath, { recursive: true, mode: 0o700 });
+      await fs.writeFile(path.join(journalPath, recordName), "{", { mode: 0o600 });
+
+      await expect(
+        restoreAcceptedRecoveryPoint(fixture.request, fixture.destinationEnv),
+      ).rejects.toMatchObject({
+        code: "restored-admission.operation-conflict",
+        disposition: "quarantine",
+      });
+    },
+  );
+
+  it("quarantines a malformed startup descriptor as typed journal corruption", async () => {
+    const fixture = await createFixture();
+    const result = await restoreAcceptedRecoveryPoint(fixture.request, fixture.destinationEnv);
+    await fs.writeFile(result.startupDescriptorPath, "{");
+
+    await expect(
+      loadRestoredAdmissionDescriptor(result.startupDescriptorPath),
+    ).rejects.toMatchObject({
+      code: "restored-admission.operation-conflict",
+      disposition: "quarantine",
+    });
   });
 
   it("quarantines committed result metadata that conflicts with durable intent", async () => {

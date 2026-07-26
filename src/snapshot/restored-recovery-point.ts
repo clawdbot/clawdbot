@@ -158,7 +158,7 @@ export async function loadRestoredAdmissionDescriptor(
   if (!path.isAbsolute(descriptorPath) || path.normalize(descriptorPath) !== descriptorPath) {
     throw conflict("Restored-admission descriptor path must be a normalized absolute path.");
   }
-  const value = await readJson(path.dirname(descriptorPath), path.basename(descriptorPath));
+  const value = await readJournalJson(path.dirname(descriptorPath), path.basename(descriptorPath));
   const descriptor = parseRestoredAdmissionDescriptor(value);
   if (descriptor.result.startupDescriptorPath !== descriptorPath) {
     throw conflict("Restored-admission descriptor does not identify its loaded path.");
@@ -442,13 +442,24 @@ async function writeRecord(filePath: string, value: unknown): Promise<void> {
 
 async function readJsonIfPresent(rootPath: string, relativePath: string): Promise<unknown> {
   try {
-    return await readJson(rootPath, relativePath);
+    return await readJournalJson(rootPath, relativePath);
   } catch (error) {
     if (
       (error as NodeJS.ErrnoException).code === "ENOENT" ||
       (error instanceof FsSafeError && error.code === "not-found")
     ) {
       return undefined;
+    }
+    throw error;
+  }
+}
+
+async function readJournalJson(rootPath: string, relativePath: string): Promise<unknown> {
+  try {
+    return await readJson(rootPath, relativePath);
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw conflict(`Persisted restore record is not valid JSON: ${relativePath}.`, error);
     }
     throw error;
   }

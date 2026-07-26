@@ -15,6 +15,9 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 
 export const RESTORED_ADMISSION_FILE_ENV = "OPENCLAW_RFC0013_RESTORED_ADMISSION_FILE";
 export const RESTORED_ADMISSION_READY_VERSION = "openclaw-restored-admission-ready/v1";
+const SCHEDULER_RECONCILIATION_EVIDENCE_VERSION =
+  "openclaw-restored-scheduler-reconciliation-evidence/v1";
+const OWNER_READINESS_EVIDENCE_VERSION = "openclaw-restored-owner-readiness-evidence/v1";
 
 const MAX_RECORD_BYTES = 1024 * 1024;
 const PRIVATE_FILE_MODE = 0o600;
@@ -58,7 +61,7 @@ export async function completeRestoredAdmission(params: {
   descriptorPath?: string;
   descriptor?: RestoredAdmissionDescriptor;
   env?: NodeJS.ProcessEnv;
-  startScheduler: () => Promise<unknown>;
+  startScheduler: () => Promise<void>;
   getOwnerReadiness: () => { ready: boolean; failing: string[]; suppressed?: string[] };
 }): Promise<{ record: RestoredAdmissionReadyRecord; replayed: boolean }> {
   const env = params.env ?? process.env;
@@ -71,9 +74,8 @@ export async function completeRestoredAdmission(params: {
     throw targetConflict("Restored-admission startup descriptor is required.");
   }
 
-  let schedulerStatus: unknown;
   try {
-    schedulerStatus = await params.startScheduler();
+    await params.startScheduler();
   } catch (error) {
     throw new RestoredAdmissionCompletionError(
       "restored-admission.scheduler-hold",
@@ -100,9 +102,24 @@ export async function completeRestoredAdmission(params: {
     destinationOwner: descriptor.result.destinationOwner,
     admissionIdentity: descriptor.result.admissionIdentity,
     restoreReceiptIdentity: descriptor.result.restoreReceiptIdentity,
-    schedulerIdentity: sha256Hex(stableStringify(schedulerStatus)),
+    schedulerIdentity: sha256Hex(
+      stableStringify({
+        version: SCHEDULER_RECONCILIATION_EVIDENCE_VERSION,
+        restoreReceiptIdentity: descriptor.result.restoreReceiptIdentity,
+        recoveryPointId: descriptor.result.recoveryPointId,
+        acceptanceSetId: descriptor.result.acceptanceSetId,
+        destinationRuntimeGeneration: descriptor.result.destinationRuntimeGeneration,
+        owner: "cron",
+        outcome: "reconciled",
+      }),
+    ),
     ownerReadinessIdentity: sha256Hex(
       stableStringify({
+        version: OWNER_READINESS_EVIDENCE_VERSION,
+        restoreReceiptIdentity: descriptor.result.restoreReceiptIdentity,
+        recoveryPointId: descriptor.result.recoveryPointId,
+        acceptanceSetId: descriptor.result.acceptanceSetId,
+        destinationRuntimeGeneration: descriptor.result.destinationRuntimeGeneration,
         ready: ownerReadiness.ready,
         failing: ownerReadiness.failing.toSorted(),
         suppressed: (ownerReadiness.suppressed ?? []).toSorted(),
@@ -203,7 +220,11 @@ async function readRecordIfPresent(rootPath: string, relativePath: string): Prom
       maxBytes: MAX_RECORD_BYTES,
       symlinks: "reject",
     });
-    return JSON.parse(read.buffer.toString("utf8")) as unknown;
+    try {
+      return JSON.parse(read.buffer.toString("utf8")) as unknown;
+    } catch (error) {
+      throw targetConflict(`Persisted admission record is not valid JSON: ${relativePath}.`, error);
+    }
   } catch (error) {
     if (
       (error as NodeJS.ErrnoException).code === "ENOENT" ||

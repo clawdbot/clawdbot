@@ -16,9 +16,9 @@ import { completeRestoredAdmission } from "./restored-admission.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("Gateway restored admission", () => {
-  it("persists exact readiness and replays only after owners reconcile again", async () => {
+  it("persists generation-bound readiness and replays only after owners reconcile again", async () => {
     const fixture = await createFixture();
-    const startScheduler = vi.fn(async () => ({ enabled: true, jobs: 2, nextWakeAtMs: 17 }));
+    const startScheduler = vi.fn(async () => {});
 
     const first = await completeRestoredAdmission({
       descriptorPath: fixture.descriptorPath,
@@ -44,7 +44,7 @@ describe("Gateway restored admission", () => {
   it("quarantines changed restored bytes before scheduler start", async () => {
     const fixture = await createFixture();
     await fs.appendFile(resolveOpenClawStateSqlitePath(fixture.env), "changed");
-    const startScheduler = vi.fn(async () => ({}));
+    const startScheduler = vi.fn(async () => {});
 
     await expect(
       completeRestoredAdmission({
@@ -67,7 +67,7 @@ describe("Gateway restored admission", () => {
       completeRestoredAdmission({
         descriptorPath: fixture.descriptorPath,
         env: fixture.env,
-        startScheduler: async () => ({ enabled: true }),
+        startScheduler: async () => {},
         getOwnerReadiness: () => ({ ready: false, failing: ["discord"] }),
       }),
     ).rejects.toMatchObject({
@@ -76,6 +76,30 @@ describe("Gateway restored admission", () => {
     });
     await expect(fs.access(path.join(fixture.journalPath, "ready.json"))).rejects.toMatchObject({
       code: "ENOENT",
+    });
+  });
+
+  it("quarantines malformed ready evidence instead of throwing raw JSON errors", async () => {
+    const fixture = await createFixture();
+    const startScheduler = vi.fn(async () => {});
+    await completeRestoredAdmission({
+      descriptorPath: fixture.descriptorPath,
+      env: fixture.env,
+      startScheduler,
+      getOwnerReadiness: () => ({ ready: true, failing: [] }),
+    });
+    await fs.writeFile(path.join(fixture.journalPath, "ready.json"), "{");
+
+    await expect(
+      completeRestoredAdmission({
+        descriptorPath: fixture.descriptorPath,
+        env: fixture.env,
+        startScheduler,
+        getOwnerReadiness: () => ({ ready: true, failing: [] }),
+      }),
+    ).rejects.toMatchObject({
+      code: "restored-admission.target-conflict",
+      disposition: "quarantine",
     });
   });
 });
