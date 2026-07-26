@@ -77,20 +77,29 @@ openclaw channels add --channel buzz
 ```
 
 The guided flow asks for your Buzz relay URL and creates a dedicated bot
-identity by default. Give the displayed **public key only** to a Buzz admin, who
-must add the identity to each room with the **Bot** role.
+identity automatically when one is not already configured. Give the displayed
+**public key only** to a Buzz admin, who must add the identity to each room with
+the **Bot** role.
 
-After the Gateway connects, OpenClaw publishes the Buzz channel account name as
-the bot's Buzz display name. The default is `OpenClaw`. A configured NIP-OA
-`authTag` is preserved in that profile so Buzz can display its verified owner.
+After the Gateway connects, OpenClaw preserves an existing Buzz profile display
+name. For a new profile it uses the explicit Buzz account name, then the
+identity name of the single agent routed to the configured rooms, and finally
+`OpenClaw`. A configured NIP-OA `authTag` is preserved in that profile so Buzz
+can display its verified owner.
 While the Gateway remains connected, OpenClaw also refreshes the bot's Buzz
 presence so room members see it as online. Buzz clears that presence when the
 last Gateway connection for the bot identity closes.
 
 OpenClaw immediately attempts authenticated room discovery. If room access is
-not ready, add the bot in Buzz and retry without leaving setup. You can also
-finish later: OpenClaw saves the identity with Buzz disabled, and the next setup
-run offers to reuse it instead of generating another key.
+not ready, it waits for Buzz to confirm the Bot role and continues
+automatically. If the bounded wait expires, setup offers authenticated
+Retry/Back controls without disabling Buzz, exiting setup, or generating
+another key.
+
+One discovered room is selected automatically. With several rooms, setup asks
+which rooms to use and which one is the default outbound target. Fresh setup
+requires mentions, accepts messages from current room members, verifies the
+saved configuration, and does not post a test message.
 
 For local Buzz development, `just dev` does not require separate relay
 membership by default. Buzz desktop cannot reliably assign the Bot role to an
@@ -113,8 +122,12 @@ also require community membership before room membership can be granted.
 - Generated bot keys follow OpenClaw's current plaintext config convention.
 - Existing keys can use plaintext or an existing `env`, `file`, or `exec`
   SecretRef.
-- Requiring mentions and allowlisting trusted sender public keys is the
-  recommended starting policy.
+- Fresh guided setup requires mentions and accepts current members of the
+  selected rooms. Manual configuration can additionally restrict activation to
+  specific member public keys.
+- OpenClaw keeps an in-memory copy of Buzz's relay-signed room roster and
+  refreshes it on membership changes; it does not query the relay for each
+  message or poll from the Gateway.
 - Buzz messages are untrusted input to the routed agent. Match that agent's tool
   policy and sandbox access to the room's trust level.
 - Anyone who obtains the bot private key can impersonate it. Treat the key like

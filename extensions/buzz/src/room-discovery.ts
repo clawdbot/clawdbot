@@ -1,9 +1,9 @@
 import { Relay, type Event, type Filter } from "nostr-tools";
 import { authenticateBuzzRelay, createBuzzAuthSigner, parseBuzzAuthTag } from "./relay-auth.js";
+import { BUZZ_ROOM_MEMBERSHIP_KIND, parseBuzzRoomMembershipEvent } from "./room-membership.js";
 import { BUZZ_CHANNEL_ID_PATTERN } from "./target.js";
 import { decodeBuzzPrivateKey, resolveBuzzPublicKey } from "./types.js";
 
-const MEMBERSHIP_KIND = 39002;
 const METADATA_KIND = 39000;
 const DEFAULT_QUERY_TIMEOUT_MS = 10_000;
 
@@ -70,6 +70,71 @@ async function queryRelay(params: {
   });
 }
 
+export async function discoverBuzzRoomsOnRelay(params: {
+  relay: Relay;
+  publicKey: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}): Promise<BuzzDiscoveredRoom[]> {
+  const timeoutMs = params.timeoutMs ?? DEFAULT_QUERY_TIMEOUT_MS;
+  const membershipEvents = await queryRelay({
+    relay: params.relay,
+    filter: {
+      kinds: [BUZZ_ROOM_MEMBERSHIP_KIND],
+      "#p": [params.publicKey],
+      limit: 1000,
+    },
+    timeoutMs,
+    signal: params.signal,
+  });
+  const roomIds = [
+    ...new Set(
+      membershipEvents
+        .map(parseBuzzRoomMembershipEvent)
+        .filter((membership) => membership?.roles.get(params.publicKey) === "bot")
+        .map((membership) => membership?.roomId)
+        .filter((roomId): roomId is string => Boolean(roomId?.match(BUZZ_CHANNEL_ID_PATTERN))),
+    ),
+  ].toSorted();
+  if (roomIds.length === 0) {
+    return [];
+  }
+
+  const metadataEvents = await queryRelay({
+    relay: params.relay,
+    filter: { kinds: [METADATA_KIND], "#d": roomIds, limit: roomIds.length },
+    timeoutMs,
+    signal: params.signal,
+  });
+  const latestMetadata = new Map<string, Event>();
+  for (const event of metadataEvents) {
+    const roomId = tagValue(event, "d")?.toLowerCase();
+    if (
+      event.kind !== METADATA_KIND ||
+      !roomId ||
+      !roomIds.includes(roomId) ||
+      (latestMetadata.get(roomId)?.created_at ?? -1) >= event.created_at
+    ) {
+      continue;
+    }
+    latestMetadata.set(roomId, event);
+  }
+
+  return roomIds.map((id) => {
+    const metadata = latestMetadata.get(id);
+    const name = metadata ? tagValue(metadata, "name")?.trim() : undefined;
+    const about = metadata ? tagValue(metadata, "about")?.trim() : undefined;
+    const room: BuzzDiscoveredRoom = {
+      id,
+      name: name || id,
+    };
+    if (about) {
+      room.about = about;
+    }
+    return room;
+  });
+}
+
 export async function discoverBuzzRooms(params: {
   relayUrl: string;
   privateKey: string;
@@ -98,63 +163,11 @@ export async function discoverBuzzRooms(params: {
 
     // Buzz's relay publishes authenticated kind-39002 membership lists for room
     // discovery. Require the explicit Bot role before setup or probes accept a room.
-    const membershipEvents = await queryRelay({
+    return await discoverBuzzRoomsOnRelay({
       relay,
-      filter: { kinds: [MEMBERSHIP_KIND], "#p": [publicKey], limit: 1000 },
+      publicKey,
       timeoutMs,
       signal,
-    });
-    const roomIds = [
-      ...new Set(
-        membershipEvents
-          .filter(
-            (event) =>
-              event.kind === MEMBERSHIP_KIND &&
-              event.tags.some(
-                (tag) =>
-                  tag[0] === "p" && tag[1] === publicKey && tag[3]?.trim().toLowerCase() === "bot",
-              ),
-          )
-          .map((event) => tagValue(event, "d")?.toLowerCase())
-          .filter((roomId): roomId is string => Boolean(roomId?.match(BUZZ_CHANNEL_ID_PATTERN))),
-      ),
-    ].toSorted();
-    if (roomIds.length === 0) {
-      return [];
-    }
-
-    const metadataEvents = await queryRelay({
-      relay,
-      filter: { kinds: [METADATA_KIND], "#d": roomIds, limit: roomIds.length },
-      timeoutMs,
-      signal,
-    });
-    const latestMetadata = new Map<string, Event>();
-    for (const event of metadataEvents) {
-      const roomId = tagValue(event, "d")?.toLowerCase();
-      if (
-        event.kind !== METADATA_KIND ||
-        !roomId ||
-        !roomIds.includes(roomId) ||
-        (latestMetadata.get(roomId)?.created_at ?? -1) >= event.created_at
-      ) {
-        continue;
-      }
-      latestMetadata.set(roomId, event);
-    }
-
-    return roomIds.map((id) => {
-      const metadata = latestMetadata.get(id);
-      const name = metadata ? tagValue(metadata, "name")?.trim() : undefined;
-      const about = metadata ? tagValue(metadata, "about")?.trim() : undefined;
-      const room: BuzzDiscoveredRoom = {
-        id,
-        name: name || id,
-      };
-      if (about) {
-        room.about = about;
-      }
-      return room;
     });
   } finally {
     relay.close();

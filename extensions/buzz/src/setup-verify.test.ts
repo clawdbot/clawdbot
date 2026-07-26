@@ -1,4 +1,3 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -21,8 +20,12 @@ describe("verifyBuzzAfterSetup", () => {
     mocks.callGatewayFromCli.mockReset();
   });
 
-  it("sends only after an authenticated Buzz probe succeeds", async () => {
+  it("verifies authenticated Buzz membership without sending a message", async () => {
     mocks.callGatewayFromCli
+      .mockResolvedValueOnce({
+        appliedConfigHash: "saved",
+        configRevisionHash: "saved",
+      })
       .mockResolvedValueOnce({
         channelAccounts: {
           buzz: [
@@ -35,52 +38,51 @@ describe("verifyBuzzAfterSetup", () => {
             },
           ],
         },
-      })
-      .mockResolvedValueOnce({ ok: true });
+      });
     const runtime = createRuntime();
     const { verifyBuzzAfterSetup } = await import("./setup-verify.js");
 
     await verifyBuzzAfterSetup({
-      cfg: {} as OpenClawConfig,
       accountId: "default",
       target: "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c",
       runtime,
-      sendTestMessage: true,
     });
 
     expect(mocks.callGatewayFromCli).toHaveBeenCalledTimes(2);
-    expect(mocks.callGatewayFromCli.mock.calls[0]?.[0]).toBe("channels.status");
-    expect(mocks.callGatewayFromCli.mock.calls[0]?.[2]).toEqual({
+    expect(mocks.callGatewayFromCli.mock.calls[0]?.[0]).toBe("config.get");
+    expect(mocks.callGatewayFromCli.mock.calls[1]?.[0]).toBe("channels.status");
+    expect(mocks.callGatewayFromCli.mock.calls[1]?.[2]).toEqual({
       channel: "buzz",
       probe: true,
       timeoutMs: 10_000,
     });
-    expect(mocks.callGatewayFromCli.mock.calls[1]?.[0]).toBe("send");
-    expect(mocks.callGatewayFromCli.mock.calls[1]?.[2]).toEqual(
-      expect.objectContaining({
-        channel: "buzz",
-        accountId: "default",
-        to: "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c",
-      }),
+    expect(mocks.callGatewayFromCli).not.toHaveBeenCalledWith(
+      "send",
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
     );
   });
 
-  it("does not send when the authenticated probe is unavailable", async () => {
-    mocks.callGatewayFromCli.mockResolvedValueOnce({
-      channelAccounts: { buzz: [{ accountId: "default" }] },
-    });
+  it("reports when the authenticated probe is unavailable", async () => {
+    mocks.callGatewayFromCli
+      .mockResolvedValueOnce({
+        appliedConfigHash: "saved",
+        configRevisionHash: "saved",
+      })
+      .mockResolvedValueOnce({
+        channelAccounts: { buzz: [{ accountId: "default" }] },
+      });
     const runtime = createRuntime();
     const { verifyBuzzAfterSetup } = await import("./setup-verify.js");
 
     await verifyBuzzAfterSetup({
-      cfg: {} as OpenClawConfig,
       accountId: "default",
       target: "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c",
       runtime,
-      sendTestMessage: true,
     });
 
-    expect(mocks.callGatewayFromCli).toHaveBeenCalledOnce();
+    expect(mocks.callGatewayFromCli).toHaveBeenCalledTimes(2);
     expect(runtime.log).toHaveBeenCalledWith(
       expect.stringContaining("did not confirm authenticated membership"),
     );
@@ -98,11 +100,9 @@ describe("verifyBuzzAfterSetup", () => {
     const { verifyBuzzAfterSetup } = await import("./setup-verify.js");
 
     await verifyBuzzAfterSetup({
-      cfg: {} as OpenClawConfig,
       accountId: "default",
       target: "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c",
       runtime,
-      sendTestMessage: true,
     });
 
     expect(runtime.log).toHaveBeenCalledWith(
@@ -122,11 +122,9 @@ describe("verifyBuzzAfterSetup", () => {
     const { verifyBuzzAfterSetup } = await import("./setup-verify.js");
 
     await verifyBuzzAfterSetup({
-      cfg: {} as OpenClawConfig,
       accountId: "default",
       target: "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c",
       runtime,
-      sendTestMessage: true,
     });
 
     expect(runtime.log).toHaveBeenCalledWith(

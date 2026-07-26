@@ -7,7 +7,6 @@ import { createBuzzSetupWizard } from "./setup-surface.js";
 
 const ROOM_A = "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c";
 const ROOM_B = "940d0c32-4eb7-46d7-9d5b-d975aaef87f7";
-const OWNER_PUBKEY = "22".repeat(32);
 const GENERATED_KEY = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
 const AUTH_TAG = '["auth","bot","kind=9","signature"]';
 
@@ -19,11 +18,8 @@ function createPrompter(): WizardPrompter {
     plain: vi.fn(async () => {}),
     progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
     select: vi.fn(async ({ message }) => {
-      if (message.includes("identity")) {
-        return "generate";
-      }
-      if (message.includes("access")) {
-        return "allowlist";
+      if (message.includes("room access")) {
+        return "retry";
       }
       if (message.includes("default")) {
         return ROOM_B;
@@ -35,18 +31,9 @@ function createPrompter(): WizardPrompter {
       if (message.includes("relay")) {
         return "wss://buzz.example.com";
       }
-      if (message.includes("sender")) {
-        return OWNER_PUBKEY;
-      }
       throw new Error(`Unexpected text prompt: ${message}`);
     }),
     confirm: vi.fn(async ({ message }) => {
-      if (message.includes("mentions")) {
-        return true;
-      }
-      if (message.includes("test message")) {
-        return true;
-      }
       throw new Error(`Unexpected confirm prompt: ${message}`);
     }),
   };
@@ -100,8 +87,8 @@ describe("Buzz guided setup", () => {
       enabled: true,
       relayUrl: "wss://buzz.example.com",
       privateKey: expectedPrivateKey,
-      groupPolicy: "allowlist",
-      groupAllowFrom: [OWNER_PUBKEY],
+      groupPolicy: "open",
+      groupAllowFrom: undefined,
       groups: {
         [ROOM_A]: { enabled: true, requireMention: true },
         [ROOM_B]: { enabled: true, requireMention: true },
@@ -119,11 +106,9 @@ describe("Buzz guided setup", () => {
     expect(hooks).toHaveLength(1);
     await hooks[0]!.run({ cfg: result.cfg, runtime });
     expect(verifyAfterWrite).toHaveBeenCalledWith({
-      cfg: result.cfg,
       accountId: "default",
       target: ROOM_B,
       runtime,
-      sendTestMessage: true,
     });
   });
 
@@ -143,18 +128,6 @@ describe("Buzz guided setup", () => {
       verifyAfterWrite: vi.fn(async () => {}),
     });
     const prompter = createPrompter();
-    vi.mocked(prompter.select).mockImplementation((async ({ message }) => {
-      if (message.includes("identity")) {
-        return "existing";
-      }
-      if (message.includes("access")) {
-        return "allowlist";
-      }
-      if (message.includes("default")) {
-        return ROOM_A;
-      }
-      throw new Error(`Unexpected select prompt: ${message}`);
-    }) as WizardPrompter["select"]);
     vi.mocked(prompter.multiselect).mockResolvedValue([ROOM_A]);
 
     const result = await wizard.configure({
@@ -173,22 +146,17 @@ describe("Buzz guided setup", () => {
     expect(result.cfg.channels?.buzz?.privateKey).toEqual(secretRef);
   });
 
-  it("persists the identity and disables Buzz when room access is not ready", async () => {
-    const discoverRooms = vi.fn(async () => []);
+  it("falls back to retry without rotating the identity when automatic discovery expires", async () => {
+    const discoverRooms = vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ id: ROOM_A, name: "General" }]);
     const wizard = createBuzzSetupWizard({
       discoverRooms,
       generateSecretKey: () => GENERATED_KEY,
+      waitForRoomAccess: vi.fn(async () => []),
     });
     const prompter = createPrompter();
-    vi.mocked(prompter.select).mockImplementation((async ({ message }) => {
-      if (message.includes("identity")) {
-        return "reuse";
-      }
-      if (message.includes("after granting")) {
-        return "pause";
-      }
-      throw new Error(`Unexpected select prompt: ${message}`);
-    }) as WizardPrompter["select"]);
 
     const result = await wizard.configure({
       cfg: {
@@ -209,23 +177,27 @@ describe("Buzz guided setup", () => {
       forceAllowFrom: false,
     });
 
-    expect(result.cfg.channels?.buzz?.enabled).toBe(false);
+    expect(result.cfg.channels?.buzz?.enabled).toBe(true);
     expect(result.cfg.channels?.buzz?.privateKey).toBe("11".repeat(32));
-    expect(result.completion).toBe("paused");
-    expect(result.accountId).toBeUndefined();
-    expect(discoverRooms).toHaveBeenCalledOnce();
+    expect(result.completion).toBeUndefined();
+    expect(result.accountId).toBe("default");
+    expect(discoverRooms).toHaveBeenCalledTimes(2);
+    expect(discoverRooms.mock.calls[0]?.[0].privateKey).toBe(
+      discoverRooms.mock.calls[1]?.[0].privateKey,
+    );
     expect(prompter.note).toHaveBeenCalledWith(
-      expect.stringContaining("Local `just dev`: relay membership is off by default"),
+      expect.stringContaining("Local `just dev` needs no separate community-member step"),
       "Buzz room access required",
     );
     expect(prompter.text).not.toHaveBeenCalledWith(
       expect.objectContaining({ message: expect.stringContaining("room UUID") }),
     );
-    expect(
-      vi
-        .mocked(prompter.select)
-        .mock.calls.find(([prompt]) => prompt.message.includes("identity"))?.[0].initialValue,
-    ).toBe("reuse");
+    expect(prompter.select).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Buzz room access is not ready",
+        initialValue: "retry",
+      }),
+    );
   });
 
   it("reports a paused identity as configured but disabled", async () => {
@@ -254,22 +226,11 @@ describe("Buzz guided setup", () => {
 
   it("warns before using an unencrypted remote relay", async () => {
     const wizard = createBuzzSetupWizard({
-      discoverRooms: vi.fn(async () => []),
+      discoverRooms: vi.fn(async () => [{ id: ROOM_A, name: "General" }]),
       generateSecretKey: () => GENERATED_KEY,
     });
     const prompter = createPrompter();
-    vi.mocked(prompter.text)
-      .mockResolvedValueOnce("ws://127.attacker.example")
-      .mockResolvedValueOnce("wss://buzz.example.com");
-    vi.mocked(prompter.select).mockImplementation((async ({ message }) => {
-      if (message.includes("identity")) {
-        return "generate";
-      }
-      if (message.includes("after granting")) {
-        return "pause";
-      }
-      throw new Error(`Unexpected select prompt: ${message}`);
-    }) as WizardPrompter["select"]);
+    vi.mocked(prompter.text).mockResolvedValueOnce("wss://buzz.example.com");
     vi.mocked(prompter.confirm).mockImplementation(async ({ message }) => {
       if (message.includes("unencrypted")) {
         return false;
@@ -278,7 +239,9 @@ describe("Buzz guided setup", () => {
     });
 
     const result = await wizard.configure({
-      cfg: {} as OpenClawConfig,
+      cfg: {
+        channels: { buzz: { relayUrl: "ws://127.attacker.example" } },
+      } as OpenClawConfig,
       runtime: createRuntime(),
       prompter,
       accountOverrides: {},
@@ -296,26 +259,19 @@ describe("Buzz guided setup", () => {
   it("reuses an existing identity without a second credential prompt", async () => {
     const runSecretStep = vi.fn();
     const wizard = createBuzzSetupWizard({
-      discoverRooms: vi.fn(async () => []),
+      discoverRooms: vi.fn(async () => [{ id: ROOM_A, name: "General" }]),
       runSecretStep,
     });
     const prompter = createPrompter();
-    vi.mocked(prompter.select).mockImplementation((async ({ message }) => {
-      if (message.includes("identity")) {
-        return "reuse";
-      }
-      if (message.includes("after granting")) {
-        return "pause";
-      }
-      throw new Error(`Unexpected select prompt: ${message}`);
-    }) as WizardPrompter["select"]);
 
     const result = await wizard.configure({
       cfg: {
         channels: {
+          defaults: { groupPolicy: "disabled" },
           buzz: {
             relayUrl: "wss://buzz.example.com",
             privateKey: "11".repeat(32),
+            groups: { [ROOM_A]: { enabled: false, requireMention: false } },
           },
         },
       } as OpenClawConfig,
@@ -328,6 +284,12 @@ describe("Buzz guided setup", () => {
 
     expect(runSecretStep).not.toHaveBeenCalled();
     expect(result.cfg.channels?.buzz?.privateKey).toBe("11".repeat(32));
+    expect(result.cfg.channels?.buzz?.groupPolicy).toBeUndefined();
+    expect(result.cfg.channels?.buzz?.groups?.[ROOM_A]).toEqual({
+      enabled: false,
+      requireMention: false,
+    });
+    expect(result.cfg.channels?.defaults?.groupPolicy).toBe("disabled");
   });
 
   it("does not use BUZZ_PRIVATE_KEY when reusing an unresolved SecretRef", async () => {
@@ -336,12 +298,6 @@ describe("Buzz guided setup", () => {
     const discoverRooms = vi.fn(async () => [{ id: ROOM_A, name: "General" }]);
     const wizard = createBuzzSetupWizard({ discoverRooms });
     const prompter = createPrompter();
-    vi.mocked(prompter.select).mockImplementation((async ({ message }) => {
-      if (message.includes("identity")) {
-        return "reuse";
-      }
-      throw new Error(`Unexpected select prompt: ${message}`);
-    }) as WizardPrompter["select"]);
     vi.mocked(prompter.text).mockImplementation(async ({ message }) => {
       if (message.includes("relay")) {
         return "wss://buzz.example.com";
@@ -368,29 +324,14 @@ describe("Buzz guided setup", () => {
     expect(result.completion).toBe("paused");
   });
 
-  it("does not use the old key after switching to an unresolved SecretRef", async () => {
-    const newSecretRef = { source: "env" as const, provider: "default", id: "NEW_BUZZ_KEY" };
-    type BuzzSetupDependencies = NonNullable<Parameters<typeof createBuzzSetupWizard>[0]>;
-    type RunSecretStep = NonNullable<BuzzSetupDependencies["runSecretStep"]>;
-    const runSecretStep = vi.fn(async ({ cfg, applySet }: Parameters<RunSecretStep>[0]) => ({
-      cfg: await applySet!(cfg, newSecretRef, ""),
-      action: "set" as const,
-    }));
+  it("does not replace an existing identity during SecretRef setup", async () => {
+    const runSecretStep = vi.fn();
     const discoverRooms = vi.fn(async () => [{ id: ROOM_A, name: "General" }]);
-    const wizard = createBuzzSetupWizard({ discoverRooms, runSecretStep });
-    const prompter = createPrompter();
-    vi.mocked(prompter.select).mockImplementation((async ({ message }) => {
-      if (message.includes("identity")) {
-        return "existing";
-      }
-      throw new Error(`Unexpected select prompt: ${message}`);
-    }) as WizardPrompter["select"]);
-    vi.mocked(prompter.text).mockImplementation(async ({ message }) => {
-      if (message.includes("relay")) {
-        return "wss://buzz.example.com";
-      }
-      throw new Error(`Unexpected text prompt: ${message}`);
+    const wizard = createBuzzSetupWizard({
+      discoverRooms,
+      runSecretStep,
     });
+    const prompter = createPrompter();
 
     const result = await wizard.configure({
       cfg: {
@@ -403,50 +344,33 @@ describe("Buzz guided setup", () => {
       } as OpenClawConfig,
       runtime: createRuntime(),
       prompter,
+      options: { secretInputMode: "ref" },
       accountOverrides: {},
       shouldPromptAccountIds: false,
       forceAllowFrom: false,
     });
 
-    expect(discoverRooms).not.toHaveBeenCalled();
-    expect(result.cfg.channels?.buzz?.privateKey).toEqual(newSecretRef);
-    expect(result.cfg.channels?.buzz?.enabled).toBe(false);
-    expect(result.completion).toBe("paused");
+    expect(runSecretStep).not.toHaveBeenCalled();
+    expect(discoverRooms).toHaveBeenCalledWith({
+      relayUrl: "wss://buzz.example.com",
+      privateKey: "11".repeat(32),
+    });
+    expect(result.cfg.channels?.buzz?.privateKey).toBe("11".repeat(32));
+    expect(result.cfg.channels?.buzz?.enabled).toBe(true);
+    expect(result.completion).toBeUndefined();
   });
 
-  it("retries authenticated discovery without rotating the generated identity", async () => {
-    const discoverRooms = vi
-      .fn()
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{ id: ROOM_A, name: "General" }]);
+  it("waits for authenticated room access without rotating the generated identity", async () => {
+    const discoverRooms = vi.fn(async () => []);
+    const waitForRoomAccess = vi.fn(async () => [{ id: ROOM_A, name: "General" }]);
     const wizard = createBuzzSetupWizard({
       discoverRooms,
       generateSecretKey: () => GENERATED_KEY,
+      waitForRoomAccess,
       verifyAfterWrite: vi.fn(async () => {}),
     });
     const prompter = createPrompter();
-    vi.mocked(prompter.select).mockImplementation((async ({ message }) => {
-      if (message.includes("identity")) {
-        return "generate";
-      }
-      if (message.includes("after granting")) {
-        return "retry";
-      }
-      if (message.includes("access")) {
-        return "open";
-      }
-      if (message.includes("default")) {
-        return ROOM_A;
-      }
-      throw new Error(`Unexpected select prompt: ${message}`);
-    }) as WizardPrompter["select"]);
     vi.mocked(prompter.multiselect).mockResolvedValue([ROOM_A]);
-    vi.mocked(prompter.confirm).mockImplementation(async ({ message }) => {
-      if (message.includes("mentions") || message.includes("test message")) {
-        return false;
-      }
-      throw new Error(`Unexpected confirm prompt: ${message}`);
-    });
 
     const result = await wizard.configure({
       cfg: {} as OpenClawConfig,
@@ -457,9 +381,13 @@ describe("Buzz guided setup", () => {
       forceAllowFrom: false,
     });
 
-    expect(discoverRooms).toHaveBeenCalledTimes(2);
-    expect(discoverRooms.mock.calls[0]?.[0].privateKey).toBe(
-      discoverRooms.mock.calls[1]?.[0].privateKey,
+    expect(discoverRooms).toHaveBeenCalledOnce();
+    const expectedPrivateKey = nip19.nsecEncode(GENERATED_KEY);
+    expect(discoverRooms).toHaveBeenCalledWith(
+      expect.objectContaining({ privateKey: expectedPrivateKey }),
+    );
+    expect(waitForRoomAccess).toHaveBeenCalledWith(
+      expect.objectContaining({ privateKey: expectedPrivateKey }),
     );
     expect(result.cfg.channels?.buzz?.enabled).toBe(true);
     expect(result.cfg.channels?.buzz?.defaultTo).toBe(ROOM_A);

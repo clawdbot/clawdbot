@@ -69,20 +69,26 @@ openclaw channels add --channel buzz
 
 The setup flow walks through the following steps:
 
-1. Enter the Buzz relay URL.
-2. Generate a dedicated bot identity, or choose an existing bot identity.
-3. Open or create the target Buzz room.
-4. Add the displayed public key to the room with the **Bot** role.
-5. Retry authenticated discovery in the same setup session, or save and resume
-   later with the same bot identity.
-6. Select the rooms returned by Buzz.
-7. Choose who can activate the agent and whether a mention is required.
-8. Choose a default room and optionally send a test message.
+1. Enter the Buzz relay URL if one is not already configured.
+2. OpenClaw reuses the configured bot identity or generates one automatically.
+3. If the bot does not have room access yet, give the displayed public key to a
+   Buzz room owner or admin.
+4. OpenClaw waits for Buzz to confirm the **Bot** role and continues
+   automatically. If the automatic wait expires, retry authenticated discovery
+   or go back without changing the generated identity.
+5. If Buzz returns one room, OpenClaw selects it. If Buzz returns several,
+   select the rooms to use and the default outbound room.
+6. OpenClaw saves the configuration and silently verifies the authenticated
+   room when the Gateway is running.
 
-OpenClaw attempts authenticated room discovery immediately after creating or
-loading the identity. If room access is not ready, it can retry without rotating
-the key. If you finish later, OpenClaw saves the relay and bot identity with Buzz
-disabled; the next setup run offers to reuse that identity.
+Fresh setup requires mentions and accepts messages from current members of the
+configured rooms. Existing explicit mention and sender-allowlist settings are
+preserved when setup is rerun.
+
+The automatic room-access wait is bounded. If access is not granted in time,
+setup remains open and offers authenticated Retry/Back controls. Every retry
+reuses the same relay and bot identity; the timeout does not disable Buzz or
+exit setup.
 
 ### Bot approval
 
@@ -102,9 +108,10 @@ buzz channels add-member \
 Run that command as the existing human owner or admin. Never give OpenClaw that
 human private key.
 
-After the Gateway connects, OpenClaw publishes the configured Buzz channel
-account name as the bot's Buzz display name. If you skip optional account
-naming, the display name defaults to `OpenClaw`. This replaces the shortened
+After the Gateway connects, OpenClaw preserves an existing non-empty Buzz
+profile display name. For a new profile it uses the configured Buzz channel
+account name, then the identity name of the single agent routed to the
+configured Buzz rooms, and finally `OpenClaw`. This replaces the shortened
 public key in Buzz after its profile cache refreshes.
 
 Buzz displays `owner unavailable` when the bot profile has no valid NIP-OA
@@ -188,14 +195,21 @@ agent. See [Channel routing](/channels/channel-routing) for matching precedence.
 
 ## Access control
 
-Guided setup configures two independent controls:
+Buzz applies two independent controls:
 
 - **Require mentions**: the agent responds only when the bot is mentioned.
-- **Sender access**: allow every member of an approved room, disable the room,
-  or allow only selected Buzz public keys.
+- **Sender access**: allow every current member of an approved room, disable
+  room ingress, or additionally restrict room members to selected Buzz public
+  keys.
 
-The recommended default is to require a mention and use a sender allowlist.
-Buzz room membership still applies in addition to these OpenClaw controls.
+Fresh guided setup requires a mention and allows current members of the selected
+rooms. OpenClaw loads Buzz's relay-signed room roster before accepting messages,
+checks membership in memory before persistent dedupe or agent work, and refreshes
+the roster after Buzz membership-change events. There is no per-message relay
+query or Gateway polling.
+
+Use `groupPolicy: "allowlist"` with `groupAllowFrom` in manual configuration
+when only specific room members should be able to activate the agent.
 
 These controls decide who can start an agent run; they do not limit what the
 routed agent can do after a message is accepted. Treat room messages as
@@ -213,8 +227,7 @@ Guided setup is recommended. The equivalent configuration looks like:
       name: "OpenClaw",
       relayUrl: "wss://buzz.example.com",
       privateKey: "nsec1...",
-      groupPolicy: "allowlist",
-      groupAllowFrom: ["<64_CHARACTER_HEX_SENDER_PUBLIC_KEY>"],
+      groupPolicy: "open",
       groups: {
         "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c": {
           requireMention: true,
@@ -226,18 +239,30 @@ Guided setup is recommended. The equivalent configuration looks like:
 }
 ```
 
+For a narrower sender policy:
+
+```json5
+{
+  channels: {
+    buzz: {
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["<64_CHARACTER_HEX_SENDER_PUBLIC_KEY>"],
+    },
+  },
+}
+```
+
 Room targets are UUIDs. Use the room UUID shown during discovery or ask a room
 admin for it; a display name such as `general` is not a valid target.
 
-Guided setup accepts sender keys as `npub` or 64-character hexadecimal values
-and stores normalized hexadecimal keys. For manual configuration,
-`groupAllowFrom` entries must use the 64-character hexadecimal form.
+For manual configuration, `groupAllowFrom` entries must use the 64-character
+hexadecimal form.
 
 ### Bot key storage
 
-The default guided path generates a bot private key and stores it in
-`channels.buzz.privateKey`, following OpenClaw's current plaintext config
-convention.
+The default guided path reuses the current bot identity or generates a private
+key and stores it in `channels.buzz.privateKey`, following OpenClaw's current
+plaintext config convention.
 
 For an existing key, setup can use plaintext or an existing `env`, `file`, or
 `exec` SecretRef. See [Secrets management](/gateway/secrets) for provider setup.
@@ -314,12 +339,12 @@ These follow-up areas are planned but are not part of the current plugin:
 
 | Symptom                                      | What to check                                                                                                        |
 | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| No rooms are discovered                      | Confirm this exact bot public key is in the room with the **Bot** role, then retry authenticated discovery.          |
+| No rooms are discovered                      | Confirm this exact bot public key is in the room with the **Bot** role, then rerun the same setup command.           |
 | Authentication fails                         | Check the relay URL, bot private key, closed-relay membership, and any authorization value supplied by the operator. |
 | A message cannot be sent                     | Confirm the bot is a room member with the **Bot** role and that the UUID is configured.                              |
-| The bot receives messages but does not reply | Check the sender allowlist and whether the room requires a mention.                                                  |
-| Setup says the Gateway is not running        | Start it with `openclaw gateway`, then run the probe and test message again.                                         |
-| Setup was paused                             | Rerun `openclaw channels add --channel buzz`, reuse the saved identity, and retry room discovery.                    |
+| The bot receives messages but does not reply | Confirm the sender is still a room member, then check the optional sender allowlist and mention requirement.         |
+| Setup says the Gateway is not running        | Start it with `openclaw gateway`, then run `openclaw channels status --probe`.                                       |
+| Automatic room discovery expires             | Grant the Bot role, then choose Retry; the same identity remains active.                                             |
 
 ## Related
 

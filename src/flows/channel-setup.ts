@@ -268,6 +268,10 @@ export async function setupChannels(
 
   const selection: ChannelChoice[] = [];
   let finishSetupRequested = false;
+  const targetedChannel =
+    options?.finishAfterInitialSelection && options.initialSelection?.length === 1
+      ? options.initialSelection[0]
+      : undefined;
   const addSelection = (channel: ChannelChoice) => {
     if (!selection.includes(channel)) {
       selection.push(channel);
@@ -449,6 +453,9 @@ export async function setupChannels(
       }
     }
     addSelection(channel);
+    if (channel === targetedChannel) {
+      finishSetupRequested = true;
+    }
     await refreshStatus(channel);
   };
 
@@ -633,10 +640,13 @@ export async function setupChannels(
     let resumingDisabledChannel = false;
     if (deferredDisabledHint) {
       if (deferredDisabledHint === "disabled") {
-        const resume = await prompter.confirm({
-          message: t("wizard.channels.resumeDisabledSetup", { channel }),
-          initialValue: true,
-        });
+        const resume =
+          channel === targetedChannel
+            ? true
+            : await prompter.confirm({
+                message: t("wizard.channels.resumeDisabledSetup", { channel }),
+                initialValue: true,
+              });
         if (!resume) {
           return "done";
         }
@@ -655,10 +665,13 @@ export async function setupChannels(
         } as OpenClawConfig;
         resumingDisabledChannel = true;
       } else if (deferredDisabledHint === "plugin disabled") {
-        const resume = await prompter.confirm({
-          message: t("wizard.channels.resumeDisabledPluginSetup", { channel }),
-          initialValue: true,
-        });
+        const resume =
+          channel === targetedChannel
+            ? true
+            : await prompter.confirm({
+                message: t("wizard.channels.resumeDisabledPluginSetup", { channel }),
+                initialValue: true,
+              });
         if (!resume) {
           return "done";
         }
@@ -885,7 +898,9 @@ export async function setupChannels(
     return "done";
   };
 
-  if (options?.quickstartDefaults) {
+  if (targetedChannel) {
+    await handleChannelChoice(targetedChannel);
+  } else if (options?.quickstartDefaults) {
     const skipValue = "__skip__" as const;
     const quickstartInitialValue = options?.initialSelection?.[0] ?? skipValue;
     while (true) {

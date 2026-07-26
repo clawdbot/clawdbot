@@ -324,6 +324,8 @@ export type SetupChannelsOptions = {
   skipConfirm?: boolean;
   quickstartDefaults?: boolean;
   initialSelection?: ChannelId[];
+  /** Finish after the explicitly targeted channel is configured or paused. */
+  finishAfterInitialSelection?: boolean;
   secretInputMode?: "plaintext" | "ref";
 };
 

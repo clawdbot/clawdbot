@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { sleep, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 
 const GATEWAY_RELOAD_WAIT_MS = 15_000;
@@ -53,11 +51,9 @@ function isGatewayNotRunningError(error: unknown): boolean {
 }
 
 export async function verifyBuzzAfterSetup(params: {
-  cfg: OpenClawConfig;
   accountId: string;
   target: string;
   runtime: RuntimeEnv;
-  sendTestMessage: boolean;
 }): Promise<void> {
   try {
     const { callGatewayFromCli } = await import("openclaw/plugin-sdk/gateway-runtime");
@@ -111,22 +107,6 @@ export async function verifyBuzzAfterSetup(params: {
     params.runtime.log(
       "Buzz authenticated successfully and the configured room membership is visible.",
     );
-    if (!params.sendTestMessage) {
-      return;
-    }
-    await callGatewayFromCli(
-      "send",
-      { timeout: "15000", json: true },
-      {
-        channel: "buzz",
-        accountId: params.accountId,
-        to: params.target,
-        message: "OpenClaw Buzz setup test: the bot is connected.",
-        idempotencyKey: randomUUID(),
-      },
-      { expectFinal: false, progress: false },
-    );
-    params.runtime.log(`Buzz test message sent to ${params.target}.`);
   } catch (error) {
     if (isGatewayNotRunningError(error)) {
       params.runtime.log("Buzz config was saved. Start OpenClaw to connect: openclaw gateway");
@@ -134,7 +114,7 @@ export async function verifyBuzzAfterSetup(params: {
     }
     const message = error instanceof Error ? error.message : String(error);
     params.runtime.log(
-      `Buzz config was saved, but post-setup verification did not complete: ${message}. Run \`openclaw channels status --probe\`, then send a test message after the Gateway reloads.`,
+      `Buzz config was saved, but post-setup verification did not complete: ${message}. Run \`openclaw channels status --probe\` after the Gateway reloads.`,
     );
   }
 }
