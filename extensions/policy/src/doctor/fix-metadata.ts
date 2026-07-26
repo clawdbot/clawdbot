@@ -1,4 +1,5 @@
 // Policy doctor fix metadata classifies findings before patch builders exist.
+import { EXEC_APPROVALS_POLICY_DOCUMENT_NAME } from "../exec-approvals-uri.js";
 import { CHECK_IDS, POLICY_CHECK_IDS } from "./check-ids.js";
 
 type PolicyFixClass = "automatic" | "reviewRequired" | "manual" | "unsupported";
@@ -388,7 +389,10 @@ const POLICY_FIX_METADATA = [
     CHECK_IDS.policyExecApprovalsMissing,
     "manual",
     "Restore an attributable exec-approvals evidence file.",
-    { policyPath: ["execApprovals", "requireFile"], configTargets: ["exec-approvals.json"] },
+    {
+      policyPath: ["execApprovals", "requireFile"],
+      configTargets: [EXEC_APPROVALS_POLICY_DOCUMENT_NAME],
+    },
   ),
   m(CHECK_IDS.policyExecApprovalsInvalid, "manual", "Repair the exec approvals evidence artifact."),
   m(
@@ -397,7 +401,7 @@ const POLICY_FIX_METADATA = [
     "Update reviewed default approval evidence or policy.",
     {
       policyPath: ["execApprovals", "defaults", "allowSecurity"],
-      configTargets: ["exec-approvals.json"],
+      configTargets: [EXEC_APPROVALS_POLICY_DOCUMENT_NAME],
     },
   ),
   m(
@@ -406,7 +410,7 @@ const POLICY_FIX_METADATA = [
     "Update reviewed agent approval evidence or policy.",
     {
       policyPath: ["execApprovals", "agents", "allowSecurity"],
-      configTargets: ["exec-approvals.json"],
+      configTargets: [EXEC_APPROVALS_POLICY_DOCUMENT_NAME],
     },
   ),
   m(
@@ -415,7 +419,7 @@ const POLICY_FIX_METADATA = [
     "Disable auto-allow skills in the approval owner surface.",
     {
       policyPath: ["execApprovals", "agents", "allowAutoAllowSkills"],
-      configTargets: ["exec-approvals.json"],
+      configTargets: [EXEC_APPROVALS_POLICY_DOCUMENT_NAME],
     },
   ),
   m(
@@ -424,7 +428,7 @@ const POLICY_FIX_METADATA = [
     "Add expected approval patterns through approval review.",
     {
       policyPath: ["execApprovals", "agents", "allowlist", "expected"],
-      configTargets: ["exec-approvals.json"],
+      configTargets: [EXEC_APPROVALS_POLICY_DOCUMENT_NAME],
     },
   ),
   m(
@@ -433,7 +437,7 @@ const POLICY_FIX_METADATA = [
     "Remove unexpected approval patterns through approval review.",
     {
       policyPath: ["execApprovals", "agents", "allowlist", "expected"],
-      configTargets: ["exec-approvals.json"],
+      configTargets: [EXEC_APPROVALS_POLICY_DOCUMENT_NAME],
     },
   ),
   m(

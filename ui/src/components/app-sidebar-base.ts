@@ -29,7 +29,6 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) canPairDevice = false;
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) sidebarEntries: readonly string[] = DEFAULT_SIDEBAR_ENTRIES;
-  @property({ attribute: false }) sessionSectionOrder: readonly string[] = [];
   @property({ attribute: false }) workboardBoards: readonly SidebarWorkboardBoard[] = [];
   @property({ attribute: false }) workboardBoardsReady = false;
   @property({ attribute: false }) workboardRenderers?: SidebarWorkboardRenderers;
@@ -53,7 +52,6 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   /** Agent id of the in-flight new-session draft; renders the draft row. */
   @property({ attribute: false }) draftSessionAgentId = "";
   @property({ attribute: false }) onUpdateSidebarEntries?: (entries: string[]) => void;
-  @property({ attribute: false }) onUpdateSessionSectionOrder?: (order: string[]) => void;
   @property({ attribute: false }) onPairMobile?: () => void;
   @property({ attribute: false })
   onNavigate?: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;

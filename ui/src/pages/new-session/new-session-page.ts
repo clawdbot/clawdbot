@@ -779,8 +779,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       ? this.pendingCloud.gatewayUrl
       : context.gateway.connection.gatewayUrl;
     const submissionClient = context.gateway.snapshot.client;
-    const submissionConnection = context.gateway.snapshot.hello;
-    if (!submissionClient || !submissionConnection) {
+    if (!submissionClient || !context.gateway.snapshot.hello) {
       return;
     }
     const submissionRecoveryScope = pendingCloud
@@ -969,7 +968,7 @@ class NewSessionPage extends OpenClawLightDomElement {
             attachments,
             createdAt: submittedAt,
           },
-          submissionConnection,
+          submissionClient,
           { messageId: cloudStart.messageId, messageSeq: cloudStart.messageSeq },
         );
         this.attachmentDraft.clearAfterSubmit(true);
@@ -996,7 +995,7 @@ class NewSessionPage extends OpenClawLightDomElement {
               attachments,
               createdAt: submittedAt,
             },
-            submissionConnection,
+            submissionClient,
             {
               messageId: result.initialRun.messageId,
               messageSeq: result.initialRun.messageSeq,

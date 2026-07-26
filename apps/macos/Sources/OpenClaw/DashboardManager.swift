@@ -1,11 +1,13 @@
 import AppKit
 import Foundation
+import Observation
 import OpenClawKit
 import OSLog
 
 private let dashboardManagerLogger = Logger(subsystem: "ai.openclaw", category: "DashboardManager")
 
 @MainActor
+@Observable
 final class DashboardManager {
     static let shared = DashboardManager()
 
@@ -22,21 +24,22 @@ final class DashboardManager {
         let displayName: String
     }
 
-    private var controller: DashboardWindowController?
-    private var mainTarget = DashboardGatewayTarget.primary
-    private var auxiliaryWindows: [UUID: AuxiliaryWindowInstance] = [:]
-    private var auxiliaryWindowOrder: [UUID] = []
-    private var endpointTask: Task<Void, Never>?
-    private var pendingOpenCommands: [DashboardNativeCommand] = []
-    private var openForCommandTask: Task<Void, Never>?
-    private var updater: UpdaterProviding?
-    private var displayedRouteRevision: UInt64?
-    private var switchGenerations: [ObjectIdentifier: UInt64] = [:]
-    private let authTokenProvider: @Sendable (GatewayConnection.Config) async -> String?
-    private let routeProbe: @Sendable () async -> Void
-    private let mainWindowAutosaveName: String
-    private var gatewayEntries: [DashboardGatewayEntry] = []
-    private var gatewayRefreshObservers: [NSObjectProtocol] = []
+    @ObservationIgnored private var controller: DashboardWindowController?
+    @ObservationIgnored private var mainTarget = DashboardGatewayTarget.primary
+    @ObservationIgnored private var auxiliaryWindows: [UUID: AuxiliaryWindowInstance] = [:]
+    @ObservationIgnored private var auxiliaryWindowOrder: [UUID] = []
+    @ObservationIgnored private var endpointTask: Task<Void, Never>?
+    @ObservationIgnored private var pendingOpenCommands: [DashboardNativeCommand] = []
+    @ObservationIgnored private var openForCommandTask: Task<Void, Never>?
+    @ObservationIgnored private var updater: UpdaterProviding?
+    @ObservationIgnored private var displayedRouteRevision: UInt64?
+    @ObservationIgnored private var switchGenerations: [ObjectIdentifier: UInt64] = [:]
+    @ObservationIgnored private let authTokenProvider: @Sendable (GatewayConnection.Config) async -> String?
+    @ObservationIgnored private let routeProbe: @Sendable () async -> Void
+    @ObservationIgnored private let mainWindowAutosaveName: String
+    private(set) var gatewayEntries: [DashboardGatewayEntry] = []
+    private(set) var frontmostDashboardTarget: DashboardGatewayTarget?
+    @ObservationIgnored private var gatewayRefreshObservers: [NSObjectProtocol] = []
     #if DEBUG
     private var testPrimaryEndpointProvider:
         (@Sendable (AppState.ConnectionMode) async throws -> GatewayConnection.EndpointSnapshot)?
@@ -78,11 +81,25 @@ final class DashboardManager {
                     Task { @MainActor [weak self] in await self?.refreshGatewaySnapshots() }
                 }
             }
+            let windowNames: [Notification.Name] = [
+                NSWindow.didBecomeKeyNotification,
+                NSWindow.willCloseNotification,
+            ]
+            self.gatewayRefreshObservers += windowNames.map { name in
+                NotificationCenter.default.addObserver(
+                    forName: name,
+                    object: nil,
+                    queue: .main)
+                { [weak self] _ in
+                    Task { @MainActor [weak self] in self?.updateFrontmostDashboardTarget() }
+                }
+            }
         }
     }
 
     func configure(updater: UpdaterProviding) {
         self.updater = updater
+        Task { await self.refreshGatewaySnapshots() }
     }
 
     /// The card's native update path only makes sense when the app owns the
@@ -356,6 +373,7 @@ final class DashboardManager {
         for controller in controllers {
             controller.closeDashboard()
         }
+        self.frontmostDashboardTarget = nil
     }
 
     func handleOnboardingCompletion() {
@@ -379,7 +397,8 @@ final class DashboardManager {
         case let .openWindow(target):
             Task { await self.openWindow(for: target) }
         case let .setPrimary(target):
-            self.confirmSetPrimary(target, from: source)
+            guard self.target(for: source) == target else { return }
+            self.presentSetPrimaryConfirmation(target, source: source)
         case .openSettings:
             AppNavigationActions.openSettings(tab: .gateways)
         }
@@ -540,6 +559,7 @@ final class DashboardManager {
             }
             self.finishSwitch(generation, for: source)
             await self.refreshGatewaySnapshots()
+            self.updateFrontmostDashboardTarget()
         } catch {
             guard self.switchIsCurrent(generation, for: source) else { return }
             self.finishSwitch(generation, for: source)
@@ -569,35 +589,9 @@ final class DashboardManager {
             }
             controller.show(url: configuration.url, auth: configuration.auth)
             await self.refreshGatewaySnapshots()
+            self.updateFrontmostDashboardTarget()
         } catch {
             Self.showGatewayError(error, message: "Could Not Open Gateway Window")
-        }
-    }
-
-    private func confirmSetPrimary(_ target: DashboardGatewayTarget, from source: DashboardWindowController) {
-        guard case let .profile(profileID) = target,
-              self.target(for: source) == target,
-              let entry = self.gatewayEntries.first(where: { $0.id == target.bridgeID }),
-              entry.canPromote
-        else {
-            return
-        }
-        let alert = DashboardWindowController.makeSetPrimaryAlert(gatewayName: entry.name)
-        let apply: (NSApplication.ModalResponse) -> Void = { [weak self, weak source] response in
-            guard response == .alertFirstButtonReturn, let self, let source else { return }
-            Task { @MainActor in
-                do {
-                    try await DashboardPrimaryGatewayAdapter(state: AppStateStore.shared).apply(profileID: profileID)
-                    await self.switchTarget(.primary, in: source)
-                } catch {
-                    Self.showGatewayError(error, message: "Could Not Set Primary Gateway")
-                }
-            }
-        }
-        if let window = source.window {
-            alert.beginSheetModal(for: window, completionHandler: apply)
-        } else {
-            apply(alert.runModal())
         }
     }
 
@@ -679,6 +673,7 @@ final class DashboardManager {
             self.switchGenerations[ObjectIdentifier(controller)] = nil
             self.auxiliaryWindows.removeValue(forKey: windowID)
             self.auxiliaryWindowOrder.removeAll { $0 == windowID }
+            self.updateFrontmostDashboardTarget()
         }
     }
 
@@ -833,6 +828,125 @@ final class DashboardManager {
     }
 }
 
+extension DashboardManager {
+    func openOrFocusDashboard(for target: DashboardGatewayTarget) {
+        Task { await self.performOpenOrFocusDashboard(for: target) }
+    }
+
+    func switchFrontmostDashboard(to target: DashboardGatewayTarget) {
+        Task { await self.performSwitchFrontmostDashboard(to: target) }
+    }
+
+    func confirmSetPrimary(_ target: DashboardGatewayTarget) {
+        self.presentSetPrimaryConfirmation(target, source: nil)
+    }
+
+    private func dashboardControllers() -> [(target: DashboardGatewayTarget, controller: DashboardWindowController)] {
+        var result: [(DashboardGatewayTarget, DashboardWindowController)] = []
+        if let controller, controller.isWindowOpen {
+            result.append((self.mainTarget, controller))
+        }
+        result += self.auxiliaryWindowOrder.compactMap { windowID in
+            guard let instance = self.auxiliaryWindows[windowID], instance.controller.isWindowOpen else { return nil }
+            return (instance.target, instance.controller)
+        }
+        return result
+    }
+
+    private func frontmostDashboard()
+        -> (target: DashboardGatewayTarget, controller: DashboardWindowController)?
+    {
+        let controllers = self.dashboardControllers()
+        if let key = controllers.first(where: { $0.controller.window?.isKeyWindow == true }) {
+            return key
+        }
+        for window in NSApp.orderedWindows {
+            if let match = controllers.first(where: { $0.controller.window === window }) {
+                return match
+            }
+        }
+        return controllers.last
+    }
+
+    private func updateFrontmostDashboardTarget() {
+        self.frontmostDashboardTarget = self.frontmostDashboard()?.target
+    }
+
+    private func dashboardController(for target: DashboardGatewayTarget) -> DashboardWindowController? {
+        if let frontmost = self.frontmostDashboard(), frontmost.target == target {
+            return frontmost.controller
+        }
+        if self.mainTarget == target, let controller, controller.isWindowOpen {
+            return controller
+        }
+        return self.auxiliaryWindowOrder.reversed().lazy
+            .compactMap { self.auxiliaryWindows[$0] }
+            .first { $0.target == target && $0.controller.isWindowOpen }?
+            .controller
+    }
+
+    private func performOpenOrFocusDashboard(for target: DashboardGatewayTarget) async {
+        if let controller = self.dashboardController(for: target) {
+            NSApp.activate(ignoringOtherApps: true)
+            controller.show()
+            self.updateFrontmostDashboardTarget()
+            return
+        }
+        if self.mainTarget == target || (target == .primary && self.controller == nil) {
+            do {
+                try await self.show()
+            } catch {
+                self.showFailure(error)
+            }
+        } else {
+            await self.openWindow(for: target)
+        }
+        self.updateFrontmostDashboardTarget()
+    }
+
+    private func performSwitchFrontmostDashboard(to target: DashboardGatewayTarget) async {
+        guard let frontmost = self.frontmostDashboard() else {
+            await self.performOpenOrFocusDashboard(for: target)
+            return
+        }
+        await self.switchTarget(target, in: frontmost.controller, present: true)
+        self.updateFrontmostDashboardTarget()
+    }
+
+    private func presentSetPrimaryConfirmation(
+        _ target: DashboardGatewayTarget,
+        source: DashboardWindowController?)
+    {
+        guard case let .profile(profileID) = target,
+              let entry = self.gatewayEntries.first(where: { $0.id == target.bridgeID }),
+              entry.canPromote
+        else {
+            return
+        }
+        let alert = DashboardWindowController.makeSetPrimaryAlert(gatewayName: entry.name)
+        let apply: (NSApplication.ModalResponse) -> Void = { [weak self, weak source] response in
+            guard response == .alertFirstButtonReturn, let self else { return }
+            Task { @MainActor in
+                do {
+                    try await DashboardPrimaryGatewayAdapter(state: AppStateStore.shared).apply(profileID: profileID)
+                    if let source, self.target(for: source) != nil {
+                        await self.switchTarget(.primary, in: source)
+                    } else {
+                        await self.refreshGatewaySnapshots()
+                    }
+                } catch {
+                    Self.showGatewayError(error, message: "Could Not Set Primary Gateway")
+                }
+            }
+        }
+        if let window = source?.window {
+            alert.beginSheetModal(for: window, completionHandler: apply)
+        } else {
+            apply(alert.runModal())
+        }
+    }
+}
+
 #if DEBUG
 extension DashboardManager {
     /// Test instances skip `observeEndpointChanges()` so the shared endpoint
@@ -876,6 +990,10 @@ extension DashboardManager {
 
     func _testSwitchTarget(_ target: DashboardGatewayTarget, in source: DashboardWindowController) async {
         await self.switchTarget(target, in: source)
+    }
+
+    func _testSwitchFrontmostDashboard(to target: DashboardGatewayTarget) async {
+        await self.performSwitchFrontmostDashboard(to: target)
     }
 
     func _testWindowTLSParams(for target: DashboardGatewayTarget) async throws -> GatewayTLSParams? {

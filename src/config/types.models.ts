@@ -269,11 +269,6 @@ export type DiscoveryToggleConfig = {
   enabled?: boolean;
 };
 
-export type ModelPricingConfig = {
-  /** Enable external or generated pricing enrichment. */
-  enabled?: boolean;
-};
-
 export type ModelCatalogRefreshConfig = {
   /** Fetch model catalog updates from the hosted OpenClaw catalog. Default: true. */
   enabled?: boolean;
@@ -286,8 +281,6 @@ export type ModelsConfig = {
   mode?: "merge" | "replace";
   /** Configured provider catalog keyed by provider id. */
   providers?: Record<string, ModelProviderConfig>;
-  /** Pricing enrichment settings. */
-  pricing?: ModelPricingConfig;
   /** Hosted model catalog refresh settings. */
   catalogRefresh?: ModelCatalogRefreshConfig;
 };

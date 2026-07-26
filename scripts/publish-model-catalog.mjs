@@ -12,6 +12,8 @@ export const LITELLM_PRICING_URL =
 const SCRIPT_LABEL = "publish-model-catalog";
 const PRICING_FETCH_TIMEOUT_MS = 60_000;
 const MAX_PRICING_CATALOG_BYTES = 5 * 1024 * 1024;
+const BUNDLE_SIZE_WARNING_BYTES = 2 * 1024 * 1024;
+const CLIENT_BUNDLE_LIMIT_BYTES = 4 * 1024 * 1024;
 const defaultRootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function requireOptionValue(args, index, flag) {
@@ -129,6 +131,7 @@ export function summarizeModelCatalogBundle(bundle) {
       (total, provider) => total + provider.models.filter((model) => model.cost).length,
       0,
     ),
+    pricingEntries: Object.keys(bundle.pricing ?? {}).length,
   };
 }
 
@@ -212,6 +215,43 @@ function parseLiteLLMPricing(value) {
   };
 }
 
+function compactPricing(pricing) {
+  return {
+    input: pricing.input,
+    output: pricing.output,
+    ...(pricing.cacheRead > 0 ? { cacheRead: pricing.cacheRead } : {}),
+    ...(pricing.cacheWrite > 0 ? { cacheWrite: pricing.cacheWrite } : {}),
+    ...(pricing.tieredPricing ? { tieredPricing: pricing.tieredPricing } : {}),
+  };
+}
+
+function mergePricing(primary, secondary) {
+  if (!primary || !hasKnownPricing(primary)) {
+    return secondary;
+  }
+  if (!secondary || !hasKnownPricing(secondary)) {
+    return primary;
+  }
+  if (!secondary?.tieredPricing) {
+    return primary;
+  }
+  return { ...primary, tieredPricing: secondary.tieredPricing };
+}
+
+function hasKnownPricing(pricing) {
+  return (
+    (pricing.input ?? 0) > 0 ||
+    (pricing.output ?? 0) > 0 ||
+    (pricing.cacheRead ?? 0) > 0 ||
+    (pricing.cacheWrite ?? 0) > 0 ||
+    Boolean(
+      pricing.tieredPricing?.some(
+        (tier) => tier.input > 0 || tier.output > 0 || tier.cacheRead > 0 || tier.cacheWrite > 0,
+      ),
+    )
+  );
+}
+
 function applyModelIdTransforms(modelId, transforms) {
   const variants = new Set([modelId]);
   for (const transform of transforms ?? []) {
@@ -262,6 +302,106 @@ function buildPricingCandidates({ providerId, modelId, source, policies, seen = 
     }
   }
   return [...candidates];
+}
+
+function reverseModelIdTransforms(modelId, transforms) {
+  const variants = new Set([modelId]);
+  for (const transform of transforms ?? []) {
+    if (transform !== "version-dots") {
+      continue;
+    }
+    for (const variant of Array.from(variants)) {
+      variants.add(
+        variant
+          .replace(/^claude-(\d+)\.(\d+)-/u, "claude-$1-$2-")
+          .replace(/^claude-([a-z]+)-(\d+)\.(\d+)$/u, "claude-$1-$2-$3"),
+      );
+    }
+  }
+  return [...variants];
+}
+
+function setRuntimePricingSource(entries, key, source, pricing) {
+  const entry = entries.get(key) ?? {};
+  entry[source] = pricing;
+  entries.set(key, entry);
+}
+
+function collectPolicyRuntimePricingAliases({ providerId, policy, source, catalog, entries }) {
+  const rawSourcePolicy = policy?.[source];
+  const sourceEnabled = Boolean(rawSourcePolicy);
+  const sourcePolicy = sourceEnabled ? rawSourcePolicy : {};
+  const sourceProvider = sourcePolicy.provider ?? providerId;
+  for (const [sourceKey, pricing] of catalog) {
+    const slash = sourceKey.indexOf("/");
+    if (slash <= 0 || slash === sourceKey.length - 1) {
+      continue;
+    }
+    const keyProvider = sourceKey.slice(0, slash);
+    const sourceModel = sourceKey.slice(slash + 1);
+    if (keyProvider === sourceProvider) {
+      for (const runtimeModel of reverseModelIdTransforms(
+        sourceModel,
+        sourcePolicy.modelIdTransforms,
+      )) {
+        setRuntimePricingSource(
+          entries,
+          `${providerId}/${runtimeModel}`,
+          source,
+          sourceEnabled ? pricing : undefined,
+        );
+      }
+    }
+    if (sourceEnabled && sourcePolicy.passthroughProviderModel) {
+      setRuntimePricingSource(entries, `${providerId}/${sourceKey}`, source, pricing);
+    }
+  }
+}
+
+function materializePolicyRuntimePricing({
+  hostedPricing,
+  policies,
+  openRouterCatalog,
+  liteLlmCatalog,
+  pricedProviderModelKeys,
+}) {
+  for (const [providerId, policy] of policies) {
+    for (const key of hostedPricing.keys()) {
+      if (key.startsWith(`${providerId}/`)) {
+        hostedPricing.delete(key);
+      }
+    }
+    if (policy?.external === false) {
+      continue;
+    }
+    const entries = new Map();
+    collectPolicyRuntimePricingAliases({
+      providerId,
+      policy,
+      source: "openRouter",
+      catalog: openRouterCatalog,
+      entries,
+    });
+    collectPolicyRuntimePricingAliases({
+      providerId,
+      policy,
+      source: "liteLLM",
+      catalog: liteLlmCatalog,
+      entries,
+    });
+    for (const [key, entry] of entries) {
+      if (pricedProviderModelKeys.has(key)) {
+        hostedPricing.delete(key);
+        continue;
+      }
+      const pricing = mergePricing(entry.openRouter, entry.liteLLM);
+      if (pricing) {
+        hostedPricing.set(key, pricing);
+      } else {
+        hostedPricing.delete(key);
+      }
+    }
+  }
 }
 
 function readPricingPolicies(manifests) {
@@ -360,50 +500,94 @@ export async function enrichModelCatalogPricing(options) {
     }
   }
   const liteLlmCatalog = new Map();
+  const liteLlmAliasGroups = [];
   for (const [id, row] of Object.entries(sources.liteLlm)) {
     const pricing = parseLiteLLMPricing(row);
     if (pricing) {
-      liteLlmCatalog.set(id, pricing);
+      const aliases = [id];
       if (typeof row?.litellm_provider === "string" && !id.includes("/")) {
-        liteLlmCatalog.set(`${row.litellm_provider}/${id}`, pricing);
+        aliases.push(`${row.litellm_provider}/${id}`);
       }
+      for (const alias of aliases) {
+        liteLlmCatalog.set(alias, pricing);
+      }
+      liteLlmAliasGroups.push(aliases);
     }
   }
 
   let enriched = 0;
+  const coveredPricingKeys = new Set();
+  const pricedProviderModelKeys = new Set();
   for (const [providerId, provider] of Object.entries(options.bundle.providers)) {
     for (const model of provider.models) {
-      const openRouterPricing = buildPricingCandidates({
+      const openRouterCandidates = buildPricingCandidates({
         providerId,
         modelId: model.id,
         source: "openRouter",
         policies,
-      })
+      });
+      const openRouterPricing = openRouterCandidates
         .map((candidate) => openRouterCatalog.get(candidate))
         .find(Boolean);
-      const liteLlmPricing = buildPricingCandidates({
+      const liteLlmCandidates = buildPricingCandidates({
         providerId,
         modelId: model.id,
         source: "liteLLM",
         policies,
-      })
+      });
+      const liteLlmPricing = liteLlmCandidates
         .map((candidate) => liteLlmCatalog.get(candidate))
         .find(Boolean);
-      const cost = openRouterPricing
-        ? {
-            ...openRouterPricing,
-            ...(liteLlmPricing?.tieredPricing
-              ? { tieredPricing: liteLlmPricing.tieredPricing }
-              : {}),
-          }
-        : liteLlmPricing;
-      if (cost) {
+      const cost = mergePricing(openRouterPricing, liteLlmPricing);
+      if (cost && hasKnownPricing(cost)) {
         model.cost = cost;
         enriched += 1;
       }
+      if (model.cost && hasKnownPricing(model.cost)) {
+        const providerModelKey = `${providerId}/${model.id}`;
+        coveredPricingKeys.add(providerModelKey);
+        pricedProviderModelKeys.add(providerModelKey);
+        for (const candidate of [...openRouterCandidates, ...liteLlmCandidates]) {
+          coveredPricingKeys.add(candidate);
+        }
+      }
     }
   }
-  return enriched;
+
+  const hostedPricing = new Map();
+  for (const [key, pricing] of openRouterCatalog) {
+    hostedPricing.set(key, pricing);
+  }
+  for (const [key, pricing] of liteLlmCatalog) {
+    hostedPricing.set(key, mergePricing(hostedPricing.get(key), pricing));
+  }
+  for (const aliases of liteLlmAliasGroups) {
+    if (aliases.some((alias) => coveredPricingKeys.has(alias))) {
+      for (const alias of aliases) {
+        coveredPricingKeys.add(alias);
+      }
+    }
+  }
+  for (const key of coveredPricingKeys) {
+    hostedPricing.delete(key);
+  }
+  materializePolicyRuntimePricing({
+    hostedPricing,
+    policies,
+    openRouterCatalog,
+    liteLlmCatalog,
+    pricedProviderModelKeys,
+  });
+  options.bundle.pricing = Object.fromEntries(
+    [...hostedPricing.entries()]
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([key, pricing]) => [key, compactPricing(pricing)]),
+  );
+  const validateBundle = options.validateBundle ?? (await loadClientBundleValidator());
+  const validated = validateBundle(options.bundle);
+  options.bundle.providers = validated.providers;
+  options.bundle.pricing = validated.pricing;
+  return { modelsEnriched: enriched, pricingEntries: hostedPricing.size };
 }
 
 function sortCatalogValue(value) {
@@ -454,24 +638,35 @@ async function runPublishModelCatalog(options = {}) {
     generatedAt,
     sourceCommit,
   });
-  const enriched = args.pricing
+  const pricingResult = args.pricing
     ? await enrichModelCatalogPricing({ bundle, manifests, fetchImpl: options.fetchImpl })
-    : 0;
+    : { modelsEnriched: 0, pricingEntries: 0 };
   const summary = summarizeModelCatalogBundle(bundle);
-  const stats = `schemaVersion=1 providers=${summary.providers} models=${summary.models} costModels=${summary.costModels} pricingEnriched=${enriched} generatedAt=${bundle.generatedAt} minVersion=${bundle.minVersion} sourceCommit=${bundle.sourceCommit}`;
+  const serialized = serializeModelCatalogBundle(bundle);
+  const bundleBytes = Buffer.byteLength(serialized);
+  if (bundleBytes > BUNDLE_SIZE_WARNING_BYTES) {
+    process.stderr.write(
+      `[${SCRIPT_LABEL}] warning: bundle size ${bundleBytes} bytes exceeds ${BUNDLE_SIZE_WARNING_BYTES} bytes\n`,
+    );
+  }
+  if (bundleBytes > CLIENT_BUNDLE_LIMIT_BYTES) {
+    throw new Error(
+      `catalog bundle ${bundleBytes} bytes exceeds client limit ${CLIENT_BUNDLE_LIMIT_BYTES} bytes`,
+    );
+  }
+  const stats = `schemaVersion=1 providers=${summary.providers} models=${summary.models} costModels=${summary.costModels} pricingEnriched=${pricingResult.modelsEnriched} pricingEntries=${pricingResult.pricingEntries} bundleBytes=${bundleBytes} generatedAt=${bundle.generatedAt} minVersion=${bundle.minVersion} sourceCommit=${bundle.sourceCommit}`;
   if (args.dryRun) {
     process.stdout.write(`[${SCRIPT_LABEL}] dry-run ${stats}\n`);
-    return { bundle, summary, pricingEnriched: enriched, wrote: false };
+    return { bundle, summary, pricingEnriched: pricingResult.modelsEnriched, wrote: false };
   }
 
-  const serialized = serializeModelCatalogBundle(bundle);
   const outputFile = path.resolve(rootDir, args.out);
   if (args.out) {
     fs.mkdirSync(path.dirname(outputFile), { recursive: true });
     fs.writeFileSync(outputFile, serialized);
   }
   process.stdout.write(`[${SCRIPT_LABEL}] published ${stats} out=${args.out}\n`);
-  return { bundle, summary, pricingEnriched: enriched, wrote: true };
+  return { bundle, summary, pricingEnriched: pricingResult.modelsEnriched, wrote: true };
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

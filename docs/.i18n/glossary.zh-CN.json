@@ -28,6 +28,26 @@
     "target": "BlueBubbles"
   },
   {
+    "source": "Buzz",
+    "target": "Buzz"
+  },
+  {
+    "source": "Channel overview",
+    "target": "频道概览"
+  },
+  {
+    "source": "Channel access controls",
+    "target": "频道访问控制"
+  },
+  {
+    "source": "Secrets management",
+    "target": "密钥管理"
+  },
+  {
+    "source": "Channel troubleshooting",
+    "target": "频道故障排除"
+  },
+  {
     "source": "Configuration reference - iMessage",
     "target": "Configuration reference - iMessage"
   },

@@ -222,7 +222,7 @@ describe("secrets runtime provider and media surfaces", () => {
           },
           models: {
             ...initial.config.models,
-            pricing: { enabled: true },
+            catalogRefresh: { enabled: false },
           },
         },
         runtimeSourceConfig,
@@ -237,7 +237,7 @@ describe("secrets runtime provider and media surfaces", () => {
         "https://runtime-only.example",
       ]);
       expect(active?.config.auth?.order?.openai).toEqual(["runtime-only-profile"]);
-      expect(active?.config.models?.pricing?.enabled).toBe(true);
+      expect(active?.config.models?.catalogRefresh?.enabled).toBe(false);
       expect(active?.config.models?.providers?.openai?.apiKey).toBe("model-new");
       expect(getRuntimeConfigSnapshot()).toEqual(active?.config);
       expect(getRuntimeConfigSourceSnapshot()).toEqual(runtimeSourceConfig);

@@ -61,13 +61,13 @@ describe("AppSidebar group mutation collapsed state", () => {
       harness.groupsDelete.mockImplementation(options.groupsDelete);
     }
     const { sidebar } = await mountSidebar(gatewayHarness.gateway, harness.sessions);
-    const onUpdateSessionSectionOrder = vi.fn();
-    sidebar.sessionSectionOrder = ["category:Alpha", "ungrouped", "groups", "work"];
-    sidebar.onUpdateSessionSectionOrder = onUpdateSessionSectionOrder;
     sidebar.connected = true;
-    harness.publish({ groups: ["Alpha"] });
+    harness.publish({
+      groups: ["Alpha"],
+      sectionOrder: ["category:Alpha", "ungrouped", "groups", "work"],
+    });
     await sidebar.updateComplete;
-    return { sidebar, harness, gatewayHarness, onUpdateSessionSectionOrder };
+    return { sidebar, harness, gatewayHarness };
   }
 
   async function openGroupMenu(sidebar: SidebarLifecycleState) {
@@ -87,7 +87,7 @@ describe("AppSidebar group mutation collapsed state", () => {
   }
 
   it("keeps collapsed keys when group rename is rejected", async () => {
-    const { sidebar, harness, onUpdateSessionSectionOrder } = await mountCollapsedGroup({
+    const { sidebar, harness } = await mountCollapsedGroup({
       groupsRename: () => Promise.reject(new Error("rename failed")),
     });
     const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("Beta");
@@ -99,12 +99,11 @@ describe("AppSidebar group mutation collapsed state", () => {
     await Promise.resolve();
 
     expect(localStorage.getItem(COLLAPSED_STORAGE_KEY)).toBe(JSON.stringify(["category:Alpha"]));
-    expect(onUpdateSessionSectionOrder).not.toHaveBeenCalled();
     promptSpy.mockRestore();
   });
 
   it("rewrites collapsed keys only after group rename succeeds", async () => {
-    const { sidebar, harness, onUpdateSessionSectionOrder } = await mountCollapsedGroup({
+    const { sidebar, harness } = await mountCollapsedGroup({
       groupsRename: () => Promise.resolve("completed"),
     });
     const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("Beta");
@@ -116,12 +115,6 @@ describe("AppSidebar group mutation collapsed state", () => {
 
     expect(JSON.parse(localStorage.getItem(COLLAPSED_STORAGE_KEY) ?? "[]")).toEqual([
       "category:Beta",
-    ]);
-    expect(onUpdateSessionSectionOrder).toHaveBeenCalledWith([
-      "category:Beta",
-      "ungrouped",
-      "groups",
-      "work",
     ]);
     promptSpy.mockRestore();
   });
@@ -150,7 +143,7 @@ describe("AppSidebar group mutation collapsed state", () => {
   });
 
   it("keeps collapsed keys when group delete is rejected", async () => {
-    const { sidebar, harness, onUpdateSessionSectionOrder } = await mountCollapsedGroup({
+    const { sidebar, harness } = await mountCollapsedGroup({
       groupsDelete: () => Promise.reject(new Error("delete failed")),
     });
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
@@ -162,12 +155,11 @@ describe("AppSidebar group mutation collapsed state", () => {
     await Promise.resolve();
 
     expect(localStorage.getItem(COLLAPSED_STORAGE_KEY)).toBe(JSON.stringify(["category:Alpha"]));
-    expect(onUpdateSessionSectionOrder).not.toHaveBeenCalled();
     confirmSpy.mockRestore();
   });
 
   it("drops collapsed keys only after group delete succeeds", async () => {
-    const { sidebar, harness, onUpdateSessionSectionOrder } = await mountCollapsedGroup({
+    const { sidebar, harness } = await mountCollapsedGroup({
       groupsDelete: () => Promise.resolve("completed"),
     });
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
@@ -179,7 +171,6 @@ describe("AppSidebar group mutation collapsed state", () => {
     await Promise.resolve();
 
     expect(JSON.parse(localStorage.getItem(COLLAPSED_STORAGE_KEY) ?? "[]")).toEqual([]);
-    expect(onUpdateSessionSectionOrder).toHaveBeenCalledWith(["ungrouped", "groups", "work"]);
     confirmSpy.mockRestore();
   });
 });
@@ -209,13 +200,10 @@ describe("AppSidebar group section ordering", () => {
       row.category = group;
     }
     const { sidebar } = await mountSidebar(gatewayHarness.gateway, harness.sessions);
-    const onUpdateSessionSectionOrder = vi.fn();
-    sidebar.sessionSectionOrder = [];
-    sidebar.onUpdateSessionSectionOrder = onUpdateSessionSectionOrder;
     sidebar.connected = true;
     harness.publish({ groups });
     await sidebar.updateComplete;
-    return { sidebar, harness, onUpdateSessionSectionOrder };
+    return { sidebar, harness };
   }
 
   function section(sidebar: SidebarLifecycleState, sectionId: string): Element {
@@ -224,6 +212,12 @@ describe("AppSidebar group section ordering", () => {
       throw new Error(`expected section ${sectionId}`);
     }
     return element;
+  }
+
+  function renderedSectionIds(sidebar: SidebarLifecycleState): string[] {
+    return Array.from(sidebar.querySelectorAll<HTMLElement>("[data-session-section]")).flatMap(
+      (element) => (element.dataset.sessionSection ? [element.dataset.sessionSection] : []),
+    );
   }
 
   function groupHeader(sidebar: SidebarLifecycleState, group: string): Element {
@@ -246,56 +240,46 @@ describe("AppSidebar group section ordering", () => {
   }
 
   it("persists a group dropped before Coding without rewriting unchanged catalog order", async () => {
-    const { sidebar, harness, onUpdateSessionSectionOrder } = await mountWithGroups([
-      "Alpha",
-      "Beta",
-    ]);
+    const { sidebar, harness } = await mountWithGroups(["Alpha", "Beta"]);
 
     await dropGroupBeforeCoding(sidebar, "Beta");
 
     await waitForFast(() =>
-      expect(onUpdateSessionSectionOrder).toHaveBeenCalledWith([
-        "category:Alpha",
-        "ungrouped",
-        "groups",
-        "category:Beta",
-        "work",
-      ]),
+      expect(harness.groupsPut).toHaveBeenCalledWith(
+        ["Alpha", "Beta"],
+        ["category:Alpha", "ungrouped", "groups", "category:Beta", "work"],
+      ),
     );
-    expect(harness.groupsPut).not.toHaveBeenCalled();
   });
 
   it("also updates catalog order when a group crosses another group on its way to Coding", async () => {
-    const { sidebar, harness, onUpdateSessionSectionOrder } = await mountWithGroups([
-      "Alpha",
-      "Beta",
-    ]);
+    const { sidebar, harness } = await mountWithGroups(["Alpha", "Beta"]);
 
     await dropGroupBeforeCoding(sidebar, "Alpha");
 
     await waitForFast(() =>
-      expect(onUpdateSessionSectionOrder).toHaveBeenCalledWith([
-        "category:Beta",
-        "ungrouped",
-        "groups",
-        "category:Alpha",
-        "work",
-      ]),
+      expect(harness.groupsPut).toHaveBeenCalledWith(
+        ["Beta", "Alpha"],
+        ["category:Beta", "ungrouped", "groups", "category:Alpha", "work"],
+      ),
     );
-    await waitForFast(() => expect(harness.groupsPut).toHaveBeenCalledWith(["Beta", "Alpha"]));
   });
 
   it("does not persist cross-group ordering when the catalog update fails", async () => {
-    const { sidebar, harness, onUpdateSessionSectionOrder } = await mountWithGroups([
-      "Alpha",
-      "Beta",
-    ]);
+    const { sidebar, harness } = await mountWithGroups(["Alpha", "Beta"]);
+    const before = renderedSectionIds(sidebar);
     harness.groupsPut.mockRejectedValue(new Error("catalog update failed"));
 
     await dropGroupBeforeCoding(sidebar, "Alpha");
 
-    await waitForFast(() => expect(harness.groupsPut).toHaveBeenCalledWith(["Beta", "Alpha"]));
+    await waitForFast(() =>
+      expect(harness.groupsPut).toHaveBeenCalledWith(
+        ["Beta", "Alpha"],
+        ["category:Beta", "ungrouped", "groups", "category:Alpha", "work"],
+      ),
+    );
     await Promise.resolve();
-    expect(onUpdateSessionSectionOrder).not.toHaveBeenCalled();
+    await sidebar.updateComplete;
+    expect(renderedSectionIds(sidebar)).toEqual(before);
   });
 });

@@ -5,9 +5,8 @@ import { join } from "node:path";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
-import { getRuntimeConfig } from "../../config/config.js";
 import { discoverModels } from "../agent-model-discovery.js";
-import { isLiveTestEnabled } from "../live-test-helpers.js";
+import { isLiveTestEnabled, readLiveTestConfig } from "../live-test-helpers.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { AgentSession } from "./agent-session.js";
@@ -73,7 +72,7 @@ async function resolveLiveModel(
   agentDir: string,
   authStorage: AuthStorage,
 ): Promise<{ model: Model; modelRegistry: ModelRegistry }> {
-  await ensureOpenClawModelsJson(getRuntimeConfig(), agentDir, {
+  await ensureOpenClawModelsJson(await readLiveTestConfig(), agentDir, {
     providerDiscoveryProviderIds: ["anthropic"],
   });
   const modelRegistry = discoverModels(authStorage, agentDir, { providerFilter: "anthropic" });

@@ -1250,12 +1250,6 @@ html.openclaw-native-macos
     box-shadow var(--duration-fast) ease;
 }
 
-/* Catalog sections are nested inside Coding, so add to its 2px item gap to
-   match the 10px rhythm between top-level session groups. */
-.sidebar-recent-sessions__group--zone-coding > .sidebar-recent-sessions__group {
-  margin-top: 8px;
-}
-
 .sidebar-recent-sessions__group--session-drop {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);
@@ -1265,11 +1259,11 @@ html.openclaw-native-macos
   opacity: 0.45;
 }
 
-.sidebar-recent-sessions__group--group-drop-before {
+.sidebar-recent-sessions__group--section-drop-before {
   box-shadow: inset 0 2px 0 color-mix(in srgb, var(--accent) 75%, transparent);
 }
 
-.sidebar-recent-sessions__group--group-drop-after {
+.sidebar-recent-sessions__group--section-drop-after {
   box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--accent) 75%, transparent);
 }
 
@@ -1406,8 +1400,14 @@ html.openclaw-native-macos
   background-position: 0 0;
   background-size: 4px 4px;
   color: var(--muted);
-  opacity: 0.55;
+  opacity: 0;
   cursor: grab;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.sidebar-recent-sessions__head--draggable:hover .sidebar-session-group-drag-handle,
+.sidebar-recent-sessions__head--draggable:focus-within .sidebar-session-group-drag-handle {
+  opacity: 0.55;
 }
 
 .sidebar-session-group-drag-handle:active {
@@ -3086,6 +3086,39 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   color: var(--muted);
   font-size: 11px;
   line-height: 1.2;
+}
+
+.sidebar-identity-card__subtitle--gateway {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sidebar-identity-card__gateway-health {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.sidebar-identity-card__gateway-health[data-health="ok"] {
+  background: var(--ok);
+}
+
+.sidebar-identity-card__gateway-health[data-health="error"] {
+  background: var(--danger);
+}
+
+.sidebar-identity-card__gateway-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-identity-card__gateway-primary {
+  flex: none;
 }
 
 .sidebar-identity-card__status {

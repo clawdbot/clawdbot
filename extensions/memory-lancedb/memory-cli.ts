@@ -134,18 +134,39 @@ export function registerMemoryCli(
         .option("--agent <id>", "Agent id (default: configured default agent)")
         .option("--limit <n>", "Max results", "5")
         .action(async (query, opts) => {
-          const agentId = resolveCliAgentId(opts.agent);
-          const vector = await embeddings.embed(normalizeRecallQuery(query, recallMaxChars));
-          const limit = parsePositiveIntegerOption(opts.limit, "--limit");
-          const results = await db.search(agentId, vector, limit, 0.3);
-          const output = results.map((r) => ({
-            id: r.entry.id,
-            text: r.entry.text,
-            category: r.entry.category,
-            importance: r.entry.importance,
-            score: r.score,
-          }));
-          console.log(JSON.stringify(output, null, 2));
+          let operationError: unknown;
+          let operationFailed = false;
+          try {
+            const agentId = resolveCliAgentId(opts.agent);
+            const vector = await embeddings.embed(normalizeRecallQuery(query, recallMaxChars));
+            const limit = parsePositiveIntegerOption(opts.limit, "--limit");
+            const results = await db.search(agentId, vector, limit, 0.3);
+            const output = results.map((r) => ({
+              id: r.entry.id,
+              text: r.entry.text,
+              category: r.entry.category,
+              importance: r.entry.importance,
+              score: r.score,
+            }));
+            console.log(JSON.stringify(output, null, 2));
+          } catch (err) {
+            operationError = err;
+            operationFailed = true;
+          }
+          let closeError: unknown;
+          let closeFailed = false;
+          try {
+            await embeddings.close?.();
+          } catch (err) {
+            closeError = err;
+            closeFailed = true;
+          }
+          if (operationFailed) {
+            throw operationError;
+          }
+          if (closeFailed) {
+            throw closeError;
+          }
         });
 
       memory

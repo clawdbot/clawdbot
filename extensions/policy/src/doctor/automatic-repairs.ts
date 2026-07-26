@@ -177,7 +177,6 @@ function disableInsecureControlUi(
   const controlUi = ensureRecord(gateway, "controlUi");
   const changes: string[] = [];
   const fields = [
-    ["allowInsecureAuth", "oc://openclaw.config/gateway/controlUi/allowInsecureAuth"],
     [
       "dangerouslyDisableDeviceAuth",
       "oc://openclaw.config/gateway/controlUi/dangerouslyDisableDeviceAuth",

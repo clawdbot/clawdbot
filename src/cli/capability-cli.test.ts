@@ -14,6 +14,7 @@ const PNG_1X1_BASE64 =
 
 type LocalAudioSelection = Awaited<ReturnType<typeof inspectLocalAudioSelection>>;
 
+const closeEmbeddingProviderMock = vi.hoisted(() => vi.fn(async () => {}));
 const mocks = vi.hoisted(() => ({
   runtime: {
     log: vi.fn(),
@@ -144,6 +145,7 @@ const mocks = vi.hoisted(() => ({
       model: "text-embedding-3-small",
       embedQuery: async () => [0.1, 0.2],
       embedBatch: async (texts: string[]) => texts.map(() => [0.1, 0.2]),
+      close: closeEmbeddingProviderMock,
     },
   })),
   listMemoryEmbeddingProviders: vi.fn(() => [
@@ -537,6 +539,7 @@ describe("capability cli", () => {
     mocks.inspectLocalAudioSelection.mockReset().mockResolvedValue({ candidates: [], entries: [] });
     mocks.convertHeicToJpeg.mockClear();
     mocks.createEmbeddingProvider.mockClear();
+    closeEmbeddingProviderMock.mockClear();
     mocks.listMemoryEmbeddingProviders
       .mockReset()
       .mockReturnValue([
@@ -3066,6 +3069,48 @@ describe("capability cli", () => {
     expect(firstJsonOutput()?.capability).toBe("embedding.create");
     expect(firstJsonOutput()?.provider).toBe("openai");
     expect(firstJsonOutput()?.model).toBe("text-embedding-3-small");
+    expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes the embedding provider without masking embedding failure", async () => {
+    closeEmbeddingProviderMock.mockRejectedValueOnce(new Error("close failed"));
+    mocks.createEmbeddingProvider.mockResolvedValueOnce({
+      provider: {
+        id: "openai",
+        model: "text-embedding-3-small",
+        embedQuery: async () => [0.1, 0.2],
+        embedBatch: async () => {
+          throw new Error("embedding failed");
+        },
+        close: closeEmbeddingProviderMock,
+      },
+    });
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "embedding", "create", "--text", "hello", "--json"],
+      }),
+    ).rejects.toThrow("exit 1");
+
+    expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(2);
+    expectRuntimeErrorContains("embedding failed");
+  });
+
+  it("retries embedding provider cleanup before reporting close failure", async () => {
+    closeEmbeddingProviderMock
+      .mockRejectedValueOnce(new Error("close failed"))
+      .mockRejectedValueOnce(new Error("close failed"));
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "embedding", "create", "--text", "hello", "--json"],
+      }),
+    ).rejects.toThrow("exit 1");
+
+    expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(2);
+    expectRuntimeErrorContains("close failed");
   });
 
   it("resolves command SecretRefs before local model capability execution", async () => {

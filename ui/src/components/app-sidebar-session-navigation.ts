@@ -293,10 +293,13 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       rows,
       grouping: this.sessionsGrouping,
       knownGroups: this.sessionsGrouping === "category" ? this.knownSessionGroups() : [],
-      // Raw stored order: the grouping layer normalizes it against the full
-      // discovered category set, so a catalog-lagging category cannot drop
-      // its persisted slot here.
-      sectionOrder: this.sessionSectionOrder,
+      // Raw gateway-owned order: grouping normalizes it against the full
+      // discovered category set without dropping catalog-lagging categories.
+      sectionOrder: this.knownSectionOrder(),
+      catalogIds:
+        this.sessionsStatusFilter === "archived"
+          ? []
+          : this.sessionData.sessionCatalogs.map((catalog) => catalog.id),
       collapsedSections: this.collapsedSessionSections,
       hideEmptyCreatorFilteredGroup: (category, rowCount) =>
         this.hideEmptyCreatorFilteredGroup(category, rowCount),
@@ -520,6 +523,23 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       this.context?.sessions.state.groups ?? [],
       this.sessionData.sessionsResult?.sessions ?? [],
     );
+  }
+
+  knownSectionOrder(): string[] {
+    return [...(this.context?.sessions.state.sectionOrder ?? [])];
+  }
+
+  knownSessionCatalogIds(): string[] {
+    const loadedCatalogIds = this.sessionData.sessionCatalogs.map((catalog) => catalog.id);
+    if (this.sessionData.sessionCatalogRefreshStatus.hasLoaded) {
+      return loadedCatalogIds;
+    }
+    // Until the first authoritative list completes, progressive rows are only
+    // a partial view. Preserve stored slots so an unrelated drag cannot erase them.
+    const storedCatalogIds = this.knownSectionOrder().flatMap((sectionId) =>
+      sectionId.startsWith("catalog:") ? [sectionId.slice("catalog:".length)] : [],
+    );
+    return [...new Set([...loadedCatalogIds, ...storedCatalogIds])];
   }
 
   findSidebarSessionByKey(sessionKey: string): SidebarRecentSession | undefined {

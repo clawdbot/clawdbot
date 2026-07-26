@@ -19,25 +19,6 @@ export function listAuthProfileStoreAgentDirs(config: OpenClawConfig, stateDir: 
   return listAuthProfileStoreAgentDirsFromAuthStorePaths(config, stateDir);
 }
 
-/** Lists legacy per-agent auth.json stores that can contain static credentials. */
-export function listLegacyAuthJsonPaths(stateDir: string): string[] {
-  const out: string[] = [];
-  const agentsRoot = path.join(resolveUserPath(stateDir), "agents");
-  if (!fs.existsSync(agentsRoot)) {
-    return out;
-  }
-  for (const entry of fs.readdirSync(agentsRoot, { withFileTypes: true })) {
-    if (!entry.isDirectory()) {
-      continue;
-    }
-    const candidate = path.join(agentsRoot, entry.name, "agent", "auth.json");
-    if (fs.existsSync(candidate)) {
-      out.push(candidate);
-    }
-  }
-  return out;
-}
-
 /** Lists global dotenv files that can supply secrets for the selected config and state roots. */
 export function listSecretsDotEnvPaths(params: { configPath: string; stateDir: string }): string[] {
   const candidates = [

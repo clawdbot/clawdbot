@@ -1,107 +1,104 @@
 // Loads, updates, restores, and initializes exec approval policy state.
-import fs from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import {
   AgentDeletionAuthorityRollbackError,
   AgentDeletionCommitUncertainError,
   isAgentDeletionBlocked,
 } from "../agents/agent-lifecycle-registry.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
+import { OpenClawStateLeaseError, withOpenClawStateLease } from "../state/openclaw-state-lease.js";
+import { formatErrorMessage } from "./errors.js";
 import {
   createFailClosedExecApprovalsFallback,
   generateToken,
   normalizeExecApprovalsInternal,
-  resolveExecApprovalsPath,
+  resolveExecApprovalsDisplayPath,
   resolveExecApprovalsSocketPath,
 } from "./exec-approvals-config.js";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./exec-approvals-core.js";
 import {
-  hardenUnchangedExecApprovals,
-  hashExecApprovalsFile,
-  readExecApprovalsSnapshotFromPath,
-  UnsafeExecApprovalsPathError,
-  writeExecApprovalsRaw,
-} from "./exec-approvals-file-io.js";
+  assertNoPendingLegacyExecApprovals,
+  ExecApprovalsMigrationRequiredError,
+  resetExecApprovalsMigrationGateForTest,
+} from "./exec-approvals-migration-gate.js";
 import {
-  withExecApprovalsLock,
-  withExecApprovalsLockSync,
-  withExecApprovalsReadLock,
-  withExecApprovalsReadLockSync,
-} from "./exec-approvals-lock.js";
+  EXEC_APPROVALS_MUTATION_LEASE_KEY,
+  EXEC_APPROVALS_MUTATION_LEASE_SCOPE,
+  deleteExecApprovalsConfigRow,
+  type ExecApprovalsMutationLeaseOwner,
+  readExecApprovalsConfigRow,
+  serializeExecApprovals,
+  snapshotFromExecApprovalsRow,
+  writeExecApprovalsConfigRow,
+} from "./exec-approvals-sqlite.js";
 
-function readExecApprovalsSnapshotUnlocked(): ExecApprovalsSnapshot {
-  const filePath = resolveExecApprovalsPath();
-  return readExecApprovalsSnapshotFromPath(filePath);
+const log = createSubsystemLogger("infra/exec-approvals");
+const WARN_INTERVAL_MS = 60_000;
+const EXEC_APPROVALS_DELETION_LEASE_MS = 120_000;
+const EXEC_APPROVALS_DELETION_LEASE_WAIT_MS = 10_000;
+let lastWarnAt: number | undefined;
+
+class ExecApprovalsStoreUnavailableError extends Error {
+  constructor(cause: unknown) {
+    super(`Exec approvals SQLite state is unavailable: ${String(cause)}`, { cause });
+    this.name = "ExecApprovalsStoreUnavailableError";
+  }
+}
+
+function warnFailClosed(message: string, error?: unknown): void {
+  const now = Date.now();
+  if (lastWarnAt !== undefined && now - lastWarnAt < WARN_INTERVAL_MS) {
+    return;
+  }
+  lastWarnAt = now;
+  if (error === undefined) {
+    log.warn(message);
+  } else {
+    log.warn(message, { error: formatErrorMessage(error) });
+  }
+}
+
+function readExecApprovalsSnapshotFromDatabase(): ExecApprovalsSnapshot {
+  assertNoPendingLegacyExecApprovals();
+  const { db } = openOpenClawStateDatabase();
+  return snapshotFromExecApprovalsRow({
+    path: resolveExecApprovalsDisplayPath(),
+    row: readExecApprovalsConfigRow(db),
+    onMalformed: () =>
+      warnFailClosed("exec approvals SQLite row is malformed; denying host execution"),
+  });
 }
 
 export function readExecApprovalsSnapshot(): ExecApprovalsSnapshot {
-  // Windows' overwrite fallback updates the destination inode in place. Readers
-  // must share its lock so they observe either the old policy or the new one.
-  return withExecApprovalsReadLockSync(
-    resolveExecApprovalsPath(),
-    readExecApprovalsSnapshotUnlocked,
-  );
-}
-
-function loadExecApprovalsUnlocked(): ExecApprovalsFile {
-  const filePath = resolveExecApprovalsPath();
   try {
-    return readExecApprovalsSnapshotFromPath(filePath).file;
-  } catch {
-    return createFailClosedExecApprovalsFallback();
-  }
-}
-
-function loadExecApprovalsHeldByCurrentProcess(): ExecApprovalsFile {
-  // The sync lock fails instantly when a same-process async holder owns it —
-  // spinning would deadlock the event loop. That failure must not degrade a
-  // valid persisted policy to the fail-closed deny fallback: all approvals
-  // mutations go through the fully synchronous writeExecApprovalsRaw /
-  // hardenUnchangedExecApprovals (no fs.promises anywhere in this store), so
-  // while this sync code runs no same-process write can be in flight — the
-  // file on disk IS the current committed policy. A missing file stays deny —
-  // the holder may be committing the first policy.
-  try {
-    const snapshot = readExecApprovalsSnapshotFromPath(resolveExecApprovalsPath());
-    if (snapshot.exists) {
-      return snapshot.file;
+    return readExecApprovalsSnapshotFromDatabase();
+  } catch (error) {
+    if (error instanceof ExecApprovalsMigrationRequiredError) {
+      throw error;
     }
-  } catch {
-    // Unreadable state keeps the fail-closed fallback below.
+    throw new ExecApprovalsStoreUnavailableError(error);
   }
-  return createFailClosedExecApprovalsFallback();
 }
 
 export function loadExecApprovals(): ExecApprovalsFile {
   try {
-    return withExecApprovalsReadLockSync(resolveExecApprovalsPath(), loadExecApprovalsUnlocked);
-  } catch (err) {
-    // Cross-process contention stays fail-closed: a foreign writer may be
-    // mid-revocation, and deny is the only state we can assert. Only the
-    // provably race-free same-process case reads the committed file.
-    if ((err as { heldByCurrentProcess?: boolean }).heldByCurrentProcess === true) {
-      return loadExecApprovalsHeldByCurrentProcess();
+    return readExecApprovalsSnapshot().file;
+  } catch (error) {
+    if (!(error instanceof ExecApprovalsStoreUnavailableError)) {
+      throw error;
     }
+    warnFailClosed("exec approvals SQLite state is unavailable; denying host execution", error);
     return createFailClosedExecApprovalsFallback();
   }
 }
 
 export async function loadExecApprovalsAsync(): Promise<ExecApprovalsFile> {
-  try {
-    return await withExecApprovalsReadLock(resolveExecApprovalsPath(), async () =>
-      loadExecApprovalsUnlocked(),
-    );
-  } catch {
-    // Match the synchronous reader's fail-closed contract; the async lock
-    // already waits for same-process holders via the process-local queue.
-    return createFailClosedExecApprovalsFallback();
-  }
-}
-
-function saveExecApprovalsUnlocked(file: ExecApprovalsFile): void {
-  const filePath = resolveExecApprovalsPath();
-  const raw = `${JSON.stringify(file, null, 2)}\n`;
-  writeExecApprovalsRaw(filePath, raw);
+  return loadExecApprovals();
 }
 
 type ExecApprovalsUpdate = {
@@ -133,12 +130,17 @@ export function replaceExecApprovalsSnapshot(
 
 type InternalExecApprovalsUpdate = ExecApprovalsUpdate & {
   allowDeletedAgentRemoval?: string;
+  allowDeletedAgentRestore?: string;
+  leaseOwner?: ExecApprovalsMutationLeaseOwner;
 };
 
 function assertNoDeletedAgentApprovalChanged(
   current: ExecApprovalsFile,
   next: ExecApprovalsFile,
-  allowDeletedAgentRemoval?: string,
+  params: Pick<
+    InternalExecApprovalsUpdate,
+    "allowDeletedAgentRemoval" | "allowDeletedAgentRestore"
+  >,
 ): void {
   const agentIds = new Set([
     ...Object.keys(current.agents ?? {}),
@@ -148,12 +150,17 @@ function assertNoDeletedAgentApprovalChanged(
     const currentPolicy = current.agents?.[agentId];
     const nextPolicy = next.agents?.[agentId];
     const allowedRemoval =
-      agentId === allowDeletedAgentRemoval &&
+      agentId === params.allowDeletedAgentRemoval &&
       currentPolicy !== undefined &&
       nextPolicy === undefined;
+    const allowedRestore =
+      agentId === params.allowDeletedAgentRestore &&
+      currentPolicy === undefined &&
+      nextPolicy !== undefined;
     if (
       isAgentDeletionBlocked(agentId) &&
       !allowedRemoval &&
+      !allowedRestore &&
       !isDeepStrictEqual(currentPolicy, nextPolicy)
     ) {
       throw new Error(`Exec approvals are unavailable while agent ${agentId} is deleted.`);
@@ -161,32 +168,43 @@ function assertNoDeletedAgentApprovalChanged(
   }
 }
 
-function updateExecApprovalsUnlocked(
+function updateExecApprovalsInTransaction(
   params: InternalExecApprovalsUpdate,
 ): ExecApprovalsSnapshot | null {
-  // Both sync and async entry points hold the sidecar lock across this full CAS transaction.
-  const current = readExecApprovalsSnapshotUnlocked();
-  if (params.baseHash !== undefined && current.hash !== params.baseHash) {
-    return null;
-  }
-  const next = params.update(structuredClone(current.file));
-  if (next === null) {
-    return current;
-  }
-  assertNoDeletedAgentApprovalChanged(current.file, next, params.allowDeletedAgentRemoval);
-  if (
-    current.exists &&
-    current.hash === hashExecApprovalsFile(next) &&
-    hardenUnchangedExecApprovals(current.path)
-  ) {
-    return current;
-  }
-  saveExecApprovalsUnlocked(next);
-  return readExecApprovalsSnapshotUnlocked();
+  assertNoPendingLegacyExecApprovals();
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const current = snapshotFromExecApprovalsRow({
+        path: resolveExecApprovalsDisplayPath(),
+        row: readExecApprovalsConfigRow(db),
+        onMalformed: () =>
+          warnFailClosed("exec approvals SQLite row is malformed; denying host execution"),
+      });
+      if (params.baseHash !== undefined && current.hash !== params.baseHash) {
+        return null;
+      }
+      const next = params.update(structuredClone(current.file));
+      if (next === null) {
+        return current;
+      }
+      assertNoDeletedAgentApprovalChanged(current.file, next, params);
+      const raw = serializeExecApprovals(next);
+      if (current.exists && current.raw === raw) {
+        return current;
+      }
+      writeExecApprovalsConfigRow({ db, file: next, raw, leaseOwner: params.leaseOwner });
+      return snapshotFromExecApprovalsRow({
+        path: current.path,
+        row: { raw_json: raw },
+      });
+    },
+    {},
+    { operationLabel: "exec-approvals.update" },
+  );
 }
 
 export function updateExecApprovalsSync(params: ExecApprovalsUpdate): ExecApprovalsSnapshot | null {
-  return withExecApprovalsLockSync(() => updateExecApprovalsUnlocked(params));
+  return updateExecApprovalsInTransaction(params);
 }
 
 export function saveExecApprovals(file: ExecApprovalsFile): void {
@@ -196,74 +214,133 @@ export function saveExecApprovals(file: ExecApprovalsFile): void {
 export async function updateExecApprovals(
   params: ExecApprovalsUpdate,
 ): Promise<ExecApprovalsSnapshot | null> {
-  return await withExecApprovalsLock(async () => updateExecApprovalsUnlocked(params));
+  return updateExecApprovalsInTransaction(params);
 }
 
-/** Hold the approvals lock across an agent deletion and restore policy if commit fails. */
+/** Remove one deleted agent's policy, restoring only that entry if commit fails. */
 export async function withAgentExecApprovalsRemoved<T>(
   agentId: string,
   commit: () => Promise<T>,
 ): Promise<T> {
   const key = normalizeAgentId(agentId);
-  return await withExecApprovalsLock(async () => {
-    const snapshot = readExecApprovalsSnapshotUnlocked();
-    try {
-      if (Object.hasOwn(snapshot.file.agents ?? {}, key)) {
-        const agents = { ...snapshot.file.agents };
-        delete agents[key];
-        const updated = updateExecApprovalsUnlocked({
-          baseHash: snapshot.hash,
-          allowDeletedAgentRemoval: key,
-          update: (file) => ({ ...file, agents }),
-        });
-        if (!updated) {
-          throw new Error("Exec approvals changed while deleting agent; retry deletion.");
+  try {
+    return await withOpenClawStateLease(
+      {
+        scope: EXEC_APPROVALS_MUTATION_LEASE_SCOPE,
+        key: EXEC_APPROVALS_MUTATION_LEASE_KEY,
+        database: { scope: "shared" },
+        leaseMs: EXEC_APPROVALS_DELETION_LEASE_MS,
+        waitMs: EXEC_APPROVALS_DELETION_LEASE_WAIT_MS,
+        leaseLabel: "exec approvals agent deletion lease",
+        operationLabel: "exec-approvals.agent-deletion.lease",
+      },
+      async (leaseOwner) => {
+        // Heartbeats retain the fence during a slow roster commit. If this process
+        // crashes, the persisted TTL expires and writers can proceed without cleanup.
+        const snapshot = readExecApprovalsSnapshot();
+        const removedPolicy = snapshot.file.agents?.[key];
+        if (removedPolicy !== undefined) {
+          const updated = updateExecApprovalsInTransaction({
+            baseHash: snapshot.hash,
+            allowDeletedAgentRemoval: key,
+            leaseOwner,
+            update: (file) => {
+              const agents = { ...file.agents };
+              delete agents[key];
+              return { ...file, agents };
+            },
+          });
+          if (!updated) {
+            throw new Error("Exec approvals changed while deleting agent; retry deletion.");
+          }
         }
-      }
-      return await commit();
-    } catch (error) {
-      if (error instanceof AgentDeletionCommitUncertainError) {
-        throw error;
-      }
-      try {
-        restoreExecApprovalsSnapshotUnlocked(snapshot);
-      } catch (rollbackError) {
-        throw new AgentDeletionAuthorityRollbackError(
-          [error, rollbackError],
-          `Failed to roll back exec approvals deletion for agent ${key}.`,
-          { cause: error },
-        );
-      }
-      throw error;
+        try {
+          return await commit();
+        } catch (error) {
+          if (error instanceof AgentDeletionCommitUncertainError) {
+            throw error;
+          }
+          if (removedPolicy !== undefined) {
+            try {
+              updateExecApprovalsInTransaction({
+                allowDeletedAgentRestore: key,
+                leaseOwner,
+                update: (file) => ({
+                  ...file,
+                  agents: { ...file.agents, [key]: removedPolicy },
+                }),
+              });
+            } catch (rollbackError) {
+              throw new AgentDeletionAuthorityRollbackError(
+                [error, rollbackError],
+                `Failed to roll back exec approvals deletion for agent ${key}.`,
+                { cause: error },
+              );
+            }
+          }
+          throw error;
+        }
+      },
+    );
+  } catch (error) {
+    if (
+      error instanceof OpenClawStateLeaseError &&
+      error.code === "OPENCLAW_STATE_LEASE_STORAGE_FAILED"
+    ) {
+      throw new ExecApprovalsStoreUnavailableError(error);
     }
-  });
-}
-
-function restoreExecApprovalsSnapshotUnlocked(snapshot: ExecApprovalsSnapshot): void {
-  if (!snapshot.exists) {
-    fs.rmSync(snapshot.path, { force: true });
-  } else if (snapshot.raw !== null) {
-    writeExecApprovalsRaw(snapshot.path, snapshot.raw);
-  } else {
-    saveExecApprovalsUnlocked(snapshot.file);
+    throw error;
   }
 }
 
+function restoreExecApprovalsSnapshotInTransaction(
+  snapshot: ExecApprovalsSnapshot,
+  leaseOwner?: ExecApprovalsMutationLeaseOwner,
+): void {
+  runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      if (!snapshot.exists) {
+        deleteExecApprovalsConfigRow(db, leaseOwner);
+        return;
+      }
+      const raw = snapshot.raw ?? serializeExecApprovals(snapshot.file);
+      writeExecApprovalsConfigRow({ db, file: snapshot.file, raw, leaseOwner });
+    },
+    {},
+    { operationLabel: "exec-approvals.restore" },
+  );
+}
+
 export function restoreExecApprovalsSnapshot(snapshot: ExecApprovalsSnapshot): void {
-  withExecApprovalsLockSync(() => restoreExecApprovalsSnapshotUnlocked(snapshot));
+  assertNoPendingLegacyExecApprovals();
+  restoreExecApprovalsSnapshotInTransaction(snapshot);
 }
 
 export async function restoreExecApprovalsSnapshotLocked(
   snapshot: ExecApprovalsSnapshot,
   baseHash: string,
 ): Promise<boolean> {
-  return await withExecApprovalsLock(async () => {
-    if (readExecApprovalsSnapshotUnlocked().hash !== baseHash) {
-      return false;
-    }
-    restoreExecApprovalsSnapshotUnlocked(snapshot);
-    return true;
-  });
+  assertNoPendingLegacyExecApprovals();
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const current = snapshotFromExecApprovalsRow({
+        path: resolveExecApprovalsDisplayPath(),
+        row: readExecApprovalsConfigRow(db),
+      });
+      if (current.hash !== baseHash) {
+        return false;
+      }
+      if (!snapshot.exists) {
+        deleteExecApprovalsConfigRow(db);
+      } else {
+        const raw = snapshot.raw ?? serializeExecApprovals(snapshot.file);
+        writeExecApprovalsConfigRow({ db, file: snapshot.file, raw });
+      }
+      return true;
+    },
+    {},
+    { operationLabel: "exec-approvals.restore-cas" },
+  );
 }
 
 function ensureExecApprovalsSocket(file: ExecApprovalsFile): ExecApprovalsFile {
@@ -290,23 +367,24 @@ function requireInitializedExecApprovals(
 
 export async function ensureExecApprovalsSnapshot(): Promise<ExecApprovalsSnapshot> {
   return requireInitializedExecApprovals(
-    await updateExecApprovals({ update: ensureExecApprovalsSocket }),
+    updateExecApprovalsInTransaction({ update: ensureExecApprovalsSocket }),
   );
 }
 
 export function ensureExecApprovals(): ExecApprovalsFile {
   return requireInitializedExecApprovals(
-    updateExecApprovalsSync({ update: ensureExecApprovalsSocket }),
+    updateExecApprovalsInTransaction({ update: ensureExecApprovalsSocket }),
   ).file;
 }
 
-export function readExecApprovalsForNoPersistenceUnlocked(filePath: string): ExecApprovalsFile {
-  try {
-    return readExecApprovalsSnapshotFromPath(filePath).file;
-  } catch (err) {
-    if (err instanceof UnsafeExecApprovalsPathError) {
-      throw err;
-    }
-    return createFailClosedExecApprovalsFallback();
-  }
+const testing = {
+  reset(): void {
+    resetExecApprovalsMigrationGateForTest();
+    lastWarnAt = undefined;
+  },
+};
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.execApprovalsStoreTestApi")] =
+    testing;
 }
