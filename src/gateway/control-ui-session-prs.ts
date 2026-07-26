@@ -65,9 +65,6 @@ type PullListItem = {
   mergeCommitSha?: string;
 };
 
-/** Lowercased merged-PR head, the base it merged into, and its merge commit. */
-type MergedPullHead = { sha: string; baseRef?: string; mergeCommitSha?: string };
-
 /**
  * Cached GitHub snapshot plus the merged PRs' heads. The heads stay
  * gateway-internal (stripped before responding): they only exist so branch
