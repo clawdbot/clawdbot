@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * Resolves the npm command invocation used by shrinkwrap generation.
+ * Resolves the npm command invocation used by npm-lock generation.
  */
-export function createNpmShrinkwrapCommand(
+export function createNpmLockCommand(
   args: string[],
   options?: {
     comSpec?: string;
@@ -19,7 +19,7 @@ export function createNpmShrinkwrapCommand(
   windowsVerbatimArguments?: boolean;
 };
 /**
- * Reads a positive integer env override for shrinkwrap subprocess limits.
+ * Reads a positive integer env override for npm-lock subprocess limits.
  */
 export function readPositiveIntEnv(
   name: unknown,
@@ -29,7 +29,7 @@ export function readPositiveIntEnv(
 /**
  * Builds execFileSync options with bounded timeout and output buffer limits.
  */
-export function createNpmShrinkwrapExecOptions(
+export function createNpmLockExecOptions(
   invocation: unknown,
   cwd: unknown,
   env?: NodeJS.ProcessEnv,
@@ -43,21 +43,15 @@ export function createNpmShrinkwrapExecOptions(
   windowsVerbatimArguments: unknown;
 };
 export function resolvePackageDirs(args: string[]): {
-  check: unknown;
-  changedPaths: string[];
   jobs: number;
   packageDirs: unknown[];
 };
-export function resolveShrinkwrapJobs(
+export function generateNpmPackageLock(packageDir: string): string;
+export function resolveNpmLockJobs(
   rawValue: unknown,
   env?: NodeJS.ProcessEnv,
   fallback?: number,
 ): number;
-export function collectCurrentShrinkwrapOverrides(
-  shrinkwrap: unknown,
-  declaredDependencies?: Set<unknown>,
-  pnpmLockPackages?: Set<unknown>,
-): unknown;
 export function collectOverrideViolations(
   lockfile: unknown,
   overrideRules: unknown,
@@ -72,13 +66,16 @@ export function collectOverrideViolations(
   }[];
 }[];
 export function collectPnpmLockViolations(
-  shrinkwrap: unknown,
+  npmLock: unknown,
   pnpmLockPackages?: Set<unknown>,
+  pnpmLockIntegrities?: Map<unknown, Set<unknown>>,
 ): {
   path: string;
   packageKey: string;
+  actualIntegrity?: unknown;
+  expectedIntegrities?: unknown[];
 }[];
-export function disableShrinkwrappedOverrideConflictSources(
+export function disableDependencyShrinkwrapOverrideConflictSources(
   lockfile: unknown,
   overrideRules: unknown,
 ): string[];
@@ -95,16 +92,15 @@ export function applyPackageExtensionPeerMetadata(
   packageExtensions?: unknown,
 ): unknown;
 export function normalizeNpmVersionDrift<T>(lockfile: T): T;
-export function packageJsonForShrinkwrap(
+export function packageJsonForNpmLock(
   packageJson: Record<string, unknown>,
-  shrinkwrapOverrides: Record<string, unknown>,
+  npmLockOverrides: Record<string, unknown>,
 ): {
   dependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
   [key: string]: unknown;
 };
-export function packageDependencyInputsChanged(packageDir: unknown, changedPaths: unknown): unknown;
 export function pnpmLockOverrideVersionForVersions(versions: unknown): unknown;
 export function parsePnpmPackageKey(packageKey: unknown): {
   name: string;
@@ -114,14 +110,9 @@ export function parseLockPackagePath(lockPath: unknown): {
   name: unknown;
   path: string;
 }[];
-export function readShrinkwrapOverrides(): unknown;
-export function restoreCurrentPnpmLockedPackages(
-  generated: unknown,
-  current: unknown,
-  pnpmLockPackages?: Set<unknown>,
-): unknown;
-export function shouldUseLegacyPeerDepsForShrinkwrap(
+export function readNpmLockOverrides(): unknown;
+export function shouldUseLegacyPeerDepsForNpmLock(
   packageJson: unknown,
   packageExtensions?: unknown,
 ): boolean;
-export function shrinkwrapPackageDirsForChangedPaths(changedPaths: string[]): string[];
+export function npmLockPackageDirsForChangedPaths(changedPaths: string[]): string[];

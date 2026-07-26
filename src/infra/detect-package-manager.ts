@@ -15,7 +15,7 @@ async function exists(p: string): Promise<boolean> {
   }
 }
 
-function resolveBunGlobalNodeModules(): string {
+export function resolveBunGlobalNodeModules(): string {
   return path.join(
     process.env.BUN_INSTALL || path.join(os.homedir(), ".bun"),
     "install",
@@ -24,7 +24,7 @@ function resolveBunGlobalNodeModules(): string {
   );
 }
 
-function resolvePnpmNodeModulesRoot(root: string): string | null {
+export function resolvePnpmNodeModulesRoot(root: string): string | null {
   const resolved = path.resolve(root);
   const parts = resolved.split(path.sep);
   const pnpmIndex = parts.lastIndexOf(".pnpm");
@@ -39,11 +39,11 @@ function resolvePnpmNodeModulesRoot(root: string): string | null {
   return path.basename(parent) === "node_modules" ? parent : null;
 }
 
-async function isBunOwnedPackageRoot(root: string): Promise<boolean> {
+export async function isBunOwnedPackageRoot(root: string): Promise<boolean> {
   return path.resolve(path.dirname(root)) === path.resolve(resolveBunGlobalNodeModules());
 }
 
-async function isPnpmOwnedPackageRoot(root: string): Promise<boolean> {
+export async function isPnpmOwnedPackageRoot(root: string): Promise<boolean> {
   const nodeModulesRoot = resolvePnpmNodeModulesRoot(root);
   if (!nodeModulesRoot || !(await exists(path.join(nodeModulesRoot, ".modules.yaml")))) {
     return false;
