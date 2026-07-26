@@ -1,4 +1,4 @@
-import { finalizeEvent, type Event } from "nostr-tools";
+import { finalizeEvent, getPublicKey, type Event, type Filter } from "nostr-tools";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 
@@ -8,8 +8,15 @@ const relayMocks = vi.hoisted(() => ({
   publish: vi.fn<(event: Event) => Promise<string>>(),
   subscriptionClose: vi.fn(),
   close: vi.fn(),
-  onevent: undefined as ((event: Event) => void) | undefined,
-  closeHandler: undefined as ((reason: string) => void) | undefined,
+  membershipEvents: [] as Event[],
+  subscriptions: [] as Array<{
+    filter: Filter;
+    handlers: {
+      onevent: (event: Event) => void;
+      oneose?: () => void;
+      onclose: (reason: string) => void;
+    };
+  }>,
 }));
 
 vi.mock("nostr-tools", async (importOriginal) => {
@@ -24,11 +31,23 @@ vi.mock("nostr-tools", async (importOriginal) => {
       close = relayMocks.close;
 
       subscribe(
-        _filters: unknown,
-        handlers: { onevent: (event: Event) => void; onclose: (reason: string) => void },
+        filters: Filter[],
+        handlers: {
+          onevent: (event: Event) => void;
+          oneose?: () => void;
+          onclose: (reason: string) => void;
+        },
       ) {
-        relayMocks.onevent = handlers.onevent;
-        relayMocks.closeHandler = handlers.onclose;
+        const filter = filters[0] ?? {};
+        relayMocks.subscriptions.push({ filter, handlers });
+        if (filter.kinds?.includes(39002)) {
+          for (const event of relayMocks.membershipEvents) {
+            handlers.onevent(event);
+          }
+          handlers.oneose?.();
+        } else if (filter.kinds?.includes(40099)) {
+          handlers.oneose?.();
+        }
         return { close: relayMocks.subscriptionClose };
       }
     },
@@ -40,6 +59,9 @@ import { sendBuzzTextOneShot, startBuzzBus } from "./buzz-bus.js";
 const PRIVATE_KEY = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
 const SENDER_PRIVATE_KEY = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
 const ACCOUNT_ID = "default";
+const CHANNEL_ID = "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c";
+const BOT_PUBLIC_KEY = getPublicKey(Uint8Array.from(Buffer.from(PRIVATE_KEY, "hex")));
+const SENDER_PUBLIC_KEY = getPublicKey(Uint8Array.from(Buffer.from(SENDER_PRIVATE_KEY, "hex")));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let previousStateDir: string | undefined;
 let stateDir: string;
@@ -50,8 +72,22 @@ describe("Buzz bus lifecycle", () => {
     stateDir = tempDirs.make("openclaw-buzz-dedupe-");
     process.env.OPENCLAW_STATE_DIR = stateDir;
     vi.clearAllMocks();
-    relayMocks.onevent = undefined;
-    relayMocks.closeHandler = undefined;
+    relayMocks.subscriptions.length = 0;
+    relayMocks.membershipEvents = [
+      {
+        id: "membership-1",
+        kind: 39002,
+        pubkey: "f".repeat(64),
+        created_at: 1_700_000_000,
+        content: "",
+        sig: "e".repeat(128),
+        tags: [
+          ["d", CHANNEL_ID],
+          ["p", BOT_PUBLIC_KEY, "", "bot"],
+          ["p", SENDER_PUBLIC_KEY, "", "member"],
+        ],
+      },
+    ];
     relayMocks.connect.mockResolvedValue();
     relayMocks.auth.mockRejectedValue(new Error("auth rejected"));
     relayMocks.publish.mockResolvedValue("");
@@ -71,7 +107,7 @@ describe("Buzz bus lifecycle", () => {
         accountId: ACCOUNT_ID,
         relayUrl: "wss://buzz.example.com",
         privateKey: PRIVATE_KEY,
-        channelIds: ["7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c"],
+        channelIds: [CHANNEL_ID],
         onMessage: async () => {},
       }),
     ).rejects.toThrow("auth rejected");
@@ -86,7 +122,7 @@ describe("Buzz bus lifecycle", () => {
     const messageId = await sendBuzzTextOneShot({
       relayUrl: "wss://buzz.example.com",
       privateKey: PRIVATE_KEY,
-      channelId: "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c",
+      channelId: CHANNEL_ID,
       text: "hello",
       threadId: "root-id",
       replyToId: "parent-id",
@@ -98,7 +134,7 @@ describe("Buzz bus lifecycle", () => {
       kind: 9,
       content: "hello",
       tags: [
-        ["h", "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c"],
+        ["h", CHANNEL_ID],
         ["e", "root-id", "", "root"],
         ["e", "parent-id", "", "reply"],
       ],
@@ -114,7 +150,7 @@ describe("Buzz bus lifecycle", () => {
       sendBuzzTextOneShot({
         relayUrl: "wss://buzz.example.com",
         privateKey: PRIVATE_KEY,
-        channelId: "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c",
+        channelId: CHANNEL_ID,
         text: "hello",
       }),
     ).rejects.toThrow("rejected");
@@ -129,7 +165,7 @@ describe("Buzz bus lifecycle", () => {
       accountId: ACCOUNT_ID,
       relayUrl: "wss://buzz.example.com",
       privateKey: PRIVATE_KEY,
-      channelIds: ["7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c"],
+      channelIds: [CHANNEL_ID],
       onMessage,
     });
     const event = finalizeEvent(
@@ -137,13 +173,16 @@ describe("Buzz bus lifecycle", () => {
         kind: 9,
         created_at: 1_700_000_000,
         content: "hello",
-        tags: [["h", "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c"]],
+        tags: [["h", CHANNEL_ID]],
       },
       Uint8Array.from(Buffer.from(SENDER_PRIVATE_KEY, "hex")),
     );
 
-    relayMocks.onevent?.(event);
-    relayMocks.onevent?.(event);
+    const messageSubscription = relayMocks.subscriptions.find((entry) =>
+      entry.filter.kinds?.includes(9),
+    );
+    messageSubscription?.handlers.onevent(event);
+    messageSubscription?.handlers.onevent(event);
 
     await vi.waitFor(() => expect(onMessage).toHaveBeenCalledOnce());
     await bus.close();
@@ -157,7 +196,7 @@ describe("Buzz bus lifecycle", () => {
       accountId: ACCOUNT_ID,
       relayUrl: "wss://buzz.example.com",
       privateKey: PRIVATE_KEY,
-      channelIds: ["7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c"],
+      channelIds: [CHANNEL_ID],
       onMessage: async () => {
         throw new Error("dispatch failed");
       },
@@ -169,12 +208,14 @@ describe("Buzz bus lifecycle", () => {
         kind: 9,
         created_at: 1_700_000_000,
         content: "hello",
-        tags: [["h", "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c"]],
+        tags: [["h", CHANNEL_ID]],
       },
       Uint8Array.from(Buffer.from(SENDER_PRIVATE_KEY, "hex")),
     );
 
-    relayMocks.onevent?.(event);
+    relayMocks.subscriptions
+      .find((entry) => entry.filter.kinds?.includes(9))
+      ?.handlers.onevent(event);
 
     await vi.waitFor(() => expect(onMessageError).toHaveBeenCalledWith(expect.any(Error)));
     expect(onFatalError).not.toHaveBeenCalled();
@@ -188,7 +229,7 @@ describe("Buzz bus lifecycle", () => {
         kind: 9,
         created_at: Math.floor(Date.now() / 1000),
         content: "hello",
-        tags: [["h", "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c"]],
+        tags: [["h", CHANNEL_ID]],
       },
       Uint8Array.from(Buffer.from(SENDER_PRIVATE_KEY, "hex")),
     );
@@ -197,10 +238,12 @@ describe("Buzz bus lifecycle", () => {
       accountId: ACCOUNT_ID,
       relayUrl: "wss://buzz.example.com",
       privateKey: PRIVATE_KEY,
-      channelIds: ["7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c"],
+      channelIds: [CHANNEL_ID],
       onMessage: firstOnMessage,
     });
-    relayMocks.onevent?.(event);
+    relayMocks.subscriptions
+      .find((entry) => entry.filter.kinds?.includes(9))
+      ?.handlers.onevent(event);
     await vi.waitFor(() => expect(firstOnMessage).toHaveBeenCalledOnce());
     await firstBus.close();
 
@@ -209,10 +252,12 @@ describe("Buzz bus lifecycle", () => {
       accountId: ACCOUNT_ID,
       relayUrl: "wss://buzz.example.com",
       privateKey: PRIVATE_KEY,
-      channelIds: ["7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c"],
+      channelIds: [CHANNEL_ID],
       onMessage: secondOnMessage,
     });
-    relayMocks.onevent?.(event);
+    relayMocks.subscriptions
+      .findLast((entry) => entry.filter.kinds?.includes(9))
+      ?.handlers.onevent(event);
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 100);
     });
