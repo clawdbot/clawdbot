@@ -19,6 +19,7 @@ function createProps(overrides: Partial<MemoryViewProps> = {}): MemoryViewProps 
     ],
     engineSelection: { kind: "auto", engineId: "memory-core" },
     engineBusy: false,
+    engineError: null,
     onEngineChange: vi.fn(),
     backend: "builtin",
     backendBusy: false,
@@ -56,14 +57,22 @@ describe("renderMemory", () => {
     expect(values).toContain("");
   });
 
-  it("reports whether the engine came from config or was auto-selected", () => {
-    const auto = renderInto(createProps({ engineSelection: { kind: "auto", engineId: null } }));
-    expect(auto.textContent).toContain("first enabled memory plugin");
+  it("reports whether the engine came from config or from the slot default", () => {
+    const auto = renderInto(createProps());
+    expect(auto.textContent).toContain("falls back to its default owner");
 
     const pinned = renderInto(
       createProps({ engineSelection: { kind: "pinned", engineId: "memory-core" } }),
     );
     expect(pinned.textContent).toContain("pinned in config");
+  });
+
+  it("surfaces a failed engine write next to the control", () => {
+    expect(renderInto(createProps()).textContent).not.toContain("Could not change");
+
+    const failed = renderInto(createProps({ engineError: "gateway rejected the change" }));
+    expect(failed.textContent).toContain("Could not change the memory engine");
+    expect(failed.textContent).toContain("gateway rejected the change");
   });
 
   it("selects the Off option and says so for an explicit plugins.slots.memory none", () => {

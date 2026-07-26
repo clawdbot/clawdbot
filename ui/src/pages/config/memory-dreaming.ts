@@ -11,6 +11,13 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 
+/** Manifest bounds for a numeric field; `count` is `{integer, minimum}`, `ratio` is `0..1`. */
+type DreamingNumberBounds = { integer: boolean; min: number; max?: number };
+
+const COUNT_FROM_ZERO: DreamingNumberBounds = { integer: true, min: 0 };
+const COUNT_FROM_ONE: DreamingNumberBounds = { integer: true, min: 1 };
+const RATIO: DreamingNumberBounds = { integer: false, min: 0, max: 1 };
+
 type DreamingFieldSpec =
   | {
       kind: "text";
@@ -19,7 +26,13 @@ type DreamingFieldSpec =
       helpKey: string;
       placeholderKey?: string;
     }
-  | { kind: "number"; path: readonly string[]; labelKey: string; helpKey: string; step?: number }
+  | {
+      kind: "number";
+      path: readonly string[];
+      labelKey: string;
+      helpKey: string;
+      bounds: DreamingNumberBounds;
+    }
   | {
       kind: "toggle";
       path: readonly string[];
@@ -37,7 +50,9 @@ type DreamingFieldGroup = {
 
 // Mirrors the memory-core manifest configSchema/uiHints
 // (extensions/memory-core/openclaw.plugin.json). Everything here previously
-// required hand-editing openclaw.json.
+// required hand-editing openclaw.json. `bounds` restates that manifest's
+// integer/minimum/maximum constraints so a rejected value is caught at the input
+// instead of after autosave hands it to the gateway.
 //
 // Toggle `fallback` and the storage-mode default below restate
 // resolveMemoryDreamingConfig in src/memory-host-sdk/dreaming.ts: an absent
@@ -92,19 +107,21 @@ const DREAMING_PHASE_GROUPS: readonly DreamingFieldGroup[] = [
         path: ["phases", "light", "lookbackDays"],
         labelKey: "memoryPage.dreaming.phaseFields.lookbackDays",
         helpKey: "memoryPage.dreaming.phaseFields.lookbackDaysHelp",
+        bounds: COUNT_FROM_ZERO,
       },
       {
         kind: "number",
         path: ["phases", "light", "limit"],
         labelKey: "memoryPage.dreaming.phaseFields.limit",
         helpKey: "memoryPage.dreaming.phaseFields.limitHelp",
+        bounds: COUNT_FROM_ZERO,
       },
       {
         kind: "number",
         path: ["phases", "light", "dedupeSimilarity"],
         labelKey: "memoryPage.dreaming.phaseFields.dedupeSimilarity",
         helpKey: "memoryPage.dreaming.phaseFields.dedupeSimilarityHelp",
-        step: 0.01,
+        bounds: RATIO,
       },
     ],
   },
@@ -124,43 +141,49 @@ const DREAMING_PHASE_GROUPS: readonly DreamingFieldGroup[] = [
         path: ["phases", "deep", "limit"],
         labelKey: "memoryPage.dreaming.phaseFields.limit",
         helpKey: "memoryPage.dreaming.phaseFields.limitHelp",
+        bounds: COUNT_FROM_ZERO,
       },
       {
         kind: "number",
         path: ["phases", "deep", "minScore"],
         labelKey: "memoryPage.dreaming.phaseFields.minScore",
         helpKey: "memoryPage.dreaming.phaseFields.minScoreHelp",
-        step: 0.01,
+        bounds: RATIO,
       },
       {
         kind: "number",
         path: ["phases", "deep", "minRecallCount"],
         labelKey: "memoryPage.dreaming.phaseFields.minRecallCount",
         helpKey: "memoryPage.dreaming.phaseFields.minRecallCountHelp",
+        bounds: COUNT_FROM_ZERO,
       },
       {
         kind: "number",
         path: ["phases", "deep", "minUniqueQueries"],
         labelKey: "memoryPage.dreaming.phaseFields.minUniqueQueries",
         helpKey: "memoryPage.dreaming.phaseFields.minUniqueQueriesHelp",
+        bounds: COUNT_FROM_ZERO,
       },
       {
         kind: "number",
         path: ["phases", "deep", "recencyHalfLifeDays"],
         labelKey: "memoryPage.dreaming.phaseFields.recencyHalfLifeDays",
         helpKey: "memoryPage.dreaming.phaseFields.recencyHalfLifeDaysHelp",
+        bounds: COUNT_FROM_ZERO,
       },
       {
         kind: "number",
         path: ["phases", "deep", "maxAgeDays"],
         labelKey: "memoryPage.dreaming.phaseFields.maxAgeDays",
         helpKey: "memoryPage.dreaming.phaseFields.maxAgeDaysHelp",
+        bounds: COUNT_FROM_ONE,
       },
       {
         kind: "number",
         path: ["phases", "deep", "maxPromotedSnippetTokens"],
         labelKey: "memoryPage.dreaming.phaseFields.maxPromotedSnippetTokens",
         helpKey: "memoryPage.dreaming.phaseFields.maxPromotedSnippetTokensHelp",
+        bounds: COUNT_FROM_ONE,
       },
     ],
   },
@@ -180,19 +203,21 @@ const DREAMING_PHASE_GROUPS: readonly DreamingFieldGroup[] = [
         path: ["phases", "rem", "lookbackDays"],
         labelKey: "memoryPage.dreaming.phaseFields.lookbackDays",
         helpKey: "memoryPage.dreaming.phaseFields.lookbackDaysHelp",
+        bounds: COUNT_FROM_ZERO,
       },
       {
         kind: "number",
         path: ["phases", "rem", "limit"],
         labelKey: "memoryPage.dreaming.phaseFields.limit",
         helpKey: "memoryPage.dreaming.phaseFields.limitHelp",
+        bounds: COUNT_FROM_ZERO,
       },
       {
         kind: "number",
         path: ["phases", "rem", "minPatternStrength"],
         labelKey: "memoryPage.dreaming.phaseFields.minPatternStrength",
         helpKey: "memoryPage.dreaming.phaseFields.minPatternStrengthHelp",
-        step: 0.01,
+        bounds: RATIO,
       },
     ],
   },
@@ -229,6 +254,18 @@ export function normalizeStorageMode(value: unknown): StorageMode {
   return STORAGE_MODES.find((mode) => mode === value) ?? DEFAULT_STORAGE_MODE;
 }
 
+/** Parses an edited number against its manifest bounds; null means "do not write". */
+export function parseDreamingNumber(raw: string, bounds: DreamingNumberBounds): number | null {
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < bounds.min) {
+    return null;
+  }
+  if (bounds.integer && !Number.isInteger(parsed)) {
+    return null;
+  }
+  return bounds.max !== undefined && parsed > bounds.max ? null : parsed;
+}
+
 function renderField(props: DreamingSettingsProps, spec: DreamingFieldSpec) {
   const value = readAtPath(props.dreaming, spec.path);
   if (spec.kind === "toggle") {
@@ -247,6 +284,7 @@ function renderField(props: DreamingSettingsProps, spec: DreamingFieldSpec) {
       : typeof value === "string"
         ? value
         : "";
+  const bounds = spec.kind === "number" ? spec.bounds : null;
   return renderSettingsRow({
     title: t(spec.labelKey),
     description: t(spec.helpKey),
@@ -254,20 +292,29 @@ function renderField(props: DreamingSettingsProps, spec: DreamingFieldSpec) {
       <input
         class="settings-input"
         type=${spec.kind === "number" ? "number" : "text"}
-        step=${spec.kind === "number" && spec.step !== undefined ? String(spec.step) : nothing}
+        min=${bounds ? String(bounds.min) : nothing}
+        max=${bounds?.max !== undefined ? String(bounds.max) : nothing}
+        step=${bounds ? (bounds.integer ? "1" : "any") : nothing}
         spellcheck="false"
         aria-label=${t(spec.labelKey)}
         .value=${text}
         placeholder=${spec.kind === "text" && spec.placeholderKey ? t(spec.placeholderKey) : ""}
         @change=${(event: Event) => {
-          const next = (event.currentTarget as HTMLInputElement).value.trim();
+          const input = event.currentTarget as HTMLInputElement;
+          const next = input.value.trim();
           if (!next) {
             props.onPatch(spec.path, undefined);
             return;
           }
-          if (spec.kind === "number") {
-            const parsed = Number(next);
-            props.onPatch(spec.path, Number.isFinite(parsed) ? parsed : undefined);
+          if (bounds) {
+            const parsed = parseDreamingNumber(next, bounds);
+            if (parsed === null) {
+              // Autosave would write this straight into a config the gateway
+              // rejects, leaving a failed save and no field to correct.
+              input.value = text;
+              return;
+            }
+            props.onPatch(spec.path, parsed);
             return;
           }
           props.onPatch(spec.path, next);

@@ -86,6 +86,51 @@ describe("findSettingsSearchBlocks", () => {
     ]);
   });
 
+  it("opens the Memory page on the tab whose editor renders the matched field", () => {
+    const memorySchema = {
+      type: "object",
+      properties: {
+        memory: {
+          type: "object",
+          properties: {
+            backend: { type: "string", title: "Backend" },
+            search: {
+              type: "object",
+              properties: { embeddingModel: { type: "string", title: "Embedding model" } },
+            },
+          },
+        },
+      },
+    };
+    const uiHints = {
+      "memory.backend": { advanced: false },
+      "memory.search": { advanced: false },
+      "memory.search.embeddingModel": { advanced: false },
+    };
+
+    // Only the Search tab renders memory.search; Overview would show nothing.
+    const searchOnly = findSettingsSearchBlocks({
+      query: "embedding model",
+      schema: memorySchema,
+      value: {},
+      uiHints,
+    });
+    expect(searchOnly).toEqual([
+      expect.objectContaining({ routeId: "memory", search: "?section=memory&tab=search" }),
+    ]);
+
+    // A section-level hit is not exclusive to one tab, so it stays on Overview.
+    const sectionWide = findSettingsSearchBlocks({
+      query: "memory",
+      schema: memorySchema,
+      value: {},
+      uiHints,
+    }).filter((block) => block.routeId === "memory");
+    expect(sectionWide).toEqual([
+      expect.objectContaining({ routeId: "memory", search: "?section=memory" }),
+    ]);
+  });
+
   it("routes moved static blocks to their dedicated pages", () => {
     const security = findSettingsSearchBlocks({
       query: "exec policy",

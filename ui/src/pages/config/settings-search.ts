@@ -19,6 +19,7 @@ import {
   MEMORY_SECTION_KEYS,
   SECURITY_SECTION_KEYS,
 } from "./config-sections.ts";
+import { MEMORY_SEARCH_TAB_SCHEMA_KEYS } from "./memory.ts";
 import {
   APPEARANCE_SETTINGS_TARGET_IDS,
   COMMUNICATION_SETTINGS_TARGET_IDS,
@@ -236,6 +237,45 @@ function resolveStaticSettingsBlock(block: StaticSettingsBlockDescriptor): Stati
   };
 }
 
+/**
+ * The Memory page splits `memory.*` across tabs, so a bare section destination
+ * drops the searcher on Overview, whose editor omits `memory.search`. Only a hit
+ * the Search tab alone can show re-routes; a section-level match (key, label,
+ * description) is symmetric across slices and stays on Overview.
+ */
+function memoryTabSearchParam(params: {
+  key: string;
+  schema: JsonSchema;
+  value: unknown;
+  hints: ConfigUiHints;
+  query: string;
+}): string {
+  const properties = params.schema.properties;
+  if (!properties) {
+    return "";
+  }
+  const sliceMatches = (keys: readonly string[]) => {
+    const sliced = Object.fromEntries(
+      Object.entries(properties).filter(([child]) => keys.includes(child)),
+    );
+    return (
+      Object.keys(sliced).length > 0 &&
+      matchesConfigSectionSearch({
+        key: params.key,
+        schema: { ...params.schema, properties: sliced },
+        value: params.value,
+        hints: params.hints,
+        query: params.query,
+        textMatcher: settingsSearchTextMatches,
+      })
+    );
+  };
+  const others = Object.keys(properties).filter(
+    (child) => !MEMORY_SEARCH_TAB_SCHEMA_KEYS.includes(child),
+  );
+  return sliceMatches(MEMORY_SEARCH_TAB_SCHEMA_KEYS) && !sliceMatches(others) ? "&tab=search" : "";
+}
+
 function routeForConfigSection(key: string): RouteId {
   if (MCP_SECTIONS.has(key)) {
     return "mcp";
@@ -319,10 +359,21 @@ export function findSettingsSearchBlocks(params: {
       continue;
     }
     const encodedKey = encodeURIComponent(key);
+    const routeId = routeForConfigSection(key);
+    const tabParam =
+      routeId === "memory"
+        ? memoryTabSearchParam({
+            key,
+            schema: sectionSchema,
+            value: value[key],
+            hints: params.uiHints,
+            query: params.query,
+          })
+        : "";
     matches.push({
-      routeId: routeForConfigSection(key),
+      routeId,
       label: meta?.label ?? sectionSchema.title ?? key,
-      search: `?section=${encodedKey}${matchesAdvanced ? "&advanced=1" : ""}`,
+      search: `?section=${encodedKey}${matchesAdvanced ? "&advanced=1" : ""}${tabParam}`,
       hash: `#config-section-${encodedKey}`,
     });
   }

@@ -31,12 +31,13 @@ export type MemoryAddonRow = {
 };
 
 /**
- * How `plugins.slots.memory` reads today. `off` is the explicit `none` sentinel
- * (normalizeSlotValue in src/plugins/config-normalization-shared.ts), which is a
- * different statement from an unset slot that happened to resolve to nothing.
+ * How `plugins.slots.memory` reads today, mirroring resolveSlotSelection in
+ * src/plugins/slots.ts. `off` is the explicit `none` sentinel; `auto` is an
+ * unset slot, which always resolves to the slot's default owner rather than to
+ * whichever memory plugin happens to be enabled.
  */
 export type MemoryEngineSelection =
-  | { kind: "auto"; engineId: string | null }
+  | { kind: "auto"; engineId: string }
   | { kind: "off" }
   | { kind: "pinned"; engineId: string };
 
@@ -46,6 +47,8 @@ export type MemoryViewProps = {
   engineOptions: readonly MemoryEngineOption[];
   engineSelection: MemoryEngineSelection;
   engineBusy: boolean;
+  /** Last failed engine write, so a rejected change is not just a snap-back. */
+  engineError: string | null;
   onEngineChange: (engineId: string | null) => void;
   /** null when the slot owner runs its own retrieval, so this row does not apply. */
   backend: MemoryBackend | null;
@@ -61,6 +64,13 @@ export type MemoryViewProps = {
 };
 
 export const MEMORY_PANEL_ID = "memory-settings-panel";
+
+const MEMORY_TABS: readonly MemoryTab[] = ["overview", "search", "dreaming"];
+
+/** Reads a `?tab=` value from a settings-search destination or a shared link. */
+export function normalizeMemoryTab(value: string | null | undefined): MemoryTab | null {
+  return MEMORY_TABS.find((tab) => tab === value) ?? null;
+}
 
 const MEMORY_ENGINE_OFF = "";
 
@@ -116,6 +126,13 @@ function renderEngineSection(props: MemoryViewProps) {
           onChange: (value) => props.onEngineChange(value || null),
         }),
       })}
+      ${props.engineError === null
+        ? nothing
+        : renderSettingsRow({
+            title: t("memoryPage.engine.changeFailed"),
+            description: props.engineError,
+            control: renderSettingsStatus({ kind: "danger", label: t("common.failed") }),
+          })}
     `,
   );
 }
@@ -264,13 +281,20 @@ export function narrowMemorySchema(schema: unknown, keys: readonly string[]): un
   return narrowed;
 }
 
+/**
+ * The `memory.*` children only the Search tab renders; every other child of the
+ * section belongs to Overview. Settings search routes deep links through this so
+ * a match cannot land on a tab whose editor omits the field it matched.
+ */
+export const MEMORY_SEARCH_TAB_SCHEMA_KEYS: readonly string[] = ["search"];
+
 /** Which `memory.*` children the embedded editor shows for a tab. */
 export function memorySchemaKeysForTab(
   tab: MemoryTab,
   backend: MemoryBackend | null,
 ): readonly string[] {
   if (tab === "search") {
-    return ["search"];
+    return MEMORY_SEARCH_TAB_SCHEMA_KEYS;
   }
   // `backend` is a curated row above the editor; qmd's sub-config only matters
   // once qmd is the selected backend.

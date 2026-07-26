@@ -29,11 +29,12 @@ class MemoryDreamingSettings extends OpenClawLightDomElement {
   private context!: ApplicationContext;
 
   @state() private selectedAgentId: string | null = null;
-  // Starts optimistic: the knobs stay editable until a schema lookup proves the
-  // slot owner cannot store them, so a slow or offline lookup never blanks the
-  // tab for the plugin that ships dreaming.
-  @state() private support: DreamingConfigPathSupport = "supported";
+  // "unknown" renders optimistically: the knobs stay editable until a schema
+  // lookup proves the slot owner cannot store them, so a slow or offline lookup
+  // never blanks the tab for the plugin that ships dreaming.
+  @state() private support: DreamingConfigPathSupport = "unknown";
   private supportPluginId: string | null = null;
+  private supportProbePluginId: string | null = null;
 
   private readonly subscriptions = new SubscriptionsController(this)
     .watch(
@@ -54,6 +55,7 @@ class MemoryDreamingSettings extends OpenClawLightDomElement {
   override disconnectedCallback() {
     this.subscriptions.clear();
     this.supportPluginId = null;
+    this.supportProbePluginId = null;
     super.disconnectedCallback();
   }
 
@@ -74,16 +76,29 @@ class MemoryDreamingSettings extends OpenClawLightDomElement {
 
   /**
    * Reuses the enablement flow's capability check so exactly one rule decides
-   * whether an alternate memory engine can hold `config.dreaming`.
+   * whether an alternate memory engine can hold `config.dreaming`. Only a
+   * definitive answer is kept: a lookup made while the gateway was unreachable
+   * answers "unknown" and must be retried on reconnect, or the page would stay
+   * optimistically editable for an engine that cannot store these knobs.
    */
   private syncSupport(runtimeConfig: ApplicationContext["runtimeConfig"]) {
     const pluginId = resolveConfiguredDreaming(currentConfigObject(runtimeConfig.state)).pluginId;
-    if (pluginId === this.supportPluginId) {
+    if (pluginId !== this.supportPluginId) {
+      this.supportPluginId = pluginId;
+      this.support = "unknown";
+    }
+    if (
+      this.support !== "unknown" ||
+      this.supportProbePluginId === pluginId ||
+      !runtimeConfig.state.connected
+    ) {
       return;
     }
-    this.supportPluginId = pluginId;
-    this.support = "supported";
+    this.supportProbePluginId = pluginId;
     void resolveDreamingConfigPathSupport(runtimeConfig, pluginId).then((support) => {
+      if (this.supportProbePluginId === pluginId) {
+        this.supportProbePluginId = null;
+      }
       if (this.isConnected && this.supportPluginId === pluginId) {
         this.support = support;
       }

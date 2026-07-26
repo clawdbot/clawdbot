@@ -1,4 +1,5 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { defaultSlotIdForKey, resolveSlotSelection } from "../../../../../src/plugins/slots.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.ts";
 import type { ConfigSnapshot } from "../../../api/types.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
@@ -7,7 +8,6 @@ import { isGatewayMethodAdvertised } from "../../../lib/gateway-methods.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../../lib/plugin-activation.ts";
 
 const DEFAULT_DREAM_DIARY_PATH = "DREAMS.md";
-const DEFAULT_DREAMING_PLUGIN_ID = "memory-core";
 const MEMORY_WIKI_PLUGIN_ID = "memory-wiki";
 
 type DreamingPhaseStatusBase = {
@@ -432,13 +432,11 @@ function normalizePhaseStatusBase(record: Record<string, unknown> | null): Dream
 }
 
 function resolveDreamingPluginId(configValue: Record<string, unknown> | null): string {
-  const plugins = asRecord(configValue?.plugins);
-  const slots = asRecord(plugins?.slots);
-  const configuredSlot = normalizeTrimmedString(slots?.memory);
-  if (configuredSlot && configuredSlot.toLowerCase() !== "none") {
-    return configuredSlot;
-  }
-  return DEFAULT_DREAMING_PLUGIN_ID;
+  const slots = asRecord(asRecord(configValue?.plugins)?.slots);
+  const selection = resolveSlotSelection("memory", slots?.memory);
+  // Switching the slot off does not move where dreaming config lives: it stays
+  // under the default owner so the knobs remain readable and editable.
+  return selection.kind === "off" ? defaultSlotIdForKey("memory") : selection.pluginId;
 }
 
 export function resolveConfiguredDreaming(configValue: Record<string, unknown> | null): {
@@ -1208,12 +1206,14 @@ function lookupDisallowsUnknownProperties(value: unknown): boolean {
   return schema?.additionalProperties === false;
 }
 
-export type DreamingConfigPathSupport = "supported" | "unsupported";
+export type DreamingConfigPathSupport = "supported" | "unsupported" | "unknown";
 
 /**
  * Whether the slot-owning memory plugin's config schema can hold `dreaming`.
- * Only a closed schema without the child proves it cannot, so an unreachable or
- * unknown schema stays "supported" and lets the gateway have the final say.
+ * Only a closed schema without the child proves it cannot. An unreachable
+ * gateway or a failed lookup answers "unknown", which callers treat as
+ * optimistic but must not cache: the gateway still has the final say, and a
+ * cached guess would survive the reconnect that could settle it.
  * Shared by the enablement toggle and the Memory page's Dreaming tab.
  */
 export async function resolveDreamingConfigPathSupport(
@@ -1221,7 +1221,7 @@ export async function resolveDreamingConfigPathSupport(
   pluginId: string,
 ): Promise<DreamingConfigPathSupport> {
   if (!config.state.client || !config.state.connected) {
-    return "supported";
+    return "unknown";
   }
   try {
     const lookup = await config.lookupSchemaPath(`plugins.entries.${pluginId}.config`);
@@ -1230,7 +1230,7 @@ export async function resolveDreamingConfigPathSupport(
     }
     return lookupDisallowsUnknownProperties(lookup) ? "unsupported" : "supported";
   } catch {
-    return "supported";
+    return "unknown";
   }
 }
 
@@ -1239,7 +1239,8 @@ async function ensureDreamingPathSupported(
   config: DreamingConfigCapability,
   pluginId: string,
 ): Promise<boolean> {
-  if ((await resolveDreamingConfigPathSupport(config, pluginId)) === "supported") {
+  // "unknown" stays optimistic: the gateway rejects the write if it is wrong.
+  if ((await resolveDreamingConfigPathSupport(config, pluginId)) !== "unsupported") {
     return true;
   }
   const message = `Selected memory plugin "${pluginId}" does not support dreaming settings.`;
