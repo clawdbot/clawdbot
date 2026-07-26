@@ -184,14 +184,14 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         return await run();
       }),
     acquireForCleanup: async () => {
-      let releasedPrompt: Promise<void> | undefined;
       await serializeLifecycle(() => {
         cleanupStarted = true;
-        releasedPrompt = promptReleased ? promptSettled : undefined;
+        if (promptReleased) {
+          promptReleased = false;
+          settlePrompt?.();
+          settlePrompt = undefined;
+        }
       });
-      if (releasedPrompt) {
-        await releasedPrompt;
-      }
       await serializeLifecycle(() => {});
       return noOpLock;
     },

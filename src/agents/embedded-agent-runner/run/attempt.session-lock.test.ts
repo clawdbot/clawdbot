@@ -226,4 +226,17 @@ describe("createEmbeddedAttemptSessionLockController", () => {
     await expect(controller.reacquireAfterPrompt()).resolves.toBeUndefined();
     expect(reloadPromptReleasedSessionFile).not.toHaveBeenCalled();
   });
+
+  it("lets cleanup settle a completed prompt when the SDK omits reacquire", async () => {
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: vi.fn(async () => ({ release: async () => undefined })),
+      lockOptions: { sessionFile: "agent:main:main" },
+    });
+
+    await controller.releaseForPrompt();
+    await expect(controller.acquireForCleanup()).resolves.toBeDefined();
+    await expect(controller.releaseForPrompt()).rejects.toThrow(
+      "attempt cleanup started before prompt submission",
+    );
+  });
 });
