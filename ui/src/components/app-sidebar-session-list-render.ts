@@ -7,7 +7,7 @@ import { t } from "../i18n/index.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
 import type { SidebarSessionSection } from "../lib/sessions/grouping.ts";
-import { renderSessionCatalogGroups } from "./app-sidebar-session-catalogs.ts";
+import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.ts";
 import {
   renderRecentSession,
   renderSessionTree,
@@ -282,10 +282,11 @@ function renderSessionCatalog(params: {
   host: SessionListHost;
   snapshot: SessionCatalogRenderSnapshot;
   catalog: SessionCatalog;
+  renderer: SessionCatalogGroupsRenderer;
 }) {
-  const { host, snapshot, catalog } = params;
+  const { host, snapshot, catalog, renderer } = params;
   return html`
-    ${renderSessionCatalogGroups({
+    ${renderer({
       catalogs: [catalog],
       connected: host.connected,
       basePath: snapshot.basePath,
@@ -335,6 +336,7 @@ function renderSessionListBody(params: {
   sections: RenderableSessionSection[];
   showDraft: boolean;
   catalogs: SessionCatalogRenderSnapshot;
+  catalogRenderer: SessionCatalogGroupsRenderer | null;
 }) {
   const { host } = params;
   const catalogsVisible = host.sessionsStatusFilter !== "archived";
@@ -362,7 +364,14 @@ function renderSessionListBody(params: {
       if (section.id.startsWith("catalog:")) {
         const catalog = catalogsBySectionId.get(section.id);
         return html`${index === firstCatalogSectionIndex ? catalogStatus : nothing}${catalog
-          ? renderSessionCatalog({ host, snapshot: params.catalogs, catalog })
+          ? params.catalogRenderer
+            ? renderSessionCatalog({
+                host,
+                snapshot: params.catalogs,
+                catalog,
+                renderer: params.catalogRenderer,
+              })
+            : nothing
           : nothing}`;
       }
       if (section.id === "work") {
@@ -404,6 +413,7 @@ export function renderSessionList(params: {
   sections: RenderableSessionSection[];
   showDraft: boolean;
   catalogs: SessionCatalogRenderSnapshot;
+  catalogRenderer: SessionCatalogGroupsRenderer | null;
 }) {
   const { host } = params;
   return html`
@@ -442,6 +452,7 @@ export function renderSessionList(params: {
           sections: params.sections,
           showDraft: params.showDraft,
           catalogs: params.catalogs,
+          catalogRenderer: params.catalogRenderer,
         })}
         ${host.sessionsStatusFilter === "archived" && params.empty
           ? html`<span class="sidebar-session-empty-hint"
