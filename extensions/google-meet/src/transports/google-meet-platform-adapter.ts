@@ -69,7 +69,7 @@ const manualActionCategories: Record<string, MeetingManualActionCategory> = {
 };
 
 function classifyManualActionReason(reason: string): MeetingManualActionCategory {
-  return manualActionCategories[reason] ?? "custom";
+  return Object.hasOwn(manualActionCategories, reason) ? manualActionCategories[reason] : "custom";
 }
 
 export const GOOGLE_MEET_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
