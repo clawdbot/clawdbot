@@ -300,11 +300,10 @@ export function createBuzzSetupWizard(
     },
     configure: async ({ cfg, prompter, options }) => {
       const existingBuzzConfig = cfg.channels?.buzz;
-      const hasExistingAccessConfig = Boolean(
+      const hasExistingAccessConfig =
         existingBuzzConfig?.groupPolicy !== undefined ||
         existingBuzzConfig?.groupAllowFrom !== undefined ||
-        existingBuzzConfig?.groups !== undefined,
-      );
+        existingBuzzConfig?.groups !== undefined;
       const useFreshAccessDefaults = !isBuzzSetupConfigured(cfg) && !hasExistingAccessConfig;
       const configuredRelayUrl =
         existingBuzzConfig?.relayUrl?.trim() || process.env.BUZZ_RELAY_URL?.trim();
@@ -434,8 +433,7 @@ export function createBuzzSetupWizard(
             roomId,
             {
               enabled: configuredGroups[roomId]?.enabled ?? true,
-              requireMention:
-                configuredGroups[roomId]?.requireMention ?? (useFreshAccessDefaults ? false : true),
+              requireMention: configuredGroups[roomId]?.requireMention ?? !useFreshAccessDefaults,
             },
           ]),
         ),

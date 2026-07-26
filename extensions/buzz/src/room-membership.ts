@@ -7,7 +7,7 @@ export const BUZZ_ROOM_SYSTEM_KIND = 40099;
 const HEX_PUBLIC_KEY_PATTERN = /^[0-9a-f]{64}$/u;
 const MEMBERSHIP_CHANGE_TYPES = new Set(["member_joined", "member_left", "member_removed"]);
 
-export type BuzzRoomMembershipChange = {
+type BuzzRoomMembershipChange = {
   type: "member_joined" | "member_left" | "member_removed";
   targetPublicKey: string;
 };

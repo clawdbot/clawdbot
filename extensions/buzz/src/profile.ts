@@ -6,9 +6,7 @@ const PROFILE_QUERY_TIMEOUT_MS = 5_000;
 const DEFAULT_CHANNEL_ADD_POLICY = "anyone";
 const CHANNEL_ADD_POLICIES = new Set(["anyone", "owner_only", "nobody"]);
 
-export type BuzzProfileSyncResult =
-  | { status: "unchanged" }
-  | { status: "published"; eventId: string };
+type BuzzProfileSyncResult = { status: "unchanged" } | { status: "published"; eventId: string };
 
 function parseProfileContent(event: Event | undefined): Record<string, unknown> {
   if (!event) {
@@ -27,9 +25,12 @@ function parseProfileContent(event: Event | undefined): Record<string, unknown> 
 function resolveProfileTags(event: Event | undefined, authTag: string[] | undefined): string[][] {
   const existingTags = event?.tags ?? [];
   if (!authTag) {
-    return existingTags.map((tag) => [...tag]);
+    return existingTags.map((tag) => tag.slice());
   }
-  return [...existingTags.filter((tag) => tag[0] !== "auth").map((tag) => [...tag]), [...authTag]];
+  return [
+    ...existingTags.filter((tag) => tag[0] !== "auth").map((tag) => tag.slice()),
+    [...authTag],
+  ];
 }
 
 function hasConfiguredAuthTag(event: Event | undefined, authTag: string[] | undefined): boolean {
@@ -192,7 +193,7 @@ export async function syncBuzzProfile(params: {
         kind: AGENT_PROFILE_KIND,
         content: agentContent,
         current: currentAgentProfile,
-        tags: currentAgentProfile?.tags.map((tag) => [...tag]) ?? [],
+        tags: currentAgentProfile?.tags.map((tag) => tag.slice()) ?? [],
         secretKey: params.secretKey,
       }),
     );

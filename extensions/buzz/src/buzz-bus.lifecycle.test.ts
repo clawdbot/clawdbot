@@ -1,6 +1,8 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { finalizeEvent, getPublicKey, type Event, type Filter } from "nostr-tools";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 
 const relayMocks = vi.hoisted(() => ({
   connect: vi.fn<() => Promise<void>>(),
@@ -68,14 +70,16 @@ const ACCOUNT_ID = "default";
 const CHANNEL_ID = "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c";
 const BOT_PUBLIC_KEY = getPublicKey(Uint8Array.from(Buffer.from(PRIVATE_KEY, "hex")));
 const SENDER_PUBLIC_KEY = getPublicKey(Uint8Array.from(Buffer.from(SENDER_PRIVATE_KEY, "hex")));
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = new Set<string>();
 let previousStateDir: string | undefined;
 let stateDir: string;
 
 describe("Buzz bus lifecycle", () => {
   beforeEach(() => {
     previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    stateDir = tempDirs.make("openclaw-buzz-dedupe-");
+    // openclaw-temp-dir: allow extension tests cannot import root test helpers.
+    stateDir = mkdtempSync(path.join(tmpdir(), "openclaw-buzz-dedupe-"));
+    tempDirs.add(stateDir);
     process.env.OPENCLAW_STATE_DIR = stateDir;
     vi.clearAllMocks();
     relayMocks.subscriptions.length = 0;
@@ -106,6 +110,10 @@ describe("Buzz bus lifecycle", () => {
     } else {
       process.env.OPENCLAW_STATE_DIR = previousStateDir;
     }
+    for (const tempDir of tempDirs) {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+    tempDirs.clear();
   });
 
   it("closes a connected relay when authentication fails", async () => {
@@ -239,9 +247,15 @@ describe("Buzz bus lifecycle", () => {
       ?.handlers.onevent(event);
 
     await vi.waitFor(() => expect(onMessageError).toHaveBeenCalledWith(expect.any(Error)));
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    expect(relayMocks.publish.mock.calls.some(([event]) => event.kind === 0)).toBe(false);
-    expect(relayMocks.publish.mock.calls.some(([event]) => event.kind === 10_100)).toBe(true);
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(
+      relayMocks.publish.mock.calls.some(([publishedEvent]) => publishedEvent.kind === 0),
+    ).toBe(false);
+    expect(
+      relayMocks.publish.mock.calls.some(([publishedEvent]) => publishedEvent.kind === 10_100),
+    ).toBe(true);
     expect(onProfilePublished).toHaveBeenCalledOnce();
     expect(onFatalError).not.toHaveBeenCalled();
     await bus.close();

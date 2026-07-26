@@ -139,25 +139,26 @@ async function sleepWithSignal(delayMs: number, signal?: AbortSignal): Promise<v
   signal?.throwIfAborted();
   await new Promise<void>((resolve, reject) => {
     let settled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
     const finish = (error?: unknown) => {
       if (settled) {
         return;
       }
       settled = true;
-      if (timer) {
-        clearTimeout(timer);
-      }
+      clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
       if (error === undefined) {
         resolve();
       } else {
-        reject(error);
+        reject(
+          error instanceof Error
+            ? error
+            : new Error("Buzz room membership refresh failed", { cause: error }),
+        );
       }
     };
     const onAbort = () =>
       finish(signal?.reason ?? new Error("Buzz room membership refresh aborted"));
-    timer = setTimeout(() => finish(), delayMs);
+    const timer = setTimeout(() => finish(), delayMs);
     signal?.addEventListener("abort", onAbort, { once: true });
     if (signal?.aborted) {
       onAbort();
@@ -175,18 +176,15 @@ async function queryBuzzRoomMemberships(params: {
   const memberships = new Map<string, BuzzRoomMembership>();
   return await new Promise<Map<string, BuzzRoomMembership>>((resolve, reject) => {
     let settled = false;
-    let subscription: ReturnType<Relay["subscribe"]> | undefined;
-    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const subscriptionRef: { current?: ReturnType<Relay["subscribe"]> } = {};
     const finish = (error?: unknown) => {
       if (settled) {
         return;
       }
       settled = true;
-      if (timeout) {
-        clearTimeout(timeout);
-      }
+      clearTimeout(timeout);
       params.signal?.removeEventListener("abort", onAbort);
-      subscription?.close("membership snapshot loaded");
+      subscriptionRef.current?.close("membership snapshot loaded");
       if (error === undefined) {
         resolve(memberships);
       } else {
@@ -199,12 +197,12 @@ async function queryBuzzRoomMemberships(params: {
     };
     const onAbort = () =>
       finish(params.signal?.reason ?? new Error("Buzz room membership query aborted"));
-    timeout = setTimeout(
+    const timeout = setTimeout(
       () => finish(new Error("Timed out loading Buzz room membership")),
       params.timeoutMs ?? MEMBERSHIP_READY_TIMEOUT_MS,
     );
     params.signal?.addEventListener("abort", onAbort, { once: true });
-    subscription = params.relay.subscribe(
+    subscriptionRef.current = params.relay.subscribe(
       [
         {
           kinds: [BUZZ_ROOM_MEMBERSHIP_KIND],
@@ -233,7 +231,7 @@ async function queryBuzzRoomMemberships(params: {
       },
     );
     if (settled) {
-      subscription.close("membership snapshot loaded");
+      subscriptionRef.current.close("membership snapshot loaded");
     }
     if (params.signal?.aborted) {
       onAbort();
@@ -384,22 +382,22 @@ async function createBuzzRoomMembershipTracker(params: {
 
   const handleSystemEvent = (event: Event): Promise<void> | undefined => {
     if (!markSystemEventSeen(event.id)) {
-      return;
+      return undefined;
     }
     const channelId = event.tags
       .find((tag) => tag[0] === "h")?.[1]
       ?.trim()
       .toLowerCase();
     if (!channelId) {
-      return;
+      return undefined;
     }
     const membership = memberships.get(channelId);
     if (!membership) {
-      return;
+      return undefined;
     }
     const change = parseBuzzRoomMembershipChangeEvent(event, membership);
     if (!change) {
-      return;
+      return undefined;
     }
     // System events invalidate membership; the relay-signed roster decides the
     // final state. Removals deny immediately, while joins wait for confirmation.
@@ -580,7 +578,7 @@ export async function startBuzzBus(options: {
     authTag,
     signal,
   });
-  let subscriptions: Array<ReturnType<Relay["subscribe"]>> = [];
+  const subscriptions: Array<ReturnType<Relay["subscribe"]>> = [];
   let stopPresenceHeartbeat = () => {};
   const bus: BuzzBus = {
     publicKey,

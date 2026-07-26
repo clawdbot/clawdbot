@@ -29,7 +29,11 @@ async function sleepWithSignal(delayMs: number, signal: AbortSignal): Promise<vo
       clearTimeout(timer);
       signal.removeEventListener("abort", onAbort);
       if (error !== undefined) {
-        reject(error);
+        reject(
+          error instanceof Error
+            ? error
+            : new Error("Buzz room access wait failed", { cause: error }),
+        );
       } else {
         resolve();
       }
@@ -71,7 +75,7 @@ export async function waitForBuzzRoomAccess(params: {
       let settled = false;
       let checking = false;
       let queuedRetry = false;
-      let subscription: ReturnType<Relay["subscribe"]> | undefined;
+      const subscriptionRef: { current?: ReturnType<Relay["subscribe"]> } = {};
       let pollTimer: ReturnType<typeof setInterval> | undefined;
       const seenEvents = new Set<string>();
 
@@ -84,7 +88,7 @@ export async function waitForBuzzRoomAccess(params: {
         if (pollTimer) {
           clearInterval(pollTimer);
         }
-        subscription?.close("room access found");
+        subscriptionRef.current?.close("room access found");
         if (error !== undefined) {
           reject(
             error instanceof Error
@@ -141,7 +145,7 @@ export async function waitForBuzzRoomAccess(params: {
       };
 
       signal.addEventListener("abort", onAbort, { once: true });
-      subscription = relay.subscribe(
+      subscriptionRef.current = relay.subscribe(
         [
           {
             kinds: [MEMBER_ADDED_KIND],
@@ -179,7 +183,7 @@ export async function waitForBuzzRoomAccess(params: {
         },
       );
       if (settled) {
-        subscription.close("room access found");
+        subscriptionRef.current.close("room access found");
       }
     });
   } finally {
