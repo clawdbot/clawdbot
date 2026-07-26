@@ -1,6 +1,11 @@
 // Workboard plugin module implements store behavior.
 import { randomUUID } from "node:crypto";
-import type { WorkboardAttachment, WorkboardCard } from "@openclaw/workboard-contract";
+import type {
+  WorkboardAttachment,
+  WorkboardCard,
+  WorkboardDiagnostic,
+  WorkboardDiagnosticAction,
+} from "@openclaw/workboard-contract";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
@@ -11,6 +16,7 @@ import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import {
   buildWorkerContext,
   cardBoardId,
+  cardChildIds,
   closeRunningAttempts,
   computeCardDiagnostics,
   isDependencyPromotableStatus,
@@ -42,6 +48,133 @@ import {
 import { WorkboardNotificationStore } from "./store-notifications.js";
 
 export type { WorkboardDispatchResult } from "./store-inputs.js";
+
+function graphDiagnostic(
+  kind: WorkboardDiagnostic["kind"],
+  title: string,
+  detail: string,
+  now: number,
+  actions: WorkboardDiagnosticAction[] = [
+    { kind: "repair_dependency", label: "Review dependency repair" },
+  ],
+): WorkboardDiagnostic {
+  return {
+    kind,
+    severity: "error",
+    title,
+    detail,
+    firstSeenAt: now,
+    lastSeenAt: now,
+    count: 1,
+    actions,
+  };
+}
+
+function computeDependencyDiagnostics(
+  cards: readonly WorkboardCard[],
+  now: number,
+): Map<string, WorkboardDiagnostic[]> {
+  const byId = new Map(cards.map((card) => [card.id, card]));
+  const diagnostics = new Map<string, WorkboardDiagnostic[]>();
+  const add = (cardId: string, entry: WorkboardDiagnostic) => {
+    const existing = diagnostics.get(cardId) ?? [];
+    if (existing.some((candidate) => candidate.kind === entry.kind)) {
+      return;
+    }
+    diagnostics.set(cardId, [...existing, entry]);
+  };
+
+  for (const card of cards) {
+    for (const link of card.metadata?.links ?? []) {
+      if (link.type !== "parent" && link.type !== "child") {
+        continue;
+      }
+      const target = link.targetCardId ? byId.get(link.targetCardId) : undefined;
+      const reciprocalType = link.type === "parent" ? "child" : "parent";
+      const reciprocal = target?.metadata?.links?.some(
+        (candidate) => candidate.type === reciprocalType && candidate.targetCardId === card.id,
+      );
+      if (!target || !reciprocal) {
+        add(
+          card.id,
+          graphDiagnostic(
+            "broken_dependency",
+            "Dependency link is not reciprocal",
+            "A parent/child dependency points to a missing card or lacks its reciprocal link.",
+            now,
+          ),
+        );
+      }
+    }
+    for (const childId of cardChildIds(card)) {
+      const child = byId.get(childId);
+      if (
+        child &&
+        child.status !== "done" &&
+        card.status !== "done" &&
+        child.metadata?.automation?.createdByCardId === card.id &&
+        child.metadata?.automation?.decompositionMode !== "hard"
+      ) {
+        add(
+          card.id,
+          graphDiagnostic(
+            "aggregate_deadlock",
+            "Aggregate parent blocks its own child",
+            "A decomposition-created child still has a hard dependency on an incomplete aggregate parent.",
+            now,
+          ),
+        );
+        add(
+          child.id,
+          graphDiagnostic(
+            "aggregate_deadlock",
+            "Decomposition child is blocked by its aggregate parent",
+            "This child appears to retain a legacy hard dependency created by decomposition.",
+            now,
+          ),
+        );
+      }
+    }
+  }
+
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const stack: string[] = [];
+  const visit = (cardId: string) => {
+    if (visiting.has(cardId)) {
+      const cycleStart = stack.indexOf(cardId);
+      for (const cycleId of stack.slice(cycleStart)) {
+        add(
+          cycleId,
+          graphDiagnostic(
+            "dependency_cycle",
+            "Dependency cycle detected",
+            "Hard parent/child links form a cycle and prevent dependency promotion.",
+            now,
+          ),
+        );
+      }
+      return;
+    }
+    if (visited.has(cardId)) {
+      return;
+    }
+    visiting.add(cardId);
+    stack.push(cardId);
+    for (const childId of cardChildIds(byId.get(cardId)!)) {
+      if (byId.has(childId)) {
+        visit(childId);
+      }
+    }
+    stack.pop();
+    visiting.delete(cardId);
+    visited.add(cardId);
+  };
+  for (const card of cards) {
+    visit(card.id);
+  }
+  return diagnostics;
+}
 
 // Capability layers split review boundaries only; the core still owns persistence and mutation order.
 export class WorkboardStore extends WorkboardNotificationStore {
@@ -208,8 +341,12 @@ export class WorkboardStore extends WorkboardNotificationStore {
 
   async diagnostics(now = Date.now()): Promise<WorkboardDiagnosticsResult> {
     const cards = await this.list();
+    const dependencyDiagnostics = computeDependencyDiagnostics(cards, now);
     const rows = cards.flatMap((card) => {
-      const diagnostics = computeCardDiagnostics(card, now);
+      const diagnostics = [
+        ...computeCardDiagnostics(card, now),
+        ...(dependencyDiagnostics.get(card.id) ?? []),
+      ];
       return diagnostics.length ? [{ card, diagnostics }] : [];
     });
     return {
@@ -221,16 +358,17 @@ export class WorkboardStore extends WorkboardNotificationStore {
   async refreshDiagnostics(now = Date.now()): Promise<WorkboardDiagnosticsResult> {
     return await this.enqueueMutation(async () => {
       const cards = await this.list();
+      const dependencyDiagnostics = computeDependencyDiagnostics(cards, now);
       const rows: WorkboardDiagnosticsResult["diagnostics"] = [];
       for (const card of cards) {
         const latest = await this.get(card.id);
         if (!latest) {
           continue;
         }
-        const diagnostics = mergeDiagnostics(
-          latest.metadata?.diagnostics,
-          computeCardDiagnostics(latest, now),
-        );
+        const diagnostics = mergeDiagnostics(latest.metadata?.diagnostics, [
+          ...computeCardDiagnostics(latest, now),
+          ...(dependencyDiagnostics.get(latest.id) ?? []),
+        ]);
         if (diagnostics.length === 0 && !latest.metadata?.diagnostics?.length) {
           continue;
         }

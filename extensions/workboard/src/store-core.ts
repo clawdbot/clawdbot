@@ -738,6 +738,74 @@ export class WorkboardCoreStore {
     );
   }
 
+  async unlinkDependency(
+    parentId: string,
+    childId: string,
+    scope?: WorkboardMutationScope,
+  ): Promise<WorkboardCard> {
+    return await this.enqueueMutation(
+      async () => await this.unlinkDependencyDirect(parentId, childId, Date.now(), scope),
+    );
+  }
+
+  protected async unlinkDependencyDirect(
+    parentId: string,
+    childId: string,
+    now = Date.now(),
+    scope?: WorkboardMutationScope,
+  ): Promise<WorkboardCard> {
+    const parent = await this.get(parentId);
+    const child = await this.get(childId);
+    if (!parent) {
+      throw new Error(`card not found: ${parentId}`);
+    }
+    if (!child) {
+      throw new Error(`card not found: ${childId}`);
+    }
+    assertCanMutateClaimedCard(parent, scope);
+    assertCanMutateClaimedCard(child, scope);
+    const hasParentLink = (parent.metadata?.links ?? []).some(
+      (link) => link.type === "child" && link.targetCardId === child.id,
+    );
+    const hasChildLink = (child.metadata?.links ?? []).some(
+      (link) => link.type === "parent" && link.targetCardId === parent.id,
+    );
+    if (!hasParentLink && !hasChildLink) {
+      return child;
+    }
+    const parentLinks = (parent.metadata?.links ?? []).filter(
+      (link) => !(link.type === "child" && link.targetCardId === child.id),
+    );
+    const childLinks = (child.metadata?.links ?? []).filter(
+      (link) => !(link.type === "parent" && link.targetCardId === parent.id),
+    );
+    const updatedParent = await this.updateCard(
+      parent.id,
+      {
+        metadata: { ...parent.metadata, links: parentLinks },
+      },
+      { allowMetadataDependencyLinks: true, enforceStatusHolds: false },
+    );
+    const nextParent = {
+      ...updatedParent,
+      events: appendEvent(updatedParent, { kind: "link_removed" }, now),
+    };
+    await this.store.register(nextParent.id, { version: 1, card: nextParent });
+    const updatedChild = await this.updateCard(
+      child.id,
+      {
+        metadata: { ...child.metadata, links: childLinks },
+      },
+      { allowMetadataDependencyLinks: true, enforceStatusHolds: false },
+    );
+    const nextChild = {
+      ...updatedChild,
+      events: appendEvent(updatedChild, { kind: "link_removed" }, now),
+    };
+    await this.store.register(nextChild.id, { version: 1, card: nextChild });
+    return await this.promoteDependencyReady(nextChild.id);
+  }
+
   protected async linkCardsDirect(
     parentId: string,
     childId: string,

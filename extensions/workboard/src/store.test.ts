@@ -2517,6 +2517,28 @@ describe("WorkboardStore", () => {
     });
   });
 
+  it("diagnoses and clears a legacy aggregate deadlock", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({ title: "Aggregate", status: "todo" });
+    const result = await store.decompose(parent.id, {
+      completeParent: false,
+      children: [{ title: "Legacy child" }],
+    });
+    const child = result.children[0]!;
+    await store.linkCards(parent.id, child.id);
+
+    const before = await store.diagnostics();
+    expect(before.diagnostics.flatMap((row) => row.diagnostics)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ kind: "aggregate_deadlock" })]),
+    );
+
+    await store.repairDecomposition(parent.id, { apply: true });
+    const after = await store.diagnostics();
+    expect(after.diagnostics.flatMap((row) => row.diagnostics)).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ kind: "aggregate_deadlock" })]),
+    );
+  });
+
   it("does not drop concurrent updates while refreshing diagnostics", async () => {
     let proofPromise: Promise<unknown> | undefined;
     let triggered = false;
@@ -3176,7 +3198,7 @@ describe("WorkboardStore", () => {
     });
   });
 
-  it("specifies and decomposes rough cards into linked children", async () => {
+  it("specifies and decomposes rough cards into non-blocking orchestration children", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const parent = await store.create({
       title: "Rough idea",
@@ -3227,11 +3249,10 @@ describe("WorkboardStore", () => {
             boardId: "planning",
             tenant: "qa",
             createdByCardId: parent.id,
+            decompositionMode: "orchestration",
             idempotencyKey: "planning:rough:child:1",
           }),
-          links: expect.arrayContaining([
-            expect.objectContaining({ type: "parent", targetCardId: parent.id }),
-          ]),
+          links: undefined,
         },
       }),
       expect.objectContaining({
@@ -3306,7 +3327,7 @@ describe("WorkboardStore", () => {
     });
   });
 
-  it("preserves parent child links when decomposition leaves the parent open", async () => {
+  it("keeps orchestration children claimable while the parent stays open", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const parent = await store.create({ title: "Parent", status: "triage" });
     await store.addLink(parent.id, { type: "relates_to", url: "https://example.com/context" });
@@ -3318,11 +3339,18 @@ describe("WorkboardStore", () => {
     });
 
     expect(result.parent.status).toBe("todo");
-    expect(result.parent.metadata?.links).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ type: "relates_to", url: "https://example.com/context" }),
-        expect.objectContaining({ type: "child", targetCardId: result.children[0]?.id }),
-      ]),
+    expect(result.parent.metadata?.links).toEqual([
+      expect.objectContaining({ type: "relates_to", url: "https://example.com/context" }),
+    ]);
+    expect(result.children[0]?.metadata?.links).toBeUndefined();
+    expect(result.children[0]?.metadata?.automation).toMatchObject({
+      createdByCardId: parent.id,
+      decompositionMode: "orchestration",
+    });
+    await expect(store.claim(result.children[0]!.id, { ownerId: "worker" })).resolves.toMatchObject(
+      {
+        card: { status: "running" },
+      },
     );
     await expect(
       store.complete(parent.id, {
@@ -3330,6 +3358,109 @@ describe("WorkboardStore", () => {
         summary: "Children recorded.",
       }),
     ).resolves.toMatchObject({ status: "done" });
+  });
+
+  it("retains hard dependency semantics when explicitly requested", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({ title: "Parent", status: "running" });
+
+    const result = await store.decompose(parent.id, {
+      completeParent: false,
+      decompositionMode: "hard",
+      children: [{ title: "Child" }],
+    });
+
+    expect(result.children[0]?.metadata?.automation).toMatchObject({
+      createdByCardId: parent.id,
+      decompositionMode: "hard",
+    });
+    expect(result.children[0]?.metadata?.links).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "parent", targetCardId: parent.id }),
+      ]),
+    );
+    await expect(store.claim(result.children[0]!.id, { ownerId: "worker" })).rejects.toThrow(
+      /dependencies/,
+    );
+    await expect(store.complete(result.children[0]!.id)).rejects.toThrow(/dependencies/);
+    await expect(
+      store.block(result.children[0]!.id, { reason: "Waiting for parent." }),
+    ).resolves.toMatchObject({
+      status: "blocked",
+    });
+    await expect(store.unblock(result.children[0]!.id)).resolves.toMatchObject({ status: "todo" });
+    const dispatch = await store.dispatch();
+    expect(dispatch.promoted.map((card) => card.id)).not.toContain(result.children[0]!.id);
+  });
+
+  it("unlinks reciprocal dependencies idempotently and records removal events", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({ title: "Parent" });
+    const child = await store.create({ title: "Child" });
+    await store.linkCards(parent.id, child.id);
+
+    const first = await store.unlinkDependency(parent.id, child.id);
+    expect(first.metadata?.links).toBeUndefined();
+    expect(first.events?.at(-1)).toMatchObject({ kind: "link_removed" });
+    expect((await store.get(parent.id))?.metadata?.links).toBeUndefined();
+    expect((await store.get(parent.id))?.events?.at(-1)).toMatchObject({ kind: "link_removed" });
+
+    const parentAfterFirst = await store.get(parent.id);
+    const second = await store.unlinkDependency(parent.id, child.id);
+    expect(second.id).toBe(child.id);
+    expect(second.events?.at(-1)).toMatchObject({ kind: "link_removed" });
+    expect((await store.get(parent.id))?.events).toHaveLength(parentAfterFirst?.events?.length);
+  });
+
+  it("dry-runs and applies only proven decomposition repairs without losing history", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({ title: "Aggregate", status: "todo" });
+    const result = await store.decompose(parent.id, {
+      completeParent: false,
+      children: [{ title: "Legacy child" }],
+    });
+    const child = result.children[0]!;
+    await store.linkCards(parent.id, child.id);
+    await store.addComment(child.id, { body: "Keep this comment." });
+    await store.addProof(child.id, {
+      status: "passed",
+      label: "Existing proof",
+      note: "Keep this proof.",
+    });
+
+    const dryRun = await store.repairDecomposition(parent.id);
+    expect(dryRun).toMatchObject({
+      dryRun: true,
+      candidateChildIds: [child.id],
+      repairedChildIds: [],
+    });
+    expect((await store.get(child.id))?.metadata?.links).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "parent", targetCardId: parent.id }),
+      ]),
+    );
+
+    const applied = await store.repairDecomposition(parent.id, { apply: true });
+    expect(applied).toMatchObject({
+      dryRun: false,
+      candidateChildIds: [child.id],
+      repairedChildIds: [child.id],
+    });
+    const repaired = await store.get(child.id);
+    expect(repaired?.metadata?.links).toBeUndefined();
+    expect(repaired?.metadata?.comments).toEqual(
+      expect.arrayContaining([expect.objectContaining({ body: "Keep this comment." })]),
+    );
+    expect(repaired?.metadata?.proof).toEqual(
+      expect.arrayContaining([expect.objectContaining({ label: "Existing proof" })]),
+    );
+    expect(repaired?.events).toEqual(
+      expect.arrayContaining([expect.objectContaining({ kind: "link_removed" })]),
+    );
+    await expect(store.repairDecomposition(parent.id, { apply: true })).resolves.toMatchObject({
+      candidateChildIds: [],
+      repairedChildIds: [],
+    });
   });
 
   it("omits derived child idempotency keys when the parent key is already at the limit", async () => {
@@ -3355,6 +3486,7 @@ describe("WorkboardStore", () => {
     const parent = await store.create({ title: "Parent" });
 
     const result = await store.decompose(parent.id, {
+      decompositionMode: "hard",
       children: [{ title: "Ignored duplicate", idempotencyKey: "child-key" }],
     });
 
