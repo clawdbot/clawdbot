@@ -536,7 +536,7 @@ OPENCLAW_DIAGNOSTICS=telegram.http,telegram.payload openclaw gateway
 ```
 
 Flag output goes to the standard log file (`logging.file`) and is still
-redacted by `logging.redactSensitive`. Full guide:
+redacted by the always-on log redaction policy. Full guide:
 [Diagnostics flags](/diagnostics/flags).
 
 ## Disable

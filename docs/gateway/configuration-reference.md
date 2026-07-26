@@ -1254,8 +1254,7 @@ writer is best-effort, not a lossless compliance archive.
     level: "info",
     file: "/tmp/openclaw/openclaw.log",
     consoleLevel: "info",
-    consoleStyle: "pretty", // pretty | compact | json
-    redactSensitive: "tools", // off | tools
+    consoleStyle: "pretty", // pretty | json
     redactPatterns: ["\\bTOKEN\\b\\s*[=:]\\s*([\"']?)([^\\s\"']+)\\1"],
   },
 }
@@ -1264,8 +1263,10 @@ writer is best-effort, not a lossless compliance archive.
 - Default log file: `/tmp/openclaw/openclaw-YYYY-MM-DD.log`; named profiles use `/tmp/openclaw/openclaw-<profile>-YYYY-MM-DD.log`.
 - Set `logging.file` for a stable path.
 - `consoleLevel` bumps to `debug` when `--verbose`.
+- `consoleStyle`: `"pretty"` or `"json"`. The earlier `"compact"` value is retired; [`openclaw doctor --fix`](/cli/doctor) maps it to `"pretty"`.
 - `maxFileBytes`: maximum active log file size in bytes before rotation (positive integer; default: `104857600` = 100 MB). OpenClaw keeps up to five numbered archives beside the active file.
-- `redactSensitive` / `redactPatterns`: best-effort masking for console output, file logs, OTLP log records, and persisted session transcript text. `redactSensitive: "off"` only disables this general log/transcript policy; UI/tool/diagnostic safety surfaces still redact secrets before emission.
+- `redactPatterns`: regexes for best-effort masking of console output, file logs, OTLP log records, and persisted session transcript text. Setting this **replaces** the built-in default patterns for log and transcript output, so include the defaults you still want; omitting them also turns off form-body and structured auth-header redaction. Tool payload redaction is separate and always merges your patterns with the defaults.
+- Redaction is always on and is no longer configurable. The retired `logging.redactSensitive` switch (including its `"off"` value) is removed by [`openclaw doctor --fix`](/cli/doctor); the runtime always applies `tools`-mode redaction to logs and transcripts. UI, tool, and diagnostic safety surfaces redact secrets independently of this policy.
 
 ---
 
