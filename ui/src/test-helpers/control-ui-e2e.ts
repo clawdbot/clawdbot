@@ -428,8 +428,13 @@ function installControlUiMockGateway(input: {
   // gateway's SQLite store does; renames replay onto static sessions.list
   // fixtures because the real gateway rewrites member categories server-side.
   const groupsStateKey = "openclaw.control-ui-e2e.sessionGroups";
-  let groupsState: { names: string[]; renames: Array<{ from: string; to: string | null }> } = {
+  let groupsState: {
+    names: string[];
+    sectionOrder: string[];
+    renames: Array<{ from: string; to: string | null }>;
+  } = {
     names: [...input.scenario.sessionGroups],
+    sectionOrder: [],
     renames: [],
   };
   let online = true;
@@ -442,6 +447,7 @@ function installControlUiMockGateway(input: {
     const rawGroups = window.sessionStorage.getItem(groupsStateKey);
     if (rawGroups) {
       groupsState = JSON.parse(rawGroups) as typeof groupsState;
+      groupsState.sectionOrder ??= [];
     }
   } catch {
     // Storage-disabled browser contexts still get the scenario catalog.
@@ -522,8 +528,14 @@ function installControlUiMockGateway(input: {
     }
   }
 
-  function groupsPayload(): { groups: Array<{ name: string; position: number }> } {
-    return { groups: groupsState.names.map((name, position) => ({ name, position })) };
+  function groupsPayload(): {
+    groups: Array<{ name: string; position: number }>;
+    sectionOrder: string[];
+  } {
+    return {
+      groups: groupsState.names.map((name, position) => ({ name, position })),
+      sectionOrder: [...groupsState.sectionOrder],
+    };
   }
 
   function normalizedGroupNames(value: unknown): string[] {
@@ -1059,6 +1071,9 @@ function installControlUiMockGateway(input: {
         return groupsPayload();
       case "sessions.groups.put": {
         groupsState.names = normalizedGroupNames(isRecord(params) ? params.names : undefined);
+        if (isRecord(params) && Array.isArray(params.sectionOrder)) {
+          groupsState.sectionOrder = normalizedGroupNames(params.sectionOrder);
+        }
         persistGroupsState();
         return { ok: true, ...groupsPayload() };
       }
@@ -1073,6 +1088,14 @@ function installControlUiMockGateway(input: {
             names.splice(sourceIndex < 0 ? names.length : sourceIndex, 0, to);
           }
           groupsState.names = names;
+          const sourceSectionId = `category:${from}`;
+          const targetSectionId = `category:${to}`;
+          groupsState.sectionOrder = groupsState.sectionOrder.flatMap((sectionId) => {
+            if (sectionId !== sourceSectionId) {
+              return [sectionId];
+            }
+            return groupsState.sectionOrder.includes(targetSectionId) ? [] : [targetSectionId];
+          });
           groupsState.renames.push({ from, to });
           persistGroupsState();
         }
@@ -1082,6 +1105,9 @@ function installControlUiMockGateway(input: {
         const name = isRecord(params) && typeof params.name === "string" ? params.name.trim() : "";
         if (name) {
           groupsState.names = groupsState.names.filter((existing) => existing !== name);
+          groupsState.sectionOrder = groupsState.sectionOrder.filter(
+            (sectionId) => sectionId !== `category:${name}`,
+          );
           groupsState.renames.push({ from: name, to: null });
           persistGroupsState();
         }

@@ -179,7 +179,6 @@ function createApplicationNavigationPreferences(
     navCollapsed: settings.navCollapsed,
     navWidth: settings.navWidth,
     sidebarEntries: settings.sidebarEntries,
-    sessionSectionOrder: settings.sessionSectionOrder,
     pinnedAgentIds: settings.pinnedAgentIds ?? [],
   };
   const listeners = new Set<(next: ApplicationNavigationPreferencesSnapshot) => void>();
@@ -194,7 +193,6 @@ function createApplicationNavigationPreferences(
         nextSnapshot.navCollapsed === snapshot.navCollapsed &&
         nextSnapshot.navWidth === snapshot.navWidth &&
         nextSnapshot.sidebarEntries === snapshot.sidebarEntries &&
-        nextSnapshot.sessionSectionOrder === snapshot.sessionSectionOrder &&
         nextSnapshot.pinnedAgentIds === snapshot.pinnedAgentIds
       ) {
         return;
@@ -203,7 +201,6 @@ function createApplicationNavigationPreferences(
         navCollapsed: nextSnapshot.navCollapsed,
         navWidth: nextSnapshot.navWidth,
         sidebarEntries: [...nextSnapshot.sidebarEntries],
-        sessionSectionOrder: [...nextSnapshot.sessionSectionOrder],
         pinnedAgentIds: [...nextSnapshot.pinnedAgentIds],
       });
       snapshot = nextSnapshot;

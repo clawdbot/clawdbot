@@ -1090,6 +1090,56 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it.each([
+    {
+      name: "root-mounted nested routes",
+      requestPath: "/settings/approvals",
+      basePath: undefined,
+      expectedPrefix: "",
+    },
+    {
+      name: "base-mounted nested routes",
+      requestPath: "/openclaw/settings/approvals",
+      basePath: "/openclaw",
+      expectedPrefix: "/openclaw",
+    },
+  ])(
+    "anchors Vite-relative public asset hrefs for $name",
+    async ({ requestPath, basePath, expectedPrefix }) => {
+      const assets = [
+        "favicon.svg",
+        "favicon-32.png",
+        "apple-touch-icon.png",
+        "manifest.webmanifest",
+      ];
+      const html = `<html><head>${assets
+        .map((asset) => `<link href="./${asset}" />`)
+        .join("")}</head><body></body></html>\n`;
+
+      await withControlUiRoot({
+        indexHtml: html,
+        fn: async (tmp) => {
+          const { res, end } = makeMockHttpResponse();
+          const handled = await handleControlUiHttpRequest(
+            { url: requestPath, method: "GET" } as IncomingMessage,
+            res,
+            {
+              ...(basePath ? { basePath } : {}),
+              root: { kind: "resolved", path: tmp },
+            },
+          );
+
+          expect(handled).toBe(true);
+          const body = String(end.mock.calls[0]?.[0] ?? "");
+          for (const asset of assets) {
+            expect(body).toContain(`href="${expectedPrefix}/${asset}"`);
+            expect(body).not.toContain(`href="./${asset}"`);
+          }
+        },
+      });
+    },
+  );
+
   it("serves bootstrap config JSON", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {

@@ -104,6 +104,10 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     now,
     persistDigest,
     stillCurrent: runStillCurrent,
+    onMissingEntry: (state) => {
+      // An unpersistable session must not re-bill the utility model every cycle.
+      disableModelForRun(state);
+    },
     onError: (state, error) => {
       observerLog.warn("session observer digest persistence failed", {
         sessionKey: state.sessionKey,
@@ -343,8 +347,13 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     state.inFlight = true;
     state.lastRunAt = now();
     const lastSelectedSequence = selectedNotes.at(-1)?.sequence ?? state.lastDigestNoteSequence;
-    const requestedPreambleGeneration = preamblePublisher.generation(state);
+    const retireSelectedNotes = () => {
+      // Run rollover replaces the state object, and inFlight serializes its slots;
+      // stale work can only retire this run's own notes, monotonically.
+      state.lastDigestNoteSequence = Math.max(state.lastDigestNoteSequence, lastSelectedSequence);
+    };
     const requestGeneration = modelSlots.beginRequest(state);
+    state.digestCount += 1;
     void (async () => {
       try {
         const modelDigest = await requestModelDigest(
@@ -354,9 +363,9 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
         const stale =
           !modelStateIsCurrent(state) ||
           !modelSlots.requestIsCurrent(state, requestGeneration) ||
-          (!final && state.terminalHealth !== undefined) ||
-          preamblePublisher.generation(state) !== requestedPreambleGeneration;
+          (!final && state.terminalHealth !== undefined);
         if (stale) {
+          retireSelectedNotes();
           if (final && states.get(state.sessionKey) === state) {
             void synthesizeTerminalDigest({ state });
             dormantRuns.delete(state.runId);
@@ -375,8 +384,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
         preamblePublisher.clear(state);
         state.consecutiveFailures = 0;
         state.revision += 1;
-        state.digestCount += 1;
-        state.lastDigestNoteSequence = lastSelectedSequence;
+        retireSelectedNotes();
         const digest: SessionObserverDigest = {
           sessionKey: state.sessionKey,
           runId: state.runId,
@@ -410,6 +418,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
           !modelSlots.requestIsCurrent(state, requestGeneration) ||
           (!final && state.terminalHealth !== undefined);
         if (stale) {
+          retireSelectedNotes();
           if (final && states.get(state.sessionKey) === state) {
             void synthesizeTerminalDigest({ state });
             dormantRuns.delete(state.runId);
@@ -657,7 +666,9 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       state.terminalHealth = terminalHealthFor(event);
       disabledRuns.delete(event.runId);
       const endedAt = readFiniteNumber(event.data.endedAt) ?? now();
-      const hasRunDigest = state.digestCount > 0 || state.previousDigest?.runId === state.runId;
+      // previousDigest is set on every ACCEPTED digest of this run; digestCount now
+      // counts attempts (budget), so it no longer implies any digest was published.
+      const hasRunDigest = state.previousDigest?.runId === state.runId;
       if (!hasRunDigest && endedAt - state.startedAt < FINAL_DIGEST_MIN_RUN_MS) {
         dormantRuns.delete(state.runId);
         dropState(state);

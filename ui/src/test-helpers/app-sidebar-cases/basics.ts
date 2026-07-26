@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
 import {
@@ -16,6 +16,33 @@ import {
 import "../../components/app-sidebar.ts";
 
 await import("../../components/viewer-facepile.ts");
+
+type SidebarNativeGatewayTestSnapshot = {
+  gateways: Array<{
+    id: string;
+    name: string;
+    isPrimary: boolean;
+    health: "ok" | "error" | "unknown";
+  }>;
+  currentId: string;
+};
+
+type SidebarNativeGatewayTestWindow = Window & {
+  __OPENCLAW_NATIVE_WEB_CHROME__?: boolean;
+  __OPENCLAW_NATIVE_GATEWAYS__?: SidebarNativeGatewayTestSnapshot;
+};
+
+function setNativeGatewayTestState(snapshot: SidebarNativeGatewayTestSnapshot): void {
+  const nativeWindow = window as SidebarNativeGatewayTestWindow;
+  nativeWindow["__OPENCLAW_NATIVE_WEB_CHROME__"] = true;
+  nativeWindow["__OPENCLAW_NATIVE_GATEWAYS__"] = snapshot;
+}
+
+afterEach(() => {
+  const nativeWindow = window as SidebarNativeGatewayTestWindow;
+  Reflect.deleteProperty(nativeWindow, "__OPENCLAW_NATIVE_WEB_CHROME__");
+  Reflect.deleteProperty(nativeWindow, "__OPENCLAW_NATIVE_GATEWAYS__");
+});
 
 describe("AppSidebar update card wiring", () => {
   it("keeps OpenClaw out of the workspace sidebar", async () => {
@@ -220,6 +247,88 @@ describe("AppSidebar viewer presence", () => {
       "Account",
     );
     expect(identityCard?.querySelector('[data-viewer-id="account"]')?.textContent).toContain("A");
+  });
+});
+
+describe("AppSidebar gateway footer subtitle", () => {
+  const twoGateways = {
+    gateways: [
+      { id: "local", name: "Local Gateway", isPrimary: true, health: "ok" },
+      { id: "remote", name: "Remote Gateway", isPrimary: false, health: "unknown" },
+    ],
+    currentId: "local",
+  } satisfies SidebarNativeGatewayTestSnapshot;
+
+  it("stays hidden outside native chrome", async () => {
+    const nativeWindow = window as SidebarNativeGatewayTestWindow;
+    nativeWindow["__OPENCLAW_NATIVE_GATEWAYS__"] = twoGateways;
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+
+    expect(sidebar.querySelector(".sidebar-identity-card__subtitle")).toBeNull();
+  });
+
+  it("stays hidden with one configured gateway", async () => {
+    setNativeGatewayTestState({ gateways: [twoGateways.gateways[0]!], currentId: "local" });
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+
+    expect(sidebar.querySelector(".sidebar-identity-card__subtitle")).toBeNull();
+  });
+
+  it("shows the current gateway health, name, and primary suffix", async () => {
+    setNativeGatewayTestState(twoGateways);
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+
+    expect(
+      sidebar.querySelector(".sidebar-identity-card__gateway-health")?.getAttribute("data-health"),
+    ).toBe("ok");
+    expect(sidebar.querySelector(".sidebar-identity-card__gateway-name")?.textContent).toBe(
+      "Local Gateway",
+    );
+    expect(sidebar.querySelector(".sidebar-identity-card__gateway-primary")?.textContent).toBe(
+      "· primary",
+    );
+    expect(sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label")).toBe(
+      "Identity and app menu for Account: Local Gateway, primary",
+    );
+  });
+
+  it("keeps the reconnecting subtitle while offline", async () => {
+    setNativeGatewayTestState(twoGateways);
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    sidebar.offline = true;
+    await sidebar.updateComplete;
+
+    expect(sidebar.querySelector(".sidebar-identity-card__subtitle")?.textContent).toBe(
+      "Reconnecting…",
+    );
+    expect(sidebar.querySelector(".sidebar-identity-card__gateway-name")).toBeNull();
+  });
+
+  it("updates when the native gateway snapshot changes", async () => {
+    setNativeGatewayTestState(twoGateways);
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    setNativeGatewayTestState({
+      gateways: [
+        { id: "local", name: "Local Gateway", isPrimary: true, health: "ok" },
+        { id: "remote", name: "Remote Gateway", isPrimary: false, health: "error" },
+      ],
+      currentId: "remote",
+    });
+    window.dispatchEvent(new CustomEvent("openclaw:native-gateways-changed"));
+    await sidebar.updateComplete;
+
+    expect(sidebar.querySelector(".sidebar-identity-card__gateway-name")?.textContent).toBe(
+      "Remote Gateway",
+    );
+    expect(
+      sidebar.querySelector(".sidebar-identity-card__gateway-health")?.getAttribute("data-health"),
+    ).toBe("error");
+    expect(sidebar.querySelector(".sidebar-identity-card__gateway-primary")).toBeNull();
   });
 });
 

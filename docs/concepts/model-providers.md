@@ -411,7 +411,7 @@ Kimi Coding uses Moonshot AI's Anthropic-compatible endpoint:
 
 - Provider: `kimi`
 - Auth: `KIMI_API_KEY`
-- Kimi K3: `kimi/k3` (1,048,576-token context, 131,072-token max output)
+- Kimi K3: `kimi/k3` (up to 1M, tier-gated) or `kimi/k3-256k` (256K, lower quota use)
 - Kimi Code: `kimi/kimi-for-coding`
 - Kimi Code HighSpeed: `kimi/kimi-for-coding-highspeed`
 
@@ -429,8 +429,8 @@ Kimi K3 uses adaptive thinking. `--thinking minimal|low` selects low effort,
 selects max effort. Catalog pricing is $3/MTok input, $15/MTok output, and
 $0.30/MTok cache reads. Legacy `kimi/kimi-code` and `kimi/k2p5` remain
 accepted as compatibility model ids and normalize to Kimi's stable API model
-id; the previously published `kimi/k3[1m]` ref remains available for existing
-configs.
+id; the previously published `kimi/k3[1m]` ref normalizes to `kimi/k3` for
+existing configs.
 
 ### Volcano Engine (Doubao)
 

@@ -73,7 +73,6 @@ extensions/comfy/workflow-runtime.ts
 extensions/copilot/harness.test.ts
 extensions/copilot/harness.ts
 extensions/copilot/src/attempt.test.ts
-extensions/copilot/src/attempt.ts
 extensions/copilot/src/event-bridge.test.ts
 extensions/copilot/src/tool-bridge.test.ts
 extensions/crabbox/src/crabbox-worker-provider.test.ts
@@ -151,7 +150,6 @@ extensions/mattermost/src/channel.ts
 extensions/mattermost/src/mattermost/monitor.inbound-system-event.test.ts
 extensions/mattermost/src/mattermost/slash-http.ts
 extensions/memory-core/doctor-contract-api.test.ts
-extensions/memory-core/src/cli.runtime.ts
 extensions/memory-core/src/cli.test.ts
 extensions/memory-core/src/dreaming-narrative.test.ts
 extensions/memory-core/src/dreaming-narrative.ts
@@ -235,7 +233,6 @@ extensions/qa-lab/src/runtime-tool-fixture.ts
 extensions/qa-lab/src/scorecard-taxonomy.ts
 extensions/qa-lab/src/suite-launch.runtime.test.ts
 extensions/qa-lab/src/suite-launch.runtime.ts
-extensions/qa-lab/src/suite.ts
 extensions/qa-lab/src/test-file-scenario-runner.test.ts
 extensions/qa-lab/web/src/app.ts
 extensions/qqbot/src/engine/gateway/outbound-dispatch.test.ts
@@ -497,7 +494,6 @@ src/agents/subagent-registry-run-manager.ts
 src/agents/subagent-registry.steer-restart.test.ts
 src/agents/subagent-registry.test.ts
 src/agents/subagent-spawn.test.ts
-src/agents/subagent-spawn.ts
 src/agents/system-prompt.test.ts
 src/agents/system-prompt.ts
 src/agents/tool-display-common.ts
@@ -734,8 +730,6 @@ src/gateway/gateway-models.profiles.live.test.ts
 src/gateway/managed-image-attachments.test.ts
 src/gateway/managed-image-attachments.ts
 src/gateway/mcp-http.test.ts
-src/gateway/model-pricing-cache.test.ts
-src/gateway/model-pricing-cache.ts
 src/gateway/node-registry.test.ts
 src/gateway/node-registry.ts
 src/gateway/openai-http.test.ts
@@ -835,7 +829,6 @@ src/infra/diagnostic-events.ts
 src/infra/exec-approval-forwarder.ts
 src/infra/exec-approvals-allow-always.test.ts
 src/infra/exec-approvals-allowlist.ts
-src/infra/exec-approvals-store.test.ts
 src/infra/exec-authorization-plan.ts
 src/infra/heartbeat-runner.returns-default-unset.test.ts
 src/infra/host-env-security.test.ts

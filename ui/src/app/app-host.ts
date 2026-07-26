@@ -702,13 +702,8 @@ class OpenClawShell extends OpenClawLightDomElement {
       scope: context.gateway.connection.gatewayUrl,
       snapshotHash: snapshot.hash ?? undefined,
       onApplied: (patch) => {
-        if (patch.sidebarEntries !== undefined || patch.sessionSectionOrder !== undefined) {
-          context.navigation.update({
-            ...(patch.sidebarEntries !== undefined ? { sidebarEntries: patch.sidebarEntries } : {}),
-            ...(patch.sessionSectionOrder !== undefined
-              ? { sessionSectionOrder: patch.sessionSectionOrder }
-              : {}),
-          });
+        if (patch.sidebarEntries !== undefined) {
+          context.navigation.update({ sidebarEntries: patch.sidebarEntries });
         }
         if (isSupportedLocale(patch.locale)) {
           void i18n.setLocale(patch.locale);
@@ -926,12 +921,11 @@ class OpenClawShell extends OpenClawLightDomElement {
     if (rosterDiff.changedIds.length > 0) {
       void context.agentIdentity.ensure(rosterDiff.changedIds);
     }
-    const previousIds = new Set(previous?.agents.map((agent) => agent.id) ?? []);
     const nextIds = new Set(next.agents.map((agent) => agent.id));
     if (
       activeAgentId &&
       context.agentSelection.state.selectedId === activeAgentId &&
-      previousIds.has(activeAgentId) &&
+      next.agents.length > 0 &&
       !nextIds.has(activeAgentId)
     ) {
       context.agentSelection.set(next.defaultId);
@@ -1856,7 +1850,6 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .canPairDevice=${gatewayConnected &&
                 hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null)}
                 .sidebarEntries=${navigationSnapshot.sidebarEntries}
-                .sessionSectionOrder=${navigationSnapshot.sessionSectionOrder}
                 .workboardBoards=${this.sidebarWorkboardSnapshot.boards}
                 .workboardBoardsReady=${this.sidebarWorkboardSnapshot.ready}
                 .workboardRenderers=${this.sidebarWorkboardRenderers}
@@ -1879,8 +1872,6 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .draftSessionAgentId=${this.draftSessionAgentId()}
                 .onUpdateSidebarEntries=${(entries: string[]) =>
                   context.navigation.update({ sidebarEntries: entries })}
-                .onUpdateSessionSectionOrder=${(order: string[]) =>
-                  context.navigation.update({ sessionSectionOrder: order })}
                 .onPairMobile=${() => void context.overlays.openDevicePairSetup()}
                 .onNavigate=${(routeId: string, options?: ApplicationNavigationOptions) =>
                   this.navigate(routeId, options)}

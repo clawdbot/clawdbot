@@ -17,12 +17,12 @@ import { shouldToggleSelectableDisclosure } from "./chat-tool-cards.ts";
 import { renderChatWorkingIndicator } from "./chat-working-indicator.ts";
 
 /** A contiguous run of in-flight streaming items rendered under one assistant group. */
-type StreamGroupPart = Extract<
+export type StreamGroupPart = Extract<
   ChatItem,
   { kind: "stream" } | { kind: "reading-indicator" } | { kind: "question" } | { kind: "plan" }
 >;
 
-type StreamGroupOptions = {
+export type StreamGroupOptions = {
   onOpenSidebar?: (content: SidebarContent) => void;
   assistant?: AssistantIdentity;
   basePath?: string;
@@ -43,11 +43,44 @@ function renderQuestionStreamPart(
   return prompt ? renderChatQuestionSummary(prompt) : nothing;
 }
 
+export function renderStreamGroupParts(
+  parts: StreamGroupPart[],
+  opts: StreamGroupOptions,
+  presentation: "standalone" | "continuation",
+) {
+  return parts.map((part) =>
+    part.kind === "reading-indicator"
+      ? renderChatWorkingIndicator(part, {
+          waitingApproval: opts.waitingApproval === true,
+          startupPhase: opts.startupPhase,
+          outputTokens: opts.runOutputTokens,
+          presentation,
+        })
+      : part.kind === "question"
+        ? renderQuestionStreamPart(part, opts)
+        : part.kind === "plan"
+          ? renderChatPlanChecklist(opts.planStatus, {
+              active: opts.planActive === true,
+              variant: "card",
+            })
+          : renderGroupedMessage(
+              {
+                role: "assistant",
+                content: [{ type: "text", text: part.text }],
+                timestamp: part.startedAt,
+              },
+              part.key,
+              { isStreaming: part.isStreaming, showReasoning: false },
+              opts.onOpenSidebar,
+            ),
+  );
+}
+
 // One assistant group per contiguous run of streaming items: a reply that
 // arrives as several stream segments renders under a single avatar/footer
 // instead of flashing a separate avatar+bubble per segment (#63956).
 export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOptions = {}) {
-  const { onOpenSidebar, assistant, basePath, authToken } = opts;
+  const { assistant, basePath, authToken } = opts;
   const name = assistant?.name ?? "Assistant";
   // Footer (sender + time) anchors to the earliest streamed segment; a run that
   // is only the reading indicator has no timestamp and therefore no footer.
@@ -65,34 +98,7 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
   return html`
     <div class=${groupClass} data-chat-row-key=${parts[0]?.key ?? nothing}>
       ${avatar}
-      <div class="chat-group-messages">
-        ${parts.map((part) =>
-          part.kind === "reading-indicator"
-            ? renderChatWorkingIndicator(
-                part,
-                opts.waitingApproval === true,
-                opts.startupPhase,
-                opts.runOutputTokens,
-              )
-            : part.kind === "question"
-              ? renderQuestionStreamPart(part, opts)
-              : part.kind === "plan"
-                ? renderChatPlanChecklist(opts.planStatus, {
-                    active: opts.planActive === true,
-                    variant: "card",
-                  })
-                : renderGroupedMessage(
-                    {
-                      role: "assistant",
-                      content: [{ type: "text", text: part.text }],
-                      timestamp: part.startedAt,
-                    },
-                    part.key,
-                    { isStreaming: part.isStreaming, showReasoning: false },
-                    onOpenSidebar,
-                  ),
-        )}
-      </div>
+      <div class="chat-group-messages">${renderStreamGroupParts(parts, opts, "standalone")}</div>
       ${footerStartedAt !== null
         ? html`
             <div class="chat-group-footer">

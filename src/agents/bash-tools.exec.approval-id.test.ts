@@ -8,8 +8,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadExecApprovals } from "../infra/exec-approvals.js";
+import {
+  loadExecApprovals,
+  saveExecApprovals,
+  type ExecApprovalsFile,
+} from "../infra/exec-approvals.js";
 import { sendMessage } from "../infra/outbound/message.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
 import { createExecTool as createExecToolImpl } from "./bash-tools.exec.js";
@@ -197,9 +202,7 @@ function buildPreparedSystemRunPayload(rawInvokeParams: unknown) {
 }
 
 async function writeExecApprovalsConfig(config: Record<string, unknown>) {
-  const approvalsPath = path.join(process.env.HOME ?? "", ".openclaw", "exec-approvals.json");
-  await fs.mkdir(path.dirname(approvalsPath), { recursive: true });
-  await fs.writeFile(approvalsPath, JSON.stringify(config, null, 2));
+  saveExecApprovals(config as ExecApprovalsFile);
 }
 
 function acceptedApprovalResponse(params: unknown) {
@@ -411,6 +414,7 @@ describe("exec approvals", () => {
     envSnapshot = captureEnv([
       "HOME",
       "USERPROFILE",
+      "OPENCLAW_STATE_DIR",
       "OPENCLAW_BUNDLED_PLUGINS_DIR",
       "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
     ]);
@@ -419,6 +423,7 @@ describe("exec approvals", () => {
     setTestEnvValue("HOME", tempDir);
     // Windows uses USERPROFILE for os.homedir()
     setTestEnvValue("USERPROFILE", tempDir);
+    setTestEnvValue("OPENCLAW_STATE_DIR", path.join(tempDir, ".openclaw"));
     deleteTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR");
     setTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
     vi.mocked(callGatewayTool).mockReset();
@@ -427,6 +432,7 @@ describe("exec approvals", () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+    closeOpenClawStateDatabaseForTest();
     envSnapshot?.restore();
     envSnapshot = undefined;
   });

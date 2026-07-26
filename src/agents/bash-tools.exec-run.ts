@@ -300,7 +300,7 @@ export function createExecTool(
       ) {
         security = "full";
       }
-      // Keep local exec defaults in sync with exec-approvals.json when tools.exec.* is unset.
+      // Keep local exec defaults in sync with host approval state when tools.exec.* is unset.
       const requestedAsk = normalizeExecAsk(params.ask);
       const hostAsk = maxAsk(modePolicy.ask, approvalPolicy?.ask ?? modePolicy.ask);
       const trustedAsk = defaults?.messageProvider && hostAsk === "off" ? undefined : requestedAsk;

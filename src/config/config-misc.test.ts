@@ -411,28 +411,6 @@ describe("plugins.slots.contextEngine", () => {
   });
 });
 
-describe("models.pricing", () => {
-  it("accepts the model pricing bootstrap toggle", () => {
-    for (const enabled of [true, false]) {
-      const result = OpenClawSchema.safeParse({
-        models: {
-          pricing: { enabled },
-        },
-      });
-      expect(result.success).toBe(true);
-    }
-  });
-
-  it("rejects non-boolean model pricing bootstrap values", () => {
-    const result = OpenClawSchema.safeParse({
-      models: {
-        pricing: { enabled: "false" },
-      },
-    });
-    expect(result.success).toBe(false);
-  });
-});
-
 describe("models.catalogRefresh", () => {
   it("accepts the refresh toggle and an http(s) override", () => {
     expect(
@@ -540,32 +518,6 @@ describe("ui.prefs.sidebarEntries", () => {
       ui: {
         prefs: {
           sidebarEntries: ["route:usage", 7],
-        },
-      },
-    });
-
-    expect(result.ok).toBe(false);
-  });
-});
-
-describe("ui.prefs.sessionSectionOrder", () => {
-  it("accepts section ids synchronized by the Control UI", () => {
-    const result = validateConfigObject({
-      ui: {
-        prefs: {
-          sessionSectionOrder: ["category:Research", "ungrouped", "groups", "work"],
-        },
-      },
-    });
-
-    expect(result.ok).toBe(true);
-  });
-
-  it("rejects section order entries that are not strings", () => {
-    const result = validateConfigObject({
-      ui: {
-        prefs: {
-          sessionSectionOrder: ["work", 7],
         },
       },
     });

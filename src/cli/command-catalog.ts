@@ -88,6 +88,16 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
       networkProxy: ({ argv }) => (hasFlag(argv, "--local") ? "default" : "bypass"),
     },
   },
+  {
+    commandPath: ["agent", "exec"],
+    policy: {
+      bypassConfigGuard: true,
+      loadPlugins: "never",
+      ownsProtocolStdout: true,
+      hideBanner: true,
+      networkProxy: "default",
+    },
+  },
   { commandPath: ["message"], policy: { loadPlugins: "never" } },
   { commandPath: ["docs"], policy: { bypassConfigGuard: true } },
   {

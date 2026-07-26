@@ -79,6 +79,7 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
   await prompter.intro("Channel setup");
   let nextConfig = await onboardChannels.setupChannels(cfg, runtime, prompter, {
     ...(params.initialChannel ? { initialSelection: [params.initialChannel] } : {}),
+    ...(params.initialChannel ? { finishAfterInitialSelection: true } : {}),
     allowDisable: false,
     allowIMessageInstall: true,
     allowSignalInstall: true,
@@ -136,10 +137,16 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
     return;
   }
 
-  const wantsNames = await prompter.confirm({
-    message: "Name these channel accounts now? (optional)",
-    initialValue: false,
-  });
+  const usesTargetedDefaults =
+    params.initialChannel !== undefined &&
+    selection.length === 1 &&
+    selection[0] === params.initialChannel;
+  const wantsNames = usesTargetedDefaults
+    ? false
+    : await prompter.confirm({
+        message: "Name these channel accounts now? (optional)",
+        initialValue: false,
+      });
   if (wantsNames) {
     for (const channel of selection) {
       const accountId = accountIds[channel] ?? DEFAULT_ACCOUNT_ID;
@@ -179,12 +186,17 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
       } => Boolean(value.accountId),
     );
   if (bindTargets.length > 0) {
-    const bindNow = await prompter.confirm({
-      message: "Route these channel accounts to agents now?",
-      initialValue: true,
-    });
+    const agentSummaries = buildAgentSummaries(nextConfig);
+    const bindNow =
+      usesTargetedDefaults && agentSummaries.length <= 1
+        ? false
+        : usesTargetedDefaults
+          ? true
+          : await prompter.confirm({
+              message: "Route these channel accounts to agents now?",
+              initialValue: true,
+            });
     if (bindNow) {
-      const agentSummaries = buildAgentSummaries(nextConfig);
       const defaultAgentId = resolveDefaultAgentId(nextConfig);
       for (const target of bindTargets) {
         const targetAgentId = await prompter.select({

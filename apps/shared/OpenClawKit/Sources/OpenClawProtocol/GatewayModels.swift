@@ -7746,29 +7746,37 @@ public struct SessionsGroupsListParams: Codable, Sendable {}
 
 public struct SessionsGroupsListResult: Codable, Sendable {
     public let groups: [SessionGroup]
+    public let sectionorder: [String]?
 
     public init(
-        groups: [SessionGroup])
+        groups: [SessionGroup],
+        sectionorder: [String]? = nil)
     {
         self.groups = groups
+        self.sectionorder = sectionorder
     }
 
     private enum CodingKeys: String, CodingKey {
         case groups
+        case sectionorder = "sectionOrder"
     }
 }
 
 public struct SessionsGroupsPutParams: Codable, Sendable {
     public let names: [String]
+    public let sectionorder: [String]?
 
     public init(
-        names: [String])
+        names: [String],
+        sectionorder: [String]? = nil)
     {
         self.names = names
+        self.sectionorder = sectionorder
     }
 
     private enum CodingKeys: String, CodingKey {
         case names
+        case sectionorder = "sectionOrder"
     }
 }
 
@@ -7807,21 +7815,25 @@ public struct SessionsGroupsDeleteParams: Codable, Sendable {
 public struct SessionsGroupsMutationResult: Codable, Sendable {
     public let ok: Bool
     public let groups: [SessionGroup]
+    public let sectionorder: [String]?
     public let updatedsessions: Int?
 
     public init(
         ok: Bool,
         groups: [SessionGroup],
+        sectionorder: [String]? = nil,
         updatedsessions: Int? = nil)
     {
         self.ok = ok
         self.groups = groups
+        self.sectionorder = sectionorder
         self.updatedsessions = updatedsessions
     }
 
     private enum CodingKeys: String, CodingKey {
         case ok
         case groups
+        case sectionorder = "sectionOrder"
         case updatedsessions = "updatedSessions"
     }
 }

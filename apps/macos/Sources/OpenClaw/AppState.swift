@@ -5,6 +5,11 @@ import OpenClawKit
 import ServiceManagement
 import SwiftUI
 
+private enum RemoteTLSFingerprintUpdate {
+    case preserve
+    case replace(String?)
+}
+
 enum ExecApprovalsPolicyLoadState: Equatable {
     case loading
     case available
@@ -768,63 +773,6 @@ final class AppState {
         }
     }
 
-    private static func syncedGatewayRoot(
-        currentRoot: [String: Any],
-        draft: GatewayConfigSyncDraft) -> (root: [String: Any], changed: Bool)
-    {
-        var root = currentRoot
-        var gateway = root["gateway"] as? [String: Any] ?? [:]
-        var changed = false
-
-        let desiredMode: String? = switch draft.connectionMode {
-        case .local:
-            "local"
-        case .remote:
-            "remote"
-        case .unconfigured:
-            nil
-        }
-
-        let currentMode = (gateway["mode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let desiredMode {
-            if currentMode != desiredMode {
-                gateway["mode"] = desiredMode
-                changed = true
-            }
-        } else if currentMode != nil {
-            gateway.removeValue(forKey: "mode")
-            changed = true
-        }
-
-        if draft.connectionMode == .remote {
-            let remoteHost = CommandResolver.parseSSHTarget(draft.remoteTarget)?.host
-            let currentRemote = gateway["remote"] as? [String: Any] ?? [:]
-            let updated = Self.updatedRemoteGatewayConfig(
-                current: currentRemote,
-                draft: .init(
-                    transport: draft.remoteTransport,
-                    remoteUrl: draft.remoteUrl,
-                    remoteHost: remoteHost,
-                    remoteTarget: draft.remoteTarget,
-                    remoteIdentity: draft.remoteIdentity,
-                    remoteToken: draft.remoteToken,
-                    remoteTokenDirty: draft.remoteTokenDirty))
-            if updated.changed {
-                gateway["remote"] = updated.remote
-                changed = true
-            }
-        }
-
-        guard changed else { return (currentRoot, false) }
-
-        if gateway.isEmpty {
-            root.removeValue(forKey: "gateway")
-        } else {
-            root["gateway"] = gateway
-        }
-        return (root, true)
-    }
-
     func triggerVoiceEars(ttl: TimeInterval? = 5) {
         self.earBoostTask?.cancel()
         self.earBoostActive = true
@@ -1061,6 +1009,78 @@ extension AppState {
 }
 
 extension AppState {
+    private static func syncedGatewayRoot(
+        currentRoot: [String: Any],
+        draft: GatewayConfigSyncDraft,
+        remoteTLSFingerprintUpdate: RemoteTLSFingerprintUpdate = .preserve)
+        -> (root: [String: Any], changed: Bool)
+    {
+        var root = currentRoot
+        var gateway = root["gateway"] as? [String: Any] ?? [:]
+        var changed = false
+
+        let desiredMode: String? = switch draft.connectionMode {
+        case .local:
+            "local"
+        case .remote:
+            "remote"
+        case .unconfigured:
+            nil
+        }
+
+        let currentMode = (gateway["mode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let desiredMode {
+            if currentMode != desiredMode {
+                gateway["mode"] = desiredMode
+                changed = true
+            }
+        } else if currentMode != nil {
+            gateway.removeValue(forKey: "mode")
+            changed = true
+        }
+
+        var remote = gateway["remote"] as? [String: Any] ?? [:]
+        var remoteChanged = false
+        if draft.connectionMode == .remote {
+            let remoteHost = CommandResolver.parseSSHTarget(draft.remoteTarget)?.host
+            let updated = Self.updatedRemoteGatewayConfig(
+                current: remote,
+                draft: .init(
+                    transport: draft.remoteTransport,
+                    remoteUrl: draft.remoteUrl,
+                    remoteHost: remoteHost,
+                    remoteTarget: draft.remoteTarget,
+                    remoteIdentity: draft.remoteIdentity,
+                    remoteToken: draft.remoteToken,
+                    remoteTokenDirty: draft.remoteTokenDirty))
+            remote = updated.remote
+            remoteChanged = updated.changed
+        }
+        if case let .replace(fingerprint) = remoteTLSFingerprintUpdate {
+            remoteChanged = Self.updateGatewayString(
+                &remote,
+                key: "tlsFingerprint",
+                value: fingerprint) || remoteChanged
+        }
+        if remoteChanged {
+            if remote.isEmpty {
+                gateway.removeValue(forKey: "remote")
+            } else {
+                gateway["remote"] = remote
+            }
+            changed = true
+        }
+
+        guard changed else { return (currentRoot, false) }
+
+        if gateway.isEmpty {
+            root.removeValue(forKey: "gateway")
+        } else {
+            root["gateway"] = gateway
+        }
+        return (root, true)
+    }
+
     private func syncGatewayConfigIfNeeded() {
         self.advanceGatewayRoutingGeneration()
         guard self.gatewayConfigSyncIsEnabled, !self.isInitializing else { return }
@@ -1115,6 +1135,15 @@ extension AppState {
 
     @discardableResult
     func syncGatewayConfigNow() -> Bool {
+        self.syncGatewayConfigNow(remoteTLSFingerprintUpdate: .preserve)
+    }
+
+    @discardableResult
+    func syncGatewayConfigNow(remoteTLSFingerprint: String?) -> Bool {
+        self.syncGatewayConfigNow(remoteTLSFingerprintUpdate: .replace(remoteTLSFingerprint))
+    }
+
+    private func syncGatewayConfigNow(remoteTLSFingerprintUpdate: RemoteTLSFingerprintUpdate) -> Bool {
         guard self.gatewayConfigSyncIsEnabled, !self.isInitializing else { return true }
         self.setGatewayConfigSyncState(.pending)
 
@@ -1134,7 +1163,8 @@ extension AppState {
         // Keep app-only connection settings local to avoid overwriting remote gateway config.
         let synced = Self.syncedGatewayRoot(
             currentRoot: OpenClawConfigFile.loadDict(),
-            draft: draft)
+            draft: draft,
+            remoteTLSFingerprintUpdate: remoteTLSFingerprintUpdate)
         guard synced.changed else {
             self.setGatewayConfigSyncState(.current)
             return true

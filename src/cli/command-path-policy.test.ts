@@ -169,6 +169,15 @@ describe("command-path-policy", () => {
       }),
     ).toBe("default");
 
+    expectResolvedPolicy(["agent", "exec"], {
+      bypassConfigGuard: true,
+      loadPlugins: "never",
+      pluginRegistry: { scope: "all" },
+      ownsProtocolStdout: true,
+      hideBanner: true,
+      networkProxy: "default",
+    });
+
     for (const commandPath of [
       ["agents"],
       ["agents", "list"],
