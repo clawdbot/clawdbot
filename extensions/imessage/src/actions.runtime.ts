@@ -32,6 +32,12 @@ type IMessageBridgeSendResult = {
   messageId: string;
 };
 
+/** Option identity assigned by Messages when the poll balloon was created. */
+export type IMessagePollSentOption = {
+  id: string;
+  text: string;
+};
+
 type TempFileInput = {
   buffer: Uint8Array;
   filename: string;
@@ -174,6 +180,33 @@ async function runIMessageCliJson(
     cliPath: options.cliPath,
     dbPath: options.dbPath,
     timeoutMs: options.timeoutMs,
+  });
+}
+
+/**
+ * Messages mints the option UUIDs, so the send response is the only place they
+ * appear before someone votes. Approval bindings key decisions off these ids
+ * rather than option text, which a vote payload could otherwise spoof.
+ */
+function readSentPollOptions(result: Record<string, unknown>): IMessagePollSentOption[] {
+  const poll = result.poll;
+  if (typeof poll !== "object" || poll === null) {
+    return [];
+  }
+  const options = (poll as { options?: unknown }).options;
+  if (!Array.isArray(options)) {
+    return [];
+  }
+  return options.flatMap((entry) => {
+    if (typeof entry !== "object" || entry === null) {
+      return [];
+    }
+    const { id, text } = entry as { id?: unknown; text?: unknown };
+    if (typeof id !== "string" || typeof text !== "string") {
+      return [];
+    }
+    const trimmedId = id.trim();
+    return trimmedId ? [{ id: trimmedId, text: text.trim() }] : [];
   });
 }
 
@@ -424,8 +457,9 @@ export const imessageActionsRuntime = {
     // shadow `options` (the CLI run options) on this params bag.
     choices: readonly string[];
     replyToMessageId?: string;
+    suppressComment?: boolean;
     options: IMessageBridgeActionOptions;
-  }): Promise<IMessageBridgeSendResult> {
+  }): Promise<IMessageBridgeSendResult & { pollOptions: IMessagePollSentOption[] }> {
     const result = await runIMessageCliJson(
       [
         "poll",
@@ -436,10 +470,11 @@ export const imessageActionsRuntime = {
         params.question,
         ...params.choices.flatMap((choice) => ["--option", choice]),
         ...(params.replyToMessageId ? ["--reply-to", params.replyToMessageId] : []),
+        ...(params.suppressComment ? ["--no-comment"] : []),
       ],
       params.options,
     );
-    return { messageId: resolveMessageId(result) };
+    return { messageId: resolveMessageId(result), pollOptions: readSentPollOptions(result) };
   },
 
   async sendPollVote(params: {

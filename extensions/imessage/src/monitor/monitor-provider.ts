@@ -48,6 +48,7 @@ import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveIMessageAccount } from "../accounts.js";
+import { maybeResolveIMessageApprovalPollVote } from "../approval-polls.js";
 import { pollPendingIMessageApprovalReactions } from "../approval-reaction-poller.js";
 import { maybeResolveIMessageApprovalReaction } from "../approval-reactions.js";
 import { markIMessageChatRead, sendIMessageTyping } from "../chat.js";
@@ -758,6 +759,27 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       logVerbose(
         "imessage: folding poll comment (inline reply sent with a poll) into the poll; not delivering standalone",
       );
+      return;
+    }
+
+    // Approval poll shortcut: a vote on an approval poll we sent resolves the
+    // approval instead of reaching the agent. Runs before body rendering so a
+    // vote never becomes "Poll vote: ..." prose, and bypasses allowFrom/dmPolicy
+    // because approval-polls authorizes the transport sender itself.
+    // Transient resolver failures intentionally reach dispatchUnit's catch,
+    // which abandons the durable claim so ingress replay can retry this vote.
+    if (
+      await maybeResolveIMessageApprovalPollVote({
+        cfg,
+        accountId: accountInfo.accountId,
+        message,
+      })
+    ) {
+      // A vote is a real message row, so the debouncer still owns its ingress
+      // claim (see dispatch's `deferred` result). Resolving it here means no
+      // session will ever adopt it; abandon explicitly or the claim stalls
+      // until the 300s handler-timeout fires.
+      await ingressLifecycle?.onAbandoned();
       return;
     }
 

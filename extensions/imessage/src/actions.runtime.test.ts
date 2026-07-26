@@ -78,6 +78,44 @@ describe("imessage actions runtime", () => {
     ).rejects.toBe(wrapperError);
   });
 
+  it("suppresses the imsg poll caption when the caller already rendered context", async () => {
+    runIMessageCliJsonCommandMock.mockResolvedValue({
+      guid: "poll-guid",
+      poll: { options: [] },
+    });
+
+    await imessageActionsRuntime.sendPoll({
+      chatGuid: "iMessage;+;chat0000",
+      question: "Approval details",
+      choices: ["Allow", "Deny"],
+      suppressComment: true,
+      options: {
+        cliPath: "imsg",
+        dbPath: "/tmp/messages.db",
+        chatGuid: "iMessage;+;chat0000",
+      },
+    });
+
+    expect(runIMessageCliJsonCommandMock).toHaveBeenCalledWith({
+      cliPath: "imsg",
+      dbPath: "/tmp/messages.db",
+      timeoutMs: undefined,
+      args: [
+        "poll",
+        "send",
+        "--chat",
+        "iMessage;+;chat0000",
+        "--question",
+        "Approval details",
+        "--option",
+        "Allow",
+        "--option",
+        "Deny",
+        "--no-comment",
+      ],
+    });
+  });
+
   it("drops cached chats.list entries when the current clock is not a valid date timestamp", async () => {
     vi.spyOn(Date, "now").mockReturnValueOnce(1_700_000_000_000).mockReturnValueOnce(Number.NaN);
     const firstClient = mockRpcChatList([{ id: 1, guid: "iMessage;+;first" }]);
