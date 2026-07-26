@@ -38,6 +38,26 @@ export const QA_SCENARIO_PACKS = [
       "Source-checkout diagnostics smoke scenarios for OpenTelemetry signal export and protected Prometheus scraping.",
     scenarioIds: QA_OBSERVABILITY_SCENARIO_IDS,
   },
+  {
+    id: "smoke-ci",
+    title: "CI Smoke Pack",
+    description:
+      "Bounded deterministic CI scenarios spanning the smoke taxonomy profile across flow, Playwright, and script execution.",
+    scenarioIds: [
+      "control-ui-chat-flow-playwright",
+      "system-agent-ring-zero-setup",
+      "dreaming-shadow-trial-report",
+      "gateway-smoke",
+      "model-switch-follow-up",
+      "group-visible-reply-tool",
+      "long-running-release-audit",
+      "matrix-restart-resume",
+      "native-command-session-target",
+      "personal-task-followthrough-status",
+      "plugin-lifecycle-hot-reload",
+      "subagent-completion-direct-fallback",
+    ],
+  },
 ] as const satisfies readonly QaScenarioPackDefinition[];
 
 export function resolveQaScenarioPackScenarioIds(params: {

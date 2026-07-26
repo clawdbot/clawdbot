@@ -1,10 +1,41 @@
-// Qa Lab tests cover bounded CI smoke profile planning.
-import { OPENCLAW_CRABLINE_DEFAULT_CHANNEL } from "@openclaw/crabline";
+// Qa Lab tests cover bounded CI smoke pack planning.
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
-import { createQaSmokeCiPart } from "./ci-smoke-plan.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createQaSmokeCiPart, selectQaSmokeCiEligibilityChannel } from "./ci-smoke-plan.js";
+import { defaultQaModelForMode, normalizeQaProviderMode } from "./model-selection.js";
 import { readQaScenarioPack } from "./scenario-catalog.js";
+import { scenarioMatchesQaProviderLane } from "./scenario-lane.js";
+import { resolveQaScenarioPackScenarioIds } from "./scenario-packs.js";
 import { readQaScorecardTaxonomyReport } from "./scorecard-taxonomy.js";
+
+const smokePackMock = vi.hoisted(() => ({
+  mode: "actual" as "actual" | "empty" | "ineligible" | "unsupported",
+}));
+
+vi.mock("./scenario-packs.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./scenario-packs.js")>();
+  return {
+    ...actual,
+    resolveQaScenarioPackScenarioIds(
+      params: Parameters<typeof actual.resolveQaScenarioPackScenarioIds>[0],
+    ) {
+      const scenarioIds = actual.resolveQaScenarioPackScenarioIds(params);
+      if (params.pack !== "smoke-ci") {
+        return scenarioIds;
+      }
+      if (smokePackMock.mode === "empty") {
+        return [];
+      }
+      if (smokePackMock.mode === "ineligible") {
+        return ["otel-trace-smoke", ...scenarioIds.slice(1)];
+      }
+      if (smokePackMock.mode === "unsupported") {
+        return ["discord-canary", ...scenarioIds.slice(1)];
+      }
+      return scenarioIds;
+    },
+  };
+});
 
 type QaScenario = ReturnType<typeof readQaScenarioPack>["scenarios"][number];
 
@@ -22,35 +53,34 @@ function estimateScenarioCost(scenario: QaScenario | undefined): number {
 }
 
 describe("createQaSmokeCiPart", () => {
-  it("balances the bounded automatic smoke set across four profile parts", () => {
+  afterEach(() => {
+    smokePackMock.mode = "actual";
+  });
+
+  it("balances the bounded smoke pack across four profile parts", () => {
     const parts = ["profile-1", "profile-2", "profile-3", "profile-4"].map((partId) =>
       createQaSmokeCiPart(partId),
     );
     const repeatedLast = createQaSmokeCiPart("profile-4");
 
     expect(repeatedLast).toEqual(parts[3]);
-    for (const part of parts) {
-      expect(part.runs[0]?.channel).toBe(OPENCLAW_CRABLINE_DEFAULT_CHANNEL);
-    }
-    // The matrix channel run rides only on the last part.
-    expect(
-      parts.slice(0, 3).some((part) => part.runs.some((run) => run.channel === "matrix")),
-    ).toBe(false);
-    expect(parts[3]?.runs.some((run) => run.channel === "matrix")).toBe(true);
+    expect(parts.slice(0, 3).some((part) => part.runs.some((run) => run.slug === "matrix"))).toBe(
+      false,
+    );
+    expect(parts[3]?.runs.some((run) => run.slug === "matrix")).toBe(true);
 
     const scenarioIds = parts.flatMap((part) => part.runs.flatMap((run) => run.scenario_ids));
     expect(new Set(scenarioIds).size).toBe(scenarioIds.length);
+    const scenarioPack = readQaScenarioPack();
     const scenarioById = new Map(
-      readQaScenarioPack().scenarios.map((scenario) => [scenario.id, scenario] as const),
+      scenarioPack.scenarios.map((scenario) => [scenario.id, scenario] as const),
     );
+    const smokePackScenarioIds = resolveQaScenarioPackScenarioIds({ pack: "smoke-ci" });
+    expect(smokePackScenarioIds).toHaveLength(12);
+    expect(new Set(scenarioIds)).toEqual(new Set(smokePackScenarioIds));
     expect(
       new Set(scenarioIds.map((scenarioId) => scenarioById.get(scenarioId)?.execution.kind)),
     ).toEqual(new Set(["flow", "playwright", "script"]));
-    expect(scenarioIds).toHaveLength(11);
-    expect(scenarioIds).toContain("control-ui-chat-flow-playwright");
-    expect(scenarioIds).toContain("gateway-smoke");
-    expect(scenarioIds).toContain("matrix-restart-resume");
-
     const selectedScenarioPaths = new Set(
       scenarioIds.map((scenarioId) => scenarioById.get(scenarioId)?.sourcePath),
     );
@@ -71,10 +101,33 @@ describe("createQaSmokeCiPart", () => {
       .map((category) => category.id);
     expect(uncoveredCategoryIds).toEqual([]);
 
+    const smokePackScenarioIdSet = new Set(smokePackScenarioIds);
+    const taxonomyProfile = expectDefined(
+      scorecardReport.profiles.find((profile) => profile.id === "smoke-ci"),
+      "smoke-ci taxonomy profile",
+    );
+    const providerMode = normalizeQaProviderMode("mock-openai");
+    const primaryModel = defaultQaModelForMode(providerMode);
+    const eligibleScenariosOutsidePack = scenarioPack.scenarios.filter(
+      (scenario) =>
+        smokeScenarioRefs.has(scenario.sourcePath) &&
+        !smokePackScenarioIdSet.has(scenario.id) &&
+        scenarioMatchesQaProviderLane({
+          scenario,
+          providerMode,
+          primaryModel,
+          channelDriver: taxonomyProfile.channelDriver,
+          channel: scenario.execution.channel,
+        }),
+    );
+    expect(eligibleScenariosOutsidePack.length).toBeGreaterThan(0);
+    expect(
+      eligibleScenariosOutsidePack.every((scenario) => !scenarioIds.includes(scenario.id)),
+    ).toBe(true);
+
     const primaryScenarioIds = parts.map(
       (part) => part.runs.find((run) => run.slug === "primary")?.scenario_ids ?? [],
     );
-    expect(primaryScenarioIds[1]).toContain("system-agent-ring-zero-setup");
     const primaryRunCosts = primaryScenarioIds.map((ids) =>
       ids.reduce(
         (cost, scenarioId) => cost + estimateScenarioCost(scenarioById.get(scenarioId)),
@@ -94,8 +147,6 @@ describe("createQaSmokeCiPart", () => {
       primaryRunCosts.toSorted((left, right) => left - right)[0],
       "lightest QA smoke run cost",
     );
-    // Greedy balance: no part carries more than one heaviest-scenario cost
-    // beyond the lightest, and every part runs at least one scenario.
     expect(heaviestRunCost - lightestRunCost).toBeLessThanOrEqual(largestScenarioCost);
     expect(primaryScenarioIds.every((ids) => ids.length > 0)).toBe(true);
   });
@@ -103,6 +154,37 @@ describe("createQaSmokeCiPart", () => {
   it("rejects undeclared profile parts", () => {
     expect(() => createQaSmokeCiPart("profile-5")).toThrow(
       "unknown QA smoke CI profile part: profile-5",
+    );
+  });
+
+  it("accepts a portable multi-channel scenario through a supported CI channel", () => {
+    const scenario = expectDefined(
+      readQaScenarioPack().scenarios.find((candidate) => candidate.id === "channel-message-flows"),
+      "channel-message-flows scenario",
+    );
+
+    expect(scenario.execution).toMatchObject({ channels: ["qa-channel", "telegram"] });
+    expect(selectQaSmokeCiEligibilityChannel(scenario)).toBe("telegram");
+  });
+
+  it("fails when the smoke pack resolves empty", () => {
+    smokePackMock.mode = "empty";
+    expect(() => createQaSmokeCiPart("profile-1")).toThrow(
+      "smoke-ci scenario pack did not resolve any CI scenarios",
+    );
+  });
+
+  it("fails when the smoke pack contains a taxonomy-ineligible scenario", () => {
+    smokePackMock.mode = "ineligible";
+    expect(() => createQaSmokeCiPart("profile-1")).toThrow(
+      "smoke-ci scenario pack resolved ineligible CI scenarios",
+    );
+  });
+
+  it("fails when the smoke pack contains an unsupported channel", () => {
+    smokePackMock.mode = "unsupported";
+    expect(() => createQaSmokeCiPart("profile-1")).toThrow(
+      "smoke-ci scenario pack resolved unsupported CI channels: discord",
     );
   });
 });

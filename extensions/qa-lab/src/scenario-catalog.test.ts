@@ -901,9 +901,6 @@ describe("qa scenario catalog", () => {
       const scenario = readQaScenarioById(scenarioId);
 
       expect(scenario.execution.channel, scenarioId).toBeUndefined();
-      expect(Object.keys(scenario.execution.profiles ?? {}), scenarioId).toEqual(
-        expect.arrayContaining(["matrix:adapter", "slack:adapter"]),
-      );
     }
   });
 

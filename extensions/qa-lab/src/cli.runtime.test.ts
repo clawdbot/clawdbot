@@ -529,12 +529,12 @@ describe("qa cli runtime", () => {
       profile: "release",
       surface: "channels",
       providerMode: "mock-openai",
-      scenarioIds: ["channel-chat-baseline", "telegram-help-command"],
+      scenarioIds: ["channel-chat-baseline", "thread-follow-up"],
     });
 
     const suiteArgs = mockFirstObjectArg(runQaSuite);
     expect(suiteArgs.scenarioIds).toContain("channel-chat-baseline");
-    expect(suiteArgs.scenarioIds).toContain("telegram-help-command");
+    expect(suiteArgs.scenarioIds).toContain("thread-follow-up");
     expect(suiteArgs.adapterFactories).toBe(
       listLiveTransportQaAdapterFactories.mock.results[0]?.value,
     );
@@ -1879,7 +1879,9 @@ describe("qa cli runtime", () => {
         repoRoot: "/tmp/openclaw-repo",
         pack: "personal-admin",
       }),
-    ).rejects.toThrow('--pack must be one of personal-agent, observability, got "personal-admin"');
+    ).rejects.toThrow(
+      '--pack must be one of personal-agent, observability, smoke-ci, got "personal-admin"',
+    );
   });
 
   it("rejects unknown suite CLI auth modes", async () => {

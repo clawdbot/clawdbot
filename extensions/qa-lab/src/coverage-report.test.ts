@@ -239,6 +239,7 @@ describe("qa coverage report", () => {
     expect(inventory.scenarioPacks.map((pack) => pack.id)).toEqual([
       "observability",
       "personal-agent",
+      "smoke-ci",
     ]);
     const personalPack = inventory.scenarioPacks.find((pack) => pack.id === "personal-agent");
     const observabilityPack = inventory.scenarioPacks.find((pack) => pack.id === "observability");

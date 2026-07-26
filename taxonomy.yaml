@@ -9,7 +9,7 @@ profiles:
   - id: smoke-ci
     description: Deterministic PR and merge proof with mock model providers and the
       Crabline-backed channel driver; categories are limited to exact owners exercised by the
-      fixed bounded CI plan.
+      bounded CI scenario pack.
     evidenceMode: slim
     channelDriver: crabline
     categoryIds:

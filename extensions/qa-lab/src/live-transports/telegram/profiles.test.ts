@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { listQaScenariosForExecutionProfile } from "../../scenario-catalog.js";
 import { listTelegramQaScenarios, resolveTelegramQaScenarioIds } from "./profiles.js";
 
 describe("Telegram QA profiles", () => {
@@ -13,9 +12,9 @@ describe("Telegram QA profiles", () => {
   });
 
   it("selects every migrated Telegram scenario through all", () => {
-    expect(resolveTelegramQaScenarioIds({ providerMode: "mock-openai", profile: "all" })).toEqual(
-      listQaScenariosForExecutionProfile("telegram:all").map((scenario) => scenario.id),
-    );
+    expect(
+      resolveTelegramQaScenarioIds({ providerMode: "mock-openai", profile: "all" }),
+    ).toHaveLength(16);
   });
 
   it("lets explicit scenarios override profile selection", () => {
@@ -43,10 +42,8 @@ describe("Telegram QA profiles", () => {
   it("lists the YAML catalog with provider-specific release defaults", () => {
     const scenarios = listTelegramQaScenarios("mock-openai");
 
-    expect(scenarios.map(({ id }) => id).toSorted()).toEqual(
-      listQaScenariosForExecutionProfile("telegram:all")
-        .map((scenario) => scenario.id)
-        .toSorted(),
+    expect(scenarios.map(({ id }) => id)).toEqual(
+      resolveTelegramQaScenarioIds({ providerMode: "mock-openai", profile: "all" }),
     );
     expect(
       scenarios.find(({ id }) => id === "telegram-long-final-reuses-preview")?.defaultEnabled,

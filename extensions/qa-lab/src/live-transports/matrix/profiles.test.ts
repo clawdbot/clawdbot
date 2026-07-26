@@ -55,4 +55,10 @@ describe("QA Lab Matrix profiles", () => {
     expect(profileScenarioIds).not.toContain("matrix-room-block-streaming");
     expect(profileScenarioIds).not.toContain("subagent-thread-spawn");
   });
+
+  it("rejects inherited object property names as unknown profiles", () => {
+    expect(() => resolveMatrixQaScenarioIds({ profile: "constructor" })).toThrow(
+      'Unknown QA Lab Matrix profile "constructor"',
+    );
+  });
 });

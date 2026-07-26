@@ -483,7 +483,7 @@ export function registerQaLabCli(program: Command) {
     .option("--parity-pack <name>", 'Preset scenario pack; currently only "agentic" is supported')
     .option(
       "--pack <id>",
-      'Scenario pack id; currently "personal-agent" and "observability" are supported',
+      'Scenario pack id; currently "personal-agent", "observability", and "smoke-ci" are supported',
     )
     .option("--scenario <id>", "Run only the named QA scenario (repeatable)", collectString, [])
     .option(

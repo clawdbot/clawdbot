@@ -16,7 +16,7 @@ Pieces:
 
 - `extensions/qa-channel`: synthetic message channel with DM, channel, thread,
   reaction, edit, and delete surfaces.
-- `extensions/qa-lab`: debugger UI, QA bus, scenario profiles, and live
+- `extensions/qa-lab`: debugger UI, QA bus, scenario runners, and live
   transport adapters for observing the transcript, injecting inbound messages,
   and exporting a Markdown report.
 - `qa/`: repo-backed seed assets for the kickoff task and baseline QA
@@ -212,8 +212,9 @@ precedence over `--profile`.
 | `e2ee-deep`  | 18        | State-loss, backup, key recovery, device hygiene, and SAS/QR/DM verification.                                                            |
 | `e2ee-cli`   | 9         | `openclaw matrix encryption setup`, recovery-key, multi-account, gateway round-trip, and self-verification commands through the harness. |
 
-Profile membership and channel requirements live with the declarative Matrix
-scenarios under `qa/scenarios/channels/`. The run chooses the channel driver.
+Matrix profile membership lives in the Matrix runner. Declarative scenarios
+under `qa/scenarios/channels/` own channel requirements. The run chooses the
+channel driver.
 Their live implementations live under
 `extensions/qa-lab/src/live-transports/matrix/scenarios/`.
 
@@ -414,11 +415,10 @@ when the maintainer secret is present.
 
 The root `taxonomy.yaml` defines semantic coverage IDs. Scenario YAML files
 under `qa/scenarios/` map each scenario to those IDs and own execution
-metadata: `channel` is the only channel requirement, and `profiles` declare
-named run membership. The channel driver is an interchangeable run-level
-implementation choice. TypeScript
-runners query that catalog; they do not maintain parallel scenario or coverage
-inventories.
+metadata; `channel` is the only channel requirement. Named scenario packs and
+transport runners own curated run membership. The channel driver is an
+interchangeable run-level implementation choice. Runners query scenario
+execution and coverage facts from the catalog without duplicating them.
 
 Static `qa coverage` output reports the taxonomy-to-scenario mapping. Actual
 proof comes from `qa-evidence.json`, which records the executed scenario,
@@ -446,7 +446,8 @@ scenarios). The pack selector is additive with repeated `--scenario` flags:
 explicit scenarios run first, then pack scenarios run in pack order with
 duplicates removed. Use `--pack observability` to select the
 `otel-trace-smoke` and `docker-prometheus-smoke` scenarios together when a
-custom QA runner already supplies the OpenTelemetry collector setup.
+custom QA runner already supplies the OpenTelemetry collector setup. The
+`smoke-ci` pack is the bounded scenario set used by the CI smoke planner.
 
 The command exits non-zero when any scenario fails. Use `--allow-failures`
 when you want artifacts without a failing exit code.

@@ -1,33 +1,23 @@
-// Qa Lab plugin module plans the bounded CI smoke profile parts.
-import { OPENCLAW_CRABLINE_DEFAULT_CHANNEL } from "@openclaw/crabline";
+// Qa Lab plugin module plans the bounded CI smoke pack parts.
 import { defaultQaModelForMode, normalizeQaProviderMode } from "./model-selection.js";
 import { readQaScenarioPack } from "./scenario-catalog.js";
-import { scenarioMatchesQaProviderLane } from "./scenario-lane.js";
+import { describeQaProviderLaneMismatches } from "./scenario-lane.js";
+import { resolveQaScenarioPackScenarioIds } from "./scenario-packs.js";
 import { readQaScorecardTaxonomyReport } from "./scorecard-taxonomy.js";
 
 const QA_SMOKE_PROFILE = "smoke-ci";
+const QA_SMOKE_PACK = "smoke-ci";
 // Four parts keep each smoke job near the fixed setup cost (~1min) instead of
 // serializing ~4min of scenarios into one job that owns the PR wall clock.
 const QA_SMOKE_CI_PARTS = ["profile-1", "profile-2", "profile-3", "profile-4"] as const;
-const QA_SMOKE_CI_CHANNELS = ["matrix", OPENCLAW_CRABLINE_DEFAULT_CHANNEL] as const;
-const QA_SMOKE_CI_SCENARIO_IDS = new Set([
-  "control-ui-chat-flow-playwright",
-  "system-agent-ring-zero-setup",
-  "gateway-smoke",
-  "model-switch-follow-up",
-  "group-visible-reply-tool",
-  "long-running-release-audit",
-  "matrix-restart-resume",
-  "personal-task-followthrough-status",
-  "plugin-lifecycle-hot-reload",
-  "subagent-completion-direct-fallback",
-  "telegram-commands-command",
-]);
+const QA_SMOKE_CI_CHANNELS = ["telegram", "matrix"] as const;
 
 type QaSmokeCiPartId = (typeof QA_SMOKE_CI_PARTS)[number];
+type QaSmokeCiScenario = ReturnType<typeof readQaScenarioPack>["scenarios"][number];
 
+// CI consumes only the run slug and ids. `qa run` resolves the taxonomy-owned
+// channel driver so this planner does not encode driver-specific channel policy.
 type QaSmokeCiRun = {
-  channel: string;
   slug: string;
   scenario_ids: string[];
 };
@@ -41,9 +31,7 @@ function isQaSmokeCiPartId(value: string): value is QaSmokeCiPartId {
   return QA_SMOKE_CI_PARTS.includes(value as QaSmokeCiPartId);
 }
 
-function estimateScenarioCost(
-  scenario: ReturnType<typeof readQaScenarioPack>["scenarios"][number],
-) {
+function estimateScenarioCost(scenario: QaSmokeCiScenario) {
   if (scenario.execution.kind === "script") {
     return 8;
   }
@@ -51,6 +39,18 @@ function estimateScenarioCost(
     return 6;
   }
   return scenario.execution.kind === "flow" && scenario.execution.isolationReason ? 4 : 1;
+}
+
+function listQaSmokeCiDeclaredChannels(scenario: QaSmokeCiScenario): readonly string[] {
+  if (scenario.execution.channel) {
+    return [scenario.execution.channel];
+  }
+  return scenario.execution.kind === "flow" ? (scenario.execution.channels ?? []) : [];
+}
+
+export function selectQaSmokeCiEligibilityChannel(scenario: QaSmokeCiScenario): string | undefined {
+  const declaredChannels = listQaSmokeCiDeclaredChannels(scenario);
+  return QA_SMOKE_CI_CHANNELS.find((channel) => declaredChannels.includes(channel));
 }
 
 export function createQaSmokeCiPart(partId: string): QaSmokeCiPart {
@@ -64,42 +64,86 @@ export function createQaSmokeCiPart(partId: string): QaSmokeCiPart {
   if (!profile) {
     throw new Error(`taxonomy.yaml does not define QA run profile ${QA_SMOKE_PROFILE}.`);
   }
-  const providerMode = normalizeQaProviderMode("mock-openai");
-  const primaryModel = defaultQaModelForMode(providerMode);
-  const scenarios = scenarioPack.scenarios.filter(
-    (scenario) =>
-      QA_SMOKE_CI_SCENARIO_IDS.has(scenario.id) &&
-      scenarioMatchesQaProviderLane({
-        scenario,
-        providerMode,
-        primaryModel,
-        channelDriver: profile.channelDriver,
-        channel: scenario.execution.channel ?? OPENCLAW_CRABLINE_DEFAULT_CHANNEL,
-      }),
-  );
-  if (scenarios.length === 0) {
-    throw new Error(`${QA_SMOKE_PROFILE} did not resolve any executable QA scenarios.`);
+
+  let scenarioIds: string[];
+  try {
+    scenarioIds = resolveQaScenarioPackScenarioIds({ pack: QA_SMOKE_PACK });
+  } catch (error) {
+    throw new Error(`${QA_SMOKE_PACK} scenario pack did not resolve any CI scenarios.`, {
+      cause: error,
+    });
   }
+  if (scenarioIds.length === 0) {
+    throw new Error(`${QA_SMOKE_PACK} scenario pack did not resolve any CI scenarios.`);
+  }
+
+  const scenariosById = new Map(
+    scenarioPack.scenarios.map((scenario) => [scenario.id, scenario] as const),
+  );
+  const missingScenarioIds = scenarioIds.filter((scenarioId) => !scenariosById.has(scenarioId));
+  if (missingScenarioIds.length > 0) {
+    throw new Error(
+      `${QA_SMOKE_PACK} scenario pack references unknown CI scenarios: ${missingScenarioIds.toSorted().join(", ")}.`,
+    );
+  }
+  const scenarios = scenarioIds.map((scenarioId) => scenariosById.get(scenarioId)!);
 
   const supportedChannels = new Set<string>(QA_SMOKE_CI_CHANNELS);
   const unsupportedChannels = new Set(
-    scenarios
-      .map((scenario) => scenario.execution.channel ?? OPENCLAW_CRABLINE_DEFAULT_CHANNEL)
-      .filter((channel) => !supportedChannels.has(channel)),
+    scenarios.flatMap((scenario) => {
+      const declaredChannels = listQaSmokeCiDeclaredChannels(scenario);
+      return declaredChannels.length > 0 && !selectQaSmokeCiEligibilityChannel(scenario)
+        ? declaredChannels.filter((channel) => !supportedChannels.has(channel))
+        : [];
+    }),
   );
   if (unsupportedChannels.size > 0) {
     throw new Error(
-      `${QA_SMOKE_PROFILE} resolved unsupported CI channels: ${[...unsupportedChannels].toSorted().join(", ")}.`,
+      `${QA_SMOKE_PACK} scenario pack resolved unsupported CI channels: ${[...unsupportedChannels].toSorted().join(", ")}.`,
     );
   }
 
-  const matrixScenarios = scenarios.filter((scenario) => scenario.execution.channel === "matrix");
-  const defaultChannelScenarios = scenarios
-    .filter(
-      (scenario) =>
-        (scenario.execution.channel ?? OPENCLAW_CRABLINE_DEFAULT_CHANNEL) ===
-        OPENCLAW_CRABLINE_DEFAULT_CHANNEL,
-    )
+  const providerMode = normalizeQaProviderMode("mock-openai");
+  const primaryModel = defaultQaModelForMode(providerMode);
+  const smokeCategories = scorecardReport.categories.filter((category) =>
+    category.profiles.includes(QA_SMOKE_PROFILE),
+  );
+  const smokeScenarioRefs = new Set(smokeCategories.flatMap((category) => category.scenarioRefs));
+  const ineligibleScenarios = scenarios.flatMap((scenario) => {
+    const reasons = describeQaProviderLaneMismatches({
+      scenario,
+      providerMode,
+      primaryModel,
+      channelDriver: profile.channelDriver,
+      channel: selectQaSmokeCiEligibilityChannel(scenario),
+    });
+    if (!smokeScenarioRefs.has(scenario.sourcePath)) {
+      reasons.unshift(`not referenced by ${QA_SMOKE_PROFILE} taxonomy categories`);
+    }
+    return reasons.length > 0 ? [`${scenario.id} (${reasons.join(", ")})`] : [];
+  });
+  if (ineligibleScenarios.length > 0) {
+    throw new Error(
+      `${QA_SMOKE_PACK} scenario pack resolved ineligible CI scenarios: ${ineligibleScenarios.toSorted().join("; ")}.`,
+    );
+  }
+
+  const selectedScenarioPaths = new Set(scenarios.map((scenario) => scenario.sourcePath));
+  const uncoveredCategoryIds = smokeCategories
+    .filter((category) => !category.scenarioRefs.some((ref) => selectedScenarioPaths.has(ref)))
+    .map((category) => category.id)
+    .toSorted();
+  if (uncoveredCategoryIds.length > 0) {
+    throw new Error(
+      `${QA_SMOKE_PACK} scenario pack leaves ${QA_SMOKE_PROFILE} taxonomy categories without CI scenarios: ${uncoveredCategoryIds.join(", ")}.`,
+    );
+  }
+
+  const matrixScenarios = scenarios.filter(
+    (scenario) => selectQaSmokeCiEligibilityChannel(scenario) === "matrix",
+  );
+  const primaryScenarios = scenarios
+    .filter((scenario) => selectQaSmokeCiEligibilityChannel(scenario) !== "matrix")
     .toSorted(
       (left, right) =>
         estimateScenarioCost(right) - estimateScenarioCost(left) || left.id.localeCompare(right.id),
@@ -112,7 +156,7 @@ export function createQaSmokeCiPart(partId: string): QaSmokeCiPart {
   if (!firstPartition) {
     throw new Error(`${QA_SMOKE_PROFILE} declares no CI profile parts.`);
   }
-  for (const scenario of defaultChannelScenarios) {
+  for (const scenario of primaryScenarios) {
     const partition = partitions.reduce(
       (lightest, candidate) => (candidate.cost < lightest.cost ? candidate : lightest),
       firstPartition,
@@ -121,8 +165,8 @@ export function createQaSmokeCiPart(partId: string): QaSmokeCiPart {
     partition.cost += estimateScenarioCost(scenario);
   }
 
-  // The matrix channel run rides on the last part so the greedy cost balance
-  // above stays undisturbed for the shared default-channel scenarios.
+  // The Matrix run rides on the last part so the greedy cost balance above
+  // stays undisturbed for scenarios that use the run-level channel driver.
   const matrixPartIndex = QA_SMOKE_CI_PARTS.length - 1;
   const partIndex = QA_SMOKE_CI_PARTS.indexOf(partId);
   const selectedPartition = partitions[partIndex];
@@ -131,14 +175,12 @@ export function createQaSmokeCiPart(partId: string): QaSmokeCiPart {
   }
   const runs: QaSmokeCiRun[] = [
     {
-      channel: OPENCLAW_CRABLINE_DEFAULT_CHANNEL,
       slug: "primary",
       scenario_ids: selectedPartition.scenarios.map((scenario) => scenario.id).toSorted(),
     },
   ];
   if (partIndex === matrixPartIndex) {
     runs.push({
-      channel: "matrix",
       slug: "matrix",
       scenario_ids: matrixScenarios.map((scenario) => scenario.id).toSorted(),
     });

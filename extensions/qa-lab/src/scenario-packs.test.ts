@@ -26,8 +26,6 @@ describe("qa scenario packs", () => {
         const scenario = readQaScenarioById(scenarioId);
 
         expect(scenario.id).toBe(scenarioId);
-        expect(scenario.execution.kind).toBe("flow");
-        expect(scenario.execution.flow?.steps.length).toBeGreaterThan(0);
       }
     }
   });
@@ -71,6 +69,12 @@ describe("qa scenario packs", () => {
     ]);
   });
 
+  it("expands the smoke-ci pack in pack order", () => {
+    expect(resolveQaScenarioPackScenarioIds({ pack: "smoke-ci" })).toEqual([
+      ...scenarioIdsForPack("smoke-ci"),
+    ]);
+  });
+
   it("combines explicit scenarios with pack scenarios", () => {
     expect(
       resolveQaScenarioPackScenarioIds({
@@ -82,7 +86,7 @@ describe("qa scenario packs", () => {
 
   it("rejects unknown scenario packs", () => {
     expect(() => resolveQaScenarioPackScenarioIds({ pack: "personal-admin" })).toThrow(
-      '--pack must be one of personal-agent, observability, got "personal-admin"',
+      '--pack must be one of personal-agent, observability, smoke-ci, got "personal-admin"',
     );
   });
 
