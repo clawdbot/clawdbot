@@ -737,10 +737,14 @@ class NewSessionPage extends OpenClawLightDomElement {
     }
     if (usesWorkspace && agent?.workspaceGit !== true) {
       this.repository = { kind: "direct", repoRoot };
+      const rejectedWorktree = !this.cloudProfileId && (this.worktree || restoreWorktree);
       if (!this.cloudProfileId) {
         this.worktree = false;
       }
       this.preferredWorktreeRestore = false;
+      if (rejectedWorktree) {
+        this.persistPreference({ worktree: false });
+      }
       return;
     }
     const snapshot = this.context?.gateway.snapshot;

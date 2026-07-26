@@ -753,7 +753,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     }
   });
 
-  it("restores the last valid place, worktree, model, and reasoning in a new draft", async () => {
+  it("restores valid preferences and repairs a worktree rejected by workspace metadata", async () => {
     const context = await browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -843,6 +843,53 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
 
       const branchRequests = await gateway.getRequests("worktrees.branches");
       expect(branchRequests.at(-1)?.params).toMatchObject({ repoRoot: PICKED });
+
+      await page.evaluate((workspace) => {
+        const key = Array.from({ length: localStorage.length }, (_, index) =>
+          localStorage.key(index),
+        ).find((candidate) => candidate?.startsWith("openclaw.new-session.preferences.v1:"));
+        if (!key) {
+          throw new Error("missing new-session preference");
+        }
+        const value = JSON.parse(localStorage.getItem(key) ?? "null") as {
+          agents?: Record<string, { folder?: string; workspace?: string }>;
+        };
+        const main = value.agents?.main;
+        if (!main) {
+          throw new Error("missing main-agent preference");
+        }
+        main.folder = workspace;
+        main.workspace = workspace;
+        localStorage.setItem(key, JSON.stringify(value));
+      }, WORKSPACE);
+      await gateway.setMethodResponse("agents.list", {
+        agents: [
+          {
+            id: "main",
+            identity: { name: "Main" },
+            name: "Main",
+            workspace: WORKSPACE,
+            workspaceGit: false,
+          },
+        ],
+        defaultId: "main",
+        mainKey: "main",
+        scope: "agent",
+      });
+      await page.reload();
+      await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("false");
+      const storedWorktree = await page.evaluate(() => {
+        const key = Array.from({ length: localStorage.length }, (_, index) =>
+          localStorage.key(index),
+        ).find((candidate) => candidate?.startsWith("openclaw.new-session.preferences.v1:"));
+        const value = key
+          ? (JSON.parse(localStorage.getItem(key) ?? "null") as {
+              agents?: Record<string, { worktree?: boolean }>;
+            } | null)
+          : null;
+        return value?.agents?.main?.worktree;
+      });
+      expect(storedWorktree).toBe(false);
     } finally {
       await context.close();
     }
