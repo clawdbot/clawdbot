@@ -131,10 +131,18 @@ Browser → Flask (0.0.0.0:5051)
 ### Storage Health
 
 - Live `df` for `/` and `/mnt/ai-storage`.
+- When `/mnt/ai-storage` is not local to the development host, the dashboard
+  performs a read-only SSH probe of the Intel Mini using
+  `OPENCLAW_INTELMINI_STORAGE_HOST`, `OPENCLAW_INTELMINI_STORAGE_USER`, and
+  `OPENCLAW_INTELMINI_STORAGE_KEY`.
+- The remote command is limited to `findmnt` and `df`; it does not mount,
+  modify, restart, or write to the Intel Mini.
 - Missing or unmounted storage is shown as **Not mounted on this host**, not as
   `0%` usage or a parser failure.
 - Internal and external disk percentages have separate trend columns. Missing
   external samples remain blank and are not plotted as zero.
+- The hourly development collector uses the same read-only remote probe when
+  the external storage is not mounted locally.
 - Thresholds: Healthy &lt;80%, Warning 80–90%, Critical &gt;90%.
 - Disk usage over time chart from `trends.csv`.
 

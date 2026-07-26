@@ -41,6 +41,18 @@ M4_SSH_KEY = os.environ.get(
     "OPENCLAW_M4_SSH_KEY",
     str(Path.home() / ".ssh/id_ed25519_openclaw_m4"),
 )
+INTELMINI_STORAGE_HOST = os.environ.get(
+    "OPENCLAW_INTELMINI_STORAGE_HOST",
+    "100.85.36.72",
+)
+INTELMINI_STORAGE_USER = os.environ.get(
+    "OPENCLAW_INTELMINI_STORAGE_USER",
+    "gravesab",
+)
+INTELMINI_STORAGE_KEY = os.environ.get(
+    "OPENCLAW_INTELMINI_STORAGE_KEY",
+    str(Path.home() / ".ssh/openclaw_dev_backup_ed25519"),
+)
 
 REPORT_DIR = Path.home() / "ai/projects/openclaw/reports"
 GRAPH_DIR = REPORT_DIR / "graphs"
@@ -172,6 +184,100 @@ def get_disk_info(path, label):
         }
 
 
+def get_remote_external_storage_info():
+    remote_command = (
+        "findmnt -n -T /mnt/ai-storage -o TARGET,SOURCE,FSTYPE && "
+        "df -P -h -- /mnt/ai-storage"
+    )
+    try:
+        out = subprocess.check_output(
+            [
+                "ssh",
+                "-i",
+                INTELMINI_STORAGE_KEY,
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "IdentitiesOnly=yes",
+                "-o",
+                "StrictHostKeyChecking=yes",
+                "-o",
+                "ConnectTimeout=5",
+                f"{INTELMINI_STORAGE_USER}@{INTELMINI_STORAGE_HOST}",
+                remote_command,
+            ],
+            text=True,
+            timeout=10,
+            stderr=subprocess.STDOUT,
+        ).strip()
+        lines = out.splitlines()
+        if len(lines) < 3:
+            raise ValueError("remote storage probe returned incomplete data")
+
+        mount_fields = lines[0].split()
+        disk_fields = lines[-1].split()
+        if (
+            len(mount_fields) < 3
+            or mount_fields[0] != "/mnt/ai-storage"
+            or len(disk_fields) < 6
+        ):
+            raise ValueError("remote storage is not mounted at the expected path")
+
+        total, used, free, pct = disk_fields[1:5]
+        pct_num = int(pct.replace("%", ""))
+        if pct_num >= 90:
+            color, status = "#ef4444", "Critical"
+        elif pct_num >= 80:
+            color, status = "#facc15", "Warning"
+        else:
+            color, status = "#22c55e", "Healthy"
+
+        return {
+            "label": "External AI Storage — Intel Mini",
+            "path": "/mnt/ai-storage",
+            "total": total,
+            "used": used,
+            "free": free,
+            "pct": pct,
+            "pct_num": pct_num,
+            "color": color,
+            "status": status,
+            "available": True,
+            "source": mount_fields[1],
+            "filesystem": mount_fields[2],
+            "remote_host": INTELMINI_STORAGE_HOST,
+        }
+    except Exception:
+        return {
+            "label": "External AI Storage — Intel Mini",
+            "path": "/mnt/ai-storage",
+            "total": "unavailable",
+            "used": "unavailable",
+            "free": "unavailable",
+            "pct": "—",
+            "pct_num": None,
+            "color": "#64748b",
+            "status": "Intel Mini probe unavailable",
+            "available": False,
+            "source": "unknown",
+            "filesystem": "unknown",
+            "remote_host": INTELMINI_STORAGE_HOST,
+        }
+
+
+def get_external_storage_info():
+    local_mount = run_command(
+        "findmnt -n -T /mnt/ai-storage -o TARGET",
+        timeout=5,
+    )
+    if local_mount == "/mnt/ai-storage":
+        return get_disk_info(
+            "/mnt/ai-storage",
+            "External AI Storage",
+        )
+    return get_remote_external_storage_info()
+
+
 def get_disk_used_percent(path):
     try:
         out = subprocess.check_output(
@@ -185,11 +291,10 @@ def get_disk_used_percent(path):
         return None
 
 
-def storage_chart_html():
+def storage_chart_html(external_now=None):
     chart_file = GRAPH_DIR / "storage_usage.png"
 
     internal_now = get_disk_used_percent("/")
-    external_now = get_disk_used_percent("/mnt/ai-storage")
 
     labels = []
     internal_values = []
@@ -294,9 +399,10 @@ def storage_chart_html():
 
 
 def storage_panel_html():
+    external_disk = get_external_storage_info()
     disks = [
         get_disk_info("/", "Internal Ubuntu Disk"),
-        get_disk_info("/mnt/ai-storage", "External AI Storage"),
+        external_disk,
     ]
 
     html = """
@@ -305,7 +411,13 @@ def storage_panel_html():
 <h3>Disk Usage Over Time</h3>
 """
 
-    html += storage_chart_html()
+    html += storage_chart_html(
+        external_now=(
+            float(external_disk["pct_num"])
+            if external_disk["available"]
+            else None
+        )
+    )
 
     html += """
 <h3 style="margin-top:20px;">Current Disk Status</h3>
@@ -351,6 +463,15 @@ def storage_panel_html():
         <div><b>Free:</b> {d['free']}</div>
         <div><b>Total:</b> {d['total']}</div>
     </div>
+    {
+        '<div style="color:#cbd5e1;margin-top:8px;font-size:14px;">'
+        f"Read-only source: {html_module.escape(d.get('source', 'local'))} "
+        f"({html_module.escape(d.get('filesystem', 'local'))}) on "
+        f"{html_module.escape(d.get('remote_host', 'this host'))}"
+        '</div>'
+        if d.get('remote_host')
+        else ''
+    }
 </div>
 """
 

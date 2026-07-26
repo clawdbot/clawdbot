@@ -83,6 +83,20 @@ if [ "$EXTERNAL_MOUNT_TARGET" = "/mnt/ai-storage" ]; then
     df -P /mnt/ai-storage |
       awk 'NR==2 {gsub("%","",$5); print $5}'
   )"
+else
+  INTELMINI_STORAGE_HOST="${OPENCLAW_INTELMINI_STORAGE_HOST:-100.85.36.72}"
+  INTELMINI_STORAGE_USER="${OPENCLAW_INTELMINI_STORAGE_USER:-gravesab}"
+  INTELMINI_STORAGE_KEY="${OPENCLAW_INTELMINI_STORAGE_KEY:-$HOME/.ssh/openclaw_dev_backup_ed25519}"
+  EXTERNAL_DISK_USED="$(
+    ssh -i "$INTELMINI_STORAGE_KEY" \
+      -o BatchMode=yes \
+      -o IdentitiesOnly=yes \
+      -o StrictHostKeyChecking=yes \
+      -o ConnectTimeout=5 \
+      "$INTELMINI_STORAGE_USER@$INTELMINI_STORAGE_HOST" \
+      "findmnt -n -T /mnt/ai-storage -o TARGET | grep -Fx /mnt/ai-storage >/dev/null && df -P /mnt/ai-storage | awk 'NR==2 {gsub(\"%\",\"\",\$5); print \$5}'" \
+      2>/dev/null || true
+  )"
 fi
 
 M4_JSON="$(

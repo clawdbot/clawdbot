@@ -523,6 +523,46 @@ class ScorecardDashboardTests(unittest.TestCase):
         self.assertEqual(disk["free"], "62G")
         self.assertEqual(disk["pct_num"], 38)
 
+    def test_remote_external_storage_probe_is_read_only_and_parses_capacity(self):
+        remote_output = (
+            "/mnt/ai-storage /dev/sda1 ext4\n"
+            "Filesystem Size Used Avail Use% Mounted on\n"
+            "/dev/sda1 3.6T 23G 3.4T 1% /mnt/ai-storage"
+        )
+        with mock.patch.object(
+            dashboard.subprocess,
+            "check_output",
+            return_value=remote_output,
+        ) as check_output:
+            disk = dashboard.get_remote_external_storage_info()
+
+        self.assertTrue(disk["available"])
+        self.assertEqual(disk["total"], "3.6T")
+        self.assertEqual(disk["used"], "23G")
+        self.assertEqual(disk["free"], "3.4T")
+        self.assertEqual(disk["pct_num"], 1)
+        self.assertEqual(disk["source"], "/dev/sda1")
+        arguments = check_output.call_args.args[0]
+        self.assertIsInstance(arguments, list)
+        self.assertIn("BatchMode=yes", arguments)
+        self.assertNotIn("shell", check_output.call_args.kwargs)
+        remote_command = arguments[-1]
+        self.assertIn("findmnt", remote_command)
+        self.assertIn("df -P -h", remote_command)
+        self.assertNotIn("mount ", remote_command)
+
+    def test_remote_storage_probe_failure_is_non_destructive_fallback(self):
+        with mock.patch.object(
+            dashboard.subprocess,
+            "check_output",
+            side_effect=TimeoutError(),
+        ):
+            disk = dashboard.get_remote_external_storage_info()
+
+        self.assertFalse(disk["available"])
+        self.assertEqual(disk["status"], "Intel Mini probe unavailable")
+        self.assertIsNone(disk["pct_num"])
+
     def test_queue_selects_an_older_undecided_archived_evaluation(self):
         archived = dashboard.AI_EVALUATION_PATH.parent / (
             "evaluation-lab-pipeline-0.json"
