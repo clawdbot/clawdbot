@@ -29,6 +29,7 @@ import ai.openclaw.app.chat.MessageSpeechController
 import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.OutgoingAttachment
 import ai.openclaw.app.chat.SessionBranch
+import ai.openclaw.app.chat.SessionForkResult
 import ai.openclaw.app.chat.SessionRewindResult
 import ai.openclaw.app.chat.SystemSpeechSpeaker
 import ai.openclaw.app.gateway.DeviceAuthEntry
@@ -5040,7 +5041,7 @@ class NodeRuntime private constructor(
 
   suspend fun rewindChatAtEntry(entryId: String): SessionRewindResult? = chat.rewindSessionAtEntryResult(chatSessionKey.value, entryId)
 
-  suspend fun forkChatAtEntry(entryId: String): Pair<String, String?>? = chat.forkSessionAtEntry(chatSessionKey.value, entryId)
+  suspend fun forkChatAtEntry(entryId: String): SessionForkResult? = chat.forkSessionAtEntry(chatSessionKey.value, entryId)
 
   suspend fun refreshChatSessionBranches(): Boolean = chat.refreshSessionBranches()
 

@@ -433,9 +433,19 @@ async function mutateSessionAtMessage(
               ...("editorText" in result && result.editorText
                 ? { editorText: result.editorText }
                 : {}),
+              ...("editorAttachments" in result && result.editorAttachments
+                ? { editorAttachments: result.editorAttachments }
+                : {}),
             }
-          : action === "rewind" && "editorText" in result && result.editorText
-            ? { editorText: result.editorText }
+          : action === "rewind"
+            ? {
+                ...("editorText" in result && result.editorText
+                  ? { editorText: result.editorText }
+                  : {}),
+                ...("editorAttachments" in result && result.editorAttachments
+                  ? { editorAttachments: result.editorAttachments }
+                  : {}),
+              }
             : {},
         undefined,
       );

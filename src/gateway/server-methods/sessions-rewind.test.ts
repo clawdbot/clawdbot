@@ -88,7 +88,13 @@ beforeEach(async () => {
       type: "message",
       id: "user-entry",
       parentId: null,
-      message: { role: "user", content: "edit me" },
+      message: {
+        role: "user",
+        content: [
+          { type: "text", text: "edit me" },
+          { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+        ],
+      },
     },
     {
       type: "message",
@@ -244,7 +250,11 @@ describe("session message-cut methods", () => {
     } as GatewayClient);
     expect(fork).toHaveBeenCalledWith(
       true,
-      expect.objectContaining({ editorText: "edit me", sessionKey: expect.any(String) }),
+      expect.objectContaining({
+        editorText: "edit me",
+        editorAttachments: [{ mimeType: "image/png", data: "aW1hZ2U=" }],
+        sessionKey: expect.any(String),
+      }),
       undefined,
     );
     const forkKey = (fork.mock.calls[0]?.[1] as { sessionKey?: string } | undefined)?.sessionKey;
@@ -264,7 +274,14 @@ describe("session message-cut methods", () => {
     );
 
     const rewind = await invoke("sessions.rewind", "user-entry");
-    expect(rewind).toHaveBeenCalledWith(true, { editorText: "edit me" }, undefined);
+    expect(rewind).toHaveBeenCalledWith(
+      true,
+      {
+        editorText: "edit me",
+        editorAttachments: [{ mimeType: "image/png", data: "aW1hZ2U=" }],
+      },
+      undefined,
+    );
     expect(mocks.queueClear).toHaveBeenCalledTimes(1);
   });
 

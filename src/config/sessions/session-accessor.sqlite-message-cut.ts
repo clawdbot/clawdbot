@@ -49,6 +49,7 @@ import type { SessionEntry } from "./types.js";
 
 type MessageCut = {
   editorText?: string;
+  editorAttachments?: Array<{ mimeType: string; data: string }>;
   parentId: string | null;
   prefix: TranscriptEvent[];
 };
@@ -251,6 +252,9 @@ function mutateSqliteSessionAtMessageInTransaction(
     key: params.targetKey,
     entry: nextEntry,
     ...(cut && !("status" in cut) && cut.editorText ? { editorText: cut.editorText } : {}),
+    ...(cut && !("status" in cut) && cut.editorAttachments
+      ? { editorAttachments: cut.editorAttachments }
+      : {}),
   };
 }
 
@@ -369,8 +373,10 @@ function resolveMessageCut(
         : node.entry,
     );
   }
+  const editorAttachments = extractEditorAttachments(message.content);
   return {
     editorText: extractEditorText(message.content),
+    ...(editorAttachments ? { editorAttachments } : {}),
     parentId: target.parentId,
     prefix,
   };
@@ -451,6 +457,25 @@ function extractEditorText(content: unknown): string | undefined {
     })
     .join("");
   return text || undefined;
+}
+
+function extractEditorAttachments(
+  content: unknown,
+): Array<{ mimeType: string; data: string }> | undefined {
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  const attachments = content.flatMap((block) => {
+    const record = asRecord(block);
+    return record?.type === "image" &&
+      typeof record.data === "string" &&
+      record.data.trim() &&
+      typeof record.mimeType === "string" &&
+      record.mimeType.trim()
+      ? [{ mimeType: record.mimeType, data: record.data }]
+      : [];
+  });
+  return attachments.length > 0 ? attachments : undefined;
 }
 
 function isSessionHeader(event: unknown): boolean {
