@@ -6,6 +6,8 @@ import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
   areUiSessionKeysEquivalent,
   normalizeSessionKeyForUiComparison,
+  uiSessionEventMatches,
+  type UiSessionDefaultsHost,
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 
@@ -44,6 +46,7 @@ export class CriticalObserverNoticeTracker {
 export function showCriticalSessionObserverNotice(params: {
   payload: unknown;
   selectedSessionKey: string;
+  sessionHost: UiSessionDefaultsHost;
   sessions: readonly GatewaySessionRow[];
   tracker: CriticalObserverNoticeTracker;
   onOpen: (sessionKey: string) => void;
@@ -70,7 +73,13 @@ export function showCriticalSessionObserverNotice(params: {
     health: digest.health,
     revision,
   });
-  if (!shouldAnnounce || areUiSessionKeysEquivalent(sessionKey, params.selectedSessionKey)) {
+  if (
+    !shouldAnnounce ||
+    uiSessionEventMatches(
+      { ...params.sessionHost, sessionKey: params.selectedSessionKey },
+      sessionKey,
+    )
+  ) {
     return;
   }
   const row = params.sessions.find((session) =>

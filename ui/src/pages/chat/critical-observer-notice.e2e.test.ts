@@ -221,4 +221,129 @@ describeControlUiE2e("Control UI critical observer notice mocked Gateway E2E", (
       await context.close();
     }
   });
+
+  it.each([
+    {
+      name: "suppresses the configured selected-agent foreground alias",
+      sessionKey: "agent:work:primary",
+      visible: false,
+    },
+    {
+      name: "suppresses the canonical selected-agent global foreground",
+      sessionKey: "global",
+      visible: false,
+    },
+    {
+      name: "announces a genuine selected-agent background session",
+      sessionKey: "agent:work:investigation",
+      visible: true,
+    },
+    {
+      name: "announces a genuine other-agent configured-main session",
+      sessionKey: "agent:other:primary",
+      visible: true,
+    },
+  ])("mocked-Gateway Chromium configured-global alias: $name", async (testCase) => {
+    const historyMessages = [
+      {
+        content: [{ type: "text", text: "Configured global foreground is ready." }],
+        role: "assistant",
+        timestamp: baseTime,
+      },
+    ];
+    const agentsList = {
+      agents: [
+        { id: "work", identity: { name: "Work" }, name: "Work" },
+        { id: "other", identity: { name: "Other" }, name: "Other" },
+      ],
+      defaultId: "work",
+      mainKey: "primary",
+      scope: "global",
+    };
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    page.setDefaultTimeout(10_000);
+    try {
+      const gateway = await installMockGateway(page, {
+        assistantAgentId: "work",
+        defaultAgentId: "work",
+        historyMessages,
+        methodResponses: {
+          "agents.list": agentsList,
+          "chat.startup": {
+            agentsList,
+            messages: historyMessages,
+            metadata: {
+              models: [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }],
+            },
+            sessionId: "configured-global-observer-session",
+            thinkingLevel: null,
+          },
+          "sessions.list": {
+            count: 3,
+            defaults: {
+              contextTokens: null,
+              model: "gpt-5.5",
+              modelProvider: "openai",
+            },
+            path: "",
+            sessions: [
+              {
+                key: "global",
+                kind: "global",
+                label: "Configured global foreground",
+                updatedAt: baseTime,
+              },
+              {
+                key: "agent:work:investigation",
+                kind: "direct",
+                label: "Selected-agent background investigation",
+                updatedAt: baseTime - 1_000,
+              },
+              {
+                key: "agent:other:primary",
+                kind: "direct",
+                label: "Other-agent configured main",
+                updatedAt: baseTime - 2_000,
+              },
+            ],
+            ts: baseTime,
+          },
+        },
+        sessionKey: "global",
+      });
+
+      const response = await page.goto(`${server.baseUrl}chat?session=global`);
+      expect(response?.status()).toBe(200);
+      await page.getByText("Configured global foreground is ready.").waitFor({ state: "visible" });
+      expect(new URL(page.url()).searchParams.get("session")).toBe("global");
+      expect(await gateway.getRequests("connect")).toHaveLength(1);
+
+      const headline = `Configured-global observer notice for ${testCase.sessionKey}`;
+      await gateway.emitGatewayEvent(
+        "session.observer",
+        observerDigest({
+          sessionKey: testCase.sessionKey,
+          health: "stuck",
+          headline,
+          revision: 1,
+        }),
+      );
+
+      const toast = page.locator(".app-toast");
+      if (testCase.visible) {
+        await toast.waitFor({ state: "visible" });
+        expect(await toast.locator(".app-toast__message").textContent()).toContain(headline);
+      } else {
+        await waitForToastUpdate(page);
+        expect(await toast.count()).toBe(0);
+      }
+    } finally {
+      await context.close();
+    }
+  });
 });
