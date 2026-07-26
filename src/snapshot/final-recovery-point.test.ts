@@ -17,6 +17,7 @@ import {
   parseFinalRecoveryPointRequest,
   type FinalRecoveryPointRequest,
 } from "./final-recovery-point.js";
+import { resolveRecoveryJournalPath, writeRecoveryJournalRecord } from "./recovery-journal.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let previousStateDir: string | undefined;
@@ -78,10 +79,10 @@ describe("final recovery-point capture", () => {
     const fixture = await createFixture();
     const operationPath = path.join(fixture.request.repositoryPath, operationId(fixture.request));
     await fs.mkdir(operationPath, { recursive: true, mode: 0o700 });
-    await fs.writeFile(
-      path.join(operationPath, "intent.json"),
-      `${stableStringify(fixture.request)}\n`,
-      { mode: 0o600 },
+    await writeRecoveryJournalRecord(
+      resolveRecoveryJournalPath(operationPath),
+      "intent",
+      fixture.request,
     );
 
     await expect(captureFinalRecoveryPoint(fixture.request)).rejects.toMatchObject({

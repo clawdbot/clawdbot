@@ -5,12 +5,17 @@ import { z } from "zod";
 import { stableStringify } from "../agents/stable-stringify.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
 import { requireDirectorySync, syncDirectory } from "../infra/directory-durability.js";
-import { ensureAbsoluteDirectory, FsSafeError, root } from "../infra/fs-safe.js";
+import { ensureAbsoluteDirectory, root } from "../infra/fs-safe.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
 import { isValidAgentId, normalizeAgentId } from "../routing/session-key.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createLocalSqliteSnapshotProvider } from "./local-repository.js";
+import {
+  readRecoveryJournalRecord,
+  resolveRecoveryJournalPath,
+  writeRecoveryJournalRecord,
+} from "./recovery-journal.js";
 import {
   createRecoveryPointManifest,
   verifyRecoveryPoint,
@@ -165,10 +170,9 @@ export async function captureFinalRecoveryPoint(
     );
   }
 
-  const intentPath = path.join(recoveryPointPath, "intent.json");
-  const resultPath = path.join(recoveryPointPath, "result.json");
-  const existingResult = await readJsonIfPresent(recoveryPointPath, "result.json");
-  const existingIntent = await readJsonIfPresent(recoveryPointPath, "intent.json");
+  const journalPath = resolveRecoveryJournalPath(recoveryPointPath);
+  const existingResult = await readJournalRecord(journalPath, "result");
+  const existingIntent = await readJournalRecord(journalPath, "intent");
   if (existingResult !== undefined) {
     if (!isDeepStrictEqual(existingIntent, request)) {
       throw operationConflict("Committed final recovery point has conflicting intent evidence.");
@@ -180,7 +184,7 @@ export async function captureFinalRecoveryPoint(
       "Final recovery-point capture has durable intent without a committed result.",
     );
   }
-  await writeCaptureRecord(intentPath, request, "intent");
+  await writeJournalRecord(journalPath, "intent", request);
 
   let snapshots: RecoveryPointSqliteSnapshot[];
   try {
@@ -233,7 +237,7 @@ export async function captureFinalRecoveryPoint(
     acceptance,
     snapshots,
   });
-  await writeCaptureRecord(resultPath, result, "committed result");
+  await writeJournalRecord(journalPath, "result", result);
   return result;
 }
 
@@ -394,10 +398,6 @@ async function ensurePrivateDirectory(directoryPath: string): Promise<void> {
   applyPrivateModeSync(result.path, PRIVATE_DIRECTORY_MODE);
 }
 
-async function writeCaptureRecord(filePath: string, value: unknown, label: string): Promise<void> {
-  await writeCaptureBytes(filePath, Buffer.from(`${stableStringify(value)}\n`, "utf8"), label);
-}
-
 async function writeCaptureBytes(filePath: string, value: Buffer, label: string): Promise<void> {
   try {
     await writeNewBytes(filePath, value);
@@ -417,17 +417,23 @@ async function writeNewBytes(filePath: string, value: Buffer): Promise<void> {
   requireDirectorySync(await syncDirectory(path.dirname(filePath)), "Final recovery-point journal");
 }
 
-async function readJsonIfPresent(rootPath: string, relativePath: string): Promise<unknown> {
+async function readJournalRecord(databasePath: string, recordType: string): Promise<unknown> {
   try {
-    return await readJson(rootPath, relativePath);
+    return await readRecoveryJournalRecord(databasePath, recordType);
   } catch (error) {
-    if (
-      (error as NodeJS.ErrnoException).code === "ENOENT" ||
-      (error instanceof FsSafeError && error.code === "not-found")
-    ) {
-      return undefined;
-    }
-    throw operationConflict(`Final recovery-point ${relativePath} is unreadable.`, error);
+    throw operationConflict(`Final recovery-point ${recordType} is unreadable.`, error);
+  }
+}
+
+async function writeJournalRecord(
+  databasePath: string,
+  recordType: string,
+  value: unknown,
+): Promise<void> {
+  try {
+    await writeRecoveryJournalRecord(databasePath, recordType, value);
+  } catch (error) {
+    throw operationConflict(`Final recovery-point ${recordType} could not be committed.`, error);
   }
 }
 
