@@ -334,11 +334,13 @@ describe("createEmbeddedAttemptSessionLockController", () => {
 
   it("rejects a late SDK prompt handoff after disposal", async () => {
     const write = vi.fn();
+    const release = vi.fn(async () => undefined);
     const controller = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock: vi.fn(async () => ({ release: async () => undefined })),
+      acquireSessionWriteLock: vi.fn(async () => ({ release })),
       lockOptions: { sessionFile: "agent:main:main" },
     });
 
+    await controller.dispose();
     await controller.dispose();
     await expect(controller.releaseForPrompt()).rejects.toThrow(
       "attempt disposed before prompt submission",
@@ -350,6 +352,7 @@ describe("createEmbeddedAttemptSessionLockController", () => {
       "attempt disposed before transcript write",
     );
     expect(write).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it("reloads after a delayed prompt following a non-terminal sessions_yield abort", async () => {

@@ -672,6 +672,9 @@ describe("SessionManager.open", () => {
     expect(() =>
       sessionManager.mergePromptReleasedSessionEntries([sideEntry], { persistLeaf: true }),
     ).toThrow("leaf control was not persisted");
+    expect(() => sessionManager.appendModelChange("openai", "gpt-5.5")).toThrow(
+      "entry was not persisted",
+    );
   });
 
   it("reloads SQLite markers through setSessionFile without switching to file paths", async () => {

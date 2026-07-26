@@ -80,6 +80,28 @@ describe("applyEmbeddedAttemptSessionIdentity", () => {
     });
   });
 
+  it("rejects a legacy marker successor already mapped to another key", () => {
+    sessionAccessorMocks.loadSessionEntry.mockReturnValue({
+      sessionId: "session-before",
+      updatedAt: 1,
+    });
+    sessionAccessorMocks.listSessionEntries.mockReturnValue([
+      {
+        sessionKey: "agent:main:other",
+        entry: { sessionId: "session-after", updatedAt: 2 },
+      },
+    ]);
+    const state = promptState();
+
+    expect(() =>
+      applyEmbeddedAttemptSessionIdentity({
+        sessionPromptState: state,
+        sessionIdUsed: "session-after",
+        sessionFileUsed: "sqlite:main:session-after:/tmp/sessions.json",
+      }),
+    ).toThrow("successor target changed the active session binding");
+  });
+
   it("rejects a legacy SQLite marker outside the active store", () => {
     const state = promptState();
 

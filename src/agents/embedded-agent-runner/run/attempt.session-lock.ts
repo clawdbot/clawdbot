@@ -79,6 +79,11 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     targetKind: "session-key",
     ...(params.initialAcquireSignal ? { signal: params.initialAcquireSignal } : {}),
   });
+  let initialLockReleasePromise: Promise<void> | undefined;
+  const releaseInitialLock = (): Promise<void> => {
+    initialLockReleasePromise ??= Promise.resolve(noOpLock.release());
+    return initialLockReleasePromise;
+  };
   let disposed = false;
   let promptAborted = false;
   let promptSubmissionBlocked = false;
@@ -241,7 +246,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         }
       });
       await serializeLifecycle(() => {});
-      return noOpLock;
+      return { release: releaseInitialLock } as SessionLock;
     },
     hasSessionTakeover: () => takeoverDetected,
     dispose: async () => {
@@ -261,6 +266,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
           if (timeout) {
             clearTimeout(timeout);
           }
+          await releaseInitialLock();
         }
       })();
       await disposePromise;

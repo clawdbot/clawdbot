@@ -44,9 +44,13 @@ export function applyEmbeddedAttemptSessionIdentity(params: {
         markerMatches.map(({ sessionKey, entry }) => [sessionKey, entry]),
         marker.sessionId,
       );
+      const markerMappedToRetainedKey = markerMatches.some(
+        ({ sessionKey }) => sessionKey === retainedSessionKey,
+      );
       const successorSessionKey =
         retainedEntry?.sessionId === marker.sessionId ||
-        retainedEntry?.sessionId === previousSessionId
+        (retainedEntry?.sessionId === previousSessionId &&
+          (markerMatches.length === 0 || markerMappedToRetainedKey))
           ? retainedSessionKey
           : (preferredMarkerSessionKey ??
             (markerMatches.length === 0 && !retainedEntry ? retainedSessionKey : undefined));
