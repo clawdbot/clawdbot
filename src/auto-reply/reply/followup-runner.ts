@@ -145,12 +145,22 @@ function resolveFollowupOperationalReplySourceEventKey(params: {
   runId?: string;
 }): string {
   const sourceMessageKey =
-    params.queued.messageId ??
-    params.queued.originatingReplyToId ??
-    params.runId ??
-    params.queued.run.sessionId ??
-    "queued-followup";
-  return sourceMessageKey;
+    params.queued.messageId ?? params.queued.originatingReplyToId ?? params.runId;
+  if (sourceMessageKey) {
+    return sourceMessageKey;
+  }
+  // One queued event may cross progress/final lanes, so its redirect key must
+  // stay stable across lanes but differ from later events in the same session.
+  return crypto
+    .createHash("sha256")
+    .update(
+      JSON.stringify({
+        enqueuedAt: params.queued.enqueuedAt,
+        prompt: params.queued.prompt,
+        sessionId: params.queued.run.sessionId,
+      }),
+    )
+    .digest("hex");
 }
 
 type FollowupAgentEvent = { stream: string; data: Record<string, unknown> };
@@ -2097,7 +2107,12 @@ export function createFollowupRunner(params: {
             explicitCommandTurn: false,
           });
           if (operational) {
-            return shouldEvaluateOperationalPayloads;
+            return (
+              shouldEvaluateOperationalPayloads &&
+              (getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true ||
+                operationalPolicy === "redirect" ||
+                operationalPolicy === "silent")
+            );
           }
           return getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true;
         });
@@ -2122,21 +2137,10 @@ export function createFollowupRunner(params: {
           if (!hasNonOperationalDeliveryPayloads || deliveredNonOperationalPayload) {
             return;
           }
-        } else if (shouldEvaluateOperationalPayloads) {
-          await sendRunPayloads(
-            operationalDeliveryPayloads,
-            effectiveQueued,
-            {
-              provider: providerUsed,
-              modelId: modelUsed,
-            },
-            { runId },
-          );
-          if (!hasNonOperationalDeliveryPayloads) {
-            return;
-          }
         } else if (operationalDeliveryPayloads.length > 0) {
-          logVerbose("followup queue: operational notice suppressed for room_event");
+          logVerbose(
+            "followup queue: unmarked operational notice suppressed by source delivery policy",
+          );
           if (!hasNonOperationalDeliveryPayloads) {
             return;
           }

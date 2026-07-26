@@ -5976,6 +5976,28 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expect(FOLLOWUP_TEST_QUEUES.get("main")?.items).toBeUndefined();
   });
 
+  it("keeps unmarked operational followup finals private in message-tool-only mode", async () => {
+    const queued = baseQueuedRun("discord");
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [{ text: "unmarked host-like status", isStatusNotice: true }],
+      },
+      queued: {
+        ...queued,
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: {
+          ...queued.run,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      } as FollowupRun,
+    });
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(FOLLOWUP_TEST_QUEUES.get("main")?.items).toBeUndefined();
+  });
+
   it("does not enqueue stranded recovery when queued followup send policy denies delivery", async () => {
     const finalText =
       "Here is a long reply for a denied session. It includes enough detail to be substantive, but send-policy denial must remain an intentional delivery block.";
