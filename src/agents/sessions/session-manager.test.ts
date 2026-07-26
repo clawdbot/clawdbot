@@ -631,6 +631,49 @@ describe("SessionManager.open", () => {
     });
   });
 
+  it("rejects a prompt-released leaf control after the session target rebounds", async () => {
+    const dir = await makeTempDir();
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "sqlite-prompt-release-rebound";
+    const sessionKey = "agent:main:dashboard:sqlite-prompt-release-rebound";
+    const marker = formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath });
+    const scope = { agentId: "main", sessionId, sessionKey, storePath };
+    await upsertSessionEntry(scope, { sessionFile: marker, sessionId, updatedAt: 10 });
+    const user = await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "rebound-user",
+      message: { role: "user", content: "question", timestamp: 1 },
+    });
+    const assistant = await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "rebound-assistant",
+      message: buildAssistantMessage("answer"),
+      parentId: user.messageId,
+    });
+    const sessionManager = openMarker(marker, sessionKey, dir);
+    const sideEntry = {
+      type: "message" as const,
+      id: "rebound-side-delivery",
+      parentId: assistant.messageId,
+      timestamp: "2026-07-26T00:00:00.000Z",
+      message: buildAssistantMessage("side delivery"),
+    };
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: sideEntry.id,
+      message: sideEntry.message,
+      parentId: sideEntry.parentId,
+    });
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      { sessionId: "replacement-session", updatedAt: 20 },
+    );
+
+    expect(() =>
+      sessionManager.mergePromptReleasedSessionEntries([sideEntry], { persistLeaf: true }),
+    ).toThrow("leaf control was not persisted");
+  });
+
   it("reloads SQLite markers through setSessionFile without switching to file paths", async () => {
     const dir = await makeTempDir();
     const storePath = path.join(dir, "sessions.json");

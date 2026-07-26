@@ -795,6 +795,8 @@ export type SessionEntryCreateWithTranscriptPrepareResult<TError = string> =
 export type SessionEntryCreateWithTranscriptOptions = {
   /** Protect the newly created row from maintenance during its initial write. */
   activeSessionKey?: string;
+  /** Working directory stored in the initial transcript header. */
+  cwd?: string;
   /** SQLite commits are authoritative; retained for the shared caller contract. */
   requireWriteSuccess?: boolean;
 };

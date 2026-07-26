@@ -583,10 +583,14 @@ async function createDefaultSdkSessionManager(
     sessionKey: `agent:main:sdk:${sessionId}`,
     storePath: join(agentDir, "openclaw-agent.sqlite"),
   };
-  const created = await createSessionEntryWithTranscript(target, () => ({
-    ok: true,
-    entry: { sessionId, updatedAt: Date.now() },
-  }));
+  const created = await createSessionEntryWithTranscript(
+    target,
+    () => ({
+      ok: true,
+      entry: { sessionId, updatedAt: Date.now() },
+    }),
+    { cwd },
+  );
   if (!created.ok) {
     throw new Error(`Failed to initialize SDK session transcript: ${created.error}`);
   }

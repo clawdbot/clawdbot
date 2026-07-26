@@ -77,10 +77,12 @@ describe("createAgentSession runtime ownership", () => {
   it("keeps the default SQLite session inside an explicit agent directory", async () => {
     const root = sdkSessionTempDirs.make("openclaw-sdk-session-");
     const agentDir = path.join(root, "isolated-agent");
+    const cwd = path.join(root, "explicit-sdk-cwd");
     const databasePath = path.join(agentDir, "openclaw-agent.sqlite");
     try {
       const { session } = await createAgentSession({
         agentDir,
+        cwd,
         model: testModel,
         resourceLoader: createEmptyResourceLoader(),
         settingsManager: SettingsManager.inMemory(),
@@ -95,7 +97,7 @@ describe("createAgentSession runtime ownership", () => {
       expect(loadSessionEntry(target)).toMatchObject({ sessionId: target.sessionId });
       await expect(loadTranscriptEvents(target)).resolves.toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ type: "session", id: target.sessionId }),
+          expect.objectContaining({ type: "session", id: target.sessionId, cwd }),
         ]),
       );
       session.dispose();
