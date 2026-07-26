@@ -24,6 +24,16 @@ function subject(ref, readiness = body) {
   return readiness.identity?.subjects?.find((entry) => entry.ref === ref);
 }
 
+function hostScenario() {
+  if (scenario === "node-unapproved" || scenario === "node-ready") {
+    return "node-not-ready";
+  }
+  if (scenario === "workspace-full" || scenario === "workspace-recovered") {
+    return "workspace-ready";
+  }
+  return scenario;
+}
+
 function assertCoreIdentity() {
   assert.equal(body.identity?.producerRef, "openclaw/gateway/current");
   const host = subject("openclaw/host-instance/current");
@@ -32,7 +42,7 @@ function assertCoreIdentity() {
   assert.equal(host?.kind, "openclaw.host-instance");
   assert.equal(
     host?.id,
-    `sha256:${createHash("sha256").update(`hosting-profile-${scenario}`).digest("hex")}`,
+    `sha256:${createHash("sha256").update(`hosting-profile-${hostScenario()}`).digest("hex")}`,
   );
   assert.equal(runtimeProcess?.kind, "openclaw.process");
   assert.ok(runtimeProcess?.id);
