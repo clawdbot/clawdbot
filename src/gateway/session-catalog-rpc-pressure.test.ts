@@ -96,7 +96,7 @@ async function writeWorkspacePlugin(params: {
 }
 
 async function setupGatewayTempHome(prefix: string) {
-  const envSnapshot = captureEnv(GATEWAY_TEST_ENV_KEYS);
+  const envSnapshot = captureEnv([...GATEWAY_TEST_ENV_KEYS]);
   const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   setTestEnvValue("HOME", tempHome);
   setTestEnvValue("OPENCLAW_STATE_DIR", path.join(tempHome, ".openclaw"));
