@@ -185,6 +185,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         if (cleanupStarted) {
           throw new Error("attempt cleanup started before prompt submission");
         }
+        promptAborted = false;
         promptReleased = true;
         promptSettled = new Promise<void>((resolve) => {
           settlePrompt = resolve;

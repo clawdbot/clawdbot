@@ -222,6 +222,24 @@ describe("exportTrajectoryBundle", () => {
     ).rejects.toThrow("transcript target does not match the requested session");
   });
 
+  it("rejects a structured transcript target whose key belongs to another agent", async () => {
+    const outputDir = makeTempDir();
+
+    await expect(
+      exportTrajectoryBundle({
+        outputDir,
+        sessionId: "requested-session",
+        sessionTarget: {
+          agentId: "main",
+          sessionId: "requested-session",
+          sessionKey: "agent:worker:requested",
+          storePath: path.join(outputDir, "sessions.json"),
+        },
+        workspaceDir: outputDir,
+      }),
+    ).rejects.toThrow("transcript target does not match the requested session");
+  });
+
   it("rejects a legacy SQLite marker for a different session", async () => {
     const outputDir = makeTempDir();
 

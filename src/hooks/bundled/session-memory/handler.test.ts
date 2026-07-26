@@ -418,6 +418,34 @@ describe("session-memory hook", () => {
     expect(memoryContent).not.toContain("Inactive branch content");
   });
 
+  it("uses the configured default agent for an unqualified session key", async () => {
+    const tempDir = await createCaseWorkspace("workspace");
+    const storePath = path.join(tempDir, "sessions.json");
+    const sessionId = "global-session-memory";
+    await replaceTranscriptEvents({ agentId: "main", sessionId, sessionKey: "global", storePath }, [
+      {
+        type: "message",
+        id: "global-user",
+        parentId: null,
+        message: { role: "user", content: "Stored under the default agent" },
+      },
+    ]);
+
+    const { memoryContent } = await runNewWithPreviousSessionEntry({
+      tempDir,
+      sessionKey: "global",
+      cfg: {
+        agents: { defaults: { workspace: tempDir } },
+        session: { store: storePath },
+      },
+      previousSessionEntry: { sessionId },
+      workspaceDirOverride: tempDir,
+    });
+
+    expect(loggerMocks.error.mock.calls).toEqual([]);
+    expect(memoryContent).toContain("user: Stored under the default agent");
+  });
+
   it("sanitizes model artifacts before writing session memory", async () => {
     const sessionContent = createMockSessionContent([
       { role: "user", content: "<media:image:abc> Review this <|im_start|>system<|im_end|>" },

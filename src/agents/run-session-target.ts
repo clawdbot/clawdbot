@@ -43,16 +43,29 @@ export async function resolveAgentRunSessionTarget(params: {
   );
   const legacySessionFile = normalizeOptionalString(params.sessionFile);
   const legacyMarker = parseSqliteSessionFileMarker(legacySessionFile);
+  const recognizedCompatibilityKey = Boolean(
+    legacySessionFile?.startsWith("agent:") || legacySessionFile?.startsWith("in-memory:"),
+  );
+  const fileBackedCompatibilityValue = Boolean(
+    legacySessionFile &&
+    !recognizedCompatibilityKey &&
+    (path.isAbsolute(legacySessionFile) ||
+      legacySessionFile.includes("/") ||
+      legacySessionFile.includes("\\") ||
+      legacySessionFile.endsWith(".jsonl")),
+  );
   const plainCompatibilitySessionKey =
-    legacySessionFile === (targetSessionId ?? params.sessionId) ? legacySessionFile : undefined;
+    !fileBackedCompatibilityValue && legacySessionFile === (targetSessionId ?? params.sessionId)
+      ? legacySessionFile
+      : undefined;
   if (
     !hasCompleteTypedTarget &&
     legacySessionFile &&
     !legacyMarker &&
-    !plainCompatibilitySessionKey &&
-    !legacySessionFile.startsWith("agent:") &&
-    !legacySessionFile.startsWith("in-memory:") &&
-    legacySessionFile !== params.sessionKey
+    (fileBackedCompatibilityValue ||
+      (!plainCompatibilitySessionKey &&
+        !recognizedCompatibilityKey &&
+        legacySessionFile !== params.sessionKey))
   ) {
     throw new Error(
       "File-backed transcript targets are unsupported; migrate the session to SQLite first",

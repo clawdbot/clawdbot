@@ -9,6 +9,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  resolveDefaultAgentId,
   resolveAgentIdByWorkspacePath,
   resolveAgentWorkspaceDir,
 } from "../../../agents/agent-scope.js";
@@ -176,7 +177,7 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
     const agentId =
       typeof context.agentId === "string" && context.agentId.trim()
         ? context.agentId.trim()
-        : resolveAgentIdFromSessionKey(event.sessionKey);
+        : resolveAgentIdFromSessionKey(event.sessionKey, resolveDefaultAgentId(cfg ?? {}));
     const contextStorePath =
       typeof context.storePath === "string" && context.storePath.trim()
         ? context.storePath.trim()

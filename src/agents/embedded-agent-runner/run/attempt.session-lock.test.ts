@@ -352,7 +352,7 @@ describe("createEmbeddedAttemptSessionLockController", () => {
     expect(write).not.toHaveBeenCalled();
   });
 
-  it("keeps sessions_yield abort release non-terminal for a delayed prompt", async () => {
+  it("reloads after a delayed prompt following a non-terminal sessions_yield abort", async () => {
     const reloadPromptReleasedSessionFile = vi.fn();
     const controller = await createEmbeddedAttemptSessionLockController({
       acquireSessionWriteLock: vi.fn(async () => ({ release: async () => undefined })),
@@ -363,7 +363,7 @@ describe("createEmbeddedAttemptSessionLockController", () => {
     await controller.releaseHeldLockForAbort({ terminal: false });
     await expect(controller.releaseForPrompt()).resolves.toBeUndefined();
     await expect(controller.reacquireAfterPrompt()).resolves.toBeUndefined();
-    expect(reloadPromptReleasedSessionFile).not.toHaveBeenCalled();
+    expect(reloadPromptReleasedSessionFile).toHaveBeenCalledOnce();
   });
 
   it("lets cleanup settle a completed prompt when the SDK omits reacquire", async () => {

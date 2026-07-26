@@ -209,6 +209,34 @@ describe("agent run session target", () => {
     });
   });
 
+  it.each(["session id", "session key"])(
+    "rejects a file path reused as the outer %s",
+    async (identityField) => {
+      const sessionFile = path.join(tempDir, "legacy-session.jsonl");
+      await expect(
+        resolveAgentRunSessionTarget({
+          sessionId: identityField === "session id" ? sessionFile : "legacy-session",
+          ...(identityField === "session key" ? { sessionKey: sessionFile } : {}),
+          sessionFile,
+        }),
+      ).rejects.toThrow("File-backed transcript targets are unsupported");
+    },
+  );
+
+  it.each(["agent:main:room/foo", "in-memory:notes.jsonl"])(
+    "keeps a recognized path-like compatibility key: %s",
+    async (sessionKey) => {
+      await expect(
+        resolveAgentRunSessionTarget({
+          agentId: "main",
+          sessionId: "compat-session",
+          sessionKey,
+          sessionFile: sessionKey,
+        }),
+      ).resolves.toMatchObject({ agentId: "main", sessionKey });
+    },
+  );
+
   it("rejects a partial typed target that conflicts with a legacy marker", async () => {
     await expect(
       resolveAgentRunSessionTarget({
