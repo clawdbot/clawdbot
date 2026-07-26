@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
 import { WorkboardStore } from "./store.js";
 
-function createMemoryStore(): WorkboardKeyedStore<PersistedWorkboardCard> {
+function createMemoryStore(): WorkboardKeyedStore {
   const entries = new Map<string, PersistedWorkboardCard>();
   return {
     async register(key, value) {
@@ -168,8 +168,10 @@ describe("workboard status_changed notification", () => {
     await store.update(b.id, { status: "ready" });
     await store.update(other.id, { status: "ready" });
     const { events } = await store.notificationEvents({ subscriptionId: sub.id });
-    const cardIds = events.map((event) => event.cardId).sort();
-    expect(cardIds).toEqual([a.id, b.id].sort());
+    const cardIds = events
+      .map((event) => event.cardId)
+      .toSorted((left, right) => left.localeCompare(right));
+    expect(cardIds).toEqual([a.id, b.id].toSorted((left, right) => left.localeCompare(right)));
     expect(cardIds).not.toContain(other.id);
   });
 
@@ -218,7 +220,7 @@ describe("workboard status_changed notification", () => {
     const staleEntry = await memory.lookup(staleCard.id);
     if (staleEntry) {
       staleEntry.card.metadata = {
-        ...(staleEntry.card.metadata ?? {}),
+        ...staleEntry.card.metadata,
         stale: { detectedAt: 1000, reason: "no heartbeat" },
       };
       await memory.register(staleCard.id, staleEntry);
