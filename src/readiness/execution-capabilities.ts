@@ -173,6 +173,14 @@ function buildContextEngineReadyCondition(
       "The selected context engine is quarantined and runtime execution uses its fallback.",
     );
   }
+  if (engineId === "legacy") {
+    return condition(
+      "ContextEngineReady",
+      "True",
+      "LegacyContextEngineReady",
+      "The built-in legacy context engine is available without a plugin runtime registration.",
+    );
+  }
   if (deps.contextEngineRegistration(engineId)?.lifecycle !== "runtime") {
     return condition(
       "ContextEngineReady",
