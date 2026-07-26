@@ -173,17 +173,23 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
       const primaryModel =
         typeof primary === "string" ? primary.split("/").slice(1).join("/") : undefined;
 
-      const requestedProvider =
-        (typeof params.provider === "string" && params.provider.trim()) ||
-        (typeof pluginCfg.defaultProvider === "string" && pluginCfg.defaultProvider.trim()) ||
-        primaryProvider ||
-        undefined;
+      const paramProvider = typeof params.provider === "string" ? params.provider.trim() : "";
+      const pluginProvider =
+        typeof pluginCfg.defaultProvider === "string" ? pluginCfg.defaultProvider.trim() : "";
+      const requestedProvider = paramProvider || pluginProvider || primaryProvider || undefined;
 
+      const paramModel = typeof params.model === "string" ? params.model.trim() : "";
+      const pluginModel =
+        typeof pluginCfg.defaultModel === "string" ? pluginCfg.defaultModel.trim() : "";
       const rawModel =
-        (typeof params.model === "string" && params.model.trim()) ||
-        (typeof pluginCfg.defaultModel === "string" && pluginCfg.defaultModel.trim()) ||
+        paramModel ||
+        pluginModel ||
         primaryModel ||
+        normalizeOptionalString(api.runtime.agent.defaults.model) ||
         undefined;
+      const hasAuthoredModelRoute = Boolean(
+        paramProvider || pluginProvider || paramModel || pluginModel,
+      );
       const { provider: resolvedProvider, model } = resolveLlmTaskModelRef({
         api,
         provider: requestedProvider,
@@ -246,11 +252,13 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         asPositiveSafeInteger(pluginCfg.timeoutMs) ??
         30_000;
 
+      const temperature = readFiniteNumberParam(params as Record<string, unknown>, "temperature");
+      const maxTokens =
+        readPositiveIntegerParam(params as Record<string, unknown>, "maxTokens") ??
+        asPositiveSafeInteger(pluginCfg.maxTokens);
       const streamParams = {
-        temperature: readFiniteNumberParam(params as Record<string, unknown>, "temperature"),
-        maxTokens:
-          readPositiveIntegerParam(params as Record<string, unknown>, "maxTokens") ??
-          asPositiveSafeInteger(pluginCfg.maxTokens),
+        ...(temperature !== undefined ? { temperature } : {}),
+        ...(maxTokens !== undefined ? { maxTokens } : {}),
       };
 
       const input = params.input;
@@ -278,6 +286,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
           const sessionFile = path.join(tmpDir, "session.json");
 
           const result = await api.runtime.agent.runEmbeddedAgent({
+            agentId: "main",
             sessionId,
             sessionFile,
             workspaceDir: api.config?.agents?.defaults?.workspace ?? process.cwd(),
@@ -285,13 +294,12 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
             prompt: fullPrompt,
             timeoutMs,
             runId: `llm-task-${Date.now()}`,
-            provider,
-            model,
+            ...(hasAuthoredModelRoute ? { provider, model } : {}),
             authProfileId,
             authProfileIdSource: authProfileId ? "user" : "auto",
             agentHarnessRuntimeOverride: agentRuntime,
             thinkLevel,
-            streamParams,
+            ...(Object.keys(streamParams).length > 0 ? { streamParams } : {}),
             disableTools: true,
             disableTrajectory: true,
           });

@@ -285,6 +285,27 @@ describe("llm-task tool (json-only)", () => {
     expect(call.model).toBe("gemini-3-flash-preview");
   });
 
+  it("uses runtime model defaults without authoring a model route override", async () => {
+    mockEmbeddedRunJson({ ok: true });
+    const tool = createLlmTaskTool(
+      fakeApi({
+        config: {
+          agents: {
+            defaults: {
+              workspace: "/tmp",
+            },
+          },
+        },
+      }),
+    );
+
+    await tool.execute("id", { prompt: "x" });
+
+    const call = firstEmbeddedRunCall();
+    expect(call.provider).toBeUndefined();
+    expect(call.model).toBeUndefined();
+  });
+
   it("passes thinking override to embedded runner", async () => {
     mockEmbeddedRunJson({ ok: true });
     const call = await executeEmbeddedRun({ prompt: "x", thinking: "high" });
@@ -399,11 +420,13 @@ describe("llm-task tool (json-only)", () => {
     ).rejects.toThrow(/not allowed/i);
   });
 
-  it("disables tools and trajectory for embedded run", async () => {
+  it("runs under main without tools or trajectory capture", async () => {
     mockEmbeddedRunJson({ ok: true });
     const call = await executeEmbeddedRun({ prompt: "x" });
+    expect(call.agentId).toBe("main");
     expect(call.disableTools).toBe(true);
     expect(call.disableTrajectory).toBe(true);
+    expect(call.streamParams).toBeUndefined();
     expect(call.agentHarnessRuntimeOverride).toBe("openclaw");
   });
 
