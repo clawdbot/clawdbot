@@ -29,7 +29,6 @@ function makeSettings(gatewayUrl: string, overrides: Partial<UiSettings> = {}): 
     themeMode: "system",
     chatShowThinking: true,
     chatShowToolCalls: true,
-    splitRatio: 0.6,
     navCollapsed: false,
     navWidth: 258,
     sidebarEntries: [],
