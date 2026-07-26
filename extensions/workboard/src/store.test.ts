@@ -2755,6 +2755,32 @@ describe("WorkboardStore", () => {
     );
   });
 
+  it("reuses a provided board snapshot instead of re-listing per worker", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({
+      title: "Design",
+      status: "running",
+      agentId: "agent-a",
+    });
+    await store.complete(parent.id, { summary: "Use board-scoped queues." }, null);
+    const child = await store.create({
+      title: "Implement",
+      agentId: "agent-a",
+      parents: [parent.id],
+    });
+
+    const board = await store.list();
+    const listSpy = vi.spyOn(store, "list");
+    const context = await store.buildWorkerContext(child.id, board);
+
+    // A caller that already holds the board triggers no extra full-board read.
+    expect(listSpy).not.toHaveBeenCalled();
+    // Enrichment is identical to the self-listing path.
+    expect(context).toContain("## Parent results");
+    expect(context).toContain("Use board-scoped queues.");
+    listSpy.mockRestore();
+  });
+
   it("persists board metadata and notification subscriptions in separate stores", async () => {
     const cards = createMemoryStore();
     const boards = createMemoryStore<PersistedWorkboardBoard>();

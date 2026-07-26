@@ -251,12 +251,14 @@ export class WorkboardStore extends WorkboardNotificationStore {
     });
   }
 
-  async buildWorkerContext(id: string): Promise<string> {
+  async buildWorkerContext(id: string, cards?: readonly WorkboardCard[]): Promise<string> {
     const card = await this.get(id);
     if (!card) {
       throw new Error(`card not found: ${id}`);
     }
-    return buildWorkerContext(card, await this.list());
+    // Callers that already hold the board (e.g. a dispatch pass starting several
+    // workers) can pass it in so we do not re-list the whole board per worker.
+    return buildWorkerContext(card, cards ?? (await this.list()));
   }
 
   static open(
