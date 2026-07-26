@@ -27,7 +27,7 @@ describe("restored new-session folder validation", () => {
       isMissingRestoredFolderError(
         new GatewayRequestError({
           code: "INVALID_REQUEST",
-          message: "Error: EACCES: permission denied, scandir '/work/ENOENT/project'",
+          message: "Error: EACCES: permission denied, scandir '/work/: ENOENT:/project'",
         }),
       ),
     ).toBe(false);

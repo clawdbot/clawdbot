@@ -5,6 +5,6 @@ export function isMissingRestoredFolderError(error: unknown): boolean {
   return (
     error instanceof GatewayRequestError &&
     error.gatewayCode === "INVALID_REQUEST" &&
-    /(?:^|:\s)(?:ENOENT|ENOTDIR):/u.test(error.message)
+    /^(?:Error:\s+)?(?:ENOENT|ENOTDIR):/u.test(error.message)
   );
 }
