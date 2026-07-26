@@ -1,8 +1,8 @@
 // Implements guided and non-interactive `openclaw channels add` account setup.
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { getBundledChannelSetupPlugin } from "../../channels/plugins/bundled.js";
 import { resolveChannelSetupCliOptionMetadata } from "../../channels/plugins/cli-add-options.js";
-import { findChannelEntryByIdOrAlias } from "../../channels/plugins/entry-resolution.js";
 import { parseOptionalDelimitedEntries } from "../../channels/plugins/helpers.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { resolveChannelSetupExecutionAdapter } from "../../channels/plugins/setup-contract.js";
@@ -63,6 +63,10 @@ export type ChannelsAddCommandParams = {
 const CHANNEL_ADD_CONTROL_OPTION_KEYS = new Set(["channel", "account"]);
 
 async function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | null) {
+  const trimmed = normalizeOptionalLowercaseString(raw);
+  if (!trimmed) {
+    return undefined;
+  }
   const entries = cfg
     ? await import("../channel-setup/trusted-catalog.js").then(
         ({ listTrustedChannelPluginCatalogEntries }) =>
@@ -75,7 +79,14 @@ async function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | nul
         ({ listRawChannelPluginCatalogEntries }) =>
           listRawChannelPluginCatalogEntries({ excludeWorkspace: true }),
       );
-  return findChannelEntryByIdOrAlias(entries, raw);
+  return entries.find((entry) => {
+    if (normalizeOptionalLowercaseString(entry.id) === trimmed) {
+      return true;
+    }
+    return (entry.meta.aliases ?? []).some(
+      (alias) => normalizeOptionalLowercaseString(alias) === trimmed,
+    );
+  });
 }
 
 function buildChannelSetupInput(opts: ChannelsAddOptions): ChannelSetupInput {
@@ -170,8 +181,8 @@ async function channelsAddCommandImpl(
   }
 
   const rawChannel = opts.channel ?? "";
+  let channel = normalizeChannelId(rawChannel);
   let catalogEntry = await resolveCatalogChannelEntry(rawChannel, nextConfig);
-  let channel = catalogEntry ? (catalogEntry.id as ChannelId) : normalizeChannelId(rawChannel);
   const resolveWorkspaceDir = () =>
     resolveAgentWorkspaceDir(nextConfig, resolveDefaultAgentId(nextConfig));
   // May load a scoped plugin when the channel is not already registered.
@@ -238,7 +249,7 @@ async function channelsAddCommandImpl(
         ...(result.pluginId ? { pluginId: result.pluginId } : {}),
       };
     }
-    channel ??= catalogEntry.id as ChannelId;
+    channel ??= normalizeChannelId(catalogEntry.id) ?? (catalogEntry.id as ChannelId);
   }
 
   if (!channel) {

@@ -1,10 +1,10 @@
 // Resolves or installs channel plugins needed by setup/onboarding flows.
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   listRawChannelPluginCatalogEntries,
   type ChannelPluginCatalogEntry,
 } from "../../channels/plugins/catalog.js";
-import { findChannelEntryByIdOrAlias } from "../../channels/plugins/entry-resolution.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
@@ -44,20 +44,35 @@ function resolveResolvedChannelId(params: {
   rawChannel?: string | null;
   catalogEntry?: ChannelPluginCatalogEntry;
 }): ChannelId | undefined {
-  if (params.catalogEntry) {
-    return params.catalogEntry.id as ChannelId;
+  const normalized = normalizeChannelId(params.rawChannel);
+  if (normalized) {
+    return normalized;
   }
-  return normalizeChannelId(params.rawChannel) ?? undefined;
+  if (!params.catalogEntry) {
+    return undefined;
+  }
+  return normalizeChannelId(params.catalogEntry.id) ?? (params.catalogEntry.id as ChannelId);
 }
 
 function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | null) {
+  const trimmed = normalizeOptionalLowercaseString(raw);
+  if (!trimmed) {
+    return undefined;
+  }
   const entries = cfg
     ? listTrustedChannelPluginCatalogEntries({
         cfg,
         workspaceDir: resolveWorkspaceDir(cfg),
       })
     : listRawChannelPluginCatalogEntries({ excludeWorkspace: true });
-  return findChannelEntryByIdOrAlias(entries, raw);
+  return entries.find((entry) => {
+    if (normalizeOptionalLowercaseString(entry.id) === trimmed) {
+      return true;
+    }
+    return (entry.meta.aliases ?? []).some(
+      (alias) => normalizeOptionalLowercaseString(alias) === trimmed,
+    );
+  });
 }
 
 function findScopedChannelPlugin(

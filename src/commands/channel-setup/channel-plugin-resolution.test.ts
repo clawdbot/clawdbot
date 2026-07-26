@@ -26,13 +26,7 @@ vi.mock("../../channels/plugins/catalog.js", () => ({
 
 vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: mocks.getChannelPlugin,
-  normalizeChannelId: (value: unknown) => {
-    if (typeof value !== "string") {
-      return null;
-    }
-    const normalized = value.trim();
-    return normalized === "teams" ? "msteams" : normalized || null;
-  },
+  normalizeChannelId: (value: unknown) => (typeof value === "string" ? value.trim() || null : null),
 }));
 
 vi.mock("./plugin-install.js", () => ({
@@ -174,37 +168,6 @@ describe("resolveInstallableChannelPlugin", () => {
     expect(snapshotRequest?.channel).toBe("telegram");
     expect(snapshotRequest?.pluginId).toBe("evil-telegram-shadow");
     expect(snapshotRequest?.workspaceDir).toBe("/tmp/workspace");
-  });
-
-  it("keeps an exact catalog id when it collides with a bundled alias", async () => {
-    const catalogEntry = createCatalogEntry({
-      id: "teams",
-      pluginId: "@vendor/teams",
-      origin: "workspace",
-    });
-    const plugin = createPlugin("teams");
-    mocks.listChannelPluginCatalogEntries.mockReturnValue([catalogEntry]);
-    mocks.loadChannelSetupPluginRegistrySnapshotForChannel.mockImplementation(
-      ({ channel }: { channel?: string }) => ({
-        channels: channel === "teams" ? [{ plugin }] : [],
-        channelSetups: [],
-      }),
-    );
-
-    const result = await resolveInstallableChannelPlugin({
-      cfg: {
-        plugins: {
-          enabled: true,
-          allow: ["@vendor/teams"],
-        },
-      },
-      runtime: {} as never,
-      rawChannel: "teams",
-      allowInstall: false,
-    });
-
-    expect(result.channelId).toBe("teams");
-    expect(result.plugin).toBe(plugin);
   });
 
   it("returns an existing plugin that lacks the requested capability without reinstalling", async () => {
