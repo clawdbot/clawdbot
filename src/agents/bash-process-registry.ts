@@ -81,6 +81,7 @@ export interface ProcessSession {
   exitSignal?: NodeJS.Signals | number | null;
   exitReason?: TerminationReason;
   noOutputTimedOut?: boolean;
+  status?: ProcessStatus;
   exited: boolean;
   /** Process exit observed; backend cleanup still owns the terminal transition. */
   finalizing?: boolean;
@@ -207,6 +208,7 @@ export function markExited(
   session.exitSignal = exitSignal;
   session.exitReason = exitReason;
   session.noOutputTimedOut = noOutputTimedOut;
+  session.status = status;
   session.tail = tail(session.aggregated, 2000);
   moveToFinished(session, status);
 }
@@ -214,9 +216,15 @@ export function markExited(
 /** Marks a running session as reconnectable after the exec call returns. */
 export function markBackgrounded(session: ProcessSession) {
   session.backgrounded = true;
-  if (!session.exited) {
-    activeBackgroundExecSessionIds.add(session.id);
+  if (session.exited) {
+    // The process can settle in the narrow window after the yield timer starts
+    // but before exec marks the session backgrounded. markExited() cannot retain
+    // that session because it was still foreground at the time. Promote the
+    // already-finished record now so the process tool can recover its output.
+    moveToFinished(session, session.status ?? "failed");
+    return;
   }
+  activeBackgroundExecSessionIds.add(session.id);
 }
 
 /** Returns the number of live background exec sessions without exposing process details. */

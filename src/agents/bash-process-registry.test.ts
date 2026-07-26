@@ -151,7 +151,7 @@ describe("bash process registry", () => {
     expect(drainSession(session).stdout).toBe("bc");
   });
 
-  it("only persists finished sessions when backgrounded", () => {
+  it("retains a session backgrounded immediately after process exit", () => {
     const session = createRegistrySession({
       maxOutputChars: 100,
       pendingMaxOutputChars: 30_000,
@@ -163,7 +163,6 @@ describe("bash process registry", () => {
     expect(listFinishedSessions()).toHaveLength(0);
 
     markBackgrounded(session);
-    markExited(session, 0, null, "completed");
     const finishedSessions = listFinishedSessions();
     const endedAt = finishedSessions[0]?.endedAt;
     expect(endedAt).toEqual(expect.any(Number));

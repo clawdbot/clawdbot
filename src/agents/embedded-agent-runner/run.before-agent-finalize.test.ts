@@ -79,7 +79,7 @@ describe("runEmbeddedAgent before_agent_finalize", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
       expect.objectContaining({
         beforeAgentFinalizeRevisionAttempts: 0,
-        maxBeforeAgentFinalizeRevisions: 3,
+        maxBeforeAgentFinalizeRevisions: 5,
       }),
     );
   });

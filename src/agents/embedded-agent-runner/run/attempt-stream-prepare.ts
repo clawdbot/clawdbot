@@ -144,18 +144,6 @@ export function prepareEmbeddedAttemptStream(input: {
           model: attempt.modelId,
           assistant: lastAssistant,
         });
-        const maxRevisionAttempts = attempt.maxBeforeAgentFinalizeRevisions ?? 0;
-        if (
-          maxRevisionAttempts > 0 &&
-          (attempt.beforeAgentFinalizeRevisionAttempts ?? 0) >= maxRevisionAttempts
-        ) {
-          log.warn(
-            `before_agent_finalize revision limit reached; finalizing ` +
-              `runId=${attempt.runId} sessionId=${attempt.sessionId} ` +
-              `attempts=${attempt.beforeAgentFinalizeRevisionAttempts ?? 0}/${maxRevisionAttempts}`,
-          );
-          return;
-        }
         const outcome = await runAgentHarnessBeforeAgentFinalizeHook({
           event: {
             runId: attempt.runId,
@@ -191,7 +179,7 @@ export function prepareEmbeddedAttemptStream(input: {
           },
           hookRunner,
         });
-        if (outcome.action !== "revise") {
+        if (outcome.action !== "revise" && outcome.action !== "exhausted") {
           return;
         }
         if (event.hadDeterministicSideEffect) {
@@ -202,6 +190,30 @@ export function prepareEmbeddedAttemptStream(input: {
           return;
         }
         beforeAgentFinalizeRevisionReason = outcome.reason;
+        if (outcome.action === "exhausted") {
+          log.warn(
+            `before_agent_finalize retry metadata exhausted; refusing unfinished success ` +
+              `runId=${attempt.runId} sessionId=${attempt.sessionId} ` +
+              `attempts=${attempt.beforeAgentFinalizeRevisionAttempts ?? 0}`,
+          );
+          return { suppressTerminalDelivery: true };
+        }
+        const maxRevisionAttempts = attempt.maxBeforeAgentFinalizeRevisions ?? 0;
+        if (
+          maxRevisionAttempts > 0 &&
+          (attempt.beforeAgentFinalizeRevisionAttempts ?? 0) >= maxRevisionAttempts
+        ) {
+          // Keep the revision reason and suppress the rejected terminal fragment
+          // so terminal resolution can replace it with a visible fail-closed
+          // error. Releasing the same unfinished answer here turns an exhausted
+          // follow-through guard into a false success.
+          log.warn(
+            `before_agent_finalize revision limit reached; refusing unfinished success ` +
+              `runId=${attempt.runId} sessionId=${attempt.sessionId} ` +
+              `attempts=${attempt.beforeAgentFinalizeRevisionAttempts ?? 0}/${maxRevisionAttempts}`,
+          );
+          return { suppressTerminalDelivery: true };
+        }
         return { suppressTerminalDelivery: true };
       }
     : undefined;

@@ -34,6 +34,7 @@ import {
 } from "./incomplete-turn.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import {
+  hasExhaustedBeforeAgentFinalizeRevisions,
   MAX_BEFORE_AGENT_FINALIZE_REVISIONS,
   type EmbeddedRunTerminalRetryState,
 } from "./terminal-retry-state.js";
@@ -415,6 +416,26 @@ export async function resolveEmbeddedRunTerminal(input: {
   }
 
   const beforeFinalizeRevisionReason = attempt.beforeAgentFinalizeRevisionReason;
+  if (
+    hasExhaustedBeforeAgentFinalizeRevisions({
+      revisionReason: beforeFinalizeRevisionReason,
+      revisionAttempts: retryState.beforeFinalizeRevisionAttempts,
+    })
+  ) {
+    const text =
+      "⚠️ Agent repeatedly stopped before completing the request. The unfinished turn was not accepted as success; completed tool actions were preserved.";
+    log.warn(
+      `before_agent_finalize revisions exhausted: ` +
+        `runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
+        `attempts=${retryState.beforeFinalizeRevisionAttempts}/${MAX_BEFORE_AGENT_FINALIZE_REVISIONS} — surfacing incomplete-turn error`,
+    );
+    return surfaceIncompleteTurn({
+      ...input,
+      text,
+      payloadCount,
+      incompleteTurnFallbackSafe: false,
+    });
+  }
   if (
     beforeFinalizeRevisionReason &&
     !settledTurnFinalizationAttempted &&

@@ -138,6 +138,7 @@ export async function awaitAgentHarnessAgentEndHook(params: {
 type AgentHarnessBeforeAgentFinalizeOutcome =
   | { action: "continue" }
   | { action: "revise"; reason: string }
+  | { action: "exhausted"; reason: string }
   | { action: "finalize"; reason?: string };
 
 /** Runs before-finalize hooks and normalizes finalize/revise/continue decisions. */
@@ -183,6 +184,7 @@ function normalizeBeforeAgentFinalizeResult(
     const retryCandidates = readBeforeAgentFinalizeRetryCandidates(result);
     if (retryCandidates.length > 0) {
       const reason = normalizeTrimmedString(result.reason);
+      let exhaustedReason: string | undefined;
       for (const retry of retryCandidates) {
         const retryInstruction = normalizeTrimmedString(retry.instruction);
         if (!retryInstruction) {
@@ -207,6 +209,7 @@ function normalizeBeforeAgentFinalizeResult(
         budget.set(retryRunId, runBudget);
         pruneFinalizeRetryBudget(budget);
         if (nextCount > maxAttempts) {
+          exhaustedReason ??= reason ?? retryInstruction;
           continue;
         }
         const revisedReason =
@@ -214,6 +217,9 @@ function normalizeBeforeAgentFinalizeResult(
             ? reason
             : [reason, retryInstruction].filter(Boolean).join("\n\n");
         return { action: "revise", reason: revisedReason };
+      }
+      if (exhaustedReason) {
+        return { action: "exhausted", reason: exhaustedReason };
       }
       return { action: "continue" };
     }

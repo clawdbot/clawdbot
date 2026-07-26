@@ -156,7 +156,7 @@ describe("agent harness lifecycle hook helpers", () => {
         ctx: { runId: "run-from-context", sessionKey: "agent:main:shared-session" },
         hookRunner: hookRunner as never,
       }),
-    ).resolves.toEqual({ action: "continue" });
+    ).resolves.toEqual({ action: "exhausted", reason: "revise from context run" });
   });
 
   it("preserves merged revise reasons when retry metadata is present", async () => {
@@ -263,7 +263,7 @@ describe("agent harness lifecycle hook helpers", () => {
         ctx: { runId: "run-1", sessionKey: "agent:main:session-1" },
         hookRunner: hookRunner as never,
       }),
-    ).resolves.toEqual({ action: "continue" });
+    ).resolves.toEqual({ action: "exhausted", reason: "retry with a safe key" });
   });
 
   it("does not collide fallback retry keys for long instructions with shared prefixes", async () => {
