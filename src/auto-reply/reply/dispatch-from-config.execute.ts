@@ -20,7 +20,10 @@ import {
 } from "./dispatch-from-config.events.js";
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import type { PrepareDispatchExecutionReadyState } from "./dispatch-from-config.prepare-execution.js";
-import { isOperationalReplyPayload } from "./operational-reply-policy.js";
+import {
+  isOperationalReplyPayload,
+  markOperationalReplyPolicyDelivered,
+} from "./operational-reply-policy.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 
 export async function executeDispatch(state: PrepareDispatchExecutionReadyState) {
@@ -549,6 +552,10 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       explicitCommandTurn: false,
                     });
                     const visiblePayloadMetadata = getReplyPayloadMetadata(visiblePayload);
+                    const policyResult = await applyDispatchOperationalReplyPolicy(visiblePayload);
+                    if (!policyResult.shouldDeliver) {
+                      return;
+                    }
                     const canBypassSourceSuppression =
                       suppressUserDeliveryBySourceReplyPolicy &&
                       isOperationalPayload &&
@@ -556,10 +563,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       !visiblePayloadMetadata.sourceReplyTranscriptMirror &&
                       ctx.InboundEventKind !== "room_event";
                     if (suppressDelivery && (sendPolicyDenied || !canBypassSourceSuppression)) {
-                      return;
-                    }
-                    const policyResult = await applyDispatchOperationalReplyPolicy(visiblePayload);
-                    if (!policyResult.shouldDeliver) {
+                      await markOperationalReplyPolicyDelivered(policyResult, false);
                       return;
                     }
                     // Channels that keep a live draft preview may need to rotate their

@@ -2,6 +2,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { markOperationalReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 
 export type CompactionNoticePhase =
@@ -49,7 +50,9 @@ export function createCompactionNoticePayload(params: {
     replyToCurrent: true,
     isCompactionNotice: true,
   };
-  return params.applyReplyToMode ? params.applyReplyToMode(payload) : payload;
+  return markOperationalReplyPayloadForSourceSuppressionDelivery(
+    params.applyReplyToMode ? params.applyReplyToMode(payload) : payload,
+  );
 }
 
 export function readCompactionHookMessages(value: unknown): string[] {
@@ -76,5 +79,7 @@ export function createCompactionHookNoticePayload(params: {
     replyToCurrent: true,
     isCompactionNotice: true,
   };
-  return params.applyReplyToMode ? params.applyReplyToMode(payload) : payload;
+  return markOperationalReplyPayloadForSourceSuppressionDelivery(
+    params.applyReplyToMode ? params.applyReplyToMode(payload) : payload,
+  );
 }

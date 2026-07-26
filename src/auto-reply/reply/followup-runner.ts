@@ -2070,10 +2070,10 @@ export function createFollowupRunner(params: {
         if (shouldEmitVerboseProgress()) {
           const suffix = typeof count === "number" ? ` (count ${count})` : "";
           deliveryPayloads = [
-            {
+            markOperationalReplyPayloadForSourceSuppressionDelivery({
               text: `🧹 Auto-compaction complete${suffix}.`,
               isCompactionNotice: true,
-            },
+            }),
             ...deliveryPayloads,
           ];
         }

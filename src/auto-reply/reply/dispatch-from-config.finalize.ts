@@ -117,11 +117,12 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       payload: reply,
       explicitCommandTurn: explicitCommandTurnCtx,
     });
+    const metadata = getReplyPayloadMetadata(reply);
     return (
       suppressUserDeliveryBySourceReplyPolicy &&
       !sendPolicyDenied &&
-      (getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true ||
-        operationalReply) &&
+      metadata?.deliverDespiteSourceReplySuppression === true &&
+      (!operationalReply || !metadata.sourceReplyTranscriptMirror) &&
       (ctx.InboundEventKind !== "room_event" || explicitCommandTurnCtx)
     );
   };

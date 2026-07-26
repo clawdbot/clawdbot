@@ -8,7 +8,10 @@ import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
-import { setReplyPayloadMetadata } from "../reply-payload.js";
+import {
+  markOperationalReplyPayloadForSourceSuppressionDelivery,
+  setReplyPayloadMetadata,
+} from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import {
   buildInlinePluginStatusPayload,
@@ -100,10 +103,12 @@ export async function completeReplyAgentRun(input: {
   const prefixNotices: ReplyPayload[] = [];
 
   if (verboseEnabled && activeIsNewSession) {
-    prefixNotices.push({
-      text: `🧭 New session: ${followupRun.run.sessionId}`,
-      isStatusNotice: true,
-    });
+    prefixNotices.push(
+      markOperationalReplyPayloadForSourceSuppressionDelivery({
+        text: `🧭 New session: ${followupRun.run.sessionId}`,
+        isStatusNotice: true,
+      }),
+    );
   }
 
   if (autoCompactionCount > 0) {
@@ -151,10 +156,12 @@ export async function completeReplyAgentRun(input: {
 
     if (verboseEnabled) {
       const suffix = typeof count === "number" ? ` (count ${count})` : "";
-      prefixNotices.push({
-        text: `🧹 Auto-compaction complete${suffix}.`,
-        isCompactionNotice: true,
-      });
+      prefixNotices.push(
+        markOperationalReplyPayloadForSourceSuppressionDelivery({
+          text: `🧹 Auto-compaction complete${suffix}.`,
+          isCompactionNotice: true,
+        }),
+      );
     }
   }
   const prefixPayloads = [...prefixNotices];

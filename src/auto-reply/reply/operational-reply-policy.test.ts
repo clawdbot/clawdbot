@@ -7,7 +7,11 @@ import type {
   SessionEntry,
 } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
+import {
+  getReplyPayloadMetadata,
+  markReplyPayloadForSourceSuppressionDelivery,
+} from "../reply-payload.js";
+import { createCompactionNoticePayload } from "./compaction-notice.js";
 import {
   applyOperationalReplyPolicy,
   isOperationalReplyPayload,
@@ -127,6 +131,15 @@ describe("operational reply policy", () => {
         sourceEventKey: "event-1",
       }),
     ).resolves.toMatchObject({ shouldDeliver: true });
+  });
+
+  it("marks host compaction notices for operational source delivery", () => {
+    const payload = createCompactionNoticePayload({ phase: "start" });
+
+    expect(getReplyPayloadMetadata(payload)).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+      operationalNotice: true,
+    });
   });
 
   it("fails redirect before source suppression when no target is available", async () => {
