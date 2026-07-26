@@ -305,8 +305,12 @@ describe("loadDotEnv", () => {
             "CLOUDSDK_PYTHON_SITEPACKAGES=1",
             "EXAMPLE_API_HOST=https://evil-api.example.com",
             "MINIMAX_API_HOST=https://evil.example.com",
+            "SLACK_FORWARDER_URL=http://evil-forwarder.example.com",
             "SLACK_API_URL=http://evil-slack.example.com/api/",
+            "SMS_ALLOWED_USERS=*",
+            "SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION=true",
             "ZALO_API_URL=http://evil-zalo.example.com/",
+            "AWS_BEDROCK_SKIP_AUTH=1",
             "HTTP_PROXY=http://evil-proxy:8080",
             "HOMEBREW_BREW_FILE=./evil-brew/bin/brew",
             "HOMEBREW_PREFIX=./evil-brew",
@@ -333,8 +337,12 @@ describe("loadDotEnv", () => {
         delete process.env.CLOUDSDK_PYTHON_SITEPACKAGES;
         delete process.env.EXAMPLE_API_HOST;
         delete process.env.MINIMAX_API_HOST;
+        delete process.env.SLACK_FORWARDER_URL;
         delete process.env.SLACK_API_URL;
+        delete process.env.SMS_ALLOWED_USERS;
+        delete process.env.SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION;
         delete process.env.ZALO_API_URL;
+        delete process.env.AWS_BEDROCK_SKIP_AUTH;
         delete process.env.HTTP_PROXY;
         delete process.env.HOMEBREW_BREW_FILE;
         delete process.env.HOMEBREW_PREFIX;
@@ -361,8 +369,12 @@ describe("loadDotEnv", () => {
         expect(process.env.CLOUDSDK_PYTHON_SITEPACKAGES).toBeUndefined();
         expect(process.env.EXAMPLE_API_HOST).toBeUndefined();
         expect(process.env.MINIMAX_API_HOST).toBeUndefined();
+        expect(process.env.SLACK_FORWARDER_URL).toBeUndefined();
         expect(process.env.SLACK_API_URL).toBeUndefined();
+        expect(process.env.SMS_ALLOWED_USERS).toBeUndefined();
+        expect(process.env.SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION).toBeUndefined();
         expect(process.env.ZALO_API_URL).toBeUndefined();
+        expect(process.env.AWS_BEDROCK_SKIP_AUTH).toBeUndefined();
         expect(process.env.HTTP_PROXY).toBeUndefined();
         expect(process.env.HOMEBREW_BREW_FILE).toBeUndefined();
         expect(process.env.HOMEBREW_PREFIX).toBeUndefined();
@@ -980,6 +992,13 @@ describe("workspace .env blocklist completeness", () => {
           "MATTERMOST_URL",
           "MATRIX_HOMESERVER",
           "MINIMAX_API_HOST",
+          "SLACK_FORWARDER_URL",
+          "SMS_ALLOWED_USERS",
+          "SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION",
+          "AWS_BEDROCK_SKIP_AUTH",
+          "FUTURE_CHANNEL_DISABLE_SIGNATURE_VALIDATION",
+          "FUTURE_PLUGIN_DANGEROUSLY_ALLOW_UNTRUSTED",
+          "FUTURE_PROVIDER_SKIP_AUTH",
           "BROWSER_EXECUTABLE_PATH",
           "CLOUDSDK_CONFIG",
           "CLOUDSDK_PYTHON",
@@ -1066,7 +1085,7 @@ describe("workspace .env blocklist completeness", () => {
             "SYNOLOGY_CHAT_INCOMING_URL=https://evil-synology.example.com/incoming",
             "SYNOLOGY_NAS_HOST=evil-synology.example.com",
             "AZURE_SPEECH_ENDPOINT=https://evil-speech.example.com",
-            "SAFE_PROVIDER_URL=https://allowed.example.com",
+            "SAFE_PROVIDER_NAME=allowed",
           ].join("\n"),
         );
 
@@ -1076,7 +1095,7 @@ describe("workspace .env blocklist completeness", () => {
         delete process.env.SYNOLOGY_CHAT_INCOMING_URL;
         delete process.env.SYNOLOGY_NAS_HOST;
         delete process.env.AZURE_SPEECH_ENDPOINT;
-        delete process.env.SAFE_PROVIDER_URL;
+        delete process.env.SAFE_PROVIDER_NAME;
 
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
@@ -1086,7 +1105,7 @@ describe("workspace .env blocklist completeness", () => {
         expect(process.env.SYNOLOGY_CHAT_INCOMING_URL).toBeUndefined();
         expect(process.env.SYNOLOGY_NAS_HOST).toBeUndefined();
         expect(process.env.AZURE_SPEECH_ENDPOINT).toBeUndefined();
-        expect(process.env.SAFE_PROVIDER_URL).toBe("https://allowed.example.com");
+        expect(process.env.SAFE_PROVIDER_NAME).toBe("allowed");
       });
     });
   });
@@ -1122,21 +1141,24 @@ describe("workspace .env blocklist completeness", () => {
             "FUTURE_PROVIDER_API_HOST=https://evil.example.com",
             "FUTURE_PROVIDER_BASE_URL=https://evil.example.com/v1",
             "FUTURE_PROVIDER_ENDPOINT=https://evil.example.com/api",
-            "SAFE_PROVIDER_URL=https://allowed.example.com",
+            "FUTURE_PROVIDER_URL=https://evil.example.com/root",
+            "SAFE_PROVIDER_DSN=postgres://localhost",
           ].join("\n"),
         );
 
         delete process.env.FUTURE_PROVIDER_API_HOST;
         delete process.env.FUTURE_PROVIDER_BASE_URL;
         delete process.env.FUTURE_PROVIDER_ENDPOINT;
-        delete process.env.SAFE_PROVIDER_URL;
+        delete process.env.FUTURE_PROVIDER_URL;
+        delete process.env.SAFE_PROVIDER_DSN;
 
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
         expect(process.env.FUTURE_PROVIDER_API_HOST).toBeUndefined();
         expect(process.env.FUTURE_PROVIDER_BASE_URL).toBeUndefined();
         expect(process.env.FUTURE_PROVIDER_ENDPOINT).toBeUndefined();
-        expect(process.env.SAFE_PROVIDER_URL).toBe("https://allowed.example.com");
+        expect(process.env.FUTURE_PROVIDER_URL).toBeUndefined();
+        expect(process.env.SAFE_PROVIDER_DSN).toBe("postgres://localhost");
       });
     });
   });
