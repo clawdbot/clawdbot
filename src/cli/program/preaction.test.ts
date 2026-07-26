@@ -143,10 +143,15 @@ describe("registerPreActionHooks", () => {
 
   function buildProgram() {
     const programLocal = new Command().name("openclaw");
-    programLocal
+    const agent = programLocal
       .command("agent")
       .requiredOption("-m, --message <text>")
       .option("--local")
+      .option("--json")
+      .action(() => {});
+    agent
+      .command("exec")
+      .argument("[message]")
       .option("--json")
       .action(() => {});
     programLocal
@@ -422,6 +427,18 @@ describe("registerPreActionHooks", () => {
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "all",
     });
+  });
+
+  it("bypasses operator config and plugin startup for agent exec", async () => {
+    await runPreAction({
+      parseArgv: ["agent", "exec", "fix it"],
+      processArgv: ["node", "openclaw", "agent", "exec", "fix it"],
+    });
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+    expect(routeLogsToStderrMock).toHaveBeenCalled();
+    expect(emitCliBannerMock).not.toHaveBeenCalled();
   });
 
   it("keeps setup alias and channels add manifest-first", async () => {
