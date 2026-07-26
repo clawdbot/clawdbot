@@ -55,6 +55,7 @@ function createReplyOperation(): TestReplyOperation {
     key: "test",
     sessionId: "session",
     abortSignal: new AbortController().signal,
+    staleExpiryReason: undefined,
     resetTriggered: false,
     terminalRecovery: false,
     acceptedSteeredInboundAudio: false,
