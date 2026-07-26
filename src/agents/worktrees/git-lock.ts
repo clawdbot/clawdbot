@@ -57,8 +57,10 @@ export async function lockWorktreeForProcess(record: ManagedWorktreeRecord): Pro
   // dead owner as reclaimable, so reclaim it here instead of failing the acquire.
   // Accepted tradeoff: the observe-then-unlock window is the same one those two
   // callers already take, so two processes reclaiming the identical stale lock at
-  // once can both believe they won. Closing it needs a reclaim guard shared by all
-  // three call sites (openclaw#114129); today's behavior loses the lock every time.
+  // once can both believe they won. Closing it needs one reclaim guard shared by all
+  // four paths -- this acquire plus service.ts release(), remove(), and
+  // isProtectedFromAutoRemoval() (openclaw#114129); today's behavior instead loses
+  // the lock every time.
   if (state.kind !== "dead") {
     throw commandError("git worktree lock", result);
   }
