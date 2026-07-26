@@ -1022,8 +1022,9 @@ export function createHookRunner(
   async function runMessageReceived(
     event: PluginHookMessageReceivedEvent,
     ctx: PluginHookMessageContext,
+    invocationScope?: PluginHookInvocationScope,
   ): Promise<void> {
-    return runVoidHook("message_received", event, ctx);
+    return runVoidHook("message_received", event, ctx, {}, invocationScope);
   }
 
   /**

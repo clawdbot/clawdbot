@@ -1492,6 +1492,7 @@ describe("dispatchReplyFromConfig", () => {
       AccountId: "acc-1",
       GroupSpace: "guild-123",
       GroupChannel: "alerts",
+      AgentId: "message-agent",
     });
 
     const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
@@ -1509,6 +1510,7 @@ describe("dispatchReplyFromConfig", () => {
             timestamp?: unknown;
           },
           { accountId?: unknown; channelId?: unknown; conversationId?: unknown },
+          { agentId?: unknown },
         ]
       | [];
     expect(event?.from).toBe(ctx.From);
@@ -1526,6 +1528,9 @@ describe("dispatchReplyFromConfig", () => {
     expect(hookContext?.channelId).toBe("telegram");
     expect(hookContext?.accountId).toBe("acc-1");
     expect(hookContext?.conversationId).toBe("telegram:999");
+    expect(
+      firstMockCall(hookMocks.runner.runMessageReceived, "message received hook")?.[2],
+    ).toEqual({ agentId: "message-agent" });
   });
 
   it("does not emit shared message_received hooks when the channel emitted them itself", async () => {

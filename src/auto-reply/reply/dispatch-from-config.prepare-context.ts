@@ -465,6 +465,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
         hookRunner.runMessageReceived(
           toPluginMessageReceivedEvent(messageReceivedHookContext),
           toPluginMessageContext(messageReceivedHookContext),
+          { agentId: sessionAgentId },
         ),
         "dispatch-from-config: message_received plugin hook failed",
       );

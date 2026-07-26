@@ -329,6 +329,13 @@ describe("phase hooks merger", () => {
         },
       },
       {
+        hookName: "message_received",
+        pluginId: "message-plugin",
+        handler: () => {
+          captureScope("message_received");
+        },
+      },
+      {
         hookName: "subagent_progress",
         pluginId: "progress-plugin",
         handler: () => {
@@ -343,6 +350,11 @@ describe("phase hooks merger", () => {
         await runner.runReplyDispatch({ ctx: { AgentId: "nested-agent" } } as never, {} as never, {
           agentId: "reply-agent",
         });
+        await runner.runMessageReceived(
+          { from: "user-1", content: "hello" },
+          { channelId: "test" },
+          { agentId: "message-agent" },
+        );
         await runner.runSubagentProgress(
           { phase: "started", runId: "run-1", childSessionKey: "agent:child:run:1" },
           { childSessionKey: "agent:child:run:1" },
@@ -353,6 +365,7 @@ describe("phase hooks merger", () => {
 
     expect(scopes).toEqual({
       reply_dispatch: { pluginId: "reply-plugin", agentId: "reply-agent" },
+      message_received: { pluginId: "message-plugin", agentId: "message-agent" },
       subagent_progress: { pluginId: "progress-plugin", agentId: "child-agent" },
     });
   });
