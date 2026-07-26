@@ -1168,10 +1168,12 @@ async function createChatPickerScenario(
       icon: "name:spark",
     }),
     sessionRow("agent:main:production-export", "Production export", baseTime - 75_000, {
+      category: "Research",
       createdActor: MOCK_CREATOR_MIRA,
       execCwd: "/Users/peter/Projects/clawdbot",
     }),
     sessionRow("agent:main:model-budget", "Model budget review", baseTime - 80_000, {
+      category: "Research",
       execCwd: "/Users/peter/Projects/openclaw",
       status: "failed",
       lastRunError: "Model out of credits: openai/gpt-5.6",
@@ -1287,6 +1289,9 @@ async function createChatPickerScenario(
     methodResponses: {
       ...buildBackgroundTasksMock(baseTime),
       "users.self": { profile: selfProfile },
+      // Custom session group catalog so the sidebar's category zone (and its
+      // drag-reordering against built-in sections) is exercised in the mock.
+      "sessions.groups.list": { groups: [{ name: "Research", position: 0 }] },
       "system.info": {
         machineName: "Peters-Mac-Studio",
         hostname: "peters-mac-studio.local",
@@ -1763,13 +1768,13 @@ async function createChatPickerScenario(
           },
         ],
       },
-      "sessions.observer.ask": {
+      "sessions.companion.ask": {
         cases: [
           {
             match: { sessionKey: OBSERVER_DEMO_SESSION_KEY },
             response: {
               answer: "It is rerunning the focused test to check whether the latest fix is stable.",
-              digestRevision: 4,
+              ts: baseTime + 2_000,
             },
           },
         ],

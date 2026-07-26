@@ -71,6 +71,7 @@
       "novita": {
         "baseUrl": "https://api.novita.ai/openai/v1",
         "api": "openai-completions",
+        "defaultModel": "deepseek/deepseek-v4-pro",
         "models": [
           {
             "id": "moonshotai/kimi-k3",

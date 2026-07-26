@@ -411,6 +411,10 @@ export function hardenUnchangedExecApprovals(filePath: string): boolean {
   return true;
 }
 
+// Contract: approvals mutations must stay fully synchronous (no fs.promises).
+// loadExecApprovals reads locklessly when a same-process async holder owns the
+// lock, which is only safe because no write can be mid-flight in the thread
+// pool while synchronous JS runs. An async writer here would break that.
 export function writeExecApprovalsRaw(filePath: string, raw: string) {
   const dir = ensureDir(filePath);
   assertSafeExecApprovalsDestination(filePath);

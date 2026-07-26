@@ -436,10 +436,10 @@ function createChatHeaderState(
       lastActiveSessionKey: "main",
       theme: "claw",
       themeMode: "dark",
-      splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 280,
       sidebarEntries: [],
+      sessionSectionOrder: [],
       chatShowThinking: false,
       chatShowToolCalls: true,
     },
@@ -652,9 +652,6 @@ function createChatProps(
     error: null,
     runError: null,
     sessions: null,
-    sidebarOpen: false,
-    sidebarContent: null,
-    splitRatio: 0.6,
     canvasPluginSurfaceUrl: null,
     embedSandboxMode: "scripts",
     allowExternalEmbedUrls: false,
@@ -691,8 +688,6 @@ function createChatProps(
     onNavigateToAgent: () => undefined,
     onSessionSelect: () => undefined,
     onOpenSidebar: () => undefined,
-    onCloseSidebar: () => undefined,
-    onSplitRatioChange: () => undefined,
     onChatScroll: () => undefined,
     basePath: "",
     ...overrides,
@@ -1659,26 +1654,7 @@ describe("chat composer workbench", () => {
     expect(container.querySelector('button[aria-label="Thread workspace"]')).toBeNull();
   });
 
-  it("stacks the detail sidebar under the thread with a horizontal divider on narrow panes", () => {
-    const sidebarProps = {
-      sidebarOpen: true,
-      sidebarContent: { kind: "markdown", content: "Stacked detail" } as const,
-      onCloseSidebar: () => undefined,
-    };
-    const wide = renderChatView(sidebarProps);
-    const wideContainer = wide.querySelector(".chat-split-container");
-    expect(wideContainer?.classList.contains("chat-split-container--open")).toBe(true);
-    expect(wideContainer?.classList.contains("chat-split-container--stacked")).toBe(false);
-    // Attribute reflection is async; the property binding lands synchronously.
-    expect(wide.querySelector("resizable-divider")?.orientation).toBe("vertical");
-
-    const stacked = renderChatView({ ...sidebarProps, sidebarStacked: true });
-    const stackedContainer = stacked.querySelector(".chat-split-container");
-    expect(stackedContainer?.classList.contains("chat-split-container--stacked")).toBe(true);
-    expect(stacked.querySelector("resizable-divider")?.orientation).toBe("horizontal");
-  });
-
-  it("opens inline Markdown images and renders the active lightbox", () => {
+  it("opens inline Markdown images", () => {
     const onOpenImage = vi.fn();
     const src = "data:image/png;base64,cG5n";
     const container = renderChatView({ onOpenImage });
@@ -1701,64 +1677,6 @@ describe("chat composer workbench", () => {
     fallbackTrigger.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(openSpy).toHaveBeenCalledWith(src, "_blank", "noopener,noreferrer");
     openSpy.mockRestore();
-
-    const onCloseImage = vi.fn();
-    const lightboxContainer = renderChatView({
-      imageLightbox: { src, title: "Artifact preview" },
-      onCloseImage,
-    });
-    const lightbox = lightboxContainer.querySelector("openclaw-image-lightbox");
-    expect(lightbox?.src).toBe(src);
-    expect(lightbox?.title).toBe("Artifact preview");
-    lightbox?.dispatchEvent(new CustomEvent("image-lightbox-close", { bubbles: true }));
-    expect(onCloseImage).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps lightbox Escape from clearing the pending reply", () => {
-    const onClearReply = vi.fn();
-    const container = renderChatView({
-      replyTarget: { messageId: "reply-1", text: "Keep this reply" },
-      onClearReply,
-      imageLightbox: {
-        src: "data:image/png;base64,cG5n",
-        title: "Artifact preview",
-      },
-      onCloseImage: vi.fn(),
-    });
-    const lightbox = container.querySelector("openclaw-image-lightbox");
-
-    lightbox?.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, composed: true }),
-    );
-
-    expect(onClearReply).not.toHaveBeenCalled();
-  });
-
-  it("opens sidebar Markdown images once", async () => {
-    const onOpenImage = vi.fn();
-    const container = renderChatView({
-      sidebarOpen: true,
-      sidebarContent: {
-        kind: "markdown",
-        content: "![Preview](data:image/png;base64,cG5n)",
-      },
-      onCloseSidebar: vi.fn(),
-      onOpenImage,
-    });
-    document.body.append(container);
-    const panel = container.querySelector("openclaw-chat-detail-panel") as
-      | (Element & { updateComplete: Promise<unknown> })
-      | null;
-    await panel?.updateComplete;
-
-    panel?.querySelector<HTMLButtonElement>(".markdown-inline-image-button")?.click();
-
-    expect(onOpenImage).toHaveBeenCalledOnce();
-    expect(onOpenImage).toHaveBeenCalledWith({
-      src: "data:image/png;base64,cG5n",
-      title: "Preview",
-    });
-    container.remove();
   });
 
   it("forces the workspace rail to the bottom dock and drops side-dock controls on narrow panes", () => {

@@ -35,6 +35,7 @@ import {
   type PiSessionPage,
 } from "./pi-session-catalog.js";
 import { piSessionStoreAvailable } from "./pi-session-paths.js";
+import { checkPiUpstreamActivity, linkContinuedPiSession } from "./pi-session-upstream-activity.js";
 
 const PI_SESSIONS_LIST_COMMAND = "acpx.pi.sessions.list.v1";
 const PI_SESSION_READ_COMMAND = "acpx.pi.sessions.read.v1";
@@ -60,7 +61,8 @@ const PI_ADOPTED_SESSION_KEY_PREFIX = "plugin:acpx:catalog-adopt:pi:";
 
 class PiCatalogParamsError extends Error {}
 
-const continueAdoption = createSessionCatalogAdoptionCoordinator();
+const continueAdoption =
+  createSessionCatalogAdoptionCoordinator<Awaited<ReturnType<typeof linkContinuedPiSession>>>();
 
 function validatePiThreadId(value: unknown): string {
   if (typeof value !== "string" || !SESSION_ID_PATTERN.test(value)) {
@@ -446,7 +448,7 @@ async function continuePiSession(
   api: OpenClawPluginApi,
   hostId: string,
   threadId: string,
-): Promise<{ sessionKey: string }> {
+): Promise<Awaited<ReturnType<typeof linkContinuedPiSession>>> {
   if (hostId.startsWith("node:")) {
     throw new PiCatalogParamsError("paired-node Pi session rows are view-only");
   }
@@ -500,6 +502,7 @@ async function continuePiSession(
       });
       return { sessionKey: created.key };
     },
+    complete: async (continued) => await linkContinuedPiSession(continued.sessionKey, threadId),
   });
 }
 
@@ -635,6 +638,7 @@ export function registerPiSessionCatalog(api: OpenClawPluginApi): void {
     read: async (request) => await readPiTranscript(api.runtime, request),
     continueSession: async (request) =>
       await continuePiSession(api, request.hostId, request.threadId),
+    checkUpstreamActivity: checkPiUpstreamActivity,
     openTerminal: async (request) => await openPiTerminal({ runtime: api.runtime, ...request }),
   });
   for (const command of createPiSessionNodeHostCommands()) {

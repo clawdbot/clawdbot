@@ -232,7 +232,11 @@ async function writeTuiPtyFixtureScript(dir: string) {
             return { runId };
           }
           const responseDelayMs =
-            opts.message === "slow prompt" || opts.message === "streaming prompt" ? 500 : 20;
+            opts.message === "slow prompt" ||
+            opts.message === "slow reset proof" ||
+            opts.message === "streaming prompt"
+              ? 500
+              : 20;
           if (opts.message === "streaming prompt") {
             setTimeout(() => {
               this.onEvent?.({
@@ -701,6 +705,38 @@ describe.sequential("TUI PTY harness", () => {
   );
 
   it(
+    "deletes forward with Ctrl+D without exiting a nonempty terminal editor",
+    async () => {
+      await fixture.run.write("keepXword", { delay: false });
+      await fixture.run.write("\u001b[D".repeat(5), { delay: false });
+      await fixture.run.write("\u0004", { delay: false });
+      await fixture.run.write("\r", { delay: false });
+
+      const sent = await fixture.waitForLogEntry(
+        (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", "keepword"),
+      );
+      expect(sent.payload).toMatchObject({ message: "keepword" });
+      await fixture.run.waitForOutput("PTY_RESPONSE: keepword");
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "exits a fresh terminal when Ctrl+D is pressed with empty input",
+    async () => {
+      const emptyFixture = await startTuiFixture();
+      try {
+        await emptyFixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+        await emptyFixture.run.write("\u0004", { delay: false });
+        expect((await emptyFixture.run.waitForExit()).exitCode).toBe(0);
+      } finally {
+        await emptyFixture.cleanup();
+      }
+    },
+    STARTUP_TEST_TIMEOUT_MS,
+  );
+
+  it(
     "presents and resolves workspace skill approval in the TUI",
     async () => {
       await fixture.run.write("skill approval proof\r");
@@ -835,6 +871,30 @@ describe.sequential("TUI PTY harness", () => {
   );
 
   it(
+    "keeps an active session intact when /reset is submitted from the terminal",
+    async () => {
+      const priorResetCount = (await readFixtureLog(fixture.logPath)).filter(
+        (entry) => entry.method === "resetSession",
+      ).length;
+
+      await fixture.run.write("slow reset proof\r");
+      await fixture.waitForLogEntry(
+        (entry) =>
+          entry.method === "sendChat" && objectFieldEquals(entry, "message", "slow reset proof"),
+      );
+      await fixture.run.write("/reset\r", { delay: false });
+      await fixture.run.waitForOutput("abort the current run before /reset");
+
+      const resetCalls = (await readFixtureLog(fixture.logPath)).filter(
+        (entry) => entry.method === "resetSession",
+      );
+      expect(resetCalls).toHaveLength(priorResetCount);
+      await fixture.run.waitForOutput("PTY_RESPONSE: slow reset proof");
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     "submits a follow-up prompt while a run is streaming",
     async () => {
       await fixture.run.write("\x15", { delay: false });
@@ -916,6 +976,35 @@ describe.sequential("TUI PTY harness", () => {
     TEST_TIMEOUT_MS,
   );
 
+  it.each([
+    {
+      sessionKey: "agent:main:matrix:channel:!MixedRoomAbCdEf:example.org",
+      message: "mixed-case matrix session identity proof",
+    },
+    {
+      sessionKey: "agent:main:signal:group:AbC123=",
+      message: "mixed-case signal session identity proof",
+    },
+  ])(
+    "preserves provider-owned identity when selecting $sessionKey in the terminal",
+    async ({ sessionKey, message }) => {
+      await fixture.run.write(`/session ${sessionKey}\r`, { delay: false });
+      await fixture.waitForLogEntry(
+        (entry) =>
+          entry.method === "loadHistory" && objectFieldEquals(entry, "sessionKey", sessionKey),
+      );
+
+      await fixture.run.write(`${message}\r`, { delay: false });
+      const sent = await fixture.waitForLogEntry(
+        (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", message),
+      );
+
+      expect(sent.payload).toMatchObject({ sessionKey, message });
+      await fixture.run.waitForOutput(`PTY_RESPONSE: ${message}`);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
   it(
     "creates a backend session from /new and adopts its canonical key",
     async () => {
@@ -930,6 +1019,7 @@ describe.sequential("TUI PTY harness", () => {
         (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", "after new"),
       );
       expect(sent.payload).toMatchObject({ sessionKey: expect.stringMatching(/^agent:main:tui-/) });
+      await fixture.run.waitForOutput("PTY_RESPONSE: after new");
     },
     TEST_TIMEOUT_MS,
   );

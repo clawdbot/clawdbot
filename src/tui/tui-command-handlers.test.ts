@@ -1069,6 +1069,45 @@ describe("tui command handlers", () => {
     expect(addSystem).toHaveBeenCalledWith("abort the current run before /new");
   });
 
+  it.each([
+    {
+      activeChatRunId: "active-run",
+      pendingSubmit: null,
+      activityStatus: "running",
+    },
+    {
+      activeChatRunId: null,
+      pendingSubmit: {
+        phase: "accepted" as const,
+        runId: "pending-run",
+        draftText: null,
+      },
+      activityStatus: "sending",
+    },
+    {
+      activeChatRunId: null,
+      pendingSubmit: {
+        phase: "sending" as const,
+        runId: "pending-run",
+        draftText: "pending",
+      },
+      activityStatus: "sending",
+    },
+    {
+      activeChatRunId: null,
+      pendingSubmit: null,
+      activityStatus: "finishing context",
+    },
+  ])("blocks /reset while the current session lifecycle is unfinished", async (runState) => {
+    const resetSession = vi.fn();
+    const { handleCommand, addSystem } = createHarness({ resetSession, ...runState });
+
+    await handleCommand("/reset");
+
+    expect(resetSession).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith("abort the current run before /reset");
+  });
+
   it("serializes input until /new adopts the created session", async () => {
     let resolveCreate: ((value: { ok: true; key: string }) => void) | undefined;
     const createSession = vi.fn().mockImplementation(

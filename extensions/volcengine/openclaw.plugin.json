@@ -230,6 +230,7 @@
       "volcengine-plan": {
         "baseUrl": "https://ark.cn-beijing.volces.com/api/coding/v3",
         "api": "openai-completions",
+        "defaultModel": "ark-code-latest",
         "models": [
           {
             "id": "ark-code-latest",

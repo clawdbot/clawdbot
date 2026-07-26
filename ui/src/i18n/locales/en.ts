@@ -568,7 +568,8 @@ export const en: TranslationMap = {
     worktreeNameInvalid: "Worktree names use lowercase letters, digits, and dashes.",
     incognito: "Incognito",
     incognitoDescription: "Keep this thread only until the Gateway restarts",
-    startAsDraft: "Start as draft",
+    draft: "Draft",
+    draftDescription: "Keep this thread to yourself until you publish it",
     messagePlaceholder: "What should this thread work on?",
     readingAttachment: "Reading attachment",
     start: "Start thread",
@@ -699,6 +700,7 @@ export const en: TranslationMap = {
     runErrorTimedOut: "Timed out",
     runErrorUnknown: "Unknown error",
     attentionRequired: "Session needs attention",
+    openSession: "Open thread",
     model: "Model",
     provider: "Provider",
     runtime: "Runtime",
@@ -3140,13 +3142,17 @@ export const en: TranslationMap = {
       on: "Dreaming On",
       off: "Dreaming Off",
     },
-    restartConfirmation: {
-      title: "Restart Gateway to Apply Change",
-      subtitle: "Changing Dreaming mode restarts the gateway.",
-      warning:
-        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
-      confirm: "Confirm Restart",
-      restarting: "Restarting…",
+    toggleConfirmation: {
+      subtitle: "Dreaming is a global setting; it is not scoped to this agent.",
+      enableTitle: "Turn On Dreaming for All Agents",
+      enableDetail:
+        "The nightly dreaming sweep will run across every configured agent workspace, promoting short-term recalls into long-term memory. This applies right away.",
+      enableConfirm: "Turn On Dreaming",
+      disableTitle: "Turn Off Dreaming for All Agents",
+      disableDetail:
+        "The nightly dreaming sweep will stop for every configured agent, not just this one. Memories already written stay; nothing new gets promoted. This applies right away.",
+      disableConfirm: "Turn Off Dreaming",
+      saving: "Saving…",
       failed: "Could not apply change. Check your connection and try again.",
     },
     status: {
@@ -4030,7 +4036,9 @@ export const en: TranslationMap = {
       threads: "Threads",
       groups: "Groups",
       coding: "Coding",
-      groupCatalogSessionsByProject: "Group by project",
+      catalogViewOptions: "View options",
+      catalogGroupByProject: "Project",
+      catalogGroupByPerson: "Person",
       openSessionMenu: "Open thread menu",
       sortBy: "Sort by",
       sortCreated: "Created",
@@ -4209,6 +4217,14 @@ export const en: TranslationMap = {
       renderedMarkdownHint: "Sanitized rich-text preview for quick reading.",
       noPreviewableMarkdown: "No previewable markdown content.",
       noContent: "No content available",
+    },
+    sidebarColumns: {
+      chat: "Chat",
+      discussion: "Discussion",
+      detail: "Details",
+      close: "Close {panel}",
+      drag: "Drag {panel}",
+      resize: "Resize {panel}",
     },
     thread: {
       search: "Search messages",

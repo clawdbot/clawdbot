@@ -137,7 +137,9 @@
   --shadow-xl: 0 24px 48px rgba(0, 0, 0, 0.5);
   --shadow-glow: 0 0 24px var(--accent-glow);
 
-  /* Spacing scale - use these instead of hardcoded px for padding/gap */
+  /* Spacing scale. Settings surfaces use these (see
+     ui/docs/design-system/settings-design.md); elsewhere raw px padding/gap is
+     grandfathered — adopt the scale when rewriting a rule, don't mass-migrate. */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;

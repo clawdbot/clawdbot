@@ -196,11 +196,11 @@ Cross-cutting notes not obvious from the rule tables below:
 - Secret and auth-profile evidence records provider/source posture and
   SecretRef metadata only, never raw values. Policy does not read or attest
   per-agent credential stores such as `auth-profiles.json`.
-- Data-handling evidence is config-level posture only (redaction mode,
-  telemetry capture toggle, session maintenance mode, transcript-indexing
-  setting). It does not inspect logs, telemetry exports, transcripts, or
-  memory files, and a clean result does not prove that no personal data or
-  secrets exist in them.
+- Data-handling evidence is config-level posture (telemetry capture toggle,
+  session maintenance mode, transcript-indexing setting) plus the always-on log
+  redaction invariant. It does not inspect logs, telemetry exports,
+  transcripts, or memory files, and a clean result does not prove that no
+  personal data or secrets exist in them.
 - Routing probes reuse OpenClaw's runtime binding resolver. Routing evidence
   records only the probe id, resolved agent, match kind, and redacted binding
   metadata. It never records peer, account, guild, team, or role identifiers.
@@ -411,7 +411,7 @@ allowlist such as `["all"]`.
 
 | Policy field                                        | Observed state                                                                                     | Use when                                                               |
 | --------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `dataHandling.sensitiveLogging.requireRedaction`    | `logging.redactSensitive`                                                                          | Set to `true` to reject `logging.redactSensitive: "off"`.              |
+| `dataHandling.sensitiveLogging.requireRedaction`    | Runtime invariant `oc://openclaw.invariant/logging/redaction`                                      | Set to `true` to record the requirement; OpenClaw always satisfies it. |
 | `dataHandling.telemetry.denyContentCapture`         | `diagnostics.otel.captureContent`                                                                  | Set to `true` to reject telemetry content capture.                     |
 | `dataHandling.retention.requireSessionMaintenance`  | `session.maintenance.mode`                                                                         | Set to `true` to require effective session maintenance mode `enforce`. |
 | `dataHandling.memory.denySessionTranscriptIndexing` | `memory.qmd.sessions.enabled`, `memory.search.experimental.sessionMemory`, and per-agent overrides | Set to `true` to reject session transcript indexing into memory.       |
@@ -845,7 +845,6 @@ the interval.
 | `policy/sandbox-container-runtime-socket-mount`          | A container-backed sandbox or browser mount exposes the container runtime socket. |
 | `policy/sandbox-container-unconfined-profile`            | Container sandbox profile is unconfined when policy denies it.                    |
 | `policy/sandbox-browser-cdp-source-range-missing`        | Sandbox browser CDP source range is missing when policy requires one.             |
-| `policy/data-handling-redaction-disabled`                | Sensitive logging redaction is disabled when policy requires it.                  |
 | `policy/data-handling-telemetry-content-capture`         | Telemetry content capture is enabled when policy denies it.                       |
 | `policy/data-handling-session-retention-not-enforced`    | Session retention maintenance is not enforced when policy requires it.            |
 | `policy/data-handling-session-transcript-memory-enabled` | Session transcript memory indexing is enabled when policy denies it.              |
@@ -1005,16 +1004,21 @@ workspace config:
   denies open group ingress
 - set reported channel ingress `requireMention` paths to `true` when policy
   requires group mentions
-- set `logging.redactSensitive=tools` when policy requires sensitive logging
-  redaction
 - set `diagnostics.otel.captureContent=false`, or
   `diagnostics.otel.captureContent.enabled=false` for object-form telemetry
   capture settings, when policy denies telemetry content capture
 
 Scoped elevated-tools repairs are detect-only. Scoped data-handling repairs are
-also skipped when the finding reports shared logging or telemetry config,
-because changing the shared setting would affect more than the scoped policy
-target.
+also skipped when the finding reports shared telemetry config, because changing
+the shared setting would affect more than the scoped policy target.
+
+`dataHandling.sensitiveLogging.requireRedaction` has no check and no repair.
+Sensitive log redaction is unconditional in OpenClaw, so nothing can report it
+as disabled. The key stays a supported policy rule: `openclaw policy` validates
+its shape, `openclaw policy compare` still requires a candidate policy to be at
+least as strict as the baseline for it, and `openclaw policy check` records the
+runtime invariant `oc://openclaw.invariant/logging/redaction` in the
+`dataHandling` evidence and attestation as proof the requirement is satisfied.
 
 Scoped required-deny repairs are skipped when the finding reports inherited
 root `tools.deny`, because adding the required tool to root config would affect

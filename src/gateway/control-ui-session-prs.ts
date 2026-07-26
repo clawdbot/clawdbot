@@ -56,15 +56,31 @@ type PullListItem = {
   repo: string;
   state: ControlUiSessionPullRequest["state"];
   headSha?: string;
+  baseRef?: string;
+  mergeCommitSha?: string;
+};
+
+/** Lowercased merged-PR head, the base it merged into, and its merge commit. */
+type MergedPullHead = { sha: string; baseRef?: string; mergeCommitSha?: string };
+
+/**
+ * Cached GitHub snapshot plus the merged PRs' heads. The heads stay
+ * gateway-internal (stripped before responding): they only exist so branch
+ * resolution can tell a landed tip from real post-merge work. Kept as raw
+ * GitHub facts because the cache key carries no default branch; each
+ * checkout filters them against its own default at resolve time.
+ */
+type BranchPullRequestsSnapshot = ControlUiSessionPullRequests & {
+  mergedHeads: MergedPullHead[];
 };
 
 type CacheEntry = {
   expiresAt: number;
-  promise: Promise<ControlUiSessionPullRequests>;
+  promise: Promise<BranchPullRequestsSnapshot>;
   refreshMode: "normal" | "forced" | null;
   // Survives refetch failures so rate-limited refreshes degrade to stale
   // chips instead of clearing the row.
-  lastGood?: ControlUiSessionPullRequest[];
+  lastGood?: { pullRequests: ControlUiSessionPullRequest[]; mergedHeads: MergedPullHead[] };
 };
 
 const branchCache = new Map<string, CacheEntry>();
@@ -93,6 +109,15 @@ async function gitOutput(cwd: string, args: string[]): Promise<string | null> {
     return result.code === 0 ? result.stdout.trim() || null : null;
   } catch {
     return null;
+  }
+}
+
+async function isAncestor(root: string, ancestor: string, descendant: string): Promise<boolean> {
+  try {
+    const result = await runGit(root, ["merge-base", "--is-ancestor", ancestor, descendant]);
+    return result.code === 0;
+  } catch {
+    return false;
   }
 }
 
@@ -208,24 +233,16 @@ async function untrackedStats(root: string): Promise<{ additions: number; files:
 }
 
 /**
- * Working-tree diff counts vs the merge base with the remote default branch,
- * untracked files included: the size the PR would have if the current work
- * were committed and pushed; changedFiles decides row visibility for
- * unpushed branches. Unlike bare `git diff`, diffing against an explicit
- * base counts unmerged (conflict) paths, so conflict-only trees still show.
+ * Working-tree diff counts vs an explicit base, untracked files included:
+ * the size the PR would have if the current work were committed and pushed;
+ * changedFiles decides row visibility for unpushed branches. Unlike bare
+ * `git diff`, diffing against an explicit base counts unmerged (conflict)
+ * paths, so conflict-only trees still show.
  */
-async function loadBranchDiffStats(
+async function diffStatsAgainst(
   root: string,
-  defaultBranch: string,
+  base: string,
 ): Promise<{ additions: number; deletions: number; changedFiles: number } | null> {
-  const mergeBase = await gitOutput(root, [
-    "merge-base",
-    `refs/remotes/origin/${defaultBranch}`,
-    "HEAD",
-  ]);
-  if (!mergeBase) {
-    return null;
-  }
   try {
     // --no-ext-diff/--no-textconv: checkout-configurable diff drivers must
     // never execute in the Gateway process (same guard as sessions-diff).
@@ -234,7 +251,7 @@ async function loadBranchDiffStats(
       "--shortstat",
       "--no-ext-diff",
       "--no-textconv",
-      mergeBase,
+      base,
     ]);
     if (result.code !== 0) {
       return null;
@@ -262,21 +279,17 @@ async function loadBranchDiffStats(
 async function branchHasCreatablePullRequest(
   root: string,
   context: SessionPullRequestGitContext,
+  pushedSha: string | null,
 ): Promise<boolean> {
   // Fail closed without a resolvable default branch: a session sitting on the
   // actual default in a clone lacking origin/HEAD must not get a Create PR row.
-  if (!context.defaultBranch) {
-    return false;
-  }
-  const remoteRef = `refs/remotes/origin/${context.branch}`;
-  const pushed = await gitOutput(root, ["rev-parse", "--verify", "--quiet", remoteRef]);
-  if (!pushed) {
+  if (!context.defaultBranch || !pushedSha) {
     return false;
   }
   const ahead = await gitOutput(root, [
     "rev-list",
     "--count",
-    `refs/remotes/origin/${context.defaultBranch}..${remoteRef}`,
+    `refs/remotes/origin/${context.defaultBranch}..refs/remotes/origin/${context.branch}`,
   ]);
   // A failed count keeps the row: rev-list errors must not hide a valid branch.
   return ahead === null || Number(ahead) > 0;
@@ -284,13 +297,98 @@ async function branchHasCreatablePullRequest(
 
 async function resolveSessionBranch(
   context: SessionPullRequestGitContext,
+  mergedHeads: readonly MergedPullHead[],
 ): Promise<ControlUiSessionBranch | undefined> {
-  // Stubbed test contexts without a root skip the local-git gates.
-  const creatable = !context.root || (await branchHasCreatablePullRequest(context.root, context));
-  const stats =
-    context.root && context.defaultBranch
-      ? await loadBranchDiffStats(context.root, context.defaultBranch)
-      : null;
+  const root = context.root;
+  if (!root) {
+    // Stubbed test contexts without a root skip the local-git gates.
+    return {
+      owner: context.owner,
+      repo: context.repo,
+      branch: context.branch,
+      createUrl: branchCreateUrl(context),
+    };
+  }
+  const pushedSha = await gitOutput(root, [
+    "rev-parse",
+    "--verify",
+    "--quiet",
+    `refs/remotes/origin/${context.branch}`,
+  ]);
+  const headSha = await gitOutput(root, ["rev-parse", "HEAD"]);
+  // Only merges whose content reached this checkout's default branch prove
+  // the tip landed there: a direct default-base merge, or a landing through
+  // another branch (feature -> release -> main) whose merge commit is now
+  // contained in the default branch. A PR merged into an unpropagated
+  // release/staging branch must not hide Create PR. Filtered here, not in
+  // the cache, because the cache key has no default branch.
+  const defaultRef = context.defaultBranch ? `refs/remotes/origin/${context.defaultBranch}` : null;
+  const landedHeads: MergedPullHead[] = [];
+  for (const head of mergedHeads) {
+    if (head.baseRef === context.defaultBranch) {
+      landedHeads.push(head);
+    } else if (
+      defaultRef &&
+      head.mergeCommitSha &&
+      (await isAncestor(root, head.mergeCommitSha, defaultRef))
+    ) {
+      landedHeads.push(head);
+    }
+  }
+  const mergedHeadShas = landedHeads.map((head) => head.sha);
+  const mergeBase = context.defaultBranch
+    ? await gitOutput(root, ["merge-base", `refs/remotes/origin/${context.defaultBranch}`, "HEAD"])
+    : null;
+  // The stats base is the newest commit whose content is known-published:
+  // the ordinary default-branch merge base, or a merged PR head related to
+  // HEAD by ancestry (a HEAD trailing the merged tip is fully landed, so
+  // HEAD itself is the baseline). Diffing against anything older would
+  // replay landed work as pending — the squash-merged commits are never
+  // ancestors of the default branch, so the merge base alone cannot see
+  // them. Ancestry is best-effort: a merged head never fetched locally
+  // cannot be proven related and falls back to the merge base.
+  const baselines: string[] = mergeBase ? [mergeBase] : [];
+  if (headSha) {
+    for (const merged of mergedHeadShas) {
+      if (await isAncestor(root, merged, headSha)) {
+        baselines.push(merged);
+      } else if (await isAncestor(root, headSha, merged)) {
+        baselines.push(headSha);
+      }
+    }
+  }
+  let statsBase: string | null = null;
+  for (const candidate of baselines) {
+    if (!statsBase || (await isAncestor(root, statsBase, candidate))) {
+      statsBase = candidate;
+    }
+  }
+  // Squash merges leave origin/<branch> "ahead" of the default branch
+  // forever, so local git alone would keep offering Create PR after the work
+  // landed. Once merged PRs exist, the link returns only when the merge base
+  // provably contains EVERY known landing — a merge-commit landing leaves the
+  // head itself as an ancestor, a squash landing is visible only via its
+  // merge commit, and an older landing must not vouch for a newer one whose
+  // diff a new PR would replay. A tip merely descending from a squashed head
+  // or a fetch-stale tracking ref proves nothing, so those states keep the
+  // row stats-only until a rebase or fetch.
+  let provenNewPushedWork = false;
+  if (pushedSha && mergeBase && !mergedHeadShas.includes(pushedSha.toLowerCase())) {
+    provenNewPushedWork = landedHeads.length > 0;
+    for (const head of landedHeads) {
+      const incorporated =
+        (await isAncestor(root, head.sha, mergeBase)) ||
+        (head.mergeCommitSha ? await isAncestor(root, head.mergeCommitSha, mergeBase) : false);
+      if (!incorporated) {
+        provenNewPushedWork = false;
+        break;
+      }
+    }
+  }
+  const creatable =
+    (mergedHeadShas.length === 0 || provenNewPushedWork) &&
+    (await branchHasCreatablePullRequest(root, context, pushedSha));
+  const stats = statsBase ? await diffStatsAgainst(root, statsBase) : null;
   // No createUrl until GitHub can compare, but local changes still get a row.
   if (!creatable && !(stats && stats.changedFiles > 0)) {
     return undefined;
@@ -338,6 +436,8 @@ function parsePullListItem(value: unknown): PullListItem | null {
     repo,
     state: derivePullState(value),
     headSha: optionalString(head, "sha"),
+    baseRef: optionalString(base, "ref"),
+    mergeCommitSha: optionalString(value, "merge_commit_sha"),
   };
 }
 
@@ -489,11 +589,25 @@ async function finishPullRequest(
   };
 }
 
+function mergedHeadsOf(items: readonly PullListItem[]): MergedPullHead[] {
+  const heads: MergedPullHead[] = [];
+  for (const item of items) {
+    if (item.state === "merged" && item.headSha) {
+      heads.push({
+        sha: item.headSha.toLowerCase(),
+        ...(item.baseRef ? { baseRef: item.baseRef } : {}),
+        ...(item.mergeCommitSha ? { mergeCommitSha: item.mergeCommitSha.toLowerCase() } : {}),
+      });
+    }
+  }
+  return heads;
+}
+
 async function fetchBranchPullRequests(
   context: SessionPullRequestGitContext,
   fetchImpl: typeof fetch,
   token: string | undefined,
-): Promise<{ pullRequests: ControlUiSessionPullRequest[]; rateLimited: boolean }> {
+): Promise<BranchPullRequestsSnapshot> {
   const head = `${context.owner}:${context.branch}`;
   let items = parsePullList(
     await fetchGitHubJson(pullsByHeadUrl(context.owner, context.repo, head), fetchImpl, token),
@@ -508,11 +622,12 @@ async function fetchBranchPullRequests(
     }
   }
   const capped = items.slice(0, MAX_PULL_REQUESTS);
+  const mergedHeads = mergedHeadsOf(capped);
   try {
     const pullRequests = await Promise.all(
       capped.map((item) => finishPullRequest(item, context.branch, fetchImpl, token)),
     );
-    return { pullRequests, rateLimited: false };
+    return { pullRequests, rateLimited: false, mergedHeads };
   } catch (error) {
     if (!(error instanceof ControlUiGitHubError && error.statusCode === 429)) {
       throw error;
@@ -531,6 +646,7 @@ async function fetchBranchPullRequests(
         state: item.state,
       })),
       rateLimited: true,
+      mergedHeads,
     };
   }
 }
@@ -539,14 +655,14 @@ async function refreshBranchPullRequests(
   context: SessionPullRequestGitContext,
   fetchImpl: typeof fetch,
   entry: CacheEntry,
-): Promise<ControlUiSessionPullRequests> {
+): Promise<BranchPullRequestsSnapshot> {
   try {
     const result = await fetchBranchPullRequests(context, fetchImpl, githubApiToken());
     // Degraded state-only chips still become lastGood: a later refresh that
     // rate-limits at the list fetch must serve the proven PRs, not an empty
     // list that would resurrect the Create PR row mid-outage. The shortened
     // expiry makes the next window retry full detail.
-    entry.lastGood = result.pullRequests;
+    entry.lastGood = { pullRequests: result.pullRequests, mergedHeads: result.mergedHeads };
     if (result.rateLimited) {
       entry.expiresAt = Date.now() + RATE_LIMIT_CACHE_MS;
     }
@@ -555,10 +671,10 @@ async function refreshBranchPullRequests(
     const rateLimited = error instanceof ControlUiGitHubError && error.statusCode === 429;
     entry.expiresAt = Date.now() + (rateLimited ? RATE_LIMIT_CACHE_MS : FAILURE_CACHE_MS);
     if (rateLimited) {
-      return { pullRequests: entry.lastGood ?? [], rateLimited: true };
+      return { pullRequests: [], mergedHeads: [], ...entry.lastGood, rateLimited: true };
     }
     if (entry.lastGood) {
-      return { pullRequests: entry.lastGood, rateLimited: false };
+      return { ...entry.lastGood, rateLimited: false };
     }
     throw error;
   }
@@ -583,18 +699,22 @@ export async function loadControlUiSessionPullRequests(
   // Branch metadata is local git only, so it stays fresh per request (the
   // working-tree diff moves while the agent works) and keeps the pre-PR row
   // alive when GitHub is rate limited; only the GitHub fetch is cached.
-  const [branch, snapshot] = await Promise.all([
-    resolveSessionBranch(context),
-    cachedBranchPullRequests(context, deps, params.refresh === true),
-  ]);
+  // Sequenced after the snapshot because branch resolution needs the merged
+  // head SHAs; the snapshot is usually a cache hit, so this costs little.
+  const { mergedHeads, ...snapshot } = await cachedBranchPullRequests(
+    context,
+    deps,
+    params.refresh === true,
+  );
+  const branch = await resolveSessionBranch(context, mergedHeads);
   return branch ? { ...snapshot, branch } : snapshot;
 }
 
 function trackBranchRefresh(
   entry: CacheEntry,
   mode: "normal" | "forced",
-  load: () => Promise<ControlUiSessionPullRequests>,
-): Promise<ControlUiSessionPullRequests> {
+  load: () => Promise<BranchPullRequestsSnapshot>,
+): Promise<BranchPullRequestsSnapshot> {
   // Publish the replacement promise before any awaited work so later callers
   // cannot overtake a queued forced refresh with an older normal result.
   entry.expiresAt = Date.now() + SUCCESS_CACHE_MS;
@@ -613,7 +733,7 @@ async function cachedBranchPullRequests(
   context: SessionPullRequestGitContext,
   deps: LoadSessionPullRequestDeps,
   refresh: boolean,
-): Promise<ControlUiSessionPullRequests> {
+): Promise<BranchPullRequestsSnapshot> {
   const key = `${context.owner.toLowerCase()}/${context.repo.toLowerCase()}#${context.branch}`;
   const cached = branchCache.get(key);
   if (cached && cached.expiresAt > Date.now()) {
@@ -640,7 +760,7 @@ async function cachedBranchPullRequests(
   }
   const entry: CacheEntry = cached ?? {
     expiresAt: 0,
-    promise: Promise.resolve({ pullRequests: [], rateLimited: false }),
+    promise: Promise.resolve({ pullRequests: [], rateLimited: false, mergedHeads: [] }),
     refreshMode: null,
   };
   const promise = trackBranchRefresh(entry, refresh ? "forced" : "normal", () =>

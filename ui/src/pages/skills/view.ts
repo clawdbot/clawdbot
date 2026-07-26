@@ -782,7 +782,7 @@ function renderInstalledClawHubOverview(
   return html`
     <div
       class="callout"
-      style="display: grid; gap: 8px; border-color: var(--border); background: var(--panel-2);"
+      style="display: grid; gap: 8px; border-color: var(--border); background: var(--panel-strong);"
     >
       <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
         <span class="chip ${verdictChipClass(verdict)}">${verdictLabel(verdict)}</span>

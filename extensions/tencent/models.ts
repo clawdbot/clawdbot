@@ -1,5 +1,5 @@
 // Tencent plugin module implements models behavior.
-import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
+import { buildManifestModelDefinition } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
@@ -7,42 +7,29 @@ import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 export const TOKENHUB_PROVIDER_ID = "tencent-tokenhub";
 
-const TOKENHUB_MANIFEST_PROVIDER = buildManifestModelProviderConfig({
-  providerId: TOKENHUB_PROVIDER_ID,
-  catalog: manifest.modelCatalog.providers[TOKENHUB_PROVIDER_ID],
-});
+export const TOKENHUB_BASE_URL = manifest.modelCatalog.providers[TOKENHUB_PROVIDER_ID].baseUrl;
 
-export const TOKENHUB_BASE_URL = TOKENHUB_MANIFEST_PROVIDER.baseUrl;
-
-export const TOKENHUB_MODEL_CATALOG: ModelDefinitionConfig[] = TOKENHUB_MANIFEST_PROVIDER.models;
-
-export function buildTokenHubModelDefinition(
-  model: (typeof TOKENHUB_MODEL_CATALOG)[number],
-): ModelDefinitionConfig {
-  return {
-    ...model,
-    api: "openai-completions",
-  };
-}
+const TOKENHUB_MANIFEST_CATALOG = manifest.modelCatalog.providers[TOKENHUB_PROVIDER_ID];
+export const TOKENHUB_MODEL_CATALOG: ModelDefinitionConfig[] = TOKENHUB_MANIFEST_CATALOG.models.map(
+  buildManifestModelDefinition({
+    providerId: TOKENHUB_PROVIDER_ID,
+    catalog: TOKENHUB_MANIFEST_CATALOG,
+    decorate: (model) => ({ ...model, api: "openai-completions" }),
+  }),
+);
 
 // ---------- TokenPlan provider ----------
 
 export const TOKENPLAN_PROVIDER_ID = "tencent-tokenplan";
 
-const TOKENPLAN_MANIFEST_PROVIDER = buildManifestModelProviderConfig({
-  providerId: TOKENPLAN_PROVIDER_ID,
-  catalog: manifest.modelCatalog.providers[TOKENPLAN_PROVIDER_ID],
-});
+export const TOKENPLAN_BASE_URL = manifest.modelCatalog.providers[TOKENPLAN_PROVIDER_ID].baseUrl;
 
-export const TOKENPLAN_BASE_URL = TOKENPLAN_MANIFEST_PROVIDER.baseUrl;
-
-export const TOKENPLAN_MODEL_CATALOG: ModelDefinitionConfig[] = TOKENPLAN_MANIFEST_PROVIDER.models;
-
-export function buildTokenPlanModelDefinition(
-  model: (typeof TOKENPLAN_MODEL_CATALOG)[number],
-): ModelDefinitionConfig {
-  return {
-    ...model,
-    api: "openai-completions",
-  };
-}
+const TOKENPLAN_MANIFEST_CATALOG = manifest.modelCatalog.providers[TOKENPLAN_PROVIDER_ID];
+export const TOKENPLAN_MODEL_CATALOG: ModelDefinitionConfig[] =
+  TOKENPLAN_MANIFEST_CATALOG.models.map(
+    buildManifestModelDefinition({
+      providerId: TOKENPLAN_PROVIDER_ID,
+      catalog: TOKENPLAN_MANIFEST_CATALOG,
+      decorate: (model) => ({ ...model, api: "openai-completions" }),
+    }),
+  );

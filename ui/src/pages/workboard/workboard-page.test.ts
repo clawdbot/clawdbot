@@ -24,6 +24,7 @@ function contextWithWorkboard(workboard: WorkboardCapability): ApplicationContex
     client: null,
     phase: "stopped",
     offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: null,
     sessionKey: "main",

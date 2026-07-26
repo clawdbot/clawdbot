@@ -22,7 +22,6 @@ extensions/browser/src/browser/extension-relay/relay-bridge.ts
 extensions/browser/src/browser/pw-session.create-page.navigation-guard.test.ts
 extensions/browser/src/browser/pw-tools-core.browser-ssrf-guard.test.ts
 extensions/browser/src/browser/pw-tools-core.interactions.navigation-guard.test.ts
-extensions/browser/src/browser/pw-tools-core.interactions.ts
 extensions/browser/src/browser/routes/agent.act.ts
 extensions/browser/src/browser/routes/agent.snapshot.ts
 extensions/browser/src/cli/browser-cli-manage.ts
@@ -144,7 +143,6 @@ extensions/matrix/src/matrix/client/config.ts
 extensions/matrix/src/matrix/monitor/events.test.ts
 extensions/matrix/src/matrix/monitor/handler.test.ts
 extensions/matrix/src/matrix/sdk.test.ts
-extensions/matrix/src/matrix/sdk.ts
 extensions/matrix/src/matrix/sdk/verification-manager.ts
 extensions/matrix/src/matrix/send.test.ts
 extensions/matrix/src/onboarding.ts
@@ -174,7 +172,6 @@ extensions/memory-core/src/short-term-promotion.test.ts
 extensions/memory-core/src/tools.test.ts
 extensions/memory-core/src/tools.ts
 extensions/memory-lancedb/index.test.ts
-extensions/memory-lancedb/index.ts
 extensions/memory-wiki/src/chatgpt-import.ts
 extensions/memory-wiki/src/cli.ts
 extensions/memory-wiki/src/compile.ts
@@ -338,7 +335,6 @@ packages/ai/src/transports/anthropic-transport-stream.test.ts
 packages/ai/src/transports/anthropic-transport-stream.ts
 packages/ai/src/transports/openai-completions-transport.ts
 packages/gateway-client/src/client.ts
-packages/gateway-protocol/src/index.ts
 packages/gateway-protocol/src/schema/agents-models-skills.ts
 packages/gateway-protocol/src/schema/protocol-schemas.ts
 packages/markdown-core/src/ir.ts
@@ -364,7 +360,6 @@ src/agents/agent-hooks/compaction-safeguard.ts
 src/agents/agent-scope.test.ts
 src/agents/agent-tools.before-tool-call.e2e.test.ts
 src/agents/agent-tools.before-tool-call.integration.e2e.test.ts
-src/agents/agent-tools.before-tool-call.ts
 src/agents/agent-tools.create-openclaw-coding-tools.test.ts
 src/agents/agent-tools.read.ts
 src/agents/agent-tools.schema.test.ts
@@ -381,7 +376,6 @@ src/agents/bash-tools.exec-host-gateway.ts
 src/agents/bash-tools.exec-host-node.test.ts
 src/agents/bash-tools.exec-runtime.ts
 src/agents/bash-tools.exec.approval-id.test.ts
-src/agents/bash-tools.exec.ts
 src/agents/bash-tools.process.ts
 src/agents/btw.test.ts
 src/agents/btw.ts
@@ -415,12 +409,10 @@ src/agents/embedded-agent-runner.sanitize-session-history.test.ts
 src/agents/embedded-agent-runner/compact.hooks.harness.ts
 src/agents/embedded-agent-runner/compact.hooks.test.ts
 src/agents/embedded-agent-runner/compact.queued.ts
-src/agents/embedded-agent-runner/compact.ts
 src/agents/embedded-agent-runner/context-engine-maintenance.test.ts
 src/agents/embedded-agent-runner/extra-params.ts
 src/agents/embedded-agent-runner/model.provider-runtime.test-support.ts
 src/agents/embedded-agent-runner/model.test.ts
-src/agents/embedded-agent-runner/model.ts
 src/agents/embedded-agent-runner/replay-history.ts
 src/agents/embedded-agent-runner/run.incomplete-turn.test.ts
 src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts
@@ -429,7 +421,6 @@ src/agents/embedded-agent-runner/run.overflow-compaction.test.ts
 src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.test.ts
 src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.ts
 src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts
-src/agents/embedded-agent-runner/run/attempt.session-lock.ts
 src/agents/embedded-agent-runner/run/attempt.spawn-workspace.context-engine.test.ts
 src/agents/embedded-agent-runner/run/attempt.spawn-workspace.test-support.ts
 src/agents/embedded-agent-runner/run/attempt.test.ts
@@ -463,9 +454,7 @@ src/agents/main-session-restart-recovery.test.ts
 src/agents/model-auth-availability.ts
 src/agents/model-auth.profiles.test.ts
 src/agents/model-auth.test.ts
-src/agents/model-auth.ts
 src/agents/model-fallback.test.ts
-src/agents/model-fallback.ts
 src/agents/model-selection-shared.ts
 src/agents/model-selection.test.ts
 src/agents/models.profiles.live.test.ts
@@ -569,7 +558,6 @@ src/auto-reply/reply/followup-runner.test.ts
 src/auto-reply/reply/followup-runner.ts
 src/auto-reply/reply/get-reply-inline-actions.skip-when-config-empty.test.ts
 src/auto-reply/reply/get-reply-run.media-only.test.ts
-src/auto-reply/reply/get-reply-run.ts
 src/auto-reply/reply/get-reply.ts
 src/auto-reply/reply/inbound-meta.test.ts
 src/auto-reply/reply/inbound-meta.ts
@@ -714,13 +702,11 @@ src/cron/isolated-agent/run.ts
 src/cron/service.jobs.test.ts
 src/cron/service/jobs.ts
 src/cron/service/ops.test.ts
-src/cron/service/ops.ts
 src/cron/service/timer.regression.test.ts
 src/cron/store.test.ts
 src/daemon/launchd.test.ts
 src/daemon/launchd.ts
 src/daemon/schtasks.startup-fallback.test.ts
-src/daemon/schtasks.ts
 src/daemon/systemd.test.ts
 src/daemon/systemd.ts
 src/fleet/backup.runtime.ts
@@ -732,12 +718,10 @@ src/flows/doctor-core-checks.runtime.test.ts
 src/flows/doctor-core-checks.runtime.ts
 src/flows/doctor-core-checks.ts
 src/flows/doctor-health-contributions.test.ts
-src/flows/doctor-health-contributions.ts
 src/flows/model-picker.ts
 src/gateway/auth.test.ts
 src/gateway/call.test.ts
 src/gateway/call.ts
-src/gateway/chat-display-projection.ts
 src/gateway/cli-session-history.test.ts
 src/gateway/client.test.ts
 src/gateway/config-reload.test.ts
@@ -793,7 +777,6 @@ src/gateway/server-methods/doctor.ts
 src/gateway/server-methods/models-auth-status.test.ts
 src/gateway/server-methods/models.test.ts
 src/gateway/server-methods/nodes.invoke-wake.test.ts
-src/gateway/server-methods/nodes.ts
 src/gateway/server-methods/send.test.ts
 src/gateway/server-methods/send.ts
 src/gateway/server-methods/server-methods.test.ts
@@ -830,7 +813,6 @@ src/gateway/session-utils.test.ts
 src/gateway/sessions-history-http.test.ts
 src/gateway/sessions-patch.test.ts
 src/gateway/talk-realtime-relay.test.ts
-src/gateway/talk-realtime-relay.ts
 src/gateway/test-helpers.server.ts
 src/gateway/tools-invoke-http.test.ts
 src/gateway/watch-node-http.ts
@@ -986,7 +968,6 @@ src/sessions/session-state-events.ts
 src/shared/json-schema-defaults.ts
 src/shared/text/assistant-visible-text.ts
 src/skills/lifecycle/clawhub.test.ts
-src/skills/lifecycle/clawhub.ts
 src/skills/lifecycle/install.ts
 src/skills/loading/workspace-load.test.ts
 src/skills/loading/workspace.ts
@@ -1052,7 +1033,6 @@ ui/src/pages/chat/chat-history.ts
 ui/src/pages/chat/chat-responsive.browser.test.ts
 ui/src/pages/chat/chat-send.test.ts
 ui/src/pages/chat/chat-state.test.ts
-ui/src/pages/chat/chat-state.ts
 ui/src/pages/chat/chat-thread.test.ts
 ui/src/pages/chat/chat-view.test.ts
 ui/src/pages/chat/components/chat-message.test.ts

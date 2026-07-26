@@ -30,6 +30,7 @@ describe("meta provider", () => {
       id: "api-key",
       kind: "api_key",
       label: "Meta API key",
+      starterModel: "meta/muse-spark-1.1",
     });
   });
 

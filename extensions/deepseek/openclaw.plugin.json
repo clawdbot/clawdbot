@@ -28,6 +28,7 @@
       "deepseek": {
         "baseUrl": "https://api.deepseek.com",
         "api": "openai-completions",
+        "defaultModel": "deepseek-v4-pro",
         "models": [
           {
             "id": "deepseek-v4-flash",

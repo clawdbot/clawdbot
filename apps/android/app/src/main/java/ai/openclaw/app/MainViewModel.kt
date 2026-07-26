@@ -9,6 +9,7 @@ import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatPlanStep
 import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.chat.ChatSwarmGroup
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
 import ai.openclaw.app.chat.ChatTranscriptAnchorState
 import ai.openclaw.app.chat.ChatWidgetResource
@@ -396,6 +397,7 @@ class MainViewModel private constructor(
 
   internal fun enterScreenshotFixtureMode(scene: AndroidScreenshotScene) {
     check(BuildConfig.DEBUG) { "Android screenshot fixtures require a debug build" }
+    AndroidScreenshotFixture.configure(scene)
     runtimeRef.value?.let { runtime ->
       // The ViewModel survives locale recreation; keep the fixture runtime instead of
       // treating the restored Activity as a second fixture startup.
@@ -641,6 +643,7 @@ class MainViewModel private constructor(
   val chatQuestions: StateFlow<List<ChatQuestionPrompt>> = runtimeState(initial = emptyList()) { it.chatQuestions }
   val chatPlanSteps: StateFlow<List<ChatPlanStep>> = runtimeState(initial = emptyList()) { it.chatPlanSteps }
   val chatSessions: StateFlow<List<ChatSessionEntry>> = runtimeState(initial = emptyList()) { it.chatSessions }
+  val chatSwarmGroups: StateFlow<List<ChatSwarmGroup>> = runtimeState(initial = emptyList()) { it.chatSwarmGroups }
   val chatSessionBranches: StateFlow<List<SessionBranch>> = runtimeState(initial = emptyList()) { it.chatSessionBranches }
   val chatSessionBranchesLoading: StateFlow<Boolean> = runtimeState(initial = false) { it.chatSessionBranchesLoading }
   val chatSessionBranchSwitching: StateFlow<Boolean> = runtimeState(initial = false) { it.chatSessionBranchSwitching }

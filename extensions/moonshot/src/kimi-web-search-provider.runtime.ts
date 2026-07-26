@@ -35,11 +35,11 @@ import {
   isNativeMoonshotBaseUrl,
   MOONSHOT_BASE_URL,
   MOONSHOT_CN_BASE_URL,
-  MOONSHOT_DEFAULT_MODEL_ID,
 } from "../provider-catalog.js";
 
 const DEFAULT_KIMI_BASE_URL = MOONSHOT_BASE_URL;
-const DEFAULT_KIMI_SEARCH_MODEL = MOONSHOT_DEFAULT_MODEL_ID;
+// Search owns a separate model default so chat onboarding changes do not silently reroute searches.
+const DEFAULT_KIMI_SEARCH_MODEL = "kimi-k2.6";
 /** Models that require explicit thinking disablement for web search. */
 const KIMI_THINKING_MODELS = new Set(["kimi-k2.6", "kimi-k2.5"]);
 const KIMI_WEB_SEARCH_TOOL = {

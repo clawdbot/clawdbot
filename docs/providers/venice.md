@@ -60,18 +60,18 @@ Anonymized models are not fully private. Venice strips metadata before forwardin
   </Step>
   <Step title="Verify setup">
     ```bash
-    openclaw agent --model venice/kimi-k2-6 --message "Hello, are you working?"
+    openclaw agent --model venice/zai-org-glm-4.7 --message "Hello, are you working?"
     ```
   </Step>
 </Steps>
 
 ## Model selection
 
-- **Default**: `venice/kimi-k2-6` (private, reasoning, vision).
+- **Default**: `venice/zai-org-glm-4.7` (private reasoning).
 - **Strongest anonymized option**: `venice/claude-opus-5`.
 
 ```bash
-openclaw models set venice/kimi-k2-6
+openclaw models set venice/zai-org-glm-4.7
 openclaw models list --all --provider venice
 ```
 
@@ -80,7 +80,7 @@ You can also run `openclaw configure` and pick **Model/auth provider > Venice AI
 <Tip>
 | Use case              | Model                                        | Why                                    |
 | --------------------- | -------------------------------------------- | -------------------------------------- |
-| General chat (default) | `kimi-k2-6`                                  | Current promoted private Kimi model    |
+| General chat (default) | `zai-org-glm-4.7`                             | Venice live default trait              |
 | Best overall quality   | `claude-opus-5`                              | Current promoted anonymized Opus model |
 | Privacy + coding       | `qwen3-coder-480b-a35b-instruct-turbo`       | Private coding model with large context |
 | Fast + cheap           | `google-gemma-4-31b-it`                      | Low-cost promoted private vision model |
@@ -95,7 +95,7 @@ You can also run `openclaw configure` and pick **Model/auth provider > Venice AI
     | Model ID                               | Name                        | Context | Notes                       |
     | -------------------------------------- | --------------------------- | ------- | --------------------------- |
     | `zai-org-glm-5-2`                      | GLM 5.2                     | 1M      | Recommended, coding         |
-    | `zai-org-glm-4.7`                      | GLM 4.7                     | 198k    | Venice default              |
+    | `zai-org-glm-4.7`                      | GLM 4.7                     | 198k    | Private reasoning           |
     | `venice-uncensored-1-2`                | Venice Uncensored 1.2       | 128k    | Most uncensored, vision     |
     | `google-gemma-4-31b-it`                | Google Gemma 4 31B Instruct | 256k    | Recommended, vision         |
     | `kimi-k2-6`                            | Kimi K2.6                   | 256k    | Recommended, coding, vision |
@@ -168,7 +168,7 @@ direct API pricing plus a small Venice fee. See
 
 ```bash
 # Default private model
-openclaw agent --model venice/kimi-k2-6 --message "Quick health check"
+openclaw agent --model venice/zai-org-glm-4.7 --message "Quick health check"
 
 # Claude Opus via Venice (anonymized)
 openclaw agent --model venice/claude-opus-5 --message "Summarize this task"
@@ -217,7 +217,7 @@ More help: [Troubleshooting](/help/troubleshooting) and [FAQ](/help/faq).
     ```json5
     {
       env: { VENICE_API_KEY: "vapi_..." },
-      agents: { defaults: { model: { primary: "venice/kimi-k2-6" } } },
+      agents: { defaults: { model: { primary: "venice/zai-org-glm-4.7" } } },
       models: {
         mode: "merge",
         providers: {
@@ -227,13 +227,13 @@ More help: [Troubleshooting](/help/troubleshooting) and [FAQ](/help/faq).
             api: "openai-completions",
             models: [
               {
-                id: "kimi-k2-6",
-                name: "Kimi K2.6",
+                id: "zai-org-glm-4.7",
+                name: "GLM 4.7",
                 reasoning: true,
-                input: ["text", "image"],
-                cost: { input: 0.75, output: 3.5, cacheRead: 0.16, cacheWrite: 0 },
-                contextWindow: 256000,
-                maxTokens: 65536,
+                input: ["text"],
+                cost: { input: 0.55, output: 2.65, cacheRead: 0.11, cacheWrite: 0 },
+                contextWindow: 198000,
+                maxTokens: 16384,
               },
             ],
           },

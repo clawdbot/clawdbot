@@ -62,7 +62,7 @@ describe("listGatewayMethods", () => {
   });
 
   it("appends new methods after model probing without shifting older method indices", () => {
-    expect(listGatewayMethods().slice(-32)).toEqual([
+    expect(listGatewayMethods().slice(-31)).toEqual([
       "models.probe",
       "migrations.memory.plan",
       "migrations.memory.apply",
@@ -75,7 +75,6 @@ describe("listGatewayMethods", () => {
       "board.prompt.authorize",
       "board.data.read",
       "board.action",
-      "sessions.observer.ask",
       "sessions.observer.visibility",
       "session.visibility.set",
       "session.members.list",
@@ -155,7 +154,7 @@ describe("listGatewayMethods", () => {
       "exec.approval.get",
     ]);
     expect(methods).toContain("tts.speak");
-    expect(coreMethods.slice(-39)).toEqual([
+    expect(coreMethods.slice(-38)).toEqual([
       "sessions.catalog.continue",
       "sessions.catalog.archive",
       "approval.get",
@@ -175,7 +174,6 @@ describe("listGatewayMethods", () => {
       "board.prompt.authorize",
       "board.data.read",
       "board.action",
-      "sessions.observer.ask",
       "sessions.observer.visibility",
       "session.visibility.set",
       "session.members.list",
