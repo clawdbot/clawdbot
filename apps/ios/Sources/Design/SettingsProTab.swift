@@ -326,10 +326,14 @@ struct SettingsProTab: View {
                             self.pendingForgetGateway = nil
                         }
                     }),
-                titleVisibility: .visible)
-            {
+                titleVisibility: .visible,
+                // Hand the entry to the action. Dismissal clears
+                // `pendingForgetGateway` before the button action runs, so an
+                // action that reads it back from state always sees nil.
+                presenting: self.pendingForgetGateway)
+            { entry in
                 Button(role: .destructive) {
-                    Task { await self.forgetPendingGateway() }
+                    Task { await self.forgetGateway(entry) }
                 } label: {
                     Text("Forget Gateway")
                         .font(OpenClawType.subheadSemiBold)
@@ -340,7 +344,7 @@ struct SettingsProTab: View {
                     Text("Cancel")
                         .font(OpenClawType.subheadSemiBold)
                 }
-            } message: {
+            } message: { _ in
                 // Keep the extraction key contiguous for the native localization inventory.
                 Text(
                     String(
