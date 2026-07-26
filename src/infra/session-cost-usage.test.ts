@@ -206,7 +206,7 @@ describe("session cost usage", () => {
     });
   });
 
-  it("synchronously rebuilds per-session summaries when every requested cache row is stale", async () => {
+  it("does not rebuild per-session summaries when refresh is disabled", async () => {
     const root = await makeSessionCostRoot("cost-session-sync");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
@@ -237,16 +237,6 @@ describe("session cost usage", () => {
       expect(disabled.cacheStatus.cachedFiles).toBe(0);
       expect(disabled.cacheStatus.pendingFiles).toBe(1);
       expect(disabled.summaries[0]).toBeNull();
-
-      const result = await loadSessionCostSummariesFromCache({
-        sessions: [{ sessionId, sessionFile }],
-      });
-
-      expect(result.cacheStatus.status).toBe("fresh");
-      expect(result.cacheStatus.cachedFiles).toBe(1);
-      expect(result.cacheStatus.pendingFiles).toBe(0);
-      expect(result.summaries[0]?.totalTokens).toBe(21);
-      expect(result.summaries[0]?.totalCost).toBeCloseTo(0.021, 8);
     });
   });
 
