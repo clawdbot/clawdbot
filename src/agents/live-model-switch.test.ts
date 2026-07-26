@@ -179,10 +179,6 @@ describe("live model switch", () => {
       authProfileId: "profile-gpt",
       authProfileIdSource: "user",
     });
-    expect(state.resolveDefaultModelForAgentMock).toHaveBeenCalledWith({
-      cfg: { session: { store: "/tmp/custom-store.json" } },
-      agentId: "reply",
-    });
     expect(state.resolveStorePathMock).toHaveBeenCalledWith("/tmp/custom-store.json", {
       agentId: "reply",
     });
@@ -374,6 +370,37 @@ describe("live model switch", () => {
         authProfileId: undefined,
         authProfileIdSource: undefined,
       });
+    });
+
+    it("trusts the caller-supplied run default instead of re-resolving the agent primary", async () => {
+      // Heartbeat/cron shape: the run passes its own model as the default and
+      // is currently executing it. Re-resolving the agent primary (mocked as
+      // anthropic/claude-opus-4-6) used to make the persisted selection differ
+      // and raised a spurious live-switch restart on every heartbeat tick.
+      state.loadSessionStoreMock.mockReturnValue({
+        main: { liveModelSwitchPending: true },
+      });
+
+      const { shouldSwitchToLiveModel } = await loadModule();
+
+      expect(
+        shouldSwitchToLiveModel(
+          makeShouldSwitchParams({
+            defaultProvider: "google",
+            defaultModel: "gemini-2.5-flash",
+            currentProvider: "google",
+            currentModel: "gemini-2.5-flash",
+          }),
+        ),
+      ).toBeUndefined();
+      expect(state.resolvePersistedSelectedModelRefMock).toHaveBeenCalledWith({
+        defaultProvider: "google",
+        runtimeProvider: undefined,
+        runtimeModel: undefined,
+        overrideProvider: undefined,
+        overrideModel: undefined,
+      });
+      expect(state.resolveDefaultModelForAgentMock).not.toHaveBeenCalled();
     });
 
     it("returns undefined when liveModelSwitchPending is false", async () => {

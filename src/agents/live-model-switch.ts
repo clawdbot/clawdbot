@@ -12,7 +12,6 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import {
   normalizeStoredOverrideModel,
   resolveDefaultModelForAgent,
@@ -56,7 +55,6 @@ function resolveLiveSessionModelSelection(params: {
   return resolveSelectionFromSessionEntry({
     cfg,
     entry,
-    agentId,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
   });
@@ -69,18 +67,16 @@ function resolveLiveSessionModelSelection(params: {
 function resolveSelectionFromSessionEntry(params: {
   cfg: OpenClawConfig;
   entry: SessionEntry | undefined;
-  agentId?: string;
   defaultProvider: string;
   defaultModel: string;
 }): LiveSessionModelSelection {
   const { cfg, entry } = params;
-  const agentId = normalizeOptionalString(params.agentId);
-  const defaultModelRef = agentId
-    ? resolveDefaultModelForAgent({
-        cfg,
-        agentId,
-      })
-    : { provider: params.defaultProvider, model: params.defaultModel };
+  // Trust the caller-supplied run defaults instead of re-resolving the agent
+  // primary here. Heartbeat and cron runs pass their own model (e.g. haiku) as
+  // the default; re-resolving the agent primary made the persisted selection
+  // diverge from those runs and raised a spurious LiveSessionModelSwitchError
+  // that restarted heartbeats onto the wrong model.
+  const defaultModelRef = { provider: params.defaultProvider, model: params.defaultModel };
   const normalizedSelection = normalizeStoredOverrideModel({
     providerOverride: entry?.providerOverride,
     modelOverride: entry?.modelOverride,
@@ -280,12 +276,14 @@ export async function consolidateLiveModelSwitchAfterRun(params: {
       if (!entry.liveModelSwitchPending) {
         return null;
       }
+      // Consolidation compares against the agent's own default: CLI harness
+      // runs execute the agent primary unless the session overrides it.
+      const agentDefault = resolveDefaultModelForAgent({ cfg, agentId });
       const persisted = resolveSelectionFromSessionEntry({
         cfg,
         entry,
-        agentId,
-        defaultProvider: DEFAULT_PROVIDER,
-        defaultModel: DEFAULT_MODEL,
+        defaultProvider: agentDefault.provider,
+        defaultModel: agentDefault.model,
       });
       const selectionApplied =
         (providerUsed === persisted.provider && modelUsed === persisted.model) ||

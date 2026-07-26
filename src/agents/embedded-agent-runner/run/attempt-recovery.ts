@@ -1,6 +1,5 @@
 import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../defaults.js";
 import type { FailoverReason } from "../../embedded-agent-helpers.js";
 import { LiveSessionModelSwitchError } from "../../live-model-switch-error.js";
 import { shouldSwitchToLiveModel, clearLiveModelSwitchPending } from "../../live-model-switch.js";
@@ -138,8 +137,11 @@ export async function recoverEmbeddedRunAttempt(input: {
     cfg: params.config,
     sessionKey: runInput.resolvedSessionKey,
     agentId: params.agentId,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
+    // Run defaults, not product constants: heartbeat/cron runs pass their own
+    // model, and comparing the persisted selection against a re-derived agent
+    // primary raised spurious live-switch restarts for those runs.
+    defaultProvider: runInput.provider,
+    defaultModel: runInput.modelId,
     currentProvider: preparedRuntime.provider,
     currentModel: preparedRuntime.modelId,
     currentAgentRuntimeOverride: params.agentHarnessRuntimeOverride,
