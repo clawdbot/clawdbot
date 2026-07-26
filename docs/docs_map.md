@@ -7828,6 +7828,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Card fields
   - H2: Starting work from a card
   - H2: Agent tools
+  - H3: Recovering legacy aggregate dependencies
   - H2: Dispatch
   - H3: Worker selection
   - H3: Entry points
