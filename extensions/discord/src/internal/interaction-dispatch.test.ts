@@ -14,6 +14,36 @@ import {
 } from "./test-builders.test-support.js";
 
 describe("dispatchInteraction", () => {
+  it("reports a matched command as accepted before its handler completes", async () => {
+    const handlerDone = createDeferred();
+    const run = vi.fn(async () => {
+      await handlerDone.promise;
+    });
+    class BlockingCommand extends Command {
+      override name = "blocking";
+      override description = "Blocking command";
+      run = run;
+    }
+    const client = createInternalTestClient([new BlockingCommand()]);
+    const onAcceptedInteraction = vi.fn();
+
+    const handled = client.handleInteraction(
+      createInternalInteractionPayload({
+        id: "interaction1",
+        token: "token1",
+        data: { id: "command1", name: "blocking", type: 1 },
+      }),
+      { onAcceptedInteraction },
+    );
+    await Promise.resolve();
+
+    expect(onAcceptedInteraction).toHaveBeenCalledOnce();
+    expect(run).toHaveBeenCalledOnce();
+
+    handlerDone.resolve();
+    await handled;
+  });
+
   it("passes command ephemeral defaults into deferred responses", async () => {
     const run = vi.fn(async (interaction: CommandInteraction) => {
       await interaction.reply("done");
@@ -147,3 +177,11 @@ describe("dispatchInteraction", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 });
+
+function createDeferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}

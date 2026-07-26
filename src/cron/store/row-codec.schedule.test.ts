@@ -11,6 +11,50 @@ function roundTrip(schedule: CronSchedule): CronSchedule | null {
 }
 
 describe("schedule column codec round-trip", () => {
+  it("round-trips the creator account through the additive job_json envelope", () => {
+    const job = projectCronJobThroughStorageCodec(
+      makeCronJob({
+        owner: {
+          agentId: "main",
+          sessionKey: "agent:main:discord:group:ops",
+          accountId: "work",
+        },
+      }),
+    );
+
+    expect(job.owner).toEqual({
+      agentId: "main",
+      sessionKey: "agent:main:discord:group:ops",
+      accountId: "work",
+    });
+  });
+
+  it("round-trips scheduled authority through the additive job_json envelope", () => {
+    const job = projectCronJobThroughStorageCodec(
+      makeCronJob({
+        owner: {
+          agentId: "main",
+          sessionKey: "agent:main:discord:group:ops",
+          accountId: "work",
+        },
+        payload: { kind: "agentTurn", message: "run", toolsAllow: ["write"] },
+        scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
+          ownerSessionKey: "agent:main:discord:group:ops",
+          ownerAccountId: "work",
+        },
+      }),
+    );
+
+    expect(job.scheduledToolPolicy).toEqual({
+      version: 1,
+      mode: "account",
+      ownerSessionKey: "agent:main:discord:group:ops",
+      ownerAccountId: "work",
+    });
+  });
+
   it("round-trips pacing through the additive job_json envelope", () => {
     const job = projectCronJobThroughStorageCodec(
       makeCronJob({ pacing: { min: "15m", max: "4h" } }),
@@ -31,6 +75,28 @@ describe("schedule column codec round-trip", () => {
     expect(roundTrip({ kind: "on-exit", command: "./watch.sh" })).toEqual({
       kind: "on-exit",
       command: "./watch.sh",
+    });
+  });
+
+  it("round-trips a stream schedule through job_json without new columns", () => {
+    expect(
+      roundTrip({
+        kind: "stream",
+        command: ["node", "events.mjs"],
+        cwd: "/repo",
+        mode: "match",
+        match: "^ready:",
+        batchMs: 100,
+        maxBatchBytes: 2_048,
+      }),
+    ).toEqual({
+      kind: "stream",
+      command: ["node", "events.mjs"],
+      cwd: "/repo",
+      mode: "match",
+      match: "^ready:",
+      batchMs: 100,
+      maxBatchBytes: 2_048,
     });
   });
 

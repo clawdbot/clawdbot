@@ -179,6 +179,30 @@ describe("DiscordInteractionListener", () => {
     await flushAsyncWork();
   });
 
+  it("reports acceptance before a long interaction handler completes", async () => {
+    const handlerDone = createDeferred();
+    const onAcceptedEvent = vi.fn();
+    const handleInteraction = vi.fn(
+      async (
+        _data: unknown,
+        context?: { onAcceptedInteraction?: () => void },
+      ) => {
+        context?.onAcceptedInteraction?.();
+        await handlerDone.promise;
+      },
+    );
+    const listener = new DiscordInteractionListener(undefined, undefined, onAcceptedEvent);
+
+    await listener.handle({ id: "interaction-1" } as never, { handleInteraction } as never);
+    await flushAsyncWork();
+
+    expect(onAcceptedEvent).toHaveBeenCalledOnce();
+    expect(handleInteraction).toHaveBeenCalledOnce();
+
+    handlerDone.resolve?.();
+    await flushAsyncWork();
+  });
+
   it("logs async interaction failures", async () => {
     const handleInteraction = vi.fn(async () => {
       throw new Error("interaction boom");

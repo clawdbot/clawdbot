@@ -35,36 +35,36 @@ function requireFinding(
 }
 
 describe("security audit node command findings", () => {
-  it("evaluates ineffective gateway.nodes.denyCommands entries", () => {
+  it("evaluates ineffective gateway.nodes.commands.deny entries", () => {
     const cases = [
       {
-        name: "flags ineffective gateway.nodes.denyCommands entries",
+        name: "flags ineffective gateway.nodes.commands.deny entries",
         cfg: {
           gateway: {
             nodes: {
-              denyCommands: ["system.*", "system.runx"],
+              commands: { deny: ["system.*", "system.runx"] },
             },
           },
         } satisfies OpenClawConfig,
         detailIncludes: ["system.*", "system.runx", "did you mean", "system.run"],
       },
       {
-        name: "suggests prefix-matching commands for unknown denyCommands entries",
+        name: "suggests prefix-matching commands for unknown deny entries",
         cfg: {
           gateway: {
             nodes: {
-              denyCommands: ["system.run.prep"],
+              commands: { deny: ["system.run.prep"] },
             },
           },
         } satisfies OpenClawConfig,
         detailIncludes: ["system.run.prep", "did you mean", "system.run.prepare"],
       },
       {
-        name: "keeps unknown denyCommands entries without suggestions when no close command exists",
+        name: "keeps unknown deny entries without suggestions when no close command exists",
         cfg: {
           gateway: {
             nodes: {
-              denyCommands: ["zzzzzzzzzzzzzz"],
+              commands: { deny: ["zzzzzzzzzzzzzz"] },
             },
           },
         } satisfies OpenClawConfig,
@@ -72,11 +72,13 @@ describe("security audit node command findings", () => {
         detailExcludes: ["did you mean"],
       },
       {
-        name: "keeps valid dangerous denyCommands entries out of unknown warnings",
+        name: "keeps valid dangerous deny entries out of unknown warnings",
         cfg: {
           gateway: {
             nodes: {
-              denyCommands: ["camera.snap", "screen.record", "camera.snapp", "system.*"],
+              commands: {
+                deny: ["camera.snap", "screen.record", "camera.snapp", "system.*"],
+              },
             },
           },
         } satisfies OpenClawConfig,
@@ -102,11 +104,13 @@ describe("security audit node command findings", () => {
     }
   });
 
-  it("does not flag valid dangerous gateway.nodes.denyCommands entries as ineffective", () => {
+  it("does not flag valid dangerous gateway.nodes.commands.deny entries as ineffective", () => {
     const findings = collectNodeDenyCommandPatternFindings({
       gateway: {
         nodes: {
-          denyCommands: ["camera.snap", "camera.clip", "screen.record", "sms.send", "system.run"],
+          commands: {
+            deny: ["camera.snap", "camera.clip", "screen.record", "sms.send", "system.run"],
+          },
         },
       },
     } satisfies OpenClawConfig);
@@ -114,7 +118,7 @@ describe("security audit node command findings", () => {
     expect(findings).toStrictEqual([]);
   });
 
-  it("evaluates dangerous gateway.nodes.allowCommands findings", () => {
+  it("evaluates dangerous gateway.nodes.commands.allow findings", () => {
     const cases: Array<{
       name: string;
       cfg: OpenClawConfig;
@@ -126,7 +130,9 @@ describe("security audit node command findings", () => {
         cfg: {
           gateway: {
             bind: "loopback",
-            nodes: { allowCommands: ["camera.snap", "screen.record", "health.summary"] },
+            nodes: {
+              commands: { allow: ["camera.snap", "screen.record", "health.summary"] },
+            },
           },
         } satisfies OpenClawConfig,
         expectedSeverity: "warn" as const,
@@ -136,18 +142,22 @@ describe("security audit node command findings", () => {
         cfg: {
           gateway: {
             bind: "lan",
-            nodes: { allowCommands: ["camera.snap", "screen.record", "health.summary"] },
+            nodes: {
+              commands: { allow: ["camera.snap", "screen.record", "health.summary"] },
+            },
           },
         } satisfies OpenClawConfig,
         expectedSeverity: "critical" as const,
       },
       {
-        name: "denied again suppresses dangerous allowCommands finding",
+        name: "denied again suppresses dangerous allow finding",
         cfg: {
           gateway: {
             nodes: {
-              allowCommands: ["camera.snap", "screen.record"],
-              denyCommands: ["camera.snap", "screen.record"],
+              commands: {
+                allow: ["camera.snap", "screen.record"],
+                deny: ["camera.snap", "screen.record"],
+              },
             },
           },
         } satisfies OpenClawConfig,

@@ -2522,6 +2522,58 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         await appModel.purgeChatTranscriptCache(gatewayID: stableID)
     }
 
+    @Test @MainActor func `offline stores keep byte-distinct gateway owners isolated`() async throws {
+        let appModel = NodeAppModel()
+        let suffix = UUID().uuidString
+        let composedGatewayID = "offline-gateway-\u{00E9}-\(suffix)"
+        let decomposedGatewayID = "offline-gateway-e\u{0301}-\(suffix)"
+        #expect(composedGatewayID.precomposedStringWithCanonicalMapping ==
+            decomposedGatewayID.precomposedStringWithCanonicalMapping)
+        #expect(GatewayStableIdentifier.key(composedGatewayID) !=
+            GatewayStableIdentifier.key(decomposedGatewayID))
+        defer {
+            appModel.cancelChatOfflineDataRemoval(gatewayID: composedGatewayID)
+        }
+
+        appModel._test_setConnectedGatewayID(composedGatewayID)
+        let composedStore = try #require(appModel.makeChatOfflineStore())
+        let composedOwnerID = appModel.chatViewModelOwnerID
+        #expect(await appModel.stageChatOfflineDataRemoval(gatewayID: composedGatewayID))
+
+        appModel._test_setConnectedGatewayID(decomposedGatewayID)
+        let decomposedStore = try #require(appModel.makeChatOfflineStore())
+
+        #expect(ObjectIdentifier(composedStore) != ObjectIdentifier(decomposedStore))
+        #expect(Array(composedStore.gatewayID.utf8) == Array(composedGatewayID.utf8))
+        #expect(Array(decomposedStore.gatewayID.utf8) == Array(decomposedGatewayID.utf8))
+        #expect(appModel.chatViewModelOwnerID != composedOwnerID)
+
+        appModel.cancelChatOfflineDataRemoval(gatewayID: composedGatewayID)
+        _ = await appModel.purgeChatTranscriptCache(gatewayID: composedGatewayID)
+        _ = await appModel.purgeChatTranscriptCache(gatewayID: decomposedGatewayID)
+    }
+
+    @Test @MainActor func `failed full offline reset never reuses retired facade`() async throws {
+        let appModel = NodeAppModel()
+        let gatewayID = "offline-reset-failure-\(UUID().uuidString)"
+        appModel._test_setConnectedGatewayID(gatewayID)
+        let originalStore = try #require(appModel.makeChatOfflineStore())
+        appModel._test_setRemoveAllChatDatabaseFilesHandler {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        defer {
+            appModel._test_setRemoveAllChatDatabaseFilesHandler(nil)
+        }
+
+        let didPurge = await appModel.purgeChatTranscriptCache()
+        #expect(!didPurge)
+        let replacementStore = try #require(appModel.makeChatOfflineStore())
+
+        #expect(ObjectIdentifier(originalStore) != ObjectIdentifier(replacementStore))
+        appModel._test_setRemoveAllChatDatabaseFilesHandler(nil)
+        _ = await appModel.purgeChatTranscriptCache(gatewayID: gatewayID)
+    }
+
     @Test @MainActor func `gateway main key refresh preserves focused Talk session`() {
         let talkMode = TalkModeManager(allowSimulatorCapture: true)
         let appModel = NodeAppModel(talkMode: talkMode)

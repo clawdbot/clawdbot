@@ -31,12 +31,8 @@ function resolveProviderChunkContext(
 }
 
 type ProviderBlockStreamingConfig = {
-  blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   streaming?: unknown;
-  accounts?: Record<
-    string,
-    { blockStreamingCoalesce?: BlockStreamingCoalesceConfig; streaming?: unknown }
-  >;
+  accounts?: Record<string, { streaming?: unknown }>;
 };
 
 function resolveScopedBlockStreamingCoalesce(

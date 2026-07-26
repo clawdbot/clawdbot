@@ -5,6 +5,8 @@ import type { JsonValue } from "./protocol.js";
 import { createClientHarness } from "./test-support.js";
 import { getCodexAppServerTurnRouter, type CodexAppServerServerRequest } from "./turn-router.js";
 
+const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 660_000;
+
 type ClientHarness = ReturnType<typeof createClientHarness>;
 
 type WireResponse = {
@@ -44,6 +46,31 @@ describe("CodexAppServerTurnRouter", () => {
     expect(addNotificationHandler).toHaveBeenCalledTimes(1);
     expect(addRequestHandler).toHaveBeenCalledTimes(1);
     expect(addCloseHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not dispatch a request that times out before route activation", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const harness = createHarness();
+    const requestHandler = vi.fn(() => ({ executed: true }));
+    const route = getCodexAppServerTurnRouter(harness.client).reserveThread({
+      threadId: "thread-late",
+    });
+
+    harness.send({
+      id: "request-late",
+      method: "item/tool/call",
+      params: { threadId: "thread-late", turnId: "turn-late", tool: "message" },
+    });
+    await vi.advanceTimersByTimeAsync(CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS);
+    expect(await waitForResponse(harness, "request-late")).toMatchObject({
+      id: "request-late",
+      result: { success: false },
+    });
+
+    await route.activate({ onRequest: requestHandler });
+
+    expect(requestHandler).not.toHaveBeenCalled();
   });
 
   it("routes concurrent traffic to the exact thread and turn", async () => {

@@ -127,7 +127,9 @@ export async function runManualStage(params: {
     ? [
         {
           value: "detected-ai",
-          label: t("wizard.guided.detectedTitle"),
+          label: t("wizard.guided.detectedGroupLabel"),
+          hint: params.detection.candidates.map((candidate) => candidate.label).join(", "),
+          methodMessage: t("wizard.guided.detectedGroupPrompt"),
           options: detectedOptions,
         },
       ]

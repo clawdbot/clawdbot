@@ -1,5 +1,23 @@
 // Removes transient runtime state from restorable OpenClaw database snapshots.
 import type { DatabaseSync } from "node:sqlite";
+import { tryParsePersistedExecApprovals } from "../infra/exec-approvals-config.js";
+import type { ExecApprovalsFile } from "../infra/exec-approvals-core.js";
+import { projectionValues } from "../infra/exec-approvals-sqlite.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
+
+type SnapshotSanitizerDatabase = Pick<OpenClawStateKyselyDatabase, "exec_approvals_config">;
+
+const FAIL_CLOSED_EXEC_APPROVALS: ExecApprovalsFile = {
+  version: 1,
+  defaults: {
+    security: "deny",
+    ask: "off",
+    askFallback: "deny",
+    autoAllowSkills: false,
+  },
+  agents: {},
+};
 
 function tableExists(database: DatabaseSync, tableName: string): boolean {
   const row = database // sqlite-allow-raw -- Offline snapshot maintenance boundary.
@@ -27,5 +45,32 @@ export function sanitizeOpenClawGlobalStateSnapshot(database: DatabaseSync): voi
     // A TTL marks blob data as transient. Exclude every TTL row, including one
     // that is still live, so restore cannot prolong its original retention.
     database.prepare("DELETE FROM plugin_blob_entries WHERE expires_at IS NOT NULL").run(); // sqlite-allow-raw -- Offline snapshot maintenance boundary.
+  }
+  if (tableExists(database, "exec_approvals_config")) {
+    const stateDb = getNodeSqliteKysely<SnapshotSanitizerDatabase>(database);
+    const rows = executeSqliteQuerySync(
+      database,
+      stateDb.selectFrom("exec_approvals_config").select(["config_key", "raw_json"]),
+    ).rows;
+    for (const row of rows) {
+      let sanitized: ExecApprovalsFile = FAIL_CLOSED_EXEC_APPROVALS;
+      const parsed = tryParsePersistedExecApprovals(row.raw_json);
+      if (parsed) {
+        sanitized = structuredClone(parsed);
+        if (sanitized.socket) {
+          delete sanitized.socket.token;
+        }
+      }
+      executeSqliteQuerySync(
+        database,
+        stateDb
+          .updateTable("exec_approvals_config")
+          .set({
+            raw_json: `${JSON.stringify(sanitized, null, 2)}\n`,
+            ...projectionValues(sanitized),
+          })
+          .where("config_key", "=", row.config_key),
+      );
+    }
   }
 }

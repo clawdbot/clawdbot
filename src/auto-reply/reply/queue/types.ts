@@ -10,6 +10,7 @@ import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
 import type { SessionEntry } from "../../../config/sessions.js";
 import type { ReplyToMode } from "../../../config/types.base.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { MediaFact } from "../../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { PluginHookChannelContext } from "../../../plugins/hook-types.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
@@ -97,6 +98,8 @@ export type FollowupRun = {
   enqueuedAt: number;
   images?: Array<{ type: "image"; data: string; mimeType: string }>;
   imageOrder?: PromptImageOrderEntry[];
+  /** Ordered facts represented by attachment text in this prompt. */
+  media?: MediaFact[];
   /**
    * Originating channel for reply routing.
    * When set, replies should be routed back to this provider

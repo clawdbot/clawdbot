@@ -58,6 +58,7 @@ function createApprovalRequestEvent(params: {
   approvalId?: string;
   sessionKey?: string;
   command?: string;
+  toolCallId?: string;
 }): EventFrame {
   return {
     type: "event",
@@ -70,6 +71,30 @@ function createApprovalRequestEvent(params: {
         command: params.command ?? "echo raw",
         host: "gateway",
         sessionKey: params.sessionKey ?? SESSION_KEY,
+        toolCallId: params.toolCallId,
+      },
+    },
+  } as EventFrame;
+}
+
+function createToolStartEvent(params: {
+  runId: string;
+  toolCallId: string;
+  name: string;
+  command?: string;
+}): EventFrame {
+  return {
+    type: "event",
+    event: "agent",
+    payload: {
+      runId: params.runId,
+      sessionKey: SESSION_KEY,
+      stream: "tool",
+      data: {
+        phase: "start",
+        name: params.name,
+        toolCallId: params.toolCallId,
+        args: params.command ? { command: params.command } : {},
       },
     },
   } as EventFrame;
@@ -256,7 +281,7 @@ describe("ACP translator permission relay", () => {
     await cleanupHarness(harness);
   });
 
-  it("does not bind session-only approval events when multiple prompts share the session key", async () => {
+  it("correlates concurrent approvals by a unique execute tool call and fails closed otherwise", async () => {
     const runIds: string[] = [];
     const request = vi.fn(async (method: string, requestParams?: Record<string, unknown>) => {
       if (method === "chat.send") {
@@ -297,17 +322,23 @@ describe("ACP translator permission relay", () => {
       expect(runIds).toHaveLength(2);
     });
 
-    const approvalId = "approval-shared";
-    await agent.handleGatewayEvent(createApprovalRequestEvent({ approvalId }));
+    await agent.handleGatewayEvent(
+      createApprovalRequestEvent({ approvalId: "approval-without-tool-id" }),
+    );
 
     expect(requestPermission).not.toHaveBeenCalled();
     expect(approvalResolveCalls(request)).toHaveLength(0);
 
     await agent.handleGatewayEvent(
-      createApprovalEvent({
+      createToolStartEvent({
         runId: expectDefined(runIds[1], "runIds[1] test invariant"),
-        approvalId,
+        toolCallId: "tool-second",
+        name: "exec",
+        command: "echo second",
       }),
+    );
+    await agent.handleGatewayEvent(
+      createApprovalRequestEvent({ approvalId: "approval-shared", toolCallId: "tool-second" }),
     );
 
     await vi.waitFor(() => {
@@ -315,11 +346,42 @@ describe("ACP translator permission relay", () => {
       expect(approvalResolveCalls(request)).toHaveLength(1);
     });
 
-    expect(firstCallArg(requestPermission).sessionId).toBe(SECOND_SESSION_ID);
+    const permission = requestPermissionPayload(requestPermission);
+    expect(permission.payload.sessionId).toBe(SECOND_SESSION_ID);
+    expect(permission.toolCall.toolCallId).toBe("tool-second");
+    expect(permission.toolCall.title).toContain("echo second");
     expect(request).toHaveBeenCalledWith("exec.approval.resolve", {
-      id: approvalId,
+      id: "approval-shared",
       decision: "allow-once",
     });
+
+    await agent.handleGatewayEvent(
+      createApprovalRequestEvent({ approvalId: "approval-mismatch", toolCallId: "tool-missing" }),
+    );
+    for (const runId of runIds) {
+      await agent.handleGatewayEvent(
+        createToolStartEvent({ runId, toolCallId: "tool-duplicate", name: "exec" }),
+      );
+    }
+    await agent.handleGatewayEvent(
+      createApprovalRequestEvent({
+        approvalId: "approval-duplicate",
+        toolCallId: "tool-duplicate",
+      }),
+    );
+    await agent.handleGatewayEvent(
+      createToolStartEvent({
+        runId: expectDefined(runIds[0], "runIds[0] test invariant"),
+        toolCallId: "tool-read",
+        name: "read",
+      }),
+    );
+    await agent.handleGatewayEvent(
+      createApprovalRequestEvent({ approvalId: "approval-read", toolCallId: "tool-read" }),
+    );
+
+    expect(requestPermission).toHaveBeenCalledTimes(1);
+    expect(approvalResolveCalls(request)).toHaveLength(1);
 
     await agent.cancel({ sessionId: SESSION_ID } as CancelNotification);
     await agent.cancel({ sessionId: SECOND_SESSION_ID } as CancelNotification);

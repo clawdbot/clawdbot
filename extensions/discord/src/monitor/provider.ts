@@ -73,6 +73,17 @@ export function recordDiscordTransportEventStatus(setStatus: DiscordMonitorStatu
   setStatus({ lastEventAt: at });
 }
 
+/** Records a human Discord action after it has passed dispatch or reaction authorization. */
+export function recordDiscordAcceptedInboundStatus(
+  setStatus: DiscordMonitorStatusSink | undefined,
+) {
+  if (!setStatus) {
+    return;
+  }
+  const at = Date.now();
+  setStatus({ lastEventAt: at, lastInboundAt: at });
+}
+
 function logDiscordStartupPhase(
   params: Omit<Parameters<typeof logDiscordStartupPhaseBase>[0], "isVerbose">,
 ) {
@@ -110,9 +121,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
 
   const rawDiscordCfg = account.config;
-  const discordRootThreadBindings = cfg.channels?.discord?.threadBindings;
-  const discordAccountThreadBindings =
-    cfg.channels?.discord?.accounts?.[account.accountId]?.threadBindings;
   const discordRestFetch = resolveDiscordRestFetch(rawDiscordCfg.proxy, runtime);
   const dmConfig = rawDiscordCfg.dm;
   const configuredDmAllowFrom = resolveDiscordAccountAllowFrom({
@@ -157,17 +165,15 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     await discordProviderRuntime.loadDiscordProviderSessionRuntime();
   const threadBindingIdleTimeoutMs =
     discordProviderSessionRuntime.resolveThreadBindingIdleTimeoutMs({
-      channelIdleHoursRaw:
-        discordAccountThreadBindings?.idleHours ?? discordRootThreadBindings?.idleHours,
+      channelIdleHoursRaw: discordCfg.threadBindings?.idleHours,
       sessionIdleHoursRaw: cfg.session?.threadBindings?.idleHours,
     });
   const threadBindingMaxAgeMs = discordProviderSessionRuntime.resolveThreadBindingMaxAgeMs({
-    channelMaxAgeHoursRaw:
-      discordAccountThreadBindings?.maxAgeHours ?? discordRootThreadBindings?.maxAgeHours,
+    channelMaxAgeHoursRaw: discordCfg.threadBindings?.maxAgeHours,
     sessionMaxAgeHoursRaw: cfg.session?.threadBindings?.maxAgeHours,
   });
   const threadBindingsEnabled = discordProviderSessionRuntime.resolveThreadBindingsEnabled({
-    channelEnabledRaw: discordAccountThreadBindings?.enabled ?? discordRootThreadBindings?.enabled,
+    channelEnabledRaw: discordCfg.threadBindings?.enabled,
     sessionEnabledRaw: cfg.session?.threadBindings?.enabled,
   });
   const groupDmEnabled = dmConfig?.groupEnabled ?? false;
@@ -182,7 +188,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     providerSetting: discordCfg.commands?.nativeSkills,
     globalSetting: cfg.commands?.nativeSkills,
   });
-  const useAccessGroups = cfg.commands?.useAccessGroups !== false;
+  const useAccessGroups = true;
   const slashCommand = resolveDiscordSlashCommandConfig(discordCfg.slashCommand);
   const sessionPrefix = "discord:slash";
   const ephemeralDefault = slashCommand.ephemeral;
@@ -386,7 +392,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     const logger = createSubsystemLogger("discord/monitor");
     const guildHistories = new Map<
       string,
-      import("openclaw/plugin-sdk/reply-history").HistoryEntry[]
+      import("./message-handler.history.js").DiscordHistoryEntry[]
     >();
     const { botUserId, botUserName } = await fetchDiscordBotIdentity({
       client,
@@ -458,6 +464,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     const trackInboundEvent = opts.setStatus
       ? () => recordDiscordTransportEventStatus(opts.setStatus)
       : undefined;
+    const trackAcceptedInboundEvent = opts.setStatus
+      ? () => recordDiscordAcceptedInboundStatus(opts.setStatus)
+      : undefined;
     registerDiscordMonitorListeners({
       cfg,
       client,
@@ -475,6 +484,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       logger,
       messageHandler,
       trackInboundEvent,
+      trackAcceptedInboundEvent,
     });
 
     logDiscordStartupPhase({

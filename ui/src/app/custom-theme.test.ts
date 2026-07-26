@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Control UI tests cover custom theme behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {

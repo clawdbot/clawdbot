@@ -410,6 +410,7 @@ function createSessionEntry(overrides?: Partial<SessionEntry>): SessionEntry {
   return {
     sessionId: "s1",
     updatedAt: Date.now(),
+    delivery: { kind: "none" },
     ...overrides,
   };
 }
@@ -1312,7 +1313,7 @@ describe("/model chat UX", () => {
     });
 
     expect(resolved.errorText).toContain(
-      'Add "openai/gpt-5.5" or its provider wildcard to agents.list[].modelPolicy.allow.',
+      'Add "openai/gpt-5.5" or its provider wildcard to agents.entries.*.modelPolicy.allow.',
     );
   });
 
@@ -2064,6 +2065,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     const rotatedEntry: SessionEntry = {
       sessionId: "s2",
       updatedAt: sessionEntry.updatedAt + 1,
+      delivery: { kind: "none" },
       elevatedLevel: "full",
     };
     await replaceSessionEntry({ sessionKey, storePath }, rotatedEntry);

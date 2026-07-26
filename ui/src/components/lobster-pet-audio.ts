@@ -44,3 +44,12 @@ export function playLobsterPetChirp(
   }
   return ctx;
 }
+
+export function previewLobsterChirp(): void {
+  const ctx = playLobsterPetChirp(null, true, "poke");
+  if (!ctx) {
+    return;
+  }
+  // The preview owns a one-shot context; release it after the chirp envelope.
+  window.setTimeout(() => void ctx.close().catch(() => {}), 300);
+}

@@ -10,9 +10,9 @@ import {
   resolveSessionFilePath,
   type resolveSessionFilePathOptions,
 } from "../config/sessions/paths.js";
-import { updateSessionStore } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { updateLegacySessionStore } from "../infra/state-migrations.legacy-session-store.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { clearTuiLastSessionPointers } from "../tui/tui-last-session.js";
 
@@ -339,7 +339,7 @@ export async function repairHeartbeatPoisonedMainSession(params: {
     return;
   }
   let movedEntry: SessionEntry | undefined;
-  await updateSessionStore(params.absoluteStorePath, (currentStore) => {
+  await updateLegacySessionStore(params.absoluteStorePath, (currentStore) => {
     const currentEntry = currentStore[mainKey];
     const currentCandidate = resolveHeartbeatMainSessionRepairCandidate({
       entry: currentEntry,

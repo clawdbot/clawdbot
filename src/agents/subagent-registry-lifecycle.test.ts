@@ -23,6 +23,7 @@ import {
 import { createSubagentRegistryLifecycleController } from "./subagent-registry-lifecycle.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-manager.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { createStructuredOutputTool } from "./tools/structured-output-tool.js";
 
 type LifecycleControllerParams = Parameters<typeof createSubagentRegistryLifecycleController>[0];
 
@@ -107,6 +108,7 @@ vi.mock("./subagent-registry-helpers.js", () => ({
   MAX_ANNOUNCE_RETRY_COUNT: 3,
   MIN_ANNOUNCE_RETRY_DELAY_MS: 1_000,
   PROVISIONAL_KILL_RECONCILIATION_MS: 5 * 60_000,
+  backfillCollectorArchiveAtMs: () => false,
   capFrozenResultText: (text: string) => text.trim(),
   logAnnounceGiveUp: helperMocks.logAnnounceGiveUp,
   persistSubagentSessionTiming: helperMocks.persistSubagentSessionTiming,
@@ -195,6 +197,7 @@ function createLifecycleController({
     runs,
     resumedRuns: new Set(),
     subagentAnnounceTimeoutMs: 1_000,
+    getRuntimeConfig: () => ({}),
     persist: vi.fn(),
     persistOrThrow: vi.fn(),
     clearPendingLifecycleError: vi.fn(),
@@ -2577,6 +2580,63 @@ describe("subagent registry lifecycle hardening", () => {
     expect(helperMocks.safeRemoveAttachmentsDir).toHaveBeenCalledWith(entry);
     expect(runs.get(entry.runId)).toBe(entry);
     expect(entry.collectorCompletion).toEqual({ status: "done" });
+  });
+
+  it("treats accepted structured output as success for a tool-only collector turn", async () => {
+    const structured = { answer: "yes" };
+    const entry = createRunEntry({
+      expectsCompletionMessage: false,
+      collect: true,
+      outputSchema: { type: "object" },
+    });
+    const structuredOutput = createStructuredOutputTool({
+      runId: entry.runId,
+      schema: { type: "object" },
+    });
+    await structuredOutput.execute("tool-call", { result: structured });
+    const controller = createLifecycleController({
+      entry,
+      captureSubagentCompletionReply: vi.fn(async () => ""),
+    });
+
+    await controller.completeSubagentRun({
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "error", error: "completed" },
+      reason: SUBAGENT_ENDED_REASON_ERROR,
+      triggerCleanup: true,
+    });
+
+    await waitForLifecycleState(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
+    expect(entry.collectorCompletion).toEqual({ status: "done", structured });
+    expect(entry.outcome).toMatchObject({ status: "ok" });
+    expect(entry.execution).toMatchObject({
+      status: "terminal",
+      outcome: expect.objectContaining({ status: "ok" }),
+    });
+    expect(entry.endedReason).toBe(SUBAGENT_ENDED_REASON_COMPLETE);
+  });
+
+  it("preserves a real failure after structured output was accepted", async () => {
+    const structured = { answer: "yes" };
+    const entry = createRunEntry({
+      expectsCompletionMessage: false,
+      collect: true,
+      outputSchema: { type: "object" },
+      structuredOutput: { structured, invalidAttempts: 0 },
+    });
+    const controller = createLifecycleController({ entry });
+
+    await controller.completeSubagentRun({
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "error", error: "provider failed after tool output" },
+      reason: SUBAGENT_ENDED_REASON_ERROR,
+      triggerCleanup: true,
+    });
+
+    await waitForLifecycleState(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
+    expect(entry.collectorCompletion).toEqual({ status: "failed", structured });
   });
 
   it("marks a successful collector with invalid structured output failed", async () => {

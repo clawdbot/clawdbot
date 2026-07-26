@@ -157,8 +157,11 @@ function renderTextStep(step: ChannelWizardStep, props: ChannelWizardViewProps) 
   };
   return html`
     <form @submit=${submit}>
-      <div class="channels-wizard__message">${step.message ?? ""}</div>
+      <div class="channels-wizard__message">
+        <label for="channel-wizard-text-input">${step.message ?? ""}</label>
+      </div>
       <input
+        id="channel-wizard-text-input"
         class="input"
         style="margin-top: 10px; width: 100%;"
         name="wizard-text"

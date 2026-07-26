@@ -367,6 +367,9 @@ export async function downloadMSTeamsGraphMedia(params: {
       continue;
     }
 
+    // This pass owns reference attachments even when their download fails; the
+    // generic attachment pass must not emit a second unavailable fact.
+    downloadedReferenceUrls.add(shareUrl);
     try {
       const sharesUrl = `${GRAPH_ROOT}/shares/${encodeGraphShareId(shareUrl)}/driveItem/content`;
       if (!isUrlAllowed(sharesUrl, policy.allowHosts)) {
@@ -410,7 +413,6 @@ export async function downloadMSTeamsGraphMedia(params: {
         },
       });
       sharePointMedia.push(sourceId ? { ...media, sourceId } : media);
-      downloadedReferenceUrls.add(shareUrl);
     } catch (err) {
       sharePointMedia.push(unavailableMedia);
       params.logger?.warn?.("msteams SharePoint reference download failed", {

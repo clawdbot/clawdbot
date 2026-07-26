@@ -1,9 +1,12 @@
+import { Response as UndiciResponse } from "undici";
 import { describe, expect, it } from "vitest";
 import {
   appendSlackNativeDataFallbackText,
   buildSlackNativeDataAccessibilityText,
   hasSlackNativeDataBlock,
   isSlackInvalidBlocksError,
+  isSlackInvalidBlocksResponse,
+  isSlackNativeResponseUrlRejection,
 } from "./native-data-blocks.js";
 
 const chart = {
@@ -50,6 +53,29 @@ describe("Slack native data blocks", () => {
     expect(isSlackInvalidBlocksError({ response: { data: "invalid_blocks" } })).toBe(true);
     expect(isSlackInvalidBlocksError({ error: "INVALID_BLOCKS" })).toBe(true);
     expect(isSlackInvalidBlocksError(new Error("invalid_blocks"))).toBe(false);
+  });
+
+  it("matches Bolt 5 response_url responses and contextual RespondError failures", async () => {
+    const response = new Response(JSON.stringify({ error: "invalid_blocks" }), { status: 200 });
+    await expect(isSlackInvalidBlocksResponse(response)).resolves.toBe(true);
+    await expect(
+      isSlackInvalidBlocksResponse(
+        new UndiciResponse(JSON.stringify({ error: "invalid_blocks" }), { status: 200 }),
+      ),
+    ).resolves.toBe(true);
+    await expect(isSlackInvalidBlocksResponse(new Response("ok"))).resolves.toBe(false);
+    expect(
+      isSlackNativeResponseUrlRejection({
+        code: "slack_bolt_respond_error",
+        statusCode: 400,
+      }),
+    ).toBe(true);
+    expect(
+      isSlackNativeResponseUrlRejection({
+        code: "slack_bolt_respond_error",
+        statusCode: 500,
+      }),
+    ).toBe(false);
   });
 
   it("appends mixed native data in block order without collapsing repeated blocks", () => {

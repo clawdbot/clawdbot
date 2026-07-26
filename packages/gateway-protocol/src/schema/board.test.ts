@@ -1,12 +1,40 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
+  BoardActionParamsSchema,
   BoardSnapshotSchema,
   BoardWidgetAppViewParamsSchema,
   BoardWidgetAppViewResultSchema,
   BoardWidgetGrantParamsSchema,
   BoardWidgetPutParamsSchema,
+  BoardWidgetResizeOpSchema,
 } from "./board.js";
+
+describe("BoardActionParamsSchema", () => {
+  it("accepts both exact cron triggers and plugin action verbs", () => {
+    expect(
+      Value.Check(BoardActionParamsSchema, {
+        ticket: "v1.ticket.signature",
+        action: "cron.trigger",
+        jobId: "nightly",
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(BoardActionParamsSchema, {
+        ticket: "v1.ticket.signature",
+        action: "workboard.dispatch",
+        params: { boardId: "release" },
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(BoardActionParamsSchema, {
+        ticket: "v1.ticket.signature",
+        action: "workboard.dispatch",
+        params: "release",
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("BoardSnapshotSchema", () => {
   it("accepts optional HTML widget view metadata", () => {
@@ -19,6 +47,8 @@ describe("BoardSnapshotSchema", () => {
           name: "status",
           tabId: "main",
           contentKind: "html",
+          presentation: "frameless",
+          heightMode: "fixed",
           sizeW: 6,
           sizeH: 4,
           position: 0,
@@ -40,6 +70,18 @@ describe("BoardSnapshotSchema", () => {
       Value.Check(BoardSnapshotSchema, {
         ...snapshot,
         widgets: [{ ...snapshot.widgets[0], frameUrl: 42 }],
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(BoardSnapshotSchema, {
+        ...snapshot,
+        widgets: [{ ...snapshot.widgets[0], presentation: "floating" }],
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(BoardSnapshotSchema, {
+        ...snapshot,
+        widgets: [{ ...snapshot.widgets[0], heightMode: "elastic" }],
       }),
     ).toBe(false);
     expect(
@@ -86,14 +128,71 @@ describe("BoardSnapshotSchema", () => {
 });
 
 describe("BoardWidgetPutParamsSchema", () => {
+  it("accepts bounded plugin widget input shapes", () => {
+    const pluginWidget = {
+      sessionKey: "agent:main:main",
+      name: "work-item",
+      content: {
+        kind: "plugin",
+        pluginKind: "workboard:card",
+        props: { cardId: "card-123" },
+      },
+    };
+    expect(Value.Check(BoardWidgetPutParamsSchema, pluginWidget)).toBe(true);
+    expect(
+      Value.Check(BoardWidgetPutParamsSchema, {
+        ...pluginWidget,
+        content: { ...pluginWidget.content, pluginKind: "missing-separator" },
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(BoardWidgetPutParamsSchema, {
+        ...pluginWidget,
+        content: { ...pluginWidget.content, props: ["not", "an", "object"] },
+      }),
+    ).toBe(false);
+  });
+
   it("accepts a gateway-resolved canvas document source", () => {
     expect(
       Value.Check(BoardWidgetPutParamsSchema, {
         sessionKey: "agent:main:main",
         name: "status",
         content: { kind: "canvas-doc", docId: "cv_status" },
+        presentation: "full-bleed",
+        heightMode: "auto",
       }),
     ).toBe(true);
+  });
+
+  it("rejects invalid widget presentation and height modes", () => {
+    const pin = {
+      sessionKey: "agent:main:main",
+      name: "status",
+      content: { kind: "html", html: "<p>ok</p>" },
+    };
+    expect(Value.Check(BoardWidgetPutParamsSchema, { ...pin, presentation: "floating" })).toBe(
+      false,
+    );
+    expect(Value.Check(BoardWidgetPutParamsSchema, { ...pin, heightMode: "elastic" })).toBe(false);
+    expect(
+      Value.Check(BoardWidgetResizeOpSchema, {
+        kind: "widget_resize",
+        name: "status",
+        sizeW: 6,
+        sizeH: 4,
+        heightMode: "fixed",
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(BoardWidgetResizeOpSchema, {
+        kind: "widget_resize",
+        name: "status",
+        sizeW: 6,
+        sizeH: 4,
+        heightMode: "elastic",
+      }),
+    ).toBe(false);
   });
 
   it("requires an active source view for MCP App pins", () => {

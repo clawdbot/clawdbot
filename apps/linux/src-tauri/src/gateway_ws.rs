@@ -11,13 +11,14 @@ use rustls::{ClientConfig, DigitallySignedStruct, Error as RustlsError, Signatur
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::fmt;
 use std::io::ErrorKind;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use subtle::ConstantTimeEq;
-use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, Webview};
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::tungstenite::{Error as TungsteniteError, Message};
 use tokio_tungstenite::{
@@ -25,6 +26,7 @@ use tokio_tungstenite::{
 };
 use uuid::Uuid;
 
+const AGENT_KIND_CLIENT_CAPABILITY: &str = "agent-kind";
 const GATEWAY_STATE_EVENT: &str = "quickchat:gateway-state";
 const CHAT_EVENT: &str = "quickchat:chat-event";
 const GATEWAY_DEVICE_IDENTITY_FILE: &str = "quickchat-gateway-device.json";
@@ -44,6 +46,7 @@ const TLS_PIN_MISMATCH_ERROR: &str = "Gateway TLS certificate fingerprint mismat
 // Mirrors packages/gateway-protocol/src/version.ts. The Gateway rejects other ranges.
 const MIN_PROTOCOL_VERSION: u32 = 4;
 const MAX_PROTOCOL_VERSION: u32 = 4;
+const INLINE_WIDGETS_CLIENT_CAPABILITY: &str = "inline-widgets";
 
 #[derive(Clone)]
 pub struct GatewayWsConfig {
@@ -183,6 +186,7 @@ pub(crate) struct GatewayAgentIdentity {
 #[derive(Clone, Deserialize)]
 pub(crate) struct GatewayAgentSummary {
     pub id: String,
+    pub kind: Option<String>,
     pub name: Option<String>,
     pub identity: Option<GatewayAgentIdentity>,
 }
@@ -238,14 +242,22 @@ pub(crate) struct ChatSendResult {
     pub(crate) run_id: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginSurfaceRefreshResponse {
+    plugin_surface_urls: Option<HashMap<String, String>>,
+}
+
 enum GatewayRequest {
     AgentsList,
     ChatSend(ChatSendParams),
+    RefreshCanvasSurface { observed_url: Option<String> },
 }
 
 enum GatewayResponse {
     AgentsList(AgentsListResult),
     ChatSend(ChatSendAck),
+    CanvasSurface(Option<String>),
 }
 
 enum DriverCommand {
@@ -357,12 +369,19 @@ impl RequestFailure {
     }
 }
 
+#[derive(Clone, Default)]
+struct CanvasSurfaceState {
+    generation: u64,
+    url: Option<String>,
+}
+
 struct GatewayClientInner {
     config: Mutex<Option<GatewayWsConfig>>,
     config_generation: AtomicU64,
     commands: Mutex<Option<mpsc::Sender<DriverCommand>>>,
     agents_cache: Mutex<Option<CachedAgents>>,
     identity: Mutex<Option<GatewayDeviceIdentityStore>>,
+    canvas_surface: Mutex<CanvasSurfaceState>,
     connection_notice: Mutex<Option<String>>,
     connection_state: AtomicU64,
     reconnect_paused: AtomicBool,
@@ -383,6 +402,7 @@ impl GatewayClient {
                 commands: Mutex::new(None),
                 agents_cache: Mutex::new(None),
                 identity: Mutex::new(None),
+                canvas_surface: Mutex::new(CanvasSurfaceState::default()),
                 connection_notice: Mutex::new(None),
                 connection_state: AtomicU64::new(GatewayConnectionState::Down as u64),
                 reconnect_paused: AtomicBool::new(false),
@@ -402,7 +422,8 @@ impl GatewayClient {
             .agents_cache
             .lock()
             .expect("gateway agents cache mutex poisoned") = None;
-        self.inner.config_generation.fetch_add(1, Ordering::SeqCst);
+        let generation = self.inner.config_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        self.set_canvas_surface_url(generation, None);
         self.inner.reconnect_paused.store(false, Ordering::SeqCst);
         self.set_connection_state(app, GatewayConnectionState::Down, None);
         if let Some(commands) = self
@@ -427,7 +448,8 @@ impl GatewayClient {
             .agents_cache
             .lock()
             .expect("gateway agents cache mutex poisoned") = None;
-        self.inner.config_generation.fetch_add(1, Ordering::SeqCst);
+        let generation = self.inner.config_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        self.set_canvas_surface_url(generation, None);
         self.inner.reconnect_paused.store(false, Ordering::SeqCst);
         self.set_connection_state(app, GatewayConnectionState::Down, None);
         if let Some(commands) = self
@@ -457,17 +479,17 @@ impl GatewayClient {
         });
     }
 
-    pub fn emit_current_state(&self, window: &WebviewWindow) -> Result<(), String> {
+    pub fn emit_current_state(&self, webview: &Webview) -> Result<(), String> {
         let notice = self
             .inner
             .connection_notice
             .lock()
             .map_err(|_| "Gateway connection notice is unavailable.".to_string())?
             .clone();
-        window
+        webview
             .emit(
                 GATEWAY_STATE_EVENT,
-                GatewayStateEvent::new(self.connection_state(), notice),
+                GatewayStateEvent::new(self.connection_state(), notice, self.canvas_surface_url()),
             )
             .map_err(|error| format!("Could not report Gateway connectivity: {error}"))
     }
@@ -521,6 +543,42 @@ impl GatewayClient {
             target,
             run_id: ack.run_id,
         })
+    }
+
+    pub async fn refresh_canvas_surface(&self) -> Result<Option<String>, String> {
+        let observed = self.canvas_surface_state();
+        if observed.url.is_none() {
+            return Ok(None);
+        }
+        if self.inner.config_generation.load(Ordering::SeqCst) != observed.generation {
+            return Err("Gateway Canvas surface generation changed before refresh.".to_string());
+        }
+        let response = self
+            .request(GatewayRequest::RefreshCanvasSurface {
+                observed_url: observed.url.clone(),
+            })
+            .await?;
+        let GatewayResponse::CanvasSurface(refreshed) = response else {
+            return Err(
+                "Gateway returned the wrong response for plugin.surface.refresh.".to_string(),
+            );
+        };
+        let Some(refreshed) = refreshed else {
+            return Err("Gateway did not return a refreshed Canvas surface.".to_string());
+        };
+        let mut current = self
+            .inner
+            .canvas_surface
+            .lock()
+            .map_err(|_| "Gateway Canvas surface state is unavailable.".to_string())?;
+        if self.inner.config_generation.load(Ordering::SeqCst) != observed.generation
+            || current.generation != observed.generation
+            || current.url != observed.url
+        {
+            return Err("Gateway Canvas surface changed during refresh.".to_string());
+        }
+        current.url = Some(refreshed.clone());
+        Ok(Some(refreshed))
     }
 
     pub fn resume_reconnect(&self) {
@@ -665,8 +723,20 @@ impl GatewayClient {
             .map_err(|_| RequestFailure::transport("Gateway connection timed out."))??;
         let nonce = wait_for_connect_challenge(&mut socket).await?;
         let signed_at_ms = unix_time_ms().map_err(RequestFailure::transport)?;
-        let params = connect_params(&identity, &auth, &nonce, signed_at_ms)
-            .map_err(RequestFailure::transport)?;
+        // Native child WebViews use platform HTTP trust and cannot bind the optional
+        // WebSocket leaf pin, so pinned Gateway connections remain capability-free.
+        let inline_widgets_available = config
+            .tls_fingerprint
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty());
+        let params = connect_params(
+            &identity,
+            &auth,
+            &nonce,
+            signed_at_ms,
+            inline_widgets_available,
+        )
+        .map_err(RequestFailure::transport)?;
         let hello = match request_on_socket(app, &mut socket, "connect", params).await {
             Ok(hello) => hello,
             Err(failure) => {
@@ -682,6 +752,10 @@ impl GatewayClient {
         if let Some(device_token) = hello.device_token.as_deref() {
             self.persist_device_token(&config.ws_url, device_token)?;
         }
+        self.set_canvas_surface_url(
+            generation,
+            gated_canvas_surface_url(hello.canvas_surface_url, inline_widgets_available),
+        );
 
         let agents = request_agents_list(app, &mut socket).await?;
         if self.inner.config_generation.load(Ordering::SeqCst) != generation {
@@ -812,6 +886,29 @@ impl GatewayClient {
         });
     }
 
+    fn set_canvas_surface_url(&self, generation: u64, url: Option<String>) {
+        let mut surface = self
+            .inner
+            .canvas_surface
+            .lock()
+            .expect("gateway canvas surface mutex poisoned");
+        if self.inner.config_generation.load(Ordering::SeqCst) == generation {
+            *surface = CanvasSurfaceState { generation, url };
+        }
+    }
+
+    fn canvas_surface_state(&self) -> CanvasSurfaceState {
+        self.inner
+            .canvas_surface
+            .lock()
+            .expect("gateway canvas surface mutex poisoned")
+            .clone()
+    }
+
+    fn canvas_surface_url(&self) -> Option<String> {
+        self.canvas_surface_state().url
+    }
+
     fn is_connected(&self) -> bool {
         self.connection_state() == GatewayConnectionState::Up
     }
@@ -832,6 +929,7 @@ impl GatewayClient {
                 .agents_cache
                 .lock()
                 .expect("gateway agents cache mutex poisoned") = None;
+            self.set_canvas_surface_url(self.inner.config_generation.load(Ordering::SeqCst), None);
         }
         let notice_changed = {
             let mut current = self
@@ -857,23 +955,31 @@ impl GatewayClient {
         let _ = app.emit_to(
             QUICKCHAT_LABEL,
             GATEWAY_STATE_EVENT,
-            GatewayStateEvent::new(state, notice),
+            GatewayStateEvent::new(state, notice, self.canvas_surface_url()),
         );
     }
 }
 
 #[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct GatewayStateEvent {
     state: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     notice: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    canvas_surface_url: Option<String>,
 }
 
 impl GatewayStateEvent {
-    fn new(state: GatewayConnectionState, notice: Option<String>) -> Self {
+    fn new(
+        state: GatewayConnectionState,
+        notice: Option<String>,
+        canvas_surface_url: Option<String>,
+    ) -> Self {
         Self {
             state: state.event_name(),
             notice,
+            canvas_surface_url,
         }
     }
 }
@@ -983,7 +1089,12 @@ fn connect_params(
     auth: &GatewayAuth,
     nonce: &str,
     signed_at_ms: u64,
+    inline_widgets_available: bool,
 ) -> Result<Value, String> {
+    let mut client_caps = vec![AGENT_KIND_CLIENT_CAPABILITY];
+    if inline_widgets_available {
+        client_caps.push(INLINE_WIDGETS_CLIENT_CAPABILITY);
+    }
     let mut params = json!({
         "minProtocol": MIN_PROTOCOL_VERSION,
         "maxProtocol": MAX_PROTOCOL_VERSION,
@@ -994,7 +1105,7 @@ fn connect_params(
             "mode": CLIENT_MODE,
             "deviceFamily": CLIENT_DEVICE_FAMILY
         },
-        "caps": [],
+        "caps": client_caps,
         "commands": [],
         "permissions": {},
         "role": CLIENT_ROLE,
@@ -1102,6 +1213,25 @@ async fn perform_request(
                     RequestFailure::transport(format!("Invalid chat.send response: {error}"))
                 })
         }
+        GatewayRequest::RefreshCanvasSurface { observed_url } => {
+            let mut params = json!({ "surface": "canvas" });
+            if let Some(observed_url) = observed_url {
+                params["observedUrl"] = Value::String(observed_url);
+            }
+            let payload = request_on_socket(app, socket, "plugin.surface.refresh", params).await?;
+            let response: PluginSurfaceRefreshResponse =
+                serde_json::from_value(payload).map_err(|error| {
+                    RequestFailure::transport(format!(
+                        "Invalid plugin.surface.refresh response: {error}"
+                    ))
+                })?;
+            let canvas = response
+                .plugin_surface_urls
+                .and_then(|urls| urls.get("canvas").cloned())
+                .map(|url| url.trim().to_string())
+                .filter(|url| !url.is_empty());
+            Ok(GatewayResponse::CanvasSurface(canvas))
+        }
     }
 }
 
@@ -1118,15 +1248,30 @@ async fn request_agents_list(
 struct ValidatedHello {
     device_token: Option<String>,
     tick_watch_timeout: Duration,
+    canvas_surface_url: Option<String>,
 }
 
 impl ValidatedHello {
-    fn new(device_token: Option<String>, tick_watch_timeout: Duration) -> Self {
+    fn new(
+        device_token: Option<String>,
+        tick_watch_timeout: Duration,
+        canvas_surface_url: Option<String>,
+    ) -> Self {
         Self {
             device_token,
             tick_watch_timeout,
+            canvas_surface_url,
         }
     }
+}
+
+fn gated_canvas_surface_url(
+    canvas_surface_url: Option<String>,
+    inline_widgets_available: bool,
+) -> Option<String> {
+    inline_widgets_available
+        .then_some(canvas_surface_url)
+        .flatten()
 }
 
 fn validate_hello(payload: Value) -> Result<ValidatedHello, String> {
@@ -1135,6 +1280,7 @@ fn validate_hello(payload: Value) -> Result<ValidatedHello, String> {
         methods: Vec<String>,
     }
     #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
     struct HelloOk {
         #[serde(rename = "type")]
         kind: String,
@@ -1142,6 +1288,7 @@ fn validate_hello(payload: Value) -> Result<ValidatedHello, String> {
         features: HelloFeatures,
         auth: HelloAuth,
         policy: Option<HelloPolicy>,
+        plugin_surface_urls: Option<HashMap<String, String>>,
     }
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -1176,9 +1323,15 @@ fn validate_hello(payload: Value) -> Result<ValidatedHello, String> {
         .unwrap_or(30_000)
         .max(1);
     let issued_device_auth = hello.auth.device_token;
+    let canvas_surface_url = hello
+        .plugin_surface_urls
+        .and_then(|surface_urls| surface_urls.get("canvas").cloned())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
     Ok(ValidatedHello::new(
         issued_device_auth,
         Duration::from_millis(tick_interval_ms).saturating_mul(2),
+        canvas_surface_url,
     ))
 }
 
@@ -1460,6 +1613,7 @@ mod tests {
             &GatewayAuth::SharedToken("secret".to_string()),
             "fixture-nonce",
             1_800_000_000_000,
+            true,
         )
         .expect("connect params");
         let frame = request_frame("connect-1", "connect", params);
@@ -1469,6 +1623,13 @@ mod tests {
         assert_eq!(frame["method"], "connect");
         assert_eq!(frame["params"]["minProtocol"], MIN_PROTOCOL_VERSION);
         assert_eq!(frame["params"]["maxProtocol"], MAX_PROTOCOL_VERSION);
+        assert_eq!(
+            frame["params"]["caps"],
+            json!([
+                AGENT_KIND_CLIENT_CAPABILITY,
+                INLINE_WIDGETS_CLIENT_CAPABILITY
+            ])
+        );
         assert_eq!(frame["params"]["client"]["id"], CLIENT_ID);
         assert_eq!(
             frame["params"]["client"]["deviceFamily"],
@@ -1490,6 +1651,16 @@ mod tests {
         assert!(frame["params"]["device"]["signature"]
             .as_str()
             .is_some_and(|value| !value.contains('=')));
+
+        let pinned_params = connect_params(
+            &store.identity(),
+            &GatewayAuth::SharedToken("secret".to_string()),
+            "fixture-nonce",
+            1_800_000_000_000,
+            false,
+        )
+        .expect("pinned connect params");
+        assert_eq!(pinned_params["caps"], json!([]));
         std::fs::remove_dir_all(directory).expect("remove connect fixture");
     }
 
@@ -1500,12 +1671,61 @@ mod tests {
             "protocol": MAX_PROTOCOL_VERSION,
             "features": { "methods": ["agents.list", "chat.send"] },
             "auth": { "deviceToken": "test-device-token" },
-            "policy": { "tickIntervalMs": 1_250 }
+            "policy": { "tickIntervalMs": 1_250 },
+            "pluginSurfaceUrls": {
+                "canvas": "https://gateway.example/__openclaw__/cap/fixture-capability"
+            }
         }))
         .expect("valid hello");
 
         assert_eq!(hello.device_token.as_deref(), Some("test-device-token"));
         assert_eq!(hello.tick_watch_timeout, Duration::from_millis(2_500));
+        assert_eq!(
+            hello.canvas_surface_url.as_deref(),
+            Some("https://gateway.example/__openclaw__/cap/fixture-capability")
+        );
+        assert_eq!(
+            gated_canvas_surface_url(hello.canvas_surface_url.clone(), true),
+            hello.canvas_surface_url
+        );
+        assert_eq!(
+            gated_canvas_surface_url(hello.canvas_surface_url, false),
+            None
+        );
+    }
+
+    #[test]
+    fn plugin_surface_refresh_response_decodes_canvas_url() {
+        let response: PluginSurfaceRefreshResponse = serde_json::from_value(json!({
+            "pluginSurfaceUrls": {
+                "canvas": "https://gateway.example/__openclaw__/cap/refreshed-capability"
+            }
+        }))
+        .expect("refresh response");
+
+        assert_eq!(
+            response
+                .plugin_surface_urls
+                .and_then(|urls| urls.get("canvas").cloned())
+                .as_deref(),
+            Some("https://gateway.example/__openclaw__/cap/refreshed-capability")
+        );
+    }
+
+    #[test]
+    fn gateway_state_event_carries_canvas_surface_in_camel_case() {
+        let event = serde_json::to_value(GatewayStateEvent::new(
+            GatewayConnectionState::Up,
+            None,
+            Some("https://gateway.example/__openclaw__/cap/fixture-capability".to_string()),
+        ))
+        .expect("serialize gateway state");
+
+        assert_eq!(
+            event["canvasSurfaceUrl"],
+            "https://gateway.example/__openclaw__/cap/fixture-capability"
+        );
+        assert!(event.get("canvas_surface_url").is_none());
     }
 
     #[test]

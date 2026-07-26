@@ -22,6 +22,9 @@ vi.mock("../infra/agent-events.js", () => ({
   emitAgentCommandOutputEvent: vi.fn(),
   emitAgentItemEvent: vi.fn(),
   emitAgentEvent: vi.fn(),
+  getAgentEventLifecycleGeneration: () => "test-generation",
+  isAgentEventLifecycleGenerationCurrent: (generation: string) => generation === "test-generation",
+  registerAgentEventLifecycleRotationHandler: vi.fn(),
 }));
 
 function createToolHandlerCtx(params: {

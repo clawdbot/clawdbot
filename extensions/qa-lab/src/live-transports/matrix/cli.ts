@@ -70,6 +70,8 @@ export const matrixQaCliRegistration: LiveTransportQaCliRegistration =
     commandName: "matrix",
     adapterFactory: createLiveTransportQaAdapterFactory({
       id: "matrix",
+      // Every worker owns a uniquely named disposable homeserver, Gateway, and state tree.
+      isolatesInstances: true,
       async create(context) {
         return (await loadMatrixQaAdapterRuntime()).createMatrixQaTransportAdapter(context);
       },

@@ -35,7 +35,11 @@ import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-r
 import { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
 import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  loadSessionEntryReadOnly,
+  updateSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import {
@@ -49,6 +53,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import {
   getReplyPayloadMetadata,
@@ -560,6 +565,7 @@ export function createFollowupRunner(params: {
       .filter((end): end is () => void => typeof end === "function");
     const queuedImages = queued.images ?? opts?.images;
     const queuedImageOrder = queued.imageOrder ?? opts?.imageOrder;
+    const queuedMedia = queued.media ?? opts?.media;
     let replyOperation: ReplyOperation | undefined;
     let deferred = false;
     let failed = false;
@@ -592,7 +598,7 @@ export function createFollowupRunner(params: {
       const resolveCurrentVerboseLevel = () => {
         if (replySessionKey && storePath) {
           try {
-            const level = loadSessionEntry({
+            const level = loadSessionEntryReadOnly({
               storePath,
               sessionKey: replySessionKey,
             })?.verboseLevel;
@@ -1297,6 +1303,7 @@ export function createFollowupRunner(params: {
                           ],
                         images: queuedImages,
                         imageOrder: queuedImageOrder,
+                        media: queuedMedia,
                         skillsSnapshot: run.skillsSnapshot,
                         messageChannel: queued.originatingChannel ?? undefined,
                         messageProvider: resolveOriginMessageProvider({
@@ -1449,6 +1456,7 @@ export function createFollowupRunner(params: {
                 },
                 images: queuedImages,
                 imageOrder: queuedImageOrder,
+                media: queuedMedia,
                 allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
                 blockReplyBreak: run.blockReplyBreak,
                 bootstrapPromptWarningSignaturesSeen,
@@ -1637,7 +1645,9 @@ export function createFollowupRunner(params: {
             entry: activeSessionEntry,
             sessionKey: run.runtimePolicySessionKey ?? replySessionKey,
             channel:
-              queued.originatingChannel ?? run.messageProvider ?? activeSessionEntry?.channel,
+              queued.originatingChannel ??
+              run.messageProvider ??
+              sessionDeliveryChannel(activeSessionEntry),
             chatType: activeSessionEntry?.chatType,
           }),
         });
@@ -1690,7 +1700,9 @@ export function createFollowupRunner(params: {
             entry: activeSessionEntry,
             sessionKey: run.runtimePolicySessionKey ?? replySessionKey,
             channel:
-              queued.originatingChannel ?? run.messageProvider ?? activeSessionEntry?.channel,
+              queued.originatingChannel ??
+              run.messageProvider ??
+              sessionDeliveryChannel(activeSessionEntry),
             chatType: activeSessionEntry?.chatType,
           }),
         });
@@ -1715,7 +1727,10 @@ export function createFollowupRunner(params: {
         }
         warnPrivateMessageToolFinal({
           sessionKey: replySessionKey,
-          channel: queued.originatingChannel ?? run.messageProvider ?? activeSessionEntry?.channel,
+          channel:
+            queued.originatingChannel ??
+            run.messageProvider ??
+            sessionDeliveryChannel(activeSessionEntry),
           finalTextLength: assistantFinalText.trim().length,
         });
         const retryEnqueued =

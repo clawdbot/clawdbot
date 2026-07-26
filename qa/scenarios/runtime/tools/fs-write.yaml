@@ -3,10 +3,10 @@ title: "Runtime tool fixture — fs.write"
 scenario:
   id: runtime-tool-fs-write
   surface: runtime-tools
-  runtimeParityTier: standard
+  runtimePairLane: core
   coverage:
     primary:
-      - tools.fs.write
+      - agent-runtime.tool-fs-write
   objective: Verify file write behavior is tracked across OpenClaw and Codex while Codex owns write natively.
   successCriteria:
     - OpenClaw may expose OpenClaw write while Codex app-server mode may omit duplicate OpenClaw dynamic write.

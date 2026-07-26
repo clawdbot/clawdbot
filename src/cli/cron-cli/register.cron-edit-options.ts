@@ -194,7 +194,9 @@ export async function resolveCronEditPayloadDeliveryPatch(
     assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
     assignIf(payload, "lightContext", opts.lightContext, typeof opts.lightContext === "boolean");
     if (opts.clearTools) {
-      payload.toolsAllow = null;
+      // Clearing a restriction means an explicit unrestricted grant. Persisting
+      // a wildcard avoids creating a new capless legacy job at the upgrade boundary.
+      payload.toolsAllow = ["*"];
     } else if (toolsAllow) {
       payload.toolsAllow = toolsAllow;
     }

@@ -77,7 +77,11 @@ import {
   resolveSingleAccountPromotionTarget,
   singleAccountKeysToMove,
 } from "./setup-contract.js";
-import { createMatrixSetupWizardProxy, matrixSetupAdapter } from "./setup-core.js";
+import {
+  createMatrixSetupWizardProxy,
+  matrixSetupAdapter,
+  matrixSetupContract,
+} from "./setup-core.js";
 import {
   defaultTopLevelPlacement,
   resolveMatrixInboundConversation,
@@ -471,7 +475,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
           }).map(projectMatrixConversationBinding),
       },
       messaging: {
-        defaultMarkdownTableMode: "bullets",
+        defaultMarkdownTableMode: "block",
         targetPrefixes: ["matrix"],
         targetIdComparison: "case-sensitive",
         normalizeTarget: normalizeMatrixMessagingTarget,
@@ -521,6 +525,12 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
       },
       setup: {
         ...matrixSetupAdapter,
+        singleAccountKeysToMove,
+        namedAccountPromotionKeys,
+        resolveSingleAccountPromotionTarget,
+      },
+      setupContract: {
+        ...matrixSetupContract,
         singleAccountKeysToMove,
         namedAccountPromotionKeys,
         resolveSingleAccountPromotionTarget,

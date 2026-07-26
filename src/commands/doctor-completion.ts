@@ -44,7 +44,10 @@ function resolveCompletionReloadPath(shell: CompletionShell): string {
   if (shell === "powershell") {
     return resolveCompletionProfilePath("powershell");
   }
-  return `~/.${shell === "zsh" ? "zshrc" : shell === "bash" ? "bashrc" : "config/fish/config.fish"}`;
+  if (shell === "bash") {
+    return `~/${path.basename(resolveCompletionProfilePath("bash"))}`;
+  }
+  return `~/.${shell === "zsh" ? "zshrc" : "config/fish/config.fish"}`;
 }
 
 function formatCompletionReloadNote(

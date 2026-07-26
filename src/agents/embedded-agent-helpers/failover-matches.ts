@@ -161,11 +161,14 @@ const ERROR_PATTERNS = {
     /\benotfound\b/i,
     /\beai_again\b/i,
     /without sending (?:any )?chunks?/i,
-    /\bstop reason:\s*(?:abort|error|malformed_response|network_error)\b/i,
-    /\breason:\s*(?:abort|error|malformed_response|network_error)\b/i,
-    /\bunhandled stop reason:\s*(?:abort|error|malformed_response|network_error)\b/i,
+    // Bare `error` is a provider-completed failure, not a hang — classified as
+    // server_error separately so diagnostics stay accurate while fallback still
+    // runs (#109218). Keep abort / network / malformed as timeout-like transients.
+    /\bstop reason:\s*(?:abort|malformed_response|network_error)\b/i,
+    /\breason:\s*(?:abort|malformed_response|network_error)\b/i,
+    /\bunhandled stop reason:\s*(?:abort|malformed_response|network_error)\b/i,
     // `\breason:` does not match provider payloads like `finish_reason: network_error` (#61281).
-    /\bfinish_reason:\s*(?:abort|error|malformed_response|network_error)\b/i,
+    /\bfinish_reason:\s*(?:abort|malformed_response|network_error)\b/i,
     // AbortError messages from fetch/stream aborts (Ollama NDJSON stream
     // timeouts, signal aborts, etc.) — without these the flattened message
     // falls through to reason=unknown (#58315).
@@ -291,6 +294,24 @@ export function isRateLimitErrorMessage(raw: string): boolean {
 
 export function isTimeoutErrorMessage(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.timeout);
+}
+
+/**
+ * Provider stream completed with an explicit error finish/stop reason.
+ * These are not request timeouts: the transport finished quickly with a
+ * provider-side error. Keep them failover-eligible as server_error (#109218).
+ */
+const PROVIDER_COMPLETED_ERROR_FINISH_REASON_PATTERNS = [
+  /\bfinish_reason:\s*error\b/i,
+  /\bstop reason:\s*error\b/i,
+  /\bunhandled stop reason:\s*error\b/i,
+  // Symmetric with the timeout stop-reason family; scoped to the word `error`
+  // only so `reason: network_error` stays in the timeout lane.
+  /\breason:\s*error\b/i,
+] as const satisfies readonly ErrorPattern[];
+
+export function isProviderCompletedErrorFinishReasonMessage(raw: string): boolean {
+  return matchesErrorPatterns(raw, PROVIDER_COMPLETED_ERROR_FINISH_REASON_PATTERNS);
 }
 
 export function isPeriodicUsageLimitErrorMessage(raw: string): boolean {

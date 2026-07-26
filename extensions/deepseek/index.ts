@@ -40,6 +40,8 @@ export default defineSingleProviderPluginEntry({
     ],
     catalog: {
       buildProvider: buildDeepSeekProvider,
+      buildStaticProvider: buildDeepSeekProvider,
+      liveModelDiscovery: true,
     },
     augmentModelCatalog: ({ config }) =>
       readConfiguredProviderCatalogEntries({

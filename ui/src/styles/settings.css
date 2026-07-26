@@ -76,12 +76,23 @@
   gap: var(--space-8);
 }
 
+/* An intro belongs to the first section rather than forming a separate block.
+   Keep later sections at the normal --space-8 separation. */
+.settings-page:has(> .settings-page__intro) {
+  gap: var(--space-5);
+}
+
+.settings-page:has(> .settings-page__intro) > .settings-section + .settings-section {
+  margin-top: calc(var(--space-8) - var(--space-5));
+}
+
 /* Table/list-heavy pages (sessions, automations, plugins) need more width. */
 .settings-page--wide {
   max-width: 1120px;
 }
 
 .settings-page__intro {
+  margin: 0;
   font-size: var(--control-ui-text-sm);
   line-height: 1.5;
   color: var(--muted);
@@ -426,10 +437,20 @@ wa-radio-group.settings-segmented::part(radios) {
 select.settings-select {
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
+  /* background-color, not the background shorthand: the shorthand resets the
+     .field select chevron longhands (image/repeat/position) and tiles the
+     arrow across Model Providers selects. */
+  background-color: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
   color: var(--text);
   padding: 7px 10px;
   transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+/* Inside generic .field wrappers (Model Providers) the select is
+   appearance: none with a background chevron; the padding shorthand above
+   collapses its 36px gutter to 10px and long model names run under the arrow. */
+.field select.settings-select {
+  padding-right: 36px;
 }
 
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-select {
@@ -437,13 +458,44 @@ select.settings-select {
   min-width: min(220px, 100%);
 }
 
+/* Permission can replace System default with long hardware labels; keep the
+   paired media pickers aligned instead of letting native intrinsic width win. */
+.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-select--media-device {
+  width: 340px;
+}
+
 /* Lone value inputs share one width so stacked rows in a group read as a
    grid instead of ragged right-aligned fields. A percentage guard cannot work
    here (the shrink-to-fit control resolves 100% circularly); the fixed width
    shrinks via flex because .settings-input/.settings-secret set min-width: 0. */
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-input,
-.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-secret {
+.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-secret,
+.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-phone-presentation {
   width: 340px;
+}
+
+.settings-phone-presentation {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.settings-phone-presentation > .settings-input,
+.settings-phone-presentation > .settings-secret {
+  width: 100%;
+}
+
+.settings-phone-presentation__value {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.settings-row--stacked .settings-row__control > .settings-phone-presentation {
+  flex: 1 1 auto;
+  width: 100%;
 }
 
 /* Number inputs hold short values (ports, counts, limits); the shared 340px
@@ -753,5 +805,15 @@ textarea.settings-input {
     width: 100%;
     max-width: 100%;
     flex-wrap: wrap;
+  }
+
+  .settings-row__control:has(> .settings-select--media-device) {
+    flex-wrap: nowrap;
+  }
+
+  .settings-select--media-device {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
   }
 }

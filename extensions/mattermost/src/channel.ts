@@ -63,7 +63,7 @@ import {
 import { looksLikeMattermostTargetId, normalizeMattermostMessagingTarget } from "./normalize.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { resolveMattermostOutboundSessionRoute } from "./session-route.js";
-import { mattermostSetupAdapter } from "./setup-core.js";
+import { mattermostSetupAdapter, mattermostSetupContract } from "./setup-core.js";
 import { mattermostSetupWizard } from "./setup-surface.js";
 import type { MattermostConfig } from "./types.js";
 
@@ -787,6 +787,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
       ...meta,
     },
     setup: mattermostSetupAdapter,
+    setupContract: mattermostSetupContract,
     setupWizard: mattermostSetupWizard,
     capabilities: {
       chatTypes: ["direct", "channel", "group", "thread"],

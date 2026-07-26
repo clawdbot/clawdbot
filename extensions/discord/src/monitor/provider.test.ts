@@ -49,6 +49,7 @@ const { voiceAutoJoinMock } = vi.hoisted(() => ({
 
 let monitorDiscordProvider: typeof import("./provider.js").monitorDiscordProvider;
 let recordDiscordTransportEventStatus: typeof import("./provider.js").recordDiscordTransportEventStatus;
+let recordDiscordAcceptedInboundStatus: typeof import("./provider.js").recordDiscordAcceptedInboundStatus;
 let providerTesting: typeof import("./provider.test-support.js").discordProviderTestSupport;
 
 function createAcpRuntimeError(code: string, message: string): Error & { code: string } {
@@ -236,7 +237,11 @@ describe("monitorDiscordProvider", () => {
     vi.doMock("../token.js", () => ({
       normalizeDiscordToken: (value?: string) => value,
     }));
-    ({ monitorDiscordProvider, recordDiscordTransportEventStatus } = await import("./provider.js"));
+    ({
+      monitorDiscordProvider,
+      recordDiscordAcceptedInboundStatus,
+      recordDiscordTransportEventStatus,
+    } = await import("./provider.js"));
     ({ discordProviderTestSupport: providerTesting } = await import("./provider.test-support.js"));
   });
 
@@ -1191,6 +1196,17 @@ describe("monitorDiscordProvider", () => {
         ([status]) => typeof (status as { lastInboundAt?: unknown }).lastInboundAt === "number",
       ),
     ).toBe(false);
+  });
+
+  it("reports accepted Discord actions as inbound human activity", async () => {
+    const setStatus = vi.fn();
+
+    recordDiscordAcceptedInboundStatus(setStatus);
+
+    expect(setStatus).toHaveBeenCalledWith({
+      lastEventAt: expect.any(Number),
+      lastInboundAt: expect.any(Number),
+    });
   });
 
   it("logs Discord startup phases and early gateway debug events", async () => {

@@ -1,14 +1,17 @@
 // Persists and resolves per-session model override choices.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasSessionAutoModelFallbackProvenance } from "../../agents/agent-scope.js";
+import { resolveCliRuntimeCanonicalProvider } from "../../agents/cli-backends.js";
 import {
   modelKey,
   normalizeModelRef,
   normalizeStoredOverrideModel,
   resolvePersistedOverrideModelRef,
 } from "../../agents/model-selection.js";
+import { RUNTIME_MODEL_VISIBILITY_NORMALIZATION } from "../../agents/model-visibility-policy.js";
 import { resolveSessionParentSessionKey } from "../../channels/plugins/session-conversation.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 /** Model override loaded from the current session or its parent session. */
 export type StoredModelOverride = {
@@ -16,6 +19,27 @@ export type StoredModelOverride = {
   model: string;
   source: "session" | "parent";
 };
+
+/** Normalizes a stored model ref, resolving runtime aliases only for CLI-bound sessions. */
+export function normalizeStoredRuntimeModelRef(
+  provider: string,
+  model: string,
+  cfg?: OpenClawConfig,
+  sessionEntry?: SessionEntry,
+) {
+  const normalized = normalizeModelRef(provider, model, RUNTIME_MODEL_VISIBILITY_NORMALIZATION);
+  const hasCliSessionBinding =
+    sessionEntry?.cliSessionBindings?.[normalized.provider] !== undefined;
+  const canonicalProvider =
+    cfg && hasCliSessionBinding
+      ? resolveCliRuntimeCanonicalProvider({
+          runtime: normalized.provider,
+          config: cfg,
+          includeSetupRegistry: true,
+        })
+      : undefined;
+  return canonicalProvider ? { ...normalized, provider: canonicalProvider } : normalized;
+}
 
 function resolveParentSessionKeyCandidate(params: {
   sessionKey?: string;

@@ -34,6 +34,7 @@ type DiscordReactionListenerParams = {
   runtime: RuntimeEnv;
   logger: DiscordListenerLogger;
   onEvent?: () => void;
+  onAcceptedEvent?: () => void;
 } & DiscordReactionRoutingParams;
 
 type DiscordReactionRoutingParams = {
@@ -119,6 +120,7 @@ async function runDiscordReactionHandler(params: {
         allowNameMatching: params.handlerParams.allowNameMatching,
         guildEntries: params.handlerParams.guildEntries,
         logger: params.handlerParams.logger,
+        onAcceptedEvent: params.handlerParams.onAcceptedEvent,
       }),
   });
 }
@@ -500,6 +502,7 @@ async function handleDiscordReactionEvent(
         },
         parentPeer: parentPeerId ? { kind: "channel", id: parentPeerId } : undefined,
       });
+      params.onAcceptedEvent?.();
       enqueueSystemEvent(text, {
         sessionKey: route.sessionKey,
         contextKey,

@@ -1,6 +1,5 @@
 // Whatsapp plugin module implements text runtime behavior.
 export {
-  convertMarkdownTables,
   sanitizeAssistantVisibleText,
   sanitizeAssistantVisibleTextWithProfile,
   stripToolCallXmlTags,
@@ -11,6 +10,7 @@ export {
   isSelfChatMode,
   jidToE164,
   markdownToWhatsApp,
+  markdownToWhatsAppChunks,
   resolveEquivalentWhatsAppDirectChatJids,
   resolveJidToE164,
   toWhatsappJid,

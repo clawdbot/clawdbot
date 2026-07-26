@@ -1,10 +1,13 @@
 // Qqbot tests cover config plugin behavior.
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   type JsonSchemaObject,
   validateJsonSchemaValue,
 } from "openclaw/plugin-sdk/json-schema-runtime";
+import { DEFAULT_SECRET_FILE_MAX_BYTES } from "openclaw/plugin-sdk/secret-file-runtime";
 import { describe, expect, it } from "vitest";
 import { qqbotSetupAdapterShared } from "./bridge/config-shared.js";
 import {
@@ -239,6 +242,71 @@ describe("qqbot config", () => {
     expect(resolved.clientSecret).toBe("secret-value");
     expect(resolved.name).toBe("Bot Two");
   });
+
+  it("rejects oversized client secret files", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "qqbot-client-secret-"));
+    try {
+      const secretFile = path.join(tempDir, "secret");
+      fs.writeFileSync(secretFile, "x".repeat(DEFAULT_SECRET_FILE_MAX_BYTES + 1));
+      const resolved = resolveQQBotAccount({
+        channels: { qqbot: { appId: "123456", clientSecretFile: secretFile } },
+      } as OpenClawConfig);
+
+      expect(resolved.clientSecret).toBe("");
+      expect(resolved.secretSource).toBe("none");
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it.runIf(process.platform !== "win32").each(["symlink", "hardlink"] as const)(
+    "continues to resolve client secret files through a %s",
+    (linkType) => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "qqbot-client-secret-link-"));
+      try {
+        const targetFile = path.join(tempDir, "secret-target");
+        const linkedFile = path.join(tempDir, "secret-link");
+        fs.writeFileSync(targetFile, " fixture-secret\n");
+        if (linkType === "symlink") {
+          fs.symlinkSync(targetFile, linkedFile);
+        } else {
+          fs.linkSync(targetFile, linkedFile);
+        }
+        const resolved = resolveQQBotAccount({
+          channels: { qqbot: { appId: "123456", clientSecretFile: linkedFile } },
+        } as OpenClawConfig);
+
+        expect(resolved.clientSecret).toBe("fixture-secret");
+        expect(resolved.secretSource).toBe("file");
+      } finally {
+        fs.rmSync(tempDir, { force: true, recursive: true });
+      }
+    },
+  );
+
+  it.each([
+    { value: "   ", secret: "", source: "none", configured: false },
+    { value: "  fixture-secret  ", secret: "fixture-secret", source: "env", configured: true },
+  ])(
+    "normalizes QQBOT_CLIENT_SECRET environment fallback %#",
+    ({ value, secret, source, configured }) => {
+      const cfg = { channels: { qqbot: { appId: "123456" } } } as OpenClawConfig;
+      const previous = process.env.QQBOT_CLIENT_SECRET;
+      process.env.QQBOT_CLIENT_SECRET = value;
+      try {
+        const resolved = resolveQQBotAccount(cfg, DEFAULT_ACCOUNT_ID);
+        expect(resolved.clientSecret).toBe(secret);
+        expect(resolved.secretSource).toBe(source);
+        expect(qqbotSetupPlugin.config.isConfigured?.(resolved, cfg)).toBe(configured);
+      } finally {
+        if (previous === undefined) {
+          delete process.env.QQBOT_CLIENT_SECRET;
+        } else {
+          process.env.QQBOT_CLIENT_SECRET = previous;
+        }
+      }
+    },
+  );
 
   it("resolves env SecretRefs on runtime resolution", () => {
     const cfg = makeQqbotSecretRefConfig();

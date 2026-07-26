@@ -33,7 +33,7 @@ class ConnectionPage extends OpenClawLightDomElement {
         return gateway.subscribe((snapshot) => {
           if (snapshot.client !== this.gatewayClient) {
             this.resetDraft(gateway);
-          } else if (!snapshot.connected) {
+          } else if (snapshot.phase !== "connected") {
             this.resetSensitiveUi();
           }
           this.requestUpdate();
@@ -92,7 +92,7 @@ class ConnectionPage extends OpenClawLightDomElement {
   override render() {
     const gateway = this.context.gateway.snapshot;
     const body = renderConnection({
-      connected: gateway.connected,
+      connected: gateway.phase === "connected",
       hello: gateway.hello,
       settings: this.settings,
       password: this.password,

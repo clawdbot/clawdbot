@@ -7,6 +7,8 @@ import {
   RUN_STALE_TAKEOVER_MS,
 } from "../../logging/diagnostic-run-activity.js";
 import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
+import { enqueueCommandInLane, setCommandLaneConcurrency } from "../../process/command-queue.js";
+import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
 import { beginReplyOperationFinalizationWork } from "./reply-run-finalization-lease.js";
 import {
@@ -14,6 +16,7 @@ import {
   createReplyOperation,
   expireStaleReplyOperation,
   forceClearReplyRunBySessionId,
+  isReplyRunEvidenceStale,
   isReplyRunActiveForSessionId,
   isReplyRunAbortableForCompaction,
   isReplyRunAbortableForSignal,
@@ -23,6 +26,7 @@ import {
   REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS,
   ReplyRunAlreadyActiveError,
   replyRunRegistry,
+  markReplyOperationGlobalLaneWaitProgress,
   runAfterReplyOperationClear,
   resolveActiveReplyRunSessionId,
   resolveReplyRunPhaseForSessionId,
@@ -36,6 +40,7 @@ const REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS = 60_000;
 describe("reply run registry", () => {
   afterEach(() => {
     testing.resetReplyRunRegistry();
+    resetCommandQueueStateForTest();
     resetDiagnosticRunActivityForTest();
     vi.restoreAllMocks();
   });
@@ -171,6 +176,51 @@ describe("reply run registry", () => {
       activeWorkKind: undefined,
       lastProgressReason: "deferred_maintenance:wait_ended",
     });
+  });
+
+  it("keeps a reply alive while the saturated global lane waits past the stale threshold", async () => {
+    vi.useFakeTimers();
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:telegram:direct:lane-wait",
+      sessionId: "session-global-lane-wait",
+      resetTriggered: false,
+    });
+    try {
+      const lane = "test:reply-global-wait";
+      setCommandLaneConcurrency(lane, 0);
+      operation.setPhase("running");
+      operation.markWaitingForGlobalLane();
+      let ran = false;
+
+      const queued = enqueueCommandInLane(
+        lane,
+        async () => {
+          operation.markGlobalLaneWaitEnded();
+          ran = true;
+        },
+        { onWait: () => markReplyOperationGlobalLaneWaitProgress(operation) },
+      );
+
+      await vi.advanceTimersByTimeAsync(RUN_STALE_TAKEOVER_MS + 1);
+      expect(operation.phase).toBe("waiting_for_global_lane");
+      expect(isReplyRunEvidenceStale(operation)).toBe(false);
+      expect(ran).toBe(false);
+
+      setCommandLaneConcurrency(lane, 1);
+      await queued;
+
+      expect(ran).toBe(true);
+      expect(operation.phase).toBe("running");
+      expect(
+        getDiagnosticSessionActivitySnapshot({
+          sessionId: operation.sessionId,
+          sessionKey: operation.key,
+        }).lastProgressReason,
+      ).toBe("global_lane:wait_ended");
+    } finally {
+      operation.complete();
+      vi.useRealTimers();
+    }
   });
 
   it("clears deferred-maintenance operations immediately on user abort", () => {

@@ -59,18 +59,23 @@ describe("getSubagentDepthFromSessionStore", () => {
     expect(depth).toBe(3);
   });
 
-  it("derives visible dashboard depth from parentSessionKey", () => {
-    const depth = getSubagentDepthFromSessionStore("agent:main:dashboard:child", {
-      store: {
-        "agent:main:main": { sessionId: "root" },
-        "agent:main:dashboard:child": {
-          sessionId: "child",
-          parentSessionKey: "agent:main:main",
-        },
+  it("ignores parentSessionKey threading when resolving spawn depth", () => {
+    // parentSessionKey is UI threading (dashboard auto-parenting, forks); only
+    // stored spawnDepth and spawnedBy lineage may contribute depth.
+    const store = {
+      "agent:main:main": { sessionId: "root" },
+      "agent:main:dashboard:operator": {
+        sessionId: "operator",
+        spawnDepth: 0,
+        parentSessionKey: "agent:main:main",
       },
-    });
-
-    expect(depth).toBe(1);
+      "agent:main:dashboard:legacy": {
+        sessionId: "legacy",
+        parentSessionKey: "agent:main:main",
+      },
+    };
+    expect(getSubagentDepthFromSessionStore("agent:main:dashboard:operator", { store })).toBe(0);
+    expect(getSubagentDepthFromSessionStore("agent:main:dashboard:legacy", { store })).toBe(0);
   });
 
   it("resolves depth when caller is identified by sessionId", () => {
@@ -138,7 +143,7 @@ describe("getSubagentDepthFromSessionStore", () => {
         store: {
           "agent:work:dashboard:child": {
             sessionId: "child",
-            parentSessionKey: parentKey,
+            spawnedBy: parentKey,
           },
         },
       });

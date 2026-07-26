@@ -5,11 +5,20 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import { renderNewSessionDraftComposer } from "./composer.ts";
+import type { NewSessionVisibility } from "./create-params.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 
 const attachmentDrafts: NewSessionAttachmentDraft[] = [];
 
-function renderComposer(overrides: { submitting?: boolean; messageLocked?: boolean } = {}) {
+function renderComposer(
+  overrides: {
+    submitting?: boolean;
+    messageLocked?: boolean;
+    visibility?: NewSessionVisibility;
+    draftAvailable?: boolean;
+    onVisibilityChange?: (visibility: NewSessionVisibility) => void;
+  } = {},
+) {
   const container = document.createElement("div");
   const attachmentDraft = new NewSessionAttachmentDraft(() => undefined);
   attachmentDrafts.push(attachmentDraft);
@@ -21,11 +30,14 @@ function renderComposer(overrides: { submitting?: boolean; messageLocked?: boole
       context: undefined,
       isCatalogTarget: true,
       message: "",
+      visibility: overrides.visibility,
+      draftAvailable: overrides.draftAvailable,
       modelControl: new NewSessionModelControl(() => undefined),
       requiresModifier: false,
       submitting: overrides.submitting ?? false,
       messageLocked: overrides.messageLocked,
       onInput: () => undefined,
+      onVisibilityChange: overrides.onVisibilityChange,
       onSubmit: () => undefined,
     }),
     container,
@@ -54,6 +66,46 @@ afterEach(() => {
 });
 
 describe("new-session composer attachment drops", () => {
+  it("renders only the incognito pill when drafts are unavailable, off by default", () => {
+    const onVisibilityChange = vi.fn();
+    const { composer } = renderComposer({ onVisibilityChange });
+    const switches = composer.querySelectorAll<HTMLButtonElement>('[role="switch"]');
+
+    expect(switches).toHaveLength(1);
+    expect(switches[0]?.getAttribute("aria-checked")).toBe("false");
+    switches[0]?.click();
+    expect(onVisibilityChange).toHaveBeenCalledWith("incognito");
+  });
+
+  it("renders a distinct active state when incognito is selected", () => {
+    const { composer } = renderComposer({ visibility: "incognito" });
+    const toggle = composer.querySelector<HTMLButtonElement>('[role="switch"]');
+
+    expect(toggle?.getAttribute("aria-checked")).toBe("true");
+    expect(toggle?.classList.contains("new-session-page__visibility--active")).toBe(true);
+  });
+
+  it("keeps the visibility pills mutually exclusive", () => {
+    const onVisibilityChange = vi.fn();
+    const { composer } = renderComposer({
+      draftAvailable: true,
+      visibility: "incognito",
+      onVisibilityChange,
+    });
+    const [draftPill, incognitoPill] = Array.from(
+      composer.querySelectorAll<HTMLButtonElement>('[role="switch"]'),
+    );
+
+    expect(draftPill?.textContent).toContain("Draft");
+    expect(draftPill?.getAttribute("aria-checked")).toBe("false");
+    expect(incognitoPill?.getAttribute("aria-checked")).toBe("true");
+
+    draftPill?.click();
+    expect(onVisibilityChange).toHaveBeenCalledWith("draft");
+    incognitoPill?.click();
+    expect(onVisibilityChange).toHaveBeenCalledWith("normal");
+  });
+
   it("adds a dropped file through the shared attachment handling", async () => {
     const { attachmentDraft, composer } = renderComposer();
     const replace = vi.spyOn(attachmentDraft, "replace");

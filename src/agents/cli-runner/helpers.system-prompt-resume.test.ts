@@ -28,28 +28,30 @@
  *     via buildClaudeLiveArgs) — covered here.
  */
 import { describe, expect, it } from "vitest";
-import type { CliBackendConfig } from "../../config/types.js";
+import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import { buildClaudeLiveArgs } from "./claude-live-session.test-support.js";
 import { buildCliArgs, resolveSystemPromptUsage } from "./helpers.js";
 
 // Minimal backend config matching the Anthropic claude-cli backend shape.
 const CLAUDE_BACKEND_BASE: Pick<
   CliBackendConfig,
+  | "command"
   | "systemPromptFileArg"
   | "systemPromptArg"
   | "systemPromptFileConfigKey"
   | "systemPromptWhen"
-  | "sessionArg"
+  | "sessionArgs"
   | "modelArg"
   | "input"
   | "output"
   | "liveSession"
 > = {
+  command: "claude",
   systemPromptFileArg: "--append-system-prompt-file",
   systemPromptArg: undefined,
   systemPromptFileConfigKey: undefined,
   systemPromptWhen: "always",
-  sessionArg: "--session-id",
+  sessionArgs: ["--session-id", "{sessionId}"],
   modelArg: "--model",
   input: "stdin",
   output: "jsonl",

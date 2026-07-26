@@ -116,7 +116,7 @@ final class QuickChatDictation: @unchecked Sendable {
         self.recognizer = recognizer
 
         let request = SFSpeechAudioBufferRecognitionRequest()
-        request.shouldReportPartialResults = true
+        SpeechRecognitionRequestPolicy.configureInteractiveTranscription(request)
         self.recognitionRequest = request
 
         guard AudioInputDeviceObserver.hasUsableDefaultInputDevice() else {

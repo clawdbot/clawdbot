@@ -17,6 +17,7 @@ import {
   type OpenClawConfig,
 } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { probeGatewayUrl, probeLocalCommand, type LocalCommandProbe } from "./probes.js";
 
@@ -131,7 +132,7 @@ function buildAgentSummaries(cfg: OpenClawConfig): SystemAgentSummary[] {
 }
 
 function resolveFastTestReferences(env: NodeJS.ProcessEnv): OpenClawReferencePaths | undefined {
-  if (env.OPENCLAW_TEST_FAST !== "1") {
+  if (!isFastTestRuntimeEnv(env)) {
     return undefined;
   }
   const sourcePath = process.cwd();

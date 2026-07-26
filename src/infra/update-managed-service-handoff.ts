@@ -11,6 +11,7 @@ import {
 } from "../daemon/constants.js";
 import { forceKillChildProcessTree } from "../process/child-process-tree.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { resolveNodeSqliteLocation } from "./node-sqlite.js";
 import { SUPERVISOR_HINT_ENV_VARS, type RespawnSupervisor } from "./supervisor-markers.js";
 import type { UpdateChannel } from "./update-channels.js";
 import {
@@ -123,7 +124,7 @@ function openStateDatabase() {
   try {
     const sqlite = require("node:sqlite");
     fs.mkdirSync(path.dirname(params.stateDatabasePath), { recursive: true, mode: 0o700 });
-    const db = new sqlite.DatabaseSync(params.stateDatabasePath);
+    const db = new sqlite.DatabaseSync(params.nodeSqliteLocation);
     db.exec("PRAGMA busy_timeout = ${HANDOFF_STATE_DATABASE_BUSY_TIMEOUT_MS};");
     db.exec([
       "CREATE TABLE IF NOT EXISTS gateway_restart_sentinel (",
@@ -888,6 +889,7 @@ async function spawnManagedServiceUpdateHandoff(
     version: 1,
     meta: params.meta,
   };
+  const stateDatabasePath = resolveOpenClawStateSqlitePath(params.env ?? process.env);
   const helperParams = {
     parentPid: params.parentPid ?? process.pid,
     // An undefined drain timeout is the configured indefinite-wait contract.
@@ -903,7 +905,8 @@ async function spawnManagedServiceUpdateHandoff(
     handoffId: params.handoffId,
     logPath,
     metaPath,
-    stateDatabasePath: resolveOpenClawStateSqlitePath(params.env ?? process.env),
+    stateDatabasePath,
+    nodeSqliteLocation: resolveNodeSqliteLocation(stateDatabasePath),
     sensitivePaths: [scriptPath, paramsPath, metaPath],
     serviceRecovery: resolveGatewayServiceRecovery(params.supervisor, params.env ?? process.env),
   };

@@ -101,7 +101,7 @@ function isPnpmStoreWarmupGatedJobName(name) {
     name === "build-artifacts" ||
     name === "check-docs" ||
     name === "check-guards" ||
-    name === "check-shrinkwrap" ||
+    name === "check-npm-lock" ||
     name === "check-prod-types" ||
     name === "check-lint" ||
     name === "check-dependencies" ||

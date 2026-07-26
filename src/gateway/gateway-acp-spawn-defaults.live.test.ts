@@ -11,14 +11,10 @@ import { describe, expect, it } from "vitest";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import { isSpawnAcpAcceptedResult, spawnAcpDirect } from "../agents/acp-spawn.js";
-import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
-import {
-  clearConfigCache,
-  clearRuntimeConfigSnapshot,
-  getRuntimeConfig,
-} from "../config/config.js";
+import { isLiveTestEnabled, readLiveTestConfig } from "../agents/live-test-helpers.js";
+import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { loadSessionStore } from "../config/sessions/store.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -219,7 +215,11 @@ async function waitForSessionEntry(params: {
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId: "codex" });
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
-    const entry = loadSessionStore(storePath)[params.sessionKey];
+    const entry = loadSessionEntry({
+      agentId: "codex",
+      storePath,
+      sessionKey: params.sessionKey,
+    });
     if (entry) {
       return entry;
     }
@@ -480,7 +480,7 @@ describeLive("gateway live (ACP spawn defaults)", () => {
         });
         await waitForGatewayPort({ host: "127.0.0.1", port, timeoutMs: CONNECT_TIMEOUT_MS });
         await waitForAcpBackendReady();
-        const runtimeCfg = getRuntimeConfig();
+        const runtimeCfg = await readLiveTestConfig();
         if (ACP_THINKING_CONTROLS_LIVE) {
           const runProof =
             acpAgentId === "opencode"
@@ -538,7 +538,7 @@ describeLive("gateway live (ACP spawn defaults)", () => {
         expect(primaryOnlyEntry.acp?.runtimeOptions?.model).not.toBe("anthropic/claude-sonnet-4-6");
       } finally {
         try {
-          const runtimeCfg = getRuntimeConfig();
+          const runtimeCfg = await readLiveTestConfig();
           for (const sessionKey of sessionKeys) {
             await getAcpSessionManager()
               .closeSession({

@@ -7,6 +7,7 @@ import type {
   WorkerSessionPlacementStore,
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
+import { ActiveTurnClaimError } from "./placement-turn-claims.js";
 import {
   projectWorkspaceResultConflict,
   type WorkerWorkspaceResultConflict,
@@ -18,13 +19,6 @@ type ActiveWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "act
 
 const PREVIOUS_RESULT_RECONCILING_MESSAGE =
   "The previous cloud turn's workspace result is still reconciling; it retries automatically — try again shortly.";
-
-function isActiveTurnClaimCollision(error: unknown, sessionId: string): boolean {
-  return (
-    error instanceof Error &&
-    error.message === `Session ${sessionId} already has an active turn claim`
-  );
-}
 
 function required(value: string | undefined, field: string): string {
   const normalized = value?.trim();
@@ -151,7 +145,7 @@ export async function claimWorkerTurn(params: {
   try {
     return { placement: params.placement, turnClaim: claim() };
   } catch (error) {
-    if (!isActiveTurnClaimCollision(error, params.identity.sessionId)) {
+    if (!(error instanceof ActiveTurnClaimError)) {
       throw error;
     }
     const activeClaim = params.placements.get(params.identity.sessionId)?.turnClaim;
@@ -202,7 +196,7 @@ export async function claimWorkerTurn(params: {
   try {
     return { placement: refreshed, turnClaim: claim() };
   } catch (error) {
-    if (isActiveTurnClaimCollision(error, params.identity.sessionId)) {
+    if (error instanceof ActiveTurnClaimError) {
       throw new Error(PREVIOUS_RESULT_RECONCILING_MESSAGE, { cause: error });
     }
     throw error;

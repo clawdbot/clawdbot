@@ -502,7 +502,7 @@ describe("gateway node command allowlist", () => {
         path: path.join(os.tmpdir(), `openclaw-node-allowed-${Date.now()}-${Math.random()}.sqlite`),
       });
 
-      systemClient = await connectNodeClientWithPairing({
+      systemClient = await connectNodeClientWithNodePairing({
         port,
         commands: ["system.run"],
         instanceId: "node-system-run",
@@ -521,7 +521,7 @@ describe("gateway node command allowlist", () => {
       await systemClient.stopAndWait();
       await waitForConnectedCount(0);
 
-      emptyClient = await connectNodeClientWithPairing({
+      emptyClient = await connectNodeClientWithNodePairing({
         port,
         commands: [],
         instanceId: "node-empty",
@@ -611,7 +611,9 @@ describe("gateway node command allowlist", () => {
       const nodeId = await findConnectedNodeIdByDisplayName(displayName);
 
       await expectPendingPairingCommands(nodeId, ["canvas.snapshot", "system.run"]);
-      await expectCanvasSnapshotDenied(nodeId, "pending-node-canvas");
+      const denied = await invokeCanvasSnapshot(nodeId, "pending-node-canvas");
+      expect(denied.ok).toBe(false);
+      expect(denied.error?.details).toMatchObject({ code: "PAIRING_CHANGED" });
     } finally {
       await nodeClient?.stopAndWait();
     }
@@ -678,7 +680,11 @@ describe("gateway node command allowlist", () => {
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(
         configPath,
-        JSON.stringify({ gateway: { nodes: { denyCommands: ["canvas.snapshot"] } } }, null, 2),
+        JSON.stringify(
+          { gateway: { nodes: { commands: { deny: ["canvas.snapshot"] } } } },
+          null,
+          2,
+        ),
       );
 
       await approvePendingNodePairing(nodeId, ["canvas.snapshot"]);

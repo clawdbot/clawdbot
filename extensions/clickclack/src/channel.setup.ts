@@ -2,7 +2,7 @@
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { clickClackConfigAdapter, clickClackMeta } from "./channel-config.js";
 import { clickClackConfigSchema } from "./config-schema.js";
-import { clickClackSetupAdapter } from "./setup-core.js";
+import { clickClackSetupAdapter, clickClackSetupContract } from "./setup-core.js";
 import { clickClackSetupWizard } from "./setup-surface.js";
 import type { ResolvedClickClackAccount } from "./types.js";
 
@@ -18,5 +18,6 @@ export const clickClackSetupPlugin: ChannelPlugin<ResolvedClickClackAccount> = {
   configSchema: clickClackConfigSchema,
   config: clickClackConfigAdapter,
   setup: clickClackSetupAdapter,
+  setupContract: clickClackSetupContract,
   setupWizard: clickClackSetupWizard,
 };

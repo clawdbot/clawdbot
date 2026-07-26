@@ -161,6 +161,19 @@ Shared infrastructure underneath (this is where the simplification lands):
   request channel; size reporting and theme tokens remain separate host
   notifications.
 
+### Plugin capability declarations
+
+Enabled plugins can extend the widget host through `dashboard.dataBindings`
+and `dashboard.actionVerbs` in `openclaw.plugin.json`. Plugin-local ids become
+grant names prefixed by the plugin id, such as `workboard.cards.list` and
+`workboard.dispatch`; `%` and `.` in the plugin-id segment are escaped so a
+different plugin/local-id split cannot inherit the same persisted grant. During
+plugin registration, OpenClaw verifies that every binding targets an RPC
+registered by the same plugin with `operator.read` and every action targets one
+with `operator.write`; invalid declarations fail the plugin load. The validated
+registry is rebuilt only with plugin lifecycle changes, while widget grants
+remain per-widget and byte-and-revision-bound.
+
 ### Modeled residual: WebRTC data channels
 
 The sandbox CSP emits the proposed `webrtc 'block'` directive, but
@@ -213,6 +226,10 @@ from the minting run. Ungranted pins stay read-only — still useful for display
 dashboards. v1 pins to the originating session's board; cross-session pinning
 needs a lease broker and waits. Coordinate with open PR #109807 (`ui/message`
 composer routing, theme/size propagation).
+
+### WorkBoard integration
+
+The WorkBoard integration program keeps cards and boards plugin-owned while stitching dispatched cards back to their session boards through the existing `sessionKey` and `runId`, exposing WorkBoard feeds and dispatch through plugin-declared bindings and actions, and composing those results with the existing `html` and `mcp-app` widget kinds instead of introducing a WorkBoard-specific widget type.
 
 ## Layout: fluid grid
 
@@ -283,10 +300,10 @@ RPCs (core method table, typebox schemas in `gateway-protocol`):
 - `board.prompt.authorize { ticket }` — returns whether a visible prompt send
   still needs per-click confirmation — `operator.read`
 - `board.data.read { ticket, bindingId, params? }` — gateway-side allowlisted
-  read binding resolution — `operator.read`
-- `board.action { ticket, action: "cron.trigger", jobId }` — exact-grant
-  automation dispatch through the existing cron run-now path —
-  `operator.write`
+  core or active-plugin read binding resolution — `operator.read`
+- `board.action { ticket, action, ... }` — exact-grant automation dispatch
+  through the existing cron run-now path or an active plugin's validated action
+  verb — `operator.write`
 
 Events (in `EVENT_SCOPE_GUARDS`, read scope):
 
@@ -327,7 +344,6 @@ false`, never in a stable release (first appeared in 2026.7.2 betas). No
   A2UI. The `pluginSurfaceUrls["canvas"]` advertisement and
   `/__openclaw__/canvas` paths are shipped native-client contracts and stay
   stable. Discord sessions keep the Discord-owned `show_widget` variant.
-- **WorkBoard is untouched** (integration is a follow-up program).
 
 ## Non-goals (this program)
 
@@ -336,7 +352,6 @@ false`, never in a stable release (first appeared in 2026.7.2 betas). No
   Control UI; the inline-widget path is unchanged).
 - Builtin data widgets (sessions/usage/cron cards) — the capability bridge plus
   agent-authored widgets cover v1; a builtin kind registry can come later.
-- WorkBoard-on-dashboard.
 
 ## Implementation plan
 

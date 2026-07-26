@@ -47,7 +47,7 @@ function normalizeInworldProviderConfig(rawConfig: Record<string, unknown>): Inw
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
-      path: "messages.tts.providers.inworld.apiKey",
+      path: "tts.providers.inworld.apiKey",
     }),
     baseUrl: normalizeInworldBaseUrl(trimToUndefined(raw?.baseUrl)),
     voiceId: trimToUndefined(raw?.voiceId) ?? DEFAULT_INWORLD_VOICE_ID,

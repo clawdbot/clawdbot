@@ -208,6 +208,10 @@ describe("listDeepInfraVideoGenCatalog", () => {
       expect(first?.kind).toBe("video_generation");
       expect(first?.capabilities?.generate?.supportsAspectRatio).toBe(true);
       expect(first?.capabilities?.generate?.supportedDurationSeconds).toEqual([5, 8]);
+      // Catalog must not advertise options the runtime drops: guidance is not
+      // part of the /v1/openai/videos contract, so catalog == runtime providerOptions.
+      expect(first?.capabilities?.providerOptions).not.toHaveProperty("guidance_scale");
+      expect(first?.capabilities?.providerOptions).not.toHaveProperty("guidanceScale");
     });
   });
 });

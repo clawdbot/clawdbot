@@ -10,6 +10,12 @@ import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { extractAssistantText, sanitizeTextContent } from "./chat-history-text.js";
 
 const callGatewayMock = vi.fn();
+const inProcessCreationMock = vi.fn(
+  async (..._args: [unknown, unknown, unknown]): Promise<unknown> => ({}),
+);
+// Default false mirrors running outside a gateway process; the trusted-creation
+// regression test flips it on and restores it.
+let inProcessGatewayContextAvailable = false;
 const facadeRuntimeMock = vi.hoisted(() => ({
   sessionKeyResolvers: new Map<
     string,
@@ -24,6 +30,11 @@ const facadeRuntimeMock = vi.hoisted(() => ({
 
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
+}));
+vi.mock("./in-process-gateway.js", () => ({
+  callInProcessGatewayToolWithCreation: (method: unknown, params: unknown, creation: unknown) =>
+    inProcessCreationMock(method, params, creation),
+  hasInProcessGatewayToolContext: () => inProcessGatewayContextAvailable,
 }));
 vi.mock("../../plugin-sdk/facade-runtime.js", async () => {
   const actual = await vi.importActual<typeof import("../../plugin-sdk/facade-runtime.js")>(
@@ -433,17 +444,17 @@ describe("resolveAnnounceTarget", () => {
     expect(requireGatewayRequest().method).toBe("sessions.list");
   });
 
-  it("falls back to origin provider and accountId from sessions.list when legacy route fields are absent", async () => {
+  it("hydrates provider and accountId from the canonical delivery projection", async () => {
     callGatewayMock.mockResolvedValueOnce({
       sessions: [
         {
           key: "agent:main:whatsapp:group:123@g.us",
-          origin: {
-            provider: "whatsapp",
+          deliveryContext: {
+            channel: "whatsapp",
+            to: "123@g.us",
             accountId: "work",
+            threadId: 271,
           },
-          lastTo: "123@g.us",
-          lastThreadId: 271,
         },
       ],
     });
@@ -487,24 +498,14 @@ describe("resolveAnnounceTarget", () => {
     });
   });
 
-  it("hydrates announce delivery from explicit external context over stale webchat session fields", async () => {
+  it("hydrates announce delivery from the canonical external projection", async () => {
     callGatewayMock.mockResolvedValueOnce({
       sessions: [
         {
           key: "agent:main:feishu:direct:ou_user",
-          channel: "webchat",
-          lastChannel: "webchat",
-          lastTo: "session:dashboard",
-          route: {
-            channel: "webchat",
-            target: { to: "session:dashboard" },
-          },
           deliveryContext: {
             channel: "feishu",
             to: "user:ou_user",
-          },
-          origin: {
-            provider: "feishu",
             accountId: "work",
             threadId: "thread-77",
           },
@@ -1241,6 +1242,65 @@ describe("sessions_send gating", () => {
 
     expect(requireDetails(result).status).toBe("ok");
     expect(waitTimeouts).toEqual([MAX_TIMER_TIMEOUT_MS]);
+  });
+});
+
+describe("sessions_send agent-main materialization provenance", () => {
+  it("uses the trusted in-process creation stamp in the production assembly (no injected caller)", async () => {
+    inProcessGatewayContextAvailable = true;
+    inProcessCreationMock.mockClear();
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: false },
+        sessions: { visibility: "all" },
+      },
+    });
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.resolve") {
+        // Unmaterialized agent main: the probe fails, forcing creation.
+        throw new Error("unknown session: agent:main:main");
+      }
+      if (request.method === "sessions.create") {
+        throw new Error("plain sessions.create must not be used for trusted materialization");
+      }
+      if (request.method === "chat.history") {
+        return { messages: [] };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-ensure-main", acceptedAt: 1 };
+      }
+      return {};
+    });
+    // Mirror production assembly (openclaw-tools.ts): no callGateway override, so
+    // ensureConfiguredAgentMainSession takes the trusted in-process branch.
+    const tool = createSessionsSendTool({
+      agentSessionKey: "agent:main:dashboard:req-provenance",
+      agentChannel: MAIN_AGENT_CHANNEL,
+    });
+
+    try {
+      const result = await tool.execute("call-ensure-main-provenance", {
+        sessionKey: "agent:main:main",
+        message: "wake up",
+        timeoutSeconds: 0,
+      });
+
+      expect(requireDetails(result).status).toBe("accepted");
+      expect(inProcessCreationMock).toHaveBeenCalledTimes(1);
+      expect(inProcessCreationMock).toHaveBeenCalledWith(
+        "sessions.create",
+        { key: "agent:main:main", agentId: "main" },
+        {
+          via: "internal",
+          actor: { type: "agent", id: "agent:main:dashboard:req-provenance" },
+        },
+      );
+    } finally {
+      inProcessGatewayContextAvailable = false;
+      inProcessCreationMock.mockClear();
+    }
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

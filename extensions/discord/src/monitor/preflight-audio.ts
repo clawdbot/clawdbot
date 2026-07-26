@@ -95,17 +95,14 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
           hasTypedText,
         };
       }
-      const audioUrls = audioAttachments
-        .map((att) => att.url)
-        .map((url) => normalizeOptionalString(url))
-        .filter((url): url is string => Boolean(url));
-      if (audioUrls.length > 0) {
+      const media = audioAttachments.flatMap((attachment) => {
+        const url = normalizeOptionalString(attachment.url);
+        return url ? [{ url, contentType: inferAudioAttachmentMime(attachment) }] : [];
+      });
+      if (media.length > 0) {
         transcript = await transcribeFirstAudio({
           ctx: {
-            MediaUrls: audioUrls,
-            MediaTypes: audioAttachments
-              .map((att) => inferAudioAttachmentMime(att))
-              .filter((contentType): contentType is string => Boolean(contentType)),
+            media,
           },
           cfg: params.cfg,
           agentDir: undefined,

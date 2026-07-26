@@ -80,9 +80,8 @@ function createConfiguredAcpCase(params: {
 }) {
   return {
     cfg: {
-      commands: {
-        useAccessGroups: false,
-      },
+      agents: { entries: { [params.agentId ?? "codex"]: {} } },
+      commands: { allowFrom: { discord: ["user:owner"] } },
       ...(params.includeChannelAccess === false
         ? {}
         : params.channelType === ChannelType.DM
@@ -1052,9 +1051,6 @@ describe("Discord native plugin command dispatch", () => {
 
   it("forwards Discord thread metadata into direct plugin command execution", async () => {
     const cfg = {
-      commands: {
-        useAccessGroups: false,
-      },
       channels: {
         discord: {
           groupPolicy: "allowlist",
@@ -1120,9 +1116,6 @@ describe("Discord native plugin command dispatch", () => {
 
   it("preserves fetched thread parent metadata when interaction parentId getter throws", async () => {
     const cfg = {
-      commands: {
-        useAccessGroups: false,
-      },
       channels: {
         discord: {
           groupPolicy: "allowlist",
@@ -1224,9 +1217,8 @@ describe("Discord native plugin command dispatch", () => {
     const guildId = "1459246755253325866";
     const channelId = "1478836151241412759";
     const cfg = {
-      commands: {
-        useAccessGroups: false,
-      },
+      agents: { entries: { qwen: {} } },
+      commands: { allowFrom: { discord: ["user:owner"] } },
       bindings: [
         {
           agentId: "qwen",

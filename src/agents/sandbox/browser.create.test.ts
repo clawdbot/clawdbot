@@ -115,7 +115,7 @@ async function loadFreshBrowserModulesForTest() {
   ({ ensureSandboxBrowser } = await import("./browser.js"));
 }
 
-function buildConfig(enableNoVnc: boolean): SandboxConfig {
+function buildConfig(noVncEnabled: boolean): SandboxConfig {
   return {
     mode: "all",
     backend: "docker",
@@ -147,7 +147,7 @@ function buildConfig(enableNoVnc: boolean): SandboxConfig {
       vncPort: 5900,
       noVncPort: 6080,
       headless: false,
-      enableNoVnc,
+      noVncEnabled,
       allowHostControl: false,
       autoStart: true,
       autoStartTimeoutMs: 12_000,
@@ -185,7 +185,7 @@ function computeTestBrowserHash(params: {
       vncPort: params.cfg.browser.vncPort,
       noVncPort: params.cfg.browser.noVncPort,
       headless: params.cfg.browser.headless,
-      enableNoVnc: params.cfg.browser.enableNoVnc,
+      noVncEnabled: params.cfg.browser.noVncEnabled,
       autoStartTimeoutMs: params.cfg.browser.autoStartTimeoutMs,
     },
     securityEpoch: SANDBOX_BROWSER_SECURITY_HASH_EPOCH,

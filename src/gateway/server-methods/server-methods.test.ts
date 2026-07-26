@@ -28,6 +28,7 @@ import {
   buildSystemRunApprovalEnvBinding,
 } from "../../infra/system-run-approval-binding.js";
 import { resetLogger, setLoggerOverride } from "../../logging.js";
+import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   augmentChatHistoryWithCanvasBlocks,
@@ -37,6 +38,7 @@ import {
   sanitizeChatHistoryMessages,
 } from "../chat-display-projection.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
+import { createChatRunState } from "../server-chat-state.js";
 import { waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
@@ -834,24 +836,40 @@ describe("injectTimestamp", () => {
 
     expect(result).toMatch(/^\[Fri 2025-07-04 12:00 EDT\]/);
   });
-
-  it("leaves messages bare when config disables envelope timestamps", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          envelopeTimestamp: "off",
-          userTimezone: "America/New_York",
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(injectTimestamp("cache sensitive prompt", timestampOptsFromConfig(cfg))).toBe(
-      "cache sensitive prompt",
-    );
-  });
 });
 
 describe("sanitizeChatHistoryMessages", () => {
+  it("preserves bounded cloud workspace conflict details for Control UI history", () => {
+    const result = sanitizeChatHistoryMessages([
+      {
+        role: "custom",
+        customType: "cloud-workspace-conflict",
+        content: "Cloud result applied with conflicts.",
+        details: {
+          paths: ["src/local.ts", "ui/src/app.ts"],
+          stagedResultRef: "refs/openclaw/worker-results/claim-1",
+          totalCount: 3,
+          internal: "discard",
+        },
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "custom",
+        customType: "cloud-workspace-conflict",
+        content: "Cloud result applied with conflicts.",
+        details: {
+          paths: ["src/local.ts", "ui/src/app.ts"],
+          stagedResultRef: "refs/openclaw/worker-results/claim-1",
+          totalCount: 3,
+        },
+        timestamp: 1,
+      },
+    ]);
+  });
+
   it("truncates display text without splitting surrogate pairs", () => {
     const prefix = "a".repeat(7);
     const result = sanitizeChatHistoryMessages(
@@ -2158,26 +2176,39 @@ describe("projectRecentChatDisplayMessages", () => {
     expect(result).toEqual([{ role: "assistant", content: "older answer", timestamp: 2 }]);
   });
 
-  it("keeps media-only user messages while dropping empty text-only user messages", () => {
-    const mediaOnly = {
-      role: "user",
-      content: "",
-      MediaPath: "/tmp/openclaw/user-upload.png",
-      timestamp: 1,
-    };
-    const multiMediaOnly = {
-      role: "user",
-      content: "",
-      MediaPaths: ["/tmp/openclaw/first.png", "/tmp/openclaw/second.jpg"],
-      timestamp: 2,
-    };
+  it.each([
+    {
+      name: "facts-only",
+      message: { __openclaw: { media: [{ path: "/tmp/openclaw/fact.png" }] } },
+      expectedPath: "/tmp/openclaw/fact.png",
+    },
+    {
+      name: "sparse",
+      message: { __openclaw: { media: [{}, { path: "/tmp/openclaw/sparse.png" }] } },
+      expectedPath: "/tmp/openclaw/sparse.png",
+      expectedIndex: 1,
+    },
+    {
+      name: "type-only",
+      message: { __openclaw: { media: [{ contentType: "image/png" }] } },
+      expectedPath: undefined,
+    },
+    {
+      name: "media-only",
+      message: { __openclaw: { media: [{ path: "/tmp/openclaw/media-only.png" }] } },
+      expectedPath: "/tmp/openclaw/media-only.png",
+    },
+  ])("keeps $name media-only users through canonical display projection", (testCase) => {
     const result = projectRecentChatDisplayMessages([
-      mediaOnly,
-      multiMediaOnly,
-      { role: "user", content: "", timestamp: 3 },
+      { role: "user", content: "", timestamp: 1, ...testCase.message },
+      { role: "user", content: "", timestamp: 2 },
     ]);
 
-    expect(result).toEqual([mediaOnly, multiMediaOnly]);
+    expect(result).toHaveLength(1);
+    expect(result[0]).not.toHaveProperty("MediaPath");
+    const media = (result[0]?.["__openclaw"] as { media?: Array<{ path?: string }> })?.media;
+    const expectedIndex = "expectedIndex" in testCase ? (testCase.expectedIndex ?? 0) : 0;
+    expect(media?.[expectedIndex]?.path).toBe(testCase.expectedPath);
   });
 
   it("merges delayed TTS supplements into their original assistant message", () => {
@@ -2645,21 +2676,14 @@ describe("timestampOptsFromConfig", () => {
     expect(timestampOptsFromConfig(cfg).timezone).toBe(expected);
   });
 
-  it("keeps timestamp injection enabled for upgraded configs unless explicitly disabled", () => {
+  it("keeps timestamp injection enabled for upgraded configs", () => {
     const upgradedConfigWithExistingDefaults = {
       agents: { defaults: { userTimezone: "America/Chicago" } },
     } as OpenClawConfig;
 
-    // Existing user configs do not store envelopeTimestamp; omission remains
-    // the shipped default even when other agent defaults are present, so no
-    // config migration is needed for this broadened use of the setting.
+    // Timestamp injection is fixed on even when other agent defaults exist.
     expect(timestampOptsFromConfig({} as OpenClawConfig).includeTimestamp).toBe(true);
     expect(timestampOptsFromConfig(upgradedConfigWithExistingDefaults).includeTimestamp).toBe(true);
-    expect(
-      timestampOptsFromConfig({
-        agents: { defaults: { envelopeTimestamp: "off" } },
-      } as OpenClawConfig).includeTimestamp,
-    ).toBe(false);
   });
 });
 
@@ -2946,7 +2970,7 @@ describe("exec approval handlers", () => {
         broadcasts.push({ event, payload });
       },
       hasExecApprovalClients: () => true,
-      chatAbortedRuns: new Map<string, number>(),
+      chatRunState: createChatRunState(),
     };
     return { manager, handlers, broadcasts, respond, context };
   }
@@ -3135,7 +3159,7 @@ describe("exec approval handlers", () => {
 
   it("rejects approval registration after the owning run was aborted", async () => {
     const { manager, handlers, broadcasts, respond, context } = createExecApprovalFixture();
-    context.chatAbortedRuns.set("run-aborted", Date.now());
+    context.chatRunState.getOrCreate("run-aborted").abortMarker = Date.now();
 
     await requestExecApproval({
       handlers,
@@ -3185,7 +3209,7 @@ describe("exec approval handlers", () => {
       "approval-allowed-before-abort",
     );
     expect(manager.resolve("approval-allowed-before-abort", "allow-once")).toBe(true);
-    context.chatAbortedRuns.set("run-allowed-before-abort", Date.now());
+    context.chatRunState.getOrCreate("run-allowed-before-abort").abortMarker = Date.now();
     await requestPromise;
 
     const waitRespond = vi.fn();
@@ -5004,25 +5028,19 @@ describe("gateway healthHandlers.status scope handling", () => {
 
 describe("gateway healthHandlers.health cache freshness", () => {
   let healthHandlers: typeof import("./health.js").healthHandlers;
-  let pricingState: typeof import("../model-pricing-cache-state.js");
   const contextEngineTestOwner = "plugin:health-test";
 
   beforeAll(async () => {
     ({ healthHandlers } = await import("./health.js"));
-    pricingState = await import("../model-pricing-cache-state.js");
   });
 
   beforeEach(() => {
-    pricingState.replaceGatewayModelPricingCache(new Map(), 0);
-    pricingState.clearGatewayModelPricingFailures();
     registerLegacyContextEngine();
     clearContextEnginesForOwner(contextEngineTestOwner);
     resetContextEngineRuntimeQuarantineForTests();
   });
 
   afterEach(() => {
-    pricingState.replaceGatewayModelPricingCache(new Map(), 0);
-    pricingState.clearGatewayModelPricingFailures();
     clearContextEnginesForOwner(contextEngineTestOwner);
     resetContextEngineRuntimeQuarantineForTests();
   });
@@ -5174,69 +5192,6 @@ describe("gateway healthHandlers.health cache freshness", () => {
     expect(mockCallArg(respond, 0, 2)).toBeUndefined();
   });
 
-  it("merges live model-pricing state into cached health responses", async () => {
-    const cached = {
-      ok: true,
-      ts: Date.now(),
-      durationMs: 1,
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-      heartbeatSeconds: 0,
-      defaultAgentId: "main",
-      agents: [],
-      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
-      modelPricing: { state: "ok", sources: [] },
-    };
-    pricingState.recordGatewayModelPricingSourceFailure(
-      "openrouter",
-      "OpenRouter pricing fetch failed: TypeError: fetch failed",
-      123,
-    );
-    const respond = vi.fn();
-    const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
-
-    await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(
-      healthHandlers,
-      {
-        req: {} as never,
-        params: {} as never,
-        respond: respond as never,
-        context: {
-          getHealthCache: () => cached,
-          refreshHealthSnapshot,
-          getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
-          logHealth: { error: vi.fn() },
-        } as never,
-        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
-        isWebchatConnect: () => false,
-      },
-    );
-
-    const payload = mockCallArg(respond, 0, 1) as
-      | {
-          modelPricing?: {
-            state?: string;
-            detail?: string;
-            sources?: Array<{ source?: string; state?: string; lastFailureAt?: number }>;
-          };
-        }
-      | undefined;
-    expect(payload?.modelPricing?.state).toBe("degraded");
-    expect(payload?.modelPricing?.detail).toBe(
-      "OpenRouter pricing fetch failed: TypeError: fetch failed",
-    );
-    expect(payload?.modelPricing?.sources).toHaveLength(1);
-    expect(payload?.modelPricing?.sources?.[0]?.source).toBe("openrouter");
-    expect(payload?.modelPricing?.sources?.[0]?.state).toBe("degraded");
-    expect(payload?.modelPricing?.sources?.[0]?.lastFailureAt).toBe(123);
-    expect(mockCallArg(respond, 0, 3)).toEqual({ cached: true });
-    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
-      probe: false,
-      includeSensitive: false,
-    });
-  });
-
   it("merges live context-engine quarantine state into cached health responses", async () => {
     const engineId = `health-context-engine-${Date.now()}`;
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -5318,9 +5273,10 @@ describe("gateway healthHandlers.health cache freshness", () => {
   });
 
   it("merges live dead-lettered delivery queue counts into cached health responses", async () => {
-    const tmpStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-health-cached-dq-"));
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = tmpStateDir;
+    const openClawState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-health-cached-dq-",
+    });
     try {
       const { moveDeliveryQueueEntryToFailed, upsertDeliveryQueueEntry } =
         await import("../../infra/delivery-queue-sqlite.js");
@@ -5378,12 +5334,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
       expect(typeof payload?.deliveryQueues?.failed?.[0]?.oldestFailedAt).toBe("number");
       expect(mockCallArg(respond, 0, 3)).toEqual({ cached: true });
     } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-      fs.rmSync(tmpStateDir, { recursive: true, force: true });
+      await openClawState.cleanup();
     }
   });
 

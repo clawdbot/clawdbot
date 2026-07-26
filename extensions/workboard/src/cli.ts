@@ -11,6 +11,7 @@ import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveWorkboardCardByIdOrPrefix } from "./card-lookup.js";
+import { redactClaimToken } from "./card-redaction.js";
 import type { WorkboardDispatchResult, WorkboardStore } from "./store.js";
 
 type JsonOptions = {
@@ -69,23 +70,6 @@ function formatCardLine(card: WorkboardCard): string {
   const boardId = card.metadata?.automation?.boardId ?? "default";
   const agent = card.agentId ? ` ${card.agentId}` : "";
   return `${card.id.slice(0, 8)}  ${card.status.padEnd(8)}  ${card.priority.padEnd(6)}  ${boardId}${agent}  ${card.title}`;
-}
-
-function redactClaimToken(card: WorkboardCard): WorkboardCard {
-  const claim = card.metadata?.claim;
-  if (!claim) {
-    return card;
-  }
-  return {
-    ...card,
-    metadata: {
-      ...card.metadata,
-      claim: {
-        ...claim,
-        token: "[redacted]",
-      },
-    },
-  };
 }
 
 function redactDispatchResult(result: WorkboardDispatchResult): WorkboardDispatchResult {

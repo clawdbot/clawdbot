@@ -31,7 +31,11 @@ import { appendBoardEventNotice, BoardEventPayloadError } from "../../boards/boa
 import type { BoardStore } from "../../boards/board-store.js";
 import { readCanvasDocumentHtmlSource } from "../../canvas/documents.js";
 import { buildWidgetDocument } from "../../canvas/wrap.js";
-import { readBoardDataBinding, triggerBoardCronJob } from "../board-host-tools.js";
+import {
+  readBoardDataBinding,
+  runBoardActionVerb,
+  triggerBoardCronJob,
+} from "../board-host-tools.js";
 import { buildBoardWidgetSandboxPath } from "../board-sandbox.js";
 import { boardStore } from "../board-store.js";
 import {
@@ -56,9 +60,11 @@ type McpAppDependencies = {
   mintFromTranscript: typeof mintMcpAppViewFromTranscript;
 };
 type BoardDataReader = typeof readBoardDataBinding;
+type BoardActionVerbRunner = typeof runBoardActionVerb;
 type BoardCronTrigger = typeof triggerBoardCronJob;
 type BoardHandlerDependencies = Partial<McpAppDependencies> & {
   readDataBinding?: BoardDataReader;
+  runActionVerb?: BoardActionVerbRunner;
   triggerCronJob?: BoardCronTrigger;
 };
 
@@ -94,6 +100,18 @@ function respondBoardError(
   respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
 }
 
+function assertCapabilityParamsSize(
+  params: Record<string, unknown>,
+  capability: "action" | "data binding",
+): void {
+  if (Buffer.byteLength(JSON.stringify(params), "utf8") > 8 * 1024) {
+    throw new BoardValidationError(
+      "invalid_operation",
+      `board widget ${capability} params exceed 8192 UTF-8 bytes`,
+    );
+  }
+}
+
 export function createBoardHandlers(
   store: BoardStore,
   appendNotice: NoticeAppender = appendBoardEventNotice,
@@ -109,6 +127,7 @@ export function createBoardHandlers(
       dependencies.mintFromTranscript ?? defaultMcpAppDependencies.mintFromTranscript,
   };
   const readDataBinding = dependencies.readDataBinding ?? readBoardDataBinding;
+  const runActionVerb = dependencies.runActionVerb ?? runBoardActionVerb;
   const triggerCronJob = dependencies.triggerCronJob ?? triggerBoardCronJob;
   return {
     "board.get": async ({ params, respond, context }) => {
@@ -411,12 +430,7 @@ export function createBoardHandlers(
       try {
         const boardParams = params as BoardDataReadParams;
         const bindingParams = boardParams.params ?? {};
-        if (Buffer.byteLength(JSON.stringify(bindingParams), "utf8") > 8 * 1024) {
-          throw new BoardValidationError(
-            "invalid_operation",
-            "board widget data binding params exceed 8192 UTF-8 bytes",
-          );
-        }
+        assertCapabilityParamsSize(bindingParams, "data binding");
         const { document } = resolveAuthorizedBoardWidgetView(store, boardParams.ticket);
         if (
           !boardWidgetHasGrantedTool(document.declared, document.grantState, boardParams.bindingId)
@@ -440,14 +454,21 @@ export function createBoardHandlers(
       try {
         const boardParams = params as BoardActionParams;
         const { document } = resolveAuthorizedBoardWidgetView(store, boardParams.ticket);
-        const capability = `cron.trigger:${boardParams.jobId}`;
+        const capability =
+          "jobId" in boardParams ? `cron.trigger:${boardParams.jobId}` : boardParams.action;
         if (!boardWidgetHasGrantedTool(document.declared, document.grantState, capability)) {
           throw new BoardValidationError(
             "invalid_operation",
             `board widget tool is not granted: ${capability}`,
           );
         }
-        respond(true, await triggerCronJob(boardParams.jobId, invocation));
+        if ("jobId" in boardParams) {
+          respond(true, await triggerCronJob(boardParams.jobId, invocation));
+          return;
+        }
+        const actionParams = boardParams.params ?? {};
+        assertCapabilityParamsSize(actionParams, "action");
+        respond(true, await runActionVerb(boardParams.action, actionParams, invocation));
       } catch (error) {
         respondBoardError(error, respond);
       }

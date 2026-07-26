@@ -1,4 +1,6 @@
 package ai.openclaw.app.chat
+
+import ai.openclaw.app.gateway.SessionObserverDigest
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -24,6 +26,40 @@ data class ChatMessage(
   val content: List<ChatMessageContent>,
   val timestampMs: Long?,
   val idempotencyKey: String? = null,
+  /** Canonical transcript-tree identity supplied by chat.history. */
+  val entryId: String? = null,
+)
+
+/** One selectable transcript branch returned by sessions.branches.list. */
+data class SessionBranch(
+  val leafEntryId: String,
+  val headline: String,
+  val messageCount: Int,
+  val updatedAt: String?,
+  val active: Boolean,
+)
+
+data class SessionRewindResult(
+  val editorText: String?,
+  val editorAttachments: List<SessionEditorAttachment>,
+)
+
+data class SessionForkResult(
+  val sessionKey: String,
+  val editorText: String?,
+  val editorAttachments: List<SessionEditorAttachment>,
+)
+
+data class SessionEditorAttachment(
+  val mimeType: String,
+  val data: String,
+)
+
+data class ChatTranscriptAnchorState(
+  val sessionKey: String,
+  val newestItemId: String?,
+  val completedEndedAt: Long?,
+  val completedNewestItemId: String?,
 )
 
 /**
@@ -147,12 +183,17 @@ data class ChatSessionEntry(
   val updatedAtMs: Long?,
   val ownerAgentId: String? = null,
   val displayName: String? = null,
+  val derivedTitle: String? = null,
   val label: String? = null,
   val category: String? = null,
   val pinned: Boolean? = null,
   val archived: Boolean? = null,
   val unread: Boolean? = null,
   val lastReadAt: Long? = null,
+  val agentStatus: ChatSessionAgentStatus? = null,
+  val hasAgentStatusMetadata: Boolean = agentStatus != null,
+  val observerDigest: SessionObserverDigest? = null,
+  val hasObserverDigestMetadata: Boolean = observerDigest != null,
   val lastActivityAt: Long? = null,
   val totalTokens: Long? = null,
   val totalTokensFresh: Boolean? = null,
@@ -165,6 +206,29 @@ data class ChatSessionEntry(
   val hasContextUsageMetadata: Boolean = totalTokens != null || totalTokensFresh != null || contextTokens != null,
   val hasActiveRun: Boolean? = null,
   val activeRunIds: List<String>? = null,
+  val hasActiveRunMetadata: Boolean = hasActiveRun != null || activeRunIds != null,
+  val parentSessionKey: String? = null,
+  val spawnedBy: String? = null,
+  val hasActiveSubagentRun: Boolean? = null,
+  val subagentRunState: String? = null,
+  val swarmGroupId: String? = null,
+  val swarmPhase: String? = null,
+  val swarmPhaseRank: Int? = null,
+  val swarmLog: String? = null,
+  val status: String? = null,
+  val lastRunError: String? = null,
+  val startedAt: Long? = null,
+  val endedAt: Long? = null,
+  val runtimeMs: Long? = null,
+  val outputTokens: Long? = null,
+  val hasRunMetadata: Boolean =
+    status != null || startedAt != null || endedAt != null || runtimeMs != null || outputTokens != null,
+)
+
+data class ChatSessionAgentStatus(
+  val note: String,
+  val expiresAt: Long,
+  val attention: String? = null,
 )
 
 /** Local fallback for server-side `sessions.list` search over cached entries. */

@@ -262,17 +262,17 @@ function writeSessionStoreSqlite(params: {
   const db = new DatabaseSync(dbPath);
   try {
     db.exec(`
-      CREATE TABLE sessions (
+      CREATE TABLE session_nodes (
+        session_key TEXT NOT NULL PRIMARY KEY,
+        current_session_id TEXT NOT NULL,
+        entry_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE session_windows (
         session_id TEXT NOT NULL PRIMARY KEY,
         session_key TEXT NOT NULL,
         agent_harness_id TEXT,
         created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
-      CREATE TABLE session_entries (
-        session_key TEXT NOT NULL PRIMARY KEY,
-        session_id TEXT NOT NULL,
-        entry_json TEXT NOT NULL,
         updated_at INTEGER NOT NULL
       );
       CREATE TABLE transcript_events (
@@ -285,12 +285,12 @@ function writeSessionStoreSqlite(params: {
     `);
     const now = Date.now();
     db.prepare(
-      `INSERT INTO sessions (
+      `INSERT INTO session_windows (
          session_id, session_key, agent_harness_id, created_at, updated_at
        ) VALUES (?, ?, ?, ?, ?)`,
     ).run(params.sessionId, params.sessionKey, "codex", now, now);
     db.prepare(
-      `INSERT INTO session_entries (session_key, session_id, entry_json, updated_at)
+      `INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
        VALUES (?, ?, ?, ?)`,
     ).run(
       params.sessionKey,

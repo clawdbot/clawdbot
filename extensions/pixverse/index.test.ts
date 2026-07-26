@@ -141,7 +141,7 @@ describe("pixverse plugin", () => {
       region: "cn",
     });
     expect(result.defaultModel).toBeUndefined();
-    expect(result.configPatch?.agents?.defaults?.videoGenerationModel).toEqual({
+    expect(result.configPatch?.agents?.defaults?.mediaModels?.video).toEqual({
       primary: PIXVERSE_DEFAULT_VIDEO_MODEL_REF,
     });
     expect(result.notes).toEqual([`PixVerse endpoint: CN (${PIXVERSE_BASE_URL_BY_REGION.cn})`]);
@@ -154,12 +154,12 @@ describe("pixverse plugin", () => {
       throw new Error("expected PixVerse auth method");
     }
     const { ctx } = createRuntimeContext("international", {
-      agents: { defaults: { videoGenerationModel: { primary: "openai/sora-2" } } },
+      agents: { defaults: { mediaModels: { video: { primary: "openai/sora-2" } } } },
     });
 
     const result = await auth.run(ctx);
 
-    expect(result.configPatch?.agents?.defaults?.videoGenerationModel).toEqual({
+    expect(result.configPatch?.agents?.defaults?.mediaModels?.video).toEqual({
       primary: "openai/sora-2",
     });
   });

@@ -10,7 +10,7 @@ import {
 import { buildChannelConfigSchema, type ChannelPlugin } from "./channel-api.js";
 import { NostrConfigSchema } from "./config-schema.js";
 import { DEFAULT_RELAYS } from "./default-relays.js";
-import { createNostrSetupAdapter } from "./setup-adapter.js";
+import { createNostrSetupAdapter, createNostrSetupContract } from "./setup-adapter.js";
 
 const t = createSetupTranslator();
 
@@ -102,6 +102,7 @@ const nostrSetupAdapter = createNostrSetupAdapter({
   resolveAccountId: (cfg, accountId) => accountId?.trim() || resolveDefaultSetupNostrAccountId(cfg),
   validatePrivateKey: looksLikeNostrPrivateKey,
 });
+const nostrSetupContract = createNostrSetupContract(nostrSetupAdapter);
 
 const nostrSetupWizard = createDelegatedSetupWizardProxy({
   channel,
@@ -147,6 +148,7 @@ export const nostrSetupPlugin: ChannelPlugin<ResolvedNostrSetupAccount> = {
   reload: { configPrefixes: ["channels.nostr"] },
   configSchema: buildChannelConfigSchema(NostrConfigSchema),
   setup: nostrSetupAdapter,
+  setupContract: nostrSetupContract,
   setupWizard: nostrSetupWizard,
   config: {
     listAccountIds: listSetupNostrAccountIds,

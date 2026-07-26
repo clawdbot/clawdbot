@@ -3,7 +3,7 @@ summary: "Run local GGUF text inference and memory embeddings in OpenClaw with l
 read_when:
   - You want local text inference without an API key or model server
   - You want memory search embeddings from a local GGUF model
-  - You are configuring memorySearch.provider = "local"
+  - You are configuring memory.search.provider = "local"
   - You need the OpenClaw plugin that owns the node-llama-cpp runtime
 title: "llama.cpp Provider"
 sidebarTitle: "llama.cpp Provider"
@@ -95,17 +95,15 @@ own read-only cache resolver, including repository, branch, and split-file namin
 
 ## Memory embedding configuration
 
-Set `memorySearch.provider` to `local`:
+Set `memory.search.provider` to `local`:
 
 ```json5
 {
-  agents: {
-    defaults: {
-      memorySearch: {
-        provider: "local",
-        local: {
-          modelPath: "hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf",
-        },
+  memory: {
+    search: {
+      provider: "local",
+      local: {
+        modelPath: "hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf",
       },
     },
   },
@@ -156,5 +154,5 @@ with:
 
 For local inference without an in-process native dependency, use the Ollama or
 LM Studio provider instead. For lower-friction local embeddings, set
-`memorySearch.provider` to a remote embedding provider such as `lmstudio`,
+`memory.search.provider` to a remote embedding provider such as `lmstudio`,
 `ollama`, `openai`, or `voyage` instead.

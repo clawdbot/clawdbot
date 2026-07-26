@@ -894,9 +894,9 @@ describe("Microsoft Teams meeting captions and permissions", () => {
     expect(captions.lines).toMatchObject([{ text: "Final caption" }]);
   });
 
-  it("enables caption capture only for transcribe mode and parses snapshots", () => {
-    expect(TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.captions.enabled("agent")).toBe(false);
-    expect(TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.captions.enabled("bidi")).toBe(false);
+  it("enables caption capture for durable notes in every mode and parses snapshots", () => {
+    expect(TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.captions.enabled("agent")).toBe(true);
+    expect(TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.captions.enabled("bidi")).toBe(true);
     expect(TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.captions.enabled("transcribe")).toBe(true);
     expect(
       TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.captions.parseTranscript({

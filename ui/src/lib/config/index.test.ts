@@ -1,7 +1,9 @@
+// @vitest-environment node
 // Control UI tests cover config behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot } from "../../api/types.ts";
+import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { createRuntimeConfigCapability, findAgentConfigEntryIndex } from "./index.ts";
 
 const CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS = 800;
@@ -17,7 +19,11 @@ function deferred<T>() {
 }
 
 function createGatewayHarness(client: GatewayBrowserClient) {
-  let snapshot = { client, connected: true, sessionKey: "main" };
+  let snapshot: {
+    client: GatewayBrowserClient;
+    phase: ApplicationGatewayPhase;
+    sessionKey: string;
+  } = { client, phase: "connected", sessionKey: "main" };
   const listeners = new Set<(next: typeof snapshot) => void>();
   return {
     gateway: {
@@ -30,7 +36,11 @@ function createGatewayHarness(client: GatewayBrowserClient) {
       },
     },
     publish: (connected: boolean) => {
-      snapshot = { client, connected, sessionKey: "main" };
+      snapshot = {
+        client,
+        phase: connected ? "connected" : "reconnecting",
+        sessionKey: "main",
+      };
       for (const listener of listeners) {
         listener(snapshot);
       }

@@ -192,6 +192,9 @@ describe("exec SecretRef id parity", () => {
     if (id.startsWith("messages.")) {
       return "messages";
     }
+    if (id.startsWith("memory.search.")) {
+      return "memory";
+    }
     if (id.startsWith("models.providers.") && id.includes(".headers.")) {
       return "models.headers";
     }
@@ -206,6 +209,9 @@ describe("exec SecretRef id parity", () => {
     }
     if (id.startsWith("talk.")) {
       return "talk";
+    }
+    if (id.startsWith("tts.providers.")) {
+      return "tts";
     }
     if (id.startsWith("tools.web.fetch.")) {
       return "tools.web.fetch";

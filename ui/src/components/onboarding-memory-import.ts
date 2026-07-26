@@ -143,7 +143,7 @@ class OnboardingMemoryImport extends OpenClawLightDomElement {
     }
     const snapshot = context.gateway.snapshot;
     if (
-      !snapshot.connected ||
+      snapshot?.phase !== "connected" ||
       !snapshot.client ||
       !hasOperatorAdminAccess(snapshot.hello?.auth ?? null)
     ) {
@@ -363,7 +363,7 @@ class OnboardingMemoryImport extends OpenClawLightDomElement {
       this.closed ||
       guardIsDone() ||
       !context ||
-      !snapshot?.connected ||
+      snapshot?.phase !== "connected" ||
       !snapshot.client ||
       !hasOperatorAdminAccess(snapshot.hello?.auth ?? null) ||
       providers.length === 0

@@ -3,7 +3,8 @@ scenario:
   id: slack-reaction-glyph-native
   surface: channels
   coverage:
-    primary: [channels.message-actions]
+    primary:
+      - slack.actions
   execution:
     profiles: { "slack:default": 6 }
     kind: flow

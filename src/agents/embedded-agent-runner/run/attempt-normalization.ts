@@ -1,4 +1,5 @@
 import { parseSqliteSessionFileMarker } from "../../../config/sessions/sqlite-marker.js";
+import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { formatAssistantErrorText } from "../../embedded-agent-helpers.js";
 import { createAgentRunDirectAbortError } from "../../run-termination.js";
 import { normalizeUsage, type UsageLike } from "../../usage.js";
@@ -73,15 +74,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
       lastTurnTotal: number | undefined;
       replayState: ReplayState;
       attempt: ReturnType<typeof normalizeEmbeddedRunAttemptResult>;
-      aborted: boolean;
-      externalAbort: boolean;
-      promptError: unknown;
-      promptErrorSource: ReturnType<typeof normalizeEmbeddedRunAttemptResult>["promptErrorSource"];
-      timedOut: boolean;
-      idleTimedOut: boolean;
-      timedOutDuringCompaction: boolean;
-      timedOutDuringToolExecution: boolean;
-      timedOutByRunBudget: boolean;
+      terminalProjection: ReturnType<typeof projectAgentRunAttemptTerminal>;
       sessionIdUsed: string;
       sessionFileUsed: string | undefined;
       currentAttemptAssistant: ReturnType<
@@ -120,22 +113,16 @@ export async function normalizeEmbeddedRunAttempt(input: {
     throw createAgentRunDirectAbortError();
   }
   const {
-    aborted,
-    externalAbort,
-    promptError,
-    promptErrorSource,
+    terminal,
     preflightRecovery,
-    timedOut,
-    idleTimedOut,
-    timedOutDuringCompaction,
     sessionIdUsed,
     sessionFileUsed,
     lastAssistant: sessionLastAssistant,
     currentAttemptAssistant,
     currentAttemptCompletedAssistant,
   } = attempt;
-  const timedOutDuringToolExecution = attempt.timedOutDuringToolExecution ?? false;
-  const timedOutByRunBudget = attempt.timedOutByRunBudget ?? false;
+  const terminalProjection = projectAgentRunAttemptTerminal(terminal);
+  const { idleTimedOut } = terminalProjection;
   const sessionAssistantForCandidate =
     !currentAttemptAssistant &&
     !isAssistantForModelRef(sessionLastAssistant, {
@@ -312,15 +299,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
     lastTurnTotal,
     replayState,
     attempt,
-    aborted,
-    externalAbort,
-    promptError,
-    promptErrorSource,
-    timedOut,
-    idleTimedOut,
-    timedOutDuringCompaction,
-    timedOutDuringToolExecution,
-    timedOutByRunBudget,
+    terminalProjection,
     sessionIdUsed,
     sessionFileUsed,
     currentAttemptAssistant,

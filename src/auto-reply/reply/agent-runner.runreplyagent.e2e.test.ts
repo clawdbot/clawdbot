@@ -458,9 +458,12 @@ describe("runReplyAgent active steering", () => {
       },
     });
 
-    await expect(run()).resolves.toEqual({
+    const result = await run();
+
+    expect(result).toEqual({
       text: "I'm still working on the current request and added this message to that run.",
     });
+    expect(getReplyPayloadMetadata(result ?? {})?.deliverDespiteSourceReplySuppression).toBe(true);
 
     expect(state.beforeAgentReplyRunMock).toHaveBeenCalledOnce();
     expect(state.beforeAgentReplyRunMock).toHaveBeenCalledWith(
@@ -963,6 +966,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(result).toEqual({
       text: "I'm still working on the previous request, so I queued this follow-up.",
     });
+    expect(getReplyPayloadMetadata(result ?? {})?.deliverDespiteSourceReplySuppression).toBe(true);
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
@@ -4497,15 +4501,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       runOverrides: {
         provider: "anthropic",
         model: "claude-opus-4-7",
-        config: {
-          agents: {
-            defaults: {
-              cliBackends: {
-                "claude-cli": { command: "claude" },
-              },
-            },
-          },
-        },
+        config: {},
       },
     });
     await run();

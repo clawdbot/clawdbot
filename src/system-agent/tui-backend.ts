@@ -222,7 +222,7 @@ class SystemAgentTuiBackend implements TuiBackend {
       defaultId: SYSTEM_AGENT_ID,
       mainKey: "main",
       scope: "per-sender",
-      agents: [{ id: SYSTEM_AGENT_ID, name: "OpenClaw" }],
+      agents: [{ id: SYSTEM_AGENT_ID, kind: "system", name: "OpenClaw" }],
     };
   }
 

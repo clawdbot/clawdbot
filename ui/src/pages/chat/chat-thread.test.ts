@@ -1,17 +1,43 @@
+// @vitest-environment node
 // Control UI tests cover build chat items behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { extractToolCardsCached as extractToolCards } from "../../lib/chat/tool-cards.ts";
 import {
+  assistantGroupCanOwnActiveRunStatus,
   buildCachedChatItems,
   coalesceStreamRuns,
   collapseCompletedTurnWork,
   getExpandedToolCards,
+  getExpandedUserMessages,
   persistedMessageEntryId,
   resetChatThreadState,
   syncToolCardExpansionState,
 } from "./chat-thread.ts";
+
+describe("assistantGroupCanOwnActiveRunStatus", () => {
+  const group = (message: Record<string, unknown>): MessageGroup => ({
+    kind: "group",
+    key: "assistant:1",
+    role: "assistant",
+    timestamp: 1,
+    isStreaming: false,
+    messages: [{ key: "message:1", message }],
+  });
+
+  it("accepts visible replies and rejects forwarded assistant input", () => {
+    expect(assistantGroupCanOwnActiveRunStatus(group({ content: "Reply" }))).toBe(true);
+    expect(
+      assistantGroupCanOwnActiveRunStatus(
+        group({
+          content: "Forwarded input",
+          provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+        }),
+      ),
+    ).toBe(false);
+  });
+});
 
 describe("persistedMessageEntryId", () => {
   it("rejects optimistic pending bubbles and accepts transcript identities", () => {
@@ -433,6 +459,42 @@ describe("collapseCompletedTurnWork", () => {
 });
 
 describe("buildCachedChatItems row identity", () => {
+  it("keeps an accepted initial send key across local-to-history replacement", () => {
+    resetChatThreadState();
+    const initial = groupAt(
+      messageGroups({
+        messages: [
+          {
+            __openclaw: { idempotencyKey: "initial-send:user", seq: 1 },
+            role: "user",
+            content: "Initial image prompt",
+            timestamp: 1,
+          },
+        ],
+      }),
+      0,
+    );
+    const reconciled = groupAt(
+      messageGroups({
+        messages: [
+          {
+            __openclaw: {
+              id: "persisted-user-message",
+              idempotencyKey: "initial-send:user",
+              seq: 1,
+            },
+            role: "user",
+            content: "Initial image prompt",
+            timestamp: 2,
+          },
+        ],
+      }),
+      0,
+    );
+
+    expect(messageAt(reconciled, 0).key).toBe(messageAt(initial, 0).key);
+  });
+
   it("keeps a persistent message key across live-to-authoritative replacement", () => {
     resetChatThreadState();
     const initial = groupAt(
@@ -938,12 +1000,14 @@ describe("buildCachedChatItems", () => {
           role: "user",
           content: "first",
           senderLabel: "Iris",
+          __openclaw: { senderId: "iris", senderName: "Iris" },
           timestamp: 1000,
         },
         {
           role: "user",
           content: "second",
           senderLabel: "Joaquin De Rojas",
+          __openclaw: { senderId: "joaquin", senderName: "Joaquin De Rojas" },
           timestamp: 1001,
         },
       ],
@@ -951,6 +1015,71 @@ describe("buildCachedChatItems", () => {
 
     expect(groups).toHaveLength(2);
     expect(groups.map((group) => group.senderLabel)).toEqual(["Iris", "Joaquin De Rojas"]);
+    expect(groups.map((group) => group.sender?.id)).toEqual(["iris", "joaquin"]);
+  });
+
+  it("renders non-compaction system messages as notices and skips empty output", () => {
+    const items = buildCachedChatItems(
+      createProps({
+        messages: [
+          { role: "system", content: "Command output\n  indented", timestamp: 1000 },
+          { role: "system", content: "  \n", timestamp: 1001 },
+        ],
+      }),
+    );
+
+    expect(items).toEqual([
+      {
+        kind: "notice",
+        key: expect.any(String),
+        text: "Command output\n  indented",
+        timestamp: 1000,
+      },
+    ]);
+  });
+
+  it("attributes assistant groups to the latest user in multi-sender threads", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "user",
+          content: "Alice asks",
+          __openclaw: { senderId: "alice", senderName: "Alice" },
+          timestamp: 1000,
+        },
+        { role: "assistant", content: "For Alice", timestamp: 1001 },
+        {
+          role: "user",
+          content: "Bob asks",
+          __openclaw: { senderId: "bob", senderName: "Bob" },
+          timestamp: 1002,
+        },
+        { role: "user", content: "Local follow-up", timestamp: 1003 },
+        { role: "assistant", content: "For Bob", timestamp: 1004 },
+      ],
+    });
+
+    const assistantGroups = groups.filter((group) => group.role === "assistant");
+    expect(assistantGroups.map((group) => group.replyToSender)).toEqual([
+      { id: "alice", name: "Alice" },
+      undefined,
+    ]);
+  });
+
+  it("does not add reply attribution in a single-sender thread", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "user",
+          content: "Alice asks",
+          __openclaw: { senderId: "alice", senderName: "Alice" },
+          timestamp: 1000,
+        },
+        { role: "assistant", content: "For Alice", timestamp: 1001 },
+      ],
+    });
+
+    expect(groups.find((group) => group.role === "assistant")?.replyToSender).toBeUndefined();
   });
 
   it("keeps differently cased user roles in one group", () => {
@@ -2341,6 +2470,36 @@ describe("buildCachedChatItems", () => {
     expect(messageAt(groupAt(groups, 0), 1).duplicateCount).toBeUndefined();
   });
 
+  it("hides a pending send after history accepts its idempotency key", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "user",
+          content: "accepted prompt",
+          timestamp: 1,
+          __openclaw: { idempotencyKey: "accepted-run:user", seq: 1 },
+        },
+      ],
+      queue: [
+        {
+          id: "pending-send-1",
+          text: "accepted prompt",
+          createdAt: 2,
+          sendRunId: "accepted-run",
+          sendSubmittedAtMs: 10,
+          sendState: "sending",
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groupAt(groups, 0).messages).toHaveLength(1);
+    expect(messageRecord(groupAt(groups, 0))["__openclaw"]).toMatchObject({
+      idempotencyKey: "accepted-run:user",
+      seq: 1,
+    });
+  });
+
   it("keeps failed queued sends out of the thread", () => {
     const groups = messageGroups({
       queue: [
@@ -2846,6 +3005,20 @@ describe("tool expansion state", () => {
     syncToolCardExpansionState("tool-name-session", [group], true);
 
     expect(getExpandedToolCards("tool-name-session").get("toolmsg:tool-name-result")).toBe(true);
+  });
+});
+
+describe("user message expansion state", () => {
+  it("keeps disclosure state per session and clears it with thread state", () => {
+    resetChatThreadState();
+    getExpandedUserMessages("main").set("user-message:one", true);
+
+    expect(getExpandedUserMessages("main").get("user-message:one")).toBe(true);
+    expect(getExpandedUserMessages("agent:main:main").get("user-message:one")).toBe(true);
+    expect(getExpandedUserMessages("other").get("user-message:one")).toBeUndefined();
+
+    resetChatThreadState();
+    expect(getExpandedUserMessages("main").get("user-message:one")).toBeUndefined();
   });
 });
 

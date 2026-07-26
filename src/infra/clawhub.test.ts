@@ -22,6 +22,7 @@ import {
   normalizeClawHubSha256Integrity,
   normalizeClawHubSha256Hex,
   parseClawHubPluginSpec,
+  reportClawHubPluginInstallTelemetry,
   reportClawHubSkillInstallTelemetry,
   resolveLatestVersionFromPackage,
   satisfiesGatewayMinimum,
@@ -94,6 +95,17 @@ function createOversizedArchiveResponse(
     }),
     cancel,
   };
+}
+
+function malformedUtf8(prefix: string, suffix: string): ArrayBuffer {
+  const prefixBytes = new TextEncoder().encode(prefix);
+  const suffixBytes = new TextEncoder().encode(suffix);
+  const buffer = new ArrayBuffer(prefixBytes.byteLength + 1 + suffixBytes.byteLength);
+  const bytes = new Uint8Array(buffer);
+  bytes.set(prefixBytes);
+  bytes[prefixBytes.byteLength] = 0xff;
+  bytes.set(suffixBytes, prefixBytes.byteLength + 1);
+  return buffer;
 }
 
 const oversizedArchiveCases: Array<{
@@ -422,6 +434,68 @@ describe("clawhub helpers", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it("sends canonical plugin install telemetry", async () => {
+    let requestBody: unknown;
+    const fetchImpl = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      if (typeof init?.body !== "string") {
+        throw new Error("Expected JSON request body");
+      }
+      requestBody = JSON.parse(init.body) as unknown;
+      return new Response(null, { status: 200 });
+    });
+
+    await reportClawHubPluginInstallTelemetry({
+      token: "token-123",
+      packageName: "@openclaw/voice-call",
+      version: "2026.7.23",
+      fetchImpl,
+    });
+
+    expect(requestBody).toEqual({
+      event: "plugin_install",
+      packageName: "@openclaw/voice-call",
+      version: "2026.7.23",
+    });
+  });
+
+  it("applies the install telemetry opt-out to plugin reports", async () => {
+    process.env.CLAWHUB_DISABLE_TELEMETRY = "true";
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 200 }));
+
+    await reportClawHubPluginInstallTelemetry({
+      token: "token-123",
+      packageName: "@openclaw/voice-call",
+      fetchImpl,
+    });
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("preserves skills-sh references in install telemetry", async () => {
+    let body: unknown;
+
+    await reportClawHubSkillInstallTelemetry({
+      token: "token-123",
+      slug: "weather",
+      version: "a".repeat(40),
+      requestedReference: "skills-sh:openclaw/skills/weather",
+      trustState: "not-scanned-by-clawhub",
+      fetchImpl: async (_input, init) => {
+        expect(typeof init?.body).toBe("string");
+        body = JSON.parse(init?.body as string);
+        return new Response(null, { status: 200 });
+      },
+    });
+
+    expect(body).toMatchObject({
+      event: "install",
+      slug: "weather",
+      version: "a".repeat(40),
+      reference: "skills-sh:openclaw/skills/weather",
+      trustState: "not-scanned-by-clawhub",
+    });
+  });
+
   it("preserves the configured ClawHub base URL path prefix", async () => {
     process.env.OPENCLAW_CLAWHUB_URL = "https://internal.example.com/clawhub";
     let requestedUrl = "";
@@ -530,6 +604,39 @@ describe("clawhub helpers", () => {
     const url = new URL(requestedUrl);
     expect(url.pathname).toBe("/api/v1/skills/weather/install");
     expect(url.searchParams.get("ownerHandle")).toBe("demo-owner");
+  });
+
+  it("sends skills-sh references to the ClawHub install resolver", async () => {
+    let requestedUrl = "";
+    const reference = "skills-sh:openclaw/skills/weather";
+
+    await fetchClawHubSkillInstallResolution({
+      slug: "weather",
+      requestedReference: reference,
+      fetchImpl: async (input) => {
+        requestedUrl = input instanceof Request ? input.url : String(input);
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            slug: "weather",
+            installKind: "github",
+            trust: { state: "not-scanned-by-clawhub" },
+            github: {
+              repo: "openclaw/skills",
+              path: "skills/weather",
+              commit: "a".repeat(40),
+              contentHash: "sha256:approved",
+              sourceUrl: "https://github.com/openclaw/skills",
+            },
+          }),
+          { headers: { "content-type": "application/json" } },
+        );
+      },
+    });
+
+    const url = new URL(requestedUrl);
+    expect(url.pathname).toBe("/api/v1/skills/weather/install");
+    expect(url.searchParams.get("reference")).toBe(reference);
   });
 
   it("fetches skill verification reports and lets version take precedence over tag", async () => {
@@ -750,6 +857,15 @@ describe("clawhub helpers", () => {
     } finally {
       setTimeoutSpy.mockRestore();
     }
+  });
+
+  it("rejects malformed UTF-8 in generated Skill Card markdown", async () => {
+    await expect(
+      fetchClawHubSkillCard({
+        slug: "agentreceipt",
+        fetchImpl: async () => new Response(malformedUtf8("# Agent ", "\n")),
+      }),
+    ).rejects.toThrow(TypeError);
   });
 
   it("fetches generated Skill Card markdown from an exact verified card URL", async () => {
@@ -1170,6 +1286,19 @@ describe("clawhub helpers", () => {
         query: "calendar",
         fetchImpl: async () =>
           new Response("{not json", {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      }),
+    ).rejects.toThrow("ClawHub /api/v1/search returned malformed JSON");
+  });
+
+  it("rejects malformed UTF-8 in otherwise valid ClawHub JSON", async () => {
+    await expect(
+      searchClawHubSkills({
+        query: "calendar",
+        fetchImpl: async () =>
+          new Response(malformedUtf8('{"results":[{"slug":"', '"}]}'), {
             status: 200,
             headers: { "content-type": "application/json" },
           }),

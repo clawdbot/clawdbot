@@ -107,8 +107,7 @@ describe("createMatrixRoomMessageHandler audio preflight", () => {
     expect(transcribeFirstAudioMock).toHaveBeenCalledWith(
       expect.objectContaining({
         ctx: expect.objectContaining({
-          MediaPaths: ["/tmp/inbound/voice.ogg"],
-          MediaTypes: ["audio/ogg"],
+          media: [{ path: "/tmp/inbound/voice.ogg", contentType: "audio/ogg" }],
           Provider: "matrix",
           Surface: "matrix",
           OriginatingChannel: "matrix",

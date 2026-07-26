@@ -162,7 +162,12 @@ async function createAmbientVerifiedBinding(config: OpenClawConfig) {
   return await createSystemAgentVerifiedInferenceBinding({
     configuredRoute: route,
     executionRoute: route,
-    auth: { authFingerprint, ...harnessBinding.auth },
+    auth: {
+      authFingerprint,
+      modelId: route.model,
+      modelApi: route.provider === "anthropic" ? "anthropic-messages" : "openai-responses",
+      ...harnessBinding.auth,
+    },
     deps: harnessBinding.deps,
   });
 }
@@ -789,6 +794,46 @@ describe("SystemAgentChatEngine", () => {
       { label: "No", reply: "no" },
     ]);
     await defaultEngine.handle("yes");
+  });
+
+  it("rejects non-decimal menu numbers in hosted wizard choices", async () => {
+    useTempStateDir();
+    const runs: unknown[] = [];
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel, prompter) => {
+        runs.push(
+          await prompter.select({
+            message: "DM mode",
+            options: [
+              { value: "pair", label: "Pairing" },
+              { value: "open", label: "Open" },
+            ],
+          }),
+        );
+        runs.push(
+          await prompter.multiselect({
+            message: "Features",
+            options: [
+              { value: "alerts", label: "Alerts" },
+              { value: "logs", label: "Logs" },
+            ],
+          }),
+        );
+      },
+    });
+    expect((await engine.handle("connect telegram")).text).toContain("1. Pairing");
+    expect((await engine.handle("1e0")).text).toContain("I could not match that answer.");
+    expect(runs).toEqual([]);
+    expect((await engine.handle("1")).text).toContain("1. Alerts");
+    expect((await engine.handle("0x1")).text).toContain("I could not match that answer.");
+    expect(await engine.handle("1,2")).toHaveProperty(
+      "text",
+      expect.stringContaining("telegram is configured"),
+    );
+    expect(runs).toEqual(["pair", ["alerts", "logs"]]);
   });
 
   it("rejects a hosted channel commit after a concurrent inference-route change", async () => {
@@ -2121,7 +2166,6 @@ describe("OpenClaw agent loop backends", () => {
       agents: {
         defaults: {
           model: { primary: "claude-cli/claude-opus-4-8" },
-          cliBackends: { "claude-cli": { command: "claude" } },
         },
       },
     } satisfies OpenClawConfig;
@@ -2185,7 +2229,6 @@ describe("OpenClaw agent loop backends", () => {
       agents: {
         defaults: {
           model: { primary: "claude-cli/claude-opus-4-8" },
-          cliBackends: { "claude-cli": { command: "claude" } },
         },
       },
     } satisfies OpenClawConfig;

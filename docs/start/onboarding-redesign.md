@@ -309,8 +309,8 @@ restart` from the real environment and verify the plist. Product follow-up:
 
 ## Decision log
 
-- Magical scan with kill switch, not consent-first (phase 1; disclosure lives
-  in the scanning progress line and results note).
+- Magical scan with kill switch, not consent-first (phase 1; persistent output
+  discloses model and ClawHub use before scanning, and the results note repeats it).
 - Full vertical including the node `device.apps` command (phase 1).
 - Third-party ClawHub skills are never pre-selected and are labeled as
   installing the publisher's code; official entries may be pre-checked

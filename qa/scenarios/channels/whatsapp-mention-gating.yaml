@@ -3,7 +3,8 @@ scenario:
   id: whatsapp-mention-gating
   surface: channels
   coverage:
-    primary: [channels.group-messages]
+    primary:
+      - whatsapp.group-allowlists
   execution:
     profiles: { "whatsapp:default": 1, "whatsapp:mock-default": 1 }
     kind: flow

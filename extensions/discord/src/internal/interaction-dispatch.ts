@@ -44,6 +44,7 @@ type DispatchClient = Parameters<typeof createInteraction>[0] & {
 export async function dispatchInteraction(
   client: DispatchClient,
   rawData: APIInteraction,
+  options?: { onAccepted?: () => void },
 ): Promise<void> {
   const interaction = createInteraction(client, rawData as RawInteraction);
   if (rawData.type === InteractionType.ApplicationCommandAutocomplete) {
@@ -57,10 +58,12 @@ export async function dispatchInteraction(
       autocompleteInteraction,
     );
     if (optionAutocomplete) {
+      options?.onAccepted?.();
       await optionAutocomplete(autocompleteInteraction);
       return;
     }
     if ("autocomplete" in command) {
+      options?.onAccepted?.();
       await (
         command as { autocomplete: (interaction: AutocompleteInteraction) => Promise<void> }
       ).autocomplete(autocompleteInteraction);
@@ -70,6 +73,7 @@ export async function dispatchInteraction(
   if (rawData.type === InteractionType.ApplicationCommand) {
     const command = client.commands.find((entry) => entry.name === readInteractionName(rawData));
     if (command && "run" in command) {
+      options?.onAccepted?.();
       await deferCommandInteractionIfNeeded(command, interaction as CommandInteraction);
       await (command as { run: (interaction: CommandInteraction) => Promise<void> }).run(
         interaction as CommandInteraction,
@@ -91,6 +95,7 @@ export async function dispatchInteraction(
         values: readComponentValues(rawData),
       })
     ) {
+      options?.onAccepted?.();
       await componentInteraction.acknowledge();
       return;
     }
@@ -98,6 +103,7 @@ export async function dispatchInteraction(
       componentType: (rawData as { data?: { component_type?: number } }).data?.component_type,
     });
     if (component) {
+      options?.onAccepted?.();
       await deferComponentInteractionIfNeeded(component, componentInteraction);
       await component.run(componentInteraction, parseComponentInteractionData(component, customId));
     }
@@ -110,6 +116,7 @@ export async function dispatchInteraction(
     }
     const modal = client.modalHandler.resolve(customId);
     if (modal) {
+      options?.onAccepted?.();
       await modal.run(interaction as ModalInteraction, modal.customIdParser(customId).data);
     }
   }

@@ -4,9 +4,8 @@ import { state } from "lit/decorators.js";
 import type { WorktreeRecord } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { titleForRoute } from "../../app-navigation.ts";
-import { pathForRoute } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { renderSessionsHubTabs } from "../../components/sessions-hub-tabs.ts";
+import { renderSessionsHubHeader } from "../../components/sessions-hub-header.ts";
 import {
   renderSettingsEmpty,
   renderSettingsPage,
@@ -17,7 +16,7 @@ import {
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
-import { searchForSession } from "../../lib/sessions/index.ts";
+import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 
@@ -90,10 +89,10 @@ class WorktreesPage extends OpenClawLightDomElement {
     sourceChanged = false,
   ) {
     const clientChanged = snapshot.client !== this.client;
-    const connectionChanged = snapshot.connected !== this.gatewayConnected;
+    const connectionChanged = (snapshot.phase === "connected") !== this.gatewayConnected;
     const identityChanged = sourceChanged || clientChanged;
     this.client = snapshot.client;
-    this.gatewayConnected = snapshot.connected;
+    this.gatewayConnected = snapshot.phase === "connected";
     if (identityChanged || connectionChanged) {
       this.invalidateLoad();
       this.invalidateOperations();
@@ -102,7 +101,7 @@ class WorktreesPage extends OpenClawLightDomElement {
       this.records = [];
       this.error = null;
     }
-    if (snapshot.connected && snapshot.client) {
+    if (snapshot.phase === "connected" && snapshot.client) {
       void this.load();
     }
   }
@@ -342,7 +341,11 @@ class WorktreesPage extends OpenClawLightDomElement {
 
   private renderOwner(record: WorktreeRecord) {
     if (record.ownerKind === "session" && record.ownerId) {
-      const href = `${pathForRoute("chat", this.context.basePath)}${searchForSession(record.ownerId)}`;
+      const href = sessionNavigationTarget({
+        context: this.context,
+        face: "chat",
+        sessionKey: record.ownerId,
+      }).href;
       return html`<a href=${href} title=${record.ownerId}>${t("worktrees.ownerSession")}</a>`;
     }
     if (record.ownerKind === "workboard") {
@@ -472,19 +475,15 @@ class WorktreesPage extends OpenClawLightDomElement {
       { wide: true },
     );
     return html`
-      <section class="content-header">
-        <div>
-          <div class="page-title">${titleForRoute("sessions")}</div>
-        </div>
-        ${renderSessionsHubTabs({
-          active: "worktrees",
-          onSelect: (tab) => {
-            if (tab !== "worktrees") {
-              this.context?.navigate(tab);
-            }
-          },
-        })}
-      </section>
+      ${renderSessionsHubHeader({
+        active: "worktrees",
+        title: titleForRoute("sessions"),
+        onSelect: (tab) => {
+          if (tab !== "worktrees") {
+            this.context?.navigate(tab);
+          }
+        },
+      })}
       ${renderSettingsWorkspace(body, { id: "sessions-hub-panel" })}
     `;
   }

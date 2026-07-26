@@ -22,6 +22,7 @@ interface Route {
 interface Context {
   waitUntil?(promise: Promise<unknown>): void;
   env?: unknown;
+  onAcceptedInteraction?: () => void;
 }
 
 export abstract class Plugin {
@@ -168,8 +169,10 @@ export class Client {
     return await this.commandDeployer.deploy(options);
   }
 
-  async handleInteraction(rawData: APIInteraction, _ctx?: Context): Promise<void> {
-    await dispatchInteraction(this, rawData);
+  async handleInteraction(rawData: APIInteraction, ctx?: Context): Promise<void> {
+    await dispatchInteraction(this, rawData, {
+      onAccepted: ctx?.onAcceptedInteraction,
+    });
   }
 
   async dispatchGatewayEvent(type: string, data: unknown): Promise<void> {

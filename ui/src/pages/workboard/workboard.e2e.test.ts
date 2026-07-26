@@ -468,7 +468,10 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
           .evaluateAll(
             (inputs) => inputs.filter((input) => (input as HTMLInputElement).disabled).length,
           ),
-      ).toBe(4);
+      ).toBe(3);
+      expect(
+        await createForm.locator(".workboard-agent-select .agent-select__trigger").isDisabled(),
+      ).toBe(true);
       const pendingCancelButtons = createForm.getByRole("button", {
         name: "Cancel",
         exact: true,
@@ -801,6 +804,7 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
           "config.get": workboardConfigSnapshot(),
           "sessions.list": sessionsListResponse([]),
           "tasks.list": { nextCursor: null, tasks: [] },
+          "workboard.boards.list": { boards },
           "workboard.cards.list": cardsListResponse([defaultCard, opsCard], boards),
         },
       });
@@ -808,16 +812,18 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       const response = await recorded.page.goto(`${server.baseUrl}workboard?board=ops`);
       expect(response?.status()).toBe(200);
       await cardInColumn(recorded.page, "Todo", opsCard.title).waitFor({ state: "visible" });
-      expect(await recorded.page.getByText(defaultCard.title).count()).toBe(0);
-      expect(new URL(recorded.page.url()).searchParams.get("board")).toBe("ops");
+      await expect.poll(() => new URL(recorded.page.url()).pathname).toBe("/workboard/ops");
+      await expect.poll(() => recorded.page.getByText(defaultCard.title).count()).toBe(0);
+      expect(new URL(recorded.page.url()).searchParams.has("board")).toBe(false);
 
       const boardFilter = recorded.page.locator(".workboard-select--toolbar-board");
       await chooseWorkboardSelectFieldOption(boardFilter, "All boards", boardFilter);
       await cardInColumn(recorded.page, "Todo", defaultCard.title).waitFor({ state: "visible" });
+      await expect.poll(() => new URL(recorded.page.url()).pathname).toBe("/workboard");
       expect(new URL(recorded.page.url()).searchParams.has("board")).toBe(false);
 
       await chooseWorkboardSelectFieldOption(boardFilter, "Operations (ops)", boardFilter);
-      await expect.poll(() => new URL(recorded.page.url()).searchParams.get("board")).toBe("ops");
+      await expect.poll(() => new URL(recorded.page.url()).pathname).toBe("/workboard/ops");
       expect(await recorded.page.getByText(defaultCard.title).count()).toBe(0);
       expect(await recorded.page.getByText("Old work (archive)").count()).toBeGreaterThan(0);
       await captureScreenshot(recorded.page, artifacts, "10-board-filter-ops");

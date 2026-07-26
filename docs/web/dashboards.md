@@ -71,6 +71,8 @@ with one tap:
 - **Prompt** (`prompt`): send messages into your thread without the per-click
   confirmation that unapproved widgets require.
 
+Enabled plugins can add their own named read-only feeds and actions to these capability lists; disabling the plugin removes those integrations.
+
 Grants are bound to the exact widget bytes and revision you reviewed. If the
 agent changes the widget and asks for _more_ than you approved, it goes back
 to pending; refreshing content within the same permissions keeps the grant.

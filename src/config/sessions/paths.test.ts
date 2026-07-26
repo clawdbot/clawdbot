@@ -3,7 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveSessionFilePath, resolveStorePath } from "./paths.js";
+import {
+  resolveSessionFilePath,
+  resolveStorePath,
+  SessionStoreAgentIdRequiredError,
+} from "./paths.js";
 
 const tempDirs: string[] = [];
 
@@ -51,6 +55,17 @@ describe("resolveSessionFilePath cross-root reroot", () => {
 });
 
 describe("resolveStorePath", () => {
+  it("resolves a fixed literal path without an agent owner", () => {
+    const fixed = path.join(path.parse(process.cwd()).root, "shared", "sessions.json");
+    expect(resolveStorePath(fixed)).toBe(path.resolve(fixed));
+  });
+
+  it("throws a typed error when an agent template has no owner", () => {
+    expect(() => resolveStorePath("/state/agents/{agentId}/sessions.json")).toThrow(
+      SessionStoreAgentIdRequiredError,
+    );
+  });
+
   it("uses the default agent store when session.store is absent or blank", () => {
     const stateDir = path.join(path.parse(process.cwd()).root, "openclaw-test-state");
     const env = {

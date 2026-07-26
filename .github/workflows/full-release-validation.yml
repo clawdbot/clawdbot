@@ -152,7 +152,7 @@ jobs:
       sha: ${{ steps.resolve.outputs.sha }}
     steps:
       - name: Checkout trusted workflow helper
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ github.sha }}
           path: workflow
@@ -268,7 +268,7 @@ jobs:
       changed_paths: ${{ steps.find.outputs.changed_paths }}
     steps:
       - name: Checkout trusted workflow helper
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ github.sha }}
           path: workflow
@@ -277,7 +277,7 @@ jobs:
           submodules: false
 
       - name: Checkout target SHA
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.resolve_target.outputs.sha }}
           path: target
@@ -366,7 +366,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout target SHA
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.resolve_target.outputs.sha }}
           fetch-depth: 1
@@ -974,8 +974,8 @@ jobs:
                   jq '[.[] | select(
                     ((.name | startswith("Run QA Lab parity lane ("))
                       or .name == "Run QA Lab parity report"
-                      or (.name | startswith("Run QA Lab runtime parity tier ("))
-                      or .name == "Run QA Lab runtime parity lane"
+                      or (.name | startswith("Run QA Lab runtime-pair lane ("))
+                      or .name == "Verify QA Lab runtime-pair lanes"
                       or .name == "Run QA Lab live Discord lane"
                       or .name == "Run QA Lab live WhatsApp lane"
                       or .name == "Run QA Lab live Slack lane")

@@ -57,6 +57,11 @@ type SetupAppCandidateGroup = {
 
 export type SetupAppRecommendationMatch = OnboardingRecommendationMatch;
 
+/** Describes the long-running recommendation scan phase visible to callers. */
+export type SetupAppScanPhase =
+  | { kind: "candidates"; appCount: number; sampleLabels: string[] }
+  | { kind: "matching"; appCount: number };
+
 export type SetupAppRecommendationsResult =
   | {
       status: "ok";
@@ -312,6 +317,7 @@ function buildMatcherPrompt(groups: SetupAppCandidateGroup[]): string {
 export async function getSetupAppRecommendations(params: {
   inventorySource: () => Promise<InstalledAppsResult | SetupAppInventoryItem[]>;
   runtime: RuntimeEnv;
+  onPhase?: (phase: SetupAppScanPhase) => void;
   deps?: RecommendationDeps;
 }): Promise<SetupAppRecommendationsResult> {
   const inventory = await params.inventorySource();
@@ -326,6 +332,11 @@ export async function getSetupAppRecommendations(params: {
   if (apps.length === 0) {
     return { status: "skipped", reason: "no-apps" };
   }
+  params.onPhase?.({
+    kind: "candidates",
+    appCount: apps.length,
+    sampleLabels: apps.slice(0, 3).map((app) => app.label),
+  });
   const groups = await gatherSetupAppCandidates({ apps, deps: params.deps });
   if (groups.every((group) => group.candidates.length === 0)) {
     return { status: "skipped", reason: "no-candidates" };
@@ -338,6 +349,7 @@ export async function getSetupAppRecommendations(params: {
     (async (prompt: string) => await completeSetupInference({ prompt, runtime: params.runtime }));
   let completion: Awaited<ReturnType<typeof complete>>;
   try {
+    params.onPhase?.({ kind: "matching", appCount: apps.length });
     completion = await complete(buildMatcherPrompt(groups));
   } catch {
     return { status: "skipped", reason: "model-failed" };

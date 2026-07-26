@@ -1031,6 +1031,7 @@ function makeReactionListenerParams(overrides?: {
   groupPolicy?: "open" | "allowlist" | "disabled";
   allowNameMatching?: boolean;
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
+  onAcceptedEvent?: () => void;
 }) {
   return {
     cfg: {} as import("openclaw/plugin-sdk/config-contracts").OpenClawConfig,
@@ -1045,6 +1046,7 @@ function makeReactionListenerParams(overrides?: {
     groupPolicy: overrides?.groupPolicy ?? "open",
     allowNameMatching: overrides?.allowNameMatching ?? false,
     guildEntries: overrides?.guildEntries,
+    onAcceptedEvent: overrides?.onAcceptedEvent,
     logger: {
       info: vi.fn(),
       warn: vi.fn(),
@@ -1138,6 +1140,35 @@ describe("discord DM reaction handling", () => {
     await listener.handle(data, client);
 
     expect(enqueueSystemEventSpy).toHaveBeenCalledOnce();
+  });
+
+  it("reports accepted reactions only after ingress authorization", async () => {
+    const onAcceptedEvent = vi.fn();
+    const data = makeReactionEvent({ botAsAuthor: true, userId: "user-1" });
+    const client = makeReactionClient({ channelType: ChannelType.DM });
+    const allowedListener = new DiscordReactionListener(
+      makeReactionListenerParams({
+        dmPolicy: "allowlist",
+        allowFrom: ["user:user-1"],
+        onAcceptedEvent,
+      }),
+    );
+
+    await allowedListener.handle(data, client);
+
+    expect(onAcceptedEvent).toHaveBeenCalledOnce();
+    expect(enqueueSystemEventSpy).toHaveBeenCalledOnce();
+
+    const blockedListener = new DiscordReactionListener(
+      makeReactionListenerParams({
+        dmPolicy: "allowlist",
+        allowFrom: ["user:user-2"],
+        onAcceptedEvent,
+      }),
+    );
+    await blockedListener.handle(data, client);
+
+    expect(onAcceptedEvent).toHaveBeenCalledOnce();
   });
 
   it("blocks group DM reactions when group DMs are disabled", async () => {

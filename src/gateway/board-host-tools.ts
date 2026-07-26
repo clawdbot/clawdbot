@@ -1,5 +1,8 @@
 import type { ErrorShape } from "../../packages/gateway-protocol/src/index.js";
+import { CORE_BOARD_DATA_BINDING_IDS } from "../boards/board-host-capability-ids.js";
 import { BoardValidationError } from "../boards/board-layout.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { agentsHandlers } from "./server-methods/agents.js";
 import { cronHandlers } from "./server-methods/cron.js";
 import { healthHandlers } from "./server-methods/health.js";
@@ -7,17 +10,7 @@ import { sessionsHandlers } from "./server-methods/sessions.js";
 import type { GatewayRequestHandlers } from "./server-methods/types.js";
 import { usageHandlers } from "./server-methods/usage.js";
 
-const BOARD_DATA_BINDING_IDS = [
-  "sessions.list",
-  "usage.status",
-  "usage.cost",
-  "cron.list",
-  "cron.status",
-  "agents.list",
-  "health",
-] as const;
-
-type BoardDataBindingId = (typeof BOARD_DATA_BINDING_IDS)[number];
+type BoardDataBindingId = (typeof CORE_BOARD_DATA_BINDING_IDS)[number];
 type GatewayHandlerInvocation = Parameters<GatewayRequestHandlers[string]>[0];
 
 const BOARD_DATA_HANDLERS: Record<BoardDataBindingId, GatewayRequestHandlers[string]> = {
@@ -31,7 +24,7 @@ const BOARD_DATA_HANDLERS: Record<BoardDataBindingId, GatewayRequestHandlers[str
 };
 
 function isBoardDataBindingId(value: string): value is BoardDataBindingId {
-  return (BOARD_DATA_BINDING_IDS as readonly string[]).includes(value);
+  return (CORE_BOARD_DATA_BINDING_IDS as readonly string[]).includes(value);
 }
 
 async function invokeGatewayHandler(
@@ -78,13 +71,50 @@ export async function readBoardDataBinding(
   params: Record<string, unknown>,
   invocation: GatewayHandlerInvocation,
 ): Promise<unknown> {
-  if (!isBoardDataBindingId(bindingId)) {
+  if (isBoardDataBindingId(bindingId)) {
+    return await invokeGatewayHandler(
+      BOARD_DATA_HANDLERS[bindingId],
+      bindingId,
+      params,
+      invocation,
+    );
+  }
+  const registration = getActivePluginRegistry()?.dashboardDataBindings.get(bindingId);
+  if (!registration) {
     throw new BoardValidationError(
       "invalid_operation",
       `board widget data binding is not allowed: ${bindingId}`,
     );
   }
-  return await invokeGatewayHandler(BOARD_DATA_HANDLERS[bindingId], bindingId, params, invocation);
+  return await invokeGatewayHandler(registration.handler, registration.method, params, invocation);
+}
+
+export async function runBoardActionVerb(
+  actionId: string,
+  params: Record<string, unknown>,
+  invocation: GatewayHandlerInvocation,
+): Promise<unknown> {
+  const registration = getActivePluginRegistry()?.dashboardActionVerbs.get(actionId);
+  if (!registration) {
+    throw new BoardValidationError(
+      "invalid_operation",
+      `board widget action verb is not allowed: ${actionId}`,
+    );
+  }
+  if (registration.paramShape) {
+    const validation = validateJsonSchemaValue({
+      schema: registration.paramShape,
+      cacheKey: `dashboard-action:${registration.pluginId}:${registration.id}`,
+      value: params,
+    });
+    if (!validation.ok) {
+      throw new BoardValidationError(
+        "invalid_operation",
+        `board widget action params do not match ${actionId}: ${validation.errors.map((error) => error.text).join(", ")}`,
+      );
+    }
+  }
+  return await invokeGatewayHandler(registration.handler, registration.method, params, invocation);
 }
 
 export async function triggerBoardCronJob(

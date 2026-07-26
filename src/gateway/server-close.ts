@@ -43,6 +43,7 @@ const HTTP_CLOSE_GRACE_MS = 1_000;
 const HTTP_CLOSE_FORCE_WAIT_MS = 5_000;
 const MCP_RUNTIME_CLOSE_GRACE_MS = 5_000;
 const LSP_RUNTIME_CLOSE_GRACE_MS = 5_000;
+const EMBEDDING_PROVIDER_CLOSE_GRACE_MS = 5_000;
 const RESTART_REPLY_DRAIN_POLL_MS = 100;
 const RESTART_REPLY_POST_ABORT_DRAIN_TIMEOUT_MS = 1_000;
 const RESTART_REPLY_POST_ABORT_DRAIN_POLL_MS = 50;
@@ -429,7 +430,7 @@ function abortActiveRunsForRestart(params: RestartRunAbortParams): number {
       entry.abortStopReason = "restart";
       entry.controller.abort(createAgentRunRestartAbortError());
       removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
-      params.chatRunState.abortedRuns.set(runId, createChatAbortMarker());
+      params.chatRunState.getOrCreate(runId).abortMarker = createChatAbortMarker();
       params.chatRunState.clearRun(runId);
       const removed = params.removeChatRun(runId, runId, entry.sessionKey);
       params.agentRunSeq.delete(runId);
@@ -439,14 +440,11 @@ function abortActiveRunsForRestart(params: RestartRunAbortParams): number {
       aborted += 1;
       continue;
     }
-    const result = abortTrackedChatRunById(
-      { ...params, chatRunBuffers: params.chatRunState.buffers },
-      {
-        runId,
-        sessionKey: entry.sessionKey,
-        stopReason: "restart",
-      },
-    );
+    const result = abortTrackedChatRunById(params, {
+      runId,
+      sessionKey: entry.sessionKey,
+      stopReason: "restart",
+    });
     if (result.aborted) {
       aborted += 1;
     }
@@ -577,7 +575,7 @@ async function triggerGatewayLifecycleHookWithTimeout(params: {
 }
 
 async function disposeRuntimeWithShutdownGrace(params: {
-  label: "bundle-mcp" | "bundle-lsp";
+  label: "bundle-mcp" | "bundle-lsp" | "embedding-providers";
   dispose: () => Promise<void>;
   graceMs: number;
   warnings: string[];
@@ -603,6 +601,11 @@ async function disposeAllBundleLspRuntimesOnDemand(): Promise<void> {
   await disposeAllBundleLspRuntimes();
 }
 
+async function drainRetainedEmbeddingProvidersOnDemand(): Promise<void> {
+  const { drainRetainedOpenAiEmbeddingProviders } = await import("./embeddings-http.js");
+  await drainRetainedOpenAiEmbeddingProviders();
+}
+
 async function stopGmailWatcherOnDemand(): Promise<void> {
   const { stopGmailWatcher } = await import("../hooks/gmail-watcher.js");
   await stopGmailWatcher();
@@ -614,7 +617,6 @@ export async function runGatewayClosePrelude(params: {
   skillsChangeUnsub?: () => void;
   disposeAuthRateLimiter?: () => void;
   disposeBrowserAuthRateLimiter: () => void;
-  stopModelPricingRefresh?: () => void;
   stopChannelHealthMonitor?: () => Promise<void>;
   stopReadinessEventLoopHealth?: () => void;
   clearSecretsRuntimeSnapshot?: () => void;
@@ -625,7 +627,6 @@ export async function runGatewayClosePrelude(params: {
   params.skillsChangeUnsub?.();
   params.disposeAuthRateLimiter?.();
   params.disposeBrowserAuthRateLimiter();
-  params.stopModelPricingRefresh?.();
   await params.stopChannelHealthMonitor?.();
   params.stopReadinessEventLoopHealth?.();
   params.clearSecretsRuntimeSnapshot?.();
@@ -679,7 +680,7 @@ export function createGatewayCloseHandler(
     postReadySidecars?: readonly GatewayPostReadySidecarHandle[];
     disposeSessionMcpRuntimes?: () => Promise<void>;
     disposeBundleLspRuntimes?: () => Promise<void>;
-    cron: { stop: () => void };
+    cron: { stop: () => void; stopAndDrain?: () => Promise<void> };
     heartbeatRunner: HeartbeatRunner;
     updateCheckStop?: (() => void) | null;
     stopTaskRegistryMaintenance?: (() => Promise<void> | void) | null;
@@ -883,7 +884,11 @@ export function createGatewayCloseHandler(
       await measureCloseStep("gmail-watcher", () =>
         shutdownStep("gmail-watcher", () => stopGmailWatcherOnDemand(), warnings),
       );
-      params.cron.stop();
+      if (params.cron.stopAndDrain) {
+        await params.cron.stopAndDrain();
+      } else {
+        params.cron.stop();
+      }
       params.heartbeatRunner.stop();
       await shutdownStep(
         "task-registry-maintenance",
@@ -1025,6 +1030,12 @@ export function createGatewayCloseHandler(
             }
           }
         }
+      });
+      await disposeRuntimeWithShutdownGrace({
+        label: "embedding-providers",
+        dispose: drainRetainedEmbeddingProvidersOnDemand,
+        graceMs: EMBEDDING_PROVIDER_CLOSE_GRACE_MS,
+        warnings,
       });
     } finally {
       try {

@@ -17,7 +17,11 @@ import {
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import type { SenderIdentity } from "../../lib/chat/sender-label.ts";
 import { formatSenderLabel } from "../../lib/chat/sender-label.ts";
-import { resolveAvatar, resolveAvatarInitials } from "../../lib/identity-avatar.ts";
+import {
+  resolveAvatar,
+  resolveAvatarInitials,
+  resolveIdentityHue,
+} from "../../lib/identity-avatar.ts";
 import {
   DEFAULT_AGENT_ID,
   isUiGlobalSessionKey,
@@ -41,7 +45,7 @@ export function renderChatAvatar(
     const initials = resolveAvatarInitials(sender);
     const initialsAvatar = html`<div
       class="chat-avatar user chat-avatar--sender-initials"
-      style=${`background: hsl(${initials.colorSeed % 360} 48% 42%)`}
+      style=${`background: hsl(${resolveIdentityHue(sender)} 48% 42%)`}
       aria-label="${label}"
     >
       ${initials.initials}

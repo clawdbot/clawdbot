@@ -97,6 +97,9 @@ vi.mock("../agents/btw.js", () => ({
 }));
 
 vi.mock("../infra/agent-events.js", () => ({
+  getAgentEventLifecycleGeneration: () => "test-generation",
+  isAgentEventLifecycleGenerationCurrent: (generation: string) => generation === "test-generation",
+  registerAgentEventLifecycleRotationHandler: vi.fn(),
   onAgentEvent: (listener: (evt: unknown) => void) => {
     registeredListener = listener;
     return () => {
@@ -205,6 +208,8 @@ vi.mock("../gateway/session-utils.js", () => ({
   loadCombinedSessionStoreForGateway: (...args: unknown[]) =>
     loadCombinedSessionStoreForGatewayMock(...args),
   loadSessionEntry: (sessionKey: string, opts?: { agentId?: string }) =>
+    loadSessionEntryMock(sessionKey, opts),
+  loadSessionEntryReadOnly: (sessionKey: string, opts?: { agentId?: string }) =>
     loadSessionEntryMock(sessionKey, opts),
   migrateAndPruneGatewaySessionStoreKey: ({ key }: { key: string }) => ({
     primaryKey: key,

@@ -110,6 +110,7 @@ export type SessionScope = "per-sender" | "global";
 
 export type AgentSummary = {
   id: string;
+  kind?: "agent" | "system";
   name?: string;
 };
 

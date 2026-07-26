@@ -12,6 +12,7 @@ import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensit
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
+import { redactToolPayloadText } from "../logging/redact.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { mergeMcpToolCatalogs } from "./agent-bundle-mcp-combined.js";
@@ -79,6 +80,7 @@ const MCP_APPS_CLIENT_EXTENSION = "io.modelcontextprotocol/ui";
 const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 const BUNDLE_MCP_FAILURE_THRESHOLD = 3;
 const BUNDLE_MCP_FAILURE_COOLDOWN_MS = 60_000;
+const BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS = 5_000;
 const BUNDLE_MCP_CATALOG_LIST_TIMEOUT_MS = 1_500;
 const BUNDLE_MCP_DISPOSE_TIMEOUT_MS = 5_000;
 const BUNDLE_MCP_CATALOG_CONNECT_CONCURRENCY = 6;
@@ -158,8 +160,8 @@ async function connectWithTimeout(
   }
 }
 
-function redactErrorUrls(error: unknown): string {
-  return redactSensitiveUrlLikeString(String(error));
+function redactMcpDiagnosticError(error: unknown): string {
+  return redactToolPayloadText(redactSensitiveUrlLikeString(String(error)));
 }
 
 async function listAllTools(client: Client, timeoutMs: number) {
@@ -415,8 +417,11 @@ export function createSessionMcpRuntime(params: {
   let activeLeases = 0;
   let disposed = false;
   let catalog: McpToolCatalog | null = null;
+  let catalogRetryAfterMs: number | undefined;
   let catalogInFlight: Promise<McpToolCatalog> | undefined;
   let catalogInvalidationGeneration = 0;
+  const catalogRetryIsDue = (): boolean =>
+    catalogRetryAfterMs !== undefined && Date.now() >= catalogRetryAfterMs;
   const sessions = new Map<string, BundleMcpSession>();
   const serverBackoff = new Map<string, McpServerBackoffState>();
   const recordServerToolFailure = (serverName: string, nowMs: number) => {
@@ -507,14 +512,14 @@ export function createSessionMcpRuntime(params: {
     return true;
   };
 
-  const getCatalog = async (): Promise<McpToolCatalog> => {
+  const loadCatalog = async (retryBaseCatalog?: McpToolCatalog): Promise<McpToolCatalog> => {
     failIfDisposed();
-    if (catalog) {
-      return catalog;
-    }
     if (catalogInFlight) {
       return catalogInFlight;
     }
+    const retryServerNames = retryBaseCatalog
+      ? new Set(retryBaseCatalog.diagnostics?.map((diagnostic) => diagnostic.serverName))
+      : undefined;
     const catalogGeneration = catalogInvalidationGeneration;
     const inFlight = (async () => {
       if (Object.keys(loaded.mcpServers).length === 0) {
@@ -526,8 +531,10 @@ export function createSessionMcpRuntime(params: {
         };
       }
 
-      const servers: Record<string, McpServerCatalog> = {};
-      const tools: McpCatalogTool[] = [];
+      // A cooldown retry replaces only diagnostic-bearing servers. Healthy clients
+      // keep their SDK tool-metadata snapshot and remain callable during recovery.
+      const servers: Record<string, McpServerCatalog> = { ...retryBaseCatalog?.servers };
+      const tools: McpCatalogTool[] = [...(retryBaseCatalog?.tools ?? [])];
       const diagnostics: McpToolCatalogDiagnostic[] = [];
       // Prefer session-wide precomputed assignments; fall back only for isolated runtimes.
       const safeServerNamesByServer =
@@ -547,6 +554,9 @@ export function createSessionMcpRuntime(params: {
         }> = [];
         for (const [serverName, rawServer] of Object.entries(loaded.mcpServers)) {
           failIfDisposed();
+          if (retryServerNames && !retryServerNames.has(serverName)) {
+            continue;
+          }
           const override = params.connectionOverrides?.get(serverName);
           // Overrides supply per-requester transport only; never write them back to config.
           const transportSource = override
@@ -627,11 +637,12 @@ export function createSessionMcpRuntime(params: {
                         onChanged: (error) => {
                           if (error) {
                             logWarn(
-                              `bundle-mcp: failed to refresh changed tool list for server "${serverName}": ${redactErrorUrls(error)}`,
+                              `bundle-mcp: failed to refresh changed tool list for server "${serverName}": ${redactMcpDiagnosticError(error)}`,
                             );
                           }
                           catalogInvalidationGeneration += 1;
                           catalog = null;
+                          catalogRetryAfterMs = undefined;
                           catalogInFlight = undefined;
                         },
                       },
@@ -752,7 +763,7 @@ export function createSessionMcpRuntime(params: {
                   diagnostics: [] as McpToolCatalogDiagnostic[],
                 };
               } catch (error) {
-                const message = redactErrorUrls(error);
+                const message = redactMcpDiagnosticError(error);
                 if (!disposed) {
                   const action = reusedSession ? "refresh" : "start";
                   logWarn(
@@ -837,6 +848,9 @@ export function createSessionMcpRuntime(params: {
       failIfDisposed();
       if (catalogInvalidationGeneration === catalogGeneration) {
         catalog = nextCatalog;
+        catalogRetryAfterMs = nextCatalog.diagnostics?.length
+          ? Date.now() + BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS
+          : undefined;
       }
       return nextCatalog;
     } finally {
@@ -844,6 +858,25 @@ export function createSessionMcpRuntime(params: {
         catalogInFlight = undefined;
       }
     }
+  };
+
+  const getCatalog = async (): Promise<McpToolCatalog> => {
+    failIfDisposed();
+    if (catalog && !catalogRetryIsDue()) {
+      return catalog;
+    }
+    if (!catalog) {
+      return loadCatalog();
+    }
+
+    const staleCatalog = catalog;
+    catalogRetryAfterMs = undefined;
+    void loadCatalog(staleCatalog).catch(() => {
+      if (!disposed && catalog === staleCatalog && catalogRetryAfterMs === undefined) {
+        catalogRetryAfterMs = Date.now() + BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS;
+      }
+    });
+    return staleCatalog;
   };
 
   return {
@@ -966,6 +999,7 @@ export function createSessionMcpRuntime(params: {
       }
       disposed = true;
       catalog = null;
+      catalogRetryAfterMs = undefined;
       catalogInFlight = undefined;
       const sessionsToClose = Array.from(sessions.values());
       sessions.clear();

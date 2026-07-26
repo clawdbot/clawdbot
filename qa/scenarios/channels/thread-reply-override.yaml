@@ -5,14 +5,8 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.threads
+      - channels.native-threads
   objective: Verify Matrix threadReplies=always converts a top-level inbound message into a native threaded reply.
-  gatewayConfigPatch:
-    channels:
-      matrix:
-        accounts:
-          $selectedAccount:
-            threadReplies: always
   successCriteria:
     - A top-level Matrix inbound message receives the requested marker.
     - The outbound message carries the triggering inbound message as its normalized thread id.
@@ -26,10 +20,14 @@ scenario:
     profiles: { "matrix:adapter": 10, "matrix:all": 6, "matrix:transport": 5 }
     kind: flow
     channel: matrix
+    timeoutMs: 60000
+    retryCount: 0
     summary: Require the canonical Matrix adapter to surface the native m.thread relation through threadId.
     config:
       conversationId: main
       marker: QA-MATRIX-THREAD-OVERRIDE-OK
+      matrixConfigOverrides:
+        threadReplies: always
 
 flow:
   steps:
@@ -56,7 +54,7 @@ flow:
             threadId:
               expr: inbound.id
             timeoutMs:
-              expr: liveTurnTimeoutMs(env, 45000)
+              ref: scenario.execution.timeoutMs
           saveAs: outbound
         - assert:
             expr: outbound.threadId === inbound.id

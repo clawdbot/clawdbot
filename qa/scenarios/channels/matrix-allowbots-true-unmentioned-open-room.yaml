@@ -4,7 +4,7 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.access-policy
+      - matrix.mention-gates
   execution:
     profiles: { "matrix:all": 37, "matrix:transport": 36 }
     kind: flow

@@ -300,6 +300,41 @@ describe("nextcloud talk setup", () => {
     });
   });
 
+  it("normalizes legacy CLI aliases before applying account config", async () => {
+    const prepareInput = nextcloudTalkSetupAdapter.prepareAccountConfigInput;
+    expect(prepareInput).toBeTypeOf("function");
+    if (!prepareInput) {
+      throw new Error("Expected Nextcloud Talk setup prepareAccountConfigInput");
+    }
+
+    const prepared = await prepareInput({
+      cfg: {},
+      accountId: DEFAULT_ACCOUNT_ID,
+      input: {
+        url: "https://cloud.example.com",
+        token: "bot-secret",
+        tokenFile: "/tmp/bot-secret",
+      },
+      runtime: {} as never,
+    });
+    expect(prepared).toEqual({
+      url: "https://cloud.example.com",
+      token: "bot-secret",
+      tokenFile: "/tmp/bot-secret",
+      baseUrl: "https://cloud.example.com",
+      secret: "bot-secret",
+      secretFile: "/tmp/bot-secret",
+    });
+
+    const passwordPrepared = await prepareInput({
+      cfg: {},
+      accountId: DEFAULT_ACCOUNT_ID,
+      input: { password: "legacy-secret" },
+      runtime: {} as never,
+    });
+    expect(passwordPrepared).toMatchObject({ secret: "legacy-secret" });
+  });
+
   it("clears stored bot secret fields when switching the default account to env", () => {
     type ApplyAccountConfigContext = Parameters<
       typeof nextcloudTalkSetupAdapter.applyAccountConfig

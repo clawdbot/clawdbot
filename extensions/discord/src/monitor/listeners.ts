@@ -82,6 +82,7 @@ export class DiscordInteractionListener extends InteractionCreateListener {
   constructor(
     private logger?: Logger,
     private onEvent?: () => void,
+    private onAcceptedEvent?: () => void,
   ) {
     super();
   }
@@ -91,7 +92,11 @@ export class DiscordInteractionListener extends InteractionCreateListener {
     // Hand off immediately so slash/component handling can wait on session locks
     // or compaction without blocking later gateway events.
     void Promise.resolve()
-      .then(() => client.handleInteraction(data as Parameters<Client["handleInteraction"]>[0], {}))
+      .then(() =>
+        client.handleInteraction(data as Parameters<Client["handleInteraction"]>[0], {
+          onAcceptedInteraction: this.onAcceptedEvent,
+        }),
+      )
       .catch((err: unknown) => {
         const logger = this.logger ?? discordEventQueueLog;
         logger.error(danger(`discord interaction handler failed: ${String(err)}`));

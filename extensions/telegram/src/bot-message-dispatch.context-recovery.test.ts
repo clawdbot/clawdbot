@@ -24,7 +24,8 @@ describeTelegramDispatch("dispatchTelegramMessage context-recovery", () => {
   it("skips general understanding after describing a first-seen non-vision sticker", async () => {
     describeStickerImage.mockResolvedValueOnce("A curious sticker");
     const ctxPayload = {
-      MediaPath: "/tmp/sticker.webp",
+      media: [{ path: "/tmp/sticker.webp", kind: "sticker" as const }],
+      CommandAuthorized: true,
       Sticker: {
         fileId: "sticker-file",
         fileUniqueId: "sticker-unique",
@@ -52,7 +53,8 @@ describeTelegramDispatch("dispatchTelegramMessage context-recovery", () => {
       Body: body,
       BodyForAgent: body,
       RawBody: "What is this?",
-      MediaPath: "/tmp/sticker.webp",
+      media: [{ path: "/tmp/sticker.webp", kind: "sticker" as const }],
+      CommandAuthorized: true,
       Sticker: {
         fileId: "sticker-file",
         fileUniqueId: "sticker-unique",
@@ -83,7 +85,8 @@ describeTelegramDispatch("dispatchTelegramMessage context-recovery", () => {
       Body: "reply-chain context",
       BodyForAgent: "reply-chain context",
       RawBody: "",
-      MediaPath: "/tmp/sticker.webp",
+      media: [{ path: "/tmp/sticker.webp", kind: "sticker" as const }],
+      CommandAuthorized: true,
       Sticker: {
         fileId: "sticker-file",
         fileUniqueId: "sticker-unique",
@@ -95,6 +98,29 @@ describeTelegramDispatch("dispatchTelegramMessage context-recovery", () => {
 
     expect(ctxPayload.Body).toBe("[Sticker] A contextual sticker\nreply-chain context");
     expect(ctxPayload.BodyForAgent).toBe("[Sticker] A contextual sticker\nreply-chain context");
+  });
+
+  it("does not describe supplemental media when the sticker fact has no path", async () => {
+    const ctxPayload = {
+      Body: "supplemental context",
+      BodyForAgent: "supplemental context",
+      RawBody: "",
+      media: [
+        { kind: "sticker" as const },
+        { path: "/tmp/replied-image.png", kind: "image" as const },
+      ],
+      CommandAuthorized: true,
+      Sticker: {
+        fileId: "sticker-file",
+        fileUniqueId: "sticker-unique",
+      },
+      StickerMediaIncluded: true,
+    } as TelegramMessageContext["ctxPayload"];
+
+    await dispatchWithContext({ context: createContext({ ctxPayload }) });
+
+    expect(describeStickerImage).not.toHaveBeenCalled();
+    expect(ctxPayload.BodyForAgent).toBe("supplemental context");
   });
 
   it("streams drafts in private threads and forwards thread id", async () => {

@@ -3,12 +3,12 @@
  */
 import path from "node:path";
 import { expect, test } from "vitest";
-import { clearSessionStoreCacheForTest } from "../config/sessions.js";
 import {
   applySessionEntryLifecycleMutation,
   listSessionEntries,
   loadSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import { rpcReq, testState, writeSessionStore } from "./test-helpers.js";

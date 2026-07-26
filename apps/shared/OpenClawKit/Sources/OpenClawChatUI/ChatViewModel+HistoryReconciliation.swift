@@ -797,8 +797,7 @@ extension OpenClawChatViewModel {
             // The cache store writes only gateway-derived rows. It filters
             // locally retained outbox bubbles until history proves their keys.
             persistTranscriptToCache(
-                sessionKey: request.session.key,
-                agentID: request.session.agentID,
+                session: request.session,
                 messages: nextMessages,
                 canonicalMessageIdempotencyKeys: Set(incoming.compactMap(\.idempotencyKey)))
         }

@@ -61,18 +61,18 @@ describe("doctor config analysis helpers", () => {
         },
       },
       agents: {
-        list: [
-          { id: "main", description: "Main coordinator" },
-          { id: "stock-news", description: "Tracks market news" },
-        ],
+        entries: {
+          main: { description: "Main coordinator" },
+          "stock-news": { description: "Tracks market news" },
+        },
       },
       unexpected: true,
     } as never);
 
     expect(result.removed).toContain("unexpected");
     expect(result.removed).toContain("defaultModel");
-    expect(result.removed).not.toContain("agents.list[0].description");
-    expect(result.removed).not.toContain("agents.list[1].description");
+    expect(result.removed).not.toContain("agents.entries.main.description");
+    expect(result.removed).not.toContain("agents.entries.stock-news.description");
     expect(OpenClawSchema.safeParse({ defaultModel: "minimax/MiniMax-M2.7" }).success).toBe(false);
     expect(result.config).toMatchObject({
       mcp: {
@@ -84,10 +84,10 @@ describe("doctor config analysis helpers", () => {
         },
       },
       agents: {
-        list: [
-          { id: "main", description: "Main coordinator" },
-          { id: "stock-news", description: "Tracks market news" },
-        ],
+        entries: {
+          main: { description: "Main coordinator" },
+          "stock-news": { description: "Tracks market news" },
+        },
       },
     });
   });

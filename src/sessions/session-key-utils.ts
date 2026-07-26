@@ -4,6 +4,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { escapeRegExp } from "../shared/regexp.js";
 
 export type ParsedAgentSessionKey = {
   agentId: string;
@@ -122,10 +123,6 @@ export function normalizeSessionPeerId(params: {
   return isCasePreservingPeer(params.channel, params.peerKind)
     ? peerId
     : normalizeLowercaseStringOrEmpty(peerId);
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 type PreservedSpan = { start: number; end: number; trim: boolean };

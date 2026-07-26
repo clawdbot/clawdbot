@@ -1,7 +1,7 @@
 // Write Cli Startup Metadata tests cover write cli startup metadata script behavior.
 import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { pathToFileURL } from "node:url";
@@ -555,6 +555,64 @@ describe("write-cli-startup-metadata", () => {
     expect(written.browserHelpText).toContain("openclaw browser");
     expect(written.secretsHelpText).toContain("openclaw secrets");
     expect(written.nodesHelpText).toContain("openclaw nodes");
+  });
+
+  it.each([
+    { title: "after successful rendering", failRender: false },
+    { title: "when rendering fails", failRender: true },
+  ])("removes isolated root-help state $title", async ({ failRender }) => {
+    const tempRoot = createTempDir("openclaw-startup-metadata-cleanup-");
+    const distDir = path.join(tempRoot, "dist");
+    const extensionsDir = path.join(tempRoot, "extensions");
+    const outputPath = path.join(distDir, "cli-startup-metadata.json");
+    let stateDir = "";
+    let statePresentDuringSiblingRender = false;
+
+    writeStartupMetadataSourceSignatureFixture(tempRoot);
+    writeFixtureFile(distDir, "root-help-fixture.js", "export function outputRootHelp() {}\n");
+
+    const writeMetadata = writeCliStartupMetadata({
+      distDir,
+      outputPath,
+      extensionsDir,
+      sourceRootDir: tempRoot,
+      renderBundledRootHelpText: async () => "Usage: openclaw\n",
+      renderSourceBrowserHelpText: (renderContext) => {
+        stateDir = renderContext.env?.OPENCLAW_STATE_DIR ?? "";
+        const sqliteDir = path.join(stateDir, "state");
+        mkdirSync(sqliteDir, { recursive: true });
+        for (const suffix of ["", "-shm", "-wal"]) {
+          writeFileSync(path.join(sqliteDir, `openclaw.sqlite${suffix}`), "fixture", "utf8");
+        }
+        if (failRender) {
+          throw new Error("browser help failed");
+        }
+        return "Usage: openclaw browser\n";
+      },
+      renderSourceSecretsHelpText: async () => {
+        await new Promise((resolve) => setImmediate(resolve));
+        statePresentDuringSiblingRender = existsSync(stateDir);
+        return "Usage: openclaw secrets\n";
+      },
+      renderSourceNodesHelpText: () => "Usage: openclaw nodes\n",
+      renderSourceSubcommandHelpTextRecord: () => ({
+        doctor: "Usage: openclaw doctor\n",
+        gateway: "Usage: openclaw gateway\n",
+        models: "Usage: openclaw models\n",
+        plugins: "Usage: openclaw plugins\n",
+        sessions: "Usage: openclaw sessions\n",
+        tasks: "Usage: openclaw tasks\n",
+      }),
+    });
+
+    if (failRender) {
+      await expect(writeMetadata).rejects.toThrow("browser help failed");
+    } else {
+      await expect(writeMetadata).resolves.toBeUndefined();
+    }
+    expect(stateDir).not.toBe("");
+    expect(statePresentDuringSiblingRender).toBe(true);
+    expect(existsSync(stateDir)).toBe(false);
   });
 
   it("regenerates nodes help when bundled canvas CLI help sources change", async () => {

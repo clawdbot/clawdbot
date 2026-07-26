@@ -4,7 +4,7 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.reconnect
+      - matrix.legacy-state
   execution:
     profiles: { "matrix:all": 63, "matrix:e2ee-smoke": 5 }
     kind: flow

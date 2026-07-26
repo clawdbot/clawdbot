@@ -33,7 +33,7 @@ import {
 import { loadAuthProfileStoreForRuntime } from "../../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { clearAuthProfileCooldown } from "../../agents/auth-profiles/usage.js";
-import { normalizeProviderId } from "../../agents/model-selection-normalize.js";
+import { normalizeProviderId } from "../../agents/model-ref-shared.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { formatCliCommand } from "../../cli/command-format.js";
@@ -511,7 +511,7 @@ async function persistProviderAuthResult(params: {
     params.runtime.log(
       params.setDefault
         ? `Default model set to ${defaultModel}`
-        : `Default model available: ${defaultModel} (use --set-default to apply)`,
+        : `Default model available: ${defaultModel} (current default unchanged; run ${formatCliCommand(`openclaw models set ${defaultModel}`)} to apply)`,
     );
   }
   if (params.result.notes && params.result.notes.length > 0) {
@@ -1000,7 +1000,7 @@ function maybeLogOpenAICodexNativeSearchTip(runtime: RuntimeEnv, providerId: str
     return;
   }
   runtime.log(
-    "Tip: Codex-capable models can use native Codex web search. Enable it with openclaw configure --section web (recommended mode: cached). Docs: https://docs.openclaw.ai/tools/web",
+    `Tip: Codex-capable models can use native Codex web search. Configure the \`web_search\` tool with \`${formatCliCommand("openclaw configure --section web")}\`. Docs: https://docs.openclaw.ai/tools/web`,
   );
 }
 

@@ -3,7 +3,8 @@ scenario:
   id: whatsapp-reply-to-message
   surface: channels
   coverage:
-    primary: [channels.group-messages]
+    primary:
+      - whatsapp.outbound-text-sends
   execution:
     profiles: { "whatsapp:default": 3, "whatsapp:mock-default": 7 }
     kind: flow

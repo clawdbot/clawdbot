@@ -217,6 +217,16 @@ async function runPreparedChannelTurnCoreInTrace<
     await params.runDispatchLifecycle?.onDispatchSkipped("botLoopProtection");
     return botLoopDrop;
   }
+  if (params.ctxPayload.SessionTranscriptContext) {
+    const { mergeSessionTranscriptContext } =
+      await import("../inbound-event/session-transcript-context.runtime.js");
+    await mergeSessionTranscriptContext({
+      agentId: params.ctxPayload.AgentId,
+      ctx: params.ctxPayload,
+      sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
+      storePath: params.storePath,
+    });
+  }
   emit({
     ...params,
     event: {

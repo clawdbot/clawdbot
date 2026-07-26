@@ -1,6 +1,7 @@
 // Audio preflight tests cover auto mode, explicit disable, and transcript echo
 // delivery settings.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { MsgContext } from "../auto-reply/templating.js";
 import { transcribeFirstAudio } from "./audio-preflight.js";
 
 const runAudioTranscriptionMock = vi.hoisted(() => vi.fn());
@@ -27,26 +28,27 @@ describe("transcribeFirstAudio", () => {
       attachments: [],
     });
 
-    const transcript = await transcribeFirstAudio({
-      ctx: {
-        Body: "<media:audio>",
-        MediaPath: "/tmp/voice.ogg",
-        MediaType: "audio/ogg",
-      },
-      cfg: {},
-    });
+    const ctx: MsgContext = {
+      Body: "<media:audio>",
+      media: [
+        { path: "/tmp/photo.jpg", contentType: "image/jpeg" },
+        { path: "/tmp/voice.ogg", contentType: "audio/ogg" },
+      ],
+    };
+    const transcript = await transcribeFirstAudio({ ctx, cfg: {} });
 
     expect(transcript).toBe("voice note transcript");
     expect(runAudioTranscriptionMock).toHaveBeenCalledTimes(1);
     expect(sendTranscriptEchoMock).not.toHaveBeenCalled();
+    expect(ctx.media?.[0]?.transcribed).not.toBe(true);
+    expect(ctx.media?.[1]?.transcribed).toBe(true);
   });
 
   it("skips audio preflight when audio config is explicitly disabled", async () => {
     const transcript = await transcribeFirstAudio({
       ctx: {
         Body: "<media:audio>",
-        MediaPath: "/tmp/voice.ogg",
-        MediaType: "audio/ogg",
+        media: [{ path: "/tmp/voice.ogg", contentType: "audio/ogg" }],
       },
       cfg: {
         tools: {
@@ -75,8 +77,7 @@ describe("transcribeFirstAudio", () => {
       Provider: "telegram",
       OriginatingTo: "telegram:42",
       AccountId: "default",
-      MediaPath: "/tmp/voice.ogg",
-      MediaType: "audio/ogg",
+      media: [{ path: "/tmp/voice.ogg", contentType: "audio/ogg" }],
     };
     const cfg = {
       tools: {

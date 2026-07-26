@@ -317,6 +317,41 @@ describe("killProcessTree", () => {
     });
   });
 
+  it("on Windows exposes taskkill completion", async () => {
+    const taskkillChild = new EventEmitter();
+    spawnMock.mockReturnValueOnce(taskkillChild);
+
+    await withMockedPlatform("win32", async () => {
+      const completed = vi.fn();
+      signalProcessTree(8989, "SIGKILL", { onComplete: completed });
+      await Promise.resolve();
+      expect(completed).not.toHaveBeenCalled();
+
+      taskkillChild.emit("close", 0);
+      await Promise.resolve();
+
+      expect(completed).toHaveBeenCalledOnce();
+      expectTaskkillCall(0, ["/F", "/T", "/PID", "8989"]);
+    });
+  });
+
+  it("on Windows bounds taskkill completion when no event arrives", async () => {
+    const taskkillChild = new EventEmitter();
+    spawnMock.mockReturnValueOnce(taskkillChild);
+
+    await withMockedPlatform("win32", async () => {
+      const completed = vi.fn();
+      signalProcessTree(9090, "SIGKILL", { onComplete: completed });
+
+      await vi.advanceTimersByTimeAsync(2_999);
+      expect(completed).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(completed).toHaveBeenCalledOnce();
+      expectTaskkillCall(0, ["/F", "/T", "/PID", "9090"]);
+    });
+  });
+
   it("on Windows force-kills synchronously without delayed taskkill", async () => {
     await withMockedPlatform("win32", async () => {
       killProcessTree(9999, { force: true });

@@ -106,6 +106,7 @@ export function createWebOnMessageHandler(params: {
       route,
       groupHistoryKey,
       groupHistories: params.groupHistories,
+      groupHistoryLimit: params.groupHistoryLimit,
       groupMemberNames: params.groupMemberNames,
       connectionId: params.connectionId,
       verbose: params.verbose,
@@ -249,8 +250,13 @@ export function createWebOnMessageHandler(params: {
         preflightAudioTranscript =
           (await transcribeFirstAudio({
             ctx: {
-              MediaPaths: [msg.payload.media?.path],
-              MediaTypes: msg.payload.media?.type ? [msg.payload.media?.type] : undefined,
+              media: [
+                {
+                  path: msg.payload.media.path,
+                  contentType: msg.payload.media.type,
+                  kind: msg.payload.media.kind ?? undefined,
+                },
+              ],
               From: conversationId,
               To: msg.platform.recipientJid,
               Provider: "whatsapp",

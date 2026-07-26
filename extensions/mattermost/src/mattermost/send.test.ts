@@ -1,5 +1,6 @@
 // Mattermost tests cover send plugin behavior.
 import { expectProvidedCfgSkipsRuntimeLoad } from "openclaw/plugin-sdk/channel-test-helpers";
+import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 let sendMessageMattermost: typeof import("./send.js").sendMessageMattermost;
@@ -10,6 +11,13 @@ type SendMessageMattermostOptions = NonNullable<
 >;
 
 const TEST_CFG = {};
+const MATTERMOST_TABLE_GOLDEN = {
+  name: "keeps native Mattermost tables instead of downgrading them to code",
+  input: "| A | B |\n|---|---|\n| 1 | 2 |",
+  before: "```\n| A | B |\n| --- | --- |\n| 1 | 2 |\n```",
+  after: "| A | B |\n|---|---|\n| 1 | 2 |",
+};
+const MATTERMOST_MARKDOWN_GOLDENS = [MATTERMOST_TABLE_GOLDEN];
 
 const mockState = vi.hoisted(() => ({
   loadConfig: vi.fn(() => ({})),
@@ -30,6 +38,10 @@ const mockState = vi.hoisted(() => ({
   fetchMattermostUserTeams: vi.fn(),
   fetchMattermostUserByUsername: vi.fn(),
   normalizeMattermostBaseUrl: vi.fn((input: string | undefined) => input?.trim() ?? ""),
+  resolveMarkdownTableMode: vi.fn(
+    (params: { cfg?: { channels?: { mattermost?: { markdown?: { tables?: string } } } } }) =>
+      params.cfg?.channels?.mattermost?.markdown?.tables ?? "off",
+  ),
   uploadMattermostFile: vi.fn(),
 }));
 
@@ -112,11 +124,10 @@ vi.mock("openclaw/plugin-sdk/plugin-config-runtime", () => ({
     }
     throw new Error("Mattermost send requires a resolved runtime config");
   },
-  resolveMarkdownTableMode: vi.fn(() => "off"),
 }));
 
-vi.mock("openclaw/plugin-sdk/text-chunking", () => ({
-  convertMarkdownTables: vi.fn((text: string) => text),
+vi.mock("openclaw/plugin-sdk/markdown-table-runtime", () => ({
+  resolveMarkdownTableMode: mockState.resolveMarkdownTableMode,
 }));
 
 vi.mock("openclaw/plugin-sdk/string-coerce-runtime", () => ({
@@ -206,6 +217,7 @@ describe("sendMessageMattermost", () => {
     mockState.fetchMattermostUser.mockReset();
     mockState.fetchMattermostUserTeams.mockReset();
     mockState.fetchMattermostUserByUsername.mockReset();
+    mockState.resolveMarkdownTableMode.mockClear();
     mockState.uploadMattermostFile.mockReset();
     mockState.createMattermostClient.mockReturnValue({});
     mockState.createMattermostPost.mockResolvedValue({ id: "post-1" });
@@ -249,6 +261,25 @@ describe("sendMessageMattermost", () => {
       accountId: "work",
     });
   });
+
+  it.each(MATTERMOST_MARKDOWN_GOLDENS)("$name", async ({ input, before, after }) => {
+    expect(convertMarkdownTables(input, "code")).toBe(before);
+
+    await sendMessageMattermost("channel:town-square", input, { cfg: TEST_CFG });
+
+    expect(createMattermostPostParams().message).toBe(after);
+  });
+
+  it.each(["code", "block"] as const)(
+    "respects the explicit Mattermost %s table fallback mode",
+    async (tables) => {
+      await sendMessageMattermost("channel:town-square", MATTERMOST_TABLE_GOLDEN.input, {
+        cfg: { channels: { mattermost: { markdown: { tables } } } },
+      });
+
+      expect(createMattermostPostParams().message).toBe(MATTERMOST_TABLE_GOLDEN.before);
+    },
+  );
 
   it("fails hard when cfg is omitted", async () => {
     await expect(

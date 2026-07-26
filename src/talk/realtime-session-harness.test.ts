@@ -64,6 +64,28 @@ describe("realtime voice session harness", () => {
     expect(harness.talk.recentEvents.map((event) => event.seq)).toEqual([1, 2, 3, 4, 5, 6]);
   });
 
+  it("honors a caller-specific recent Talk event limit", () => {
+    const harness = createHarness({
+      talk: {
+        sessionId: "limited-session",
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+        provider: "test",
+        maxRecentEvents: 2,
+      },
+    });
+
+    harness.emit({ type: "session.started", payload: {} });
+    harness.emit({ type: "session.ready", payload: {} });
+    harness.emit({ type: "session.closed", payload: {}, final: true });
+
+    expect(harness.talk.recentEvents.map((event) => event.type)).toEqual([
+      "session.ready",
+      "session.closed",
+    ]);
+  });
+
   it("suppresses input through queued output playback plus the echo tail", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
@@ -118,6 +140,15 @@ describe("realtime voice session harness", () => {
       responseStyle: "brief",
     });
     expect(deliver).toHaveBeenCalledWith("answer:first\nsecond");
+  });
+
+  it("detects assistant transcript echo without enabling audio suppression", () => {
+    const harness = createHarness({ transcriptLookbackMs: 12_000 });
+
+    harness.recordTranscript("assistant", "I found the shopping list");
+
+    expect(harness.isLikelyAssistantEchoTranscript("I found the shopping list")).toBe(true);
+    expect(harness.recordInputAudio(Buffer.from([1, 2]))).toBe(true);
   });
 
   it("flushes transport output when provider barge-in does not clear it", () => {

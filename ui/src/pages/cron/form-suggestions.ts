@@ -1,5 +1,6 @@
 import type { AgentsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { currentConfigObject } from "../../lib/config/index.ts";
 import {
   getCronJobPayload,
@@ -33,10 +34,17 @@ export function buildCronSuggestions(params: {
 }) {
   const configValue = currentConfigObject(params.runtimeConfig);
   const channel = params.cron.cronForm.deliveryChannel.trim() || "last";
+  const systemAgentIds = new Set(
+    (params.agentsList?.agents ?? [])
+      .filter((entry) => entry.kind === "system")
+      .map((entry) => entry.id.trim()),
+  );
   const agentSuggestions = unique([
-    ...(params.agentsList?.agents.map((entry) => entry.id.trim()) ?? []),
+    ...listSelectableAgents(params.agentsList?.agents ?? []).map((entry) => entry.id.trim()),
     ...params.cron.cronJobs.map((job) =>
-      typeof job.agentId === "string" ? job.agentId.trim() : "",
+      typeof job.agentId === "string" && !systemAgentIds.has(job.agentId.trim())
+        ? job.agentId.trim()
+        : "",
     ),
   ]);
   const modelSuggestions = unique([

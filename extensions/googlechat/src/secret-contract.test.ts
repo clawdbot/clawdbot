@@ -17,7 +17,7 @@ describe("googlechat secret contract", () => {
           accounts: {
             work: {
               enabled: true,
-              serviceAccountRef: {
+              serviceAccount: {
                 source: "env",
                 provider: "default",
                 id: "GOOGLECHAT_SERVICE_ACCOUNT",

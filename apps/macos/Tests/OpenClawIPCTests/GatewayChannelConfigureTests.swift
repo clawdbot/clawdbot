@@ -20,12 +20,17 @@ struct GatewayConnectionTests {
 
     private func makeSession(
         helloDelayMs: Int = 0,
-        serverCapabilities: [String] = []) -> GatewayTestWebSocketSession
+        serverCapabilities: [String] = [],
+        connectIncludesDeviceHandler: @escaping @Sendable (Bool) -> Void = { _ in })
+        -> GatewayTestWebSocketSession
     {
         GatewayTestWebSocketSession(
             taskFactory: {
                 GatewayTestWebSocketTask(
                     sendHook: { task, message, sendIndex in
+                        if let params = GatewayWebSocketTestSupport.connectRequestParams(from: message) {
+                            connectIncludesDeviceHandler(params["device"] != nil)
+                        }
                         guard sendIndex > 0 else { return }
                         guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
                         let response = GatewayWebSocketTestSupport.okResponseData(id: id)
@@ -86,6 +91,19 @@ struct GatewayConnectionTests {
         _ = try await conn.request(method: "status", params: nil)
         #expect(session.snapshotMakeCount() == 1)
         #expect(session.snapshotCancelCount() == 0)
+    }
+
+    @Test func `mock connection omits device identity`() async throws {
+        let connectIncludesDevice = OSAllocatedUnfairLock<Bool?>(initialState: nil)
+        let session = self.makeSession(connectIncludesDeviceHandler: { includesDevice in
+            connectIncludesDevice.withLock { $0 = includesDevice }
+        })
+        let (conn, _) = try self.makeConnection(session: session)
+
+        _ = try await conn.request(method: "status", params: nil)
+
+        #expect(connectIncludesDevice.withLock { $0 } == false)
+        await conn.shutdown()
     }
 
     @Test func `first connection admits hello capabilities before lease readiness`() async throws {

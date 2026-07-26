@@ -18,6 +18,10 @@ describe("tokenizeHtmlTags", () => {
 });
 
 describe("chunkTextForOutbound", () => {
+  it("keeps non-positive option limits finite", () => {
+    expect(chunkTextForOutbound("abc", 0, { preserveWhitespace: false })).toEqual(["abc"]);
+  });
+
   it.each([
     {
       name: "returns empty for empty input",

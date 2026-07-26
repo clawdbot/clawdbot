@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringifiedOptionalString,
@@ -196,12 +197,6 @@ const SENSITIVE_HEADER_NAMES = new Set([
 
 const SENSITIVE_KEY_PATTERN =
   /(?:^|[_-])(api[_-]?key|authorization|bearer|password|secret|token)$/i;
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 function issue(level: McpDoctorIssue["level"], message: string): McpDoctorIssue {
   return { level, message };

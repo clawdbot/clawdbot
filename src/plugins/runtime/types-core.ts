@@ -73,7 +73,9 @@ type RuntimeSessionStoreReadParams = {
   readConsistency?: "latest";
   storePath?: string;
 };
-type RuntimeSessionStoreListParams = Partial<Omit<RuntimeSessionStoreReadParams, "sessionKey">>;
+type RuntimeSessionStoreListParams = Partial<Omit<RuntimeSessionStoreReadParams, "sessionKey">> & {
+  readOnly?: boolean;
+};
 type RuntimeSessionStoreEntrySummary = {
   sessionKey: string;
   entry: RuntimeSessionEntry;
@@ -111,6 +113,17 @@ type RuntimeCreateSessionEntryBaseParams = {
         pluginExtensions?: RuntimeSessionPluginExtensions;
         /** Registry-injected owner; plugin callers cannot select another owner. */
         pluginOwnerId?: string;
+      }
+    | {
+        acpBackendId: string;
+        acpSessionBinding: {
+          acpAgentId: string;
+          agentSessionId: string;
+        };
+        modelSelectionLocked?: true;
+        pluginExtensions?: RuntimeSessionPluginExtensions;
+        /** Registry-injected owner; plugin callers cannot select another owner. */
+        pluginOwnerId?: string;
       };
 };
 type RuntimeCreateSessionEntryParams = RuntimeCreateSessionEntryBaseParams &
@@ -131,7 +144,7 @@ type RuntimeCreateSessionEntryParams = RuntimeCreateSessionEntryBaseParams &
   );
 type RuntimeSessionStoreEntryPatchParams = RuntimeSessionStoreReadParams & {
   fallbackEntry?: RuntimeSessionEntry;
-  maintenanceConfig?: import("../../config/sessions/store.js").ResolvedSessionMaintenanceConfigInput;
+  maintenanceConfig?: import("../../config/sessions/store-maintenance.js").ResolvedSessionMaintenanceConfigInput;
   preserveActivity?: boolean;
   replaceEntry?: boolean;
   update: (

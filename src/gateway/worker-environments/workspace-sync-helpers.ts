@@ -105,7 +105,6 @@ async function resolveRemoteWorkspaceBaseManifest(
       "",
       "resolve",
       baseDigest,
-      Intl.DateTimeFormat().resolvedOptions().locale,
     ],
   });
   if (!workerWorkspaceCommandSucceeded(resolved)) {
