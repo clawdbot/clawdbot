@@ -73,7 +73,7 @@ export type QaSuiteScenarioResult = {
   runtimeParity?: RuntimeParityResult;
 };
 
-export type QaSuiteEnvironment = {
+type QaSuiteEnvironment = {
   lab: QaLabServerHandle;
   webSessionIds: Set<string>;
 } & QaSuiteRuntimeEnv;
