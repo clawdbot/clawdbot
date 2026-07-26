@@ -309,6 +309,21 @@ function isReadableLegacySessionEntry(value: unknown): value is FileEntry {
   );
 }
 
+function normalizePersistedLegacyHookMessage(value: unknown): unknown {
+  if (!isJsonRecord(value) || value.type !== "message" || !isJsonRecord(value.message)) {
+    return value;
+  }
+  const message = value.message;
+  if (
+    message.role !== "custom" ||
+    message.customType !== undefined ||
+    !isReadableContent(message.content)
+  ) {
+    return value;
+  }
+  return { ...value, message: { ...message, customType: "hook" } };
+}
+
 export function parseParentLinkedOpaqueEntry(
   record: unknown,
 ): { id: string; parentId: string | null } | undefined {
@@ -370,7 +385,8 @@ export function partitionSessionFileEntries(entries: readonly FileEntry[]): {
   ) as SessionHeader | undefined;
   const acceptsLegacyEntries = (header?.version ?? 1) < CURRENT_SESSION_VERSION;
   let hasHeader = false;
-  for (const [originalIndex, entry] of entries.entries()) {
+  for (const [originalIndex, rawEntry] of entries.entries()) {
+    const entry = normalizePersistedLegacyHookMessage(rawEntry) as FileEntry;
     if (
       !hasHeader &&
       isJsonRecord(entry) &&

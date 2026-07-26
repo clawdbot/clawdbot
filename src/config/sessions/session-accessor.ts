@@ -213,6 +213,7 @@ export {
 export {
   isSessionTranscriptProjectionUnavailableError,
   readRecentSessionTranscriptActiveEvents,
+  readSessionTranscriptActiveStats,
   readRecentSessionTranscriptMessageEvents,
   readSessionTranscriptActiveLeafEvents,
   readSessionTranscriptMessageAnchorPage,

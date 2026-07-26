@@ -344,6 +344,37 @@ export function readRecentSessionTranscriptActiveEvents(
   });
 }
 
+/** Reads active-path event count and JSONL byte size without materializing payloads. */
+export function readSessionTranscriptActiveStats(scope: SessionTranscriptReadScope): {
+  eventCount: number;
+  sizeBytes: number;
+} {
+  return withCurrentProjectionSnapshot(scope, (projection) => {
+    const db = getActiveTranscriptKysely(projection.database);
+    const row = executeSqliteQueryTakeFirstSync(
+      projection.database.db,
+      db
+        .selectFrom("session_transcript_active_events as active")
+        .innerJoin("transcript_events as event", (join) =>
+          join
+            .onRef("event.session_id", "=", "active.session_id")
+            .onRef("event.seq", "=", "active.event_seq"),
+        )
+        .select((eb) => [
+          eb.fn.count<number>("active.event_seq").as("event_count"),
+          /* kysely-allow-raw: JSONL size includes event bytes plus newline separators. */
+          sql<number>`COALESCE(SUM(LENGTH(CAST(event.event_json AS BLOB))), 0)
+            + CASE WHEN COUNT(*) > 0 THEN COUNT(*) - 1 ELSE 0 END`.as("size_bytes"),
+        ])
+        .where("active.session_id", "=", projection.resolved.sessionId),
+    );
+    return {
+      eventCount: row?.event_count ?? 0,
+      sizeBytes: row?.size_bytes ?? 0,
+    };
+  });
+}
+
 /** Reads one append-stable forward page from the materialized active-message projection. */
 export function readSessionTranscriptVisibleMessageDelta(
   scope: SessionTranscriptReadScope,

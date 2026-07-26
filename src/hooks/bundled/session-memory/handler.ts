@@ -124,13 +124,15 @@ async function getRecentSqliteSessionContent(
 ): Promise<string | null> {
   try {
     const events = capturedEvents ?? (await loadTranscriptEvents({ ...scope }));
-    const latestResetIndex = events.findLastIndex(
-      (event) =>
-        Boolean(event) &&
-        typeof event === "object" &&
-        !Array.isArray(event) &&
-        (event as { type?: unknown }).type === "reset",
-    );
+    const latestResetIndex = capturedEvents
+      ? -1
+      : events.findLastIndex(
+          (event) =>
+            Boolean(event) &&
+            typeof event === "object" &&
+            !Array.isArray(event) &&
+            (event as { type?: unknown }).type === "reset",
+        );
     const retiredEvents = latestResetIndex >= 0 ? events.slice(0, latestResetIndex) : events;
     return getRecentSessionContentFromEvents(
       selectVisibleTranscriptEvents(retiredEvents),
