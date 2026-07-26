@@ -150,11 +150,6 @@ export function parseMSTeamsActivityTimestamp(value: unknown): Date | undefined 
   return Number.isNaN(date.getTime()) ? undefined : date;
 }
 
-export function stripMSTeamsMentionTags(text: string): string {
-  // Teams wraps mentions in <at>...</at> tags
-  return text.replace(/<at[^>]*>.*?<\/at>/gi, "").trim();
-}
-
 function readMSTeamsAttachmentContent(att: MSTeamsAttachmentLike): string {
   if (typeof att.content === "string") {
     return att.content;

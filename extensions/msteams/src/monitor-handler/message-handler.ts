@@ -667,7 +667,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const graphConversationId = translateMSTeamsDmConversationIdForGraph({
       isDirectMessage,
       conversationId,
-      aadObjectId,
+      aadObjectId: from.aadObjectId,
       appId,
     });
     if (quoteMessageId && isDirectMessage && graphConversationId.startsWith("19:")) {

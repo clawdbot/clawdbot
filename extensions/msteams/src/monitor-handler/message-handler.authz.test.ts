@@ -87,6 +87,8 @@ vi.mock("../graph-thread.js", () => {
   };
 });
 
+/* oxlint-disable max-lines -- TODO: split this oversized test suite. */
+
 vi.mock("../team-identity.js", () => ({
   resolveTeamGroupId: graphThreadMockState.resolveTeamGroupId,
 }));
