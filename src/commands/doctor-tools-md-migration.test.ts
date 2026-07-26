@@ -2,7 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { loadExtraBootstrapFilesWithDiagnostics } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveExtraBootstrapPatterns } from "../hooks/bundled/bootstrap-extra-files/patterns.js";
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
 
@@ -85,6 +87,23 @@ async function expectMissing(filePath: string): Promise<void> {
   await expect(fs.access(filePath)).rejects.toMatchObject({ code: "ENOENT" });
 }
 
+function configureExtraBootstrapPatterns(
+  cfg: OpenClawConfig,
+  key: "paths" | "patterns" | "files",
+  patterns: string[],
+): void {
+  cfg.hooks = {
+    internal: {
+      entries: {
+        "bootstrap-extra-files": {
+          enabled: true,
+          [key]: patterns,
+        },
+      },
+    },
+  };
+}
+
 describe("TOOLS.md migration", () => {
   it("previews the migration without mutating or archiving workspace files", async () => {
     const fixture = await createFixture();
@@ -152,6 +171,334 @@ describe("TOOLS.md migration", () => {
     expect(rerunAgents).toBe(expected);
     expect(rerunAgents.match(/migrated from TOOLS\.md/gu)).toHaveLength(1);
   });
+
+  it("migrates every configured nested TOOLS.md beside its sibling AGENTS.md", async () => {
+    const fixture = await createFixture();
+    configureExtraBootstrapPatterns(fixture.cfg, "paths", [
+      "packages/*/AGENTS.md",
+      "packages/*/TOOLS.md",
+    ]);
+    const customizedDir = path.join(fixture.workspace, "packages", "customized");
+    const createdDir = path.join(fixture.workspace, "packages", "created");
+    const untouchedDir = path.join(fixture.workspace, "packages", "untouched");
+    const emptyDir = path.join(fixture.workspace, "packages", "empty");
+    await Promise.all(
+      [customizedDir, createdDir, untouchedDir, emptyDir].map((dir) =>
+        fs.mkdir(dir, { recursive: true }),
+      ),
+    );
+    await fs.writeFile(
+      path.join(customizedDir, "AGENTS.md"),
+      "# Package\n\n## Tools\n\nExisting.\n",
+    );
+    await fs.writeFile(path.join(customizedDir, "TOOLS.md"), "### deploy\n\nUse staging.\n");
+    await fs.writeFile(path.join(createdDir, "TOOLS.md"), "### inspect\n\nRead only.\n");
+    await fs.writeFile(path.join(untouchedDir, "AGENTS.md"), "# Untouched\n");
+    await fs.writeFile(path.join(untouchedDir, "TOOLS.md"), LEGACY_TOOLS_MD_TEMPLATE_FIXTURE);
+    await fs.writeFile(path.join(emptyDir, "TOOLS.md"), "");
+
+    const findings = await collectToolsMdMigrationFindings(fixture.cfg);
+    expect(findings).toHaveLength(4);
+    expect(findings.map((finding) => finding.path)).toEqual(
+      expect.arrayContaining([
+        path.join(customizedDir, "TOOLS.md"),
+        path.join(createdDir, "TOOLS.md"),
+        path.join(untouchedDir, "TOOLS.md"),
+        path.join(emptyDir, "TOOLS.md"),
+      ]),
+    );
+
+    const result = await maybeMigrateToolsMd({
+      cfg: fixture.cfg,
+      shouldRepair: true,
+      env: fixture.env,
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toHaveLength(4);
+    await expect(fs.readFile(path.join(customizedDir, "AGENTS.md"), "utf8")).resolves.toBe(
+      "# Package\n\n## Tools\n\nExisting.\n\n" +
+        "### Local notes (migrated from TOOLS.md)\n\n" +
+        "### deploy\n\nUse staging.\n",
+    );
+    await expect(fs.readFile(path.join(createdDir, "AGENTS.md"), "utf8")).resolves.toBe(
+      "## Tools\n\n### Local notes (migrated from TOOLS.md)\n\n### inspect\n\nRead only.\n",
+    );
+    await expect(fs.readFile(path.join(untouchedDir, "AGENTS.md"), "utf8")).resolves.toBe(
+      "# Untouched\n",
+    );
+    await expectMissing(path.join(emptyDir, "AGENTS.md"));
+    await Promise.all(
+      [customizedDir, createdDir, untouchedDir, emptyDir].map((dir) =>
+        expectMissing(path.join(dir, "TOOLS.md")),
+      ),
+    );
+    await expect(
+      fs.readdir(path.join(fixture.stateDir, "backups", "tools-md-migration")),
+    ).resolves.toHaveLength(4);
+    await expect(
+      maybeMigrateToolsMd({ cfg: fixture.cfg, shouldRepair: true, env: fixture.env }),
+    ).resolves.toEqual({ changes: [], warnings: [] });
+  });
+
+  it.each(["patterns", "files"] as const)(
+    "discovers nested TOOLS.md through the %s alias",
+    async (key) => {
+      const fixture = await createFixture();
+      configureExtraBootstrapPatterns(fixture.cfg, key, ["packages/*/TOOLS.md"]);
+      const packageDir = path.join(fixture.workspace, "packages", key);
+      await fs.mkdir(packageDir, { recursive: true });
+      await fs.writeFile(path.join(packageDir, "TOOLS.md"), `Notes from ${key}.\n`);
+
+      await expect(collectToolsMdMigrationFindings(fixture.cfg)).resolves.toEqual([
+        expect.objectContaining({ path: path.join(packageDir, "TOOLS.md") }),
+      ]);
+      const result = await maybeMigrateToolsMd({
+        cfg: fixture.cfg,
+        shouldRepair: true,
+        env: fixture.env,
+      });
+      expect(result.warnings).toEqual([]);
+      const hookConfig = fixture.cfg.hooks?.internal?.entries?.["bootstrap-extra-files"];
+      expect(hookConfig?.[key]).toEqual(["packages/*/TOOLS.md", "packages/*/AGENTS.md"]);
+    },
+  );
+
+  it("adds the sibling AGENTS.md pattern after migrating a TOOLS-only configuration", async () => {
+    const fixture = await createFixture();
+    configureExtraBootstrapPatterns(fixture.cfg, "paths", ["packages/*/TOOLS.md"]);
+    const packageDir = path.join(fixture.workspace, "packages", "tools-only");
+    await fs.mkdir(packageDir, { recursive: true });
+    await fs.writeFile(path.join(packageDir, "TOOLS.md"), "Reachable after migration.\n");
+
+    const result = await maybeMigrateToolsMd({
+      cfg: fixture.cfg,
+      shouldRepair: true,
+      env: fixture.env,
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toHaveLength(2);
+    const hookConfig = fixture.cfg.hooks?.internal?.entries?.["bootstrap-extra-files"];
+    expect(hookConfig?.paths).toEqual(["packages/*/TOOLS.md", "packages/*/AGENTS.md"]);
+    const patterns = resolveExtraBootstrapPatterns(hookConfig as Record<string, unknown>);
+    const loaded = await loadExtraBootstrapFilesWithDiagnostics(fixture.workspace, patterns);
+    expect(loaded.files).toEqual([
+      expect.objectContaining({
+        name: "AGENTS.md",
+        path: path.join(packageDir, "AGENTS.md"),
+        content: expect.stringContaining("Reachable after migration."),
+      }),
+    ]);
+  });
+
+  it("stops the workspace migration when a configured path escapes the workspace", async () => {
+    const fixture = await createFixture();
+    const rootTools = "Root notes stay put.\n";
+    const outsideDir = path.join(fixture.root, "outside");
+    await fs.mkdir(outsideDir);
+    await fs.writeFile(fixture.toolsPath, rootTools);
+    await fs.writeFile(path.join(outsideDir, "TOOLS.md"), "Outside notes.\n");
+    configureExtraBootstrapPatterns(fixture.cfg, "paths", ["../outside/TOOLS.md"]);
+
+    await expect(collectToolsMdMigrationFindings(fixture.cfg)).resolves.toEqual([
+      expect.objectContaining({
+        severity: "error",
+        requirement: "tools-md-migration-blocked",
+        message: expect.stringContaining("could not be read safely"),
+      }),
+    ]);
+    const result = await maybeMigrateToolsMd({
+      cfg: fixture.cfg,
+      shouldRepair: true,
+      env: fixture.env,
+    });
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([expect.stringContaining("could not be read safely")]);
+    await expect(fs.readFile(fixture.toolsPath, "utf8")).resolves.toBe(rootTools);
+    await expect(fs.readFile(path.join(outsideDir, "TOOLS.md"), "utf8")).resolves.toBe(
+      "Outside notes.\n",
+    );
+  });
+
+  it("ignores unrelated unsafe patterns while migrating the root TOOLS.md", async () => {
+    const fixture = await createFixture();
+    await fs.writeFile(fixture.toolsPath, "Root-only notes.\n");
+    configureExtraBootstrapPatterns(fixture.cfg, "paths", ["../outside/AGENTS.md"]);
+
+    const result = await maybeMigrateToolsMd({
+      cfg: fixture.cfg,
+      shouldRepair: true,
+      env: fixture.env,
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toHaveLength(1);
+    await expect(fs.readFile(fixture.agentsPath, "utf8")).resolves.toContain("Root-only notes.");
+    await expectMissing(fixture.toolsPath);
+  });
+
+  it("treats a configured but not-yet-created workspace as having no migration sources", async () => {
+    const fixture = await createFixture();
+    configureExtraBootstrapPatterns(fixture.cfg, "paths", ["packages/*/TOOLS.md"]);
+    await fs.rm(fixture.workspace, { recursive: true });
+
+    await expect(collectToolsMdMigrationFindings(fixture.cfg)).resolves.toEqual([]);
+    const result = await maybeMigrateToolsMd({
+      cfg: fixture.cfg,
+      shouldRepair: true,
+      env: fixture.env,
+    });
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      "Added migrated AGENTS.md bootstrap pattern: packages/*/AGENTS.md",
+    ]);
+  });
+
+  it.each([
+    ["globstar", "packages/**", 1],
+    ["character class", "packages/*/TOOL[LS].md", 2],
+    ["path-spanning alternatives", "{packages/claimed/TOOLS.md,packages/other/AGENTS.md}", 2],
+  ] as const)(
+    "recovers an interrupted nested claim discovered through a %s pattern",
+    async (_label, pattern, expectedChangeCount) => {
+      const fixture = await createFixture();
+      const packageDir = path.join(fixture.workspace, "packages", "claimed");
+      const toolsPath = path.join(packageDir, "TOOLS.md");
+      await fs.mkdir(packageDir, { recursive: true });
+      await fs.writeFile(toolsPath, "Recovered nested notes.\n");
+      const claimPath = `${toolsPath}.doctor-importing-999999-${Date.now() - 60_000}-claim`;
+      await fs.rename(toolsPath, claimPath);
+      configureExtraBootstrapPatterns(fixture.cfg, "paths", [pattern]);
+
+      const result = await maybeMigrateToolsMd({
+        cfg: fixture.cfg,
+        shouldRepair: true,
+        env: fixture.env,
+      });
+
+      expect(result.warnings).toEqual([]);
+      expect(result.changes).toHaveLength(expectedChangeCount);
+      await expect(fs.readFile(path.join(packageDir, "AGENTS.md"), "utf8")).resolves.toContain(
+        "Recovered nested notes.",
+      );
+      await expectMissing(toolsPath);
+      await expectMissing(claimPath);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "refuses an in-workspace TOOLS.md file symlink instead of migrating its target",
+    async () => {
+      const fixture = await createFixture();
+      const linkedDir = path.join(fixture.workspace, "packages", "linked");
+      const sharedDir = path.join(fixture.workspace, "packages", "shared");
+      await fs.mkdir(linkedDir, { recursive: true });
+      await fs.mkdir(sharedDir, { recursive: true });
+      const sharedTools = path.join(sharedDir, "TOOLS.md");
+      await fs.writeFile(sharedTools, "Shared notes.\n");
+      await fs.symlink(path.join("..", "shared", "TOOLS.md"), path.join(linkedDir, "TOOLS.md"));
+      configureExtraBootstrapPatterns(fixture.cfg, "paths", ["packages/linked/TOOLS.md"]);
+
+      await expect(collectToolsMdMigrationFindings(fixture.cfg)).resolves.toEqual([
+        expect.objectContaining({
+          severity: "error",
+          message: expect.stringContaining("must not be a symlink"),
+        }),
+      ]);
+      await expect(fs.readFile(sharedTools, "utf8")).resolves.toBe("Shared notes.\n");
+      await expectMissing(path.join(sharedDir, "AGENTS.md"));
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "refuses a sibling AGENTS.md symlink before archiving or mutating the source",
+    async () => {
+      const fixture = await createFixture();
+      const packageDir = path.join(fixture.workspace, "packages", "linked-agents");
+      const outsideAgents = path.join(fixture.root, "outside-agents.md");
+      const toolsPath = path.join(packageDir, "TOOLS.md");
+      await fs.mkdir(packageDir, { recursive: true });
+      await fs.writeFile(outsideAgents, "Private external instructions.\n");
+      await fs.writeFile(toolsPath, "Nested tool notes.\n");
+      await fs.symlink(outsideAgents, path.join(packageDir, "AGENTS.md"));
+      configureExtraBootstrapPatterns(fixture.cfg, "paths", ["packages/*/TOOLS.md"]);
+
+      const result = await maybeMigrateToolsMd({
+        cfg: fixture.cfg,
+        shouldRepair: true,
+        env: fixture.env,
+      });
+
+      expect(result.changes).toEqual([]);
+      expect(result.warnings).toEqual([
+        expect.stringContaining("AGENTS.md must be an unlinked regular file"),
+      ]);
+      await expect(fs.readFile(toolsPath, "utf8")).resolves.toBe("Nested tool notes.\n");
+      await expect(fs.readFile(outsideAgents, "utf8")).resolves.toBe(
+        "Private external instructions.\n",
+      );
+      await expectMissing(fixture.stateDir);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "retargets the hook when an earlier nested migration succeeds before a later failure",
+    async () => {
+      const fixture = await createFixture();
+      const successDir = path.join(fixture.workspace, "packages", "a-success");
+      const failedDir = path.join(fixture.workspace, "packages", "z-failed");
+      const outsideAgents = path.join(fixture.root, "outside-agents.md");
+      await fs.mkdir(successDir, { recursive: true });
+      await fs.mkdir(failedDir, { recursive: true });
+      await fs.writeFile(path.join(successDir, "TOOLS.md"), "Successfully migrated.\n");
+      await fs.writeFile(path.join(failedDir, "TOOLS.md"), "Must remain.\n");
+      await fs.writeFile(outsideAgents, "Private external instructions.\n");
+      await fs.symlink(outsideAgents, path.join(failedDir, "AGENTS.md"));
+      configureExtraBootstrapPatterns(fixture.cfg, "paths", ["packages/*/TOOLS.md"]);
+
+      const result = await maybeMigrateToolsMd({
+        cfg: fixture.cfg,
+        shouldRepair: true,
+        env: fixture.env,
+      });
+
+      expect(result.changes).toHaveLength(2);
+      expect(result.warnings).toHaveLength(1);
+      await expect(fs.readFile(path.join(successDir, "AGENTS.md"), "utf8")).resolves.toContain(
+        "Successfully migrated.",
+      );
+      await expectMissing(path.join(successDir, "TOOLS.md"));
+      await expect(fs.readFile(path.join(failedDir, "TOOLS.md"), "utf8")).resolves.toBe(
+        "Must remain.\n",
+      );
+      expect(fixture.cfg.hooks?.internal?.entries?.["bootstrap-extra-files"]?.paths).toEqual([
+        "packages/*/TOOLS.md",
+        "packages/*/AGENTS.md",
+      ]);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "stops the workspace migration when a configured nested path follows a symlink outside",
+    async () => {
+      const fixture = await createFixture();
+      const outsideDir = path.join(fixture.root, "outside");
+      const packagesDir = path.join(fixture.workspace, "packages");
+      await fs.mkdir(outsideDir);
+      await fs.mkdir(packagesDir);
+      await fs.writeFile(path.join(outsideDir, "TOOLS.md"), "Outside notes.\n");
+      await fs.symlink(outsideDir, path.join(packagesDir, "linked"), "dir");
+      configureExtraBootstrapPatterns(fixture.cfg, "paths", ["packages/linked/TOOLS.md"]);
+
+      await expect(collectToolsMdMigrationFindings(fixture.cfg)).resolves.toEqual([
+        expect.objectContaining({
+          severity: "error",
+          requirement: "tools-md-migration-blocked",
+        }),
+      ]);
+    },
+  );
 
   it("keeps live claims created from old source files fresh", async () => {
     const ownerPid = process.ppid;

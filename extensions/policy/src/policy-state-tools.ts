@@ -14,7 +14,10 @@ function scanPolicyToolHeaders(raw: string): readonly PolicyToolEvidence[] {
   const tools: PolicyToolEvidence[] = [];
   let localNotesMode: "plain" | "migrated" | undefined;
   for (let index = 0; index < section.length; index += 1) {
-    const line = section[index]?.text ?? "";
+    const sectionLine = section[index];
+    const line = sectionLine?.text ?? "";
+    const sectionHeading = /^(#{1,6})\s+(.+?)\s*#*\s*$/u.exec(line);
+    const isChildHeading = sectionHeading?.[1]?.length === (sectionLine?.sectionDepth ?? 0) + 1;
     if (
       line.includes("Skills provide your tools.") &&
       line.includes("Keep local notes") &&
@@ -23,26 +26,33 @@ function scanPolicyToolHeaders(raw: string): readonly PolicyToolEvidence[] {
       localNotesMode = "plain";
       continue;
     }
-    if (/^###\s+Local notes\s*$/iu.test(line)) {
+    if (isChildHeading && /^Local notes\s*$/iu.test(sectionHeading?.[2] ?? "")) {
       localNotesMode = "plain";
       continue;
     }
-    if (/^###\s+Local notes \(migrated from TOOLS\.md\)\s*$/iu.test(line)) {
+    if (
+      isChildHeading &&
+      /^Local notes \(migrated from TOOLS\.md\)\s*$/iu.test(sectionHeading?.[2] ?? "")
+    ) {
       localNotesMode = "migrated";
       continue;
     }
-    const sectionHeading = /^(#{1,6})\s+(.+?)\s*#*\s*$/u.exec(line);
-    if (localNotesMode && sectionHeading && slugify(sectionHeading[2] ?? "") === "tools") {
+    if (
+      localNotesMode &&
+      sectionHeading &&
+      sectionHeading[1]!.length <= (section[index]?.sectionDepth ?? 0) &&
+      slugify(sectionHeading[2] ?? "") === "tools"
+    ) {
       localNotesMode = undefined;
       continue;
     }
-    if (localNotesMode === "plain" && /^###\s+/u.test(line)) {
+    if (localNotesMode === "plain" && isChildHeading) {
       localNotesMode = undefined;
     }
     if (localNotesMode) {
       continue;
     }
-    const heading = /^###\s+([^\s#]+)(.*)$/.exec(line);
+    const heading = isChildHeading ? /^([^\s#]+)(.*)$/u.exec(sectionHeading?.[2] ?? "") : null;
     const bullet = /^[-*+]\s+([^:\s][^:]*?)\s*:(.*)$/.exec(line);
     const match = heading ?? bullet;
     const toolName = match?.[1];
@@ -68,8 +78,14 @@ function scanPolicyToolHeaders(raw: string): readonly PolicyToolEvidence[] {
     };
     const metaLines = [match[2] ?? ""];
     for (let metaIndex = index + 1; metaIndex < section.length; metaIndex += 1) {
-      const metaLine = section[metaIndex]?.text ?? "";
-      if (/^###\s+\S+/.test(metaLine.trim()) || /^[-*+]\s+[^:\s][^:]*?\s*:/.test(metaLine)) {
+      const metaSectionLine = section[metaIndex];
+      const metaLine = metaSectionLine?.text ?? "";
+      const metaHeading = /^(#{1,6})\s+(.+?)\s*#*\s*$/u.exec(metaLine.trim());
+      if (
+        (metaHeading !== null &&
+          (metaHeading[1]?.length ?? 0) <= (metaSectionLine?.sectionDepth ?? 0) + 1) ||
+        /^[-*+]\s+[^:\s][^:]*?\s*:/.test(metaLine)
+      ) {
         break;
       }
       metaLines.push(metaLine);
@@ -99,12 +115,16 @@ function scanPolicyToolHeaders(raw: string): readonly PolicyToolEvidence[] {
 function markdownSectionLines(
   raw: string,
   sectionSlug: string,
-): readonly { readonly line: number; readonly text: string }[] {
+): readonly {
+  readonly line: number;
+  readonly text: string;
+  readonly sectionDepth: number;
+}[] {
   const lines = raw.split(/\r?\n/);
   let sectionDepth: number | undefined;
   let foundSection = false;
   let fence: { marker: "`" | "~"; length: number } | undefined;
-  const section: { line: number; text: string }[] = [];
+  const section: { line: number; text: string; sectionDepth: number }[] = [];
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index] ?? "";
     const fenceRun = /^\s*(`{3,}|~{3,})/.exec(line)?.[1];
@@ -134,12 +154,12 @@ function markdownSectionLines(
         sectionDepth = undefined;
       }
       if (sectionDepth !== undefined) {
-        section.push({ line: index + 1, text: line });
+        section.push({ line: index + 1, text: line, sectionDepth });
         continue;
       }
-      if (slug === sectionSlug) {
+      if (depth <= 2 && slug === sectionSlug) {
         if (foundSection) {
-          section.push({ line: index + 1, text: line });
+          section.push({ line: index + 1, text: line, sectionDepth: depth });
         }
         foundSection = true;
         sectionDepth = depth;
@@ -147,7 +167,7 @@ function markdownSectionLines(
       continue;
     }
     if (sectionDepth !== undefined) {
-      section.push({ line: index + 1, text: line });
+      section.push({ line: index + 1, text: line, sectionDepth });
     }
   }
   return section;

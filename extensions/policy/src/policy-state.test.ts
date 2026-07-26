@@ -124,6 +124,57 @@ describe("scanPolicyTools", () => {
     ).resolves.toEqual([expect.objectContaining({ id: "deploy", risk: "high" })]);
   });
 
+  it("parses a tool literally named tools after local notes", async () => {
+    await expect(
+      scanPolicyTools(
+        [
+          "## Tools",
+          "### Local notes",
+          "- SSH: prod-host",
+          "### tools risk: high sensitivity: restricted owner: ops",
+        ].join("\n"),
+      ),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "tools",
+        risk: "high",
+        sensitivity: "restricted",
+        owner: "ops",
+      }),
+    ]);
+  });
+
+  it("ignores deeper Tools sections outside the governed H1/H2 contract", async () => {
+    await expect(
+      scanPolicyTools(
+        [
+          "## Build",
+          "### Tools",
+          "- npm: risk: high owner: ops",
+          "## Tools",
+          "### deploy risk: low owner: release",
+        ].join("\n"),
+      ),
+    ).resolves.toEqual([expect.objectContaining({ id: "deploy", risk: "low", owner: "release" })]);
+  });
+
+  it("does not carry metadata across repeated Tools section boundaries", async () => {
+    const evidence = await scanPolicyTools(
+      [
+        "## Tools",
+        "### deploy risk: high",
+        "## Tools",
+        "owner: ops",
+        "### inspect risk: low owner: support",
+      ].join("\n"),
+    );
+    expect(evidence).toEqual([
+      expect.objectContaining({ id: "deploy", risk: "high" }),
+      expect.objectContaining({ id: "inspect", owner: "support" }),
+    ]);
+    expect(evidence[0]).not.toHaveProperty("owner");
+  });
+
   it("keeps longer fences open across shorter delimiter runs", async () => {
     await expect(
       scanPolicyTools(["## Tools", "````markdown", "```", "- SSH: home-server", "````"].join("\n")),

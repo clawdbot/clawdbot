@@ -289,6 +289,60 @@ describe("registerPolicyDoctorChecks", () => {
     );
   });
 
+  it("runs required metadata checks for a tool literally named tools", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ tools: { requireMetadata: ["risk", "sensitivity", "owner"] } }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "AGENTS.md"),
+      "# Tools\n\n## Local notes\n\n- SSH: prod-host\n\n## tools risk: high\n",
+      "utf-8",
+    );
+
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()), {
+      checks: registerChecks(),
+    });
+
+    expect(result.findings).toHaveLength(2);
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/tools-missing-sensitivity-token",
+          ocPath: "oc://AGENTS.md/tools/tools",
+        }),
+        expect.objectContaining({
+          checkId: "policy/tools-missing-owner",
+          ocPath: "oc://AGENTS.md/tools/tools",
+        }),
+      ]),
+    );
+  });
+
+  it("does not capture an unrelated nested Tools section as governed evidence", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ tools: { requireMetadata: ["risk", "sensitivity", "owner"] } }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "AGENTS.md"),
+      "## Build\n\n### Tools\n\n- npm: install dependencies\n",
+      "utf-8",
+    );
+
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()), {
+      checks: registerChecks(),
+    });
+
+    expect(result.findings).toEqual([]);
+  });
+
   it("reports governed bullet tools missing required metadata", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     await fs.writeFile(configPath, "{}", "utf-8");

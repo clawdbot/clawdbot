@@ -7,9 +7,11 @@ import { createHash } from "node:crypto";
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { Minimatch } from "minimatch";
 import { extractFrontmatterBlock } from "../../packages/markdown-core/src/frontmatter.js";
 import { openRootFile } from "../infra/boundary-file-read.js";
 import { pathExists } from "../infra/fs-safe.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { retryAsync } from "../infra/retry.js";
 import {
   CANONICAL_ROOT_MEMORY_FILENAME,
@@ -209,6 +211,12 @@ export type ExtraBootstrapLoadDiagnostic = {
   path: string;
   reason: ExtraBootstrapLoadDiagnosticCode;
   detail: string;
+};
+
+export type WorkspacePatternFile = {
+  name: string;
+  path: string;
+  content: string;
 };
 
 /** Set of recognized bootstrap filenames for runtime validation */
@@ -1033,20 +1041,24 @@ function resolveGlobWalkRoot(pattern: string): string {
 async function* walkWorkspaceFiles(
   workspaceDir: string,
   initialRelativeDir: string,
+  strictRead: boolean,
+  matcher: Minimatch,
 ): AsyncGenerator<string> {
   const stack = [initialRelativeDir === "." ? "" : initialRelativeDir];
   while (stack.length > 0) {
     const currentRelativeDir = stack.pop() ?? "";
     const currentDir = path.resolve(workspaceDir, currentRelativeDir);
-    const relativeToWorkspace = path.relative(workspaceDir, currentDir);
-    if (relativeToWorkspace.startsWith("..") || path.isAbsolute(relativeToWorkspace)) {
+    if (!isPathInside(workspaceDir, currentDir)) {
       continue;
     }
 
     let entries: syncFs.Dirent[];
     try {
       entries = await fs.readdir(currentDir, { withFileTypes: true });
-    } catch {
+    } catch (error) {
+      if (strictRead && (error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
       continue;
     }
 
@@ -1054,12 +1066,15 @@ async function* walkWorkspaceFiles(
       const childRelativePath = currentRelativeDir
         ? path.join(currentRelativeDir, entry.name)
         : entry.name;
+      const normalizedChildPath = normalizeWorkspacePatternPath(childRelativePath);
       if (entry.isDirectory()) {
-        stack.push(childRelativePath);
+        if (matcher.match(normalizedChildPath, true)) {
+          stack.push(childRelativePath);
+        }
         continue;
       }
-      if (entry.isFile() || entry.isSymbolicLink()) {
-        yield normalizeWorkspacePatternPath(childRelativePath);
+      if ((entry.isFile() || entry.isSymbolicLink()) && matcher.match(normalizedChildPath)) {
+        yield normalizedChildPath;
       }
     }
   }
@@ -1068,8 +1083,9 @@ async function* walkWorkspaceFiles(
 async function resolveExtraBootstrapPatternPaths(
   workspaceDir: string,
   pattern: string,
+  strictRead: boolean,
 ): Promise<string[]> {
-  if (typeof fs.glob === "function") {
+  if (!strictRead && typeof fs.glob === "function") {
     try {
       const matches: string[] = [];
       for await (const match of fs.glob(pattern, { cwd: workspaceDir })) {
@@ -1086,55 +1102,93 @@ async function resolveExtraBootstrapPatternPaths(
   }
 
   const normalizedPattern = normalizeWorkspacePatternPath(pattern);
+  const matcher = new Minimatch(normalizedPattern, {
+    nocomment: true,
+    nonegate: true,
+    windowsPathsNoEscape: true,
+  });
   const matches: string[] = [];
   for await (const candidate of walkWorkspaceFiles(
     workspaceDir,
     resolveGlobWalkRoot(normalizedPattern),
+    strictRead,
+    matcher,
   )) {
-    if (path.matchesGlob(candidate, normalizedPattern)) {
-      matches.push(candidate);
-    }
+    matches.push(candidate);
   }
   return matches.length > 0 ? matches : [pattern];
 }
 
-export async function loadExtraBootstrapFilesWithDiagnostics(
+function patternWalkRootStaysInWorkspace(workspaceDir: string, pattern: string): boolean {
+  const walkRoot = path.resolve(workspaceDir, resolveGlobWalkRoot(pattern));
+  return isPathInside(workspaceDir, walkRoot);
+}
+
+export async function loadWorkspacePatternFilesWithDiagnostics(
   dir: string,
   extraPatterns: string[],
+  options: {
+    acceptedBasenames: ReadonlySet<string>;
+    acceptedBasenamePrefixes?: readonly string[];
+    reportUnsupportedBasenames?: boolean;
+    strictPatternRead?: boolean;
+  },
 ): Promise<{
-  files: WorkspaceBootstrapFile[];
+  files: WorkspacePatternFile[];
   diagnostics: ExtraBootstrapLoadDiagnostic[];
 }> {
   if (!extraPatterns.length) {
     return { files: [], diagnostics: [] };
   }
   const resolvedDir = resolveUserPath(dir);
-
-  // Resolve glob patterns into concrete file paths
+  const diagnostics: ExtraBootstrapLoadDiagnostic[] = [];
   const resolvedPaths = new Set<string>();
   for (const pattern of extraPatterns) {
-    if (hasGlobPattern(pattern)) {
-      const matches = await resolveExtraBootstrapPatternPaths(resolvedDir, pattern);
-      for (const match of matches) {
-        resolvedPaths.add(match);
+    if (!patternWalkRootStaysInWorkspace(resolvedDir, pattern)) {
+      diagnostics.push({
+        path: path.resolve(resolvedDir, pattern),
+        reason: "security",
+        detail: "pattern resolves outside the workspace",
+      });
+      continue;
+    }
+    try {
+      if (hasGlobPattern(pattern)) {
+        const matches = await resolveExtraBootstrapPatternPaths(
+          resolvedDir,
+          pattern,
+          options.strictPatternRead === true,
+        );
+        for (const match of matches) {
+          resolvedPaths.add(match);
+        }
+      } else {
+        resolvedPaths.add(pattern);
       }
-    } else {
-      resolvedPaths.add(pattern);
+    } catch (error) {
+      diagnostics.push({
+        path: path.resolve(resolvedDir, pattern),
+        reason: "io",
+        detail: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
-  const files: WorkspaceBootstrapFile[] = [];
-  const diagnostics: ExtraBootstrapLoadDiagnostic[] = [];
+  const files: WorkspacePatternFile[] = [];
   for (const relPath of resolvedPaths) {
     const filePath = path.resolve(resolvedDir, relPath);
-    // Only load files whose basename is a recognized bootstrap filename
     const baseName = path.basename(relPath);
-    if (!VALID_BOOTSTRAP_NAMES.has(baseName)) {
-      diagnostics.push({
-        path: filePath,
-        reason: "invalid-bootstrap-filename",
-        detail: `unsupported bootstrap basename: ${baseName}`,
-      });
+    const accepted =
+      options.acceptedBasenames.has(baseName) ||
+      options.acceptedBasenamePrefixes?.some((prefix) => baseName.startsWith(prefix)) === true;
+    if (!accepted) {
+      if (options.reportUnsupportedBasenames !== false) {
+        diagnostics.push({
+          path: filePath,
+          reason: "invalid-bootstrap-filename",
+          detail: `unsupported bootstrap basename: ${baseName}`,
+        });
+      }
       continue;
     }
     const loaded = await readWorkspaceFileWithGuards({
@@ -1142,17 +1196,18 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
       workspaceDir: resolvedDir,
     });
     if (loaded.ok) {
-      files.push({
-        name: baseName as WorkspaceBootstrapFileName,
-        path: filePath,
-        content: loaded.content,
-        missing: false,
-      });
+      files.push({ name: baseName, path: filePath, content: loaded.content });
       continue;
     }
 
+    const missing = (loaded.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
     const reason: ExtraBootstrapLoadDiagnosticCode =
-      loaded.reason === "path" ? "missing" : loaded.reason === "validation" ? "security" : "io";
+      loaded.reason === "validation" ||
+      (options.strictPatternRead === true && loaded.reason === "path" && !missing)
+        ? "security"
+        : loaded.reason === "path"
+          ? "missing"
+          : "io";
     diagnostics.push({
       path: filePath,
       reason,
@@ -1165,5 +1220,26 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
     });
   }
   return { files, diagnostics };
+}
+
+export async function loadExtraBootstrapFilesWithDiagnostics(
+  dir: string,
+  extraPatterns: string[],
+): Promise<{
+  files: WorkspaceBootstrapFile[];
+  diagnostics: ExtraBootstrapLoadDiagnostic[];
+}> {
+  const loaded = await loadWorkspacePatternFilesWithDiagnostics(dir, extraPatterns, {
+    acceptedBasenames: VALID_BOOTSTRAP_NAMES,
+  });
+  return {
+    files: loaded.files.map((file) => ({
+      name: file.name as WorkspaceBootstrapFileName,
+      path: file.path,
+      content: file.content,
+      missing: false,
+    })),
+    diagnostics: loaded.diagnostics,
+  };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

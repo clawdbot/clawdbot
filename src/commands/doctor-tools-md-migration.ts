@@ -3,14 +3,25 @@ import { createHash } from "node:crypto";
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { Minimatch, minimatch } from "minimatch";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { DEFAULT_AGENTS_FILENAME, DEFAULT_TOOLS_FILENAME } from "../agents/workspace.js";
+import {
+  DEFAULT_AGENTS_FILENAME,
+  DEFAULT_TOOLS_FILENAME,
+  loadWorkspacePatternFilesWithDiagnostics,
+} from "../agents/workspace.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
+import {
+  resolveExtraBootstrapPatternConfig,
+  resolveExtraBootstrapPatterns,
+} from "../hooks/bundled/bootstrap-extra-files/patterns.js";
+import { resolveHookConfig } from "../hooks/config.js";
 import { formatErrorMessage as errorMessage } from "../infra/errors.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { shortenHomePath } from "../utils.js";
 
 const TOOLS_MD_MIGRATION_CHECK_ID = "core/doctor/tools-md-migration";
@@ -22,6 +33,7 @@ const CURRENT_AGENTS_TOOLS_GUIDANCE =
 const TOOLS_CLAIM_INFIX = ".doctor-importing-";
 const ACTIVE_CLAIM_MAX_AGE_MS = 10 * 60 * 1000;
 const HARD_LINK_UNSUPPORTED_CODES = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "EXDEV"]);
+const TOOLS_MD_PATTERN_BASENAMES = new Set([DEFAULT_TOOLS_FILENAME]);
 
 const LEGACY_TOOLS_MD_TEMPLATE =
   [
@@ -95,6 +107,7 @@ type ToolsMdSource = {
   path: string;
   content: string;
   sha256: string;
+  fromExtraPattern?: boolean;
 };
 
 type MigrationClaimIdentity = {
@@ -102,8 +115,53 @@ type MigrationClaimIdentity = {
   createdAtMs: number;
 };
 
+type MigrationFileSnapshot = {
+  content: string;
+  stat?: syncFs.Stats;
+};
+
 function sha256(content: string): string {
   return createHash("sha256").update(content).digest("hex");
+}
+
+async function readMigrationFileSnapshot(params: {
+  filePath: string;
+  label: string;
+  allowMissing?: boolean;
+}): Promise<MigrationFileSnapshot> {
+  let stat: syncFs.Stats;
+  try {
+    stat = await fs.lstat(params.filePath);
+  } catch (error) {
+    if (params.allowMissing && (error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { content: "" };
+    }
+    throw error;
+  }
+  if (!stat.isFile() || stat.nlink > 1) {
+    throw new Error(`${params.label} must be an unlinked regular file for automatic migration`);
+  }
+  const noFollow = syncFs.constants.O_NOFOLLOW ?? 0;
+  const handle = await fs.open(params.filePath, syncFs.constants.O_RDONLY | noFollow);
+  try {
+    const openedStat = await handle.stat();
+    if (
+      !openedStat.isFile() ||
+      openedStat.nlink !== 1 ||
+      openedStat.dev !== stat.dev ||
+      openedStat.ino !== stat.ino
+    ) {
+      throw new Error(`${params.label} changed while opening it for migration`);
+    }
+    const content = await handle.readFile("utf8");
+    const currentStat = await fs.lstat(params.filePath);
+    if (currentStat.dev !== openedStat.dev || currentStat.ino !== openedStat.ino) {
+      throw new Error(`${params.label} changed while opening it for migration`);
+    }
+    return { content, stat: openedStat };
+  } finally {
+    await handle.close();
+  }
 }
 
 function parseMigrationClaimIdentity(
@@ -232,6 +290,195 @@ function workspaceTargets(cfg: OpenClawConfig): Array<{ agentId: string; workspa
   });
 }
 
+function configuredExtraBootstrapPatterns(cfg: OpenClawConfig): string[] {
+  const hookConfig = resolveHookConfig(cfg, "bootstrap-extra-files");
+  if (!hookConfig || hookConfig.enabled === false) {
+    return [];
+  }
+  return resolveExtraBootstrapPatterns(hookConfig as Record<string, unknown>);
+}
+
+const WORKSPACE_GLOB_OPTIONS = {
+  nocomment: true,
+  nonegate: true,
+  windowsPathsNoEscape: true,
+} as const;
+
+function patternAlternativesMatchingBasename(pattern: string, basename: string): string[] {
+  const normalized = pattern.replaceAll(path.sep, "/").replaceAll("\\", "/");
+  const matcher = new Minimatch(normalized, WORKSPACE_GLOB_OPTIONS);
+  return matcher.globSet.filter((alternative) =>
+    minimatch(basename, path.posix.basename(alternative), WORKSPACE_GLOB_OPTIONS),
+  );
+}
+
+function patternCanMatchToolsMd(pattern: string): boolean {
+  return patternAlternativesMatchingBasename(pattern, DEFAULT_TOOLS_FILENAME).length > 0;
+}
+
+function interruptedClaimPatterns(patterns: readonly string[]): string[] {
+  return patterns.flatMap((pattern) => {
+    const claimName = `${DEFAULT_TOOLS_FILENAME}${TOOLS_CLAIM_INFIX}*`;
+    return patternAlternativesMatchingBasename(pattern, DEFAULT_TOOLS_FILENAME).map(
+      (alternative) => {
+        const basenamePattern = path.posix.basename(alternative);
+        if (basenamePattern === "**") {
+          return `${alternative}/${claimName}`;
+        }
+        const dirnamePattern = path.posix.dirname(alternative);
+        return dirnamePattern === "." ? claimName : `${dirnamePattern}/${claimName}`;
+      },
+    );
+  });
+}
+
+function patternAlternativeStaysInsideWorkspace(alternative: string): boolean {
+  const normalized = path.posix.normalize(alternative);
+  return (
+    !path.posix.isAbsolute(normalized) &&
+    !path.win32.isAbsolute(normalized) &&
+    normalized !== ".." &&
+    !normalized.startsWith("../")
+  );
+}
+
+function agentsPatternsForToolsPattern(pattern: string): string[] {
+  const normalized = pattern.replaceAll(path.sep, "/").replaceAll("\\", "/");
+  const expandedPatterns = new Set(new Minimatch(normalized, WORKSPACE_GLOB_OPTIONS).globSet);
+  return patternAlternativesMatchingBasename(pattern, DEFAULT_TOOLS_FILENAME).flatMap(
+    (alternative) => {
+      if (!patternAlternativeStaysInsideWorkspace(alternative)) {
+        return [];
+      }
+      const basenamePattern = path.posix.basename(alternative);
+      if (minimatch(DEFAULT_AGENTS_FILENAME, basenamePattern, WORKSPACE_GLOB_OPTIONS)) {
+        return [];
+      }
+      const dirnamePattern = path.posix.dirname(alternative);
+      const agentsPattern =
+        dirnamePattern === "."
+          ? DEFAULT_AGENTS_FILENAME
+          : `${dirnamePattern}/${DEFAULT_AGENTS_FILENAME}`;
+      return expandedPatterns.has(agentsPattern) ? [] : [agentsPattern];
+    },
+  );
+}
+
+function retargetConfiguredExtraBootstrapPatterns(cfg: OpenClawConfig): string[] {
+  const hookConfig = resolveHookConfig(cfg, "bootstrap-extra-files");
+  if (!hookConfig) {
+    return [];
+  }
+  const resolved = resolveExtraBootstrapPatternConfig(hookConfig as Record<string, unknown>);
+  if (!resolved) {
+    return [];
+  }
+  const additions = [
+    ...new Set(
+      resolved.patterns
+        .flatMap((pattern) => agentsPatternsForToolsPattern(pattern))
+        .filter((pattern) => !resolved.patterns.includes(pattern)),
+    ),
+  ];
+  if (additions.length === 0) {
+    return [];
+  }
+  hookConfig[resolved.key] = [...resolved.patterns, ...additions];
+  return additions;
+}
+
+async function collectWorkspaceToolsMdSources(params: {
+  cfg: OpenClawConfig;
+  workspaceDir: string;
+  recoverClaims: boolean;
+}): Promise<ToolsMdSource[]> {
+  const sources: ToolsMdSource[] = [];
+  const seen = new Set<string>();
+  const rootSource = await readToolsMd(params.workspaceDir, {
+    recoverClaims: params.recoverClaims,
+  });
+  if (rootSource) {
+    sources.push(rootSource);
+    seen.add(await fs.realpath(rootSource.path));
+  }
+
+  const patterns = configuredExtraBootstrapPatterns(params.cfg);
+  const toolsPatterns = patterns.filter(patternCanMatchToolsMd);
+  if (toolsPatterns.length === 0) {
+    return sources;
+  }
+  const resolved = await loadWorkspacePatternFilesWithDiagnostics(
+    params.workspaceDir,
+    toolsPatterns,
+    {
+      acceptedBasenames: TOOLS_MD_PATTERN_BASENAMES,
+      reportUnsupportedBasenames: false,
+      strictPatternRead: true,
+    },
+  );
+  const claimMatches = await loadWorkspacePatternFilesWithDiagnostics(
+    params.workspaceDir,
+    interruptedClaimPatterns(toolsPatterns),
+    {
+      acceptedBasenames: new Set(),
+      acceptedBasenamePrefixes: [`${DEFAULT_TOOLS_FILENAME}${TOOLS_CLAIM_INFIX}`],
+      reportUnsupportedBasenames: false,
+      strictPatternRead: true,
+    },
+  );
+  const blocked = [...resolved.diagnostics, ...claimMatches.diagnostics].filter(
+    (diagnostic) => diagnostic.reason === "security" || diagnostic.reason === "io",
+  );
+  if (blocked.length > 0) {
+    throw new Error(
+      `bootstrap-extra-files patterns could not be read safely: ${blocked
+        .map((diagnostic) => `${diagnostic.path}: ${diagnostic.detail}`)
+        .join("; ")}`,
+    );
+  }
+  const matchedFiles = [...resolved.files, ...claimMatches.files];
+  if (matchedFiles.length === 0) {
+    return sources;
+  }
+
+  const workspaceRealPath = await fs.realpath(params.workspaceDir);
+  const candidateDirectories = new Map<string, Set<string>>();
+  for (const matched of matchedFiles) {
+    const stat = await fs.lstat(matched.path);
+    if (stat.isSymbolicLink()) {
+      throw new Error(
+        `configured TOOLS.md migration source must not be a symlink: ${matched.path}`,
+      );
+    }
+    const matchedRealPath = await fs.realpath(matched.path);
+    if (!isPathInside(workspaceRealPath, matchedRealPath)) {
+      throw new Error(`configured TOOLS.md resolved outside the workspace: ${matched.path}`);
+    }
+    const sourceDir = path.dirname(matchedRealPath);
+    const expectedHashes = candidateDirectories.get(sourceDir) ?? new Set<string>();
+    expectedHashes.add(sha256(matched.content));
+    candidateDirectories.set(sourceDir, expectedHashes);
+  }
+  for (const [sourceDir, expectedHashes] of candidateDirectories) {
+    const source = await readToolsMd(sourceDir, {
+      recoverClaims: params.recoverClaims,
+    });
+    if (!source) {
+      throw new Error(`configured TOOLS.md changed during migration discovery: ${sourceDir}`);
+    }
+    const sourceRealPath = await fs.realpath(source.path);
+    if (seen.has(sourceRealPath)) {
+      continue;
+    }
+    if (!expectedHashes.has(source.sha256)) {
+      throw new Error(`configured TOOLS.md changed during migration discovery: ${source.path}`);
+    }
+    seen.add(sourceRealPath);
+    sources.push({ ...source, fromExtraPattern: true });
+  }
+  return sources;
+}
+
 function migratedBlock(content: string): string {
   return `${MIGRATED_SUBSECTION_HEADING}\n\n${content}`;
 }
@@ -341,24 +588,15 @@ async function writeAgentsAtomically(params: {
   expected: string;
   content: string;
 }): Promise<void> {
-  const current = await fs.readFile(params.agentsPath, "utf8").catch((error: unknown) => {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return "";
-    }
-    throw error;
+  const snapshot = await readMigrationFileSnapshot({
+    filePath: params.agentsPath,
+    label: "AGENTS.md",
+    allowMissing: true,
   });
-  if (current !== params.expected) {
+  if (snapshot.content !== params.expected) {
     throw new Error("AGENTS.md changed during TOOLS.md migration");
   }
-  const stat = await fs.lstat(params.agentsPath).catch((error: unknown) => {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return undefined;
-    }
-    throw error;
-  });
-  if (stat && (!stat.isFile() || stat.nlink > 1)) {
-    throw new Error("AGENTS.md must be an unlinked regular file for automatic migration");
-  }
+  const stat = snapshot.stat;
   const mode = stat?.mode ?? 0o600;
   const tempPath = `${params.agentsPath}.doctor-writing-${process.pid}-${Date.now()}`;
   const handle = await fs.open(tempPath, "wx", mode);
@@ -376,7 +614,12 @@ async function writeAgentsAtomically(params: {
       if (
         currentStat.dev !== stat.dev ||
         currentStat.ino !== stat.ino ||
-        (await fs.readFile(params.agentsPath, "utf8")) !== params.expected
+        (
+          await readMigrationFileSnapshot({
+            filePath: params.agentsPath,
+            label: "AGENTS.md",
+          })
+        ).content !== params.expected
       ) {
         throw new Error("AGENTS.md changed during TOOLS.md migration");
       }
@@ -384,7 +627,10 @@ async function writeAgentsAtomically(params: {
       claimed = true;
       publishNoClobberSync(tempPath, params.agentsPath);
       syncFs.unlinkSync(tempPath);
-      if ((await fs.readFile(backupPath, "utf8")) !== params.expected) {
+      if (
+        (await readMigrationFileSnapshot({ filePath: backupPath, label: "AGENTS.md backup" }))
+          .content !== params.expected
+      ) {
         syncFs.renameSync(backupPath, params.agentsPath);
         claimed = false;
         throw new Error("AGENTS.md changed during TOOLS.md migration");
@@ -430,6 +676,10 @@ async function recoverInterruptedAgentsClaim(params: {
     throw new Error("multiple interrupted AGENTS.md migration claims require manual recovery");
   }
   const claimPath = path.join(path.dirname(agentsPath), claims[0]!);
+  const claimSnapshot = await readMigrationFileSnapshot({
+    filePath: claimPath,
+    label: "AGENTS.md migration claim",
+  });
   const claimIdentity = parseMigrationClaimIdentity(claims[0]!, prefix);
   if (
     claimIdentity &&
@@ -442,18 +692,21 @@ async function recoverInterruptedAgentsClaim(params: {
     );
   }
   try {
-    await fs.lstat(agentsPath);
-    const claimedContent = await fs.readFile(claimPath, "utf8");
+    const agentsSnapshot = await readMigrationFileSnapshot({
+      filePath: agentsPath,
+      label: "AGENTS.md",
+    });
+    const claimedContent = claimSnapshot.content;
     const expected = params.shouldMerge
       ? mergeToolsMdIntoAgentsMd(claimedContent, params.toolsContent)
       : ensureLocalNotesHeading(
           claimedContent.replace(LEGACY_AGENTS_TOOLS_GUIDANCE, CURRENT_AGENTS_TOOLS_GUIDANCE),
         );
-    if ((await fs.readFile(agentsPath, "utf8")) === expected) {
+    if (agentsSnapshot.content === expected) {
       await fs.rm(claimPath);
       return;
     }
-    if ((await fs.readFile(agentsPath, "utf8")) === claimedContent) {
+    if (agentsSnapshot.content === claimedContent) {
       await fs.rm(claimPath);
       return;
     }
@@ -559,6 +812,102 @@ async function archiveSource(params: {
   return archivePath;
 }
 
+async function resolveAgentsMigrationDestination(params: {
+  workspaceDir: string;
+  sourceDir: string;
+}): Promise<string> {
+  const [workspaceRealPath, sourceDirRealPath] = await Promise.all([
+    fs.realpath(params.workspaceDir),
+    fs.realpath(params.sourceDir),
+  ]);
+  if (!isPathInside(workspaceRealPath, sourceDirRealPath)) {
+    throw new Error(
+      `AGENTS.md migration destination resolves outside the workspace: ${sourceDirRealPath}`,
+    );
+  }
+  const agentsPath = path.join(sourceDirRealPath, DEFAULT_AGENTS_FILENAME);
+  await readMigrationFileSnapshot({
+    filePath: agentsPath,
+    label: "AGENTS.md",
+    allowMissing: true,
+  });
+  return agentsPath;
+}
+
+async function migrateToolsMdSource(params: {
+  agentId: string;
+  source: ToolsMdSource;
+  workspaceDir: string;
+  env: NodeJS.ProcessEnv;
+}): Promise<{ shouldMerge: boolean; agentsPath: string }> {
+  const shouldMerge =
+    params.source.content.trim().length > 0 &&
+    params.source.content !== LEGACY_TOOLS_MD_TEMPLATE &&
+    params.source.content !== LEGACY_TOOLS_DEV_MD_TEMPLATE &&
+    params.source.content !== LEGACY_TOOLS_DEV_FALLBACK;
+  const sourceDir = path.dirname(params.source.path);
+  const agentsPath = await resolveAgentsMigrationDestination({
+    workspaceDir: params.workspaceDir,
+    sourceDir,
+  });
+  await archiveSource({ agentId: params.agentId, source: params.source, env: params.env });
+  const claimPath = `${params.source.path}${TOOLS_CLAIM_INFIX}${process.pid}-${Date.now()}-${params.source.sha256.slice(0, 12)}`;
+  await fs.rename(params.source.path, claimPath);
+  try {
+    if (sha256(await fs.readFile(claimPath, "utf8")) !== params.source.sha256) {
+      throw new Error("TOOLS.md changed before the migration claim was acquired");
+    }
+    await recoverInterruptedAgentsClaim({
+      agentsPath,
+      toolsContent: params.source.content,
+      shouldMerge,
+    });
+    const agentsContent = (
+      await readMigrationFileSnapshot({
+        filePath: agentsPath,
+        label: "AGENTS.md",
+        allowMissing: true,
+      })
+    ).content;
+    const merged = shouldMerge
+      ? mergeToolsMdIntoAgentsMd(agentsContent, params.source.content)
+      : agentsContent.includes(LEGACY_AGENTS_TOOLS_GUIDANCE)
+        ? ensureLocalNotesHeading(
+            agentsContent.replace(LEGACY_AGENTS_TOOLS_GUIDANCE, CURRENT_AGENTS_TOOLS_GUIDANCE),
+          )
+        : agentsContent;
+    if (merged !== agentsContent) {
+      await writeAgentsAtomically({ agentsPath, expected: agentsContent, content: merged });
+    }
+    if (sha256(await fs.readFile(claimPath, "utf8")) !== params.source.sha256) {
+      throw new Error("TOOLS.md changed while the migration claim was held");
+    }
+    if (
+      merged !== agentsContent &&
+      (
+        await readMigrationFileSnapshot({
+          filePath: agentsPath,
+          label: "AGENTS.md",
+        })
+      ).content !== merged
+    ) {
+      throw new Error("AGENTS.md changed after TOOLS.md migration was written");
+    }
+    await fs.rm(claimPath);
+    await syncDirectory(sourceDir);
+  } catch (error) {
+    try {
+      await restoreClaimNoClobber(claimPath, params.source.path);
+    } catch (restoreError) {
+      throw new Error(`TOOLS.md migration claim is preserved at ${claimPath}`, {
+        cause: restoreError,
+      });
+    }
+    throw error;
+  }
+  return { shouldMerge, agentsPath };
+}
+
 function migrationFinding(params: {
   agentId: string;
   path: string;
@@ -583,8 +932,12 @@ export async function collectToolsMdMigrationFindings(
   const findings: HealthFinding[] = [];
   for (const target of workspaceTargets(cfg)) {
     try {
-      const source = await readToolsMd(target.workspaceDir);
-      if (source) {
+      const sources = await collectWorkspaceToolsMdSources({
+        cfg,
+        workspaceDir: target.workspaceDir,
+        recoverClaims: false,
+      });
+      for (const source of sources) {
         findings.push(
           migrationFinding({
             agentId: target.agentId,
@@ -617,83 +970,60 @@ export async function maybeMigrateToolsMd(params: {
   const env = params.env ?? process.env;
   const changes: string[] = [];
   const warnings: string[] = [];
+  let migrationBlocked = false;
+  let migratedConfiguredSource = false;
   for (const target of workspaceTargets(params.cfg)) {
+    let sources: ToolsMdSource[];
     try {
-      const source = await readToolsMd(target.workspaceDir, {
+      sources = await collectWorkspaceToolsMdSources({
+        cfg: params.cfg,
+        workspaceDir: target.workspaceDir,
         recoverClaims: params.shouldRepair,
       });
-      if (!source) {
-        continue;
-      }
-      if (!params.shouldRepair) {
+    } catch (error) {
+      warnings.push(`Agent "${target.agentId}" TOOLS.md was not migrated: ${errorMessage(error)}`);
+      migrationBlocked = true;
+      continue;
+    }
+    if (!params.shouldRepair) {
+      for (const source of sources) {
         note(
           `${shortenHomePath(source.path)} will be archived and merged into AGENTS.md when customized.`,
           "TOOLS.md migration preview",
         );
-        continue;
       }
+      continue;
+    }
 
-      const shouldMerge =
-        source.content.trim().length > 0 &&
-        source.content !== LEGACY_TOOLS_MD_TEMPLATE &&
-        source.content !== LEGACY_TOOLS_DEV_MD_TEMPLATE &&
-        source.content !== LEGACY_TOOLS_DEV_FALLBACK;
-      await archiveSource({ agentId: target.agentId, source, env });
-      const claimPath = `${source.path}${TOOLS_CLAIM_INFIX}${process.pid}-${Date.now()}-${source.sha256.slice(0, 12)}`;
-      await fs.rename(source.path, claimPath);
+    for (const source of sources.toSorted((left, right) => left.path.localeCompare(right.path))) {
       try {
-        if (sha256(await fs.readFile(claimPath, "utf8")) !== source.sha256) {
-          throw new Error("TOOLS.md changed before the migration claim was acquired");
-        }
-        const agentsPath = path.join(target.workspaceDir, DEFAULT_AGENTS_FILENAME);
-        await recoverInterruptedAgentsClaim({
-          agentsPath,
-          toolsContent: source.content,
-          shouldMerge,
+        const migrated = await migrateToolsMdSource({
+          agentId: target.agentId,
+          source,
+          workspaceDir: target.workspaceDir,
+          env,
         });
-        let agentsContent = "";
-        try {
-          agentsContent = await fs.readFile(agentsPath, "utf8");
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-            throw error;
-          }
-        }
-        const merged = shouldMerge
-          ? mergeToolsMdIntoAgentsMd(agentsContent, source.content)
-          : agentsContent.includes(LEGACY_AGENTS_TOOLS_GUIDANCE)
-            ? ensureLocalNotesHeading(
-                agentsContent.replace(LEGACY_AGENTS_TOOLS_GUIDANCE, CURRENT_AGENTS_TOOLS_GUIDANCE),
-              )
-            : agentsContent;
-        if (merged !== agentsContent) {
-          await writeAgentsAtomically({ agentsPath, expected: agentsContent, content: merged });
-        }
-        if (sha256(await fs.readFile(claimPath, "utf8")) !== source.sha256) {
-          throw new Error("TOOLS.md changed while the migration claim was held");
-        }
-        if (merged !== agentsContent && (await fs.readFile(agentsPath, "utf8")) !== merged) {
-          throw new Error("AGENTS.md changed after TOOLS.md migration was written");
-        }
-        await fs.rm(claimPath);
-        await syncDirectory(target.workspaceDir);
+        changes.push(
+          migrated.shouldMerge
+            ? `Merged ${shortenHomePath(source.path)} into ${shortenHomePath(migrated.agentsPath)} and archived the original.`
+            : `Removed untouched ${shortenHomePath(source.path)} after archiving it.`,
+        );
+        migratedConfiguredSource ||= source.fromExtraPattern === true;
       } catch (error) {
-        try {
-          await restoreClaimNoClobber(claimPath, source.path);
-        } catch (restoreError) {
-          throw new Error(`TOOLS.md migration claim is preserved at ${claimPath}`, {
-            cause: restoreError,
-          });
-        }
-        throw error;
+        warnings.push(
+          `Agent "${target.agentId}" ${shortenHomePath(source.path)} was not migrated: ${errorMessage(error)}`,
+        );
+        migrationBlocked = true;
+        break;
       }
+    }
+  }
+  if (params.shouldRepair && (!migrationBlocked || migratedConfiguredSource)) {
+    const additions = retargetConfiguredExtraBootstrapPatterns(params.cfg);
+    if (additions.length > 0) {
       changes.push(
-        shouldMerge
-          ? `Merged ${shortenHomePath(source.path)} into AGENTS.md and archived the original.`
-          : `Removed untouched ${shortenHomePath(source.path)} after archiving it.`,
+        `Added migrated AGENTS.md bootstrap pattern${additions.length === 1 ? "" : "s"}: ${additions.join(", ")}`,
       );
-    } catch (error) {
-      warnings.push(`Agent "${target.agentId}" TOOLS.md was not migrated: ${errorMessage(error)}`);
     }
   }
   if (changes.length > 0) {
