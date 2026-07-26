@@ -2,6 +2,9 @@ import { isLegacyParentWritableUpdateDoctorPass } from "../commands/doctor/share
 import { writeConfigMachineState } from "../state/config-machine-state.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 
+const loadDoctorStateIntegrityModule = async () =>
+  await import("../commands/doctor-state-integrity.js");
+
 export async function runLegacyPluginManifestHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairLegacyPluginManifestContracts } =
     await import("../commands/doctor-plugin-manifests.js");
@@ -74,7 +77,7 @@ export async function runChannelIngressDeadLettersHealth(): Promise<void> {
 }
 
 export async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { noteStateIntegrity } = await import("../commands/doctor-state-integrity.js");
+  const { noteStateIntegrity } = await loadDoctorStateIntegrityModule();
   await noteStateIntegrity(ctx.cfg, ctx.prompter, ctx.configPath);
 }
 

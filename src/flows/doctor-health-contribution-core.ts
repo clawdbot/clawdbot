@@ -2,6 +2,8 @@ import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types
 import { renderStructuredHealthFindings } from "./doctor-health-contribution.js";
 import type { HealthCheck, HealthFinding } from "./health-checks.js";
 
+const loadHealthCheckRegistryModule = async () => await import("./health-check-registry.js");
+
 export async function runStructuredHealthRepairs(
   ctx: DoctorHealthFlowContext,
   resolveCoreChecks: () => Promise<readonly HealthCheck[]>,
@@ -10,7 +12,7 @@ export async function runStructuredHealthRepairs(
     return;
   }
   const { registerBundledHealthChecks } = await import("./bundled-health-checks.js");
-  const { listExtensionHealthChecksForDoctor } = await import("./health-check-registry.js");
+  const { listExtensionHealthChecksForDoctor } = await loadHealthCheckRegistryModule();
   const { runDoctorHealthRepairs } = await import("./doctor-repair-flow.js");
   const { resolveAgentWorkspaceDir, resolveDefaultAgentId } =
     await import("../agents/agent-scope.js");

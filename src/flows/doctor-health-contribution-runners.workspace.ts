@@ -6,6 +6,9 @@ import type { HealthCheckContext, HealthFinding } from "./health-checks.js";
 type PluginVersionDriftReport =
   import("../plugins/plugin-version-drift.js").PluginVersionDriftReport;
 
+const loadDoctorStateIntegrityModule = async () =>
+  await import("../commands/doctor-state-integrity.js");
+
 export async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   if (!ctx.cfg.hooks?.gmail?.model?.trim()) {
     return;
@@ -199,7 +202,7 @@ export async function runWorkspaceSuggestionsHealth(ctx: DoctorHealthFlowContext
   }
   const { resolveAgentWorkspaceDir, resolveDefaultAgentId } =
     await import("../agents/agent-scope.js");
-  const { noteWorkspaceBackupTip } = await import("../commands/doctor-state-integrity.js");
+  const { noteWorkspaceBackupTip } = await loadDoctorStateIntegrityModule();
   const { MEMORY_SYSTEM_PROMPT, shouldSuggestMemorySystem } =
     await import("../commands/doctor-workspace.js");
   const { note } = await import("../../packages/terminal-core/src/note.js");
