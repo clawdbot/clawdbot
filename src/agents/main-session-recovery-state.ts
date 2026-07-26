@@ -159,12 +159,20 @@ export function isMainRestartRecoveryCandidate(entry: SessionEntry, sessionKey: 
 // clears. With no active delivery or aggregate, those fences no longer own work.
 function hasOrphanedMainRestartRecoveryFences(entry: SessionEntry, sessionKey: string): boolean {
   return (
-    entry.status === "running" &&
-    entry.abortedLastRun !== true &&
-    entry.restartRecoveryRuns !== undefined &&
-    entry.mainRestartRecovery === undefined &&
-    entry.restartRecoveryDeliveryRunId === undefined &&
-    isMainRestartRecoveryCandidate(entry, sessionKey)
+    (entry.status === "running" &&
+      entry.abortedLastRun !== true &&
+      entry.restartRecoveryRuns !== undefined &&
+      entry.mainRestartRecovery === undefined &&
+      entry.restartRecoveryDeliveryRunId === undefined &&
+      isMainRestartRecoveryCandidate(entry, sessionKey)) ||
+    // Terminal sessions with recovery residue were permanently unadmittable,
+    // returning "changed while starting work" forever (production incident 2026-07-26).
+    (entry.status !== undefined &&
+      entry.status !== "running" &&
+      entry.mainRestartRecovery === undefined &&
+      entry.restartRecoveryDeliveryRunId === undefined &&
+      isMainRestartRecoveryCandidate(entry, sessionKey) &&
+      (entry.restartRecoveryRuns !== undefined || entry.abortedLastRun === true))
   );
 }
 

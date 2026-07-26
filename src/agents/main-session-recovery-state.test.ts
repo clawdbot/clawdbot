@@ -229,6 +229,58 @@ describe("main session recovery state", () => {
     expect(entry.mainRestartRecovery).toBeUndefined();
   });
 
+  it("clears orphaned recovery residue before terminal foreground admission", () => {
+    const entry = interruptedEntry({
+      status: "failed",
+      mainRestartRecovery: undefined,
+      restartRecoveryRuns: [{ runId: "stale-run", lifecycleGeneration: "dead-generation" }],
+    });
+
+    expect(
+      transitionMainSessionRecovery(entry, {
+        kind: "claim_foreground",
+        cycleId: "unused",
+        lifecycleGeneration: "generation-1",
+        sessionId: "session-1",
+        sessionKey,
+        claimId: "foreground-1",
+      }),
+    ).toEqual({ kind: "applied" });
+    expect(entry).toMatchObject({ status: "failed", abortedLastRun: false });
+    expect(entry.restartRecoveryRuns).toBeUndefined();
+    expect(entry.mainRestartRecovery).toBeUndefined();
+    expect(entry.restartRecoveryDeliveryRunId).toBeUndefined();
+  });
+
+  it("keeps interrupted running recovery residue authoritative", () => {
+    const entry = interruptedEntry({
+      mainRestartRecovery: undefined,
+      restartRecoveryRuns: [{ runId: "pending-run", lifecycleGeneration: "generation-1" }],
+    });
+
+    expect(
+      transitionMainSessionRecovery(entry, {
+        kind: "claim_foreground",
+        cycleId: "cycle-2",
+        lifecycleGeneration: "generation-1",
+        sessionId: "session-1",
+        sessionKey,
+        claimId: "foreground-1",
+      }),
+    ).toMatchObject({ kind: "foreground_claimed" });
+    expect(entry.abortedLastRun).toBe(true);
+    expect(entry.restartRecoveryRuns).toEqual([
+      { runId: "pending-run", lifecycleGeneration: "generation-1" },
+    ]);
+    expect(entry.mainRestartRecovery).toMatchObject({
+      cycleId: "cycle-2",
+      foregroundClaims: {
+        lifecycleGeneration: "generation-1",
+        tokens: ["foreground-1"],
+      },
+    });
+  });
+
   it("keeps lifecycle fences while a recovery delivery owner remains", () => {
     const entry = interruptedEntry({
       abortedLastRun: false,
@@ -959,5 +1011,21 @@ describe("main session recovery state", () => {
 
   it("builds an empty clear patch when no main recovery state exists", () => {
     expect(buildMainSessionRecoveryClearPatch({ abortedLastRun: false })).toEqual({});
+  });
+
+  it("clears every main recovery ownership field", () => {
+    expect(
+      buildMainSessionRecoveryClearPatch({
+        abortedLastRun: true,
+        restartRecoveryRuns: [{ runId: "stale-run", lifecycleGeneration: "dead-generation" }],
+        mainRestartRecovery: recoveryState(),
+        restartRecoveryDeliveryRunId: "delivery-run",
+      }),
+    ).toEqual({
+      abortedLastRun: false,
+      restartRecoveryRuns: undefined,
+      mainRestartRecovery: undefined,
+      restartRecoveryDeliveryRunId: undefined,
+    });
   });
 });

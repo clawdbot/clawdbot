@@ -391,6 +391,65 @@ describe("main session recovery store", () => {
     expect(read().mainRestartRecovery).toBeUndefined();
   });
 
+  it("atomically clears orphaned recovery residue from a terminal row", async () => {
+    await write(
+      interruptedEntry({
+        status: "failed",
+        mainRestartRecovery: undefined,
+        restartRecoveryRuns: [{ runId: "stale-run", lifecycleGeneration: "dead-generation" }],
+      }),
+    );
+
+    await expect(
+      claimMainSessionRecoveryOwner({
+        lifecycleGeneration,
+        sessionId: "session-1",
+        target: { sessionKey, storePath },
+      }),
+    ).resolves.toEqual({ kind: "not_required" });
+    expect(read()).toMatchObject({
+      sessionId: "session-1",
+      status: "failed",
+      abortedLastRun: false,
+    });
+    expect(read().restartRecoveryRuns).toBeUndefined();
+    expect(read().mainRestartRecovery).toBeUndefined();
+    expect(read().restartRecoveryDeliveryRunId).toBeUndefined();
+  });
+
+  it("inspects terminal recovery residue as non-blocking before foreground cleanup", async () => {
+    const residue = interruptedEntry({
+      status: "done",
+      mainRestartRecovery: undefined,
+      restartRecoveryRuns: [{ runId: "stale-run", lifecycleGeneration: "dead-generation" }],
+    });
+    await write(residue);
+
+    await expect(
+      inspectMainSessionRecoveryRequired({
+        expectedSessionId: "session-1",
+        lifecycleGeneration,
+        target: { sessionKey, storePath },
+      }),
+    ).resolves.toEqual({ kind: "not_required" });
+    expect(read()).toMatchObject({
+      status: "done",
+      abortedLastRun: true,
+      restartRecoveryRuns: residue.restartRecoveryRuns,
+    });
+    expect(read().mainRestartRecovery).toBeUndefined();
+
+    await expect(
+      claimMainSessionRecoveryOwner({
+        lifecycleGeneration,
+        sessionId: "session-1",
+        target: { sessionKey, storePath },
+      }),
+    ).resolves.toEqual({ kind: "not_required" });
+    expect(read()).toMatchObject({ status: "done", abortedLastRun: false });
+    expect(read().restartRecoveryRuns).toBeUndefined();
+  });
+
   it("binds a foreground claim to its lifecycle run", async () => {
     await write(interruptedEntry());
 
