@@ -1,0 +1,146 @@
+name: Voice Wake foreground Gateway proof
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - ".github/workflows/voicewake-foreground-proof.yml"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "scripts/voicewake-foreground-proof.ts"
+      - "src/cli/gateway-cli/**"
+      - "src/cli/run-main.ts"
+      - "src/commands/doctor-config-preflight.ts"
+      - "src/commands/doctor-config-preflight.process.test.ts"
+      - "src/commands/doctor/shared/**"
+      - "src/infra/state-migrations*.ts"
+      - "src/infra/voicewake-routing.ts"
+      - "src/infra/voicewake.ts"
+      - "src/logging/redact.ts"
+      - "src/state/openclaw-state-db.ts"
+      - "src/state/openclaw-state-db.paths.ts"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: voicewake-foreground-proof-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.15.0"
+
+jobs:
+  foreground-proof:
+    name: Foreground Gateway recovery proof
+    if: github.event.pull_request.draft == false
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout candidate head
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Prepare proof artifact directory
+        id: artifact
+        env:
+          CANDIDATE_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_dir="$GITHUB_WORKSPACE/.artifacts/voicewake-foreground-proof"
+          mkdir -p "$artifact_dir"
+          printf '%s\n' "$CANDIDATE_SHA" > "$artifact_dir/candidate-sha.txt"
+          cat > "$artifact_dir/voicewake-foreground-proof.json" <<'EOF'
+          {"outcome":"incomplete","reason":"proof did not start"}
+          EOF
+          cat > "$artifact_dir/voicewake-foreground-proof.md" <<'EOF'
+          # Voice Wake foreground Gateway proof
+
+          - Outcome: incomplete before foreground proof execution.
+          EOF
+          echo "artifact_dir=$artifact_dir" >> "$GITHUB_OUTPUT"
+
+      - name: Verify candidate identity
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]]
+          git diff --exit-code --quiet
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          check-latest: false
+
+      - name: Install proof dependencies without lifecycle scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          isolated_home="$RUNNER_TEMP/voicewake-proof-home"
+          isolated_store="$RUNNER_TEMP/voicewake-proof-pnpm-store"
+          mkdir -p "$isolated_home" "$isolated_store"
+          corepack enable
+          corepack prepare pnpm@11.15.1+sha512.81350b07e53c9538a02f1f2303b4290fa2d7be04e56e2a970c4cc4b417dc761de196edabd49d55c7dc9580db81007c44143e4e3d7e462b3000d23c255122d065 --activate
+          pnpm_bin="$(command -v pnpm)"
+          env -i \
+            HOME="$isolated_home" \
+            NPM_CONFIG_USERCONFIG="$isolated_home/.npmrc" \
+            PATH="$PATH" \
+            PNPM_HOME="$isolated_home/.pnpm" \
+            "$pnpm_bin" install --frozen-lockfile --ignore-scripts --store-dir "$isolated_store"
+          git diff --exit-code --quiet
+
+      - name: Run isolated foreground proof
+        id: proof
+
+        env:
+          CANDIDATE_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_dir="$GITHUB_WORKSPACE/.artifacts/voicewake-foreground-proof"
+          mkdir -p "$artifact_dir"
+          printf '%s\n' "$CANDIDATE_SHA" > "$artifact_dir/candidate-sha.txt"
+          set +e
+          env -i \
+            HOME="$RUNNER_TEMP/voicewake-proof-run-home" \
+            LANG="C.UTF-8" \
+            LC_ALL="C.UTF-8" \
+            OPENCLAW_VOICEWAKE_PROOF_ARTIFACT_DIR="$artifact_dir" \
+            OPENCLAW_VOICEWAKE_PROOF_CANDIDATE_SHA="$CANDIDATE_SHA" \
+            PATH="$PATH" \
+            node --import tsx scripts/voicewake-foreground-proof.ts
+          proof_exit="$?"
+          set -e
+          [[ "$(git rev-parse HEAD)" == "$CANDIDATE_SHA" ]]
+          [[ -f "$artifact_dir/voicewake-foreground-proof.json" ]]
+          [[ -f "$artifact_dir/voicewake-foreground-proof.md" ]]
+          echo "artifact_dir=$artifact_dir" >> "$GITHUB_OUTPUT"
+          echo "proof_exit=$proof_exit" >> "$GITHUB_OUTPUT"
+          exit "$proof_exit"
+
+      - name: Publish redacted proof summary
+        if: ${{ always() && steps.artifact.outputs.artifact_dir != '' }}
+        shell: bash
+        run: cat "${{ steps.artifact.outputs.artifact_dir }}/voicewake-foreground-proof.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload foreground proof artifact
+        if: ${{ always() && steps.artifact.outputs.artifact_dir != '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: voicewake-foreground-proof-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}-${{ github.run_attempt }}
+          path: ${{ steps.artifact.outputs.artifact_dir }}
+          if-no-files-found: error
+          retention-days: 14
