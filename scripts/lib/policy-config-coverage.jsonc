@@ -29,7 +29,6 @@
     "gateway.nodes.commands.deny.*",
     "gateway.tailscale.mode",
     "gateway.tailscale.preserveFunnel",
-    "logging.redactSensitive",
     "memory.qmd.sessions.enabled",
     "mcp.servers.*.command",
     "mcp.servers.*.transport",
@@ -173,14 +172,6 @@
       "area": "ingress",
       "policy": "ingress.session.requireDmScope",
       "reason": "Policy observes direct-message session isolation scope.",
-    },
-    {
-      "pattern": "logging.redactSensitive",
-      "status": "observed",
-      "area": "dataHandling",
-      "policy": "dataHandling.sensitiveLogging.requireRedaction",
-      "reason": "Policy observes sensitive log redaction posture.",
-      "allowNoSchemaPath": true,
     },
     {
       "pattern": "diagnostics.otel.captureContent",

@@ -1,7 +1,7 @@
 // Policy doctor fix metadata classifies findings before patch builders exist.
 import { CHECK_IDS, POLICY_CHECK_IDS } from "./check-ids.js";
 
-type PolicyFixClass = "automatic" | "reviewRequired" | "manual" | "validateOnly" | "unsupported";
+type PolicyFixClass = "automatic" | "reviewRequired" | "manual" | "unsupported";
 
 type PolicyFixMetadata = {
   readonly checkId: (typeof POLICY_CHECK_IDS)[number];
@@ -326,15 +326,6 @@ const POLICY_FIX_METADATA = [
       policyPath: ["sandbox", "browser", "requireCdpSourceRange"],
       configTargets: ["agents.sandbox.browser"],
     },
-  ),
-  // Sensitive log redaction is an unconditional runtime invariant (src/logging/redact.ts),
-  // so this requirement has no config target to patch. Adding one would emit a retired
-  // config key that strict validation rejects.
-  m(
-    CHECK_IDS.policyDataHandlingRedactionDisabled,
-    "validateOnly",
-    "Update the policy requirement; sensitive log redaction is always enabled.",
-    { policyPath: ["dataHandling", "sensitiveLogging", "requireRedaction"] },
   ),
   m(
     CHECK_IDS.policyDataHandlingTelemetryContentCapture,
