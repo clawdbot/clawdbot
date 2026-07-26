@@ -1,9 +1,6 @@
 import {
-  runAuthProfileHealth,
   runClaudeCliHealth,
   runCommandOwnerHealth,
-  runGatewayAuthHealth,
-  runGatewayConfigHealth,
 } from "./doctor-health-contribution-runners.gateway.js";
 import {
   runChannelIngressDeadLettersHealth,
@@ -13,7 +10,6 @@ import {
   runDiskSpaceHealth,
   runLegacyCronHealth,
   runLegacyPluginManifestHealth,
-  runLegacyStateHealth,
   runPluginRegistryHealth,
   runReleaseConfiguredPluginInstallsHealth,
   runSandboxHealth,
@@ -43,13 +39,17 @@ function legacyOwnedRepair(
 
 export function resolveInitialDoctorHealthContributions(params: {
   runStructuredHealthRepairs: (ctx: DoctorHealthFlowContext) => Promise<void>;
+  runGatewayConfigHealth: (ctx: DoctorHealthFlowContext) => Promise<void>;
+  runAuthProfileHealth: (ctx: DoctorHealthFlowContext) => Promise<void>;
+  runGatewayAuthHealth: (ctx: DoctorHealthFlowContext) => Promise<void>;
+  runLegacyStateHealth: (ctx: DoctorHealthFlowContext) => Promise<void>;
 }): DoctorHealthContribution[] {
   return [
     createDoctorHealthContribution({
       id: "doctor:gateway-config",
       label: "Gateway config",
       healthCheckIds: ["core/doctor/gateway-config"],
-      run: runGatewayConfigHealth,
+      run: params.runGatewayConfigHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:auth-profiles",
@@ -62,7 +62,7 @@ export function resolveInitialDoctorHealthContributions(params: {
           return collectAuthProfileHealthFindings({ cfg: ctx.cfg, allowKeychainPrompt: false });
         },
       },
-      run: runAuthProfileHealth,
+      run: params.runAuthProfileHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:claude-cli",
@@ -74,7 +74,7 @@ export function resolveInitialDoctorHealthContributions(params: {
       id: "doctor:gateway-auth",
       label: "Gateway auth",
       healthCheckIds: ["core/doctor/gateway-auth"],
-      run: runGatewayAuthHealth,
+      run: params.runGatewayAuthHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:command-owner",
@@ -91,7 +91,7 @@ export function resolveInitialDoctorHealthContributions(params: {
       id: "doctor:legacy-state",
       label: "Legacy state",
       healthCheckIds: ["core/doctor/legacy-state", "core/doctor/removed-workspaces-state"],
-      run: runLegacyStateHealth,
+      run: params.runLegacyStateHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:legacy-plugin-manifests",

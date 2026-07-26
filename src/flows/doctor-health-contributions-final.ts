@@ -10,7 +10,6 @@ import {
   runBrowserHealth,
   runDevicePairingHealth,
   runGatewayDaemonHealth,
-  runGatewayHealthChecks,
   runGatewayServicesHealth,
   runOpenAIOAuthTlsHealth,
   runSecurityHealth,
@@ -21,23 +20,29 @@ import {
 import {
   collectMemorySearchHealthFindings,
   collectWorkspaceStatusPluginVersionDrift,
-  detectSystemdLingerFindings,
   runBootstrapSizeHealth,
   runHeartbeatCadenceMigrationHealth,
   runHeartbeatScratchMigrationHealth,
   runHeartbeatTaskMigrationHealth,
   runHooksModelHealth,
   runMemorySearchHealthContribution,
-  runShellCompletionHealth,
   runSkillsHealth,
-  runSystemdLingerHealth,
   runWorkspaceStatusHealth,
   runWorkspaceSuggestionsHealth,
 } from "./doctor-health-contribution-runners.workspace.js";
-import type { DoctorHealthContribution } from "./doctor-health-contribution-types.js";
+import type {
+  DoctorHealthContribution,
+  DoctorHealthFlowContext,
+} from "./doctor-health-contribution-types.js";
 import { createDoctorHealthContribution } from "./doctor-health-contribution.js";
+import type { HealthCheck } from "./health-checks.js";
 
-export function resolveFinalDoctorHealthContributions(): DoctorHealthContribution[] {
+export function resolveFinalDoctorHealthContributions(params: {
+  runSystemdLingerHealth: (ctx: DoctorHealthFlowContext) => Promise<void>;
+  detectSystemdLingerFindings: HealthCheck["detect"];
+  runShellCompletionHealth: (ctx: DoctorHealthFlowContext) => Promise<void>;
+  runGatewayHealthChecks: (ctx: DoctorHealthFlowContext) => Promise<void>;
+}): DoctorHealthContribution[] {
   return [
     createDoctorHealthContribution({
       id: "doctor:gateway-services",
@@ -161,9 +166,9 @@ export function resolveFinalDoctorHealthContributions(): DoctorHealthContributio
       healthChecks: {
         description: "Disabled systemd user lingering is reported as a finding.",
         defaultEnabled: false,
-        detect: detectSystemdLingerFindings,
+        detect: params.detectSystemdLingerFindings,
       },
-      run: runSystemdLingerHealth,
+      run: params.runSystemdLingerHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:workspace-status",
@@ -276,13 +281,13 @@ export function resolveFinalDoctorHealthContributions(): DoctorHealthContributio
       id: "doctor:shell-completion",
       label: "Shell completion",
       healthCheckIds: ["core/doctor/shell-completion"],
-      run: runShellCompletionHealth,
+      run: params.runShellCompletionHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:gateway-health",
       label: "Gateway health",
       healthCheckIds: ["core/doctor/gateway-health"],
-      run: runGatewayHealthChecks,
+      run: params.runGatewayHealthChecks,
     }),
     createDoctorHealthContribution({
       id: "doctor:whatsapp-responsiveness",

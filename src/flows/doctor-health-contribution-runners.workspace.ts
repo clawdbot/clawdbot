@@ -1,7 +1,6 @@
 import type { DoctorOptions } from "../commands/doctor-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
-import { resolveDoctorMode } from "./doctor-health-contribution-utils.js";
 import type { HealthCheckContext, HealthFinding } from "./health-checks.js";
 
 type PluginVersionDriftReport =
@@ -48,73 +47,6 @@ export async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise
   if (warnings.length > 0) {
     note(warnings.join("\n"), "Hooks");
   }
-}
-
-export async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  if (
-    ctx.options.nonInteractive === true ||
-    process.platform !== "linux" ||
-    resolveDoctorMode(ctx.cfg) !== "local"
-  ) {
-    return;
-  }
-  const { resolveGatewayService } = await import("../daemon/service.js");
-  const { ensureSystemdUserLingerInteractive } = await import("../commands/systemd-linger.js");
-  const { note } = await import("../../packages/terminal-core/src/note.js");
-  let loaded;
-  try {
-    loaded = await resolveGatewayService().isLoaded({ env: process.env });
-  } catch {
-    loaded = false;
-  }
-  if (!loaded) {
-    return;
-  }
-  await ensureSystemdUserLingerInteractive({
-    runtime: ctx.runtime,
-    prompter: { confirm: async (p) => ctx.prompter.confirm(p), note },
-    reason:
-      "Gateway runs as a systemd user service. Without lingering, systemd stops the user session on logout/idle and kills the Gateway.",
-    requireConfirm: true,
-  });
-}
-
-export async function detectSystemdLingerFindings(
-  ctx: HealthCheckContext,
-): Promise<readonly HealthFinding[]> {
-  if (process.platform !== "linux" || resolveDoctorMode(ctx.cfg) !== "local") {
-    return [];
-  }
-  const { resolveGatewayService } = await import("../daemon/service.js");
-  let loaded;
-  try {
-    loaded = await resolveGatewayService().isLoaded({ env: process.env });
-  } catch {
-    loaded = false;
-  }
-  if (!loaded) {
-    return [];
-  }
-  const { isSystemdUserServiceAvailable, readSystemdUserLingerStatus } =
-    await import("../daemon/systemd.js");
-  if (!(await isSystemdUserServiceAvailable(process.env))) {
-    return [];
-  }
-  const status = await readSystemdUserLingerStatus(process.env);
-  if (!status || status.linger === "yes") {
-    return [];
-  }
-  return [
-    {
-      checkId: "core/doctor/systemd-linger",
-      severity: "warning",
-      source: "doctor",
-      message: `Systemd lingering is disabled for ${status.user}.`,
-      target: `systemd.user.${status.user}`,
-      requirement: "systemd user lingering enabled",
-      fixHint: `Run: sudo loginctl enable-linger ${status.user}`,
-    },
-  ];
 }
 
 export async function collectWorkspaceStatusPluginVersionDrift(params: {
@@ -194,13 +126,6 @@ export async function runHeartbeatTaskMigrationHealth(ctx: DoctorHealthFlowConte
     cfg: ctx.cfg,
     shouldRepair: ctx.prompter.shouldRepair,
     env: ctx.env,
-  });
-}
-
-export async function runShellCompletionHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { doctorShellCompletion } = await import("../commands/doctor-completion.js");
-  await doctorShellCompletion(ctx.runtime, ctx.prompter, {
-    nonInteractive: ctx.options.nonInteractive,
   });
 }
 

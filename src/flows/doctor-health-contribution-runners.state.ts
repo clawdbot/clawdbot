@@ -1,54 +1,6 @@
 import { isLegacyParentWritableUpdateDoctorPass } from "../commands/doctor/shared/update-phase.js";
 import { writeConfigMachineState } from "../state/config-machine-state.js";
-import { runCoreContributionHealth } from "./doctor-health-contribution-core.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
-
-export async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { detectLegacyStateMigrations, runLegacyStateMigrations } =
-    await import("../commands/doctor-state-migrations.js");
-  const { note } = await import("../../packages/terminal-core/src/note.js");
-  await runCoreContributionHealth(ctx, ["core/doctor/removed-workspaces-state"]);
-  const doctorOnlyStateMigrations = ctx.options.repair === true || ctx.options.yes === true;
-  const legacyState = await detectLegacyStateMigrations({
-    cfg: ctx.cfg,
-    ...(doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
-  });
-  if (legacyState.warnings.length > 0) {
-    note(legacyState.warnings.join("\n"), "Doctor warnings");
-  }
-  if (legacyState.notices.length > 0) {
-    note(legacyState.notices.join("\n"), "Doctor notices");
-  }
-  if (legacyState.preview.length === 0) {
-    return;
-  }
-  note(legacyState.preview.join("\n"), "Legacy state detected");
-  const migrate =
-    ctx.options.nonInteractive === true
-      ? true
-      : await ctx.prompter.confirm({
-          message: "Migrate detected legacy state now?",
-          initialValue: true,
-        });
-  if (!migrate) {
-    return;
-  }
-  const migrated = await runLegacyStateMigrations({
-    detected: legacyState,
-    config: ctx.cfg,
-    ...(doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
-    recoverCorruptTargetStore: doctorOnlyStateMigrations,
-  });
-  if (migrated.changes.length > 0) {
-    note(migrated.changes.join("\n"), "Doctor changes");
-  }
-  if ((migrated.notices ?? []).length > 0) {
-    note(migrated.notices!.join("\n"), "Doctor notices");
-  }
-  if (migrated.warnings.length > 0) {
-    note(migrated.warnings.join("\n"), "Doctor warnings");
-  }
-}
 
 export async function runLegacyPluginManifestHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairLegacyPluginManifestContracts } =
