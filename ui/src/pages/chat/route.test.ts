@@ -351,8 +351,98 @@ describe("loadChatRoute", () => {
       sessionKey: "agent:main:workspace",
       draft: undefined,
       face: "chat",
+      canonicalLocation: { pathname: "/chat/main", search: "", hash: "" },
     });
     expect(list).not.toHaveBeenCalled();
+  });
+
+  it("canonicalizes a literal configured-main route when defaults are warm", async () => {
+    const { context, list } = contextFor(result([]), "workspace");
+    await expect(
+      loadChatRoute(
+        context,
+        { pathname: "/chat/research/workspace", search: "?draft=ship", hash: "#pane" },
+        "chat",
+        new AbortController().signal,
+      ),
+    ).resolves.toEqual({
+      kind: "session",
+      sessionKey: "agent:research:workspace",
+      draft: "ship",
+      face: "chat",
+      canonicalLocation: {
+        pathname: "/chat/research",
+        search: "?draft=ship",
+        hash: "#pane",
+      },
+    });
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it("canonicalizes a literal configured-main route after cold defaults arrive", async () => {
+    for (const [pathname, targetSessionKey, mainKey, expectedCanonicalLocation] of [
+      [
+        "/chat/research/workspace",
+        "agent:research:workspace",
+        "workspace",
+        { pathname: "/chat/research", search: "", hash: "" },
+      ],
+      [
+        "/chat/research/team/primary",
+        "agent:research:team:primary",
+        "team:primary",
+        { pathname: "/chat/research", search: "", hash: "" },
+      ],
+      ["/chat/research/main", "agent:research:main", "workspace", null],
+    ] as const) {
+      type GatewayListener = Parameters<ApplicationContext["gateway"]["subscribe"]>[0];
+      let listener: GatewayListener | null = null;
+      let snapshot = {
+        phase: "connecting",
+        client: null,
+        hello: null,
+      } as unknown as ApplicationContext["gateway"]["snapshot"];
+      const context = {
+        basePath: "",
+        gateway: {
+          get snapshot() {
+            return snapshot;
+          },
+          subscribe: (next: GatewayListener) => {
+            listener = next;
+            return () => undefined;
+          },
+        },
+        agents: { state: { agentsList: null } },
+      } as unknown as ApplicationContext;
+      const loaded = await loadChatRoute(
+        context,
+        { pathname, search: "", hash: "" },
+        "chat",
+        new AbortController().signal,
+      );
+      expect(loaded).toMatchObject({
+        kind: "session",
+        sessionKey: targetSessionKey,
+        face: "chat",
+      });
+      if (!("kind" in loaded) || loaded.kind !== "session" || !loaded.canonicalLocationReady) {
+        throw new Error("expected deferred main-session canonicalization");
+      }
+
+      snapshot = {
+        phase: "connected",
+        client: {},
+        hello: { snapshot: { sessionDefaults: { mainKey } } },
+      } as unknown as ApplicationContext["gateway"]["snapshot"];
+      const connectedListener = listener as GatewayListener | null;
+      if (!connectedListener) {
+        throw new Error("expected gateway readiness subscription");
+      }
+      connectedListener(snapshot);
+
+      await expect(loaded.canonicalLocationReady).resolves.toEqual(expectedCanonicalLocation);
+    }
   });
 
   it("loads a specific synthetic catalog thread from its URL target", async () => {

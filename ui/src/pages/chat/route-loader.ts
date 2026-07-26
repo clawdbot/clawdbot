@@ -38,6 +38,7 @@ export type ChatRouteData =
       draft?: string;
       face: BoardFace;
       canonicalLocation?: RouteLocation;
+      canonicalLocationReady?: Promise<RouteLocation | null>;
     }
   | {
       kind: "ambiguous";
@@ -54,6 +55,13 @@ export type SessionChatRouteData = Omit<
   face?: BoardFace;
   kind?: "session";
 };
+
+export function locationWithoutDraft(location: RouteLocation): RouteLocation {
+  const params = new URLSearchParams(location.search);
+  params.delete("draft");
+  const search = params.toString();
+  return { ...location, search: search ? `?${search}` : "" };
+}
 
 type SessionPrefixResolution =
   | { kind: "not-found" }
@@ -181,6 +189,32 @@ function configuredMainKey(context: ApplicationContext): string {
   });
 }
 
+function hasConfiguredMainKey(context: ApplicationContext): boolean {
+  return Boolean(
+    context.agents.state.agentsList?.mainKey?.trim() ||
+    (context.gateway.snapshot.phase === "connected" && context.gateway.snapshot.hello),
+  );
+}
+
+function canonicalMainLocation(
+  context: ApplicationContext,
+  location: RouteLocation,
+  face: BoardFace,
+  sessionKey: string,
+): RouteLocation | null {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed) {
+    return null;
+  }
+  const mainKey = configuredMainKey(context).toLowerCase();
+  const rest = parsed.rest.toLowerCase();
+  if (rest !== mainKey) {
+    return null;
+  }
+  const pathname = pathForSession(face, parsed.agentId, sessionKey, context.basePath, { mainKey });
+  return pathname && pathname !== location.pathname ? { ...location, pathname } : null;
+}
+
 function targetFromLocation(context: ApplicationContext, location: RouteLocation) {
   const mainKey = configuredMainKey(context);
   const direct = sessionRefFromPath(location.pathname, context.basePath, mainKey);
@@ -268,11 +302,24 @@ export async function loadChatRoute(
     };
   }
   if (target.kind === "literal") {
+    const defaultsKnown = hasConfiguredMainKey(context);
+    const canonicalLocation = defaultsKnown
+      ? canonicalMainLocation(context, location, face, target.sessionKey)
+      : null;
+    const parsed = parseAgentSessionKey(target.sessionKey);
+    const canonicalLocationReady =
+      !defaultsKnown && parsed
+        ? waitForGatewayClient(context.gateway, signal)
+            .then(() => canonicalMainLocation(context, location, face, target.sessionKey))
+            .catch(() => null)
+        : undefined;
     return {
       kind: "session",
       sessionKey: target.sessionKey,
       draft: draftFromLocation(location),
       face,
+      ...(canonicalLocation ? { canonicalLocation } : {}),
+      ...(canonicalLocationReady ? { canonicalLocationReady } : {}),
     };
   }
   const resolution = await querySessionPrefix(context, target.shortId, signal);

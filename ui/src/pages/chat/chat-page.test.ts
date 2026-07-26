@@ -2,6 +2,7 @@
 /* @vitest-environment-options {"url":"http://chat-page.test/"} */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import type { RouteLocation } from "@openclaw/uirouter";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const nativeGateways = vi.hoisted(() => ({ current: null as NativeGatewaysCapability | null }));
@@ -72,6 +73,14 @@ function createSplitLayout(sessionKey: string): ChatSplitLayout {
 
 function itemAt<T>(items: ArrayLike<T>, index: number, label: string): T {
   return expectDefined(items[index], `${label} ${index}`);
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 function setLayout(page: ChatPage, layout: ChatSplitLayout | undefined) {
@@ -367,6 +376,35 @@ describe("chat page split layout host", () => {
     });
     page.data = { ...firstRouteData };
     expect(getRouteDraftForActivePane(page)).toBe("one-shot draft");
+  });
+
+  it("replaces a cold literal main route after canonical defaults resolve", async () => {
+    const page = new ChatPage();
+    const navigation = setNavigationContext(page);
+    const canonicalLocation = deferred<RouteLocation | null>();
+    page.data = {
+      sessionKey: "agent:research:workspace",
+      face: "chat",
+      draft: "ship",
+      canonicalLocationReady: canonicalLocation.promise,
+    };
+    document.body.append(page);
+    await page.updateComplete;
+    await vi.waitFor(() => expect(navigation.replace).toHaveBeenCalledOnce());
+    navigation.replace.mockClear();
+
+    canonicalLocation.resolve({
+      pathname: "/chat/research",
+      search: "?draft=ship&panel=details",
+      hash: "",
+    });
+    await vi.waitFor(() =>
+      expect(navigation.replace).toHaveBeenCalledWith("chat", {
+        pathname: "/chat/research",
+        search: "?panel=details",
+        hash: "",
+      }),
+    );
   });
 
   it("keeps catalog identity when consuming a route draft", async () => {

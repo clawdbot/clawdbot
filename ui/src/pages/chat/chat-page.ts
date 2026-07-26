@@ -20,7 +20,7 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/chat.css";
 import "./chat-pane.ts";
-import type { SessionChatRouteData } from "./route-loader.ts";
+import { locationWithoutDraft, type SessionChatRouteData } from "./route-loader.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import {
   resolveSplitDropZone,
@@ -125,6 +125,14 @@ export class ChatPage extends OpenClawLightDomElement {
         this.context.replace(data.face ?? "chat", data.canonicalLocation);
         return;
       }
+      void data?.canonicalLocationReady?.then((location) => {
+        if (location && this.isConnected && this.data === data) {
+          this.context.replace(
+            data.face ?? "chat",
+            this.consumedDraftData === data ? locationWithoutDraft(location) : location,
+          );
+        }
+      });
       this.syncRouteAgent();
       this.syncRouteToActivePane();
     }

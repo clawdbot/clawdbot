@@ -108,6 +108,29 @@ describe("normalizeInitialApplicationLocation", () => {
     expect(subscribe).not.toHaveBeenCalled();
   });
 
+  it("canonicalizes a scoped persisted main key when defaults are already known", async () => {
+    const subscribe = vi.fn(() => () => undefined);
+
+    await expect(
+      resolveInitialApplicationLocation({
+        location: { pathname: "/", search: "", hash: "" },
+        basePath: "",
+        sessionKey: "agent:research:workspace",
+        gateway: {
+          snapshot: {
+            phase: "connected",
+            client: {},
+            hello: { snapshot: { sessionDefaults: { mainKey: "workspace" } } },
+          },
+          subscribe,
+        } as unknown as ApplicationContext<RouteId>["gateway"],
+        agentsList: () => null,
+        signal: new AbortController().signal,
+      }),
+    ).resolves.toEqual({ pathname: "/chat/research", search: "", hash: "" });
+    expect(subscribe).not.toHaveBeenCalled();
+  });
+
   it("starts the first-run redirect after installing the persisted session location", async () => {
     const canonicalLocation = normalizeInitialApplicationLocation(
       { pathname: "/", search: "", hash: "" },

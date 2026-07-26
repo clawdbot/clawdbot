@@ -3,6 +3,7 @@ import { routeIdFromPath } from "../app-routes.ts";
 import { pathForSession } from "../app-session-path-builder.ts";
 import {
   parseAgentSessionKey,
+  resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
   type UiSessionDefaultsHost,
 } from "../lib/sessions/session-key.ts";
@@ -15,6 +16,7 @@ export function normalizeInitialApplicationLocation(
   basePath: string,
   sessionKey: string,
   fallbackAgentId: string,
+  mainKey?: string | null,
 ) {
   if (!isDefaultChatLanding(location, basePath, routeIdFromPath) || !sessionKey.trim()) {
     return location;
@@ -23,7 +25,7 @@ export function normalizeInitialApplicationLocation(
   if (!agentId) {
     return location;
   }
-  const pathname = pathForSession("chat", agentId, sessionKey, basePath);
+  const pathname = pathForSession("chat", agentId, sessionKey, basePath, { mainKey });
   return pathname ? { ...location, pathname } : location;
 }
 
@@ -43,13 +45,15 @@ export async function resolveInitialApplicationLocation(params: {
   if (params.sessionKey.trim() && !parseAgentSessionKey(params.sessionKey)) {
     await waitForGatewayClient(params.gateway, params.signal);
   }
+  const defaults = {
+    agentsList: params.agentsList(),
+    hello: params.gateway.snapshot.hello,
+  };
   return normalizeInitialApplicationLocation(
     params.location,
     params.basePath,
     params.sessionKey,
-    resolveUiDefaultAgentId({
-      agentsList: params.agentsList(),
-      hello: params.gateway.snapshot.hello,
-    }),
+    resolveUiDefaultAgentId(defaults),
+    resolveUiConfiguredMainKey(defaults),
   );
 }
