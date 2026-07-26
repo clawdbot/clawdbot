@@ -74,8 +74,6 @@
     "!dist/plugin-sdk/cli-backend.d.ts",
     "!dist/plugin-sdk/cli-runtime.d.ts",
     "!dist/plugin-sdk/codex-mcp-projection.d.ts",
-    "!dist/plugin-sdk/codex-native-task-runtime.js",
-    "!dist/plugin-sdk/codex-native-task-runtime.d.ts",
     "!dist/plugin-sdk/command-status-runtime.d.ts",
     "!dist/plugin-sdk/command-surface.d.ts",
     "!dist/plugin-sdk/concurrency-runtime.d.ts",
