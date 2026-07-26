@@ -226,6 +226,17 @@ describe("SQLite auth storage", () => {
     expect(() => AuthStorage.forAgent(agentDir)).toThrow("requires legacy credential migration");
   });
 
+  it("fails closed when a legacy credential source appears after construction", async () => {
+    const agentDir = makeAgentDir();
+    const storage = AuthStorage.forAgent(agentDir);
+    vi.stubEnv("OPENAI_API_KEY", "fake-environment-key");
+    fs.writeFileSync(path.join(agentDir, "auth.json"), '{"openai":{"key":"fake-late"}}\n');
+
+    await expect(storage.getApiKey("openai")).rejects.toThrow(
+      "requires legacy credential migration",
+    );
+  });
+
   it("ignores unresolved named profiles outside the provider-default facade", async () => {
     const agentDir = makeAgentDir();
     writePersistedAuthProfileStoreRaw(

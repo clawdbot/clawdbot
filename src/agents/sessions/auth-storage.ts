@@ -353,9 +353,11 @@ export class AuthStorage {
   private loadError: Error | null = null;
   private errors: Error[] = [];
   private storage: AuthStorageBackend;
+  private migrationOwnerAgentDir?: string;
 
-  private constructor(storage: AuthStorageBackend) {
+  private constructor(storage: AuthStorageBackend, migrationOwnerAgentDir?: string) {
     this.storage = storage;
+    this.migrationOwnerAgentDir = migrationOwnerAgentDir;
     this.reload();
   }
 
@@ -365,7 +367,7 @@ export class AuthStorage {
       getRuntimeAuthProfileStoreSnapshot(agentDir) ??
       loadAuthProfileStoreForSecretsRuntime(agentDir);
     assertAuthStorageSecretRefsMaterialized(preparedStore);
-    return new AuthStorage(new SqliteAuthStorageBackend(agentDir, preparedStore));
+    return new AuthStorage(new SqliteAuthStorageBackend(agentDir, preparedStore), agentDir);
   }
 
   /**
@@ -670,6 +672,10 @@ export class AuthStorage {
     const runtimeKey = this.runtimeOverrides.get(providerId);
     if (runtimeKey) {
       return runtimeKey;
+    }
+
+    if (this.migrationOwnerAgentDir) {
+      assertAuthProfileMigrationReady(this.migrationOwnerAgentDir);
     }
 
     if (
