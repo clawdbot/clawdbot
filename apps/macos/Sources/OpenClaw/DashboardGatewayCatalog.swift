@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 
 enum DashboardGatewayTarget: Equatable, Hashable, Sendable {
     case primary
@@ -129,7 +130,13 @@ struct DashboardPrimaryGatewayAdapter {
         try await MacGatewayProfileStore.shared.endpoint(profileID: profileID)
     }
 
-    var persist: @MainActor (AppState) -> Bool = { $0.syncGatewayConfigNow() }
+    var currentTLSFingerprint: @MainActor () -> String? = {
+        GatewayRemoteConfig.resolveTLSFingerprint(root: OpenClawConfigFile.loadDict())
+    }
+
+    var persist: @MainActor (AppState, String?) -> Bool = {
+        $0.syncGatewayConfigNow(remoteTLSFingerprint: $1)
+    }
 
     func apply(profileID: String) async throws {
         let endpoint = try await self.endpoint(profileID)
@@ -138,22 +145,29 @@ struct DashboardPrimaryGatewayAdapter {
         else {
             throw DashboardPrimaryGatewayError.notPromotable
         }
+        let tlsFingerprint = endpoint.tls.flatMap { route in
+            route.params.expectedFingerprint ?? route.params.storeKey.flatMap {
+                GatewayTLSStore.loadFingerprint(stableID: $0)
+            }
+        }
         let previous = (
             transport: self.state.remoteTransport,
             url: self.state.remoteUrl,
             token: self.state.remoteToken,
-            mode: self.state.connectionMode)
+            mode: self.state.connectionMode,
+            tlsFingerprint: self.currentTLSFingerprint())
         self.state.remoteTransport = .direct
         self.state.remoteUrl = endpoint.config.url.absoluteString
         // Promotion intentionally moves the saved token into gateway.remote.token,
         // matching the existing Settings connection flow.
         self.state.remoteToken = token
         self.state.connectionMode = .remote
-        guard self.persist(self.state) else {
+        guard self.persist(self.state, tlsFingerprint) else {
             self.state.remoteTransport = previous.transport
             self.state.remoteUrl = previous.url
             self.state.remoteToken = previous.token
             self.state.connectionMode = previous.mode
+            _ = self.persist(self.state, previous.tlsFingerprint)
             throw DashboardPrimaryGatewayError.notPromotable
         }
     }

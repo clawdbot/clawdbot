@@ -251,6 +251,10 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             "window.dispatchEvent(new CustomEvent('openclaw:native-update-availability-changed'))")
     }
 
+    func hasTLSParams(_ params: GatewayTLSParams?) -> Bool {
+        self.tlsParams == params
+    }
+
     // MARK: - WKUIDelegate
 
     func webView(

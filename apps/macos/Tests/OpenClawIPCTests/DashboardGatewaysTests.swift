@@ -116,6 +116,27 @@ struct DashboardGatewaysBridgeTests {
 @Suite(.serialized)
 @MainActor
 struct DashboardManagerGatewayTargetTests {
+    @Test func `primary window configuration retains resolved TLS policy`() async throws {
+        let state = AppStateStore.shared
+        let originalMode = state.connectionMode
+        state.connectionMode = .remote
+        defer { state.connectionMode = originalMode }
+        let url = try #require(URL(string: "wss://studio.example:443/"))
+        let params = GatewayTLSParams(
+            required: true,
+            expectedFingerprint: String(repeating: "a", count: 64),
+            allowTOFU: false,
+            storeKey: "primary")
+        let manager = DashboardManager._testMake(primaryEndpointProvider: { _ in
+            GatewayConnection.EndpointSnapshot(
+                config: (url: url, token: "primary-token", password: nil),
+                tls: GatewayTLSRoute(params: params, allowsTrustedPinReplacement: false),
+                routeAuthority: nil)
+        })
+
+        #expect(try await manager._testWindowTLSParams(for: .primary) == params)
+    }
+
     @Test func `primary endpoint subscription does not mutate profile targeted main window`() async throws {
         let url = try #require(URL(string: "http://127.0.0.1:60001/#token=current"))
         let controller = DashboardWindowController(
@@ -127,7 +148,8 @@ struct DashboardManagerGatewayTargetTests {
             windowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)")
         controller.show()
         defer { controller.closeDashboard() }
-        let manager = DashboardManager._testMake()
+        let entries = DashboardGatewayTestEntries.withProfiles(["studio"])
+        let manager = DashboardManager._testMake(gatewayEntriesProvider: { entries })
         manager._testSetController(controller)
         manager._testSetMainTarget(.profile("studio"))
 
@@ -181,7 +203,8 @@ struct DashboardManagerGatewayTargetTests {
         let frame = NSRect(x: 180, y: 180, width: 960, height: 720)
         controller.window?.setFrame(frame, display: false)
         controller.show()
-        let manager = DashboardManager._testMake()
+        let entries = DashboardGatewayTestEntries.withProfiles(["studio"])
+        let manager = DashboardManager._testMake(gatewayEntriesProvider: { entries })
         manager.configure(updater: DashboardGatewayTestUpdater())
         manager._testSetController(controller)
         manager._testSetMainTarget(.profile("studio"))
@@ -200,6 +223,92 @@ struct DashboardManagerGatewayTargetTests {
         #expect(auxiliary.controller.window?.frameAutosaveName != controller.window?.frameAutosaveName)
         #expect(!auxiliary.controller._testUpdateBridgeAvailable)
     }
+
+    @Test func `concurrent switches keep the latest selection for one window`() async throws {
+        let gate = DashboardSwitchEndpointGate()
+        let sourceURL = try #require(URL(string: "http://127.0.0.1:60001/#token=current"))
+        let controller = DashboardWindowController(
+            url: sourceURL,
+            auth: DashboardWindowAuth(
+                gatewayUrl: "ws://127.0.0.1:60001/",
+                token: "current",
+                password: nil),
+            windowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)")
+        let entries = DashboardGatewayTestEntries.withProfiles(["first", "second"])
+        let manager = DashboardManager._testMake(
+            profileEndpointProvider: { profileID in
+                try await gate.endpoint(profileID)
+            },
+            gatewayEntriesProvider: { entries })
+        manager._testSetController(controller)
+        defer { manager.close() }
+
+        let first = Task { @MainActor in
+            await manager._testSwitchTarget(.profile("first"), in: controller)
+        }
+        await gate.waitUntilFirstRequested()
+        let second = Task { @MainActor in
+            await manager._testSwitchTarget(.profile("second"), in: controller)
+        }
+        await second.value
+        await gate.releaseFirst()
+        await first.value
+
+        #expect(manager._testMainTarget() == .profile("second"))
+        #expect(manager._testController()?.currentURL.port == 60003)
+    }
+}
+
+private enum DashboardGatewayTestEntries {
+    static func withProfiles(_ profileIDs: [String]) -> [DashboardGatewayEntry] {
+        [
+            DashboardGatewayEntry(
+                id: "primary",
+                name: "Local Gateway",
+                kind: "local",
+                isPrimary: true,
+                canPromote: false,
+                health: .ok),
+        ] + profileIDs.map { profileID in
+            DashboardGatewayEntry(
+                id: "profile:\(profileID)",
+                name: profileID.capitalized,
+                kind: "remote",
+                isPrimary: false,
+                canPromote: true,
+                health: .unknown)
+        }
+    }
+}
+
+private actor DashboardSwitchEndpointGate {
+    private var firstRequested = false
+    private var firstContinuation: CheckedContinuation<Void, Never>?
+
+    func endpoint(_ profileID: String) async throws -> GatewayConnection.EndpointSnapshot {
+        if profileID == "first" {
+            self.firstRequested = true
+            await withCheckedContinuation { continuation in
+                self.firstContinuation = continuation
+            }
+        }
+        let port = profileID == "first" ? 60002 : 60003
+        let url = try #require(URL(string: "ws://127.0.0.1:\(port)"))
+        return GatewayConnection.EndpointSnapshot(
+            config: (url: url, token: profileID, password: nil),
+            routeAuthority: nil)
+    }
+
+    func waitUntilFirstRequested() async {
+        while !self.firstRequested {
+            await Task.yield()
+        }
+    }
+
+    func releaseFirst() {
+        self.firstContinuation?.resume()
+        self.firstContinuation = nil
+    }
 }
 
 @MainActor
@@ -214,15 +323,22 @@ private final class DashboardGatewayTestUpdater: UpdaterProviding {
 
 @MainActor
 struct DashboardPrimaryGatewayAdapterTests {
-    @Test func `token profile promotion updates AppState direct remote fields`() async throws {
+    @Test func `token profile promotion carries its TLS pin`() async throws {
         let state = AppState(preview: true)
         let url = try #require(URL(string: "wss://studio.example:443/"))
+        let fingerprint = String(repeating: "a", count: 64)
+        var persistedFingerprints: [String?] = []
         let adapter = DashboardPrimaryGatewayAdapter(
             state: state,
             endpoint: { _ in
                 GatewayConnection.EndpointSnapshot(
                     config: (url: url, token: "profile-token", password: nil),
+                    tls: DashboardGatewayTestTLS.route(fingerprint: fingerprint),
                     routeAuthority: nil)
+            },
+            persist: { _, fingerprint in
+                persistedFingerprints.append(fingerprint)
+                return true
             })
 
         try await adapter.apply(profileID: "studio")
@@ -231,6 +347,31 @@ struct DashboardPrimaryGatewayAdapterTests {
         #expect(state.remoteUrl == url.absoluteString)
         #expect(state.remoteToken == "profile-token")
         #expect(state.connectionMode == .remote)
+        #expect(persistedFingerprints == [fingerprint])
+    }
+
+    @Test func `token profile without a pin clears the previous primary pin`() async throws {
+        let state = AppState(preview: true)
+        let url = try #require(URL(string: "wss://studio.example:443/"))
+        var persistedFingerprints: [String?] = []
+        let adapter = DashboardPrimaryGatewayAdapter(
+            state: state,
+            endpoint: { _ in
+                GatewayConnection.EndpointSnapshot(
+                    config: (url: url, token: "profile-token", password: nil),
+                    tls: DashboardGatewayTestTLS.route(fingerprint: nil),
+                    routeAuthority: nil)
+            },
+            currentTLSFingerprint: { String(repeating: "b", count: 64) },
+            persist: { _, fingerprint in
+                persistedFingerprints.append(fingerprint)
+                return true
+            })
+
+        try await adapter.apply(profileID: "studio")
+
+        #expect(persistedFingerprints.count == 1)
+        #expect(persistedFingerprints[0] == nil)
     }
 
     @Test func `password only profile cannot be promoted`() async throws {
@@ -255,14 +396,22 @@ struct DashboardPrimaryGatewayAdapterTests {
         state.remoteToken = "previous-token"
         state.connectionMode = .local
         let url = try #require(URL(string: "wss://studio.example:443/"))
+        let previousFingerprint = String(repeating: "b", count: 64)
+        let profileFingerprint = String(repeating: "a", count: 64)
+        var persistedFingerprints: [String?] = []
         let adapter = DashboardPrimaryGatewayAdapter(
             state: state,
             endpoint: { _ in
                 GatewayConnection.EndpointSnapshot(
                     config: (url: url, token: "profile-token", password: nil),
+                    tls: DashboardGatewayTestTLS.route(fingerprint: profileFingerprint),
                     routeAuthority: nil)
             },
-            persist: { _ in false })
+            currentTLSFingerprint: { previousFingerprint },
+            persist: { _, fingerprint in
+                persistedFingerprints.append(fingerprint)
+                return persistedFingerprints.count > 1
+            })
 
         await #expect(throws: DashboardPrimaryGatewayError.notPromotable) {
             try await adapter.apply(profileID: "studio")
@@ -271,5 +420,18 @@ struct DashboardPrimaryGatewayAdapterTests {
         #expect(state.remoteUrl == "ws://127.0.0.1:18789")
         #expect(state.remoteToken == "previous-token")
         #expect(state.connectionMode == .local)
+        #expect(persistedFingerprints == [profileFingerprint, previousFingerprint])
+    }
+}
+
+private enum DashboardGatewayTestTLS {
+    static func route(fingerprint: String?) -> GatewayTLSRoute {
+        GatewayTLSRoute(
+            params: GatewayTLSParams(
+                required: true,
+                expectedFingerprint: fingerprint,
+                allowTOFU: fingerprint == nil,
+                storeKey: nil),
+            allowsTrustedPinReplacement: true)
     }
 }
