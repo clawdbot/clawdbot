@@ -3409,7 +3409,9 @@ describe("WorkboardStore", () => {
     const second = await store.unlinkDependency(parent.id, child.id);
     expect(second.id).toBe(child.id);
     expect(second.events?.at(-1)).toMatchObject({ kind: "link_removed" });
-    expect((await store.get(parent.id))?.events).toHaveLength(parentAfterFirst?.events?.length);
+    expect((await store.get(parent.id))?.events).toHaveLength(
+      parentAfterFirst?.events?.length ?? 0,
+    );
   });
 
   it("dry-runs and applies only proven decomposition repairs without losing history", async () => {
