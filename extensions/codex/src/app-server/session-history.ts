@@ -123,14 +123,20 @@ function resolveSqliteMarkerSessionKey(
   marker: SqliteSessionFileMarker,
 ): string | undefined {
   const explicitSessionKey = target.sessionKey?.trim();
-  if (explicitSessionKey) {
-    return explicitSessionKey;
-  }
   const entries = listSessionEntries({
     agentId: marker.agentId,
     readOnly: true,
     storePath: marker.storePath,
   });
+  if (
+    explicitSessionKey &&
+    entries.some(
+      ({ entry, sessionKey }) =>
+        sessionKey === explicitSessionKey && entry.sessionId === marker.sessionId,
+    )
+  ) {
+    return explicitSessionKey;
+  }
   const matches = entries.filter(({ entry }) => entry.sessionId === marker.sessionId);
   return selectPreferredSessionKey(matches, marker.sessionId);
 }
