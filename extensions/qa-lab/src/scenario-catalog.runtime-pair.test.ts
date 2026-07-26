@@ -52,11 +52,14 @@ describe("QA runtime-pair scenario catalog", () => {
     }
 
     expect(readQaScenarioById("gateway-restart-inflight-run").runtimePairLane).toBeUndefined();
-    expect(readQaScenarioById("gateway-restart-inflight-run").execution.runtime).toBe("openclaw");
+    expect(readQaScenarioById("gateway-restart-inflight-run").execution).toMatchObject({
+      kind: "flow",
+      runtime: "openclaw",
+      timeoutMs: 420_000,
+    });
     expect(readQaScenarioExecutionConfig("gateway-restart-inflight-run")).toMatchObject({
       requiredProviderMode: "mock-openai",
     });
-    expect(readQaScenarioById("gateway-restart-inflight-run").execution.timeoutMs).toBe(420_000);
 
     for (const scenarioId of [
       "hosted-image-generation-providers-live",
