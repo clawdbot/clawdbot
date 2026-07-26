@@ -243,7 +243,16 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
   const enqueue = async (item: T) => {
     const key = params.buildKey(item);
     const debounceMs = resolveDebounceMs(item);
-    const canDebounce = debounceMs > 0 && (params.shouldDebounce?.(item) ?? true);
+    const shouldDebounce = params.shouldDebounce?.(item) ?? true;
+    const existing = key ? buffers.get(key) : undefined;
+    if (existing && shouldDebounce) {
+      existing.items.push(item);
+      // One buffered batch keeps the window selected by its first item.
+      // Later aliases or config reloads must not change when that batch flushes.
+      scheduleFlush(key, existing);
+      return;
+    }
+    const canDebounce = debounceMs > 0 && shouldDebounce;
 
     if (!canDebounce || !key) {
       if (key) {
@@ -282,14 +291,6 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       return;
     }
 
-    const existing = buffers.get(key);
-    if (existing) {
-      existing.items.push(item);
-      // One buffered batch keeps the window selected by its first item.
-      // Later aliases or config reloads must not change when that batch flushes.
-      scheduleFlush(key, existing);
-      return;
-    }
     if (!canTrackKey(key)) {
       // When the debounce map is saturated, fall back to immediate keyed work
       // instead of buffering, but still preserve same-key ordering.

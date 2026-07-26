@@ -610,7 +610,7 @@ describe("createInboundDebouncer", () => {
 
     await debouncer.enqueue({ key: "a", id: "1", windowMs: 100 });
     await vi.advanceTimersByTimeAsync(40);
-    await debouncer.enqueue({ key: "a", id: "2", windowMs: 10 });
+    await debouncer.enqueue({ key: "a", id: "2", windowMs: 0 });
 
     await vi.advanceTimersByTimeAsync(99);
     expect(calls).toStrictEqual([]);
