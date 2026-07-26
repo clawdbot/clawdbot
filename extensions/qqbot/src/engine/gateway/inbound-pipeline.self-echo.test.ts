@@ -122,7 +122,7 @@ function makeAccessResult(
       requested: true,
       authorized: allowed,
       shouldBlockControlCommand: false,
-      reasonCode: allowed ? "command_authorized" : "command_not_authorized",
+      reasonCode: allowed ? "command_authorized" : "control_command_unauthorized",
     },
     routeAccess: {
       allowed,
@@ -131,7 +131,7 @@ function makeAccessResult(
       ran: false,
       allowed,
       shouldSkip: false,
-      reasonCode: allowed ? "activation_allowed" : "sender_denied",
+      reasonCode: allowed ? "activation_allowed" : "activation_skipped",
     },
   };
 }
