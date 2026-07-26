@@ -1,4 +1,8 @@
 // Codex tests cover harness plugin behavior.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createCodexAppServerAgentHarness } from "./harness.js";
 import {
@@ -271,32 +275,48 @@ describe("Codex agent harness reset()", () => {
   });
 
   it("repairs a retirement fence left by an earlier in-place reset", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-harness-reset-"));
+    const storePath = path.join(root, "sessions.json");
     const bindingStore = createCodexTestBindingStore();
+    const sessionKey = "agent:worker:main";
     const identity = sessionBindingIdentity({
       agentId: "worker",
       sessionId: "session-1",
-      sessionKey: "agent:worker:main",
+      sessionKey,
     });
-    await bindingStore.mutate(identity, {
-      kind: "set",
-      binding: { threadId: "thread-1", cwd: "/repo" },
-    });
-    await bindingStore.retireSessionGeneration(identity);
-    const harness = createCodexAppServerAgentHarness({ bindingStore });
-
-    await harness.reset?.({
-      agentId: "worker",
-      sessionId: "session-1",
-      sessionKey: "agent:worker:main",
-      reason: "reset",
-    });
-
-    await expect(
-      bindingStore.mutate(identity, {
+    try {
+      await upsertSessionEntry({
+        agentId: identity.agentId,
+        sessionKey,
+        storePath,
+        entry: { sessionId: identity.sessionId, updatedAt: 1 },
+      });
+      await bindingStore.mutate(identity, {
         kind: "set",
-        binding: { threadId: "thread-recovered", cwd: "/repo" },
-      }),
-    ).resolves.toBe(true);
+        binding: { threadId: "thread-1", cwd: "/repo" },
+      });
+      await bindingStore.retireSessionGeneration(identity);
+      const harness = createCodexAppServerAgentHarness({
+        bindingStore,
+        resolveConfig: () => ({ session: { store: storePath } }),
+      });
+
+      await harness.reset?.({
+        agentId: "worker",
+        sessionId: "session-1",
+        sessionKey,
+        reason: "reset",
+      });
+
+      await expect(
+        bindingStore.mutate(identity, {
+          kind: "set",
+          binding: { threadId: "thread-recovered", cwd: "/repo" },
+        }),
+      ).resolves.toBe(true);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("keeps deleted session generations retired", async () => {

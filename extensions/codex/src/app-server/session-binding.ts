@@ -971,6 +971,11 @@ export function createCodexAppServerBindingStore(
             if (!ownsStoredSessionGeneration(identity, current)) {
               return { result: "conflict" as const };
             }
+            // A retired same-id row may be a deletion fence. Only the authoritative
+            // session-store reclaim path can prove it belongs to an in-place reset.
+            if (current.state === "cleared" && current.retired === true) {
+              return { result: "conflict" as const };
+            }
             return {
               result: "applied" as const,
               next: {

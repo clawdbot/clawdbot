@@ -960,6 +960,36 @@ describe("Codex app-server binding store", () => {
     await expect(store.read(current)).resolves.toMatchObject({ threadId: "thread-new" });
   });
 
+  it("keeps a retired in-place generation fenced until it is verified", async () => {
+    const { state, values } = createStateStore();
+    const store = createCodexAppServerBindingStore(state);
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-1",
+      sessionKey: "agent:main:telegram:chat-1",
+    };
+    await store.mutate(identity, {
+      kind: "set",
+      binding: { threadId: "thread-old", cwd: "/old" },
+    });
+    await store.retireSessionGeneration(identity);
+
+    await expect(store.resetSessionGeneration(identity)).resolves.toBe("conflict");
+    expect(values.get(bindingStoreKey(identity))).toEqual({
+      version: 1,
+      state: "cleared",
+      retired: true,
+      sessionId: identity.sessionId,
+    });
+    await expect(
+      store.mutate(identity, {
+        kind: "set",
+        binding: { threadId: "thread-unverified", cwd: "/new" },
+      }),
+    ).resolves.toBe(false);
+  });
+
   it("verifies and releases a retired fence for the still-current stable session id", async () => {
     const { state, values } = createStateStore();
     const store = createCodexAppServerBindingStore(state);
