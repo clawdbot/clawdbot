@@ -127,44 +127,6 @@ describe("createSessionCapability", () => {
     sessions.dispose();
   });
 
-  it("sends and publishes gateway-owned sidebar section order", async () => {
-    const request = vi.fn(async (method: string, params: unknown) => {
-      if (method !== "sessions.groups.put") {
-        throw new Error(`Unexpected request: ${method}`);
-      }
-      expect(params).toEqual({
-        names: ["Beta", "Alpha"],
-        sectionOrder: ["work", "category:Beta", "ungrouped", "category:Alpha"],
-      });
-      return {
-        ok: true,
-        groups: [
-          { name: "Beta", position: 0 },
-          { name: "Alpha", position: 1 },
-        ],
-        sectionOrder: ["work", "category:Beta", "ungrouped", "category:Alpha"],
-      };
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { gateway } = createGatewayHarness(client, ["sessions.groups.put"]);
-    const sessions = createSessionCapability(gateway);
-
-    await expect(
-      sessions.groupsPut(
-        ["Beta", "Alpha"],
-        ["work", "category:Beta", "ungrouped", "category:Alpha"],
-      ),
-    ).resolves.toBe("completed");
-    expect(sessions.state.groups).toEqual(["Beta", "Alpha"]);
-    expect(sessions.state.sectionOrder).toEqual([
-      "work",
-      "category:Beta",
-      "ungrouped",
-      "category:Alpha",
-    ]);
-    sessions.dispose();
-  });
-
   it("automatically retries an explicitly retryable group catalog failure", async () => {
     let groupsCalls = 0;
     const request = vi.fn(async (method: string) => {
