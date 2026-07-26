@@ -207,16 +207,14 @@ describe("policy doctor metadata", () => {
         .get("unsupported")
         ?.map((rule) => rule.checkId)
         .toSorted(),
-      validateOnly:
-        grouped
-          .get("validateOnly")
-          ?.map((rule) => rule.checkId)
-          .toSorted() ?? [],
+      validateOnly: grouped
+        .get("validateOnly")
+        ?.map((rule) => rule.checkId)
+        .toSorted(),
     }).toEqual({
       automatic: [
         "policy/agents-tool-not-denied",
         "policy/channels-denied-provider",
-        "policy/data-handling-redaction-disabled",
         "policy/data-handling-telemetry-content-capture",
         "policy/gateway-control-ui-insecure",
         "policy/gateway-http-endpoint-enabled",
@@ -287,7 +285,7 @@ describe("policy doctor metadata", () => {
         "policy/tools-profile-unapproved",
       ],
       unsupported: ["policy/sandbox-container-posture-unobservable"],
-      validateOnly: [],
+      validateOnly: ["policy/data-handling-redaction-disabled"],
     });
   });
 });

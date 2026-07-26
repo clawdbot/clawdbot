@@ -530,6 +530,28 @@ describe("retired runtime config migrations", () => {
     expect(result.changes.length).toBeGreaterThan(8);
   });
 
+  it("lifts the retired plan-tool switch out of the tools.experimental container", () => {
+    const result = applyAll({ tools: { experimental: { planTool: false } } });
+
+    expect(result.raw).toHaveProperty("tools.updatePlan", false);
+    expect(result.raw).not.toHaveProperty("tools.experimental");
+    expect(result.changes).toContain("Moved tools.experimental.planTool → tools.updatePlan.");
+  });
+
+  it("drops the tools.experimental container when the canonical plan-tool switch wins", () => {
+    const canonicalWins = applyAll({
+      tools: { updatePlan: true, experimental: { planTool: false } },
+    });
+    const emptyContainer = applyAll({ tools: { experimental: {} } });
+
+    expect(canonicalWins.raw).toHaveProperty("tools.updatePlan", true);
+    expect(canonicalWins.raw).not.toHaveProperty("tools.experimental");
+    expect(emptyContainer.raw).not.toHaveProperty("tools.experimental");
+    expect(emptyContainer.changes).toContain(
+      "Removed tools.experimental; tools.updatePlan now owns the switch.",
+    );
+  });
+
   it("consolidates the approved tier-eval tranche with canonical values winning", () => {
     const result = applyAll({
       mcp: { servers: { docs: { cwd: "/canonical", workingDirectory: "/legacy" } } },

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { chromium, type CDPSession, type Page, type Worker } from "playwright-core";
 import { afterEach, describe, expect, it } from "vitest";
-import { WebSocketServer, type RawData, type WebSocket } from "ws";
+import { WebSocketServer, type WebSocket } from "ws";
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_IDS,
@@ -12,9 +12,12 @@ import {
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { useAutoCleanupTempDirTracker } from "../test-support.js";
 import {
+  assertCopilotStaleRunIsolation,
   copyCopilotSidepanelExtension,
   isSidePanelTarget,
+  rawDataText,
   resolveChromiumExecutable,
+  textValue,
 } from "./sidepanel.e2e-support.js";
 
 declare const chrome: {
@@ -56,6 +59,7 @@ type GatewayHarness = {
   requests: RequestFrame[];
   close: () => Promise<void>;
   disconnectClients: () => void;
+  emitEvent: (event: string, payload: Record<string, unknown>) => void;
   failNextAbort: () => void;
   holdNextSubscription: () => () => void;
 };
@@ -87,19 +91,6 @@ type PanelTarget = {
   text: (selector: string) => Promise<string>;
   wakeBackground: () => Promise<void>;
 };
-
-function textValue(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-function rawDataText(data: RawData): string {
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString("utf8");
-  }
-  return data instanceof ArrayBuffer
-    ? Buffer.from(new Uint8Array(data)).toString("utf8")
-    : data.toString("utf8");
-}
 
 const cleanups: Array<() => Promise<void>> = [];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -319,6 +310,11 @@ async function createGatewayHarness(): Promise<GatewayHarness> {
     disconnectClients: () => {
       for (const client of wss.clients) {
         client.terminate();
+      }
+    },
+    emitEvent: (event, payload) => {
+      for (const client of wss.clients) {
+        client.send(JSON.stringify({ type: "event", event, payload }));
       }
     },
     failNextAbort: () => {
@@ -1037,5 +1033,7 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
         timeout: 15_000,
       })
       .toBe(true);
-  }, 75_000);
+
+    await assertCopilotStaleRunIsolation({ expect, gateway, panel: reopenedBetaPanel });
+  }, 120_000);
 });

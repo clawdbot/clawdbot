@@ -1394,6 +1394,40 @@ describe("exec approvals", () => {
     }
   });
 
+  it("denies an allowlisted command with shell expansion without requesting approval", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const trustedExecutablePath = await fs.realpath(process.execPath);
+    await writeExecApprovalsConfig({
+      version: 1,
+      defaults: { security: "allowlist", ask: "off", askFallback: "deny" },
+      agents: {
+        main: {
+          allowlist: [{ pattern: trustedExecutablePath }],
+        },
+      },
+    });
+
+    const calls: string[] = [];
+    mockGatewayOkCalls(calls);
+    const tool = createExecTool({
+      host: "gateway",
+      ask: "off",
+      security: "allowlist",
+      approvalRunningNoticeMs: 0,
+    });
+
+    const result = await tool.execute("call-shell-expansion-deny", {
+      command: `${JSON.stringify(process.execPath)} --version *.md`,
+    });
+
+    expect(result.details.status).toBe("failed");
+    expect(getResultText(result)).toContain("ask-fallback-deny: execution-plan-miss");
+    expect(calls).not.toContain("exec.approval.request");
+    expect(calls).not.toContain("exec.approval.waitDecision");
+  });
+
   it("requires approval for the legacy skill display prelude even when the wrapper is allowlisted", async () => {
     if (process.platform === "win32") {
       return;

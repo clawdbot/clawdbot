@@ -10,8 +10,8 @@ import {
 } from "./models.js";
 import {
   applyTokenHubConfig,
-  TOKENHUB_DEFAULT_MODEL_REF,
   applyTokenPlanConfig,
+  TOKENHUB_DEFAULT_MODEL_REF,
   TOKENPLAN_DEFAULT_MODEL_REF,
 } from "./onboard.js";
 import { buildTokenHubProvider, buildTokenPlanProvider } from "./provider-catalog.js";

@@ -1444,6 +1444,9 @@ describe("package acceptance workflow", () => {
 describe("package artifact reuse", () => {
   it("binds package acceptance input artifacts to the complete producer tuple", () => {
     const resolvePackage = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package");
+    expect(workflowStep(resolvePackage, "Setup Node environment").with).toMatchObject({
+      "install-deps": "true",
+    });
     expect(
       workflowStep(resolvePackage, "Checkout package workflow ref").with?.["persist-credentials"],
     ).toBe(false);
@@ -1484,6 +1487,11 @@ describe("package artifact reuse", () => {
     ]);
 
     const packageIntegrity = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "package_integrity");
+    expect(
+      workflowStep(packageIntegrity, "Setup package validation dependencies").with,
+    ).toMatchObject({
+      "install-deps": "true",
+    });
     expect(
       workflowStep(packageIntegrity, "Download package-under-test artifact").with,
     ).toMatchObject({

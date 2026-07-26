@@ -587,8 +587,11 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
   const active = activeSkillMutation(props, skill.skillKey);
   const editValue = props.edits[skill.skillKey] ?? "";
   const message = props.messages[skill.skillKey] ?? null;
-  const installOption = skill.install[0];
-  const canInstall = installOption !== undefined && skill.missing.bins.length > 0;
+  const missingBins = new Set([...skill.missing.bins, ...skill.missing.anyBins]);
+  // An installer must provide a currently missing binary, not an unrelated dependency.
+  const installOption = skill.install.find((option) =>
+    option.bins.some((bin) => missingBins.has(bin)),
+  );
   const showBundledBadge = Boolean(skill.bundled && skill.source !== "openclaw-bundled");
   const missing = computeSkillMissing(skill);
   const reasons = computeSkillReasons(skill);
@@ -678,7 +681,7 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
             <span style="font-size: 13px; font-weight: 500;">
               ${skill.disabled ? t("skillsPage.disabled") : t("skillsPage.enabled")}
             </span>
-            ${canInstall
+            ${installOption
               ? html`<button
                   class="btn"
                   ?disabled=${locked}
@@ -779,7 +782,7 @@ function renderInstalledClawHubOverview(
   return html`
     <div
       class="callout"
-      style="display: grid; gap: 8px; border-color: var(--border); background: var(--panel-2);"
+      style="display: grid; gap: 8px; border-color: var(--border); background: var(--panel-strong);"
     >
       <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
         <span class="chip ${verdictChipClass(verdict)}">${verdictLabel(verdict)}</span>

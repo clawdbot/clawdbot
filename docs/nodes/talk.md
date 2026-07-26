@@ -95,6 +95,23 @@ Supported keys: `voice` / `voice_id` / `voiceId`, `model` / `model_id` / `modelI
 }
 ```
 
+OpenAI browser and iOS WebRTC Talk use Platform credentials in this order:
+the configured realtime API key, an `openai` API-key profile, then
+`OPENAI_API_KEY`. When none is configured and the bundled Codex runtime is
+active, Talk falls back to its logged-in ChatGPT/Codex subscription
+automatically. OpenAI OAuth/Codex agent sessions activate that runtime without
+an additional Talk auth setting. This experimental fallback supports client-owned WebRTC only;
+Gateway relay and backend voice bridges still require OpenAI Platform
+credentials.
+
+OpenClaw does not read or copy the Codex OAuth token. The Codex app-server owns
+the subscription-authenticated realtime connection and starts an ephemeral,
+read-only thread seeded with bounded context from the active agent session.
+Codex owns the realtime model, base prompt, and agent handoff on this route;
+`talk.realtime.model`, direct provider tools, and Video Talk apply only to the
+Platform WebRTC route. Custom Talk instructions and bounded profile context are
+added as developer context without replacing Codex's native delegation prompt.
+
 | Key                                      | Default                                    | Notes                                                                                                                                                                                                                                                                      |
 | ---------------------------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `agentId`                                | configured default agent                   | Owns Talk sessions created without an explicit agent-scoped session key.                                                                                                                                                                                                   |
@@ -115,7 +132,7 @@ Supported keys: `voice` / `voice_id` / `voiceId`, `model` / `model_id` / `modelI
 | `realtime.transport`                     | -                                          | `webrtc`: client-owned OpenAI WebRTC on iOS and in the browser. `provider-websocket`: browser-owned, stays on Gateway relay on iOS. `gateway-relay`: keeps provider audio on the Gateway; Android uses realtime only with this transport.                                  |
 | `realtime.brain`                         | -                                          | `agent-consult` routes realtime tool calls through Gateway policy; `direct-tools` is legacy direct-tool compatibility; `none` is for transcription/external orchestration.                                                                                                 |
 | `realtime.consultRouting`                | -                                          | `provider-direct` preserves the provider's direct reply when it skips `openclaw_agent_consult`; `force-agent-consult` routes finalized user transcripts through OpenClaw instead.                                                                                          |
-| `realtime.instructions`                  | -                                          | Appends provider-facing system instructions to OpenClaw's built-in realtime prompt (voice style/tone); the default `openclaw_agent_consult` guidance stays.                                                                                                                |
+| `realtime.instructions`                  | -                                          | Appends provider-facing system instructions to OpenClaw's built-in realtime prompt. On the Codex OAuth fallback, the text is developer context and Codex's native delegation prompt stays authoritative.                                                                   |
 
 `talk.catalog` exposes canonical provider ids and registry aliases, each provider's valid modes/transports/brain strategies/realtime audio formats/capability flags, and the runtime-selected readiness result. First-party Talk clients should read that catalog instead of maintaining provider aliases locally; treat an older Gateway that omits group readiness as unverified rather than definitively unconfigured. Streaming transcription providers are discovered through `talk.catalog.transcription`; the current Gateway relay uses the Voice Call streaming provider config until a dedicated Talk transcription config surface ships.
 

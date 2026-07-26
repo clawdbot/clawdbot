@@ -20,7 +20,7 @@ import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readResponseWithLimit } from "../infra/http-body.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { planManifestModelCatalogRows } from "../model-catalog/index.js";
+import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
 import { isInstalledPluginEnabled } from "../plugins/installed-plugin-index.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type {
@@ -529,6 +529,7 @@ function resolveModelPricingManifestMetadata(params: {
 function loadManifestPricingContext(
   registry: PluginManifestRegistry,
   normalizationOptions: PricingModelNormalizationOptions,
+  config: OpenClawConfig,
 ): {
   policies: Map<string, ExternalPricingPolicy>;
   catalogPricing: Map<string, CachedModelPricing>;
@@ -544,7 +545,7 @@ function loadManifestPricingContext(
   }
 
   const catalogPricing = new Map<string, CachedModelPricing>();
-  for (const row of planManifestModelCatalogRows({ registry }).rows) {
+  for (const row of planEffectiveModelCatalogRows({ registry, config }).rows) {
     const pricing = toCachedModelPricing(row.cost);
     if (pricing) {
       catalogPricing.set(modelKey(row.provider, row.id), pricing);
@@ -1232,6 +1233,7 @@ async function refreshGatewayModelPricingCache(
     const pricingContext = loadManifestPricingContext(
       manifestMetadata.activeRegistry,
       normalizationOptions,
+      params.config,
     );
     const allRefs = collectConfiguredModelPricingRefs(params.config, {
       manifestRegistry: manifestMetadata.allRegistry,

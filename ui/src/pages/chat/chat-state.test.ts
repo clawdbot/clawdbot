@@ -39,6 +39,7 @@ import {
   storedChatOutboxScopeKey,
 } from "./composer-persistence.ts";
 import { scheduleControlUiAfterPaint } from "./performance.ts";
+import { openSlot } from "./sidebar-layout.ts";
 
 beforeEach(() => {
   vi.spyOn(assistantIdentity, "loadLocalAssistantIdentity").mockReturnValue({
@@ -695,6 +696,16 @@ describe("route composer fallback", () => {
 
     expect(release).toHaveBeenCalledTimes(1);
     expect(state.imageLightbox).toBeNull();
+  });
+
+  it("clears transient detail content on a route switch", () => {
+    const { state } = createRouteState("");
+    state.sidebarContent = { kind: "markdown", content: "First session detail" };
+    state.sidebarLayout = openSlot({ columns: [] }, "detail");
+
+    resetChatStateForRouteSession(state, "agent:main:second");
+
+    expect(state.sidebarContent).toBeNull();
   });
 
   it("restores one atomic history snapshot when returning to a session", () => {

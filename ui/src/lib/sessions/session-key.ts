@@ -230,6 +230,13 @@ function normalizeUiSessionEventKey(
   return aliases.has(normalized) ? normalizeLowercaseStringOrEmpty(canonicalMain) : normalized;
 }
 
+export function canonicalUiSessionKeyForPersistence(
+  host: Pick<UiSessionDefaultsHost, "agentsList" | "hello">,
+  sessionKey: string | undefined | null,
+): string {
+  return normalizeUiSessionEventKey(host, sessionKey) ?? "";
+}
+
 export function areUiSessionKeysEquivalentForHost(
   host: Pick<UiSessionDefaultsHost, "agentsList" | "hello">,
   left: string | undefined | null,

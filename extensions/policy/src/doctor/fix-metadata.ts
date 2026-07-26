@@ -327,14 +327,14 @@ const POLICY_FIX_METADATA = [
       configTargets: ["agents.sandbox.browser"],
     },
   ),
+  // Sensitive log redaction is an unconditional runtime invariant (src/logging/redact.ts),
+  // so this requirement has no config target to patch. Adding one would emit a retired
+  // config key that strict validation rejects.
   m(
     CHECK_IDS.policyDataHandlingRedactionDisabled,
-    "automatic",
-    "Set sensitive logging to a redacting mode.",
-    {
-      policyPath: ["dataHandling", "sensitiveLogging", "requireRedaction"],
-      configTargets: ["logging.redactSensitive"],
-    },
+    "validateOnly",
+    "Update the policy requirement; sensitive log redaction is always enabled.",
+    { policyPath: ["dataHandling", "sensitiveLogging", "requireRedaction"] },
   ),
   m(
     CHECK_IDS.policyDataHandlingTelemetryContentCapture,

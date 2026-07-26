@@ -36,6 +36,7 @@ export function createContext(
     client,
     phase: "connected",
     offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: {
       type: "hello-ok" as const,
       protocol: 1,

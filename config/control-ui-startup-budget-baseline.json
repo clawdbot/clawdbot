@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 318587,
-  "reason": "move presentation preferences to browser-local state",
-  "updatedAt": "2026-07-23"
+  "startupJsGzipBytes": 319835,
+  "reason": "flexible multi-sidebar chat layout",
+  "updatedAt": "2026-07-25"
 }

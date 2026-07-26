@@ -5,10 +5,10 @@ import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-ru
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
-import { COHERE_COMMAND_A_PLUS_MODEL_ID } from "./models.js";
 import { buildCohereProvider, COHERE_LIVE_MODEL_DISCOVERY } from "./provider-catalog.js";
 import { createCohereCompletionsWrapper } from "./stream.js";
 
+const COHERE_COMMAND_A_PLUS_MODEL_ID = "command-a-plus-05-2026";
 const COHERE_COMMAND_A_REASONING_MODEL_ID = "command-a-reasoning-08-2025";
 const COHERE_COMMAND_A_VISION_MODEL_ID = "command-a-vision-07-2025";
 const COHERE_NORTH_MINI_CODE_MODEL_ID = "north-mini-code-1-0";
@@ -108,8 +108,6 @@ describe("Cohere provider plugin", () => {
         }),
         expect.objectContaining({
           id: "command-a-03-2025",
-          status: "deprecated",
-          replacedBy: COHERE_COMMAND_A_PLUS_MODEL_ID,
           compat: {
             supportsStore: false,
             supportsUsageInStreaming: false,
@@ -118,8 +116,6 @@ describe("Cohere provider plugin", () => {
         }),
         expect.objectContaining({
           id: COHERE_COMMAND_A_REASONING_MODEL_ID,
-          status: "deprecated",
-          replacedBy: COHERE_COMMAND_A_PLUS_MODEL_ID,
           reasoning: true,
           input: ["text"],
           contextWindow: 256000,
@@ -127,8 +123,6 @@ describe("Cohere provider plugin", () => {
         }),
         expect.objectContaining({
           id: COHERE_COMMAND_A_VISION_MODEL_ID,
-          status: "deprecated",
-          replacedBy: COHERE_COMMAND_A_PLUS_MODEL_ID,
           reasoning: false,
           input: ["text", "image"],
           contextWindow: 128000,

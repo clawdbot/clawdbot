@@ -160,6 +160,12 @@ describeControlUiE2e("Control UI chat background-tasks rail mocked Gateway E2E",
       const rail = page.locator(".chat-tasks-rail");
       await rail.locator('[data-task-id="task-subagent"]').waitFor({ state: "visible" });
       await rail.locator('[data-task-id="task-cron"]').waitFor({ state: "visible" });
+      // Finished history starts collapsed: only the section header with the
+      // count renders until it is expanded.
+      const finishedToggle = rail.getByRole("button", { name: "Finished (1)" });
+      await finishedToggle.waitFor({ state: "visible" });
+      expect(await rail.locator('[data-task-id="task-cli"]').count()).toBe(0);
+      await finishedToggle.click();
       await rail.locator('[data-task-id="task-cli"]').waitFor({ state: "visible" });
       const railText = await rail.textContent();
       expect(railText).toContain("Reading provider catalogs");

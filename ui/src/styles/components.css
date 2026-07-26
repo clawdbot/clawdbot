@@ -2272,7 +2272,7 @@ openclaw-chat-session-rail {
 
 .code-block-copy.copied .code-block-copy__done {
   display: inline;
-  color: var(--success, #22c55e);
+  color: var(--ok);
 }
 
 .json-collapse {
@@ -3146,8 +3146,8 @@ td.data-table-key-col {
 
 .exec-approval-card--inline {
   padding: 14px 16px;
-  border-color: color-mix(in srgb, var(--warning) 45%, var(--border));
-  background: color-mix(in srgb, var(--warning) 5%, var(--card));
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
+  background: color-mix(in srgb, var(--warn) 5%, var(--card));
   animation: none;
 }
 
@@ -3230,7 +3230,7 @@ td.data-table-key-col {
 .exec-approval-warning {
   margin-top: 10px;
   font-size: 13px;
-  color: var(--warning, #b7791f);
+  color: var(--warn);
 }
 
 .exec-approval-actions {
@@ -3307,7 +3307,7 @@ td.data-table-key-col {
 }
 
 .exec-approval-list__expiry {
-  color: var(--warning);
+  color: var(--warn);
   font: 11px/1.2 var(--mono);
   font-variant-numeric: tabular-nums;
 }
@@ -5526,7 +5526,7 @@ td.data-table-key-col {
 .session-approval-badge {
   display: inline-flex;
   align-items: center;
-  color: var(--warning);
+  color: var(--warn);
 }
 
 .session-approval-badge svg {

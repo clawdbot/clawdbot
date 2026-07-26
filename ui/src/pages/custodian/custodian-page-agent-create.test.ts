@@ -23,6 +23,7 @@ function createContext(request: ReturnType<typeof vi.fn>) {
     client,
     phase: "connected",
     offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: {
       type: "hello-ok",
       protocol: 1,

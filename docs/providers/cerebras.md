@@ -17,7 +17,7 @@ read_when:
 | Direct CLI flag | `--cerebras-api-key <key>`                                |
 | API             | OpenAI-compatible (`openai-completions`)                  |
 | Base URL        | `https://api.cerebras.ai/v1`                              |
-| Default model   | `cerebras/zai-glm-4.7`                                    |
+| Default model   | `cerebras/gpt-oss-120b`                                   |
 
 ## Install plugin
 
@@ -75,11 +75,11 @@ openclaw onboard --non-interactive \
 
 All three models have a 131,072-token context window and a 40,960-token max output.
 
-| Model ref               | Name         | Reasoning | Notes                                    |
-| ----------------------- | ------------ | --------- | ---------------------------------------- |
-| `cerebras/zai-glm-4.7`  | Z.ai GLM 4.7 | yes       | Default model; scheduled for deprecation |
-| `cerebras/gpt-oss-120b` | GPT OSS 120B | yes       | Production reasoning model               |
-| `cerebras/gemma-4-31b`  | Gemma 4 31B  | yes       | Text-and-image input; text output        |
+| Model ref               | Name         | Reasoning | Notes                                     |
+| ----------------------- | ------------ | --------- | ----------------------------------------- |
+| `cerebras/zai-glm-4.7`  | Z.ai GLM 4.7 | yes       | Scheduled for deprecation August 17, 2026 |
+| `cerebras/gpt-oss-120b` | GPT OSS 120B | yes       | Default production reasoning model        |
+| `cerebras/gemma-4-31b`  | Gemma 4 31B  | yes       | Preview; text-and-image input             |
 
 ## Manual config
 
@@ -90,7 +90,7 @@ Most setups only need the API key. Use explicit `models.providers.cerebras` conf
   env: { CEREBRAS_API_KEY: "csk-..." },
   agents: {
     defaults: {
-      model: { primary: "cerebras/zai-glm-4.7" },
+      model: { primary: "cerebras/gpt-oss-120b" },
     },
   },
   models: {

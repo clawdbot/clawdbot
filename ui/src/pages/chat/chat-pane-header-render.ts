@@ -126,6 +126,7 @@ export abstract class ChatPaneHeaderRender extends ChatPaneHeader {
             ></openclaw-viewer-facepile>`
           : nothing,
       faceControl: renderBoardFaceToggle(board.hasBoard, board.face, (face) => {
+        this.syncChatSidebarForDock(face === "dashboard" ? board.dock : "hidden");
         this.persistBoardSessionView({ face });
       }),
       sharingControl:

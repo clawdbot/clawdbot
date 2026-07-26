@@ -27,6 +27,7 @@
       "meta": {
         "baseUrl": "https://api.meta.ai/v1",
         "api": "openai-responses",
+        "defaultModel": "muse-spark-1.1",
         "models": [
           {
             "id": "muse-spark-1.1",
@@ -34,8 +35,7 @@
             "reasoning": true,
             "input": [
               "text",
-              "image",
-              "document"
+              "image"
             ],
             "contextWindow": 1048576,
             "maxTokens": 131072,

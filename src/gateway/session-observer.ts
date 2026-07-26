@@ -1,4 +1,5 @@
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
+import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import {
   createSessionActivityNoteState,
   flushSessionActivityAssistantNote,
@@ -9,10 +10,13 @@ import {
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { getAgentRunContext } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { createSessionObserverAskRuntime } from "./session-observer-ask.js";
 import { createSessionObserverAudience } from "./session-observer-audience.js";
 import { createSessionObserverCompletion } from "./session-observer-completion.js";
-import type { SessionObserverEvent, SessionObserverService } from "./session-observer-contract.js";
+import type {
+  SessionObserverCompanionSnapshot,
+  SessionObserverEvent,
+  SessionObserverService,
+} from "./session-observer-contract.js";
 import { createSessionObserverModelSlots } from "./session-observer-model-slots.js";
 import {
   createDormantSessionObserverRun,
@@ -48,10 +52,7 @@ const FINAL_DIGEST_MIN_RUN_MS = 30_000;
 // prevents background observer calls from outgrowing the surface consuming them.
 const MAX_CONCURRENT_MODEL_SESSIONS = 6;
 
-type SessionObserver = SessionObserverService &
-  Pick<ReturnType<typeof createSessionObserverAskRuntime>, "getSnapshot" | "getCompanionSnapshot">;
-
-export function createSessionObserver(deps: SessionObserverDeps): SessionObserver {
+export function createSessionObserver(deps: SessionObserverDeps): SessionObserverService {
   const now = deps.now ?? Date.now;
   const setTimeoutFn = deps.setTimeoutFn ?? setTimeout;
   const clearTimeoutFn = deps.clearTimeoutFn ?? clearTimeout;
@@ -69,19 +70,27 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
   const disabledRuns = new Set<string>();
   const visibleConnections = new Set<string>();
   let disposed = false;
-  const askRuntime = createSessionObserverAskRuntime({
-    getConfig: deps.getConfig,
-    subscribers: deps.subscribers,
-    states,
-    resolveUtilityModelRef,
-    prepareModel,
-    completeModel,
-    readSession,
-    now,
-    setTimeoutFn,
-    clearTimeoutFn,
-    isDisposed: () => disposed,
-  });
+  const getCompanionSnapshot = (sessionKey: string): SessionObserverCompanionSnapshot => {
+    const state = states.get(sessionKey);
+    if (state) {
+      flushSessionActivityAssistantNote(state);
+      return {
+        agentId: state.agentId,
+        runId: state.runId,
+        ...(state.previousDigest ? { digest: state.previousDigest } : {}),
+        notes: state.notes.map((note) => ({ sequence: note.sequence, text: note.text })),
+      };
+    }
+    const cfg = deps.getConfig();
+    const agentId = resolveSessionAgentId({ sessionKey, config: cfg });
+    const digest = readSession(sessionKey, agentId)?.observerDigest;
+    return {
+      agentId,
+      ...(digest?.runId ? { runId: digest.runId } : {}),
+      ...(digest ? { digest } : {}),
+      notes: [],
+    };
+  };
   const audience = createSessionObserverAudience({
     subscribers: deps.subscribers,
     sessionEventSubscribers: deps.sessionEventSubscribers,
@@ -380,10 +389,17 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
             ? { planProgress: state.planProgress ?? modelDigest.planProgress }
             : {}),
         };
+        const previous = state.previousDigest?.health;
+        const next = digest.health;
+        const criticalTransition =
+          (next === "stuck" || next === "waiting-on-user") && previous !== next;
         state.previousDigest = digest;
-        deps.broadcastToConnIds("session.observer", digest, audience.recipients(state.sessionKey), {
-          dropIfSlow: true,
-        });
+        // The existing gateway.controlUi.sessionObserver=false gate prevents this
+        // run entirely, so the wider critical announce inherits the same opt-out.
+        const recipients = criticalTransition
+          ? audience.criticalRecipients(state.sessionKey)
+          : audience.recipients(state.sessionKey);
+        deps.broadcastToConnIds("session.observer", digest, recipients, { dropIfSlow: true });
         await persistAcceptedDigest(state, digest, final);
         if (final) {
           dormantRuns.delete(state.runId);
@@ -668,14 +684,11 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
         suspendStatesWithoutAudience();
       }
     },
-    getSnapshot: askRuntime.getSnapshot,
-    getCompanionSnapshot: askRuntime.getCompanionSnapshot,
-    ask: askRuntime.ask,
+    getCompanionSnapshot,
     dispose() {
       disposed = true;
       preamblePublisher.dispose();
       unsubscribeChanges();
-      askRuntime.dispose();
       for (const state of states.values()) {
         dropState(state);
       }

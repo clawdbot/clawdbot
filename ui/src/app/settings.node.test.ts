@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { openSlot } from "../pages/chat/sidebar-layout.ts";
 import { createImportedCustomThemeFixture } from "../test-helpers/custom-theme.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import {
@@ -59,7 +60,6 @@ function makeSettings(gatewayUrl: string, overrides: Partial<UiSettings> = {}): 
     themeMode: "system",
     chatShowThinking: true,
     chatShowToolCalls: true,
-    splitRatio: 0.6,
     navCollapsed: false,
     navWidth: 258,
     sidebarEntries: [],
@@ -261,7 +261,6 @@ describe("loadSettings default gateway URL derivation", () => {
       themeMode: "system",
       chatShowThinking: true,
       chatShowToolCalls: true,
-      splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
       sidebarEntries: [],
@@ -291,7 +290,6 @@ describe("loadSettings default gateway URL derivation", () => {
       themeMode: "system",
       chatShowThinking: true,
       chatShowToolCalls: true,
-      splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
       sidebarEntries: [],
@@ -306,7 +304,6 @@ describe("loadSettings default gateway URL derivation", () => {
       themeMode: "system",
       chatShowThinking: true,
       chatShowToolCalls: true,
-      splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
       sidebarEntries: [],
@@ -334,7 +331,6 @@ describe("loadSettings default gateway URL derivation", () => {
       themeMode: "system",
       chatShowThinking: true,
       chatShowToolCalls: true,
-      splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
       sidebarEntries: [],
@@ -351,7 +347,6 @@ describe("loadSettings default gateway URL derivation", () => {
       chatShowThinking: true,
       chatShowToolCalls: true,
       chatPersistCommentary: true,
-      splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
       sidebarEntries: [],
@@ -383,7 +378,6 @@ describe("loadSettings default gateway URL derivation", () => {
       themeMode: "system",
       chatShowThinking: true,
       chatShowToolCalls: true,
-      splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
       sidebarEntries: ["route:tasks", "route:cron"],
@@ -443,7 +437,6 @@ describe("loadSettings default gateway URL derivation", () => {
       themeMode: "system",
       chatShowThinking: true,
       chatShowToolCalls: true,
-      splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
       sidebarEntries: [],
@@ -756,7 +749,6 @@ describe("loadSettings default gateway URL derivation", () => {
       themeMode: "system",
       chatShowThinking: true,
       chatShowToolCalls: true,
-      splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
       sidebarEntries: [],
@@ -770,7 +762,6 @@ describe("loadSettings default gateway URL derivation", () => {
       themeMode: "system",
       chatShowThinking: true,
       chatShowToolCalls: true,
-      splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
       sidebarEntries: [],
@@ -797,7 +788,6 @@ describe("loadSettings default gateway URL derivation", () => {
       themeMode: "light",
       chatShowThinking: true,
       chatShowToolCalls: true,
-      splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 320,
       sidebarEntries: [],
@@ -875,6 +865,34 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(loadSettings().boardSessionViews).toEqual({});
   });
 
+  it("persists normalized sidebar layouts per session", () => {
+    setTestLocation({ protocol: "https:", host: "gateway.example:8443", pathname: "/" });
+    const settings = loadSettings();
+    const sidebarSessionLayouts = {
+      "agent:main:main": openSlot({ columns: [] }, "discussion"),
+    };
+
+    saveSettings({ ...settings, sidebarSessionLayouts });
+
+    expect(loadSettings().sidebarSessionLayouts).toEqual(sidebarSessionLayouts);
+  });
+
+  it("normalizes corrupt stored sidebar layouts to empty columns", () => {
+    setTestLocation({ protocol: "https:", host: "gateway.example:8443", pathname: "/" });
+    const gwUrl = expectedGatewayUrl("");
+    localStorage.setItem(
+      `openclaw.control.settings.v1:${gwUrl}`,
+      JSON.stringify({
+        gatewayUrl: gwUrl,
+        sidebarSessionLayouts: { "agent:main:main": { columns: "invalid" } },
+      }),
+    );
+
+    expect(loadSettings().sidebarSessionLayouts).toEqual({
+      "agent:main:main": { columns: [] },
+    });
+  });
+
   it("omits an invalid stored chat split layout", () => {
     setTestLocation({
       protocol: "https:",
@@ -908,7 +926,6 @@ describe("loadSettings default gateway URL derivation", () => {
       themeMode: "system",
       chatShowThinking: true,
       chatShowToolCalls: true,
-      splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
       sidebarEntries: [],
@@ -937,7 +954,6 @@ describe("loadSettings default gateway URL derivation", () => {
         themeMode: "dark",
         chatShowThinking: true,
         chatShowToolCalls: true,
-        splitRatio: 0.6,
         navCollapsed: false,
         navWidth: 258,
         sidebarEntries: [],
@@ -980,7 +996,6 @@ describe("loadSettings default gateway URL derivation", () => {
       themeMode: "system",
       chatShowThinking: true,
       chatShowToolCalls: true,
-      splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
       sidebarEntries: [],
@@ -1022,7 +1037,6 @@ describe("loadSettings default gateway URL derivation", () => {
       themeMode: "system",
       chatShowThinking: true,
       chatShowToolCalls: true,
-      splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
       sidebarEntries: [],

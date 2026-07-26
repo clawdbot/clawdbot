@@ -2,19 +2,14 @@
  * Chutes provider builders for static and dynamically discovered catalogs.
  */
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import {
-  CHUTES_BASE_URL,
-  CHUTES_MODEL_CATALOG,
-  buildChutesModelDefinition,
-  discoverChutesModels,
-} from "./models.js";
+import { CHUTES_BASE_URL, CHUTES_MODEL_CATALOG, discoverChutesModels } from "./models.js";
 
 /** Builds the static Chutes provider catalog from bundled model metadata. */
 export function buildStaticChutesProvider(): ModelProviderConfig {
   return {
     baseUrl: CHUTES_BASE_URL,
     api: "openai-completions",
-    models: CHUTES_MODEL_CATALOG.map(buildChutesModelDefinition),
+    models: structuredClone(CHUTES_MODEL_CATALOG),
   };
 }
 
@@ -28,6 +23,6 @@ export async function buildChutesProvider(accessToken?: string): Promise<ModelPr
   return {
     baseUrl: CHUTES_BASE_URL,
     api: "openai-completions",
-    models: models.length > 0 ? models : CHUTES_MODEL_CATALOG.map(buildChutesModelDefinition),
+    models: models.length > 0 ? models : structuredClone(CHUTES_MODEL_CATALOG),
   };
 }

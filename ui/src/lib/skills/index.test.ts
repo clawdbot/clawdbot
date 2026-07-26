@@ -442,8 +442,8 @@ describe("loadSkillCard", () => {
           disabled: false,
           blockedByAllowlist: false,
           eligible: true,
-          requirements: { bins: [], env: [], config: [], os: [] },
-          missing: { bins: [], env: [], config: [], os: [] },
+          requirements: { anyBins: [], bins: [], env: [], config: [], os: [] },
+          missing: { anyBins: [], bins: [], env: [], config: [], os: [] },
           configChecks: [],
           install: [],
           skillCard: {
@@ -495,8 +495,8 @@ describe("loadSkillCard", () => {
           disabled: false,
           blockedByAllowlist: false,
           eligible: true,
-          requirements: { bins: [], env: [], config: [], os: [] },
-          missing: { bins: [], env: [], config: [], os: [] },
+          requirements: { anyBins: [], bins: [], env: [], config: [], os: [] },
+          missing: { anyBins: [], bins: [], env: [], config: [], os: [] },
           configChecks: [],
           install: [],
           clawhub: {

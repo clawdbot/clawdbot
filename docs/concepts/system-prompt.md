@@ -30,7 +30,7 @@ The bundled OpenAI/Codex GPT-5-family overlay (`resolveGpt5SystemPromptContribut
 
 The prompt is compact, with fixed sections:
 
-- **Tooling**: structured-tool source-of-truth reminder plus runtime tool-use guidance. When the experimental `update_plan` tool is enabled (`tools.experimental.planTool`), its own tool description adds: use it only for non-trivial multi-step work, keep at most one step `in_progress`, and skip it for simple one-step work.
+- **Tooling**: structured-tool source-of-truth reminder plus runtime tool-use guidance. When the `update_plan` tool is enabled (`tools.updatePlan`, on by default), its own tool description adds: use it only for non-trivial multi-step work, keep at most one step `in_progress`, and skip it for simple one-step work.
 - **Execution Bias**: act in-turn on actionable requests, continue until done or blocked, recover from weak tool results, check mutable state live, and verify before finalizing.
 - **Promised Work**: promising future, background, delegated, or continued work creates follow-through ownership: arrange a push-based completion or watch path before ending the turn, proactively return with the result or a concrete blocker, and never treat progress (like `running`) as completion.
 - **Safety**: short guardrail reminder against power-seeking behavior or bypassing oversight.

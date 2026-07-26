@@ -1683,10 +1683,7 @@ jobs:
           OPENCLAW_BUILD_PRIVATE_QA: "1"
           NODE_OPTIONS: --max-old-space-size=8192
         run: |
-          node scripts/build-all.mjs qaRuntime
-          pnpm ui:build
           package_args=(
-            --skip-build
             --output-dir .artifacts/qa-e2e/smoke-ci-package
             --output-name openclaw-current.tgz
           )
@@ -1694,6 +1691,8 @@ jobs:
             package_args=(--allow-unreleased-changelog "${package_args[@]}")
           fi
           node scripts/package-openclaw-for-docker.mjs "${package_args[@]}"
+          node scripts/build-all.mjs qaRuntime
+          pnpm ui:build
 
       - name: Run smoke profile part
         env:

@@ -327,7 +327,14 @@ function renderSessionCatalogs(params: {
         display,
       }),
     onToggleSection: (sectionId) => host.toggleSection(sectionId),
-    onToggleProjectGrouping: () => host.toggleCatalogProjectGrouping(),
+    // aria-expanded must land on the one header whose menu is open, so the
+    // catalog id rides on the trigger's data attribute instead of a global flag.
+    viewMenuOpenCatalogId: host.sidebarMenus.catalogViewMenuPosition
+      ? (host.sidebarMenus.catalogViewMenuTrigger?.getAttribute("data-session-catalog-view-menu") ??
+        null)
+      : null,
+    creatorFilterActive: host.sessionCreatorFilterActive,
+    onOpenViewMenu: (trigger) => host.sidebarMenus.toggleCatalogViewMenu(trigger),
     onLoadMore: (catalogId) => void host.sessionData.loadMoreSessionCatalog(catalogId),
     onOpenNewSession: host.onOpenNewSession,
     onNavigate: host.onNavigate,
@@ -346,6 +353,11 @@ function renderSessionListBody(params: {
   codingTrailingPresent?: boolean;
 }) {
   const { host } = params;
+  // Categorized threads still need the global sort and new-thread actions,
+  // which belong to Threads even when that section has no rows of its own.
+  const hasCategorizedThreads = params.sections.some(
+    (section) => Boolean(section.category) && section.totalRowCount > 0,
+  );
   return html`
     ${params.sections.map((section) => {
       const showDraft = section.id === "ungrouped" && params.showDraft;
@@ -361,12 +373,13 @@ function renderSessionListBody(params: {
           trailing: params.codingTrailing ?? nothing,
         });
       }
-      // Threads hides its bare empty header unless it owns the collaborative
-      // creator filter; custom categories stay visible as drop targets.
+      // Hide an empty Threads header only when it does not own reachable
+      // actions for categorized threads, collaborators, or an active drag.
       if (
         section.id === "ungrouped" &&
         section.totalRowCount === 0 &&
         !showDraft &&
+        !hasCategorizedThreads &&
         !host.sessionOwnershipVisible &&
         host.sessionsStatusFilter === "active" &&
         host.sessionOrganizer.draggingSessionKey === null

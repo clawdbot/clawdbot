@@ -641,6 +641,45 @@ describe("session observer", () => {
     harness.observer.dispose();
   });
 
+  it("widens only critical health transitions to hidden session-list subscribers", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const healths = ["stuck", "stuck", "on-track", "stuck", "done", "failed"] as const;
+    const completeModel = vi.fn(async () => {
+      const health = healths[completeModel.mock.calls.length - 1] ?? "on-track";
+      return modelMessage({ headline: `Health: ${health}`, health });
+    });
+    const harness = createHarness({ completeModel });
+    harness.sessionEventSubscribers.subscribe("conn-background");
+
+    const publishNext = async (initial = false) => {
+      if (initial) {
+        startAndAddToolNotes(harness.observer);
+      } else {
+        for (let index = 0; index < 4; index += 1) {
+          harness.observer.handleEvent(
+            event({
+              stream: "tool",
+              data: { phase: "start", name: "read", args: { index } },
+            }),
+          );
+        }
+      }
+      await vi.advanceTimersByTimeAsync(12_000);
+      await flushObserver();
+      return harness.broadcastToConnIds.mock.calls.at(-1)?.[2] as ReadonlySet<string>;
+    };
+
+    expect(await publishNext(true)).toEqual(new Set(["conn-1", "conn-background"]));
+    expect(await publishNext()).toEqual(new Set(["conn-1"]));
+    expect(await publishNext()).toEqual(new Set(["conn-1"]));
+    expect(await publishNext()).toEqual(new Set(["conn-1", "conn-background"]));
+    expect(await publishNext()).toEqual(new Set(["conn-1"]));
+    expect(await publishNext()).toEqual(new Set(["conn-1"]));
+    expect(completeModel).toHaveBeenCalledTimes(6);
+    harness.observer.dispose();
+  });
+
   it("suspends when the last visible connection is removed", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
@@ -650,7 +689,7 @@ describe("session observer", () => {
     harness.observer.removeConnection("conn-1");
     await vi.advanceTimersByTimeAsync(12_000);
 
-    expect(harness.observer.getSnapshot("agent:main:session-1").notes).toEqual([]);
+    expect(harness.observer.getCompanionSnapshot("agent:main:session-1").notes).toEqual([]);
     expect(harness.completeModel).not.toHaveBeenCalled();
     harness.observer.dispose();
   });

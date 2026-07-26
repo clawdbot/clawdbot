@@ -15,12 +15,14 @@ import {
   executeActAction,
   executeConsoleAction,
   executeDownloadAction,
+  executeExtractAction,
   executeSnapshotAction,
   executeTabsAction,
 } from "./browser-tool.actions.js";
 import {
   type AnyAgentTool,
   type NodeListNode,
+  BrowserToolOutputSchema,
   BrowserToolSchema,
   browserAct,
   browserArmDialog,
@@ -30,6 +32,7 @@ import {
   browserFocusTab,
   browserImportProfile,
   browserNavigate,
+  browserPageContent,
   browserOpenTab,
   browserPdfSave,
   browserProfiles,
@@ -38,13 +41,18 @@ import {
   browserStart,
   browserStatus,
   browserStop,
+  completeWithPreparedSimpleCompletionModel,
   describeImageFile,
+  extractAssistantText,
   getRuntimeConfig,
   getBrowserProfileCapabilities,
   imageResultFromFile,
+  htmlToMarkdown,
   jsonResult,
   listNodes,
   normalizeOptionalString,
+  normalizeWhitespace,
+  prepareSimpleCompletionModelForAgent,
   readPositiveIntegerParam,
   readStringParam,
   readStringValue,
@@ -54,6 +62,7 @@ import {
   resolveNodeIdFromList,
   resolveProfile,
   saveMediaBuffer,
+  sanitizeHtml,
   selectDefaultNodeFromList,
   stageBrowserScreenshotForSharing,
   touchSessionBrowserTab,
@@ -76,6 +85,7 @@ const browserToolDeps = {
   browserFocusTab,
   browserImportProfile,
   browserNavigate,
+  browserPageContent,
   browserOpenTab,
   browserPdfSave,
   browserProfiles,
@@ -84,12 +94,18 @@ const browserToolDeps = {
   browserStart,
   browserStatus,
   browserStop,
+  completeWithPreparedSimpleCompletionModel,
   describeImageFile,
+  extractAssistantText,
   getRuntimeConfig,
   imageResultFromFile,
+  htmlToMarkdown,
   listNodes,
+  normalizeWhitespace,
   normalizeBrowserScreenshot,
   saveMediaBuffer,
+  sanitizeHtml,
+  prepareSimpleCompletionModelForAgent,
   stageBrowserScreenshotForSharing,
   touchSessionBrowserTab,
   trackSessionBrowserTab,
@@ -397,6 +413,7 @@ export function createBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
   agentSessionKey?: string;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   activeModel?: {
@@ -418,7 +435,8 @@ export function createBrowserTool(opts?: {
     name: "browser",
     description: describeBrowserTool({ targetDefault, hostHint }),
     parameters: BrowserToolSchema,
-    execute: async (_toolCallId, args) => {
+    outputSchema: BrowserToolOutputSchema,
+    execute: async (_toolCallId, args, signal) => {
       const bindingResult =
         opts?.runToolBinding === undefined
           ? undefined
@@ -733,6 +751,18 @@ export function createBrowserTool(opts?: {
             baseUrl,
             profile,
             proxyRequest,
+            onTabActivity: sessionTabs.touch,
+          });
+        case "extract":
+          return await executeExtractAction({
+            input: params,
+            baseUrl,
+            profile,
+            proxyRequest,
+            agentId: opts?.agentId ?? "main",
+            agentDir: opts?.agentDir,
+            signal,
+            deps: browserToolDeps,
             onTabActivity: sessionTabs.touch,
           });
         case "screenshot": {

@@ -417,6 +417,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneReset {
     this.paneResizeObserver?.disconnect();
     this.paneResizeObserver = null;
     this.connectionGeneration += 1;
+    this.sessionDiscussionPanels.clear();
     this.sessionCompanionHydrationKey = "";
     this.taskSuggestionsRequestVersion += 1;
     this.taskSuggestions = [];

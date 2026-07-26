@@ -347,6 +347,7 @@ describe("package-openclaw-for-docker", () => {
       packageExtensions: string | undefined;
       dockerBuildExtensions: string | undefined;
       internalDockerBuildPluginIds: string | undefined;
+      privateQa: string | undefined;
       skipDts: string | undefined;
       timeoutMs: number | undefined;
     }> = [];
@@ -355,11 +356,13 @@ describe("package-openclaw-for-docker", () => {
     const previousPackageExtensions = process.env.OPENCLAW_EXTENSIONS;
     const previousDockerBuildExtensions = process.env.OPENCLAW_DOCKER_BUILD_EXTENSIONS;
     const previousInternalPluginIds = process.env[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV];
+    const previousPrivateQa = process.env.OPENCLAW_BUILD_PRIVATE_QA;
     process.env.OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS = "1234";
     process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD = "1";
     process.env.OPENCLAW_EXTENSIONS = "clickclack";
     process.env.OPENCLAW_DOCKER_BUILD_EXTENSIONS = "slack";
     process.env[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV] = "msteams";
+    process.env.OPENCLAW_BUILD_PRIVATE_QA = "1";
 
     try {
       await buildPackageArtifacts("/repo", {
@@ -377,6 +380,7 @@ describe("package-openclaw-for-docker", () => {
             packageExtensions: options.env?.OPENCLAW_EXTENSIONS,
             dockerBuildExtensions: options.env?.OPENCLAW_DOCKER_BUILD_EXTENSIONS,
             internalDockerBuildPluginIds: options.env?.[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV],
+            privateQa: options.env?.OPENCLAW_BUILD_PRIVATE_QA,
             skipDts: options.env?.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD,
             timeoutMs: options.timeoutMs,
           });
@@ -397,6 +401,7 @@ describe("package-openclaw-for-docker", () => {
         ["OPENCLAW_EXTENSIONS", previousPackageExtensions],
         ["OPENCLAW_DOCKER_BUILD_EXTENSIONS", previousDockerBuildExtensions],
         [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV, previousInternalPluginIds],
+        ["OPENCLAW_BUILD_PRIVATE_QA", previousPrivateQa],
       ] as const) {
         if (previousValue === undefined) {
           delete process.env[envName];
@@ -415,6 +420,7 @@ describe("package-openclaw-for-docker", () => {
         internalDockerBuildPluginIds: undefined,
         noPnpm: "1",
         packageExtensions: undefined,
+        privateQa: undefined,
         skipDts: "0",
         timeoutMs: 1234,
       },

@@ -6,11 +6,9 @@ import {
   legacyStateFileExists,
 } from "openclaw/plugin-sdk/runtime-doctor";
 import {
-  DAILY_INGESTION_STATE_RELATIVE_PATH,
-  SESSION_INGESTION_STATE_RELATIVE_PATH,
   normalizeDailyIngestionState,
   normalizeSessionIngestionState,
-} from "../dreaming-phases.js";
+} from "../dreaming-ingestion-state.js";
 import {
   DREAMING_DAILY_INGESTION_NAMESPACE,
   DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
@@ -38,6 +36,17 @@ type LegacySource = {
   filePath: string;
 };
 
+const LEGACY_DAILY_INGESTION_STATE_RELATIVE_PATH = path.join(
+  "memory",
+  ".dreams",
+  "daily-ingestion.json",
+);
+const LEGACY_SESSION_INGESTION_STATE_RELATIVE_PATH = path.join(
+  "memory",
+  ".dreams",
+  "session-ingestion.json",
+);
+
 async function readJsonFile(filePath: string): Promise<unknown> {
   return JSON.parse(await fs.readFile(filePath, "utf8"));
 }
@@ -49,8 +58,8 @@ async function collectLegacySources(
   const sources: LegacySource[] = [];
   for (const workspaceDir of resolveConfiguredWorkspaces(config, env)) {
     const candidates = [
-      { label: "daily ingestion", relativePath: DAILY_INGESTION_STATE_RELATIVE_PATH },
-      { label: "session ingestion", relativePath: SESSION_INGESTION_STATE_RELATIVE_PATH },
+      { label: "daily ingestion", relativePath: LEGACY_DAILY_INGESTION_STATE_RELATIVE_PATH },
+      { label: "session ingestion", relativePath: LEGACY_SESSION_INGESTION_STATE_RELATIVE_PATH },
       { label: "short-term recall", relativePath: SHORT_TERM_STORE_RELATIVE_PATH },
       { label: "phase signals", relativePath: SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH },
     ];

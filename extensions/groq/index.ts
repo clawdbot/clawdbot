@@ -4,15 +4,17 @@ import {
   streamSimple,
   type AssistantMessageEvent,
 } from "openclaw/plugin-sdk/llm";
-// Groq plugin entrypoint registers its OpenClaw integration.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { buildOpenAICompatibleProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
+import {
+  buildManifestModelProviderConfig,
+  readManifestProviderDefaultModelRef,
+} from "openclaw/plugin-sdk/provider-catalog-shared";
 import { groqMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-const GROQ_DEFAULT_MODEL_REF = "groq/openai/gpt-oss-120b";
+const GROQ_DEFAULT_MODEL_REF = readManifestProviderDefaultModelRef(manifest, "groq")!;
 const GROQ_OVERSIZED_RECOVERY_MODEL_ID = "llama-3.3-70b-versatile";
 const GROQ_FALLBACK_MAX_TOKENS = 1_024;
 
