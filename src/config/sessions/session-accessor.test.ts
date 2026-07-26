@@ -2965,6 +2965,37 @@ describe("session accessor seam", () => {
     await expect(loadTranscriptEvents(scope)).resolves.toEqual([]);
   });
 
+  it("exposes only transcript identity to append predicates", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "session-predicate-context",
+      sessionKey: "agent:main:predicate-context",
+      storePath,
+    };
+    await upsertSessionEntry(scope, {
+      sessionId: scope.sessionId,
+      updatedAt: 10,
+      customTitle: "private entry state",
+    });
+    let predicateContext: unknown;
+
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          message: { role: "assistant", content: "not appended", timestamp: 100 },
+          shouldAppend: (context) => {
+            predicateContext = context;
+            return false;
+          },
+        },
+      ],
+      updateMode: "file-only",
+    });
+
+    expect(predicateContext).toEqual(scope);
+    expect(predicateContext).not.toHaveProperty("sessionEntry");
+  });
+
   it("rejects a guarded transcript turn when same-session lifecycle ownership changes", async () => {
     const scope = {
       agentId: "main",

@@ -15,6 +15,6 @@ export async function resolveSessionTranscriptFile(params: {
 }): Promise<{ sessionFile: string; sessionEntry: SessionEntry | undefined }> {
   return {
     sessionFile: params.sessionKey,
-    sessionEntry: params.sessionEntry,
+    sessionEntry: params.sessionEntry ?? params.sessionStore?.[params.sessionKey],
   };
 }

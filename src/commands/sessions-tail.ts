@@ -173,11 +173,15 @@ function formatProgressLine(event: TrajectoryEvent): string {
   return [formatTimestamp(event.ts), typeLabel, sessionLabel, preview].join(" ").trimEnd();
 }
 
-function readSqliteTrajectorySnapshot(source: TailTrajectorySource): TrajectorySnapshot {
+function readSqliteTrajectorySnapshot(
+  source: TailTrajectorySource,
+  tailEvents: number,
+): TrajectorySnapshot {
   const rows = loadSqliteTrajectoryRuntimeEventRowsSync({
     agentId: source.agentId,
     sessionId: source.sessionId,
     storePath: source.storePath,
+    tailEvents,
   });
   return {
     events: rows.map((row) => row.event),
@@ -185,8 +189,8 @@ function readSqliteTrajectorySnapshot(source: TailTrajectorySource): TrajectoryS
   };
 }
 
-function readTailSnapshot(selection: TailSelection): TrajectorySnapshot {
-  return readSqliteTrajectorySnapshot(selection.source);
+function readTailSnapshot(selection: TailSelection, tailEvents: number): TrajectorySnapshot {
+  return readSqliteTrajectorySnapshot(selection.source, tailEvents);
 }
 
 function renderEvents(events: TrajectoryEvent[], runtime: RuntimeEnv): void {
@@ -363,7 +367,7 @@ export async function sessionsTailCommand(
 
   const followSnapshots = new Map<TailSelection, TrajectorySnapshot>();
   for (const selection of selected) {
-    const snapshot = readTailSnapshot(selection);
+    const snapshot = readTailSnapshot(selection, Math.max(tailCount, opts.follow ? 1 : 0));
     followSnapshots.set(selection, snapshot);
     renderEvents(tailCount > 0 ? snapshot.events.slice(-tailCount) : [], runtime);
   }

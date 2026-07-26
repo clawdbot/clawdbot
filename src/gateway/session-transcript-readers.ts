@@ -5,6 +5,7 @@ import {
   readSessionTranscriptMessageEventCount,
   readSessionTranscriptMessageEventPage,
   readSessionTranscriptMessageEvents,
+  resolveConcreteSessionStorePath,
   resolveSessionTranscriptReadTarget,
   waitForSessionTranscriptProjection,
   type SessionTranscriptMessageEvent,
@@ -657,8 +658,9 @@ export async function readLatestSessionUsageFromTranscriptAsync(
   scope: SessionTranscriptReadScope,
 ): Promise<SessionTranscriptUsageSnapshot | null> {
   const artifactFile = scope.sessionFile?.trim();
+  const concreteStorePath = resolveConcreteSessionStorePath(scope.storePath);
   const hasCompleteTarget = Boolean(
-    scope.agentId?.trim() && scope.sessionKey?.trim() && scope.storePath?.trim(),
+    scope.agentId?.trim() && scope.sessionKey?.trim() && concreteStorePath,
   );
   if (
     !hasCompleteTarget &&
@@ -668,9 +670,9 @@ export async function readLatestSessionUsageFromTranscriptAsync(
   ) {
     return await readLatestSessionUsageFromTranscriptAsyncFile(
       scope.sessionId,
-      scope.storePath,
+      concreteStorePath,
       artifactFile,
-      scope.agentId,
+      undefined,
     );
   }
   const target = resolveTranscriptReadTarget(scope);

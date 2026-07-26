@@ -90,6 +90,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   let lifecycle = Promise.resolve();
   let reloadFailed = false;
   let reloadFailure: unknown;
+  let disposePromise: Promise<void> | undefined;
   type LifecycleOwner = { active: boolean; pendingOperations: Set<Promise<void>> };
   const lifecycleOwner = new AsyncLocalStorage<LifecycleOwner>();
   const serializeLifecycle = async <T>(run: () => Promise<T> | T): Promise<T> => {
@@ -146,29 +147,28 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       promptAborted = true;
       promptSubmissionBlocked ||= options?.terminal !== false;
       promptReleased = false;
-      settlePrompt?.();
-      settlePrompt = undefined;
     },
     refreshAfterOwnedSessionWrite: () => {},
     withOwnedSessionFileWrite: (run) => run(),
     reacquireAfterPrompt: async () =>
       await serializeLifecycle(async () => {
-        if (disposed || promptAborted) {
-          settlePrompt?.();
-          return;
-        }
         try {
+          if (disposed || promptAborted) {
+            return;
+          }
           if (reloadFailed) {
             throw reloadFailure;
           }
-          await params.reloadPromptReleasedSessionFile?.();
-        } catch (error) {
-          reloadFailed = true;
-          reloadFailure = error;
-          if (error instanceof EmbeddedAttemptSessionTakeoverError) {
-            takeoverDetected = true;
+          try {
+            await params.reloadPromptReleasedSessionFile?.();
+          } catch (error) {
+            reloadFailed = true;
+            reloadFailure = error;
+            if (error instanceof EmbeddedAttemptSessionTakeoverError) {
+              takeoverDetected = true;
+            }
+            throw error;
           }
-          throw error;
         } finally {
           promptReleased = false;
           settlePrompt?.();
@@ -197,31 +197,25 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     },
     hasSessionTakeover: () => takeoverDetected,
     dispose: async () => {
-      disposed = true;
-      let promptSettleTimedOut = false;
-      if (promptReleased) {
+      disposePromise ??= (async () => {
+        disposed = true;
+        promptAborted = true;
+        promptReleased = false;
         let timeout: ReturnType<typeof setTimeout> | undefined;
-        const promptSettledBeforeTimeout = await Promise.race([
-          promptSettled.then(() => true),
-          new Promise<false>((resolve) => {
-            timeout = setTimeout(() => resolve(false), PROMPT_DISPOSE_SETTLE_TIMEOUT_MS);
-          }),
-        ]);
-        promptSettleTimedOut = !promptSettledBeforeTimeout;
-        if (timeout) {
-          clearTimeout(timeout);
+        try {
+          await Promise.race([
+            Promise.all([promptSettled, serializeLifecycle(() => {})]),
+            new Promise<void>((resolve) => {
+              timeout = setTimeout(resolve, PROMPT_DISPOSE_SETTLE_TIMEOUT_MS);
+            }),
+          ]);
+        } finally {
+          if (timeout) {
+            clearTimeout(timeout);
+          }
         }
-        if (promptReleased) {
-          promptAborted = true;
-          promptReleased = false;
-          settlePrompt?.();
-          settlePrompt = undefined;
-        }
-      }
-      if (promptSettleTimedOut) {
-        return;
-      }
-      await serializeLifecycle(() => {});
+      })();
+      await disposePromise;
     },
   };
 }
@@ -233,6 +227,42 @@ type PromptReleaseStreamFn = ((...args: unknown[]) => Promise<unknown>) & {
 type SessionWithAgentPrompt = {
   agent?: { streamFn?: PromptReleaseStreamFn };
 };
+
+async function settlePromptSubmission(params: {
+  session: unknown;
+  waitForSessionEvents: (session: unknown) => Promise<void>;
+  reacquireAfterPrompt: () => Promise<void>;
+}): Promise<void> {
+  let drainFailed = false;
+  let drainError: unknown;
+  try {
+    await params.waitForSessionEvents(params.session);
+  } catch (error) {
+    drainFailed = true;
+    drainError = error;
+  }
+  try {
+    await params.reacquireAfterPrompt();
+  } catch (error) {
+    if (drainFailed) {
+      attachPromptSettlementError(error, drainError);
+    }
+    throw error;
+  }
+  if (drainFailed) {
+    throw drainError;
+  }
+}
+
+function attachPromptSettlementError(promptError: unknown, settlementError: unknown): void {
+  if (promptError instanceof Error && promptError.cause === undefined) {
+    try {
+      promptError.cause = settlementError;
+    } catch {
+      // A frozen provider error remains the primary failure; settlement diagnostics are secondary.
+    }
+  }
+}
 
 export function installPromptSubmissionLockRelease(params: {
   session: unknown;
@@ -260,9 +290,12 @@ export function installPromptSubmissionLockRelease(params: {
   const wrappedStreamFn: PromptReleaseStreamFn = async (...args: unknown[]) => {
     await params.waitForSessionEvents(params.session);
     await params.releaseForPrompt();
+    let promptFailed = false;
+    let promptError: unknown;
+    let promptResult: unknown;
     try {
       if (params.sessionFile && params.withSessionWriteLock) {
-        return await withOwnedSessionTranscriptWrites(
+        promptResult = await withOwnedSessionTranscriptWrites(
           {
             sessionFile: params.sessionFile,
             sessionKey: params.sessionKey,
@@ -272,12 +305,31 @@ export function installPromptSubmissionLockRelease(params: {
           },
           async () => await originalStreamFn(...args),
         );
+      } else {
+        promptResult = await originalStreamFn(...args);
       }
-      return await originalStreamFn(...args);
-    } finally {
-      await params.waitForSessionEvents(params.session);
-      await params.reacquireAfterPrompt();
+    } catch (error) {
+      promptFailed = true;
+      promptError = error;
     }
+    let settlementFailed = false;
+    let settlementError: unknown;
+    try {
+      await settlePromptSubmission(params);
+    } catch (error) {
+      settlementFailed = true;
+      settlementError = error;
+    }
+    if (promptFailed) {
+      if (settlementFailed) {
+        attachPromptSettlementError(promptError, settlementError);
+      }
+      throw promptError;
+    }
+    if (settlementFailed) {
+      throw settlementError;
+    }
+    return promptResult;
   };
   wrappedStreamFn.openclawSessionLockPromptReleaseInstalled = true;
   agent.streamFn = wrappedStreamFn;

@@ -284,6 +284,8 @@ export class SessionManagerPersistence extends SessionManagerCore {
     const leafEntry = this.createLeafControl(rawTailId, sideBranchParentId, "side");
     appendTranscriptEventSync(this.persistenceTarget, leafEntry);
     this.rememberLeafControl(leafEntry);
+    this.appendParentId = sideBranchParentId;
+    this.appendMode = "side";
     return { publishedEntries: [{ kind: "id", id: leafEntry.id }] };
   }
 

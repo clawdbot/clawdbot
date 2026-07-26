@@ -24,7 +24,7 @@ function resolveRuntimeContext(
     throw new Error(`Cannot resolve transcript scope without an agent id: ${scope.sessionKey}`);
   }
   const configuredStorePath =
-    resolveConcreteStorePath(scope.storePath) ??
+    resolveConcreteSessionStorePath(scope.storePath) ??
     resolveStorePath(getRuntimeConfig().session?.store, { agentId, env: scope.env });
   const storePath = resolveSessionStorePathForScope({
     agentId,
@@ -67,7 +67,7 @@ export function resolveSessionTranscriptReadTarget(
     throw new Error(`Cannot resolve transcript scope without an agent id: ${sessionKey}`);
   }
   const configuredStorePath =
-    resolveConcreteStorePath(scope.storePath) ??
+    resolveConcreteSessionStorePath(scope.storePath) ??
     resolveStorePath(getRuntimeConfig().session?.store, { agentId, env: scope.env });
   const storePath = resolveSessionStorePathForScope({
     agentId,
@@ -83,7 +83,7 @@ export function resolveSessionTranscriptReadTarget(
   };
 }
 
-function resolveConcreteStorePath(storePath: string | undefined): string | undefined {
+export function resolveConcreteSessionStorePath(storePath: string | undefined): string | undefined {
   const trimmed = storePath?.trim();
   if (!trimmed || trimmed === "(multiple)" || trimmed.includes("{agentId}")) {
     return undefined;

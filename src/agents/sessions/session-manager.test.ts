@@ -621,6 +621,11 @@ describe("SessionManager.open", () => {
       appendParentId: sideEntry.id,
       appendMode: "side",
     });
+    expect(sessionManager.getAppendParentId()).toBe(sideEntry.id);
+    expect(sessionManager.getAppendMode()).toBe("side");
+    const reopened = openMarker(marker, sessionKey, dir);
+    expect(reopened.getAppendParentId()).toBe(sideEntry.id);
+    expect(reopened.getAppendMode()).toBe("side");
     await expect(fs.stat(path.join(process.cwd(), marker))).rejects.toMatchObject({
       code: "ENOENT",
     });

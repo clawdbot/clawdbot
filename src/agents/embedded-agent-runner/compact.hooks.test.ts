@@ -4236,12 +4236,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     },
   );
 
-  it("resolves a deprecated session-key successor against the active SQLite store", async () => {
-    const maintain = vi.fn(async (_params?: unknown) => ({
-      changed: false,
-      bytesFreed: 0,
-      rewrittenEntries: 0,
-    }));
+  it("rejects a deprecated session-key successor outside the active binding", async () => {
     const delegatedSessionId = "delegated-key-session";
     const delegatedSessionKey = "agent:main:delegated-key-session";
     const dir = await mkdtemp(join(tmpdir(), "openclaw-compaction-successor-"));
@@ -4249,7 +4244,6 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     resolveContextEngineMock.mockResolvedValue({
       info: { ownsCompaction: false },
       compact: contextEngineCompactMock,
-      maintain,
     } as never);
     contextEngineCompactMock.mockResolvedValue({
       ok: true,
@@ -4268,26 +4262,18 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         { sessionId: delegatedSessionId, updatedAt: 1 },
       );
 
-      await compactEmbeddedAgentSession(
-        wrappedCompactionArgs({
-          sessionTarget: {
-            agentId: "main",
-            sessionId: TEST_SESSION_ID,
-            sessionKey: TEST_SESSION_KEY,
-            storePath,
-          },
-        }),
-      );
-
-      expectRecordFields(mockCallArg(maintain), {
-        sessionFile: delegatedSessionKey,
-        sessionId: delegatedSessionId,
-        sessionTarget: expect.objectContaining({
-          sessionId: delegatedSessionId,
-          sessionKey: delegatedSessionKey,
-          storePath,
-        }),
-      });
+      await expect(
+        compactEmbeddedAgentSession(
+          wrappedCompactionArgs({
+            sessionTarget: {
+              agentId: "main",
+              sessionId: TEST_SESSION_ID,
+              sessionKey: TEST_SESSION_KEY,
+              storePath,
+            },
+          }),
+        ),
+      ).rejects.toThrow("successor target changed the active session binding");
     } finally {
       closeOpenClawAgentDatabasesForTest();
       await rm(dir, { force: true, recursive: true });
@@ -4341,7 +4327,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       rewrittenEntries: 0,
     }));
     const delegatedSessionId = "delegated-marker-session";
-    const storePath = "/tmp/delegated-marker-store.sqlite";
+    const storePath = "/tmp/sessions.json";
     const marker = `sqlite:main:${delegatedSessionId}:${storePath}`;
     resolveContextEngineMock.mockResolvedValue({
       info: { ownsCompaction: false },
@@ -4367,6 +4353,30 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         storePath,
       }),
     });
+  });
+
+  it("rejects conflicting structured successor session ids", async () => {
+    resolveContextEngineMock.mockResolvedValue({
+      info: { ownsCompaction: false },
+      compact: contextEngineCompactMock,
+    } as never);
+    contextEngineCompactMock.mockResolvedValue({
+      ok: true,
+      compacted: true,
+      result: {
+        sessionId: "top-level-session",
+        sessionTarget: {
+          agentId: "main",
+          sessionId: "target-session",
+          sessionKey: TEST_SESSION_KEY,
+          storePath: "/tmp/sessions.json",
+        },
+      },
+    } as never);
+
+    await expect(compactEmbeddedAgentSession(wrappedCompactionArgs())).rejects.toThrow(
+      "successor identity is inconsistent",
+    );
   });
 
   it("derives queued compaction ownership from a self-contained session target", async () => {

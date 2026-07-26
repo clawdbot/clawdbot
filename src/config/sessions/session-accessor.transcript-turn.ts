@@ -144,7 +144,6 @@ async function selectAppendableTranscriptTurnMessages(
     const shouldAppend = append.shouldAppend
       ? await append.shouldAppend({
           ...(target.agentId ? { agentId: target.agentId } : {}),
-          ...target,
           ...(target.sessionId ? { sessionId: target.sessionId } : {}),
           ...(target.sessionKey ? { sessionKey: target.sessionKey } : {}),
           ...(target.storePath ? { storePath: target.storePath } : {}),

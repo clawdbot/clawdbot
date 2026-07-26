@@ -670,6 +670,7 @@ async function compactResolvedContextEngine(
             reason: formatErrorMessage(compactErr),
           };
         }
+        const reportedSessionId = result.result?.sessionId;
         const delegatedSuccessor = resolveCompactionSuccessorTranscript(result);
         const delegatedSessionTarget = result.result?.sessionTarget;
         const delegatedSessionId = delegatedSuccessor.sessionId;
@@ -680,6 +681,13 @@ async function compactResolvedContextEngine(
         let postCompactionSessionFile = delegatedSessionFile ?? params.sessionFile;
         let postCompactionSessionTarget = runtimeTarget;
         if (delegatedSessionTarget) {
+          if (
+            reportedSessionId &&
+            delegatedSessionTarget.sessionId &&
+            delegatedSessionTarget.sessionId !== reportedSessionId
+          ) {
+            throw new Error("Context-engine successor identity is inconsistent");
+          }
           const resolvedDelegatedTarget = await resolveAgentRunSessionTarget({
             agentId: delegatedSessionTarget.agentId ?? sessionAgentId,
             config: params.config,
@@ -782,6 +790,16 @@ async function compactResolvedContextEngine(
             sessionKey: legacyTarget.sessionKey,
             sessionTarget: legacyTarget,
           });
+          if (
+            resolvedDelegatedTarget.agentId !== runtimeTarget.agentId ||
+            resolvedDelegatedTarget.sessionKey !== runtimeTarget.sessionKey ||
+            path.resolve(resolvedDelegatedTarget.storePath) !==
+              path.resolve(runtimeTarget.storePath)
+          ) {
+            throw new Error(
+              "Legacy context-engine successor target changed the active session binding",
+            );
+          }
           postCompactionSessionId = resolvedDelegatedTarget.sessionId;
           postCompactionSessionFile = marker
             ? formatSqliteSessionFileMarker(resolvedDelegatedTarget)

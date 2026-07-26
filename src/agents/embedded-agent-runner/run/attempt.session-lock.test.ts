@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createEmbeddedAttemptSessionLockController,
   EmbeddedAttemptSessionTakeoverError,
+  installPromptSubmissionLockRelease,
 } from "./attempt.session-lock.js";
 
 describe("createEmbeddedAttemptSessionLockController", () => {
@@ -189,6 +190,103 @@ describe("createEmbeddedAttemptSessionLockController", () => {
     }
   });
 
+  it("keeps disposal tied to a released prompt until the bounded timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const controller = await createEmbeddedAttemptSessionLockController({
+        acquireSessionWriteLock: vi.fn(async () => ({ release: async () => undefined })),
+        lockOptions: { sessionFile: "agent:main:main" },
+      });
+      await controller.releaseForPrompt();
+      let disposed = false;
+      const disposal = controller.dispose().then(() => {
+        disposed = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(disposed).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await disposal;
+      expect(disposed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a queued next prompt settlement after the prior reacquire finishes", async () => {
+    vi.useFakeTimers();
+    try {
+      let markReloadStarted!: () => void;
+      const reloadStarted = new Promise<void>((resolve) => {
+        markReloadStarted = resolve;
+      });
+      let finishReload!: () => void;
+      const reloadBlocked = new Promise<void>((resolve) => {
+        finishReload = resolve;
+      });
+      const controller = await createEmbeddedAttemptSessionLockController({
+        acquireSessionWriteLock: vi.fn(async () => ({ release: async () => undefined })),
+        lockOptions: { sessionFile: "agent:main:main" },
+        reloadPromptReleasedSessionFile: async () => {
+          markReloadStarted();
+          await reloadBlocked;
+        },
+      });
+
+      await controller.releaseForPrompt();
+      const firstReacquire = controller.reacquireAfterPrompt();
+      await reloadStarted;
+      const secondRelease = controller.releaseForPrompt();
+      finishReload();
+      await Promise.all([firstReacquire, secondRelease]);
+
+      let disposed = false;
+      const disposal = controller.dispose().then(() => {
+        disposed = true;
+      });
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(disposed).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await disposal;
+      expect(disposed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps repeated disposal bounded after abort clears the prompt release", async () => {
+    vi.useFakeTimers();
+    try {
+      let markReloadStarted!: () => void;
+      const reloadStarted = new Promise<void>((resolve) => {
+        markReloadStarted = resolve;
+      });
+      const controller = await createEmbeddedAttemptSessionLockController({
+        acquireSessionWriteLock: vi.fn(async () => ({ release: async () => undefined })),
+        lockOptions: { sessionFile: "agent:main:main" },
+        reloadPromptReleasedSessionFile: async () => {
+          markReloadStarted();
+          await new Promise<void>(() => {});
+        },
+      });
+
+      await controller.releaseForPrompt();
+      void controller.reacquireAfterPrompt();
+      await reloadStarted;
+      await controller.releaseHeldLockForAbort();
+      const firstDisposal = controller.dispose();
+      const secondDisposal = controller.dispose();
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      await expect(Promise.all([firstDisposal, secondDisposal])).resolves.toEqual([
+        undefined,
+        undefined,
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("rejects a late SDK prompt handoff after cleanup has started", async () => {
     const controller = await createEmbeddedAttemptSessionLockController({
       acquireSessionWriteLock: vi.fn(async () => ({ release: async () => undefined })),
@@ -238,5 +336,82 @@ describe("createEmbeddedAttemptSessionLockController", () => {
     await expect(controller.releaseForPrompt()).rejects.toThrow(
       "attempt cleanup started before prompt submission",
     );
+  });
+});
+
+describe("installPromptSubmissionLockRelease", () => {
+  it("reacquires after a post-stream event drain failure", async () => {
+    const drainError = new Error("event drain failed");
+    const session = { agent: { streamFn: vi.fn(async () => "ok") } };
+    const waitForSessionEvents = vi
+      .fn<(session: unknown) => Promise<void>>()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(drainError);
+    const reacquireAfterPrompt = vi.fn(async () => undefined);
+    installPromptSubmissionLockRelease({
+      session,
+      waitForSessionEvents,
+      releaseForPrompt: vi.fn(async () => undefined),
+      reacquireAfterPrompt,
+    });
+
+    await expect(session.agent.streamFn()).rejects.toBe(drainError);
+    expect(reacquireAfterPrompt).toHaveBeenCalledOnce();
+  });
+
+  it("preserves the provider error when prompt settlement also fails", async () => {
+    const providerError = new Error("provider failed");
+    const settlementError = new Error("reacquire failed");
+    const session = {
+      agent: {
+        streamFn: vi.fn(async () => {
+          throw providerError;
+        }),
+      },
+    };
+    installPromptSubmissionLockRelease({
+      session,
+      waitForSessionEvents: vi.fn(async () => undefined),
+      releaseForPrompt: vi.fn(async () => undefined),
+      reacquireAfterPrompt: vi.fn(async () => {
+        throw settlementError;
+      }),
+    });
+
+    await expect(session.agent.streamFn()).rejects.toBe(providerError);
+    expect(providerError.cause).toBe(settlementError);
+  });
+
+  it("preserves an undefined prompt settlement rejection", async () => {
+    const session = { agent: { streamFn: vi.fn(async () => "ok") } };
+    installPromptSubmissionLockRelease({
+      session,
+      waitForSessionEvents: vi.fn(async () => undefined),
+      releaseForPrompt: vi.fn(async () => undefined),
+      reacquireAfterPrompt: vi.fn(async () => await Promise.reject(undefined)),
+    });
+
+    await expect(session.agent.streamFn()).rejects.toBeUndefined();
+  });
+
+  it("preserves a frozen provider error when prompt settlement also fails", async () => {
+    const providerError = Object.freeze(new Error("frozen provider failure"));
+    const session = {
+      agent: {
+        streamFn: vi.fn(async () => {
+          throw providerError;
+        }),
+      },
+    };
+    installPromptSubmissionLockRelease({
+      session,
+      waitForSessionEvents: vi.fn(async () => undefined),
+      releaseForPrompt: vi.fn(async () => undefined),
+      reacquireAfterPrompt: vi.fn(async () => {
+        throw new Error("settlement failed");
+      }),
+    });
+
+    await expect(session.agent.streamFn()).rejects.toBe(providerError);
   });
 });
