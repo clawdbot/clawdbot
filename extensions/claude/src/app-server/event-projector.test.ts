@@ -24,10 +24,15 @@ function emptyAcc(): ProjectorAccumulator {
 
 function makeParams(
   onAgentEvent?: (event: { stream: string; data: Record<string, unknown> }) => void,
+  reasoningCallbacks?: {
+    onReasoningStream?: (payload: { text: string; isReasoningSnapshot?: boolean }) => void;
+    onReasoningEnd?: () => void;
+  },
 ): EmbeddedRunAttemptParams {
   return {
     runId: "run_test",
     onAgentEvent,
+    ...reasoningCallbacks,
   } as unknown as EmbeddedRunAttemptParams;
 }
 
@@ -364,6 +369,83 @@ describe("finalize", () => {
     projector.finalize();
     expect(acc.assistantTexts).toEqual([]);
     expect(acc.reasoning).toBe("");
+  });
+});
+
+// ── onReasoningStream / onReasoningEnd (openclaw-q7i) ───────────────────────
+//
+// Regression coverage: the projector captured reasoning deltas into
+// acc.reasoning for diagnostics but never called the onReasoningStream/
+// onReasoningEnd callback pair that Discord/Slack/Telegram/etc. actually
+// listen on for live rendering (codex's event-projector-reasoning.ts wires
+// the same pair; the generic emitAgentEvent({stream: "reasoning"}) call has
+// no confirmed consumer on the channel-delivery path). These pin that both
+// callbacks fire with the contract codex established.
+describe("onReasoningStream / onReasoningEnd", () => {
+  it("streams each reasoning delta as an accumulated snapshot", () => {
+    const acc = emptyAcc();
+    const streamed: Array<{ text: string; isReasoningSnapshot?: boolean }> = [];
+    const params = makeParams(undefined, { onReasoningStream: (p) => streamed.push(p) });
+    const projector = new ClaudeAppServerEventProjector(TURN_ID, acc, params, {
+      runId: "run_test",
+      agentId: "tank",
+      sessionId: "s_1",
+      sessionKey: "agent:tank:test",
+      channelId: "discord",
+    });
+    projector.processNotification(
+      notif("item/reasoning/delta", { turnId: TURN_ID, delta: "thinking " }),
+    );
+    projector.processNotification(
+      notif("item/reasoning/delta", { turnId: TURN_ID, delta: "step 2" }),
+    );
+    expect(streamed).toEqual([
+      { text: "thinking ", isReasoningSnapshot: true },
+      { text: "thinking step 2", isReasoningSnapshot: true },
+    ]);
+  });
+
+  it("fires onReasoningEnd exactly once at turn/completed when reasoning streamed", () => {
+    const acc = emptyAcc();
+    let endCalls = 0;
+    const params = makeParams(undefined, { onReasoningEnd: () => (endCalls += 1) });
+    const projector = new ClaudeAppServerEventProjector(TURN_ID, acc, params, {
+      runId: "run_test",
+      agentId: "tank",
+      sessionId: "s_1",
+      sessionKey: "agent:tank:test",
+      channelId: "discord",
+    });
+    projector.processNotification(
+      notif("item/reasoning/delta", { turnId: TURN_ID, delta: "thinking" }),
+    );
+    projector.processNotification(
+      notif("turn/completed", {
+        turnId: TURN_ID,
+        turn: { id: TURN_ID, status: "completed", items: [] },
+      }),
+    );
+    expect(endCalls).toBe(1);
+  });
+
+  it("does not fire onReasoningEnd on a turn with no reasoning", () => {
+    const acc = emptyAcc();
+    let endCalls = 0;
+    const params = makeParams(undefined, { onReasoningEnd: () => (endCalls += 1) });
+    const projector = new ClaudeAppServerEventProjector(TURN_ID, acc, params, {
+      runId: "run_test",
+      agentId: "tank",
+      sessionId: "s_1",
+      sessionKey: "agent:tank:test",
+      channelId: "discord",
+    });
+    projector.processNotification(
+      notif("turn/completed", {
+        turnId: TURN_ID,
+        turn: { id: TURN_ID, status: "completed", items: [] },
+      }),
+    );
+    expect(endCalls).toBe(0);
   });
 });
 

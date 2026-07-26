@@ -166,6 +166,10 @@ export class ClaudeAppServerEventProjector {
   private readonly serverTaggedFinalItemIds = new Set<string>();
   private settled = false;
   private tokenUsage: NormalizedUsage | undefined;
+  // Guards onReasoningEnd against firing on a turn that never streamed any
+  // reasoning (codex's reasoningStarted/reasoningEnded pattern, see
+  // extensions/codex/src/app-server/event-projector-reasoning.ts).
+  private reasoningEndFired = false;
 
   constructor(
     private readonly turnId: string,
@@ -498,7 +502,20 @@ export class ClaudeAppServerEventProjector {
       return;
     }
     this.reasoningParts.push(p.delta);
-    emitReasoningDeltaEvent(this.params, p.delta, this.reasoningParts.join(""));
+    const accumulated = this.reasoningParts.join("");
+    emitReasoningDeltaEvent(this.params, p.delta, accumulated);
+    // Codex streams reasoning to the user-visible channel transcript via the
+    // dedicated onReasoningStream/onReasoningEnd callback pair (see
+    // extensions/codex/src/app-server/event-projector-reasoning.ts), which is
+    // the actual plumbing Discord/Slack/Telegram/etc. delivery listens on —
+    // NOT the generic emitAgentEvent bus above (that's a "stream": "reasoning"
+    // tag the shared AgentEventStream union doesn't recognize; nothing renders
+    // it). Without this call, reasoning was captured into acc.reasoning for
+    // diagnostics but never reached any channel regardless of /reasoning on
+    // or reasoningDefault config (openclaw-q7i). isReasoningSnapshot: true
+    // matches codex's contract — text is the full accumulated reasoning so
+    // far, not just this delta.
+    void this.params.onReasoningStream?.({ text: accumulated, isReasoningSnapshot: true });
   }
 
   private handleTokenUsage(p: Record<string, unknown>): void {
@@ -574,6 +591,16 @@ export class ClaudeAppServerEventProjector {
       if (picked) {
         this.textParts.push(picked);
       }
+    }
+    // Close the reasoning stream exactly once, only when this turn actually
+    // streamed reasoning — mirrors codex's maybeEndReasoning() call at the
+    // same turn-completed point (extensions/codex/src/app-server/
+    // event-projector.ts). Channel renderers use onReasoningEnd to finalize/
+    // collapse the live reasoning block; skipping it on a no-reasoning turn
+    // avoids an empty open/close pair.
+    if (this.reasoningParts.length > 0 && !this.reasoningEndFired) {
+      this.reasoningEndFired = true;
+      void this.params.onReasoningEnd?.();
     }
     return { kind: "completed", turn };
   }
