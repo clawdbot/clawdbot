@@ -60,6 +60,9 @@ AI_REVIEW_PATH = (
 )
 AI_PROMOTION_DIR = AI_REPORT_DIR / "scorecard_promotions"
 AI_SCORECARD_PATH = OPENCLAW_ROOT / "config/ai_intelligence/scorecard.json"
+AI_MODEL_REGISTRY_PATH = (
+    OPENCLAW_ROOT / "config/ai_intelligence/model_registry.json"
+)
 AI_APPROVAL_TOOL = (
     OPENCLAW_ROOT / "tools/ai_intelligence/approve_evaluation_lab.py"
 )
@@ -1416,6 +1419,7 @@ def scorecard_snapshot():
     approval = queue["decisions"].get(pipeline_id)
     candidates = load_json_object(AI_CANDIDATES_PATH)
     scorecard = load_json_object(AI_SCORECARD_PATH)
+    model_registry = load_json_object(AI_MODEL_REGISTRY_PATH)
 
     if (
         evaluation
@@ -1468,6 +1472,7 @@ def scorecard_snapshot():
         "approval": approval,
         "candidates": candidates,
         "scorecard": scorecard,
+        "model_registry": model_registry,
         "eligible": eligible,
         "audits": audits,
         "promotion_applied": bool(decision_id and decision_id in applied_decisions),
@@ -1558,6 +1563,25 @@ def ai_scorecard():
 """
         if not audit_rows:
             audit_rows = "<tr><td colspan='4'>No scorecard promotions recorded.</td></tr>"
+
+        all_model_rows = ""
+        for model in (snapshot["model_registry"] or {}).get("models", []):
+            model_id = str(model.get("id", "unknown"))
+            has_scores = model_id in (snapshot["scorecard"] or {}).get("models", {})
+            all_model_rows += f"""
+<tr>
+  <td>{html_module.escape(str(model.get('display_name', model_id)))}</td>
+  <td><code>{html_module.escape(model_id)}</code></td>
+  <td>{html_module.escape(str(model.get('provider', 'unknown')))}</td>
+  <td>{html_module.escape(str(model.get('deployment', 'unknown')))}</td>
+  <td>{html_module.escape(str(model.get('status', 'unknown')))}</td>
+  <td>{'Available' if has_scores else 'Not scored'}</td>
+</tr>
+"""
+        if not all_model_rows:
+            all_model_rows = (
+                "<tr><td colspan='6'>No registered models found.</td></tr>"
+            )
 
         actions = """
 <div class="panel">
@@ -1701,9 +1725,26 @@ def ai_scorecard():
             font-weight:bold;">Open Approval / Reject Queue</a>
 </div>
 """
+        all_models_panel = ""
+        if request.args.get("view") == "all":
+            all_models_panel = f"""
+<div class="panel">
+  <h2>All Registered Models</h2>
+  <p>This inventory includes production, fallback, evaluation, watch, local,
+     and cloud models from the authoritative model registry.</p>
+  <table style="width:100%;border-collapse:collapse;">
+    <tr>
+      <th>Model</th><th>Registry ID</th><th>Provider</th>
+      <th>Deployment</th><th>Status</th><th>Scorecard</th>
+    </tr>
+    {all_model_rows}
+  </table>
+</div>
+"""
         body = f"""
 {notice}
 {queue_link}
+{all_models_panel}
 <div class="panel">
   <h2>Current Evaluation</h2>
   <p><b>Pipeline:</b> {html_module.escape(pipeline_id or 'unavailable')}</p>

@@ -227,6 +227,11 @@ The shared navigation separates the read-only **All Models Scorecard** view
 from the actionable **Review Queue** so returning to the scorecard never
 depends on whether a pending decision exists.
 
+The All Models Scorecard reads the authoritative model registry and lists every
+registered local and cloud model, including production, fallback, evaluation,
+and watch entries. Promotion-eligible winners from the selected evaluation are
+shown separately and must not be presented as the complete model inventory.
+
 The review workflow:
 
 - discovers immutable `evaluation-lab-*.json` reports and displays the oldest

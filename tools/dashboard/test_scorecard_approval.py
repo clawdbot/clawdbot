@@ -99,6 +99,7 @@ class ScorecardDashboardTests(unittest.TestCase):
         dashboard.AI_CANDIDATES_PATH = reports / "candidates.json"
         dashboard.AI_PROMOTION_DIR = reports / "promotions"
         dashboard.AI_SCORECARD_PATH = config / "scorecard.json"
+        dashboard.AI_MODEL_REGISTRY_PATH = config / "model_registry.json"
         dashboard.AI_BENCHMARK_PATH = reports / "benchmark.json"
         dashboard.AI_VALIDATION_PATH = reports / "validation.json"
         dashboard.AI_REVIEW_PATH = reports / "review.json"
@@ -129,6 +130,28 @@ class ScorecardDashboardTests(unittest.TestCase):
         )
         dashboard.AI_CANDIDATES_PATH.write_text(json.dumps({"candidates": []}))
         dashboard.AI_SCORECARD_PATH.write_text(json.dumps({"models": {}}))
+        dashboard.AI_MODEL_REGISTRY_PATH.write_text(
+            json.dumps(
+                {
+                    "models": [
+                        {
+                            "id": "ollama-gemma3-12b",
+                            "display_name": "Gemma 3 12B",
+                            "provider": "Local Ollama",
+                            "deployment": "local",
+                            "status": "production",
+                        },
+                        {
+                            "id": "claude",
+                            "display_name": "Claude",
+                            "provider": "Anthropic",
+                            "deployment": "cloud",
+                            "status": "evaluation",
+                        },
+                    ]
+                }
+            )
+        )
         dashboard.AI_BENCHMARK_PATH.write_text(
             json.dumps(
                 {
@@ -243,6 +266,9 @@ class ScorecardDashboardTests(unittest.TestCase):
         rendered = dashboard.ai_scorecard()
 
         self.assertIn("Promotion-Eligible Winners", rendered)
+        self.assertIn("All Registered Models", rendered)
+        self.assertIn("Gemma 3 12B", rendered)
+        self.assertIn("Claude", rendered)
         self.assertIn("Open Approval / Reject Queue", rendered)
         self.assertNotIn("No pending scorecard reviews", rendered)
 
