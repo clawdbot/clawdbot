@@ -497,13 +497,14 @@ describe("buildInboundContext bot self-echo suppression", () => {
         config: { groupAllowFrom: ["user-openid"], groupPolicy: "open" },
       },
     });
-    deps.adapters.access.resolveInboundAccess = vi.fn(
+    const resolveInboundAccessMock = vi.fn(
       (input): QQBotInboundAccess =>
         makeAccessResult({
           isGroup: input.isGroup,
           allowed: input.senderId === "user-openid",
         }),
     );
+    deps.adapters.access.resolveInboundAccess = resolveInboundAccessMock;
 
     const inbound = await buildInboundContext(
       makeEvent({
@@ -514,7 +515,7 @@ describe("buildInboundContext bot self-echo suppression", () => {
       deps,
     );
 
-    expect(deps.adapters.access.resolveInboundAccess).toHaveBeenCalledWith(
+    expect(resolveInboundAccessMock).toHaveBeenCalledWith(
       expect.objectContaining({
         conversationId: "group-openid",
         groupPolicy: "allowlist",
