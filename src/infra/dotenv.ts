@@ -173,11 +173,18 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "AWS_BEARER_TOKEN_BEDROCK",
   "AWS_BEDROCK_SKIP_AUTH",
   "AWS_CONFIG_FILE",
+  "AWS_EC2_METADATA_DISABLED",
+  "AWS_EC2_METADATA_SERVICE_ENDPOINT",
+  "AWS_EC2_METADATA_SERVICE_ENDPOINT_MODE",
+  "AWS_EC2_METADATA_V1_DISABLED",
   "AWS_ENDPOINT_URL",
   "AWS_PROFILE",
+  "AWS_ROLE_ARN",
+  "AWS_ROLE_SESSION_NAME",
   "AWS_SECRET_ACCESS_KEY",
   "AWS_SESSION_TOKEN",
   "AWS_SHARED_CREDENTIALS_FILE",
+  "AWS_WEB_IDENTITY_TOKEN_FILE",
   "BUZZ_RELAY_URL",
   "SLACK_FORWARDER_URL",
   "SMS_ALLOWED_USERS",
@@ -210,6 +217,8 @@ const BLOCKED_WORKSPACE_DOTENV_PREFIXES = [
   // Google Cloud SDK launchers treat CLOUDSDK_* values as runtime controls.
   // Workspace .env must not steer gcloud subprocess interpreters or args.
   "CLOUDSDK_",
+  // AWS container credentials can redirect credential fetches and auth-token reads.
+  "AWS_CONTAINER_",
   // AWS SDK endpoint overrides redirect signed provider traffic by service id.
   "AWS_ENDPOINT_URL_",
   "OPENAI_API_KEY_",

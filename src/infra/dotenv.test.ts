@@ -259,13 +259,24 @@ describe("loadDotEnv", () => {
             "AWS_ACCESS_KEY_ID=workspace-access-key",
             "AWS_BEARER_TOKEN_BEDROCK=workspace-bearer",
             "AWS_BEDROCK_SKIP_AUTH=1",
+            "AWS_CONTAINER_AUTHORIZATION_TOKEN=workspace-token",
+            "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE=./container-token",
+            "AWS_CONTAINER_CREDENTIALS_FULL_URI=https://evil-credentials.example.com",
+            "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI=/evil-credentials",
             "AWS_CONFIG_FILE=./attacker-aws-config",
+            "AWS_EC2_METADATA_DISABLED=false",
+            "AWS_EC2_METADATA_SERVICE_ENDPOINT=https://evil-imds.example.com",
+            "AWS_EC2_METADATA_SERVICE_ENDPOINT_MODE=IPv6",
+            "AWS_EC2_METADATA_V1_DISABLED=false",
             "AWS_ENDPOINT_URL=https://evil-aws.example.com",
             "AWS_ENDPOINT_URL_BEDROCK_RUNTIME=https://evil-bedrock.example.com",
             "AWS_PROFILE=workspace-profile",
+            "AWS_ROLE_ARN=arn:aws:iam::123456789012:role/attacker",
+            "AWS_ROLE_SESSION_NAME=workspace-session",
             "AWS_SECRET_ACCESS_KEY=workspace-secret-key",
             "AWS_SESSION_TOKEN=workspace-session-token",
             "AWS_SHARED_CREDENTIALS_FILE=./attacker-aws-credentials",
+            "AWS_WEB_IDENTITY_TOKEN_FILE=./web-identity-token",
             "SYNOLOGY_ALLOWED_USER_IDS=*",
             "HTTP_PROXY=http://evil-proxy:8080",
             "HOMEBREW_BREW_FILE=./evil-brew/bin/brew",
@@ -303,13 +314,24 @@ describe("loadDotEnv", () => {
         delete process.env.AWS_ACCESS_KEY_ID;
         delete process.env.AWS_BEARER_TOKEN_BEDROCK;
         delete process.env.AWS_BEDROCK_SKIP_AUTH;
+        delete process.env.AWS_CONTAINER_AUTHORIZATION_TOKEN;
+        delete process.env.AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE;
+        delete process.env.AWS_CONTAINER_CREDENTIALS_FULL_URI;
+        delete process.env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI;
         delete process.env.AWS_CONFIG_FILE;
+        delete process.env.AWS_EC2_METADATA_DISABLED;
+        delete process.env.AWS_EC2_METADATA_SERVICE_ENDPOINT;
+        delete process.env.AWS_EC2_METADATA_SERVICE_ENDPOINT_MODE;
+        delete process.env.AWS_EC2_METADATA_V1_DISABLED;
         delete process.env.AWS_ENDPOINT_URL;
         delete process.env.AWS_ENDPOINT_URL_BEDROCK_RUNTIME;
         delete process.env.AWS_PROFILE;
+        delete process.env.AWS_ROLE_ARN;
+        delete process.env.AWS_ROLE_SESSION_NAME;
         delete process.env.AWS_SECRET_ACCESS_KEY;
         delete process.env.AWS_SESSION_TOKEN;
         delete process.env.AWS_SHARED_CREDENTIALS_FILE;
+        delete process.env.AWS_WEB_IDENTITY_TOKEN_FILE;
         delete process.env.SYNOLOGY_ALLOWED_USER_IDS;
         delete process.env.HTTP_PROXY;
         delete process.env.HOMEBREW_BREW_FILE;
@@ -347,13 +369,24 @@ describe("loadDotEnv", () => {
         expect(process.env.AWS_ACCESS_KEY_ID).toBeUndefined();
         expect(process.env.AWS_BEARER_TOKEN_BEDROCK).toBeUndefined();
         expect(process.env.AWS_BEDROCK_SKIP_AUTH).toBeUndefined();
+        expect(process.env.AWS_CONTAINER_AUTHORIZATION_TOKEN).toBeUndefined();
+        expect(process.env.AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE).toBeUndefined();
+        expect(process.env.AWS_CONTAINER_CREDENTIALS_FULL_URI).toBeUndefined();
+        expect(process.env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI).toBeUndefined();
         expect(process.env.AWS_CONFIG_FILE).toBeUndefined();
+        expect(process.env.AWS_EC2_METADATA_DISABLED).toBeUndefined();
+        expect(process.env.AWS_EC2_METADATA_SERVICE_ENDPOINT).toBeUndefined();
+        expect(process.env.AWS_EC2_METADATA_SERVICE_ENDPOINT_MODE).toBeUndefined();
+        expect(process.env.AWS_EC2_METADATA_V1_DISABLED).toBeUndefined();
         expect(process.env.AWS_ENDPOINT_URL).toBeUndefined();
         expect(process.env.AWS_ENDPOINT_URL_BEDROCK_RUNTIME).toBeUndefined();
         expect(process.env.AWS_PROFILE).toBeUndefined();
+        expect(process.env.AWS_ROLE_ARN).toBeUndefined();
+        expect(process.env.AWS_ROLE_SESSION_NAME).toBeUndefined();
         expect(process.env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
         expect(process.env.AWS_SESSION_TOKEN).toBeUndefined();
         expect(process.env.AWS_SHARED_CREDENTIALS_FILE).toBeUndefined();
+        expect(process.env.AWS_WEB_IDENTITY_TOKEN_FILE).toBeUndefined();
         expect(process.env.SYNOLOGY_ALLOWED_USER_IDS).toBeUndefined();
         expect(process.env.HTTP_PROXY).toBeUndefined();
         expect(process.env.HOMEBREW_BREW_FILE).toBeUndefined();
