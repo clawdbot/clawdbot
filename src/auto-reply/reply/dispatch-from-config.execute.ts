@@ -234,6 +234,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       payloadMetadata?.nonTerminalToolErrorWarning === true;
                     const shouldEvaluateOperationalPayload =
                       !sendPolicyDenied &&
+                      !(suppressHookUserDelivery && !suppressUserDeliveryBySourceReplyPolicy) &&
                       (!suppressDelivery || suppressUserDeliveryBySourceReplyPolicy) &&
                       isOperationalReplyPayload({
                         payload,

@@ -809,6 +809,10 @@ describe("dispatchReplyFromConfig", () => {
       { text: "private child failure", isError: true },
       { operationalNotice: true },
     );
+    const toolPayload = setReplyPayloadMetadata(
+      { text: "private child tool status", isStatusNotice: true },
+      { operationalNotice: true },
+    );
 
     await expect(
       dispatchReplyFromConfig({
@@ -823,12 +827,14 @@ describe("dispatchReplyFromConfig", () => {
         },
         dispatcher,
         replyResolver: async (_ctx, opts) => {
+          await opts?.onToolResult?.(toolPayload);
           await opts?.onBlockReply?.(blockPayload);
           return finalPayload;
         },
       }),
     ).resolves.toMatchObject({ queuedFinal: false });
 
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
