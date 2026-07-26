@@ -50,6 +50,7 @@ import type { SessionEntry } from "./types.js";
 type MessageCut = {
   editorText?: string;
   editorAttachments?: Array<{ mimeType: string; data: string }>;
+  editorMediaRefs?: Array<{ path: string; contentType: string }>;
   parentId: string | null;
   prefix: TranscriptEvent[];
 };
@@ -255,6 +256,9 @@ function mutateSqliteSessionAtMessageInTransaction(
     ...(cut && !("status" in cut) && cut.editorAttachments
       ? { editorAttachments: cut.editorAttachments }
       : {}),
+    ...(cut && !("status" in cut) && cut.editorMediaRefs
+      ? { editorMediaRefs: cut.editorMediaRefs }
+      : {}),
   };
 }
 
@@ -374,9 +378,11 @@ function resolveMessageCut(
     );
   }
   const editorAttachments = extractEditorAttachments(message.content);
+  const editorMediaRefs = extractEditorMediaRefs(message);
   return {
     editorText: extractEditorText(message.content),
     ...(editorAttachments ? { editorAttachments } : {}),
+    ...(editorMediaRefs ? { editorMediaRefs } : {}),
     parentId: target.parentId,
     prefix,
   };
@@ -476,6 +482,24 @@ function extractEditorAttachments(
       : [];
   });
   return attachments.length > 0 ? attachments : undefined;
+}
+
+function extractEditorMediaRefs(
+  message: Record<string, unknown>,
+): Array<{ path: string; contentType: string }> | undefined {
+  const media = asRecord(message.__openclaw)?.media;
+  if (!Array.isArray(media)) {
+    return undefined;
+  }
+  const refs = media.flatMap((entry) => {
+    const record = asRecord(entry);
+    const mediaPath = typeof record?.path === "string" ? record.path.trim() : "";
+    const contentType = record?.contentType;
+    return mediaPath && typeof contentType === "string" && contentType.startsWith("image/")
+      ? [{ path: mediaPath, contentType }]
+      : [];
+  });
+  return refs.length > 0 ? refs : undefined;
 }
 
 function isSessionHeader(event: unknown): boolean {

@@ -1,3 +1,4 @@
+import path from "node:path";
 import {
   ErrorCodes,
   errorShape,
@@ -18,6 +19,7 @@ import {
   type SessionBranchSwitchMutationResult,
   type SessionMessageCutMutationResult,
 } from "../../config/sessions/session-accessor.js";
+import { MEDIA_MAX_BYTES, readMediaBuffer } from "../../media/store.js";
 import {
   isCompetingSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
@@ -47,6 +49,28 @@ type MessageCutAction = "fork" | "rewind" | "switch";
 
 const EXTERNAL_CONVERSATION_ERROR =
   "Session history changes are unavailable because this session is owned by an external agent harness.";
+
+async function resolveEditorMediaAttachments(
+  refs: Array<{ path: string; contentType: string }> | undefined,
+): Promise<Array<{ mimeType: string; data: string }>> {
+  if (!refs) {
+    return [];
+  }
+  const attachments = await Promise.all(
+    refs.map(async (ref) => {
+      try {
+        // Transcript paths are untrusted hints; read only the basename through the
+        // media store so its traversal guards and byte cap stay authoritative.
+        const id = path.basename(ref.path);
+        const media = await readMediaBuffer(id, "inbound", MEDIA_MAX_BYTES);
+        return { mimeType: ref.contentType, data: media.buffer.toString("base64") };
+      } catch {
+        return undefined;
+      }
+    }),
+  );
+  return attachments.filter((attachment) => attachment !== undefined);
+}
 
 function resolveUpstreamForkHarness(link: SessionUpstreamLink) {
   const matches = listRegisteredAgentHarnesses().filter((entry) =>
@@ -416,6 +440,15 @@ async function mutateSessionAtMessage(
         respondMessageCutError(result, action, entryId, respond);
         return;
       }
+      const editorAttachments =
+        action === "switch"
+          ? []
+          : [
+              ...("editorAttachments" in result ? (result.editorAttachments ?? []) : []),
+              ...(await resolveEditorMediaAttachments(
+                "editorMediaRefs" in result ? result.editorMediaRefs : undefined,
+              )),
+            ];
       if (action !== "fork") {
         clearSessionQueues(lifecycleIdentities);
       } else {
@@ -433,18 +466,14 @@ async function mutateSessionAtMessage(
               ...("editorText" in result && result.editorText
                 ? { editorText: result.editorText }
                 : {}),
-              ...("editorAttachments" in result && result.editorAttachments
-                ? { editorAttachments: result.editorAttachments }
-                : {}),
+              ...(editorAttachments.length > 0 ? { editorAttachments } : {}),
             }
           : action === "rewind"
             ? {
                 ...("editorText" in result && result.editorText
                   ? { editorText: result.editorText }
                   : {}),
-                ...("editorAttachments" in result && result.editorAttachments
-                  ? { editorAttachments: result.editorAttachments }
-                  : {}),
+                ...(editorAttachments.length > 0 ? { editorAttachments } : {}),
               }
             : {},
         undefined,

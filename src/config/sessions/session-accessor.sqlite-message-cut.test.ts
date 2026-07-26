@@ -82,6 +82,12 @@ async function createSession(options: { activeLeafTarget?: string } = {}) {
           { type: "text", text: "second prompt" },
           { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
         ],
+        __openclaw: {
+          media: [
+            { path: "/state/media/inbound/stored-image.png", contentType: "image/png" },
+            { path: "/state/media/inbound/notes.txt", contentType: "text/plain" },
+          ],
+        },
       },
     },
     {
@@ -210,6 +216,9 @@ describe("SQLite session message cuts", () => {
       key: sessionKey,
       editorText: "second prompt",
       editorAttachments: [{ mimeType: "image/png", data: "aW1hZ2U=" }],
+      editorMediaRefs: [
+        { path: "/state/media/inbound/stored-image.png", contentType: "image/png" },
+      ],
     });
     if (result.status !== "created") {
       throw new Error("expected rewind result");
@@ -250,6 +259,7 @@ describe("SQLite session message cuts", () => {
 
     expect(result).toMatchObject({ status: "created", editorText: "first prompt" });
     expect(result).not.toHaveProperty("editorAttachments");
+    expect(result).not.toHaveProperty("editorMediaRefs");
   });
 
   it("rewinds the stored row when its canonical key differs", async () => {
@@ -291,6 +301,9 @@ describe("SQLite session message cuts", () => {
       key: targetKey,
       editorText: "second prompt",
       editorAttachments: [{ mimeType: "image/png", data: "aW1hZ2U=" }],
+      editorMediaRefs: [
+        { path: "/state/media/inbound/stored-image.png", contentType: "image/png" },
+      ],
     });
     if (result.status !== "created") {
       throw new Error("expected fork result");

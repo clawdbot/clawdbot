@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { saveMediaBuffer } from "../../media/store.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
@@ -67,6 +68,7 @@ import type { GatewayClient } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sessionKey = "agent:main:rewind-handler";
+const storedImageData = Buffer.from("stored-image");
 
 beforeEach(async () => {
   mocks.active = false;
@@ -75,6 +77,7 @@ beforeEach(async () => {
   mocks.upstreamFork.mockReset();
   mocks.queueClear.mockReset();
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-rewind-handler-"));
+  const storedImage = await saveMediaBuffer(storedImageData, "image/png", "inbound");
   await upsertSessionEntry(
     { agentId: "main", sessionKey },
     {
@@ -94,6 +97,12 @@ beforeEach(async () => {
           { type: "text", text: "edit me" },
           { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
         ],
+        __openclaw: {
+          media: [
+            { path: storedImage.path, contentType: "image/png" },
+            { path: `${storedImage.path}.missing`, contentType: "image/png" },
+          ],
+        },
       },
     },
     {
@@ -252,7 +261,10 @@ describe("session message-cut methods", () => {
       true,
       expect.objectContaining({
         editorText: "edit me",
-        editorAttachments: [{ mimeType: "image/png", data: "aW1hZ2U=" }],
+        editorAttachments: [
+          { mimeType: "image/png", data: "aW1hZ2U=" },
+          { mimeType: "image/png", data: storedImageData.toString("base64") },
+        ],
         sessionKey: expect.any(String),
       }),
       undefined,
@@ -278,7 +290,10 @@ describe("session message-cut methods", () => {
       true,
       {
         editorText: "edit me",
-        editorAttachments: [{ mimeType: "image/png", data: "aW1hZ2U=" }],
+        editorAttachments: [
+          { mimeType: "image/png", data: "aW1hZ2U=" },
+          { mimeType: "image/png", data: storedImageData.toString("base64") },
+        ],
       },
       undefined,
     );
