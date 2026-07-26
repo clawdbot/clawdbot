@@ -6,14 +6,14 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AttemptParamsLike } from "./attempt-types.js";
 import type { attachEventBridge } from "./event-bridge.js";
-import type { createCopilotUserInputBridge } from "./user-input-bridge.js";
+import type { CopilotUserInputBridge } from "./user-input-bridge.js";
 export function registerCopilotActiveRun(params: {
   abortActiveSession: () => void;
   bridge: ReturnType<typeof attachEventBridge> | undefined;
   input: AttemptParamsLike;
   isAborted: () => boolean;
   isSettled: () => boolean;
-  userInputBridge: ReturnType<typeof createCopilotUserInputBridge>;
+  userInputBridge: CopilotUserInputBridge;
 }) {
   const cancelGatewayQuestionBestEffort = (resolvedBy: string) => {
     void cancelPendingAgentQuestionForSession({

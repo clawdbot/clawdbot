@@ -40,7 +40,7 @@ import { attachEventBridge, type SessionLike } from "./event-bridge.js";
 import { createCopilotNativeSubagentTaskMirror } from "./native-subagent-task-mirror.js";
 import { classifyResumeFailure, decideReplayAction } from "./replay-shim.js";
 import type { PooledClient } from "./runtime.js";
-import { createCopilotUserInputBridge } from "./user-input-bridge.js";
+import type { CopilotUserInputBridge } from "./user-input-bridge.js";
 export async function runCopilotExecution(context: {
   params: AgentHarnessAttemptParams;
   deps: CopilotAttemptDeps;
@@ -104,7 +104,7 @@ export async function runCopilotExecution(context: {
     scope: input.agentHarnessTaskRuntimeScope,
   });
   let activeRunHandleRef: Parameters<typeof clearActiveEmbeddedRun>[1] | undefined;
-  let userInputBridgeRef: ReturnType<typeof createCopilotUserInputBridge> | undefined;
+  let userInputBridgeRef: CopilotUserInputBridge | undefined;
   let cleanupToolBridge: (() => void) | undefined;
   let releaseError: Error | undefined;
   let downgradedFromResume = false;
