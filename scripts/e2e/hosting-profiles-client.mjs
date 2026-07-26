@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 
 const [scenario, url] = process.argv.slice(2);
 if (!scenario || !url) {
@@ -16,6 +17,44 @@ function condition(type) {
 
 function findCondition(type) {
   return body.conditions?.find((entry) => entry.type === type);
+}
+
+function subject(ref, readiness = body) {
+  return readiness.identity?.subjects?.find((entry) => entry.ref === ref);
+}
+
+function assertCoreIdentity() {
+  assert.equal(body.identity?.producerRef, "openclaw/gateway/current");
+  const host = subject("openclaw/host-instance/current");
+  const runtimeProcess = subject("openclaw/process/current");
+  const gateway = subject("openclaw/gateway/current");
+  assert.equal(host?.kind, "openclaw.host-instance");
+  assert.equal(
+    host?.id,
+    `sha256:${createHash("sha256").update(`hosting-profile-${scenario}`).digest("hex")}`,
+  );
+  assert.equal(runtimeProcess?.kind, "openclaw.process");
+  assert.ok(runtimeProcess?.id);
+  assert.equal(runtimeProcess?.parentRef, host?.ref);
+  assert.equal(gateway?.kind, "openclaw.gateway");
+  assert.ok(gateway?.id);
+  assert.equal(gateway?.parentRef, runtimeProcess?.ref);
+}
+
+async function assertIdentityStableAcrossPolls() {
+  const repeatedResponse = await fetch(url);
+  const repeated = await repeatedResponse.json();
+  assert.equal(repeatedResponse.status, response.status);
+  assert.equal(repeated.identity?.producerRef, body.identity?.producerRef);
+  for (const current of body.identity?.subjects ?? []) {
+    const next = subject(current.ref, repeated);
+    assert.equal(next?.id, current.id, `${current.ref} id changed between readiness polls`);
+    assert.equal(
+      next?.generation,
+      current.generation,
+      `${current.ref} generation changed between readiness polls`,
+    );
+  }
 }
 
 function assertSelectedProfile(profile) {
@@ -142,5 +181,8 @@ if (scenario === "unprofiled") {
 } else {
   throw new Error(`unknown hosting profile scenario: ${scenario}`);
 }
+
+assertCoreIdentity();
+await assertIdentityStableAcrossPolls();
 
 console.log(JSON.stringify({ scenario, status: response.status, readiness: body }, null, 2));

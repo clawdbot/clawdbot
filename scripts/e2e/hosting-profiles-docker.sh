@@ -56,6 +56,7 @@ run_scenario() {
     "${profile_args[@]}" \
     "${runtime_args[@]}" \
     -e "OPENCLAW_WORKSPACE_DIR=/tmp/hosting-profile-workspace" \
+    -e "OPENCLAW_INSTANCE_ID=hosting-profile-$scenario" \
     -e "OPENCLAW_SKIP_CHANNELS=1" \
     -e "OPENCLAW_SKIP_GMAIL_WATCHER=1" \
     -e "OPENCLAW_SKIP_CRON=1" \
