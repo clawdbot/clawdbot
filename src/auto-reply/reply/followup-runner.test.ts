@@ -41,6 +41,8 @@ let clearRuntimeConfigSnapshot: typeof import("../../config/config.js").clearRun
 let loadSessionEntry: typeof import("../../config/sessions/session-accessor.js").loadSessionEntry;
 let replaceSessionEntrySync: typeof import("../../config/sessions/session-accessor.js").replaceSessionEntrySync;
 let clearSessionStoreCacheForTest: typeof import("../../config/sessions/store-writer-state.js").clearSessionStoreCacheForTest;
+let resolveUnsuffixedSqliteTargetFromSessionStorePath: typeof import("../../config/sessions/session-sqlite-target.js").resolveUnsuffixedSqliteTargetFromSessionStorePath;
+let closeOpenClawAgentDatabasesForTest: typeof import("../../state/openclaw-agent-db.js").closeOpenClawAgentDatabasesForTest;
 let clearFollowupQueue: typeof import("./queue/state.js").clearFollowupQueue;
 let enqueueFollowupRun: typeof import("./queue.js").enqueueFollowupRun;
 let sessionRunAccounting: typeof import("./session-run-accounting.js");
@@ -535,6 +537,9 @@ async function loadFreshFollowupRunnerModuleForTest() {
   ({ clearSessionStoreCacheForTest } = await import("../../config/sessions/store-writer-state.js"));
   ({ loadSessionEntry, replaceSessionEntrySync } =
     await import("../../config/sessions/session-accessor.js"));
+  ({ resolveUnsuffixedSqliteTargetFromSessionStorePath } =
+    await import("../../config/sessions/session-sqlite-target.js"));
+  ({ closeOpenClawAgentDatabasesForTest } = await import("../../state/openclaw-agent-db.js"));
   ({ clearFollowupQueue } = await import("./queue/state.js"));
   ({ enqueueFollowupRun } = await import("./queue.js"));
   sessionRunAccounting = await import("./session-run-accounting.js");
@@ -670,13 +675,18 @@ afterEach(() => {
   clearFollowupQueue("main");
   FOLLOWUP_TEST_QUEUES.clear();
   FOLLOWUP_TEST_SESSION_STORES.clear();
+  closeOpenClawAgentDatabasesForTest();
+  clearSessionStoreCacheForTest();
   for (const storePath of FOLLOWUP_TEST_SESSION_STORE_PATHS) {
     fsSync.rmSync(storePath, { force: true });
+    const sqlitePath = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath).path;
+    fsSync.rmSync(sqlitePath, { force: true });
+    fsSync.rmSync(`${sqlitePath}-shm`, { force: true });
+    fsSync.rmSync(`${sqlitePath}-wal`, { force: true });
   }
   FOLLOWUP_TEST_SESSION_STORE_PATHS.clear();
   vi.clearAllTimers();
   vi.useRealTimers();
-  clearSessionStoreCacheForTest();
   if (!FOLLOWUP_DEBUG) {
     return;
   }
@@ -2180,12 +2190,17 @@ describe("createFollowupRunner runtime config", () => {
       payloads: [{ text: "done" }],
       meta: {},
     });
+    const storePath = path.join(
+      tmpdir(),
+      `openclaw-followup-cli-media-${crypto.randomUUID()}.json`,
+    );
+    FOLLOWUP_TEST_SESSION_STORE_PATHS.add(storePath);
 
     const runner = createFollowupRunner({
       typing: createMockTypingController(),
       typingMode: "instant",
       sessionKey: "main",
-      storePath: "/tmp/sessions.json",
+      storePath,
       defaultModel: "anthropic/claude-opus-4-7",
     });
 
@@ -2203,7 +2218,7 @@ describe("createFollowupRunner runtime config", () => {
     expect(runCliAgentMock).toHaveBeenCalledOnce();
     const mediaCall = requireLastMockCallArg(runCliAgentMock, "run cli agent");
     expect(mediaCall.persistAssistantTranscript).toBe(true);
-    expect(mediaCall.storePath).toBe("/tmp/sessions.json");
+    expect(mediaCall.storePath).toBe(storePath);
     const recorder = requireRecord(mediaCall.userTurnTranscriptRecorder, "cli user turn recorder");
     expect(recorder.message).toBe(preparedUserTurnMessage);
   });

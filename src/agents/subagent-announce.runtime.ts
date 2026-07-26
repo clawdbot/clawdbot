@@ -10,7 +10,7 @@ export { resolveAgentIdFromSessionKey, resolveStorePath } from "../config/sessio
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeDiagnosticTraceparent } from "../infra/diagnostic-trace-context-pure.js";
-import { summarizeSpawnError } from "./spawn-pipeline.js";
+import { summarizeSpawnError } from "./spawn-error.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { splitModelRef } from "./subagent-spawn-plan.js";
 import { resolveGatewaySessionStoreTarget, upsertSessionEntry } from "./subagent-spawn.runtime.js";

@@ -1,5 +1,6 @@
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import { registerSubagentRun } from "./subagent-registry.js";
+export { summarizeSpawnError } from "./spawn-error.js";
 
 type SpawnPipelinePhase = "initialize" | "dispatch" | "register";
 
@@ -33,10 +34,6 @@ type SpawnPipelineResult<TState> =
       state?: TState;
       runId?: string;
     };
-
-export function summarizeSpawnError(error: unknown): string {
-  return error instanceof Error ? error.message : typeof error === "string" ? error : "error";
-}
 
 export async function runSpawnPipeline<TState>(params: {
   adapter: SpawnBackendAdapter<TState>;

@@ -67,6 +67,7 @@ it("rejects maxChildrenPerAgent above schema ceiling (10000)", () => {
         defaults: {
           subagents: { maxChildrenPerAgent: 10001 },
         },
+        entries: { main: { default: true } },
       },
     }),
   ).toThrow();
@@ -78,6 +79,7 @@ it("accepts maxChildrenPerAgent at schema ceiling (10000)", () => {
       defaults: {
         subagents: { maxChildrenPerAgent: 10000 },
       },
+      entries: { main: { default: true } },
     },
   });
   expect(parsed.agents?.defaults?.subagents?.maxChildrenPerAgent).toBe(10000);

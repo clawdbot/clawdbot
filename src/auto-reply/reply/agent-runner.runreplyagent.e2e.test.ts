@@ -301,6 +301,7 @@ function createMinimalRun(params?: {
     originatingTo: sessionCtx.OriginatingTo,
     originatingChatId: sessionCtx.NativeChannelId ?? sessionCtx.ChatId,
     run: {
+      agentId: "main",
       sessionId: "session",
       sessionKey,
       messageProvider: "whatsapp",
