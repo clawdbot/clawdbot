@@ -6,7 +6,7 @@ import {
   IncomingMessage,
   ServerResponse,
 } from "node:http";
-import type { AddressInfo } from "node:net";
+import net, { type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -149,6 +149,18 @@ type ProxyResponseResult = {
   statusCode?: number;
 };
 
+function getPrototypeMethod<T>(prototype: object, methodName: string): T {
+  let current: object | null = prototype;
+  while (current) {
+    const value = Object.getOwnPropertyDescriptor(current, methodName)?.value;
+    if (typeof value === "function") {
+      return value as T;
+    }
+    current = Object.getPrototypeOf(current);
+  }
+  throw new Error(`Missing prototype method ${methodName}`);
+}
+
 async function getThroughProxy(proxyUrl: string, targetUrl: string): Promise<ProxyResponseResult> {
   const proxy = new URL(proxyUrl);
   return await new Promise<ProxyResponseResult>((resolve) => {
@@ -229,6 +241,84 @@ async function postThroughProxy(params: {
   });
 }
 
+async function rawSlowGetThroughProxy(params: {
+  pauseBeforeReadMs: number;
+  proxyUrl: string;
+  targetUrl: string;
+}): Promise<{ receivedBytes: number; resumed: boolean; statusLine: string }> {
+  const proxy = new URL(params.proxyUrl);
+  return await new Promise((resolve, reject) => {
+    let bodyBytes = 0;
+    let contentLength: number | undefined;
+    let headerBytes = Buffer.alloc(0);
+    let receivedBytes = 0;
+    let resumed = false;
+    let settled = false;
+    let statusLine = "";
+    const socket = net.connect(Number(proxy.port), proxy.hostname);
+    const timeout = setTimeout(() => {
+      socket.destroy();
+      if (!settled) {
+        settled = true;
+        reject(new Error("slow proxy client timed out"));
+      }
+    }, 15000);
+    const finish = () => {
+      clearTimeout(timeout);
+      if (!settled) {
+        settled = true;
+        resolve({ receivedBytes, resumed, statusLine });
+      }
+    };
+    const maybeFinishCompleteBody = () => {
+      if (contentLength !== undefined && bodyBytes >= contentLength) {
+        socket.destroy();
+        finish();
+      }
+    };
+    socket.on("connect", () => {
+      socket.write(
+        `GET ${params.targetUrl} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n`,
+      );
+      socket.pause();
+      setTimeout(() => {
+        resumed = true;
+        socket.resume();
+      }, params.pauseBeforeReadMs);
+    });
+    socket.on("data", (chunk) => {
+      receivedBytes += chunk.length;
+      if (contentLength === undefined) {
+        headerBytes = Buffer.concat([headerBytes, Buffer.from(chunk)]);
+        const headerEnd = headerBytes.indexOf("\r\n\r\n");
+        if (headerEnd === -1) {
+          return;
+        }
+        const headerText = headerBytes.subarray(0, headerEnd).toString("latin1");
+        statusLine = headerText.split("\r\n")[0] ?? "";
+        const contentLengthHeader = headerText
+          .split("\r\n")
+          .find((line) => line.toLowerCase().startsWith("content-length:"));
+        const parsedContentLength = Number(contentLengthHeader?.split(":")[1]?.trim());
+        contentLength = Number.isFinite(parsedContentLength) ? parsedContentLength : 0;
+        bodyBytes += headerBytes.byteLength - headerEnd - 4;
+        headerBytes = Buffer.alloc(0);
+      } else {
+        bodyBytes += chunk.length;
+      }
+      maybeFinishCompleteBody();
+    });
+    socket.on("error", (error) => {
+      clearTimeout(timeout);
+      if (!settled) {
+        settled = true;
+        reject(error);
+      }
+    });
+    socket.on("close", finish);
+  });
+}
+
 afterEach(async () => {
   await cleanupTestRoot();
 });
@@ -272,18 +362,42 @@ describe("startDebugProxyServer", () => {
 
   it("pauses the upstream response while downstream forwarding is backpressured", async () => {
     const settings = await makeSettings();
-    const responseBody = `pressure-${"x".repeat(1024)}`;
-    const origin = await startLargeBodyOrigin(responseBody);
-    const proxy = await startDebugProxyServer({ settings });
-    const originalWrite = Object.getOwnPropertyDescriptor(ServerResponse.prototype, "write")
-      ?.value as (...args: unknown[]) => boolean;
-    const originalPause = Object.getOwnPropertyDescriptor(IncomingMessage.prototype, "pause")
-      ?.value as typeof IncomingMessage.prototype.pause;
-    const originalResume = Object.getOwnPropertyDescriptor(IncomingMessage.prototype, "resume")
-      ?.value as typeof IncomingMessage.prototype.resume;
+    const responseChunks = [Buffer.from("pressure-"), Buffer.alloc(1024, "x")];
+    const responseBodyBytes = responseChunks.reduce((total, chunk) => total + chunk.byteLength, 0);
+    const originalWrite = getPrototypeMethod<typeof ServerResponse.prototype.write>(
+      ServerResponse.prototype,
+      "write",
+    );
+    const originalPause = getPrototypeMethod<typeof IncomingMessage.prototype.pause>(
+      IncomingMessage.prototype,
+      "pause",
+    );
+    const originalResume = getPrototypeMethod<typeof IncomingMessage.prototype.resume>(
+      IncomingMessage.prototype,
+      "resume",
+    );
     let forcedBackpressure = false;
     let upstreamPauseCount = 0;
     let upstreamResumeCount = 0;
+    const originServer = createHttpServer((req, res) => {
+      req.resume();
+      res.writeHead(200, {
+        "content-length": String(responseBodyBytes),
+        "content-type": "text/plain; charset=utf-8",
+      });
+      res.write(responseChunks[0]);
+      setTimeout(() => res.end(responseChunks[1]), 30);
+    });
+    await new Promise<void>((resolve, reject) => {
+      originServer.once("error", reject);
+      originServer.listen(0, "127.0.0.1", () => {
+        originServer.off("error", reject);
+        resolve();
+      });
+    });
+    const originAddress = originServer.address() as AddressInfo;
+    const originUrl = `http://127.0.0.1:${originAddress.port}/capture`;
+    const proxy = await startDebugProxyServer({ settings });
 
     ServerResponse.prototype.write = function patchedWrite(
       this: ServerResponse,
@@ -316,18 +430,31 @@ describe("startDebugProxyServer", () => {
     };
 
     try {
-      const forwarded = await getThroughProxy(proxy.proxyUrl, origin.url);
+      const forwarded = await rawSlowGetThroughProxy({
+        pauseBeforeReadMs: 0,
+        proxyUrl: proxy.proxyUrl,
+        targetUrl: originUrl,
+      });
 
+      expect(forwarded).toMatchObject({ resumed: true, statusLine: "HTTP/1.1 200 OK" });
       expect(forcedBackpressure).toBe(true);
-      expect(forwarded).toMatchObject({ body: responseBody, complete: true, statusCode: 200 });
+      expect(forwarded.receivedBytes).toBeGreaterThanOrEqual(responseBodyBytes);
       expect(upstreamPauseCount).toBeGreaterThanOrEqual(1);
       expect(upstreamResumeCount).toBeGreaterThanOrEqual(1);
     } finally {
       ServerResponse.prototype.write = originalWrite as typeof ServerResponse.prototype.write;
       IncomingMessage.prototype.pause = originalPause;
       IncomingMessage.prototype.resume = originalResume;
+      await new Promise<void>((resolve, reject) => {
+        originServer.close((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve();
+        });
+      });
       await proxy.stop();
-      await origin.stop();
     }
   });
 
