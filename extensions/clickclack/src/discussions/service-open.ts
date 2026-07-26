@@ -6,7 +6,7 @@ import {
   isClickClackChannelNameConflict,
   type ClickClackClient,
 } from "../http-client.js";
-import type { ResolvedClickClackAccount } from "../types.js";
+import type { CoreConfig, ResolvedClickClackAccount } from "../types.js";
 import {
   clearDiscussionBindingGeneration,
   listPendingDiscussionOpens,
@@ -384,7 +384,7 @@ export async function openClickClackDiscussionBinding(
       accountId: account.accountId,
       agentId: resolveAgentIdFromSessionKey(
         sessionKey,
-        resolveDefaultAgentId(runtime.config.current()),
+        resolveDefaultAgentId(runtime.config.current() as CoreConfig),
       ),
       sessionId: entry.sessionId,
       serverBaseUrl,
