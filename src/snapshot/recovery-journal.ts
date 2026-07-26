@@ -19,7 +19,7 @@ type RecoveryJournalDatabase = {
   recovery_journal_records: RecoveryJournalRecordTable;
 };
 
-export class RecoveryJournalError extends Error {
+class RecoveryJournalError extends Error {
   constructor(
     public readonly kind: "conflict" | "corrupt",
     message: string,
@@ -37,7 +37,7 @@ export function resolveRecoveryJournalPath(directoryPath: string): string {
 export async function readRecoveryJournalRecord(
   databasePath: string,
   recordType: string,
-): Promise<unknown | undefined> {
+): Promise<unknown> {
   const database = await openRecoveryJournal(databasePath);
   try {
     const kysely = getNodeSqliteKysely<RecoveryJournalDatabase>(database);
@@ -112,6 +112,7 @@ async function openRecoveryJournal(databasePath: string) {
     });
   const database = openNodeSqliteDatabase(databasePath);
   try {
+    // sqlite-allow-raw -- this boundary owns dedicated journal bootstrap DDL and durability pragmas.
     database.exec(`
       PRAGMA journal_mode = DELETE;
       PRAGMA synchronous = FULL;
