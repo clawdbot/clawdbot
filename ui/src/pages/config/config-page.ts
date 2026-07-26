@@ -86,6 +86,7 @@ type ConfigPageSetting =
 const MOVED_SECTION_ROUTES: Record<string, { routeId: RouteId; keepSection: boolean }> = {
   "communications:__notifications__": { routeId: "notifications", keepSection: false },
   "automation:approvals": { routeId: "security", keepSection: true },
+  "ai-agents:memory": { routeId: "memory", keepSection: true },
 };
 
 const SYSTEM_INFO_POLL_INTERVAL_MS = 10_000;
