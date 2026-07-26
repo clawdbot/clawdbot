@@ -32,6 +32,19 @@ export function createAgentSelectionCapability(
   gateway: AgentSelectionGateway,
   roster: AgentSelectionRoster,
 ): AgentSelectionCapability {
+  const reconcileSelectedId = (value: string | null): string | null => {
+    const selectedId = value?.trim() ? normalizeAgentId(value) : null;
+    const agentsList = roster.state.agentsList;
+    if (
+      !selectedId ||
+      !agentsList ||
+      agentsList.agents.length === 0 ||
+      agentsList.agents.some((agent) => normalizeAgentId(agent.id) === selectedId)
+    ) {
+      return selectedId;
+    }
+    return normalizeAgentId(agentsList.defaultId);
+  };
   const resolveScopeId = (value: string | null): string | null => {
     const scopeId = value?.trim() ? normalizeAgentId(value) : null;
     // System agents remain valid concrete chat targets, but never become shared page filters.
@@ -51,7 +64,11 @@ export function createAgentSelectionCapability(
   const listeners = new Set<(next: AgentSelectionState) => void>();
 
   const publish = (next: AgentSelectionState) => {
-    const reconciled = { ...next, scopeId: resolveScopeId(next.scopeId) };
+    const selectedId = reconcileSelectedId(next.selectedId);
+    // Selection and page scope move together when a configured agent vanishes.
+    // Otherwise route-derived agent ids keep sending agent-scoped RPCs to a dead target.
+    const scopeId = selectedId === next.selectedId ? next.scopeId : selectedId;
+    const reconciled = { selectedId, scopeId: resolveScopeId(scopeId) };
     if (state.selectedId === reconciled.selectedId && state.scopeId === reconciled.scopeId) {
       return;
     }

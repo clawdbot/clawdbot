@@ -20,18 +20,10 @@ import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { type EditorId, openEditor } from "../../../lib/editor-links.ts";
 import { openExternalUrlSafe } from "../../../lib/open-external-url.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
-import "./session-discussion-panel.ts";
 import "./session-diff-panel.ts";
 import { renderChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.ts";
 import type { FileEditorViewHandle } from "./file-editor-view.ts";
 import type { SessionDiffLoader } from "./session-diff-panel.ts";
-import type {
-  SessionDiscussionInfoLoader,
-  SessionDiscussionOpener,
-  SessionDiscussionStateListener,
-} from "./session-discussion-panel.ts";
-
-export const CHAT_DETAIL_FULL_MESSAGE_MAX_CHARS = 500_000;
 
 type DetailUnavailableReason = "not_found" | "oversized" | "not_visible";
 export type DetailFullMessageResult = {
@@ -82,19 +74,6 @@ type SessionDiffSidebarContent = {
   kind: "session-diff";
   /** Fetches a fresh sessions.diff snapshot; the panel refetches on refresh. */
   load: SessionDiffLoader;
-  rawText?: string | null;
-  fullMessageRequest?: SidebarFullMessageRequest;
-  unavailableReason?: DetailUnavailableReason | null;
-};
-
-type SessionDiscussionSidebarContent = {
-  kind: "session-discussion";
-  sessionKey: string;
-  canOpen: boolean;
-  openUrl?: string | null;
-  loadInfo: SessionDiscussionInfoLoader;
-  openDiscussion: SessionDiscussionOpener;
-  onStateChange: SessionDiscussionStateListener;
   rawText?: string | null;
   fullMessageRequest?: SidebarFullMessageRequest;
   unavailableReason?: DetailUnavailableReason | null;
@@ -153,7 +132,6 @@ export type SidebarContent =
   | CanvasSidebarContent
   | ImageSidebarContent
   | FileSidebarContent
-  | SessionDiscussionSidebarContent
   | SessionDiffSidebarContent;
 
 function hasFullMessageRequest(content: SidebarContent): content is SidebarContent & {
@@ -517,6 +495,7 @@ type MarkdownSidebarProps = {
   canvasPluginSurfaceUrl?: string | null;
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
+  embedded?: boolean;
 };
 
 function renderMarkdownSidebar(props: MarkdownSidebarProps) {
@@ -540,8 +519,6 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
           props.allowExternalEmbedUrls ?? false,
         )
       : null;
-  const discussionOpenUrl =
-    content?.kind === "session-discussion" ? (content.openUrl ?? null) : null;
   const title =
     content?.kind === "canvas"
       ? content.title?.trim() || "Render Preview"
@@ -551,48 +528,29 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
           ? content.name.trim() || "File"
           : content?.kind === "session-diff"
             ? t("chat.sessionDiff.title")
-            : content?.kind === "session-discussion"
-              ? t("chat.sessionDiscussion.title")
-              : content?.kind === "markdown"
-                ? "Markdown Preview"
-                : "Tool Details";
+            : content?.kind === "markdown"
+              ? "Markdown Preview"
+              : "Tool Details";
   return html`
     <div class="sidebar-panel">
-      <div class="sidebar-header">
-        <div class="sidebar-title">${title}</div>
-        <div class="sidebar-header__actions">
-          ${discussionOpenUrl
-            ? html`
-                <openclaw-tooltip .content=${t("chat.sessionDiscussion.openExternal")}>
-                  <a
-                    class="btn btn--ghost btn--icon"
-                    href=${discussionOpenUrl}
-                    target="_blank"
-                    rel="noopener"
-                    aria-label=${t("chat.sessionDiscussion.openExternal")}
-                  >
-                    ${icons.externalLink}
-                  </a>
-                </openclaw-tooltip>
-              `
-            : nothing}
-          <openclaw-tooltip .content=${t("chat.detailPanel.close")}>
-            <button
-              @click=${props.onClose}
-              class="btn"
-              type="button"
-              aria-label=${t("chat.detailPanel.close")}
-            >
-              ${icons.x}
-            </button>
-          </openclaw-tooltip>
-        </div>
-      </div>
-      <div
-        class="sidebar-content ${content?.kind === "session-discussion"
-          ? "sidebar-content--discussion"
-          : ""}"
-      >
+      ${props.embedded
+        ? nothing
+        : html`<div class="sidebar-header">
+            <div class="sidebar-title">${title}</div>
+            <div class="sidebar-header__actions">
+              <openclaw-tooltip .content=${t("chat.detailPanel.close")}>
+                <button
+                  @click=${props.onClose}
+                  class="btn"
+                  type="button"
+                  aria-label=${t("chat.detailPanel.close")}
+                >
+                  ${icons.x}
+                </button>
+              </openclaw-tooltip>
+            </div>
+          </div> `}
+      <div class="sidebar-content">
         ${props.error
           ? html`
               <div class="callout danger">${props.error}</div>
@@ -614,34 +572,54 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
               ? renderFileSidebarContent(content, props.onViewRawText, props.fileView)
               : content.kind === "session-diff"
                 ? html`<openclaw-session-diff .loader=${content.load}></openclaw-session-diff>`
-                : content.kind === "session-discussion"
+                : content.kind === "canvas"
                   ? html`
-                      <openclaw-session-discussion
-                        .sessionKey=${content.sessionKey}
-                        .canOpen=${content.canOpen}
-                        .loadInfo=${content.loadInfo}
-                        .openDiscussion=${content.openDiscussion}
-                        .onStateChange=${content.onStateChange}
-                      ></openclaw-session-discussion>
+                      <div class="chat-tool-card__preview" data-kind="canvas">
+                        <div class="chat-tool-card__preview-panel" data-side="front">
+                          ${keyed(
+                            `${canvasSandbox}\u0000${canvasSrc ?? ""}\u0000${content.preferredHeight ?? ""}`,
+                            html`
+                              <iframe
+                                class="chat-tool-card__preview-frame"
+                                title=${content.title?.trim() || "Render preview"}
+                                sandbox=${canvasSandbox}
+                                src=${canvasSrc ?? nothing}
+                                style=${content.preferredHeight
+                                  ? `height:${content.preferredHeight}px`
+                                  : ""}
+                              ></iframe>
+                            `,
+                          )}
+                        </div>
+                        ${content.rawText?.trim()
+                          ? html`
+                              <div style="margin-top: 12px;">
+                                <button @click=${props.onViewRawText} class="btn" type="button">
+                                  ${t("chat.detailPanel.viewRawText")}
+                                </button>
+                              </div>
+                            `
+                          : nothing}
+                      </div>
                     `
-                  : content.kind === "canvas"
+                  : content.kind === "image"
                     ? html`
-                        <div class="chat-tool-card__preview" data-kind="canvas">
+                        <div class="chat-tool-card__preview" data-kind="image">
                           <div class="chat-tool-card__preview-panel" data-side="front">
-                            ${keyed(
-                              `${canvasSandbox}\u0000${canvasSrc ?? ""}\u0000${content.preferredHeight ?? ""}`,
-                              html`
-                                <iframe
-                                  class="chat-tool-card__preview-frame"
-                                  title=${content.title?.trim() || "Render preview"}
-                                  sandbox=${canvasSandbox}
-                                  src=${canvasSrc ?? nothing}
-                                  style=${content.preferredHeight
-                                    ? `height:${content.preferredHeight}px`
-                                    : ""}
-                                ></iframe>
-                              `,
-                            )}
+                            <button
+                              type="button"
+                              class="chat-tool-card__preview-image-button"
+                              aria-label=${t("chat.imageLightbox.open", { title })}
+                              @click=${() =>
+                                openSidebarImage(props.onOpenImage, content.src, title)}
+                            >
+                              <img
+                                class="chat-tool-card__preview-image"
+                                src=${content.src}
+                                alt=${title}
+                                style="display:block;max-width:100%;height:auto;border-radius:8px;"
+                              />
+                            </button>
                           </div>
                           ${content.rawText?.trim()
                             ? html`
@@ -654,69 +632,35 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                             : nothing}
                         </div>
                       `
-                    : content.kind === "image"
-                      ? html`
-                          <div class="chat-tool-card__preview" data-kind="image">
-                            <div class="chat-tool-card__preview-panel" data-side="front">
-                              <button
-                                type="button"
-                                class="chat-tool-card__preview-image-button"
-                                aria-label=${t("chat.imageLightbox.open", { title })}
-                                @click=${() =>
-                                  openSidebarImage(props.onOpenImage, content.src, title)}
-                              >
-                                <img
-                                  class="chat-tool-card__preview-image"
-                                  src=${content.src}
-                                  alt=${title}
-                                  style="display:block;max-width:100%;height:auto;border-radius:8px;"
-                                />
-                              </button>
-                            </div>
-                            ${content.rawText?.trim()
-                              ? html`
-                                  <div style="margin-top: 12px;">
-                                    <button @click=${props.onViewRawText} class="btn" type="button">
-                                      ${t("chat.detailPanel.viewRawText")}
-                                    </button>
-                                  </div>
-                                `
-                              : nothing}
-                          </div>
-                        `
-                      : html`
-                          <section class="sidebar-markdown-shell">
-                            <div class="sidebar-markdown-shell__toolbar">
-                              <div class="sidebar-markdown-shell__intro">
-                                <div class="sidebar-markdown-shell__eyebrow">
-                                  ${icons.scrollText}
-                                  <span>${t("chat.detailPanel.renderedMarkdown")}</span>
-                                </div>
-                                <div class="sidebar-markdown-shell__hint">
-                                  ${t("chat.detailPanel.renderedMarkdownHint")}
-                                </div>
+                    : html`
+                        <section class="sidebar-markdown-shell">
+                          <div class="sidebar-markdown-shell__toolbar">
+                            <div class="sidebar-markdown-shell__intro">
+                              <div class="sidebar-markdown-shell__eyebrow">
+                                ${icons.scrollText}
+                                <span>${t("chat.detailPanel.renderedMarkdown")}</span>
                               </div>
-                              <button
-                                @click=${props.onViewRawText}
-                                class="btn btn--sm"
-                                type="button"
-                              >
-                                ${t("chat.detailPanel.viewRawText")}
-                              </button>
+                              <div class="sidebar-markdown-shell__hint">
+                                ${t("chat.detailPanel.renderedMarkdownHint")}
+                              </div>
                             </div>
-                            ${markdownHtml
-                              ? html`
-                                  <article class="sidebar-markdown-reader sidebar-markdown">
-                                    ${unsafeHTML(markdownHtml)}
-                                  </article>
-                                `
-                              : html`
-                                  <div class="sidebar-markdown-empty">
-                                    ${t("chat.detailPanel.noPreviewableMarkdown")}
-                                  </div>
-                                `}
-                          </section>
-                        `
+                            <button @click=${props.onViewRawText} class="btn btn--sm" type="button">
+                              ${t("chat.detailPanel.viewRawText")}
+                            </button>
+                          </div>
+                          ${markdownHtml
+                            ? html`
+                                <article class="sidebar-markdown-reader sidebar-markdown">
+                                  ${unsafeHTML(markdownHtml)}
+                                </article>
+                              `
+                            : html`
+                                <div class="sidebar-markdown-empty">
+                                  ${t("chat.detailPanel.noPreviewableMarkdown")}
+                                </div>
+                              `}
+                        </section>
+                      `
             : html` <div class="muted">${t("chat.detailPanel.noContent")}</div> `}
       </div>
     </div>
@@ -731,6 +675,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
   @property() canvasPluginSurfaceUrl: string | null = null;
   @property() embedSandboxMode: EmbedSandboxMode = "scripts";
   @property({ type: Boolean }) allowExternalEmbedUrls = false;
+  @property({ type: Boolean }) embedded = false;
   @property({ attribute: false }) onOpenWorkspaceFile?:
     | ((target: { path: string; line?: number | null }) => void)
     | null = null;
@@ -1335,11 +1280,8 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     const currentMatchIndex = matches.length
       ? Math.min(this.fileSearchMatchIndex, matches.length - 1)
       : 0;
-    // The discussion iframe has no intrinsic height, so its host wrapper must
-    // stretch; content-sized kinds (files, tool details) keep auto height.
-    const fillHost = this.visibleContent?.kind === "session-discussion";
     return html`
-      <div class=${fillHost ? "sidebar-panel-host--fill" : ""} @click=${this.handlePanelClick}>
+      <div @click=${this.handlePanelClick}>
         ${renderMarkdownSidebar({
           content: this.visibleContent,
           error: this.error,
@@ -1376,6 +1318,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
           canvasPluginSurfaceUrl: this.canvasPluginSurfaceUrl,
           embedSandboxMode: this.embedSandboxMode,
           allowExternalEmbedUrls: this.allowExternalEmbedUrls,
+          embedded: this.embedded,
           onClose: this.close,
           onOpenImage: this.onOpenImage ?? undefined,
           onViewRawText: this.showRawText,

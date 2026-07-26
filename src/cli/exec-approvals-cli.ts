@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Command } from "commander";
@@ -180,10 +181,6 @@ function isNativeApprovalsSnapshot(
   snapshot: ExecApprovalsSnapshot,
 ): snapshot is NativeExecApprovalsSnapshot {
   return "enabled" in snapshot;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function parseNativeAction(value: unknown, label: string): NativeExecApprovalAction {

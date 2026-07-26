@@ -18,6 +18,7 @@ import {
   validateConfigSchemaParams,
   validateConfigSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { readAgentRosterProperty } from "../../agents/agent-scope-config.js";
 import {
   createConfigIO,
   parseConfigJson5,
@@ -41,6 +42,7 @@ import {
 import { isBuiltInModelProviderOverlayId } from "../../config/zod-schema.core.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isPlainObject } from "../../infra/plain-object.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   isRetryableSecretDegradationReason,
   redactSecretDegradationReason,
@@ -478,6 +480,45 @@ function parseValidateConfigFromRawOrRespond(
   };
 }
 
+function listExplicitAgentRosterIds(config: OpenClawConfig): string[] {
+  const roster = readAgentRosterProperty(config);
+  if (roster?.kind === "entries" && isRecord(roster.value)) {
+    return Object.keys(roster.value);
+  }
+  if (roster?.kind !== "list" || !Array.isArray(roster.value)) {
+    return [];
+  }
+  return roster.value.flatMap((entry) =>
+    isRecord(entry) && typeof entry.id === "string" ? [entry.id] : [],
+  );
+}
+
+function rejectDroppedAgentRosterEntries(params: {
+  currentConfig: OpenClawConfig;
+  submittedConfig: OpenClawConfig;
+  respond: RespondFn;
+}): boolean {
+  const submittedIds = new Set(
+    listExplicitAgentRosterIds(params.submittedConfig).map((agentId) => normalizeAgentId(agentId)),
+  );
+  const droppedIds = listExplicitAgentRosterIds(params.currentConfig)
+    .filter((agentId) => !submittedIds.has(normalizeAgentId(agentId)))
+    .toSorted();
+  if (droppedIds.length === 0) {
+    return false;
+  }
+  params.respond(
+    false,
+    undefined,
+    errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      `config.set would remove existing agent entries: ${droppedIds.join(", ")}. ` +
+        "Use the agents.delete RPC or `openclaw agents delete <id>` for intentional deletion.",
+    ),
+  );
+  return true;
+}
+
 function summarizeConfigValidationIssues(issues: ReadonlyArray<ConfigValidationIssue>): string {
   const trimmed = issues.slice(0, MAX_CONFIG_ISSUES_IN_ERROR_MESSAGE);
   const lines = normalizeStringEntries(
@@ -738,6 +779,15 @@ export const configHandlers: GatewayRequestHandlers = {
     const { snapshot, writeOptions } = writeSnapshot;
     const parsed = parseValidateConfigFromRawOrRespond(params, "config.set", snapshot, respond);
     if (!parsed) {
+      return;
+    }
+    if (
+      rejectDroppedAgentRosterEntries({
+        currentConfig: snapshot.config,
+        submittedConfig: parsed.config,
+        respond,
+      })
+    ) {
       return;
     }
     const preparedSecretsSnapshot = await ensureResolvableSecretRefsOrRespond({

@@ -109,7 +109,7 @@ function parseSessionKey(key: string): SessionKeyInfo {
   const normalized = normalizeLowercaseStringOrEmpty(key);
 
   // Main session.
-  if (key === "main" || key === "agent:main:main") {
+  if (key === "main" || /^agent:[^:]+:main$/u.test(key)) {
     return { prefix: "", fallbackName: "Main Thread" };
   }
 

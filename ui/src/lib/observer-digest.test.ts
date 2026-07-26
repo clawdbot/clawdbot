@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
-import { ObserverDigestHistory } from "./observer-digest.ts";
+import { isCriticalObserverHealth, ObserverDigestHistory } from "./observer-digest.ts";
+
+describe("isCriticalObserverHealth", () => {
+  it("recognizes only health states that require operator attention", () => {
+    expect(isCriticalObserverHealth("stuck")).toBe(true);
+    expect(isCriticalObserverHealth("waiting-on-user")).toBe(true);
+    expect(isCriticalObserverHealth("done")).toBe(false);
+    expect(isCriticalObserverHealth("failed")).toBe(false);
+  });
+});
 
 const HISTORY_LIMIT = 50;
 

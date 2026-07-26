@@ -53,6 +53,10 @@
   },
   "redirects": [
     {
+      "source": "/gateway/security/shrinkwrap",
+      "destination": "/gateway/security/dependency-locking"
+    },
+    {
       "source": "/cli/crestodian",
       "destination": "/cli/openclaw"
     },
@@ -1674,7 +1678,7 @@
                       "gateway/security/index",
                       "gateway/security/exposure-runbook",
                       "gateway/security/secure-file-operations",
-                      "gateway/security/shrinkwrap",
+                      "gateway/security/dependency-locking",
                       "gateway/security/audit-checks",
                       "gateway/security/rate-limiting",
                       "gateway/operator-scopes",

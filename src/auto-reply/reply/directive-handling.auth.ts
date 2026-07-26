@@ -227,7 +227,7 @@ export const resolveAuthLabel = async (
     });
     return {
       label: labels.join(", "),
-      source: `auth-profiles.json: ${formatPath(resolveAuthStorePathForDisplay(agentDir))}`,
+      source: `auth profile store: ${formatPath(resolveAuthStorePathForDisplay(agentDir))}`,
     };
   }
 

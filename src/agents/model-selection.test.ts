@@ -1603,6 +1603,28 @@ describe("model-selection", () => {
   });
 
   describe("resolveAllowedModelRef", () => {
+    it("keeps deprecated catalog refs selectable", () => {
+      const result = resolveAllowedModelRef({
+        cfg: {} as OpenClawConfig,
+        catalog: [
+          {
+            provider: "openai",
+            id: "gpt-5.5",
+            name: "GPT-5.5",
+            status: "deprecated",
+            replacedBy: "gpt-5.6",
+          },
+        ],
+        raw: "openai/gpt-5.5",
+        defaultProvider: "openai",
+      });
+
+      expect(result).toEqual({
+        key: "openai/gpt-5.5",
+        ref: { provider: "openai", model: "gpt-5.5" },
+      });
+    });
+
     it("accepts explicit allowlist refs absent from bundled catalog", () => {
       const result = resolveAllowedModelRef({
         cfg: EXPLICIT_ALLOWLIST_CONFIG,

@@ -38,6 +38,7 @@ import {
   resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   resolveClaudeThinkingProfile,
+  supportsClaude1MContext,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
@@ -57,6 +58,7 @@ import {
   applyAnthropicConfigDefaults,
   normalizeAnthropicProviderConfigForProvider,
 } from "./config-defaults.js";
+import { acceptsAnthropicLiveModelContract } from "./live-model-contract-gate.js";
 import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { resolveClaudeCliSyntheticAuth } from "./provider-discovery.js";
@@ -431,7 +433,7 @@ function resolveAnthropicForwardCompatModel(
 }
 
 function isAnthropicGa1MModel(modelId: string): boolean {
-  return supportsClaudeAdaptiveThinking({ id: modelId });
+  return supportsClaude1MContext({ id: modelId });
 }
 
 function isAnthropicFable5Model(modelId: string): boolean {
@@ -949,6 +951,7 @@ export function buildAnthropicProvider(): ProviderPlugin {
                 ...(key ? { "x-api-key": key } : {}),
               };
             },
+            acceptUnknownModel: acceptsAnthropicLiveModelContract,
           },
         }),
     },

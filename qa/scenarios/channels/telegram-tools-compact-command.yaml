@@ -12,7 +12,7 @@ scenario:
     - The compact tools command reaches native command dispatch.
     - The joined reply includes exec and the verbose-mode hint.
   codeRefs:
-    - src/auto-reply/reply/commands-tools.ts
+    - src/auto-reply/reply/commands-info.ts
     - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
   execution:
     profiles:

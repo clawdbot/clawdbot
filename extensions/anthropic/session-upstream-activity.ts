@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import {
   classifyClaudeCliHistoryMessage,
   classifyClaudeCliHistoryLine,
+  isExternalUserText,
   type SessionCatalogContinueProviderResult,
   type SessionUpstreamActivity,
   type SessionUpstreamProbe,
@@ -102,15 +103,6 @@ function readMarkerOffset(probe: SessionUpstreamProbe): number | undefined {
   }
   const offset = probe.marker.offset ?? probe.marker.size;
   return Number.isSafeInteger(offset) && (offset as number) >= 0 ? (offset as number) : undefined;
-}
-
-function normalizeUserText(text: string): string {
-  return text.trim().replace(/\s+/g, " ");
-}
-
-function isExternalUserText(probe: SessionUpstreamProbe, text: string | undefined): boolean {
-  const normalized = text === undefined ? "" : normalizeUserText(text);
-  return !probe.ownRecentUserTexts.includes(normalized);
 }
 
 async function checkClaudeSessionUpstreamActivity(

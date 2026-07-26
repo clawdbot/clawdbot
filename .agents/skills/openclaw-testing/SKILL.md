@@ -215,11 +215,12 @@ official trust.
   must depend on packages declared in the plugin package `dependencies` or
   `optionalDependencies`; do not make a final proof depend on manually running
   `npm install` inside `~/.openclaw/npm/projects/...`.
-- If the plugin ships `npm-shrinkwrap.json`, regenerate or check it after
-  moving dependencies between dev and runtime sections.
+- After moving dependencies between dev and runtime sections, run the transient
+  npm package-lock check and inspect the bundled runtime payload when enabled.
 - Inspect the packed tarball when dependency ownership or generated `dist/`
-  matters: verify `package/package.json`, the expected runtime files, and any
-  package-local shrinkwrap before installing it on a live host.
+  matters: verify `package/package.json`, the expected runtime files, the
+  bundled `node_modules` payload when enabled, and the absence of npm lockfiles
+  before installing it on a live host.
 - After installing the package, restart the Gateway when the touched surface is
   plugin registration, runtime dependency loading, privileged helpers, provider
   routing, or generated dist.

@@ -3,6 +3,7 @@
 import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { repeat } from "lit/directives/repeat.js";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { ChannelUiMetaEntry, CronJob, CronRunLogEntry, CronStatus } from "../../api/types.ts";
 import "../../styles/chat/text.css";
 import "../../styles/cron.css";
@@ -14,6 +15,7 @@ import type {
   CronSortDir,
 } from "../../api/types.ts";
 import { icon, icons } from "../../components/icons.ts";
+import { highlightCodeHtml } from "../../components/markdown-code-blocks.ts";
 import {
   renderSettingsPage,
   renderSettingsRow,
@@ -311,6 +313,8 @@ function renderRequiredTitle(label: string) {
 // wrapped control its accessible name (including the visually-hidden required marker).
 function renderFieldRow(params: {
   label: string;
+  // Blank when the control is not labelable (e.g. a code block); the label then
+  // has no `for` target and the control carries its own aria-label.
   controlId: string;
   control: unknown;
   required?: boolean;
@@ -328,7 +332,7 @@ function renderFieldRow(params: {
     : html`<div class=${controlClass}>${params.control}</div>`;
   return html`
     <div class=${params.stacked ? "settings-row settings-row--stacked" : "settings-row"}>
-      <label class="settings-row__text" for=${params.controlId}>
+      <label class="settings-row__text" for=${ifDefined(params.controlId || undefined)}>
         <span class="settings-row__title">
           ${params.required ? renderRequiredTitle(params.label) : params.label}
         </span>
@@ -1047,6 +1051,16 @@ function renderMenuItem(
 
 // ── Editor sections ──
 
+// Only the read-only payload kinds carry source text; the rest are prose prompts,
+// so an empty language keeps them on the plain editable textarea.
+const CRON_PAYLOAD_CODE_LANGUAGES: Record<CronFormState["payloadKind"], string> = {
+  script: "javascript",
+  command: "bash",
+  heartbeat: "",
+  systemEvent: "",
+  agentTurn: "",
+};
+
 function renderPromptSection(
   props: CronProps,
   ctx: { payloadLocked: boolean; isAgentTurn: boolean },
@@ -1063,32 +1077,49 @@ function renderPromptSection(
     : props.form.payloadKind === "systemEvent"
       ? t("cron.form.systemEventHelp")
       : t("cron.form.agentTurnHelp");
+  // Script/command payloads are always read-only here, so they render as a highlighted
+  // code block instead of a textarea; every other kind stays an editable field. The code
+  // block carries no aria-invalid/describedby because validateCronForm skips payloadText
+  // for locked payloads, so this branch can never render a payload error.
+  const codeLanguage = ctx.payloadLocked ? CRON_PAYLOAD_CODE_LANGUAGES[props.form.payloadKind] : "";
   const promptRow = renderFieldRow({
     label: promptLabel,
-    controlId: "cron-payload-text",
+    controlId: codeLanguage ? "" : "cron-payload-text",
     required: true,
     help: promptHelp,
     stacked: true,
     wide: true,
     error: props.fieldErrors.payloadText,
     errorId: errorIdForField("payloadText"),
-    control: html`
-      <textarea
-        id="cron-payload-text"
-        class="settings-input"
-        rows="6"
-        .value=${props.form.payloadText}
-        ?readonly=${ctx.payloadLocked}
-        aria-required="true"
-        placeholder=${t("cron.form.promptPlaceholder")}
-        aria-invalid=${props.fieldErrors.payloadText ? "true" : "false"}
-        aria-describedby=${ifDefined(
-          props.fieldErrors.payloadText ? errorIdForField("payloadText") : undefined,
-        )}
-        @input=${(e: Event) =>
-          props.onFormChange({ payloadText: (e.target as HTMLTextAreaElement).value })}
-      ></textarea>
-    `,
+    control: codeLanguage
+      ? html`
+          <pre
+            id="cron-payload-text"
+            class="code-block cron-payload-code"
+            data-test-id="cron-payload-code"
+            tabindex="0"
+            aria-label=${promptLabel}
+          ><code class="hljs">${unsafeHTML(
+            highlightCodeHtml(props.form.payloadText, codeLanguage),
+          )}</code></pre>
+        `
+      : html`
+          <textarea
+            id="cron-payload-text"
+            class="settings-input"
+            rows="6"
+            .value=${props.form.payloadText}
+            ?readonly=${ctx.payloadLocked}
+            aria-required="true"
+            placeholder=${t("cron.form.promptPlaceholder")}
+            aria-invalid=${props.fieldErrors.payloadText ? "true" : "false"}
+            aria-describedby=${ifDefined(
+              props.fieldErrors.payloadText ? errorIdForField("payloadText") : undefined,
+            )}
+            @input=${(e: Event) =>
+              props.onFormChange({ payloadText: (e.target as HTMLTextAreaElement).value })}
+          ></textarea>
+        `,
   });
   const actionRow = renderFieldRow({
     label: t("cron.form.action"),

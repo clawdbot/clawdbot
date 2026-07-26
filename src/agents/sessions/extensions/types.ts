@@ -36,6 +36,7 @@ import type {
   AgentMessage,
   AgentToolResult,
   AgentToolUpdateCallback,
+  StreamFn,
   ThinkingLevel,
   ToolExecutionMode,
 } from "../../runtime/index.js";
@@ -614,6 +615,10 @@ interface SessionBeforeCompactEvent {
   branchEntries: SessionEntry[];
   customInstructions?: string;
   signal: AbortSignal;
+  /** Prepared reasoning level for extension-owned summarization. */
+  thinkingLevel?: ThinkingLevel;
+  /** Prepared provider stream for extension-owned summarization. */
+  streamFn?: StreamFn;
 }
 
 /** Fired after context compaction */

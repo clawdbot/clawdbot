@@ -1679,10 +1679,32 @@ describe("ollama plugin", () => {
     }
     expect(result.provider.baseUrl).toBe("https://ollama.com");
     expect(result.provider.models?.map((model: { id: string }) => model.id)).toEqual([
-      "kimi-k2.5:cloud",
-      "minimax-m2.7:cloud",
-      "glm-5.1:cloud",
-      "glm-5.2:cloud",
+      "minimax-m2.7",
+      "glm-5.1",
+      "glm-5.2",
+    ]);
+    expect(result.provider.models).toEqual([
+      expect.objectContaining({
+        id: "minimax-m2.7",
+        contextWindow: 196_608,
+        reasoning: true,
+        input: ["text"],
+        compat: { supportsTools: true, supportsUsageInStreaming: true },
+      }),
+      expect.objectContaining({
+        id: "glm-5.1",
+        contextWindow: 202_752,
+        reasoning: true,
+        input: ["text"],
+        compat: { supportsTools: true, supportsUsageInStreaming: true },
+      }),
+      expect.objectContaining({
+        id: "glm-5.2",
+        contextWindow: 1_000_000,
+        reasoning: true,
+        input: ["text"],
+        compat: { supportsTools: true, supportsUsageInStreaming: true },
+      }),
     ]);
 
     provider.createStreamFn?.({
@@ -1698,7 +1720,7 @@ describe("ollama plugin", () => {
     buildOllamaProviderMock.mockResolvedValueOnce({
       baseUrl: "https://ollama.com",
       api: "ollama",
-      models: [buildOllamaModelDefinitionMock("glm-5.2:cloud")],
+      models: [buildOllamaModelDefinitionMock("glm-5.2")],
     });
 
     const result = await provider.catalog.run({
@@ -1716,9 +1738,7 @@ describe("ollama plugin", () => {
     });
     expect(result?.provider.apiKey).toBe("OLLAMA_API_KEY");
     expect(result?.provider.models).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: "glm-5.2:cloud", name: "glm-5.2:cloud" }),
-      ]),
+      expect.arrayContaining([expect.objectContaining({ id: "glm-5.2", name: "glm-5.2" })]),
     );
   });
 
@@ -1727,7 +1747,7 @@ describe("ollama plugin", () => {
     buildOllamaProviderMock.mockResolvedValueOnce({
       baseUrl: "https://ollama.com",
       api: "ollama",
-      models: [buildOllamaModelDefinitionMock("kimi-k2.5:cloud")],
+      models: [buildOllamaModelDefinitionMock("kimi-k2.6")],
     });
     queryOllamaModelShowInfoMock.mockResolvedValueOnce({
       contextWindow: 1_000_000,
@@ -1735,7 +1755,7 @@ describe("ollama plugin", () => {
     });
     const result = await provider.catalog.run({
       config: {
-        agents: { defaults: { model: { primary: "ollama-cloud/glm-5.2:cloud" } } },
+        agents: { defaults: { model: { primary: "ollama-cloud/glm-5.2" } } },
       },
       env: {},
       resolveProviderApiKey: () => ({
@@ -1748,15 +1768,13 @@ describe("ollama plugin", () => {
       apiKey: "cloud-key",
       quiet: true,
     });
-    expect(queryOllamaModelShowInfoMock).toHaveBeenCalledWith(
-      "https://ollama.com",
-      "glm-5.2:cloud",
-      { apiKey: "cloud-key" },
-    );
+    expect(queryOllamaModelShowInfoMock).toHaveBeenCalledWith("https://ollama.com", "glm-5.2", {
+      apiKey: "cloud-key",
+    });
     expect(result?.provider.models).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          id: "glm-5.2:cloud",
+          id: "glm-5.2",
           contextWindow: 1_000_000,
           maxTokens: 8192,
           reasoning: true,
@@ -1769,13 +1787,13 @@ describe("ollama plugin", () => {
     const provider = registerOllamaCloudProvider();
     const model = provider.resolveDynamicModel?.({
       provider: "ollama-cloud",
-      modelId: "glm-5.2:cloud",
+      modelId: "glm-5.2",
     } as never);
 
     expect(model).toEqual(
       expect.objectContaining({
         provider: "ollama-cloud",
-        id: "glm-5.2:cloud",
+        id: "glm-5.2",
         contextWindow: 1_000_000,
         maxTokens: 8192,
         reasoning: true,

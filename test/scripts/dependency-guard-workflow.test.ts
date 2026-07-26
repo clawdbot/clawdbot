@@ -194,7 +194,6 @@ describe("dependency guard workflow", () => {
     const script = readFileSync("scripts/github/dependency-guard.mjs", "utf8");
     expect(script).toContain('filename.endsWith("package.json")');
     expect(script).toContain('filename.endsWith("package-lock.json")');
-    expect(script).toContain('filename.endsWith("npm-shrinkwrap.json")');
     expect(script).toContain('filename.endsWith("pnpm-lock.yaml")');
     expect(script).toContain('filename === "pnpm-workspace.yaml"');
     expect(script).toContain('filename.startsWith("patches/")');
@@ -207,7 +206,6 @@ describe("dependency guard workflow", () => {
     const guardSources = `${script}\n${sharedScript}`;
     expect(script).toContain('filename.endsWith("pnpm-lock.yaml")');
     expect(script).toContain('filename.endsWith("package-lock.json")');
-    expect(script).toContain('filename.endsWith("npm-shrinkwrap.json")');
     expect(script).toContain('"optionalDependencies"');
     expect(script).toContain('"peerDependencies"');
     expect(script).toContain('"overrides"');
@@ -266,8 +264,7 @@ describe("dependency guard workflow", () => {
     );
     expect(codeowners).toContain("/scripts/github/dependency-guard.mjs @openclaw/openclaw-secops");
     expect(codeowners).toContain("/package-lock.json @openclaw/openclaw-secops");
-    expect(codeowners).toContain("/npm-shrinkwrap.json @openclaw/openclaw-secops");
     expect(codeowners).toContain("/extensions/*/package-lock.json @openclaw/openclaw-secops");
-    expect(codeowners).toContain("/extensions/*/npm-shrinkwrap.json @openclaw/openclaw-secops");
+    expect(codeowners).toContain("/pnpm-lock.yaml @openclaw/openclaw-secops");
   });
 });

@@ -85,6 +85,7 @@ import {
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { resolveRequestClientIp } from "./net.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
+import { isTerminalConfigEnabled } from "./terminal/enabled.js";
 
 const ROOT_PREFIX = "/";
 const CONTROL_UI_ASSISTANT_MEDIA_PREFIX = "/__openclaw__/assistant-media";
@@ -124,17 +125,18 @@ const CONTROL_UI_ROOT_PUBLIC_ASSETS = new Set([
   "sw.js",
 ]);
 
-/** Rewrites root-absolute Control UI public asset hrefs for configured base paths. */
+/** Anchors bundled public assets before deep-linked documents begin preloading. */
 function rewriteControlUiIndexHtmlPublicAssetHrefs(html: string, basePath: string): string {
   const normalized = normalizeControlUiBasePath(basePath);
-  if (!normalized) {
-    return html;
-  }
   let next = html;
   for (const asset of CONTROL_UI_ROOT_PUBLIC_ASSETS) {
-    const rootHref = `href="/${asset}"`;
-    const baseHref = `href="${normalized}/${asset}"`;
-    next = next.split(rootHref).join(baseHref);
+    const assetHref = `href="${normalized}/${asset}"`;
+    // Vite's portable ./ base emits relative hrefs, which the browser starts
+    // resolving against a nested route before the UI can correct them.
+    next = next.replaceAll(`href="./${asset}"`, assetHref);
+    if (normalized) {
+      next = next.replaceAll(`href="/${asset}"`, assetHref);
+    }
   }
   return next;
 }
@@ -913,10 +915,10 @@ export async function handleControlUiHttpRequest(
   const url = new URL(urlRaw, "http://localhost");
   const basePath = normalizeControlUiBasePath(opts?.basePath);
   const pathname = url.pathname;
-  // The embedded terminal ships ghostty-web (WASM); relax the index CSP only
-  // for an explicitly enabled terminal so the default policy stays strict.
-  const terminalEnabled =
-    opts?.terminalEnabled ?? opts?.config?.gateway?.terminal?.enabled === true;
+  // The embedded terminal ships ghostty-web (WASM); the index CSP carries the
+  // WASM relaxation whenever the terminal is enabled (the default) and stays
+  // strict once operators opt out with gateway.terminal.enabled: false.
+  const terminalEnabled = opts?.terminalEnabled ?? isTerminalConfigEnabled(opts?.config);
   const route = classifyControlUiRequest({
     basePath,
     pathname,

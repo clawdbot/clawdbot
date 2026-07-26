@@ -15,6 +15,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 import { runMessageAction } from "./message-action-runner.js";
 
@@ -91,19 +92,10 @@ async function withSandbox(test: (sandboxDir: string) => Promise<void>) {
 }
 
 async function withTempOpenClawStateDir<T>(test: (stateDir: string) => Promise<T>): Promise<T> {
-  const previous = process.env.OPENCLAW_STATE_DIR;
-  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-runner-state-"));
-  process.env.OPENCLAW_STATE_DIR = stateDir;
-  try {
-    return await test(stateDir);
-  } finally {
-    if (previous === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previous;
-    }
-    await fs.rm(stateDir, { recursive: true, force: true });
-  }
+  return await withOpenClawTestState(
+    { layout: "state-only", prefix: "msg-runner-state-" },
+    (state) => test(state.stateDir),
+  );
 }
 
 const runDrySend = (params: {

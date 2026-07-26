@@ -67,7 +67,6 @@ import {
   resolveUiConfiguredMainKey,
   resolveUiKnownSelectedGlobalAgentId,
 } from "../lib/sessions/session-key.ts";
-import "../lib/toast.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
@@ -559,6 +558,11 @@ class OpenClawShell extends OpenClawLightDomElement {
     EventTarget,
     ReturnType<typeof globalThis.setTimeout>
   >();
+  // Lazy: the critical-notice module stays out of the startup chunk (perf
+  // budget); loaded on the first session.observer digest after boot.
+  private criticalNoticeRuntime: Promise<
+    typeof import("../pages/chat/critical-observer-notice.runtime.ts")
+  > | null = null;
   private readonly subscriptions = new SubscriptionsController(this);
 
   private get context(): ApplicationContext<RouteId> | undefined {
@@ -787,6 +791,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.navDrawerTrigger = null;
     this.lastWorkspaceLocation = null;
     this.activeSessionKey = "";
+    void this.criticalNoticeRuntime?.then((runtime) => runtime.resetCriticalObserverTracker());
     this.settingsSearchQuery = "";
     this.commandPaletteTarget = undefined;
     this.agentsListClient = null;
@@ -808,6 +813,28 @@ class OpenClawShell extends OpenClawLightDomElement {
 
   private readonly handleGatewayEvent = (event: GatewayEventFrame) => {
     this.sidebarWorkboardRuntime?.handleGatewayEvent(event.event);
+    if (event.event === "session.observer") {
+      const context = this.context;
+      if (context) {
+        // All digests flow through (not just critical ones): the runtime
+        // tracker must see recovery transitions for its re-announce dedupe.
+        this.criticalNoticeRuntime ??= import("../pages/chat/critical-observer-notice.runtime.ts");
+        const payload = event.payload;
+        void this.criticalNoticeRuntime.then((runtime) =>
+          runtime.handleCriticalObserverDigest({
+            payload,
+            selectedSessionKey: this.activeSessionKey,
+            sessionHost: this.storedOutboxScopeHost(context),
+            sessions: context.sessions.state.result?.sessions ?? [],
+            onOpen: (sessionKey) => {
+              context.gateway.setSessionKey(sessionKey);
+              this.navigate("chat", { search: searchForSession(sessionKey) });
+            },
+          }),
+        );
+      }
+      return;
+    }
     if (event.event === "config.changed") {
       // Another writer (agent-approved config_set, other device, CLI) changed
       // openclaw.json; refresh the snapshot so ui.prefs reconcile live. A
@@ -894,12 +921,11 @@ class OpenClawShell extends OpenClawLightDomElement {
     if (rosterDiff.changedIds.length > 0) {
       void context.agentIdentity.ensure(rosterDiff.changedIds);
     }
-    const previousIds = new Set(previous?.agents.map((agent) => agent.id) ?? []);
     const nextIds = new Set(next.agents.map((agent) => agent.id));
     if (
       activeAgentId &&
       context.agentSelection.state.selectedId === activeAgentId &&
-      previousIds.has(activeAgentId) &&
+      next.agents.length > 0 &&
       !nextIds.has(activeAgentId)
     ) {
       context.agentSelection.set(next.defaultId);

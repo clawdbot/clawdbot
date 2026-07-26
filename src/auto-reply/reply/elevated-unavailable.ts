@@ -14,14 +14,14 @@ export function formatElevatedUnavailableMessage(params: {
     lines.push(`Failing gates: ${params.failures.map((f) => `${f.gate} (${f.key})`).join(", ")}`);
   } else {
     lines.push(
-      "Failing gates: enabled (tools.elevated.enabled / agents.list[].tools.elevated.enabled), allowFrom (tools.elevated.allowFrom.<provider>).",
+      "Failing gates: enabled (tools.elevated.enabled / agents.entries.*.tools.elevated.enabled), allowFrom (tools.elevated.allowFrom.<provider>).",
     );
   }
   lines.push("Fix-it keys:");
   lines.push("- tools.elevated.enabled");
   lines.push("- tools.elevated.allowFrom.<provider>");
-  lines.push("- agents.list[].tools.elevated.enabled");
-  lines.push("- agents.list[].tools.elevated.allowFrom.<provider>");
+  lines.push("- agents.entries.*.tools.elevated.enabled");
+  lines.push("- agents.entries.*.tools.elevated.allowFrom.<provider>");
   if (params.sessionKey) {
     lines.push(
       `See: ${formatCliCommand(`openclaw sandbox explain --session ${params.sessionKey}`)}`,

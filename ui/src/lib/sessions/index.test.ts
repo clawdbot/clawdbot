@@ -108,7 +108,10 @@ describe("createSessionCapability", () => {
       if (groupsCalls === 1) {
         throw new Error("temporary catalog failure");
       }
-      return { groups: [{ name: "Research" }] };
+      return {
+        groups: [{ name: "Research" }],
+        sectionOrder: ["work", "category:Research", "ungrouped"],
+      };
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway } = createGatewayHarness(client, ["sessions.groups.list"]);
@@ -120,6 +123,7 @@ describe("createSessionCapability", () => {
 
     expect(groupsCalls).toBe(2);
     expect(sessions.state.groups).toEqual(["Research"]);
+    expect(sessions.state.sectionOrder).toEqual(["work", "category:Research", "ungrouped"]);
     sessions.dispose();
   });
 

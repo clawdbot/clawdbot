@@ -557,6 +557,7 @@ describe("channelsAddCommand", () => {
     await channelsAddCommand({ channel: "external-chat" }, runtime, { hasFlags: false });
 
     expect(setupOptions().initialSelection).toEqual(["external-chat"]);
+    expect(setupOptions().finishAfterInitialSelection).toBe(true);
   });
 
   it("exits quietly when guided channel setup is cancelled", async () => {

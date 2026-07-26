@@ -331,6 +331,17 @@ function codeModeWaitCallMessage() {
   };
 }
 
+// A provider failure is the remaining unresumable transcript tail: restart
+// aborts now resume, so notice-delivery tests need a shape that still fails.
+function unresumableAssistantMessage(text = "provider failed") {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text }],
+    stopReason: "error",
+    errorMessage: "Provider finish_reason: content_filter",
+  };
+}
+
 function cleanedLockForPath(lockPath: string): SessionLockInspection {
   // Simulates lock cleanup after process restart: stale lock removed, owning
   // PID dead, and the transcript path available for recovery.
@@ -2318,6 +2329,7 @@ describe("main-session-restart-recovery", () => {
     ]);
 
     const result = await retryRestartAbortedMainSessionRecoveryAfterOwnerRelease({
+      cfg: { agents: { entries: { main: { default: true } } } },
       expectedSessionId: "legacy-session",
       sessionKey: "main",
       storePath,
@@ -2327,7 +2339,7 @@ describe("main-session-restart-recovery", () => {
     expect(callGateway).toHaveBeenCalledOnce();
     expect(gatewayParams()).toMatchObject({
       expectedExistingSessionId: "legacy-session",
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
     });
     expect(
       sessionAccessor.loadExactSessionEntry({ sessionKey: "main", storePath })?.entry,
@@ -2562,7 +2574,7 @@ describe("main-session-restart-recovery", () => {
       .mockResolvedValueOnce({ runId: "run-resumed" });
 
     scheduleRestartAbortedMainSessionRecovery({
-      cfg: {},
+      cfg: { agents: { entries: { main: { default: true } } } },
       delayMs: 0,
       maxRetries: 1,
       stateDir: tmpDir,
@@ -3885,22 +3897,6 @@ describe("main-session-restart-recovery", () => {
         stopReason: "error",
       },
     ],
-    [
-      "aborted tool call",
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call-1", name: "write", arguments: {} }],
-        stopReason: "aborted",
-      },
-    ],
-    [
-      "aborted assistant output with text",
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "partial answer" }],
-        stopReason: "aborted",
-      },
-    ],
   ])("does not resume %s at the transcript tail", async (_label, assistantMessage) => {
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, mainSessionStore());
@@ -3912,6 +3908,56 @@ describe("main-session-restart-recovery", () => {
     await expectRecovery({ recovered: 0, failed: 1, skipped: 0 });
     expect(callGateway).not.toHaveBeenCalled();
   });
+
+  it.each([
+    [
+      "no abort string",
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "partial answer" }],
+        stopReason: "aborted",
+      },
+      false,
+    ],
+    [
+      "a worker abort string",
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "" }],
+        stopReason: "aborted",
+        errorMessage: "Worker inference aborted.",
+      },
+      false,
+    ],
+    [
+      "a dangling side-effecting call",
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call-1", name: "write", arguments: {} }],
+        stopReason: "aborted",
+        errorMessage: "Worker inference aborted.",
+      },
+      true,
+    ],
+  ])(
+    "resumes an aborted tail persisted with %s",
+    async (_label, assistantMessage, forceRestartSafeTools) => {
+      const sessionsDir = await makeSessionsDir();
+      await writeStore(sessionsDir, mainSessionStore());
+      await writeTranscript(sessionsDir, "main-session", [
+        { role: "user", content: "do the thing" },
+        assistantMessage,
+      ]);
+
+      await expectRecovery({ recovered: 1, failed: 0, skipped: 0 });
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      if (forceRestartSafeTools) {
+        expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
+      } else {
+        expect(gatewayParams()).not.toMatchObject({ forceRestartSafeTools: true });
+      }
+    },
+  );
 
   it("keeps an unresumable Control UI notice in history despite a stale external route", async () => {
     const sessionsDir = await makeSessionsDir();
@@ -3925,11 +3971,7 @@ describe("main-session-restart-recovery", () => {
     });
     await writeTranscript(sessionsDir, "main-session", [
       { role: "user", content: "do the thing" },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "partial answer" }],
-        stopReason: "aborted",
-      },
+      unresumableAssistantMessage(),
     ]);
 
     await expectRecovery({ recovered: 0, failed: 1, skipped: 0 });
@@ -3984,11 +4026,7 @@ describe("main-session-restart-recovery", () => {
     );
     await writeTranscript(sessionsDir, "main-session", [
       { role: "user", content: "do another thing" },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "another partial answer" }],
-        stopReason: "aborted",
-      },
+      unresumableAssistantMessage("another provider failure"),
     ]);
 
     await expectRecovery({ recovered: 0, failed: 1, skipped: 0 });
@@ -4029,11 +4067,7 @@ describe("main-session-restart-recovery", () => {
     });
     await writeTranscript(sessionsDir, "main-session", [
       { role: "user", content: "do the thing" },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "partial answer" }],
-        stopReason: "aborted",
-      },
+      unresumableAssistantMessage(),
     ]);
     transcriptMocks.appendAssistantMessageToSessionTranscript.mockResolvedValueOnce({
       ok: false,
@@ -4090,11 +4124,7 @@ describe("main-session-restart-recovery", () => {
     });
     await writeTranscript(sessionsDir, "interrupted-session", [
       { role: "user", content: "do the thing" },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "partial answer" }],
-        stopReason: "aborted",
-      },
+      unresumableAssistantMessage(),
     ]);
     let entryAtExternalSend: SessionEntry | undefined;
     vi.mocked(callGateway).mockImplementationOnce(async () => {

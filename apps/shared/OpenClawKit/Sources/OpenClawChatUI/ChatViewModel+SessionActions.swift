@@ -400,6 +400,7 @@ extension OpenClawChatViewModel {
             self.runMessageScopesByRunID.removeAll()
             self.provisionalFinalMessagesByID.removeAll()
             self.input = result.editorText ?? ""
+            self.restoreEditorAttachments(result.editorAttachments)
             let historyRequest = self.beginHistoryRequest(for: initiatingSession)
             _ = await self.refreshHistoryAfterRun(historyRequest: historyRequest)
             guard self.isCurrentSession(initiatingSession) else {
@@ -647,6 +648,7 @@ extension OpenClawChatViewModel {
             self.switchSession(to: createdKey)
             guard self.sessionKey == createdKey else { return }
             self.input = result.editorText ?? ""
+            self.restoreEditorAttachments(result.editorAttachments)
         } catch {
             await self.cancelOutboxSessionMutation(initiatingSession)
             self.errorText = error.localizedDescription

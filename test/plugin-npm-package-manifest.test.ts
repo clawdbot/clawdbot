@@ -70,11 +70,16 @@ function listNpmPackDryRunFiles(packageDir: string): string[] {
   if (result.status !== 0) {
     throw new Error(result.stderr.trim() || `npm pack failed with exit ${result.status}`);
   }
-  const [packResult] = JSON.parse(result.stdout) as [
-    {
-      files?: { path?: string }[];
-    },
-  ];
+  const parsed = JSON.parse(result.stdout) as unknown;
+  const packResult = (
+    Array.isArray(parsed)
+      ? parsed[0]
+      : parsed && typeof parsed === "object" && "files" in parsed
+        ? parsed
+        : parsed && typeof parsed === "object"
+          ? Object.values(parsed)[0]
+          : undefined
+  ) as { files?: { path?: string }[] } | undefined;
   return (packResult?.files ?? []).flatMap((entry) =>
     typeof entry.path === "string" ? [entry.path] : [],
   );
@@ -242,17 +247,6 @@ describe("plugin npm package manifest staging", () => {
     const packageDir = writePublishablePluginPackage(repoDir);
     writeFileText(join(packageDir, "dist", "index.js"), "export {};\n");
     writeFileText(join(packageDir, "dist", "setup-entry.js"), "export {};\n");
-    writeJsonFile(join(packageDir, "npm-shrinkwrap.json"), {
-      name: "@openclaw/diffs",
-      version: "2026.5.3",
-      lockfileVersion: 3,
-      packages: {
-        "": {
-          name: "@openclaw/diffs",
-          version: "2026.5.3",
-        },
-      },
-    });
 
     const resolved = resolveAugmentedPluginNpmPackageJson({
       repoRoot: repoDir,
@@ -265,14 +259,7 @@ describe("plugin npm package manifest staging", () => {
       version: "2026.5.3",
       type: "module",
       bundledDependencies: [],
-      files: [
-        "dist/**",
-        "openclaw.plugin.json",
-        "npm-shrinkwrap.json",
-        "README.md",
-        "SKILL.md",
-        "skills/**",
-      ],
+      files: ["dist/**", "openclaw.plugin.json", "README.md", "SKILL.md", "skills/**"],
       peerDependencies: {
         openclaw: ">=2026.4.30",
       },
@@ -309,7 +296,7 @@ describe("plugin npm package manifest staging", () => {
         expect(stagedPackageJson.bundledDependencies).toEqual([]);
         expect(stagedPackageJson.bundleDependencies).toBeUndefined();
         expect(stagedPackageJson.files).toContain("dist/**");
-        expect(stagedPackageJson.files).toContain("npm-shrinkwrap.json");
+        expect(stagedPackageJson.files).not.toContain("package-lock.json");
         expect(stagedPackageJson.files).toContain("skills/**");
         expect(stagedPackageJson.peerDependencies.openclaw).toBe(">=2026.4.30");
         expect(stagedPackageJson.peerDependenciesMeta.openclaw.optional).toBe(true);
@@ -345,29 +332,6 @@ describe("plugin npm package manifest staging", () => {
         },
       },
     });
-    writeJsonFile(join(packageDir, "npm-shrinkwrap.json"), {
-      name: "@openclaw/diffs",
-      version: "2026.5.3",
-      lockfileVersion: 3,
-      requires: true,
-      packages: {
-        "": {
-          name: "@openclaw/diffs",
-          version: "2026.5.3",
-          dependencies: {
-            "local-runtime-dep": "file:./deps/local-runtime-dep",
-          },
-        },
-        "deps/local-runtime-dep": {
-          name: "local-runtime-dep",
-          version: "1.0.0",
-        },
-        "node_modules/local-runtime-dep": {
-          resolved: "deps/local-runtime-dep",
-          link: true,
-        },
-      },
-    });
 
     const originalText = readFileSync(join(packageDir, "package.json"), "utf8");
     const nodeModulesPath = join(packageDir, "node_modules");
@@ -383,10 +347,16 @@ describe("plugin npm package manifest staging", () => {
         expect(stagedPackageJson.bundleDependencies).toBeUndefined();
         expect(stagedPackageJson.devDependencies).toBeUndefined();
         expect(existsSync(join(nodeModulesPath, "local-runtime-dep", "package.json"))).toBe(true);
+        expect(existsSync(join(packageDir, "package-lock.json"))).toBe(false);
+        const packedFiles = listNpmPackDryRunFiles(packageDir);
+        expect(packedFiles).toContain("node_modules/local-runtime-dep/package.json");
+        expect(packedFiles).not.toContain("package-lock.json");
+        expect(packedFiles).not.toContain("npm-shrinkwrap.json");
       },
     );
 
     expect(existsSync(nodeModulesPath)).toBe(false);
+    expect(existsSync(join(packageDir, "package-lock.json"))).toBe(false);
     expect(readFileSync(join(packageDir, "package.json"), "utf8")).toBe(originalText);
   });
 
@@ -414,41 +384,6 @@ describe("plugin npm package manifest staging", () => {
         },
         release: {
           publishToNpm: true,
-        },
-      },
-    });
-    writeJsonFile(join(packageDir, "npm-shrinkwrap.json"), {
-      name: "@openclaw/diffs",
-      version: "2026.5.3",
-      lockfileVersion: 3,
-      requires: true,
-      packages: {
-        "": {
-          name: "@openclaw/diffs",
-          version: "2026.5.3",
-          dependencies: {
-            "local-runtime-dep": "file:./deps/local-runtime-dep",
-          },
-        },
-        "deps/local-runtime-dep": {
-          name: "local-runtime-dep",
-          version: "1.0.0",
-          optionalDependencies: {
-            "optional-platform-dep": "file:../../deps/optional-platform-dep",
-          },
-        },
-        "deps/optional-platform-dep": {
-          version: "1.0.0",
-          optional: true,
-          os: [process.platform === "win32" ? "darwin" : "win32"],
-        },
-        "node_modules/local-runtime-dep": {
-          resolved: "deps/local-runtime-dep",
-          link: true,
-        },
-        "node_modules/optional-platform-dep": {
-          resolved: "deps/optional-platform-dep",
-          link: true,
         },
       },
     });
@@ -516,21 +451,6 @@ withAugmentedPluginNpmManifestForPackage(
         release: {
           publishToNpm: true,
           bundleRuntimeDependencies: false,
-        },
-      },
-    });
-    writeJsonFile(join(packageDir, "npm-shrinkwrap.json"), {
-      name: "@openclaw/diffs",
-      version: "2026.5.3",
-      lockfileVersion: 3,
-      requires: true,
-      packages: {
-        "": {
-          name: "@openclaw/diffs",
-          version: "2026.5.3",
-          dependencies: {
-            "local-runtime-dep": "file:./deps/local-runtime-dep",
-          },
         },
       },
     });

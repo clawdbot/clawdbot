@@ -21479,6 +21479,16 @@
       "translated": "다음"
     },
     {
+      "id": "native.apple.3db546546fbaf38e",
+      "source": "OpenClaw is preparing a local model.",
+      "translated": "OpenClaw가 로컬 모델을 준비하고 있습니다."
+    },
+    {
+      "id": "native.apple.c5992a23c991f948",
+      "source": "OpenClaw is completing provider sign-in.",
+      "translated": "OpenClaw가 공급자 로그인을 완료하고 있습니다."
+    },
+    {
       "id": "native.apple.0f3c1c6f0672bed7",
       "source": "The Gateway setup request failed.",
       "translated": "Gateway 설정 요청이 실패했습니다."
@@ -21614,6 +21624,21 @@
       "translated": "다시 확인"
     },
     {
+      "id": "native.apple.82148c7c60e4fb74",
+      "source": "Set up a local model",
+      "translated": "로컬 모델 설정"
+    },
+    {
+      "id": "native.apple.506a932536c642c2",
+      "source": "Download or prepare a local model on this Gateway.",
+      "translated": "이 Gateway에서 로컬 모델을 다운로드하거나 준비합니다."
+    },
+    {
+      "id": "native.apple.d31411a9f3c68c33",
+      "source": "Set up / Download model",
+      "translated": "모델 설정 / 다운로드"
+    },
+    {
       "id": "native.apple.7fc409b6aaa6d3b9",
       "source": "Sign in with a provider",
       "translated": "공급자로 로그인"
@@ -21644,6 +21669,11 @@
       "translated": "로그인"
     },
     {
+      "id": "native.apple.b62dfd708d5cfb14",
+      "source": "The model is downloaded and prepared on this Gateway.",
+      "translated": "이 Gateway에서 모델이 다운로드되고 준비되었습니다."
+    },
+    {
       "id": "native.apple.869fe436119bb8a6",
       "source": "Credentials stay on this Gateway and are saved only after the live test succeeds.",
       "translated": "자격 증명은 이 Gateway에만 유지되며 라이브 테스트가 성공한 후에만 저장됩니다."
@@ -21654,9 +21684,19 @@
       "translated": "로그인 페이지 열기…"
     },
     {
+      "id": "native.apple.91cd595c858a6ea7",
+      "source": "Starting local model setup…",
+      "translated": "로컬 모델 설정을 시작하는 중…"
+    },
+    {
       "id": "native.apple.bb3352787887c424",
       "source": "Starting secure sign-in…",
       "translated": "보안 로그인 시작 중…"
+    },
+    {
+      "id": "native.apple.ba9a46f1e6c4d477",
+      "source": "Model setup didn’t complete",
+      "translated": "모델 설정이 완료되지 않았습니다"
     },
     {
       "id": "native.apple.d7519516740bfc93",

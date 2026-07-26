@@ -51,15 +51,18 @@ describe("normalizeBrowserUrlDraft", () => {
     }
     class LazyUpgradeBrowserPanel extends BrowserPanel {}
     customElements.define(tagName, LazyUpgradeBrowserPanel);
-    const panel = element as unknown as HTMLElement & { updateComplete: Promise<unknown> };
+    const panel = element as unknown as HTMLElement & {
+      browserPanelIsOpen(): boolean;
+      updateComplete: Promise<unknown>;
+    };
     await panel.updateComplete;
-    expect((panel as unknown as { open: boolean }).open).toBe(true);
+    expect(panel.browserPanelIsOpen()).toBe(true);
   });
 
   it("keeps an already closed panel closed for an explicit close request", () => {
     const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {
       available: boolean;
-      open: boolean;
+      browserPanelIsOpen: () => boolean;
       handleToggleRequest: (event: Event) => void;
     };
     panel.available = true;
@@ -69,6 +72,6 @@ describe("normalizeBrowserUrlDraft", () => {
       new CustomEvent("openclaw:browser-toggle", { detail: { open: false } }),
     );
 
-    expect(panel.open).toBe(false);
+    expect(panel.browserPanelIsOpen()).toBe(false);
   });
 });

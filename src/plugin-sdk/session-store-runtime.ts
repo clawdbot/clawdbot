@@ -12,6 +12,7 @@ import {
   resolveSessionFilePath as resolveLegacySessionFilePath,
   resolveStorePath as resolveSessionStorePath,
 } from "../config/sessions/paths.js";
+export { SessionStoreAgentIdRequiredError } from "../config/sessions/paths.js";
 import {
   applySessionStoreProjection as applyAccessorSessionStoreProjection,
   cleanupSessionLifecycleArtifacts as cleanupAccessorSessionLifecycleArtifacts,

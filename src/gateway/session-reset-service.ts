@@ -86,6 +86,7 @@ import {
   noteActiveSessionForShutdown,
 } from "./active-sessions-shutdown-tracker.js";
 import { findDirectChildSessionsForParent } from "./session-child-sessions.js";
+import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
 import {
   archiveSessionTranscriptsDetailed,
   resolveStableSessionEndTranscript,
@@ -1233,6 +1234,7 @@ export async function performGatewaySessionReset(params: {
           };
         }
         handleSessionStateSessionDeleted(target.canonicalKey, agentId);
+        notifyGatewaySessionReset(target.canonicalKey);
         emitGatewaySessionEndPluginHook({
           cfg,
           sessionKey: target.canonicalKey,
@@ -1511,7 +1513,9 @@ export async function performGatewaySessionReset(params: {
       const lifecycle: Awaited<ReturnType<typeof resetSessionEntryLifecycle>> =
         await lifecyclePromise;
       if (!resetSkipped) {
-        handleSessionStateSessionReset(target.canonicalKey ?? params.key);
+        const resetSessionKey = target.canonicalKey ?? params.key;
+        handleSessionStateSessionReset(resetSessionKey);
+        notifyGatewaySessionReset(resetSessionKey);
       }
       const next = lifecycle.nextEntry;
       const selectedModel = resolveSessionModelRef(cfg, next, target.agentId);

@@ -34,6 +34,19 @@ struct GatewayModelsCompatibilityTests {
     }
 
     @Test
+    func `session group results decode older gateway payloads`() throws {
+        let list = try JSONDecoder().decode(
+            SessionsGroupsListResult.self,
+            from: Data(#"{"groups":[]}"#.utf8))
+        let mutation = try JSONDecoder().decode(
+            SessionsGroupsMutationResult.self,
+            from: Data(#"{"ok":true,"groups":[]}"#.utf8))
+
+        #expect(list.sectionorder == nil)
+        #expect(mutation.sectionorder == nil)
+    }
+
+    @Test
     func `chat send canonical initializer stays unambiguous`() {
         let params = ChatSendParams(
             sessionkey: "main",

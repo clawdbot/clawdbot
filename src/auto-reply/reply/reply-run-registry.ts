@@ -108,6 +108,7 @@ export function resolveReplyBackendQueueMessageMismatch(
 export type ReplyOperationPhase =
   | "queued"
   | "waiting_for_deferred_maintenance"
+  | "waiting_for_global_lane"
   | "preflight_compacting"
   | "memory_flushing"
   | "running"
@@ -152,6 +153,8 @@ export type ReplyOperation = {
   readonly acceptedSteeredInboundAudio: boolean;
   readonly phase: ReplyOperationPhase;
   readonly result: ReplyOperationResult | null;
+  /** Set when a stale-watchdog expiry forced this operation's run_stalled result. */
+  readonly staleExpiryReason?: ReplyOperationStaleReason;
   readonly startedAtMs: number;
   readonly lastActivityAtMs: number;
   /** True when this operation has owned the supplied session ID. */
@@ -161,6 +164,7 @@ export type ReplyOperation = {
     next:
       | "queued"
       | "waiting_for_deferred_maintenance"
+      | "waiting_for_global_lane"
       | "preflight_compacting"
       | "memory_flushing"
       | "running",
@@ -169,6 +173,10 @@ export type ReplyOperation = {
   markWaitingForDeferredMaintenance(): void;
   /** Return a maintenance-waiting operation to queued if the run has not started. */
   markDeferredMaintenanceWaitEnded(): void;
+  /** Mark this operation as waiting for process-global run capacity. */
+  markWaitingForGlobalLane(): void;
+  /** Return a global-lane-waiting operation to queued once capacity is granted. */
+  markGlobalLaneWaitEnded(): void;
   /** Mark this operation as an in-flight terminal-session recovery. */
   markTerminalRecovery(): void;
   markAcceptedSteeredInboundAudio(): void;
@@ -348,7 +356,11 @@ function isReplyRunCompacting(operation: ReplyOperation): boolean {
 }
 
 function isReplyOperationPreBackendPhase(phase: ReplyOperationPhase): boolean {
-  return phase === "queued" || phase === "waiting_for_deferred_maintenance";
+  return (
+    phase === "queued" ||
+    phase === "waiting_for_deferred_maintenance" ||
+    phase === "waiting_for_global_lane"
+  );
 }
 
 const attachedBackendByOperation = new WeakMap<ReplyOperation, ReplyBackendHandle>();
@@ -574,6 +586,8 @@ export function createReplyOperation(params: {
   let currentSessionKey = sessionKey;
   let currentSessionId = sessionId;
   let phase: ReplyOperationPhase = "queued";
+  let phaseBeforeGlobalLaneWait: "queued" | "running" | undefined;
+  let staleExpiryReason: ReplyOperationStaleReason | undefined;
   let result: ReplyOperationResult | null = null;
   let stateCleared = false;
   let retainFailureUntilComplete = false;
@@ -697,6 +711,9 @@ export function createReplyOperation(params: {
     get result() {
       return result;
     },
+    get staleExpiryReason() {
+      return staleExpiryReason;
+    },
     get startedAtMs() {
       return startedAtMs;
     },
@@ -737,6 +754,32 @@ export function createReplyOperation(params: {
         sessionKey: currentSessionKey,
         sessionId: currentSessionId,
         reason: "deferred_maintenance:wait_ended",
+      });
+    },
+    markWaitingForGlobalLane() {
+      if (result || (phase !== "queued" && phase !== "running")) {
+        return;
+      }
+      // Queued-on-lane is healthy waiting, not a wedged run. Removing this phase
+      // lets stale recovery silently drop replies while global capacity is busy.
+      phaseBeforeGlobalLaneWait = phase;
+      phase = "waiting_for_global_lane";
+      markReplyRunDiagnosticProgress({
+        sessionKey: currentSessionKey,
+        sessionId: currentSessionId,
+        reason: "global_lane:waiting",
+      });
+    },
+    markGlobalLaneWaitEnded() {
+      if (result || phase !== "waiting_for_global_lane") {
+        return;
+      }
+      phase = phaseBeforeGlobalLaneWait ?? "queued";
+      phaseBeforeGlobalLaneWait = undefined;
+      markReplyRunDiagnosticProgress({
+        sessionKey: currentSessionKey,
+        sessionId: currentSessionId,
+        reason: "global_lane:wait_ended",
       });
     },
     markTerminalRecovery() {
@@ -925,6 +968,9 @@ export function createReplyOperation(params: {
     if (!result) {
       abortFrozenOperations.add(operation);
       detachUpstreamAbort();
+      // The reason distinguishes pre-run drops (user got nothing; feedback owed)
+      // from post-output stalls (finalization/terminal cleanup; feedback is noise).
+      staleExpiryReason = reason;
       setResult({ kind: "failed", code: "run_stalled" });
       phase = "failed";
     }
@@ -1064,8 +1110,20 @@ export function isReplyRunEvidenceStale(operation: ReplyOperation): boolean {
   });
   return (
     !operation.result &&
+    operation.phase !== "waiting_for_global_lane" &&
     Date.now() - operation.lastActivityAtMs > resolveRunStaleThresholdMs(activity)
   );
+}
+
+export function markReplyOperationGlobalLaneWaitProgress(operation: ReplyOperation): void {
+  if (operation.result || operation.phase !== "waiting_for_global_lane") {
+    return;
+  }
+  markReplyRunDiagnosticProgress({
+    sessionKey: operation.key,
+    sessionId: operation.sessionId,
+    reason: "global_lane:waiting",
+  });
 }
 
 export function isReplyRunEvidenceStaleBySessionId(sessionId: string): boolean {
