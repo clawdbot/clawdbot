@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
+import type { runWithModelFallback } from "../../agents/model-fallback.js";
 import {
   createFollowupRun,
   createMinimalRunAgentTurnParams,
   getRunAgentTurnWithFallback,
   setupAgentRunnerExecutionTestState,
 } from "./agent-runner-execution.test-support.js";
-import type { FallbackRunnerParams } from "./agent-runner-fallback-candidate.js";
+
+type FallbackRunnerParams = Parameters<typeof runWithModelFallback>[0];
 
 const state = setupAgentRunnerExecutionTestState();
 

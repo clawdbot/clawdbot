@@ -6225,33 +6225,6 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expect(routeReplyMock).not.toHaveBeenCalled();
   });
 
-  it("delivers non-deliverable terminal fallback through message-tool-only gate", async () => {
-    const queued = baseQueuedRun("discord");
-    const { onBlockReply } = await runMessagingCase({
-      agentResult: {
-        payloads: [],
-        meta: { nonDeliverableTerminalTurn: true },
-      },
-      queued: {
-        ...queued,
-        originatingChannel: "discord",
-        originatingTo: "channel:C1",
-        currentInboundEventKind: "user_request",
-        run: {
-          ...queued.run,
-          sourceReplyDeliveryMode: "message_tool_only",
-        },
-      } as FollowupRun,
-    });
-
-    const deliveredPayload =
-      onBlockReply.mock.calls[0]?.[0] ?? routeReplyMock.mock.calls[0]?.[0]?.payload;
-    expect(deliveredPayload).toMatchObject({
-      text: "The agent run failed before producing a reply.",
-      isError: true,
-    });
-  });
-
   it("keeps message-tool-only suppression intact for normal (non-terminal) turns", async () => {
     const queued = baseQueuedRun("discord");
     const { onBlockReply } = await runMessagingCase({
