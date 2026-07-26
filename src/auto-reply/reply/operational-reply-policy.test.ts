@@ -2,7 +2,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import type {
+  OperationalReplyPendingOnceReservation,
+  SessionEntry,
+} from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import {
@@ -16,7 +19,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function createSessionStoreFixture(params?: {
   operationalReplyOnceKeys?: string[];
-  operationalReplyPendingOnceKeys?: string[];
+  operationalReplyPendingOnceKeys?: OperationalReplyPendingOnceReservation[];
 }) {
   const root = tempDirs.make("openclaw-operational-reply-policy-");
   const storePath = path.join(root, "sessions.json");
@@ -196,9 +199,24 @@ describe("operational reply policy", () => {
 
     const pendingEntry = await readSessionStoreEntry(storePath, sessionKey);
     expect(pendingEntry.operationalReplyOnceKeys).toBeUndefined();
-    expect(pendingEntry.operationalReplyPendingOnceKeys).toEqual([expect.any(String)]);
+    expect(pendingEntry.operationalReplyPendingOnceKeys).toEqual([
+      {
+        expiresAt: expect.any(Number),
+        key: expect.any(String),
+        owner: expect.any(String),
+      },
+    ]);
 
     clearOperationalReplyPolicyStateForTest();
+    await replaceSessionEntry(
+      { sessionKey, storePath },
+      {
+        ...pendingEntry,
+        operationalReplyPendingOnceKeys: pendingEntry.operationalReplyPendingOnceKeys?.map(
+          (reservation) => ({ ...reservation, expiresAt: Date.now() - 1 }),
+        ),
+      },
+    );
 
     const retryAfterRestart = await applyOncePolicy({
       cfg,
@@ -225,6 +243,79 @@ describe("operational reply policy", () => {
     });
 
     expect(duplicateAfterDelivery.shouldDeliver).toBe(false);
+  });
+
+  it("keeps an active durable reservation owned by another process", async () => {
+    const { sessionKey, storePath } = await createSessionStoreFixture();
+    const cfg = onceConfig(storePath);
+
+    const first = await applyOncePolicy({
+      cfg,
+      sessionKey,
+      storePath,
+      text: "cross-process notice",
+    });
+    expect(first.shouldDeliver).toBe(true);
+
+    const pendingEntry = await readSessionStoreEntry(storePath, sessionKey);
+    await replaceSessionEntry(
+      { sessionKey, storePath },
+      {
+        ...pendingEntry,
+        operationalReplyPendingOnceKeys: pendingEntry.operationalReplyPendingOnceKeys?.map(
+          (reservation) => ({ ...reservation, owner: "another-process" }),
+        ),
+      },
+    );
+    clearOperationalReplyPolicyStateForTest();
+
+    const duplicateFromAnotherProcess = await applyOncePolicy({
+      cfg,
+      sessionKey,
+      storePath,
+      text: "cross-process notice",
+    });
+
+    expect(duplicateFromAnotherProcess.shouldDeliver).toBe(false);
+
+    await markOperationalReplyPolicyDelivered(first, true);
+    const retainedEntry = await readSessionStoreEntry(storePath, sessionKey);
+    expect(retainedEntry.operationalReplyOnceKeys).toBeUndefined();
+    expect(retainedEntry.operationalReplyPendingOnceKeys?.[0]?.owner).toBe("another-process");
+  });
+
+  it("bounds durable pending reservations", async () => {
+    const pendingReservations = Array.from({ length: 1023 }, (_, index) => ({
+      key: `pending-${index}`,
+      owner: `owner-${index}`,
+      expiresAt: Date.now() + 60_000,
+    }));
+    const { sessionKey, storePath } = await createSessionStoreFixture({
+      operationalReplyPendingOnceKeys: pendingReservations,
+    });
+
+    const result = await applyOncePolicy({
+      cfg: onceConfig(storePath),
+      sessionKey,
+      storePath,
+      text: "new bounded notice",
+    });
+    expect(result.shouldDeliver).toBe(true);
+
+    const entry = await readSessionStoreEntry(storePath, sessionKey);
+    expect(entry.operationalReplyPendingOnceKeys).toHaveLength(1024);
+
+    clearOperationalReplyPolicyStateForTest();
+    const overflow = await applyOncePolicy({
+      cfg: onceConfig(storePath),
+      sessionKey,
+      storePath,
+      text: "overflow notice",
+    });
+    expect(overflow.shouldDeliver).toBe(false);
+
+    const boundedEntry = await readSessionStoreEntry(storePath, sessionKey);
+    expect(boundedEntry.operationalReplyPendingOnceKeys).toHaveLength(1024);
   });
 
   it("bounds in-memory once keys to the same recent delivered window", async () => {

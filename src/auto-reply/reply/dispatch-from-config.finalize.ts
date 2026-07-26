@@ -103,7 +103,8 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     payload: ReplyPayload;
   }> = [];
   let allQueuedFinalsObserved = true;
-  let suppressedFinalByOperationalPolicy = false;
+  let eligibleFinalCount = 0;
+  let operationalPolicySuppressedFinalCount = 0;
   const finalPolicySettlements: Promise<void>[] = [];
   // Explicit command turns (native or authorized text-slash like /compact) are
   // user-initiated, so a marked terminal reply for the command bypasses
@@ -137,9 +138,10 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     if (reply.isCommentary === true && !commentaryPayloadsEnabled) {
       continue;
     }
+    eligibleFinalCount += 1;
     const policyResult = await applyDispatchOperationalReplyPolicy(reply);
     if (!policyResult.shouldDeliver) {
-      suppressedFinalByOperationalPolicy = true;
+      operationalPolicySuppressedFinalCount += 1;
       continue;
     }
     if (suppressDelivery && !shouldDeliverDespiteSourceReplySuppression(reply)) {
@@ -206,6 +208,9 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     registerReplyDispatcherSettledTask(dispatcher, () => settlement);
   }
 
+  const allFinalsSuppressedByOperationalPolicy =
+    eligibleFinalCount > 0 && operationalPolicySuppressedFinalCount === eligibleFinalCount;
+
   if (attemptedFinalDelivery && !finalDeliveryFailed) {
     if (queuedFinal && allQueuedFinalsObserved) {
       // Delivery observers run from the queue itself, so direct low-level callers
@@ -241,7 +246,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     // Register successful queued cleanup before honoring a late abort. The
     // outer settle owner still runs it from finally (#89115).
     throwIfDispatchOperationAborted();
-  } else if (!attemptedFinalDelivery && suppressedFinalByOperationalPolicy) {
+  } else if (!attemptedFinalDelivery && allFinalsSuppressedByOperationalPolicy) {
     await clearPendingFinalDeliveryAfterSuccess({
       ...pendingFinalDelivery,
       identity: pendingFinalDeliveryIdentity,
@@ -347,7 +352,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       ...(!queuedFinal &&
       !getObservedReplyDelivery() &&
       !emptyFinalAllowedAsSilent &&
-      !(suppressedFinalByOperationalPolicy && !attemptedFinalDelivery)
+      !allFinalsSuppressedByOperationalPolicy
         ? { noVisibleReplyFallbackEligible: true }
         : {}),
       ...(beforeAgentRunBlocked ? { beforeAgentRunBlocked } : {}),

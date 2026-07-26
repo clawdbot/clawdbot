@@ -732,6 +732,40 @@ describe("dispatchReplyFromConfig", () => {
     });
   });
 
+  it("keeps missing-final recovery when policy silence is mixed with a hidden ordinary final", async () => {
+    setNoAbort();
+    const cfg = {
+      ...emptyConfig,
+      messages: {
+        operationalReplies: { policy: "silent" },
+      },
+    } satisfies OpenClawConfig;
+    const dispatcher = createDispatcher();
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        ChatType: "direct",
+      }),
+      cfg,
+      dispatcher,
+      replyResolver: async () =>
+        [
+          { text: "provider is temporarily unavailable", isStatusNotice: true },
+          { text: "ordinary final reply" },
+        ] satisfies ReplyPayload[],
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      queuedFinal: false,
+      noVisibleReplyFallbackEligible: true,
+    });
+  });
+
   it("sends only one plan status notice per reply run", async () => {
     setNoAbort();
     const cfg = {

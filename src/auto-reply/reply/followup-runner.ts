@@ -2112,6 +2112,9 @@ export function createFollowupRunner(params: {
           }
           return getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true;
         });
+        const deliveredNonOperationalPayload = suppressionDeliverablePayloads.some(
+          (payload) => !isOperationalReplyPayload({ payload, explicitCommandTurn: false }),
+        );
         if (suppressionDeliverablePayloads.length > 0) {
           // Marked runtime output and policy-owned notices bypass source-reply
           // suppression, not the admission-time send policy or ambient room-event silence.
@@ -2127,7 +2130,7 @@ export function createFollowupRunner(params: {
             },
             { runId },
           );
-          if (!hasNonOperationalDeliveryPayloads) {
+          if (!hasNonOperationalDeliveryPayloads || deliveredNonOperationalPayload) {
             return;
           }
         } else if (shouldEvaluateOperationalPayloads) {

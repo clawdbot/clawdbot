@@ -28,6 +28,12 @@ export type SessionScope = "per-sender" | "global";
 export type SessionChatType = ChatType;
 type SessionVisibility = "shared" | "read-only" | "suggest" | "draft";
 
+export type OperationalReplyPendingOnceReservation = {
+  key: string;
+  owner: string;
+  expiresAt: number;
+};
+
 export type SessionOrigin = {
   label?: string;
   provider?: string;
@@ -518,9 +524,9 @@ export type SessionEntry = SessionRestartRecoveryState &
     operationalReplyOnceKeys?: string[];
     /**
      * In-flight operational reply fingerprints reserved before visible delivery.
-     * These are retried after restart and only move to operationalReplyOnceKeys on success.
+     * Short owner leases prevent concurrent processes from sending the same notice.
      */
-    operationalReplyPendingOnceKeys?: string[];
+    operationalReplyPendingOnceKeys?: OperationalReplyPendingOnceReservation[];
     contextTokens?: number;
     contextBudgetStatus?: SessionContextBudgetStatus;
     compactionCount?: number;

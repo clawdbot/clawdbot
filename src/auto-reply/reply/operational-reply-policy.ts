@@ -6,7 +6,10 @@ import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type {
+  OperationalReplyPendingOnceReservation,
+  SessionEntry,
+} from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -19,6 +22,8 @@ import {
 const deliveredOperationalReplyOnceKeys = new Set<string>();
 const pendingOperationalReplyOnceKeys = new Set<string>();
 const MAX_OPERATIONAL_REPLY_ONCE_KEYS = 1024;
+const OPERATIONAL_REPLY_ONCE_LEASE_MS = 5 * 60_000;
+const operationalReplyOnceLeaseOwner = crypto.randomUUID();
 
 type OperationalReplyPolicy = "always" | "once" | "redirect" | "silent";
 
@@ -179,6 +184,25 @@ function normalizeOperationalReplyOnceKeys(
   return value.filter((key): key is string => typeof key === "string" && key.trim().length > 0);
 }
 
+function normalizeOperationalReplyPendingOnceReservations(
+  value: SessionEntry["operationalReplyPendingOnceKeys"],
+): OperationalReplyPendingOnceReservation[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter(
+    (reservation): reservation is OperationalReplyPendingOnceReservation =>
+      typeof reservation === "object" &&
+      reservation !== null &&
+      typeof reservation.key === "string" &&
+      reservation.key.trim().length > 0 &&
+      typeof reservation.owner === "string" &&
+      reservation.owner.trim().length > 0 &&
+      typeof reservation.expiresAt === "number" &&
+      Number.isFinite(reservation.expiresAt),
+  );
+}
+
 function appendOperationalReplyOnceKey(keys: readonly string[], key: string): string[] {
   return [...keys, key];
 }
@@ -189,10 +213,6 @@ function removeOperationalReplyOnceKey(keys: readonly string[], key: string): st
 
 function boundOperationalReplyOnceKeys(keys: readonly string[]): string[] {
   return keys.slice(-MAX_OPERATIONAL_REPLY_ONCE_KEYS);
-}
-
-function arraysEqual(left: readonly string[], right: readonly string[]): boolean {
-  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 function resolveOperationalReplySourceScope(params: {
@@ -226,6 +246,7 @@ function resolveOperationalReplySourceScope(params: {
 type OperationalReplyOnceReservation = {
   durableReserved: boolean;
   key: string;
+  owner: string;
   scope?: { sessionKey: string; storePath: string };
 };
 
@@ -242,7 +263,7 @@ async function reserveOperationalReplyOnceKey(params: {
   }
   const scope = resolveOperationalReplySourceScope(params);
   if (!scope) {
-    return { durableReserved: false, key: params.key };
+    return { durableReserved: false, key: params.key, owner: operationalReplyOnceLeaseOwner };
   }
   try {
     let reserved = false;
@@ -255,17 +276,31 @@ async function reserveOperationalReplyOnceKey(params: {
           alreadySeen = true;
           return null;
         }
-        const pendingKeys = normalizeOperationalReplyOnceKeys(
+        const now = Date.now();
+        const activeReservations = normalizeOperationalReplyPendingOnceReservations(
           entry.operationalReplyPendingOnceKeys,
-        );
-        // This process already owns the in-memory reservation. An identical
-        // durable pending key is stale from an earlier process and is replaced.
+        ).filter((reservation) => reservation.expiresAt > now);
+        if (activeReservations.some((reservation) => reservation.key === params.key)) {
+          alreadySeen = true;
+          return activeReservations.length === entry.operationalReplyPendingOnceKeys?.length
+            ? null
+            : { operationalReplyPendingOnceKeys: activeReservations };
+        }
+        // Owner leases coordinate overlapping gateway processes. Expiry recovers
+        // crashed owners; a full lease set fails closed instead of evicting a live claim.
+        if (activeReservations.length >= MAX_OPERATIONAL_REPLY_ONCE_KEYS) {
+          alreadySeen = true;
+          return activeReservations.length === entry.operationalReplyPendingOnceKeys?.length
+            ? null
+            : { operationalReplyPendingOnceKeys: activeReservations };
+        }
         reserved = true;
         return {
-          operationalReplyPendingOnceKeys: appendOperationalReplyOnceKey(
-            removeOperationalReplyOnceKey(pendingKeys, params.key),
-            params.key,
-          ),
+          operationalReplyPendingOnceKeys: activeReservations.concat({
+            key: params.key,
+            owner: operationalReplyOnceLeaseOwner,
+            expiresAt: now + OPERATIONAL_REPLY_ONCE_LEASE_MS,
+          }),
         };
       },
       { preserveActivity: true },
@@ -275,12 +310,17 @@ async function reserveOperationalReplyOnceKey(params: {
       return null;
     }
     if (reserved) {
-      return { durableReserved: true, key: params.key, scope };
+      return {
+        durableReserved: true,
+        key: params.key,
+        owner: operationalReplyOnceLeaseOwner,
+        scope,
+      };
     }
-    return { durableReserved: false, key: params.key };
+    return { durableReserved: false, key: params.key, owner: operationalReplyOnceLeaseOwner };
   } catch (error) {
     logVerbose(`operational-reply-policy: once persistence skipped: ${formatErrorMessage(error)}`);
-    return { durableReserved: false, key: params.key };
+    return { durableReserved: false, key: params.key, owner: operationalReplyOnceLeaseOwner };
   }
 }
 
@@ -295,13 +335,18 @@ async function releaseOperationalReplyOnceReservation(
     await patchSessionEntry(
       reservation.scope,
       (entry) => {
-        const keys = normalizeOperationalReplyOnceKeys(entry.operationalReplyPendingOnceKeys);
-        if (!keys.includes(reservation.key)) {
+        const reservations = normalizeOperationalReplyPendingOnceReservations(
+          entry.operationalReplyPendingOnceKeys,
+        );
+        const nextReservations = reservations.filter(
+          (candidate) => candidate.key !== reservation.key || candidate.owner !== reservation.owner,
+        );
+        if (nextReservations.length === reservations.length) {
           return null;
         }
-        const nextKeys = removeOperationalReplyOnceKey(keys, reservation.key);
         return {
-          operationalReplyPendingOnceKeys: nextKeys.length > 0 ? nextKeys : undefined,
+          operationalReplyPendingOnceKeys:
+            nextReservations.length > 0 ? nextReservations : undefined,
         };
       },
       { preserveActivity: true },
@@ -316,39 +361,52 @@ async function releaseOperationalReplyOnceReservation(
 async function finalizeOperationalReplyOnceReservation(
   reservation: OperationalReplyOnceReservation,
 ): Promise<void> {
-  markOperationalReplyOnceKeyDeliveredInMemory(reservation.key);
   if (!reservation.durableReserved || !reservation.scope) {
+    markOperationalReplyOnceKeyDeliveredInMemory(reservation.key);
     return;
   }
   try {
+    let finalized = false;
     await patchSessionEntry(
       reservation.scope,
       (entry) => {
         const deliveredKeys = normalizeOperationalReplyOnceKeys(entry.operationalReplyOnceKeys);
-        const pendingKeys = normalizeOperationalReplyOnceKeys(
+        const pendingReservations = normalizeOperationalReplyPendingOnceReservations(
           entry.operationalReplyPendingOnceKeys,
         );
+        const ownsReservation = pendingReservations.some(
+          (candidate) => candidate.key === reservation.key && candidate.owner === reservation.owner,
+        );
+        if (!ownsReservation) {
+          return null;
+        }
+        finalized = true;
         const nextDeliveredKeys = boundOperationalReplyOnceKeys(
           appendOperationalReplyOnceKey(
             removeOperationalReplyOnceKey(deliveredKeys, reservation.key),
             reservation.key,
           ),
         );
-        const nextPendingKeys = removeOperationalReplyOnceKey(pendingKeys, reservation.key);
-        if (
-          arraysEqual(nextDeliveredKeys, deliveredKeys) &&
-          arraysEqual(nextPendingKeys, pendingKeys)
-        ) {
-          return null;
-        }
+        const nextPendingReservations = pendingReservations.filter(
+          (candidate) => candidate.key !== reservation.key || candidate.owner !== reservation.owner,
+        );
         return {
           operationalReplyOnceKeys: nextDeliveredKeys.length > 0 ? nextDeliveredKeys : undefined,
-          operationalReplyPendingOnceKeys: nextPendingKeys.length > 0 ? nextPendingKeys : undefined,
+          operationalReplyPendingOnceKeys:
+            nextPendingReservations.length > 0 ? nextPendingReservations : undefined,
         };
       },
       { preserveActivity: true },
     );
+    if (finalized) {
+      markOperationalReplyOnceKeyDeliveredInMemory(reservation.key);
+    } else {
+      releaseOperationalReplyOnceKeyInMemory(reservation.key);
+    }
   } catch (error) {
+    // Delivery already succeeded. Keep process-local dedupe even when the
+    // durable lease cannot be finalized; the lease will expire for recovery.
+    markOperationalReplyOnceKeyDeliveredInMemory(reservation.key);
     logVerbose(
       `operational-reply-policy: once reservation finalization skipped: ${formatErrorMessage(error)}`,
     );

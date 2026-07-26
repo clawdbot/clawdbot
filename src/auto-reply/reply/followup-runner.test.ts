@@ -5943,6 +5943,39 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expect(routeReplyMock).not.toHaveBeenCalled();
   });
 
+  it("does not enqueue stranded recovery after delivering a marked ordinary followup", async () => {
+    const queued = baseQueuedRun("discord");
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [
+          setReplyPayloadMetadataForTest(
+            { text: "visible marked reply" },
+            { deliverDespiteSourceReplySuppression: true },
+          ),
+          {
+            text:
+              "A second ordinary final has enough detail to look substantive. It must not " +
+              "schedule a retry after the marked reply was already delivered.",
+          },
+        ],
+      },
+      queued: {
+        ...queued,
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: {
+          ...queued.run,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      } as FollowupRun,
+    });
+
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "visible marked reply" }),
+    );
+    expect(FOLLOWUP_TEST_QUEUES.get("main")?.items).toBeUndefined();
+  });
+
   it("does not enqueue stranded recovery when queued followup send policy denies delivery", async () => {
     const finalText =
       "Here is a long reply for a denied session. It includes enough detail to be substantive, but send-policy denial must remain an intentional delivery block.";
