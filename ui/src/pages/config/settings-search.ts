@@ -16,6 +16,7 @@ import {
   COMMUNICATION_SECTION_KEYS,
   INFRASTRUCTURE_SECTION_KEYS,
   MCP_SECTION_KEYS,
+  MEMORY_SECTION_KEYS,
   SECURITY_SECTION_KEYS,
 } from "./config-sections.ts";
 import {
@@ -221,6 +222,7 @@ const APPEARANCE_SECTIONS = new Set<string>(APPEARANCE_SECTION_KEYS);
 const SECURITY_SECTIONS = new Set<string>(SECURITY_SECTION_KEYS);
 const AUTOMATION_SECTIONS = new Set<string>(AUTOMATION_SECTION_KEYS);
 const MCP_SECTIONS = new Set<string>(MCP_SECTION_KEYS);
+const MEMORY_SECTIONS = new Set<string>(MEMORY_SECTION_KEYS);
 const INFRASTRUCTURE_SECTIONS = new Set<string>(INFRASTRUCTURE_SECTION_KEYS);
 const AI_AGENTS_SECTIONS = new Set<string>(AI_AGENTS_SECTION_KEYS);
 
@@ -237,6 +239,9 @@ function resolveStaticSettingsBlock(block: StaticSettingsBlockDescriptor): Stati
 function routeForConfigSection(key: string): RouteId {
   if (MCP_SECTIONS.has(key)) {
     return "mcp";
+  }
+  if (MEMORY_SECTIONS.has(key)) {
+    return "memory";
   }
   if (COMMUNICATION_SECTIONS.has(key)) {
     return "communications";

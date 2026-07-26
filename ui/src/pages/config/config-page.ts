@@ -48,6 +48,8 @@ import {
   type ConfigPageId,
 } from "./config-sections.ts";
 import { renderMcp } from "./mcp.ts";
+import { renderMemoryPage } from "./memory-page.ts";
+import { narrowMemorySchema } from "./memory.ts";
 import { renderQuickSettings } from "./quick.ts";
 import { configTargetIdFromHash, type ConfigRouteData } from "./route-data.ts";
 import { renderSecurity, type SecurityOverview } from "./security.ts";
@@ -114,6 +116,8 @@ function defaultConfigSelection(pageId: ConfigPageId): ConfigSelection {
       return { activeSection: "commands", activeSubsection: null };
     case "mcp":
       return { activeSection: "mcp", activeSubsection: null };
+    case "memory":
+      return { activeSection: "memory", activeSubsection: null };
     case "infrastructure":
       return { activeSection: "gateway", activeSubsection: null };
     case "ai-agents":
@@ -248,6 +252,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     security: "form",
     automation: "form",
     mcp: "form",
+    memory: "form",
     infrastructure: "form",
     "ai-agents": "form",
     advanced: "form",
@@ -260,6 +265,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     security: defaultConfigSelection("security"),
     automation: defaultConfigSelection("automation"),
     mcp: defaultConfigSelection("mcp"),
+    memory: defaultConfigSelection("memory"),
     infrastructure: defaultConfigSelection("infrastructure"),
     "ai-agents": defaultConfigSelection("ai-agents"),
     advanced: defaultConfigSelection("advanced"),
@@ -1027,6 +1033,27 @@ export class ConfigPage extends OpenClawLightDomElement {
           embeddedEditor: true,
           navRootLabel: "MCP",
         }),
+      });
+    }
+    if (this.pageId === "memory") {
+      return renderMemoryPage({
+        configObject,
+        pluginsHref: pathForRoute("plugins", this.context.basePath),
+        memoryImportHref: pathForRoute("memory-import", this.context.basePath),
+        // Memory's engine and backend are product decisions, not power-user
+        // knobs: this page forces the advanced tier open so they never hide
+        // behind the global Advanced toggle.
+        buildEditor: (keys) =>
+          renderConfig({
+            ...props,
+            schema: narrowMemorySchema(props.schema, keys),
+            activeSection: "memory",
+            activeSubsection: null,
+            showModeToggle: false,
+            embeddedEditor: true,
+            forceShowAdvanced: true,
+            navRootLabel: t("tabs.memory"),
+          }),
       });
     }
     if (this.pageId === "security") {

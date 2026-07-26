@@ -59,6 +59,33 @@ describe("findSettingsSearchBlocks", () => {
     ]);
   });
 
+  it("routes the memory section to its own page instead of AI & Agents", () => {
+    const matches = findSettingsSearchBlocks({
+      query: "backend",
+      schema: {
+        type: "object",
+        properties: {
+          memory: {
+            type: "object",
+            properties: {
+              backend: { type: "string", title: "Backend" },
+            },
+          },
+        },
+      },
+      value: { memory: { backend: "builtin" } },
+      uiHints: { "memory.backend": { advanced: false } },
+    });
+
+    expect(matches).toEqual([
+      expect.objectContaining({
+        routeId: "memory",
+        search: "?section=memory",
+        hash: "#config-section-memory",
+      }),
+    ]);
+  });
+
   it("routes moved static blocks to their dedicated pages", () => {
     const security = findSettingsSearchBlocks({
       query: "exec policy",

@@ -37,6 +37,7 @@ export const pages = [
   configPage("security", "/settings/security", []),
   configPage("automation", "/settings/automation", ["/automation"]),
   configPage("mcp", "/settings/mcp", ["/mcp"]),
+  configPage("memory", "/settings/memory", []),
   configPage("infrastructure", "/settings/infrastructure", ["/infrastructure"]),
   configPage("ai-agents", "/settings/ai-agents", ["/ai-agents"]),
   configPage("advanced", "/settings/advanced", []),
