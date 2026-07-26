@@ -2016,7 +2016,10 @@ describe("state migrations", () => {
     await fs.writeFile(triggersPath, JSON.stringify({ triggers: ["retry-wake"] }), "utf8");
     await loadVoiceWakeConfig(stateDir);
 
-    const realExec = DatabaseSync.prototype.exec;
+    const realExec = Reflect.get(DatabaseSync.prototype, "exec") as (
+      this: DatabaseSync,
+      sql: string,
+    ) => void;
     const execSpy = vi
       .spyOn(DatabaseSync.prototype, "exec")
       .mockImplementation(function (this: DatabaseSync, sql) {
@@ -2024,7 +2027,7 @@ describe("state migrations", () => {
           execSpy.mockImplementation(realExec);
           throw new Error("commit blocked");
         }
-        return realExec.call(this, sql);
+        return Reflect.apply(realExec, this, [sql]);
       });
     try {
       const first = migrateLegacyVoiceWakeSettings({
