@@ -357,6 +357,24 @@ describe("getMemorySearchManager caching", () => {
     }
   });
 
+  it("does not return a failed-close wrapper after a module reload", async () => {
+    const agentId = "reload-failed-close";
+    const cfg = createQmdCfg(agentId);
+    const firstManager = requireManager(await getMemorySearchManager({ cfg, agentId }));
+    mockPrimary.close.mockRejectedValueOnce(new Error("qmd close failed"));
+
+    await expect(closeMemorySearchManager({ cfg, agentId })).rejects.toThrow("qmd close failed");
+
+    vi.resetModules();
+    const freshModule = await import("./search-manager.js");
+    try {
+      const second = await freshModule.getMemorySearchManager({ cfg, agentId, withLease });
+      expect(second.manager).not.toBe(firstManager);
+    } finally {
+      await freshModule.closeAllMemorySearchManagers();
+    }
+  });
+
   it("reuses the same QMD manager instance for repeated calls", async () => {
     const cfg = createQmdCfg("main");
 
@@ -804,6 +822,63 @@ describe("getMemorySearchManager caching", () => {
     expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
   });
 
+  it("retains an unused qmd candidate when both replacement closes fail", async () => {
+    const agentId = "cached-qmd-double-close-failure";
+    const firstCfg = createQmdCfg(agentId, "/tmp/workspace-a");
+    const secondCfg = createQmdCfg(agentId, "/tmp/workspace-b");
+    const firstPrimary = createQmdManagerInstanceMock();
+    const secondPrimary = createQmdManagerInstanceMock();
+    const thirdPrimary = createQmdManagerInstanceMock();
+    firstPrimary.close.mockRejectedValueOnce(new Error("old close failed"));
+    secondPrimary.close.mockRejectedValueOnce(new Error("candidate close failed"));
+    createQmdManagerMock
+      .mockImplementationOnce(async () => firstPrimary)
+      .mockImplementationOnce(async () => secondPrimary)
+      .mockImplementationOnce(async () => thirdPrimary);
+
+    await getMemorySearchManager({ cfg: firstCfg, agentId });
+    await expect(getMemorySearchManager({ cfg: secondCfg, agentId })).rejects.toThrow(
+      "old close failed",
+    );
+    expect(secondPrimary.close).toHaveBeenCalledTimes(1);
+
+    const replacement = await getMemorySearchManager({ cfg: secondCfg, agentId });
+    expect(replacement.manager).toBeDefined();
+    expect(secondPrimary.close).toHaveBeenCalledTimes(2);
+    expect(createQmdManagerMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("continues scoped teardown when retained candidate cleanup still fails", async () => {
+    const agentId = "cached-qmd-persistent-close-failure";
+    const firstCfg = createQmdCfg(agentId, "/tmp/workspace-a");
+    const secondCfg = createQmdCfg(agentId, "/tmp/workspace-b");
+    const firstPrimary = createQmdManagerInstanceMock();
+    const secondPrimary = createQmdManagerInstanceMock();
+    firstPrimary.close.mockRejectedValueOnce(new Error("old close failed"));
+    secondPrimary.close.mockRejectedValue(new Error("candidate close failed"));
+    createQmdManagerMock
+      .mockImplementationOnce(async () => firstPrimary)
+      .mockImplementationOnce(async () => secondPrimary);
+
+    await getMemorySearchManager({ cfg: firstCfg, agentId });
+    await expect(getMemorySearchManager({ cfg: secondCfg, agentId })).rejects.toThrow(
+      "old close failed",
+    );
+
+    await expect(closeMemorySearchManager({ cfg: firstCfg, agentId })).rejects.toThrow(
+      "candidate close failed",
+    );
+    expect(secondPrimary.close).toHaveBeenCalledTimes(2);
+    expect(firstPrimary.close).toHaveBeenCalledTimes(2);
+    expect(mockCloseMemoryIndexManagersForAgent).toHaveBeenCalledWith({
+      cfg: firstCfg,
+      agentId,
+    });
+
+    secondPrimary.close.mockResolvedValue(undefined);
+    await closeMemorySearchManager({ cfg: firstCfg, agentId });
+  });
+
   it("dedupes concurrent full qmd manager creation for the same agent", async () => {
     const agentId = "pending-qmd";
     const cfg = createQmdCfg(agentId);
@@ -1160,6 +1235,49 @@ describe("getMemorySearchManager caching", () => {
     expect(fallbackSearch).toHaveBeenCalledTimes(2);
   });
 
+  it("joins and closes builtin fallback creation during wrapper teardown", async () => {
+    const agentId = "fallback-create-close-race";
+    const { manager } = await createFailedQmdSearchHarness({
+      agentId,
+      errorMessage: "qmd query failed",
+    });
+    const fallbackGate = createDeferred<typeof fallbackManager>();
+    mockMemoryIndexGet.mockImplementationOnce(async () => await fallbackGate.promise);
+
+    const searchPromise = manager.search("hello");
+    await vi.waitFor(() => expect(mockMemoryIndexGet).toHaveBeenCalledTimes(1));
+    const closePromise = manager.close?.() ?? Promise.resolve();
+    fallbackGate.resolve(fallbackManager);
+
+    await closePromise;
+    await expect(searchPromise).rejects.toThrow("memory search manager is closed");
+    expect(fallbackManager.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not start fallback creation after wrapper teardown begins", async () => {
+    const agentId = "fallback-after-close-race";
+    const primarySearchGate = createDeferred<void>();
+    mockPrimary.search.mockImplementationOnce(async () => {
+      await primarySearchGate.promise;
+      throw new Error("qmd query failed");
+    });
+    const cfg = createQmdCfg(agentId);
+    const manager = requireManager(await getMemorySearchManager({ cfg, agentId }));
+    const primaryCloseGate = createDeferred<void>();
+    mockPrimary.close.mockImplementation(async () => await primaryCloseGate.promise);
+
+    const searchPromise = manager.search("hello");
+    await vi.waitFor(() => expect(mockPrimary.search).toHaveBeenCalledTimes(1));
+    const closePromise = manager.close?.() ?? Promise.resolve();
+    primarySearchGate.resolve();
+    await vi.waitFor(() => expect(mockPrimary.close).toHaveBeenCalled());
+
+    primaryCloseGate.resolve();
+    await closePromise;
+    await expect(searchPromise).rejects.toThrow("memory search manager is closed");
+    expect(mockMemoryIndexGet).not.toHaveBeenCalled();
+  });
+
   it("gives same-call qmd-to-builtin fallback a fresh default deadline", async () => {
     vi.useFakeTimers();
     try {
@@ -1308,6 +1426,27 @@ describe("getMemorySearchManager caching", () => {
     });
     expect(nextMain.manager).not.toBe(mainManager);
     expect(nextOther.manager).toBe(otherManager);
+  });
+
+  it("blocks qmd replacement while scoped teardown closes its builtin fallback", async () => {
+    const agentId = "scoped-fallback-close-race";
+    const cfg = createQmdCfg(agentId);
+    const firstManager = requireManager(await getMemorySearchManager({ cfg, agentId }));
+    (firstManager as unknown as { fallback: typeof fallbackManager }).fallback = fallbackManager;
+    const fallbackCloseGate = createDeferred<void>();
+    fallbackManager.close.mockImplementationOnce(async () => await fallbackCloseGate.promise);
+
+    const closePromise = closeMemorySearchManager({ cfg, agentId });
+    await vi.waitFor(() => expect(fallbackManager.close).toHaveBeenCalledTimes(1));
+    const secondPromise = getMemorySearchManager({ cfg, agentId });
+    await Promise.resolve();
+    expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
+
+    fallbackCloseGate.resolve();
+    await closePromise;
+    const secondManager = requireManager(await secondPromise);
+    expect(secondManager).not.toBe(firstManager);
+    expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
   });
 
   it("closes the requested agent builtin index manager on scoped teardown", async () => {
