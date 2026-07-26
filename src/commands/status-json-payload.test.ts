@@ -282,5 +282,4 @@ describe("status-json-payload", () => {
       reason: "GatewayUnavailable",
     });
   });
-
 });
