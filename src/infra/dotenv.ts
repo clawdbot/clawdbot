@@ -172,9 +172,12 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "AWS_ACCESS_KEY_ID",
   "AWS_BEARER_TOKEN_BEDROCK",
   "AWS_BEDROCK_SKIP_AUTH",
+  "AWS_CONFIG_FILE",
+  "AWS_ENDPOINT_URL",
   "AWS_PROFILE",
   "AWS_SECRET_ACCESS_KEY",
   "AWS_SESSION_TOKEN",
+  "AWS_SHARED_CREDENTIALS_FILE",
   "BUZZ_RELAY_URL",
   "SLACK_FORWARDER_URL",
   "SMS_ALLOWED_USERS",
@@ -207,6 +210,8 @@ const BLOCKED_WORKSPACE_DOTENV_PREFIXES = [
   // Google Cloud SDK launchers treat CLOUDSDK_* values as runtime controls.
   // Workspace .env must not steer gcloud subprocess interpreters or args.
   "CLOUDSDK_",
+  // AWS SDK endpoint overrides redirect signed provider traffic by service id.
+  "AWS_ENDPOINT_URL_",
   "OPENAI_API_KEY_",
   // Workspace .env is untrusted; reserve the full OpenClaw runtime namespace
   // for shell/global config so new OPENCLAW_* controls are fail-closed by default.
