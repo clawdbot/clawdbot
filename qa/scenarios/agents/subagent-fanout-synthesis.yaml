@@ -6,9 +6,9 @@ scenario:
   runtimePairLane: core
   coverage:
     primary:
-      - agent-runtime.subagent-turns-subagents
-    secondary:
       - agent-runtime.subagent-turns-synthesis
+    secondary:
+      - agent-runtime.subagent-turns-subagents
   objective: Verify the agent can delegate multiple bounded subagent tasks and fold both results back into one parent reply.
   successCriteria:
     - Parent flow launches at least two bounded subagent tasks.
@@ -28,7 +28,7 @@ scenario:
     config:
       prompt: |-
         Subagent fanout synthesis check: delegate exactly two bounded subagents sequentially using sessions_spawn, not ACP.
-        First spawn exactly one child with label qa-fanout-alpha and task: verify that `HEARTBEAT.md` exists and reply exactly `ok` if it does. Wait for that child to finish.
+        First spawn exactly one child with label qa-fanout-alpha and task: verify that `AGENTS.md` exists and reply exactly `ok` if it does. Wait for that child to finish.
         Then spawn exactly one child with label qa-fanout-beta and task: verify that `repo/qa/scenarios/agents/subagent-fanout-synthesis.yaml` exists and reply exactly `ok` if it does. Wait for that child to finish.
         Do not spawn any more children after qa-fanout-beta finishes.
         Then reply with exactly these two lines and nothing else:
@@ -89,7 +89,7 @@ flow:
                               expr: "env.providerMode === 'mock-openai' ? config.expectedChildLabels[1] : `${config.expectedChildLabels[1]}-${attempt}`"
                           - set: prompt
                             value:
-                              expr: "`Subagent fanout synthesis check: delegate exactly two bounded subagents sequentially using sessions_spawn, not ACP.\nFirst spawn exactly one child with label ${alphaLabel} and task: verify that \\`HEARTBEAT.md\\` exists and reply exactly \\`ok\\` if it does. Wait for that child to finish.\nThen spawn exactly one child with label ${betaLabel} and task: verify that \\`repo/qa/scenarios/agents/subagent-fanout-synthesis.yaml\\` exists and reply exactly \\`ok\\` if it does. Wait for that child to finish.\nDo not spawn any more children after ${betaLabel} finishes.\nThen reply with exactly these two lines and nothing else:\nsubagent-1: ok\nsubagent-2: ok`"
+                              expr: "`Subagent fanout synthesis check: delegate exactly two bounded subagents sequentially using sessions_spawn, not ACP.\nFirst spawn exactly one child with label ${alphaLabel} and task: verify that \\`AGENTS.md\\` exists and reply exactly \\`ok\\` if it does. Wait for that child to finish.\nThen spawn exactly one child with label ${betaLabel} and task: verify that \\`repo/qa/scenarios/agents/subagent-fanout-synthesis.yaml\\` exists and reply exactly \\`ok\\` if it does. Wait for that child to finish.\nDo not spawn any more children after ${betaLabel} finishes.\nThen reply with exactly these two lines and nothing else:\nsubagent-1: ok\nsubagent-2: ok`"
                           - set: sessionKey
                             value:
                               expr: "`agent:qa:fanout:${attempt}:${randomUUID().slice(0, 8)}`"

@@ -2112,4 +2112,15 @@ CREATE TABLE IF NOT EXISTS outbound_media_provenance (
   sha256 TEXT NOT NULL,
   size_bytes INTEGER NOT NULL,
   created_at_ms INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS model_catalog_remote (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  bundle_json TEXT NOT NULL,
+  generated_at INTEGER NOT NULL,
+  min_version TEXT,
+  source_url TEXT NOT NULL,
+  etag TEXT,
+  last_modified TEXT,
+  checked_at INTEGER NOT NULL
 ) STRICT;\n`;

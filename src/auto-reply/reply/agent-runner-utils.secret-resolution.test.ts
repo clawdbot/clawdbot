@@ -184,9 +184,7 @@ describe("resolveQueuedReplyExecutionConfig channel scope", () => {
         },
       },
       tools: {
-        experimental: {
-          planTool: true,
-        },
+        updatePlan: true,
       },
     } as unknown as OpenClawConfig;
     setRuntimeConfigSnapshot(staleRuntimeConfig, sourceConfig);

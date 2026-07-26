@@ -7,6 +7,7 @@ import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import {
+  generateAttachmentId,
   getChatAttachmentDataUrl,
   getChatAttachmentPreviewUrl,
   registerChatAttachmentPayload,
@@ -86,10 +87,6 @@ function clickComposerInput(target: HTMLElement, selector: string) {
     .closest(".agent-chat__composer-shell, .new-session-page__composer")
     ?.querySelector<HTMLInputElement>(selector)
     ?.click();
-}
-
-function generateAttachmentId(): string {
-  return `att-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
 function chatAttachmentFromFile(file: File, dataUrl: string): ChatAttachment {

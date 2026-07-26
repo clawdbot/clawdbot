@@ -545,7 +545,6 @@ describe("runtime parity", () => {
     expect(missingCell.transcriptBytes).toBe("");
     expect(missingCell.toolCalls).toEqual([]);
   });
-
   it("keeps an explicitly identified orphan result separate", async () => {
     const tempRoot = await seedRuntimeParityTranscript({
       sessionId: "orphan-trajectory-result",

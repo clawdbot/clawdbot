@@ -12,6 +12,7 @@ import { expandToolGroups, normalizeToolName } from "../../agents/tool-policy.js
 import { deriveContextPromptTokens } from "../../agents/usage.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { HEARTBEAT_TOKEN, isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
+import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -1953,6 +1954,12 @@ export async function runCronIsolatedAgentTurn(params: {
         });
       } finally {
         prepared.context.sessionWorkAdmission.release();
+        // Browser ownership follows the detached run identity, not the stable cron job key.
+        await cleanupBrowserSessionsForLifecycleEnd({
+          cfg: prepared.context.cfgWithAgentDefaults,
+          sessionKeys: [prepared.context.runSessionKey],
+          onWarn: (message) => logWarn(`[cron:${params.job.id}] ${message}`),
+        });
       }
     }
   }

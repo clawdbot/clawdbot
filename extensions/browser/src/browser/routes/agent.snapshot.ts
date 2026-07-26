@@ -8,7 +8,12 @@ import path from "node:path";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getImageMetadata } from "../../media/media-services.js";
 import { ensureMediaDir, saveMediaBuffer } from "../../media/store.js";
-import { captureScreenshot, snapshotAria, snapshotRoleViaCdp } from "../cdp.js";
+import {
+  captureScreenshot,
+  getMainFrameDocumentIdentityViaCdp,
+  snapshotAria,
+  snapshotRoleViaCdp,
+} from "../cdp.js";
 import {
   evaluateChromeMcpScript,
   navigateChromeMcpPage,
@@ -27,7 +32,7 @@ import {
   assertBrowserNavigationResultAllowed,
 } from "../navigation-guard.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
-import { finalizeRoleSnapshot } from "../pw-role-snapshot.js";
+import { finalizeRoleSnapshot, type RoleRefMap } from "../pw-role-snapshot.js";
 import type { AnnotationItem } from "../screenshot-annotate.js";
 import { scaleAnnotations } from "../screenshot-annotate.js";
 import {
@@ -36,6 +41,11 @@ import {
   normalizeBrowserScreenshot,
 } from "../screenshot.js";
 import type { BrowserRouteContext } from "../server-context.js";
+import {
+  getPreviousSnapshotKeys,
+  recordSnapshotKeys,
+  type SnapshotDeltaFamily,
+} from "../snapshot-delta-cache.js";
 import { appendSnapshotUrls, type SnapshotUrlEntry } from "../snapshot-urls.js";
 import { normalizeBrowserTimerDelayMs } from "../timer-delay.js";
 import {
@@ -597,16 +607,56 @@ export function registerBrowserAgentSnapshotRoutes(
               ...ssrfPolicyOpts,
             });
           }
-          let observedBrowserState: unknown;
-          if (!usesChromeMcp && pwModule) {
-            observedBrowserState = await pwModule
-              .getObservedBrowserStateViaPlaywright({
-                cdpUrl: profileCtx.profile.cdpUrl,
-                targetId: tab.targetId,
-                ssrfPolicy: ctx.state().resolved.ssrfPolicy,
-              })
-              .catch(() => undefined);
-          }
+          const deltaFamily: SnapshotDeltaFamily | undefined =
+            plan.format === "ai"
+              ? {
+                  identity: usesChromeMcp
+                    ? "aria"
+                    : plan.wantsRoleSnapshot
+                      ? plan.refsMode === "aria"
+                        ? "aria"
+                        : "role"
+                      : pwModule
+                        ? "aria"
+                        : "role",
+                  interactive: plan.interactive,
+                  compact: plan.compact,
+                  depth: plan.depth,
+                  selector: plan.selectorValue,
+                  frame: plan.frameSelectorValue,
+                  urls: plan.urls,
+                  maxChars: plan.resolvedMaxChars,
+                }
+              : undefined;
+          const createDeltaState = (documentIdentity?: string) => {
+            const previousKeys =
+              deltaFamily && documentIdentity
+                ? getPreviousSnapshotKeys(ctx, {
+                    profile: profileCtx.profile.name,
+                    targetId: tab.targetId,
+                    documentIdentity,
+                    family: deltaFamily,
+                  })
+                : undefined;
+            return {
+              delta:
+                deltaFamily && previousKeys !== undefined
+                  ? { mode: deltaFamily.identity, previousKeys }
+                  : undefined,
+              record: (refs: RoleRefMap) => {
+                if (!deltaFamily || !documentIdentity) {
+                  return;
+                }
+                recordSnapshotKeys(ctx, {
+                  profile: profileCtx.profile.name,
+                  targetId: tab.targetId,
+                  documentIdentity,
+                  family: deltaFamily,
+                  refs,
+                });
+              },
+            };
+          };
           if (usesChromeMcp) {
             const operation: ChromeMcpSnapshotOperation = {
               profileName: profileCtx.profile.name,
@@ -625,6 +675,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 nodes: flattenChromeMcpSnapshotToAriaNodes(snapshot, plan.limit),
               });
             }
+            const deltaState = createDeltaState();
             const built = buildAiSnapshotFromChromeMcpSnapshot({
               root: snapshot,
               options: {
@@ -645,6 +696,7 @@ export function registerBrowserAgentSnapshotRoutes(
             const finalized = finalizeRoleSnapshot({
               ...builtWithUrls,
               maxChars: plan.resolvedMaxChars,
+              delta: deltaState.delta,
             });
             if (plan.labels) {
               const refs = Object.keys(finalized.refs);
@@ -668,6 +720,7 @@ export function registerBrowserAgentSnapshotRoutes(
                   "browser",
                   DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
                 );
+                deltaState.record(finalized.refs);
                 return res.json({
                   ok: true,
                   format: "ai",
@@ -684,6 +737,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 await clearChromeMcpOverlay(operation);
               }
             }
+            deltaState.record(finalized.refs);
             return res.json({
               ok: true,
               format: "ai",
@@ -691,6 +745,18 @@ export function registerBrowserAgentSnapshotRoutes(
               url: tab.url,
               ...finalized,
             });
+          }
+          const readPlaywrightDocumentIdentity =
+            pwModule?.getMainFrameDocumentIdentityViaPlaywright;
+          let observedBrowserState: unknown;
+          if (pwModule) {
+            observedBrowserState = await pwModule
+              .getObservedBrowserStateViaPlaywright({
+                cdpUrl: profileCtx.profile.cdpUrl,
+                targetId: tab.targetId,
+                ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+              })
+              .catch(() => undefined);
           }
           if (hasPendingDialogs(observedBrowserState)) {
             return res.json({
@@ -703,6 +769,37 @@ export function registerBrowserAgentSnapshotRoutes(
               ...(plan.format === "aria" ? { nodes: [] } : { snapshot: "", refs: {} }),
             });
           }
+          const readDocumentIdentity = async (): Promise<string | undefined> => {
+            if (!deltaFamily) {
+              return undefined;
+            }
+            const playwrightIdentity = readPlaywrightDocumentIdentity
+              ? await readPlaywrightDocumentIdentity({
+                  cdpUrl: profileCtx.profile.cdpUrl,
+                  targetId: tab.targetId,
+                }).catch(() => undefined)
+              : undefined;
+            if (playwrightIdentity || !tab.wsUrl) {
+              return playwrightIdentity;
+            }
+            return await getMainFrameDocumentIdentityViaCdp({
+              wsUrl: tab.wsUrl,
+              timeoutMs: plan.timeoutMs,
+            }).catch(() => undefined);
+          };
+          const initialDocumentIdentity = await readDocumentIdentity();
+          const deltaState = createDeltaState(initialDocumentIdentity);
+          const assertDocumentIdentityUnchanged = async () => {
+            if (!initialDocumentIdentity) {
+              return;
+            }
+            const finalDocumentIdentity = await readDocumentIdentity();
+            if (finalDocumentIdentity !== initialDocumentIdentity) {
+              throw new Error(
+                "Frame changed while its browser snapshot was being captured; retry.",
+              );
+            }
+          };
           if (plan.format === "ai") {
             const roleSnapshotArgs = {
               cdpUrl: profileCtx.profile.cdpUrl,
@@ -719,6 +816,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 compact: plan.compact ?? undefined,
                 maxDepth: plan.depth ?? undefined,
               },
+              delta: deltaState.delta,
             };
 
             const cdpRoleSnapshot = async () => {
@@ -738,6 +836,7 @@ export function registerBrowserAgentSnapshotRoutes(
                   compact: plan.compact ?? undefined,
                   maxDepth: plan.depth ?? undefined,
                 },
+                delta: deltaState.delta,
               });
             };
 
@@ -764,6 +863,7 @@ export function registerBrowserAgentSnapshotRoutes(
                     ...(typeof plan.resolvedMaxChars === "number"
                       ? { maxChars: plan.resolvedMaxChars }
                       : {}),
+                    delta: deltaState.delta,
                   })
                 : await cdpRoleSnapshot();
             if (!snap) {
@@ -801,6 +901,8 @@ export function registerBrowserAgentSnapshotRoutes(
                 DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
               );
               const imageType = normalized.contentType?.includes("jpeg") ? "jpeg" : "png";
+              await assertDocumentIdentityUnchanged();
+              deltaState.record(snap.refs ?? {});
               return res.json({
                 ok: true,
                 format: plan.format,
@@ -819,6 +921,8 @@ export function registerBrowserAgentSnapshotRoutes(
               });
             }
 
+            await assertDocumentIdentityUnchanged();
+            deltaState.record(snap.refs ?? {});
             return res.json({
               ok: true,
               format: plan.format,

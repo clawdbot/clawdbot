@@ -80,6 +80,12 @@ export type CliSessionBinding = {
   reseedReceipt?: CliSessionReseedReceipt;
 };
 
+type AcpSessionBinding = {
+  acpBackendId: string;
+  acpAgentId: string;
+  agentSessionId: string;
+};
+
 export type SessionCompactionCheckpointReason =
   | "manual"
   | "auto-threshold"
@@ -520,6 +526,8 @@ export type SessionEntry = SessionRestartRecoveryState &
     memoryFlushLastFailureError?: string;
     cliSessionIds?: Record<string, string>;
     cliSessionBindings?: Record<string, CliSessionBinding>;
+    /** Initialization fence for seeding canonical ACP metadata; cleared after creation. */
+    acpSessionBinding?: AcpSessionBinding;
     claudeCliSessionId?: string;
     label?: string;
     /** User-defined organization bucket for session lists; unrelated to chat groupId/groupChannel. */

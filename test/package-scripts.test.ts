@@ -169,6 +169,12 @@ describe("package scripts", () => {
     );
   });
 
+  it("runs Docker package process-tree coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts",
+    );
+  });
+
   it("runs legacy session importer atomicity coverage in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "src/infra/state-migrations.legacy-session-store.test.ts",

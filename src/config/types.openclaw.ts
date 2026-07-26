@@ -174,6 +174,8 @@ export type OpenClawConfig = {
       chatFollowUpMode?: "steer" | "queue";
       /** Ordered page and pinned-session entries shown in the Control UI sidebar. */
       sidebarEntries?: string[];
+      /** Custom session groups interleaved with built-in Control UI sidebar sections. */
+      sessionSectionOrder?: string[];
       /** Expand advanced settings in schema-driven Control UI forms. */
       showAdvancedSettings?: boolean;
     };
@@ -279,12 +281,16 @@ export type ConfigFileSnapshot = {
   path: string;
   /** Lexical and canonical file paths reached while resolving $include directives. */
   includedPaths?: string[];
+  /** Include contribution provenance needed by authored-layer repair decisions. */
+  includeProvenance?: { agentRoster: boolean };
   /** Whether the config file exists on disk. */
   exists: boolean;
   /** Raw file contents before parsing; null when missing. */
   raw: string | null;
   /** Parsed JSON/JSONC/YAML value before schema normalization. */
   parsed: unknown;
+  /** Include/env-resolved source before raw compatibility migrations. */
+  sourceConfigBeforeMigrations?: ResolvedSourceConfig;
   /**
    * Config authored on disk after $include resolution and ${ENV} substitution,
    * but BEFORE runtime defaults are applied.

@@ -2745,49 +2745,22 @@ describe("task-registry", () => {
 
   it.each([
     {
-      name: "keeps fresh childless codex-native subagent tasks live",
-      taskKind: "codex-native",
-      sourceId: "codex-thread:child-thread",
-      task: "Codex native child",
+      name: "keeps fresh harness-owned subagent tasks live",
+      taskKind: "external-harness",
+      sourceId: "harness:child",
+      task: "Harness-owned child",
       ageMinutes: 10,
       reconciled: 0,
       error: undefined,
     },
     {
-      name: "marks stale childless codex-native subagent tasks lost",
-      taskKind: "codex-native",
-      sourceId: "codex-thread:child-thread",
-      task: "Codex native child",
-      ageMinutes: 31,
-      reconciled: 1,
-      error: "Codex native subagent stopped reporting progress",
-    },
-    {
-      name: "keeps fresh childless copilot-native subagent tasks live",
-      taskKind: "copilot-native",
-      sourceId: "copilot-agent:child-agent",
-      task: "Copilot native child",
-      ageMinutes: 10,
-      reconciled: 0,
-      error: undefined,
-    },
-    {
-      name: "marks stale childless copilot-native subagent tasks lost",
-      taskKind: "copilot-native",
-      sourceId: "copilot-agent:child-agent",
-      task: "Copilot native child",
+      name: "marks stale harness-owned subagent tasks lost",
+      taskKind: "external-harness",
+      sourceId: "harness:child",
+      task: "Harness-owned child",
       ageMinutes: 31,
       reconciled: 1,
       error: "Native subagent stopped reporting progress",
-    },
-    {
-      name: "does not mark unrelated childless subagent tasks lost",
-      taskKind: "codex-native",
-      sourceId: "other-runtime:child-thread",
-      task: "Non-Codex childless row",
-      ageMinutes: 31,
-      reconciled: 0,
-      error: undefined,
     },
   ])("$name", async ({ taskKind, sourceId, task: taskName, ageMinutes, reconciled, error }) => {
     await withTaskRegistryTempDir(async () => {
@@ -2813,6 +2786,31 @@ describe("task-registry", () => {
         requireTaskById(task.taskId),
         error === undefined ? { status: "running", lastEventAt } : { status: "lost", error },
       );
+    });
+  });
+
+  it("uses normal reconcile grace for OpenClaw-owned subagent tasks", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryForTests();
+      const now = Date.now();
+      const task = createTaskFixture("subagent", {
+        childSessionKey: "agent:main:subagent:missing",
+        runId: "openclaw-subagent:missing",
+        task: "OpenClaw-owned child",
+        notifyPolicy: "silent",
+        lastEventAt: now - 10 * 60_000,
+      });
+
+      expect(await runTaskRegistryMaintenance()).toEqual({
+        reconciled: 1,
+        recovered: 0,
+        cleanupStamped: 0,
+        pruned: 0,
+      });
+      expectRecordFields(requireTaskById(task.taskId), {
+        status: "lost",
+        error: "backing session missing",
+      });
     });
   });
 
@@ -4771,24 +4769,17 @@ describe("task-registry", () => {
 
   it.each([
     {
-      name: "cancels childless codex-native tasks without routing through OpenClaw subagent sessions",
-      taskKind: "codex-native",
-      sourceId: "codex-thread:child-thread",
-      task: "Codex native child",
+      name: "cancels harness-owned tasks without routing through OpenClaw subagent sessions",
+      taskKind: "external-harness",
+      sourceId: "harness:child",
+      task: "Harness-owned child",
       cancellable: true,
     },
     {
-      name: "cancels childless copilot-native tasks without routing through OpenClaw subagent sessions",
-      taskKind: "copilot-native",
-      sourceId: "copilot-agent:child-agent",
-      task: "Copilot native child",
-      cancellable: true,
-    },
-    {
-      name: "does not cancel unrelated childless subagent tasks",
-      taskKind: "codex-native",
-      sourceId: "other-runtime:child-thread",
-      task: "Non-Codex childless row",
+      name: "does not cancel childless subagent tasks without a harness task kind",
+      taskKind: undefined,
+      sourceId: "openclaw-subagent:child",
+      task: "Childless OpenClaw row",
       cancellable: false,
     },
   ])("$name", async ({ taskKind, sourceId, task: taskName, cancellable }) => {

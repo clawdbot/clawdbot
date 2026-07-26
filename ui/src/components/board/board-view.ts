@@ -2,7 +2,6 @@ import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { repeat } from "lit/directives/repeat.js";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import {
   BOARD_GRID_COLUMNS,
@@ -78,7 +77,6 @@ class OpenClawBoardView extends OpenClawLightDomElement {
   @property({ attribute: false }) activeTabId = "";
   @property({ attribute: false }) widgetFrameUrl?: BoardWidgetFrameUrl;
   @property({ attribute: false }) callbacks?: BoardViewCallbacks;
-  @property({ attribute: false }) sessions: readonly GatewaySessionRow[] = [];
   @property({ attribute: false }) observer?: BoardObserverContext;
   @property({ type: Boolean }) canMutate = true;
   @property({ type: Boolean }) canGrant = true;
@@ -660,7 +658,6 @@ class OpenClawBoardView extends OpenClawLightDomElement {
                 .sessionKey=${sessionKey}
                 .widgetFrameUrl=${this.widgetFrameUrl}
                 .callbacks=${this.cellCallbacks}
-                .sessions=${this.sessions}
                 .observer=${this.observer}
                 .dragging=${widget.name === this.gestureName}
                 .focusTabIndex=${widget.name === focusName ? 0 : -1}

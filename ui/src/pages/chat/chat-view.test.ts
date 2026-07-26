@@ -45,7 +45,6 @@ import {
   type ChatModelControlsProps,
 } from "./components/chat-model-controls.ts";
 import {
-  isChatThreadSearchOpen,
   resetChatThreadPresentationState,
   toggleChatThreadSearch,
 } from "./components/chat-thread.ts";
@@ -437,10 +436,10 @@ function createChatHeaderState(
       lastActiveSessionKey: "main",
       theme: "claw",
       themeMode: "dark",
-      splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 280,
       sidebarEntries: [],
+      sessionSectionOrder: [],
       chatShowThinking: false,
       chatShowToolCalls: true,
     },
@@ -637,7 +636,6 @@ function createChatProps(
     compactionStatus: null,
     fallbackStatus: null,
     messages: [],
-    sideChatTurns: [],
     toolMessages: [],
     streamSegments: [],
     stream: null,
@@ -654,9 +652,6 @@ function createChatProps(
     error: null,
     runError: null,
     sessions: null,
-    sidebarOpen: false,
-    sidebarContent: null,
-    splitRatio: 0.6,
     canvasPluginSurfaceUrl: null,
     embedSandboxMode: "scripts",
     allowExternalEmbedUrls: false,
@@ -684,8 +679,6 @@ function createChatProps(
     onAbort: () => undefined,
     onQueueRemove: () => undefined,
     onQueueSteer: () => undefined,
-    onSideChatClose: () => undefined,
-    onSideChatClear: () => undefined,
     onNewSession: () => undefined,
     onClearHistory: () => undefined,
     onOpenSessionCheckpoints: () => undefined,
@@ -695,8 +688,6 @@ function createChatProps(
     onNavigateToAgent: () => undefined,
     onSessionSelect: () => undefined,
     onOpenSidebar: () => undefined,
-    onCloseSidebar: () => undefined,
-    onSplitRatioChange: () => undefined,
     onChatScroll: () => undefined,
     basePath: "",
     ...overrides,
@@ -718,6 +709,38 @@ function createDeferred<T>() {
   });
   return { promise, resolve, reject };
 }
+
+describe("chat Swarm progress", () => {
+  it("stays visible during an active run between the transcript and composer", () => {
+    const parentSessionKey = "agent:main:parent";
+    const container = renderChatView({
+      sessionKey: parentSessionKey,
+      canAbort: true,
+      showNewMessages: true,
+      swarmSessions: [
+        {
+          key: "agent:main:subagent:worker",
+          kind: "direct",
+          updatedAt: 1,
+          parentSessionKey,
+          swarmGroupId: "swarm:agent:main:parent:turn-42",
+          label: "Worker A",
+          status: "running",
+        },
+      ],
+    });
+
+    const widget = container.querySelector("[data-test-id=chat-swarm]");
+    expect(widget).not.toBeNull();
+    const scrollAnchor = widget?.previousElementSibling;
+    expect(scrollAnchor?.classList.contains("chat-scroll-to-bottom-wrap")).toBe(true);
+    expect(scrollAnchor?.previousElementSibling?.classList.contains("chat-thread")).toBe(true);
+    expect(widget?.nextElementSibling?.classList.contains("agent-chat__composer-shell")).toBe(true);
+    expect(container.querySelector(".chat-swarm__dot--running")?.getAttribute("title")).toBe(
+      "Worker A: Running",
+    );
+  });
+});
 
 describe("inline approval card", () => {
   it("renders between the transcript and composer and forwards its decision id", () => {
@@ -1631,26 +1654,7 @@ describe("chat composer workbench", () => {
     expect(container.querySelector('button[aria-label="Thread workspace"]')).toBeNull();
   });
 
-  it("stacks the detail sidebar under the thread with a horizontal divider on narrow panes", () => {
-    const sidebarProps = {
-      sidebarOpen: true,
-      sidebarContent: { kind: "markdown", content: "Stacked detail" } as const,
-      onCloseSidebar: () => undefined,
-    };
-    const wide = renderChatView(sidebarProps);
-    const wideContainer = wide.querySelector(".chat-split-container");
-    expect(wideContainer?.classList.contains("chat-split-container--open")).toBe(true);
-    expect(wideContainer?.classList.contains("chat-split-container--stacked")).toBe(false);
-    // Attribute reflection is async; the property binding lands synchronously.
-    expect(wide.querySelector("resizable-divider")?.orientation).toBe("vertical");
-
-    const stacked = renderChatView({ ...sidebarProps, sidebarStacked: true });
-    const stackedContainer = stacked.querySelector(".chat-split-container");
-    expect(stackedContainer?.classList.contains("chat-split-container--stacked")).toBe(true);
-    expect(stacked.querySelector("resizable-divider")?.orientation).toBe("horizontal");
-  });
-
-  it("opens inline Markdown images and renders the active lightbox", () => {
+  it("opens inline Markdown images", () => {
     const onOpenImage = vi.fn();
     const src = "data:image/png;base64,cG5n";
     const container = renderChatView({ onOpenImage });
@@ -1673,64 +1677,6 @@ describe("chat composer workbench", () => {
     fallbackTrigger.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(openSpy).toHaveBeenCalledWith(src, "_blank", "noopener,noreferrer");
     openSpy.mockRestore();
-
-    const onCloseImage = vi.fn();
-    const lightboxContainer = renderChatView({
-      imageLightbox: { src, title: "Artifact preview" },
-      onCloseImage,
-    });
-    const lightbox = lightboxContainer.querySelector("openclaw-image-lightbox");
-    expect(lightbox?.src).toBe(src);
-    expect(lightbox?.title).toBe("Artifact preview");
-    lightbox?.dispatchEvent(new CustomEvent("image-lightbox-close", { bubbles: true }));
-    expect(onCloseImage).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps lightbox Escape from clearing the pending reply", () => {
-    const onClearReply = vi.fn();
-    const container = renderChatView({
-      replyTarget: { messageId: "reply-1", text: "Keep this reply" },
-      onClearReply,
-      imageLightbox: {
-        src: "data:image/png;base64,cG5n",
-        title: "Artifact preview",
-      },
-      onCloseImage: vi.fn(),
-    });
-    const lightbox = container.querySelector("openclaw-image-lightbox");
-
-    lightbox?.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, composed: true }),
-    );
-
-    expect(onClearReply).not.toHaveBeenCalled();
-  });
-
-  it("opens sidebar Markdown images once", async () => {
-    const onOpenImage = vi.fn();
-    const container = renderChatView({
-      sidebarOpen: true,
-      sidebarContent: {
-        kind: "markdown",
-        content: "![Preview](data:image/png;base64,cG5n)",
-      },
-      onCloseSidebar: vi.fn(),
-      onOpenImage,
-    });
-    document.body.append(container);
-    const panel = container.querySelector("openclaw-chat-detail-panel") as
-      | (Element & { updateComplete: Promise<unknown> })
-      | null;
-    await panel?.updateComplete;
-
-    panel?.querySelector<HTMLButtonElement>(".markdown-inline-image-button")?.click();
-
-    expect(onOpenImage).toHaveBeenCalledOnce();
-    expect(onOpenImage).toHaveBeenCalledWith({
-      src: "data:image/png;base64,cG5n",
-      title: "Preview",
-    });
-    container.remove();
   });
 
   it("forces the workspace rail to the bottom dock and drops side-dock controls on narrow panes", () => {
@@ -1786,7 +1732,8 @@ describe("chat composer workbench", () => {
       onToggleFinished: () => undefined,
       onRefresh: () => undefined,
       onCancel: () => undefined,
-      onToggleTask: () => undefined,
+      onSelectTask: () => undefined,
+      onBackToList: () => undefined,
       onOpenSession: () => undefined,
     };
 
@@ -1832,7 +1779,8 @@ describe("chat composer workbench", () => {
       onToggleFinished: () => undefined,
       onRefresh: () => undefined,
       onCancel: () => undefined,
-      onToggleTask: () => undefined,
+      onSelectTask: () => undefined,
+      onBackToList: () => undefined,
       onOpenSession: () => undefined,
     };
     const messages = [{ role: "assistant", content: "done", timestamp: 1 }];
@@ -1924,15 +1872,24 @@ describe("per-pane chat presentation state", () => {
   });
 
   it("keeps thread search independent and resets only the targeted pane", () => {
+    const paneA = document.createElement("div");
+    const paneB = document.createElement("div");
+    const renderPane = (container: HTMLElement, paneId: string, draft: string) => {
+      render(renderChat(createChatProps({ paneId, draft, getDraft: () => draft })), container);
+    };
+
     toggleChatThreadSearch("pane-a", vi.fn());
-    expect(isChatThreadSearchOpen("pane-a")).toBe(true);
-    expect(isChatThreadSearchOpen("pane-b")).toBe(false);
+    renderPane(paneA, "pane-a", "");
+    renderPane(paneB, "pane-b", "");
+    expect(paneA.querySelector(".agent-chat__search-bar")).not.toBeNull();
+    expect(paneB.querySelector(".agent-chat__search-bar")).toBeNull();
 
     toggleChatThreadSearch("pane-b", vi.fn());
     resetChatThreadPresentationState("pane-a");
-
-    expect(isChatThreadSearchOpen("pane-a")).toBe(false);
-    expect(isChatThreadSearchOpen("pane-b")).toBe(true);
+    renderPane(paneA, "pane-a", "");
+    renderPane(paneB, "pane-b", "");
+    expect(paneA.querySelector(".agent-chat__search-bar")).toBeNull();
+    expect(paneB.querySelector(".agent-chat__search-bar")).not.toBeNull();
   });
 });
 

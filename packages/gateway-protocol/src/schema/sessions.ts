@@ -55,18 +55,6 @@ export const SessionObserverDigestSchema = closedObject({
   planProgress: Type.Optional(SessionObserverPlanProgressSchema),
 });
 
-/** Asks the observer about one session using its sanitized observation context. */
-export const SessionsObserverAskParamsSchema = closedObject({
-  sessionKey: NonEmptyString,
-  question: Type.String({ minLength: 1, maxLength: 400 }),
-});
-
-/** Ephemeral observer answer returned only to the requesting operator. */
-export const SessionsObserverAskResultSchema = closedObject({
-  answer: Type.String({ minLength: 1, maxLength: 600 }),
-  digestRevision: Type.Optional(Type.Integer({ minimum: 1 })),
-});
-
 /** Declares whether this connection currently renders session observer output. */
 export const SessionsObserverVisibilityParamsSchema = closedObject({
   visible: Type.Boolean(),
@@ -74,6 +62,45 @@ export const SessionsObserverVisibilityParamsSchema = closedObject({
 
 /** Acknowledges a connection's observer visibility declaration. */
 export const SessionsObserverVisibilityResultSchema = closedObject({
+  ok: Type.Literal(true),
+});
+
+/** One bounded question/answer exchange in the ephemeral session companion. */
+export const SessionCompanionExchangeSchema = closedObject({
+  question: Type.String({ minLength: 1, maxLength: 400 }),
+  answer: Type.String({ minLength: 1, maxLength: 1200 }),
+  ts: Type.Integer({ minimum: 0 }),
+});
+
+/** Asks the read-only companion about one session and its workspace. */
+export const SessionsCompanionAskParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  question: Type.String({ minLength: 1, maxLength: 400 }),
+});
+
+/** Companion answer returned only to the requesting operator. */
+export const SessionsCompanionAskResultSchema = closedObject({
+  answer: Type.String({ minLength: 1, maxLength: 1200 }),
+  ts: Type.Integer({ minimum: 0 }),
+});
+
+/** Selects the in-memory companion thread for one session. */
+export const SessionsCompanionStateParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+});
+
+/** Current bounded exchanges for one session companion thread. */
+export const SessionsCompanionStateResultSchema = closedObject({
+  exchanges: Type.Array(SessionCompanionExchangeSchema, { maxItems: 24 }),
+});
+
+/** Selects the in-memory companion thread to clear. */
+export const SessionsCompanionResetParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+});
+
+/** Acknowledges clearing one companion thread. */
+export const SessionsCompanionResetResultSchema = closedObject({
   ok: Type.Literal(true),
 });
 
@@ -619,13 +646,20 @@ export const SessionsForkParamsSchema = closedObject({
   entryId: NonEmptyString,
 });
 
+const SessionEditorAttachmentSchema = closedObject({
+  mimeType: Type.String(),
+  data: Type.String(),
+});
+
 export const SessionsRewindResultSchema = closedObject({
   editorText: Type.Optional(Type.String()),
+  editorAttachments: Type.Optional(Type.Array(SessionEditorAttachmentSchema)),
 });
 
 export const SessionsForkResultSchema = closedObject({
   sessionKey: NonEmptyString,
   editorText: Type.Optional(Type.String()),
+  editorAttachments: Type.Optional(Type.Array(SessionEditorAttachmentSchema)),
 });
 
 export const SessionBranchSchema = closedObject({
@@ -766,14 +800,19 @@ export type SessionOperationEvent = Static<typeof SessionOperationEventSchema>;
 export type SessionObserverHealth = Static<typeof SessionObserverHealthSchema>;
 export type SessionObserverPlanProgress = Static<typeof SessionObserverPlanProgressSchema>;
 export type SessionObserverDigest = Static<typeof SessionObserverDigestSchema>;
-export type SessionsObserverAskParams = Static<typeof SessionsObserverAskParamsSchema>;
-export type SessionsObserverAskResult = Static<typeof SessionsObserverAskResultSchema>;
 export type SessionsObserverVisibilityParams = Static<
   typeof SessionsObserverVisibilityParamsSchema
 >;
 export type SessionsObserverVisibilityResult = Static<
   typeof SessionsObserverVisibilityResultSchema
 >;
+export type SessionCompanionExchange = Static<typeof SessionCompanionExchangeSchema>;
+export type SessionsCompanionAskParams = Static<typeof SessionsCompanionAskParamsSchema>;
+export type SessionsCompanionAskResult = Static<typeof SessionsCompanionAskResultSchema>;
+export type SessionsCompanionStateParams = Static<typeof SessionsCompanionStateParamsSchema>;
+export type SessionsCompanionStateResult = Static<typeof SessionsCompanionStateResultSchema>;
+export type SessionsCompanionResetParams = Static<typeof SessionsCompanionResetParamsSchema>;
+export type SessionsCompanionResetResult = Static<typeof SessionsCompanionResetResultSchema>;
 export type SessionsCompactionListParams = Static<typeof SessionsCompactionListParamsSchema>;
 export type SessionsCompactionGetParams = Static<typeof SessionsCompactionGetParamsSchema>;
 export type SessionsCompactionBranchParams = Static<typeof SessionsCompactionBranchParamsSchema>;

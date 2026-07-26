@@ -351,12 +351,13 @@ describe("OpenClaw shell server preferences", () => {
     vi.stubGlobal("localStorage", createStorageMock());
     resetServerUiPrefsSync();
     const sidebarEntries = ["route:usage", "session:agent:main:test"];
+    const sessionSectionOrder = ["ungrouped", "category:Research", "groups", "work"];
     const updateNavigation = vi.fn();
     const refreshTheme = vi.fn();
     const runtimeConfig = {
       state: {
         configSnapshot: {
-          config: { ui: { prefs: { sidebarEntries } } },
+          config: { ui: { prefs: { sidebarEntries, sessionSectionOrder } } },
           hash: "sidebar-config-hash",
         },
       },
@@ -373,7 +374,7 @@ describe("OpenClaw shell server preferences", () => {
 
     shell.reconcileServerUiPrefs(runtimeConfig);
 
-    expect(updateNavigation).toHaveBeenCalledWith({ sidebarEntries });
+    expect(updateNavigation).toHaveBeenCalledWith({ sidebarEntries, sessionSectionOrder });
     expect(refreshTheme).toHaveBeenCalledOnce();
     resetServerUiPrefsSync();
   });

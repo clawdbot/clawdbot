@@ -1,10 +1,15 @@
 /** Baseten provider plugin entrypoint. */
+import { buildOpenAICompatibleLiveModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type { ProviderCatalogContext } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
-import { BASETEN_DEFAULT_MODEL_REF, resolveBasetenDynamicModel } from "./models.js";
+import {
+  BASETEN_DEFAULT_MODEL_REF,
+  projectBasetenLiveModels,
+  resolveBasetenDynamicModel,
+} from "./models.js";
 import { applyBasetenConfig } from "./onboard.js";
-import { buildBasetenProvider, buildStaticBasetenProvider } from "./provider-catalog.js";
+import { buildStaticBasetenProvider } from "./provider-catalog.js";
 import { createBasetenThinkingWrapper } from "./stream.js";
 import { resolveBasetenThinkingProfile } from "./thinking.js";
 
@@ -46,11 +51,21 @@ export default defineSingleProviderPluginEntry({
         if (!apiKey) {
           return null;
         }
+        if (!discoveryApiKey) {
+          return { provider: { ...buildStaticBasetenProvider(), apiKey } };
+        }
         return {
-          provider: {
-            ...(await buildBasetenProvider(discoveryApiKey)),
+          provider: await buildOpenAICompatibleLiveModelProviderConfig({
+            providerId: PROVIDER_ID,
+            providerConfig: buildStaticBasetenProvider(),
             apiKey,
-          },
+            discoveryApiKey,
+            modelDiscovery: {
+              timeoutMs: 10_000,
+              ttlMs: 5 * 60 * 1000,
+              projectRows: projectBasetenLiveModels,
+            },
+          }),
         };
       },
       staticRun: async () => ({ provider: buildStaticBasetenProvider() }),

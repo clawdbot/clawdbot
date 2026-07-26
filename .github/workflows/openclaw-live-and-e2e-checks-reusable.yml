@@ -1988,6 +1988,21 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
+      - name: Setup artifact package validation environment
+        if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_id != ''
+        uses: ./.release-harness/.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
+          install-deps: "false"
+          use-actions-cache: "false"
+
+      - name: Install trusted package validation dependencies
+        if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_id != ''
+        env:
+          CI: "true"
+        run: pnpm --dir .release-harness install --frozen-lockfile --prefer-offline --ignore-scripts
+
       - name: Validate OpenClaw package artifact identity
         id: input_package_artifact
         if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_id != ''
@@ -2124,8 +2139,12 @@ jobs:
             cp "${tgzs[0]}" "$target"
           fi
           echo "Validating Docker E2E package tarball: $target"
+          validator="scripts/check-openclaw-package-tarball.mjs"
+          if [[ -n "${EXPECTED_PACKAGE_FILE_NAME// }" ]]; then
+            validator=".release-harness/scripts/check-openclaw-package-tarball.mjs"
+          fi
           started_at="$(date +%s)"
-          timeout --foreground 5m node scripts/check-openclaw-package-tarball.mjs "$target"
+          timeout --foreground 5m node "$validator" "$target"
           finished_at="$(date +%s)"
           echo "Docker E2E package tarball validation finished in $((finished_at - started_at))s."
           digest="$(sha256sum "$target" | awk '{print $1}')"
@@ -3307,7 +3326,8 @@ jobs:
               echo "OPENCLAW_TEST_CONSOLE=1" >> "$GITHUB_ENV"
               ;;
             live-codex-harness*-docker)
-              # Keep CI on the API-key path for now. The staged Codex auth secret
+              # TODO(2026-10-01): Repair or remove stale staged Codex auth, then choose the canonical CI auth path.
+              # Keep CI on the API-key path. The staged Codex auth secret
               # is currently stale, but the wrapper still supports codex-auth for
               # local maintainer reruns without changing Peter's flow.
               echo "OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key" >> "$GITHUB_ENV"

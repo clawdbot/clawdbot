@@ -15,6 +15,7 @@ import {
 } from "../cron/store.js";
 import type { CronJob, CronJobCreate } from "../cron/types.js";
 import type { HealthFinding } from "../flows/health-checks.js";
+import { formatErrorMessage as errorMessage } from "../infra/errors.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.js";
 import { resolveHeartbeatSchedulerSeed } from "../infra/heartbeat-runner.js";
 import { shortenHomePath } from "../utils.js";
@@ -33,10 +34,6 @@ type HeartbeatMonitorChange =
 type HeartbeatMonitorPlan = {
   changes: HeartbeatMonitorChange[];
 };
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function createDoctorCronService(storePath: string, cfg: OpenClawConfig): CronService {
   const noop = () => {};

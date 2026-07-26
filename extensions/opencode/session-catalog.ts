@@ -302,6 +302,16 @@ async function runOpenCode(args: string[]): Promise<string> {
   return Buffer.concat(stdout).toString("utf8");
 }
 
+export async function queryOpenCodeDatabase(query: string): Promise<unknown> {
+  const output = await runOpenCode(["--pure", "db", query, "--format", "json"]);
+  return output.trim() ? (JSON.parse(output) as unknown) : [];
+}
+
+export async function exportOpenCodeSession(threadId: string): Promise<unknown> {
+  const output = await runOpenCode(["--pure", "export", threadId]);
+  return JSON.parse(output) as unknown;
+}
+
 function parseOpenCodeSession(value: unknown): SessionCatalogSession | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -326,7 +336,7 @@ function parseOpenCodeSession(value: unknown): SessionCatalogSession | undefined
     source: "opencode-cli",
     modelProvider: "opencode",
     archived: false,
-    canContinue: false,
+    canContinue: true,
     canArchive: false,
   };
 }
@@ -343,8 +353,7 @@ export async function listLocalOpenCodeSessionPage(value?: unknown): Promise<Ope
     "WHERE parent_id IS NULL AND time_archived IS NULL",
     `ORDER BY time_updated DESC, id DESC LIMIT ${String(requestedCount)}`,
   ].join(" ");
-  const output = await runOpenCode(["--pure", "db", query, "--format", "json"]);
-  const parsed = output.trim() ? (JSON.parse(output) as unknown) : [];
+  const parsed = await queryOpenCodeDatabase(query);
   if (!Array.isArray(parsed) || parsed.length > MAX_CLI_LIST_SESSIONS) {
     throw new Error("OpenCode returned an invalid session list");
   }
@@ -478,8 +487,7 @@ export async function readLocalOpenCodeTranscriptPage(
 ): Promise<SessionsCatalogReadResult> {
   const params = parseReadParams(value);
   const offset = decodeCursor(params.cursor);
-  const output = await runOpenCode(["--pure", "export", params.threadId]);
-  const items = openCodeTranscriptItems(JSON.parse(output) as unknown);
+  const items = openCodeTranscriptItems(await exportOpenCodeSession(params.threadId));
   const page = transcriptPage(items, params.limit, offset);
   return {
     hostId: LOCAL_HOST_ID,

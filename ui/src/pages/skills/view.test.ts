@@ -34,12 +34,14 @@ function createSkill(overrides: Partial<SkillStatusEntry> = {}): SkillStatusEntr
     blockedByAgentFilter: false,
     eligible: true,
     requirements: {
+      anyBins: [],
       bins: [],
       env: [],
       config: [],
       os: [],
     },
     missing: {
+      anyBins: [],
       bins: [],
       env: [],
       config: [],
@@ -209,6 +211,173 @@ describe("renderSkills", () => {
     );
   });
 
+  it("renders alternative missing binaries and exposes their installer", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+    installDialogMethod("showModal", function (this: HTMLDialogElement) {
+      this.setAttribute("open", "");
+    });
+    const onInstall = vi.fn();
+    const skill = createSkill({
+      skillKey: "coding-agent",
+      name: "Coding Agent",
+      eligible: false,
+      requirements: {
+        bins: [],
+        anyBins: ["claude", "codex", "opencode"],
+        env: [],
+        config: [],
+        os: [],
+      },
+      missing: {
+        bins: [],
+        anyBins: ["claude", "codex", "opencode"],
+        env: [],
+        config: [],
+        os: [],
+      },
+      install: [
+        {
+          id: "node-unrelated",
+          kind: "node",
+          label: "Install unrelated CLI",
+          bins: ["unrelated"],
+        },
+        { id: "node-codex", kind: "node", label: "Install Codex CLI", bins: ["codex"] },
+      ],
+    });
+
+    render(
+      renderSkills(
+        createProps({
+          report: {
+            workspaceDir: "/tmp/workspace",
+            managedSkillsDir: "/tmp/skills",
+            skills: [skill],
+          },
+          detailKey: "coding-agent",
+          onInstall,
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const warning = container.querySelector(".md-preview-dialog__body .callout");
+    expect(normalizeText(expectDefined(warning, "alternative binary requirement"))).toContain(
+      "bin:any of (claude, codex, opencode)",
+    );
+    const installButton = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => normalizeText(button) === "Install Codex CLI",
+    );
+    expect(installButton).toBeInstanceOf(HTMLButtonElement);
+    installButton?.click();
+    expect(onInstall).toHaveBeenCalledWith("coding-agent", "Coding Agent", "node-codex");
+  });
+
+  it("does not offer an installer that cannot satisfy a missing alternative", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+    installDialogMethod("showModal", function (this: HTMLDialogElement) {
+      this.setAttribute("open", "");
+    });
+    const skill = createSkill({
+      skillKey: "coding-agent",
+      name: "Coding Agent",
+      eligible: false,
+      requirements: {
+        bins: [],
+        anyBins: ["claude", "codex", "opencode"],
+        env: [],
+        config: [],
+        os: [],
+      },
+      missing: {
+        bins: [],
+        anyBins: ["claude", "codex", "opencode"],
+        env: [],
+        config: [],
+        os: [],
+      },
+      install: [
+        {
+          id: "node-unrelated",
+          kind: "node",
+          label: "Install unrelated CLI",
+          bins: ["unrelated"],
+        },
+      ],
+    });
+
+    render(
+      renderSkills(
+        createProps({
+          report: {
+            workspaceDir: "/tmp/workspace",
+            managedSkillsDir: "/tmp/skills",
+            skills: [skill],
+          },
+          detailKey: "coding-agent",
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(normalizeText(container)).toContain("bin:any of (claude, codex, opencode)");
+    expect(
+      Array.from(container.querySelectorAll<HTMLButtonElement>("button")).some(
+        (button) => normalizeText(button) === "Install unrelated CLI",
+      ),
+    ).toBe(false);
+  });
+
+  it("does not offer an installer once an alternative binary is present", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+    installDialogMethod("showModal", function (this: HTMLDialogElement) {
+      this.setAttribute("open", "");
+    });
+    const skill = createSkill({
+      skillKey: "coding-agent",
+      name: "Coding Agent",
+      requirements: {
+        bins: [],
+        anyBins: ["claude", "codex", "opencode"],
+        env: [],
+        config: [],
+        os: [],
+      },
+      missing: { bins: [], anyBins: [], env: [], config: [], os: [] },
+      install: [{ id: "node-codex", kind: "node", label: "Install Codex CLI", bins: ["codex"] }],
+    });
+
+    render(
+      renderSkills(
+        createProps({
+          report: {
+            workspaceDir: "/tmp/workspace",
+            managedSkillsDir: "/tmp/skills",
+            skills: [skill],
+          },
+          detailKey: "coding-agent",
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(normalizeText(container)).not.toContain("bin:any of");
+    expect(
+      Array.from(container.querySelectorAll<HTMLButtonElement>("button")).some(
+        (button) => normalizeText(button) === "Install Codex CLI",
+      ),
+    ).toBe(false);
+  });
+
   it("locks every skill mutation control behind the active mutation", async () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -219,7 +388,7 @@ describe("renderSkills", () => {
     const calendar = createSkill({
       skillKey: "calendar",
       name: "Calendar",
-      missing: { bins: ["calendar-cli"], env: [], config: [], os: [] },
+      missing: { anyBins: [], bins: ["calendar-cli"], env: [], config: [], os: [] },
       install: [
         { id: "calendar-cli", kind: "brew", label: "Install calendar-cli", bins: ["calendar-cli"] },
       ],

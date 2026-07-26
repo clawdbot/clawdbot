@@ -620,13 +620,9 @@ async function waitForPersistedTranscriptToolEvidence(
       const summary = await readSessionTranscriptSummary(env, params.sessionKey, {
         allowEmpty: true,
       });
-      const callCount = summary.assistantToolCallCounts[params.toolName] ?? 0;
+      const completedCount = summary.completedToolCallCounts[params.toolName] ?? 0;
       const successfulCount = summary.successfulToolCallCounts[params.toolName] ?? 0;
-      if (
-        summary.finalText &&
-        callCount > 0 &&
-        (!params.requireSuccessfulResult || successfulCount > 0)
-      ) {
+      if (completedCount > 0 && (!params.requireSuccessfulResult || successfulCount > 0)) {
         return;
       }
       lastError = undefined;

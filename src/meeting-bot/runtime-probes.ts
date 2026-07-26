@@ -29,10 +29,10 @@ type MeetingProbeSession<Health extends MeetingProbeHealth> = {
   };
 };
 
-type MeetingProbeRequest<Mode extends string, Transport extends string> = {
+type MeetingProbeRequest<Transport extends string> = {
   agentId?: string;
   message?: string;
-  mode?: Mode;
+  mode?: string;
   timeoutMs?: number;
   transport?: Transport;
   url: string;
@@ -50,7 +50,7 @@ type MeetingProbeContext<
   Transport extends string,
   Health extends MeetingProbeHealth,
   Session extends MeetingProbeSession<Health>,
-  Request extends MeetingProbeRequest<Mode, Transport>,
+  Request extends MeetingProbeRequest<Transport>,
 > = {
   config: Config;
   resolveAgentId(request: Request): string;
@@ -62,7 +62,7 @@ type MeetingProbeContext<
   ): boolean;
   hasHealthHandle(sessionId: string): boolean;
   refreshHealth(sessionId: string): void;
-  refreshCaptionHealth(session: Session, timeoutMs: number): Promise<void>;
+  refreshCaptionHealth(session: Session, timeoutMs?: number): Promise<void>;
 };
 
 type MeetingRuntimeProbeOptions<
@@ -83,20 +83,41 @@ export function createMeetingRuntimeProbes<
   Transport extends string,
   Health extends MeetingProbeHealth,
   Session extends MeetingProbeSession<Health>,
-  Request extends MeetingProbeRequest<Mode, Transport>,
->(options: MeetingRuntimeProbeOptions<Mode, Health, Session>) {
+  Request extends MeetingProbeRequest<Transport>,
+>(
+  options: MeetingRuntimeProbeOptions<Mode, Health, Session> & {
+    normalizeUrl?(url: string): string;
+    resolveRequestMode?(mode: Request["mode"], config: Config): Mode | undefined;
+    defaultTransport?(config: Config): Transport;
+    validateListeningTransport?(transport: Transport): void;
+    resolveSpeechTimeoutMs?(request: Request, config: Config): number;
+    refreshCaptionHealth?(
+      context: MeetingProbeContext<Config, Mode, Transport, Health, Session, Request>,
+      session: Session,
+      timeoutMs: number,
+    ): Promise<void>;
+    speechModeError?: string;
+    listeningModeError?: string;
+  },
+) {
   type Context = MeetingProbeContext<Config, Mode, Transport, Health, Session, Request>;
 
   const testSpeech = async (context: Context, request: Request) => {
-    if (request.mode === "transcribe") {
-      throw options.invalidRequest("test_speech requires mode: agent or bidi");
+    const requestMode =
+      options.resolveRequestMode?.(request.mode, context.config) ??
+      (request.mode as Mode | undefined);
+    if (requestMode === "transcribe") {
+      throw options.invalidRequest(
+        options.speechModeError ?? "test_speech requires mode: agent or bidi",
+      );
     }
-    const requestedMode = request.mode ?? context.config.defaultMode;
+    const requestedMode = requestMode ?? context.config.defaultMode;
     const mode = options.talkBackMode(requestedMode) ? requestedMode : ("agent" as Mode);
     const resolved = {
-      url: request.url,
+      url: options.normalizeUrl?.(request.url) ?? request.url,
       transport:
         request.transport ??
+        options.defaultTransport?.(context.config) ??
         (context.config.chromeNode.node ? ("chrome-node" as Transport) : ("chrome" as Transport)),
       mode,
       agentId: context.resolveAgentId(request),
@@ -129,7 +150,8 @@ export function createMeetingRuntimeProbes<
     if (shouldWait && !verified()) {
       const deadline =
         Date.now() +
-        options.resolveTimeoutMs(request.timeoutMs, context.config.chrome.joinTimeoutMs);
+        (options.resolveSpeechTimeoutMs?.(request, context.config) ??
+          options.resolveTimeoutMs(request.timeoutMs, context.config.chrome.joinTimeoutMs));
       while (Date.now() < deadline && !verified()) {
         await sleep(100);
         context.refreshHealth(result.session.id);
@@ -163,17 +185,24 @@ export function createMeetingRuntimeProbes<
   };
 
   const testListening = async (context: Context, request: Request) => {
-    if (request.mode && request.mode !== "transcribe") {
-      throw options.invalidRequest("test_listen requires mode: transcribe");
+    const requestMode =
+      options.resolveRequestMode?.(request.mode, context.config) ??
+      (request.mode as Mode | undefined);
+    if (requestMode && requestMode !== "transcribe") {
+      throw options.invalidRequest(
+        options.listeningModeError ?? "test_listen requires mode: transcribe",
+      );
     }
     const resolved = {
-      url: request.url,
+      url: options.normalizeUrl?.(request.url) ?? request.url,
       transport:
         request.transport ??
+        options.defaultTransport?.(context.config) ??
         (context.config.chromeNode.node ? ("chrome-node" as Transport) : ("chrome" as Transport)),
       mode: "transcribe" as Mode,
       agentId: context.resolveAgentId(request),
     };
+    options.validateListeningTransport?.(resolved.transport);
     const beforeSessions = context.list();
     const before = new Set(beforeSessions.map((session) => session.id));
     const existing = beforeSessions.find((session) => context.isReusable(session, resolved));
@@ -205,7 +234,10 @@ export function createMeetingRuntimeProbes<
           deadlineTimer = setTimeout(() => resolve(false), remainingMs);
         });
         const refreshed = await Promise.race([
-          context.refreshCaptionHealth(result.session, remainingMs).then(() => true),
+          (
+            options.refreshCaptionHealth?.(context, result.session, remainingMs) ??
+            context.refreshCaptionHealth(result.session, remainingMs)
+          ).then(() => true),
           deadlineReached,
         ]).finally(() => {
           if (deadlineTimer !== undefined) {

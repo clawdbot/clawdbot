@@ -9,6 +9,7 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { normalizeSidebarEntries } from "../app-navigation.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
+import { normalizeSessionSectionOrderTokens } from "../lib/sessions/custom-groups.ts";
 import {
   loadSettings,
   normalizeChatFollowUpModeOverride,
@@ -91,6 +92,10 @@ const SYNCED_PREFS = {
   sidebarEntries: prefSpec<string[]>({
     extract: (value) => normalizeSidebarEntries(value) ?? undefined,
     local: (settings) => settings.sidebarEntries,
+  }),
+  sessionSectionOrder: prefSpec<string[]>({
+    extract: (value) => normalizeSessionSectionOrderTokens(value) ?? undefined,
+    local: (settings) => settings.sessionSectionOrder,
   }),
   showAdvancedSettings: prefSpec<boolean>({
     extract: (value) => (typeof value === "boolean" ? value : undefined),
@@ -320,12 +325,14 @@ async function drainPrefsQueue(client: GatewayBrowserClient): Promise<void> {
         return;
       }
       try {
+        const replacePaths = [
+          ...(prefs.sidebarEntries !== undefined ? ["ui.prefs.sidebarEntries"] : []),
+          ...(prefs.sessionSectionOrder !== undefined ? ["ui.prefs.sessionSectionOrder"] : []),
+        ];
         await client.request("config.patch", {
           baseHash,
           raw: JSON.stringify({ ui: { prefs } }),
-          ...(prefs.sidebarEntries !== undefined
-            ? { replacePaths: ["ui.prefs.sidebarEntries"] }
-            : {}),
+          ...(replacePaths.length > 0 ? { replacePaths } : {}),
           note: "control-ui prefs sync",
         });
         staleConfigHashes.add(baseHash);

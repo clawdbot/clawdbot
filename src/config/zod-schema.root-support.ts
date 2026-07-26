@@ -245,6 +245,7 @@ const TalkRealtimeSchema = z
 
 export const TalkSchema = z
   .strictObject({
+    agentId: z.string().trim().min(1).optional(),
     provider: z.string().optional(),
     providers: z.record(z.string(), TalkProviderEntrySchema).optional(),
     realtime: TalkRealtimeSchema.optional(),

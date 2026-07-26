@@ -1375,10 +1375,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         restoreModelOverride();
         return null;
       }
-      await refreshReplacement(options.agentId);
-      if (!isCurrentConnection(scope)) {
-        restoreModelOverride();
-        return null;
+      if (!options.deferListRefresh) {
+        await refreshReplacement(options.agentId);
+        if (!isCurrentConnection(scope)) {
+          restoreModelOverride();
+          return null;
+        }
       }
       if (pendingModelPatches.get(normalizedKey)?.token === modelPatchToken) {
         pendingModelPatches.delete(normalizedKey);
@@ -1823,8 +1825,11 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         } finally {
           if (isCurrentConnection(scope)) {
             const sessionKey = gateway.snapshot.sessionKey?.trim();
+            const agentScope = sessionKey
+              ? scopedAgentListParamsForSession(gateway.snapshot, sessionKey)
+              : { agentId: resolveUiSelectedGlobalAgentId(gateway.snapshot) };
             await refresh({
-              ...(sessionKey ? scopedAgentListParamsForSession(gateway.snapshot, sessionKey) : {}),
+              ...agentScope,
               includeDerivedTitles: true,
               backgroundHydrate: true,
               force: true,

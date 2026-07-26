@@ -315,11 +315,7 @@ describe("OpenClaw database integrity verifier", () => {
     const replacementPath = `${agent.path}.replacement`;
     const { DatabaseSync } = requireNodeSqlite();
     const replacement = new DatabaseSync(replacementPath);
-    try {
-      replacement.exec("CREATE TABLE replacement_marker (id INTEGER PRIMARY KEY) STRICT;");
-    } finally {
-      replacement.close();
-    }
+    replacement.close();
     expect(closeOpenClawAgentDatabaseByPath(agent.path)).toBe(true);
     fs.rmSync(agent.path);
     fs.renameSync(replacementPath, agent.path);

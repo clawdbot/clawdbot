@@ -389,6 +389,32 @@ beforeEach(() => {
 });
 
 describe("modelsListCommand forward-compat", () => {
+  describe("empty model lists", () => {
+    it.each([
+      { name: "JSON", options: { json: true } },
+      { name: "plain text", options: { plain: true } },
+    ])("renders empty $name output through the canonical model table", async ({ options }) => {
+      mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
+      const runtime = createRuntime();
+      const opts = { ...options, provider: "autoqa-no-such-provider" };
+
+      await modelsListCommand(opts, runtime as never);
+
+      expect(mocks.printModelTable).toHaveBeenCalledWith([], runtime, opts);
+      expect(runtime.log).not.toHaveBeenCalledWith("No models found.");
+    });
+
+    it("preserves the human-readable message for an empty model list", async () => {
+      mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
+      const runtime = createRuntime();
+
+      await modelsListCommand({ provider: "autoqa-no-such-provider" }, runtime as never);
+
+      expect(runtime.log).toHaveBeenCalledWith("No models found.");
+      expect(mocks.printModelTable).not.toHaveBeenCalled();
+    });
+  });
+
   describe("configured rows", () => {
     it("returns manifest catalog rows for provider filters without --all", async () => {
       mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });

@@ -22,7 +22,7 @@ import {
 } from "./compaction-planning.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { isTimeoutError } from "./failover-error.js";
-import type { AgentMessage } from "./runtime/index.js";
+import type { AgentMessage, StreamFn, ThinkingLevel } from "./runtime/index.js";
 import type { ExtensionContext } from "./sessions/index.js";
 import { generateSummary as agentGenerateSummary } from "./sessions/index.js";
 
@@ -72,30 +72,6 @@ export type CompactionSummarizationInstructions = {
   identifierInstructions?: string;
 };
 
-type GenerateSummaryCompat = {
-  (
-    currentMessages: AgentMessage[],
-    model: NonNullable<ExtensionContext["model"]>,
-    reserveTokens: number,
-    apiKey: string,
-    signal?: AbortSignal,
-    customInstructions?: string,
-    previousSummary?: string,
-  ): Promise<string>;
-  (
-    currentMessages: AgentMessage[],
-    model: NonNullable<ExtensionContext["model"]>,
-    reserveTokens: number,
-    apiKey: string,
-    headers: Record<string, string> | undefined,
-    signal?: AbortSignal,
-    customInstructions?: string,
-    previousSummary?: string,
-  ): Promise<string>;
-};
-
-const generateSummaryCompat = agentGenerateSummary as unknown as GenerateSummaryCompat;
-
 function resolveIdentifierPreservationInstructions(
   instructions?: CompactionSummarizationInstructions,
 ): string | undefined {
@@ -140,6 +116,8 @@ async function summarizeChunks(params: {
   customInstructions?: string;
   summarizationInstructions?: CompactionSummarizationInstructions;
   previousSummary?: string;
+  thinkingLevel?: ThinkingLevel;
+  streamFn?: StreamFn;
 }): Promise<string> {
   if (params.messages.length === 0) {
     return params.previousSummary ?? DEFAULT_SUMMARY_FALLBACK;
@@ -169,6 +147,8 @@ async function summarizeChunks(params: {
             params.signal,
             effectiveInstructions,
             summary,
+            params.thinkingLevel,
+            params.streamFn,
           ),
         {
           attempts: 3,
@@ -237,27 +217,20 @@ function generateSummary(
   signal: AbortSignal,
   customInstructions?: string,
   previousSummary?: string,
+  thinkingLevel?: ThinkingLevel,
+  streamFn?: StreamFn,
 ): Promise<string> {
-  if (agentGenerateSummary.length >= 8) {
-    return generateSummaryCompat(
-      currentMessages,
-      model,
-      reserveTokens,
-      apiKey,
-      headers,
-      signal,
-      customInstructions,
-      previousSummary,
-    );
-  }
-  return generateSummaryCompat(
+  return agentGenerateSummary(
     currentMessages,
     model,
     reserveTokens,
     apiKey,
+    headers,
     signal,
     customInstructions,
     previousSummary,
+    thinkingLevel,
+    streamFn,
   );
 }
 
@@ -277,6 +250,8 @@ async function summarizeWithFallbackResult(params: {
   customInstructions?: string;
   summarizationInstructions?: CompactionSummarizationInstructions;
   previousSummary?: string;
+  thinkingLevel?: ThinkingLevel;
+  streamFn?: StreamFn;
 }): Promise<CompactionSummaryResult> {
   const { messages, contextWindow } = params;
 
@@ -390,6 +365,8 @@ export async function summarizeInStages(params: {
   previousSummary?: string;
   parts?: number;
   minMessagesForSplit?: number;
+  thinkingLevel?: ThinkingLevel;
+  streamFn?: StreamFn;
 }): Promise<CompactionSummaryResult> {
   const { messages } = params;
   if (messages.length === 0) {

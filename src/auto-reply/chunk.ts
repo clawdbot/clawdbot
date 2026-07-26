@@ -34,12 +34,8 @@ const DEFAULT_CHUNK_MODE: ChunkMode = "length";
 
 type ProviderChunkConfig = {
   textChunkLimit?: number;
-  chunkMode?: ChunkMode;
   streaming?: unknown;
-  accounts?: Record<
-    string,
-    { textChunkLimit?: number; chunkMode?: ChunkMode; streaming?: unknown }
-  >;
+  accounts?: Record<string, { textChunkLimit?: number; streaming?: unknown }>;
 };
 
 function resolveChunkLimitForProvider(
@@ -96,9 +92,6 @@ function resolveChunkModeForProvider(
   const accounts = cfgSection.accounts;
   if (accounts && typeof accounts === "object") {
     const direct = resolveAccountEntry(accounts, normalizedAccountId);
-    // resolveChannelStreamingChunkMode owns nested-first/flat-fallback
-    // precedence (the flat `chunkMode` fallback serves external SDK plugin
-    // configs during the deprecation window). Do not re-read flat keys here.
     const directMode = resolveChannelStreamingChunkMode(direct);
     if (directMode) {
       return directMode;

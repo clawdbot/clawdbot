@@ -1,7 +1,7 @@
 // Policy doctor fix metadata classifies findings before patch builders exist.
 import { CHECK_IDS, POLICY_CHECK_IDS } from "./check-ids.js";
 
-type PolicyFixClass = "automatic" | "reviewRequired" | "manual" | "validateOnly" | "unsupported";
+type PolicyFixClass = "automatic" | "reviewRequired" | "manual" | "unsupported";
 
 type PolicyFixMetadata = {
   readonly checkId: (typeof POLICY_CHECK_IDS)[number];
@@ -325,15 +325,6 @@ const POLICY_FIX_METADATA = [
     {
       policyPath: ["sandbox", "browser", "requireCdpSourceRange"],
       configTargets: ["agents.sandbox.browser"],
-    },
-  ),
-  m(
-    CHECK_IDS.policyDataHandlingRedactionDisabled,
-    "automatic",
-    "Set sensitive logging to a redacting mode.",
-    {
-      policyPath: ["dataHandling", "sensitiveLogging", "requireRedaction"],
-      configTargets: ["logging.redactSensitive"],
     },
   ),
   m(
