@@ -1,6 +1,7 @@
 // Pure grouping helpers for the sessions table "Group by" modes.
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { parseSessionKeyParts } from "../format.ts";
+import { moveSessionOrderEntry, normalizeSessionSectionOrderTokens } from "./custom-groups.ts";
 import { parseAgentSessionKey } from "./session-key.ts";
 
 export const SESSION_GROUP_MODES = [
@@ -33,6 +34,57 @@ export type SidebarSessionSection<Row> = {
   work?: boolean;
   rows: Row[];
 };
+
+const DEFAULT_SESSION_SECTION_ORDER = ["ungrouped", "groups", "work"] as const;
+
+export function normalizeSessionSectionOrder(
+  stored: readonly string[],
+  knownGroups: readonly string[],
+): string[] {
+  const groups = [...new Set(knownGroups.map((name) => name.trim()).filter(Boolean))];
+  const knownGroupSet = new Set(groups);
+  const order = (normalizeSessionSectionOrderTokens(stored) ?? []).filter((token) => {
+    if (!token.startsWith("category:")) {
+      return true;
+    }
+    return knownGroupSet.has(token.slice("category:".length));
+  });
+
+  for (const group of groups) {
+    const token = `category:${group}`;
+    if (order.includes(token)) {
+      continue;
+    }
+    const firstBuiltInIndex = order.findIndex((entry) =>
+      DEFAULT_SESSION_SECTION_ORDER.includes(
+        entry as (typeof DEFAULT_SESSION_SECTION_ORDER)[number],
+      ),
+    );
+    order.splice(firstBuiltInIndex < 0 ? order.length : firstBuiltInIndex, 0, token);
+  }
+
+  for (const [index, sectionId] of DEFAULT_SESSION_SECTION_ORDER.entries()) {
+    if (order.includes(sectionId)) {
+      continue;
+    }
+    if (index === 0) {
+      order.push(sectionId);
+      continue;
+    }
+    const previousId = DEFAULT_SESSION_SECTION_ORDER[index - 1]!;
+    order.splice(order.indexOf(previousId) + 1, 0, sectionId);
+  }
+  return order;
+}
+
+export function moveSessionSection(
+  order: readonly string[],
+  source: string,
+  target: string,
+  position: "before" | "after",
+): string[] {
+  return moveSessionOrderEntry(order, source, target, position);
+}
 
 /**
  * Sections that render a header (and therefore can collapse). Pinned rows
@@ -150,7 +202,11 @@ type SidebarGroupableRow = {
  */
 export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
   rows: readonly Row[],
-  options: { knownGroups?: readonly string[]; grouping?: SidebarSessionsGrouping } = {},
+  options: {
+    knownGroups?: readonly string[];
+    grouping?: SidebarSessionsGrouping;
+    sectionOrder?: readonly string[];
+  } = {},
 ): SidebarSessionSection<Row>[] {
   const grouping = options.grouping ?? "category";
   const pinned: Row[] = [];
@@ -205,14 +261,29 @@ export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
       .filter((name) => !knownGroups.includes(name))
       .toSorted((a, b) => a.localeCompare(b)),
   ];
-  for (const category of orderedCategories) {
-    sections.push({ id: `category:${category}`, category, rows: categories.get(category) ?? [] });
-  }
-  sections.push({ id: "ungrouped", rows: threads });
+  const orderedSections: SidebarSessionSection<Row>[] = orderedCategories.map((category) => ({
+    id: `category:${category}`,
+    category,
+    rows: categories.get(category) ?? [],
+  }));
+  orderedSections.push({ id: "ungrouped", rows: threads });
   if (groups.length > 0) {
-    sections.push({ id: "groups", groups: true, rows: groups });
+    orderedSections.push({ id: "groups", groups: true, rows: groups });
   }
-  sections.push({ id: "work", work: true, rows: coding });
+  orderedSections.push({ id: "work", work: true, rows: coding });
+  if (options.sectionOrder) {
+    const sectionsById = new Map(orderedSections.map((section) => [section.id, section]));
+    for (const sectionId of normalizeSessionSectionOrder(options.sectionOrder, orderedCategories)) {
+      const section = sectionsById.get(sectionId as SidebarSessionSection<Row>["id"]);
+      if (section) {
+        sections.push(section);
+        sectionsById.delete(section.id);
+      }
+    }
+    sections.push(...orderedSections.filter((section) => sectionsById.has(section.id)));
+    return sections;
+  }
+  sections.push(...orderedSections);
   return sections;
 }
 

@@ -529,6 +529,7 @@ See [Plugins](/tools/plugin).
       chatPersistCommentary: true, // Keep commentary after runs in Control UI; does not deliver it to channels
       chatSendShortcut: "enter", // enter | modifier-enter
       chatFollowUpMode: "steer", // steer | queue; omit to use the server queue mode
+      sessionSectionOrder: ["category:Research", "ungrouped", "groups", "work"],
       showAdvancedSettings: false, // Expand every Advanced group in Settings
     },
   },
@@ -545,6 +546,9 @@ See [Plugins](/tools/plugin).
   commentary visible during a run but removes it at completion and prevents new
   Codex commentary from entering the durable transcript mirror. Messaging-channel
   delivery remains separate and unchanged.
+  `sessionSectionOrder` interleaves custom session groups (`category:<name>`) with
+  the built-in `ungrouped`, `groups`, and `work` sidebar sections. An empty or
+  omitted list keeps the default custom-groups-first order.
   `showAdvancedSettings` defaults to `false`; Settings search may temporarily
   open one matching advanced group without changing this preference.
   Presentation-only preferences such as text scale, chat width, and live
@@ -1197,9 +1201,11 @@ Notes:
 
 ```json5
 {
-  audit: {
-    enabled: true,
-    messages: "off", // off | direct | all
+  logging: {
+    audit: {
+      enabled: true,
+      messages: "off", // off | direct | all
+    },
   },
 }
 ```
@@ -1229,7 +1235,12 @@ and coverage limits.
   available. These are correlation aids rather than anonymization; the state
   database stores the derivation key, but RPC and CLI exports do not.
 
-The running Gateway captures `audit.enabled` and `audit.messages` at startup;
+A root-level `audit` block is retired; the canonical path is `logging.audit`.
+The root config object is strict, so an old top-level `audit` block is rejected.
+Run [`openclaw doctor --fix`](/cli/doctor) to move it to `logging.audit`.
+
+The running Gateway captures `logging.audit.enabled` and
+`logging.audit.messages` at startup;
 restart it after changing either setting. Message coverage currently includes
 accepted inbound messages that reach core dispatch and one terminal row per
 original logical outbound reply payload that reaches shared durable delivery.
@@ -1247,8 +1258,7 @@ writer is best-effort, not a lossless compliance archive.
     level: "info",
     file: "/tmp/openclaw/openclaw.log",
     consoleLevel: "info",
-    consoleStyle: "pretty", // pretty | compact | json
-    redactSensitive: "tools", // off | tools
+    consoleStyle: "pretty", // pretty | json
     redactPatterns: ["\\bTOKEN\\b\\s*[=:]\\s*([\"']?)([^\\s\"']+)\\1"],
   },
 }
@@ -1257,8 +1267,10 @@ writer is best-effort, not a lossless compliance archive.
 - Default log file: `/tmp/openclaw/openclaw-YYYY-MM-DD.log`; named profiles use `/tmp/openclaw/openclaw-<profile>-YYYY-MM-DD.log`.
 - Set `logging.file` for a stable path.
 - `consoleLevel` bumps to `debug` when `--verbose`.
+- `consoleStyle`: `"pretty"` or `"json"`. The earlier `"compact"` value is retired; [`openclaw doctor --fix`](/cli/doctor) maps it to `"pretty"`.
 - `maxFileBytes`: maximum active log file size in bytes before rotation (positive integer; default: `104857600` = 100 MB). OpenClaw keeps up to five numbered archives beside the active file.
-- `redactSensitive` / `redactPatterns`: best-effort masking for console output, file logs, OTLP log records, and persisted session transcript text. `redactSensitive: "off"` only disables this general log/transcript policy; UI/tool/diagnostic safety surfaces still redact secrets before emission.
+- `redactPatterns`: regexes for best-effort masking of console output, file logs, OTLP log records, and persisted session transcript text. Setting this **replaces** the built-in default patterns for log and transcript output, so include the defaults you still want; omitting them also turns off form-body and structured auth-header redaction. Tool payload redaction is separate and always merges your patterns with the defaults.
+- Redaction is always on and is no longer configurable. [`openclaw doctor --fix`](/cli/doctor) removes the retired switch from older config files; the runtime always applies `tools`-mode redaction to logs and transcripts. UI, tool, and diagnostic safety surfaces redact secrets independently of this policy.
 
 ---
 
@@ -1285,23 +1297,11 @@ writer is best-effort, not a lossless compliance archive.
       logsExporter: "otlp",
       sampleRate: 1.0,
       flushIntervalMs: 5000,
-      captureContent: {
-        enabled: false,
-        inputMessages: false,
-        outputMessages: false,
-        toolInputs: false,
-        toolOutputs: false,
-        systemPrompt: false,
-        toolDefinitions: false,
-      },
+      captureContent: false,
     },
 
     cacheTrace: {
       enabled: false,
-      filePath: "~/.openclaw/logs/cache-trace.jsonl",
-      includeMessages: true,
-      includePrompt: true,
-      includeSystem: true,
     },
   },
 }
@@ -1319,13 +1319,11 @@ writer is best-effort, not a lossless compliance archive.
 - `otel.logsExporter`: log export sink: `"otlp"` (default), `"stdout"` for one JSON object per stdout line, or `"both"`.
 - `otel.sampleRate`: trace sampling rate `0`-`1`.
 - `otel.flushIntervalMs`: periodic telemetry flush interval in ms.
-- `otel.captureContent`: opt-in raw content capture for OTEL span attributes. Defaults to off. Boolean `true` captures non-system message/tool content; the object form lets you enable `inputMessages`, `outputMessages`, `toolInputs`, `toolOutputs`, `systemPrompt`, and `toolDefinitions` explicitly.
+- `otel.captureContent`: opt-in raw content capture for OTEL span attributes. Defaults to off. `true` captures non-system message, tool, and tool-definition content plus OTLP log bodies.
 - `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`: environment toggle for latest experimental GenAI inference span shape, including `{gen_ai.operation.name} {gen_ai.request.model}` span names, `CLIENT` span kind, and `gen_ai.provider.name` instead of legacy `gen_ai.system`. By default spans keep `openclaw.model.call` and `gen_ai.system` for compatibility; GenAI metrics use bounded semantic attributes.
 - `OPENCLAW_OTEL_PRELOADED=1`: environment toggle for hosts that already registered a global OpenTelemetry SDK. OpenClaw then skips plugin-owned SDK startup/shutdown while keeping diagnostic listeners active.
 - `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`, and `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`: signal-specific endpoint env vars used when the matching config key is unset.
 - `cacheTrace.enabled`: log cache trace snapshots for embedded runs (default: `false`).
-- `cacheTrace.filePath`: output path for cache trace JSONL (default: `$OPENCLAW_STATE_DIR/logs/cache-trace.jsonl`).
-- `cacheTrace.includeMessages` / `includePrompt` / `includeSystem`: control what is included in cache trace output (all default: `true`).
 
 ---
 
@@ -1444,17 +1442,27 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
 {
   cron: {
     enabled: true,
-    webhook: "https://example.invalid/legacy", // deprecated fallback for stored notify:true jobs
+    triggers: {
+      enabled: true,
+    },
     webhookToken: "replace-with-dedicated-token", // optional bearer token for outbound webhook auth
     sessionRetention: "24h", // duration string or false
   },
 }
 ```
 
+- `enabled`: execute stored cron jobs (default: `true`). Set `false` to pause all cron execution without deleting jobs.
+- `triggers.enabled`: also run event-driven cron triggers (default: `false`).
 - `sessionRetention`: how long to keep completed isolated cron run sessions before pruning SQLite session rows. Also controls cleanup of archived deleted cron transcripts. Default: `24h`; set `false` to disable.
 - Run history automatically keeps the newest 2000 terminal rows per job. Lost rows retain their 24-hour cleanup window.
 - `webhookToken`: bearer token used for cron webhook POST delivery (`delivery.mode = "webhook"`), if omitted no auth header is sent.
-- `webhook`: deprecated legacy fallback webhook URL (http/https) used by `openclaw doctor --fix` to migrate stored jobs that still have `notify: true`; runtime delivery uses per-job `delivery.mode="webhook"` plus `delivery.to`, or `delivery.completionDestination` when preserving announce delivery.
+
+The `cron` block is strict; `cron.enabled`, `cron.triggers`, `cron.webhookToken`,
+`cron.sessionRetention`, and `cron.failureAlert` are the only accepted keys. The
+retired `cron.webhook` fallback URL is gone: runtime delivery uses per-job
+`delivery.mode = "webhook"` plus `delivery.to`, or `delivery.completionDestination`
+when preserving announce delivery. `openclaw doctor --fix` strips a leftover
+`cron.webhook` from existing config files.
 
 ### `cron.failureAlert`
 
@@ -1463,29 +1471,9 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
   cron: {
     failureAlert: {
       enabled: false,
-      after: 3,
+      after: 2,
       cooldownMs: 3600000,
       includeSkipped: false,
-      mode: "announce",
-      accountId: "main",
-    },
-  },
-}
-```
-
-- `enabled`: enable failure alerts for cron jobs (default: `false`).
-- `after`: consecutive failures before an alert fires (positive integer, min: `1`).
-- `cooldownMs`: minimum milliseconds between repeated alerts for the same job (non-negative integer).
-- `includeSkipped`: count consecutive skipped runs toward the alert threshold (default: `false`). Skipped runs are tracked separately and do not affect execution-error backoff.
-- `mode`: delivery mode - `"announce"` sends via a channel message; `"webhook"` posts to the configured webhook.
-- `accountId`: optional account or channel id to scope alert delivery.
-
-### `cron.failureDestination`
-
-```json5
-{
-  cron: {
-    failureDestination: {
       mode: "announce",
       channel: "last",
       to: "channel:C1234567890",
@@ -1495,12 +1483,19 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
 }
 ```
 
-- Default destination for cron failure notifications across all jobs.
-- `mode`: `"announce"` or `"webhook"`; defaults to `"announce"` when enough target data exists.
+`cron.failureAlert` owns both the alert threshold and the default failure
+destination for every job. The retired `cron.failureDestination` block is merged
+into it by [`openclaw doctor --fix`](/cli/doctor).
+
+- `enabled`: enable failure alerts for cron jobs (default: `false`).
+- `after`: consecutive failures before an alert fires (positive integer, min: `1`; default: `2`).
+- `cooldownMs`: minimum milliseconds between repeated alerts for the same job (non-negative integer; default: `3600000`).
+- `includeSkipped`: count consecutive skipped runs toward the alert threshold (default: `false`). Skipped runs are tracked separately and do not affect execution-error backoff.
+- `mode`: delivery mode - `"announce"` sends via a channel message; `"webhook"` posts to the target in `to`. Defaults to `"announce"` when enough target data exists.
 - `channel`: channel override for announce delivery. `"last"` reuses the last known delivery channel.
 - `to`: explicit announce target or webhook URL. Required for webhook mode.
-- `accountId`: optional account override for delivery.
-- Per-job `delivery.failureDestination` overrides this global default.
+- `accountId`: optional account or channel id to scope alert delivery.
+- Per-job `delivery.failureDestination` overrides these global destination fields.
 - When neither global nor per-job failure destination is set, jobs that already deliver via `announce` fall back to that primary announce target on failure.
 - `delivery.failureDestination` is only supported for `sessionTarget="isolated"` jobs unless the job's primary `delivery.mode` is `"webhook"`.
 

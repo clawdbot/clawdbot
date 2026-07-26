@@ -335,7 +335,6 @@ packages/ai/src/transports/anthropic-transport-stream.test.ts
 packages/ai/src/transports/anthropic-transport-stream.ts
 packages/ai/src/transports/openai-completions-transport.ts
 packages/gateway-client/src/client.ts
-packages/gateway-protocol/src/index.ts
 packages/gateway-protocol/src/schema/agents-models-skills.ts
 packages/gateway-protocol/src/schema/protocol-schemas.ts
 packages/markdown-core/src/ir.ts
@@ -708,7 +707,6 @@ src/cron/store.test.ts
 src/daemon/launchd.test.ts
 src/daemon/launchd.ts
 src/daemon/schtasks.startup-fallback.test.ts
-src/daemon/schtasks.ts
 src/daemon/systemd.test.ts
 src/daemon/systemd.ts
 src/fleet/backup.runtime.ts
@@ -720,7 +718,6 @@ src/flows/doctor-core-checks.runtime.test.ts
 src/flows/doctor-core-checks.runtime.ts
 src/flows/doctor-core-checks.ts
 src/flows/doctor-health-contributions.test.ts
-src/flows/doctor-health-contributions.ts
 src/flows/model-picker.ts
 src/gateway/auth.test.ts
 src/gateway/call.test.ts
@@ -816,7 +813,6 @@ src/gateway/session-utils.test.ts
 src/gateway/sessions-history-http.test.ts
 src/gateway/sessions-patch.test.ts
 src/gateway/talk-realtime-relay.test.ts
-src/gateway/talk-realtime-relay.ts
 src/gateway/test-helpers.server.ts
 src/gateway/tools-invoke-http.test.ts
 src/gateway/watch-node-http.ts

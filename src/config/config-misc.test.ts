@@ -491,7 +491,7 @@ describe("diagnostics.otel.captureContent", () => {
     expect(invalid.success).toBe(false);
   });
 
-  it("accepts boolean and granular OTEL content capture config", () => {
+  it("accepts boolean OTEL content capture config", () => {
     for (const captureContent of [true, false]) {
       const result = OpenClawSchema.safeParse({
         diagnostics: {
@@ -540,6 +540,32 @@ describe("ui.prefs.sidebarEntries", () => {
       ui: {
         prefs: {
           sidebarEntries: ["route:usage", 7],
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+  });
+});
+
+describe("ui.prefs.sessionSectionOrder", () => {
+  it("accepts section ids synchronized by the Control UI", () => {
+    const result = validateConfigObject({
+      ui: {
+        prefs: {
+          sessionSectionOrder: ["category:Research", "ungrouped", "groups", "work"],
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects section order entries that are not strings", () => {
+    const result = validateConfigObject({
+      ui: {
+        prefs: {
+          sessionSectionOrder: ["work", 7],
         },
       },
     });

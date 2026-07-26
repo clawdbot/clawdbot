@@ -197,7 +197,16 @@ async function installFakeOpenCode(
 const args = process.argv.slice(2);
 if (process.env.CATALOG_UNRELATED_ENV) process.exit(3);
 if (args[0] === "--pure" && args[1] === "db" && args.includes("--format") && args.includes("json")) {
-  process.stdout.write(${JSON.stringify(JSON.stringify([session]))});
+  process.stdout.write(args[2].includes("event_sequence")
+    ? ${JSON.stringify(
+      JSON.stringify([
+        {
+          id: "ses_test",
+          seq: 4,
+        },
+      ]),
+    )}
+    : ${JSON.stringify(JSON.stringify([session]))});
 } else if (args[0] === "--pure" && args[1] === "export" && args[2] === "ses_test") {
   process.stdout.write(${JSON.stringify(JSON.stringify(exported))});
 } else {
@@ -419,6 +428,14 @@ describe("OpenCode session catalog", () => {
 
       expect(first).toEqual(concurrent);
       expect(second).toEqual(first);
+      expect(first.upstream).toEqual({
+        kind: "opencode-cli",
+        ref: { threadId: "ses_test" },
+        marker: {
+          seq: 4,
+          lastHumanMessageId: "msg_user",
+        },
+      });
       expect(createSessionEntry).toHaveBeenCalledTimes(1);
       expect(createSessionEntry).toHaveBeenCalledWith(
         expect.objectContaining({

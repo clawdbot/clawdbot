@@ -407,12 +407,20 @@ export class SessionOrganizerController implements ReactiveController {
     }
     // Collapse keys follow only a confirmed Gateway rename. A stale completion
     // must not rewrite storage owned by the replacement connection.
-    const from = `category:${group}`;
-    if (this.collapsedSessionSections.has(from)) {
+    const fromSectionId = `category:${group}`;
+    const nextSectionId = `category:${next}`;
+    if (this.collapsedSessionSections.has(fromSectionId)) {
       const collapsed = new Set(this.collapsedSessionSections);
-      collapsed.delete(from);
-      collapsed.add(`category:${next}`);
+      collapsed.delete(fromSectionId);
+      collapsed.add(nextSectionId);
       this.saveCollapsedSessionSections(collapsed);
+    }
+    if (this.host.sessionSectionOrder.includes(fromSectionId)) {
+      this.host.onUpdateSessionSectionOrder?.(
+        this.host.sessionSectionOrder.map((token) =>
+          token === fromSectionId ? nextSectionId : token,
+        ),
+      );
     }
     this.host.requestUpdate();
   }
@@ -432,6 +440,12 @@ export class SessionOrganizerController implements ReactiveController {
     const collapsed = new Set(this.collapsedSessionSections);
     collapsed.delete(`category:${group}`);
     this.saveCollapsedSessionSections(collapsed);
+    const sectionId = `category:${group}`;
+    if (this.host.sessionSectionOrder.includes(sectionId)) {
+      this.host.onUpdateSessionSectionOrder?.(
+        this.host.sessionSectionOrder.filter((token) => token !== sectionId),
+      );
+    }
     this.host.requestUpdate();
   }
 
@@ -457,7 +471,7 @@ export class SessionOrganizerController implements ReactiveController {
 
   private async reorderSessionGroup(
     source: string,
-    target: string,
+    targetSectionId: string,
     position: "before" | "after",
   ): Promise<void> {
     const scope = this.host.sessionData.beginSessionMutation();
@@ -465,7 +479,7 @@ export class SessionOrganizerController implements ReactiveController {
       return;
     }
     const operations = await this.loadOperations(scope);
-    await operations?.reorderSessionGroup(this.host, source, target, position, scope);
+    await operations?.reorderSessionGroup(this.host, source, targetSectionId, position, scope);
   }
 
   async assignSessionCategory(
@@ -483,11 +497,11 @@ export class SessionOrganizerController implements ReactiveController {
 
   sectionDragOver(event: DragEvent, sectionId: string, category?: string) {
     const dataTransfer = event.dataTransfer;
-    if (
-      category &&
-      sessionGroupDragActive(dataTransfer) &&
-      this.draggingSessionGroup !== category
-    ) {
+    if (sessionGroupDragActive(dataTransfer)) {
+      const sourceGroup = readSessionGroupDragData(dataTransfer) ?? this.draggingSessionGroup;
+      if (!sourceGroup || sectionId === `category:${sourceGroup}`) {
+        return;
+      }
       event.preventDefault();
       if (dataTransfer) {
         dataTransfer.dropEffect = "move";
@@ -495,13 +509,21 @@ export class SessionOrganizerController implements ReactiveController {
       const target = event.currentTarget as HTMLElement;
       const bounds = target.getBoundingClientRect();
       const position = event.clientY < bounds.top + bounds.height / 2 ? "before" : "after";
-      this.sessionGroupDropTarget = { group: category, position };
+      this.sessionGroupDropTarget = { sectionId, position };
       this.host.requestUpdate();
       this.sessionDropTarget = null;
       this.host.requestUpdate();
       return;
     }
     if (!sessionDragActive(dataTransfer)) {
+      return;
+    }
+    const acceptsSession =
+      sectionId === "pinned" ||
+      (this.host.sessionsGrouping === "category" &&
+        (sectionId === "ungrouped" || Boolean(category)));
+    if (!acceptsSession) {
+      event.stopPropagation();
       return;
     }
     event.preventDefault();
@@ -514,7 +536,7 @@ export class SessionOrganizerController implements ReactiveController {
     this.host.requestUpdate();
   }
 
-  sectionDragLeave(event: DragEvent, sectionId: string, category?: string) {
+  sectionDragLeave(event: DragEvent, sectionId: string, _category?: string) {
     const current = event.currentTarget as HTMLElement;
     if (event.relatedTarget instanceof Node && current.contains(event.relatedTarget)) {
       return;
@@ -523,7 +545,7 @@ export class SessionOrganizerController implements ReactiveController {
       this.sessionDropTarget = null;
       this.host.requestUpdate();
     }
-    if (category && this.sessionGroupDropTarget?.group === category) {
+    if (this.sessionGroupDropTarget?.sectionId === sectionId) {
       this.sessionGroupDropTarget = null;
       this.host.requestUpdate();
     }
@@ -535,14 +557,22 @@ export class SessionOrganizerController implements ReactiveController {
     if (!sourceGroup && !sessionKey) {
       return;
     }
+    if (
+      !sourceGroup &&
+      sectionId !== "pinned" &&
+      (this.host.sessionsGrouping !== "category" || (sectionId !== "ungrouped" && !category))
+    ) {
+      event.stopPropagation();
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
-    if (sourceGroup && category && sourceGroup !== category) {
+    if (sourceGroup && sectionId !== `category:${sourceGroup}`) {
       const position =
-        this.sessionGroupDropTarget?.group === category
+        this.sessionGroupDropTarget?.sectionId === sectionId
           ? this.sessionGroupDropTarget.position
           : "before";
-      void this.reorderSessionGroup(sourceGroup, category, position);
+      void this.reorderSessionGroup(sourceGroup, sectionId, position);
     } else {
       // Rows can be dragged from a browsed agent section, so search all caches.
       const session = sessionKey ? this.host.findSidebarSessionByKey(sessionKey) : undefined;

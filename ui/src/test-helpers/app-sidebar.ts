@@ -21,6 +21,7 @@ import type {
 import type { SessionDataController } from "../components/session-data-controller.ts";
 import type { SessionOrganizerController } from "../components/session-organizer-controller.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
+import { reconcileSessionHistory } from "../lib/sessions/reconcile.ts";
 import { createApplicationContextProvider } from "./application-context.ts";
 import { createStorageMock } from "./storage.ts";
 
@@ -43,11 +44,13 @@ export type SidebarLifecycleState = HTMLElement & {
   catalogOpenTarget: "viewer" | "terminal";
   canPairDevice: boolean;
   sidebarEntries: readonly string[];
+  sessionSectionOrder: readonly string[];
   workboardBoards: readonly SidebarWorkboardBoard[];
   workboardBoardsReady: boolean;
   workboardRenderers?: SidebarWorkboardRenderers;
   sidebarLiveActivity: boolean;
   onUpdateSidebarEntries?: (entries: string[]) => void;
+  onUpdateSessionSectionOrder?: (order: string[]) => void;
   pinnedAgentIds: readonly string[];
   sessionKey: string;
   onNavigate: (
@@ -211,6 +214,17 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
   const list = vi.fn((_options?: Parameters<SessionCapability["list"]>[0]) =>
     Promise.resolve<SessionsListResult | null>(null),
   );
+  const reconcile = vi.fn<SessionCapability["reconcile"]>((row, defaults, options) => {
+    const result = reconcileSessionHistory(state.result, row, defaults, options);
+    if (result === state.result) {
+      return false;
+    }
+    state = { ...state, result };
+    for (const listener of listeners) {
+      listener(state);
+    }
+    return true;
+  });
   const sessions = {
     get state() {
       return state;
@@ -243,6 +257,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     delete: deleteSession,
     deleteMany,
     list,
+    reconcile,
     setCreatorFilter,
     refresh,
     refreshReplacement,
@@ -265,6 +280,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     deleteSession,
     deleteMany,
     list,
+    reconcile,
     setCreatorFilter,
     refresh,
     refreshReplacement,

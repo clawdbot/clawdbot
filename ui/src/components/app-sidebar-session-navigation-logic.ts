@@ -71,6 +71,7 @@ export function buildSidebarSessionNavigationState(input: {
   context: ApplicationContext<RouteId> | undefined;
   routeSessionKey: string;
   sessionsResult: SessionsListResult | null;
+  activeSession?: GatewaySessionRow | null;
   sessionsAgentId: string | null;
   showCron: boolean;
   statusFilter: SidebarSessionStatusFilter;
@@ -85,6 +86,7 @@ export function buildSidebarSessionNavigationState(input: {
   const { context } = input;
   const navigation = resolveSessionNavigation({
     result: input.sessionsResult,
+    activeSession: input.activeSession,
     resultAgentId: input.sessionsAgentId,
     sessionKey: input.routeSessionKey,
     assistantAgentId:
@@ -188,6 +190,7 @@ export function partitionSidebarVisibleSections(input: {
   rows: SidebarRecentSession[];
   grouping: SidebarSessionsGrouping;
   knownGroups: string[] | undefined;
+  sectionOrder?: readonly string[];
   collapsedSections: ReadonlySet<string>;
   hideEmptyCreatorFilteredGroup: (category: string | undefined, rowCount: number) => boolean;
   visibleSessionLimits: ReadonlyMap<string, number>;
@@ -197,6 +200,7 @@ export function partitionSidebarVisibleSections(input: {
   const sections = groupSidebarSessionRows(input.rows, {
     grouping: input.grouping,
     knownGroups: input.knownGroups,
+    sectionOrder: input.sectionOrder,
   }).filter(
     (section) =>
       section.id !== "pinned" &&

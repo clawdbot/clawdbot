@@ -783,8 +783,9 @@ and may drop records on failure or saturation, so this surface is not a
 lossless compliance archive.
 
 Recording is on by default and controlled by
-[`audit.enabled`](/gateway/configuration-reference#audit). Message recording is
-separately controlled by `audit.messages` and defaults to `"off"`. When
+[`logging.audit.enabled`](/gateway/configuration-reference#audit). Message
+recording is separately controlled by `logging.audit.messages` and defaults to
+`"off"`. When
 recording is disabled, `audit.activity.list` keeps serving records written
 earlier until they expire.
 

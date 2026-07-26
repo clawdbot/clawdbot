@@ -16,6 +16,7 @@ import type {
 } from "../lib/sessions/catalog-key.ts";
 import { buildCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import {
+  groupCatalogSessionsByPerson,
   groupCatalogSessionsByProject,
   type CatalogProjectGrouping,
 } from "../lib/sessions/catalog-project-grouping.ts";
@@ -105,6 +106,7 @@ type SessionCatalogGroupsParams = {
   renderLiveRow: (row: GatewaySessionRow, display: CatalogBackingSessionDisplay) => unknown;
   onToggleSection: (sectionId: string) => void;
   viewMenuOpenCatalogId: string | null;
+  creatorFilterActive: boolean;
   onOpenViewMenu: (trigger: HTMLElement) => void;
   onLoadMore: (catalogId: string) => void;
   onOpenNewSession?: (agentId: string, target?: NewSessionTarget) => void;
@@ -232,7 +234,9 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
           </button>
           <button
             type="button"
-            class="sidebar-session-group-actions sidebar-session-sort sidebar-session-catalog-grouping"
+            class="sidebar-session-group-actions sidebar-session-sort sidebar-session-catalog-grouping ${params.creatorFilterActive
+              ? "sidebar-session-sort--filtered"
+              : ""}"
             data-session-catalog-view-menu=${catalog.id}
             title=${t("chat.sidebar.catalogViewOptions")}
             aria-label=${t("chat.sidebar.catalogViewOptions")}
@@ -293,7 +297,11 @@ function renderCatalogHostGroup(
 ) {
   const errorHelp = host.error ? `[${host.error.code}] ${host.error.message}` : undefined;
   const projectGroups =
-    params.projectGrouping === "project" ? groupCatalogSessionsByProject(host.sessions) : null;
+    params.projectGrouping === "project"
+      ? groupCatalogSessionsByProject(host.sessions)
+      : params.projectGrouping === "person"
+        ? groupCatalogSessionsByPerson(host.sessions)
+        : null;
   // Gateway errors stay on the catalog header; node headings remain so remote rows keep their owner.
   const showHostHeading = host.kind !== "gateway";
   return html`

@@ -20,7 +20,7 @@ import {
 } from "./src/browser-gateway-contract.js";
 import { parseBrowserTabToolBinding } from "./src/browser-tool-binding.js";
 import { describeBrowserTool } from "./src/browser-tool-description.js";
-import { BrowserToolSchema } from "./src/browser-tool.schema.js";
+import { BrowserToolOutputSchema, BrowserToolSchema } from "./src/browser-tool.schema.js";
 import { initializeBrowserSessionTabStore } from "./src/browser/session-tab-store.js";
 import {
   configureSystemProfileImportStateStore,
@@ -92,6 +92,7 @@ function createLazyBrowserTool(opts?: {
     name: "browser",
     description: describeBrowserTool({ targetDefault, hostHint }),
     parameters: BrowserToolSchema,
+    outputSchema: BrowserToolOutputSchema,
     execute: async (toolCallId, args, signal, onUpdate) => {
       const { createBrowserTool } = await loadBrowserRegistrationRuntimeModule();
       const tool = createBrowserTool(

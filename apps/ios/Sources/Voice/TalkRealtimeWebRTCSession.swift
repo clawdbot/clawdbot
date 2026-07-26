@@ -1169,7 +1169,7 @@ extension TalkRealtimeWebRTCSession {
 
     private func exchangeOffer(_ sdp: String, session: TalkRealtimeClientSession) async throws -> String {
         let rawURL = session.offerUrl ?? Self.defaultOfferURL
-        guard let url = URL(string: rawURL) else {
+        guard let url = await gateway.resolveGatewayHTTPURL(rawURL) else {
             throw NSError(domain: "TalkRealtimeWebRTC", code: 4, userInfo: [
                 NSLocalizedDescriptionKey: "Invalid OpenAI realtime offer URL",
             ])

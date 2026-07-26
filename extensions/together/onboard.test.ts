@@ -17,6 +17,7 @@ describe("Together onboarding", () => {
     expect(TOGETHER_DEFAULT_MODEL_REF).toBe(
       `together/${manifest.modelCatalog.providers.together.defaultModel}`,
     );
+    expect(TOGETHER_DEFAULT_MODEL_REF).toBe("together/moonshotai/Kimi-K2.6");
     expect(config.agents?.defaults?.models?.[TOGETHER_DEFAULT_MODEL_REF]).toEqual({
       alias: "Together AI",
     });

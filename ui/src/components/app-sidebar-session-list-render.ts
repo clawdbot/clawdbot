@@ -74,8 +74,6 @@ function renderSessionSection(params: {
   const collapsedAttentionDot =
     collapsed &&
     section.rows.some((row) => rowDemandsVisibility(row, RowVisibilityReason.Attention));
-  const acceptsSessions =
-    host.sessionsGrouping === "category" && (section.id === "ungrouped" || Boolean(group));
   const sectionClass = [
     "sidebar-recent-sessions__group",
     `sidebar-recent-sessions__group--zone-${zone}`,
@@ -86,7 +84,7 @@ function renderSessionSection(params: {
     host.sessionOrganizer.sessionDropTarget === section.id
       ? "sidebar-recent-sessions__group--session-drop"
       : "",
-    group && host.sessionOrganizer.sessionGroupDropTarget?.group === group
+    host.sessionOrganizer.sessionGroupDropTarget?.sectionId === section.id
       ? `sidebar-recent-sessions__group--group-drop-${host.sessionOrganizer.sessionGroupDropTarget.position}`
       : "",
   ]
@@ -96,15 +94,9 @@ function renderSessionSection(params: {
     <div
       class=${sectionClass}
       data-session-section=${section.id}
-      @dragover=${acceptsSessions || group
-        ? (event: DragEvent) => host.sectionDragOver(event, section.id, group)
-        : nothing}
-      @dragleave=${acceptsSessions || group
-        ? (event: DragEvent) => host.sectionDragLeave(event, section.id, group)
-        : nothing}
-      @drop=${acceptsSessions || group
-        ? (event: DragEvent) => host.sectionDrop(event, section.id, group)
-        : nothing}
+      @dragover=${(event: DragEvent) => host.sectionDragOver(event, section.id, group)}
+      @dragleave=${(event: DragEvent) => host.sectionDragLeave(event, section.id, group)}
+      @drop=${(event: DragEvent) => host.sectionDrop(event, section.id, group)}
     >
       ${html`
         <div
@@ -333,6 +325,7 @@ function renderSessionCatalogs(params: {
       ? (host.sidebarMenus.catalogViewMenuTrigger?.getAttribute("data-session-catalog-view-menu") ??
         null)
       : null,
+    creatorFilterActive: host.sessionCreatorFilterActive,
     onOpenViewMenu: (trigger) => host.sidebarMenus.toggleCatalogViewMenu(trigger),
     onLoadMore: (catalogId) => void host.sessionData.loadMoreSessionCatalog(catalogId),
     onOpenNewSession: host.onOpenNewSession,

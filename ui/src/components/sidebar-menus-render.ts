@@ -327,8 +327,15 @@ export function renderSidebarCatalogViewMenuForController(controller: SidebarMen
     position,
     trigger: controller.catalogViewMenuTrigger,
     grouping: host.catalogProjectGrouping,
+    creators: host.sessionOwnershipVisible ? host.sessionCreatorOptions : [],
+    creatorFilterId: host.sessionCreatorFilterActive ? host.sessionCreatorFilterId : null,
     onGroupingChange: (grouping) => {
       host.setCatalogProjectGrouping(grouping);
+      controller.closeCatalogViewMenu({ restoreFocus: true });
+    },
+    onCreatorFilterChange: (creatorId) => {
+      host.sessionCreatorFilterId = creatorId;
+      void host.sessionDataContext?.sessions.setCreatorFilter(creatorId);
       controller.closeCatalogViewMenu({ restoreFocus: true });
     },
     onClose: (restoreFocus) => {

@@ -702,8 +702,13 @@ class OpenClawShell extends OpenClawLightDomElement {
       scope: context.gateway.connection.gatewayUrl,
       snapshotHash: snapshot.hash ?? undefined,
       onApplied: (patch) => {
-        if (patch.sidebarEntries !== undefined) {
-          context.navigation.update({ sidebarEntries: patch.sidebarEntries });
+        if (patch.sidebarEntries !== undefined || patch.sessionSectionOrder !== undefined) {
+          context.navigation.update({
+            ...(patch.sidebarEntries !== undefined ? { sidebarEntries: patch.sidebarEntries } : {}),
+            ...(patch.sessionSectionOrder !== undefined
+              ? { sessionSectionOrder: patch.sessionSectionOrder }
+              : {}),
+          });
         }
         if (isSupportedLocale(patch.locale)) {
           void i18n.setLocale(patch.locale);
@@ -824,6 +829,7 @@ class OpenClawShell extends OpenClawLightDomElement {
           runtime.handleCriticalObserverDigest({
             payload,
             selectedSessionKey: this.activeSessionKey,
+            sessionHost: this.storedOutboxScopeHost(context),
             sessions: context.sessions.state.result?.sessions ?? [],
             onOpen: (sessionKey) => {
               context.gateway.setSessionKey(sessionKey);
@@ -1850,6 +1856,7 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .canPairDevice=${gatewayConnected &&
                 hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null)}
                 .sidebarEntries=${navigationSnapshot.sidebarEntries}
+                .sessionSectionOrder=${navigationSnapshot.sessionSectionOrder}
                 .workboardBoards=${this.sidebarWorkboardSnapshot.boards}
                 .workboardBoardsReady=${this.sidebarWorkboardSnapshot.ready}
                 .workboardRenderers=${this.sidebarWorkboardRenderers}
@@ -1872,6 +1879,8 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .draftSessionAgentId=${this.draftSessionAgentId()}
                 .onUpdateSidebarEntries=${(entries: string[]) =>
                   context.navigation.update({ sidebarEntries: entries })}
+                .onUpdateSessionSectionOrder=${(order: string[]) =>
+                  context.navigation.update({ sessionSectionOrder: order })}
                 .onPairMobile=${() => void context.overlays.openDevicePairSetup()}
                 .onNavigate=${(routeId: string, options?: ApplicationNavigationOptions) =>
                   this.navigate(routeId, options)}

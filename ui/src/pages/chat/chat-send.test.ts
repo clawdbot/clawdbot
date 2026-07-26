@@ -395,7 +395,6 @@ function makeHost(overrides?: MakeHostOverrides): TestChatHost | TestChatHostWit
         chatShowToolCalls: next.chatShowToolCalls,
         chatPersistCommentary: next.chatPersistCommentary,
         chatSendShortcut: next.chatSendShortcut,
-        splitRatio: next.splitRatio,
       });
     }),
     ...hostOverrides,

@@ -411,7 +411,7 @@ allowlist such as `["all"]`.
 
 | Policy field                                        | Observed state                                                                                     | Use when                                                               |
 | --------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `dataHandling.sensitiveLogging.requireRedaction`    | `logging.redactSensitive`                                                                          | Set to `true` to reject `logging.redactSensitive: "off"`.              |
+| `dataHandling.sensitiveLogging.requireRedaction`    | Sensitive log redaction, which is always on                                                        | Set to `true` to record the requirement; OpenClaw always satisfies it. |
 | `dataHandling.telemetry.denyContentCapture`         | `diagnostics.otel.captureContent`                                                                  | Set to `true` to reject telemetry content capture.                     |
 | `dataHandling.retention.requireSessionMaintenance`  | `session.maintenance.mode`                                                                         | Set to `true` to require effective session maintenance mode `enforce`. |
 | `dataHandling.memory.denySessionTranscriptIndexing` | `memory.qmd.sessions.enabled`, `memory.search.experimental.sessionMemory`, and per-agent overrides | Set to `true` to reject session transcript indexing into memory.       |
@@ -1005,16 +1005,16 @@ workspace config:
   denies open group ingress
 - set reported channel ingress `requireMention` paths to `true` when policy
   requires group mentions
-- set `logging.redactSensitive=tools` when policy requires sensitive logging
-  redaction
 - set `diagnostics.otel.captureContent=false`, or
   `diagnostics.otel.captureContent.enabled=false` for object-form telemetry
   capture settings, when policy denies telemetry content capture
 
 Scoped elevated-tools repairs are detect-only. Scoped data-handling repairs are
-also skipped when the finding reports shared logging or telemetry config,
-because changing the shared setting would affect more than the scoped policy
-target.
+also skipped when the finding reports shared telemetry config, because changing
+the shared setting would affect more than the scoped policy target.
+
+`dataHandling.sensitiveLogging.requireRedaction` has no repair. Sensitive log
+redaction is unconditional, so the check only validates the policy declaration.
 
 Scoped required-deny repairs are skipped when the finding reports inherited
 root `tools.deny`, because adding the required tool to root config would affect

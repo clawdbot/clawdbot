@@ -18,13 +18,6 @@ export function createPolicyDataAuthChecks(deps: PolicyDoctorCheckDeps): readonl
         CHECK_IDS.policyDataHandlingRedactionDisabled,
       );
     },
-    repair(ctx, findings) {
-      return repairPolicyAutomaticNarrower(
-        ctx,
-        findings,
-        CHECK_IDS.policyDataHandlingRedactionDisabled,
-      );
-    },
   };
   const policyDataHandlingTelemetryContentCaptureCheck: HealthCheck = {
     id: CHECK_IDS.policyDataHandlingTelemetryContentCapture,

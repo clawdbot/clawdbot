@@ -82,7 +82,9 @@ function getBackgroundTasksState(host: BackgroundTasksHost): BackgroundTasksStat
     // agent switches and only reload the task list for the new scope.
     collapsed: current?.collapsed ?? true,
     error: null,
-    finishedCollapsed: current?.finishedCollapsed ?? false,
+    // Finished history starts collapsed so active work owns the rail; the
+    // section header still shows the count for discoverability.
+    finishedCollapsed: current?.finishedCollapsed ?? true,
     loadedClient: null,
     loading: false,
     pendingReload: false,
@@ -588,7 +590,7 @@ export function renderBackgroundTasksRail(
             ${empty
               ? html`<div class="chat-tasks-rail__state">${t("chat.backgroundTasks.empty")}</div>`
               : nothing}
-            <div class="chat-tasks-rail__scroll">
+            <div class="chat-tasks-rail__scroll chat-tasks-rail__scroll--split">
               ${active.length > 0
                 ? html`
                     <section class="chat-tasks-rail__section" data-tasks-section="running">

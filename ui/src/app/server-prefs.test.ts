@@ -39,6 +39,7 @@ describe("server pref extraction", () => {
           chatMessageMaxWidth: "82%",
           showAdvancedSettings: true,
           sidebarEntries: ["route:usage", "session:agent:main:test", "route:usage", 7],
+          sessionSectionOrder: ["category:Alpha", "work", "bogus", "work", 7],
           bogus: true,
         }),
         { onApplied },
@@ -52,6 +53,7 @@ describe("server pref extraction", () => {
       chatSendShortcut: "modifier-enter",
       showAdvancedSettings: true,
       sidebarEntries: ["route:usage", "session:agent:main:test"],
+      sessionSectionOrder: ["category:Alpha", "work"],
     });
   });
 
@@ -163,6 +165,20 @@ describe("changedServerUiPrefs", () => {
       changedServerUiPrefs(
         { ...previous, sidebarEntries },
         { ...previous, sidebarEntries: [...sidebarEntries] },
+      ),
+    ).toBeNull();
+  });
+
+  it("syncs canonical session section order without treating equal arrays as changes", () => {
+    const previous = loadSettings();
+    const sessionSectionOrder = ["ungrouped", "category:Alpha", "groups", "work"];
+    expect(changedServerUiPrefs(previous, { ...previous, sessionSectionOrder })).toEqual({
+      sessionSectionOrder,
+    });
+    expect(
+      changedServerUiPrefs(
+        { ...previous, sessionSectionOrder },
+        { ...previous, sessionSectionOrder: [...sessionSectionOrder] },
       ),
     ).toBeNull();
   });
@@ -297,6 +313,24 @@ describe("pushServerUiPrefs", () => {
         baseHash: "hash-1",
         raw: JSON.stringify({ ui: { prefs: { sidebarEntries: remainingEntries } } }),
         replacePaths: ["ui.prefs.sidebarEntries"],
+        note: "control-ui prefs sync",
+      });
+    });
+  });
+
+  it("marks the session section order array for replacement", async () => {
+    const request = vi.fn(async (method: string) =>
+      method === "config.get" ? { hash: "hash-0" } : {},
+    );
+    const client = { request } as unknown as Parameters<typeof pushServerUiPrefs>[0];
+    const sessionSectionOrder = ["ungrouped", "category:Alpha", "groups", "work"];
+
+    pushServerUiPrefs(client, { sessionSectionOrder });
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith("config.patch", {
+        baseHash: "hash-0",
+        raw: JSON.stringify({ ui: { prefs: { sessionSectionOrder } } }),
+        replacePaths: ["ui.prefs.sessionSectionOrder"],
         note: "control-ui prefs sync",
       });
     });

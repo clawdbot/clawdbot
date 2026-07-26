@@ -3404,7 +3404,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: tools.agentToAgent
   - H3: tools.sessions
   - H3: `tools.sessions_spawn`
-  - H3: tools.experimental
+  - H3: tools.updatePlan
   - H3: agents.defaults.subagents
   - H2: Custom providers and base URLs
   - H3: Provider field details
@@ -3477,7 +3477,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Bridge (legacy, removed)
   - H2: Cron
   - H3: cron.failureAlert
-  - H3: cron.failureDestination
   - H2: Media model template variables
   - H2: Config includes ($include)
   - H2: Related
@@ -9718,6 +9717,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /tools/browser-control
 - Headings:
   - H2: Control API (optional)
+  - H3: Page extraction
   - H3: /act error contract
   - H3: Playwright requirement
   - H4: Docker Playwright install

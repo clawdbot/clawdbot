@@ -60,13 +60,25 @@ export async function browserPdfSave(
 /** Capture the selected page HTML for private extraction processing. */
 export async function browserPageContent(
   baseUrl: string | undefined,
-  opts: { targetId?: string; profile?: string; timeoutMs: number; signal?: AbortSignal },
+  opts: {
+    targetId?: string;
+    profile?: string;
+    timeoutMs: number;
+    signal?: AbortSignal;
+    selector?: string;
+    ignoreSelectors?: string[];
+  },
 ): Promise<BrowserPageContentResult> {
   const q = buildProfileQuery(opts.profile);
   return await fetchBrowserJson<BrowserPageContentResult>(withBaseUrl(baseUrl, `/extract${q}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ targetId: opts.targetId, timeoutMs: opts.timeoutMs }),
+    body: JSON.stringify({
+      targetId: opts.targetId,
+      timeoutMs: opts.timeoutMs,
+      selector: opts.selector,
+      ignoreSelectors: opts.ignoreSelectors,
+    }),
     timeoutMs: opts.timeoutMs,
     signal: opts.signal,
   });
