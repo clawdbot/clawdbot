@@ -32,7 +32,7 @@ export type AgentHarnessAttemptResult = Extract<
   AgentHarnessAttemptResultContract,
   { terminal: unknown }
 >;
-export type AttemptTerminal = AgentHarnessAttemptResult["terminal"];
+type AttemptTerminal = AgentHarnessAttemptResult["terminal"];
 export type AttemptResultWithSdkSessionId = AgentHarnessAttemptResult & { sdkSessionId?: string };
 export function withPromptFailure(terminal: AttemptTerminal, error: unknown): AttemptTerminal {
   return terminal.kind === "aborted" || terminal.kind === "timeout"
@@ -137,7 +137,7 @@ export type ModelRefInputObject = {
   contextWindow?: number;
   maxTokens?: number;
 };
-export type ResolveSandboxContextFn = typeof defaultResolveSandboxContext;
+type ResolveSandboxContextFn = typeof defaultResolveSandboxContext;
 export interface CopilotAttemptDeps {
   pool: CopilotClientPool;
   operation?: CopilotAttemptOperation;

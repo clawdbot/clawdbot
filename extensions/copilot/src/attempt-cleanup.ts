@@ -93,9 +93,7 @@ export function deferBackgroundCompactionCleanup(params: {
     return outcome;
   })();
 }
-export async function cancelBackgroundCompactionBeforeTeardown(
-  session: SessionLike,
-): Promise<void> {
+async function cancelBackgroundCompactionBeforeTeardown(session: SessionLike): Promise<void> {
   const cancelBackgroundCompaction = session.rpc?.history?.cancelBackgroundCompaction;
   if (!cancelBackgroundCompaction) {
     return;
@@ -117,7 +115,7 @@ export async function cancelBackgroundCompactionBeforeTeardown(
     }
   }
 }
-export async function awaitDeferredCleanupBeforeDeadline(params: {
+async function awaitDeferredCleanupBeforeDeadline(params: {
   abortSignal: AbortSignal | undefined;
   awaitSessionIdle: boolean;
   bridge: ReturnType<typeof attachEventBridge>;

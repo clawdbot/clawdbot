@@ -219,7 +219,7 @@ export function createSessionConfig(
         : {}),
   };
 }
-export function buildCopilotAvailableTools(sdkTools: SdkTool[], includeAskUser: boolean): string[] {
+function buildCopilotAvailableTools(sdkTools: SdkTool[], includeAskUser: boolean): string[] {
   const availableTools = sdkTools.map((tool) => tool.name);
   if (includeAskUser) {
     availableTools.push(...COPILOT_ASK_USER_AVAILABLE_TOOLS);
@@ -246,7 +246,7 @@ export async function createMessageOptions(
     ...(requestHeaders ? { requestHeaders } : {}),
   };
 }
-export function createPromptImageAttachments(
+function createPromptImageAttachments(
   images: unknown[],
 ): NonNullable<MessageOptions["attachments"]> {
   return images.flatMap((image, index) => {
@@ -269,7 +269,7 @@ export function createPromptImageAttachments(
     ];
   });
 }
-export async function resolvePromptImages(
+async function resolvePromptImages(
   params: AttemptParamsLike,
   context: {
     effectiveCwd: string | undefined;
@@ -307,7 +307,7 @@ export async function resolvePromptImages(
   });
   return result.images;
 }
-export function resolveImageCapabilityModel(params: AttemptParamsLike): { input?: string[] } {
+function resolveImageCapabilityModel(params: AttemptParamsLike): { input?: string[] } {
   const model = params.model;
   if (model && typeof model === "object" && Array.isArray((model as { input?: unknown }).input)) {
     return { input: (model as { input: string[] }).input };
