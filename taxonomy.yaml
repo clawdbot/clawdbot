@@ -322,7 +322,7 @@ surfaces:
           - docs/concepts/architecture.md
           - docs/web/control-ui.md
           - docs/web/webchat.md
-          - docs/refactor/canvas.md
+          - docs/plugins/reference/canvas.md
         search_anchors:
           - hosted web surface
           - control ui gateway
@@ -1094,7 +1094,6 @@ surfaces:
             description: Canvas plugin groups A2UI push, reset, and JSONL transport with snapshot capture and node-rendered Canvas state.
         docs:
           - docs/plugins/reference/canvas.md
-          - docs/refactor/canvas.md
           - docs/gateway/configuration-reference.md
         search_anchors:
           - Canvas plugin

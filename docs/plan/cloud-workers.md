@@ -9,7 +9,11 @@ read_when:
 
 ## Status
 
-Proposal, revision 3. Not implemented. Direction agreed 2026-07; revision 2 incorporated adversarial review findings (dedicated worker protocol, placement/environment state machines, git-aware inbound sync, one-way v1 handoff, controlled-egress security wording). Revision 3 settles the sync ownership model (worker authors commits, gateway adopts and publishes), adds a no-git plain sync mode, fixes worker exec at full-within-box, moves internet policy to provision time, and restores agent dispatch to milestone 3.
+Revision 3. Milestones 1-3 are shipped in `main`: the environments state machine and Crabbox provider (`src/gateway/server-methods/environments.ts`), the authenticated worker protocol and admission path (`src/worker/worker-connection-{admission,contract,frames}.ts`), the `openclaw worker` embedded loop (`src/worker/worker-command.runtime.ts`), the gateway inference proxy (`src/worker/inference-stream.runtime.ts`), and human/UI dispatch (`sessions.dispatch`, declared in `src/gateway/methods/core-descriptors.ts`). Shipped behavior is documented in `docs/gateway/cloud-workers.md`.
+
+Not yet implemented: milestone 4 (symmetric live handoff) and the "Later" items below. The "both humans and agents can dispatch" goal is also only half-shipped — `sessions.dispatch` covers human/UI dispatch, but no agent-facing dispatch tool exists (`src/agents/tools` has none).
+
+Direction agreed 2026-07; revision 2 incorporated adversarial review findings (dedicated worker protocol, placement/environment state machines, git-aware inbound sync, one-way v1 handoff, controlled-egress security wording). Revision 3 settles the sync ownership model (worker authors commits, gateway adopts and publishes), adds a no-git plain sync mode, fixes worker exec at full-within-box, moves internet policy to provision time, and restores agent dispatch to milestone 3.
 
 ## Problem
 

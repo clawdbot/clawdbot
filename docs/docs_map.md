@@ -5165,16 +5165,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Milestones
   - H2: Open questions
 
-## plan/path3-sqlite-session-artifact-family.md
-
-- Route: /plan/path3-sqlite-session-artifact-family
-- Headings:
-  - H1: Path 3 SQLite Session Artifact Family
-  - H2: Authoritative family
-  - H2: Non-family artifacts after the flip
-  - H2: Patch points
-  - H2: Focused tests
-
 ## plan/swarms.md
 
 - Route: /plan/swarms
@@ -8671,19 +8661,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Tests
   - H2: Compatibility Notes
   - H2: Success Criteria
-
-## refactor/canvas.md
-
-- Route: /refactor/canvas
-- Headings:
-  - H1: Canvas plugin refactor
-  - H2: Goal
-  - H2: Non-goals
-  - H2: Current branch state
-  - H2: Target shape
-  - H2: Migration steps
-  - H2: Audit checklist
-  - H2: Verification commands
 
 ## refactor/database-first.md
 
