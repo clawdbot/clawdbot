@@ -8,7 +8,7 @@ import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { openNodeSqliteDatabase, requireNodeSqlite } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 
 type ReadOnlySqliteSessionSummary = {
@@ -373,10 +373,9 @@ export function readOnlySqliteTranscriptSessionIds(sqlitePath: string): string[]
   if (!fs.existsSync(sqlitePath)) {
     return [];
   }
-  const sqlite = requireNodeSqlite();
-  let database: InstanceType<typeof sqlite.DatabaseSync> | undefined;
+  let database: DatabaseSync | undefined;
   try {
-    database = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
+    database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
     const table = database
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
       .get("transcript_events");
@@ -397,7 +396,7 @@ export function readOnlySqliteTranscriptSessionIds(sqlitePath: string): string[]
 // Read-only transcript snapshot reader for dry-run detection phase.
 // Avoids opening writable database lifecycle (lease/WAL/schema-ensure).
 // Returns rows only; migration parses per-row during repair.
-export type ReadOnlyTranscriptSnapshot =
+type ReadOnlyTranscriptSnapshot =
   | {
       ok: true;
       rows: Array<{ eventJson: string; seq: number }>;
@@ -411,10 +410,9 @@ export function readOnlySqliteTranscriptSnapshot(
   if (!fs.existsSync(sqlitePath)) {
     return { ok: false, error: new Error(`SQLite database not found: ${sqlitePath}`) };
   }
-  const sqlite = requireNodeSqlite();
-  let database: InstanceType<typeof sqlite.DatabaseSync> | undefined;
+  let database: DatabaseSync | undefined;
   try {
-    database = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
+    database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
     const rows = database
       .prepare(
         "SELECT event_json, seq FROM transcript_events WHERE session_id = ? ORDER BY seq ASC",
