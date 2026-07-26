@@ -1,15 +1,110 @@
 // Gateway TLS runtime loads configured certificates or generates a local
 // self-signed pair, returning server-ready options plus client fingerprint.
 import { X509Certificate } from "node:crypto";
+import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import tls from "node:tls";
+import {
+  ensureDurableDirectory,
+  syncDirectory,
+  type DirectoryReceipt,
+} from "@openclaw/fs-safe/durability";
 import type { GatewayTlsConfig } from "../../config/types.gateway.js";
 import { runExec } from "../../process/exec.js";
-import { CONFIG_DIR, ensureDir, resolveUserPath, shortenHomeInString } from "../../utils.js";
-import { pathExists } from "../fs-safe.js";
+import { CONFIG_DIR, resolveUserPath, shortenHomeInString } from "../../utils.js";
+import { sameFileIdentity } from "../fs-safe-advanced.js";
+import { canonicalPathFromExistingAncestor, pathExists } from "../fs-safe.js";
 import { resolveSystemBin } from "../resolve-system-bin.js";
 import { normalizeFingerprint } from "./fingerprint.js";
+
+const GATEWAY_TLS_CERT_GENERATION_TIMEOUT_MS = 30_000;
+
+type GatewayTlsLog = {
+  info?: (message: string) => void;
+  warn?: (message: string, meta?: Record<string, unknown>) => void;
+};
+
+type GatewayTlsDegradation = {
+  event: "gateway.tls.degraded";
+  ownerKind: "gateway";
+  ownerId: "tls";
+  reason: "atomic hard-link publication unavailable" | "directory durability unavailable";
+  state: "best-effort";
+};
+
+function gatewayTlsDegradation(reason: GatewayTlsDegradation["reason"]): GatewayTlsDegradation {
+  return {
+    event: "gateway.tls.degraded",
+    ownerKind: "gateway",
+    ownerId: "tls",
+    reason,
+    state: "best-effort",
+  };
+}
+
+function isHardLinkUnsupportedError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code === "ENOTSUP" || code === "EOPNOTSUPP" || code === "EPERM";
+}
+
+type PublishedGeneratedTlsOutput = {
+  degradationReasons: GatewayTlsDegradation["reason"][];
+  identity: Stats;
+};
+
+async function publishGeneratedTlsOutput(
+  stagedPath: string,
+  finalPath: string,
+  contents: string,
+  parentReceipt: DirectoryReceipt,
+): Promise<PublishedGeneratedTlsOutput> {
+  const degradationReasons: GatewayTlsDegradation["reason"][] = [];
+  const stagedHandle = await fs.open(stagedPath, "r+");
+  let stagedIdentity: Stats;
+  try {
+    await stagedHandle.sync();
+    stagedIdentity = await stagedHandle.stat();
+  } finally {
+    await stagedHandle.close();
+  }
+  let publishedIdentity: Stats | undefined;
+  // Publication failures deliberately preserve any final path already created. Node has no
+  // cross-platform unlink-if-inode-matches primitive, so rollback could delete a replacement.
+  try {
+    await fs.link(stagedPath, finalPath);
+    const linkedIdentity = await fs.lstat(finalPath);
+    if (!linkedIdentity.isFile() || !sameFileIdentity(stagedIdentity, linkedIdentity)) {
+      throw new Error(`Generated TLS output changed during publication: ${finalPath}`);
+    }
+    publishedIdentity = linkedIdentity;
+  } catch (error) {
+    if (!isHardLinkUnsupportedError(error)) {
+      throw error;
+    }
+    degradationReasons.push("atomic hard-link publication unavailable");
+    // Some supported filesystems cannot publish with hard links. An exclusive handle keeps
+    // no-overwrite semantics without pathname cleanup that could delete concurrent output.
+    const handle = await fs.open(finalPath, "wx", 0o600);
+    try {
+      publishedIdentity = await handle.stat();
+      await handle.writeFile(contents, "utf8");
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+  }
+  if (!publishedIdentity) {
+    throw new Error(`Generated TLS output was not published: ${finalPath}`);
+  }
+  const directorySync = await syncDirectory(parentReceipt, {
+    label: "gateway TLS publication directory",
+  });
+  if (directorySync.status === "unsupported") {
+    degradationReasons.push("directory durability unavailable");
+  }
+  return { degradationReasons, identity: publishedIdentity };
+}
 
 // Gateway TLS runtime carries loaded cert material plus the normalized SHA-256
 // fingerprint advertised to clients.
@@ -27,53 +122,102 @@ export type GatewayTlsRuntime = {
 async function generateSelfSignedCert(params: {
   certPath: string;
   keyPath: string;
-  log?: { info?: (msg: string) => void };
+  log?: GatewayTlsLog;
 }): Promise<void> {
-  const certDir = path.dirname(params.certPath);
-  const keyDir = path.dirname(params.keyPath);
-  await ensureDir(certDir);
-  if (keyDir !== certDir) {
-    await ensureDir(keyDir);
-  }
+  const certDir = await canonicalPathFromExistingAncestor(path.dirname(params.certPath));
+  const keyDir = await canonicalPathFromExistingAncestor(path.dirname(params.keyPath));
+  const certDirectory = await ensureDurableDirectory({ directoryPath: certDir });
+  const keyDirectory =
+    keyDir === certDir ? certDirectory : await ensureDurableDirectory({ directoryPath: keyDir });
   const opensslBin = resolveSystemBin("openssl");
   if (!opensslBin) {
     throw new Error(
       "openssl not found in trusted system directories. Install it in an OS-managed location.",
     );
   }
-  // Use argv execution with a trusted system binary; certificate paths are arguments,
-  // not shell text.
-  await runExec(
-    opensslBin,
-    [
-      "req",
-      "-x509",
-      "-newkey",
-      "rsa:2048",
-      "-sha256",
-      "-days",
-      "3650",
-      "-nodes",
-      "-keyout",
-      params.keyPath,
-      "-out",
-      params.certPath,
-      "-subj",
-      "/CN=openclaw-gateway",
-    ],
-    { logOutput: false },
-  );
-  await fs.chmod(params.keyPath, 0o600).catch(() => {});
-  await fs.chmod(params.certPath, 0o600).catch(() => {});
-  params.log?.info?.(
-    `gateway tls: generated self-signed cert at ${shortenHomeInString(params.certPath)}`,
-  );
+  const certStageDir = await fs.mkdtemp(path.join(certDir, ".openclaw-gateway-tls-cert-"));
+  const stagedCertPath = path.join(certStageDir, "cert.pem");
+  let keyStageDir: string | undefined;
+  try {
+    keyStageDir = await fs.mkdtemp(path.join(keyDir, ".openclaw-gateway-tls-key-"));
+    const stagedKeyPath = path.join(keyStageDir, "key.pem");
+    await Promise.all([fs.chmod(certStageDir, 0o700), fs.chmod(keyStageDir, 0o700)]);
+    // OpenSSL never sees the configured final paths, so timeout and generation
+    // failures cannot strand a half-written certificate pair there.
+    await runExec(
+      opensslBin,
+      [
+        "req",
+        "-x509",
+        "-newkey",
+        "rsa:2048",
+        "-sha256",
+        "-days",
+        "3650",
+        "-nodes",
+        "-keyout",
+        stagedKeyPath,
+        "-out",
+        stagedCertPath,
+        "-subj",
+        "/CN=openclaw-gateway",
+      ],
+      {
+        logOutput: false,
+        timeoutMs: GATEWAY_TLS_CERT_GENERATION_TIMEOUT_MS,
+      },
+    );
+    await Promise.all([fs.chmod(stagedKeyPath, 0o600), fs.chmod(stagedCertPath, 0o600)]);
+    const [cert, key] = await Promise.all([
+      fs.readFile(stagedCertPath, "utf8"),
+      fs.readFile(stagedKeyPath, "utf8"),
+    ]);
+    tls.createSecureContext({ cert, key, minVersion: "TLSv1.3" });
+    const degradationReasons = new Set<GatewayTlsDegradation["reason"]>();
+    if (
+      certDirectory.parentSync.status === "unsupported" ||
+      keyDirectory.parentSync.status === "unsupported"
+    ) {
+      degradationReasons.add("directory durability unavailable");
+    }
+    const certPublication = await publishGeneratedTlsOutput(
+      stagedCertPath,
+      path.join(certDirectory.path, path.basename(params.certPath)),
+      cert,
+      certDirectory,
+    );
+    certPublication.degradationReasons.forEach((reason) => degradationReasons.add(reason));
+    // Preserve the published certificate on key failure: conditional pathname removal is not atomic.
+    const keyPublication = await publishGeneratedTlsOutput(
+      stagedKeyPath,
+      path.join(keyDirectory.path, path.basename(params.keyPath)),
+      key,
+      keyDirectory,
+    );
+    keyPublication.degradationReasons.forEach((reason) => degradationReasons.add(reason));
+    for (const reason of degradationReasons) {
+      const degradation = gatewayTlsDegradation(reason);
+      params.log?.warn?.(
+        `[GATEWAY_TLS_DEGRADED] best-effort gateway:tls: ${degradation.reason}.`,
+        degradation,
+      );
+    }
+    params.log?.info?.(
+      `gateway tls: generated self-signed cert at ${shortenHomeInString(params.certPath)}`,
+    );
+  } finally {
+    await Promise.allSettled(
+      [certStageDir, keyStageDir]
+        .filter((dir): dir is string => Boolean(dir))
+        .map((dir) => fs.rm(dir, { force: true, recursive: true })),
+    );
+  }
 }
 
 /** Load or generate gateway TLS material and return server-ready TLS options. */
 export async function loadGatewayTlsRuntime(
   cfg: GatewayTlsConfig | undefined,
-  log?: { info?: (msg: string) => void; warn?: (msg: string) => void },
+  log?: GatewayTlsLog,
 ): Promise<GatewayTlsRuntime> {
   if (!cfg || cfg.enabled !== true) {
     return { enabled: false, required: false };

@@ -1695,7 +1695,7 @@ describe("resolveModel", () => {
     expect(model.compat).toEqual(
       expect.objectContaining({
         supportsUsageInStreaming: true,
-        supportsReasoningEffort: false,
+        supportsReasoningEffort: true,
         maxTokensField: "max_tokens",
       }),
     );
@@ -2929,6 +2929,41 @@ describe("resolveModel", () => {
         thinkingFormat: "qwen-chat-template",
       }),
     );
+  });
+
+  it("does not derive reasoning from ignored compat on a catalog-owned vLLM route", () => {
+    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
+      ...makeModel("Qwen/Qwen3-8B"),
+      provider: "vllm",
+      api: "openai-completions",
+      baseUrl: "http://localhost:9000",
+      reasoning: false,
+      compat: { supportsStrictMode: false },
+    });
+    const cfg = {
+      models: {
+        providers: {
+          vllm: {
+            baseUrl: "http://localhost:9000",
+            api: "openai-completions",
+            models: [
+              {
+                id: "Qwen/Qwen3-8B",
+                name: "Qwen/Qwen3-8B",
+                compat: { thinkingFormat: "qwen-chat-template" },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("vllm", "Qwen/Qwen3-8B", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model?.reasoning).toBe(false);
+    expect(result.model?.compat).toEqual(expect.objectContaining({ supportsStrictMode: false }));
+    expect(result.model?.compat).not.toHaveProperty("thinkingFormat");
   });
 
   it("infers reasoning for matching vLLM Qwen compat fallback models", () => {

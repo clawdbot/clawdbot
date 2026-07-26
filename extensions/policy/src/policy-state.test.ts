@@ -47,6 +47,14 @@ describe("scanPolicyChannels", () => {
   });
 });
 
+describe("scanPolicyRouting", () => {
+  it("is opt-in so existing evidence and attestations remain stable", () => {
+    const cfg = { channels: { imessage: {} }, bindings: [] };
+    expect(collectPolicyEvidence(cfg)).not.toHaveProperty("routing");
+    expect(collectPolicyEvidence(cfg, { routing: {} })).toHaveProperty("routing");
+  });
+});
+
 describe("scanPolicyTools", () => {
   it("scans documented bullet tool declarations", async () => {
     await expect(

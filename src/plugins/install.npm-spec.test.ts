@@ -1774,6 +1774,7 @@ describe("installPluginFromNpmSpec", () => {
       `${JSON.stringify({ lockfileVersion: 3, packages: {} })}\n`,
       "utf8",
     );
+    fs.writeFileSync(path.join(npmProjectRoot, "npm-shrinkwrap.json"), "{}\n", "utf8");
 
     mockNpmViewAndInstall({
       spec: `${packageName}@1.0.0`,
@@ -1829,6 +1830,7 @@ describe("installPluginFromNpmSpec", () => {
       ),
     ).toBe("old tree");
     expect(fs.existsSync(path.join(quarantineDir, "package-lock.json"))).toBe(true);
+    expect(fs.existsSync(path.join(quarantineDir, "npm-shrinkwrap.json"))).toBe(true);
   });
 
   it("allows rebuilt hoisted dependencies after managed npm project quarantine", async () => {
@@ -2945,7 +2947,7 @@ describe("installPluginFromNpmSpec", () => {
       path.join(hostRoot, "pnpm-workspace.yaml"),
       [
         "overrides:",
-        "  axios: 1.16.0",
+        "  axios: 1.18.0",
         '  node-domexception: "npm:@nolyfill/domexception@1.0.28"',
         "  nested:",
         '    alias: "npm:@scope/alias@1.0.0"',
@@ -2994,7 +2996,7 @@ describe("installPluginFromNpmSpec", () => {
             };
           }
           expect(manifest.overrides).toEqual({
-            axios: "1.16.0",
+            axios: "1.18.0",
             nested: {
               semver: "1.2.3",
             },

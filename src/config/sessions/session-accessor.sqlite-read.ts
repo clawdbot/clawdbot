@@ -157,7 +157,7 @@ export function readSqliteTranscriptStatsSync(
   const session = executeSqliteQueryTakeFirstSync(
     database.db,
     db
-      .selectFrom("sessions")
+      .selectFrom("session_windows")
       .select(["transcript_observed_at", "transcript_updated_at"])
       .where("session_id", "=", resolved.sessionId),
   );

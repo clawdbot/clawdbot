@@ -217,13 +217,20 @@ describe("buildChannelInboundEventContext", () => {
       ReplyToId: "root-1",
       ReplyToBody: "quoted",
       ReplyToSender: "Quoted User",
-      MediaPath: "/tmp/image.png",
-      MediaUrl: "/tmp/image.png",
-      MediaType: "image/png",
-      MediaPaths: ["/tmp/image.png", ""],
-      MediaUrls: ["/tmp/image.png", "https://example.test/audio.mp3"],
-      MediaTypes: ["image/png", "audio/mpeg"],
-      MediaTranscribedIndexes: [1],
+      media: [
+        expect.objectContaining({
+          path: "/tmp/image.png",
+          contentType: "image/png",
+          kind: "image",
+          transcribed: false,
+        }),
+        expect.objectContaining({
+          url: "https://example.test/audio.mp3",
+          contentType: "audio/mpeg",
+          kind: "audio",
+          transcribed: true,
+        }),
+      ],
       ChatType: "group",
       ChatId: "room-1",
       ConversationLabel: "Room One",
@@ -626,8 +633,9 @@ describe("finalizeChannelInboundContext", () => {
 
     expect(result.context.ReplyToBody).toBe("quoted");
     expect(result.context.ReplyToSender).toBe("Alice");
-    expect(result.context.MediaPath).toBe("/tmp/a.png");
-    expect(result.context.MediaType).toBe("image/png");
+    expect(result.context.media).toEqual([
+      expect.objectContaining({ path: "/tmp/a.png", contentType: "image/png" }),
+    ]);
     expect(Object.hasOwn(result.context, "SupplementalContext")).toBe(false);
   });
 });
@@ -681,8 +689,9 @@ describe("finalizeChannelInboundContext supplemental media resolution", () => {
     });
 
     expect(media).not.toHaveBeenCalled();
-    expect(result.context.MediaPath).toBe("/tmp/current.png");
-    expect(result.context.MediaType).toBe("image/png");
+    expect(result.context.media).toEqual([
+      expect.objectContaining({ path: "/tmp/current.png", contentType: "image/png" }),
+    ]);
     expect(result.supplemental?.quote).toEqual({ id: "reply-1", sender: "Bot" });
   });
 
@@ -710,8 +719,9 @@ describe("finalizeChannelInboundContext supplemental media resolution", () => {
       },
     });
 
-    expect(result.context.MediaPath).toBe("/tmp/self.png");
-    expect(result.context.MediaType).toBe("image/png");
+    expect(result.context.media).toEqual([
+      expect.objectContaining({ path: "/tmp/self.png", contentType: "image/png" }),
+    ]);
     expect(result.supplemental?.quote).toEqual({ id: "reply-1", sender: "Bot" });
   });
 

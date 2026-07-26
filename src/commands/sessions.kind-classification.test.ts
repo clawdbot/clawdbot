@@ -1,6 +1,7 @@
 // Session kind classification tests cover chat, ACP, and agent session metadata classification.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import {
   mockSessionsConfig,
   resetMockSessionsConfig,
@@ -68,11 +69,13 @@ function buildAcpSpawnChildEntry(): SessionEntry {
     sessionId: "spawn-child-session-id",
     updatedAt: Date.now() - 2 * 60_000,
     spawnedBy: TELEGRAM_GROUP_KEY,
-    deliveryContext: {
-      channel: "telegram",
-      to: "-1003967207344",
-      threadId: 323,
-    },
+    delivery: normalizeSessionDeliveryState({
+      context: {
+        channel: "telegram",
+        to: "-1003967207344",
+        threadId: 323,
+      },
+    }),
     // No chatType — ACP spawn-child entries don't carry one. The classifier
     // must infer "this came from a group" from spawnedBy / deliveryContext.
   };
@@ -88,10 +91,12 @@ function buildAcpDirectEntry(): SessionEntry {
   return {
     sessionId: "dm-session-id",
     updatedAt: Date.now() - 5 * 60_000,
-    deliveryContext: {
-      channel: "telegram",
-      to: "+15555550123",
-    },
+    delivery: normalizeSessionDeliveryState({
+      context: {
+        channel: "telegram",
+        to: "+15555550123",
+      },
+    }),
   };
 }
 

@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../../cron/service.test-harness.js";
-import { createCronServiceState } from "../../cron/service/state.js";
+import { createCronServiceState as createCronServiceStateBase } from "../../cron/service/state.js";
 import { executeJobCore, onTimer } from "../../cron/service/timer.test-support.js";
 import * as cronStoreModule from "../../cron/store.js";
 import { loadCronStore } from "../../cron/store.js";
@@ -13,10 +13,17 @@ import * as taskExecutor from "../../tasks/task-executor.js";
 import { findTaskByRunId, listTaskRecordsUnsorted } from "../../tasks/task-registry.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { formatTaskStatusDetail } from "../../tasks/task-status.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-service-timer-seam",
 });
+
+function createCronServiceState(
+  params: Parameters<typeof createCronServiceStateBase>[0],
+): ReturnType<typeof createCronServiceStateBase> {
+  return createCronServiceStateBase({ defaultAgentId: "main", ...params });
+}
 
 function createDueMainJob(params: { now: number; wakeMode: CronJob["wakeMode"] }): CronJob {
   return {
@@ -122,9 +129,9 @@ describe("cron service timer seam coverage", () => {
       {
         sessionId: "main-pr-router-session",
         updatedAt: now,
-        lastChannel: "discord",
-        lastTo: "channel-1",
-        lastAccountId: "default",
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "discord", to: "channel-1", accountId: "default" },
+        }),
       },
     );
 
@@ -133,6 +140,7 @@ describe("cron service timer seam coverage", () => {
       cronEnabled: true,
       log: logger,
       nowMs: () => now,
+      defaultAgentId: "main-pr-router",
       resolveSessionStorePath: () => sessionStorePath,
       enqueueSystemEvent,
       requestHeartbeat,
@@ -167,16 +175,17 @@ describe("cron service timer seam coverage", () => {
     const requestHeartbeat = vi.fn();
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
 
-    await writeCronStoreSnapshot({
-      storePath,
-      jobs: [createDueMainJob({ now, wakeMode: "next-heartbeat" })],
-    });
+    const jobWithoutExplicitOwner = createDueMainJob({ now, wakeMode: "next-heartbeat" });
+    delete jobWithoutExplicitOwner.sessionKey;
+    await writeCronStoreSnapshot({ storePath, jobs: [jobWithoutExplicitOwner] });
 
     const state = createCronServiceState({
       storePath,
       cronEnabled: true,
       log: logger,
       nowMs: () => now,
+      defaultAgentId: "stale-default",
+      resolveDefaultAgentId: () => "ops",
       enqueueSystemEvent,
       requestHeartbeat,
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
@@ -184,7 +193,7 @@ describe("cron service timer seam coverage", () => {
 
     await onTimer(state);
 
-    const cronRunSessionKey = `agent:main:cron:main-heartbeat-job:run:${now}`;
+    const cronRunSessionKey = `agent:ops:cron:main-heartbeat-job:run:${now}`;
     expect(enqueueSystemEvent).toHaveBeenCalledWith("heartbeat seam tick", {
       agentId: undefined,
       sessionKey: cronRunSessionKey,
@@ -213,6 +222,7 @@ describe("cron service timer seam coverage", () => {
     }
     expect(task.runtime).toBe("cron");
     expect(task.sourceId).toBe("main-heartbeat-job");
+    expect(task.agentId).toBe("ops");
     expect(task.ownerKey).toBe("");
     expect(task.scopeKind).toBe("system");
     expect(task.childSessionKey).toBe(cronRunSessionKey);

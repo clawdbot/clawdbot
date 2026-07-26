@@ -31,7 +31,7 @@ openclaw config get browser.executablePath
 openclaw config set browser.executablePath "/usr/bin/google-chrome"
 openclaw config set browser.profiles.work.executablePath "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 openclaw config set agents.defaults.heartbeat.every "2h"
-openclaw config set 'agents.list[0].tools.exec.node' "node-id-or-name"
+openclaw config set 'agents.entries.main.tools.exec.node' "node-id-or-name"
 openclaw config set agents.defaults.models '{"openai/gpt-5.4":{}}' --strict-json --merge
 openclaw config set channels.discord.token --ref-provider default --ref-source env --ref-id DISCORD_BOT_TOKEN
 openclaw config set secrets.providers.vaultfile --provider-source file --provider-path /etc/openclaw/secrets.json --provider-mode json
@@ -48,9 +48,9 @@ Dot or bracket notation. Quote bracket paths in shell examples so zsh does not g
 
 ```bash
 openclaw config get agents.defaults.workspace
-openclaw config get 'agents.list[0].id'
-openclaw config get agents.list
-openclaw config set 'agents.list[1].tools.exec.node' "node-id-or-name"
+openclaw config get agents.entries.main
+openclaw config get agents.entries
+openclaw config set 'agents.entries.work.tools.exec.node' "node-id-or-name"
 ```
 
 ### `config get`
@@ -117,10 +117,10 @@ openclaw config set channels.whatsapp.groups '["*"]' --strict-json
 
 `config get <path> --json` prints the raw value as JSON instead of terminal-formatted text.
 
-When a write changes `agents.defaults.model` or a per-agent `agents.list[].model`, OpenClaw resolves each changed primary or fallback through the configured provider catalogs before writing. Unknown model references are rejected without changing the active config; run `openclaw models list` to see available models.
+When a write changes `agents.defaults.model` or a per-agent `agents.entries.*.model`, OpenClaw resolves each changed primary or fallback through the configured provider catalogs before writing. Unknown model references are rejected without changing the active config; run `openclaw models list` to see available models.
 
 <Note>
-Object assignment replaces the target path by default. Protected paths that commonly hold user-added entries refuse replacements that would remove existing entries unless you pass `--replace`: `agents.defaults.models`, `agents.list`, `models.providers`, `models.providers.<id>`, `models.providers.<id>.models`, `plugins.entries`, and `auth.profiles`.
+Object assignment replaces the target path by default. Protected paths that commonly hold user-added entries refuse replacements that would remove existing entries unless you pass `--replace`: `agents.defaults.models`, `agents.entries`, `models.providers`, `models.providers.<id>`, `models.providers.<id>.models`, `plugins.entries`, and `auth.profiles`.
 </Note>
 
 Use `--merge` when adding entries to those maps:

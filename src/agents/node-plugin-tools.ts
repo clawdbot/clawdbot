@@ -1,4 +1,5 @@
 /** Materializes connected node-hosted plugin tools for agent runs. */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { listConnectedNodePluginTools } from "../gateway/node-plugin-tool-snapshot.js";
 import {
   NODE_MCP_TOOL_CALL_GATEWAY_TIMEOUT_MS,
@@ -21,10 +22,6 @@ type MaterializedNodeToolEntry = ReturnType<typeof listConnectedNodePluginTools>
   command: string;
   normalizedName: string;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 function isAgentToolResult(value: unknown): value is AgentToolResult<unknown> {
   return isRecord(value) && Array.isArray(value.content);

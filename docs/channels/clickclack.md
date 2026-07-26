@@ -220,8 +220,8 @@ setup token cannot create or synchronize channels.
 `discussions.workspace` accepts the same workspace id, slug, or display name
 as the account-level `workspace` and defaults to that value. `section` controls
 the ClickClack sidebar section and defaults to `Sessions`. When
-`controlUrlBase` is set, the managed channel links back to the real Control UI
-session route, `/chat?session=<encoded-session-key>`.
+`controlUrlBase` is set, the managed channel links back to the canonical
+[Control UI session path](/web/urls#session-and-dashboard-urls).
 
 Enable discussions on exactly one ClickClack account. The gateway provider has
 no account selector, so multiple enabled discussion accounts are rejected

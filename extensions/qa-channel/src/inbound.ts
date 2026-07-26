@@ -1,17 +1,14 @@
 import {
   buildChannelInboundEventContext,
   resolveChannelInboundRouteEnvelope,
+  toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 // Qa Channel plugin module implements inbound behavior.
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  buildAgentMediaPayload,
-  saveMediaBuffer,
-  saveMediaSource,
-} from "openclaw/plugin-sdk/media-runtime";
+import { saveMediaBuffer, saveMediaSource } from "openclaw/plugin-sdk/media-runtime";
 import {
   sanitizeQaBusToolCallArguments,
   type QaBusToolCall,
@@ -47,9 +44,9 @@ function decodeAttachmentBase64(value: string): Buffer | null {
   return buffer;
 }
 
-async function resolveQaInboundMediaPayload(attachments: QaBusMessage["attachments"]) {
+async function resolveQaInboundMediaFacts(attachments: QaBusMessage["attachments"]) {
   if (!Array.isArray(attachments) || attachments.length === 0) {
-    return {};
+    return [];
   }
   const mediaList: Array<{ path: string; contentType?: string | null }> = [];
   for (const attachment of attachments) {
@@ -89,7 +86,7 @@ async function resolveQaInboundMediaPayload(attachments: QaBusMessage["attachmen
       });
     }
   }
-  return mediaList.length > 0 ? buildAgentMediaPayload(mediaList) : {};
+  return toInboundMediaFacts(mediaList);
 }
 
 function resolveQaGroupConfig(params: {
@@ -293,7 +290,7 @@ export async function handleQaInbound(params: {
     timestamp: inbound.timestamp,
     body: inbound.text,
   });
-  const mediaPayload = await resolveQaInboundMediaPayload(inbound.attachments);
+  const media = await resolveQaInboundMediaFacts(inbound.attachments);
   const nativeCommand = inbound.nativeCommand;
   const commandTargets = nativeCommand
     ? resolveNativeCommandSessionTargets({
@@ -340,6 +337,7 @@ export async function handleQaInbound(params: {
       threadParentId: inbound.threadId ? inbound.conversation.id : undefined,
     },
     message: { body, bodyForAgent: inbound.text, rawBody: inbound.text, commandBody },
+    media,
     access: {
       commands: { authorized: true },
       mentions: { canDetectMention: isGroup, wasMentioned: Boolean(wasMentioned) },
@@ -354,7 +352,6 @@ export async function handleQaInbound(params: {
         : undefined,
       GroupChannel: inbound.conversation.kind === "channel" ? inbound.conversation.id : undefined,
       ThreadLabel: inbound.threadTitle,
-      ...mediaPayload,
     },
   });
 

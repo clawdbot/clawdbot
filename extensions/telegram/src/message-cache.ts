@@ -34,6 +34,14 @@ export type TelegramCachedMessageNode = Omit<TelegramReplyChainEntry, "messageId
   messageId: string;
   sourceMessage: Message;
   promptContextProjectionMarker?: TelegramPromptContextProjectionMarker;
+  threadBinding?: TelegramMessageThreadBinding;
+};
+
+// This marker is a provider fact, never an inference from invocation origin or
+// a legacy threadId. Delegated mutations may rely on it after cache hydration.
+type TelegramMessageThreadBinding = {
+  kind: "provider-observed-v1";
+  threadId: string;
 };
 
 type TelegramConversationContextNode = {
@@ -48,6 +56,8 @@ type TelegramMessageCache = {
     msg: Message;
     botUserId?: number;
     promptContextProjection?: TelegramPromptContextProjection;
+    /** Set only while recording an authenticated provider event or response. */
+    providerObservedThreadId?: number;
     threadId?: number;
   }) => Promise<TelegramCachedMessageNode>;
   get: (params: {
@@ -127,6 +137,7 @@ export type PersistedTelegramMessageCacheValue = {
   sourceMessage: Message;
   botUserId?: number;
   promptContextProjection?: TelegramPromptContextProjection | TelegramPromptContextSource;
+  threadBinding?: TelegramMessageThreadBinding;
   threadId?: string;
 };
 
@@ -206,6 +217,7 @@ function normalizeMessageNode(
   params: {
     threadId?: number;
     promptContextProjectionMarker?: TelegramPromptContextProjectionMarker;
+    threadBinding?: TelegramMessageThreadBinding;
   },
 ): TelegramCachedMessageNode {
   const media = resolveTelegramPrimaryMedia(msg);
@@ -214,6 +226,7 @@ function normalizeMessageNode(
   const replyMessage = resolveReplyMessage(msg);
   const body = resolveMessageBody(msg, params.promptContextProjectionMarker !== undefined);
   const threadId = parseTelegramMessageThreadId(params.threadId);
+  const threadBinding = normalizeTelegramMessageThreadBinding(params.threadBinding, threadId);
   const timestamp = resolveMessageTimestamp(msg);
   return {
     sourceMessage: msg,
@@ -234,7 +247,39 @@ function normalizeMessageNode(
     ...(params.promptContextProjectionMarker
       ? { promptContextProjectionMarker: params.promptContextProjectionMarker }
       : {}),
+    ...(threadBinding ? { threadBinding } : {}),
   };
+}
+
+function normalizeTelegramMessageThreadBinding(
+  value: unknown,
+  threadId: unknown,
+): TelegramMessageThreadBinding | undefined {
+  if (!isRecord(value) || value.kind !== "provider-observed-v1") {
+    return undefined;
+  }
+  const normalizedThreadId = parseTelegramMessageThreadId(threadId);
+  const observedThreadId = parseTelegramMessageThreadId(value.threadId);
+  if (normalizedThreadId === undefined || observedThreadId !== normalizedThreadId) {
+    return undefined;
+  }
+  return { kind: "provider-observed-v1", threadId: String(normalizedThreadId) };
+}
+
+function createTelegramMessageThreadBinding(
+  threadId: unknown,
+): TelegramMessageThreadBinding | undefined {
+  const normalizedThreadId = parseTelegramMessageThreadId(threadId);
+  return normalizedThreadId === undefined
+    ? undefined
+    : { kind: "provider-observed-v1", threadId: String(normalizedThreadId) };
+}
+
+export function hasProviderObservedTelegramThreadBinding(
+  node: TelegramCachedMessageNode | null | undefined,
+  threadId: unknown,
+): boolean {
+  return normalizeTelegramMessageThreadBinding(node?.threadBinding, threadId) !== undefined;
 }
 
 function normalizeMessageNodes(
@@ -242,6 +287,7 @@ function normalizeMessageNodes(
   params: {
     threadId?: number;
     promptContextProjectionMarker?: TelegramPromptContextProjectionMarker;
+    threadBinding?: TelegramMessageThreadBinding;
   },
 ): TelegramCachedMessageObservation[] {
   const observations: TelegramCachedMessageObservation[] = [];
@@ -253,6 +299,7 @@ function normalizeMessageNodes(
     inheritedThreadId: number | undefined,
     mode: TelegramMessageObservationMode,
     promptContextProjectionMarker?: TelegramPromptContextProjectionMarker,
+    threadBinding?: TelegramMessageThreadBinding,
   ) => {
     const node = normalizeMessageNode(message, {
       threadId:
@@ -260,6 +307,7 @@ function normalizeMessageNodes(
           (message as { message_thread_id?: unknown }).message_thread_id,
         ) ?? inheritedThreadId,
       ...(promptContextProjectionMarker ? { promptContextProjectionMarker } : {}),
+      ...(threadBinding ? { threadBinding } : {}),
     });
     if (visited.has(node.messageId)) {
       return;
@@ -267,11 +315,23 @@ function normalizeMessageNodes(
     visited.add(node.messageId);
     const replyMessage = resolveEmbeddedReplyMessage(message);
     if (replyMessage?.message_id != null) {
-      visit(replyMessage, nodeThreadId(node) ?? inheritedThreadId, "partial");
+      visit(
+        replyMessage,
+        nodeThreadId(node) ?? inheritedThreadId,
+        "partial",
+        undefined,
+        node.threadBinding,
+      );
     }
     observations.push({ node, mode });
   };
-  visit(msg, params.threadId, "authoritative", params.promptContextProjectionMarker);
+  visit(
+    msg,
+    params.threadId,
+    "authoritative",
+    params.promptContextProjectionMarker,
+    params.threadBinding,
+  );
   return observations;
 }
 
@@ -307,9 +367,14 @@ function parsePersistedCacheValue(key: string, value: unknown) {
     isTelegramMessageFromCurrentBot(value.sourceMessage, botUserId)
       ? parseTelegramPromptContextProjection(value.promptContextProjection)
       : undefined;
+  const threadBinding =
+    value.version === TELEGRAM_MESSAGE_CACHE_PERSISTED_VERSION
+      ? normalizeTelegramMessageThreadBinding(value.threadBinding, threadId)
+      : undefined;
   return normalizeMessageNodes(value.sourceMessage, {
     ...(threadId !== undefined ? { threadId } : {}),
     ...(promptContextProjectionMarker ? { promptContextProjectionMarker } : {}),
+    ...(threadBinding ? { threadBinding } : {}),
   }).map(({ node, mode }) => ({
     key: `${key.slice(0, separatorIndex + 1)}${node.messageId}`,
     node,
@@ -375,9 +440,13 @@ function mergeCachedMessageNode(
     : mergedSourceMessage;
   const promptContextProjectionMarker =
     incoming.promptContextProjectionMarker ?? existing.promptContextProjectionMarker;
+  const threadBinding =
+    normalizeTelegramMessageThreadBinding(incoming.threadBinding, threadId) ??
+    normalizeTelegramMessageThreadBinding(existing.threadBinding, threadId);
   return normalizeMessageNode(sourceMessage, {
     ...(threadId !== undefined ? { threadId } : {}),
     ...(promptContextProjectionMarker ? { promptContextProjectionMarker } : {}),
+    ...(threadBinding ? { threadBinding } : {}),
   });
 }
 
@@ -504,6 +573,7 @@ async function persistCachedNode(params: {
       sourceMessage: params.node.sourceMessage,
       ...(params.botUserId !== undefined ? { botUserId: params.botUserId } : {}),
       ...(promptContextProjection ? { promptContextProjection } : {}),
+      ...(params.node.threadBinding ? { threadBinding: params.node.threadBinding } : {}),
       ...(params.node.threadId ? { threadId: params.node.threadId } : {}),
     });
   } catch (error) {
@@ -582,8 +652,17 @@ export function createTelegramMessageCache(params?: {
   };
 
   return {
-    record: async ({ accountId, botUserId, chatId, msg, promptContextProjection, threadId }) => {
+    record: async ({
+      accountId,
+      botUserId,
+      chatId,
+      msg,
+      promptContextProjection,
+      providerObservedThreadId,
+      threadId,
+    }) => {
       await hydrateMessageCacheBucket(bucket, maxMessages, scopeKey);
+      const threadBinding = createTelegramMessageThreadBinding(providerObservedThreadId);
       const observations = normalizeMessageNodes(msg, {
         threadId,
         ...(promptContextProjection && isTelegramMessageFromCurrentBot(msg, botUserId)
@@ -594,6 +673,7 @@ export function createTelegramMessageCache(params?: {
               },
             }
           : {}),
+        ...(threadBinding ? { threadBinding } : {}),
       });
       const currentObservation = observations.at(-1)!;
       let recordedEntry = currentObservation.node;
@@ -696,7 +776,7 @@ function compareCachedMessageNodes(
 const SESSION_BOUNDARY_COMMAND_RE = /^\/(?:new|reset)(?:@[A-Za-z0-9_]+)?(?:\s|$)/i;
 const SOFT_RESET_COMMAND_RE = /^\/reset(?:@[A-Za-z0-9_]+)?\s+soft(?:\s|$)/i;
 
-export function isTelegramSessionBoundaryCommandText(text: string | undefined): boolean {
+function isTelegramSessionBoundaryCommandText(text: string | undefined): boolean {
   const body = text?.trim();
   return Boolean(
     body && SESSION_BOUNDARY_COMMAND_RE.test(body) && !SOFT_RESET_COMMAND_RE.test(body),

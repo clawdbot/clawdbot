@@ -39,6 +39,7 @@ const pluginMethods = [
 const workboardDisabled = {
   id: "workboard",
   name: "Workboard",
+  packageName: "@openclaw/workboard",
   description: "Dashboard workboard for agent-owned issues and sessions.",
   version: "2026.7.9",
   kind: ["productivity"],
@@ -325,6 +326,46 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     await server?.close();
   });
 
+  it.each(["installed", "discover"] as const)(
+    "finds an existing plugin by scoped package identity in the %s catalog",
+    async (tab) => {
+      const context = await newContext();
+      const page = await context.newPage();
+      const gateway = await installMockGateway(page, {
+        featureMethods: pluginMethods,
+        methodResponses: {
+          ...pluginMethodResponses(),
+          "plugins.search": { results: [] },
+        },
+      });
+
+      try {
+        await page.goto(`${server.baseUrl}settings/plugins`);
+        const workboardCard = page.locator('[data-plugin-id="workboard"]');
+        await workboardCard.waitFor({ state: "visible" });
+
+        if (tab === "discover") {
+          await page.getByRole("tab", { name: /^Discover/u }).click();
+          await workboardCard.waitFor({ state: "visible" });
+        }
+
+        await page.getByRole("searchbox", { name: "Search plugins" }).fill("@openclaw/workboard");
+        await workboardCard.waitFor({ state: "visible", timeout: 5_000 });
+        await captureScreenshot(page, `08-scoped-package-${tab}.png`);
+
+        if (tab === "discover") {
+          const searchRequest = await gateway.waitForRequest("plugins.search");
+          expect(requestParams(searchRequest)).toEqual({
+            query: "@openclaw/workboard",
+            limit: 20,
+          });
+        }
+      } finally {
+        await context.close();
+      }
+    },
+  );
+
   it("browses the catalog, installs from ClawHub, enables Workboard, and refreshes authoritative state", async () => {
     const context = await newContext();
     const page = await context.newPage();
@@ -482,6 +523,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await workboardCard.waitFor({ state: "visible" });
       const listCountBeforeEnable = (await gateway.getRequests("plugins.list")).length;
       const configCountBeforeEnable = (await gateway.getRequests("config.get")).length;
+      const connectCountBeforeEnable = (await gateway.getRequests("connect")).length;
       const enableCountBefore = (await gateway.getRequests("plugins.setEnabled")).length;
       await gateway.deferNext("plugins.list");
       await gateway.deferNext("config.get");
@@ -505,8 +547,11 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       );
       expect(requestParams(postEnableListRequest)).toEqual({});
       expect(requestParams(postEnableConfigRequest)).toEqual({});
+      await gateway.setMethodResponse("plugins.list", finalInventory);
+      await gateway.setMethodResponse("config.get", configSnapshot(true));
       await gateway.resolveDeferred("plugins.list", finalInventory);
       await gateway.resolveDeferred("config.get", configSnapshot(true));
+      await waitForNextRequest(gateway, "connect", connectCountBeforeEnable);
       await expect.poll(() => workboardCard.getAttribute("aria-busy")).toBe("false");
 
       await page
@@ -566,15 +611,19 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       }
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.waitFor({ state: "visible" });
-      const pagesButton = sidebar.locator(".sidebar-nav__head-action");
-      if ((await pagesButton.getAttribute("aria-expanded")) !== "true") {
-        await pagesButton.click();
+      const workboardSidebarItem = sidebar.locator(
+        '.sidebar-zone-entry[data-sidebar-entry="route:workboard"] > .nav-item',
+      );
+      await workboardSidebarItem.waitFor({ state: "visible" });
+      expect(await workboardSidebarItem.getAttribute("href")).toBe("/workboard");
+      if (updateScreenshots) {
+        await mkdir(artifactDir, { recursive: true });
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(artifactDir, "07-workboard-sidebar.png"),
+        });
       }
-      const workboardMenuItem = sidebar
-        .locator("wa-dropdown.sidebar-more-menu")
-        .locator('wa-dropdown-item[value="workboard"] a');
-      await workboardMenuItem.waitFor({ state: "visible" });
-      expect(await workboardMenuItem.getAttribute("href")).toBe("/workboard");
     } finally {
       await context.close();
     }

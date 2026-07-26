@@ -5,7 +5,7 @@
   "dockerDefaultWorkspace": "/tmp/system-agent-first-run",
   "dockerAgentWorkspace": "/tmp/openclaw-reef",
   "agentId": "reef",
-  "model": "claude-cli/claude-opus-4-8",
+  "model": "claude-cli/claude-opus-5",
   "telegramEnv": "TELEGRAM_BOT_TOKEN",
   "telegramToken": "123456:openclaw-openclaw-telegram-e2e-token",
   "commands": [

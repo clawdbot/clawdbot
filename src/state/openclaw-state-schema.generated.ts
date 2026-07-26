@@ -384,6 +384,12 @@ CREATE TABLE IF NOT EXISTS schema_meta (
   updated_at INTEGER NOT NULL
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS config_machine_state (
+  state_key TEXT NOT NULL PRIMARY KEY,
+  value_json TEXT NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS device_pairing_pending (
   request_id TEXT NOT NULL PRIMARY KEY,
   device_id TEXT NOT NULL,
@@ -1321,6 +1327,25 @@ CREATE INDEX IF NOT EXISTS idx_cron_jobs_agent_session
   ON cron_jobs(agent_id, session_key, updated_at DESC, job_id)
   WHERE agent_id IS NOT NULL OR session_key IS NOT NULL;
 
+-- Scratch is separate from cron_jobs so scheduler state writes and downgraded
+-- full-row replacement preserve it. New builds prune rows explicitly on job removal.
+-- content NULL is a tombstone: it keeps the revision lineage monotonic across
+-- unset/recreate so stale compare-and-swap writes cannot resurrect old content.
+CREATE TABLE IF NOT EXISTS cron_job_scratch (
+  store_key TEXT NOT NULL,
+  job_id TEXT NOT NULL,
+  content TEXT,
+  revision INTEGER NOT NULL,
+  source_sha256 TEXT,
+  updated_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (store_key, job_id),
+  CHECK (revision >= 1),
+  CHECK (content IS NULL OR length(CAST(content AS BLOB)) <= 262144)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_cron_job_scratch_store_updated
+  ON cron_job_scratch(store_key, updated_at_ms DESC, job_id);
+
 CREATE TABLE IF NOT EXISTS command_log_entries (
   id TEXT NOT NULL PRIMARY KEY,
   timestamp_ms INTEGER NOT NULL,
@@ -1573,6 +1598,71 @@ CREATE INDEX IF NOT EXISTS idx_flow_runs_status ON flow_runs(status);
 CREATE INDEX IF NOT EXISTS idx_flow_runs_owner_key ON flow_runs(owner_key);
 CREATE INDEX IF NOT EXISTS idx_flow_runs_updated_at ON flow_runs(updated_at);
 
+-- Durable meeting-capture sessions are gateway-global rather than agent-session
+-- transcripts. JSON/JSONL files are doctor import inputs or explicit CLI exports.
+CREATE TABLE IF NOT EXISTS meeting_transcript_sessions (
+  session_id TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  selector TEXT NOT NULL UNIQUE,
+  export_key TEXT NOT NULL,
+  session_slug TEXT NOT NULL,
+  provider_id TEXT NOT NULL,
+  title TEXT,
+  source_json TEXT NOT NULL,
+  stopped_at TEXT,
+  metadata_json TEXT,
+  export_manifest_json TEXT NOT NULL DEFAULT '{}',
+  export_pending_json TEXT NOT NULL DEFAULT '[]',
+  next_utterance_seq INTEGER NOT NULL DEFAULT 0 CHECK (next_utterance_seq >= 0),
+  created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+  updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= 0),
+  PRIMARY KEY (session_id, started_at)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_meeting_transcript_sessions_started
+  ON meeting_transcript_sessions(started_at DESC, session_id);
+
+CREATE INDEX IF NOT EXISTS idx_meeting_transcript_sessions_id
+  ON meeting_transcript_sessions(session_id, started_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_meeting_transcript_sessions_slug
+  ON meeting_transcript_sessions(session_slug, started_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_meeting_transcript_sessions_export_key
+  ON meeting_transcript_sessions(export_key);
+
+CREATE TABLE IF NOT EXISTS meeting_transcript_utterances (
+  session_id TEXT NOT NULL,
+  session_started_at TEXT NOT NULL,
+  sequence INTEGER NOT NULL CHECK (sequence >= 0),
+  utterance_id TEXT,
+  started_at TEXT,
+  ended_at TEXT,
+  speaker_id TEXT,
+  speaker_label TEXT,
+  text TEXT NOT NULL,
+  final INTEGER CHECK (final IN (0, 1)),
+  metadata_json TEXT,
+  PRIMARY KEY (session_id, session_started_at, sequence),
+  FOREIGN KEY (session_id, session_started_at)
+    REFERENCES meeting_transcript_sessions(session_id, started_at)
+    ON DELETE CASCADE
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS meeting_transcript_summaries (
+  session_id TEXT NOT NULL,
+  session_started_at TEXT NOT NULL,
+  generated_at TEXT,
+  summary_json TEXT,
+  markdown TEXT,
+  utterance_count INTEGER NOT NULL CHECK (utterance_count >= 0),
+  PRIMARY KEY (session_id, session_started_at),
+  FOREIGN KEY (session_id, session_started_at)
+    REFERENCES meeting_transcript_sessions(session_id, started_at)
+    ON DELETE CASCADE,
+  CHECK (summary_json IS NOT NULL OR markdown IS NOT NULL)
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS migration_runs (
   id TEXT NOT NULL PRIMARY KEY,
   started_at INTEGER NOT NULL,
@@ -1654,6 +1744,13 @@ CREATE TABLE IF NOT EXISTS session_groups (
   name TEXT NOT NULL PRIMARY KEY,
   position INTEGER NOT NULL,
   created_at INTEGER NOT NULL
+) STRICT;
+
+-- Gateway-owned sidebar section layout. IDs are ungrouped, groups, work, or
+-- category:<name>; pinned sessions are ordered separately and never stored.
+CREATE TABLE IF NOT EXISTS sidebar_sections (
+  section_id TEXT NOT NULL PRIMARY KEY,
+  position INTEGER NOT NULL
 ) STRICT;
 
 -- Gateway-owned durable cloud worker lifecycle. Provider-specific execution
@@ -1930,4 +2027,107 @@ CREATE TABLE IF NOT EXISTS fleet_cells (
   host_port INTEGER NOT NULL,
   container_name TEXT NOT NULL,
   data_dir TEXT NOT NULL
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS claw_installs (
+  agent_id TEXT NOT NULL PRIMARY KEY,
+  schema_version TEXT NOT NULL,
+  source_kind TEXT NOT NULL,
+  claw_name TEXT NOT NULL,
+  claw_version TEXT NOT NULL,
+  package_root TEXT NOT NULL,
+  manifest_path TEXT NOT NULL,
+  integrity_kind TEXT NOT NULL,
+  integrity TEXT NOT NULL,
+  source_byte_length INTEGER NOT NULL,
+  manifest_schema_version INTEGER NOT NULL,
+  plan_integrity TEXT NOT NULL,
+  workspace TEXT NOT NULL UNIQUE,
+  agent_config_digest TEXT NOT NULL,
+  agent_owned_paths_json TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (
+    status IN ('pending', 'workspace_ready', 'config_committed', 'complete', 'partial')
+  ),
+  added_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS claw_workspace_files (
+  agent_id TEXT NOT NULL,
+  target_path TEXT NOT NULL,
+  schema_version TEXT NOT NULL,
+  workspace TEXT NOT NULL,
+  source_path TEXT NOT NULL,
+  content_digest TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (agent_id, target_path)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS claw_package_refs (
+  agent_id TEXT NOT NULL,
+  package_kind TEXT NOT NULL,
+  package_source TEXT NOT NULL,
+  package_ref TEXT NOT NULL,
+  package_version TEXT NOT NULL,
+  package_integrity TEXT NOT NULL,
+  schema_version TEXT NOT NULL,
+  claw_name TEXT NOT NULL,
+  package_status TEXT NOT NULL,
+  relationship TEXT NOT NULL CHECK (relationship IN ('managed', 'referenced')),
+  origin TEXT NOT NULL CHECK (origin IN ('claw-introduced', 'pre-existing')),
+  independent_owner INTEGER NOT NULL CHECK (independent_owner IN (0, 1)),
+  installed_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (agent_id, package_kind, package_source, package_ref, package_version)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS claw_cron_refs (
+  agent_id TEXT NOT NULL,
+  manifest_id TEXT NOT NULL,
+  schema_version TEXT NOT NULL,
+  declaration_key TEXT NOT NULL UNIQUE,
+  scheduler_job_id TEXT UNIQUE,
+  status TEXT NOT NULL,
+  job_json TEXT NOT NULL,
+  error TEXT,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (agent_id, manifest_id)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS claw_mcp_server_refs (
+  agent_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  schema_version TEXT NOT NULL,
+  config_digest TEXT NOT NULL,
+  relationship TEXT NOT NULL CHECK (relationship IN ('managed', 'referenced')),
+  origin TEXT NOT NULL CHECK (origin IN ('claw-introduced', 'pre-existing')),
+  independent_owner INTEGER NOT NULL DEFAULT 0 CHECK (independent_owner IN (0, 1)),
+  status TEXT NOT NULL,
+  error TEXT,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (agent_id, name)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS outbound_media_provenance (
+  realpath TEXT NOT NULL PRIMARY KEY,
+  kind TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  sha256 TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  created_at_ms INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS model_catalog_remote (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  bundle_json TEXT NOT NULL,
+  generated_at INTEGER NOT NULL,
+  min_version TEXT,
+  source_url TEXT NOT NULL,
+  etag TEXT,
+  last_modified TEXT,
+  checked_at INTEGER NOT NULL
 ) STRICT;\n`;

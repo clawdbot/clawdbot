@@ -191,6 +191,19 @@ export async function runGatewayLoop(params: {
       return false;
     }
   };
+  const confirmLaunchdHandoff = async (respawn: {
+    handoffSpawned?: Promise<boolean>;
+  }): Promise<boolean> => {
+    const delay = new Promise<void>((resolve) => {
+      setTimeout(resolve, LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS);
+    });
+    const spawned = respawn.handoffSpawned
+      ? await Promise.race([respawn.handoffSpawned, delay.then(() => true)])
+      : false;
+    // Preserve the crash-loop throttle window even when spawn settles early.
+    await delay;
+    return spawned;
+  };
   const handleRestartAfterServerClose = async () => {
     await releaseLockIfHeld();
     const {
@@ -277,13 +290,25 @@ export async function runGatewayLoop(params: {
           restartResolver?.();
           return;
         }
-        activeRestartRequest = null;
         gatewayLog.info("restart mode: update process respawn (supervisor restart)");
-        if (supervisorMode === "launchd") {
-          await new Promise((resolve) => {
-            setTimeout(resolve, LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS);
-          });
+        if (supervisorMode === "launchd" && !(await confirmLaunchdHandoff(respawn))) {
+          gatewayLog.warn(
+            "launchd restart handoff failed to spawn; falling back to in-process restart",
+          );
+          await markUpdateRestartSentinelFailure("restart-handoff-unavailable").catch(
+            (err: unknown) => {
+              gatewayLog.warn(`failed to mark update restart handoff unavailable: ${String(err)}`);
+            },
+          );
+          if (!(await reacquireLockForInProcessRestart())) {
+            return;
+          }
+          activeRestartRequest = null;
+          shuttingDown = false;
+          restartResolver?.();
+          return;
         }
+        activeRestartRequest = null;
         exitProcess(0);
         return;
       }
@@ -349,15 +374,21 @@ export async function runGatewayLoop(params: {
           return;
         }
       }
-      activeRestartRequest = null;
       gatewayLog.info(`restart mode: full process restart (${modeLabel})`);
-      if (supervisorMode === "launchd") {
-        // A short clean-exit pause keeps rapid SIGUSR1/config restarts from
-        // tripping launchd crash-loop throttling before KeepAlive relaunches.
-        await new Promise((resolve) => {
-          setTimeout(resolve, LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS);
-        });
+      if (supervisorMode === "launchd" && !(await confirmLaunchdHandoff(respawn))) {
+        await writeStabilityBundle("gateway.restart_handoff_spawn_failed");
+        gatewayLog.warn(
+          "launchd restart handoff failed to spawn; falling back to in-process restart",
+        );
+        if (!(await reacquireLockForInProcessRestart())) {
+          return;
+        }
+        activeRestartRequest = null;
+        shuttingDown = false;
+        restartResolver?.();
+        return;
       }
+      activeRestartRequest = null;
       exitProcess(0);
       return;
     }

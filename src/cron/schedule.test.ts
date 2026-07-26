@@ -266,3 +266,11 @@ describe("computeNextRunAtMs on-exit", () => {
     ).toBeUndefined();
   });
 });
+
+describe("computeNextRunAtMs stream", () => {
+  it("never reports a time-due run for event stream schedules", () => {
+    expect(computeNextRunAtMs({ kind: "stream", command: ["node", "events.mjs"] }, 0)).toBe(
+      undefined,
+    );
+  });
+});

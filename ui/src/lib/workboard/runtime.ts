@@ -98,6 +98,25 @@ export function invalidateWorkboardLoads(host: WorkboardHost) {
   nextWorkboardLifecycleReconciliationEpoch(host);
 }
 
+export function stopWorkboardLiveRefresh(host: WorkboardHost): void {
+  const runtime = getWorkboardRuntime(host);
+  const loadInFlight = Boolean(runtime.loadPromise);
+  runtime.liveRefreshGeneration = (runtime.liveRefreshGeneration ?? 0) + 1;
+  if (runtime.liveRefreshRetryTimer) {
+    clearTimeout(runtime.liveRefreshRetryTimer);
+    delete runtime.liveRefreshRetryTimer;
+  }
+  delete runtime.liveRefreshEntry;
+  delete runtime.liveRefreshPromise;
+  delete runtime.liveChangeEpoch;
+  delete runtime.liveHighestSeenRevision;
+  delete runtime.liveAppliedRevision;
+  delete runtime.liveRefreshPending;
+  if (loadInFlight) {
+    invalidateWorkboardLoads(host);
+  }
+}
+
 function clearWorkboardLifecycleTaskPreparedTimer(host: WorkboardHost) {
   const runtime = getWorkboardRuntime(host);
   const timer = runtime.lifecycleTaskPreparedTimer;

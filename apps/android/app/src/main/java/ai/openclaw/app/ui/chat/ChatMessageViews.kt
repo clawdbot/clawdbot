@@ -7,8 +7,11 @@ import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.MessageSpeechPhase
 import ai.openclaw.app.chat.MessageSpeechState
+import ai.openclaw.app.chat.OUTBOX_BRANCH_CHANGED_ERROR
+import ai.openclaw.app.chat.chatOutboxDisplayError
 import ai.openclaw.app.chat.normalizeVisibleChatMessageRole
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.i18n.nativeStringResource
 import ai.openclaw.app.tools.ToolDisplayRegistry
 import ai.openclaw.app.ui.MobileColorsAccessor
 import ai.openclaw.app.ui.design.ClawTheme
@@ -63,7 +66,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
@@ -71,6 +73,8 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -93,6 +97,9 @@ private data class ChatBubbleStyle(
 internal fun ChatMessageBubble(
   message: ChatMessage,
   onReplyMessage: (String) -> Unit = {},
+  sessionActionsEnabled: Boolean = false,
+  onRewindMessage: (String) -> Unit = {},
+  onForkMessage: (String) -> Unit = {},
   speechState: MessageSpeechState? = null,
   onToggleListen: ((String, String) -> Unit)? = null,
 ) {
@@ -123,6 +130,9 @@ internal fun ChatMessageBubble(
   ChatMessageActionHost(
     text = messageText,
     onReply = onReplyMessage,
+    showSessionActions = role == "user" && message.entryId != null && sessionActionsEnabled,
+    onRewind = message.entryId?.let { entryId -> { onRewindMessage(entryId) } },
+    onFork = message.entryId?.let { entryId -> { onForkMessage(entryId) } },
     listenActive = messageSpeech != null,
     onToggleListen = toggleListen,
     modifier = Modifier.fillMaxWidth(),
@@ -363,17 +373,29 @@ private fun linkPreviewDomain(url: String): String =
 
 /** Assistant placeholder shown while a run is active but no text has streamed yet. */
 @Composable
-fun ChatTypingIndicatorBubble() {
+fun ChatTypingIndicatorBubble(
+  runKey: String,
+  observedAtElapsedMs: Long,
+) {
+  val elapsedMs = rememberWorkingElapsedMs(observedAtElapsedMs)
+  val phrase = workingPhraseText(seed = runKey, elapsedMs = elapsedMs)
   ChatBubbleContainer(
     style = bubbleStyle("assistant"),
     roleLabel = roleLabel("assistant"),
   ) {
     Row(
+      modifier = Modifier.clearAndSetSemantics { contentDescription = nativeString("Working") },
       verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-      DotPulse(color = mobileTextSecondary)
-      Text(nativeString("Thinking..."), style = mobileCallout, color = mobileTextSecondary)
+      WorkingClawIcon(runKey = runKey, color = mobileAccent)
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+      ) {
+        Text(formatLocalizedChatDurationCompact(elapsedMs), style = mobileCallout, color = mobileTextSecondary)
+        phrase?.let { Text(nativeStringResource("· \$phrase", it), style = mobileCallout, color = mobileTextSecondary) }
+      }
     }
   }
 }
@@ -438,10 +460,18 @@ fun ChatOutboxBubble(
       ChatOutboxStatus.Sending -> nativeString("Sending…")
       ChatOutboxStatus.Accepted -> nativeString("Sent — confirming delivery…")
       ChatOutboxStatus.Failed ->
-        item.lastError
+        chatOutboxDisplayError(item.lastError)
           ?.trim()
           ?.takeIf { it.isNotEmpty() }
-          ?.let { nativeString("Failed — \$it", it) } ?: nativeString("Failed")
+          ?.let { error ->
+            val localized =
+              if (error == OUTBOX_BRANCH_CHANGED_ERROR) {
+                nativeString("Session branch changed; review and retry this message.")
+              } else {
+                error
+              }
+            nativeString("Failed — \$it", localized)
+          } ?: nativeString("Failed")
     }
 
   ChatBubbleContainer(
@@ -623,27 +653,6 @@ internal fun ChatBase64Image(
   } else if (imageState.failed) {
     Text(nativeString("Unsupported attachment"), style = mobileCaption1, color = mobileTextSecondary)
   }
-}
-
-@Composable
-private fun DotPulse(color: Color) {
-  Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
-    PulseDot(alpha = 0.38f, color = color)
-    PulseDot(alpha = 0.62f, color = color)
-    PulseDot(alpha = 0.90f, color = color)
-  }
-}
-
-@Composable
-private fun PulseDot(
-  alpha: Float,
-  color: Color,
-) {
-  Surface(
-    modifier = Modifier.size(6.dp).alpha(alpha),
-    shape = CircleShape,
-    color = color,
-  ) {}
 }
 
 /** Shared code block renderer used by chat Markdown. */

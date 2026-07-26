@@ -8,6 +8,7 @@ import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeGoogleModelId } from "./model-id.js";
 import { GOOGLE_GEMINI_DEFAULT_MODEL, applyGoogleGeminiModelDefault } from "./onboard.js";
 import {
+  buildGoogleLiveCatalogProvider,
   buildGoogleStaticCatalogProvider,
   buildGoogleVertexStaticCatalogProvider,
 } from "./provider-catalog.js";
@@ -79,6 +80,24 @@ export function buildGoogleProvider(): ProviderPlugin {
           "google-vertex": buildGoogleVertexStaticCatalogProvider(),
         },
       }),
+    },
+    catalog: {
+      order: "simple",
+      run: async (ctx) => {
+        const auth = ctx.resolveProviderApiKey("google");
+        if (!auth.apiKey) {
+          return null;
+        }
+        return {
+          providers: {
+            google: await buildGoogleLiveCatalogProvider({
+              apiKey: auth.apiKey,
+              discoveryApiKey: auth.discoveryApiKey,
+            }),
+            "google-vertex": buildGoogleVertexStaticCatalogProvider(),
+          },
+        };
+      },
     },
     normalizeModelId: ({ modelId }) => normalizeGoogleModelId(modelId),
     resolveDynamicModel: (ctx) =>

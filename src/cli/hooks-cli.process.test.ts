@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
+  buildNativeHookRelayCommand,
   registerNativeHookRelay,
   testing as nativeHookRelayTesting,
 } from "../agents/harness/native-hook-relay.js";
@@ -111,6 +112,61 @@ async function createLingeringPreloadFixture(): Promise<{
   return { markerPath, preloadPath, stateDir };
 }
 
+async function createTimeoutOwnershipFixture(): Promise<{
+  nodeWrapperPath: string;
+  pidLogPath: string;
+  preloadPath: string;
+  readyMarkerPath: string;
+  stateDir: string;
+}> {
+  const root = tempDirs.make("openclaw-hooks-timeout-owner-");
+  const nodeWrapperPath = path.join(root, "node-with-tsx");
+  const pidLogPath = path.join(root, "pids");
+  const preloadPath = path.join(root, "track-relay-pid.mjs");
+  const readyMarkerPath = path.join(root, "ready");
+  const stateDir = path.join(root, "state");
+  await fs.mkdir(stateDir, { recursive: true });
+  await fs.writeFile(
+    preloadPath,
+    [
+      'import fs from "node:fs";',
+      "fs.appendFileSync(process.env.RELAY_PID_LOG, `${process.pid}\\n`);",
+      "const originalAsyncIterator = process.stdin[Symbol.asyncIterator].bind(process.stdin);",
+      "process.stdin[Symbol.asyncIterator] = function () {",
+      "  fs.writeFileSync(process.env.RELAY_READY_MARKER, `${process.pid}\\n`);",
+      "  return originalAsyncIterator();",
+      "};",
+      "",
+    ].join("\n"),
+  );
+  await fs.writeFile(
+    nodeWrapperPath,
+    ["#!/bin/sh", 'exec "$OPENCLAW_TEST_NODE" --import tsx "$@"', ""].join("\n"),
+  );
+  await fs.chmod(nodeWrapperPath, 0o755);
+  return { nodeWrapperPath, pidLogPath, preloadPath, readyMarkerPath, stateDir };
+}
+
+async function readPidFile(filePath: string): Promise<number[]> {
+  try {
+    return (await fs.readFile(filePath, "utf8"))
+      .split(/\s+/u)
+      .map((value) => Number.parseInt(value, 10))
+      .filter((value) => Number.isSafeInteger(value) && value > 0);
+  } catch {
+    return [];
+  }
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function runHooksCli(params: {
   args: string[];
   completion: "exit" | "output-then-exit";
@@ -209,7 +265,6 @@ async function runHooksRelay(params: { event: "post_tool_use" | "pre_tool_use"; 
       LINGER_MARKER: fixture.markerPath,
       NODE_OPTIONS: `--import=${pathToFileURL(fixture.preloadPath).href}`,
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_NO_RESPAWN: "1",
       OPENCLAW_STATE_DIR: fixture.stateDir,
     },
     stdin: params.stdin,
@@ -219,6 +274,75 @@ async function runHooksRelay(params: { event: "post_tool_use" | "pre_tool_use"; 
 }
 
 describe("hooks CLI process lifecycle", () => {
+  it.runIf(process.platform !== "win32")(
+    "keeps the relay on the timeout-owned shell PID",
+    async () => {
+      const fixture = await createTimeoutOwnershipFixture();
+      const command = buildNativeHookRelayCommand({
+        provider: "codex",
+        relayId: "timeout-owner",
+        event: "post_tool_use",
+        executable: path.resolve("src/entry.ts"),
+        nodeExecutable: fixture.nodeWrapperPath,
+        timeoutMs: 60_000,
+      });
+      const child = spawn("/bin/sh", ["-lc", command], {
+        cwd: path.resolve("."),
+        env: {
+          ...process.env,
+          NODE_ENV: undefined,
+          VITEST: undefined,
+          NODE_COMPILE_CACHE: path.join(fixture.stateDir, "node-compile-cache"),
+          NODE_OPTIONS: `--import=${pathToFileURL(fixture.preloadPath).href}`,
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          OPENCLAW_STATE_DIR: fixture.stateDir,
+          OPENCLAW_TEST_NODE: process.execPath,
+          RELAY_PID_LOG: fixture.pidLogPath,
+          RELAY_READY_MARKER: fixture.readyMarkerPath,
+        },
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      activeChildren.add(child);
+      child.once("close", () => activeChildren.delete(child));
+      const timeoutOwnedPid = child.pid;
+      if (!timeoutOwnedPid) {
+        throw new Error("Expected native hook relay shell PID");
+      }
+
+      try {
+        await expect
+          .poll(async () => (await readPidFile(fixture.readyMarkerPath))[0], {
+            interval: 100,
+            timeout: outputTimeoutMs,
+          })
+          .toBe(timeoutOwnedPid);
+        expect(new Set(await readPidFile(fixture.pidLogPath))).toEqual(new Set([timeoutOwnedPid]));
+
+        const closed = once(child, "close");
+        expect(child.kill("SIGKILL")).toBe(true);
+        await closed;
+        await expect
+          .poll(() => isProcessAlive(timeoutOwnedPid), { interval: 50, timeout: 5_000 })
+          .toBe(false);
+        await expect
+          .poll(
+            async () =>
+              (await readPidFile(fixture.pidLogPath)).filter((pid) => isProcessAlive(pid)),
+            { interval: 50, timeout: 5_000 },
+          )
+          .toEqual([]);
+      } finally {
+        await terminateChild(child);
+        for (const pid of await readPidFile(fixture.pidLogPath)) {
+          if (pid !== timeoutOwnedPid && isProcessAlive(pid)) {
+            process.kill(pid, "SIGKILL");
+          }
+        }
+      }
+    },
+    60_000,
+  );
+
   it("uses the explicit relay database when the child has a different state directory", async () => {
     const relay = registerNativeHookRelay({
       provider: "codex",
@@ -254,7 +378,6 @@ describe("hooks CLI process lifecycle", () => {
       label: "hooks relay explicit state database",
       env: {
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        OPENCLAW_NO_RESPAWN: "1",
         OPENCLAW_STATE_DIR: childStateDir,
       },
       stdin: JSON.stringify({ hook_event_name: "PostToolUse" }),

@@ -133,6 +133,7 @@ export type TuiAgentsList = {
   scope: SessionScope;
   agents: Array<{
     id: string;
+    kind?: "agent" | "system";
     name?: string;
   }>;
 };

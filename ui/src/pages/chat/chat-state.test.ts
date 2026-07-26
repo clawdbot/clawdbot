@@ -1,6 +1,9 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import * as assistantIdentity from "../../app/assistant-identity.ts";
+import type { ApplicationContext } from "../../app/context.ts";
+import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import {
   buildFallbackSlashCommands,
   replaceSlashCommands,
@@ -16,6 +19,7 @@ import {
 } from "./chat-queue.ts";
 import {
   ChatStateController,
+  createPageState,
   handlePageGatewayEvent,
   refreshChatMetadata,
   resetChatStateForRouteSession,
@@ -35,6 +39,7 @@ import {
   storedChatOutboxScopeKey,
 } from "./composer-persistence.ts";
 import { scheduleControlUiAfterPaint } from "./performance.ts";
+import { openSlot } from "./sidebar-layout.ts";
 
 beforeEach(() => {
   vi.spyOn(assistantIdentity, "loadLocalAssistantIdentity").mockReturnValue({
@@ -49,6 +54,92 @@ afterEach(() => {
 });
 
 describe("ChatStateController render lifecycle", () => {
+  it("rejects a run-less observer digest during an identified active run", () => {
+    const projectedDigest = {
+      sessionKey: "agent:main:current",
+      runId: "run-1",
+      revision: 1,
+      updatedAt: 1_000,
+      headline: "Projected current status",
+      health: "on-track" as const,
+    };
+    const requestUpdate = vi.fn();
+    const state = {
+      sessionKey: projectedDigest.sessionKey,
+      assistantAgentId: "main",
+      agentsList: { defaultId: "main" },
+      chatRunId: "run-1",
+      observerDigest: projectedDigest,
+      requestUpdate,
+    } as unknown as ChatPageHost;
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "session.observer",
+      payload: {
+        sessionKey: projectedDigest.sessionKey,
+        revision: 2,
+        updatedAt: 2_000,
+        headline: "Run-less live status",
+        health: "stuck",
+      },
+    });
+
+    expect(state.observerDigest).toBe(projectedDigest);
+    expect(requestUpdate).not.toHaveBeenCalled();
+  });
+
+  it("accepts only the row-active observer run when attaching mid-run", () => {
+    const projectedDigest = {
+      sessionKey: "agent:main:current",
+      runId: "r1",
+      revision: 1,
+      updatedAt: 1_000,
+      headline: "Projected current status",
+      health: "on-track" as const,
+    };
+    const requestUpdate = vi.fn();
+    const state = {
+      sessionKey: projectedDigest.sessionKey,
+      assistantAgentId: "main",
+      agentsList: { defaultId: "main" },
+      chatRunId: null,
+      observerDigest: projectedDigest,
+      sessionsResult: {
+        sessions: [
+          {
+            key: projectedDigest.sessionKey,
+            hasActiveRun: true,
+            activeRunIds: ["r1"],
+          },
+        ],
+      },
+      requestUpdate,
+    } as unknown as ChatPageHost;
+    const observerEvent = (runId?: string) =>
+      ({
+        type: "event" as const,
+        event: "session.observer",
+        payload: {
+          sessionKey: projectedDigest.sessionKey,
+          ...(runId ? { runId } : {}),
+          revision: 2,
+          updatedAt: 2_000,
+          headline: `Live status ${runId ?? "without run"}`,
+          health: "grinding",
+        },
+      }) satisfies Parameters<typeof handlePageGatewayEvent>[1];
+
+    handlePageGatewayEvent(state, observerEvent());
+    handlePageGatewayEvent(state, observerEvent("r2"));
+    expect(state.observerDigest).toBe(projectedDigest);
+    expect(requestUpdate).not.toHaveBeenCalled();
+
+    handlePageGatewayEvent(state, observerEvent("r1"));
+    expect(state.observerDigest?.headline).toBe("Live status r1");
+    expect(requestUpdate).toHaveBeenCalledOnce();
+  });
+
   it("tracks waiting approval only for the selected session until resolution", () => {
     const state = {
       sessionKey: "agent:main:current",
@@ -206,6 +297,56 @@ describe("ChatStateController render lifecycle", () => {
     expect(requestUpdate).toHaveBeenCalledOnce();
   });
 
+  it("forces one PR-chips refresh per PR link seen in the live stream", () => {
+    vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation(() => 1);
+    const refreshSessionPullRequests = vi.fn(() => Promise.resolve());
+    const state = {
+      chatMessages: [],
+      chatMessagesBySession: new Map(),
+      chatRunId: "run-1",
+      chatStream: null,
+      chatStreamRenderFrame: null,
+      chatStreamStartedAt: 1,
+      lastError: null,
+      pendingSessionMessageReloadSessionKey: null,
+      refreshSessionPullRequests,
+      requestUpdate: vi.fn(),
+      sessionKey: "main",
+    } as unknown as ChatPageHost;
+    const delta = (deltaText: string, runId = "run-1") =>
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: { state: "delta", runId, sessionKey: "main", deltaText },
+      });
+
+    delta("working on it ");
+    expect(refreshSessionPullRequests).not.toHaveBeenCalled();
+
+    // Issue links never carry chips.
+    delta("see https://github.com/openclaw/openclaw/issues/42 ");
+    expect(refreshSessionPullRequests).not.toHaveBeenCalled();
+
+    delta("opened https://github.com/openclaw/openclaw/pull/113840 for review ");
+    expect(refreshSessionPullRequests).toHaveBeenCalledTimes(1);
+    expect(refreshSessionPullRequests).toHaveBeenCalledWith({ refresh: true });
+
+    // One refresh reloads all of the branch's PRs; further links in the same
+    // run must not spend more GitHub quota.
+    delta("also https://github.com/openclaw/openclaw/pull/113900 ");
+    expect(refreshSessionPullRequests).toHaveBeenCalledTimes(1);
+
+    // Streaming may split a URL across chunks; the rolling tail rejoins it.
+    delta("continuing https://github.com/openclaw/openclaw/pu", "run-2");
+    expect(refreshSessionPullRequests).toHaveBeenCalledTimes(1);
+    delta("ll/113901 done", "run-2");
+    expect(refreshSessionPullRequests).toHaveBeenCalledTimes(2);
+
+    // A later run announcing the same PR (e.g. its merge) refreshes again.
+    delta("merged https://github.com/openclaw/openclaw/pull/113840 at last", "run-3");
+    expect(refreshSessionPullRequests).toHaveBeenCalledTimes(3);
+  });
+
   it("requests a render before selecting the commit promise", async () => {
     let resolveCommit: (value: boolean) => void = () => {};
     const nextCommit = new Promise<boolean>((resolve) => {
@@ -360,7 +501,6 @@ describe("session pull request refresh", () => {
       chatQueue: [],
       chatQueueByScope: {},
       chatRunId: null,
-      chatSideResultTerminalRuns: new Set(),
       chatStream: null,
       chatStreamRenderFrame: null,
       chatStreamSegments: [],
@@ -508,6 +648,51 @@ describe("session pull request refresh", () => {
   });
 });
 
+describe("image lightbox lifecycle", () => {
+  it("invalidates immediately when beginning a deferred image open", () => {
+    const invalidate = vi.fn();
+    const context = {
+      agents: {
+        state: { agentsList: null },
+        adoptList: vi.fn(),
+      },
+      agentSelection: { state: { selectedId: "main" } },
+      basePath: "",
+      config: {
+        current: {
+          allowExternalEmbedUrls: false,
+          assistantIdentity: { name: "Assistant" },
+          embedSandboxMode: "scripts",
+          localMediaPreviewRoots: [],
+        },
+      },
+      initialUserMessage: createInitialUserMessageHandoff(),
+      sessions: {},
+    } as unknown as ApplicationContext;
+    const state = createPageState(
+      context,
+      {
+        invalidate,
+        afterCommit: () => () => {},
+      },
+      { querySelector: () => null },
+    );
+    const release = vi.fn();
+    state.imageLightbox = {
+      src: "blob:managed-image",
+      title: "Generated image",
+      release,
+    };
+
+    const requestVersion = state.beginImageOpen();
+
+    expect(requestVersion).toBe(1);
+    expect(state.imageLightbox).toBeNull();
+    expect(release).toHaveBeenCalledOnce();
+    expect(invalidate).toHaveBeenCalledOnce();
+  });
+});
+
 describe("route composer fallback", () => {
   function createRouteState(chatMessage: string) {
     const resetChatInputHistoryNavigation = vi.fn();
@@ -517,6 +702,7 @@ describe("route composer fallback", () => {
       assistantAgentId: "main",
       agentsList: { defaultId: "main", mainKey: "main" },
       hello: null,
+      initialUserMessage: createInitialUserMessageHandoff(),
       sessionKey: "agent:main:first",
       chatMessage,
       chatComposerFallbackByScope: {},
@@ -524,6 +710,8 @@ describe("route composer fallback", () => {
       chatQueueByScope: {},
       chatMessages: [],
       chatMessagesBySession: new Map(),
+      imageLightbox: null,
+      imageLightboxRequestVersion: 0,
       chatAttachments: [
         {
           id: "staged-image",
@@ -531,7 +719,6 @@ describe("route composer fallback", () => {
           dataUrl: "data:image/png;base64,AAA",
         },
       ],
-      chatSideResultTerminalRuns: new Set(),
       chatToolMessages: [],
       chatStreamSegments: [],
       toolStreamById: new Map(),
@@ -546,17 +733,44 @@ describe("route composer fallback", () => {
     return { resetChatInputHistoryNavigation, resetChatScroll, state };
   }
 
+  it("releases the active image lightbox on a route switch", () => {
+    const { state } = createRouteState("");
+    const release = vi.fn();
+    state.imageLightbox = {
+      src: "blob:managed-image",
+      title: "Generated image",
+      release,
+    };
+
+    resetChatStateForRouteSession(state, "agent:main:second");
+
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(state.imageLightbox).toBeNull();
+  });
+
+  it("clears transient detail content on a route switch", () => {
+    const { state } = createRouteState("");
+    state.sidebarContent = { kind: "markdown", content: "First session detail" };
+    state.sidebarLayout = openSlot({ columns: [] }, "detail");
+
+    resetChatStateForRouteSession(state, "agent:main:second");
+
+    expect(state.sidebarContent).toBeNull();
+  });
+
   it("restores one atomic history snapshot when returning to a session", () => {
     vi.stubGlobal("sessionStorage", createStorageMock());
     const { state } = createRouteState("");
     state.chatMessages = [{ role: "assistant", content: "first session" }];
     state.chatHistoryPagination = { hasMore: true, nextOffset: 400, totalMessages: 718 };
     state.currentSessionId = "session-first";
+    state.chatDisplayedLeafEntryId = "leaf-first";
 
     resetChatStateForRouteSession(state, "agent:main:second");
     state.chatMessages = [{ role: "assistant", content: "second session" }];
     state.chatHistoryPagination = { hasMore: false, totalMessages: 1 };
     state.currentSessionId = "session-second";
+    state.chatDisplayedLeafEntryId = "leaf-second";
 
     resetChatStateForRouteSession(state, "agent:main:first");
 
@@ -567,6 +781,7 @@ describe("route composer fallback", () => {
       totalMessages: 718,
     });
     expect(state.currentSessionId).toBe("session-first");
+    expect(state.chatDisplayedLeafEntryId).toBe("leaf-first");
   });
 
   it("reapplies a live send projection when a subscribed pane switches into its scope", () => {
@@ -1227,6 +1442,46 @@ describe("resolveChatAvatarUrl", () => {
     } as unknown as ChatPageHost;
 
     expect(resolveChatAvatarUrl(state)).toBe("blob:authenticated-avatar");
+  });
+});
+
+describe("loadPageAssistantIdentity", () => {
+  it("loads the identity for the current session after a same-client route switch", async () => {
+    const request = vi.fn().mockResolvedValue({ name: "Second Session", agentId: "main" });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const context = {
+      agents: { state: { agentsList: null }, adoptList: vi.fn() },
+      agentSelection: { state: { selectedId: "main" } },
+      basePath: "",
+      config: {
+        current: {
+          allowExternalEmbedUrls: false,
+          assistantIdentity: { name: "Assistant" },
+          chatMessageMaxWidth: null,
+          embedSandboxMode: "scripts",
+          localMediaPreviewRoots: [],
+        },
+      },
+      gateway: { snapshot: { client, connected: true, hello: null } },
+      initialUserMessage: createInitialUserMessageHandoff(),
+      sessions: {},
+    } as unknown as ApplicationContext;
+    const state = createPageState(
+      context,
+      { invalidate: vi.fn(), afterCommit: () => () => {} },
+      { querySelector: () => null },
+    );
+    state.client = client;
+    state.connected = true;
+    state.assistantName = "First Session";
+    state.sessionKey = "agent:main:second";
+
+    await state.loadAssistantIdentity();
+
+    expect(request).toHaveBeenCalledWith("agent.identity.get", {
+      sessionKey: "agent:main:second",
+    });
+    expect(state.assistantName).toBe("Second Session");
   });
 });
 

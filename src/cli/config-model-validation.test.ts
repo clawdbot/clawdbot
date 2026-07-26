@@ -1,13 +1,25 @@
 import { describe, expect, it, vi } from "vitest";
+import { migratePersistedImplicitMainRoster } from "../config/legacy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { checkTouchedTextModelRefs } from "./config-model-validation.js";
+import { checkTouchedTextModelRefs as checkTouchedTextModelRefsRaw } from "./config-model-validation.js";
+
+const checkTouchedTextModelRefs: typeof checkTouchedTextModelRefsRaw = (params) =>
+  checkTouchedTextModelRefsRaw({
+    ...params,
+    config: migratePersistedImplicitMainRoster(params.config).config as OpenClawConfig,
+    ...(params.previousConfig
+      ? {
+          previousConfig: migratePersistedImplicitMainRoster(params.previousConfig)
+            .config as OpenClawConfig,
+        }
+      : {}),
+  });
 
 type ResolverInput = {
   config: OpenClawConfig;
   ref: {
     path: string;
     value: string;
-    agentIndex?: number;
     agentId?: string;
     fallback: boolean;
     authProfileId?: string;
@@ -81,7 +93,7 @@ describe("config model validation", () => {
               fallbacks: ["anthropic/claude-sonnet-4-6"],
             },
           },
-          list: [{ id: "main", default: true }, { id: "ops" }],
+          entries: { main: { default: true }, ops: {} },
         },
       },
       touchedPaths: [["agents", "defaults", "model"]],
@@ -109,7 +121,10 @@ describe("config model validation", () => {
       config: {
         agents: {
           defaults: { model: { primary: "provider-a/default" } },
-          list: [{ id: "main", default: true, model: "provider-b/override" }, { id: "ops" }],
+          entries: {
+            main: { default: true, model: "provider-b/override" },
+            ops: {},
+          },
         },
       },
       touchedPaths: [["agents", "defaults", "model", "primary"]],
@@ -122,7 +137,6 @@ describe("config model validation", () => {
       ref: {
         path: "agents.defaults.model.primary",
         value: "provider-a/default",
-        agentIndex: 1,
         agentId: "ops",
         fallback: false,
       },
@@ -134,7 +148,10 @@ describe("config model validation", () => {
 
     const result = await checkTouchedTextModelRefs({
       config: {
-        agents: { defaults: { model: { primary: "openai/gpt-5.4-mini@work" } } },
+        agents: {
+          defaults: { model: { primary: "openai/gpt-5.4-mini@work" } },
+          entries: { main: { default: true } },
+        },
       },
       touchedPaths: [["agents", "defaults", "model", "primary"]],
       resolveModelRef,
@@ -143,7 +160,10 @@ describe("config model validation", () => {
     expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
     expect(resolveModelRef).toHaveBeenCalledWith({
       config: {
-        agents: { defaults: { model: { primary: "openai/gpt-5.4-mini@work" } } },
+        agents: {
+          defaults: { model: { primary: "openai/gpt-5.4-mini@work" } },
+          entries: { main: { default: true } },
+        },
       },
       ref: {
         path: "agents.defaults.model.primary",
@@ -345,54 +365,56 @@ describe("config model validation", () => {
     });
   });
 
-  it("accepts a configured CLI backend model without an embedded catalog row", async () => {
-    const result = await checkTouchedTextModelRefs({
-      config: {
-        agents: {
-          defaults: {
-            model: { primary: "acme-cli/foo" },
-            cliBackends: { "acme-cli": { command: "acme" } },
-          },
-        },
-      },
-      touchedPaths: [["agents", "defaults", "model", "primary"]],
-    });
-
-    expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
-  });
-
-  it("infers a configured provider for a bare primary model", async () => {
+  it("passes a configured bare primary model to runtime resolution", async () => {
+    const resolveModelRef = vi.fn(async () => undefined);
     const result = await checkTouchedTextModelRefs({
       config: {
         agents: {
           defaults: {
             model: { primary: "foo" },
             models: { "acme-cli/foo": {} },
-            cliBackends: { "acme-cli": { command: "acme" } },
           },
         },
       },
       touchedPaths: [["agents", "defaults", "model", "primary"]],
+      resolveModelRef,
     });
 
     expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+    expect(resolveModelRef).toHaveBeenCalledWith({
+      config: expect.any(Object),
+      ref: {
+        path: "agents.defaults.model.primary",
+        value: "foo",
+        fallback: false,
+      },
+    });
   });
 
   it("keeps an explicit qualified primary ahead of a same-named bare alias", async () => {
+    const resolveModelRef = vi.fn(async () => undefined);
     const result = await checkTouchedTextModelRefs({
       config: {
         agents: {
           defaults: {
             model: { primary: "acme-cli/foo" },
             models: { bar: { alias: "acme-cli/foo" } },
-            cliBackends: { "acme-cli": { command: "acme" } },
           },
         },
       },
       touchedPaths: [["agents", "defaults", "model", "primary"]],
+      resolveModelRef,
     });
 
     expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+    expect(resolveModelRef).toHaveBeenCalledWith({
+      config: expect.any(Object),
+      ref: {
+        path: "agents.defaults.model.primary",
+        value: "acme-cli/foo",
+        fallback: false,
+      },
+    });
   });
 
   it("reports resolver setup failures without claiming refs were checked", async () => {
@@ -431,21 +453,21 @@ describe("config model validation", () => {
     });
   });
 
-  it.each([{ agents: { list: {} } }, { agents: { list: [null] } }])(
-    "ignores schema-invalid agent-list draft values",
-    async (config) => {
-      const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
+  it.each([
+    { agents: { entries: [{ model: "missing/model" }] } },
+    { agents: { entries: { bad: null } } },
+  ])("ignores schema-invalid agent-entry draft values", async (config) => {
+    const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
 
-      const result = await checkTouchedTextModelRefs({
-        config: config as unknown as OpenClawConfig,
-        touchedPaths: [["agents", "list"]],
-        resolveModelRef,
-      });
+    const result = await checkTouchedTextModelRefs({
+      config: config as unknown as OpenClawConfig,
+      touchedPaths: [["agents", "entries"]],
+      resolveModelRef,
+    });
 
-      expect(result).toEqual({ refsChecked: 0, refsTotal: 0, errors: [] });
-      expect(resolveModelRef).not.toHaveBeenCalled();
-    },
-  );
+    expect(result).toEqual({ refsChecked: 0, refsTotal: 0, errors: [] });
+    expect(resolveModelRef).not.toHaveBeenCalled();
+  });
 
   it("rejects an unresolved default fallback", async () => {
     const resolveModelRef = vi.fn(async () => "Unknown model: missing/fallback");
@@ -507,16 +529,15 @@ describe("config model validation", () => {
             fallbacks: ["backup", "provider-a/qualified-backup"],
           },
         },
-        list: [
-          { id: "main", default: true },
-          {
-            id: "ops",
+        entries: {
+          main: { default: true },
+          ops: {
             model: {
               primary: "provider-c/main",
               fallbacks: ["agent-backup", "provider-c/qualified-agent-backup"],
             },
           },
-        ],
+        },
       },
     };
 
@@ -543,7 +564,7 @@ describe("config model validation", () => {
     expect(resolveModelRef.mock.calls.map(([call]) => call.ref.path)).toEqual([
       "agents.defaults.model.primary",
       "agents.defaults.model.fallbacks.0",
-      "agents.list.1.model.fallbacks.0",
+      "agents.entries.ops.model.fallbacks.0",
     ]);
   });
 
@@ -558,6 +579,7 @@ describe("config model validation", () => {
           },
           models: { "gpt-5": { alias: "legacy/" } },
         },
+        entries: { main: { default: true } },
       },
     };
 
@@ -574,6 +596,7 @@ describe("config model validation", () => {
               fallbacks: ["legacy/"],
             },
           },
+          entries: { main: { default: true } },
         },
       },
       touchedPaths: [["agents", "defaults", "model", "primary"]],
@@ -597,7 +620,7 @@ describe("config model validation", () => {
             fallbacks: ["backup"],
           },
         },
-        list: [{ id: "ops", model: { fallbacks: ["agent-backup"] } }],
+        entries: { ops: { default: true, model: { fallbacks: ["agent-backup"] } } },
       },
     };
 
@@ -626,6 +649,72 @@ describe("config model validation", () => {
     ]);
   });
 
+  it("allows model validation while repairing a malformed previous default roster", async () => {
+    const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
+
+    await expect(
+      checkTouchedTextModelRefs({
+        config: {
+          agents: {
+            entries: {
+              main: { default: true },
+              ops: {},
+            },
+          },
+        },
+        previousConfig: {
+          agents: {
+            entries: {
+              main: { default: true },
+              ops: { default: true },
+            },
+          },
+        },
+        touchedPaths: [["agents", "entries", "ops", "default"]],
+        resolveModelRef,
+      }),
+    ).resolves.toEqual({ refsChecked: 0, refsTotal: 0, errors: [] });
+  });
+
+  it("revalidates fallbacks when roster repair also changes an ambiguous default provider", async () => {
+    const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
+
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "provider-b/main", fallbacks: ["backup"] },
+          },
+          entries: {
+            main: { default: true },
+            ops: {},
+          },
+        },
+      },
+      previousConfig: {
+        agents: {
+          defaults: {
+            model: { primary: "provider-a/main", fallbacks: ["backup"] },
+          },
+          entries: {
+            main: { default: true },
+            ops: { default: true },
+          },
+        },
+      },
+      touchedPaths: [
+        ["agents", "defaults", "model", "primary"],
+        ["agents", "entries", "ops", "default"],
+      ],
+      resolveModelRef,
+    });
+
+    expect(result.errors).toEqual([]);
+    expect(resolveModelRef.mock.calls.map(([call]) => call.ref.path)).toContain(
+      "agents.defaults.model.fallbacks.0",
+    );
+  });
+
   it("validates touched fallback and per-agent model refs", async () => {
     const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
     const config: OpenClawConfig = {
@@ -636,10 +725,10 @@ describe("config model validation", () => {
             fallbacks: ["anthropic/claude-sonnet-4-6"],
           },
         },
-        list: [
-          { id: "main", default: true },
-          { id: "ops", model: { primary: "google/gemini-3.1-pro-preview" } },
-        ],
+        entries: {
+          main: { default: true },
+          ops: { model: { primary: "google/gemini-3.1-pro-preview" } },
+        },
       },
     };
 
@@ -647,7 +736,7 @@ describe("config model validation", () => {
       config,
       touchedPaths: [
         ["agents", "defaults", "model", "fallbacks"],
-        ["agents", "list", "1", "model", "primary"],
+        ["agents", "entries", "ops", "model", "primary"],
       ],
       resolveModelRef,
     });
@@ -660,13 +749,37 @@ describe("config model validation", () => {
         fallback: true,
       },
       {
-        path: "agents.list.1.model.primary",
+        path: "agents.entries.ops.model.primary",
         value: "google/gemini-3.1-pro-preview",
-        agentIndex: 1,
         agentId: "ops",
         fallback: false,
       },
     ]);
+  });
+
+  it("uses list index paths for list-shaped agent model refs", async () => {
+    const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
+
+    const result = await checkTouchedTextModelRefsRaw({
+      config: {
+        agents: {
+          list: [{ id: "ops", default: true, model: "provider-a/model" }],
+        },
+      },
+      touchedPaths: [["agents", "list", "0", "model"]],
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+    expect(resolveModelRef).toHaveBeenCalledWith({
+      config: expect.any(Object),
+      ref: {
+        path: "agents.list.0.model",
+        value: "provider-a/model",
+        agentId: "ops",
+        fallback: false,
+      },
+    });
   });
 
   it("does not validate unrelated or media model keys", async () => {
@@ -677,11 +790,11 @@ describe("config model validation", () => {
         agents: {
           defaults: {
             model: { primary: "openai/gpt-5.4-mini" },
-            videoGenerationModel: { primary: "qwen/wan2.6-t2v" },
+            mediaModels: { video: { primary: "qwen/wan2.6-t2v" } },
           },
         },
       },
-      touchedPaths: [["agents", "defaults", "videoGenerationModel", "primary"]],
+      touchedPaths: [["agents", "defaults", "mediaModels", "video", "primary"]],
       resolveModelRef,
     });
 
@@ -697,13 +810,17 @@ describe("config model validation", () => {
           model: { primary: "openai/gpt-5.4-mini" },
           workspace: "/tmp/next-workspace",
         },
+        entries: { main: { default: true } },
       },
     };
 
     const result = await checkTouchedTextModelRefs({
       config,
       previousConfig: {
-        agents: { defaults: { model: { primary: "openai/gpt-5.4-mini" } } },
+        agents: {
+          defaults: { model: { primary: "openai/gpt-5.4-mini" } },
+          entries: { main: { default: true } },
+        },
       },
       touchedPaths: [["agents", "defaults"]],
       resolveModelRef,
@@ -713,27 +830,27 @@ describe("config model validation", () => {
     expect(resolveModelRef).not.toHaveBeenCalled();
   });
 
-  it("revalidates per-agent refs when list ownership changes", async () => {
+  it("revalidates per-agent refs when entry model ownership changes", async () => {
     const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
 
     const result = await checkTouchedTextModelRefs({
       config: {
         agents: {
-          list: [
-            { id: "beta", model: "provider-a/model" },
-            { id: "alpha", model: "provider-b/model" },
-          ],
+          entries: {
+            beta: { default: true, model: "provider-a/model" },
+            alpha: { model: "provider-b/model" },
+          },
         },
       },
       previousConfig: {
         agents: {
-          list: [
-            { id: "alpha", model: "provider-a/model" },
-            { id: "beta", model: "provider-b/model" },
-          ],
+          entries: {
+            alpha: { default: true, model: "provider-a/model" },
+            beta: { model: "provider-b/model" },
+          },
         },
       },
-      touchedPaths: [["agents", "list"]],
+      touchedPaths: [["agents", "entries"]],
       resolveModelRef,
     });
 
@@ -741,22 +858,22 @@ describe("config model validation", () => {
     expect(resolveModelRef.mock.calls.map(([call]) => call.ref.agentId)).toEqual(["beta", "alpha"]);
   });
 
-  it("does not revalidate a retained agent model after an earlier entry is removed", async () => {
+  it("does not revalidate a retained agent model when another entry is removed", async () => {
     const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
 
     const result = await checkTouchedTextModelRefs({
       config: {
-        agents: { list: [{ id: "beta", model: "provider-b/model" }] },
+        agents: { entries: { beta: { default: true, model: "provider-b/model" } } },
       },
       previousConfig: {
         agents: {
-          list: [
-            { id: "alpha", model: "provider-a/model" },
-            { id: "beta", model: "provider-b/model" },
-          ],
+          entries: {
+            alpha: { default: true, model: "provider-a/model" },
+            beta: { model: "provider-b/model" },
+          },
         },
       },
-      touchedPaths: [["agents", "list", "0"]],
+      touchedPaths: [["agents", "entries", "alpha"]],
       resolveModelRef,
     });
 
@@ -764,17 +881,17 @@ describe("config model validation", () => {
     expect(resolveModelRef).not.toHaveBeenCalled();
   });
 
-  it("revalidates a per-agent model when its agent id changes directly", async () => {
+  it("revalidates a per-agent model when its entry key changes", async () => {
     const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
 
     const result = await checkTouchedTextModelRefs({
       config: {
-        agents: { list: [{ id: "next", model: "provider-a/model" }] },
+        agents: { entries: { next: { default: true, model: "provider-a/model" } } },
       },
       previousConfig: {
-        agents: { list: [{ id: "current", model: "provider-a/model" }] },
+        agents: { entries: { current: { default: true, model: "provider-a/model" } } },
       },
-      touchedPaths: [["agents", "list", "0", "id"]],
+      touchedPaths: [["agents", "entries"]],
       resolveModelRef,
     });
 
@@ -782,9 +899,8 @@ describe("config model validation", () => {
     expect(resolveModelRef).toHaveBeenCalledWith({
       config: expect.any(Object),
       ref: {
-        path: "agents.list.0.model",
+        path: "agents.entries.next.model",
         value: "provider-a/model",
-        agentIndex: 0,
         agentId: "next",
         fallback: false,
         dependency: true,
@@ -804,7 +920,7 @@ describe("config model validation", () => {
               fallbacks: ["provider-a/backup"],
             },
           },
-          list: [{ id: "ops" }],
+          entries: { ops: { default: true } },
         },
       },
       previousConfig: {
@@ -815,10 +931,10 @@ describe("config model validation", () => {
               fallbacks: ["provider-a/backup"],
             },
           },
-          list: [{ id: "ops", model: "provider-b/override" }],
+          entries: { ops: { default: true, model: "provider-b/override" } },
         },
       },
-      touchedPaths: [["agents", "list", "0", "model"]],
+      touchedPaths: [["agents", "entries", "ops", "model"]],
       resolveModelRef,
     });
 
@@ -827,7 +943,6 @@ describe("config model validation", () => {
       {
         path: "agents.defaults.model.primary",
         value: "provider-a/default",
-        agentIndex: 0,
         agentId: "ops",
         fallback: false,
         dependency: true,
@@ -835,7 +950,6 @@ describe("config model validation", () => {
       {
         path: "agents.defaults.model.fallbacks.0",
         value: "provider-a/backup",
-        agentIndex: 0,
         agentId: "ops",
         fallback: true,
         dependency: true,
@@ -843,7 +957,7 @@ describe("config model validation", () => {
     ]);
   });
 
-  it("validates inherited defaults when an agent is created through its id path", async () => {
+  it("validates inherited defaults when a leaf write creates an agent entry", async () => {
     const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
 
     const result = await checkTouchedTextModelRefs({
@@ -855,7 +969,7 @@ describe("config model validation", () => {
               fallbacks: ["provider-a/backup"],
             },
           },
-          list: [{ id: "ops" }],
+          entries: { ops: { default: true, workspace: "/tmp/ops" } },
         },
       },
       previousConfig: {
@@ -866,51 +980,15 @@ describe("config model validation", () => {
               fallbacks: ["provider-a/backup"],
             },
           },
+          entries: { main: { default: true } },
         },
       },
-      touchedPaths: [["agents", "list", "0", "id"]],
+      touchedPaths: [["agents", "entries", "ops", "workspace"]],
       resolveModelRef,
     });
 
     expect(result).toEqual({ refsChecked: 2, refsTotal: 2, errors: [] });
     expect(resolveModelRef.mock.calls.map(([call]) => call.ref.agentId)).toEqual(["ops", "ops"]);
-  });
-
-  it("validates defaults activated by removing the last configured agent", async () => {
-    const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
-
-    const result = await checkTouchedTextModelRefs({
-      config: {
-        agents: {
-          defaults: {
-            model: {
-              primary: "provider-a/default",
-              fallbacks: ["provider-a/backup"],
-            },
-          },
-          list: [],
-        },
-      },
-      previousConfig: {
-        agents: {
-          defaults: {
-            model: {
-              primary: "provider-a/default",
-              fallbacks: ["provider-a/backup"],
-            },
-          },
-          list: [{ id: "ops", default: true, model: "provider-b/override" }],
-        },
-      },
-      touchedPaths: [["agents", "list", "0"]],
-      resolveModelRef,
-    });
-
-    expect(result).toEqual({ refsChecked: 2, refsTotal: 2, errors: [] });
-    expect(resolveModelRef.mock.calls.map(([call]) => call.ref.path)).toEqual([
-      "agents.defaults.model.primary",
-      "agents.defaults.model.fallbacks.0",
-    ]);
   });
 
   it("does not revalidate a default primary that was already inherited", async () => {
@@ -920,16 +998,16 @@ describe("config model validation", () => {
       config: {
         agents: {
           defaults: { model: { primary: "provider-a/default" } },
-          list: [{ id: "ops", model: { fallbacks: ["provider-b/next"] } }],
+          entries: { ops: { default: true, model: { fallbacks: ["provider-b/next"] } } },
         },
       },
       previousConfig: {
         agents: {
           defaults: { model: { primary: "provider-a/default" } },
-          list: [{ id: "ops", model: { fallbacks: ["provider-b/current"] } }],
+          entries: { ops: { default: true, model: { fallbacks: ["provider-b/current"] } } },
         },
       },
-      touchedPaths: [["agents", "list", "0", "model", "fallbacks"]],
+      touchedPaths: [["agents", "entries", "ops", "model", "fallbacks"]],
       resolveModelRef,
     });
 
@@ -937,12 +1015,30 @@ describe("config model validation", () => {
     expect(resolveModelRef).toHaveBeenCalledWith({
       config: expect.any(Object),
       ref: {
-        path: "agents.list.0.model.fallbacks.0",
+        path: "agents.entries.ops.model.fallbacks.0",
         value: "provider-b/next",
-        agentIndex: 0,
         agentId: "ops",
         fallback: true,
       },
     });
+  });
+
+  it("leaves malformed roster drafts to schema validation", async () => {
+    const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
+
+    for (const entries of [
+      [] as never,
+      { bad: null } as never,
+      { main: { default: true }, ops: { default: true } },
+    ]) {
+      await expect(
+        checkTouchedTextModelRefsRaw({
+          config: { agents: { entries } },
+          touchedPaths: [["agents", "entries"]],
+          resolveModelRef,
+        }),
+      ).resolves.toEqual({ refsChecked: 0, refsTotal: 0, errors: [] });
+    }
+    expect(resolveModelRef).not.toHaveBeenCalled();
   });
 });

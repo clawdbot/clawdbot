@@ -4,7 +4,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { NodeRegistry, NodeSession } from "./node-registry.js";
 
-type NotificationRegistry = Pick<NodeRegistry, "listConnected" | "invoke">;
+type NotificationRegistry = Pick<
+  NodeRegistry,
+  "listCurrentConnected" | "isConnectionCurrentPairingState" | "invoke"
+>;
 
 type RouterOptions = {
   primaryDelayMs?: number;
@@ -13,6 +16,9 @@ type RouterOptions = {
 
 type PendingConnectionAlert = {
   nodeId: string;
+  connId: string;
+  pairingIdentity?: string;
+  pairingGeneration?: string;
   timer?: ReturnType<typeof setTimeout>;
 };
 
@@ -64,7 +70,12 @@ class NodeConnectionNotificationRouter {
     if (previous?.timer) {
       clearTimeout(previous.timer);
     }
-    const pending: PendingConnectionAlert = { nodeId: source.nodeId };
+    const pending: PendingConnectionAlert = {
+      nodeId: source.nodeId,
+      connId: source.connId,
+      pairingIdentity: source.pairingIdentity,
+      pairingGeneration: source.pairingGeneration,
+    };
     this.pendingByNodeId.set(source.nodeId, pending);
     this.armTimer(pending, this.primaryDelayMs, () => this.deliverPrimary(pending));
   }
@@ -79,16 +90,17 @@ class NodeConnectionNotificationRouter {
   }
 
   private async deliverPrimary(pending: PendingConnectionAlert): Promise<void> {
-    const source = this.currentSource(pending);
+    const connected = await this.registry.listCurrentConnected();
+    const source = this.currentSource(pending, connected);
     if (!source) {
       this.finishAlert(pending);
       return;
     }
-    const primary = this.notificationTargets()
+    const primary = this.notificationTargets(connected)
       .filter((node) => node.lastActiveAtMs !== undefined)
       .toSorted(compareActivity)
       .at(0);
-    const delivered = primary ? await this.notify(primary, source) : false;
+    const delivered = primary ? await this.notify(primary, source, pending) : false;
     if (!this.attemptIsCurrent(pending)) {
       return;
     }
@@ -105,23 +117,35 @@ class NodeConnectionNotificationRouter {
     pending: PendingConnectionAlert,
     attemptedConnId?: string,
   ): Promise<void> {
-    const source = this.currentSource(pending);
+    const connected = await this.registry.listCurrentConnected();
+    const source = this.currentSource(pending, connected);
     if (!source) {
       this.finishAlert(pending);
       return;
     }
-    const targets = this.notificationTargets().filter((node) => node.connId !== attemptedConnId);
-    await Promise.all(targets.map(async (node) => await this.notify(node, source)));
+    const targets = this.notificationTargets(connected).filter(
+      (node) => node.connId !== attemptedConnId,
+    );
+    await Promise.all(targets.map(async (node) => await this.notify(node, source, pending)));
     if (this.attemptIsCurrent(pending)) {
       this.finishAlert(pending);
     }
   }
 
-  private currentSource(pending: PendingConnectionAlert): NodeSession | undefined {
+  private currentSource(
+    pending: PendingConnectionAlert,
+    connected: readonly NodeSession[],
+  ): NodeSession | undefined {
     if (!this.attemptIsCurrent(pending)) {
       return undefined;
     }
-    return this.registry.listConnected().find((node) => node.nodeId === pending.nodeId);
+    return connected.find(
+      (node) =>
+        node.nodeId === pending.nodeId &&
+        node.connId === pending.connId &&
+        node.pairingIdentity === pending.pairingIdentity &&
+        node.pairingGeneration === pending.pairingGeneration,
+    );
   }
 
   private attemptIsCurrent(pending: PendingConnectionAlert): boolean {
@@ -139,15 +163,34 @@ class NodeConnectionNotificationRouter {
     }
   }
 
-  private notificationTargets(): NodeSession[] {
-    return this.registry.listConnected().filter(isMacNotificationNode);
+  private notificationTargets(connected: readonly NodeSession[]): NodeSession[] {
+    return connected.filter(isMacNotificationNode);
   }
 
-  private async notify(target: NodeSession, source: NodeSession): Promise<boolean> {
+  private async sourceIsCurrent(pending: PendingConnectionAlert): Promise<boolean> {
+    if (!this.attemptIsCurrent(pending)) {
+      return false;
+    }
+    const connected = await this.registry.listCurrentConnected();
+    if (!this.currentSource(pending, connected)) {
+      return false;
+    }
+    return await this.registry.isConnectionCurrentPairingState(pending.connId);
+  }
+
+  private async notify(
+    target: NodeSession,
+    source: NodeSession,
+    pending: PendingConnectionAlert,
+  ): Promise<boolean> {
     try {
+      if (!(await this.sourceIsCurrent(pending)) || !this.attemptIsCurrent(pending)) {
+        return false;
+      }
       const result = await this.registry.invoke({
         nodeId: target.nodeId,
         expectedConnId: target.connId,
+        expectedPairingGeneration: target.pairingGeneration,
         command: "system.notify",
         params: {
           title: "Node connected",

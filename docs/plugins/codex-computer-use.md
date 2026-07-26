@@ -70,10 +70,11 @@ available as a normal OpenClaw MCP server. Use the Codex Computer Use setup on
 this page when Codex app-server should own plugin installation, MCP reloads,
 and native tool calls inside Codex-mode turns.
 
-CUA's driver is macOS-specific and still requires the local macOS permissions
-its app prompts for, such as Accessibility and Screen Recording. OpenClaw does
-not install `cua-driver`, grant those permissions, or bypass the upstream
-driver's safety model.
+CUA's driver ships prerelease builds for macOS, Windows (x64 and ARM64), and
+Linux (x64 and ARM64, preview tier). It still requires the local OS
+permissions its app prompts for, such as Accessibility and Screen Recording on
+macOS. OpenClaw does not install `cua-driver`, grant those permissions, or
+bypass the upstream driver's safety model.
 
 ## Quick setup
 
@@ -106,13 +107,19 @@ Computer Use in and lets OpenClaw install or re-enable it before the turn:
 With this config, OpenClaw checks Codex app-server before each Codex-mode
 turn. If Computer Use is missing but Codex app-server has already discovered
 an installable marketplace, OpenClaw asks Codex app-server to install or
-re-enable the plugin and reload MCP servers. On macOS, when no matching
+re-enable the plugin and reload MCP servers. Before starting an isolated
+Codex app-server on macOS, auto-install also copies the official signed
+Computer Use service app from the selected desktop app bundle into that
+Codex home's `computer-use` directory when the native client is missing.
+On macOS, when no matching
 marketplace is registered and a standard desktop app bundle exists, OpenClaw
 also tries to register the bundled Codex marketplace from
 `/Applications/ChatGPT.app/Contents/Resources/plugins/openai-bundled`, with
 `/Applications/Codex.app/Contents/Resources/plugins/openai-bundled` retained
 as a fallback for legacy standalone installs. If setup still cannot make the
 MCP server available, the turn fails before the thread starts.
+Strict readiness failures are harness preflight failures, so model fallback
+does not repeat the same local readiness sequence for every model candidate.
 
 After changing Computer Use config, use `/new` or `/reset` in the affected
 chat before testing if an existing Codex thread has already started.
@@ -254,7 +261,7 @@ remote install is unsupported, run install with a local source or path:
 | Field                           | Default        | Meaning                                                                        |
 | ------------------------------- | -------------- | ------------------------------------------------------------------------------ |
 | `enabled`                       | inferred       | Require Computer Use. Defaults to true when another Computer Use field is set. |
-| `autoInstall`                   | false          | Install or re-enable from already discovered marketplaces at turn start.       |
+| `autoInstall`                   | false          | Provision the native client and install or re-enable the plugin at turn start. |
 | `marketplaceDiscoveryTimeoutMs` | 60000          | How long install waits for Codex app-server marketplace discovery.             |
 | `liveTestTimeoutMs`             | 60000          | Timeout for the temporary readiness thread and its cleanup requests.           |
 | `toolCallTimeoutMs`             | 60000          | Timeout for the Computer Use `list_apps` readiness tool call.                  |
@@ -319,10 +326,12 @@ tools when available, and the specific message for the failing setup step.
 
 ## macOS permissions
 
-Computer Use is macOS-specific. The Codex-owned MCP server may need local OS
-permissions before it can inspect or control apps. If OpenClaw says Computer
-Use is installed but the MCP server is unavailable, verify the Codex-side
-Computer Use setup first:
+This Codex-owned Computer Use path runs on macOS, where the MCP server may need
+local OS permissions before it can inspect or control apps. (For cross-platform
+desktop control on Windows and Linux node hosts, see the
+[cua-computer fulfiller](/nodes/computer-use#windows-and-linux-experimental-via-cua-driver).)
+If OpenClaw says Computer Use is installed but the MCP server is unavailable,
+verify the Codex-side Computer Use setup first:
 
 - Codex app-server is running on the same host where desktop control should
   happen.

@@ -19,7 +19,8 @@ The OpenClaw Linux companion is a Tauri desktop app for a local Gateway. It:
 - installs the OpenClaw CLI and managed Node runtime when they are missing; release builds install the stable channel automatically, while development builds ask for the channel first
 - attaches to a healthy Gateway before attempting service changes
 - delegates install, start, stop, and restart operations to the CLI-managed systemd user service
-- discovers nearby Bonjour Gateways and opens their Control UI from the resolved service endpoint
+- discovers nearby Bonjour Gateways and opens each Control UI in a route-scoped window, so several
+  Gateway dashboards can stay connected and be used simultaneously
 - opens the Gateway-served Control UI with its resolved authentication URL
 - opens the Control UI in onboarding mode after its first-run install, which
   offers to import detected Claude Code, Codex, or Hermes memories into the
@@ -149,7 +150,7 @@ A node can be connected and device-paired while its effective `caps` and `comman
 
 Camera devices must be readable by the service user, commonly through the `video` group. Camera clips use the default PulseAudio or PipeWire source when `includeAudio` is true; microphone audio exists only as that clip track, not as a standalone command. Location requires the node-service user to be permitted by the host's GeoClue policy.
 
-`camera.snap` and `camera.clip` also require explicit Gateway arming through `gateway.nodes.allowCommands`. See [Camera capture](/nodes/camera) and [Location command](/nodes/location-command) for payloads, limits, and errors.
+`camera.snap` and `camera.clip` also require explicit Gateway arming through `gateway.nodes.commands.allow`. See [Camera capture](/nodes/camera) and [Location command](/nodes/location-command) for payloads, limits, and errors.
 
 ## Install
 

@@ -1,4 +1,3 @@
-// Shared skill Gateway operations and state helpers.
 import {
   ClawHubTrustErrorCodes,
   readClawHubTrustErrorDetails,
@@ -16,6 +15,7 @@ export type ClawHubSearchResult = {
   slug: string;
   displayName: string;
   summary?: string;
+  icon?: string | null;
   version?: string;
   updatedAt?: number;
 };
@@ -25,6 +25,7 @@ export type ClawHubSkillDetail = {
     slug: string;
     displayName: string;
     summary?: string;
+    icon?: string | null;
     tags?: Record<string, string>;
     channel?: string | null;
     isOfficial?: boolean | null;
@@ -156,9 +157,8 @@ function getClawHubTrustDetailsFromError(err: unknown) {
   return readClawHubTrustErrorDetails((err as { details?: unknown }).details);
 }
 
-function formatClawHubInstallMessage(message: string, warning?: string): string {
-  return warning ? `${message}\n\n${warning}` : message;
-}
+const formatClawHubInstallMessage = (message: string, warning?: string): string =>
+  warning ? `${message}\n\n${warning}` : message;
 
 function formatClawHubAcknowledgementMessage(warning?: string): string {
   return formatClawHubInstallMessage(

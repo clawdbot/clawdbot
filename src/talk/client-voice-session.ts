@@ -2,9 +2,11 @@
 import { randomUUID } from "node:crypto";
 import {
   appendTranscriptMessage,
-  loadSessionEntry,
-  upsertSessionEntry,
+  loadSessionEntryReadOnly,
+  patchSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
+import { mergeSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   onTrustedInternalDiagnosticEvent,
@@ -214,19 +216,42 @@ export function createOrResumeClientVoiceSession(params: {
   return voiceSessionId;
 }
 
+/** Read the canonical agent-session id without creating state during provider startup. */
+export function resolveClientVoiceAgentSessionId(params: {
+  agentId: string;
+  sessionKey: string;
+}): string | undefined {
+  return loadSessionEntryReadOnly(params)?.sessionId?.trim() || undefined;
+}
+
 /** Ensure Talk has the same canonical agent-session row that chat turns append to. */
 export async function ensureClientVoiceAgentSessionEntry(params: {
   agentId: string;
   sessionKey: string;
-}): Promise<void> {
-  const existing = loadSessionEntry(params);
-  if (existing?.sessionId) {
-    return;
-  }
-  const created = await upsertSessionEntry(params, {});
+  deadlineAt?: number;
+}): Promise<string> {
+  const created = await patchSessionEntry(
+    params,
+    (_entry, context) => {
+      // Browser credentials can be short-lived. Check at the authoritative
+      // write boundary so a queued write cannot create an unusable empty chat.
+      if (params.deadlineAt !== undefined && Date.now() >= params.deadlineAt) {
+        throw new Error("Realtime browser session expired during startup; try again");
+      }
+      if (context.existingEntry?.sessionId) {
+        return null;
+      }
+      if (context.existingEntry) {
+        return { sessionId: randomUUID() };
+      }
+      return buildSessionCreationStamp({ via: "talk", actor: { type: "human" } });
+    },
+    { fallbackEntry: mergeSessionEntry(undefined, {}) },
+  );
   if (!created?.sessionId) {
     throw new Error(`agent session could not be initialized (${params.sessionKey})`);
   }
+  return created.sessionId;
 }
 
 /** Correlate a consult run with its open call for confirmation and mutation evidence. */
@@ -401,7 +426,7 @@ async function appendVoiceTranscript(params: {
     if (record.origin !== params.origin) {
       throw new Error("voice session origin does not allow this transcript source");
     }
-    const sessionEntry = loadSessionEntry({
+    const sessionEntry = loadSessionEntryReadOnly({
       agentId: params.agentId,
       sessionKey: params.sessionKey,
     });
@@ -531,7 +556,10 @@ async function deliverMutationDigestOnce(
   if (!text) {
     return;
   }
-  const entry = loadSessionEntry({ agentId: record.agentId, sessionKey: record.sessionKey });
+  const entry = loadSessionEntryReadOnly({
+    agentId: record.agentId,
+    sessionKey: record.sessionKey,
+  });
   const target = resolveSessionDeliveryTarget({ entry, requestedChannel: "last" });
   if (!target.channel || target.channel === "webchat" || !target.to) {
     return;

@@ -23,7 +23,10 @@
     "terminal.data": "Embedded terminal is a web/desktop surface; iOS has no terminal client.",
     "terminal.exit": "Embedded terminal is a web/desktop surface; iOS has no terminal client.",
     "update.available": "Gateway self-update notices do not apply to iOS; app updates ship via the App Store.",
-    "session.approval": "Native approval review uses exec.approval push/nudge delivery; the session-scoped approval stream is a Control UI chat surface."
+    "session.approval": "Native approval review uses exec.approval push/nudge delivery; the session-scoped approval stream is a Control UI chat surface.",
+    "session.sharing": "Session visibility/membership management is a Control UI operator surface; iOS reads visibility/sharingRole from session rows and has no sharing editor.",
+    "session.suggestion": "The suggestion queue is a Control UI collaboration surface; iOS does not render or resolve session suggestions.",
+    "session.typing": "Collaborative typing state is a Control UI-only ephemeral indicator; iOS does not render it."
   },
   "android": {
     "session.operation": "Chat UI derives run state from chat/agent events; no session.operation consumer yet.",
@@ -49,6 +52,9 @@
     "terminal.data": "Embedded terminal is a web/desktop surface; Android has no terminal client.",
     "terminal.exit": "Embedded terminal is a web/desktop surface; Android has no terminal client.",
     "session.approval": "Native approval review uses exec.approval push/nudge delivery; the session-scoped approval stream is a Control UI chat surface.",
+    "session.sharing": "Session visibility/membership management is a Control UI operator surface; Android reads visibility/sharingRole from session rows and has no sharing editor.",
+    "session.suggestion": "The suggestion queue is a Control UI collaboration surface; Android does not render or resolve session suggestions.",
+    "session.typing": "Collaborative typing state is a Control UI-only ephemeral indicator; Android does not render it.",
     "node.invoke.cancel": "Cancel targets streaming agent.cli.claude.run.v1 invokes; app nodes never advertise agent runs, so no cancel can address them.",
     "node.invoke.input": "Carries terminal keystrokes/resize to a node PTY relay invoke; the relay runs on gateway/CLI node hosts and app nodes never host it, so Android has no consumer."
   }

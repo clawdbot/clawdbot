@@ -4,7 +4,7 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.dm
+      - matrix.dm-policy
   execution:
     profiles: { "matrix:all": 40, "matrix:transport": 39 }
     kind: flow

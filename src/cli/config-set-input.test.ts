@@ -120,9 +120,17 @@ describe("config set input parsing", () => {
       " ".repeat(8 * 1024 * 1024 + 1),
       (batchPath) => {
         expect(() => parseBatchSource({ batchFile: batchPath })).toThrow(
-          "File exceeds 8388608 bytes",
+          "--batch-file exceeds the 8 MiB supported maximum (8388608 bytes)",
         );
       },
     );
+  });
+
+  it("accepts --batch-file at exactly the size limit", () => {
+    const content = "[]".padEnd(8 * 1024 * 1024, " ");
+    withBatchFile("openclaw-config-set-input-boundary-", content, (batchPath) => {
+      const parsed = parseBatchSource({ batchFile: batchPath });
+      expect(parsed).toEqual([]);
+    });
   });
 });

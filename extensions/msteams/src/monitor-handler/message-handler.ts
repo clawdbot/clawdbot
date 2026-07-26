@@ -13,6 +13,7 @@ import {
   hasFinalInboundReplyDispatch,
   resolveInboundReplyDispatchCounts,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { bindIngressLifecycleToReplyOptions } from "openclaw/plugin-sdk/channel-outbound";
 import {
   filterSupplementalContextItems,
@@ -623,8 +624,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
             },
             log,
             deadline: preprocessingDeadline,
-            preserveFilenames: (cfg as { media?: { preserveFilenames?: boolean } }).media
-              ?.preserveFilenames,
+            preserveFilenames: false,
           }),
       });
     } catch (err) {
@@ -905,6 +905,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         rawBody,
         commandBody,
       },
+      sessionTranscript: { historyLimit: isRoomish ? historyLimit : 0 },
       access: {
         mentions: {
           canDetectMention: !isDirectMessage,
@@ -1035,63 +1036,6 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     }
   };
 
-  // One debounced turn owns every constituent queue claim. Fan adoption and
-  // abandonment to all of them; otherwise merged messages replay after restart.
-  function buildFlushIngressLifecycle(entries: MSTeamsDebounceEntry[]): {
-    lifecycle: MSTeamsIngressLifecycle | undefined;
-    settle: () => Promise<void>;
-  } {
-    const lifecycles = entries
-      .map((entry) => entry.turnAdoptionLifecycle)
-      .filter((lifecycle) => lifecycle !== undefined);
-    const [firstLifecycle] = lifecycles;
-    if (!firstLifecycle) {
-      return { lifecycle: undefined, settle: async () => {} };
-    }
-    let handedOff = false;
-    const adoptAll = async () => {
-      for (const lifecycle of lifecycles) {
-        await lifecycle.onAdopted();
-      }
-    };
-    return {
-      lifecycle: {
-        abortSignal:
-          lifecycles.length === 1
-            ? firstLifecycle.abortSignal
-            : AbortSignal.any(lifecycles.map((lifecycle) => lifecycle.abortSignal)),
-        onAdopted: async () => {
-          handedOff = true;
-          await adoptAll();
-        },
-        onDeferred: () => {
-          handedOff = true;
-          for (const lifecycle of lifecycles) {
-            lifecycle.onDeferred();
-          }
-        },
-        onAdoptionFinalizing: () => {
-          for (const lifecycle of lifecycles) {
-            lifecycle.onAdoptionFinalizing();
-          }
-        },
-        onAbandoned: async () => {
-          handedOff = true;
-          for (const lifecycle of lifecycles) {
-            await lifecycle.onAbandoned();
-          }
-        },
-      },
-      // Gated, blank, and other terminal no-dispatch turns are handled work.
-      // Tombstone them instead of leaving deferred claims to stall-watchdog.
-      settle: async () => {
-        if (!handedOff) {
-          await adoptAll();
-        }
-      },
-    };
-  }
-
   const inboundDebouncer = core.channel.debounce.createInboundDebouncer<MSTeamsDebounceEntry>({
     debounceMs: inboundDebounceMs,
     buildKey: (entry) => {
@@ -1119,7 +1063,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       if (!last) {
         return;
       }
-      const { lifecycle, settle } = buildFlushIngressLifecycle(entries);
+      const { lifecycle, settle } = fanInChannelIngressLifecycles(
+        entries.map((entry) => entry.turnAdoptionLifecycle),
+      );
       try {
         if (entries.length === 1) {
           await handleTeamsMessageNow(

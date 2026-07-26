@@ -193,6 +193,27 @@ describe("headless Code Mode", () => {
     expect(tool.execute).toHaveBeenCalledOnce();
   });
 
+  it("honors cron payload tool budgets above the old headless cap", async () => {
+    const tool = fakeTool("budgeted", async () => jsonResult({ ok: true }));
+    const result = expectCompleted(
+      await runCodeModeScriptHeadless({
+        ctx: createHeadlessHarness([tool]),
+        code: `
+          for (let index = 0; index < 129; index += 1) {
+            await tools.call("openclaw:core:budgeted", {});
+          }
+          return true;
+        `,
+        maxToolCalls: 200,
+        wallClockMs: 120_000,
+      }),
+    );
+
+    expect(result.value).toBe(true);
+    expect(result.toolCallCount).toBe(129);
+    expect(tool.execute).toHaveBeenCalledTimes(129);
+  });
+
   it("enforces one wall-clock deadline across worker and tool legs", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const toolStarted = createDeferred();
@@ -226,6 +247,39 @@ describe("headless Code Mode", () => {
     const result = expectFailed(await resultPromise);
 
     expect(result.code).toBe("timeout");
+    expect(result.toolCallCount).toBe(1);
+  });
+
+  it("honors cron payload wall-clock limits above the old headless cap", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const toolStarted = createDeferred();
+    const slow = fakeTool("slow_leg", async () => {
+      toolStarted.resolve();
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 330_000);
+      });
+      return jsonResult({ ok: true });
+    });
+    const resultPromise = runCodeModeScriptHeadless({
+      ctx: createHeadlessHarness([slow]),
+      code: `
+        await tools.call("openclaw:core:slow_leg", {});
+        return true;
+      `,
+      wallClockMs: 360_000,
+    });
+
+    await toolStarted.promise;
+    let settled = false;
+    void resultPromise.finally(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    const result = expectCompleted(await resultPromise);
+    expect(result.value).toBe(true);
     expect(result.toolCallCount).toBe(1);
   });
 

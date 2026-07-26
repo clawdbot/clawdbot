@@ -271,7 +271,6 @@ describe("browser permission routes", () => {
       {
         allowPrivateNetwork: true,
         allowedHostnames: ["browser.example"],
-        hostnameAllowlist: ["browser.example"],
       },
     );
   });

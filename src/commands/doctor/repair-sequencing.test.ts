@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   applyPluginAutoEnable: vi.fn(),
   materializePluginAutoEnableCandidates: vi.fn(),
   collectActiveToolSchemaProjectionWarnings: vi.fn(),
+  collectChannelDoctorCompatibilityMutations: vi.fn(),
   ensureAuthProfileStore: vi.fn(),
   evaluateStoredCredentialEligibility: vi.fn(),
   getInstalledPluginRecord: vi.fn(),
@@ -76,6 +77,7 @@ vi.mock("../../plugins/installed-plugin-index.js", async (importOriginal) => ({
 }));
 
 vi.mock("./shared/channel-doctor.js", () => ({
+  collectChannelDoctorCompatibilityMutations: mocks.collectChannelDoctorCompatibilityMutations,
   collectChannelDoctorRepairMutations: ({ cfg }: { cfg: OpenClawConfig }) => {
     const allowFrom = cfg.channels?.discord?.allowFrom as unknown[] | undefined;
     if (allowFrom?.[0] === 123) {
@@ -287,6 +289,7 @@ describe("doctor repair sequencing", () => {
       warnings: [],
     });
     mocks.collectActiveToolSchemaProjectionWarnings.mockReturnValue([]);
+    mocks.collectChannelDoctorCompatibilityMutations.mockReturnValue([]);
     mocks.resolveAuthProfileOrder.mockReturnValue([]);
     mocks.resolveProfileUnusableUntilForDisplay.mockReturnValue(null);
     mocks.maybeRepairStalePluginConfig.mockImplementation((cfg: OpenClawConfig) => ({
@@ -656,6 +659,91 @@ describe("doctor repair sequencing", () => {
     expect(result.changeNotes).toStrictEqual([
       'Installed missing configured plugin "brave" from @openclaw/brave-plugin.',
       "brave web search provider selected, enabled automatically.",
+    ]);
+  });
+
+  it("applies doctor contracts exposed by newly installed plugins", async () => {
+    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValueOnce({
+      changes: ['Installed missing configured plugin "discord" from @openclaw/discord.'],
+      warnings: [],
+      repairedPluginIds: ["discord"],
+    });
+    mocks.materializePluginAutoEnableCandidates.mockImplementationOnce(
+      (params: { config: OpenClawConfig }) => ({
+        config: {
+          ...params.config,
+          plugins: {
+            ...params.config.plugins,
+            entries: {
+              ...params.config.plugins?.entries,
+              discord: { enabled: true },
+            },
+          },
+        },
+        changes: ["discord installed for existing configuration, enabled automatically."],
+      }),
+    );
+    mocks.collectChannelDoctorCompatibilityMutations.mockImplementationOnce(
+      (cfg: OpenClawConfig) => [
+        {
+          config: {
+            ...cfg,
+            channels: {
+              ...cfg.channels,
+              discord: {
+                ...cfg.channels?.discord,
+                dmPolicy: "allowlist",
+                allowFrom: [123],
+                dm: { enabled: true },
+              },
+            },
+          },
+          changes: [
+            "Moved channels.discord.dm.policy → channels.discord.dmPolicy.",
+            "Moved channels.discord.dm.allowFrom → channels.discord.allowFrom.",
+          ],
+        },
+      ],
+    );
+
+    const result = await runDoctorRepairSequence({
+      state: {
+        cfg: {
+          channels: {
+            discord: {
+              dm: { enabled: true, policy: "allowlist", allowFrom: [123] },
+            },
+          },
+        } as OpenClawConfig,
+        candidate: {
+          channels: {
+            discord: {
+              dm: { enabled: true, policy: "allowlist", allowFrom: [123] },
+            },
+          },
+        } as OpenClawConfig,
+        pendingChanges: false,
+        fixHints: [],
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(mocks.collectChannelDoctorCompatibilityMutations).toHaveBeenCalledWith(
+      expect.objectContaining({
+        plugins: { entries: { discord: { enabled: true } } },
+      }),
+      { env: process.env },
+    );
+    expect(result.state.candidate.channels?.discord).toEqual({
+      dmPolicy: "allowlist",
+      allowFrom: ["123"],
+      dm: { enabled: true },
+    });
+    expect(result.changeNotes).toStrictEqual([
+      'Installed missing configured plugin "discord" from @openclaw/discord.',
+      "discord installed for existing configuration, enabled automatically.",
+      "Moved channels.discord.dm.policy → channels.discord.dmPolicy.\nMoved channels.discord.dm.allowFrom → channels.discord.allowFrom.",
+      "channels.discord.allowFrom: converted 1 numeric ID to strings",
     ]);
   });
 

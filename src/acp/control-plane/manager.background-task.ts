@@ -9,7 +9,7 @@ import {
   startTaskRunByRunId,
 } from "../../tasks/detached-task-runtime.js";
 import { resolveRequiredCompletionTerminalResult } from "../../tasks/task-completion-contract.js";
-import type { DeliveryContext } from "../../utils/delivery-context.js";
+import { deliveryContextFromSession, type DeliveryContext } from "../../utils/delivery-context.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
 import type { AcpSessionManagerDeps } from "./manager.types.js";
 import { normalizeText } from "./runtime-options.js";
@@ -117,7 +117,8 @@ export function resolveBackgroundTaskContext(params: {
   })?.entry;
   return {
     requesterSessionKey,
-    requesterOrigin: parentEntry?.deliveryContext ?? childEntry?.deliveryContext,
+    requesterOrigin:
+      deliveryContextFromSession(parentEntry) ?? deliveryContextFromSession(childEntry),
     childSessionKey: params.sessionKey,
     runId: params.requestId,
     label: normalizeText(childEntry?.label),

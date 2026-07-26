@@ -76,6 +76,7 @@ const INTERNAL_CORE_PACKAGE_ALIASES = [
     subpaths: [
       ["", "index.ts"],
       ["providers", "providers.ts"],
+      ["transports", "transports.ts"],
       ["diagnostics", path.join("utils", "diagnostics.ts")],
       ["event-stream", path.join("utils", "event-stream.ts")],
       ["types", "types.ts"],

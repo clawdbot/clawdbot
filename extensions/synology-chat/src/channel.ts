@@ -31,7 +31,11 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntriesLower,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
+import {
+  findCodeRegions,
+  isInsideCode,
+  sanitizeAssistantVisibleText,
+} from "openclaw/plugin-sdk/text-chunking";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { synologyChatApprovalAuth } from "./approval-auth.js";
 import { sendMessage, sendFileUrl } from "./client.js";
@@ -43,10 +47,16 @@ import {
 } from "./gateway-runtime.js";
 import { collectSynologyChatSecurityAuditFindings } from "./security-audit.js";
 import { buildSynologyChatOutboundSessionKey } from "./session-key.js";
-import { synologyChatSetupAdapter, synologyChatSetupWizard } from "./setup-surface.js";
+import {
+  synologyChatSetupAdapter,
+  synologyChatSetupContract,
+  synologyChatSetupWizard,
+} from "./setup-surface.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
 
 const CHANNEL_ID = "synology-chat";
+const SYNOLOGY_MARKDOWN_LINK_RE =
+  /(?<!!)\[((?:\\[^\n]|[^\\\]\n])+)\]\((https?:\/\/(?:\\[^\n]|[^()\s<>\\])+(?:\((?:\\[^\n]|[^()\s<>\\])*\)(?:\\[^\n]|[^()\s<>\\])*)*)(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^()\n]*\)))?\)/g;
 
 const resolveSynologyChatDmPolicy = createScopedDmSecurityResolver<ResolvedSynologyChatAccount>({
   channelKey: CHANNEL_ID,
@@ -258,7 +268,15 @@ async function sendSynologyChatText(
 ): Promise<SynologyChatOutboundResult> {
   const account = resolveOutboundAccount(ctx.cfg ?? {}, ctx.accountId);
   const incomingUrl = requireIncomingUrl(account);
-  const ok = await sendMessage(incomingUrl, ctx.text, ctx.to, account.allowInsecureSsl);
+  const codeRegions = findCodeRegions(ctx.text);
+  const text = ctx.text.replace(SYNOLOGY_MARKDOWN_LINK_RE, (match, label, url, offset) => {
+    const slashCount = ctx.text.slice(0, offset).match(/\\+$/)?.[0].length ?? 0;
+    if (slashCount % 2 === 1 || isInsideCode(offset, codeRegions) || /[<>|]/.test(label + url)) {
+      return match;
+    }
+    return `<${url.replace(/\\([()])/g, "$1")}|${label.replace(/\\([[\]])/g, "$1")}>`;
+  });
+  const ok = await sendMessage(incomingUrl, text, ctx.to, account.allowInsecureSsl);
   if (!ok) {
     throw new Error("Failed to send message to Synology Chat");
   }
@@ -327,6 +345,7 @@ function createSynologyChatPlugin(): SynologyChatPlugin {
       reload: { configPrefixes: [`channels.${CHANNEL_ID}`] },
       configSchema: SynologyChatChannelConfigSchema,
       setup: synologyChatSetupAdapter,
+      setupContract: synologyChatSetupContract,
       setupWizard: synologyChatSetupWizard,
       config: {
         ...synologyChatConfigAdapter,

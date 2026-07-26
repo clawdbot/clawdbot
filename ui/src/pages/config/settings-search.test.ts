@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { afterEach, describe, expect, it } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { findSettingsSearchBlocks } from "./settings-search.ts";
@@ -45,7 +46,7 @@ describe("findSettingsSearchBlocks", () => {
         },
       },
       value: { mcp: { servers: {} } },
-      uiHints: {},
+      uiHints: { "mcp.servers": { advanced: false } },
     });
 
     expect(matches).toEqual([
@@ -97,7 +98,7 @@ describe("findSettingsSearchBlocks", () => {
     expect(matches).toEqual([
       expect.objectContaining({
         routeId: "advanced",
-        search: "?section=secrets",
+        search: "?section=secrets&advanced=1",
         hash: "#config-section-secrets",
       }),
     ]);
@@ -122,7 +123,7 @@ describe("findSettingsSearchBlocks", () => {
         },
       },
       value: {},
-      uiHints: {},
+      uiHints: { "tools.profile": { advanced: false } },
     });
 
     expect(matches).toEqual([
@@ -153,7 +154,7 @@ describe("findSettingsSearchBlocks", () => {
         },
       },
       value: {},
-      uiHints: {},
+      uiHints: { "tools.profile": { advanced: false } },
     });
 
     expect(matches).toEqual([

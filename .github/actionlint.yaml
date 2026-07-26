@@ -29,3 +29,10 @@ paths:
       - 'constant expression "false" in condition'
       # actionlint's built-in runner label allowlist lags Blacksmith additions.
       - 'label "blacksmith-16vcpu-[^"]+" is unknown\.'
+  # GitHub Actions supports concurrency.queue, but actionlint does not yet model it.
+  .github/workflows/docker-release.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
+  .github/workflows/docker-channel-promote.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'

@@ -15,6 +15,11 @@ import {
   validateNodePluginToolsUpdateParams,
   validateNodeSkillsUpdateParams,
   validateNodePresenceActivityPayload,
+  validateSessionsListParams,
+  validateSessionsCompanionAskParams,
+  validateSessionsCompanionResetParams,
+  validateSessionsCompanionStateParams,
+  validateSessionsObserverVisibilityParams,
   validateSessionsSearchParams,
   validateSessionsUsageParams,
   validateTasksCancelParams,
@@ -34,6 +39,8 @@ import {
   validateWakeParams,
   type ValidationError,
 } from "./index.js";
+import * as schemaExportRegistry from "./schema-export-registry.js";
+import * as validatorRegistry from "./validator-registry.js";
 
 /**
  * Broad protocol validator smoke tests.
@@ -56,12 +63,30 @@ const makeError = (overrides: Partial<ValidationError>): ValidationError => ({
 /** Runtime shape shared by all exported lazy protocol validator functions. */
 type ProtocolValidator = (value: unknown) => boolean;
 
+describe("protocol export registries", () => {
+  it("re-exports every runtime registry symbol by identity", () => {
+    for (const registry of [schemaExportRegistry, validatorRegistry]) {
+      for (const [name, value] of Object.entries(registry)) {
+        expect(protocol[name as keyof typeof protocol], name).toBe(value);
+      }
+    }
+  });
+});
+
 describe("lazy protocol validators", () => {
   it("validates through exported lazy validators", () => {
     expect(validateCommandsListParams({})).toBe(true);
     expect(validateCommandsListParams({ includeArgs: true })).toBe(true);
     expect(validateCommandsListParams({ includeArgs: "yes" })).toBe(false);
     expect(formatValidationErrors(validateCommandsListParams.errors)).toContain("must be boolean");
+  });
+
+  it("accepts every sessions.list archive filter mode", () => {
+    expect(validateSessionsListParams({})).toBe(true);
+    expect(validateSessionsListParams({ archived: false })).toBe(true);
+    expect(validateSessionsListParams({ archived: true })).toBe(true);
+    expect(validateSessionsListParams({ archived: "all" })).toBe(true);
+    expect(validateSessionsListParams({ archived: "archived" })).toBe(false);
   });
 
   it("keeps validation errors readable on the exported validator", () => {
@@ -262,6 +287,40 @@ describe("lazy protocol validators", () => {
     expect(validateSessionsSearchParams({ query: "deployment failure", limit: 26 })).toBe(false);
     expect(validateSessionsSearchParams({ query: "" })).toBe(false);
     expect(validateSessionsSearchParams({ query: "x".repeat(4097) })).toBe(false);
+  });
+
+  it("validates closed bounded session companion params", () => {
+    expect(
+      validateSessionsCompanionAskParams({
+        sessionKey: "agent:main:current",
+        question: "What changed in the project?",
+      }),
+    ).toBe(true);
+    expect(
+      validateSessionsCompanionAskParams({
+        sessionKey: "agent:main:current",
+        question: "x".repeat(401),
+      }),
+    ).toBe(false);
+    expect(validateSessionsCompanionAskParams({ sessionKey: "", question: "why" })).toBe(false);
+    expect(
+      validateSessionsCompanionAskParams({
+        sessionKey: "agent:main:current",
+        question: "why",
+        extra: true,
+      }),
+    ).toBe(false);
+    expect(validateSessionsCompanionStateParams({ sessionKey: "agent:main:current" })).toBe(true);
+    expect(validateSessionsCompanionStateParams({ sessionKey: "" })).toBe(false);
+    expect(validateSessionsCompanionResetParams({ sessionKey: "agent:main:current" })).toBe(true);
+    expect(validateSessionsCompanionResetParams({})).toBe(false);
+  });
+
+  it("validates closed session observer visibility declarations", () => {
+    expect(validateSessionsObserverVisibilityParams({ visible: true })).toBe(true);
+    expect(validateSessionsObserverVisibilityParams({})).toBe(false);
+    expect(validateSessionsObserverVisibilityParams({ visible: "true" })).toBe(false);
+    expect(validateSessionsObserverVisibilityParams({ visible: false, extra: true })).toBe(false);
   });
 
   it("validates chat sends that suppress command interpretation", () => {
@@ -734,8 +793,14 @@ describe("validateModelsProbeParams", () => {
   it("accepts one provider with optional profile and timeout", () => {
     expect(validateModelsProbeParams({ provider: "openai" })).toBe(true);
     expect(
-      validateModelsProbeParams({ provider: "OpenAI", profileId: "work", timeoutMs: 20_000 }),
+      validateModelsProbeParams({
+        provider: "OpenAI",
+        profileId: "work",
+        timeoutMs: 20_000,
+        agentId: "writer",
+      }),
     ).toBe(true);
+    expect(validateModelsProbeParams({ provider: "openai", agentId: "" })).toBe(true);
   });
 
   it("rejects missing providers, invalid timeouts, and extra fields", () => {
@@ -770,11 +835,14 @@ describe("validateNodePresenceActivityPayload", () => {
     expect(validateNodePresenceActivityPayload({ idleSeconds: 2_592_000, saturated: true })).toBe(
       true,
     );
+    expect(validateNodePresenceActivityPayload({ action: "clear" })).toBe(true);
   });
 
   it("rejects negative, unbounded, and extra fields", () => {
     expect(validateNodePresenceActivityPayload({ idleSeconds: -1 })).toBe(false);
     expect(validateNodePresenceActivityPayload({ idleSeconds: 2_592_001 })).toBe(false);
     expect(validateNodePresenceActivityPayload({ idleSeconds: 1, active: true })).toBe(false);
+    expect(validateNodePresenceActivityPayload({ action: "clear", idleSeconds: 1 })).toBe(false);
+    expect(validateNodePresenceActivityPayload({ action: "disable" })).toBe(false);
   });
 });

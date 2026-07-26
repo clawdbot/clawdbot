@@ -18,8 +18,6 @@ export type GatewayTlsConfig = {
 };
 
 export type WideAreaDiscoveryConfig = {
-  /** Enable DNS-SD style wide-area discovery. */
-  enabled?: boolean;
   /** Optional unicast DNS-SD domain (e.g. "openclaw.internal"). */
   domain?: string;
 };
@@ -90,6 +88,8 @@ export type ResolvedTalkConfig = {
 };
 
 export type TalkConfig = {
+  /** Agent that owns Talk sessions created without an agent-scoped session key. */
+  agentId?: string;
   /** Active Talk TTS provider (for example "acme-speech"). */
   provider?: string;
   /** Provider-specific Talk config keyed by provider id. */
@@ -123,6 +123,13 @@ export type TalkConfigResponse = TalkConfig & {
 };
 
 export type GatewayControlUiConfig = {
+  /** @deprecated Doctor-only legacy input. */
+  chatMessageMaxWidth?: string;
+  /**
+   * @deprecated Upgrade-only transport input. Retained so releases that shipped
+   * this break-glass flag can migrate an unpaired browser safely.
+   */
+  dangerouslyDisableDeviceAuth?: boolean;
   /** If false, the Gateway will not serve the Control UI (default /). */
   enabled?: boolean;
   /** Optional base path prefix for the Control UI (e.g. "/openclaw"). */
@@ -135,6 +142,8 @@ export type GatewayControlUiConfig = {
    * utility-model routing and caches them per agent.
    */
   toolTitles?: boolean;
+  /** Produce utility-model session status digests for subscribed Control UI clients (default true). */
+  sessionObserver?: boolean;
   /**
    * Embed sandbox mode for hosted Control UI previews.
    * - strict: no script execution inside embeds
@@ -148,7 +157,6 @@ export type GatewayControlUiConfig = {
    */
   allowExternalEmbedUrls?: boolean;
   /** Optional max-width for grouped Control UI chat messages (default: min(900px, 68%)). */
-  chatMessageMaxWidth?: string;
   /** Allowed browser origins for Control UI/WebChat websocket connections. */
   allowedOrigins?: string[];
   /**
@@ -156,14 +164,6 @@ export type GatewayControlUiConfig = {
    * Supported long-term for deployments that intentionally rely on this policy.
    */
   dangerouslyAllowHostHeaderOriginFallback?: boolean;
-  /**
-   * Insecure-auth toggle.
-   * Control UI still requires secure context + device identity unless
-   * dangerouslyDisableDeviceAuth is enabled.
-   */
-  allowInsecureAuth?: boolean;
-  /** DANGEROUS: Disable device identity checks for the Control UI (default: false). */
-  dangerouslyDisableDeviceAuth?: boolean;
 };
 
 /** Gateway authentication strategy for WebSocket and HTTP clients. */
@@ -296,7 +296,7 @@ export type GatewayRemoteConfig = {
  * host terminal is allowed.
  */
 export type GatewayTerminalConfig = {
-  /** Master switch for the operator terminal. Default: false. */
+  /** Master switch for the operator terminal. Default: true; set false to opt out. */
   enabled?: boolean;
   /**
    * Shell executable to launch. When unset the host login shell is used
@@ -484,6 +484,12 @@ export type GatewayNodePairingConfig = {
 };
 
 export type GatewayNodesConfig = {
+  /** @deprecated Doctor-only legacy input. */
+  skills?: { enabled?: boolean };
+  /** @deprecated Doctor-only legacy input. */
+  allowCommands?: string[];
+  /** @deprecated Doctor-only legacy input. */
+  denyCommands?: string[];
   /** Browser routing policy for node-hosted browser proxies. */
   browser?: {
     /** Routing mode (default: auto). */
@@ -498,15 +504,14 @@ export type GatewayNodesConfig = {
     /** Accept node-published plugin tool descriptors (default: true). */
     enabled?: boolean;
   };
-  /** Controls whether paired nodes may publish agent-visible skills (default: true). */
-  skills?: {
-    /** Accept node-published skill descriptors (default: true). */
-    enabled?: boolean;
+  /** Accept node-published skill descriptors (default: true). */
+  allowSkills?: boolean;
+  commands?: {
+    /** Additional node.invoke commands to allow on the gateway. */
+    allow?: string[];
+    /** Commands to deny even if they appear in the defaults or node claims. */
+    deny?: string[];
   };
-  /** Additional node.invoke commands to allow on the gateway. */
-  allowCommands?: string[];
-  /** Commands to deny even if they appear in the defaults or node claims. */
-  denyCommands?: string[];
 };
 
 export type GatewayToolsConfig = {

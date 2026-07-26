@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveAvatar, setAvatarGatewayOrigin } from "./identity-avatar.ts";
+import { resolveAvatar, resolveIdentityHue, setAvatarGatewayOrigin } from "./identity-avatar.ts";
 
 afterEach(() => {
   setAvatarGatewayOrigin(null);
@@ -28,6 +28,18 @@ describe("resolveAvatar", () => {
     expect(second.kind).toBe("initials");
     if (first.kind === "initials" && second.kind === "initials") {
       expect(first.colorSeed).toBe(second.colorSeed);
+    }
+  });
+
+  it("derives a stable identity hue from the same seed as the initials color", () => {
+    const first = resolveIdentityHue({ id: "profile_123", name: "Ada Lovelace" });
+    const second = resolveIdentityHue({ id: "profile_123", name: "Renamed User" });
+    expect(first).toBe(second);
+    expect(first).toBeGreaterThanOrEqual(0);
+    expect(first).toBeLessThan(360);
+    const resolved = resolveAvatar({ id: "profile_123" });
+    if (resolved.kind === "initials") {
+      expect(first).toBe(resolved.colorSeed % 360);
     }
   });
 

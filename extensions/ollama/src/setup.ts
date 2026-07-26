@@ -19,10 +19,7 @@ import { applyAgentDefaultModelPrimary } from "openclaw/plugin-sdk/provider-onbo
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { WizardCancelledError, type WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   OLLAMA_CLOUD_BASE_URL,
   OLLAMA_CLOUD_DEFAULT_MODELS,
@@ -33,10 +30,12 @@ import {
 import { readProviderBaseUrl } from "./provider-base-url.js";
 import {
   buildOllamaBaseUrlSsrFPolicy,
+  buildDefaultOllamaCloudModelDefinition,
   buildOllamaProvider,
   buildOllamaModelDefinition,
   enrichOllamaModelsWithContext,
   fetchOllamaModels,
+  isOllamaCloudModel,
   resolveOllamaApiBase,
   type OllamaModelWithContext,
 } from "./provider-models.js";
@@ -44,7 +43,10 @@ import {
 export { buildOllamaProvider };
 
 const OLLAMA_SUGGESTED_MODELS_LOCAL = [OLLAMA_DEFAULT_MODEL];
-const OLLAMA_SUGGESTED_MODELS_CLOUD = [...OLLAMA_CLOUD_DEFAULT_MODELS];
+const OLLAMA_SUGGESTED_MODELS_CLOUD = OLLAMA_CLOUD_DEFAULT_MODELS.map((model) => model.id);
+const OLLAMA_SUGGESTED_MODELS_LOCAL_CLOUD = OLLAMA_CLOUD_DEFAULT_MODELS.map(
+  (model) => `${model.id}:cloud`,
+);
 const OLLAMA_CONTEXT_ENRICH_LIMIT = 200;
 const OLLAMA_CLOUD_MAX_DISCOVERED_MODELS = 500;
 const OLLAMA_PULL_RESPONSE_TIMEOUT_MS = 30_000;
@@ -52,6 +54,8 @@ const OLLAMA_PULL_STREAM_IDLE_TIMEOUT_MS = 300_000;
 const OLLAMA_RECOMMENDED_TOOLS_MODEL = "gemma4:e4b";
 const OLLAMA_RECOMMENDED_TOOLS_MODEL_SIZE = "about 9.6 GB";
 const OLLAMA_TOOLS_SCAN_CONCURRENCY = 8;
+
+type OllamaCloudDefaultModel = (typeof OLLAMA_CLOUD_DEFAULT_MODELS)[number];
 
 type OllamaSetupOptions = {
   customBaseUrl?: string;
@@ -121,10 +125,6 @@ function normalizeOllamaModelName(value: string | undefined): string | undefined
   return trimmed;
 }
 
-function isOllamaCloudModel(modelName: string | undefined): boolean {
-  return normalizeOptionalLowercaseString(modelName)?.endsWith(":cloud") === true;
-}
-
 function formatOllamaPullStatus(status: string): { text: string; hidePercent: boolean } {
   const trimmed = status.trim();
   const partStatusMatch = trimmed.match(/^([a-z-]+)\s+(?:sha256:)?[a-f0-9]{8,}$/i);
@@ -146,8 +146,9 @@ export async function checkOllamaCloudAuth(
       url: `${apiBase}/api/me`,
       init: {
         method: "POST",
-        signal: AbortSignal.timeout(5000),
       },
+      // Guard-owned timeoutMs also bounds DNS/proxy preflight; init.signal does not.
+      timeoutMs: 5000,
       policy: buildOllamaBaseUrlSsrFPolicy(apiBase),
       auditContext: "ollama-setup.me",
     });
@@ -433,14 +434,21 @@ async function promptForOllamaCloudCredential(params: {
 function buildOllamaModelsConfig(
   modelNames: string[],
   discoveredModelsByName?: Map<string, OllamaModelWithContext>,
+  defaultModels: readonly OllamaCloudDefaultModel[] = [],
 ) {
   return modelNames.map((name) => {
     const discovered = discoveredModelsByName?.get(name);
-    // Suggested cloud models may be injected before `/api/tags` exposes them,
-    // so keep Kimi vision-capable during setup even without discovered metadata.
+    const defaultModel = defaultModels.find((model) => model.id === name);
+    if (defaultModel && !discovered) {
+      return buildDefaultOllamaCloudModelDefinition(defaultModel);
+    }
     const capabilities =
-      discovered?.capabilities ?? (name === "kimi-k2.5:cloud" ? ["vision"] : undefined);
-    return buildOllamaModelDefinition(name, discovered?.contextWindow, capabilities);
+      discovered?.capabilities ?? (defaultModel ? [...defaultModel.capabilities] : undefined);
+    return buildOllamaModelDefinition(
+      name,
+      discovered?.contextWindow ?? defaultModel?.contextWindow,
+      capabilities,
+    );
   });
 }
 
@@ -494,6 +502,7 @@ function applyOllamaProviderConfig(
   modelNames: string[],
   discoveredModelsByName?: Map<string, OllamaModelWithContext>,
   apiKey: SecretInput = "OLLAMA_API_KEY",
+  defaultModels: readonly OllamaCloudDefaultModel[] = [],
 ): OpenClawConfig {
   return {
     ...cfg,
@@ -506,7 +515,7 @@ function applyOllamaProviderConfig(
           baseUrl,
           api: "ollama",
           apiKey,
-          models: buildOllamaModelsConfig(modelNames, discoveredModelsByName),
+          models: buildOllamaModelsConfig(modelNames, discoveredModelsByName, defaultModels),
         },
       },
     },
@@ -547,7 +556,10 @@ async function resolveHostBackedSuggestedModelNames(params: {
 
   const auth = await checkOllamaCloudAuth(params.baseUrl);
   if (auth.signedIn) {
-    return mergeUniqueModelNames(OLLAMA_SUGGESTED_MODELS_LOCAL, OLLAMA_SUGGESTED_MODELS_CLOUD);
+    return mergeUniqueModelNames(
+      OLLAMA_SUGGESTED_MODELS_LOCAL,
+      OLLAMA_SUGGESTED_MODELS_LOCAL_CLOUD,
+    );
   }
 
   await params.prompter.note(
@@ -800,6 +812,7 @@ export async function promptAndConfigureOllama(params: {
         modelNames,
         undefined,
         credential,
+        OLLAMA_CLOUD_DEFAULT_MODELS,
       ),
     };
   }

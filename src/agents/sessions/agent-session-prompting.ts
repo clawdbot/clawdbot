@@ -1,5 +1,8 @@
 import { readFileSync } from "node:fs";
 import type { ImageContent, TextContent } from "../../llm/types.js";
+import { attachRuntimePromptMediaFacts, type MediaFact } from "../../media/media-facts.js";
+import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
+import { readRuntimePromptImageFactIndexes } from "../../media/runtime-prompt-image-provenance.js";
 import { attachRuntimeUserTurnTranscriptContext } from "../../sessions/user-turn-transcript-runtime-context.js";
 import type {
   PersistedUserTurnMessage,
@@ -86,6 +89,21 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     images?: ImageContent[],
   ): Array<TextContent | ImageContent> {
     return [{ type: "text", text }, ...(images ?? [])];
+  }
+
+  private createUserMessage(text: string, images?: ImageContent[]): PersistedUserTurnMessage {
+    const message = {
+      role: "user",
+      content: this.createUserContent(text, images),
+      timestamp: Date.now(),
+    } satisfies PersistedUserTurnMessage;
+    const imageFactIndexes = readRuntimePromptImageFactIndexes(images);
+    return imageFactIndexes
+      ? ({
+          ...message,
+          __openclaw: { mediaImageBlockFactIndexes: imageFactIndexes },
+        } as unknown as PersistedUserTurnMessage)
+      : message;
   }
 
   /**
@@ -187,11 +205,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       messages = [];
 
       // Add user message
-      messages.push({
-        role: "user",
-        content: this.createUserContent(expandedText, currentImages),
-        timestamp: Date.now(),
-      });
+      messages.push(this.createUserMessage(expandedText, currentImages));
 
       // Inject any pending "nextTurn" messages as context alongside the user message
       for (const msg of this.pendingNextTurnMessages) {
@@ -320,6 +334,8 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     text: string,
     images?: ImageContent[],
     userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
+    media?: MediaFact[],
+    imageOrder?: PromptImageOrderEntry[],
   ): Promise<void> {
     // Check for extension commands (cannot be queued)
     if (text.startsWith("/")) {
@@ -337,6 +353,8 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       preparedMessage && userTurnTranscriptRecorder
         ? { message: preparedMessage, recorder: userTurnTranscriptRecorder }
         : undefined,
+      media,
+      imageOrder,
     );
   }
 
@@ -370,18 +388,19 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       message: PersistedUserTurnMessage;
       recorder: UserTurnTranscriptRecorder;
     },
+    media?: MediaFact[],
+    imageOrder?: PromptImageOrderEntry[],
   ): Promise<void> {
     this.steeringMessages.push(text);
     this.emitQueueUpdate();
-    const runtimeMessage = {
-      role: "user",
-      content: this.createUserContent(text, images),
-      timestamp: Date.now(),
-    } satisfies PersistedUserTurnMessage;
+    const runtimeMessage = this.createUserMessage(text, images);
+    const promptMessage = media?.length
+      ? attachRuntimePromptMediaFacts(runtimeMessage, media, imageOrder)
+      : runtimeMessage;
     this.agent.steer(
       transcriptContext
-        ? attachRuntimeUserTurnTranscriptContext(runtimeMessage, transcriptContext)
-        : runtimeMessage,
+        ? attachRuntimeUserTurnTranscriptContext(promptMessage, transcriptContext)
+        : promptMessage,
     );
   }
 

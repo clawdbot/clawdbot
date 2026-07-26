@@ -244,7 +244,7 @@ async function dispatchDiscordCommandInteraction(params: {
     });
   };
 
-  const useAccessGroups = cfg.commands?.useAccessGroups !== false;
+  const useAccessGroups = true;
   const user = interaction.user;
   if (!user) {
     return { accepted: false };

@@ -79,9 +79,16 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
   "@openclaw/ai/diagnostics": ["../dist/plugin-sdk/packages/ai/src/utils/diagnostics.d.ts"],
   "@openclaw/ai/event-stream": ["../dist/plugin-sdk/packages/ai/src/utils/event-stream.d.ts"],
   "@openclaw/ai/providers": ["../dist/plugin-sdk/packages/ai/src/providers.d.ts"],
+  "@openclaw/ai/transports": ["../dist/plugin-sdk/packages/ai/src/transports.d.ts"],
   "@openclaw/ai/types": ["../dist/plugin-sdk/packages/ai/src/types.d.ts"],
   "@openclaw/ai/validation": ["../dist/plugin-sdk/packages/ai/src/validation.d.ts"],
-  "@openclaw/ai/internal/*": ["../dist/plugin-sdk/packages/ai/src/internal/*.d.ts"],
+  "@openclaw/ai/internal/anthropic": ["../dist/plugin-sdk/packages/ai/src/internal/anthropic.d.ts"],
+  "@openclaw/ai/internal/openai": ["../dist/plugin-sdk/packages/ai/src/internal/openai.d.ts"],
+  "@openclaw/ai/internal/retry-after": [
+    "../dist/plugin-sdk/packages/ai/src/internal/retry-after.d.ts",
+  ],
+  "@openclaw/ai/internal/runtime": ["../dist/plugin-sdk/packages/ai/src/internal/runtime.d.ts"],
+  "@openclaw/ai/internal/shared": ["../dist/plugin-sdk/packages/ai/src/internal/shared.d.ts"],
   "@openclaw/llm-core": ["../dist/plugin-sdk/packages/llm-core/src/index.d.ts"],
   "@openclaw/llm-core/diagnostics": [
     "../dist/plugin-sdk/packages/llm-core/src/utils/diagnostics.d.ts",

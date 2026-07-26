@@ -869,7 +869,6 @@ export function verifyPlivoWebhook(
     try {
       const req = new URL(reconstructed);
       const base = new URL(options.publicUrl);
-      base.pathname = req.pathname;
       base.search = req.search;
       verificationUrl = base.toString();
     } catch {

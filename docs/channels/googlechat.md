@@ -172,10 +172,8 @@ Use these identifiers for delivery and allowlists:
       webhookPath: "/googlechat",
       botUser: "users/1234567890", // optional; helps mention detection
       allowBots: false,
-      dm: {
-        policy: "pairing",
-        allowFrom: ["users/1234567890"],
-      },
+      dmPolicy: "pairing",
+      allowFrom: ["users/1234567890"],
       groupPolicy: "allowlist",
       groups: {
         "spaces/AAAA": {

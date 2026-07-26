@@ -34,7 +34,7 @@ export {
 export {
   listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGateway,
-  loadSessionEntry,
+  loadSessionEntryReadOnly as loadSessionEntry,
   resolveSessionModelRef,
 } from "../../gateway/session-utils.js";
 export { resolveSessionKeyFromResolveParams } from "../../gateway/sessions-resolve.js";

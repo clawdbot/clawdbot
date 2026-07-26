@@ -15,7 +15,7 @@ import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-re
 import { createPluginCacheKey, PluginLruCache } from "./plugin-cache-primitives.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
-import { resolvePluginMetadataSnapshotMemoEnvFingerprint } from "./plugin-metadata-snapshot.js";
+import { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-snapshot.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 import type { PluginRuntime } from "./runtime/types.js";
@@ -360,7 +360,7 @@ function resolveSetupRegistryCacheKey(params?: {
       env,
       workspaceDir: params?.workspaceDir,
     }),
-    resolvePluginMetadataSnapshotMemoEnvFingerprint(env),
+    resolvePluginMetadataEnvFingerprint(env),
     resolveCurrentSetupSnapshotCacheId(),
     process.cwd(),
     params?.pluginIds ? [...params.pluginIds].toSorted() : null,

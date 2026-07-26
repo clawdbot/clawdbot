@@ -203,11 +203,11 @@ function readSessionEntry(sessionId) {
     try {
       const row = db
         .prepare(
-          `SELECT se.session_key, se.entry_json, s.agent_harness_id
-             FROM sessions AS s
-             INNER JOIN session_entries AS se ON se.session_id = s.session_id
-            WHERE s.session_id = ?
-            ORDER BY se.updated_at DESC, se.session_key
+          `SELECT sn.session_key, sn.entry_json, sw.agent_harness_id
+             FROM session_nodes AS sn
+             INNER JOIN session_windows AS sw ON sw.session_id = sn.current_session_id
+            WHERE sw.session_id = ?
+            ORDER BY sn.updated_at DESC, sn.session_key
             LIMIT 1`,
         )
         .get(sessionId);

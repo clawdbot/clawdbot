@@ -298,7 +298,12 @@ describeControlUiE2e("Control UI usage cost analysis mocked Gateway E2E", () => 
     try {
       await page.goto(`${server.baseUrl}usage`);
       await page.locator(".daily-chart-compact").waitFor({ state: "visible", timeout: 10_000 });
-      await page.locator(".agent-scope-control__select").selectOption("");
+      const agentScope = page.locator(".agent-scope-control openclaw-agent-select");
+      await agentScope.locator(".agent-select__trigger").click();
+      await agentScope
+        .locator("wa-dropdown-item[data-agent-option]")
+        .filter({ hasText: "All agents" })
+        .click();
       await expect
         .poll(async () => (await gateway.getRequests("usage.cost")).at(-1)?.params)
         .toMatchObject({ agentScope: "all" });

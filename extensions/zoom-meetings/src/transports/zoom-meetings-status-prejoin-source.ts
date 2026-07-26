@@ -1,312 +1,19 @@
+import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import { zoomMeetingStatusAccessSource } from "./zoom-meetings-status-access-source.js";
 import { zoomMeetingStatusPageSource } from "./zoom-meetings-status-page-source.js";
-import type { ZoomMeetingStatusPreludeParams } from "./zoom-meetings-status-types.js";
 
-const ZOOM_MEETING_TRANSCRIPT_MAX_LINES = 500;
+type MeetingStatusPreludeParams = Parameters<
+  typeof MeetingPlatformAdapter.createStatusPreludeSource
+>[0];
 
-export function zoomMeetingStatusPreludeSource(params: ZoomMeetingStatusPreludeParams): string {
-  const selectors = params.selectors;
-  const expectedIdentity = params.expectedIdentity;
-  const toggleStateFunction = params.toggleStateFunction;
-  const pageIdentityFunctionSource = () => params.pageIdentitySource;
-  return `async () => {
-  ${pageIdentityFunctionSource()}
-  const topDocument = globalThis.document;
-  const document = topDocument.querySelector("#webclient")?.contentDocument || topDocument;
-  const pageWindow = document.defaultView || globalThis;
-  const HTMLInputElement = pageWindow.HTMLInputElement || globalThis.HTMLInputElement;
-  const Event = pageWindow.Event || globalThis.Event;
-  const MutationObserver = pageWindow.MutationObserver || globalThis.MutationObserver;
-  const parseToggleState = ${toggleStateFunction};
-  const selectors = ${selectors};
-  const expectedIdentity = ${JSON.stringify(expectedIdentity)};
-  const allowMicrophone = ${JSON.stringify(params.allowMicrophone)};
-  const allowSessionAdoption = ${JSON.stringify(params.allowSessionAdoption)};
-  const autoJoin = ${JSON.stringify(params.autoJoin)};
-  const captureCaptions = ${JSON.stringify(params.captureCaptions)};
-  const readOnly = ${JSON.stringify(Boolean(params.readOnly))};
-  const sessionId = ${JSON.stringify(params.meetingSessionId)};
-  const identityRetentionMs = ${JSON.stringify(Math.max(30_000, params.waitForInCallMs))};
-  const text = (node) => (node?.innerText || node?.textContent || "").trim();
-  const label = (node) => [
-    node?.getAttribute?.("aria-label"),
-    node?.getAttribute?.("title"),
-    node?.getAttribute?.("data-tid"),
-    text(node),
-  ].filter(Boolean).join(" ");
-  const clickable = (node) => node?.matches?.("button")
-    ? node
-    : node?.querySelector?.("button") || node?.closest?.("button") || node;
-  const first = (list) => {
-    for (const selector of list) {
-      const node = document.querySelector(selector);
-      if (node) return clickable(node);
-    }
-    return undefined;
-  };
-  const firstRaw = (list) => {
-    for (const selector of list) {
-      const node = document.querySelector(selector);
-      if (node) return node;
-    }
-    return undefined;
-  };
-  const firstWithin = (root, list) => {
-    if (!root) return undefined;
-    for (const selector of list) {
-      if (root.matches?.(selector)) return root;
-      const node = root.querySelector?.(selector);
-      if (node) return node;
-    }
-    return undefined;
-  };
-  const findTextButton = (pattern) => [...document.querySelectorAll("button")]
+export function zoomMeetingStatusPreludeSource(params: MeetingStatusPreludeParams): string {
+  return MeetingPlatformAdapter.createStatusPreludeSource(params, {
+    controlLookupSource: `const findTextButton = (pattern) => [...document.querySelectorAll("button")]
     .find((button) => !button.disabled && pattern.test(label(button)));
   const findTextControl = (pattern) =>
     [...document.querySelectorAll('button, a, [role="button"]')]
-      .find((control) => !control.disabled && pattern.test(label(control)));
-  const waitForUi = () => new Promise((resolve) => setTimeout(resolve, 120));
-  const bridgeOwnedBySession = (entry) => Boolean(
-    sessionId && (!entry?.sessionId || entry.sessionId === sessionId)
-  );
-  const mediaSourceUrl = (element) => String(element?.currentSrc || element?.src || "");
-  const bridgeSources = (entry) => Array.isArray(entry?.sources)
-    ? entry.sources
-    : entry?.source
-      ? [{ element: entry.source, muted: Boolean(entry.sourceMuted), pending: Boolean(entry.pending), stream: entry.stream, url: entry.sourceUrl }]
-      : [];
-  const bridgeSourceMatches = (element, source) => {
-    if (!element) return false;
-    if (source?.pending && mediaSourceIsEmpty(element) && !source.stream && !source.url) return true;
-    if (source?.stream || element.srcObject) return element.srcObject === source?.stream;
-    const currentUrl = mediaSourceUrl(element);
-    return Boolean(source?.url && currentUrl && source.url === currentUrl);
-  };
-  const mediaSourceIsEmpty = (element) => Boolean(
-    element && !element.srcObject && !mediaSourceUrl(element)
-  );
-  const restoreAudioBridgeSource = (source) => {
-    const element = source?.element;
-    // An empty element may receive a replacement source after cleanup. Keep it
-    // silent because there is no source identity that is safe to restore.
-    if (mediaSourceIsEmpty(element)) {
-      element.muted = true;
-      return;
-    }
-    // Zoom reuses media elements across source changes. Restore only the exact
-    // source this bridge muted.
-    if (!bridgeSourceMatches(element, source)) return;
-    const detachedLiveSource = Boolean(
-      element.isConnected === false &&
-      element.srcObject?.getAudioTracks?.().some((track) => track.readyState === "live")
-    );
-    if (detachedLiveSource) {
-      element.muted = true;
-      element.pause?.();
-      element.srcObject = null;
-      return;
-    }
-    element.muted = Boolean(source.muted);
-  };
-  const restoreAudioBridgeSources = (entry) => {
-    bridgeSources(entry).forEach(restoreAudioBridgeSource);
-  };
-  const retireAudioBridge = (entry, restoreSources = true) => {
-    if (restoreSources) restoreAudioBridgeSources(entry);
-    entry?.bridge?.pause?.();
-    if (entry?.bridge) entry.bridge.srcObject = null;
-    entry?.bridge?.remove?.();
-  };
-  const retireOwnedAudioBridges = (restoreSources = true) => {
-    const entries = Array.isArray(window.__openclawZoomAudioOutputs)
-      ? window.__openclawZoomAudioOutputs
-      : [];
-    const retained = [];
-    for (const entry of entries) {
-      if (!bridgeOwnedBySession(entry)) {
-        retained.push(entry);
-        continue;
-      }
-      retireAudioBridge(entry, restoreSources);
-    }
-    if (retained.length > 0) window.__openclawZoomAudioOutputs = retained;
-    else delete window.__openclawZoomAudioOutputs;
-  };
-  const adoptAudioBridgeSourcesForSession = () => {
-    const entries = Array.isArray(window.__openclawZoomAudioOutputs)
-      ? window.__openclawZoomAudioOutputs
-      : [];
-    const suspendedBySource = new Map();
-    for (const entry of entries) {
-      for (const source of bridgeSources(entry)) {
-        if (!source?.element || suspendedBySource.has(source.element)) continue;
-        if (!bridgeSourceMatches(source.element, source)) {
-          restoreAudioBridgeSource(source);
-          continue;
-        }
-        suspendedBySource.set(source.element, {
-          sessionId,
-          source: source.element,
-          sourceMuted: Boolean(source.muted),
-          sourceUrl: mediaSourceUrl(source.element) || source.url,
-          stream: source.element.srcObject,
-          suspended: true,
-        });
-      }
-      retireAudioBridge(entry, false);
-    }
-    const suspended = [...suspendedBySource.values()];
-    if (suspended.length > 0) window.__openclawZoomAudioOutputs = suspended;
-    else delete window.__openclawZoomAudioOutputs;
-  };
-  const suspendOwnedAudioBridges = () => {
-    const entries = Array.isArray(window.__openclawZoomAudioOutputs)
-      ? window.__openclawZoomAudioOutputs
-      : [];
-    const retained = [];
-    const suspendedBySource = new Map();
-    for (const entry of entries) {
-      if (!bridgeOwnedBySession(entry)) {
-        retained.push(entry);
-        continue;
-      }
-      // This pending entry owns the muted element until a later serialized
-      // status poll sees and routes the attached playback source.
-      if (
-        entry?.pending &&
-        bridgeSources(entry).some((source) => bridgeSourceMatches(source?.element, source))
-      ) {
-        retained.push(entry);
-        continue;
-      }
-      for (const source of bridgeSources(entry)) {
-        if (!source?.element || suspendedBySource.has(source.element)) continue;
-        if (!bridgeSourceMatches(source.element, source)) {
-          restoreAudioBridgeSource(source);
-          continue;
-        }
-        suspendedBySource.set(source.element, {
-          sessionId: entry.sessionId || sessionId,
-          source: source.element,
-          sourceMuted: Boolean(source.muted),
-          sourceUrl: source.url,
-          stream: source.element.srcObject,
-          suspended: true,
-        });
-      }
-      retireAudioBridge(entry, false);
-    }
-    const next = [...retained, ...suspendedBySource.values()];
-    if (next.length > 0) window.__openclawZoomAudioOutputs = next;
-    else delete window.__openclawZoomAudioOutputs;
-  };
-  const retireOwnedCaptions = () => {
-    const active = window.__openclawZoomCaptions;
-    const owned = Boolean(
-      active && sessionId && (!active.sessionId || active.sessionId === sessionId)
-    );
-    if (!owned) return;
-    if (active.settleTimer !== undefined) clearTimeout(active.settleTimer);
-    active.observer?.disconnect?.();
-    delete window.__openclawZoomCaptions;
-  };
-  const finalizeCaptionState = (active) => {
-    if (!active) return;
-    if (active.settleTimer !== undefined) clearTimeout(active.settleTimer);
-    active.settleTimer = undefined;
-    active.observer?.disconnect?.();
-    active.observer = undefined;
-    active.observerInstalled = false;
-    active.lines = Array.isArray(active.lines) ? active.lines : [];
-    if (Array.isArray(active.visible) && active.visible.length > 0) {
-      active.lines.push(...active.visible.map((entry) => ({
-        at: entry.at,
-        speaker: entry.speaker,
-        text: entry.text,
-      })));
-      active.visible = [];
-    }
-    const excess = active.lines.length - ${ZOOM_MEETING_TRANSCRIPT_MAX_LINES};
-    if (excess > 0) {
-      active.lines.splice(0, excess);
-      active.droppedLines = (active.droppedLines || 0) + excess;
-    }
-    active.finalized = true;
-    active.finalizedAt = Date.now();
-  };
-  const archiveFinalizedCaptions = (active) => {
-    if (active?.finalized !== true || !active.sessionId) return;
-    const archive = window.__openclawZoomCaptionArchive &&
-        typeof window.__openclawZoomCaptionArchive === "object"
-      ? window.__openclawZoomCaptionArchive
-      : {};
-    archive[active.sessionId] = active;
-    const retained = Object.entries(archive)
-      .sort((left, right) => Number(right[1]?.finalizedAt || 0) - Number(left[1]?.finalizedAt || 0))
-      .slice(0, 4);
-    window.__openclawZoomCaptionArchive = Object.fromEntries(retained);
-  };
-  const finalizeOwnedCaptions = () => {
-    const active = window.__openclawZoomCaptions;
-    const owned = Boolean(
-      active && sessionId && (!active.sessionId || active.sessionId === sessionId)
-    );
-    if (owned) {
-      active.identity ||= priorMeeting?.identity || expectedIdentity;
-      finalizeCaptionState(active);
-    }
-  };
-  const toggleState = (node, kind) => parseToggleState({
-    kind,
-    ariaPressed: node?.getAttribute?.("aria-pressed"),
-    ariaChecked: node?.getAttribute?.("aria-checked"),
-    checked: typeof node?.checked === "boolean" ? node.checked : undefined,
-    iconClass: node?.querySelector?.("svg")?.getAttribute?.("class"),
-    label: label(node),
-  });
-  const notes = [];
-  const currentIdentity = meetingIdentity(location.href);
-  const priorMeeting = window.__openclawZoomMeeting;
-  if (expectedIdentity && currentIdentity && currentIdentity !== expectedIdentity) {
-    // A confirmed SPA transition must stop resources still owned by this
-    // request, while preserving any newer session already committed to the tab.
-    retireOwnedAudioBridges();
-    finalizeOwnedCaptions();
-    const requestOwnsMeeting = Boolean(
-      priorMeeting &&
-      sessionId &&
-      (!priorMeeting.sessionId || priorMeeting.sessionId === sessionId)
-    );
-    if (requestOwnsMeeting) delete window.__openclawZoomMeeting;
-    return JSON.stringify({
-      inCall: false,
-      manualActionRequired: true,
-      manualActionReason: "zoom-session-conflict",
-      manualActionMessage: "The tracked Zoom tab now shows a different meeting. Return to the requested meeting link, then retry.",
-      title: document.title,
-      url: location.href,
-      notes,
-    });
-  }
-  const meetingOwnerConflict = Boolean(
-    priorMeeting?.sessionId && priorMeeting.sessionId !== sessionId
-  );
-  const captionOwnerConflict = Boolean(
-    window.__openclawZoomCaptions?.sessionId &&
-    window.__openclawZoomCaptions.sessionId !== sessionId
-  );
-  const committedOwnerConflict = meetingOwnerConflict || captionOwnerConflict;
-  const canRepairCaptionOwner = Boolean(
-    !meetingOwnerConflict && priorMeeting?.sessionId === sessionId
-  );
-  const canMutateSession = Boolean(
-    !readOnly &&
-    sessionId &&
-    (!committedOwnerConflict || canRepairCaptionOwner || allowSessionAdoption)
-  );
-  const identityMatchedUrl = Boolean(expectedIdentity && currentIdentity === expectedIdentity);
-  const identityVerifiedBeforeCall = identityMatchedUrl;
-  const continueInBrowser = first(selectors.continueInBrowser) ||
+      .find((control) => !control.disabled && pattern.test(label(control)));`,
+    lifecycleSource: `  const continueInBrowser = first(selectors.continueInBrowser) ||
     findTextButton(/join from browser|continue on this browser|join on the web|use the web app|continue without the app/i);
   if (canMutateSession && identityVerifiedBeforeCall && continueInBrowser) {
     continueInBrowser.click();
@@ -642,10 +349,8 @@ export function zoomMeetingStatusPreludeSource(params: ZoomMeetingStatusPreludeP
     controlManualActionMessage = inCall
       ? "Mute the Zoom microphone and verify it stays muted for observe-only mode."
       : "Mute the Zoom microphone and verify the microphone control shows it is off, then retry joining.";
-  }
-  const micMuted = microphoneState === "off" ? true : microphoneState === "on" ? false : undefined;
-  const cameraOff = cameraState === "off" ? true : cameraState === "on" ? false : undefined;
-  const signInControl = first(selectors.signIn);
+  }`,
+    manualActionSource: `  const signInControl = first(selectors.signIn);
   const tenantLoginRequired =
     /authorized attendees only|meeting is for authorized attendees|sign in to join|verify your email|enter the code sent to/i.test(pageTextLower);
   const loginRequired = tenantLoginRequired ||
@@ -690,6 +395,22 @@ export function zoomMeetingStatusPreludeSource(params: ZoomMeetingStatusPreludeP
     join.click();
     clickedJoin = true;
     notes.push("Clicked the Zoom guest join button.");
-  }
-`;
+  }`,
+    platform: {
+      displayName: "Zoom",
+      globals: {
+        audioOutputs: "__openclawZoomAudioOutputs",
+        captionArchive: "__openclawZoomCaptionArchive",
+        captions: "__openclawZoomCaptions",
+        meeting: "__openclawZoomMeeting",
+      },
+      manualActionReasonPrefix: "zoom",
+    },
+    setupSource: `const topDocument = globalThis.document;
+  const document = topDocument.querySelector("#webclient")?.contentDocument || topDocument;
+  const pageWindow = document.defaultView || globalThis;
+  const HTMLInputElement = pageWindow.HTMLInputElement || globalThis.HTMLInputElement;
+  const Event = pageWindow.Event || globalThis.Event;
+  const MutationObserver = pageWindow.MutationObserver || globalThis.MutationObserver;`,
+  });
 }

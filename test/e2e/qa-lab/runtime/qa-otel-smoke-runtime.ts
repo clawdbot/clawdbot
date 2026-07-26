@@ -1728,8 +1728,6 @@ async function main() {
       id: "qa-otel-smoke",
       title: "QA OTEL smoke evidence",
       sourcePath: "test/e2e/qa-lab/runtime/qa-otel-smoke-runtime.ts",
-      primaryCoverageIds: ["telemetry.otel"],
-      secondaryCoverageIds: ["telemetry.plugin-sdk-runtime-exports"],
       docsRefs: ["docs/gateway/opentelemetry.md", "docs/concepts/qa-e2e-automation.md"],
       codeRefs: [
         "test/e2e/qa-lab/runtime/qa-otel-smoke-runtime.ts",

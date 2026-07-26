@@ -8,7 +8,7 @@
   },
   "type": "module",
   "dependencies": {
-    "ws": "8.21.0",
+    "ws": "8.21.1",
     "zod": "4.4.3"
   },
   "devDependencies": {
@@ -43,7 +43,13 @@
       "docsPath": "/channels/mattermost",
       "docsLabel": "mattermost",
       "blurb": "self-hosted Slack-style chat; install the plugin to enable.",
-      "order": 65
+      "order": 65,
+      "setup": { "fields": [
+        { "key": "token", "kind": "string", "sensitive": true, "cli": { "flags": "--token <token>", "description": "Mattermost bot token" } },
+        { "key": "botToken", "kind": "string", "sensitive": true, "cli": { "flags": "--bot-token <token>", "description": "Mattermost bot token" } },
+        { "key": "httpUrl", "kind": "string", "cli": { "flags": "--http-url <url>", "description": "Mattermost server URL" } },
+        { "key": "useEnv", "kind": "boolean", "cli": { "flags": "--use-env", "description": "Use Mattermost environment credentials" } }
+      ] }
     },
     "install": {
       "clawhubSpec": "clawhub:@openclaw/mattermost",

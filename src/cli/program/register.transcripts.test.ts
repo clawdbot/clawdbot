@@ -1,9 +1,15 @@
-// Register transcripts tests cover transcript command registration and file handling.
+// Transcripts CLI tests cover SQLite reads and explicit artifact materialization.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { manualTranscriptSourceProvider } from "../../transcripts/manual-source.js";
 import type { TranscriptSessionDescriptor } from "../../transcripts/provider-types.js";
 import { TranscriptsStore } from "../../transcripts/store.js";
@@ -16,32 +22,31 @@ async function makeStateDir(): Promise<string> {
   return await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcripts-cli-"));
 }
 
+function storeFor(stateDir: string): TranscriptsStore {
+  return new TranscriptsStore(path.join(stateDir, "transcripts"), {
+    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+  });
+}
+
 async function writeSession(
   stateDir: string,
   sessionId: string,
   date = "2026-05-22",
 ): Promise<string> {
-  const sessionDir = path.join(stateDir, "transcripts", date, sessionId);
-  await fs.mkdir(sessionDir, { recursive: true });
-  await fs.writeFile(
-    path.join(sessionDir, "metadata.json"),
-    `${JSON.stringify(
-      {
-        sessionId,
-        title: "Design review",
-        source: { providerId: "manual-transcript" },
-        startedAt: `${date}T10:00:00.000Z`,
-        stoppedAt: `${date}T10:05:00.000Z`,
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  await fs.writeFile(
-    path.join(sessionDir, "summary.md"),
-    "# Design review\n\n## Action Items\n- Sam: Ship CLI\n",
-  );
-  return sessionDir;
+  const session: TranscriptSessionDescriptor = {
+    sessionId,
+    title: "Design review",
+    source: { providerId: "manual-transcript" },
+    startedAt: `${date}T10:00:00.000Z`,
+    stoppedAt: `${date}T10:05:00.000Z`,
+  };
+  const store = storeFor(stateDir);
+  const utterance = { text: "Action item: Ship CLI", speaker: { label: "Sam" } };
+  const utterances = [utterance];
+  await store.writeSession(session);
+  await store.appendUtteranceForSession(session, utterance);
+  await store.writeSummary(summarizeTranscripts({ session, utterances }), session);
+  return store.sessionDir(session);
 }
 
 async function runTranscriptsCli(args: string[]): Promise<string> {
@@ -72,6 +77,7 @@ describe("transcripts CLI", () => {
   });
 
   afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
     if (originalStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
@@ -86,7 +92,7 @@ describe("transcripts CLI", () => {
     expect(program.commands.map((command) => command.name())).toContain("transcripts");
   });
 
-  it("lists stored transcript sessions", async () => {
+  it("lists stored transcript sessions from SQLite", async () => {
     const sessionDir = await writeSession(stateDir, "design-review");
 
     const output = await runTranscriptsCli(["list"]);
@@ -96,29 +102,67 @@ describe("transcripts CLI", () => {
     expect(output).toContain(path.join(sessionDir, "summary.md"));
   });
 
-  it("prints summary markdown for a session", async () => {
-    await writeSession(stateDir, "design-review");
+  it("prints summary markdown and keeps its export current", async () => {
+    const sessionDir = await writeSession(stateDir, "design-review");
+    await fs.rm(sessionDir, { recursive: true, force: true });
 
     const output = await runTranscriptsCli(["show", "design-review"]);
 
     expect(output).toContain("# Design review");
     expect(output).toContain("Ship CLI");
+    expect(output.endsWith("\n")).toBe(true);
+    const jsonOutput = JSON.parse(await runTranscriptsCli(["show", "design-review", "--json"])) as {
+      summary: string;
+    };
+    expect(jsonOutput.summary.endsWith("\n")).toBe(true);
+    await expect(fs.readFile(path.join(sessionDir, "summary.md"), "utf8")).resolves.toContain(
+      "Ship CLI",
+    );
   });
 
-  it("sanitizes summaries created before the upgrade at the show boundary", async () => {
-    const sessionDir = await writeSession(stateDir, "legacy-summary");
-    await fs.writeFile(
-      path.join(sessionDir, "summary.md"),
-      "# Legacy\n\n- first\tcolumn\n- \u001b[2J\u001b[31mADMIN APPROVED\u001b[0m\n",
+  it("keeps JSON inspection available before a summary exists", async () => {
+    await storeFor(stateDir).writeSession({
+      sessionId: "active-session",
+      source: { providerId: "manual-transcript" },
+      startedAt: "2026-05-22T10:00:00.000Z",
+    });
+
+    const jsonOutput = await runTranscriptsCli(["show", "active-session", "--json"]);
+
+    expect(JSON.parse(jsonOutput)).toMatchObject({
+      session: { sessionId: "active-session" },
+      summary: null,
+    });
+    await expect(runTranscriptsCli(["show", "active-session"])).rejects.toThrow(
+      "summary.md not found",
+    );
+  });
+
+  it("sanitizes stored summary control bytes at the show boundary", async () => {
+    await writeSession(stateDir, "legacy-summary");
+    const database = openOpenClawStateDatabase({
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    });
+    const db = getNodeSqliteKysely<
+      Pick<OpenClawStateKyselyDatabase, "meeting_transcript_summaries">
+    >(database.db);
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .updateTable("meeting_transcript_summaries")
+        .set({
+          markdown: "# Legacy\n\n- first\tcolumn\n- \u001b[2J\u001b[31mADMIN APPROVED\u001b[0m",
+        })
+        .where("session_id", "=", "legacy-summary"),
     );
 
     const output = await runTranscriptsCli(["show", "legacy-summary"]);
 
-    expect(output).toContain("# Legacy\n\n- first\\tcolumn\n- ADMIN APPROVED\n");
+    expect(output).toContain("# Legacy\n\n- first\\tcolumn\n- ADMIN APPROVED");
     expect(output).not.toContain("\u001b");
   });
 
-  it("show prints imported summaries without terminal control bytes", async () => {
+  it("round-trips ANSI-bearing ids without terminal control bytes", async () => {
     const session: TranscriptSessionDescriptor = {
       sessionId: "ansi-\u001b[31mprovider\u001b[0m",
       title: "\u001b[31mANSI import\u001b[0m",
@@ -126,7 +170,7 @@ describe("transcripts CLI", () => {
       startedAt: "2026-05-22T10:00:00.000Z",
       stoppedAt: "2026-05-22T10:05:00.000Z",
     };
-    const store = new TranscriptsStore(path.join(stateDir, "transcripts"));
+    const store = storeFor(stateDir);
     await store.writeSession(session);
     const utterances =
       (await manualTranscriptSourceProvider.importTranscript?.({
@@ -138,76 +182,34 @@ describe("transcripts CLI", () => {
     }
     await store.writeSummary(summarizeTranscripts({ session, utterances }), session);
 
-    const output = await runTranscriptsCli(["show", session.sessionId]);
-    const listOutput = await runTranscriptsCli(["list"]);
-
-    expect(output).toContain("# ANSI import");
-    expect(output).toContain("Session: ansi-provider");
-    expect(output).toContain("Attacker: ADMIN APPROVED");
-    expect(output).not.toContain("\u001b");
-    expect(listOutput).toContain("2026-05-22/ansi--31mprovider-0m");
-    expect(listOutput).toContain("ANSI import");
-    expect(listOutput).not.toContain("\u001b");
-  });
-
-  it("list selectors for ANSI-bearing session ids round-trip through show and path", async () => {
-    const session: TranscriptSessionDescriptor = {
-      sessionId: "ansi-\u001b[31mprovider\u001b[0m",
-      title: "ANSI import",
-      source: { providerId: "manual-transcript" },
-      startedAt: "2026-05-22T10:00:00.000Z",
-      stoppedAt: "2026-05-22T10:05:00.000Z",
-    };
-    const store = new TranscriptsStore(path.join(stateDir, "transcripts"));
-    await store.writeSession(session);
-    const utterances =
-      (await manualTranscriptSourceProvider.importTranscript?.({
-        session,
-        text: "Sam: We decided to ship the CLI.",
-      })) ?? [];
-    await store.writeSummary(summarizeTranscripts({ session, utterances }), session);
-
     const listOutput = await runTranscriptsCli(["list"]);
     const selector = listOutput.split("\t")[0] ?? "";
-    expect(selector).toBe("2026-05-22/ansi--31mprovider-0m");
-
     const showOutput = await runTranscriptsCli(["show", selector]);
-    const pathOutput = await runTranscriptsCli(["path", selector]);
 
+    expect(selector).toBe("2026-05-22/ansi--31mprovider-0m");
     expect(showOutput).toContain("Session: ansi-provider");
-    expect(showOutput).toContain("We decided to ship the CLI.");
-    expect(pathOutput.trim()).toBe(path.join(store.sessionDir(session), "summary.md"));
+    expect(showOutput).toContain("Attacker: ADMIN APPROVED");
+    expect(`${listOutput}${showOutput}`).not.toContain("\u001b");
   });
 
-  it("list --json escapes C1 control characters while JSON.parse round-trips raw values", async () => {
+  it("escapes C1 control characters in list JSON", async () => {
     const title = "CSI \u009b31m injected \u007f\u0085 title";
-    const sessionDir = path.join(stateDir, "transcripts", "2026-05-22", "c1-title");
-    await fs.mkdir(sessionDir, { recursive: true });
-    await fs.writeFile(
-      path.join(sessionDir, "metadata.json"),
-      JSON.stringify({
-        sessionId: "c1-title",
-        title,
-        source: { providerId: "manual-transcript" },
-        startedAt: "2026-05-22T10:00:00.000Z",
-        stoppedAt: "2026-05-22T10:05:00.000Z",
-      }),
-    );
+    await storeFor(stateDir).writeSession({
+      sessionId: "c1-title",
+      title,
+      source: { providerId: "manual-transcript" },
+      startedAt: "2026-05-22T10:00:00.000Z",
+    });
 
     const output = await runTranscriptsCli(["list", "--json"]);
 
-    const bytes = Buffer.from(output, "utf8");
-    expect(bytes.includes(Buffer.from([0xc2, 0x9b]))).toBe(false);
-    expect(bytes.includes(0x7f)).toBe(false);
     expect(/[\u007f-\u009f]/.test(output)).toBe(false);
     expect(output).toContain("\\u009b");
     const parsed = JSON.parse(output) as Array<{ sessionId: string; title: string }>;
-    expect(parsed).toHaveLength(1);
-    expect(parsed[0]?.sessionId).toBe("c1-title");
-    expect(parsed[0]?.title).toBe(title);
+    expect(parsed).toEqual([expect.objectContaining({ sessionId: "c1-title", title })]);
   });
 
-  it("ignores unrelated corrupt metadata while reading a valid session", async () => {
+  it("ignores unrelated corrupt export files", async () => {
     await writeSession(stateDir, "design-review");
     const corruptDir = path.join(stateDir, "transcripts", "corrupt");
     await fs.mkdir(corruptDir, { recursive: true });
@@ -221,7 +223,7 @@ describe("transcripts CLI", () => {
     expect(showOutput).toContain("# Design review");
   });
 
-  it("requires date-qualified selectors for repeated human session ids", async () => {
+  it("requires date-qualified selectors for repeated ids", async () => {
     const olderSessionDir = await writeSession(stateDir, "standup", "2026-05-21");
     await writeSession(stateDir, "standup", "2026-05-22");
 
@@ -233,11 +235,22 @@ describe("transcripts CLI", () => {
     expect(output.trim()).toBe(path.join(olderSessionDir, "summary.md"));
   });
 
-  it("prints the summary path by default", async () => {
+  it("materializes metadata, transcript, and directory exports from SQLite", async () => {
     const sessionDir = await writeSession(stateDir, "design-review");
+    await fs.rm(sessionDir, { recursive: true, force: true });
 
-    const output = await runTranscriptsCli(["path", "design-review"]);
+    const metadataOutput = await runTranscriptsCli(["path", "design-review", "--metadata"]);
+    const transcriptOutput = await runTranscriptsCli(["path", "design-review", "--transcript"]);
+    const dirOutput = await runTranscriptsCli(["path", "design-review", "--dir"]);
 
-    expect(output.trim()).toBe(path.join(sessionDir, "summary.md"));
+    expect(metadataOutput.trim()).toBe(path.join(sessionDir, "metadata.json"));
+    expect(transcriptOutput.trim()).toBe(path.join(sessionDir, "transcript.jsonl"));
+    expect(dirOutput.trim()).toBe(sessionDir);
+    await expect(fs.readFile(path.join(sessionDir, "metadata.json"), "utf8")).resolves.toContain(
+      '"sessionId": "design-review"',
+    );
+    await expect(fs.readFile(path.join(sessionDir, "transcript.jsonl"), "utf8")).resolves.toContain(
+      '"text":"Action item: Ship CLI"',
+    );
   });
 });

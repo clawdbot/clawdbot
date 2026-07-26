@@ -3,7 +3,8 @@ scenario:
   id: slack-mention-gating
   surface: channels
   coverage:
-    primary: [channels.group-messages]
+    primary:
+      - slack.channel-allowlists
   execution:
     profiles: { "slack:default": 1 }
     kind: flow

@@ -72,7 +72,7 @@ describe("createFeishuCommentReplyDispatcher", () => {
       ...created.dispatcherOptions,
       deliver: created.delivery.deliver,
     } as {
-      deliver: (payload: { text: string }, phase: { kind: string }) => Promise<void> | void;
+      deliver: (payload: { text: string }, phase: { kind: string }) => Promise<unknown>;
       onCleanup?: () => Promise<void> | void;
       onReplyStart?: () => Promise<void> | void;
     };
@@ -165,5 +165,35 @@ describe("createFeishuCommentReplyDispatcher", () => {
     await options.onReplyStart?.();
 
     expect(start).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains the accepted comment reply id and text when a later chunk fails", async () => {
+    getFeishuRuntimeMock.mockReturnValue({
+      channel: {
+        text: {
+          resolveTextChunkLimit: vi.fn(() => 4),
+          resolveChunkMode: vi.fn(() => "line"),
+          chunkTextWithMode: vi.fn(() => ["first", "second"]),
+        },
+        reply: { resolveHumanDelayConfig: vi.fn(() => undefined) },
+      },
+    });
+    deliverCommentThreadTextMock
+      .mockResolvedValueOnce({ delivery_mode: "reply_comment", reply_id: "reply_native_1" })
+      .mockRejectedValueOnce(new Error("second comment send failed"));
+    const created = createTestCommentReplyDispatcher();
+
+    const error = await created.delivery
+      .deliver({ text: "firstsecond" }, { kind: "final" })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      deliveryResult: {
+        messageIds: ["reply_native_1"],
+        content: "first",
+        visibleReplySent: true,
+      },
+    });
   });
 });

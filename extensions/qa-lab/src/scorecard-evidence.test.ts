@@ -82,14 +82,17 @@ async function buildQaProfileScorecardEvidence(params: {
 }
 
 describe("profile scorecard evidence", () => {
-  it("scores partial multi-id feature coverage by covered coverage IDs", async () => {
+  it("scores atomic feature coverage by its one exact coverage ID", async () => {
     const category: QaScorecardCategoryCoverageReport = {
       id: "surface.category",
       taxonomySurfaceId: "surface",
       taxonomyCategoryName: "Category",
       inventoryStatus: "partial",
       profiles: ["release"],
-      features: [{ name: "Multi-id feature", coverageIds: ["coverage.one", "coverage.two"] }],
+      features: [
+        { name: "Covered feature", coverageIds: ["coverage.one"] },
+        { name: "Missing feature", coverageIds: ["coverage.two"] },
+      ],
       coverageIds: ["coverage.one", "coverage.two"],
       inventoriedCoverageIds: ["coverage.one"],
       inventoryRefs: [],
@@ -117,11 +120,11 @@ describe("profile scorecard evidence", () => {
 
     expect(scorecard.categoryReports[0]?.status).toBe("partial");
     expect(scorecard.categoryReports[0]?.features).toMatchObject({
-      total: 1,
-      fulfilled: 0,
-      partial: 1,
-      missing: 0,
-      fulfillmentPercent: 0,
+      total: 2,
+      fulfilled: 1,
+      partial: 0,
+      missing: 1,
+      fulfillmentPercent: 50,
     });
     expect(scorecard.categoryReports[0]?.coverageIds).toMatchObject({
       total: 2,
@@ -137,11 +140,11 @@ describe("profile scorecard evidence", () => {
       fulfillmentPercent: 50,
     });
     expect(scorecard.features).toMatchObject({
-      total: 1,
-      fulfilled: 0,
-      partial: 1,
-      missing: 0,
-      fulfillmentPercent: 0,
+      total: 2,
+      fulfilled: 1,
+      partial: 0,
+      missing: 1,
+      fulfillmentPercent: 50,
     });
   });
 

@@ -11,6 +11,7 @@ export {
   resolveTtsAutoMode,
   resolveTtsConfig,
   resolveTtsPrefsPath,
+  setTtsMachinePrefsPathResolver,
   type ResolvedTtsConfig,
   type ResolvedTtsModelOverrides,
 } from "./src/tts-settings.js";

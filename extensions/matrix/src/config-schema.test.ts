@@ -147,11 +147,42 @@ describe("MatrixConfigSchema SecretInput", () => {
           label: "Shelling",
           maxLines: 4,
           toolProgress: false,
+          commandText: "status",
         },
         preview: {
           toolProgress: true,
         },
       },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it.each([
+    ["boolean streaming", { streaming: true }],
+    ["mode string streaming", { streaming: "progress" }],
+    ["streamMode", { streamMode: "progress" }],
+    ["chunkMode", { chunkMode: "newline" }],
+    ["blockStreaming", { blockStreaming: true }],
+    ["blockStreamingCoalesce", { blockStreamingCoalesce: { idleMs: 5 } }],
+    ["draftChunk", { draftChunk: { minChars: 10 } }],
+  ])("rejects retired account streaming input (%s) with a doctor pointer", (_name, input) => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      accounts: { work: input },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      // The channel-config wrapper reshapes failures into { issues }.
+      expect(JSON.stringify(result.issues)).toContain("doctor --fix");
+    }
+  });
+
+  it("keeps schema-open account entries with nested streaming objects", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      accounts: { work: { streaming: { mode: "progress" }, customField: 1 } },
     });
     expect(result.success).toBe(true);
   });

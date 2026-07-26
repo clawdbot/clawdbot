@@ -2,7 +2,11 @@ import type { DatabaseSync } from "node:sqlite";
 import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 
-// v13 = one durable generation token per raw session transcript.
+// v16 retires legacy top-level Media* transcript fields. It is a downgrade
+// guard only; the physical schema is unchanged and Doctor owns the data rewrite.
+// v15 makes board and session-sharing tables part of the canonical agent schema.
+// v14 = logical session nodes, generation windows, and node-owned artifact FKs.
+// v13 = one durable rewrite watermark per raw session transcript.
 // v12 = session-owned ACP parent-stream events.
 // v11 = agent-scoped runtime leases, durable delivery operations, canonical
 // external conversation addresses, and bounded per-session heartbeat outcome context.
@@ -14,7 +18,7 @@ import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 // The v4 session/transcript flip and main's v2 memory-identity
 // change is folded in structure-gated migrations, so v2 main DBs and
 // pre-merge v4 flip DBs both converge on this schema.
-export const OPENCLAW_AGENT_SCHEMA_VERSION = 13;
+export const OPENCLAW_AGENT_SCHEMA_VERSION = 16;
 
 /** Open per-agent SQLite database handle plus lifecycle maintenance. */
 export type OpenClawAgentDatabase = {

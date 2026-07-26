@@ -8,7 +8,25 @@ import {
   resolveAssistantTextAvatar,
   resolveChatAvatarRenderUrl,
 } from "../avatar.ts";
-import { buildAgentContext, formatBytes, resolveEffectiveModelFallbacks } from "./display.ts";
+import {
+  buildAgentContext,
+  formatBytes,
+  listSelectableAgents,
+  resolveEffectiveModelFallbacks,
+} from "./display.ts";
+
+describe("listSelectableAgents", () => {
+  it("excludes semantic system rows without depending on identity", () => {
+    const agents = [
+      { id: "main", kind: "agent" as const },
+      { id: "ordinary-looking-id", kind: "system" as const },
+      { id: "legacy-gateway-row" },
+    ];
+
+    expect(listSelectableAgents(agents)).toEqual([agents[0], agents[2]]);
+    expect(agents).toHaveLength(3);
+  });
+});
 
 describe("formatBytes", () => {
   it("preserves the Control UI byte-size display contract", () => {
@@ -44,6 +62,18 @@ describe("resolveEffectiveModelFallbacks", () => {
     };
 
     expect(resolveEffectiveModelFallbacks(entryModel, defaultModel)).toEqual(["openai/gpt-5-nano"]);
+  });
+
+  it.each([
+    { name: "a string primary", model: "openai/gpt-5.4" },
+    { name: "an object primary", model: { primary: "openai/gpt-5.4" } },
+  ])("does not inherit global fallbacks for $name", ({ model }) => {
+    expect(
+      resolveEffectiveModelFallbacks(model, {
+        primary: "openai/gpt-5.4",
+        fallbacks: ["anthropic/claude-sonnet-4-6"],
+      }),
+    ).toStrictEqual([]);
   });
 
   it("keeps explicit empty entry fallback lists", () => {

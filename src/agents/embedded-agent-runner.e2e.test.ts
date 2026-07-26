@@ -844,7 +844,11 @@ describe("runEmbeddedAgent", () => {
     const sessionFile = nextSessionFile();
     runEmbeddedAttemptMock.mockResolvedValueOnce(
       makeEmbeddedRunnerAttempt({
-        promptError: new Error("request exceeds the model context window"),
+        terminal: {
+          kind: "failed",
+          source: "prompt",
+          error: new Error("request exceeds the model context window"),
+        },
       }),
     );
 
@@ -1070,7 +1074,7 @@ describe("runEmbeddedAgent", () => {
       .mockImplementationOnce(async () => {
         expect(disposeSessionMcpRuntimeMock).not.toHaveBeenCalled();
         return makeEmbeddedRunnerAttempt({
-          promptError: new Error("401 unauthorized"),
+          terminal: { kind: "failed", source: "prompt", error: new Error("401 unauthorized") },
         });
       })
       .mockImplementationOnce(async () => {
@@ -1188,7 +1192,7 @@ describe("runEmbeddedAgent", () => {
     const sessionKey = nextSessionKey();
     runEmbeddedAttemptMock.mockResolvedValueOnce(
       makeEmbeddedRunnerAttempt({
-        promptError: new Error("boom"),
+        terminal: { kind: "failed", source: "prompt", error: new Error("boom") },
       }),
     );
     await expect(

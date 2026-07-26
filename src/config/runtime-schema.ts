@@ -11,7 +11,7 @@ import { buildConfigSchema, type ConfigSchemaResponse } from "./schema.js";
 
 // Runtime schemas include currently loaded plugin/channel metadata for accurate UI fields.
 function loadManifestRegistry(config: OpenClawConfig, env?: NodeJS.ProcessEnv) {
-  const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+  const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config), env);
   return resolvePluginMetadataSnapshot({
     config,
     env: env ?? process.env,
@@ -32,7 +32,9 @@ export function loadGatewayRuntimeConfigSchema(): ConfigSchemaResponse {
 
 export async function readBestEffortRuntimeConfigSchema(): Promise<ConfigSchemaResponse> {
   const snapshot = await readConfigFileSnapshot();
-  const config = snapshot.valid ? snapshot.config : { plugins: { enabled: true } };
+  const config = snapshot.valid
+    ? snapshot.config
+    : { agents: { list: [{ id: "main", default: true }] }, plugins: { enabled: true } };
   const registry = loadManifestRegistry(config);
   return buildConfigSchema({
     plugins: snapshot.valid ? collectPluginSchemaMetadata(registry) : [],

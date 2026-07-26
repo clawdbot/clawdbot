@@ -15,8 +15,9 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import type { MsgContext } from "../templating.js";
+import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { shouldBypassPluginOwnedBindingForCommand } from "./dispatch-from-config.plugin-binding.js";
 import {
   createDispatcher,
   diagnosticMocks,
@@ -47,6 +48,7 @@ import {
   globalBeforeAll0,
   describe0BeforeEach0,
 } from "./dispatch-from-config.test-harness.js";
+import { finalizeInboundContextForSdk } from "./inbound-context.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 beforeAll(globalBeforeAll0);
@@ -819,6 +821,69 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyResolver).not.toHaveBeenCalled();
   });
 
+  it("looks up plugin bindings with the canonical conversation target", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) => hookName === "inbound_claim") as () => boolean,
+    );
+    hookMocks.registry.plugins = [{ id: "codex", status: "loaded" }];
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+      status: "handled",
+      result: { handled: true },
+    });
+    const binding = {
+      bindingId: "binding-slack-user",
+      targetSessionKey: "plugin-binding:codex:slack-user",
+      targetKind: "session",
+      conversation: {
+        channel: "slack",
+        accountId: "default",
+        conversationId: "user:U123",
+      },
+      status: "active",
+      boundAt: 1710000000000,
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "codex",
+        pluginRoot: "/tmp/codex",
+      },
+    } satisfies SessionBindingRecord;
+    sessionBindingMocks.resolveByConversation.mockImplementation((conversation) =>
+      conversation.conversationId === "user:U123" ? binding : null,
+    );
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "openclaw",
+      Surface: "openclaw",
+      OriginatingChannel: "slack",
+      OriginatingTo: "user:U123",
+      From: "user:U123",
+      To: "user:U123",
+      AccountId: "default",
+      Body: "hello",
+      SessionKey: "main",
+    });
+    const replyResolver = vi.fn(async () => ({ text: "must not run" }) satisfies ReplyPayload);
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(sessionBindingMocks.resolveByConversation).toHaveBeenCalledWith({
+      channel: "slack",
+      accountId: "default",
+      conversationId: "user:U123",
+      parentConversationId: undefined,
+    });
+    expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
+      "codex",
+      expect.any(Object),
+      expect.objectContaining({
+        conversationId: "U123",
+        pluginBinding: expect.objectContaining({ bindingId: "binding-slack-user" }),
+      }),
+    );
+    expect(replyResolver).not.toHaveBeenCalled();
+  });
+
   it("holds session lifecycle mutation until an interrupted plugin claim exits", async () => {
     setNoAbort();
     hookMocks.runner.hasHooks.mockImplementation(
@@ -1306,14 +1371,8 @@ describe("dispatchReplyFromConfig", () => {
       expect(params.sessionKey).toBe("agent:main:imessage:direct:user");
       expect(params.workspaceDir).toContain(".openclaw/workspace");
       expect(params.remoteMediaMode).toBe("cache");
-      params.ctx.MediaPath = stagedPath;
-      params.ctx.MediaPaths = [stagedPath];
-      params.ctx.MediaUrl = stagedPath;
-      params.ctx.MediaUrls = [stagedPath];
-      params.sessionCtx.MediaPath = stagedPath;
-      params.sessionCtx.MediaPaths = [stagedPath];
-      params.sessionCtx.MediaUrl = stagedPath;
-      params.sessionCtx.MediaUrls = [stagedPath];
+      params.ctx.media = [{ path: stagedPath, url: stagedPath, contentType: "image/jpeg" }];
+      params.sessionCtx.media = params.ctx.media;
       return { staged: new Map([[rawPath, stagedPath]]) };
     });
     hookMocks.runner.hasHooks.mockImplementation(
@@ -1374,12 +1433,7 @@ describe("dispatchReplyFromConfig", () => {
       Body: "what is this?",
       MessageSid: "msg-claim-imessage-media",
       SessionKey: "agent:main:imessage:direct:user",
-      MediaPath: rawPath,
-      MediaPaths: [rawPath],
-      MediaUrl: rawPath,
-      MediaUrls: [rawPath],
-      MediaType: "image/jpeg",
-      MediaTypes: ["image/jpeg"],
+      media: [{ path: rawPath, url: rawPath, contentType: "image/jpeg" }],
       MediaRemoteHost: "user@gateway-host",
     });
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
@@ -1388,9 +1442,9 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
     expect(order).toEqual(["stage", "claim"]);
-    expect(ctx.MediaStaged).not.toBe(true);
-    expect(ctx.MediaPath).toBe(rawPath);
-    expect(ctx.MediaPaths).toEqual([rawPath]);
+    expect(ctx.media).toEqual([
+      expect.objectContaining({ path: rawPath, url: rawPath, contentType: "image/jpeg" }),
+    ]);
     expect(stageSandboxMediaMocks.stageSandboxMedia).toHaveBeenCalledTimes(1);
     expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-imessage-codex-media");
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
@@ -1420,18 +1474,13 @@ describe("dispatchReplyFromConfig", () => {
       Body: "what is this?",
       MessageSid: "msg-ordinary-imessage-media",
       SessionKey: "agent:main:imessage:direct:user",
-      MediaPath: rawPath,
-      MediaPaths: [rawPath],
-      MediaUrl: rawPath,
-      MediaUrls: [rawPath],
-      MediaType: "image/jpeg",
-      MediaTypes: ["image/jpeg"],
+      media: [{ path: rawPath, url: rawPath, contentType: "image/jpeg" }],
       MediaRemoteHost: "user@gateway-host",
     });
     const replyResolver = vi.fn(async (receivedCtx: MsgContext) => {
-      expect(receivedCtx.MediaStaged).not.toBe(true);
-      expect(receivedCtx.MediaPath).toBe(rawPath);
-      expect(receivedCtx.MediaPaths).toEqual([rawPath]);
+      expect(receivedCtx.media).toEqual([
+        expect.objectContaining({ path: rawPath, url: rawPath, contentType: "image/jpeg" }),
+      ]);
       return { text: "agent reply" } satisfies ReplyPayload;
     });
 
@@ -1440,9 +1489,9 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(stageSandboxMediaMocks.stageSandboxMedia).not.toHaveBeenCalled();
     expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
-    expect(ctx.MediaStaged).not.toBe(true);
-    expect(ctx.MediaPath).toBe(rawPath);
-    expect(ctx.MediaPaths).toEqual([rawPath]);
+    expect(ctx.media).toEqual([
+      expect.objectContaining({ path: rawPath, url: rawPath, contentType: "image/jpeg" }),
+    ]);
   });
 
   it("does not cache-stage remote iMessage media for message_received-only hooks", async () => {
@@ -1453,41 +1502,50 @@ describe("dispatchReplyFromConfig", () => {
     const rawPath = "/Users/demo/Library/Messages/Attachments/ab/cd/photo.jpg";
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "imessage",
-      Surface: "imessage",
-      OriginatingChannel: "imessage",
-      OriginatingTo: "imessage:chat:ordinary-hook",
-      To: "imessage:chat:ordinary-hook",
-      AccountId: "default",
-      SenderId: "user-9",
-      CommandAuthorized: true,
-      WasMentioned: false,
-      CommandBody: "what is this?",
-      RawBody: "what is this?",
-      Body: "what is this?",
-      MessageSid: "msg-ordinary-imessage-hook-media",
-      SessionKey: "agent:main:imessage:direct:user",
-      MediaPath: rawPath,
-      MediaPaths: [rawPath],
-      MediaUrl: rawPath,
-      MediaUrls: [rawPath],
-      MediaType: "image/jpeg",
-      MediaTypes: ["image/jpeg"],
-      MediaRemoteHost: "user@gateway-host",
-    });
+    const ctx = finalizeInboundContextForSdk(
+      buildTestCtx({
+        Provider: "imessage",
+        Surface: "imessage",
+        OriginatingChannel: "imessage",
+        OriginatingTo: "imessage:chat:ordinary-hook",
+        To: "imessage:chat:ordinary-hook",
+        AccountId: "default",
+        SenderId: "user-9",
+        CommandAuthorized: true,
+        WasMentioned: false,
+        CommandBody: "what is this?",
+        RawBody: "what is this?",
+        Body: "what is this?",
+        MessageSid: "msg-ordinary-imessage-hook-media",
+        SessionKey: "agent:main:imessage:direct:user",
+        media: [{ path: rawPath, url: rawPath, contentType: "image/jpeg" }],
+        MediaRemoteHost: "user@gateway-host",
+      }),
+    );
     const replyResolver = vi.fn(async (receivedCtx: MsgContext) => {
-      expect(receivedCtx.MediaStaged).not.toBe(true);
-      expect(receivedCtx.MediaPath).toBe(rawPath);
-      expect(receivedCtx.MediaPaths).toEqual([rawPath]);
+      expect(receivedCtx.media).toEqual([
+        expect.objectContaining({ path: rawPath, url: rawPath, contentType: "image/jpeg" }),
+      ]);
       return { text: "agent reply" } satisfies ReplyPayload;
     });
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     const [event] = firstMockCall(hookMocks.runner.runMessageReceived, "message received hook") as
-      | [{ metadata?: Record<string, unknown> }]
+      | [
+          {
+            media?: unknown[];
+            originalMedia?: Array<Record<string, unknown>>;
+            mediaStagingPending?: boolean;
+            metadata?: Record<string, unknown>;
+          },
+        ]
       | [];
+    expect(event?.media).toBeUndefined();
+    expect(event?.originalMedia).toEqual([
+      expect.objectContaining({ path: rawPath, url: rawPath, contentType: "image/jpeg" }),
+    ]);
+    expect(event?.mediaStagingPending).toBe(true);
     expect(event?.metadata?.mediaPath).toBeUndefined();
     expect(event?.metadata?.mediaPaths).toBeUndefined();
     expect(event?.metadata?.mediaUrl).toBeUndefined();
@@ -1509,6 +1567,9 @@ describe("dispatchReplyFromConfig", () => {
           unknown,
           unknown,
           {
+            media?: unknown[];
+            originalMedia?: Array<Record<string, unknown>>;
+            mediaStagingPending?: boolean;
             metadata?: Record<string, unknown>;
           },
         ]
@@ -1517,11 +1578,16 @@ describe("dispatchReplyFromConfig", () => {
     expect(internalHookCall?.[3]?.metadata?.mediaRemoteHost).toBe("user@gateway-host");
     expect(internalHookCall?.[3]?.metadata?.originalMediaPath).toBe(rawPath);
     expect(internalHookCall?.[3]?.metadata?.originalMediaPaths).toEqual([rawPath]);
+    expect(internalHookCall?.[3]?.media).toBeUndefined();
+    expect(internalHookCall?.[3]?.originalMedia).toEqual([
+      expect.objectContaining({ path: rawPath, url: rawPath, contentType: "image/jpeg" }),
+    ]);
+    expect(internalHookCall?.[3]?.mediaStagingPending).toBe(true);
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(stageSandboxMediaMocks.stageSandboxMedia).not.toHaveBeenCalled();
-    expect(ctx.MediaStaged).not.toBe(true);
-    expect(ctx.MediaPath).toBe(rawPath);
-    expect(ctx.MediaPaths).toEqual([rawPath]);
+    expect(ctx.media).toEqual([
+      expect.objectContaining({ path: rawPath, url: rawPath, contentType: "image/jpeg" }),
+    ]);
   });
 
   it("routes Discord thread plugin-owned bindings by raw thread id", async () => {
@@ -1716,7 +1782,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("lets authorized plugin-owned binding commands fall through to command processing", async () => {
+  it("lets authorized gateway-style plugin commands escape plugin-owned bindings", async () => {
     setNoAbort();
     expect(
       registerPluginCommand(
@@ -1775,16 +1841,25 @@ describe("dispatchReplyFromConfig", () => {
       AccountId: "default",
       SenderId: "user-9",
       SenderUsername: "ada",
-      CommandSource: "text",
       CommandAuthorized: true,
       WasMentioned: false,
       CommandBody: "/codex detach",
+      BodyForCommands: "/codex detach",
       RawBody: "/codex detach",
       Body: "/codex detach",
       MessageSid: "msg-claim-plugin-command-escape",
       SessionKey: "agent:main:discord:channel:1481858418548412579",
     });
     const replyResolver = vi.fn(async () => ({ text: "detached" }) satisfies ReplyPayload);
+
+    expect(
+      shouldBypassPluginOwnedBindingForCommand(
+        { ...ctx, CommandAuthorized: "false" } as unknown as Parameters<
+          typeof shouldBypassPluginOwnedBindingForCommand
+        >[0],
+        cfg,
+      ),
+    ).toBe(false);
 
     const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 

@@ -87,8 +87,6 @@ export type InternalHooksConfig = {
     /** Additional hook directories to scan */
     extraDirs?: string[];
   };
-  /** Install records for hook packs or hooks */
-  installs?: Record<string, HookInstallRecord>;
 };
 
 export type HooksConfig = {

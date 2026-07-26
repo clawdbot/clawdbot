@@ -103,7 +103,11 @@ async function main() {
   assert(gatewayUrl, "missing GW_URL");
   assert(gatewayToken, "missing GW_TOKEN");
 
-  const gateway = await connectGateway({ url: gatewayUrl, token: gatewayToken });
+  const gateway = await connectGateway({
+    url: gatewayUrl,
+    token: gatewayToken,
+    bindFreshDevice: true,
+  });
   assertGatewayScopes(gateway, {
     include: ["operator.admin", "operator.pairing", "operator.write"],
     label: "owner gateway",

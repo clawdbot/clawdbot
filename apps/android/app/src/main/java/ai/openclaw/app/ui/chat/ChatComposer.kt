@@ -362,7 +362,8 @@ internal fun mergeChatDraft(
   currentOwner: ChatComposerOwner? = null,
 ): String? {
   if (draft?.owner != null && draft.owner != currentOwner) return null
-  val text = draft?.text?.takeIf { it.isNotBlank() } ?: return null
+  if (draft?.expectedExistingText != null && draft.expectedExistingText != currentInput) return null
+  val text = draft?.text?.takeIf { draft.acceptsEmptyText || it.isNotBlank() } ?: return null
   return when (draft.placement) {
     ChatDraftPlacement.Replace -> text
     ChatDraftPlacement.BeforeExisting -> text + currentInput

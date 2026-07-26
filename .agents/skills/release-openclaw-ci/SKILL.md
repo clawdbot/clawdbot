@@ -34,10 +34,12 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   fails, the parent cancels the remaining child matrix and prints the failed
   job summary. Inspect that first red job instead of waiting for unrelated
   matrix tails.
-- Treat the product-complete pre-changelog commit as the Code SHA. Full product
-  validation and performance evidence bind to that SHA. The later Release SHA
-  may reuse those results only when it is a descendant whose complete changed
-  path set is exactly `CHANGELOG.md`.
+- For regular beta/stable releases, treat the product-complete pre-changelog
+  commit as the Code SHA. Full product validation and performance evidence bind
+  to that SHA. The later Release SHA may reuse those results only when it is a
+  descendant whose complete changed path set is exactly `CHANGELOG.md`.
+- Extended-stable validates one exact branch tip; it does not reuse the regular
+  Code-SHA/Release-SHA evidence model.
 - In a sparse worktree or Testbox source sync, first confirm `package.json`,
   `pnpm-lock.yaml`, and every source path the selected check reads. If any are
   absent, that checkout cannot validate a release dependency or Docker lane:
@@ -170,6 +172,29 @@ Publish with `openclaw-release-publish.yml` using `release_profile=from-validati
 unless a maintainer intentionally wants to cross-check a specific profile; the
 publish workflow reads the effective profile from the full-validation manifest.
 
+### Extended-stable validation
+
+For `.33+`, dispatch from and target the canonical branch; the regular
+SHA-pinned helper would produce a rejected `release-ci/*` identity:
+
+```bash
+gh workflow run full-release-validation.yml \
+  --ref extended-stable/YYYY.M.33 \
+  -f ref=extended-stable/YYYY.M.33 \
+  -f release_profile=stable
+```
+
+Accept only a complete `rerun_group=all` run whose branch, head/target SHAs,
+manifest `workflowRef`, and package versions identify the same commit. Save its
+successful `run_attempt` and require the final tag to resolve there. Reject
+`release-ci/*`, current-main, narrow, and earlier-attempt evidence.
+
+Product failures need an approved backport. Frozen-target tooling failures need
+the smallest behavior-preserving repair. Provider, approval, runner, or log
+races keep the candidate unchanged. Record repairs and superseded runs; any
+branch change requires a new complete parent. Omit only an explicitly
+unsupported frozen-target scenario, never a required behavior or package.
+
 ## Watch
 
 Use the transition-only summary watcher instead of repeated raw polling:
@@ -237,7 +262,8 @@ include_android=true -f release_gate=true`.
 
 Record:
 
-- Code SHA and Release SHA
+- release identity: Code/Release SHAs for regular releases; canonical branch,
+  exact SHA, and immutable tag for extended-stable
 - evidence-reuse policy and complete changed-path set
 - active full parent run URL, attempt, workflow SHA, and any superseded parent
   with the exact replacement reason
@@ -245,6 +271,8 @@ Record:
 - performance comparison result versus earlier releases when available
 - targeted local proof commands
 - provider-secret preflight result
+- frozen-target compatibility repairs or omitted inapplicable scenarios, with
+  their source PRs and invariant
 - known gaps or unrelated failures
 
 For lessons and recovery patterns, read `references/release-ci-notes.md`.

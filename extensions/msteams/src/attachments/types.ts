@@ -15,7 +15,7 @@ export type MSTeamsAccessTokenProvider = {
 export type MSTeamsInboundMedia = {
   path?: string;
   contentType?: string;
-  kind: "image" | "document";
+  kind: Extract<import("openclaw/plugin-sdk/media-runtime").MediaKind, "image" | "document">;
   /** Transport resource identity used only to align fallback downloads. */
   sourceId?: string;
 };

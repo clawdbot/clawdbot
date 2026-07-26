@@ -5,6 +5,8 @@ import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
+  controlUiSessionPath,
+  controlUiSessionUrl,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -244,7 +246,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     });
 
     try {
-      await page.goto(`${server.baseUrl}chat?session=${encodeURIComponent(parentKey)}`);
+      await page.goto(controlUiSessionUrl(server.baseUrl, parentKey));
       const parent = page.locator(`[data-session-key="${parentKey}"]`);
       await parent.waitFor({ state: "visible", timeout: 10_000 });
       await expect.poll(() => page.locator(".sidebar-recent-session--child").count()).toBe(0);
@@ -269,7 +271,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await captureUiProof(page, "child-sessions-expanded.png");
 
       await childRows.nth(1).getByRole("link").click();
-      await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBe(childTwoKey);
+      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(childTwoKey));
     } finally {
       await context.close();
     }
@@ -487,7 +489,9 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       // returning the same list, so the archived row stays visible here.)
       const researchLink = sidebarResearch.locator("a").first();
       await researchLink.click();
-      await expect.poll(() => page.url()).toContain("session=agent%3Amain%3Aresearch");
+      await expect
+        .poll(() => new URL(page.url()).pathname)
+        .toBe(controlUiSessionPath("agent:main:research"));
       await expect.poll(rowNames).toEqual(["Release planning", "Data migration", "Research notes"]);
       await expect
         .poll(() =>
@@ -542,7 +546,9 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       ).toBe(true);
       await captureUiProof(page, "command-palette-session-search.png");
       await paletteOption.click();
-      await expect.poll(() => page.url()).toContain("session=agent%3Amain%3Arelease");
+      await expect
+        .poll(() => new URL(page.url()).pathname)
+        .toBe(controlUiSessionPath("agent:main:release"));
     } finally {
       await context.close();
     }
@@ -583,10 +589,10 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       );
       const shell = page.locator(".shell");
       const shellNav = page.locator(".shell-nav");
-      const collapseButton = sidebar
-        .locator(".sidebar-brand")
+      const collapseButton = page
+        .locator(".shell-chrome-controls")
         .getByRole("button", { name: "Collapse sidebar" });
-      const expandButton = page.locator(".shell-nav-expand");
+      const expandButton = page.locator(".shell-chrome-controls__nav-toggle");
       const drawerToggle = page
         .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
         .first();
@@ -734,6 +740,252 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     }
   });
 
+  // Batch archiving used to force one canonical sessions.list per row, which is
+  // what made a multi-select stall. The whole selection must archive on one
+  // refresh and leave the sidebar settled with the rows gone.
+  it("archives a sidebar multi-select with one canonical list refresh", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
+    const batchKeys = ["agent:main:batch-a", "agent:main:batch-b", "agent:main:batch-c"] as const;
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:main", "Main", baseTime),
+          sessionRow(batchKeys[0], "Batch A", baseTime - 1_000),
+          sessionRow(batchKeys[1], "Batch B", baseTime - 2_000),
+          sessionRow(batchKeys[2], "Batch C", baseTime - 3_000),
+        ]),
+        "sessions.patch": {},
+      },
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const sidebar = page.locator("openclaw-app-sidebar");
+      const rowFor = (key: string) =>
+        sidebar.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
+      await rowFor(batchKeys[0]).waitFor({ state: "visible", timeout: 10_000 });
+      for (const key of batchKeys.slice(1)) {
+        await rowFor(key).waitFor({ state: "visible" });
+      }
+      const listCountBeforeBatch = (await gateway.getRequests("sessions.list")).length;
+
+      for (const key of batchKeys) {
+        await rowFor(key).click({ modifiers: ["Meta"] });
+      }
+      await rowFor(batchKeys[0]).click({ button: "right" });
+      const batchMenu = page.locator("openclaw-session-menu");
+      const archiveItem = batchMenu.getByRole("menuitem", { name: `Archive ${batchKeys.length}` });
+      await archiveItem.waitFor({ state: "visible", timeout: 10_000 });
+      await captureUiProof(page, "sidebar-multi-select-archive-menu.png");
+      await activateMenuItem(archiveItem);
+
+      for (const key of batchKeys) {
+        await waitForPatch(gateway, (params) => params.key === key && params.archived === true);
+      }
+
+      const patches = await gateway.getRequests("sessions.patch");
+      expect(patches.map((request) => requireRecord(request.params).key)).toEqual([...batchKeys]);
+      // The whole selection costs one canonical refresh, not one per archived row.
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.list")).length, { timeout: 10_000 })
+        .toBe(listCountBeforeBatch + 1);
+      await captureUiProof(page, "sidebar-multi-select-archive-settled.png");
+      // Hold past the batch so a late per-row refresh would still be caught.
+      await page.waitForTimeout(500);
+      expect((await gateway.getRequests("sessions.list")).length).toBe(listCountBeforeBatch + 1);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps the selected session through archive refreshes and restores the composer", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
+    const sessionRows = Array.from({ length: 15 }, (_, index) =>
+      sessionRow(
+        `agent:main:archive-refresh-${index}`,
+        `Archive refresh ${index}`,
+        baseTime - (index + 1) * 1_000,
+      ),
+    );
+    const selected = sessionRows[2]!;
+    const batchRows = [sessionRows[0]!, sessionRows[1]!, sessionRows[3]!];
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:main", "Main", baseTime),
+          ...sessionRows,
+        ]),
+        "sessions.patch": {},
+      },
+      sessionArchiveFiltering: true,
+      sessionKey: "agent:main:main",
+    });
+
+    const assertSelectedRoute = async () => {
+      await expect.poll(() => page.url()).toContain(`session=${encodeURIComponent(selected.key)}`);
+      const row = page.locator(`.sidebar-recent-session[data-session-key="${selected.key}"]`);
+      await row.waitFor({ state: "visible", timeout: 10_000 });
+      await expect
+        .poll(() => row.getAttribute("class"))
+        .toContain("sidebar-recent-session--active");
+    };
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const sidebar = page.locator("openclaw-app-sidebar");
+      const rowFor = (key: string) =>
+        sidebar.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
+      await rowFor(selected.key).waitFor({ state: "visible", timeout: 10_000 });
+      await rowFor(selected.key).locator("a").first().click();
+      await assertSelectedRoute();
+      await page.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
+
+      for (const row of batchRows) {
+        await rowFor(row.key).click({ modifiers: ["Meta"] });
+      }
+      await rowFor(batchRows[0]!.key).click({ button: "right" });
+      const batchMenu = page.locator("openclaw-session-menu");
+      await activateMenuItem(
+        batchMenu.getByRole("menuitem", { name: `Archive ${batchRows.length}` }),
+      );
+      for (const row of batchRows) {
+        await waitForPatch(gateway, (params) => params.key === row.key && params.archived === true);
+        await gateway.emitGatewayEvent("sessions.changed", {
+          ...row,
+          archived: true,
+          reason: "update",
+          sessionKey: row.key,
+        });
+        await assertSelectedRoute();
+      }
+
+      await gateway.setMethodResponse("sessions.describe", {
+        session: { ...selected, archived: true },
+      });
+      const selectedRow = rowFor(selected.key);
+      await selectedRow.hover();
+      await selectedRow.getByRole("button", { name: "Open thread menu" }).click();
+      await activateMenuItem(
+        page.locator("openclaw-session-menu").getByRole("menuitem", {
+          name: "Archive thread",
+        }),
+      );
+      await waitForPatch(
+        gateway,
+        (params) => params.key === selected.key && params.archived === true,
+      );
+      await gateway.emitGatewayEvent("sessions.changed", {
+        ...selected,
+        archived: true,
+        reason: "update",
+        sessionKey: selected.key,
+      });
+
+      await assertSelectedRoute();
+      await selectedRow.locator(".sidebar-session__archive-glyph").waitFor({ state: "visible" });
+      const archivedNotice = page.locator(".agent-chat__disabled-banner");
+      await archivedNotice.waitFor({ state: "visible", timeout: 10_000 });
+      await expect.poll(() => archivedNotice.textContent()).toContain("This session is archived.");
+      await expect.poll(() => page.locator(".agent-chat__input").count()).toBe(0);
+
+      await archivedNotice.getByRole("button", { name: "Unarchive" }).click();
+      await waitForPatch(
+        gateway,
+        (params) => params.key === selected.key && params.archived === false,
+      );
+      await gateway.emitGatewayEvent("sessions.changed", {
+        ...selected,
+        archived: false,
+        reason: "update",
+        sessionKey: selected.key,
+      });
+
+      await assertSelectedRoute();
+      await archivedNotice.waitFor({ state: "detached", timeout: 10_000 });
+      await page.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("shows the archived notice when an archived session is cold-loaded outside the active list", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const archived = sessionRow(
+      "agent:main:dashboard:cold-archive",
+      "Archived planning",
+      Date.parse("2026-07-01T16:00:00.000Z"),
+      { archived: true },
+    );
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.describe": { session: archived },
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:main", "Main", archived.updatedAt + 1),
+        ]),
+        "sessions.patch": {},
+      },
+      sessionArchiveFiltering: true,
+      sessionKey: archived.key,
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat?session=${encodeURIComponent(archived.key)}`);
+
+      const selectedRow = page.locator(
+        `.sidebar-recent-session[data-session-key="${archived.key}"]`,
+      );
+      await selectedRow.waitFor({ state: "visible", timeout: 10_000 });
+      await expect
+        .poll(() => selectedRow.getAttribute("class"))
+        .toContain("sidebar-recent-session--active");
+      await selectedRow.locator(".sidebar-session__archive-glyph").waitFor({ state: "visible" });
+      await expect.poll(() => page.getByText("Archived planning", { exact: true }).count()).toBe(2);
+
+      const archivedNotice = page.locator(".agent-chat__disabled-banner");
+      await archivedNotice.waitFor({ state: "visible", timeout: 10_000 });
+      await expect.poll(() => archivedNotice.textContent()).toContain("This session is archived.");
+      await expect.poll(() => page.locator(".agent-chat__input").count()).toBe(0);
+
+      await gateway.setMethodResponse("sessions.describe", {
+        session: { ...archived, archived: false },
+      });
+      await archivedNotice.getByRole("button", { name: "Unarchive" }).click();
+      await waitForPatch(
+        gateway,
+        (params) => params.key === archived.key && params.archived === false,
+      );
+      await gateway.emitGatewayEvent("sessions.changed", {
+        ...archived,
+        archived: false,
+        reason: "update",
+        sessionKey: archived.key,
+      });
+
+      await archivedNotice.waitFor({ state: "detached", timeout: 10_000 });
+      await page.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("keeps a session row when the Gateway reports no deletion", async () => {
     const context = await browser.newContext({
       locale: "en-US",
@@ -839,7 +1091,6 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       const initialListCount = (await gateway.getRequests("sessions.list")).length;
 
       await gateway.closeLatest(1006, "disconnect proof");
-      await page.locator(".connection-banner").waitFor({ state: "visible", timeout: 10_000 });
       await gateway.deferNext("sessions.list");
       await sidebarRow.waitFor({ state: "visible" });
       await captureUiProof(page, "sidebar-sessions-during-reconnect.png");
@@ -848,7 +1099,6 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list")).length, { timeout: 15_000 })
         .toBeGreaterThan(initialListCount);
-      await page.locator(".connection-banner").waitFor({ state: "detached", timeout: 15_000 });
       await sidebarRow.waitFor({ state: "visible" });
       expect(await sidebarRows.count()).toBe(3);
       for (const otherKey of otherSessionKeys) {
@@ -1096,7 +1346,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
-    const sessions = Array.from({ length: 12 }, (_, index) =>
+    const sessions = Array.from({ length: 13 }, (_, index) =>
       sessionRow(`agent:main:session-${index}`, `Session ${index}`, baseTime - index * 60_000, {
         ...(index === 0 ? { category: "Alpha" } : {}),
         ...(index === 1 ? { category: "Beta" } : {}),
@@ -1115,9 +1365,11 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     try {
       await page.goto(`${server.baseUrl}chat`);
       const sidebarRows = page.locator(".sidebar-recent-session");
-      await expect.poll(() => sidebarRows.count()).toBe(10);
-      await page.getByRole("button", { name: "Load more" }).click();
+      // Category sections page independently: Alpha and Beta stay visible
+      // alongside the first ten rows in the ungrouped section.
       await expect.poll(() => sidebarRows.count()).toBe(12);
+      await page.getByRole("button", { name: "Show more" }).click();
+      await expect.poll(() => sidebarRows.count()).toBe(13);
       await expect.poll(() => page.getByText("All threads", { exact: true }).count()).toBe(0);
       await captureUiProof(page, "sidebar-all-sessions.png");
 
@@ -1141,10 +1393,20 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
           .indexOf(element),
       );
       expect(moveToGroupIndex).toBeGreaterThanOrEqual(0);
+      // Submenu ARIA is ready before Web Awesome finishes opening the dropdown.
+      // Wait for its focus contract so navigation keys cannot outrun the menu.
+      await expect
+        .poll(() =>
+          page.locator("openclaw-session-menu > wa-dropdown > wa-dropdown-item:focus").count(),
+        )
+        .toBe(1);
       await page.keyboard.press("Home");
       for (let index = 0; index < moveToGroupIndex; index += 1) {
         await page.keyboard.press("ArrowDown");
       }
+      await expect
+        .poll(() => moveToGroup.evaluate((element) => element === document.activeElement))
+        .toBe(true);
       await page.keyboard.press("ArrowRight");
       await expect.poll(() => moveToGroup.getAttribute("aria-expanded")).toBe("true");
       page.once("dialog", (dialog) => void dialog.accept("Gamma"));
@@ -1191,7 +1453,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       });
       await expect
         .poll(() => ungrouped.locator(".sidebar-recent-session").count(), { timeout: 10_000 })
-        .toBe(9);
+        .toBe(10);
 
       const alpha = page.locator('[data-session-section="category:Alpha"]');
       const alphaToggle = alpha.getByRole("button", { name: "Alpha", exact: true });
@@ -1229,8 +1491,6 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
             .getAttribute("aria-expanded"),
         )
         .toBe("false");
-      await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(10);
-      await page.getByRole("button", { name: "Load more threads" }).click();
       await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(11);
 
       const patchCountBeforeFlatDrag = (await gateway.getRequests("sessions.patch")).length;
@@ -1316,11 +1576,28 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
         .toEqual(["Pinned only"]);
       await expect.poll(() => chatsGroup.locator(".sidebar-recent-session").count()).toBe(0);
       await expect.poll(() => page.locator(".sidebar-recent-session--active").count()).toBe(1);
-      // The empty Threads section only materializes once the drag is in
-      // flight, so target the whole sessions surface (its drop handler unpins).
-      await pinnedEntry
-        .locator(".sidebar-recent-session")
-        .dragTo(page.locator(".sidebar-sessions"));
+      // The empty Threads section only materializes after dragstart. Move the
+      // real pointer first so Playwright does not wait for a hidden target.
+      const pinnedRow = pinnedEntry.locator(".sidebar-recent-session");
+      const sourceBox = await pinnedRow.boundingBox();
+      if (!sourceBox) {
+        throw new Error("expected pinned session bounds");
+      }
+      await page.mouse.move(sourceBox.x + sourceBox.width / 2, sourceBox.y + sourceBox.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(sourceBox.x + sourceBox.width / 2 + 12, sourceBox.y + 12, {
+        steps: 4,
+      });
+      const sessionList = page.locator(".sidebar-sessions");
+      await sessionList.waitFor({ state: "visible" });
+      const targetBox = await sessionList.boundingBox();
+      if (!targetBox) {
+        throw new Error("expected session list bounds");
+      }
+      await page.mouse.move(targetBox.x + targetBox.width / 2, targetBox.y + targetBox.height / 2, {
+        steps: 8,
+      });
+      await page.mouse.up();
       const unpinPatch = await waitForPatch(
         gateway,
         (params) => params.key === "agent:main:pinned" && params.pinned === false,
@@ -1543,7 +1820,9 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     try {
       await page.goto(`${server.baseUrl}chat`);
       await page.locator('[data-session-section="work"] .sidebar-session-group-toggle').click();
-      const loadMore = page.getByRole("button", { name: "Load more threads" });
+      const loadMore = page
+        .locator('[data-session-section="ungrouped"]')
+        .getByRole("button", { name: "Show more" });
       for (let pageIndex = 0; pageIndex < 3 && (await loadMore.isVisible()); pageIndex += 1) {
         await loadMore.click();
       }

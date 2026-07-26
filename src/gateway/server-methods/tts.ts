@@ -174,7 +174,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
     }
     try {
       const cfg = context.getRuntimeConfig();
-      // synthesizeSpeech enforces the same messages.tts.maxTextLength bound but
+      // synthesizeSpeech enforces the same tts.maxTextLength bound but
       // reports it as a synthesis failure; pre-check to return a request error.
       const maxTextLength = resolveTtsConfig(cfg).maxTextLength;
       if (text.length > maxTextLength) {

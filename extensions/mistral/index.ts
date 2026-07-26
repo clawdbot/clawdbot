@@ -1,4 +1,3 @@
-// Mistral plugin entrypoint registers its OpenClaw integration.
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import {
   applyMistralModelCompat,
@@ -8,7 +7,8 @@ import {
 } from "./api.js";
 import { mistralMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { mistralMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
-import { applyMistralConfig, MISTRAL_DEFAULT_MODEL_REF } from "./onboard.js";
+import { MISTRAL_DEFAULT_MODEL_REF } from "./model-definitions.js";
+import { applyMistralConfig } from "./onboard.js";
 import { buildMistralProvider } from "./provider-catalog.js";
 import { buildMistralRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
 
@@ -45,7 +45,9 @@ export default defineSingleProviderPluginEntry({
     ],
     catalog: {
       buildProvider: buildMistralProvider,
+      buildStaticProvider: buildMistralProvider,
       allowExplicitBaseUrl: true,
+      liveModelDiscovery: true,
     },
     matchesContextOverflowError: ({ errorMessage }) =>
       /\bmistral\b.*(?:input.*too long|token limit.*exceeded)/i.test(errorMessage),

@@ -1038,6 +1038,7 @@ export async function buildIMessageInboundContext(params: {
       rawBody: decision.bodyText,
       commandBody: decision.bodyText,
     },
+    sessionTranscript: { historyLimit: decision.isGroup ? params.historyLimit : 0 },
     access: {
       mentions: {
         canDetectMention: decision.isGroup,

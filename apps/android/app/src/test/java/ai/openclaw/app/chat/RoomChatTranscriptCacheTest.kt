@@ -149,6 +149,37 @@ class RoomChatTranscriptCacheTest {
     }
 
   @Test
+  fun sessionRoundTripKeepsRunMetadata() =
+    runTest {
+      val store = cache()
+      store.saveSessions(
+        gatewayId = "gateway-a",
+        agentId = "main",
+        sessions =
+          listOf(
+            ChatSessionEntry(
+              key = "main",
+              updatedAtMs = 20L,
+              status = "done",
+              startedAt = 1_000L,
+              endedAt = 5_000L,
+              runtimeMs = 4_000L,
+              outputTokens = 485L,
+            ),
+          ),
+      )
+
+      val loaded = store.loadSessions("gateway-a", "main").single()
+
+      assertEquals("done", loaded.status)
+      assertEquals(1_000L, loaded.startedAt)
+      assertEquals(5_000L, loaded.endedAt)
+      assertEquals(4_000L, loaded.runtimeMs)
+      assertEquals(485L, loaded.outputTokens)
+      assertTrue(loaded.hasRunMetadata)
+    }
+
+  @Test
   fun transcriptForSessionOutsideFullCachedListSurvivesEviction() =
     runTest {
       val store = cache()

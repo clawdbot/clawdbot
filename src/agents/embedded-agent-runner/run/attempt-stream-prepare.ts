@@ -3,6 +3,7 @@
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
+import { captureAgentRunLifecycleGeneration } from "../../../infra/agent-events.js";
 import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
@@ -30,6 +31,7 @@ import {
   type ToolSearchTargetTranscriptProjection,
 } from "../../tool-search.js";
 import { log } from "../logger.js";
+import { setActiveEmbeddedRunLifecycleGeneration } from "../run-state.js";
 import {
   clearActiveEmbeddedRun,
   type EmbeddedAgentQueueHandle,
@@ -88,7 +90,10 @@ export function prepareEmbeddedAttemptStream(input: {
   const attempt = input.attempt;
   const hookRunner = input.hookRunner;
   let beforeAgentFinalizeRevisionReason: string | undefined;
-  const onBeforeTerminalDelivery = hookRunner?.hasHooks("before_agent_finalize")
+  const shouldRunBeforeAgentFinalize =
+    attempt.operation !== "settled-tool-finalization" &&
+    hookRunner?.hasHooks("before_agent_finalize");
+  const onBeforeTerminalDelivery = shouldRunBeforeAgentFinalize
     ? async (event: {
         messages: AgentMessage[];
         willRetry: boolean;
@@ -266,7 +271,9 @@ export function prepareEmbeddedAttemptStream(input: {
       silentExpected: attempt.silentExpected,
       suppressLiveStreamOutput: attempt.suppressLiveStreamOutput,
       config: attempt.config,
-      sessionKey: input.sandboxSessionKey,
+      // Live events belong to the transcript session. The sandbox key is only
+      // authority context and may intentionally point at a visible parent.
+      sessionKey: attempt.sessionKey,
       currentChannelId: attempt.currentChannelId,
       currentMessagingTarget: attempt.currentMessagingTarget,
       currentThreadId: attempt.currentThreadTs,
@@ -361,6 +368,7 @@ export function prepareEmbeddedAttemptStream(input: {
       );
     },
     isStreaming: () => input.activeSession.isStreaming,
+    isAborted: () => input.getRunState().aborted,
     isStopped: () =>
       !acceptingSteerMessages ||
       input.getRunState().aborted ||
@@ -374,6 +382,10 @@ export function prepareEmbeddedAttemptStream(input: {
     abort: (reason) => abortActiveRunExternally(reason),
   };
   attempt.replyOperation?.attachBackend(queueHandle);
+  setActiveEmbeddedRunLifecycleGeneration(
+    queueHandle,
+    attempt.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(attempt.runId),
+  );
   setActiveEmbeddedRun(attempt.sessionId, queueHandle, attempt.sessionKey, attempt.sessionFile);
 
   return {

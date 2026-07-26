@@ -17,14 +17,21 @@ export function resolveRuntimeImageSanitization(): { maxDimensionPx: number } | 
 }
 export {
   callGatewayTool,
+  completeWithPreparedSimpleCompletionModel,
   describeImageFile,
+  extractAssistantText,
+  htmlToMarkdown,
   imageResultFromFile,
   jsonResult,
   listNodes,
   readPositiveIntegerParam,
   readStringParam,
+  normalizeWhitespace,
+  prepareSimpleCompletionModelForAgent,
+  validateJsonSchemaValue,
   resolveNodeIdFromList,
   saveMediaBuffer,
+  sanitizeHtml,
   selectDefaultNodeFromList,
 } from "./sdk-setup-tools.js";
 export type { AnyAgentTool, NodeListNode } from "./sdk-setup-tools.js";
@@ -33,7 +40,7 @@ export {
   normalizeOptionalString,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-export { BrowserToolSchema } from "./browser-tool.schema.js";
+export { BrowserToolOutputSchema, BrowserToolSchema } from "./browser-tool.schema.js";
 export {
   browserAct,
   browserArmDialog,
@@ -41,6 +48,7 @@ export {
   browserConsoleMessages,
   browserDownload,
   browserNavigate,
+  browserPageContent,
   browserPdfSave,
   browserScreenshotAction,
   browserWaitForDownload,

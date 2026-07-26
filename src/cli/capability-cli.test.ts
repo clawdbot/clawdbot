@@ -14,6 +14,7 @@ const PNG_1X1_BASE64 =
 
 type LocalAudioSelection = Awaited<ReturnType<typeof inspectLocalAudioSelection>>;
 
+const closeEmbeddingProviderMock = vi.hoisted(() => vi.fn(async () => {}));
 const mocks = vi.hoisted(() => ({
   runtime: {
     log: vi.fn(),
@@ -144,6 +145,7 @@ const mocks = vi.hoisted(() => ({
       model: "text-embedding-3-small",
       embedQuery: async () => [0.1, 0.2],
       embedBatch: async (texts: string[]) => texts.map(() => [0.1, 0.2]),
+      close: closeEmbeddingProviderMock,
     },
   })),
   listMemoryEmbeddingProviders: vi.fn(() => [
@@ -537,6 +539,7 @@ describe("capability cli", () => {
     mocks.inspectLocalAudioSelection.mockReset().mockResolvedValue({ candidates: [], entries: [] });
     mocks.convertHeicToJpeg.mockClear();
     mocks.createEmbeddingProvider.mockClear();
+    closeEmbeddingProviderMock.mockClear();
     mocks.listMemoryEmbeddingProviders
       .mockReset()
       .mockReturnValue([
@@ -2665,7 +2668,7 @@ describe("capability cli", () => {
       }),
     ).rejects.toThrow("exit 1");
     expectRuntimeErrorContains("No audio transcription provider is configured or ready");
-    expectRuntimeErrorContains("tools.media.audio.models");
+    expectRuntimeErrorContains("tools.media.models");
   });
 
   it("surfaces the underlying transcription failure for audio transcribe", async () => {
@@ -2736,7 +2739,7 @@ describe("capability cli", () => {
   });
 
   it("hydrates local TTS provider config from API-key auth profiles", async () => {
-    const rawConfig = { messages: { tts: { providers: { openai: { voice: "coral" } } } } };
+    const rawConfig = { tts: { providers: { openai: { voice: "coral" } } } };
     mocks.loadConfig.mockReturnValue(rawConfig);
     mocks.resolveApiKeyForProvider.mockResolvedValueOnce({
       apiKey: "profile-openai-key",
@@ -2766,9 +2769,9 @@ describe("capability cli", () => {
       }),
     );
     const cfg = firstTextToSpeechCall()?.cfg as {
-      messages?: { tts?: { providers?: { openai?: { apiKey?: string; voice?: string } } } };
+      tts?: { providers?: { openai?: { apiKey?: string; voice?: string } } };
     };
-    expect(cfg.messages?.tts?.providers?.openai).toMatchObject({
+    expect(cfg.tts?.providers?.openai).toMatchObject({
       apiKey: "profile-openai-key",
       voice: "coral",
     });
@@ -2776,7 +2779,7 @@ describe("capability cli", () => {
   });
 
   it("hydrates local TTS default provider config from API-key auth profiles", async () => {
-    const rawConfig = { messages: { tts: { provider: "openai" } } };
+    const rawConfig = { tts: { provider: "openai" } };
     mocks.loadConfig.mockReturnValue(rawConfig);
     mocks.resolveApiKeyForProvider.mockResolvedValueOnce({
       apiKey: "profile-openai-key",
@@ -2797,9 +2800,9 @@ describe("capability cli", () => {
       }),
     );
     const cfg = firstTextToSpeechCall()?.cfg as {
-      messages?: { tts?: { providers?: { openai?: { apiKey?: string } } } };
+      tts?: { providers?: { openai?: { apiKey?: string } } };
     };
-    expect(cfg.messages?.tts?.providers?.openai).toMatchObject({
+    expect(cfg.tts?.providers?.openai).toMatchObject({
       apiKey: "profile-openai-key",
     });
   });
@@ -2823,9 +2826,9 @@ describe("capability cli", () => {
       expect.objectContaining({ channelId: "discord" }),
     );
     const cfg = firstTextToSpeechCall()?.cfg as {
-      messages?: { tts?: { providers?: { openai?: { apiKey?: string } } } };
+      tts?: { providers?: { openai?: { apiKey?: string } } };
     };
-    expect(cfg.messages?.tts?.providers?.openai).toMatchObject({
+    expect(cfg.tts?.providers?.openai).toMatchObject({
       apiKey: "profile-openai-key",
     });
   });
@@ -2856,19 +2859,19 @@ describe("capability cli", () => {
       channels?: {
         discord?: { tts?: { openai?: { apiKey?: string; speakerVoice?: string } } };
       };
-      messages?: { tts?: { providers?: { openai?: { apiKey?: string } } } };
+      tts?: { providers?: { openai?: { apiKey?: string } } };
     };
     expect(cfg.channels?.discord?.tts?.openai).toMatchObject({
       apiKey: "profile-openai-key",
       speakerVoice: "nova",
     });
-    expect(cfg.messages?.tts?.providers?.openai).toBeUndefined();
+    expect(cfg.tts?.providers?.openai).toBeUndefined();
     expect(mocks.setRuntimeConfigSnapshot).toHaveBeenLastCalledWith(cfg);
   });
 
   it("does not override inherited local TTS channel provider API keys", async () => {
     const rawConfig = {
-      messages: { tts: { providers: { openai: { apiKey: "config-key" } } } },
+      tts: { providers: { openai: { apiKey: "config-key" } } },
       channels: {
         discord: {
           tts: {
@@ -2893,18 +2896,18 @@ describe("capability cli", () => {
     });
 
     const cfg = firstTextToSpeechCall()?.cfg as {
-      messages?: { tts?: { providers?: { openai?: { apiKey?: string } } } };
+      tts?: { providers?: { openai?: { apiKey?: string } } };
       channels?: {
         discord?: { tts?: { providers?: { openai?: { apiKey?: string; speakerVoice?: string } } } };
       };
     };
-    expect(cfg.messages?.tts?.providers?.openai?.apiKey).toBe("config-key");
+    expect(cfg.tts?.providers?.openai?.apiKey).toBe("config-key");
     expect(cfg.channels?.discord?.tts?.providers?.openai).toEqual({ speakerVoice: "nova" });
     expect(mocks.resolveApiKeyForProvider).not.toHaveBeenCalled();
   });
 
   it("does not hydrate local TTS provider config from token auth profiles", async () => {
-    const rawConfig = { messages: { tts: { provider: "openai" } } };
+    const rawConfig = { tts: { provider: "openai" } };
     mocks.loadConfig.mockReturnValue(rawConfig);
     mocks.resolveApiKeyForProvider.mockResolvedValueOnce({
       apiKey: "profile-openai-token",
@@ -2918,13 +2921,13 @@ describe("capability cli", () => {
     });
 
     const cfg = firstTextToSpeechCall()?.cfg as {
-      messages?: { tts?: { providers?: { openai?: { apiKey?: string } } } };
+      tts?: { providers?: { openai?: { apiKey?: string } } };
     };
-    expect(cfg.messages?.tts?.providers?.openai?.apiKey).toBeUndefined();
+    expect(cfg.tts?.providers?.openai?.apiKey).toBeUndefined();
   });
 
   it("does not override existing TTS provider API keys with different casing", async () => {
-    const rawConfig = { messages: { tts: { providers: { OpenAI: { apiKey: "config-key" } } } } };
+    const rawConfig = { tts: { providers: { OpenAI: { apiKey: "config-key" } } } };
     mocks.loadConfig.mockReturnValue(rawConfig);
     mocks.resolveApiKeyForProvider.mockResolvedValueOnce({
       apiKey: "profile-openai-key",
@@ -2947,16 +2950,14 @@ describe("capability cli", () => {
     });
 
     const cfg = firstTextToSpeechCall()?.cfg as {
-      messages?: {
-        tts?: { providers?: { openai?: { apiKey?: string }; OpenAI?: { apiKey?: string } } };
-      };
+      tts?: { providers?: { openai?: { apiKey?: string }; OpenAI?: { apiKey?: string } } };
     };
-    expect(cfg.messages?.tts?.providers?.OpenAI?.apiKey).toBe("config-key");
-    expect(cfg.messages?.tts?.providers?.openai).toBeUndefined();
+    expect(cfg.tts?.providers?.OpenAI?.apiKey).toBe("config-key");
+    expect(cfg.tts?.providers?.openai).toBeUndefined();
   });
 
   it("does not override existing direct TTS provider API keys", async () => {
-    const rawConfig = { messages: { tts: { openai: { apiKey: "config-key" } } } };
+    const rawConfig = { tts: { openai: { apiKey: "config-key" } } };
     mocks.loadConfig.mockReturnValue(rawConfig);
     mocks.resolveApiKeyForProvider.mockResolvedValueOnce({
       apiKey: "profile-openai-key",
@@ -2979,15 +2980,13 @@ describe("capability cli", () => {
     });
 
     const cfg = firstTextToSpeechCall()?.cfg as {
-      messages?: {
-        tts?: {
-          openai?: { apiKey?: string };
-          providers?: { openai?: { apiKey?: string } };
-        };
+      tts?: {
+        openai?: { apiKey?: string };
+        providers?: { openai?: { apiKey?: string } };
       };
     };
-    expect(cfg.messages?.tts?.openai?.apiKey).toBe("config-key");
-    expect(cfg.messages?.tts?.providers?.openai).toBeUndefined();
+    expect(cfg.tts?.openai?.apiKey).toBe("config-key");
+    expect(cfg.tts?.providers?.openai).toBeUndefined();
   });
 
   it("disables TTS fallback when explicit provider or voice/model selection is requested", async () => {
@@ -3070,6 +3069,48 @@ describe("capability cli", () => {
     expect(firstJsonOutput()?.capability).toBe("embedding.create");
     expect(firstJsonOutput()?.provider).toBe("openai");
     expect(firstJsonOutput()?.model).toBe("text-embedding-3-small");
+    expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes the embedding provider without masking embedding failure", async () => {
+    closeEmbeddingProviderMock.mockRejectedValueOnce(new Error("close failed"));
+    mocks.createEmbeddingProvider.mockResolvedValueOnce({
+      provider: {
+        id: "openai",
+        model: "text-embedding-3-small",
+        embedQuery: async () => [0.1, 0.2],
+        embedBatch: async () => {
+          throw new Error("embedding failed");
+        },
+        close: closeEmbeddingProviderMock,
+      },
+    });
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "embedding", "create", "--text", "hello", "--json"],
+      }),
+    ).rejects.toThrow("exit 1");
+
+    expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(2);
+    expectRuntimeErrorContains("embedding failed");
+  });
+
+  it("retries embedding provider cleanup before reporting close failure", async () => {
+    closeEmbeddingProviderMock
+      .mockRejectedValueOnce(new Error("close failed"))
+      .mockRejectedValueOnce(new Error("close failed"));
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "embedding", "create", "--text", "hello", "--json"],
+      }),
+    ).rejects.toThrow("exit 1");
+
+    expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(2);
+    expectRuntimeErrorContains("close failed");
   });
 
   it("resolves command SecretRefs before local model capability execution", async () => {

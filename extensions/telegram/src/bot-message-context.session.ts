@@ -624,6 +624,13 @@ export async function buildTelegramInboundContextPayload(params: {
       inboundHistory,
       sourceModality: msg.voice ? "voice" : undefined,
     },
+    sessionTranscript: {
+      chatWindow: true,
+      historyLimit: isGroup ? historyLimit : 10,
+      beforeTimestampMs: options?.receivedAtMs ?? (msg.date ? msg.date * 1000 : undefined),
+      minTimestampMs: options?.promptContextMinTimestampMs,
+      senderLabels: { assistant: "OpenClaw", user: "User" },
+    },
     access: {
       commands: {
         authorized: commandAuthorized,

@@ -18,7 +18,7 @@ import {
   type CodexAppServerThreadBinding,
 } from "./app-server/session-binding.test-helpers.js";
 import { listPairedNode } from "./session-catalog-node-continue.js";
-import { catalogError } from "./session-catalog-parsing.js";
+import { catalogError, parseCatalogPage } from "./session-catalog-parsing.js";
 import { CODEX_TERMINAL_RESUME_COMMAND } from "./session-catalog-terminal.js";
 import {
   CODEX_LOCAL_SESSION_HOST_ID,
@@ -359,12 +359,13 @@ function archiveTestSession(params: {
   });
 }
 
-function createGatewayApi(runtime: PluginRuntime) {
+function createGatewayApi(runtime: PluginRuntime, apiConfig: OpenClawConfig = {}) {
   let provider: SessionCatalogProvider | undefined;
   const registerSessionCatalog = vi.fn((candidate: SessionCatalogProvider) => {
     provider = candidate;
   });
   const api = {
+    config: apiConfig,
     runtime,
     registerSessionCatalog,
   } as unknown as OpenClawPluginApi;
@@ -391,6 +392,30 @@ afterEach(async () => {
 });
 
 describe("Codex session catalog errors", () => {
+  it("preserves fallback names returned by paired nodes", () => {
+    expect(
+      parseCatalogPage({
+        sessions: [
+          {
+            threadId: "thread-1",
+            fallbackName: "Readable fallback",
+            status: "idle",
+            archived: false,
+          },
+        ],
+      }),
+    ).toEqual({
+      sessions: [
+        {
+          threadId: "thread-1",
+          fallbackName: "Readable fallback",
+          status: "idle",
+          archived: false,
+        },
+      ],
+    });
+  });
+
   it("keeps the underlying paired-node list failure", () => {
     expect(catalogError("NODE_LIST_FAILED", new Error("paired store is unreadable"))).toEqual({
       code: "NODE_LIST_FAILED",
@@ -407,14 +432,13 @@ describe("Codex supervision catalog", () => {
         {
           id: "thread-title",
           name: "Match title",
-          preview: "private transcript preview",
+          preview: "private\ntranscript preview",
           cwd: "/workspace/one",
           status: { type: "idle" },
           source: "vscode",
         },
         {
           id: "thread-preview",
-          name: "Other title",
           preview: "Match appears only in private preview text",
           status: { type: "idle" },
           source: "cli",
@@ -464,6 +488,50 @@ describe("Codex supervision catalog", () => {
     expect(commandRpcMocks.codexControlRequest.mock.calls.map((call) => call[1])).not.toContain(
       "thread/resume",
     );
+  });
+
+  it("uses a sanitized preview only when Codex has no thread name", async () => {
+    const pluginConfig = { supervision: { enabled: true } };
+    commandRpcMocks.codexControlRequest.mockResolvedValue({
+      data: [
+        {
+          id: "thread-named",
+          name: "Explicit title",
+          preview: "must stay private",
+          status: { type: "idle" },
+          source: "cli",
+        },
+        {
+          id: "thread-fallback",
+          preview: "Investigate\nfailed Rosita run",
+          status: { type: "idle" },
+          source: "cli",
+        },
+      ],
+    });
+    const control = createCodexSessionCatalogControl({
+      getPluginConfig: () => pluginConfig,
+      getRuntimeConfig: () => config,
+    });
+
+    await expect(control.listPage({ limit: 25 })).resolves.toEqual({
+      sessions: [
+        {
+          threadId: "thread-named",
+          name: "Explicit title",
+          status: "idle",
+          source: "cli",
+          archived: false,
+        },
+        {
+          threadId: "thread-fallback",
+          fallbackName: "Investigate failed Rosita run",
+          status: "idle",
+          source: "cli",
+          archived: false,
+        },
+      ],
+    });
   });
 
   it("scans bounded native pages for complete title-only search results", async () => {
@@ -2892,6 +2960,10 @@ describe("Codex supervision actions", () => {
     });
     expect(registerSessionCatalog).toHaveBeenCalledOnce();
     const provider = getProvider();
+    expect(provider?.resolveCreateSession?.({ agentId: "main" })).toEqual({
+      model: "openai/gpt-5.6-sol",
+      agentRuntime: "codex",
+    });
     await expect(
       provider?.archive?.({
         hostId: CODEX_LOCAL_SESSION_HOST_ID,
@@ -2923,6 +2995,30 @@ describe("Codex supervision actions", () => {
     expect(control.readThread).toHaveBeenCalledOnce();
     expect(control.archiveThread).toHaveBeenCalledOnce();
     expect(createSessionEntry).not.toHaveBeenCalled();
+  });
+
+  it("advertises creation from startup config before the live snapshot is available", () => {
+    const startupConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-sol" },
+          models: { "openai/gpt-5.6-sol": {} },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const { runtime } = createRuntime();
+    const { api, getProvider } = createGatewayApi(runtime, startupConfig);
+    registerCodexSessionCatalog({
+      api,
+      bindingStore: createCodexTestBindingStore(),
+      control: createEligibleControl(),
+      getRuntimeConfig: () => undefined,
+    });
+
+    expect(getProvider()?.resolveCreateSession?.({ agentId: "main" })).toEqual({
+      model: "openai/gpt-5.6-sol",
+      agentRuntime: "codex",
+    });
   });
 
   it("marks paired-node rows continuable only with complete permitted capabilities", async () => {
@@ -3398,6 +3494,7 @@ describe("Codex supervision actions", () => {
           sessions: [
             {
               threadId: "thread-1",
+              fallbackName: "Readable fallback",
               status: "notLoaded",
               source: "cli",
               archived: false,
@@ -3411,7 +3508,14 @@ describe("Codex supervision actions", () => {
     await expect(getProvider()?.list({})).resolves.toMatchObject([
       {
         hostId: CODEX_LOCAL_SESSION_HOST_ID,
-        sessions: [{ threadId: "thread-1", canContinue: true, canArchive: true }],
+        sessions: [
+          {
+            threadId: "thread-1",
+            name: "Readable fallback",
+            canContinue: true,
+            canArchive: true,
+          },
+        ],
       },
     ]);
   });

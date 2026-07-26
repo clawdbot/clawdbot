@@ -35,6 +35,7 @@
     <string name="native_0174f83136630e7e" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s حسابات"</string>
     <string name="native_01ac1c298e0cbd9a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تتطلب تغييرات Cron الإذن operator.admin. لا تمنحه رموز الإعداد عمدًا. أعد الاتصال باستخدام الرمز المميز المشترك أو كلمة المرور الخاصة بـ Gateway لطلب وصول المسؤول. إذا ظل هذا الجهاز يفتقر إليه، فوافق على ترقية النطاق المعلّقة من عميل مسؤول حالي."</string>
     <string name="native_01bcfe7a9296b6d6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Apply Patch"</string>
+    <string name="native_01cfb797d96a35b6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"القرص"</string>
     <string name="native_01d937a18e381125" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"إلغاء كتم مكبر الصوت"</string>
     <string name="native_024f9605eda4caf4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مرات التخطي المتتالية"</string>
     <string name="native_027d7c7db6d8b3ef" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لا يحتوي هذا المجلد على أي ملفات بعد."</string>
@@ -58,6 +59,7 @@
     <string name="native_05dd0c51d15c5db7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الوكيل النشط"</string>
     <string name="native_0621d308bb3df463" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مهمة واحدة مجدولة"</string>
     <string name="native_0623c0abcd81a5e0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لا يوجد رد"</string>
+    <string name="native_0685fbaba2d0f3c9" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تم تحديد %1$s"</string>
     <string name="native_0692ff7848b2cfc2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مصفوفة JSON للأمر argv"</string>
     <string name="native_06ee275ccdbbf862" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تعذّرت قراءة هذه الصورة. اختر لقطة شاشة واضحة أو صورة لرمز QR من openclaw qr."</string>
     <string name="native_06fcc3f73af64b5b" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تعذّر %1$s مقترح ورشة عمل Skills."</string>
@@ -108,6 +110,7 @@
     <string name="native_0f56cc286a4f23d8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مراجعة الشهادة مطلوبة"</string>
     <string name="native_0f8fe3a9688138a1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"افتح سطح Canvas الحالي لفحصه أو التفاعل معه."</string>
     <string name="native_0ff98f05be01ce5e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تم تحديث التشغيل الآلي."</string>
+    <string name="native_102acc10e67a297d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"برنامج نصي"</string>
     <string name="native_1039e92fa05c1279" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"حالة Gateway، وجاهزية عقدة الهاتف، وتدفق السجلات الأخير."</string>
     <string name="native_106808530413298b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"فتح تفاصيل الأتمتة"</string>
     <string name="native_1093115897879aa3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"بيئة التشغيل"</string>
@@ -127,12 +130,16 @@
     <string name="native_130011756125313c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تشغيل"</string>
     <string name="native_133f293961d7aa43" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جارٍ البحث في المحادثات"</string>
     <string name="native_13798c3256e792c8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"التحدث في الوقت الفعلي"</string>
-    <string name="native_13b588109e423636" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw يجهّز ردًا."</string>
+    <string name="native_13aa9aaad10f0e15" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"· %1$s"</string>
+    <string name="native_13b588109e423636" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"يقوم OpenClaw بتحضير رد."</string>
     <string name="native_13ba4cde12390943" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تمت الموافقة مرة واحدة."</string>
     <string name="native_13e10588f9f959cd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"إعداد المزوّد"</string>
+    <string name="native_140bedbf9c3f6d56" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"بلا"</string>
+    <string name="native_1418848426a1b86e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تُحفَظ حمولات البرنامج النصي دون تغيير. استخدم CLI لتعديل هذا البرنامج النصي."</string>
     <string name="native_14638daf580b6ee0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"دليل إعداد Android"</string>
     <string name="native_146c4d822cea4531" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تم حظر %1$s تطبيقات من إعادة التوجيه."</string>
     <string name="native_1485bc093cdbef6d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الأجهزة المقترنة"</string>
+    <string name="native_14a01f1f39e117c7" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">":%1$s"</string>
     <string name="native_1520b570498730a0" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s معلّقة"</string>
     <string name="native_155106be1173d757" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"اسم الجهاز"</string>
     <string name="native_155f816c0407310c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"إرسال"</string>
@@ -172,12 +179,14 @@
     <string name="native_1a6b66544dcfe305" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"إضافة Gateway"</string>
     <string name="native_1a9e3989a89e862b" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"النسخ غير متاح: %1$s"</string>
     <string name="native_1aa4cb0bcca76e92" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"صورة"</string>
+    <string name="native_1afff5a07eab0e88" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"التدفق"</string>
     <string name="native_1b9e1aa135771a2f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"إغلاق معاينة الصورة"</string>
     <string name="native_1bbd174404efbce9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"eval"</string>
     <string name="native_1c1174c05c1e6582" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"آخر أمر: %1$s"</string>
     <string name="native_1c14dd24ad063de3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"اجعل نافذة طرفية مفتوحة على الجهاز الذي يشغّل OpenClaw."</string>
     <string name="native_1c57b89e11e96ec1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لا توجد عناصر مفقودة"</string>
     <string name="native_1c8217deb20c30d4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"يتطلب إخراج اللوحة اتصال Gateway نشطًا."</string>
+    <string name="native_1cea287c3ba01d1d" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s · %2$s"</string>
     <string name="native_1d183f3f10e963ca" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"معزول"</string>
     <string name="native_1d19464a31484a7e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"© 2026 OpenClaw Foundation — ترخيص MIT."</string>
     <string name="native_1d393b0081b632c5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"PDF"</string>
@@ -205,6 +214,7 @@
     <string name="native_211988ba9dd0570a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"هل تريد رفض طلب الاقتران؟"</string>
     <string name="native_2132066dc9475cb7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"This skill is installed but not available to the current agent. Agent filters stay on desktop or CLI."</string>
     <string name="native_21378545892f1fe2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الناشر"</string>
+    <string name="native_2147ee396ae75c73" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"التفريع من هنا"</string>
     <string name="native_214d4932fc767e8f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">" · المحادثة: جارٍ التحدث"</string>
     <string name="native_217119a61e20f1f2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تجاوز اختياري"</string>
     <string name="native_21b111cbfe6e8fca" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"افتراضي"</string>
@@ -227,6 +237,7 @@
     <string name="native_23e39291d6135814" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جارٍ الحفظ…"</string>
     <string name="native_24047d2b5cfd52f4" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"المرساة %1$s"</string>
     <string name="native_2419329067823cab" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"search"</string>
+    <string name="native_24433c70eba5b153" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تفعيل"</string>
     <string name="native_24bea482416ae420" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"افحص مهام Gateway المجدولة وأدِرها."</string>
     <string name="native_24c55f66c5795fc5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"سمح رد سابق بهذا الأمر مرة واحدة بالفعل."</string>
     <string name="native_24cacf5004bf68ae" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"generate"</string>
@@ -243,6 +254,8 @@
     <string name="native_262c897a1f408b0b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الاتصال بـ Gateway الخاص بك"</string>
     <string name="native_2682bd813a3bccbc" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"أدخل رمز الإعداد من openclaw qr."</string>
     <string name="native_268f14bbfe119c1e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"التشخيصات"</string>
+    <string name="native_26c923382436328a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تبقى التطبيقات الأخرى دون مساس."</string>
+    <string name="native_26cd8a19b9bb1ce9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"التكسير"</string>
     <string name="native_26d00d15c465cd73" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"يؤدي هذا إلى حذف المحادثة ونصها نهائيًا."</string>
     <string name="native_26e47d73a55d7fa7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تمت الموافقة على الجهاز."</string>
     <string name="native_26f0dd993530eb2d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تجري إعادة المحاولة تلقائيًا"</string>
@@ -265,11 +278,13 @@
     <string name="native_28d03596d24eeb4e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تخطي"</string>
     <string name="native_28d55ec6974d84e8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"فشل الطلب الصوتي"</string>
     <string name="native_29129d736e62995a" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"سيؤدي هذا إلى رفض \"%1$s\" وتحديث حالة ورشة Skills من Gateway."</string>
+    <string name="native_29260c30c3e72758" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تكوين الصدفة"</string>
     <string name="native_2937013f21818106" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"update"</string>
     <string name="native_29887a5ff9846ccc" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مشاركة"</string>
     <string name="native_29d5c526bab8bf50" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الكاميرا مفعّلة"</string>
     <string name="native_2a1446dd9ce169e9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تظهر Telegram وWhatsApp والبريد الإلكتروني والقنوات الأخرى هنا بعد الإعداد."</string>
     <string name="native_2a33d984de881573" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"خطأ في الشبكة"</string>
+    <string name="native_2ac86a8e8f1d6cfb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"استكشاف برك المد والجزر"</string>
     <string name="native_2b54c265effc491b" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"استعد لوحة الرسم الآن للجلسة=%1$s والمصدر=%2$s. إذا كانت هناك حالة A2UI موجودة، فأعِد تشغيلها فورًا. وإلا، فأنشئ واعرض لوحة معلومات مدمجة وملائمة للأجهزة المحمولة في لوحة الرسم."</string>
     <string name="native_2b7d5b8c98a1bc16" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"فشل البدء: %1$s"</string>
     <string name="native_2bb186b55caf8791" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لم يُطلب"</string>
@@ -284,6 +299,7 @@
     <string name="native_2d4dfe885f84629e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"السماح بالوصول إلى مكتبة الصور."</string>
     <string name="native_2d6416405eb44982" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"حلّ رد سابق هذه الموافقة بالفعل."</string>
     <string name="native_2d85de9d56c226e4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لا توجد سلاسل محادثات حديثة"</string>
+    <string name="native_2dc73e579b72dae5" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"المهلة %1$sث"</string>
     <string name="native_2df01a03ff43400b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لا توجد نتائج مطابقة"</string>
     <string name="native_2df30b117ad829ab" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"قراءة إشعارات التطبيقات المحددة"</string>
     <string name="native_2e0078a8322d6f1f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"التوفر غير معروف"</string>
@@ -306,8 +322,10 @@
     <string name="native_30d01a64f9a923c9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جهاز جديد"</string>
     <string name="native_30e08bdeea992a84" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Session Status"</string>
     <string name="native_30e9bef4f7cdb531" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"فتح معاينة الصورة"</string>
+    <string name="native_310f897ae1852e57" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تغيّر فرع الجلسة؛ راجع هذه الرسالة وأعد المحاولة."</string>
     <string name="native_310ff200149b44a3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"close"</string>
     <string name="native_31347fbd80416902" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"يبدو أن هذا رمز إعداد. ارجع واختر إعداد Gateway، ثم استخدام رمز الإعداد."</string>
+    <string name="native_3191b52693ec28b4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"✦"</string>
     <string name="native_31b1b13bf090da01" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الوكلاء والأتمتة"</string>
     <string name="native_31e392d1c0378bec" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تطبيق"</string>
     <string name="native_31ee02ebfbe71531" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تم تخطي تشغيل المهمة الآلية."</string>
@@ -320,11 +338,13 @@
     <string name="native_3316348dbadfb7b1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"read"</string>
     <string name="native_3370146d6d466cb3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تحديد النص"</string>
     <string name="native_33883f8ea8442d39" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"نشاط الحركة"</string>
+    <string name="native_339ba6d5849fef85" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"description: %1$s"</string>
     <string name="native_33b93476cf597a33" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الوقت"</string>
     <string name="native_33c8e8de41c3a351" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"غير موثّق"</string>
     <string name="native_347de0eefc8c2b98" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Yield"</string>
     <string name="native_349f96d2f47c34bb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"نسخ أمر الموافقة"</string>
     <string name="native_34aff6fa5839dc50" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"إخراج الشاشة الحالي وسطح التطبيق التفاعلي."</string>
+    <string name="native_34d29e78d246ae8d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الخدمة متصلة"</string>
     <string name="native_34e108c0896d0158" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"العرض"</string>
     <string name="native_34ef570432852cd6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جاهز عندما تكون جاهزًا"</string>
     <string name="native_35054a374a0f2b14" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تعذّر تحميل كتالوج موفّري الخدمة."</string>
@@ -339,6 +359,7 @@
     <string name="native_35cb408d8973ebba" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"وصّل Gateway لعرض المزوّدين"</string>
     <string name="native_35e70a7ab8a0d399" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"نبضة الاتصال التالية"</string>
     <string name="native_35f2ff4f129d2a63" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تم إقران Gateway. في انتظار الموافقة على إمكانات العقدة."</string>
+    <string name="native_36409c59c2b80eff" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"التمليح"</string>
     <string name="native_3643db520673cdf0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"إغلاق اللوحة"</string>
     <string name="native_364802f3894668df" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"كتابة جهات الاتصال"</string>
     <string name="native_367ccfda39b62aa7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لا توجد مهارات مثبّتة تطابق هذا البحث."</string>
@@ -347,6 +368,7 @@
     <string name="native_36e8d5e94219dc37" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"إعدادات Talk"</string>
     <string name="native_36f1fac278711470" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"المراقبة · سلسلة محادثات واحدة"</string>
     <string name="native_37053dc1f680546b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"نص الحمولة"</string>
+    <string name="native_3741f267a6170e88" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تعيين النص"</string>
     <string name="native_37582309e7a1dbe5" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الموافقة %1$s"</string>
     <string name="native_379ce0aacf46c35f" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لم يُرجع Gateway جاهزية %1$s"</string>
     <string name="native_37b637bd85f6d2cb" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"يوجد %1$s من النماذج المُعدّة. حدّث لإعادة التحقق من التوفر."</string>
@@ -376,18 +398,21 @@
     <string name="native_3be0085a6bd88cdd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"وضع التحدث نشط"</string>
     <string name="native_3bee4ede6bf4436c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جارٍ العمل · عملية تشغيل نشطة واحدة"</string>
     <string name="native_3c6168bbf86e6e4b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الموافقة والتمكين"</string>
+    <string name="native_3c6af34c83122de7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تحديث Gateway مطلوب"</string>
     <string name="native_3cb27ae0fbca8ae3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"نسخ الصورة"</string>
     <string name="native_3d06950825de7452" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"عنوان URL لـ Gateway"</string>
     <string name="native_3d200f624b8bda8f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"main أو isolated أو current أو session:&lt;id&gt;"</string>
     <string name="native_3d61e9d54ffa2d93" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"اتصل بالـ Gateway لفتح shell في مساحة عمل الوكيل."</string>
     <string name="native_3da4811eafea080a" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s://%2$s:%3$s"</string>
     <string name="native_3de3d401128d4395" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تعذّر تحميل تفاصيل الموافقة. حدّث وحاول مرة أخرى."</string>
+    <string name="native_3e258ff7801d9f13" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"يمكنني التحقق من حالة Gateway، أو إصلاح الإعدادات، أو تغيير النماذج، أو ربط القنوات."</string>
     <string name="native_3e398e6fb979557a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tool Call"</string>
     <string name="native_3e42e385075b9b56" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"المحادثات"</string>
     <string name="native_3f00927a719345ed" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Write"</string>
     <string name="native_3f25ccebfa99dcf3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ابدأ بموجّه، أو استخدم الصوت."</string>
     <string name="native_3f39d5c348e5b79d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ي"</string>
     <string name="native_3f940108cb1ecd9c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"فتح الإعدادات"</string>
+    <string name="native_3f9ff1a2775b1fef" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جارٍ الرصد…"</string>
     <string name="native_3fb20f30e3f6845c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"إنهاء المحادثة"</string>
     <string name="native_3fb8bbabfcedb87c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"آخر خطأ"</string>
     <string name="native_400dc06511b8dbc3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"راجع الإجراءات التي تحتاج إلى انتباهك."</string>
@@ -399,10 +424,12 @@
     <string name="native_408d82aabe9e687a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"This skill is disabled on the gateway. Enable it here when the current connection has operator.admin."</string>
     <string name="native_40b601a10ca536c1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الرسائل القصيرة"</string>
     <string name="native_40d04f6fb9437ff3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ميزة التعرّف على الكلام على الجهاز غير متاحة."</string>
+    <string name="native_40f50dcd921f40ad" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"برنامج نصي · للقراءة فقط"</string>
     <string name="native_4122a5c9825224af" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"المرفقات كبيرة جدًا بحيث لا يمكن وضعها في قائمة الانتظار ضمن رسالة واحدة؛ أزل بعضها وحاول مجددًا."</string>
     <string name="native_4135d64f3bde1a92" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"يوجد نموذج واحد مُعدّ. حدّث لإعادة التحقق من التوفر."</string>
     <string name="native_41659b48f2dc4c36" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الأداة غير متاحة"</string>
     <string name="native_4186107d2194d09a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"يلزم اتصال آمن لهذا المضيف."</string>
+    <string name="native_41a86988751ad5cb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الأخيرة"</string>
     <string name="native_41cb8a2ca2cf1e36" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لا توجد عمليات أتمتة مطابقة."</string>
     <string name="native_41df9f586511e084" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"يمكن للهاتف الوصول إلى Gateway"</string>
     <string name="native_41ed52921661c7f0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway"</string>
@@ -419,6 +446,7 @@
     <string name="native_4408aaecc2b1470d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"المصادقة المحفوظة غير صالحة. أعد المصادقة أو أعد ضبط اتصال هذا Gateway."</string>
     <string name="native_44173ba2044fb22f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"أثناء الاستخدام"</string>
     <string name="native_4441146b0fe1d5c6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"screenshot"</string>
+    <string name="native_447575533b63241f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الرجوع إلى هنا"</string>
     <string name="native_4481c2190a1b4bca" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تعبير Cron، مثل 0 9 * * *"</string>
     <string name="native_4499e7b7e1c9ddbc" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"العودة إلى الصوت"</string>
     <string name="native_449f5a775762cdc5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تحدّث"</string>
@@ -426,6 +454,7 @@
     <string name="native_45a8847c4a6b2c81" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"يُسمح لـ %1$s تطبيقات بإعادة التوجيه."</string>
     <string name="native_460b3a7da007b7af" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الدردشة"</string>
     <string name="native_4632a2cfafca4e0d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"يلزم الوصول إلى الميكروفون."</string>
+    <string name="native_4646155e9edc9859" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"العدو الجانبي"</string>
     <string name="native_464c4ffd019e1e96" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تحرير"</string>
     <string name="native_46e406ca2f3277fb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ساعات الهدوء"</string>
     <string name="native_46fa69e51b74768a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"نسخ التشخيصات"</string>
@@ -472,12 +501,14 @@
     <string name="native_4e25d34a20313a61" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الإذن مطلوب"</string>
     <string name="native_4e8c72cab82e0711" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"إعدادات التشغيل الآلي غير صالحة."</string>
     <string name="native_4ec30e9d85725d41" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"قائمة السماح"</string>
+    <string name="native_4ecb8335a5262bc3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الإعداد والحالة والإصلاح"</string>
     <string name="native_4ed379d418bb8629" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"groups"</string>
     <string name="native_4ee252fb736effa2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"المفتاح العام"</string>
     <string name="native_4efca0d10c5feb8e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"حول"</string>
     <string name="native_4f1bc100d1dccc1e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لم يتم العثور على رمز QR للإعداد في هذه الصورة. اختر رمز QR الذي أنشأه openclaw qr، أو أدخل رمز الإعداد يدويًا."</string>
     <string name="native_4fe3cdd404ea0290" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"permissions"</string>
     <string name="native_5047cfb3b607e7d0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"وصّل Gateway لتحميل العُقد والأجهزة المقترنة."</string>
+    <string name="native_5051902c7b6a368b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تبديل الفرع"</string>
     <string name="native_5083cd4b96b0d09d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لا توجد مهارات"</string>
     <string name="native_50bae925225d054b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تُشغَّل الردود بصوت عالٍ"</string>
     <string name="native_50c8b81faf51e7d1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تعليم كمقروء"</string>
@@ -507,6 +538,7 @@
     <string name="native_53dd551fe4010842" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"وصّل Gateway لتحميل جاهزية المزوّد."</string>
     <string name="native_53f15ea2f2343351" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"غير مقترن"</string>
     <string name="native_53fb429d67bd4aab" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"انتهت صلاحية هذه الموافقة قبل أن يتم حلها."</string>
+    <string name="native_541ff80fcb2f8e87" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جارٍ الرصد خلال %1$s ثانية — انتقل إلى التطبيق المستهدف"</string>
     <string name="native_542e9aa519c89605" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مطالبة الوكيل"</string>
     <string name="native_544731b8da90eb65" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"emoji list"</string>
     <string name="native_544d9e42216c2ac0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"متكرر"</string>
@@ -520,7 +552,7 @@
     <string name="native_55a12cbe0995e214" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مستمع الإشعارات"</string>
     <string name="native_55d8e7da6d0a752c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مكبر الصوت مكتوم"</string>
     <string name="native_560d3e826c413dc9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"البحث في سلاسل المحادثات"</string>
-    <string name="native_565339bc4d33d728" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"حسنًا"</string>
+    <string name="native_565339bc4d33d728" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"موافق"</string>
     <string name="native_56a508f3f2bf424a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تعذّر فتح دليل الإعداد."</string>
     <string name="native_56c41c606c44f3fc" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"اسأل OpenClaw %1$s"</string>
     <string name="native_56c4c3d30ceda56e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Wait for Agents"</string>
@@ -546,6 +578,7 @@
     <string name="native_59bc255786c1c762" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"هذا الـ Gateway"</string>
     <string name="native_59cfb3e96f2f11f3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لا توجد عمليات تشغيل حديثة بعد."</string>
     <string name="native_5a6db2a878731e8b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"نموذج اللغة على الجهاز غير متاح"</string>
+    <string name="native_5a71fb83d16829a7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تتطلب لوحة المعلومات Gateway متصلاً"</string>
     <string name="native_5a73512707500938" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ستظهر المقترحات المطابقة هنا بعد أن تنشئ الوكلاء مسودات مهارات قابلة لإعادة الاستخدام."</string>
     <string name="native_5a7a1c2ec168fbbf" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Session Search"</string>
     <string name="native_5a7d4412c13abceb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw يتحدث"</string>
@@ -561,6 +594,7 @@
     <string name="native_5c1acea9c9b0e704" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Web Fetch"</string>
     <string name="native_5c39123805ffb4e2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الموجّه"</string>
     <string name="native_5c944156b5353428" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"هل تريد الموافقة على الجهاز؟"</string>
+    <string name="native_5d366a1eee742cee" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"اتصل بـ Gateway لديك لفتح لوحة معلومات هذه الجلسة."</string>
     <string name="native_5d410adb9576e266" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"هل تريد إزالة %1$s وبيانات الاعتماد المحفوظة الخاصة به من هذا الهاتف؟"</string>
     <string name="native_5d6c41a67139ee26" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"يشير رمز QR إلى Gateway بعيد غير آمن. %1$s %2$s"</string>
     <string name="native_5d6cbac59f87e78d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"سطح الشاشة جاهز"</string>
@@ -573,7 +607,10 @@
     <string name="native_5ef0f6acc538715a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw يتحدث"</string>
     <string name="native_5f04ae9ed6a865bb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جارٍ الاتصال..."</string>
     <string name="native_5f09a378bea71719" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">" · الموقع: دائمًا"</string>
+    <string name="native_5f1f8f127f00341e" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الرسائل: %1$s"</string>
+    <string name="native_5f2c0d991f6945be" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الإبحار"</string>
     <string name="native_5f2c3c8856593678" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"التحميل من Gateway"</string>
+    <string name="native_5f5c40116fd7161d" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"text: %1$s"</string>
     <string name="native_5f9bbdd124f822a2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"يحتاج إلى"</string>
     <string name="native_5fa1d457ddfcd26c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"rename group"</string>
     <string name="native_5fa7aac5375c5815" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جاهز"</string>
@@ -594,6 +631,7 @@
     <string name="native_61ffa9c8c703dd5e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"channels"</string>
     <string name="native_62026a42b2390a87" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ممنوح"</string>
     <string name="native_624fccb6586a4c4d" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"كل %1$s دقيقة"</string>
+    <string name="native_6254d8ee6bcbafc8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"رمز مميز واحد"</string>
     <string name="native_62677f693c313cc7" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s %2$s"</string>
     <string name="native_628ee59a91eaa013" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"التطبيقات المثبتة"</string>
     <string name="native_62a2fed3d6e08c44" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"قيد الانتظار"</string>
@@ -630,7 +668,7 @@
     <string name="native_674eb55d9c353900" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تفاصيل الجدول"</string>
     <string name="native_67528858c36397f7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"إمكانات الهاتف"</string>
     <string name="native_67a926f7008e2b0e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"غير متاح"</string>
-    <string name="native_67b696468610b879" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dashboard"</string>
+    <string name="native_67b696468610b879" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لوحة المعلومات"</string>
     <string name="native_67fa416afa64d304" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لصق الرمز المميز"</string>
     <string name="native_6827238fea72c88b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لا يوجد موفرون"</string>
     <string name="native_684889f0079cc145" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"بصمة SHA-256"</string>
@@ -651,6 +689,7 @@
     <string name="native_6aadac2f2b7a6b8e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"رجوع"</string>
     <string name="native_6b82f7ec6987fff5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مشاركة الرسالة"</string>
     <string name="native_6b97422ed395a4f7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"أنشئ رمز QR."</string>
+    <string name="native_6b983a81e5e8099e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"إعادة التشغيل"</string>
     <string name="native_6bdbb891ab45a014" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مكبر الصوت قيد التشغيل"</string>
     <string name="native_6be2e6236d34642d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"حذف المجموعة؟"</string>
     <string name="native_6be36ca49ee85210" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مفقود"</string>
@@ -668,6 +707,7 @@
     <string name="native_6d5d9004797377e1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"التراخيص"</string>
     <string name="native_6d7c95a353d873cd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"اتصل بـ Gateway للبحث عن مهارات ClawHub."</string>
     <string name="native_6df1bb18a59ab97d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مهارة"</string>
+    <string name="native_6e034875b3baa6ee" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تغيّر اتصال Gateway. أعد تشغيل OpenClaw لإعادة الاتصال."</string>
     <string name="native_6e0a0b9d8c5ee4d9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"معرّف الجهاز"</string>
     <string name="native_6e117ba97cbfb6f0" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لم يحدّد Gateway موفّر %1$s النشط"</string>
     <string name="native_6e293a8c009e0011" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"قيد الانتظار"</string>
@@ -697,6 +737,7 @@
     <string name="native_713166971d730f81" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الأمر"</string>
     <string name="native_7143e424a2bf2663" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تم إلغاء هذه الموافقة قبل أن يتم حلها."</string>
     <string name="native_716c3d1f55a7cd37" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الميكروفون قيد التشغيل · في انتظار Gateway"</string>
+    <string name="native_71988c4d8e0803ba" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"نص"</string>
     <string name="native_7198eaa9f18ee413" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"يتم عرض %1$s من %2$s. حسّن البحث لعرض المزيد."</string>
     <string name="native_71aec38e93393296" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الإصدار v%1$s متاح"</string>
     <string name="native_71dba3ccde0a371b" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s://%2$s"</string>
@@ -714,6 +755,7 @@
     <string name="native_73d5214e7f5430f8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"وكلاؤك جاهزون"</string>
     <string name="native_740aa42cc068cf01" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لم يتم تكوين أي موفّر %1$s على Gateway"</string>
     <string name="native_744883c7eb649f92" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جارٍ الاستماع لجولة واحدة"</string>
+    <string name="native_744ea732e226adc1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"رصد"</string>
     <string name="native_746f71ec623adc37" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ميلي ثانية Epoch (اختياري)"</string>
     <string name="native_7491b353909c1147" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لا توجد نماذج مُعدّة. حدّث لإعادة التحقق من التوفر."</string>
     <string name="native_74a883a037bc227f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الإعدادات"</string>
@@ -748,6 +790,7 @@
     <string name="native_788011833a5a0f22" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الإشعارات"</string>
     <string name="native_78af93f13a7e5044" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"يتطلب التطبيق والرفض والحجر الصحي نطاق operator.admin. أعد الاتصال باستخدام مصادقة gateway المشتركة أو وافق على ترقية نطاق جهاز operator.admin لتمكين إجراءات دورة الحياة."</string>
     <string name="native_78f25f393aa9bcbf" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"sticker upload"</string>
+    <string name="native_7900450859bdb8c2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"صيد الكركند"</string>
     <string name="native_790d78931c21b895" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Messages to recover"</string>
     <string name="native_792175fb265c32bc" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"openclaw devices approve %1$s"</string>
     <string name="native_79a68a0d42388125" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تفاصيل سجل Gateway قابلة للقراءة."</string>
@@ -766,6 +809,7 @@
     <string name="native_7bac819e2197030d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لغة الجهاز غير مدعومة"</string>
     <string name="native_7bda957a27b2f876" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"في قائمة الانتظار — سيُرسل عند إعادة الاتصال"</string>
     <string name="native_7c55b5030e55a687" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"قبل %1$s د"</string>
+    <string name="native_7c5b2da19293eb98" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الفرع الحالي"</string>
     <string name="native_7c5c9a83536e33d2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جارٍ التحقق من صلاحية الاقتران"</string>
     <string name="native_7c79875c4f9d1990" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"وصول محدود إلى Gateway"</string>
     <string name="native_7cc20d4753b8fd45" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جارٍ تشغيل الأدوات..."</string>
@@ -782,7 +826,9 @@
     <string name="native_7e61a3570d66514a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تحتاج مصادقة Gateway إلى مراجعة. تحقق من إعدادات Gateway، ثم أعد المحاولة."</string>
     <string name="native_7e6ec31086c4e10e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"يستخدم رمز QR معرّف نطاق IPv6. استخدم عنوان IPv6 غير محدد النطاق أو اسم مضيف LAN."</string>
     <string name="native_7e9e5ac30f2216fd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"add"</string>
+    <string name="native_7f0a603d5a401abe" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"التكريل"</string>
     <string name="native_7f1e323b6272c620" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"سليم"</string>
+    <string name="native_7f2c3cec9e26d5f6" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"اكتمل خلال %1$s"</string>
     <string name="native_7f816072c1c6a23b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الوسائط"</string>
     <string name="native_7fc04e3053dfde2a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"خيارات التثبيت"</string>
     <string name="native_7fe837d777c45948" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"خلال %1$s ساعة"</string>
@@ -793,6 +839,7 @@
     <string name="native_81c2c4f30a4bec68" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مسح البحث"</string>
     <string name="native_81d38aca5306940b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ممكّنة للوكلاء المؤهلين."</string>
     <string name="native_820d08e12968baff" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لا توجد محادثة حالية"</string>
+    <string name="native_8224853603189c0f" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"bounds: %1$s"</string>
     <string name="native_82250171708918de" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"بعد %1$s"</string>
     <string name="native_825b9c75d7fed691" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"السماح للمجدول بتشغيل عملية الأتمتة هذه."</string>
     <string name="native_82990a093599a9bb" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s مطبّق"</string>
@@ -805,6 +852,7 @@
     <string name="native_848123d14f84faa2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"خام"</string>
     <string name="native_848f54e89660cea4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"عمليات التشغيل"</string>
     <string name="native_849ccb784cf30af6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تشغيل الآن"</string>
+    <string name="native_84a2e27466832efd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"فرع بدون عنوان"</string>
     <string name="native_84aebc69a1bf739a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تم إعداده"</string>
     <string name="native_84db8228370efedd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"camera list"</string>
     <string name="native_84f9cb5c5662fa3b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"1 مطبّق"</string>
@@ -819,6 +867,7 @@
     <string name="native_8703f3dea42d2831" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"امسح رمز QR أو رمز الإعداد ضوئيًا"</string>
     <string name="native_8749b1693f749411" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Installing"</string>
     <string name="native_8777372abc96dc0b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"العُقد المباشرة، والهواتف المقترنة، وطلبات الأجهزة المعلّقة."</string>
+    <string name="native_879cafd347609411" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لقطة: %1$s"</string>
     <string name="native_879e2ce7797af6d2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"سمح رد سابق بهذا الأمر بالفعل وحفظ الاختيار."</string>
     <string name="native_87b17944085875ed" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الطلبات المعلّقة"</string>
     <string name="native_87b42e40c2a290e0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تمت الموافقة"</string>
@@ -842,6 +891,7 @@
     <string name="native_8b8f03b41e1c066b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"يمكن لـ OpenClaw تلقي التنبيهات المحددة."</string>
     <string name="native_8b8fc46055e32971" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"فتح الشاشة"</string>
     <string name="native_8ba35bb80ddab5a3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"إجراءات الدردشة"</string>
+    <string name="native_8ba5517fc10b3db5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"السماح بالتحكم في التطبيقات الأخرى؟"</string>
     <string name="native_8bb7ec15b1e350a5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جارٍ الفحص"</string>
     <string name="native_8bf253a125f66985" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"امسح رمز الإعداد ضوئيًا أو الصقه لإضافة Gateway آخر."</string>
     <string name="native_8c4a3896e8f06d27" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"انتهت مهلة TLS"</string>
@@ -854,6 +904,7 @@
     <string name="native_8d20273207a2fe99" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"openclaw nodes approve %1$s"</string>
     <string name="native_8d57374bc09c8756" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ملاحظة صوتية · %1$s"</string>
     <string name="native_8d59829c1e15afe1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الاستخدام"</string>
+    <string name="native_8d6976fa1face9dd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"استكشاف النوتيلوس"</string>
     <string name="native_8d99e5d18d734856" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"السياق %1$s%%"</string>
     <string name="native_8da844efc33c91b3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"نسخ المطالبات الصوتية"</string>
     <string name="native_8dd6857baf026850" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"كتم الصوت"</string>
@@ -883,6 +934,7 @@
     <string name="native_9193a6bd2430c6df" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"في انتظار الاقتران"</string>
     <string name="native_91a6e5ed6ae788f4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ابدأ محادثة أو واصلها"</string>
     <string name="native_91e9086800ed776e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لا توجد مهام مجدولة"</string>
+    <string name="native_91fe7ca2ad2e19cd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الرد على OpenClaw…"</string>
     <string name="native_920e413c7d411b61" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الحالة"</string>
     <string name="native_921ff8493d077a59" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"عقدة OpenClaw · متصلة"</string>
     <string name="native_92340695899bd2d8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"نشط"</string>
@@ -891,9 +943,11 @@
     <string name="native_929d4aafa630ff10" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"إغلاق الماسح"</string>
     <string name="native_92b8699dada676f9" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"كل %1$s يوم"</string>
     <string name="native_92c1cdfdf4cb9cf6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مفعّل"</string>
+    <string name="native_92c541b8b903eef0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"التمكين وفتح الإعدادات"</string>
     <string name="native_92d01b120cacf65f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"متصل وجاهز"</string>
     <string name="native_9309a242422af6f3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ask User"</string>
     <string name="native_938ee8367299dc55" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"خطأ في الدردشة"</string>
+    <string name="native_939b082f4698fd79" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"التمرير للأمام"</string>
     <string name="native_93bf9fb90d28b037" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s من %2$s"</string>
     <string name="native_93c59f1918d177c6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"خطّط للعمل"</string>
     <string name="native_93d8874c8c86f0fc" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"console"</string>
@@ -909,7 +963,9 @@
     <string name="native_950d7da1f43f723a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"المحادثة مباشرة"</string>
     <string name="native_95204ae1796ddfab" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تعذر تثبيت %1$s من ClawHub."</string>
     <string name="native_953a8bd0a18d7a3d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مرحبًا بك في OpenClaw"</string>
+    <string name="native_958074a2ffa6bae8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"التحكم في التطبيقات الأخرى"</string>
     <string name="native_95d0536838bd0e14" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"فهرس الإشارات"</string>
+    <string name="native_95f20b63460b030c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"أدخل السر…"</string>
     <string name="native_963e80a1954e4b73" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s:%2$s"</string>
     <string name="native_966dccd25d82bd2a" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"أخبر OpenClaw أن %1$s"</string>
     <string name="native_96a5ba634bfc2ed4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تم الاكتشاف"</string>
@@ -932,6 +988,7 @@
     <string name="native_999e5fee2f7c2856" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s مزوّدين"</string>
     <string name="native_99b6623213642793" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"سياق الهاتف والخصوصية"</string>
     <string name="native_99f818dd50c0dd7c" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s/%2$s متصلة"</string>
+    <string name="native_9a0019fcfaef0a49" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s  %2$s"</string>
     <string name="native_9a0bf562e602f844" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لا تزال استعادة Gateway بعد إعادة التشغيل جارية."</string>
     <string name="native_9a16d8b4110f4349" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"يؤدي استبدال رمز الإعداد إلى مسح بيانات اعتماد الإعداد ورموز الجهاز المحفوظة على هذا الهاتف قبل إعادة الاتصال. قد يحتاج هذا الهاتف إلى الموافقة على إمكانات العقدة مرة أخرى؛ لا تتابع إلا إذا كنت تقصد الاقتران باستخدام رمز إعداد جديد لـ Gateway."</string>
     <string name="native_9a25e9ad380dafd4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"افتح عملية أتمتة لفحص إعداداتها وسجل تشغيلها. يمكن أيضًا للاتصالات ذات نطاق المسؤول تشغيلها أو تعديلها أو تفعيلها أو تعطيلها أو حذفها."</string>
@@ -946,6 +1003,7 @@
     <string name="native_9c05e80faaf8a6c1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"آخر تشغيل"</string>
     <string name="native_9c1a4dd536c477b9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"يلزم الوصول إلى الكاميرا لمسح QR الخاص بالإعداد ضوئيًا."</string>
     <string name="native_9ca009adf23586a3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تعذّر تحديث النموذج."</string>
+    <string name="native_9cb35bee8628332d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"إطلاق الفقاعات"</string>
     <string name="native_9cb615d253908670" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"thread reply"</string>
     <string name="native_9ce78fe395f3890f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"حذف…"</string>
     <string name="native_9d2242bb16d9f942" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"اتصل بـ Gateway لفحص عمليات الأتمتة."</string>
@@ -957,7 +1015,9 @@
     <string name="native_9db0df0afb47b562" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مفتاح المهارة"</string>
     <string name="native_9e37aa0704a3cf44" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تم تثبيت %1$s."</string>
     <string name="native_9e4635769f0aaf0d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"بوابات Gateway"</string>
+    <string name="native_9e7b2578a4302921" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"actions: %1$s"</string>
     <string name="native_9e9bef85bb320b81" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"وضع إعادة التوجيه"</string>
+    <string name="native_9f0c94a080088bb3" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$sألف"</string>
     <string name="native_9f6e180ff696bec5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تبديل تخطيط المحادثات"</string>
     <string name="native_9fb7c4ebcbc3e558" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لا توجد نقطة نهاية TLS"</string>
     <string name="native_9fe101a0ec7ef416" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"بوابة OpenClaw"</string>
@@ -965,12 +1025,14 @@
     <string name="native_a02f1cea3c1d6c6e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جارٍ التفكير…"</string>
     <string name="native_a05e2595b1680cfb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"يتطلب الوصول إلى Gateway المراجعة"</string>
     <string name="native_a0946d3da9c32dee" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"1 معلّق"</string>
+    <string name="native_a09fc07b0ff5e7e7" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$sث"</string>
     <string name="native_a0d36b5ded4ebcce" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تطبيق المقترح؟"</string>
     <string name="native_a0e63d7c7125d29a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ليس الآن"</string>
     <string name="native_a0f0ae6f5f475c06" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"غير موافق عليه"</string>
     <string name="native_a10a36fa109818be" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"البحث في التطبيقات"</string>
     <string name="native_a12db0cfcad2e5f0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"نموذج واحد مُعدّ"</string>
     <string name="native_a135dd52de0ce45a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تجاهل إشعار الموافقة"</string>
+    <string name="native_a137f17a19a09cbe" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"·"</string>
     <string name="native_a1794783aab72d20" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"غير متصل"</string>
     <string name="native_a181b2c15994a7fc" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مزود الكلام"</string>
     <string name="native_a190013f72efad35" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"موافقة Gateway قيد التنفيذ. سيعيد OpenClaw المحاولة تلقائيًا."</string>
@@ -978,6 +1040,7 @@
     <string name="native_a1bca979bc69befb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تتطلب تغييرات cron صلاحية operator.admin."</string>
     <string name="native_a20d12c5e9c428c3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"التفكير"</string>
     <string name="native_a23967c129397864" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"screen snapshot"</string>
+    <string name="native_a29d2779acbc81f2" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"العُقد المرصودة: %1$s"</string>
     <string name="native_a2bbc7ffd69f9c49" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لم يتم العثور على إجراءات"</string>
     <string name="native_a2f29836cda5ceb1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"حفظ والاتصال"</string>
     <string name="native_a330395cc0a53ad1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"list"</string>
@@ -996,15 +1059,18 @@
     <string name="native_a53a8b84da7bc600" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جلسة Gateway قيد التنفيذ"</string>
     <string name="native_a61935d6be7b9f04" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"في انتظار المراجعة"</string>
     <string name="native_a626442da425ff22" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لا توجد Skills مثبتة."</string>
+    <string name="native_a67d4aa392f75557" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جارٍ التحقق من Gateway"</string>
     <string name="native_a68658a5db8b891d" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"التدرّج %1$s"</string>
     <string name="native_a6a20a23827b4cbd" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"نتيجة %1$s غير معروفة. أعِد الاتصال وحدّث Skills، ثم أعِد المحاولة؛ ينضم Gateway بأمان إلى عملية تثبيت مطابقة لا تزال قيد التشغيل."</string>
     <string name="native_a6bd489d95504499" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"نسيان"</string>
     <string name="native_a6cda369816c943c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لا توجد بوابات Gateway مقترنة."</string>
     <string name="native_a757bc0928d19377" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s · %2$s"</string>
+    <string name="native_a7779b096e663c47" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"&lt;سر محجوب&gt;"</string>
     <string name="native_a79bcff159841b0f" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s مشكلات"</string>
     <string name="native_a7b90ee8facf0aed" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw"</string>
     <string name="native_a89bac8b89022bde" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جارٍ الاستماع · %1$s في قائمة الانتظار"</string>
     <string name="native_a8bbbd7231a6c191" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تم كتم صوت المساعد"</string>
+    <string name="native_a8c28c2b07e4be03" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تعمل إجراءات العُقد فقط عندما يكون التطبيق المستهدف في المقدمة (يتم التحقق عبر المسار البعيد). تعمل الإجراءات العامة وإجراءات التطبيق نفسه هنا."</string>
     <string name="native_a8ef5cdf31a6505a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لم يتم العثور على أي بوابات بعد. استخدم الإعداد اليدوي إذا كان الاكتشاف محظورًا."</string>
     <string name="native_a901aa25b833cf33" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"فتح المحادثة"</string>
     <string name="native_a92f0449a9f7235b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جارٍ العمل"</string>
@@ -1016,6 +1082,7 @@
     <string name="native_aa73b4d5ffec85f6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"اتصل بـ Gateway لفحص مهارات ClawHub."</string>
     <string name="native_aab53a916682c720" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تبقى قائمة التطبيقات على هذا الهاتف."</string>
     <string name="native_ab0171ca0494d441" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"خامل"</string>
+    <string name="native_ab3b3d3706f7f158" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"يظهر في إعدادات إمكانية الوصول في Android."</string>
     <string name="native_ab3c45669917ec6f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"التسليم الذكي"</string>
     <string name="native_ab604a360777735f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"رفض"</string>
     <string name="native_ab79b5cb27bfd124" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"أعاد Gateway الحالة \'%1$s\' بعد %2$s."</string>
@@ -1030,7 +1097,9 @@
     <string name="native_ac1c17acbaa7cf14" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"اتصل بـ Gateway لتثبيت مهارات ClawHub."</string>
     <string name="native_ac2e8f4025b42994" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"البحث الصوتي"</string>
     <string name="native_ac3a53754a79a614" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">" · الميكروفون: يستمع"</string>
+    <string name="native_ac4ae1579a18e0bb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"أعد الاتصال بصلاحية operator.admin لمراجعة إعدادات Gateway وتغييرها."</string>
     <string name="native_ac8991ef01019cf5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تحميل المزيد"</string>
+    <string name="native_acaeca7794e19199" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الرصد خلال 3 ثوانٍ"</string>
     <string name="native_acba25512100f80b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"run"</string>
     <string name="native_acbd9344335ffd93" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جارٍ إنشاء الصوت…"</string>
     <string name="native_aceb696a04c19971" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← رجوع"</string>
@@ -1070,7 +1139,6 @@
     <string name="native_b3975aa73d16205c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"يحتاج إلى موافقة مجددًا"</string>
     <string name="native_b3e24789bf8dc89b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"غير مجدول"</string>
     <string name="native_b450645debe2cf0a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جهات الاتصال"</string>
-    <string name="native_b4739a4f08650db2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جارٍ التفكير..."</string>
     <string name="native_b485a5fff49d5e50" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"يظل هاتفك هادئًا حتى تدعو الحاجة إليه"</string>
     <string name="native_b4a6b1fff2ff63e3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"يستمع · جارٍ إرسال الصوت في قائمة الانتظار"</string>
     <string name="native_b4aca584eecea590" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تعذّر تحميل تفاصيل المهمة"</string>
@@ -1078,6 +1146,7 @@
     <string name="native_b538b9d40695a6fa" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"يتطلب Gateway هوية هذا الجهاز. أعد المصادقة أو أعد ضبط اتصال هذا Gateway."</string>
     <string name="native_b53b35163f7588c4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الجلسة التالية"</string>
     <string name="native_b55dae19fcb48a4d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"أمان الاتصال"</string>
+    <string name="native_b58eb52c8810b978" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تخطي الآن"</string>
     <string name="native_b5a229ac8becc603" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الموقع الإلكتروني"</string>
     <string name="native_b5af0517c02601fd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"وصّل Gateway لتحميل طلبات الموافقة في التطبيق."</string>
     <string name="native_b5c6a385b2498915" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تم نسخ %1$s"</string>
@@ -1106,12 +1175,15 @@
     <string name="native_bae9264d6d972b80" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"summarize"</string>
     <string name="native_bb4f2558e4333834" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تم حفظ صورة الأداة في التنزيلات"</string>
     <string name="native_bbe5fc3b9ef39f99" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جارٍ البدء…"</string>
+    <string name="native_bc198f2a7e49ad71" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s رموز مميزة"</string>
     <string name="native_bc19cec293228fb8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"خطأ في العميل"</string>
     <string name="native_bc1c94a6dfce1058" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تحقق من الجهاز الذي يطلب الوصول قبل منحه الإذن."</string>
     <string name="native_bc6618670f3e8a17" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ميكروفون Bluetooth LE"</string>
     <string name="native_bcb06651437caa15" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s %2$s"</string>
     <string name="native_bd08450d63406844" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تم تفعيل التشغيل الآلي."</string>
+    <string name="native_bd55fcb6169dfcca" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$sم"</string>
     <string name="native_bd6719b455bcc898" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Memory Get"</string>
+    <string name="native_bdb3e7b214dd3a8f" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s · %2$s"</string>
     <string name="native_bdb86505f8062d15" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مؤرشف"</string>
     <string name="native_bdc090ec61e3fcfc" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"إعادة التحميل"</string>
     <string name="native_bdff71b20b9cf392" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"البحث في عمليات الأتمتة"</string>
@@ -1124,6 +1196,7 @@
     <string name="native_bf7f8c7f88c30f4f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"كلمة مرور Gateway غير صالحة. أعد إدخالها أو أعد ضبط اتصال هذا Gateway."</string>
     <string name="native_bf8a9eab9e7e141b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"إعادة الاتصال"</string>
     <string name="native_bf9056d99b800ad1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"وقت ISO، مثل 2026-07-09T09:30:00Z"</string>
+    <string name="native_bfa5272988932130" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s أدوات"</string>
     <string name="native_bfcef86c38cb24d4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"رفض رد سابق هذه الموافقة بالفعل."</string>
     <string name="native_bfda026e6c598dde" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مرتبط"</string>
     <string name="native_bfe59c5dac8860ff" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"فتح %1$s"</string>
@@ -1132,6 +1205,7 @@
     <string name="native_c126029e43f5ff90" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"قائمة الانتظار دون اتصال ممتلئة (%1$s من الرسائل)؛ احذف العناصر قيد الانتظار أولًا."</string>
     <string name="native_c1272aab485f1172" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تتطلب البوابات العامة wss:// أو Tailscale Serve. يُسمح باستخدام ws:// مع localhost ومضيفي .local ومحاكي Android وعناوين IP الخاصة بشبكة LAN."</string>
     <string name="native_c12a06263b75eb23" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"وصّل Gateway لتحميل تفاصيل Skill."</string>
+    <string name="native_c13d4537c5210f5a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الوصول الكامل مطلوب"</string>
     <string name="native_c156b9eaf502aabc" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مستمع التنبيه"</string>
     <string name="native_c184b2ada7abc688" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"توسيع معاينة الرابط"</string>
     <string name="native_c18ee03d3906a488" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مسح البحث في المحادثات"</string>
@@ -1194,6 +1268,7 @@
     <string name="native_c8864e27d32de6c4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مشاركة الملف"</string>
     <string name="native_c8cdbd2d94cf9a22" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"في الوقت الفعلي"</string>
     <string name="native_c8e5998f6a3955c2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"API"</string>
+    <string name="native_c916463083257986" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw يعمل…"</string>
     <string name="native_c982ea227c415ce0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تحدّث أو أملِ باستخدام OpenClaw"</string>
     <string name="native_c98e54e459aa271e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مشاركة معلومات التطبيقات المثبَّتة؟"</string>
     <string name="native_c99cb171b25e1f69" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جارٍ تحميل الأتمتة…"</string>
@@ -1202,6 +1277,7 @@
     <string name="native_c9e9b24ded599d1b" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"اختر موفّر %1$s مدعومًا على Gateway"</string>
     <string name="native_ca184496974204a0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"غير متاح"</string>
     <string name="native_ca1fd4548524cb2e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مجلد فارغ"</string>
+    <string name="native_ca381c1e76e681b6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"فتح الإعدادات"</string>
     <string name="native_ca7981b46ecf2c17" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"إيقاف"</string>
     <string name="native_cab94aba84f97f7f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"أسلوب الكتابة"</string>
     <string name="native_cae7d57bc067a514" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"إيقاف"</string>
@@ -1211,6 +1287,7 @@
     <string name="native_cc5f45fb30a26e07" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"أداة التعرّف مشغولة"</string>
     <string name="native_cc721e25d73938a6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway المنزلي"</string>
     <string name="native_cc7a9a5cf8c4bc9d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"شغّل أمر الموافقة على Gateway"</string>
+    <string name="native_cc7b0c45e61379e6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الخدمة معطّلة"</string>
     <string name="native_cc925e3c97ac7a35" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تعذر تحميل مقترحات ورشة عمل Skills."</string>
     <string name="native_ccb452b3c43f6862" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"أطلعني على آخر مستجدات سلاسل محادثاتي الأخيرة في OpenClaw واقترح الخطوات التالية."</string>
     <string name="native_ccb4c324f516c633" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ليس الآن"</string>
@@ -1251,7 +1328,9 @@
     <string name="native_d1e9567da9a8a4b0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bash"</string>
     <string name="native_d2089be672953d11" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الرمز المميز"</string>
     <string name="native_d20f43f925e706ce" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"يمكن لوكيل OpenClaw المتصل استخدام إمكانات الجهاز التي تفعّلها. تابع فقط إذا كنت تثق بـ Gateway والوكيل الذي تتصل به."</string>
+    <string name="native_d221e1221dce05f9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جمع البرنقيل"</string>
     <string name="native_d23d9ee57a18a989" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تم منح الوصول إلى الصور المحددة أو الوصول الكامل إلى الصور."</string>
+    <string name="native_d25ec2aa4dcc5d8f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"منفّذ إمكانية الوصول"</string>
     <string name="native_d2b0d89c925920b4" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s من العناصر المفقودة"</string>
     <string name="native_d2b1f7d46a6d8c27" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"طي قائمة التحقق الخاصة بالخطة"</string>
     <string name="native_d2e42a0613646388" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"موافقة العقدة مطلوبة"</string>
@@ -1261,6 +1340,7 @@
     <string name="native_d31de1a5c5c8ba2a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"المتصفح"</string>
     <string name="native_d354ee936f59115e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"screen record"</string>
     <string name="native_d3974fd6d3b6c81f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"التشغيل معلّق"</string>
+    <string name="native_d3a99679bf6ce596" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"يتيح التمكين لـ OpenClaw مراقبة شاشات التطبيقات الأخرى والتحكم بها عند التفعيل. يلزم منح إذن إمكانية الوصول في Android."</string>
     <string name="native_d3e1c5f8a6e240fc" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"المصدر"</string>
     <string name="native_d3f75e24411053c4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ذكاء اصطناعي شخصي على أجهزتك"</string>
     <string name="native_d406ade2958cb5b6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Attach"</string>
@@ -1278,8 +1358,11 @@
     <string name="native_d6a99dbee26515ff" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ستظهر حدود المزوّد هنا عندما يبلّغ عنها Gateway."</string>
     <string name="native_d6bfda034106ecd6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مشكلة واحدة"</string>
     <string name="native_d6f931ca6d5f5b60" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"يتم الاحتفاظ بالمحادثات في \"%1$s\" ونقلها مجددًا إلى غير مجمّعة."</string>
+    <string name="native_d70604e843046137" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"موصى به"</string>
     <string name="native_d70b9e24bca26b40" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تاريخ الإنشاء"</string>
     <string name="native_d729f71dabe85839" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s/%2$s رموز مميزة نشطة"</string>
+    <string name="native_d7502bb4492cf924" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لا توجد نتيجة إجراء"</string>
+    <string name="native_d77561a220212ca8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الالتقاط"</string>
     <string name="native_d799abd9fa4df2a7" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s…"</string>
     <string name="native_d7f4aa113e00ae3c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"فتح تفاصيل المهارة"</string>
     <string name="native_d803ca340ecdfb72" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"فشل النطق: %1$s"</string>
@@ -1307,6 +1390,7 @@
     <string name="native_db0e960b68b57894" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تحتاج إلى موافقة"</string>
     <string name="native_db18382a249e0206" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"دردشة جديدة"</string>
     <string name="native_db259fef5236a070" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"اتصل بـ Gateway لتحديث مقترحات ورشة عمل Skills."</string>
+    <string name="native_db4fa8d71b5b2d1e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"فشل طلب OpenClaw."</string>
     <string name="native_dbb6cf817820de0b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الإذن مطلوب"</string>
     <string name="native_dc1c61f0f60f79a1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"راجع جاهزية الموفرين\nوالنماذج المكوّنة."</string>
     <string name="native_dc380888c4e2c776" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جارٍ التحميل"</string>
@@ -1318,6 +1402,7 @@
     <string name="native_dcd1d5223f73b3a9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الاسم"</string>
     <string name="native_dd167905de0defca" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الإصدار"</string>
     <string name="native_dd9d24965dbedc02" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Cron"</string>
+    <string name="native_de0c1db9a7704ebf" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"اربط هذا الهاتف بـ Gateway قبل فتح OpenClaw."</string>
     <string name="native_de2ae3a91cd112dd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"إزالة عبارة التنبيه"</string>
     <string name="native_de356e01822d360d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لم يتم قبول رمز الإعداد. أنشئ رمزًا جديدًا باستخدام openclaw qr."</string>
     <string name="native_de60af1d2f170722" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"14 رسالة · Android"</string>
@@ -1353,6 +1438,7 @@
     <string name="native_e2d0a54968ead24e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"حذف"</string>
     <string name="native_e2d1ec2328a8146f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"اطلب من OpenClaw استخدام إمكانات Android."</string>
     <string name="native_e31ab643c44f7a0e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"member"</string>
+    <string name="native_e32528b87d90d528" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جارٍ التحقق مما إذا كان هذا Gateway يدعم مساعد إعدادات OpenClaw."</string>
     <string name="native_e330f9d64f5ad4dd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"استخدم خيارات الاسترداد أدناه لإعادة الاتصال."</string>
     <string name="native_e3399e6ed762c252" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s message(s) need recovery. Re-enter anything you want to keep, then delete these rows."</string>
     <string name="native_e35e24d39a82aec2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تعذر تحميل القنوات."</string>
@@ -1394,6 +1480,7 @@
     <string name="native_ea93d6a262ecb87a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الأدوات"</string>
     <string name="native_ea9ce70b6decb8f3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مفتاح تبديل Gateway"</string>
     <string name="native_eaa2090d6781a821" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"إرسال SMS"</string>
+    <string name="native_eabec9fd718dea48" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw جاهز للمتابعة في دردشتك العادية."</string>
     <string name="native_eac0d0947c6fa808" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لم يتم العثور على أوامر"</string>
     <string name="native_eacf0905afcf79b6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لا يوجد تحديث للوحة الرسم بعد. اضغط لإعادة المحاولة."</string>
     <string name="native_eadb3e64a1178e71" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تحتاج الطرفية إلى Gateway متصل"</string>
@@ -1401,7 +1488,9 @@
     <string name="native_eaf3a81a6411115f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"عامل تصفية التطبيقات"</string>
     <string name="native_eb814be3ca3b78c0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الرئيسي"</string>
     <string name="native_ebd3cf6ef444b1ba" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$sk"</string>
+    <string name="native_ec1b5ed4436eb57f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway مطلوب"</string>
     <string name="native_ec5ba0abb717da87" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الوصول"</string>
+    <string name="native_ec84b5419c482103" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الحِزم: snapshot=%1$s foreground=%2$s"</string>
     <string name="native_eccee4ef94589b56" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"إعادة محاولة الاتصال"</string>
     <string name="native_ecf193ef6d31b8b1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"برنامج جدولة Cron متوقف."</string>
     <string name="native_ed077f3d8125d60d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"فتح"</string>
@@ -1417,6 +1506,7 @@
     <string name="native_eef430d88d7f78d2" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تعذر تحميل تفاصيل ClawHub لـ %1$s."</string>
     <string name="native_ef363b97b21cbfd6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الأدوات قيد التشغيل"</string>
     <string name="native_ef7b085f8c78687e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مشاركة الموقع الدقيق أثناء تفعيل الموقع."</string>
+    <string name="native_efac890edfc315fe" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mobile UI"</string>
     <string name="native_efb52e7172b77731" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"السمة"</string>
     <string name="native_eff936b9e59f7d1b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لا يزال Gateway يعرض هذه الموافقة على أنها معلّقة. راجعها قبل المحاولة مرة أخرى."</string>
     <string name="native_effe3c323ebd1339" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"إنهاء الملاحظة الصوتية"</string>
@@ -1427,6 +1517,7 @@
     <string name="native_f0aa6815d2a91947" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لا يستمع OpenClaw إلا عندما تبدأ المحادثة أو الإملاء."</string>
     <string name="native_f0ac2eabb5a584e3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مشاركة الخطوات والنشاط"</string>
     <string name="native_f0cae79a3657c1db" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"يتطلب الإعداد"</string>
+    <string name="native_f0d1fb4ac220db11" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"حدّث هذا Gateway لاستخدام مساعد إعدادات OpenClaw."</string>
     <string name="native_f113b3bd283e216c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"يتطلب اتصال Gateway هذا صلاحية operator.admin لتثبيت مهارات ClawHub."</string>
     <string name="native_f12b7a9412a51a7d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تم تطبيق المقترح."</string>
     <string name="native_f14cc3ede97361fd" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s قيد الانتظار"</string>
@@ -1457,6 +1548,7 @@
     <string name="native_f498742c19d9bbdb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لم يتم التسليم"</string>
     <string name="native_f4cc820d308495c4" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الحمولة · %1$s"</string>
     <string name="native_f4ccae29e1bb0c20" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"قيد التشغيل"</string>
+    <string name="native_f4ce53e24f86c82e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"استخدام المخالب"</string>
     <string name="native_f4db1e48476f6075" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"إنهاء"</string>
     <string name="native_f4e2076014711222" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"استخدام ثقة النظام"</string>
     <string name="native_f4ef7a41caa88dd1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لا يوجد مزوّدون جاهزون"</string>
@@ -1470,6 +1562,7 @@
     <string name="native_f616dfac9815faea" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"قم بتكوين %1$s على Gateway"</string>
     <string name="native_f61d0c645f00a4ed" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"امسح رمز QR ضوئيًا أو استخدم رمز الإعداد من OpenClaw Gateway لديك."</string>
     <string name="native_f6323e4e7ef2eea2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"نموذج أولي لنظام التصميم"</string>
+    <string name="native_f6b21a4dbcd8e593" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الغربلة"</string>
     <string name="native_f6d2b1ae590eb212" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">" · التحدث: مفعّل"</string>
     <string name="native_f6e82c3f136a6c5b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لا توجد بيانات استخدام بعد."</string>
     <string name="native_f6e94ebc86517b65" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"فشلت المحادثة قبل بدء التشغيل؛ حاول مرة أخرى."</string>
@@ -1488,17 +1581,22 @@
     <string name="native_f8cd133f0ea1031b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"العثور على المحادثات السابقة"</string>
     <string name="native_f90f3791049b995d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تصفّح المحادثات"</string>
     <string name="native_f92e2ad582c0e13f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جارٍ التحديث"</string>
+    <string name="native_f9777b12e8f49df2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جمع اللؤلؤ"</string>
     <string name="native_f991ae9cb081e1f3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"افتح الكاميرا وضع الرمز من openclaw qr داخل الإطار."</string>
     <string name="native_f9ea3f1540eaa584" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لا توجد أجهزة"</string>
     <string name="native_fa0ddca1671f4d61" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"إعادة توجيه الإشعارات"</string>
+    <string name="native_fa2acef20c1dd52f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"سأبقي هذه المحادثة منفصلة عن الدردشة العادية مع الوكيل."</string>
     <string name="native_fa4f9ee12d15faec" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تعود جلسة Gateway إلى الاتصال بالإنترنت. يُفترض أن تستقر اختصارات الوكلاء تلقائيًا بعد لحظات."</string>
     <string name="native_fa664b09af472ec4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جرّب بحثًا مختلفًا أو امسح الاستعلام الحالي."</string>
     <string name="native_fa8b0b30b80cd97e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"السماح بالموقع في الخلفية؟"</string>
+    <string name="native_fa91fd53f004be47" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الصعود إلى السطح"</string>
     <string name="native_faab0dc4735c1cfe" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"التمهيد"</string>
     <string name="native_fad13bdbe9a8cd0f" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s · %2$s · %3$s"</string>
     <string name="native_fae8fa3bc050ab7e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"إلغاء الملاحظة الصوتية"</string>
+    <string name="native_fb2c3707ff8cfcd8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"التمرير للخلف"</string>
     <string name="native_fb7ad4cc59155311" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"openclaw gateway"</string>
     <string name="native_fbba7592ca9da80e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تم إقران Gateway"</string>
+    <string name="native_fbd2ae2ba1642ca5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الانسلاخ"</string>
     <string name="native_fbf2d2bbaee06fed" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"نستمع إلى دورك التالي."</string>
     <string name="native_fc0646722204f965" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw يعمل"</string>
     <string name="native_fc374cd61c135a9e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"إدخال سجل"</string>

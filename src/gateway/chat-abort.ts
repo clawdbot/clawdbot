@@ -12,11 +12,12 @@ import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { projectLiveAssistantBufferedText } from "./live-chat-projector.js";
 import {
   createChatAbortMarker,
-  type ChatAbortMarker,
   type ChatRunPlanSnapshot,
+  type ChatRunState,
 } from "./server-chat-state.js";
 
 const DEFAULT_CHAT_RUN_ABORT_GRACE_MS = 60_000;
@@ -263,8 +264,7 @@ function normalizeActiveAgentId(agentId: string | undefined): string | undefined
  */
 export function resolveInFlightRunSnapshot(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
-  chatRunBuffers: Map<string, string>;
-  chatRunPlanSnapshots?: Map<string, ChatRunPlanSnapshot>;
+  chatRunState: Pick<ChatRunState, "runs">;
   requestedSessionKey: string;
   canonicalSessionKey: string;
   agentId?: string;
@@ -329,11 +329,12 @@ export function resolveInFlightRunSnapshot(params: {
   // only at completion — so there is nothing to show mid-run, but the client
   // should still adopt the run and show a `streaming` status (not idle) and
   // render the result cleanly when it lands.
-  const bufferedText = params.chatRunBuffers?.get(best.runId) ?? "";
+  const run = params.chatRunState.runs.get(best.runId);
+  const bufferedText = run?.buffer ?? "";
   const projected = projectLiveAssistantBufferedText(bufferedText, {
     suppressLeadFragments: true,
   });
-  const plan = params.chatRunPlanSnapshots?.get(best.runId);
+  const plan = run?.planSnapshot;
   return {
     runId: best.runId,
     text: projected.suppress ? "" : projected.text,
@@ -382,9 +383,7 @@ export function boundInFlightRunSnapshotForChatHistory(params: {
 
 export type ChatAbortOps = {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
-  chatRunBuffers: Map<string, string>;
-  chatAbortedRuns: Map<string, ChatAbortMarker>;
-  clearChatRunState: (runId: string) => void;
+  chatRunState: Pick<ChatRunState, "clearRun" | "getOrCreate" | "runs">;
   removeChatRun: (
     sessionId: string,
     clientRunId: string,
@@ -403,11 +402,7 @@ export type ChatAbortOps = {
 
 type TrackedChatRunAbortOps = {
   chatAbortControllers: ChatAbortOps["chatAbortControllers"];
-  chatRunBuffers: ChatAbortOps["chatRunBuffers"];
-  chatRunState: {
-    abortedRuns: ChatAbortOps["chatAbortedRuns"];
-    clearRun: ChatAbortOps["clearChatRunState"];
-  };
+  chatRunState: ChatAbortOps["chatRunState"];
   removeChatRun: ChatAbortOps["removeChatRun"];
   agentRunSeq: ChatAbortOps["agentRunSeq"];
   broadcast: ChatAbortOps["broadcast"];
@@ -421,9 +416,7 @@ export function abortTrackedChatRunById(
   return abortChatRunById(
     {
       chatAbortControllers: ops.chatAbortControllers,
-      chatRunBuffers: ops.chatRunBuffers,
-      chatAbortedRuns: ops.chatRunState.abortedRuns,
-      clearChatRunState: ops.chatRunState.clearRun,
+      chatRunState: ops.chatRunState,
       removeChatRun: ops.removeChatRun,
       agentRunSeq: ops.agentRunSeq,
       broadcast: ops.broadcast,
@@ -550,9 +543,9 @@ export function abortChatRunById(
     return { aborted: false };
   }
 
-  const bufferedText = ops.chatRunBuffers.get(runId);
+  const bufferedText = ops.chatRunState.runs.get(runId)?.buffer;
   const partialText = bufferedText && bufferedText.trim() ? bufferedText : undefined;
-  ops.chatAbortedRuns.set(runId, createChatAbortMarker());
+  ops.chatRunState.getOrCreate(runId).abortMarker = createChatAbortMarker();
   if (stopReason) {
     active.abortStopReason = stopReason;
   }
@@ -570,7 +563,7 @@ export function abortChatRunById(
     // Approval persistence failure must not prevent the requested run abort.
   }
   active.controller.abort(createChatAbortSignalReason(stopReason));
-  ops.clearChatRunState(runId);
+  ops.chatRunState.clearRun(runId);
   const removed = ops.removeChatRun(runId, runId, sessionKey);
   if (active.controlUiVisible !== false) {
     broadcastChatAborted(ops, {
@@ -634,19 +627,28 @@ export function updateChatRunProvider(
 export function abortChatRunsForProvider(
   ops: ChatAbortOps,
   params: {
+    cfg: OpenClawConfig;
     providerId: string;
+    agentId?: string;
     stopReason?: string;
   },
 ): { runIds: string[] } {
   const providerId = normalizeProviderIdForActiveRun(params.providerId);
+  const agentId = normalizeActiveAgentId(params.agentId);
+  const defaultAgentId = resolveDefaultAgentId(params.cfg);
   if (!providerId) {
     return { runIds: [] };
   }
-  const matches = [...ops.chatAbortControllers.entries()].filter(
-    ([, entry]) =>
-      normalizeProviderIdForActiveRun(entry.authProviderId) === providerId ||
-      normalizeProviderIdForActiveRun(entry.providerId) === providerId,
-  );
+  const matches = [...ops.chatAbortControllers.entries()].filter(([, entry]) => {
+    const entryAgentId = normalizeActiveAgentId(
+      entry.agentId ?? parseAgentSessionKey(entry.sessionKey)?.agentId ?? defaultAgentId,
+    );
+    return (
+      (!agentId || entryAgentId === agentId) &&
+      (normalizeProviderIdForActiveRun(entry.authProviderId) === providerId ||
+        normalizeProviderIdForActiveRun(entry.providerId) === providerId)
+    );
+  });
   const runIds: string[] = [];
   for (const [runId, entry] of matches) {
     const result = abortChatRunById(ops, {

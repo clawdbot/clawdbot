@@ -10,6 +10,7 @@ describe("config route data", () => {
       }),
     ).toEqual({
       section: "browser",
+      advanced: false,
       targetBlockId: "config-section-browser/profiles",
     });
   });
@@ -18,6 +19,15 @@ describe("config route data", () => {
     expect(configTargetIdFromHash("#%")).toBeNull();
     expect(configRouteData({ search: "", hash: "#%" })).toEqual({
       section: null,
+      advanced: false,
+      targetBlockId: null,
+    });
+  });
+
+  it("preserves advanced search navigation intent", () => {
+    expect(configRouteData({ search: "?section=gateway&advanced=1", hash: "" })).toEqual({
+      section: "gateway",
+      advanced: true,
       targetBlockId: null,
     });
   });

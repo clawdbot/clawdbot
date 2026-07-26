@@ -7,9 +7,10 @@
   "dependencies": {
     "@grammyjs/runner": "2.0.3",
     "@grammyjs/transformer-throttler": "1.2.1",
-    "grammy": "1.44.0",
-    "typebox": "1.3.3",
-    "undici": "8.5.0"
+    "grammy": "1.45.1",
+    "typebox": "1.3.6",
+    "undici": "8.6.0",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
@@ -32,7 +33,9 @@
           ]
         }
       },
-      "approvalFlags": ["native"],
+      "approvalFlags": [
+        "native"
+      ],
       "label": "Telegram",
       "selectionLabel": "Telegram (Bot API)",
       "detailLabel": "Telegram Bot",
@@ -46,6 +49,27 @@
         "https://openclaw.ai"
       ],
       "markdownCapable": true,
+      "setup": {
+        "fields": [
+          {
+            "key": "token",
+            "kind": "string",
+            "sensitive": true,
+            "cli": { "flags": "--token <token>", "description": "Telegram bot token" }
+          },
+          {
+            "key": "tokenFile",
+            "kind": "string",
+            "sensitive": true,
+            "cli": { "flags": "--token-file <path>", "description": "Telegram bot token file" }
+          },
+          {
+            "key": "useEnv",
+            "kind": "boolean",
+            "cli": { "flags": "--use-env", "description": "Use TELEGRAM_BOT_TOKEN" }
+          }
+        ]
+      },
       "commands": {
         "nativeCommandsAutoEnabled": true,
         "nativeSkillsAutoEnabled": true

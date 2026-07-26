@@ -22,8 +22,9 @@ type WorkboardPageTestElement = HTMLElement & {
 function contextWithWorkboard(workboard: WorkboardCapability): ApplicationContext {
   const snapshot: ApplicationGatewaySnapshot = {
     client: null,
-    connected: false,
-    reconnecting: false,
+    phase: "stopped",
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: null,
     sessionKey: "main",
@@ -96,7 +97,7 @@ describe("WorkboardPage lifecycle", () => {
       eventListener = listener;
       return () => undefined;
     };
-    context.gateway.snapshot.connected = true;
+    context.gateway.snapshot.phase = "connected";
     context.gateway.snapshot.client = { request: vi.fn() } as never;
     const page = document.createElement("openclaw-workboard-page") as WorkboardPageTestElement;
     page.context = context;
@@ -118,7 +119,7 @@ describe("WorkboardPage lifecycle", () => {
   it("forces one canonical reload when the live client is newly installed", async () => {
     const workboard = createWorkboardCapability();
     const context = contextWithWorkboard(workboard);
-    context.gateway.snapshot.connected = true;
+    context.gateway.snapshot.phase = "connected";
     context.gateway.snapshot.client = { request: vi.fn() } as never;
     configureLiveRefresh.mockReturnValueOnce(true);
     const page = document.createElement("openclaw-workboard-page") as WorkboardPageTestElement;
@@ -139,7 +140,7 @@ describe("WorkboardPage lifecycle", () => {
       snapshotListener = listener;
       return () => undefined;
     };
-    context.gateway.snapshot.connected = true;
+    context.gateway.snapshot.phase = "connected";
     context.gateway.snapshot.client = { request: vi.fn() } as never;
     const page = document.createElement("openclaw-workboard-page") as WorkboardPageTestElement;
     page.context = context;
@@ -147,7 +148,7 @@ describe("WorkboardPage lifecycle", () => {
     await page.updateComplete;
     vi.clearAllMocks();
 
-    snapshotListener?.({ ...context.gateway.snapshot, connected: false, client: null });
+    snapshotListener?.({ ...context.gateway.snapshot, phase: "stopped", client: null });
 
     expect(stopLiveRefresh).toHaveBeenCalledWith(workboard);
     expect(stopLifecycleRefresh).toHaveBeenCalledWith(workboard);

@@ -51,13 +51,13 @@ docker_build_args_need_buildx() {
 docker_build_transient_failure() {
   local log_file="$1"
   grep -Eqi \
-    'frontend grpc server closed unexpectedly|failed to dial gRPC|no active session|buildkit.*connection.*closed|rpc error: code = Unavailable|failed to fetch oauth token:.*(5[0-9][0-9]|Gateway Timeout)|unexpected status from .*: 5[0-9][0-9]|TLS handshake timeout|net/http: TLS handshake timeout|i/o timeout|connection reset by peer' \
+    'frontend grpc server closed unexpectedly|failed to dial gRPC|no active session|buildkit.*connection.*closed|rpc error: code = Unavailable|failed to fetch oauth token:.*(5[0-9][0-9]|Gateway Timeout)|unexpected status from .*: 5[0-9][0-9]|TLS handshake timeout|net/http: TLS handshake timeout|ConnectTimeoutError|Connect Timeout Error|i/o timeout|connection reset by peer' \
     "$log_file"
 }
 
 docker_build_resource_exhausted_failure() {
   local log_file="$1"
-  grep -Eqi 'ResourceExhausted|cannot allocate memory|out of memory|exit code: 137|signal: killed|Killed' "$log_file"
+  grep -Eqi 'ResourceExhausted|cannot allocate memory|out of memory|exit code: 137|signal: killed|fatal error: killed signal terminated program|(^|#[0-9]+ [0-9.]+ )Killed[[:space:]]*$' "$log_file"
 }
 
 docker_build_print_resource_exhausted_hint() {

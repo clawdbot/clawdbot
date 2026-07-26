@@ -7,6 +7,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { AgentsListResult, SkillStatusEntry, SkillStatusReport } from "../../api/types.ts";
+import "../../components/agent-select-registration.ts";
 import { icons } from "../../components/icons.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import "../../components/modal-dialog.ts";
@@ -20,6 +21,7 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { clampText } from "../../lib/format.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import { groupSkills, type SkillGroup } from "../../lib/skills-grouping.ts";
@@ -203,13 +205,6 @@ function verdictStatusKind(
   return status === "pending" || status === "not-run" ? "muted" : "warn";
 }
 
-type SkillsAgentOption = AgentsListResult["agents"][number];
-
-function agentOptionLabel(agent: SkillsAgentOption, defaultId: string | undefined): string {
-  const baseName = agent.identity?.name?.trim() || agent.name?.trim() || agent.id;
-  return agent.id === defaultId ? t("skillsPage.defaultAgent", { name: baseName }) : baseName;
-}
-
 function skillControlsLocked(props: SkillsProps): boolean {
   return props.loading || props.operation !== null;
 }
@@ -310,9 +305,12 @@ function renderSkillsToolbar(
   statusCounts: Record<SkillsStatusFilter, number>,
   shownCount: number,
 ) {
-  const agents = props.agentsList?.agents ?? [];
-  const selectedAgentId =
-    props.selectedAgentId ?? props.agentsList?.defaultId ?? agents[0]?.id ?? "";
+  const agents = listSelectableAgents(props.agentsList?.agents ?? []);
+  const selectedAgentId = agents.some((agent) => agent.id === props.selectedAgentId)
+    ? (props.selectedAgentId ?? "")
+    : agents.some((agent) => agent.id === props.agentsList?.defaultId)
+      ? (props.agentsList?.defaultId ?? "")
+      : (agents[0]?.id ?? "");
   return html`
     <div class="plugins-toolbar plugins-toolbar--fields">
       ${renderSettingsSegmented<SkillsStatusFilter>({
@@ -327,24 +325,28 @@ function renderSkillsToolbar(
       })}
       ${agents.length > 0
         ? html`
-            <label class="plugins-field skills-toolbar__agent">
+            <div class="plugins-field skills-toolbar__agent">
               <span>${t("usage.filters.agent")}</span>
-              <select
+              <openclaw-agent-select
+                class="agent-select--settings"
                 name="skills-agent"
-                class="settings-select"
+                .options=${agents.map((agent) => {
+                  const label = normalizeAgentLabel(agent);
+                  return {
+                    value: agent.id,
+                    label:
+                      agent.id === props.agentsList?.defaultId
+                        ? t("skillsPage.defaultAgent", { name: label })
+                        : label,
+                    agent,
+                  };
+                })}
                 .value=${selectedAgentId}
-                ?disabled=${skillControlsLocked(props) || !props.connected || agents.length < 2}
-                @change=${(e: Event) => props.onAgentChange((e.target as HTMLSelectElement).value)}
-              >
-                ${agents.map(
-                  (agent) => html`
-                    <option value=${agent.id} ?selected=${agent.id === selectedAgentId}>
-                      ${agentOptionLabel(agent, props.agentsList?.defaultId)}
-                    </option>
-                  `,
-                )}
-              </select>
-            </label>
+                .accessibleLabel=${t("usage.filters.agent")}
+                .disabled=${skillControlsLocked(props) || !props.connected || agents.length < 2}
+                .onSelect=${props.onAgentChange}
+              ></openclaw-agent-select>
+            </div>
           `
         : nothing}
       <label class="plugins-field skills-toolbar__search">
@@ -439,18 +441,24 @@ function renderClawHubResults(props: SkillsProps) {
     return renderSettingsEmpty(t("skillsPage.noClawHubResults"));
   }
   return html`
-    ${results.map(
-      (r) => html`
+    ${results.map((r) => {
+      const iconUrl = safeExternalHref(r.icon ?? undefined);
+      return html`
         <div class="settings-row plugins-item plugins-item--clickable">
           <button
             type="button"
-            class="settings-row__text plugins-item__detail-button"
+            class="settings-row__text plugins-item__detail-button clawhub-skill-result__button"
             aria-label=${t("skillsPage.openDetails", { name: r.displayName })}
             @click=${() => props.onClawHubDetailOpen(r.slug)}
           >
-            <span class="settings-row__title">${r.displayName}</span>
-            <span class="settings-row__desc">
-              ${r.summary ? clampText(r.summary, 120) : r.slug}
+            ${iconUrl
+              ? html`<img class="clawhub-skill-icon" src=${iconUrl} alt="" loading="lazy" />`
+              : nothing}
+            <span class="clawhub-skill-result__copy">
+              <span class="settings-row__title">${r.displayName}</span>
+              <span class="settings-row__desc">
+                ${r.summary ? clampText(r.summary, 120) : r.slug}
+              </span>
             </span>
           </button>
           <div class="settings-row__control">
@@ -466,13 +474,16 @@ function renderClawHubResults(props: SkillsProps) {
             </button>
           </div>
         </div>
-      `,
-    )}
+      `;
+    })}
   `;
 }
 
 function renderClawHubDetailDialog(props: SkillsProps) {
   const detail = props.clawhubDetail;
+  const skillIconUrl = safeExternalHref(detail?.skill?.icon ?? undefined);
+  const profileImageUrl = skillIconUrl ? null : safeExternalHref(detail?.owner?.image ?? undefined);
+  const detailImageUrl = skillIconUrl ?? profileImageUrl;
 
   return html`
     <openclaw-modal-dialog
@@ -482,8 +493,19 @@ function renderClawHubDetailDialog(props: SkillsProps) {
     >
       <div class="md-preview-dialog__panel">
         <div class="md-preview-dialog__header">
-          <div class="md-preview-dialog__title">
-            ${detail?.skill?.displayName ?? props.clawhubDetailSlug}
+          <div class="clawhub-skill-detail__identity">
+            ${detailImageUrl
+              ? html`<img
+                  class="clawhub-skill-icon clawhub-skill-icon--detail ${profileImageUrl
+                    ? "clawhub-skill-icon--profile"
+                    : ""}"
+                  src=${detailImageUrl}
+                  alt=""
+                />`
+              : nothing}
+            <div class="md-preview-dialog__title">
+              ${detail?.skill?.displayName ?? props.clawhubDetailSlug}
+            </div>
           </div>
           <button class="btn btn--sm" @click=${props.onClawHubDetailClose}>
             ${t("skillsPage.close")}
@@ -585,8 +607,11 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
   const active = activeSkillMutation(props, skill.skillKey);
   const editValue = props.edits[skill.skillKey] ?? "";
   const message = props.messages[skill.skillKey] ?? null;
-  const installOption = skill.install[0];
-  const canInstall = installOption !== undefined && skill.missing.bins.length > 0;
+  const missingBins = new Set([...skill.missing.bins, ...skill.missing.anyBins]);
+  // An installer must provide a currently missing binary, not an unrelated dependency.
+  const installOption = skill.install.find((option) =>
+    option.bins.some((bin) => missingBins.has(bin)),
+  );
   const showBundledBadge = Boolean(skill.bundled && skill.source !== "openclaw-bundled");
   const missing = computeSkillMissing(skill);
   const reasons = computeSkillReasons(skill);
@@ -676,7 +701,7 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
             <span style="font-size: 13px; font-weight: 500;">
               ${skill.disabled ? t("skillsPage.disabled") : t("skillsPage.enabled")}
             </span>
-            ${canInstall
+            ${installOption
               ? html`<button
                   class="btn"
                   ?disabled=${locked}
@@ -777,7 +802,7 @@ function renderInstalledClawHubOverview(
   return html`
     <div
       class="callout"
-      style="display: grid; gap: 8px; border-color: var(--border); background: var(--panel-2);"
+      style="display: grid; gap: 8px; border-color: var(--border); background: var(--panel-strong);"
     >
       <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
         <span class="chip ${verdictChipClass(verdict)}">${verdictLabel(verdict)}</span>

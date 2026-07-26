@@ -12,7 +12,7 @@ type CopilotUserInputHandler = NonNullable<SessionConfig["onUserInputRequest"]>;
 type CopilotUserInputRequest = Parameters<CopilotUserInputHandler>[0];
 type CopilotUserInputResponse = Awaited<ReturnType<CopilotUserInputHandler>>;
 
-type CopilotUserInputBridge = {
+export type CopilotUserInputBridge = {
   onUserInputRequest: CopilotUserInputHandler;
   cancelPending: () => void;
 };

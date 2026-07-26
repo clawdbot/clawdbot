@@ -370,6 +370,7 @@ prepare_gates() {
   enter_worktree "$pr" false
 
   mark_pr_operation_side_effects_if_available
+  refresh_prep_branch_for_reviewed_head "$pr"
   checkout_prep_branch "$pr"
   require_artifact .local/pr-meta.env
   # shellcheck disable=SC1091

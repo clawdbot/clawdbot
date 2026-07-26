@@ -30,14 +30,14 @@ describe("collectTtsApiKeyAssignments", () => {
 
     collectTtsApiKeyAssignments({
       tts,
-      pathPrefix: "messages.tts",
+      pathPrefix: "tts",
       defaults: undefined,
       context,
     });
 
     expect(context.assignments).toHaveLength(1);
     expect(context.assignments[0]).toMatchObject({
-      path: "messages.tts.providers.elevenlabs.apiKey",
+      path: "tts.providers.elevenlabs.apiKey",
       expected: "string",
       ownerKind: "capability",
       ownerId: "tts",

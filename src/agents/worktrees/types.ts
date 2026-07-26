@@ -44,10 +44,13 @@ export type ManagedWorktreeBranch = {
   kind: "local" | "remote";
 };
 
+type ManagedWorktreeRepositoryStatus = "git" | "not_git" | "unavailable";
+
 export type ManagedWorktreeBranchesResult = {
   branches: ManagedWorktreeBranch[];
   defaultBranch?: string;
   headBranch?: string;
+  repositoryStatus?: ManagedWorktreeRepositoryStatus;
 };
 
 export type ManagedWorktreeGcResult = {

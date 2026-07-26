@@ -1,9 +1,9 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
-import { resolveSecretPlanTargetByPath } from "openclaw/plugin-sdk/secret-ref-runtime";
+import { pluginSecretRefSetup } from "openclaw/plugin-sdk/secret-ref-runtime";
+import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { parseVaultSecretId } from "../vault-secret-id.js";
 
@@ -17,22 +17,6 @@ type CommandLike = {
     defaultValue?: string[],
   ): CommandLike;
   action<TOptions>(fn: (options: TOptions) => void | Promise<void>): CommandLike;
-};
-
-type SecretRef = {
-  source: "exec";
-  provider: string;
-  id: string;
-};
-
-type SecretsPlanTarget = {
-  type: string;
-  path: string;
-  pathSegments: string[];
-  agentId?: string;
-  providerId?: string;
-  accountId?: string;
-  ref: SecretRef;
 };
 
 type VaultExecProviderConfig = {
@@ -52,15 +36,6 @@ type ConfigTargetSecretMapping = {
   path: string;
   agentId?: string;
   secretId: string;
-};
-
-type SecretsApplyPlan = {
-  version: 1;
-  protocolVersion: 1;
-  generatedAt: string;
-  generatedBy: "manual";
-  providerUpserts: Record<string, VaultExecProviderConfig>;
-  targets: SecretsPlanTarget[];
 };
 
 type RegisterVaultCommandsParams = {
@@ -94,9 +69,6 @@ type ProviderStatus = {
 };
 
 const VAULT_PROVIDER_ALIAS = "vault";
-const SECRET_PROVIDER_ALIAS_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
-const MODEL_PROVIDER_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
-const FORBIDDEN_PATH_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
 
 function writeLine(message = ""): void {
   process.stdout.write(`${message}\n`);
@@ -114,29 +86,8 @@ function normalizeOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function parseDotPath(pathname: string): string[] {
-  return pathname
-    .split(".")
-    .map((segment) => segment.trim())
-    .filter((segment) => segment.length > 0);
-}
-
-function toDotPath(segments: string[]): string {
-  return segments.join(".");
-}
-
 function assertValidProviderAlias(value: string): void {
-  if (!SECRET_PROVIDER_ALIAS_PATTERN.test(value)) {
-    throw new Error(
-      `Invalid provider alias "${value}". Use lowercase letters, numbers, underscores, or hyphens.`,
-    );
-  }
-}
-
-function assertValidModelProviderId(label: string, value: string): void {
-  if (!MODEL_PROVIDER_ID_PATTERN.test(value)) {
-    throw new Error(`Invalid ${label} model provider id: ${value}`);
-  }
+  pluginSecretRefSetup.assertValidProviderAlias(value);
 }
 
 function assertValidVaultSecretId(label: string, value: string): void {
@@ -202,15 +153,6 @@ function resolveStatusProviderAlias(config: OpenClawConfig, requestedAlias?: str
   return configuredAliases[0] ?? VAULT_PROVIDER_ALIAS;
 }
 
-async function pathExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function resolverScriptPathCandidates(baseUrl: string): [string, string] {
   return [
     fileURLToPath(new URL("../vault-secret-ref-resolver.js", baseUrl)),
@@ -241,79 +183,11 @@ function buildProviderConfig(): VaultExecProviderConfig {
   };
 }
 
-function createModelApiKeyTarget(params: {
-  providerAlias: string;
-  providerId: string;
-  secretId: string;
-}): SecretsPlanTarget {
-  assertValidModelProviderId("target", params.providerId);
-  return {
-    type: "models.providers.apiKey",
-    path: `models.providers.${params.providerId}.apiKey`,
-    pathSegments: ["models", "providers", params.providerId, "apiKey"],
-    providerId: params.providerId,
-    ref: {
-      source: "exec",
-      provider: params.providerAlias,
-      id: params.secretId,
-    },
-  };
-}
-
 function parseTargetSpecifier(value: string): {
   path: string;
   agentId?: string;
 } {
-  if (value.startsWith("auth-profiles:")) {
-    const remainder = value.slice("auth-profiles:".length);
-    const separatorIndex = remainder.indexOf(":");
-    const agentId = separatorIndex >= 0 ? remainder.slice(0, separatorIndex) : "";
-    const targetPath = separatorIndex >= 0 ? remainder.slice(separatorIndex + 1) : "";
-    if (!agentId || !targetPath) {
-      throw new Error(`Invalid --target auth-profiles target: ${value}`);
-    }
-    return { agentId, path: targetPath };
-  }
-  return {
-    path: value.startsWith("openclaw:") ? value.slice("openclaw:".length) : value,
-  };
-}
-
-function createConfigSecretTarget(params: {
-  providerAlias: string;
-  path: string;
-  agentId?: string;
-  secretId: string;
-}): SecretsPlanTarget {
-  const pathSegments = parseDotPath(params.path);
-  const normalizedPath = toDotPath(pathSegments);
-  if (
-    pathSegments.length === 0 ||
-    normalizedPath !== params.path ||
-    pathSegments.some((segment) => FORBIDDEN_PATH_SEGMENTS.has(segment))
-  ) {
-    throw new Error(`Invalid --target config path: ${params.path}`);
-  }
-  const resolved = resolveSecretPlanTargetByPath({
-    configFile: params.agentId ? "auth-profiles.json" : "openclaw.json",
-    pathSegments,
-  });
-  if (!resolved) {
-    throw new Error(`Unknown or unsupported Vault setup target path: ${params.path}`);
-  }
-  return {
-    type: resolved.targetType,
-    path: normalizedPath,
-    pathSegments,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    ...(resolved.providerId ? { providerId: resolved.providerId } : {}),
-    ...(resolved.accountId ? { accountId: resolved.accountId } : {}),
-    ref: {
-      source: "exec",
-      provider: params.providerAlias,
-      id: params.secretId,
-    },
-  };
+  return pluginSecretRefSetup.parseTargetSpecifier("Vault", value);
 }
 
 function parseProviderKeyMappings(values: string[] | undefined): ProviderSecretMapping[] {
@@ -326,7 +200,7 @@ function parseProviderKeyMappings(values: string[] | undefined): ProviderSecretM
     }
     const providerId = value.slice(0, separator).trim();
     const secretId = value.slice(separator + 1).trim();
-    assertValidModelProviderId("--provider-key", providerId);
+    pluginSecretRefSetup.assertValidModelProviderId("--provider-key", providerId);
     assertValidVaultSecretId(`--provider-key ${providerId}`, secretId);
     return { providerId, secretId };
   });
@@ -379,53 +253,13 @@ function collectProviderSecrets(options: {
   return providerSecrets;
 }
 
-function assertNoDuplicatePlanTargets(targets: SecretsPlanTarget[]): void {
-  const seen = new Set<string>();
-  for (const target of targets) {
-    const key = target.agentId
-      ? `auth-profiles:${target.agentId}:${target.path}`
-      : `openclaw:${target.path}`;
-    if (seen.has(key)) {
-      throw new Error(`Duplicate secret target path in Vault setup: ${target.path}`);
-    }
-    seen.add(key);
-  }
-}
-
 function buildPlan(params: {
   providerAlias: string;
   providerConfig: VaultExecProviderConfig;
   providerSecrets: ProviderSecretMapping[];
   configTargetSecrets?: ConfigTargetSecretMapping[];
-}): SecretsApplyPlan {
-  const targets = [
-    ...params.providerSecrets.map((entry) =>
-      createModelApiKeyTarget({
-        providerAlias: params.providerAlias,
-        providerId: entry.providerId,
-        secretId: entry.secretId,
-      }),
-    ),
-    ...(params.configTargetSecrets ?? []).map((entry) =>
-      createConfigSecretTarget({
-        providerAlias: params.providerAlias,
-        path: entry.path,
-        ...(entry.agentId ? { agentId: entry.agentId } : {}),
-        secretId: entry.secretId,
-      }),
-    ),
-  ];
-  assertNoDuplicatePlanTargets(targets);
-  return {
-    version: 1,
-    protocolVersion: 1,
-    generatedAt: new Date().toISOString(),
-    generatedBy: "manual",
-    providerUpserts: {
-      [params.providerAlias]: params.providerConfig,
-    },
-    targets,
-  };
+}) {
+  return pluginSecretRefSetup.buildPlan({ productName: "Vault", ...params });
 }
 
 async function promptOptionalSecretId(label: string): Promise<string | undefined> {
@@ -525,7 +359,10 @@ async function runSetup(options: SetupOptions): Promise<void> {
   const planPath =
     normalizeOptionalString(options.planOut) ??
     path.join(resolvePreferredOpenClawTmpDir(), `openclaw-vault-secrets-${process.pid}.json`);
-  await fs.writeFile(planPath, `${JSON.stringify(plan, null, 2)}\n`, "utf8");
+  await pluginSecretRefSetup.writePlanFile({
+    planPath,
+    content: `${JSON.stringify(plan, null, 2)}\n`,
+  });
   writeLine(`Plan written to ${planPath}`);
   writeLine(`Targets: ${plan.targets.length}`);
   writeLine("");

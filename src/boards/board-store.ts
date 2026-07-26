@@ -58,6 +58,7 @@ type StoredBoard = {
 
 const BOARD_MAX_WIDGETS = 48;
 const BOARD_MAX_WIDGET_HTML_BYTES = 256 * 1024;
+const BOARD_MAX_WIDGET_PLUGIN_PROPS_BYTES = 8 * 1024;
 
 function emptyBoardSnapshot(sessionKey: string): BoardSnapshot {
   return { sessionKey, revision: 0, tabs: [], widgets: [] };
@@ -70,6 +71,7 @@ export function cloneBoardSnapshot(snapshot: BoardSnapshot): BoardSnapshot {
     tabs: snapshot.tabs.map((tab) => ({ ...tab })),
     widgets: snapshot.widgets.map((widget) => ({
       ...widget,
+      ...(widget.props !== undefined ? { props: structuredClone(widget.props) } : {}),
       ...(widget.declaredSummary !== undefined
         ? { declaredSummary: [...widget.declaredSummary] }
         : {}),
@@ -93,7 +95,7 @@ function createBoardWidgetDocument(
   grantState: BoardWidgetHtmlDocument["grantState"],
   declared: BoardWidgetDeclared | undefined,
   instanceId: string,
-): BoardWidgetDocument {
+): BoardWidgetDocument | undefined {
   if (content.kind === "html") {
     return {
       html: content.html,
@@ -103,6 +105,9 @@ function createBoardWidgetDocument(
       grantState,
       ...(declared ? { declared } : {}),
     };
+  }
+  if (content.kind === "plugin") {
+    return undefined;
   }
   return {
     descriptor: { ...content.descriptor },
@@ -124,7 +129,10 @@ export function createBoardDeclaredSummary(
   return lines.length > 0 ? lines : undefined;
 }
 
-type BoardWidgetGrantScope = { kind: "html" } | { kind: "mcp-app"; serverName: string };
+type BoardWidgetGrantScope =
+  | { kind: "html" }
+  | { kind: "mcp-app"; serverName: string }
+  | { kind: "plugin" };
 
 function grantScopeMatches(
   previous: BoardWidgetDocument | undefined,
@@ -138,12 +146,33 @@ function grantScopeMatches(
   const next: BoardWidgetGrantScope =
     content.kind === "html"
       ? { kind: "html" }
-      : { kind: "mcp-app", serverName: content.descriptor.serverName };
+      : content.kind === "mcp-app"
+        ? { kind: "mcp-app", serverName: content.descriptor.serverName }
+        : { kind: "plugin" };
   return (
     prior === undefined ||
     (prior.kind === "html" && next.kind === "html") ||
     (prior.kind === "mcp-app" && next.kind === "mcp-app" && prior.serverName === next.serverName)
   );
+}
+
+function validatePluginContent(params: BoardWidgetMaterializedPutParams): void {
+  if (params.content.kind !== "plugin") {
+    return;
+  }
+  if (params.declared !== undefined) {
+    throw new BoardValidationError(
+      "invalid_operation",
+      "trusted plugin widgets do not accept sandbox capability declarations",
+    );
+  }
+  const propsBytes = Buffer.byteLength(JSON.stringify(params.content.props ?? {}), "utf8");
+  if (propsBytes > BOARD_MAX_WIDGET_PLUGIN_PROPS_BYTES) {
+    throw new BoardValidationError(
+      "invalid_operation",
+      `board plugin widget props exceed ${BOARD_MAX_WIDGET_PLUGIN_PROPS_BYTES} UTF-8 bytes`,
+    );
+  }
 }
 
 export function createBoardWidgetPutSnapshot(
@@ -155,6 +184,7 @@ export function createBoardWidgetPutSnapshot(
     instanceId: string;
   },
 ): BoardSnapshot {
+  validatePluginContent(params);
   if (
     params.content.kind === "html" &&
     Buffer.byteLength(params.content.html, "utf8") > BOARD_MAX_WIDGET_HTML_BYTES
@@ -181,7 +211,8 @@ export function createBoardWidgetPutSnapshot(
   }
   const size = BOARD_SIZE_PRESETS[(params.placement?.size ?? "md") as BoardSize];
   const widgetRevision = (existing?.revision ?? 0) + 1;
-  const declared = normalizeBoardWidgetDeclared(params.declared);
+  const declared =
+    params.content.kind === "plugin" ? undefined : normalizeBoardWidgetDeclared(params.declared);
   const declaredSummary = createBoardDeclaredSummary(declared);
   const contentSha256 =
     params.content.kind === "html"
@@ -207,18 +238,39 @@ export function createBoardWidgetPutSnapshot(
           ? { title: existing.title }
           : {}),
       contentKind: params.content.kind,
+      ...(params.presentation !== undefined
+        ? { presentation: params.presentation }
+        : existing?.presentation !== undefined
+          ? { presentation: existing.presentation }
+          : {}),
+      ...(params.heightMode !== undefined
+        ? { heightMode: params.heightMode }
+        : existing?.heightMode !== undefined
+          ? { heightMode: existing.heightMode }
+          : {}),
+      ...(params.content.kind === "plugin"
+        ? {
+            pluginKind: params.content.pluginKind,
+            ...(params.content.props !== undefined
+              ? { props: structuredClone(params.content.props) }
+              : {}),
+          }
+        : {}),
       sizeW: params.placement?.size ? size.sizeW : (existing?.sizeW ?? size.sizeW),
       sizeH: params.placement?.size ? size.sizeH : (existing?.sizeH ?? size.sizeH),
       position: existing?.position ?? layout.widgets.length,
-      grantState: preservesGrant
-        ? "granted"
-        : params.content.kind === "mcp-app" && !params.content.interactive
+      grantState:
+        params.content.kind === "plugin"
           ? "none"
-          : declaredSummary || params.content.kind === "mcp-app"
-            ? "pending"
-            : "none",
+          : preservesGrant
+            ? "granted"
+            : params.content.kind === "mcp-app" && !params.content.interactive
+              ? "none"
+              : declaredSummary || params.content.kind === "mcp-app"
+                ? "pending"
+                : "none",
       revision: widgetRevision,
-      instanceId: context.instanceId,
+      ...(params.content.kind !== "plugin" ? { instanceId: context.instanceId } : {}),
       ...(declaredSummary ? { declaredSummary } : {}),
       ...(declared ? { declared } : {}),
     },
@@ -331,16 +383,18 @@ export class InMemoryBoardStore implements BoardStore {
       (widget) => widget.name === canonicalParams.name,
     )!.revision;
     const widget = snapshot.widgets.find((candidate) => candidate.name === canonicalParams.name)!;
-    documents.set(
-      canonicalParams.name,
-      createBoardWidgetDocument(
-        canonicalParams.content,
-        widgetRevision,
-        widget.grantState,
-        declared,
-        instanceId,
-      ),
+    const document = createBoardWidgetDocument(
+      canonicalParams.content,
+      widgetRevision,
+      widget.grantState,
+      declared,
+      instanceId,
     );
+    if (document) {
+      documents.set(canonicalParams.name, document);
+    } else {
+      documents.delete(canonicalParams.name);
+    }
     this.boards.set(canonicalParams.sessionKey, { snapshot, documents });
     return cloneBoardSnapshot(snapshot);
   }

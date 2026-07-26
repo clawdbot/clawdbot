@@ -43,6 +43,7 @@ async function executeWidget(params: {
   name?: string;
   tab?: string;
   size?: "sm" | "md" | "lg" | "xl" | "full";
+  presentation?: "card" | "full-bleed" | "frameless";
   after?: string;
   capabilities?: { netOrigins?: string[]; tools?: string[] };
 }) {
@@ -60,6 +61,7 @@ async function executeWidget(params: {
     ...(params.name ? { name: params.name } : {}),
     ...(params.tab ? { tab: params.tab } : {}),
     ...(params.size ? { size: params.size } : {}),
+    ...(params.presentation ? { presentation: params.presentation } : {}),
     ...(params.after ? { after: params.after } : {}),
     ...(params.capabilities ? { capabilities: params.capabilities } : {}),
   });
@@ -89,6 +91,21 @@ async function executeWidget(params: {
 }
 
 describe("show_widget", () => {
+  it("uses flat provider-safe enums for dashboard options", () => {
+    const tool = createShowWidgetTool();
+    const properties = (
+      tool.parameters as {
+        properties?: Record<string, { anyOf?: unknown; enum?: string[] }>;
+      }
+    ).properties;
+    expect(properties?.size).toMatchObject({ enum: ["sm", "md", "lg", "xl", "full"] });
+    expect(properties?.presentation).toMatchObject({
+      enum: ["card", "full-bleed", "frameless"],
+    });
+    expect(properties?.size?.anyOf).toBeUndefined();
+    expect(properties?.presentation?.anyOf).toBeUndefined();
+  });
+
   it("keeps the wrapped document bytes stable", () => {
     const html = buildWidgetDocument(
       "Status <live>",
@@ -292,6 +309,7 @@ describe("show_widget", () => {
       name: "release-status",
       tab: "main",
       size: "lg",
+      presentation: "frameless",
       callGateway,
     });
     const pinnedTitle = Array.from(title).slice(0, 80).join("");
@@ -301,6 +319,7 @@ describe("show_widget", () => {
       revision: 1,
     });
     expect(store.getSnapshot("agent:main:pinned").widgets[0]?.title).toBe(pinnedTitle);
+    expect(store.getSnapshot("agent:main:pinned").widgets[0]?.presentation).toBe("frameless");
     expect(result.resultText).toContain("pinned to dashboard tab main as release-status (lg)");
     expect(result.boardWidgetName).toBe("release-status");
     expect(broadcast).toHaveBeenCalledWith("board.changed", {

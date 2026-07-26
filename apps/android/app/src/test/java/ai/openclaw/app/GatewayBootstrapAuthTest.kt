@@ -451,6 +451,7 @@ class GatewayBootstrapAuthTest {
 
       assertEquals("ab".repeat(32), prefs.loadGatewayTlsFingerprint(endpoint.stableId))
       assertEquals("setup-bootstrap-token", waitForDesiredBootstrapToken(runtime, "nodeSession"))
+      assertEquals("ab".repeat(32), runtime.gatewayControlPage.value?.tlsFingerprintSha256)
       assertNull(desiredBootstrapToken(runtime, "operatorSession"))
     }
 

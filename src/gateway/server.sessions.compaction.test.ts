@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import type { SessionCompactionCheckpoint } from "../config/sessions.js";
+import { readSessionArchiveContentSync } from "../config/sessions/archive-compression.js";
 import {
   appendTranscriptMessage,
   appendTranscriptEvent,
@@ -284,7 +285,6 @@ test("sessions.compaction.* lists checkpoints and branches or restores from comp
   expect(checkpoint.payload?.checkpoint.preCompaction.sessionFile).toBeUndefined();
 
   const sessionManagerOpenSpy = vi.spyOn(SessionManager, "open");
-  const sessionManagerForkFromSpy = vi.spyOn(SessionManager, "forkFrom");
   let branched: Awaited<
     ReturnType<
       typeof rpcReq<{
@@ -318,10 +318,8 @@ test("sessions.compaction.* lists checkpoints and branches or restores from comp
       checkpointId: "checkpoint-1",
     });
     expect(sessionManagerOpenSpy).not.toHaveBeenCalled();
-    expect(sessionManagerForkFromSpy).not.toHaveBeenCalled();
   } finally {
     sessionManagerOpenSpy.mockRestore();
-    sessionManagerForkFromSpy.mockRestore();
   }
   expect(branched.ok).toBe(true);
   expect(branched.payload?.sourceKey).toBe("agent:main:main");
@@ -350,7 +348,6 @@ test("sessions.compaction.* lists checkpoints and branches or restores from comp
   expect(branchedEntry?.compactionCheckpoints).toBeUndefined();
 
   const restoreSessionManagerOpenSpy = vi.spyOn(SessionManager, "open");
-  const restoreSessionManagerForkFromSpy = vi.spyOn(SessionManager, "forkFrom");
   let restored: Awaited<
     ReturnType<
       typeof rpcReq<{
@@ -384,10 +381,8 @@ test("sessions.compaction.* lists checkpoints and branches or restores from comp
       checkpointId: "checkpoint-1",
     });
     expect(restoreSessionManagerOpenSpy).not.toHaveBeenCalled();
-    expect(restoreSessionManagerForkFromSpy).not.toHaveBeenCalled();
   } finally {
     restoreSessionManagerOpenSpy.mockRestore();
-    restoreSessionManagerForkFromSpy.mockRestore();
   }
   expect(restored.ok).toBe(true);
   expect(restored.payload?.key).toBe("agent:main:main");
@@ -1125,7 +1120,7 @@ test("sessions.reset waits for terminal compaction before replacing the session"
   expect(reset.ok).toBe(true);
   const resetSessionId = reset.payload?.entry.sessionId;
   expect(resetSessionId).toBeTruthy();
-  expect(resetSessionId).not.toBe("sess-compact-reset");
+  expect(resetSessionId).toBe("sess-compact-reset");
   const resetEntry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
   expect(resetEntry?.sessionId).toBe(resetSessionId);
   ws.close();
@@ -1536,7 +1531,7 @@ test("sessions.patch rejects archive while terminal compaction owns the session"
   ws.close();
 });
 
-test("sessions.compact maxLines trims SQLite transcript rows and returns an archive marker", async () => {
+test("sessions.compact maxLines trims SQLite transcript rows and archives the full pre-compaction transcript", async () => {
   const { dir, storePath } = await createSessionStoreDir();
   await seedSessionEntry({
     entry: sessionStoreEntry("sess-main"),
@@ -1549,6 +1544,12 @@ test("sessions.compact maxLines trims SQLite transcript rows and returns an arch
     storePath,
     totalLines: 500,
   });
+  const original = await loadTranscriptRows({
+    sessionId: "sess-main",
+    sessionKey: "agent:main:main",
+    storePath,
+  });
+  expect(original).toHaveLength(500);
 
   const { ws } = await openClient();
   const compacted = await rpcReq<{
@@ -1577,7 +1578,15 @@ test("sessions.compact maxLines trims SQLite transcript rows and returns an arch
   expect(retained.at(-1)).toMatchObject({
     message: { content: "line-498" },
   });
-  expect(compacted.payload?.archived).toContain(`sqlite:main:sess-main:${storePath}.bak.`);
+  const archived = compacted.payload?.archived ?? "";
+  expect(path.basename(archived)).toMatch(/^sess-main\.jsonl\.bak\.\d{4}-\d{2}-\d{2}T/);
+  expect(await fs.realpath(path.dirname(archived))).toBe(await fs.realpath(dir));
+  await expect(fs.stat(archived)).resolves.toMatchObject({ mode: expect.any(Number) });
+  const archivedEvents = readSessionArchiveContentSync(archived)
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+  expect(archivedEvents).toEqual(original);
   await expect(fs.readdir(dir)).resolves.not.toContain("sess-main.jsonl");
 
   // No active run present, so the interrupt guard short-circuits without aborting.

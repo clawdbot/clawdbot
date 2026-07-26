@@ -219,7 +219,7 @@ describe("buildInboundMetaSystemPrompt", () => {
     expect(payload["flags"]).toBeUndefined();
   });
 
-  it("keeps explicit bot mentions out of the system metadata", () => {
+  it("keeps bot usernames out of the system metadata and includes standing mention guidance", () => {
     const prompt = buildInboundMetaSystemPrompt(
       {
         OriginatingTo: "telegram:-1001249586642",
@@ -236,7 +236,9 @@ describe("buildInboundMetaSystemPrompt", () => {
     const payload = parseInboundMetaPayload(prompt);
     expect(payload["flags"]).toBeUndefined();
     expect(prompt).not.toContain("SirPinchALotBot");
-    expect(prompt).not.toContain("explicitly mentions your channel identity");
+    expect(prompt).toContain(
+      "When explicitly_mentioned_bot is true, the incoming message mentions your channel identity; treat it as addressed to you even if your persona name differs.",
+    );
   });
 
   it("omits sender_id when blank", () => {
@@ -524,7 +526,10 @@ describe("buildInboundUserContextPrefix", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "direct",
       OriginatingChannel: "discord",
-      MediaTypes: ["application/pdf", "image/png"],
+      media: [
+        { path: "/tmp/report.pdf", contentType: "application/pdf" },
+        { path: "/tmp/photo.png", contentType: "image/png" },
+      ],
     } as TemplateContext);
 
     expect(parseConversationInfoPayload(text)["source_modality"]).toBe("document");
@@ -602,7 +607,7 @@ describe("buildInboundUserContextPrefix", () => {
     } as TemplateContext);
 
     expect(text).toContain("Conversation info (untrusted metadata):");
-    expect(text).toContain('"conversation_label": "ops-room"');
+    expect(text).toContain('"conversation_label":"ops-room"');
   });
 
   it("renders group subject and participants as untrusted metadata", () => {
@@ -776,29 +781,34 @@ describe("buildInboundUserContextPrefix", () => {
   });
 
   it("renders hydrated reply chain instead of duplicate one-hop reply target", () => {
-    const text = buildInboundUserContextPrefix({
-      ReplyToSender: "Blair",
-      ReplyToBody: "The cache warmer is the piece I meant.",
-      ReplyChain: [
-        {
-          messageId: "3001",
-          sender: "Blair",
-          senderId: "700002",
-          timestamp: 1778216405000,
-          body: "The cache warmer is the piece I meant.",
-          replyToId: "3000",
-        },
-        {
-          messageId: "3000",
-          sender: "Avery",
-          senderId: "700001",
-          timestamp: 1778216400000,
-          body: "Architecture sketch for the cache warmer",
-          mediaType: "image",
-          mediaRef: "telegram:file/proof-photo-small",
-        },
-      ],
-    } as TemplateContext);
+    const text = buildInboundUserContextPrefix(
+      {
+        ReplyToSender: "Blair",
+        ReplyToBody: "The cache warmer is the piece I meant.",
+        ReplyChain: [
+          {
+            messageId: "3001",
+            sender: "Blair",
+            senderId: "700002",
+            timestamp: 1778216405000,
+            body: "The cache warmer is the piece I meant.",
+            replyToId: "3000",
+            forwardedFrom: "Morgan",
+            forwardedDate: 1778212800000,
+          },
+          {
+            messageId: "3000",
+            sender: "Avery",
+            senderId: "700001",
+            timestamp: 1778216400000,
+            body: "Architecture sketch for the cache warmer",
+            mediaType: "image",
+            mediaRef: "telegram:file/proof-photo-small",
+          },
+        ],
+      } as TemplateContext,
+      { timezone: "UTC" },
+    );
 
     const replyChain = parseReplyChainPayload(text);
     expect(replyChain).toEqual([
@@ -806,22 +816,23 @@ describe("buildInboundUserContextPrefix", () => {
         message_id: "3001",
         sender: "Blair",
         sender_id: "700002",
-        timestamp_ms: 1778216405000,
+        timestamp: "2026-05-08T05:00:05Z",
         body: "The cache warmer is the piece I meant.",
         reply_to_id: "3000",
+        forwarded_from: "Morgan",
+        forwarded_date: "2026-05-08T04:00:00Z",
       },
       {
         message_id: "3000",
         sender: "Avery",
         sender_id: "700001",
-        timestamp_ms: 1778216400000,
+        timestamp: "2026-05-08T05:00:00Z",
         body: "Architecture sketch for the cache warmer",
         media_type: "image",
         media_ref: "telegram:file/proof-photo-small",
       },
     ]);
     expect(text).not.toContain("Reply target of current user message");
-    expect(parseConversationInfoPayload(text)["has_reply_context"]).toBe(true);
   });
 
   it("renders Telegram replies as an inline current-message quote", () => {
@@ -937,6 +948,29 @@ describe("buildInboundUserContextPrefix", () => {
     expect(conversationInfo["sender"]).toEqual({ e164: "+15551234567" });
   });
 
+  it("omits e164 when it repeats the sender id digits", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      SenderId: "15551234567",
+      SenderE164: "+1 (555) 123-4567",
+    } as TemplateContext);
+
+    expect(parseConversationInfoPayload(text)["sender"]).toEqual({ id: "15551234567" });
+  });
+
+  it("keeps e164 when it differs from the sender id digits", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      SenderId: "15550001111",
+      SenderE164: "+15551234567",
+    } as TemplateContext);
+
+    expect(parseConversationInfoPayload(text)["sender"]).toEqual({
+      id: "15550001111",
+      e164: "+15551234567",
+    });
+  });
+
   it("includes dynamic per-turn flags in conversation info", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "group",
@@ -962,9 +996,6 @@ describe("buildInboundUserContextPrefix", () => {
     expect(conversationInfo["mentioned_subteam_ids"]).toEqual(["S_ONCALL"]);
     expect(conversationInfo["implicit_mention_kinds"]).toEqual(["bot_thread_participant"]);
     expect(conversationInfo["mention_source"]).toBe("implicit_thread");
-    expect(conversationInfo["has_reply_context"]).toBe(true);
-    expect(conversationInfo["has_forwarded_context"]).toBe(true);
-    expect(conversationInfo["has_thread_starter"]).toBe(true);
     expect(conversationInfo["history_count"]).toBe(1);
   });
 
@@ -977,8 +1008,7 @@ describe("buildInboundUserContextPrefix", () => {
 
     const conversationInfo = parseConversationInfoPayload(text);
     expect(conversationInfo["explicitly_mentioned_bot"]).toBe(true);
-    expect(text).toContain("explicitly mentions your channel identity @SirPinchALotBot");
-    expect(text).toContain("Treat that mention as addressed to you");
+    expect(text).not.toContain("SirPinchALotBot");
   });
 
   it("trims sender_id in conversation info", () => {
@@ -1031,11 +1061,11 @@ describe("buildInboundUserContextPrefix", () => {
     });
     expect(conversationInfo["topic_id"]).toBe("thread--1");
 
-    expect(text).toContain('"body": "thread starter"');
-    expect(text).toContain('"sender_label": "Quoter"');
-    expect(text).toContain('"body": "quoted body"');
-    expect(text).toContain('"from": "forwarder"');
-    expect(text).toContain('"title": "title"');
+    expect(text).toContain('"body":"thread starter"');
+    expect(text).toContain('"sender_label":"Quoter"');
+    expect(text).toContain('"body":"quoted body"');
+    expect(text).toContain('"from":"forwarder"');
+    expect(text).toContain('"title":"title"');
     expect(text).toContain("history: body text");
   });
 
@@ -1176,7 +1206,7 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).not.toContain("telegram:file/old-provider-ref");
     expect(text).not.toContain("/home/user/.openclaw/media/inbound/sticker.webp");
     expect(text).not.toContain("Current local chat window (untrusted metadata):");
-    expect(text).not.toContain('"message_id": "34273"');
+    expect(text).not.toContain('"message_id":"34273"');
   });
 
   it("honors timestamp suppression for chat window structured context", () => {
@@ -1363,7 +1393,7 @@ describe("buildInboundUserContextPrefix", () => {
     } as TemplateContext);
 
     expect(withForwardedFrom).toContain("Forwarded message context (untrusted metadata):");
-    expect(withForwardedFrom).toContain('"from": "source"');
+    expect(withForwardedFrom).toContain('"from":"source"');
   });
 
   it("truncates oversized untrusted strings before serializing them into prompt context", () => {
@@ -1375,7 +1405,7 @@ describe("buildInboundUserContextPrefix", () => {
 
     expect(text).not.toContain(oversized);
     expect(text).toContain("…[truncated]");
-    expect(text).toContain('"body": "');
+    expect(text).toContain('"body":"');
   });
 
   it("preserves tail content in ReplyChain body via head+tail truncation", () => {
@@ -1505,9 +1535,6 @@ describe("buildInboundUserContextPrefix", () => {
       ],
     } as TemplateContext);
 
-    const conversationInfo = parseConversationInfoPayload(text);
-    expect(conversationInfo["history_media_count"]).toBe(1);
-
     expect(text).toContain("#m-1");
     expect(text).toContain("Alice: <media:image> (1 image) [image/png]");
     expect(text).not.toContain("/tmp/openclaw-secret-image.png");
@@ -1542,9 +1569,6 @@ describe("buildInboundUserContextPrefix", () => {
         },
       ],
     } as TemplateContext);
-
-    const conversationInfo = parseConversationInfoPayload(text);
-    expect(conversationInfo["history_media_count"]).toBe(2);
 
     expect(text).toContain("#m-2");
     expect(text).toContain("Alice: <media:image> (2 images) [image/png, image/jpeg]");

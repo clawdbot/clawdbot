@@ -14,7 +14,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { createAsyncLock } from "../infra/json-files.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "./clawhub-error-codes.js";
@@ -54,16 +53,20 @@ import {
   type HostedOfficialExternalPluginCatalogLoadResult,
   type OfficialExternalPluginCatalogEntry,
 } from "./official-external-plugin-catalog.js";
+import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { resolveManifestProviderAuthChoices } from "./provider-auth-choices.js";
 import { listRecommendedToolInstalls } from "./recommended-tool-installs.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./registry-refresh.js";
 import { applySlotSelectionForPlugin } from "./slot-selection.js";
 import { setPluginEnabledInConfig } from "./toggle-config.js";
+import { collectClawPluginUninstallWarnings } from "./uninstall-claw-references.js";
 import {
   applyPluginUninstallDirectoryRemoval,
   formatUninstallActionLabels,
   planPluginUninstall,
+  pluginUninstallTargetExists,
+  prepareConfigForPendingPluginDirectoryRemoval,
 } from "./uninstall.js";
 
 type ManagedPluginCatalogEntry = {
@@ -136,9 +139,7 @@ let officialCatalogCache:
   | { key: string; result: Promise<HostedOfficialExternalPluginCatalogLoadResult> }
   | undefined;
 
-function officialCatalogCacheKey(config: OpenClawConfig): string {
-  return JSON.stringify(config.marketplaces ?? null);
-}
+const OFFICIAL_CATALOG_CACHE_KEY = "built-in";
 
 /** Clear the process-stable hosted catalog snapshot after an explicit owner reload. */
 export function clearManagedPluginOfficialCatalogCache(): void {
@@ -275,12 +276,12 @@ function overlayBundledOfficialPluginCatalogMetadata(
   });
 }
 
-async function loadOfficialCatalog(config: OpenClawConfig): Promise<OfficialCatalogResult> {
-  const key = officialCatalogCacheKey(config);
+async function loadOfficialCatalog(): Promise<OfficialCatalogResult> {
+  const key = OFFICIAL_CATALOG_CACHE_KEY;
   if (officialCatalogCache?.key !== key) {
     officialCatalogCache = {
       key,
-      result: loadConfiguredHostedOfficialExternalPluginCatalogEntries(config),
+      result: loadConfiguredHostedOfficialExternalPluginCatalogEntries(),
     };
   }
   const result = await officialCatalogCache.result;
@@ -325,13 +326,10 @@ function normalizeFeaturedAt(value: unknown): number | undefined {
 }
 
 function resolveCatalogInstallAction(params: {
-  config: OpenClawConfig;
   entry: OfficialExternalPluginCatalogEntry;
   pluginId: string;
 }): ManagedPluginCatalogEntry["install"] {
-  const install = resolveOfficialExternalPluginInstall(params.entry, {
-    catalogConfig: params.config.marketplaces,
-  });
+  const install = resolveOfficialExternalPluginInstall(params.entry);
   const clawhub = install?.clawhubSpec ? parseClawHubPluginSpec(install.clawhubSpec) : undefined;
   if (clawhub && !clawhub.version) {
     return { source: "clawhub", packageName: clawhub.name };
@@ -558,7 +556,7 @@ export async function resolveManagedPluginIconUrl(params: {
 }): Promise<string | undefined> {
   const env = params.env ?? process.env;
   const metadata = loadPluginMetadataSnapshot({ config: params.config, env });
-  const officialCatalog = params.officialCatalog ?? (await loadOfficialCatalog(params.config));
+  const officialCatalog = params.officialCatalog ?? (await loadOfficialCatalog());
   return resolvePluginIconUrlFromCatalogFacts({
     metadata,
     officialEntries: officialCatalog.entries,
@@ -615,7 +613,7 @@ export async function listManagedPlugins(params: {
 }): Promise<ManagedPluginCatalog> {
   const env = params.env ?? process.env;
   const metadata = loadPluginMetadataSnapshot({ config: params.config, env });
-  const officialCatalog = params.officialCatalog ?? (await loadOfficialCatalog(params.config));
+  const officialCatalog = params.officialCatalog ?? (await loadOfficialCatalog());
   const bundledOfficialEntries = listOfficialExternalPluginCatalogEntries();
   const plugins = metadata.index.plugins.map((record): ManagedPluginCatalogEntry => {
     const manifest = metadata.byPluginId.get(record.pluginId);
@@ -726,7 +724,7 @@ export async function listManagedPlugins(params: {
       continue;
     }
     const kind = normalizeKinds(entry.kind);
-    const install = resolveCatalogInstallAction({ config: params.config, entry, pluginId });
+    const install = resolveCatalogInstallAction({ entry, pluginId });
     const description = normalizeOptionalString(entry.description);
     const version = normalizeOptionalString(entry.version);
     const featuredAt =
@@ -761,8 +759,6 @@ export async function listManagedPlugins(params: {
     mutationAllowed: !resolveIsNixMode(env),
   };
 }
-
-const withManagedPluginMutationLock = createAsyncLock();
 
 function assertValidConfigSnapshot(
   prepared: Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>>,
@@ -838,28 +834,22 @@ function resolveDeclaredOfficialPluginId(
 
 function resolveOfficialEntryByClawHubPackage(
   entries: readonly OfficialExternalPluginCatalogEntry[],
-  config: OpenClawConfig,
   packageName: string,
 ): OfficialExternalPluginCatalogEntry | undefined {
   // Bundled identities remain the local trust anchor when a hosted feed omits
   // its ClawHub candidate; hosted install/version metadata is never copied back.
   return [...listOfficialExternalPluginCatalogEntries(), ...entries].find((entry) => {
-    const install = resolveOfficialExternalPluginInstall(entry, {
-      catalogConfig: config.marketplaces,
-    });
+    const install = resolveOfficialExternalPluginInstall(entry);
     return parseClawHubPluginSpec(install?.clawhubSpec ?? "")?.name === packageName;
   });
 }
 
 function resolveHostedOfficialEntryByClawHubPackage(
   entries: readonly OfficialExternalPluginCatalogEntry[],
-  config: OpenClawConfig,
   packageName: string,
 ): OfficialExternalPluginCatalogEntry | undefined {
   return entries.find((entry) => {
-    const install = resolveOfficialExternalPluginInstall(entry, {
-      catalogConfig: config.marketplaces,
-    });
+    const install = resolveOfficialExternalPluginInstall(entry);
     return parseClawHubPluginSpec(install?.clawhubSpec ?? "")?.name === packageName;
   });
 }
@@ -1008,24 +998,17 @@ async function installFromClawHub(params: {
   expectedIntegrity?: string;
 }): Promise<{ pluginId: string; config: OpenClawConfig }> {
   const packageName = params.request.packageName.trim();
-  const official = resolveOfficialEntryByClawHubPackage(
-    params.officialEntries,
-    params.snapshot.config,
-    packageName,
-  );
+  const official = resolveOfficialEntryByClawHubPackage(params.officialEntries, packageName);
   // Pin the runtime id only when the catalog entry declares one; the entry-id
   // fallback is just the package name and would reject legitimate installs,
   // while a declared id must stay enforced even if it equals the package name.
   const expectedPluginId = official ? resolveDeclaredOfficialPluginId(official) : undefined;
   const hostedOfficial = resolveHostedOfficialEntryByClawHubPackage(
     params.officialEntries,
-    params.snapshot.config,
     packageName,
   );
   const hostedInstall = hostedOfficial
-    ? resolveOfficialExternalPluginInstall(hostedOfficial, {
-        catalogConfig: params.snapshot.config.marketplaces,
-      })
+    ? resolveOfficialExternalPluginInstall(hostedOfficial)
     : undefined;
   const hostedClawHub = parseClawHubPluginSpec(hostedInstall?.clawhubSpec ?? "");
   const requestMatchesHostedCandidate =
@@ -1083,9 +1066,7 @@ async function installFromOfficialCatalog(params: {
     );
   }
   const pluginId = resolveOfficialExternalPluginId(entry);
-  const install = resolveOfficialExternalPluginInstall(entry, {
-    catalogConfig: params.snapshot.config.marketplaces,
-  });
+  const install = resolveOfficialExternalPluginInstall(entry);
   if (!pluginId || !install) {
     throw new ManagedPluginLifecycleError(
       `official plugin catalog entry is not installable: ${params.request.pluginId}`,
@@ -1151,10 +1132,10 @@ export async function installManagedPlugin(params: {
   request: ManagedPluginInstallRequest;
   env?: NodeJS.ProcessEnv;
 }): Promise<{ plugin: ManagedPluginCatalogEntry; warnings?: string[] }> {
-  return await withManagedPluginMutationLock(async () => {
-    const env = params.env ?? process.env;
+  const env = params.env ?? process.env;
+  return await withPluginLifecycleLease({ env }, async () => {
     const snapshot = await readPluginMutationSnapshot(env);
-    const officialCatalog = await loadOfficialCatalog(snapshot.config);
+    const officialCatalog = await loadOfficialCatalog();
     const warnings: string[] = [];
     const installed =
       params.request.source === "clawhub"
@@ -1200,8 +1181,8 @@ export async function setManagedPluginEnabled(params: {
   changedPaths: string[];
   warnings?: string[];
 }> {
-  return await withManagedPluginMutationLock(async () => {
-    const env = params.env ?? process.env;
+  const env = params.env ?? process.env;
+  return await withPluginLifecycleLease({ env }, async () => {
     const snapshot = await readPluginMutationSnapshot(env);
     const metadata = loadPluginMetadataSnapshot({ config: snapshot.config, env });
     const pluginId = metadata.normalizePluginId(params.pluginId.trim());
@@ -1266,8 +1247,8 @@ export async function uninstallManagedPlugin(params: {
   pluginId: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<{ pluginId: string; removed: string[]; warnings?: string[] }> {
-  return await withManagedPluginMutationLock(async () => {
-    const env = params.env ?? process.env;
+  const env = params.env ?? process.env;
+  return await withPluginLifecycleLease({ env }, async () => {
     const snapshot = await readPluginMutationSnapshot(env);
     const installRecords = await loadInstalledPluginIndexInstallRecords();
     // Mirror the CLI uninstall flow: plan against config carrying install records
@@ -1286,15 +1267,55 @@ export async function uninstallManagedPlugin(params: {
     // planPluginUninstall keeps its plugin-id fallback for channel config keys.
     const channelIds = manifest && manifest.channels.length > 0 ? manifest.channels : undefined;
     const extensionsDir = resolveDefaultPluginExtensionsDir(env);
-    const plan = planPluginUninstall({
+    const initialPlan = planPluginUninstall({
       config: configWithRecords,
       pluginId,
       ...(channelIds ? { channelIds } : {}),
       deleteFiles: true,
       extensionsDir,
     });
-    if (!plan.ok) {
-      throw new ManagedPluginLifecycleError(plan.error);
+    if (!initialPlan.ok) {
+      throw new ManagedPluginLifecycleError(initialPlan.error);
+    }
+    let plan = initialPlan;
+    let finalSnapshot = snapshot;
+    let directoryResult = { directoryRemoved: false, warnings: [] as string[] };
+    if (plan.directoryRemoval) {
+      const disabledConfig = prepareConfigForPendingPluginDirectoryRemoval(
+        snapshot.config,
+        pluginId,
+      );
+      await replaceConfigFile({
+        nextConfig: disabledConfig,
+        baseHash: snapshot.baseHash,
+        writeOptions: {
+          ...snapshot.writeOptions,
+          afterWrite: { mode: "auto" },
+        },
+      });
+      directoryResult = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
+      if (pluginUninstallTargetExists(plan.directoryRemoval.target)) {
+        throw new ManagedPluginLifecycleError(
+          `Failed to remove plugin directory ${plan.directoryRemoval.target}; the plugin remains disabled and tracked so uninstall can be retried.`,
+          { kind: "unavailable" },
+        );
+      }
+      finalSnapshot = await readPluginMutationSnapshot(env);
+      const refreshedConfigWithRecords = withPluginInstallRecords(
+        finalSnapshot.config,
+        installRecords,
+      );
+      const refreshedPlan = planPluginUninstall({
+        config: refreshedConfigWithRecords,
+        pluginId,
+        ...(channelIds ? { channelIds } : {}),
+        deleteFiles: true,
+        extensionsDir,
+      });
+      if (!refreshedPlan.ok) {
+        throw new ManagedPluginLifecycleError(refreshedPlan.error);
+      }
+      plan = refreshedPlan;
     }
     const nextConfig = withoutPluginInstallRecords(plan.config);
     const nextInstallRecords = removePluginInstallRecordFromRecords(installRecords, pluginId);
@@ -1302,11 +1323,17 @@ export async function uninstallManagedPlugin(params: {
       previousInstallRecords: installRecords,
       nextInstallRecords,
       nextConfig,
-      baseHash: snapshot.baseHash,
-      writeOptions: snapshot.writeOptions,
+      baseHash: finalSnapshot.baseHash,
+      writeOptions: finalSnapshot.writeOptions,
     });
-    const directoryResult = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
-    const warnings = [...directoryResult.warnings];
+    const warnings = [
+      ...collectClawPluginUninstallWarnings({
+        pluginId,
+        installRecord: installRecords[pluginId],
+        env,
+      }),
+      ...directoryResult.warnings,
+    ];
     await refreshPluginRegistryAfterConfigMutation({
       config: nextConfig,
       reason: "source-changed",

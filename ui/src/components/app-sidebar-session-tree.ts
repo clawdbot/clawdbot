@@ -2,6 +2,8 @@ import type { GatewaySessionRow } from "../api/types.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import {
   SIDEBAR_SESSION_NO_ATTENTION,
+  rowDemandsVisibility,
+  RowVisibilityReason,
   sidebarSessionAttentionPriority,
   type SidebarKnownSessionAttention,
   type SidebarRecentSession,
@@ -63,7 +65,7 @@ export function projectSessionTree(params: {
     isChild: boolean,
     ancestors: ReadonlySet<string>,
   ): SidebarRecentSession => {
-    const childSessionKeys = childKeysByParent.get(row.key) ?? [];
+    const childSessionKeys = row.archived === true ? [] : (childKeysByParent.get(row.key) ?? []);
     const nextAncestors = new Set(ancestors);
     nextAncestors.add(row.key);
     const children = childSessionKeys.flatMap((key) => {
@@ -89,6 +91,13 @@ export function projectSessionTree(params: {
         child.failedChildCount,
       0,
     );
+    // Conflict attention is transitive: a collapsed parent must expose staged
+    // cloud results held by descendants or the recovery signal disappears.
+    const workspaceConflictCount = Math.min(
+      Number.MAX_SAFE_INTEGER,
+      (projected.workspaceConflictCount ?? 0) +
+        children.reduce((count, child) => count + (child.workspaceConflictCount ?? 0), 0),
+    );
     const unloadedChildKeys = childSessionKeys.filter((key) => !rowsByKey.has(key));
     // Only direct unloaded children can match: parents carry their keys, but not grandchildren's.
     // Grandchildren join the normal transitive fold after their branch is materialized.
@@ -105,6 +114,7 @@ export function projectSessionTree(params: {
     // ancestor remains actionable even when the blocked descendant is hidden.
     const attention = children.reduce(
       (current, child) =>
+        rowDemandsVisibility(child, RowVisibilityReason.Attention) &&
         sidebarSessionAttentionPriority(child.attention) > sidebarSessionAttentionPriority(current)
           ? child.attention
           : current,
@@ -122,6 +132,7 @@ export function projectSessionTree(params: {
       containsActiveDescendant: children.some(
         (child) => child.active || child.visuallyActive || child.containsActiveDescendant,
       ),
+      workspaceConflictCount: workspaceConflictCount || undefined,
       runningChildCount,
       failedChildCount,
     };

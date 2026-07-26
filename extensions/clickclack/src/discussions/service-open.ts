@@ -1,3 +1,4 @@
+import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 import {
@@ -5,7 +6,7 @@ import {
   isClickClackChannelNameConflict,
   type ClickClackClient,
 } from "../http-client.js";
-import type { ResolvedClickClackAccount } from "../types.js";
+import type { CoreConfig, ResolvedClickClackAccount } from "../types.js";
 import {
   clearDiscussionBindingGeneration,
   listPendingDiscussionOpens,
@@ -17,6 +18,7 @@ import type {
   ClickClackDiscussionBinding,
   ClickClackDiscussionBindingStore,
 } from "./binding-store.js";
+import { controlSessionUrl } from "./control-session-url.js";
 import { normalizedServerBaseUrl } from "./eligibility.js";
 import {
   discussionCredentialFingerprint,
@@ -51,20 +53,6 @@ function isDefinitiveNoCreateHttpError(error: unknown): boolean {
   // Timeout, conflict, early-data, and rate-limit responses can follow a committed
   // request or positively indicate an existing external_ref. Reconcile those.
   return ![408, 409, 425, 429].includes(error.status);
-}
-
-export function controlSessionUrl(
-  baseUrl: string | undefined,
-  sessionKey: string,
-): string | undefined {
-  if (!baseUrl) {
-    return undefined;
-  }
-  const url = new URL(baseUrl);
-  url.pathname = `${url.pathname.replace(/\/+$/u, "")}/chat`;
-  url.hash = "";
-  url.searchParams.set("session", sessionKey);
-  return url.toString();
 }
 
 export async function resolveAvailableChannelName(params: {
@@ -201,7 +189,13 @@ export async function openClickClackDiscussionBinding(
 
   const label = resolveDiscussionLabel(entry.label, sessionKey);
   const section = entry.category?.trim() || account.discussions.section;
-  const externalUrl = controlSessionUrl(account.discussions.controlUrlBase, sessionKey);
+  const externalUrl = controlSessionUrl(
+    account.discussions.controlUrlBase,
+    sessionKey,
+    account.agentId ?? "main",
+    (runtime.config.current() as CoreConfig).session?.mainKey,
+    label,
+  );
   const archived = entry.archivedAt !== undefined;
   return await params.withChannelMutationLock(async () => {
     if (!store.hasCapacity(sessionKey)) {
@@ -381,7 +375,10 @@ export async function openClickClackDiscussionBinding(
     }
     const nextBinding: ClickClackDiscussionBinding = {
       accountId: account.accountId,
-      agentId: resolveAgentIdFromSessionKey(sessionKey),
+      agentId: resolveAgentIdFromSessionKey(
+        sessionKey,
+        resolveDefaultAgentId(runtime.config.current() as CoreConfig),
+      ),
       sessionId: entry.sessionId,
       serverBaseUrl,
       credentialFingerprint,

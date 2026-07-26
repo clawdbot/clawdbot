@@ -25,7 +25,7 @@ export function pluginTabKey(ref: PluginTabRef): string {
 }
 
 // One static route hosts every plugin-declared tab; the router only supports
-// exact paths, so the tab reference travels in the query like chat sessions.
+// exact paths, so the tab reference travels in the query.
 export const page = definePage({
   id: "plugin",
   path: "/plugin",

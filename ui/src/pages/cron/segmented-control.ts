@@ -1,5 +1,6 @@
 import { html } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
+import { renderSettingsSegmented } from "../../components/settings-ui.ts";
 import "../../components/web-awesome-tabs.ts";
 
 export function renderSegmented<T extends string>(params: {
@@ -38,33 +39,10 @@ export function renderSegmented<T extends string>(params: {
       </wa-tab-group>
     `;
   }
-  return html`
-    <wa-radio-group
-      class="settings-segmented"
-      size="s"
-      orientation="horizontal"
-      label=${ifDefined(params.ariaLabel)}
-      .value=${params.value}
-      @change=${(event: Event) => {
-        const value = (event.currentTarget as HTMLElement & { value?: string }).value;
-        if (value !== undefined) {
-          params.onChange(value as T);
-        }
-      }}
-    >
-      ${params.options.map(
-        (option) => html`
-          <wa-radio
-            class="settings-segmented__btn"
-            appearance="button"
-            value=${option.value}
-            .checked=${option.value === params.value}
-            data-test-id=${ifDefined(option.testId)}
-          >
-            ${option.label}
-          </wa-radio>
-        `,
-      )}
-    </wa-radio-group>
-  `;
+  return renderSettingsSegmented({
+    value: params.value,
+    options: params.options,
+    ariaLabel: params.ariaLabel,
+    onChange: (value) => params.onChange(value),
+  });
 }

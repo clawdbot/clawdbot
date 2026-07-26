@@ -400,10 +400,10 @@ function gatewayNodeCommandFindings(
         message: `Gateway node command '${command}' is denied by policy but not denied by OpenClaw config.`,
         source: "policy",
         path: "openclaw config",
-        ocPath: "oc://openclaw.config/gateway/nodes/denyCommands",
-        target: "oc://openclaw.config/gateway/nodes/denyCommands",
+        ocPath: "oc://openclaw.config/gateway/nodes/commands/deny",
+        target: "oc://openclaw.config/gateway/nodes/commands/deny",
         requirement: `oc://${policyDocName}/gateway/nodes/denyCommands`,
-        fixHint: `Add '${command}' to gateway.nodes.denyCommands or update policy after review.`,
+        fixHint: `Add '${command}' to gateway.nodes.commands.deny or update policy after review.`,
       };
     });
 }

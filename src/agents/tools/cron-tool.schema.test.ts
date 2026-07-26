@@ -110,9 +110,23 @@ describe("createCronToolSchema", () => {
     ).toEqual(["max", "min"]);
   });
 
-  it("job.schedule exposes kind, at, everyMs, anchorMs, expr, tz, staggerMs", () => {
+  it("job.schedule exposes interval, cron, and stream source fields", () => {
     expect(keysAt(schemaRecord, "job.schedule")).toEqual(
-      ["anchorMs", "at", "everyMs", "expr", "kind", "staggerMs", "tz"].toSorted(),
+      [
+        "anchorMs",
+        "at",
+        "batchMs",
+        "command",
+        "cwd",
+        "everyMs",
+        "expr",
+        "kind",
+        "match",
+        "maxBatchBytes",
+        "mode",
+        "staggerMs",
+        "tz",
+      ].toSorted(),
     );
   });
 

@@ -14,6 +14,10 @@ export function findSessionAccessorBoundaryViolations(
   content: unknown,
   fileName?: string,
 ): unknown[];
+export function findReadOnlySessionAccessorViolations(
+  content: unknown,
+  fileName?: string,
+): unknown[];
 export function findEmbeddedAgentSessionTargetViolations(
   content: unknown,
   fileName?: string,
@@ -71,3 +75,4 @@ export const migratedTranscriptWriterFiles: Set<string>;
 export const migratedSessionCompactManualTrimFiles: Set<string>;
 export const migratedSessionLifecycleCleanupFiles: Set<string>;
 export const migratedMemoryHostSessionCorpusFiles: Set<string>;
+export const readOnlyGatewaySessionAccessorFiles: Set<string>;

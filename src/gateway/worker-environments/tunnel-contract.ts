@@ -6,6 +6,13 @@ import type {
 
 export type WorkerTunnelStatus = "stopped" | "connecting" | "connected" | "reconnecting";
 
+export class WorkerTunnelOwnerDisconnectedError extends Error {
+  constructor() {
+    super("Worker tunnel owner is no longer connected");
+    this.name = "WorkerTunnelOwnerDisconnectedError";
+  }
+}
+
 export type WorkerTunnelRequest = {
   environmentId: string;
   ownerEpoch: number;

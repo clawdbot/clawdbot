@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Control UI tests cover operator question parsing and lifecycle state.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { waitForFast } from "../test-helpers/wait-for.ts";

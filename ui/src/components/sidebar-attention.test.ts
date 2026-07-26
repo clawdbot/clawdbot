@@ -120,8 +120,7 @@ describe("sidebar attention refresh ownership", () => {
     const client = { request } as unknown as GatewayBrowserClient;
     const snapshot = {
       client,
-      connected: true,
-      reconnecting: false,
+      phase: "connected",
       hello: null,
       assistantAgentId: "main",
       sessionKey: "agent:main:main",

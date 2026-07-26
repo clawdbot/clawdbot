@@ -27,6 +27,7 @@ import { loadTranscriptEvents } from "../../../config/sessions/session-accessor.
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
 import type { Context, Model } from "../../../llm/types.js";
 import {
+  buildLateMediaAttachedProjection,
   createUserTurnTranscriptRecorder,
   mergePreparedUserTurnMessageForRuntime,
   type UserTurnInput,
@@ -437,6 +438,15 @@ describe("append-only late media (issue #99495)", () => {
       expect(lateProvider?.content).toBe(
         `${EXPECTED_PREFIX_TURN1}[media attached: ${path.join(dir, "image.png")}]`,
       );
+      const lateProjection = buildLateMediaAttachedProjection(latePersisted as AgentMsg);
+      expect(lateProjection.text).toBe(`[media attached: ${path.join(dir, "image.png")}]`);
+      expect(lateProjection.media).toEqual([
+        expect.objectContaining({
+          path: path.join(dir, "image.png"),
+          contentType: "image/png",
+          kind: "image",
+        }),
+      ]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -467,7 +477,11 @@ describe("append-only late media (issue #99495)", () => {
     const normalized = normalizeMessagesForLlmBoundary([merged], { timezone: TZ });
 
     expect(normalized).toHaveLength(1);
-    expect(merged).toMatchObject({ MediaPath: "media://inbound/image.jpg" });
+    expect(merged).toMatchObject({
+      __openclaw: {
+        media: [expect.objectContaining({ path: "media://inbound/image.jpg" })],
+      },
+    });
   });
 });
 
@@ -630,7 +644,7 @@ describe("prompt-cache tail carrier for current-turn metadata (issue #100271)", 
     const historicalContent = (asHistorical[0] as { content?: unknown } | undefined)?.content;
     expect(JSON.stringify(currentContent)).toBe(JSON.stringify(historicalContent));
     expect(typeof currentContent).toBe("string");
-    expect(currentContent).toContain('"name": "Alice"');
+    expect(currentContent).toContain('"name":"Alice"');
     expect(
       normalizeMessagesForLlmBoundary(asCurrent, {
         timezone: TZ,

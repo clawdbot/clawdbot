@@ -86,12 +86,13 @@ async function seedWaitingActiveMainSession() {
 }
 
 async function resetMainSession() {
-  return await directSessionReq<{ ok: true; key: string; entry: { sessionId: string } }>(
-    "sessions.reset",
-    {
-      key: "main",
-    },
-  );
+  return await directSessionReq<{
+    ok: true;
+    key: string;
+    entry: { lifecycleRevision?: string; sessionId: string };
+  }>("sessions.reset", {
+    key: "main",
+  });
 }
 
 function installAcpRuntimeBackendWithFreshSession() {
@@ -161,7 +162,8 @@ test("sessions.reset aborts active runs and clears queues", async () => {
   const reset = await resetMainSession();
   expect(reset.ok).toBe(true);
   expect(reset.payload?.key).toBe("agent:main:main");
-  expect(reset.payload?.entry.sessionId).not.toBe("sess-main");
+  expect(reset.payload?.entry.sessionId).toBe("sess-main");
+  expect(reset.payload?.entry.lifecycleRevision).toEqual(expect.any(String));
   expectActiveRunCleanup("agent:main:main", ["main", "agent:main:main", "sess-main"], "sess-main");
   expect(peekSystemEvents("main")).toStrictEqual([]);
   expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
@@ -546,7 +548,7 @@ test("sessions.reset finishes after lifecycle rotation during destructive cleanu
   });
   writeAcpSessionMetaForMigration({
     sessionKey: "agent:main:main",
-    sessionId: "sess-main",
+    lifecycleRevision: undefined,
     meta: resolvedAcpMeta({
       recordId: "agent:main:main",
       backendSessionId: "backend-session-1",
@@ -621,7 +623,7 @@ test("sessions.reset rejects a concurrent archive during lifecycle rotation", as
   });
   const entry = loadSessionEntry({ storePath, sessionKey });
   expect(entry?.archivedAt).toBeUndefined();
-  expect(entry?.sessionId).not.toBe("sess-archive-race");
+  expect(entry?.sessionId).toBe("sess-archive-race");
 });
 
 test.each([
@@ -698,7 +700,7 @@ test("sessions.reset preserves a newer session after lifecycle rotation", async 
   });
   writeAcpSessionMetaForMigration({
     sessionKey: "agent:main:main",
-    sessionId: "sess-main",
+    lifecycleRevision: undefined,
     meta: resolvedAcpMeta({
       recordId: "agent:main:main",
       backendSessionId: "backend-session-1",
@@ -995,7 +997,7 @@ test("sessions.reset emits subagent targetKind for subagent sessions", async () 
   });
   expect(reset.ok).toBe(true);
   expect(reset.payload?.key).toBe("agent:main:subagent:worker");
-  expect(reset.payload?.entry.sessionId).not.toBe("sess-subagent");
+  expect(reset.payload?.entry.sessionId).toBe("sess-subagent");
   expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
   const event = (subagentLifecycleHookMocks.runSubagentEnded.mock.calls as unknown[][])[0]?.[0] as
     | { targetKind?: string; targetSessionKey?: string; reason?: string; outcome?: string }

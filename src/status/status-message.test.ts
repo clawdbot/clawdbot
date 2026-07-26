@@ -134,11 +134,7 @@ describe("buildStatusMessage context window", () => {
     const text = buildStatusMessage({
       config: {
         agents: {
-          defaults: {
-            cliBackends: {
-              "claude-cli": { command: "claude" },
-            },
-          },
+          defaults: {},
         },
         models: {
           providers: {

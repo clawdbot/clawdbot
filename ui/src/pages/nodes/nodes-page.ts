@@ -192,17 +192,17 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
     initialBind = false,
   ) {
     const clientChanged = this.client !== snapshot.client;
-    const connectionChanged = this.connected !== snapshot.connected;
-    if (forceReset || clientChanged || connectionChanged || !snapshot.connected) {
+    const connectionChanged = this.connected !== (snapshot.phase === "connected");
+    if (forceReset || clientChanged || connectionChanged || snapshot.phase !== "connected") {
       this.requestGeneration += 1;
     }
     this.syncGatewayState(snapshot);
-    if (forceReset || (!initialBind && (clientChanged || !snapshot.connected))) {
+    if (forceReset || (!initialBind && (clientChanged || snapshot.phase !== "connected"))) {
       this.resetServerState(snapshot);
     }
     if (
       this.routeDataInitialized &&
-      snapshot.connected &&
+      snapshot.phase === "connected" &&
       snapshot.client &&
       (forceReset || clientChanged || connectionChanged)
     ) {
@@ -216,8 +216,9 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
 
   private syncGatewayState(snapshot: ApplicationGatewaySnapshot) {
     this.client = snapshot.client;
-    this.connected = snapshot.connected;
-    this.canPairDevice = snapshot.connected && hasOperatorAdminAccess(snapshot.hello?.auth ?? null);
+    this.connected = snapshot.phase === "connected";
+    this.canPairDevice =
+      snapshot.phase === "connected" && hasOperatorAdminAccess(snapshot.hello?.auth ?? null);
   }
 
   private applyRouteData() {
@@ -236,7 +237,7 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
       return;
     }
     this.client = snapshot.client;
-    this.connected = snapshot.connected;
+    this.connected = snapshot.phase === "connected";
     this.nodesLoading = data.nodes.nodesLoading;
     this.nodes = data.nodes.nodes;
     this.lastError = data.nodes.lastError;
@@ -262,7 +263,10 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
     // Drop it on client change/disconnect so a confirm can never fire removal
     // RPCs at a different gateway that reuses the same device ids.
     this.inventoryRemovalPrompt = null;
-    const next = createInitialNodesState(snapshot);
+    const next = createInitialNodesState({
+      client: snapshot.client,
+      connected: snapshot.phase === "connected",
+    });
     this.nodesLoading = next.nodesLoading;
     this.nodes = next.nodes;
     this.presenceRequestId += 1;
@@ -310,7 +314,7 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
   private async loadPresence() {
     const gateway = this.context.gateway.snapshot;
     const client = gateway.client;
-    if (!gateway.connected || !client) {
+    if (gateway.phase !== "connected" || !client) {
       return;
     }
     const generation = this.requestGeneration;
@@ -337,7 +341,7 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
   ): boolean {
     const snapshot = this.context.gateway.snapshot;
     return (
-      snapshot.connected &&
+      snapshot.phase === "connected" &&
       snapshot.client === client &&
       this.requestGeneration === generation &&
       this.presenceRequestId === requestId
@@ -366,9 +370,10 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
   override render() {
     const config = this.context.runtimeConfig.state;
     const gatewaySnapshot = this.context.gateway.snapshot;
-    const gatewayVersion = gatewaySnapshot.connected
-      ? gatewaySnapshot.hello?.server?.version?.trim() || null
-      : null;
+    const gatewayVersion =
+      gatewaySnapshot.phase === "connected"
+        ? gatewaySnapshot.hello?.server?.version?.trim() || null
+        : null;
     return html`
       <section class="content-header">
         <div>

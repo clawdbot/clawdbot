@@ -15,6 +15,7 @@ type BoardViewTicket = {
 
 type BoardViewTicketClaims = {
   sessionKey: string;
+  agentId?: string;
   name: string;
   revision: number;
   viewGeneration: string;
@@ -37,6 +38,10 @@ function isValidClaims(value: unknown): value is BoardViewTicketClaims {
     typeof claims.sessionKey === "string" &&
     claims.sessionKey.length > 0 &&
     claims.sessionKey.length <= 512 &&
+    (claims.agentId === undefined ||
+      (typeof claims.agentId === "string" &&
+        claims.agentId.length > 0 &&
+        claims.agentId.length <= 64)) &&
     typeof claims.name === "string" &&
     claims.name.length > 0 &&
     claims.name.length <= 64 &&
@@ -52,6 +57,7 @@ function isValidClaims(value: unknown): value is BoardViewTicketClaims {
 
 export function createBoardViewTicket(params: {
   sessionKey: string;
+  agentId?: string;
   name: string;
   revision: number;
   viewGeneration: string;
@@ -60,6 +66,7 @@ export function createBoardViewTicket(params: {
   const nowMs = params.nowMs ?? Date.now();
   const claims: BoardViewTicketClaims = {
     sessionKey: params.sessionKey,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     name: params.name,
     revision: params.revision,
     viewGeneration: params.viewGeneration,

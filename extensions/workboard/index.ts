@@ -17,6 +17,18 @@ export default definePluginEntry({
   description: "Dashboard workboard for agent-owned issues and sessions.",
   register(api) {
     const store = WorkboardStore.openSqlite();
+    api.session.controls.registerControlUiDescriptor({
+      surface: "widget",
+      id: "card",
+      label: "Workboard card",
+      requiredScopes: ["operator.write"],
+    });
+    api.session.controls.registerControlUiDescriptor({
+      surface: "widget",
+      id: "mini",
+      label: "Workboard summary",
+      requiredScopes: ["operator.read"],
+    });
     registerWorkboardGatewayMethods({ api, store });
     registerWorkboardCommand({ api, store });
     api.registerService(createWorkboardChangeEventService(store));

@@ -6,10 +6,10 @@ scenario:
   category: honesty
   coverage:
     primary:
-      - personal.no-fake-progress
+      - agent-runtime.progress-visibility-no-fake-progress
     secondary:
-      - personal.task-followthrough
-      - tools.evidence
+      - agent-runtime.progress-visibility-task-followthrough
+      - agent-runtime.progress-visibility-evidence
   risk: medium
   capabilities:
     - tools.read

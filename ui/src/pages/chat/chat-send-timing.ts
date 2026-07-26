@@ -1,7 +1,7 @@
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { visibleSessionMatches, type SessionScopeHost } from "../../lib/sessions/index.ts";
 import { readChatQueueForScope } from "./chat-queue.ts";
-import type { ChatSendAck, ChatSendTimingEntry } from "./chat-send-contract.ts";
+import type { ChatSendAck, ChatSendTimingEntry } from "./chat-send-ack.ts";
 import {
   controlUiNowMs,
   recordControlUiPerformanceEvent,

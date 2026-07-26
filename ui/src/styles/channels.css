@@ -117,6 +117,107 @@
   padding: var(--space-4) var(--space-4) var(--space-5);
 }
 
+/* ---------- DM sender access requests ---------- */
+
+.channels-pairing-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.channels-pairing-filters label {
+  display: grid;
+  flex: 1 1 180px;
+  gap: var(--space-1);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.channels-pairing-filters select {
+  width: 100%;
+}
+
+.channels-pairing-request {
+  align-items: stretch;
+}
+
+.channels-pairing-request__main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  width: 100%;
+}
+
+.channels-pairing-request__actions {
+  flex-wrap: wrap;
+}
+
+.channels-pairing-request__details {
+  width: 100%;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.channels-pairing-request__details summary {
+  width: fit-content;
+  cursor: pointer;
+}
+
+.channels-pairing-request__details .settings-kv {
+  margin-top: var(--space-2);
+}
+
+.channels-pairing-help {
+  padding: var(--space-3);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.5;
+}
+
+.channels-pairing-dialog {
+  display: grid;
+  width: min(520px, calc(100vw - 48px));
+  gap: var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xl);
+  padding: var(--space-4);
+  background: var(--popover);
+  box-shadow: var(--shadow-xl);
+}
+
+.channels-pairing-dialog__option {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.channels-pairing-dialog__option input {
+  margin-top: 3px;
+}
+
+.channels-pairing-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+@media (max-width: 640px) {
+  .channels-pairing-request__main {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .channels-pairing-request__actions {
+    justify-content: flex-start;
+  }
+}
+
 /* ---------- setup wizard dialog ---------- */
 
 .channels-wizard {

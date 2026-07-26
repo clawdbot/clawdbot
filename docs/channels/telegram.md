@@ -250,7 +250,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     Group replies require mention by default. A mention can come from:
 
     - a native `@botusername` mention, or
-    - a mention pattern in `agents.list[].groupChat.mentionPatterns` or `messages.groupChat.mentionPatterns`
+    - a mention pattern in `agents.entries.*.groupChat.mentionPatterns` or `messages.groupChat.mentionPatterns`
 
     Session-level toggles (state only, not persisted): `/activation always`, `/activation mention`. Use config for persistence:
 
@@ -578,7 +578,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     **Persistent ACP topic binding**: forum topics can pin ACP harness sessions through top-level typed bindings (`bindings[]` with `type: "acp"`, `match.channel: "telegram"`, `peer.kind: "group"`, and a topic-qualified id like `-1001234567890:topic:42`). Currently scoped to forum topics in groups/supergroups. See [ACP Agents](/tools/acp-agents).
 
-    **Thread-bound ACP spawn from chat**: `/acp spawn <agent> --thread here|auto` binds the current topic to a new ACP session; follow-ups route there directly, and OpenClaw pins the spawn confirmation in-topic. Requires `channels.telegram.threadBindings.spawnSessions` (default: `true`).
+    **Thread-bound ACP spawn from chat**: `/acp spawn <agent> --thread here|auto` binds the current topic to a new ACP session; follow-ups route there directly, and OpenClaw pins the spawn confirmation in-topic. Controlled by `session.threadBindings.spawnSessions` (default: `true`).
 
     Template context exposes `MessageThreadId` and `IsForum`. DM chats with `message_thread_id` keep reply metadata but only use thread-aware session keys when Telegram `getMe` reports `has_topics_enabled: true`.
     The retired `dm.threadReplies` and `direct.*.threadReplies` overrides are gone; BotFather threaded mode is the single source of truth. Run `openclaw doctor --fix` to remove stale config keys.
@@ -699,7 +699,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - `channels.telegram.accounts.<accountId>.ackReaction`
     - `channels.telegram.ackReaction`
     - `messages.ackReaction`
-    - agent identity emoji fallback (`agents.list[].identity.emoji`, else "👀")
+    - agent identity emoji fallback (`agents.entries.*.identity.emoji`, else "👀")
 
     Telegram expects a unicode emoji (for example "👀"); use `""` to disable the reaction for a channel or account.
 

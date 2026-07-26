@@ -16,9 +16,6 @@ import {
 } from "./process/respawn-child-runner.js";
 
 const EXPERIMENTAL_WARNING_FLAG = "--disable-warning=ExperimentalWarning";
-const BUNDLED_CA_FLAG = "--use-bundled-ca";
-const OPENSSL_CA_FLAG = "--use-openssl-ca";
-const SYSTEM_CA_FLAG = "--use-system-ca";
 const OPENCLAW_NODE_OPTIONS_READY = "OPENCLAW_NODE_OPTIONS_READY";
 const OPENCLAW_NODE_EXTRA_CA_CERTS_READY = "OPENCLAW_NODE_EXTRA_CA_CERTS_READY";
 const WINDOWS_STACK_SIZE_FLAG = "--stack-size=8192";
@@ -65,28 +62,6 @@ function hasExperimentalWarningSuppressed(
   return execArgv.some((arg) => arg === EXPERIMENTAL_WARNING_FLAG || arg === "--no-warnings");
 }
 
-function hasNodeRuntimeOption(params: {
-  env: NodeJS.ProcessEnv;
-  execArgv: string[];
-  option: string;
-}): boolean {
-  const nodeOptions = (params.env.NODE_OPTIONS ?? "").split(/\s+/u);
-  return (
-    params.execArgv.includes(params.option) ||
-    nodeOptions.some((token) => {
-      if (token === params.option) {
-        return true;
-      }
-      const quote = token[0];
-      return (
-        (quote === '"' || quote === "'") &&
-        token.at(-1) === quote &&
-        token.slice(1, -1) === params.option
-      );
-    })
-  );
-}
-
 function hasStackSizeConfigured(execArgv: string[]): boolean {
   return execArgv.some(
     (arg) =>
@@ -116,7 +91,7 @@ export function buildCliRespawnPlan(
     platform === "win32" ? normalizeWindowsArgv(argv, { platform, execPath }) : argv;
 
   if (
-    shouldSkipStartupEnvironmentRespawnForArgv(normalizedArgv) ||
+    shouldSkipStartupEnvironmentRespawnForArgv(normalizedArgv, platform) ||
     isTruthyEnvValue(env.OPENCLAW_NO_RESPAWN)
   ) {
     return null;
@@ -144,23 +119,6 @@ export function buildCliRespawnPlan(
     };
   }
 
-  if (
-    platform === "darwin" &&
-    env.NODE_USE_SYSTEM_CA === "1" &&
-    !isTerminalInteractiveRespawnArgv(argv) &&
-    !hasNodeRuntimeOption({ env, execArgv, option: SYSTEM_CA_FLAG }) &&
-    !hasNodeRuntimeOption({ env, execArgv, option: OPENSSL_CA_FLAG })
-  ) {
-    // Node loads the macOS Keychain off-thread on the first TLS import, then joins
-    // that worker during shutdown. One-shot CLIs use the file-backed CA store instead;
-    // an explicit --use-system-ca remains the opt-in for Keychain-only trust.
-    childEnv.NODE_USE_SYSTEM_CA = "0";
-    if (!hasNodeRuntimeOption({ env, execArgv, option: BUNDLED_CA_FLAG })) {
-      childExecArgv.unshift(OPENSSL_CA_FLAG);
-    }
-    needsRespawn = true;
-  }
-
   const autoNodeExtraCaCerts =
     params.autoNodeExtraCaCerts ??
     resolveNodeStartupTlsEnvironment({
@@ -179,7 +137,7 @@ export function buildCliRespawnPlan(
   }
 
   if (
-    !shouldSkipRespawnForArgv(argv) &&
+    !shouldSkipRespawnForArgv(argv, platform) &&
     !isTruthyEnvValue(env[OPENCLAW_NODE_OPTIONS_READY]) &&
     !hasExperimentalWarningSuppressed({ env, execArgv })
   ) {

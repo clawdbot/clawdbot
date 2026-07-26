@@ -39,6 +39,9 @@ import {
 } from "./agent-runner-failure-copy.js";
 import { classifyProviderRequestError } from "./provider-request-error-classifier.js";
 
+const RATE_LIMIT_RETRY_MESSAGE =
+  "⚠️ The model request was rate-limited. Please try again in a few minutes.";
+
 /** Builds a human-friendly rate-limit message, including a known cooldown. */
 export function buildRateLimitCooldownMessage(err: unknown): string {
   const codexUsageLimitMessage = extractCodexUsageLimitErrorMessage(err);
@@ -57,7 +60,7 @@ export function buildRateLimitCooldownMessage(err: unknown): string {
       const providerMessage = sanitizeUserFacingText(message, { errorContext: true });
       return providerMessage.startsWith("⚠️") ? providerMessage : `⚠️ ${providerMessage}`;
     }
-    return "⚠️ All models are temporarily rate-limited. Please try again in a few minutes.";
+    return RATE_LIMIT_RETRY_MESSAGE;
   }
   const expiry = err.soonestCooldownExpiry;
   const now = Date.now();
@@ -68,7 +71,13 @@ export function buildRateLimitCooldownMessage(err: unknown): string {
     }
     return `⚠️ Rate-limited — ready in ~${Math.ceil(secsLeft / 60)} min. Please try again shortly.`;
   }
-  return "⚠️ All models are temporarily rate-limited. Please try again in a few minutes.";
+  const attemptedModels = new Set(
+    err.attempts.map((attempt) => `${attempt.provider}/${attempt.model}`),
+  );
+  if (attemptedModels.size > 1 && isPureTransientRateLimitSummary(err)) {
+    return "⚠️ All attempted models were rate-limited or overloaded. Please try again in a few minutes.";
+  }
+  return RATE_LIMIT_RETRY_MESSAGE;
 }
 
 export function resolveBillingFailureReplyText(err: unknown): string {

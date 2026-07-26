@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { upsertSessionEntry } from "../config/sessions/session-accessor.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -15,10 +16,15 @@ import {
 
 const tempDirs: string[] = [];
 
-function createEnv(): NodeJS.ProcessEnv {
+async function createEnv(): Promise<NodeJS.ProcessEnv> {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-heartbeat-outcome-"));
   tempDirs.push(stateDir);
-  return { OPENCLAW_STATE_DIR: stateDir };
+  const env = { OPENCLAW_STATE_DIR: stateDir };
+  await upsertSessionEntry(
+    { agentId: "main", env, sessionKey: "agent:main:main" },
+    { sessionId: "heartbeat-outcome-test", updatedAt: 1 },
+  );
+  return env;
 }
 
 afterEach(() => {
@@ -30,8 +36,8 @@ afterEach(() => {
 });
 
 describe("heartbeat outcome store", () => {
-  it("keeps one bounded typed outcome per base session with provenance", () => {
-    const env = createEnv();
+  it("keeps one bounded typed outcome per base session with provenance", async () => {
+    const env = await createEnv();
     persistHeartbeatOutcome({
       agentId: "main",
       sessionKey: "agent:main:main",
@@ -75,8 +81,8 @@ describe("heartbeat outcome store", () => {
     );
   });
 
-  it("replaces older state and ignores visible or no-change responses", () => {
-    const env = createEnv();
+  it("replaces older state and ignores visible or no-change responses", async () => {
+    const env = await createEnv();
     const base = {
       agentId: "main",
       sessionKey: "agent:main:main",
@@ -119,8 +125,8 @@ describe("heartbeat outcome store", () => {
     ).toEqual({ count: 1 });
   });
 
-  it("injects once per user run, keeps retries, and resets after a new heartbeat", () => {
-    const env = createEnv();
+  it("injects once per user run, keeps retries, and resets after a new heartbeat", async () => {
+    const env = await createEnv();
     const base = {
       agentId: "main",
       sessionKey: "agent:main:main",

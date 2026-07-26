@@ -1040,6 +1040,11 @@ describe("media store", () => {
         expectedIdPattern: /^[a-f0-9-]{36}\.txt$/,
         expectUuidOnly: true,
       },
+      {
+        name: "strips controls and neutralizes bidi/zero-width formatting",
+        originalFilename: "report\rC\nL\tT\fF\x1bE\x00N\x7fD\u202efd\u200bp\ufeffsafe.exe",
+        expectedIdPattern: /^reportCLTFEND_fd_p_safe---[a-f0-9-]{36}\.txt$/,
+      },
     ] as const)("$name", async (testCase) => {
       await expectSavedOriginalFilenameCase(testCase);
     });

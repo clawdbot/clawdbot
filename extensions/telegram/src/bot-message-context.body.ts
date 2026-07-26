@@ -192,7 +192,7 @@ export async function resolveTelegramInboundBody(params: {
   });
   const messageTextParts = getTelegramTextParts(msg);
   const allowForCommands = isGroup ? effectiveGroupAllow : effectiveDmAllow;
-  const useAccessGroups = cfg.commands?.useAccessGroups !== false;
+  const useAccessGroups = true;
   const hasControlCommandInMessage = hasControlCommand(messageTextParts.text, cfg, {
     botUsername,
   });
@@ -288,14 +288,7 @@ export async function resolveTelegramInboundBody(params: {
         OriginatingTo: originatingTo,
         AccountId: accountId,
         MessageThreadId: replyThreadId,
-        MediaPaths:
-          materializedMedia.length > 0
-            ? materializedMedia.map((media) => media.path as string)
-            : undefined,
-        MediaTypes:
-          materializedMedia.length > 0
-            ? materializedMedia.map((media) => media.contentType ?? media.kind)
-            : undefined,
+        media: materializedMedia,
       };
       preflightTranscript = await transcribeFirstAudio({
         ctx: tempCtx,

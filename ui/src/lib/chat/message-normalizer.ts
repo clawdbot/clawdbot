@@ -217,12 +217,16 @@ function mimeTypeFromUrl(url: string): string | undefined {
 }
 
 function inferAttachmentKind(url: string): {
-  kind: "image" | "audio" | "video" | "document";
+  kind: Extract<MessageContentItem, { type: "attachment" }>["attachment"]["kind"];
   mimeType?: string;
   label: string;
 } {
   const mimeType = mimeTypeFromUrl(url);
-  const kind = mediaKindFromMime(mimeType) ?? "document";
+  const inferredKind = mediaKindFromMime(mimeType);
+  const kind =
+    !inferredKind || inferredKind === "sticker" || inferredKind === "unknown"
+      ? "document"
+      : inferredKind;
   const label = (() => {
     try {
       if (/^https?:\/\//i.test(url)) {

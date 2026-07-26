@@ -812,12 +812,12 @@ async function resolveTelegramCommandAuth(params: {
     senderId,
     senderUsername,
     resolveGroupPolicy,
-    enforcePolicy: cfg.commands?.useAccessGroups !== false,
+    enforcePolicy: true,
     useTopicAndGroupOverrides: false,
     enforceAllowlistAuthorization: requireAuth && !commandsAllowFromConfigured,
     allowEmptyAllowlistEntries: true,
     requireSenderForAllowlistAuthorization: true,
-    checkChatAllowlist: cfg.commands?.useAccessGroups !== false,
+    checkChatAllowlist: true,
   });
   if (!policyAccess.allowed) {
     if (policyAccess.reason === "group-policy-disabled") {

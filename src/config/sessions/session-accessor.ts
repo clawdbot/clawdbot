@@ -169,6 +169,7 @@ export {
 export {
   forkSessionAtMessage,
   listSessionBranches,
+  resolveSessionTranscriptActiveLeafEntryId,
   rewindSessionToMessage,
   switchSessionBranch,
 } from "./session-accessor.message-cut.js";
@@ -176,6 +177,7 @@ export {
   commitReplySessionInitialization,
   loadReplySessionInitializationSnapshot,
   persistSessionResetLifecycle,
+  SessionInitializationAgentScopeMismatchError,
 } from "./session-accessor.reset.js";
 export {
   appendTranscriptEvent,
@@ -203,6 +205,7 @@ export { persistSessionTranscriptTurn } from "./session-accessor.transcript-turn
 export {
   isSessionTranscriptProjectionUnavailableError,
   readRecentSessionTranscriptMessageEvents,
+  readSessionTranscriptActiveLeafEvents,
   readSessionTranscriptMessageAnchorPage,
   readSessionTranscriptMessageEventById,
   readSessionTranscriptMessageEventCount,
