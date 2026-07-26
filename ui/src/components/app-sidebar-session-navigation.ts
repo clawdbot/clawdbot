@@ -296,6 +296,10 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       // Raw gateway-owned order: grouping normalizes it against the full
       // discovered category set without dropping catalog-lagging categories.
       sectionOrder: this.knownSectionOrder(),
+      catalogIds:
+        this.sessionsStatusFilter === "archived"
+          ? []
+          : this.sessionData.sessionCatalogs.map((catalog) => catalog.id),
       collapsedSections: this.collapsedSessionSections,
       hideEmptyCreatorFilteredGroup: (category, rowCount) =>
         this.hideEmptyCreatorFilteredGroup(category, rowCount),
@@ -523,6 +527,19 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
 
   knownSectionOrder(): string[] {
     return [...(this.context?.sessions.state.sectionOrder ?? [])];
+  }
+
+  knownSessionCatalogIds(): string[] {
+    const loadedCatalogIds = this.sessionData.sessionCatalogs.map((catalog) => catalog.id);
+    if (this.sessionData.sessionCatalogRefreshStatus.hasLoaded) {
+      return loadedCatalogIds;
+    }
+    // Until the first authoritative list completes, progressive rows are only
+    // a partial view. Preserve stored slots so an unrelated drag cannot erase them.
+    const storedCatalogIds = this.knownSectionOrder().flatMap((sectionId) =>
+      sectionId.startsWith("catalog:") ? [sectionId.slice("catalog:".length)] : [],
+    );
+    return [...new Set([...loadedCatalogIds, ...storedCatalogIds])];
   }
 
   findSidebarSessionByKey(sessionKey: string): SidebarRecentSession | undefined {
