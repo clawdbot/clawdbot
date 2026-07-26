@@ -1,8 +1,4 @@
-import type { ToolDisplaySpec } from "./tool-display-common.js";
-
-type ContinuationToolDisplaySpec = ToolDisplaySpec & {
-  emoji?: string;
-};
+import type { ToolDisplayRegistry } from "./tool-display-config.types.js";
 
 export const CONTINUATION_TOOL_DISPLAY_CONFIG = {
   continue_delegate: {
@@ -20,4 +16,4 @@ export const CONTINUATION_TOOL_DISPLAY_CONFIG = {
     title: "Request Compaction",
     detailKeys: ["reason"],
   },
-} satisfies Record<string, ContinuationToolDisplaySpec>;
+} satisfies ToolDisplayRegistry;
