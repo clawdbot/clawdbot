@@ -792,6 +792,47 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
+  it("keeps parent-owned operational replies private before redirect policy", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "child-session",
+      updatedAt: Date.now(),
+      spawnedBy: "agent:main:parent",
+      acp: { backend: "acpx" },
+    };
+    const dispatcher = createDispatcher();
+    const blockPayload = setReplyPayloadMetadata(
+      { text: "private child status", isStatusNotice: true },
+      { operationalNotice: true },
+    );
+    const finalPayload = setReplyPayloadMetadata(
+      { text: "private child failure", isError: true },
+      { operationalNotice: true },
+    );
+
+    await expect(
+      dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "telegram",
+          ChatType: "direct",
+          SessionKey: "agent:main:child",
+        }),
+        cfg: {
+          ...emptyConfig,
+          messages: { operationalReplies: { policy: "redirect" } },
+        },
+        dispatcher,
+        replyResolver: async (_ctx, opts) => {
+          await opts?.onBlockReply?.(blockPayload);
+          return finalPayload;
+        },
+      }),
+    ).resolves.toMatchObject({ queuedFinal: false });
+
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
   it("keeps missing-final recovery when policy silence is mixed with a hidden ordinary final", async () => {
     setNoAbort();
     const cfg = {

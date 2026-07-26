@@ -64,6 +64,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     sessionStoreEntry,
     sessionTtsAuto,
     suppressDelivery,
+    suppressHookUserDelivery,
     suppressUserDeliveryBySourceReplyPolicy,
     throwIfDispatchOperationAborted,
     waitForPendingDirectBlockReplyDelivery,
@@ -138,13 +139,10 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       continue;
     }
     eligibleFinalCount += 1;
-    const policyResult = await applyDispatchOperationalReplyPolicy(reply);
-    if (!policyResult.shouldDeliver) {
-      operationalPolicySuppressedFinalCount += 1;
-      continue;
-    }
-    if (suppressDelivery && !shouldDeliverDespiteSourceReplySuppression(reply)) {
-      await markOperationalReplyPolicyDelivered(policyResult, false);
+    if (
+      (suppressHookUserDelivery && !suppressUserDeliveryBySourceReplyPolicy) ||
+      (suppressDelivery && !shouldDeliverDespiteSourceReplySuppression(reply))
+    ) {
       if (hasOutboundReplyContent(reply, { trimText: true })) {
         logVerbose(
           [
@@ -159,6 +157,11 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
           ].join(" "),
         );
       }
+      continue;
+    }
+    const policyResult = await applyDispatchOperationalReplyPolicy(reply);
+    if (!policyResult.shouldDeliver) {
+      operationalPolicySuppressedFinalCount += 1;
       continue;
     }
     const finalPayloadDedupeKey = createFinalDispatchPayloadDedupeKey(reply);

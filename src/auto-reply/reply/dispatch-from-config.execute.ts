@@ -552,6 +552,9 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       explicitCommandTurn: false,
                     });
                     const visiblePayloadMetadata = getReplyPayloadMetadata(visiblePayload);
+                    if (suppressHookUserDelivery && !suppressUserDeliveryBySourceReplyPolicy) {
+                      return;
+                    }
                     const policyResult = await applyDispatchOperationalReplyPolicy(visiblePayload);
                     if (!policyResult.shouldDeliver) {
                       return;

@@ -85,6 +85,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   } = state;
   const shouldSuppressProgressDelivery = () =>
     sendPolicyDenied ||
+    (suppressHookUserDelivery && !suppressUserDeliveryBySourceReplyPolicy) ||
     (suppressDelivery && !shouldDeliverVerboseProgressDespiteSourceSuppression());
   const shouldSuppressDefaultToolProgressMessages = () => !shouldEmitVerboseProgress();
   const shouldSendVerboseProgressMessages = () => !shouldSuppressDefaultToolProgressMessages();

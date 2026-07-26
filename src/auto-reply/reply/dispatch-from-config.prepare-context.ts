@@ -114,16 +114,15 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
         ? payload
         : copyReplyPayloadMetadata(payload, { ...payload, isStatusNotice: true }),
     );
-    const policyResult = await applyDispatchOperationalReplyPolicy(noticePayload);
-    if (!policyResult.shouldDeliver) {
-      return policyResult.redirected === true;
-    }
     if (
       sendPolicyDenied ||
       (suppressHookUserDelivery && !suppressUserDeliveryBySourceReplyPolicy)
     ) {
-      await markOperationalReplyPolicyDelivered(policyResult, false);
       return false;
+    }
+    const policyResult = await applyDispatchOperationalReplyPolicy(noticePayload);
+    if (!policyResult.shouldDeliver) {
+      return policyResult.redirected === true;
     }
     if (ctx.InboundEventKind === "room_event" && suppressAutomaticSourceDelivery) {
       await markOperationalReplyPolicyDelivered(policyResult, false);

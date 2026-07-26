@@ -65,6 +65,8 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     sourceReplyPolicy,
     suppressAutomaticSourceDelivery,
     suppressDelivery,
+    suppressHookUserDelivery,
+    suppressUserDeliveryBySourceReplyPolicy,
     traceReplyPhase,
   } = state;
   const settleDirectOperationalPolicyAfterDispatch = async (
@@ -296,6 +298,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
   });
   const shouldSuppressProgressDelivery = () =>
     sendPolicyDenied ||
+    (suppressHookUserDelivery && !suppressUserDeliveryBySourceReplyPolicy) ||
     (suppressDelivery && !shouldDeliverVerboseProgressDespiteSourceSuppression());
   const hasVisibleRegularVerboseToolProgress = () =>
     shouldEmitVerboseProgress() &&
