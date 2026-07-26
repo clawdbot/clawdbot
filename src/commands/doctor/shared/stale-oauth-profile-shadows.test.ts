@@ -41,12 +41,15 @@ function storeWith(profileId: string, credential: OAuthCredential): AuthProfileS
   };
 }
 
-async function writeRawAuthStore(
-  agentDir: string,
-  store: unknown,
-  options: { writeLegacy?: boolean } = {},
-): Promise<void> {
-  if (options.writeLegacy) {
+async function writeRawAuthStore(agentDir: string, store: unknown): Promise<void> {
+  const profiles =
+    typeof store === "object" && store !== null && "profiles" in store
+      ? (store.profiles as Record<string, unknown>)
+      : {};
+  const hasLegacySidecarRef = Object.values(profiles).some(
+    (profile) => typeof profile === "object" && profile !== null && "oauthRef" in profile,
+  );
+  if (hasLegacySidecarRef) {
     const authPath = resolveAuthStorePath(agentDir);
     await fs.mkdir(path.dirname(authPath), { recursive: true });
     await fs.writeFile(authPath, `${JSON.stringify(store, null, 2)}\n`, "utf8");
@@ -275,26 +278,22 @@ describe("stale OAuth profile shadow doctor repair", () => {
     const profileId = "openai-codex:default";
     const now = Date.now();
     const childAgentDir = path.join(stateDir, "agents", "telegram", "agent");
-    await writeRawAuthStore(
-      childAgentDir,
-      {
-        version: 1,
-        profiles: {
-          [profileId]: {
-            type: "oauth",
+    await writeRawAuthStore(childAgentDir, {
+      version: 1,
+      profiles: {
+        [profileId]: {
+          type: "oauth",
+          provider: "openai-codex",
+          accountId: "acct-shared",
+          expires: now - 60_000,
+          oauthRef: {
+            source: "openclaw-credentials",
             provider: "openai-codex",
-            accountId: "acct-shared",
-            expires: now - 60_000,
-            oauthRef: {
-              source: "openclaw-credentials",
-              provider: "openai-codex",
-              id: "0123456789abcdef0123456789abcdef",
-            },
+            id: "0123456789abcdef0123456789abcdef",
           },
         },
       },
-      { writeLegacy: true },
-    );
+    });
     saveAuthProfileStore(
       storeWith(
         profileId,
