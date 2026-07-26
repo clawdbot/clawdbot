@@ -164,6 +164,23 @@ describe("operational reply policy", () => {
     expect(duplicateAfterSuccess.shouldDeliver).toBe(false);
   });
 
+  it("allows only one concurrent once reservation", async () => {
+    const { sessionKey, storePath } = await createSessionStoreFixture();
+    const cfg = onceConfig(storePath);
+
+    const results = await Promise.all([
+      applyOncePolicy({ cfg, sessionKey, storePath, text: "concurrent notice" }),
+      applyOncePolicy({ cfg, sessionKey, storePath, text: "concurrent notice" }),
+    ]);
+
+    expect(results.filter((result) => result.shouldDeliver)).toHaveLength(1);
+    const reserved = results.find((result) => result.shouldDeliver);
+    if (!reserved) {
+      throw new Error("expected one concurrent reservation");
+    }
+    await markOperationalReplyPolicyDelivered(reserved, true);
+  });
+
   it("retries stale durable pending once reservations after restart", async () => {
     const { sessionKey, storePath } = await createSessionStoreFixture();
     const cfg = onceConfig(storePath);

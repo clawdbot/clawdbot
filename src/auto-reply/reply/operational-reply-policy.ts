@@ -235,14 +235,14 @@ async function reserveOperationalReplyOnceKey(params: {
   sourceSessionKey?: string;
   sourceStorePath?: string;
 }): Promise<OperationalReplyOnceReservation | null> {
-  if (hasOperationalReplyOnceKey(params.key)) {
+  // Claim the key before the first await. Concurrent callers in this process
+  // must not both pass the durable-store check and reserve the same notice.
+  if (!reserveOperationalReplyOnceKeyInMemory(params.key)) {
     return null;
   }
   const scope = resolveOperationalReplySourceScope(params);
   if (!scope) {
-    return reserveOperationalReplyOnceKeyInMemory(params.key)
-      ? { durableReserved: false, key: params.key }
-      : null;
+    return { durableReserved: false, key: params.key };
   }
   try {
     let reserved = false;
@@ -258,12 +258,8 @@ async function reserveOperationalReplyOnceKey(params: {
         const pendingKeys = normalizeOperationalReplyOnceKeys(
           entry.operationalReplyPendingOnceKeys,
         );
-        // Durable pending keys can be stale after restart; only live in-memory
-        // pending state blocks concurrent duplicates from this process.
-        if (pendingKeys.includes(params.key) && pendingOperationalReplyOnceKeys.has(params.key)) {
-          alreadySeen = true;
-          return null;
-        }
+        // This process already owns the in-memory reservation. An identical
+        // durable pending key is stale from an earlier process and is replaced.
         reserved = true;
         return {
           operationalReplyPendingOnceKeys: appendOperationalReplyOnceKey(
@@ -275,20 +271,16 @@ async function reserveOperationalReplyOnceKey(params: {
       { preserveActivity: true },
     );
     if (alreadySeen) {
+      releaseOperationalReplyOnceKeyInMemory(params.key);
       return null;
     }
     if (reserved) {
-      reserveOperationalReplyOnceKeyInMemory(params.key);
       return { durableReserved: true, key: params.key, scope };
     }
-    return reserveOperationalReplyOnceKeyInMemory(params.key)
-      ? { durableReserved: false, key: params.key }
-      : null;
+    return { durableReserved: false, key: params.key };
   } catch (error) {
     logVerbose(`operational-reply-policy: once persistence skipped: ${formatErrorMessage(error)}`);
-    return reserveOperationalReplyOnceKeyInMemory(params.key)
-      ? { durableReserved: false, key: params.key }
-      : null;
+    return { durableReserved: false, key: params.key };
   }
 }
 

@@ -492,12 +492,6 @@ export function createFollowupRunner(params: {
       return true;
     };
     for (const [payloadIndex, payload] of policyCandidatePayloads.entries()) {
-      if (!shouldRouteToOriginating && !opts?.onBlockReply) {
-        defaultRuntime.error?.(
-          "followup queue: completed with payloads but no origin route or visible dispatcher is available",
-        );
-        return false;
-      }
       const providerRoute = deliveryPlan.resolveFollowupRoute({
         payload,
         originatingChannel,
@@ -521,6 +515,16 @@ export function createFollowupRunner(params: {
               : opts?.onBlockReply
                 ? "dispatcher"
                 : undefined;
+      if (!deliveryRoute) {
+        const policyResult = await applyFollowupPayloadPolicy(payload, payloadIndex, replyKind);
+        if (policyResult.shouldDeliver) {
+          await markOperationalReplyPolicyDelivered(policyResult, false);
+          defaultRuntime.error?.(
+            "followup queue: completed with payloads but no origin route or visible dispatcher is available",
+          );
+        }
+        continue;
+      }
       if (deliveryRoute === "dispatcher") {
         await typingSignals.signalTextDelta(payload.text);
         // The dispatcher owns operational policy for this path. Applying it
@@ -626,23 +630,16 @@ export function createFollowupRunner(params: {
           "cross-channel misdelivery.",
         isError: true,
       });
-      const policyResult = await applyFollowupPayloadPolicy(
-        routeFailureNotice,
-        policyCandidatePayloads.length,
-        "block",
-      );
-      if (policyResult.shouldDeliver) {
-        if (
-          queued.currentInboundEventKind === "room_event" &&
-          resolveOperationalReplyPolicy(runtimeConfig).policy === "always"
-        ) {
-          logVerbose("followup queue: cross-channel failure notice suppressed for room_event");
-          return deliveredAnyPayload;
-        }
-        const delivered = await sendDispatcherPayload(routeFailureNotice);
-        await markOperationalReplyPolicyDelivered(policyResult, delivered);
-        deliveredAnyPayload = delivered || deliveredAnyPayload;
+      if (
+        queued.currentInboundEventKind === "room_event" &&
+        resolveOperationalReplyPolicy(runtimeConfig).policy === "always"
+      ) {
+        logVerbose("followup queue: cross-channel failure notice suppressed for room_event");
+        return deliveredAnyPayload;
       }
+      // The dispatcher owns operational policy for this fallback too.
+      const delivered = await sendDispatcherPayload(routeFailureNotice);
+      deliveredAnyPayload = delivered || deliveredAnyPayload;
     }
     return deliveredAnyPayload;
   };
