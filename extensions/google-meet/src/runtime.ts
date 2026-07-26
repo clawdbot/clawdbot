@@ -23,6 +23,7 @@ import {
   testGoogleMeetSpeech,
   type GoogleMeetRuntimeProbeContext,
 } from "./runtime-probes.js";
+import { resolveRecoverOwnership } from "./runtime-recover-ownership.js";
 import {
   isBrowserTransport,
   noteSession,
@@ -252,19 +253,27 @@ export class GoogleMeetRuntime {
     const url = request.url
       ? GOOGLE_MEET_PLATFORM_ADAPTER.urls.validateAndNormalize(request.url)
       : undefined;
+    // Untargeted recovery must only reattach to a tab this runtime owns.
+    // Without trackedTargetId, findRecoverableTab falls through to any Meet
+    // identity in the shared Chrome profile and arms mic/captions on it.
+    const ownership = resolveRecoverOwnership({
+      url,
+      transport,
+      sessions: this.list(),
+      createdBrowserTabs: this.#createdBrowserTabs,
+    });
+
+    if (!url && !ownership.trackedTargetId) {
+      const message = "No owned Meet tab available for untargeted recovery.";
+      return transport === "chrome-node"
+        ? { transport: "chrome-node" as const, nodeId: "", found: false, message }
+        : { transport: "chrome" as const, found: false, message };
+    }
+    const { runtime, config, fullConfig } = this.params;
+    const recoverParams = { runtime, config, fullConfig, url, ...ownership };
     return transport === "chrome-node"
-      ? await recoverCurrentMeetTabOnNode({
-          runtime: this.params.runtime,
-          config: this.params.config,
-          fullConfig: this.params.fullConfig,
-          url,
-        })
-      : await recoverCurrentMeetTab({
-          runtime: this.params.runtime,
-          config: this.params.config,
-          fullConfig: this.params.fullConfig,
-          url,
-        });
+      ? await recoverCurrentMeetTabOnNode(recoverParams)
+      : await recoverCurrentMeetTab(recoverParams);
   }
 
   async join(request: GoogleMeetJoinRequest): Promise<GoogleMeetJoinResult> {

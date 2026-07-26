@@ -563,13 +563,19 @@ export async function recoverMeetingBrowserTab<
     (!trackedUrlHasMeetingIdentity || trackedUrlMatches)
       ? trackedCandidate
       : undefined;
+  // Untargeted recovery without a tracked target must not attach to a random
+  // meeting tab in a shared browser profile (mic + captions would arm on it).
+  const allowUntargetedEnumeration =
+    Boolean(params.requestedMeetingUrl) || Boolean(params.trackedTargetId);
   const tab =
     trackedTab ??
-    findRecoverableTab({
-      adapter: params.adapter,
-      tabs,
-      requestedMeetingUrl: params.requestedMeetingUrl,
-    });
+    (allowUntargetedEnumeration
+      ? findRecoverableTab({
+          adapter: params.adapter,
+          tabs,
+          requestedMeetingUrl: params.requestedMeetingUrl,
+        })
+      : undefined);
   const targetId = tab?.targetId;
   if (!tab || !targetId) {
     return {
