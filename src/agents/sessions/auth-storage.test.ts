@@ -316,6 +316,54 @@ describe("SQLite auth storage", () => {
     );
   });
 
+  it("does not reuse prepared materialization when the current snapshot is unresolved", async () => {
+    const agentDir = makeAgentDir();
+    const keyRef = { source: "env" as const, provider: "default", id: "QA_AUTH_REF" };
+    writePersistedAuthProfileStoreRaw(
+      {
+        version: 1,
+        profiles: {
+          "openai:default": { type: "api_key", provider: "openai", keyRef },
+        },
+      },
+      agentDir,
+    );
+    replaceRuntimeAuthProfileStoreSnapshots([
+      {
+        agentDir,
+        store: {
+          version: 1,
+          profiles: {
+            "openai:default": {
+              type: "api_key",
+              provider: "openai",
+              keyRef,
+              key: "not-a-real",
+            },
+          },
+        },
+      },
+    ]);
+    const storage = AuthStorage.forAgent(agentDir);
+    replaceRuntimeAuthProfileStoreSnapshots([
+      {
+        agentDir,
+        store: {
+          version: 1,
+          profiles: {
+            "openai:default": { type: "api_key", provider: "openai", keyRef },
+          },
+        },
+      },
+    ]);
+
+    storage.reload();
+
+    await expect(storage.getApiKey("openai")).rejects.toThrow(
+      "requires the active secrets runtime to materialize SecretRef credentials",
+    );
+  });
+
   it("preserves state-only SQLite rows when adding credentials", () => {
     const agentDir = makeAgentDir();
     writePersistedAuthProfileStateRaw(

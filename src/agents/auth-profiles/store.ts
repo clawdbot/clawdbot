@@ -1390,8 +1390,12 @@ function saveAuthProfileStoreInTransaction(
     if (suppliedRuntimeStore) {
       const existing = getRuntimeAuthProfileStoreSnapshot(agentDir);
       if (existing) {
+        const materialized = preserveResolvedSecretBackedCredentials({
+          next: suppliedRuntimeStore,
+          existing,
+        });
         setRuntimeAuthProfileStoreSnapshot(
-          mergeRuntimeExternalProfileReferences({ next: suppliedRuntimeStore, existing }),
+          mergeRuntimeExternalProfileReferences({ next: materialized, existing }),
           agentDir,
         );
       }

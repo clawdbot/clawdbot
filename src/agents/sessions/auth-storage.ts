@@ -290,11 +290,10 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
   ) {}
 
   private resolveMaterializedRuntimeStores(): AuthProfileStore[] {
-    // A current lifecycle snapshot always wins. The prepared snapshot remains
-    // safe only while its SecretRefs still exactly match persisted rows.
-    return [getRuntimeAuthProfileStoreSnapshot(this.agentDir), this.preparedStore].filter(
-      (store): store is AuthProfileStore => store !== undefined,
-    );
+    const current = getRuntimeAuthProfileStoreSnapshot(this.agentDir);
+    // A current lifecycle snapshot is authoritative, including an unresolved
+    // ref after failed/revoked secrets reload. Prepared data is bootstrap-only.
+    return current ? [current] : this.preparedStore ? [this.preparedStore] : [];
   }
 
   private readRaw(): AuthProfileStore {
