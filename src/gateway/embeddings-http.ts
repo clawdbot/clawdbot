@@ -311,7 +311,7 @@ function adaptGenericEmbeddingProvider(
         ...options,
         inputType: "document",
       }),
-    ...(provider.close ? { close: provider.close } : {}),
+    ...(provider.close ? { close: async () => await provider.close?.() } : {}),
   };
 }
 
