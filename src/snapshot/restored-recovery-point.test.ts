@@ -17,6 +17,11 @@ import {
 } from "./final-recovery-point.js";
 import { createLocalSqliteSnapshotProvider } from "./local-repository.js";
 import {
+  readRecoveryJournalRecord,
+  resolveRecoveryJournalPath,
+  writeRecoveryJournalRecord,
+} from "./recovery-journal.js";
+import {
   createRecoveryPointAcceptance,
   createRecoveryPointManifest,
   type RecoveryPointSqliteSnapshot,
@@ -66,9 +71,11 @@ describe("restored recovery-point admission", () => {
     await expect(
       fs.access(resolveOpenClawAgentSqlitePath({ agentId: "main", env: fixture.destinationEnv })),
     ).resolves.toBe(undefined);
-    expect(JSON.parse(await fs.readFile(first.startupDescriptorPath, "utf8"))).toEqual({
+    await expect(
+      readRecoveryJournalRecord(first.startupDescriptorPath, "startup"),
+    ).resolves.toEqual({
       version: "openclaw-restored-admission/v1",
-      journalPath: path.dirname(first.startupDescriptorPath),
+      journalPath: first.startupDescriptorPath,
       result: first,
     });
   });
@@ -135,11 +142,8 @@ describe("restored recovery-point admission", () => {
 
   it("quarantines durable intent without a committed result", async () => {
     const fixture = await createFixture();
-    const journalPath = path.join(fixture.request.journalRoot, operationId(fixture.request));
-    await fs.mkdir(journalPath, { recursive: true, mode: 0o700 });
-    await fs.writeFile(path.join(journalPath, "intent.json"), stableStringify(fixture.request), {
-      mode: 0o600,
-    });
+    const journalPath = await prepareJournal(fixture.request);
+    await writeRecoveryJournalRecord(journalPath, "intent", fixture.request);
 
     await expect(
       restoreAcceptedRecoveryPoint(fixture.request, fixture.destinationEnv),
@@ -152,13 +156,13 @@ describe("restored recovery-point admission", () => {
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it.each(["intent.json", "result.json"])(
+  it.each(["intent", "result"])(
     "quarantines malformed durable %s instead of throwing raw JSON errors",
     async (recordName) => {
       const fixture = await createFixture();
-      const journalPath = path.join(fixture.request.journalRoot, operationId(fixture.request));
-      await fs.mkdir(journalPath, { recursive: true, mode: 0o700 });
-      await fs.writeFile(path.join(journalPath, recordName), "{", { mode: 0o600 });
+      const journalPath = await prepareJournal(fixture.request);
+      await writeRecoveryJournalRecord(journalPath, recordName, {});
+      replaceJournalPayload(journalPath, recordName, "{");
 
       await expect(
         restoreAcceptedRecoveryPoint(fixture.request, fixture.destinationEnv),
@@ -172,7 +176,7 @@ describe("restored recovery-point admission", () => {
   it("quarantines a malformed startup descriptor as typed journal corruption", async () => {
     const fixture = await createFixture();
     const result = await restoreAcceptedRecoveryPoint(fixture.request, fixture.destinationEnv);
-    await fs.writeFile(result.startupDescriptorPath, "{");
+    replaceJournalPayload(result.startupDescriptorPath, "startup", "{");
 
     await expect(
       loadRestoredAdmissionDescriptor(result.startupDescriptorPath),
@@ -190,8 +194,9 @@ describe("restored recovery-point admission", () => {
       ...resultWithoutReceipt,
       runtimeLineage: "runtime/other-tenant",
     };
-    await fs.writeFile(
-      path.join(path.dirname(result.startupDescriptorPath), "result.json"),
+    replaceJournalPayload(
+      result.startupDescriptorPath,
+      "result",
       stableStringify({
         ...conflictingWithoutReceipt,
         restoreReceiptIdentity: sha256Hex(stableStringify(conflictingWithoutReceipt)),
@@ -224,6 +229,24 @@ describe("restored recovery-point admission", () => {
     ).toThrow("normalized absolute path");
   });
 });
+
+async function prepareJournal(request: RestoredRecoveryPointRequest): Promise<string> {
+  const journalDirectory = path.join(request.journalRoot, operationId(request));
+  await fs.mkdir(journalDirectory, { recursive: true, mode: 0o700 });
+  return resolveRecoveryJournalPath(journalDirectory);
+}
+
+function replaceJournalPayload(databasePath: string, recordType: string, payload: string): void {
+  const sqlite = requireNodeSqlite();
+  const database = new sqlite.DatabaseSync(databasePath);
+  try {
+    database
+      .prepare("UPDATE recovery_journal_records SET payload_json = ? WHERE record_type = ?")
+      .run(payload, recordType);
+  } finally {
+    database.close();
+  }
+}
 
 async function createFixture() {
   const tempDir = tempDirs.make("openclaw-restored-recovery-point-");

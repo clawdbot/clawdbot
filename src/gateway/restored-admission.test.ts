@@ -4,6 +4,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { stableStringify } from "../agents/stable-stringify.js";
 import { sha256File, sha256Hex } from "../infra/crypto-digest.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import {
+  readRecoveryJournalRecord,
+  resolveRecoveryJournalPath,
+  writeRecoveryJournalRecord,
+} from "../snapshot/recovery-journal.js";
 import {
   RESTORED_ADMISSION_DESCRIPTOR_VERSION,
   RESTORED_RECOVERY_POINT_RESULT_VERSION,
@@ -36,9 +42,9 @@ describe("Gateway restored admission", () => {
     expect(first.replayed).toBe(false);
     expect(replay).toEqual({ record: first.record, replayed: true });
     expect(startScheduler).toHaveBeenCalledTimes(2);
-    expect(
-      JSON.parse(await fs.readFile(path.join(fixture.journalPath, "ready.json"), "utf8")),
-    ).toEqual(first.record);
+    await expect(readRecoveryJournalRecord(fixture.journalPath, "ready")).resolves.toEqual(
+      first.record,
+    );
   });
 
   it("quarantines changed restored bytes before scheduler start", async () => {
@@ -74,9 +80,7 @@ describe("Gateway restored admission", () => {
       code: "restored-admission.owner-readiness-hold",
       disposition: "hold",
     });
-    await expect(fs.access(path.join(fixture.journalPath, "ready.json"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expect(readRecoveryJournalRecord(fixture.journalPath, "ready")).resolves.toBeUndefined();
   });
 
   it("quarantines malformed ready evidence instead of throwing raw JSON errors", async () => {
@@ -88,7 +92,7 @@ describe("Gateway restored admission", () => {
       startScheduler,
       getOwnerReadiness: () => ({ ready: true, failing: [] }),
     });
-    await fs.writeFile(path.join(fixture.journalPath, "ready.json"), "{");
+    replaceJournalPayload(fixture.journalPath, "ready", "{");
 
     await expect(
       completeRestoredAdmission({
@@ -113,9 +117,9 @@ async function createFixture() {
   await fs.mkdir(path.dirname(agentPath), { recursive: true });
   await fs.writeFile(globalPath, "global-state");
   await fs.writeFile(agentPath, "agent-state");
-  const journalPath = path.join(tempDir, "journal");
-  await fs.mkdir(journalPath, { recursive: true, mode: 0o700 });
-  const descriptorPath = path.join(journalPath, "startup.json");
+  const journalDirectory = path.join(tempDir, "journal");
+  await fs.mkdir(journalDirectory, { recursive: true, mode: 0o700 });
+  const descriptorPath = resolveRecoveryJournalPath(journalDirectory);
   const resultWithoutReceipt: Omit<
     Extract<RestoredRecoveryPointResult, { ok: true }>,
     "restoreReceiptIdentity"
@@ -155,14 +159,22 @@ async function createFixture() {
     ...resultWithoutReceipt,
     restoreReceiptIdentity: sha256Hex(stableStringify(resultWithoutReceipt)),
   };
-  await fs.writeFile(
-    descriptorPath,
-    `${stableStringify({
-      version: RESTORED_ADMISSION_DESCRIPTOR_VERSION,
-      journalPath,
-      result,
-    })}\n`,
-    { mode: 0o600 },
-  );
-  return { descriptorPath, env, journalPath };
+  await writeRecoveryJournalRecord(descriptorPath, "startup", {
+    version: RESTORED_ADMISSION_DESCRIPTOR_VERSION,
+    journalPath: descriptorPath,
+    result,
+  });
+  return { descriptorPath, env, journalPath: descriptorPath };
+}
+
+function replaceJournalPayload(databasePath: string, recordType: string, payload: string): void {
+  const sqlite = requireNodeSqlite();
+  const database = new sqlite.DatabaseSync(databasePath);
+  try {
+    database
+      .prepare("UPDATE recovery_journal_records SET payload_json = ? WHERE record_type = ?")
+      .run(payload, recordType);
+  } finally {
+    database.close();
+  }
 }

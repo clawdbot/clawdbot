@@ -4,13 +4,17 @@ import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { stableStringify } from "../agents/stable-stringify.js";
 import { sha256File, sha256Hex } from "../infra/crypto-digest.js";
-import { requireDirectorySync, syncDirectory } from "../infra/directory-durability.js";
-import { ensureAbsoluteDirectory, FsSafeError, root } from "../infra/fs-safe.js";
+import { ensureAbsoluteDirectory, root } from "../infra/fs-safe.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
 import { isValidAgentId, normalizeAgentId } from "../routing/session-key.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createLocalSqliteSnapshotProvider } from "./local-repository.js";
+import {
+  readRecoveryJournalRecord,
+  resolveRecoveryJournalPath,
+  writeRecoveryJournalRecord,
+} from "./recovery-journal.js";
 import {
   verifyRecoveryPoint,
   type RecoveryPointManifest,
@@ -24,7 +28,6 @@ export const RESTORED_ADMISSION_DESCRIPTOR_VERSION = "openclaw-restored-admissio
 
 const MAX_RECORD_BYTES = 1024 * 1024;
 const PRIVATE_DIRECTORY_MODE = 0o700;
-const PRIVATE_FILE_MODE = 0o600;
 const SAFE_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,254}$/u;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 
@@ -145,7 +148,7 @@ export function parseRestoredAdmissionDescriptor(value: unknown): RestoredAdmiss
     !path.isAbsolute(descriptor.result.startupDescriptorPath) ||
     path.normalize(descriptor.result.startupDescriptorPath) !==
       descriptor.result.startupDescriptorPath ||
-    path.dirname(descriptor.result.startupDescriptorPath) !== descriptor.journalPath
+    descriptor.result.startupDescriptorPath !== descriptor.journalPath
   ) {
     throw conflict("Restored-admission descriptor path is outside its private journal.");
   }
@@ -158,7 +161,7 @@ export async function loadRestoredAdmissionDescriptor(
   if (!path.isAbsolute(descriptorPath) || path.normalize(descriptorPath) !== descriptorPath) {
     throw conflict("Restored-admission descriptor path must be a normalized absolute path.");
   }
-  const value = await readJournalJson(path.dirname(descriptorPath), path.basename(descriptorPath));
+  const value = await readJournalRecord(descriptorPath, "startup");
   const descriptor = parseRestoredAdmissionDescriptor(value);
   if (descriptor.result.startupDescriptorPath !== descriptorPath) {
     throw conflict("Restored-admission descriptor does not identify its loaded path.");
@@ -171,7 +174,7 @@ export async function restoreAcceptedRecoveryPoint(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<RestoredRecoveryPointResult> {
   const request = parseRestoredRecoveryPointRequest(stableStringify(requestValue));
-  const journalPath = path.join(
+  const journalDirectory = path.join(
     request.journalRoot,
     sha256Hex(
       stableStringify({
@@ -181,10 +184,11 @@ export async function restoreAcceptedRecoveryPoint(
       }),
     ),
   );
-  const startupDescriptorPath = path.join(journalPath, "startup.json");
-  await ensurePrivateDirectory(journalPath);
-  const existingIntent = await readJsonIfPresent(journalPath, "intent.json");
-  const existingResult = await readJsonIfPresent(journalPath, "result.json");
+  await ensurePrivateDirectory(journalDirectory);
+  const journalPath = resolveRecoveryJournalPath(journalDirectory);
+  const startupDescriptorPath = journalPath;
+  const existingIntent = await readJournalRecord(journalPath, "intent");
+  const existingResult = await readJournalRecord(journalPath, "result");
   if (existingResult !== undefined) {
     if (!isDeepStrictEqual(existingIntent, request)) {
       throw conflict("Committed restore has conflicting intent evidence.");
@@ -194,7 +198,7 @@ export async function restoreAcceptedRecoveryPoint(
       throw conflict("Committed restore result is invalid.");
     }
     await verifyCommittedRestore(request, replayed.data, startupDescriptorPath, env);
-    await writeStartupDescriptor(startupDescriptorPath, journalPath, replayed.data);
+    await writeStartupDescriptor(journalPath, replayed.data);
     return replayed.data;
   }
   if (existingIntent !== undefined) {
@@ -203,7 +207,7 @@ export async function restoreAcceptedRecoveryPoint(
 
   const verified = await verifyAcceptedRecoveryPoint(request);
   assertNoRequiredObligations(verified.manifest);
-  await writeRecord(path.join(journalPath, "intent.json"), request);
+  await writeJournalRecord(journalPath, "intent", request);
 
   const componentReceipts: Array<z.infer<typeof componentReceiptSchema>> = [];
   try {
@@ -243,8 +247,8 @@ export async function restoreAcceptedRecoveryPoint(
     startupDescriptorPath,
     components: componentReceipts,
   });
-  await writeRecord(path.join(journalPath, "result.json"), result);
-  await writeStartupDescriptor(startupDescriptorPath, journalPath, result);
+  await writeJournalRecord(journalPath, "result", result);
+  await writeStartupDescriptor(journalPath, result);
   return result;
 }
 
@@ -395,7 +399,6 @@ function createRestoreResult(params: {
 }
 
 async function writeStartupDescriptor(
-  startupDescriptorPath: string,
   journalPath: string,
   result: RestoredRecoveryPointResult,
 ): Promise<void> {
@@ -404,14 +407,14 @@ async function writeStartupDescriptor(
     journalPath,
     result,
   });
-  const existing = await readJsonIfPresent(journalPath, path.basename(startupDescriptorPath));
+  const existing = await readJournalRecord(journalPath, "startup");
   if (existing !== undefined) {
     if (!isDeepStrictEqual(existing, descriptor)) {
       throw conflict("Restored-admission startup descriptor conflicts with committed restore.");
     }
     return;
   }
-  await writeRecord(startupDescriptorPath, descriptor);
+  await writeJournalRecord(journalPath, "startup", descriptor);
 }
 
 async function ensurePrivateDirectory(directoryPath: string): Promise<void> {
@@ -429,39 +432,23 @@ async function ensurePrivateDirectory(directoryPath: string): Promise<void> {
   applyPrivateModeSync(result.path, PRIVATE_DIRECTORY_MODE);
 }
 
-async function writeRecord(filePath: string, value: unknown): Promise<void> {
-  const handle = await fs.open(filePath, "wx", PRIVATE_FILE_MODE);
+async function readJournalRecord(databasePath: string, recordType: string): Promise<unknown> {
   try {
-    await handle.writeFile(`${stableStringify(value)}\n`, "utf8");
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-  requireDirectorySync(await syncDirectory(path.dirname(filePath)), "Restore journal");
-}
-
-async function readJsonIfPresent(rootPath: string, relativePath: string): Promise<unknown> {
-  try {
-    return await readJournalJson(rootPath, relativePath);
+    return await readRecoveryJournalRecord(databasePath, recordType);
   } catch (error) {
-    if (
-      (error as NodeJS.ErrnoException).code === "ENOENT" ||
-      (error instanceof FsSafeError && error.code === "not-found")
-    ) {
-      return undefined;
-    }
-    throw error;
+    throw conflict(`Persisted restore record is unreadable: ${recordType}.`, error);
   }
 }
 
-async function readJournalJson(rootPath: string, relativePath: string): Promise<unknown> {
+async function writeJournalRecord(
+  databasePath: string,
+  recordType: string,
+  value: unknown,
+): Promise<void> {
   try {
-    return await readJson(rootPath, relativePath);
+    await writeRecoveryJournalRecord(databasePath, recordType, value);
   } catch (error) {
-    if (error instanceof SyntaxError) {
-      throw conflict(`Persisted restore record is not valid JSON: ${relativePath}.`, error);
-    }
-    throw error;
+    throw conflict(`Persisted restore record could not be committed: ${recordType}.`, error);
   }
 }
 

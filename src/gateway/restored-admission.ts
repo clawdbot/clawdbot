@@ -1,11 +1,11 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { stableStringify } from "../agents/stable-stringify.js";
 import { sha256File, sha256Hex } from "../infra/crypto-digest.js";
-import { requireDirectorySync, syncDirectory } from "../infra/directory-durability.js";
-import { FsSafeError, root } from "../infra/fs-safe.js";
+import {
+  readRecoveryJournalRecord,
+  writeRecoveryJournalRecord,
+} from "../snapshot/recovery-journal.js";
 import {
   loadRestoredAdmissionDescriptor,
   type RestoredAdmissionDescriptor,
@@ -19,8 +19,6 @@ const SCHEDULER_RECONCILIATION_EVIDENCE_VERSION =
   "openclaw-restored-scheduler-reconciliation-evidence/v1";
 const OWNER_READINESS_EVIDENCE_VERSION = "openclaw-restored-owner-readiness-evidence/v1";
 
-const MAX_RECORD_BYTES = 1024 * 1024;
-const PRIVATE_FILE_MODE = 0o600;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 
 const readyRecordSchema = z
@@ -136,7 +134,7 @@ export async function completeRestoredAdmission(params: {
     ...recordWithoutIdentity,
     readinessIdentity: sha256Hex(stableStringify(recordWithoutIdentity)),
   });
-  const existing = await readRecordIfPresent(descriptor.journalPath, "ready.json");
+  const existing = await readReadyRecord(descriptor.journalPath);
   if (existing !== undefined) {
     const parsed = readyRecordSchema.safeParse(existing);
     if (!parsed.success || !isDeepStrictEqual(parsed.data, record)) {
@@ -148,7 +146,16 @@ export async function completeRestoredAdmission(params: {
     }
     return { record, replayed: true };
   }
-  await writeRecord(path.join(descriptor.journalPath, "ready.json"), record);
+  try {
+    await writeRecoveryJournalRecord(descriptor.journalPath, "ready", record);
+  } catch (error) {
+    throw new RestoredAdmissionCompletionError(
+      "restored-admission.ready-conflict",
+      "quarantine",
+      "Restored-admission readiness evidence could not be committed.",
+      { cause: error },
+    );
+  }
   return { record, replayed: false };
 }
 
@@ -206,39 +213,11 @@ function resolveComponentTarget(componentId: string, env: NodeJS.ProcessEnv): st
   return resolveOpenClawAgentSqlitePath({ agentId: componentId.slice(prefix.length), env });
 }
 
-async function writeRecord(filePath: string, value: RestoredAdmissionReadyRecord): Promise<void> {
-  const handle = await fs.open(filePath, "wx", PRIVATE_FILE_MODE);
+async function readReadyRecord(databasePath: string): Promise<unknown> {
   try {
-    await handle.writeFile(`${stableStringify(value)}\n`, "utf8");
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-  requireDirectorySync(await syncDirectory(path.dirname(filePath)), "Restored-admission journal");
-}
-
-async function readRecordIfPresent(rootPath: string, relativePath: string): Promise<unknown> {
-  try {
-    const read = await (
-      await root(rootPath)
-    ).read(relativePath, {
-      hardlinks: "reject",
-      maxBytes: MAX_RECORD_BYTES,
-      symlinks: "reject",
-    });
-    try {
-      return JSON.parse(read.buffer.toString("utf8")) as unknown;
-    } catch (error) {
-      throw targetConflict(`Persisted admission record is not valid JSON: ${relativePath}.`, error);
-    }
+    return await readRecoveryJournalRecord(databasePath, "ready");
   } catch (error) {
-    if (
-      (error as NodeJS.ErrnoException).code === "ENOENT" ||
-      (error instanceof FsSafeError && error.code === "not-found")
-    ) {
-      return undefined;
-    }
-    throw error;
+    throw targetConflict("Persisted admission record is unreadable: ready.", error);
   }
 }
 
