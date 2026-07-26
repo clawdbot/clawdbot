@@ -60,7 +60,7 @@ function allAddressableSessionKeys(cfg: OpenClawConfig): string[] {
       }
     }
   }
-  return [...keys].sort();
+  return [...keys].toSorted();
 }
 
 function resolveRoute(
@@ -75,7 +75,7 @@ function resolveRoute(
       ...(delegate.targetSessionKey ? [delegate.targetSessionKey] : []),
       ...(delegate.targetSessionKeys ?? []),
     ]),
-  ].sort();
+  ].toSorted();
   if (targetSessionKeys.length > 0) {
     return {
       route:
@@ -88,7 +88,7 @@ function resolveRoute(
   if (delegate.fanoutMode === "tree") {
     return {
       route: { kind: "fanout", fanoutMode: "tree" },
-      sessionKeys: listAncestorSessionKeys(dispatchingSessionKey).sort(),
+      sessionKeys: listAncestorSessionKeys(dispatchingSessionKey).toSorted(),
     };
   }
   if (delegate.fanoutMode === "all") {
@@ -128,7 +128,7 @@ export function prepareDelegateArtifactPolicy(params: {
         ? resolved.sessionKeys
         : [params.dispatchingSessionKey];
   const recipients: DelegateArtifactRecipientV1[] = [];
-  for (const sessionKey of [...new Set(recipientKeys)]) {
+  for (const sessionKey of new Set(recipientKeys)) {
     const sessionId = loadSessionId(params.cfg, sessionKey);
     if (!sessionId) {
       throw new Error("artifact-capable continuation target is not a durable local session");
