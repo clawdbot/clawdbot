@@ -16,6 +16,7 @@ import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import {
   applyTaskEvent,
   mergeTaskLists,
+  normalizeTaskEventPayload,
   normalizeTasksCancelResult,
   normalizeTasksListResult,
   type TaskSummary,
@@ -43,6 +44,16 @@ function taskMatchesAgentScope(task: TaskSummary, agentId: string | null): boole
   );
 }
 
+type TaskRefreshEvent = NonNullable<ReturnType<typeof normalizeTaskEventPayload>>;
+
+type TaskRefreshEventBuffer = {
+  generation: number;
+  gateway: ApplicationContext["gateway"];
+  client: GatewayBrowserClient;
+  scopeId: string | null;
+  events: TaskRefreshEvent[];
+};
+
 class TasksPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
@@ -58,6 +69,7 @@ class TasksPage extends OpenClawLightDomElement {
   private operationEpoch = 0;
   private observedAgentScopeId: string | null | undefined;
   private gatewaySource?: ApplicationContext["gateway"];
+  private taskRefreshEvents: TaskRefreshEventBuffer | null = null;
   private readonly subscriptions = new SubscriptionsController(this)
     .effect(
       () => this.context?.gateway,
@@ -90,9 +102,23 @@ class TasksPage extends OpenClawLightDomElement {
             void this.refreshTasks();
             return;
           }
-          this.tasks = result.tasks.filter((task) =>
-            taskMatchesAgentScope(task, this.context.agentSelection.state.scopeId),
-          );
+          const scopeId = this.context.agentSelection.state.scopeId;
+          const normalizedEvent = normalizeTaskEventPayload(event.payload);
+          const buffer = this.taskRefreshEvents;
+          if (
+            normalizedEvent &&
+            normalizedEvent.action !== "restored" &&
+            buffer &&
+            buffer.generation === this.loadGeneration &&
+            buffer.gateway === gateway &&
+            buffer.client === this.client &&
+            buffer.scopeId === scopeId &&
+            (normalizedEvent.action === "deleted" ||
+              taskMatchesAgentScope(normalizedEvent.task, scopeId))
+          ) {
+            buffer.events.push(normalizedEvent);
+          }
+          this.tasks = result.tasks.filter((task) => taskMatchesAgentScope(task, scopeId));
         });
         if (this.connected) {
           void this.refreshTasks();
@@ -163,6 +189,7 @@ class TasksPage extends OpenClawLightDomElement {
     // cancellation responses from mutating the replacement task snapshot.
     this.loadGeneration += 1;
     this.operationEpoch += 1;
+    this.taskRefreshEvents = null;
     this.loading = false;
     this.cancellingTaskIds = new Set();
   }
@@ -204,10 +231,21 @@ class TasksPage extends OpenClawLightDomElement {
       return;
     }
     const generation = ++this.loadGeneration;
+    const scopeId = this.context.agentSelection.state.scopeId;
+    // Replay only events received during this exact scoped request; otherwise
+    // late snapshot pages can undo concurrent completions, creations, or deletes.
+    const taskRefreshEvents: TaskRefreshEventBuffer = {
+      generation,
+      gateway,
+      client,
+      scopeId,
+      events: [],
+    };
+    this.taskRefreshEvents = taskRefreshEvents;
     this.loading = true;
     this.error = null;
     try {
-      const agentId = this.context.agentSelection.state.scopeId ?? undefined;
+      const agentId = scopeId ?? undefined;
       // Active tasks need their own query: the ledger pages newest-first, so a
       // long-running task can hide behind newer terminal records on page one.
       const [activePayload, recentPayload] = await Promise.all([
@@ -223,8 +261,13 @@ class TasksPage extends OpenClawLightDomElement {
       if (!active || !recent) {
         throw new Error(t("tasksPage.invalidResponse"));
       }
-      const tasks = mergeTaskLists(recent, active);
       if (this.isLoadScopeCurrent(gateway, client, generation)) {
+        // The active query is issued first; a same-millisecond recent page
+        // must win running-progress ties when a pushed event is dropped.
+        let tasks = mergeTaskLists(active, recent);
+        for (const event of taskRefreshEvents.events) {
+          tasks = applyTaskEvent(tasks, event).tasks;
+        }
         this.tasks = tasks;
       }
     } catch (error) {
@@ -232,6 +275,9 @@ class TasksPage extends OpenClawLightDomElement {
         this.error = formatTaskError(error, t("tasksPage.loadFailed"));
       }
     } finally {
+      if (this.taskRefreshEvents === taskRefreshEvents) {
+        this.taskRefreshEvents = null;
+      }
       if (this.isLoadScopeCurrent(gateway, client, generation)) {
         this.loading = false;
       }
@@ -260,6 +306,20 @@ class TasksPage extends OpenClawLightDomElement {
       }
       const result = normalizeTasksCancelResult(payload);
       if (result?.task) {
+        const event = normalizeTaskEventPayload({ action: "upserted", task: result.task });
+        const buffer = this.taskRefreshEvents;
+        if (
+          event &&
+          buffer &&
+          buffer.generation === this.loadGeneration &&
+          buffer.gateway === gateway &&
+          buffer.client === client &&
+          buffer.scopeId === this.context.agentSelection.state.scopeId
+        ) {
+          // Cancellation replies are authoritative even if the best-effort
+          // registry event is dropped while the matching pages are in flight.
+          buffer.events.push(event);
+        }
         this.tasks = applyTaskEvent(this.tasks, { action: "upserted", task: result.task }).tasks;
       }
       // Refusals (already terminal, stale id, no cancellation handle) are

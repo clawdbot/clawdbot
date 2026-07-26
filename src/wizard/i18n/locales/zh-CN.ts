@@ -503,6 +503,8 @@ export const zh_CN = {
         "{channel} 插件不可用（继续设置）。如果设置后频道仍无法工作，请运行 `{listCommand}` 和 `{enableCommand}`，然后重启 Gateway。",
       pluginNotAvailable: "{channel} 插件不可用。",
       removeTitle: "移除频道",
+      resumeDisabledPluginSetup: "{channel} 插件已禁用。现在启用并继续设置吗？",
+      resumeDisabledSetup: "{channel} 已禁用。现在启用并继续设置吗？",
       select: "选择频道",
       selectQuickstart: "选择频道（QuickStart）",
       selectedTitle: "已选择频道",

@@ -246,6 +246,7 @@
     "!dist/extensions/arcee/**",
     "!dist/extensions/baseten/**",
     "!dist/extensions/brave/**",
+    "!dist/extensions/buzz/**",
     "!dist/extensions/cerebras/**",
     "!dist/extensions/chutes/**",
     "!dist/extensions/clickclack/**",
