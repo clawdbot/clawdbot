@@ -52,6 +52,7 @@ type DiscoveredModel = {
   id: string;
   name?: string;
   provider: string;
+  profileId?: string;
   api?: ModelCatalogEntry["api"];
   contextWindow?: number;
   contextTokens?: number;
@@ -254,7 +255,10 @@ function mergeCatalogEntries(
   },
 ): void {
   const indexByKey = new Map(
-    models.map((entry, index) => [catalogEntryDedupeKey(entry.provider, entry.id, entry.profileId), index]),
+    models.map((entry, index) => [
+      catalogEntryDedupeKey(entry.provider, entry.id, entry.profileId),
+      index,
+    ]),
   );
   for (const entry of entries) {
     const key = catalogEntryDedupeKey(entry.provider, entry.id, entry.profileId);
