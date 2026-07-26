@@ -12,8 +12,7 @@ import {
   type QaSuiteGatewayRssSample,
   writeQaSuiteArtifacts,
 } from "./suite-artifacts.js";
-import { applyQaMergePatch } from "./suite-merge-patch.js";
-import { collectQaSuiteTransportPolicy } from "./suite-planning.js";
+import { applyQaMergePatch, collectQaSuiteTransportPolicy } from "./suite-planning.js";
 import { runQaSuiteRoundTripProbe } from "./suite-round-trip.js";
 import { waitForGatewayHealthy, waitForTransportReady } from "./suite-runtime-gateway.js";
 import {

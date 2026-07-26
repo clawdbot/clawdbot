@@ -47,8 +47,6 @@ export type QaSuiteSummaryJsonParams = {
  * import this type instead of re-declaring the shape, so changes to the
  * summary schema propagate through to every consumer at type-check time.
  */
-export type { QaSuiteSummaryJson } from "./suite-summary.js";
-
 export type QaSuiteGatewayRssSample = NonNullable<
   NonNullable<QaSuiteSummaryJson["metrics"]>["gatewayProcessRssSamples"]
 >[number];
