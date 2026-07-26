@@ -274,7 +274,7 @@ describe("kimi tool-call markup wrapper", () => {
     });
   });
 
-  it.each(["k3", "k3[1m]"])("defaults %s to adaptive high thinking", (modelId) => {
+  it.each(["k3", "k3-256k"])("defaults %s to adaptive high thinking", (modelId) => {
     const {
       streamFn: baseStreamFn,
       getCapturedModel,

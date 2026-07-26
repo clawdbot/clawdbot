@@ -62,7 +62,7 @@ function countContentChars(message: AssistantMessage, type: "text" | "thinking")
 }
 
 async function runReasoningScenario(params: {
-  modelId: "k3" | "k3[1m]";
+  modelId: "k3" | "k3-256k";
   thinkingLevel: "off" | "low" | "adaptive" | "max";
 }): Promise<AssistantMessage> {
   const registered = await registerSingleProviderPlugin(plugin);
