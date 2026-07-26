@@ -33,6 +33,7 @@ import {
   requestPluginConversationBinding,
 } from "./conversation-binding.js";
 import { getActivePluginChannelRegistry } from "./runtime.js";
+import { withPluginRuntimePluginScope } from "./runtime/gateway-request-scope.js";
 import type {
   OpenClawPluginCommandDefinition,
   PluginCommandContext,
@@ -401,7 +402,13 @@ export async function executePluginCommand(params: {
   // Lock registry during execution to prevent concurrent modifications
   setPluginCommandRegistryLocked(true);
   try {
-    const result = await command.handler(ctx);
+    const result = await withPluginRuntimePluginScope(
+      {
+        pluginId: command.pluginId,
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+      },
+      () => command.handler(ctx),
+    );
     logVerbose(
       `Plugin command /${command.name} executed successfully for ${senderId || "unknown"}`,
     );

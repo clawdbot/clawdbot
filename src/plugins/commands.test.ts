@@ -13,6 +13,7 @@ import {
 } from "./commands.js";
 import { createPluginRegistry } from "./registry.js";
 import { setActivePluginRegistry } from "./runtime.js";
+import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { createBundledPluginRecord } from "./status.test-fixtures.js";
 
@@ -1242,6 +1243,48 @@ describe("registerPluginCommand", () => {
     expect(result).toEqual({ text: "ok" });
     expect(receivedCtx?.sessionKey).toBe("agent:main:whatsapp:direct:123");
     expect(receivedCtx?.sessionId).toBe("session-123");
+  });
+
+  it("scopes plugin command handlers to the owning plugin and agent", async () => {
+    let receivedScope:
+      | {
+          pluginId?: string;
+          agentId?: string;
+        }
+      | undefined;
+    const handler = async () => {
+      const scope = getPluginRuntimeGatewayRequestScope();
+      receivedScope = scope
+        ? {
+            pluginId: scope.pluginId,
+            agentId: scope.agentId,
+          }
+        : undefined;
+      return { text: "ok" };
+    };
+
+    const result = await executePluginCommand({
+      command: {
+        name: "scopecheck",
+        description: "Demo command",
+        acceptsArgs: false,
+        handler,
+        pluginId: "demo-plugin",
+      },
+      channel: "discord",
+      senderId: "U123",
+      isAuthorizedSender: true,
+      agentId: "codex",
+      sessionKey: "plugin-binding:demo-plugin:dm",
+      commandBody: "/scopecheck",
+      config: {} as never,
+    });
+
+    expect(result).toEqual({ text: "ok" });
+    expect(receivedScope).toEqual({
+      pluginId: "demo-plugin",
+      agentId: "codex",
+    });
   });
 
   it("passes a host-bound llm runtime through to plugin command handlers", async () => {
