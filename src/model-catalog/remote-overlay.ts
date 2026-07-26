@@ -1,6 +1,7 @@
 import {
   validateAndSanitizeRemoteModelCatalogBundle,
   type RemoteModelCatalogBundle,
+  type RemoteModelCatalogPricing,
 } from "@openclaw/model-catalog-core";
 import type { ModelCatalogProvider } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -11,8 +12,12 @@ import { isRemoteModelCatalogRefreshEnabled, resolveRemoteCatalogUrl } from "./r
 import { readRemoteModelCatalog } from "./remote-store.js";
 
 type RemoteModelCatalogOverlay = Readonly<Record<string, ModelCatalogProvider>>;
+type ActiveRemoteModelCatalog = {
+  providers: RemoteModelCatalogOverlay;
+  pricing?: Readonly<Record<string, RemoteModelCatalogPricing>>;
+};
 
-let cachedOverlay: { sourceUrl: string; value: RemoteModelCatalogOverlay | null } | undefined;
+let cachedOverlay: { sourceUrl: string; value: ActiveRemoteModelCatalog | null } | undefined;
 let readBundledGeneratedAt = bundledCatalogGeneratedAt;
 let readStoredCatalog = readRemoteModelCatalog;
 
@@ -24,9 +29,7 @@ function isCompatible(bundle: RemoteModelCatalogBundle): boolean {
   return comparison !== null && comparison >= 0;
 }
 
-export function getRemoteModelCatalogOverlay(
-  config: OpenClawConfig,
-): RemoteModelCatalogOverlay | undefined {
+function getActiveRemoteModelCatalog(config: OpenClawConfig): ActiveRemoteModelCatalog | undefined {
   if (!isRemoteModelCatalogRefreshEnabled(config)) {
     return undefined;
   }
@@ -50,12 +53,28 @@ export function getRemoteModelCatalogOverlay(
       cachedOverlay = { sourceUrl, value: null };
       return undefined;
     }
-    cachedOverlay = { sourceUrl, value: bundle.providers };
-    return bundle.providers;
+    const value = {
+      providers: bundle.providers,
+      ...(bundle.pricing ? { pricing: bundle.pricing } : {}),
+    };
+    cachedOverlay = { sourceUrl, value };
+    return value;
   } catch {
     cachedOverlay = undefined;
     return undefined;
   }
+}
+
+export function getRemoteModelCatalogOverlay(
+  config: OpenClawConfig,
+): RemoteModelCatalogOverlay | undefined {
+  return getActiveRemoteModelCatalog(config)?.providers;
+}
+
+export function getRemoteModelCatalogPricing(
+  config: OpenClawConfig,
+): Readonly<Record<string, RemoteModelCatalogPricing>> | undefined {
+  return getActiveRemoteModelCatalog(config)?.pricing;
 }
 
 function resetRemoteModelCatalogOverlayForTest(): void {

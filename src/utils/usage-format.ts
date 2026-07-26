@@ -15,9 +15,12 @@ import type { NormalizedUsage } from "../agents/usage.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getGatewayModelPricingCacheFingerprint } from "../gateway/model-pricing-cache-state.js";
-import { getCachedGatewayModelPricing } from "../gateway/model-pricing-cache.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
+import {
+  modelCatalogPricingFingerprint,
+  resolveCatalogModelPricing,
+  resolveHostedModelPricing,
+} from "../model-catalog/pricing.js";
 export { formatTokenCount } from "./token-format.js";
 
 /**
@@ -229,6 +232,24 @@ function normalizeModelCostConfig(cost: RawModelCostConfig): ModelCostConfig {
     cacheWrite: cost.cacheWrite,
     ...(normalizedTiers ? { tieredPricing: normalizedTiers } : {}),
   };
+}
+
+function normalizeResolvedPricing(cost: {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  tieredPricing?: RawPricingTier[];
+}): ModelCostConfig {
+  return normalizeModelCostConfig({
+    input: typeof cost.input === "number" && Number.isFinite(cost.input) ? cost.input : 0,
+    output: typeof cost.output === "number" && Number.isFinite(cost.output) ? cost.output : 0,
+    cacheRead:
+      typeof cost.cacheRead === "number" && Number.isFinite(cost.cacheRead) ? cost.cacheRead : 0,
+    cacheWrite:
+      typeof cost.cacheWrite === "number" && Number.isFinite(cost.cacheWrite) ? cost.cacheWrite : 0,
+    ...(cost.tieredPricing ? { tieredPricing: cost.tieredPricing } : {}),
+  });
 }
 
 function isRawModelCostConfig(value: unknown): value is RawModelCostConfig {
@@ -626,7 +647,7 @@ export function resolveModelCostConfigFingerprint(
     modelsJsonNormalized: serializeCostIndex(
       loadModelsJsonCostIndex({ agentDir: resolvedAgentDir }),
     ),
-    gatewayPricing: getGatewayModelPricingCacheFingerprint(),
+    catalogPricing: modelCatalogPricingFingerprint(config),
   });
 }
 
@@ -646,6 +667,16 @@ export function resolveModelCostConfig(params: {
     return undefined;
   }
   const agentDir = resolveCostAgentDir(params.config, params.agentDir);
+  if (params.allowPluginNormalization !== false) {
+    const catalogPricing = resolveCatalogModelPricing({
+      config: params.config,
+      provider: params.provider ?? "",
+      model: params.model ?? "",
+    });
+    if (catalogPricing) {
+      return normalizeResolvedPricing(catalogPricing);
+    }
+  }
 
   // Favor direct configured keys first so local pricing/status lookups stay
   // synchronous and do not drag plugin/provider discovery into the hot path.
@@ -684,7 +715,12 @@ export function resolveModelCostConfig(params: {
     }
   }
 
-  return getCachedGatewayModelPricing(params);
+  const hostedPricing = resolveHostedModelPricing({
+    config: params.config,
+    provider: params.provider ?? "",
+    model: params.model ?? "",
+  });
+  return hostedPricing ? normalizeResolvedPricing(hostedPricing) : undefined;
 }
 
 const toNumber = (value: number | undefined): number =>

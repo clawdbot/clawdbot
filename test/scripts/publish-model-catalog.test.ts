@@ -56,6 +56,7 @@ describe("publish model catalog", () => {
       providers: 2,
       models: 200,
       costModels: 0,
+      pricingEntries: 0,
     });
     expect(MODEL_CATALOG_MIN_MODELS).toBe(200);
   });
@@ -123,7 +124,7 @@ describe("publish model catalog", () => {
     expect(fs.existsSync(out)).toBe(false);
   });
 
-  it("enriches only existing models with OpenRouter flat and LiteLLM tier pricing", async () => {
+  it("enriches catalog models and emits unmatched hosted pricing keys", async () => {
     const anthropic = fixtureProvider("claude", 100);
     anthropic.models[0] = { id: "claude-3-5-sonnet" };
     const openai = fixtureProvider("gpt", 100);
@@ -184,10 +185,18 @@ describe("publish model catalog", () => {
           output_cost_per_token: 0.000004,
         },
         "unknown/new-model": { input_cost_per_token: 1, output_cost_per_token: 1 },
+        "external-model": {
+          litellm_provider: "custom",
+          input_cost_per_token: 0.000007,
+          output_cost_per_token: 0.000008,
+        },
       });
     };
 
-    await expect(enrichModelCatalogPricing({ bundle, manifests, fetchImpl })).resolves.toBe(2);
+    await expect(enrichModelCatalogPricing({ bundle, manifests, fetchImpl })).resolves.toEqual({
+      modelsEnriched: 2,
+      pricingEntries: 3,
+    });
     expect(bundle.providers.anthropic?.models[0]?.cost).toMatchObject({ input: 1, output: 2 });
     expect(bundle.providers.openai?.models[0]?.cost).toMatchObject({
       input: 3,
@@ -195,7 +204,18 @@ describe("publish model catalog", () => {
       tieredPricing: [{ input: 5, output: 6, range: [1000] }],
     });
     expect(bundle.providers.openai?.models[2]?.cost).toBeUndefined();
-    expect(summarizeModelCatalogBundle(bundle)).toMatchObject({ models: 200, costModels: 2 });
+    expect(bundle.pricing).toEqual({
+      "custom/external-model": { input: 7, output: 8 },
+      "external-model": { input: 7, output: 8 },
+      "unknown/new-model": { input: 1_000_000, output: 1_000_000 },
+    });
+    expect(bundle.pricing).not.toHaveProperty("gpt-special");
+    expect(bundle.pricing).not.toHaveProperty("openai/gpt-special");
+    expect(summarizeModelCatalogBundle(bundle)).toMatchObject({
+      models: 200,
+      costModels: 2,
+      pricingEntries: 3,
+    });
     expect(Object.hasOwn(bundle.providers, "unknown")).toBe(false);
   });
 
@@ -236,7 +256,7 @@ describe("publish model catalog", () => {
             return new Response("not-json", { status: 200 });
           },
         }),
-      ).resolves.toBe(0);
+      ).resolves.toEqual({ modelsEnriched: 0, pricingEntries: 0 });
     } finally {
       stderr.mockRestore();
     }
@@ -255,10 +275,12 @@ describe("publish model catalog", () => {
     const left = {
       ...base,
       providers: { zeta: { models: [{ id: "b" }, { id: "a" }] }, alpha: { models: [{ id: "c" }] } },
+      pricing: { "z/model": { input: 2, output: 3 }, "a/model": { input: 1, output: 2 } },
     };
     const right = {
       ...base,
       providers: { alpha: { models: [{ id: "c" }] }, zeta: { models: [{ id: "a" }, { id: "b" }] } },
+      pricing: { "a/model": { output: 2, input: 1 }, "z/model": { output: 3, input: 2 } },
     };
     expect(serializeModelCatalogBundle(left)).toBe(serializeModelCatalogBundle(right));
   });

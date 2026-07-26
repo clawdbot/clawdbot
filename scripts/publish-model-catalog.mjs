@@ -12,6 +12,8 @@ export const LITELLM_PRICING_URL =
 const SCRIPT_LABEL = "publish-model-catalog";
 const PRICING_FETCH_TIMEOUT_MS = 60_000;
 const MAX_PRICING_CATALOG_BYTES = 5 * 1024 * 1024;
+const BUNDLE_SIZE_WARNING_BYTES = 2 * 1024 * 1024;
+const CLIENT_BUNDLE_LIMIT_BYTES = 4 * 1024 * 1024;
 const defaultRootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function requireOptionValue(args, index, flag) {
@@ -129,6 +131,7 @@ export function summarizeModelCatalogBundle(bundle) {
       (total, provider) => total + provider.models.filter((model) => model.cost).length,
       0,
     ),
+    pricingEntries: Object.keys(bundle.pricing ?? {}).length,
   };
 }
 
@@ -210,6 +213,26 @@ function parseLiteLLMPricing(value) {
     cacheWrite: toPricePerMillion(parseNumberString(value.cache_creation_input_token_cost)),
     ...(tieredPricing ? { tieredPricing } : {}),
   };
+}
+
+function compactPricing(pricing) {
+  return {
+    input: pricing.input,
+    output: pricing.output,
+    ...(pricing.cacheRead > 0 ? { cacheRead: pricing.cacheRead } : {}),
+    ...(pricing.cacheWrite > 0 ? { cacheWrite: pricing.cacheWrite } : {}),
+    ...(pricing.tieredPricing ? { tieredPricing: pricing.tieredPricing } : {}),
+  };
+}
+
+function mergePricing(primary, secondary) {
+  if (!primary) {
+    return secondary;
+  }
+  if (!secondary?.tieredPricing) {
+    return primary;
+  }
+  return { ...primary, tieredPricing: secondary.tieredPricing };
 }
 
 function applyModelIdTransforms(modelId, transforms) {
@@ -360,50 +383,84 @@ export async function enrichModelCatalogPricing(options) {
     }
   }
   const liteLlmCatalog = new Map();
+  const liteLlmAliasGroups = [];
   for (const [id, row] of Object.entries(sources.liteLlm)) {
     const pricing = parseLiteLLMPricing(row);
     if (pricing) {
-      liteLlmCatalog.set(id, pricing);
+      const aliases = [id];
       if (typeof row?.litellm_provider === "string" && !id.includes("/")) {
-        liteLlmCatalog.set(`${row.litellm_provider}/${id}`, pricing);
+        aliases.push(`${row.litellm_provider}/${id}`);
       }
+      for (const alias of aliases) {
+        liteLlmCatalog.set(alias, pricing);
+      }
+      liteLlmAliasGroups.push(aliases);
     }
   }
 
   let enriched = 0;
+  const coveredPricingKeys = new Set();
   for (const [providerId, provider] of Object.entries(options.bundle.providers)) {
     for (const model of provider.models) {
-      const openRouterPricing = buildPricingCandidates({
+      const openRouterCandidates = buildPricingCandidates({
         providerId,
         modelId: model.id,
         source: "openRouter",
         policies,
-      })
+      });
+      const openRouterPricing = openRouterCandidates
         .map((candidate) => openRouterCatalog.get(candidate))
         .find(Boolean);
-      const liteLlmPricing = buildPricingCandidates({
+      const liteLlmCandidates = buildPricingCandidates({
         providerId,
         modelId: model.id,
         source: "liteLLM",
         policies,
-      })
+      });
+      const liteLlmPricing = liteLlmCandidates
         .map((candidate) => liteLlmCatalog.get(candidate))
         .find(Boolean);
-      const cost = openRouterPricing
-        ? {
-            ...openRouterPricing,
-            ...(liteLlmPricing?.tieredPricing
-              ? { tieredPricing: liteLlmPricing.tieredPricing }
-              : {}),
-          }
-        : liteLlmPricing;
+      const cost = mergePricing(openRouterPricing, liteLlmPricing);
       if (cost) {
         model.cost = cost;
         enriched += 1;
       }
+      if (model.cost) {
+        coveredPricingKeys.add(`${providerId}/${model.id}`);
+        for (const candidate of [...openRouterCandidates, ...liteLlmCandidates]) {
+          coveredPricingKeys.add(candidate);
+        }
+      }
     }
   }
-  return enriched;
+
+  const hostedPricing = new Map();
+  for (const [key, pricing] of openRouterCatalog) {
+    hostedPricing.set(key, pricing);
+  }
+  for (const [key, pricing] of liteLlmCatalog) {
+    hostedPricing.set(key, mergePricing(hostedPricing.get(key), pricing));
+  }
+  for (const aliases of liteLlmAliasGroups) {
+    if (aliases.some((alias) => coveredPricingKeys.has(alias))) {
+      for (const alias of aliases) {
+        coveredPricingKeys.add(alias);
+      }
+    }
+  }
+  for (const key of coveredPricingKeys) {
+    hostedPricing.delete(key);
+  }
+  options.bundle.pricing = Object.fromEntries(
+    [...hostedPricing.entries()]
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([key, pricing]) => [key, compactPricing(pricing)]),
+  );
+  const validateBundle = options.validateBundle ?? (await loadClientBundleValidator());
+  const validated = validateBundle(options.bundle);
+  options.bundle.providers = validated.providers;
+  options.bundle.pricing = validated.pricing;
+  return { modelsEnriched: enriched, pricingEntries: hostedPricing.size };
 }
 
 function sortCatalogValue(value) {
@@ -454,24 +511,35 @@ async function runPublishModelCatalog(options = {}) {
     generatedAt,
     sourceCommit,
   });
-  const enriched = args.pricing
+  const pricingResult = args.pricing
     ? await enrichModelCatalogPricing({ bundle, manifests, fetchImpl: options.fetchImpl })
-    : 0;
+    : { modelsEnriched: 0, pricingEntries: 0 };
   const summary = summarizeModelCatalogBundle(bundle);
-  const stats = `schemaVersion=1 providers=${summary.providers} models=${summary.models} costModels=${summary.costModels} pricingEnriched=${enriched} generatedAt=${bundle.generatedAt} minVersion=${bundle.minVersion} sourceCommit=${bundle.sourceCommit}`;
+  const serialized = serializeModelCatalogBundle(bundle);
+  const bundleBytes = Buffer.byteLength(serialized);
+  if (bundleBytes > BUNDLE_SIZE_WARNING_BYTES) {
+    process.stderr.write(
+      `[${SCRIPT_LABEL}] warning: bundle size ${bundleBytes} bytes exceeds ${BUNDLE_SIZE_WARNING_BYTES} bytes\n`,
+    );
+  }
+  if (bundleBytes > CLIENT_BUNDLE_LIMIT_BYTES) {
+    throw new Error(
+      `catalog bundle ${bundleBytes} bytes exceeds client limit ${CLIENT_BUNDLE_LIMIT_BYTES} bytes`,
+    );
+  }
+  const stats = `schemaVersion=1 providers=${summary.providers} models=${summary.models} costModels=${summary.costModels} pricingEnriched=${pricingResult.modelsEnriched} pricingEntries=${pricingResult.pricingEntries} bundleBytes=${bundleBytes} generatedAt=${bundle.generatedAt} minVersion=${bundle.minVersion} sourceCommit=${bundle.sourceCommit}`;
   if (args.dryRun) {
     process.stdout.write(`[${SCRIPT_LABEL}] dry-run ${stats}\n`);
-    return { bundle, summary, pricingEnriched: enriched, wrote: false };
+    return { bundle, summary, pricingEnriched: pricingResult.modelsEnriched, wrote: false };
   }
 
-  const serialized = serializeModelCatalogBundle(bundle);
   const outputFile = path.resolve(rootDir, args.out);
   if (args.out) {
     fs.mkdirSync(path.dirname(outputFile), { recursive: true });
     fs.writeFileSync(outputFile, serialized);
   }
   process.stdout.write(`[${SCRIPT_LABEL}] published ${stats} out=${args.out}\n`);
-  return { bundle, summary, pricingEnriched: enriched, wrote: true };
+  return { bundle, summary, pricingEnriched: pricingResult.modelsEnriched, wrote: true };
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
