@@ -4,6 +4,7 @@ import {
   WORKBOARD_ATTEMPT_STATUSES,
   WORKBOARD_DIAGNOSTIC_KINDS,
   WORKBOARD_DIAGNOSTIC_SEVERITIES,
+  WORKBOARD_DECOMPOSITION_MODES,
   WORKBOARD_EVENT_KINDS,
   WORKBOARD_EXECUTION_MODES,
   WORKBOARD_EXECUTION_STATUSES,
@@ -24,6 +25,7 @@ import {
   type WorkboardDiagnosticAction,
   type WorkboardDiagnosticKind,
   type WorkboardDiagnosticSeverity,
+  type WorkboardDecompositionMode,
   type WorkboardEvent,
   type WorkboardEventKind,
   type WorkboardExecution,
@@ -281,6 +283,15 @@ export function normalizeStatus(value: unknown, fallback: WorkboardStatus): Work
   throw new Error(`status must be one of: ${WORKBOARD_STATUSES.join(", ")}.`);
 }
 
+export function normalizeDecompositionMode(
+  value: unknown,
+  fallback: WorkboardDecompositionMode = "orchestration",
+): WorkboardDecompositionMode {
+  return WORKBOARD_DECOMPOSITION_MODES.includes(value as WorkboardDecompositionMode)
+    ? (value as WorkboardDecompositionMode)
+    : fallback;
+}
+
 export function normalizePriority(value: unknown, fallback: WorkboardPriority): WorkboardPriority {
   if (typeof value !== "string" || !value.trim()) {
     return fallback;
@@ -421,6 +432,11 @@ export function normalizeAutomation(
     120,
     "created by card id",
   );
+  const decompositionMode = WORKBOARD_DECOMPOSITION_MODES.includes(
+    record.decompositionMode as WorkboardDecompositionMode,
+  )
+    ? (record.decompositionMode as WorkboardDecompositionMode)
+    : fallback.decompositionMode;
   const idempotencyKey = normalizeBoundedString(
     record.idempotencyKey,
     fallback.idempotencyKey,
@@ -458,6 +474,7 @@ export function normalizeAutomation(
     ...(tenant ? { tenant } : {}),
     ...(boardId ? { boardId } : {}),
     ...(createdByCardId ? { createdByCardId } : {}),
+    ...(decompositionMode ? { decompositionMode } : {}),
     ...(idempotencyKey ? { idempotencyKey } : {}),
     ...(skills?.length ? { skills } : {}),
     ...(workspace ? { workspace } : {}),
@@ -1213,6 +1230,7 @@ function removeUndefinedAutomationFields(automation: WorkboardAutomation): Workb
     "tenant",
     "boardId",
     "createdByCardId",
+    "decompositionMode",
     "idempotencyKey",
     "skills",
     "workspace",
