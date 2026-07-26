@@ -67,11 +67,10 @@ export async function writeQaAuthProfiles(params: {
         version: 1,
         profiles: { ...existing.profiles, ...params.profiles } as AuthProfileStore["profiles"],
       };
-  saveAuthProfileStore(
-    nextStore,
-    params.agentDir,
-    { filterExternalAuthProfiles: false, syncExternalCli: false },
-  );
+  saveAuthProfileStore(nextStore, params.agentDir, {
+    filterExternalAuthProfiles: false,
+    syncExternalCli: false,
+  });
 }
 
 export function readQaAuthProfiles(agentDir: string): {
