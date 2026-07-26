@@ -578,7 +578,7 @@ export function assistantGroupCanOwnActiveRunStatus(group: MessageGroup): boolea
   );
 }
 
-export function messageGroupStartsTurnBoundary(group: MessageGroup): boolean {
+function messageGroupStartsTurnBoundary(group: MessageGroup): boolean {
   const role = group.role.toLowerCase();
   return (
     role === "user" ||

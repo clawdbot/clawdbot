@@ -2121,6 +2121,48 @@ describe("chat loading skeleton", () => {
     expect(container.querySelector(".chat-turn-recap")).toBeNull();
   });
 
+  it("keeps a completed recap after later tool content", () => {
+    vi.mocked(chatThread.buildCachedChatItems).mockReturnValueOnce([
+      {
+        kind: "group",
+        key: "group:assistant:test",
+        role: "assistant",
+        messages: [
+          {
+            key: "message:assistant:test",
+            message: { role: "assistant", content: "Interim answer", timestamp: 1 },
+          },
+        ],
+        timestamp: 1,
+        isStreaming: false,
+      },
+      {
+        kind: "group",
+        key: "group:tool:test",
+        role: "tool",
+        messages: [
+          {
+            key: "message:tool:test",
+            message: { role: "tool", content: "Later tool result", timestamp: 2 },
+          },
+        ],
+        timestamp: 2,
+        isStreaming: false,
+      },
+    ]);
+    vi.spyOn(chatProgress, "resolveTurnRecap").mockReturnValue({
+      runtimeMs: 5_000,
+      outputTokens: 42,
+    });
+
+    const container = renderChatView({
+      messages: [{ role: "assistant", content: "Interim answer", timestamp: 1 }],
+    });
+
+    expect(renderMessageGroupMock.mock.calls[0]?.[1].turnRecap).toBeUndefined();
+    expect(container.querySelector(".chat-turn-recap")?.textContent).toContain("Done in");
+  });
+
   it("keeps live status standalone when the preceding response is hidden", () => {
     const sessionKey = "deleted-active-status";
     renderChatView({

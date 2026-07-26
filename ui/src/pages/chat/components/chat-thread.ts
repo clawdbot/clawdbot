@@ -56,7 +56,6 @@ import {
   deletedChatItemsSignature,
   getExpandedToolCards,
   getExpandedUserMessages,
-  messageGroupStartsTurnBoundary,
   persistedMessageEntryId,
   resetChatThreadState,
   stableBooleanMapSignature,
@@ -1392,21 +1391,14 @@ function renderChatThreadContents(
   });
   let turnRecapOwnerKey: string | null = null;
   if (turnRecap !== null) {
-    for (let index = transcriptItems.length - 1; index >= 0; index -= 1) {
-      const item = transcriptItems[index];
-      if (!item || item.kind !== "group") {
-        continue;
-      }
-      if (assistantGroupCanOwnActiveRunStatus(item)) {
-        if (!deleted.has(item.key)) {
-          turnRecapByGroupKey.set(item.key, turnRecap);
-          turnRecapOwnerKey = item.key;
-        }
-        break;
-      }
-      if (messageGroupStartsTurnBoundary(item)) {
-        break;
-      }
+    const lastItem = transcriptItems.at(-1);
+    if (
+      lastItem?.kind === "group" &&
+      !deleted.has(lastItem.key) &&
+      assistantGroupCanOwnActiveRunStatus(lastItem)
+    ) {
+      turnRecapByGroupKey.set(lastItem.key, turnRecap);
+      turnRecapOwnerKey = lastItem.key;
     }
   }
   const transcriptRows: ChatTranscriptRow[] = transcriptItems.map((item) => ({
