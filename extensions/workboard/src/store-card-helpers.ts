@@ -742,4 +742,65 @@ export function compareNotifications(a: WorkboardNotification, b: WorkboardNotif
   }
   return a.id.localeCompare(b.id);
 }
+
+/**
+ * Project durable `status_changed` notifications from a card's move history.
+ *
+ * These are NOT persisted as notification rows. Exactly like the synthesized
+ * `stale` notification, they are derived at read time from data the store
+ * already writes atomically with the card — here, the `moved` lifecycle events
+ * that `updateCard` appends in the same write as the status field. A card's
+ * status change and its `status_changed` projection therefore share a single
+ * atomic persist and can never diverge, and every existing card's history is
+ * covered retroactively with no schema migration.
+ *
+ * Only real transitions are projected: `moved` events whose `fromStatus` and
+ * `toStatus` differ. Position-only moves reuse the `moved` kind with equal
+ * endpoints and are skipped, so a no-op status write produces nothing. Card
+ * creation (`created`) is birth, not a change, and carries no `fromStatus`, so
+ * it is skipped too. `revision` is the 1-based ordinal of the transition within
+ * the card's retained move history, a stable idempotency discriminator; the
+ * derived `sequence` (`at * 1000 + revision`) shares the millisecond-scaled
+ * numbering used by persisted rows and synthesized `stale`, so the cursor
+ * orders and de-duplicates all three kinds together.
+ */
+export function synthesizeStatusChangedNotifications(card: WorkboardCard): WorkboardNotification[] {
+  const events = card.events;
+  if (!events?.length) {
+    return [];
+  }
+  const cardSession = cardSessionKey(card);
+  const cardRun = cardRunId(card);
+  const result: WorkboardNotification[] = [];
+  let revision = 0;
+  for (const event of events) {
+    if (
+      event.kind !== "moved" ||
+      event.fromStatus === undefined ||
+      event.toStatus === undefined ||
+      event.fromStatus === event.toStatus ||
+      typeof event.at !== "number" ||
+      !Number.isFinite(event.at)
+    ) {
+      continue;
+    }
+    revision += 1;
+    const eventSessionKey = event.sessionKey ?? cardSession;
+    const eventRunId = event.runId ?? cardRun;
+    result.push({
+      id: `status:${card.id}:${event.id}`,
+      kind: "status_changed",
+      createdAt: event.at,
+      sequence: event.at * 1000 + revision,
+      message: `Status changed ${event.fromStatus} → ${event.toStatus}.`,
+      cardId: card.id,
+      fromStatus: event.fromStatus,
+      toStatus: event.toStatus,
+      revision,
+      ...(eventSessionKey ? { sessionKey: eventSessionKey } : {}),
+      ...(eventRunId ? { runId: eventRunId } : {}),
+    });
+  }
+  return result;
+}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
