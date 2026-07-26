@@ -1,0 +1,7 @@
+Flask==3.1.3
+Gunicorn==26.0.0
+Markdown==3.10.2
+matplotlib==3.11.1
+psycopg2-binary==2.9.12
+pypdf==6.14.2
+requests==2.34.2

@@ -297,14 +297,43 @@ Current `app.py` is a **simplified single-page** layout vs. earlier multi-tab ve
 ## 9. Dependencies and Deployment
 
 - **Port:** `5051` (`app.run(host="0.0.0.0", port=5051)`)
-- **systemd:** Expected unit at `~/.config/systemd/user/openclaw-dashboard.service`
-- **venv:** `tools/dashboard/.venv` (Flask, matplotlib, numpy, requests)
+- **systemd:** `~/.config/systemd/user/openclaw-dashboard.service` supervises
+  the WSGI master and restarts it after failure.
+- **venv:** `.venv-dashboard` uses the pinned dependencies in
+  `tools/dashboard/requirements.txt`.
 - **Configured endpoints:** Ollama and optional model-host SSH use environment
   variables; deployment-local repository and backup paths remain fixed.
 
 ---
 
-## 10. AI Model Scorecard Review Queue
+## 10. WSGI Runtime and Reliability
+
+The dashboard is served by Gunicorn rather than Flask's built-in development
+server. `tools/dashboard/wsgi.py` exports the application without invoking
+`app.run()`. The pinned runtime and default policy are:
+
+- Gunicorn 26.0.0;
+- two `gthread` workers with four threads each;
+- a 300-second request timeout for operator-triggered model and backup checks;
+- 45-second graceful shutdown;
+- worker recycling after 1,000 requests with jitter;
+- access and error output captured by the systemd journal;
+- no application preloading, so a failed worker does not share mutable startup
+  state with its replacement.
+
+The systemd unit restarts a failed master, reloads with `HUP`, and stops
+gracefully with `SIGQUIT`. Supported user-service protections include
+`NoNewPrivileges`, private temporary storage, read-only system directories,
+kernel-tunable and control-group protection, and SUID/SGID restrictions.
+`ProtectKernelModules` is intentionally omitted because the development VM's
+user-service environment cannot apply that directive.
+
+The Flask `app.run()` block remains a rollback-only direct launch path. It must
+not be the normal production runtime.
+
+---
+
+## 11. AI Model Scorecard Review Queue
 
 The deployment-local dashboard includes an operator review surface at
 `/ai-scorecard`.
@@ -345,7 +374,7 @@ Promotion remains a separate action with explicit decision-ID confirmation.
 The review queue does not generate synthetic evaluations. A new Evaluation Lab
 report becomes the next review item.
 
-## 11. RanchBrain Database
+## 12. RanchBrain Database
 
 The deployment-local RanchBrain dashboard reads PostgreSQL settings from the
 first available configured credential file:
@@ -390,7 +419,7 @@ transaction fails.
 | `POST /ai-scorecard/promote`                | Promote an approved scorecard         |
 | `POST /ranchbrain/knowledge/reject`         | Reject approved mistaken knowledge    |
 
-## 12. Gaps and Observations
+## 13. Gaps and Observations
 
 1. **Dead code:** `build_system_health()` result is unused; service grid is missing from UI.
 2. **Performance:** Deep model checks are operator-triggered so normal dashboard
@@ -407,7 +436,11 @@ transaction fails.
 | Concern                         | Location                                       |
 | ------------------------------- | ---------------------------------------------- |
 | Main app                        | `tools/dashboard/app.py`                       |
-| Run                             | `python app.py` → `:5051`                      |
+| WSGI entry point                | `tools/dashboard/wsgi.py`                      |
+| Gunicorn policy                 | `tools/dashboard/gunicorn.conf.py`             |
+| Pinned dependencies             | `tools/dashboard/requirements.txt`             |
+| Service unit                    | `scripts/systemd/openclaw-dashboard.service`   |
+| Emergency direct launch         | `python tools/dashboard/app.py` → `:5051`      |
 | Charts                          | `reports/graphs/*.png`                         |
 | Trends input                    | `reports/trends.csv`                           |
 | Dashboard backups               | `~/openclaw-dashboard-backups/`                |

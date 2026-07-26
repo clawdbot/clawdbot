@@ -1,19 +1,19 @@
 ---
 title: "OpenClaw Operations Runbook"
-version: "1.0"
+version: "1.1"
 status: "Foundational"
 owner: "OpenClaw Architecture"
-last_reviewed: "2026-07-19"
+last_reviewed: "2026-07-26"
 category: "Operations"
 source_document: "OPERATIONS_RUNBOOK.md"
 ---
 
 # OpenClaw Operations Runbook
 
-Version: 1.0
+Version: 1.1
 Status: Foundational
 Owner: OpenClaw Architecture
-Last Updated: 2026-07-19
+Last Updated: 2026-07-26
 
 ---
 
@@ -96,6 +96,56 @@ For any unexpected issue:
 5. PropertyManager API
 6. Telegram integrations
 7. RanchBrain services
+
+---
+
+# Dashboard WSGI Operations
+
+The dashboard normally runs as the user service
+`openclaw-dashboard.service`. Gunicorn is the WSGI master and supervises two
+threaded workers.
+
+Standard health checks:
+
+```text
+systemctl --user is-active openclaw-dashboard.service
+systemctl --user status openclaw-dashboard.service
+curl --fail http://127.0.0.1:5051/
+```
+
+Recent logs:
+
+```text
+journalctl --user -u openclaw-dashboard.service -n 100 --no-pager
+```
+
+Graceful configuration reload:
+
+```text
+systemctl --user reload openclaw-dashboard.service
+```
+
+Controlled restart:
+
+```text
+systemctl --user restart openclaw-dashboard.service
+```
+
+Before changing the service, preserve the installed unit, record the current
+commit, and confirm the direct Flask rollback command is available. Production
+changes still require operator testing and explicit deployment approval.
+
+If the WSGI service cannot start:
+
+1. Disable and stop `openclaw-dashboard.service`.
+2. Restore the previous unit from the deployment rollback checkpoint.
+3. As a temporary recovery measure only, start
+   `.venv-dashboard/bin/python tools/dashboard/app.py`.
+4. Confirm `http://127.0.0.1:5051/` returns HTTP 200.
+5. Preserve Gunicorn and systemd logs before attempting another deployment.
+
+The direct Flask server is a temporary rollback path, not an accepted steady
+production state.
 
 ---
 

@@ -1,0 +1,27 @@
+[Unit]
+Description=OpenClaw Dashboard WSGI Service
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=%h/ai/projects/openclaw
+Environment=PYTHONUNBUFFERED=1
+ExecStart=%h/ai/projects/openclaw/.venv-dashboard/bin/gunicorn --config %h/ai/projects/openclaw/tools/dashboard/gunicorn.conf.py tools.dashboard.wsgi:application
+ExecReload=/bin/kill -s HUP $MAINPID
+KillSignal=SIGQUIT
+TimeoutStopSec=60
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+UMask=0027
+
+[Install]
+WantedBy=default.target
