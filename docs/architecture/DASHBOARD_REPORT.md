@@ -96,7 +96,8 @@ Browser → Flask (0.0.0.0:5051)
   - `llama3.2:3b`, `hermes3:8b`, `gemma3:12b`, `nomic-embed-text:latest`, `gpt-oss:20b`, `glm-4.7-flash:latest`
 - Generation models use `/api/generate`; embedding models use `/api/embed`.
 - The default page uses the inventory for a fast installed/available status.
-- **Run Live Model Tests** explicitly performs generation and embedding calls.
+- **Run Live Model Tests** opens an immediate progress page, then performs
+  generation and embedding calls through `/api/model-health/live`.
 - When the server is unreachable, the dashboard shows one server-level failure
   and skips redundant per-model failures.
 - Live checks use the canonical Ollama timeout and do not block normal page

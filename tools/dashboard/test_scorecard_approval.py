@@ -391,6 +391,49 @@ class ScorecardDashboardTests(unittest.TestCase):
         self.assertIn("AVAILABLE: Installed generation model", rendered)
         self.assertIn("AVAILABLE: Installed embedding model", rendered)
         self.assertIn("Run Live Model Tests", rendered)
+        self.assertIn('action="/model-health"', rendered)
+
+    def test_live_model_test_page_gives_immediate_progress_feedback(self):
+        rendered = dashboard.live_model_health_page()
+
+        self.assertIn("Tests are running", rendered)
+        self.assertIn('fetch("/api/model-health/live")', rendered)
+        self.assertIn("Return to Dashboard", rendered)
+
+    def test_live_model_health_api_returns_structured_results(self):
+        ollama = {
+            "connected": True,
+            "endpoint": "http://m4.example:11434/api/tags",
+            "model_names": ["gemma3:12b", "nomic-embed-text:latest"],
+        }
+        with (
+            mock.patch.object(
+                dashboard,
+                "MODELS",
+                ["gemma3:12b", "nomic-embed-text:latest"],
+            ),
+            mock.patch.object(
+                dashboard,
+                "get_m4_ollama_status",
+                return_value=ollama,
+            ),
+            mock.patch.object(
+                dashboard,
+                "test_model",
+                side_effect=[
+                    {"success": True, "response": "Generation check passed"},
+                    {
+                        "success": True,
+                        "response": "Embedding check passed (768 dimensions)",
+                    },
+                ],
+            ),
+        ):
+            report = dashboard.live_model_health_api()
+
+        self.assertTrue(report["server_connected"])
+        self.assertEqual(len(report["models"]), 2)
+        self.assertEqual(report["models"][0]["status"], "success")
 
     def test_unreachable_server_is_reported_once_without_model_tests(self):
         ollama = {

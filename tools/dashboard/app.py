@@ -491,8 +491,7 @@ def model_status_panel_html(ollama, run_live_checks=False):
     output += "</div>"
     if ollama["connected"] and not run_live_checks:
         output += """
-<form method="GET" action="/" style="margin-top:14px;">
-  <input type="hidden" name="run_model_checks" value="1">
+<form method="GET" action="/model-health" style="margin-top:14px;">
   <button type="submit">Run Live Model Tests</button>
 </form>
 """
@@ -505,6 +504,120 @@ def model_status_panel_html(ollama, run_live_checks=False):
 </p>
 """
     return output + "</div>"
+
+
+@app.route("/api/model-health/live")
+def live_model_health_api():
+    ollama = get_m4_ollama_status()
+    if not ollama["connected"]:
+        return {
+            "server_connected": False,
+            "endpoint": ollama["endpoint"],
+            "error": ollama["error"],
+            "models": [],
+        }
+
+    installed_models = set(ollama.get("model_names", []))
+    results = []
+    for model in MODELS:
+        if model not in installed_models:
+            results.append(
+                {
+                    "model": model,
+                    "status": "failed",
+                    "message": "Model is not installed on the configured AI server.",
+                }
+            )
+            continue
+
+        result = test_model(model)
+        results.append(
+            {
+                "model": model,
+                "status": (
+                    "success"
+                    if result["success"]
+                    else result.get("status", "failed")
+                ),
+                "message": result["response"],
+            }
+        )
+
+    return {
+        "server_connected": True,
+        "endpoint": ollama["endpoint"],
+        "models": results,
+    }
+
+
+@app.route("/model-health")
+def live_model_health_page():
+    body = """
+<div class="panel">
+  <h2>Live Model Tests</h2>
+  <p id="live-test-progress" style="color:#fbbf24;font-weight:bold;">
+    Tests are running. Large models can take several minutes to load.
+  </p>
+  <div id="live-test-results" class="output">
+Connecting to the configured AI server...
+  </div>
+  <p style="margin-bottom:0;">
+    <a href="/" style="color:#93c5fd;font-weight:bold;">
+      Return to Dashboard
+    </a>
+  </p>
+</div>
+<script>
+const progress = document.getElementById("live-test-progress");
+const results = document.getElementById("live-test-results");
+
+fetch("/api/model-health/live")
+  .then((response) => {
+    if (!response.ok) {
+      throw new Error(`Health request failed with HTTP ${response.status}`);
+    }
+    return response.json();
+  })
+  .then((report) => {
+    if (!report.server_connected) {
+      progress.textContent = "AI model server is unreachable.";
+      progress.style.color = "#ef4444";
+      results.textContent =
+        `Endpoint: ${report.endpoint}\\nReason: ${report.error}`;
+      return;
+    }
+
+    const lines = [`Endpoint: ${report.endpoint}`, ""];
+    for (const item of report.models) {
+      const label = item.status === "success"
+        ? "SUCCESS"
+        : item.status === "timeout"
+          ? "WARNING"
+          : "FAILED";
+      lines.push(`${item.model}`);
+      lines.push(`${label}: ${item.message}`);
+      lines.push("");
+    }
+    results.textContent = lines.join("\\n");
+    const failures = report.models.filter(
+      (item) => item.status === "failed"
+    ).length;
+    const warnings = report.models.filter(
+      (item) => item.status === "timeout"
+    ).length;
+    progress.textContent =
+      `Tests complete: ${report.models.length - failures - warnings} passed, ` +
+      `${warnings} warning(s), ${failures} failure(s).`;
+    progress.style.color = failures ? "#ef4444" : warnings ? "#fbbf24" : "#22c55e";
+  })
+  .catch((error) => {
+    progress.textContent = "Live model tests could not complete.";
+    progress.style.color = "#ef4444";
+    results.textContent = error.message;
+  });
+</script>
+"""
+    return ranchbrain_shell("Live Model Tests", body)
 
 
 def find_column(rows, names):
@@ -1299,6 +1412,13 @@ body {{
   margin-top:10px;
   font-size:14px;
   overflow-wrap:anywhere;
+}}
+.output {{
+  background:#020d24;
+  padding:15px;
+  border-radius:6px;
+  white-space:pre-wrap;
+  overflow-x:auto;
 }}
 .table-scroll {{
   width:100%;
