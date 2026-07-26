@@ -1258,6 +1258,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /cli/agent
 - Headings:
   - H1: openclaw agent
+  - H2: agent exec
+  - H3: agent exec options
   - H2: Options
   - H2: Examples
   - H2: Notes
@@ -5527,6 +5529,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /platforms/mac/webchat
 - Headings:
   - H2: Multiple Gateway windows
+  - H3: Gateway picker
   - H2: Quick Chat bar
   - H2: Launch and debugging
   - H2: How it is wired

@@ -1,3 +1,7 @@
+import type {
+  NativeGatewaysCapability,
+  NativeGatewaysSnapshot,
+} from "../../app/native-gateways.runtime.ts";
 import {
   consume,
   applicationContext,
@@ -79,6 +83,9 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @property({ attribute: false }) paneTitle = "";
   @property({ attribute: false }) narrow = false;
   @property({ attribute: false }) mergedChrome = false;
+  @property({ attribute: false }) nativeGateways?: NativeGatewaysCapability | null;
+  @property({ attribute: false }) gatewaysSnapshot?: NativeGatewaysSnapshot | null;
+  @property({ attribute: false }) onboarding = false;
   @property({ attribute: false }) onOpenSplitView?: () => void;
   @property({ attribute: false }) onSplitDown?: (paneId: string) => void;
   @property({ attribute: false }) onSplitRight?: (paneId: string) => void;

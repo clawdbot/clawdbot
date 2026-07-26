@@ -151,7 +151,6 @@ extensions/mattermost/src/channel.ts
 extensions/mattermost/src/mattermost/monitor.inbound-system-event.test.ts
 extensions/mattermost/src/mattermost/slash-http.ts
 extensions/memory-core/doctor-contract-api.test.ts
-extensions/memory-core/src/cli.runtime.ts
 extensions/memory-core/src/cli.test.ts
 extensions/memory-core/src/dreaming-narrative.test.ts
 extensions/memory-core/src/dreaming-narrative.ts
@@ -235,7 +234,6 @@ extensions/qa-lab/src/runtime-tool-fixture.ts
 extensions/qa-lab/src/scorecard-taxonomy.ts
 extensions/qa-lab/src/suite-launch.runtime.test.ts
 extensions/qa-lab/src/suite-launch.runtime.ts
-extensions/qa-lab/src/suite.ts
 extensions/qa-lab/src/test-file-scenario-runner.test.ts
 extensions/qa-lab/web/src/app.ts
 extensions/qqbot/src/engine/gateway/outbound-dispatch.test.ts
@@ -351,7 +349,6 @@ src/acp/translator.ts
 src/agents/acp-spawn-parent-stream.test.ts
 src/agents/acp-spawn-parent-stream.ts
 src/agents/acp-spawn.test.ts
-src/agents/acp-spawn.ts
 src/agents/agent-bundle-mcp-runtime.test.ts
 src/agents/agent-bundle-mcp-runtime.ts
 src/agents/agent-command.live-model-switch.test.ts

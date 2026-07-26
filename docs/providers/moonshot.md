@@ -184,7 +184,7 @@ onboarding.
     **Best for:** code-focused tasks via the Kimi Coding endpoint.
 
     <Note>
-    Kimi Coding uses a different API key and provider prefix (`kimi/...`) than Moonshot (`moonshot/...`). Current refs are `kimi/k3`, `kimi/kimi-for-coding`, and `kimi/kimi-for-coding-highspeed`. Legacy refs `kimi/kimi-code` and `kimi/k2p5` remain accepted and normalize to `kimi/kimi-for-coding`; the previously published `kimi/k3[1m]` ref remains available for existing configs.
+    Kimi Coding uses a different API key and provider prefix (`kimi/...`) than Moonshot (`moonshot/...`). Current refs are `kimi/k3` for up to 1M context (tier-gated), `kimi/k3-256k` for 256K context with lower quota use, `kimi/kimi-for-coding`, and `kimi/kimi-for-coding-highspeed`. Legacy refs `kimi/kimi-code` and `kimi/k2p5` normalize to `kimi/kimi-for-coding`; legacy `kimi/k3[1m]` normalizes to `kimi/k3`.
     </Note>
 
     The coding service accepts both OpenAI-compatible
@@ -197,6 +197,7 @@ onboarding.
     | Model ref | Name | Reasoning | Input | Context | Max output |
     | --- | --- | --- | --- | --- | --- |
     | `kimi/k3` | Kimi K3 | adaptive; low / high / max effort | text, image | 1,048,576 | 131,072 |
+    | `kimi/k3-256k` | Kimi K3 (256k) | adaptive; low / high / max effort | text, image | 262,144 | 131,072 |
 
     The K3 catalog estimates $3/MTok input, $15/MTok output, $0.30/MTok
     cache reads, and $0/MTok cache writes. The catalog reports K3's maximum
@@ -322,7 +323,8 @@ Config lives under `plugins.entries.moonshot.config.webSearch`:
     Its Anthropic-compatible endpoint receives `thinking.type: "disabled"` for
     off. Every enabled level uses adaptive thinking; minimal/low maps to low
     effort, medium/high/adaptive maps to high effort, and xhigh/max maps to max
-    effort. This also applies to the compatibility ref `kimi/k3[1m]`.
+    effort. This applies to both `kimi/k3` and `kimi/k3-256k`. Legacy
+    `kimi/k3[1m]` normalizes to `kimi/k3`.
     Moonshot API K3 supports `auto`, `none`, `required`, and pinned tool choices,
     so OpenClaw preserves the requested `tool_choice`. For multi-turn tool use,
     OpenClaw preserves the assistant reasoning content required by Moonshot's

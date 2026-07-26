@@ -3544,7 +3544,7 @@ jobs:
       - macos-swift
       - ios-build
       - android
-    # Re-enable this job when we want to collect CI timing data for timing optimization.
+    # TODO(2026-10-01): Re-enable or delete the CI timing-summary job after the next timing-optimization review.
     if: ${{ false && !cancelled() && always() && github.event_name != 'push' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
