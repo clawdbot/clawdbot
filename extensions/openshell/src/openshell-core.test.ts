@@ -353,7 +353,66 @@ describe("openshell backend manager", () => {
     });
   });
 
-  it("removes runtimes via openshell sandbox delete", async () => {
+  it("reuses a found generated sandbox without creating a duplicate", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-workspace-");
+    const factory = createOpenShellSandboxBackendFactory({
+      pluginConfig: resolveOpenShellPluginConfig({ command: "openshell", mode: "remote" }),
+    });
+    const backend = await factory({
+      sessionKey: "agent:main:turn",
+      scopeKey: "agent:main",
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      cfg: createOpenShellBackendSandboxConfig(),
+    });
+
+    cliMocks.runOpenShellCli.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+    await backend.runShellCommand?.({ script: "true" });
+    await backend.runShellCommand?.({ script: "true" });
+
+    const lifecycleCalls = cliMocks.runOpenShellCli.mock.calls
+      .map(([params]) => params)
+      .filter(
+        (params) => params.args[0] === "sandbox" && ["get", "create"].includes(params.args[1]),
+      );
+    expect(lifecycleCalls).toEqual([
+      expect.objectContaining({ args: ["sandbox", "get", backend.runtimeId] }),
+    ]);
+  });
+
+  it("creates one generated sandbox after a failed lookup", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-workspace-");
+    const factory = createOpenShellSandboxBackendFactory({
+      pluginConfig: resolveOpenShellPluginConfig({ command: "openshell", mode: "remote" }),
+    });
+    const backend = await factory({
+      sessionKey: "agent:main:turn",
+      scopeKey: "agent:main",
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      cfg: createOpenShellBackendSandboxConfig(),
+    });
+
+    cliMocks.runOpenShellCli
+      .mockResolvedValueOnce({ code: 1, stdout: "", stderr: "not found" })
+      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+    await backend.runShellCommand?.({ script: "true" });
+    await backend.runShellCommand?.({ script: "true" });
+
+    const lifecycleCalls = cliMocks.runOpenShellCli.mock.calls
+      .map(([params]) => params)
+      .filter(
+        (params) => params.args[0] === "sandbox" && ["get", "create"].includes(params.args[1]),
+      );
+    expect(lifecycleCalls).toEqual([
+      expect.objectContaining({ args: ["sandbox", "get", backend.runtimeId] }),
+      expect.objectContaining({
+        args: expect.arrayContaining(["sandbox", "create", "--name", backend.runtimeId]),
+      }),
+    ]);
+  });
+
+  it("removes runtimes using their stored sandbox name", async () => {
     cliMocks.runOpenShellCli.mockResolvedValue({
       code: 0,
       stdout: "",
@@ -369,9 +428,9 @@ describe("openshell backend manager", () => {
 
     await manager.removeRuntime({
       entry: {
-        containerName: "openclaw-session-5678",
+        containerName: "openclaw-session-5678-legacy-runtime-name",
         backendId: "openshell",
-        runtimeLabel: "openclaw-session-5678",
+        runtimeLabel: "openclaw-session-5678-legacy-runtime-name",
         sessionKey: "agent:main",
         createdAtMs: 1,
         lastUsedAtMs: 1,
@@ -387,10 +446,10 @@ describe("openshell backend manager", () => {
     });
     expect(cliMocks.runOpenShellCli).toHaveBeenCalledWith({
       context: {
-        sandboxName: "openclaw-session-5678",
+        sandboxName: "openclaw-session-5678-legacy-runtime-name",
         config: expectedConfig,
       },
-      args: ["sandbox", "delete", "openclaw-session-5678"],
+      args: ["sandbox", "delete", "openclaw-session-5678-legacy-runtime-name"],
     });
   });
 

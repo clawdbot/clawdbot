@@ -1,4 +1,5 @@
 // Openshell plugin module implements backend behavior.
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type {
@@ -891,17 +892,16 @@ function resolveOpenShellPluginConfigFromConfig(
   return resolveOpenShellPluginConfig(pluginConfig);
 }
 
-function buildOpenShellSandboxName(scopeKey: string): string {
+export function buildOpenShellSandboxName(scopeKey: string): string {
   const trimmed = scopeKey.trim() || "session";
-  const safe = normalizeLowercaseStringOrEmpty(trimmed)
+  const slug = normalizeLowercaseStringOrEmpty(trimmed)
     .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/-+/g, "-")
     .replace(/^-+|-+$/g, "")
-    .slice(0, 32);
-  const hash = Array.from(trimmed).reduce(
-    (acc, char) => ((acc * 33) ^ char.charCodeAt(0)) >>> 0,
-    5381,
-  );
-  return `openclaw-${safe || "session"}-${hash.toString(16).slice(0, 8)}`;
+    .slice(0, 3)
+    .replace(/-+$/g, "");
+  const hash = createHash("sha256").update(trimmed).digest("hex").slice(0, 12);
+  return `os-${slug || "x"}-${hash}`;
 }
 
 function resolveRemoteMaterializedSkillsWorkspaceDir(remoteWorkspaceDir: string): string {
