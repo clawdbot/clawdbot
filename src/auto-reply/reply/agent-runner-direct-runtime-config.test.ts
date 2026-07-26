@@ -573,6 +573,7 @@ describe("runReplyAgent runtime config", () => {
     expect(result.text).toBe(`⚠️ ${codexMessage}`);
     const metadata = getReplyPayloadMetadata(result);
     expect(metadata?.deliverDespiteSourceReplySuppression).toBe(true);
+    expect(metadata?.operationalNotice).toBe(true);
   });
 
   it("surfaces preflight compaction failures before the agent starts", async () => {

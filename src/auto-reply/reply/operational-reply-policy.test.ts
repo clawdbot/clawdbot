@@ -143,13 +143,28 @@ describe("operational reply policy", () => {
     });
   });
 
+  it("silences text-only host operational notices", async () => {
+    const payload = markOperationalReplyPayloadForSourceSuppressionDelivery({
+      text: "usage limit reached",
+    });
+
+    await expect(
+      applyOperationalReplyPolicy({
+        cfg: { messages: { operationalReplies: { policy: "silent" } } } as OpenClawConfig,
+        payload,
+        explicitCommandTurn: false,
+        sendPolicyDenied: false,
+        sourceEventKey: "event-1",
+      }),
+    ).resolves.toMatchObject({ intentionalSilence: true, shouldDeliver: false });
+  });
+
   it("fails redirect before source suppression when no target is available", async () => {
     await expect(
       applyOperationalReplyPolicy({
         cfg: { messages: { operationalReplies: { policy: "redirect" } } } as OpenClawConfig,
         payload: markOperationalReplyPayloadForSourceSuppressionDelivery({
           text: "provider failed",
-          isError: true,
         }),
         explicitCommandTurn: false,
         sendPolicyDenied: false,
