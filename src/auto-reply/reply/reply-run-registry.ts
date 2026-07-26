@@ -153,6 +153,8 @@ export type ReplyOperation = {
   readonly acceptedSteeredInboundAudio: boolean;
   readonly phase: ReplyOperationPhase;
   readonly result: ReplyOperationResult | null;
+  /** Set when a stale-watchdog expiry forced this operation's run_stalled result. */
+  readonly staleExpiryReason: ReplyOperationStaleReason | undefined;
   readonly startedAtMs: number;
   readonly lastActivityAtMs: number;
   /** True when this operation has owned the supplied session ID. */
@@ -585,6 +587,7 @@ export function createReplyOperation(params: {
   let currentSessionId = sessionId;
   let phase: ReplyOperationPhase = "queued";
   let phaseBeforeGlobalLaneWait: "queued" | "running" | undefined;
+  let staleExpiryReason: ReplyOperationStaleReason | undefined;
   let result: ReplyOperationResult | null = null;
   let stateCleared = false;
   let retainFailureUntilComplete = false;
@@ -707,6 +710,9 @@ export function createReplyOperation(params: {
     },
     get result() {
       return result;
+    },
+    get staleExpiryReason() {
+      return staleExpiryReason;
     },
     get startedAtMs() {
       return startedAtMs;
@@ -962,6 +968,9 @@ export function createReplyOperation(params: {
     if (!result) {
       abortFrozenOperations.add(operation);
       detachUpstreamAbort();
+      // The reason distinguishes pre-run drops (user got nothing; feedback owed)
+      // from post-output stalls (finalization/terminal cleanup; feedback is noise).
+      staleExpiryReason = reason;
       setResult({ kind: "failed", code: "run_stalled" });
       phase = "failed";
     }

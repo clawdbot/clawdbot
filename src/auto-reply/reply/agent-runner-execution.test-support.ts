@@ -407,6 +407,7 @@ export function createMockReplyOperation(options?: { abortSignal?: AbortSignal }
       key: "main",
       sessionId: "session",
       abortSignal: options?.abortSignal ?? new AbortController().signal,
+      staleExpiryReason: undefined,
       resetTriggered: false,
       terminalRecovery: false,
       acceptedSteeredInboundAudio: false,
