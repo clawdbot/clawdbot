@@ -245,7 +245,7 @@ describe("phase hooks merger", () => {
 
     await runner.runInboundClaimForPluginOutcome(
       "target-plugin",
-      { content: "test", channel: "test" },
+      { content: "test", channel: "test", isGroup: false },
       { channelId: "test", agentId: "codex" },
     );
     await withPluginRuntimeGatewayRequestScope(
