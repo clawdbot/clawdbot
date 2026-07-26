@@ -122,7 +122,11 @@ function getPricingContext(config: OpenClawConfig): PricingContext {
 
 function hasKnownPricing(pricing: PricingValue): boolean {
   return (
-    Boolean(pricing.tieredPricing?.length) ||
+    Boolean(
+      pricing.tieredPricing?.some(
+        (tier) => tier.input > 0 || tier.output > 0 || tier.cacheRead > 0 || tier.cacheWrite > 0,
+      ),
+    ) ||
     (pricing.input ?? 0) > 0 ||
     (pricing.output ?? 0) > 0 ||
     (pricing.cacheRead ?? 0) > 0 ||
@@ -238,7 +242,10 @@ export function resolveHostedModelPricing(params: {
     return undefined;
   }
   const key = modelKey(normalized.provider, normalized.model);
-  return context.hosted[key] ?? context.normalizedHosted.get(key);
+  return (
+    context.hosted[key] ??
+    (context.policies.has(normalized.provider) ? undefined : context.normalizedHosted.get(key))
+  );
 }
 
 export function modelCatalogPricingFingerprint(config?: OpenClawConfig): string {

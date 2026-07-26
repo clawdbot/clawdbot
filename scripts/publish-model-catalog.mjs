@@ -235,6 +235,20 @@ function mergePricing(primary, secondary) {
   return { ...primary, tieredPricing: secondary.tieredPricing };
 }
 
+function hasKnownPricing(pricing) {
+  return (
+    (pricing.input ?? 0) > 0 ||
+    (pricing.output ?? 0) > 0 ||
+    (pricing.cacheRead ?? 0) > 0 ||
+    (pricing.cacheWrite ?? 0) > 0 ||
+    Boolean(
+      pricing.tieredPricing?.some(
+        (tier) => tier.input > 0 || tier.output > 0 || tier.cacheRead > 0 || tier.cacheWrite > 0,
+      ),
+    )
+  );
+}
+
 function applyModelIdTransforms(modelId, transforms) {
   const variants = new Set([modelId]);
   for (const transform of transforms ?? []) {
@@ -521,7 +535,7 @@ export async function enrichModelCatalogPricing(options) {
         model.cost = cost;
         enriched += 1;
       }
-      if (model.cost) {
+      if (model.cost && hasKnownPricing(model.cost)) {
         const providerModelKey = `${providerId}/${model.id}`;
         coveredPricingKeys.add(providerModelKey);
         pricedProviderModelKeys.add(providerModelKey);

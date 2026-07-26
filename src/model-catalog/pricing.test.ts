@@ -22,10 +22,28 @@ beforeEach(() => {
       generatedAt: 200,
       minVersion: "2026.7.0",
       sourceCommit: "pricing-test",
-      providers: { openai: { models: [{ id: "gpt-catalog", cost: { input: 1, output: 2 } }] } },
+      providers: {
+        openai: {
+          models: [
+            { id: "gpt-catalog", cost: { input: 1, output: 2 } },
+            {
+              id: "gpt-zero-tier",
+              cost: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                tieredPricing: [{ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, range: [0] }],
+              },
+            },
+          ],
+        },
+      },
       pricing: {
         "openai/gpt-external": { input: 2.5, output: 10, cacheRead: 1.25 },
+        "openai/gpt-zero-tier": { input: 4, output: 8 },
         "openrouter/openai/gpt-catalog": { input: 1, output: 2 },
+        "z-ai/forbidden": { input: 9, output: 18 },
       },
     }),
   });
@@ -161,6 +179,37 @@ describe("hosted model pricing", () => {
         model: "openai/gpt-catalog",
       }),
     ).toEqual({ input: 1, output: 2, cacheRead: 0, cacheWrite: 0 });
+  });
+
+  it("falls through zero-only catalog tiers without reviving disabled source aliases", () => {
+    const agentDir = tempDirs.make("openclaw-zero-tier-pricing-");
+    expect(
+      resolveModelCostConfig({
+        config: configFor("https://api.openai.com/v1"),
+        agentDir,
+        provider: "openai",
+        model: "gpt-zero-tier",
+      }),
+    ).toEqual({ input: 4, output: 8, cacheRead: 0, cacheWrite: 0 });
+
+    const zaiConfig = {
+      models: {
+        providers: {
+          zai: {
+            baseUrl: "https://api.z.ai/api/paas/v4",
+            models: [{ id: "forbidden", name: "Forbidden source alias" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    expect(
+      resolveModelCostConfig({
+        config: zaiConfig,
+        agentDir,
+        provider: "zai",
+        model: "forbidden",
+      }),
+    ).toBeUndefined();
   });
 
   it("fingerprints provider overlays without explicit model rows", () => {
