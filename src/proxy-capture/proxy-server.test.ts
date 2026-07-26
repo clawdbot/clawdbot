@@ -149,12 +149,15 @@ type ProxyResponseResult = {
   statusCode?: number;
 };
 
-function getPrototypeMethod<T>(prototype: object, methodName: string): T {
+function getPrototypeMethod(
+  prototype: object,
+  methodName: string,
+): (...args: unknown[]) => unknown {
   let current: object | null = prototype;
   while (current) {
     const value = Object.getOwnPropertyDescriptor(current, methodName)?.value;
     if (typeof value === "function") {
-      return value as T;
+      return value as (...args: unknown[]) => unknown;
     }
     current = Object.getPrototypeOf(current);
   }
@@ -364,18 +367,18 @@ describe("startDebugProxyServer", () => {
     const settings = await makeSettings();
     const responseChunks = [Buffer.from("pressure-"), Buffer.alloc(1024, "x")];
     const responseBodyBytes = responseChunks.reduce((total, chunk) => total + chunk.byteLength, 0);
-    const originalWrite = getPrototypeMethod<typeof ServerResponse.prototype.write>(
+    const originalWrite = getPrototypeMethod(
       ServerResponse.prototype,
       "write",
-    );
-    const originalPause = getPrototypeMethod<typeof IncomingMessage.prototype.pause>(
+    ) as typeof ServerResponse.prototype.write;
+    const originalPause = getPrototypeMethod(
       IncomingMessage.prototype,
       "pause",
-    );
-    const originalResume = getPrototypeMethod<typeof IncomingMessage.prototype.resume>(
+    ) as typeof IncomingMessage.prototype.pause;
+    const originalResume = getPrototypeMethod(
       IncomingMessage.prototype,
       "resume",
-    );
+    ) as typeof IncomingMessage.prototype.resume;
     let forcedBackpressure = false;
     let upstreamPauseCount = 0;
     let upstreamResumeCount = 0;
