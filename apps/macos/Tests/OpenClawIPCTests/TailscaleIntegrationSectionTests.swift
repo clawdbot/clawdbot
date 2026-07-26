@@ -5,6 +5,56 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct TailscaleIntegrationSectionTests {
+    @Test func `cli-only tailscale status is detected as installed and running`() {
+        let service = TailscaleService(isInstalled: false, isRunning: false)
+        service.applyStatusEvidence(
+            appInstalled: false,
+            apiResponse: TailscaleService.TailscaleAPIResponse(
+                status: "Running",
+                deviceName: "april",
+                tailnetName: "tail7a0b9.ts.net",
+                iPv4: "100.66.5.88"),
+            fallbackIP: "100.66.5.88")
+
+        #expect(service.isInstalled)
+        #expect(service.isRunning)
+        #expect(service.tailscaleHostname == "april.tail7a0b9.ts.net")
+        #expect(service.tailscaleIP == "100.66.5.88")
+        #expect(service.statusError == nil)
+    }
+
+    @Test func `cli-only tailscale daemon without an address is detected as installed`() {
+        let service = TailscaleService(isInstalled: false, isRunning: false)
+        service.applyStatusEvidence(
+            appInstalled: false,
+            apiResponse: TailscaleService.TailscaleAPIResponse(
+                status: "NeedsLogin",
+                deviceName: "april",
+                tailnetName: "tail7a0b9.ts.net",
+                iPv4: nil),
+            fallbackIP: nil)
+
+        #expect(service.isInstalled)
+        #expect(!service.isRunning)
+        #expect(service.tailscaleHostname == nil)
+        #expect(service.tailscaleIP == nil)
+        #expect(service.statusError == "Tailscale is not running")
+    }
+
+    @Test func `tailnet interface fallback is detected without the mac app`() {
+        let service = TailscaleService(isInstalled: false, isRunning: false)
+        service.applyStatusEvidence(
+            appInstalled: false,
+            apiResponse: nil,
+            fallbackIP: "100.66.5.88")
+
+        #expect(service.isInstalled)
+        #expect(service.isRunning)
+        #expect(service.tailscaleHostname == nil)
+        #expect(service.tailscaleIP == "100.66.5.88")
+        #expect(service.statusError == nil)
+    }
+
     @Test func `tailscale section builds body when not installed`() {
         let service = TailscaleService(isInstalled: false, isRunning: false, statusError: "not installed")
         var view = TailscaleIntegrationSection(connectionMode: .local, isPaused: false)
