@@ -910,7 +910,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
     try {
       await page.goto(`${server.baseUrl}chat`);
       const sidebar = page.locator("openclaw-app-sidebar");
-      await sidebar.getByRole("button", { name: /Agent menu/ }).click();
+      await sidebar.getByRole("button", { name: /Switch agent/ }).click();
       const menu = sidebar.locator("wa-dropdown.sidebar-agent-menu");
       const mainSwitch = menu.getByRole("menuitemradio", { name: "Main" });
       const researchSwitch = menu.getByRole("menuitemradio", { name: "Research" });
