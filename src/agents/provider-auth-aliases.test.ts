@@ -2,7 +2,10 @@
  * Regression coverage for provider auth alias resolution.
  * Verifies plugin metadata aliases, origin priority, trust, and cache behavior.
  */
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { pluginTestRepoRoot as repoRoot } from "../plugins/generated-plugin-test-helpers.js";
 
 const pluginRegistryMocks = vi.hoisted(() => {
   const loadManifestRegistry = vi.fn();
@@ -267,5 +270,28 @@ describe("provider auth aliases", () => {
       }),
     ).toBe("provider-two");
     expect(pluginRegistryMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
+  });
+  it("resolves modelstudio and qwencloud via bundled qwen manifest providerAuthAliases (#84081)", () => {
+    const manifest = JSON.parse(
+      readFileSync(join(repoRoot, "extensions/qwen/openclaw.plugin.json"), "utf-8"),
+    ) as { providerAuthAliases?: Record<string, string> };
+
+    expect(manifest.providerAuthAliases?.modelstudio).toBe("qwen");
+    expect(manifest.providerAuthAliases?.qwencloud).toBe("qwen");
+
+    const metadataSnapshot = createPluginMetadataSnapshot({
+      plugins: [
+        createPluginManifestRecord({
+          id: "qwen",
+          origin: "bundled",
+          providerAuthAliases: manifest.providerAuthAliases,
+        }),
+      ],
+    });
+
+    expect(resolveProviderIdForAuth("modelstudio", { metadataSnapshot })).toBe("qwen");
+    expect(resolveProviderIdForAuth("qwencloud", { metadataSnapshot })).toBe("qwen");
+    expect(resolveProviderIdForAuth("qwen", { metadataSnapshot })).toBe("qwen");
+    expect(resolveProviderIdForAuth("dashscope", { metadataSnapshot })).toBe("dashscope");
   });
 });

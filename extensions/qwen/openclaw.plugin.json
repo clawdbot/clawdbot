@@ -13,6 +13,10 @@
     "qwen-token-plan",
     "bailian-token-plan"
   ],
+  "providerAuthAliases": {
+    "modelstudio": "qwen",
+    "qwencloud": "qwen"
+  },
   "providerEndpoints": [
     {
       "endpointClass": "modelstudio-native",
@@ -55,8 +59,14 @@
         "model": "qwen3.6-flash",
         "reason": "qwen3.6-flash is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint.",
         "when": {
-          "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"],
-          "providerConfigApiIn": ["qwen", "modelstudio"]
+          "baseUrlHosts": [
+            "coding.dashscope.aliyuncs.com",
+            "coding-intl.dashscope.aliyuncs.com"
+          ],
+          "providerConfigApiIn": [
+            "qwen",
+            "modelstudio"
+          ]
         }
       },
       {
@@ -64,8 +74,14 @@
         "model": "qwen3.7-max",
         "reason": "qwen3.7-max is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint.",
         "when": {
-          "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"],
-          "providerConfigApiIn": ["qwen", "modelstudio"]
+          "baseUrlHosts": [
+            "coding.dashscope.aliyuncs.com",
+            "coding-intl.dashscope.aliyuncs.com"
+          ],
+          "providerConfigApiIn": [
+            "qwen",
+            "modelstudio"
+          ]
         }
       },
       {
@@ -73,8 +89,14 @@
         "model": "qwen3.6-flash",
         "reason": "qwen3.6-flash is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint.",
         "when": {
-          "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"],
-          "providerConfigApiIn": ["qwen", "modelstudio"]
+          "baseUrlHosts": [
+            "coding.dashscope.aliyuncs.com",
+            "coding-intl.dashscope.aliyuncs.com"
+          ],
+          "providerConfigApiIn": [
+            "qwen",
+            "modelstudio"
+          ]
         }
       },
       {
@@ -82,8 +104,14 @@
         "model": "qwen3.7-max",
         "reason": "qwen3.7-max is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint.",
         "when": {
-          "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"],
-          "providerConfigApiIn": ["qwen", "modelstudio"]
+          "baseUrlHosts": [
+            "coding.dashscope.aliyuncs.com",
+            "coding-intl.dashscope.aliyuncs.com"
+          ],
+          "providerConfigApiIn": [
+            "qwen",
+            "modelstudio"
+          ]
         }
       }
     ],
@@ -96,8 +124,16 @@
             "id": "qwen3.7-plus",
             "name": "qwen3.7-plus",
             "reasoning": true,
-            "input": ["text", "image"],
-            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
             "contextWindow": 1000000,
             "maxTokens": 65536
           },
@@ -105,8 +141,16 @@
             "id": "qwen3.6-plus",
             "name": "qwen3.6-plus",
             "reasoning": true,
-            "input": ["text", "image"],
-            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
             "contextWindow": 1000000,
             "maxTokens": 65536
           },
@@ -114,8 +158,15 @@
             "id": "qwen3-coder-next",
             "name": "qwen3-coder-next",
             "reasoning": true,
-            "input": ["text"],
-            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
             "contextWindow": 262144,
             "maxTokens": 65536,
             "status": "deprecated",
@@ -125,8 +176,16 @@
             "id": "kimi-k2.5",
             "name": "kimi-k2.5",
             "reasoning": true,
-            "input": ["text", "image"],
-            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
             "contextWindow": 262144,
             "maxTokens": 98304
           },
@@ -134,8 +193,15 @@
             "id": "glm-5",
             "name": "glm-5",
             "reasoning": true,
-            "input": ["text"],
-            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
             "contextWindow": 202752,
             "maxTokens": 16384
           },
@@ -143,8 +209,15 @@
             "id": "MiniMax-M2.5",
             "name": "MiniMax-M2.5",
             "reasoning": true,
-            "input": ["text"],
-            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
             "contextWindow": 196608,
             "maxTokens": 32768
           }
@@ -157,12 +230,19 @@
     }
   },
   "contracts": {
-    "mediaUnderstandingProviders": ["qwen"],
-    "videoGenerationProviders": ["qwen"]
+    "mediaUnderstandingProviders": [
+      "qwen"
+    ],
+    "videoGenerationProviders": [
+      "qwen"
+    ]
   },
   "mediaUnderstandingProviderMetadata": {
     "qwen": {
-      "capabilities": ["image", "video"],
+      "capabilities": [
+        "image",
+        "video"
+      ],
       "defaultModels": {
         "image": "qwen3.6-plus",
         "video": "qwen3.6-plus"
@@ -176,11 +256,17 @@
     "providers": [
       {
         "id": "qwen",
-        "envVars": ["QWEN_API_KEY", "MODELSTUDIO_API_KEY", "DASHSCOPE_API_KEY"]
+        "envVars": [
+          "QWEN_API_KEY",
+          "MODELSTUDIO_API_KEY",
+          "DASHSCOPE_API_KEY"
+        ]
       },
       {
         "id": "qwen-token-plan",
-        "envVars": ["QWEN_TOKEN_PLAN_API_KEY"]
+        "envVars": [
+          "QWEN_TOKEN_PLAN_API_KEY"
+        ]
       }
     ]
   },
@@ -190,7 +276,9 @@
       "method": "standard-api-key-cn",
       "choiceId": "qwen-standard-api-key-cn",
       "appGuidedSecret": true,
-      "deprecatedChoiceIds": ["modelstudio-standard-api-key-cn"],
+      "deprecatedChoiceIds": [
+        "modelstudio-standard-api-key-cn"
+      ],
       "choiceLabel": "Standard API Key for China (pay-as-you-go)",
       "choiceHint": "Endpoint: dashscope.aliyuncs.com",
       "groupId": "qwen",
@@ -206,7 +294,9 @@
       "method": "standard-api-key",
       "choiceId": "qwen-standard-api-key",
       "appGuidedSecret": true,
-      "deprecatedChoiceIds": ["modelstudio-standard-api-key"],
+      "deprecatedChoiceIds": [
+        "modelstudio-standard-api-key"
+      ],
       "choiceLabel": "Standard API Key for Global/Intl (pay-as-you-go)",
       "choiceHint": "Endpoint: dashscope-intl.aliyuncs.com",
       "groupId": "qwen",
@@ -222,7 +312,9 @@
       "method": "api-key-cn",
       "choiceId": "qwen-api-key-cn",
       "appGuidedSecret": true,
-      "deprecatedChoiceIds": ["modelstudio-api-key-cn"],
+      "deprecatedChoiceIds": [
+        "modelstudio-api-key-cn"
+      ],
       "choiceLabel": "Coding Plan API Key for China (subscription)",
       "choiceHint": "Endpoint: coding.dashscope.aliyuncs.com",
       "groupId": "qwen",
@@ -238,7 +330,9 @@
       "method": "api-key",
       "choiceId": "qwen-api-key",
       "appGuidedSecret": true,
-      "deprecatedChoiceIds": ["modelstudio-api-key"],
+      "deprecatedChoiceIds": [
+        "modelstudio-api-key"
+      ],
       "choiceLabel": "Coding Plan API Key for Global/Intl (subscription)",
       "choiceHint": "Endpoint: coding-intl.dashscope.aliyuncs.com",
       "groupId": "qwen",
