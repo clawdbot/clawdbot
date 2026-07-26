@@ -1290,9 +1290,9 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
 
       const expectedProfileSha256 = Object.fromEntries(
         [...importedProfileIds].flatMap((profileId) => {
-          const credential = verifiedStore.profiles[profileId];
-          return credential
-            ? [[profileId, digestAuthProfileMigrationValue(credential)] as const]
+          const profileValue = verifiedStore.profiles[profileId];
+          return profileValue
+            ? [[profileId, digestAuthProfileMigrationValue(profileValue)] as const]
             : [];
         }),
       );
