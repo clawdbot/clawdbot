@@ -708,7 +708,6 @@ src/cron/store.test.ts
 src/daemon/launchd.test.ts
 src/daemon/launchd.ts
 src/daemon/schtasks.startup-fallback.test.ts
-src/daemon/schtasks.ts
 src/daemon/systemd.test.ts
 src/daemon/systemd.ts
 src/fleet/backup.runtime.ts
