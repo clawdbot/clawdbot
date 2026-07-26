@@ -269,7 +269,7 @@ describe("AppSidebar gateway footer subtitle", () => {
   });
 
   it("stays hidden with one configured gateway", async () => {
-    setNativeGatewayTestState({ gateways: [twoGateways.gateways[0]], currentId: "local" });
+    setNativeGatewayTestState({ gateways: [twoGateways.gateways[0]!], currentId: "local" });
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
 
