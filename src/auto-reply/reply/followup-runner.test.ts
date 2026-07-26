@@ -5198,7 +5198,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expectNoBlockReplyText(onBlockReply, "second payload");
   });
 
-  it("suppresses cross-channel route-failure notices for room events", async () => {
+  it("suppresses once-policy cross-channel route-failure notices for room events", async () => {
     routeReplyMock.mockResolvedValue({
       ok: false,
       error: "forced route failure",
@@ -5207,6 +5207,10 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     queued.currentInboundEventKind = "room_event";
     queued.originatingChannel = "discord";
     queued.originatingTo = "channel:C1";
+    queued.run.config = {
+      ...queued.run.config,
+      messages: { operationalReplies: { policy: "once" } },
+    };
     const { onBlockReply } = await runMessagingCase({
       agentResult: { payloads: [{ text: "hello world!" }, { text: "second payload" }] },
       queued,

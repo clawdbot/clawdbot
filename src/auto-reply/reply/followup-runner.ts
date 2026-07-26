@@ -641,9 +641,11 @@ export function createFollowupRunner(params: {
           "cross-channel misdelivery.",
         isError: true,
       });
+      const operationalPolicy = resolveOperationalReplyPolicy(runtimeConfig).policy;
       if (
         queued.currentInboundEventKind === "room_event" &&
-        resolveOperationalReplyPolicy(runtimeConfig).policy === "always"
+        operationalPolicy !== "redirect" &&
+        operationalPolicy !== "silent"
       ) {
         logVerbose("followup queue: cross-channel failure notice suppressed for room_event");
         return deliveredAnyPayload;
