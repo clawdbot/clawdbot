@@ -319,7 +319,7 @@ export class WorkboardCoreStore {
         cardSessionKey(card) === sessionKey,
     );
     if (conflict) {
-      throw new Error(`session ${sessionKey} is already bound to active card ${conflict.id}.`);
+        throw new Error(`session ${sessionKey} is already reserved by card ${conflict.id}.`);
     }
   }
 
@@ -425,7 +425,7 @@ export class WorkboardCoreStore {
     const syncedMetadata = trimMetadataToBudget(
       syncExecutionAttemptMetadata(metadata, execution, now),
     );
-    this.assertPrimarySessionAvailable(cards, "", sessionKey, status);
+    this.assertPrimarySessionAvailable(cards, "", sessionKey, status, true);
     const boardId = syncedMetadata.automation?.boardId ?? "default";
     const position = Number.isFinite(normalizedPosition)
       ? normalizedPosition
@@ -644,7 +644,13 @@ export class WorkboardCoreStore {
       previousSessionKey !== nextSessionKey ||
       isActivePrimarySessionCard(next) !== isActivePrimarySessionCard(existing)
     ) {
-      this.assertPrimarySessionAvailable(await this.list(), next.id, nextSessionKey, next.status);
+      this.assertPrimarySessionAvailable(
+        await this.list(),
+        next.id,
+        nextSessionKey,
+        next.status,
+        true,
+      );
     }
     next.events = appendEvent(next, updateEvent(existing, next), now);
     if (options.enforceStatusHolds && effectivePatch.status !== undefined) {

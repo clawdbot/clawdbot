@@ -905,7 +905,7 @@ describe("WorkboardStore", () => {
         action: "bind",
         sessionKey: "agent:main:chat:one",
       }),
-    ).rejects.toThrow("already bound to active card");
+    ).rejects.toThrow("already reserved by card");
 
     const rebound = await store.bindSession(card.id, {
       action: "rebind",
@@ -937,6 +937,27 @@ describe("WorkboardStore", () => {
         sessionKey: "agent:main:chat:one",
       }),
     ).rejects.toThrow("bound to session agent:main:chat:two");
+  });
+
+  it("reserves provisional session bindings before claim", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const sessionKey = "agent:main:provisional";
+    const first = await store.create({ title: "First", sessionKey });
+    const second = await store.create({ title: "Second" });
+
+    await expect(store.create({ title: "Duplicate", sessionKey })).rejects.toThrow(
+      "already reserved by card",
+    );
+    await expect(store.update(second.id, { sessionKey })).rejects.toThrow(
+      "already reserved by card",
+    );
+
+    const claimed = await store.claim(first.id, {
+      ownerId: "agent-main",
+      sessionKey,
+    });
+    expect(claimed.card.status).toBe("running");
+    expect(claimed.card.sessionKey).toBe(sessionKey);
   });
 
   it("tracks execution attempts as card metadata", async () => {
@@ -3002,21 +3023,10 @@ describe("WorkboardStore", () => {
     const store = new WorkboardStore(createMemoryStore(), {
       subscriptions: createMemoryStore<PersistedWorkboardNotificationSubscription>(),
     });
-    const matching = await store.create({
-      title: "Matching session",
-      boardId: "ops",
-      sessionKey: "session-1",
-      runId: "run-1",
-    });
-    const unrelated = await store.create({
-      title: "Other session",
-      boardId: "ops",
-      sessionKey: "session-2",
-      runId: "run-2",
-    });
     await store.create({
       title: "Card-scoped failed notification",
       boardId: "ops",
+      status: "done",
       sessionKey: "session-1",
       runId: "run-1",
       metadata: {
@@ -3029,6 +3039,19 @@ describe("WorkboardStore", () => {
           },
         ],
       },
+    });
+    const matching = await store.create({
+      title: "Matching session",
+      boardId: "ops",
+      status: "running",
+      sessionKey: "session-1",
+      runId: "run-1",
+    });
+    const unrelated = await store.create({
+      title: "Other session",
+      boardId: "ops",
+      sessionKey: "session-2",
+      runId: "run-2",
     });
     const subscription = await store.subscribeNotifications({
       boardId: "ops",
