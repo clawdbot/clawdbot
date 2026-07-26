@@ -40,7 +40,7 @@ function snapshotFrom(value: unknown): NativeGatewaysSnapshot | null {
     : null;
 }
 
-export function createNativeGatewaysCapability(): NativeGatewaysCapability | null {
+function createNativeGatewaysCapability(): NativeGatewaysCapability | null {
   if (typeof window === "undefined") {
     return null;
   }
