@@ -100,6 +100,8 @@ beforeEach(async () => {
         __openclaw: {
           media: [
             { path: storedImage.path, contentType: "image/png" },
+            // Duplicate ref proves dedupe: the response must carry this image once.
+            { path: storedImage.path, contentType: "image/png" },
             { path: `${storedImage.path}.missing`, contentType: "image/png" },
           ],
         },

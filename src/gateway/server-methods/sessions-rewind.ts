@@ -50,26 +50,37 @@ type MessageCutAction = "fork" | "rewind" | "switch";
 const EXTERNAL_CONVERSATION_ERROR =
   "Session history changes are unavailable because this session is owned by an external agent harness.";
 
+// A message realistically carries a handful of images; a corrupt transcript must
+// not turn rewind into a bulk media read.
+const EDITOR_MEDIA_REF_LIMIT = 10;
+
 async function resolveEditorMediaAttachments(
   refs: Array<{ path: string; contentType: string }> | undefined,
 ): Promise<Array<{ mimeType: string; data: string }>> {
   if (!refs) {
     return [];
   }
-  const attachments = await Promise.all(
-    refs.map(async (ref) => {
-      try {
-        // Transcript paths are untrusted hints; read only the basename through the
-        // media store so its traversal guards and byte cap stay authoritative.
-        const id = path.basename(ref.path);
-        const media = await readMediaBuffer(id, "inbound", MEDIA_MAX_BYTES);
-        return { mimeType: ref.contentType, data: media.buffer.toString("base64") };
-      } catch {
-        return undefined;
-      }
-    }),
-  );
-  return attachments.filter((attachment) => attachment !== undefined);
+  const seen = new Set<string>();
+  const attachments: Array<{ mimeType: string; data: string }> = [];
+  for (const ref of refs) {
+    if (seen.has(ref.path)) {
+      continue;
+    }
+    seen.add(ref.path);
+    if (seen.size > EDITOR_MEDIA_REF_LIMIT) {
+      break;
+    }
+    try {
+      // Transcript paths are untrusted hints; read only the basename through the
+      // media store so its traversal guards and byte cap stay authoritative.
+      const id = path.basename(ref.path);
+      const media = await readMediaBuffer(id, "inbound", MEDIA_MAX_BYTES);
+      attachments.push({ mimeType: ref.contentType, data: media.buffer.toString("base64") });
+    } catch {
+      // Skipped refs (missing file, oversized, guard rejection) never fail the cut.
+    }
+  }
+  return attachments;
 }
 
 function resolveUpstreamForkHarness(link: SessionUpstreamLink) {
