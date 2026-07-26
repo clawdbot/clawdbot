@@ -325,7 +325,7 @@ export async function startStartupEntry(
   stdout.write(`${formatLine("Started Windows login item", resolveTaskName(env))}\n`);
 }
 
-export function parseScheduledTaskXmlEnabled(output: string): boolean | null {
+function parseScheduledTaskXmlEnabled(output: string): boolean | null {
   const normalized = output.replace(/^\uFEFF/u, "").replaceAll(String.fromCharCode(0), "");
   const settings = /<Settings(?:\s[^>]*)?>([\s\S]*?)<\/Settings>/iu.exec(normalized)?.[1];
   if (settings === undefined) {
@@ -336,7 +336,7 @@ export function parseScheduledTaskXmlEnabled(output: string): boolean | null {
   return enabled === undefined ? true : enabled.toLowerCase() === "true";
 }
 
-export function probeScheduledTaskExists(taskName: string): boolean | null {
+function probeScheduledTaskExists(taskName: string): boolean | null {
   const encodedTaskName = Buffer.from(taskName, "utf8").toString("base64");
   const script = [
     "$ErrorActionPreference='Stop'",

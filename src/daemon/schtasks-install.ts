@@ -548,7 +548,7 @@ export async function startScheduledTask({
   stdout.write(`${formatLine("Started Scheduled Task", taskName)}\n`);
 }
 
-export async function restartRegisteredScheduledTask(params: {
+async function restartRegisteredScheduledTask(params: {
   env: GatewayServiceEnv;
   stdout: NodeJS.WritableStream;
   mode: { kind: "standard" } | { kind: "fallback-takeover" };
