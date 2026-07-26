@@ -12,6 +12,7 @@ import {
   createGatewayHarness,
   createSessions,
   createSessionsHarness,
+  catalogPage,
   mountSidebar,
   type SidebarLifecycleState,
   type TestSessionMenu,
@@ -344,9 +345,22 @@ describe("AppSidebar transient menus", () => {
 });
 
 describe("AppSidebar section reordering", () => {
-  async function mountWithGroups(groups: string[], sectionOrder: string[] = []) {
-    const client = {} as GatewayBrowserClient;
-    const gateway = createGateway(client);
+  async function mountWithGroups(
+    groups: string[],
+    sectionOrder: string[] = [],
+    options: { withCatalog?: boolean } = {},
+  ) {
+    const request = vi
+      .fn()
+      .mockResolvedValue(catalogPage([{ threadId: "thread-codex", name: "Codex thread" }]));
+    const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+    if (options.withCatalog) {
+      gateway.publish({
+        hello: {
+          features: { methods: ["sessions.catalog.list"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+    }
     const harness = createSessionsHarness("main", [
       "agent:main:main",
       "agent:main:plain",
@@ -377,10 +391,15 @@ describe("AppSidebar section reordering", () => {
       }
       row.category = group;
     }
-    const { sidebar } = await mountSidebar(gateway, harness.sessions);
+    const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
     sidebar.connected = true;
     harness.publish({ groups, sectionOrder });
     await sidebar.updateComplete;
+    if (options.withCatalog) {
+      await waitForFast(() =>
+        expect(sidebar.querySelector('[data-session-section="catalog:codex"]')).not.toBeNull(),
+      );
+    }
     return { sidebar, harness };
   }
 
@@ -395,13 +414,25 @@ describe("AppSidebar section reordering", () => {
   }
 
   it("marks every section header draggable and renders a grip", async () => {
-    const { sidebar } = await mountWithGroups(["Alpha", "Beta"]);
+    const { sidebar } = await mountWithGroups(["Alpha", "Beta"], [], { withCatalog: true });
 
     expect(groupHeader(sidebar, "category:Alpha").getAttribute("draggable")).toBe("true");
     expect(groupHeader(sidebar, "ungrouped").getAttribute("draggable")).toBe("true");
     expect(groupHeader(sidebar, "groups").getAttribute("draggable")).toBe("true");
     expect(groupHeader(sidebar, "work").getAttribute("draggable")).toBe("true");
-    for (const sectionId of ["category:Alpha", "category:Beta", "ungrouped", "groups", "work"]) {
+    expect(groupHeader(sidebar, "catalog:codex").getAttribute("draggable")).toBe("true");
+    const codingSection = sidebar.querySelector('[data-session-section="work"]');
+    const catalogSection = sidebar.querySelector('[data-session-section="catalog:codex"]');
+    expect(catalogSection?.parentElement).toBe(codingSection?.parentElement);
+    expect(catalogSection?.previousElementSibling).toBe(codingSection);
+    for (const sectionId of [
+      "category:Alpha",
+      "category:Beta",
+      "ungrouped",
+      "groups",
+      "work",
+      "catalog:codex",
+    ]) {
       expect(
         groupHeader(sidebar, sectionId).querySelector(".sidebar-session-group-drag-handle"),
       ).not.toBeNull();
@@ -457,6 +488,47 @@ describe("AppSidebar section reordering", () => {
 
     await waitForFast(() =>
       expect(harness.groupsPut).toHaveBeenCalledWith([], ["work", "ungrouped", "groups"]),
+    );
+  });
+
+  it("preserves saved catalog slots while the first catalog load is pending", async () => {
+    const { sidebar, harness } = await mountWithGroups(
+      [],
+      ["ungrouped", "groups", "work", "catalog:codex"],
+    );
+    const dataTransfer = createDataTransferStub();
+
+    dispatchDragEvent(groupHeader(sidebar, "work"), "dragstart", dataTransfer);
+    const threadsSection = sidebar.querySelector('[data-session-section="ungrouped"]');
+    if (!threadsSection) {
+      throw new Error("expected Threads section");
+    }
+    dispatchDragEvent(threadsSection, "drop", dataTransfer);
+
+    await waitForFast(() =>
+      expect(harness.groupsPut).toHaveBeenCalledWith(
+        [],
+        ["work", "ungrouped", "groups", "catalog:codex"],
+      ),
+    );
+  });
+
+  it("persists a catalog section move relative to Coding", async () => {
+    const { sidebar, harness } = await mountWithGroups([], [], { withCatalog: true });
+    const dataTransfer = createDataTransferStub();
+
+    dispatchDragEvent(groupHeader(sidebar, "catalog:codex"), "dragstart", dataTransfer);
+    const codingSection = sidebar.querySelector('[data-session-section="work"]');
+    if (!codingSection) {
+      throw new Error("expected Coding section");
+    }
+    dispatchDragEvent(codingSection, "drop", dataTransfer);
+
+    await waitForFast(() =>
+      expect(harness.groupsPut).toHaveBeenCalledWith(
+        [],
+        ["ungrouped", "groups", "catalog:codex", "work"],
+      ),
     );
   });
 });

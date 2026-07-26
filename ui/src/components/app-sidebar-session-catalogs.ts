@@ -23,6 +23,7 @@ import {
 import { searchForSession } from "../lib/sessions/index.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { shouldHandleNavigationClick } from "./app-sidebar-nav-menus.ts";
+import { renderSidebarSessionSectionHeader } from "./app-sidebar-session-section-header.ts";
 import { icons } from "./icons.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 
@@ -105,6 +106,13 @@ type SessionCatalogGroupsParams = {
   creatorId?: string | null;
   renderLiveRow: (row: GatewaySessionRow, display: CatalogBackingSessionDisplay) => unknown;
   onToggleSection: (sectionId: string) => void;
+  draggingSectionId: string | null;
+  sectionDropTarget: { sectionId: string; position: "before" | "after" } | null;
+  onSectionDragOver: (event: DragEvent, sectionId: string) => void;
+  onSectionDragLeave: (event: DragEvent, sectionId: string) => void;
+  onSectionDrop: (event: DragEvent, sectionId: string) => void;
+  onStartSectionDrag: (sectionId: string) => void;
+  onFinishSectionDrag: () => void;
   viewMenuOpenCatalogId: string | null;
   creatorFilterActive: boolean;
   onOpenViewMenu: (trigger: HTMLElement) => void;
@@ -205,66 +213,88 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
     }
     const errorMessage = errorMessages.join("; ");
     const errorHelp = `${errorMessage}. Configure native thread discovery in Settings > Automation > Plugins.`;
+    const sectionClass = [
+      "sidebar-recent-sessions__group",
+      "sidebar-recent-sessions__group--zone-coding",
+      collapsed ? "sidebar-recent-sessions__group--collapsed" : "",
+      params.draggingSectionId === sectionId ? "sidebar-recent-sessions__group--dragging" : "",
+      params.sectionDropTarget?.sectionId === sectionId
+        ? `sidebar-recent-sessions__group--section-drop-${params.sectionDropTarget.position}`
+        : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
     return html`
-      <div class="sidebar-recent-sessions__group" data-session-section=${sectionId}>
-        <div class="sidebar-recent-sessions__head">
-          <button
-            type="button"
-            class="sidebar-session-group-toggle"
-            aria-expanded=${String(!collapsed)}
-            aria-label=${hasError ? `${catalog.label}: ${errorHelp}` : catalog.label}
-            title=${hasError ? errorHelp : nothing}
-            @click=${() => params.onToggleSection(sectionId)}
-          >
-            <span class="sidebar-recent-sessions__label-text">${catalog.label}</span>
-            <span class="sidebar-session-group-toggle__icon" aria-hidden="true"
-              >${collapsed ? icons.chevronRight : icons.chevronDown}</span
+      <div
+        class=${sectionClass}
+        data-session-section=${sectionId}
+        @dragover=${(event: DragEvent) => params.onSectionDragOver(event, sectionId)}
+        @dragleave=${(event: DragEvent) => params.onSectionDragLeave(event, sectionId)}
+        @drop=${(event: DragEvent) => params.onSectionDrop(event, sectionId)}
+      >
+        ${renderSidebarSessionSectionHeader({
+          sectionId,
+          onStartDrag: params.onStartSectionDrag,
+          onFinishDrag: params.onFinishSectionDrag,
+          content: html`
+            <button
+              type="button"
+              class="sidebar-session-group-toggle"
+              aria-expanded=${String(!collapsed)}
+              aria-label=${hasError ? `${catalog.label}: ${errorHelp}` : catalog.label}
+              title=${hasError ? errorHelp : nothing}
+              @click=${() => params.onToggleSection(sectionId)}
             >
-            ${renderCatalogHeaderStatus(hasActiveRun, hasUnread)}
-            ${hasError || (collapsed && rows.length > 0)
-              ? html`<span
-                  class="sidebar-session-group-count ${hasError
-                    ? "sidebar-session-group-count--error"
-                    : ""}"
-                  data-session-catalog-error=${hasError ? catalog.id : nothing}
-                  aria-hidden="true"
-                  >${hasError ? icons.alertTriangle : rows.length}</span
-                >`
-              : nothing}
-          </button>
-          <button
-            type="button"
-            class="sidebar-session-group-actions sidebar-session-sort sidebar-session-catalog-grouping ${params.creatorFilterActive
-              ? "sidebar-session-sort--filtered"
-              : ""}"
-            data-session-catalog-view-menu=${catalog.id}
-            title=${t("chat.sidebar.catalogViewOptions")}
-            aria-label=${t("chat.sidebar.catalogViewOptions")}
-            aria-haspopup="menu"
-            aria-expanded=${String(params.viewMenuOpenCatalogId === catalog.id)}
-            @click=${(event: MouseEvent) => {
-              event.stopPropagation();
-              params.onOpenViewMenu(event.currentTarget as HTMLElement);
-            }}
-          >
-            ${icons.listFilter}
-          </button>
-          ${canCreateSession
-            ? html`<button
-                type="button"
-                class="sidebar-session-group-actions sidebar-session-sort sidebar-session-new sidebar-session-catalog-new"
-                title=${`${t("chat.runControls.newSession")} — ${catalog.label}`}
-                aria-label=${`${t("chat.runControls.newSession")} — ${catalog.label}`}
-                ?disabled=${!params.connected}
-                @click=${() =>
-                  params.onOpenNewSession?.(params.newSessionAgentId, {
-                    catalogId: catalog.id,
-                  })}
+              <span class="sidebar-recent-sessions__label-text">${catalog.label}</span>
+              <span class="sidebar-session-group-toggle__icon" aria-hidden="true"
+                >${collapsed ? icons.chevronRight : icons.chevronDown}</span
               >
-                ${icons.plus}
-              </button>`
-            : nothing}
-        </div>
+              ${renderCatalogHeaderStatus(hasActiveRun, hasUnread)}
+              ${hasError || (collapsed && rows.length > 0)
+                ? html`<span
+                    class="sidebar-session-group-count ${hasError
+                      ? "sidebar-session-group-count--error"
+                      : ""}"
+                    data-session-catalog-error=${hasError ? catalog.id : nothing}
+                    aria-hidden="true"
+                    >${hasError ? icons.alertTriangle : rows.length}</span
+                  >`
+                : nothing}
+            </button>
+            <button
+              type="button"
+              class="sidebar-session-group-actions sidebar-session-sort sidebar-session-catalog-grouping ${params.creatorFilterActive
+                ? "sidebar-session-sort--filtered"
+                : ""}"
+              data-session-catalog-view-menu=${catalog.id}
+              title=${t("chat.sidebar.catalogViewOptions")}
+              aria-label=${t("chat.sidebar.catalogViewOptions")}
+              aria-haspopup="menu"
+              aria-expanded=${String(params.viewMenuOpenCatalogId === catalog.id)}
+              @click=${(event: MouseEvent) => {
+                event.stopPropagation();
+                params.onOpenViewMenu(event.currentTarget as HTMLElement);
+              }}
+            >
+              ${icons.listFilter}
+            </button>
+            ${canCreateSession
+              ? html`<button
+                  type="button"
+                  class="sidebar-session-group-actions sidebar-session-sort sidebar-session-new sidebar-session-catalog-new"
+                  title=${`${t("chat.runControls.newSession")} — ${catalog.label}`}
+                  aria-label=${`${t("chat.runControls.newSession")} — ${catalog.label}`}
+                  ?disabled=${!params.connected}
+                  @click=${() =>
+                    params.onOpenNewSession?.(params.newSessionAgentId, {
+                      catalogId: catalog.id,
+                    })}
+                >
+                  ${icons.plus}
+                </button>`
+              : nothing}
+          `,
+        })}
         ${collapsed
           ? nothing
           : html`<div class="sidebar-recent-sessions__list">

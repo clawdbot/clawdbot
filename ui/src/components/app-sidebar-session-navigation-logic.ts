@@ -190,6 +190,7 @@ export function partitionSidebarVisibleSections(input: {
   rows: SidebarRecentSession[];
   grouping: SidebarSessionsGrouping;
   knownGroups: string[] | undefined;
+  catalogIds?: readonly string[];
   sectionOrder?: readonly string[];
   collapsedSections: ReadonlySet<string>;
   hideEmptyCreatorFilteredGroup: (category: string | undefined, rowCount: number) => boolean;
@@ -201,6 +202,7 @@ export function partitionSidebarVisibleSections(input: {
     grouping: input.grouping,
     knownGroups: input.knownGroups,
     sectionOrder: input.sectionOrder,
+    catalogIds: input.catalogIds,
   }).filter(
     (section) =>
       section.id !== "pinned" &&

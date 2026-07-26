@@ -138,6 +138,22 @@ describe("groupSidebarSessionRows", () => {
     ]);
   });
 
+  it("emits catalog sections after coding by default and honors their stored positions", () => {
+    const rows = [row({ key: "thread" }), row({ key: "work", workSession: true })];
+
+    expect(
+      groupSidebarSessionRows(rows, { catalogIds: ["claude", "codex"] }).map(
+        (section) => section.id,
+      ),
+    ).toEqual(["ungrouped", "work", "catalog:claude", "catalog:codex"]);
+    expect(
+      groupSidebarSessionRows(rows, {
+        catalogIds: ["claude", "codex"],
+        sectionOrder: ["catalog:codex", "ungrouped", "work", "catalog:claude"],
+      }).map((section) => section.id),
+    ).toEqual(["catalog:codex", "ungrouped", "work", "catalog:claude"]);
+  });
+
   it("appends sections missing from stored order in default relative order", () => {
     const sections = groupSidebarSessionRows(
       [row({ key: "a", category: "Alpha" }), row({ key: "thread" })],
@@ -227,6 +243,16 @@ describe("normalizeSessionSectionOrder", () => {
         ["Alpha"],
       ),
     ).toEqual(["category:Alpha", "ungrouped", "groups", "work"]);
+  });
+
+  it("appends unseen catalogs after coding and drops disappeared catalogs", () => {
+    expect(
+      normalizeSessionSectionOrder(
+        ["catalog:codex", "ungrouped", "groups", "work", "catalog:removed"],
+        [],
+        ["claude", "codex"],
+      ),
+    ).toEqual(["catalog:codex", "ungrouped", "groups", "work", "catalog:claude"]);
   });
 
   it("drops invalid and duplicate tokens", () => {
