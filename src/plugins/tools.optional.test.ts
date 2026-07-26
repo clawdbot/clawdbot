@@ -531,10 +531,10 @@ describe("resolvePluginTools optional tools", () => {
     vi.useRealTimers();
   });
 
-  it("runs plugin tool factories, prepare callbacks, and execute callbacks under the owning plugin and agent scope", async () => {
+  it("runs every plugin tool lifecycle callback under the owning plugin and agent scope", async () => {
     const context = { ...createContext(), agentId: "work" };
     const observed: Array<{
-      phase: "factory" | "prepare" | "execute";
+      phase: "factory" | "prepare" | "prepare-before" | "finalize-before" | "execute";
       pluginId?: string;
       pluginSource?: string;
       agentId?: string;
@@ -568,6 +568,26 @@ describe("resolvePluginTools optional tools", () => {
               });
               return args;
             },
+            prepareBeforeToolCallParams(params: unknown) {
+              const prepareBeforeScope = getPluginRuntimeGatewayRequestScope();
+              observed.push({
+                phase: "prepare-before",
+                pluginId: prepareBeforeScope?.pluginId,
+                pluginSource: prepareBeforeScope?.pluginSource,
+                agentId: prepareBeforeScope?.agentId,
+              });
+              return params;
+            },
+            finalizeBeforeToolCallParams(params: unknown) {
+              const finalizeBeforeScope = getPluginRuntimeGatewayRequestScope();
+              observed.push({
+                phase: "finalize-before",
+                pluginId: finalizeBeforeScope?.pluginId,
+                pluginSource: finalizeBeforeScope?.pluginSource,
+                agentId: finalizeBeforeScope?.agentId,
+              });
+              return params;
+            },
             async execute() {
               const executeScope = getPluginRuntimeGatewayRequestScope();
               observed.push({
@@ -593,7 +613,15 @@ describe("resolvePluginTools optional tools", () => {
         const tools = resolvePluginTools(createResolveToolsParams({ context }));
         expect(tools.map((tool) => tool.name)).toEqual(["multi_tool", "optional-demo_tool"]);
         for (const tool of tools) {
-          await tool.execute(`call-${tool.name}`, tool.prepareArguments?.({}) ?? {}, undefined);
+          const preparedArguments = tool.prepareArguments?.({}) ?? {};
+          const preparedBefore = await tool.prepareBeforeToolCallParams?.(preparedArguments, {
+            toolCallId: `call-${tool.name}`,
+          });
+          const finalizedBefore = tool.finalizeBeforeToolCallParams?.(
+            preparedBefore,
+            preparedBefore,
+          );
+          await tool.execute(`call-${tool.name}`, finalizedBefore ?? preparedArguments, undefined);
           expect(getPluginRuntimeGatewayRequestScope()).toMatchObject({
             pluginId: "outer",
             pluginSource: "/tmp/outer.js",
@@ -623,6 +651,18 @@ describe("resolvePluginTools optional tools", () => {
         agentId: "work",
       },
       {
+        phase: "prepare-before",
+        pluginId: "multi",
+        pluginSource: "/tmp/multi.js",
+        agentId: "work",
+      },
+      {
+        phase: "finalize-before",
+        pluginId: "multi",
+        pluginSource: "/tmp/multi.js",
+        agentId: "work",
+      },
+      {
         phase: "execute",
         pluginId: "multi",
         pluginSource: "/tmp/multi.js",
@@ -630,6 +670,18 @@ describe("resolvePluginTools optional tools", () => {
       },
       {
         phase: "prepare",
+        pluginId: "optional-demo",
+        pluginSource: "/tmp/optional-demo.js",
+        agentId: "work",
+      },
+      {
+        phase: "prepare-before",
+        pluginId: "optional-demo",
+        pluginSource: "/tmp/optional-demo.js",
+        agentId: "work",
+      },
+      {
+        phase: "finalize-before",
         pluginId: "optional-demo",
         pluginSource: "/tmp/optional-demo.js",
         agentId: "work",

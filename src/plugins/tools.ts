@@ -148,6 +148,23 @@ function wrapPluginToolCallbacks(
     ? (args: unknown) =>
         runWithPluginToolScope(entry, agentId, () => Reflect.apply(prepareArguments, tool, [args]))
     : undefined;
+  const prepareBeforeToolCallParams = tool.prepareBeforeToolCallParams;
+  const scopedPrepareBeforeToolCallParams = prepareBeforeToolCallParams
+    ? (
+        params: unknown,
+        ctx: { toolCallId?: string; hookContext?: unknown; signal?: AbortSignal },
+      ) =>
+        runWithPluginToolScope(entry, agentId, () =>
+          Reflect.apply(prepareBeforeToolCallParams, tool, [params, ctx]),
+        )
+    : undefined;
+  const finalizeBeforeToolCallParams = tool.finalizeBeforeToolCallParams;
+  const scopedFinalizeBeforeToolCallParams = finalizeBeforeToolCallParams
+    ? (params: unknown, preparedParams: unknown) =>
+        runWithPluginToolScope(entry, agentId, () =>
+          Reflect.apply(finalizeBeforeToolCallParams, tool, [params, preparedParams]),
+        )
+    : undefined;
   const scopedExecute = (
     toolCallId: string,
     params: unknown,
@@ -167,6 +184,12 @@ function wrapPluginToolCallbacks(
       if (prop === "prepareArguments" && scopedPrepareArguments) {
         return scopedPrepareArguments;
       }
+      if (prop === "prepareBeforeToolCallParams" && scopedPrepareBeforeToolCallParams) {
+        return scopedPrepareBeforeToolCallParams;
+      }
+      if (prop === "finalizeBeforeToolCallParams" && scopedFinalizeBeforeToolCallParams) {
+        return scopedFinalizeBeforeToolCallParams;
+      }
       if (prop === "execute") {
         return scopedExecute;
       }
@@ -178,6 +201,22 @@ function wrapPluginToolCallbacks(
           configurable: true,
           enumerable: Object.prototype.propertyIsEnumerable.call(target, prop),
           value: scopedPrepareArguments,
+          writable: true,
+        };
+      }
+      if (prop === "prepareBeforeToolCallParams" && scopedPrepareBeforeToolCallParams) {
+        return {
+          configurable: true,
+          enumerable: Object.prototype.propertyIsEnumerable.call(target, prop),
+          value: scopedPrepareBeforeToolCallParams,
+          writable: true,
+        };
+      }
+      if (prop === "finalizeBeforeToolCallParams" && scopedFinalizeBeforeToolCallParams) {
+        return {
+          configurable: true,
+          enumerable: Object.prototype.propertyIsEnumerable.call(target, prop),
+          value: scopedFinalizeBeforeToolCallParams,
           writable: true,
         };
       }
