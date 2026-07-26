@@ -154,6 +154,56 @@ export async function prepareGatewayRuntimeState(params: {
     ambientAutostartSuppressedChannelIds,
     minimalTestGateway,
   } = bootstrap;
+  const runtimeConfig = await startupTrace.measure("runtime.config", async () => {
+    const { resolveGatewayRuntimeConfig } = await import("./server-runtime-config.js");
+    return resolveGatewayRuntimeConfig({
+      cfg: cfgAtStart,
+      port,
+      bind: opts.bind,
+      host: opts.host,
+      controlUiEnabled: opts.controlUiEnabled,
+      openAiChatCompletionsEnabled: opts.openAiChatCompletionsEnabled,
+      openResponsesEnabled: opts.openResponsesEnabled,
+      auth: resolvedStartupAuthOverride,
+      tailscale: startupTailscaleOverride,
+    });
+  });
+  const {
+    bindHost,
+    controlUiEnabled,
+    openAiChatCompletionsEnabled,
+    openAiChatCompletionsConfig,
+    openResponsesEnabled,
+    openResponsesConfig,
+    strictTransportSecurityHeader,
+    controlUiBasePath,
+    controlUiRoot: controlUiRootOverride,
+    resolvedAuth,
+    tailscaleConfig,
+    tailscaleMode,
+  } = runtimeConfig;
+  if (bootstrap.generatedStartupAuthToken && isLoopbackHost(bindHost)) {
+    const { ensureStartupLocalCliPairing } = await import("./startup-local-cli-pairing.js");
+    const pairingResult = await startupTrace.measure("runtime.local-cli-pairing", () =>
+      ensureStartupLocalCliPairing(),
+    );
+    if (pairingResult === "created") {
+      log.info("runtime-only gateway auth paired the local CLI device before readiness");
+    } else if (pairingResult === "unavailable") {
+      log.warn(
+        "runtime-only gateway auth could not prepare local CLI device credentials; configure gateway.auth.token or gateway.auth.password for CLI access",
+      );
+    }
+  }
+  const getResolvedAuth = () =>
+    resolveGatewayAuth({
+      authConfig:
+        getActiveSecretsRuntimeConfigSnapshot()?.config.gateway?.auth ??
+        getRuntimeConfig().gateway?.auth,
+      authOverride: resolvedStartupAuthOverride,
+      env: process.env,
+      tailscaleMode,
+    });
   const makeState = (config: OpenClawConfig, registry: typeof pluginBootstrap.pluginRegistry) => {
     const profile = resolveHostingProfileSelection({
       config,
@@ -264,56 +314,6 @@ export async function prepareGatewayRuntimeState(params: {
         (workerPlacementDispatchAvailable || method !== "sessions.dispatch") &&
         (workerPlacementControlAvailable || method !== "sessions.reclaim"),
     );
-  const runtimeConfig = await startupTrace.measure("runtime.config", async () => {
-    const { resolveGatewayRuntimeConfig } = await import("./server-runtime-config.js");
-    return resolveGatewayRuntimeConfig({
-      cfg: cfgAtStart,
-      port,
-      bind: opts.bind,
-      host: opts.host,
-      controlUiEnabled: opts.controlUiEnabled,
-      openAiChatCompletionsEnabled: opts.openAiChatCompletionsEnabled,
-      openResponsesEnabled: opts.openResponsesEnabled,
-      auth: resolvedStartupAuthOverride,
-      tailscale: startupTailscaleOverride,
-    });
-  });
-  const {
-    bindHost,
-    controlUiEnabled,
-    openAiChatCompletionsEnabled,
-    openAiChatCompletionsConfig,
-    openResponsesEnabled,
-    openResponsesConfig,
-    strictTransportSecurityHeader,
-    controlUiBasePath,
-    controlUiRoot: controlUiRootOverride,
-    resolvedAuth,
-    tailscaleConfig,
-    tailscaleMode,
-  } = runtimeConfig;
-  if (bootstrap.generatedStartupAuthToken && isLoopbackHost(bindHost)) {
-    const { ensureStartupLocalCliPairing } = await import("./startup-local-cli-pairing.js");
-    const pairingResult = await startupTrace.measure("runtime.local-cli-pairing", () =>
-      ensureStartupLocalCliPairing(),
-    );
-    if (pairingResult === "created") {
-      log.info("runtime-only gateway auth paired the local CLI device before readiness");
-    } else if (pairingResult === "unavailable") {
-      log.warn(
-        "runtime-only gateway auth could not prepare local CLI device credentials; configure gateway.auth.token or gateway.auth.password for CLI access",
-      );
-    }
-  }
-  const getResolvedAuth = () =>
-    resolveGatewayAuth({
-      authConfig:
-        getActiveSecretsRuntimeConfigSnapshot()?.config.gateway?.auth ??
-        getRuntimeConfig().gateway?.auth,
-      authOverride: resolvedStartupAuthOverride,
-      env: process.env,
-      tailscaleMode,
-    });
   const resolveSharedGatewaySessionGenerationForConfig = (config: OpenClawConfig) =>
     resolveSharedGatewaySessionGeneration(
       resolveGatewayAuth({
