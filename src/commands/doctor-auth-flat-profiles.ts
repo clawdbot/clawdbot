@@ -20,6 +20,7 @@ import {
 } from "../agents/auth-profiles/persisted.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import {
+  inspectPersistedAuthProfileStateRaw,
   inspectPersistedAuthProfileStoreRaw,
   readPersistedAuthProfileStateRaw,
   resolveAuthProfileDatabasePath,
@@ -841,7 +842,15 @@ function loadAuthProfileMigrationTargetStore(
   if (inspection.status !== "missing") {
     throw new Error("canonical auth profile store is unreadable; legacy source left in place");
   }
-  return { version: AUTH_STORE_VERSION, profiles: {} };
+  const stateInspection = inspectPersistedAuthProfileStateRaw(agentDir, database);
+  if (stateInspection.status === "unreadable") {
+    throw new Error("canonical auth profile state is unreadable; legacy source left in place");
+  }
+  return {
+    version: AUTH_STORE_VERSION,
+    profiles: {},
+    ...coerceAuthProfileState(readPersistedAuthProfileStateRaw(agentDir, database)),
+  };
 }
 
 function migrateLegacyOAuthFile(params: {
@@ -910,6 +919,9 @@ function migrateLockedLegacyOAuthFile(params: {
       mainAgentDir,
       {
         filterExternalAuthProfiles: false,
+        preserveStateProfileIds: collectAuthProfileStateProfileIds(
+          coerceAuthProfileState(existing),
+        ),
         syncExternalCli: false,
       },
       database,

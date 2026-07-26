@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import {
   readPersistedAuthProfileStoreRaw,
+  writePersistedAuthProfileStateRaw,
   writePersistedAuthProfileStoreRaw,
 } from "../agents/auth-profiles/sqlite.js";
 import {
@@ -194,6 +195,42 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
     expect(fs.existsSync(oauthPath)).toBe(true);
     expectNoMigratedArchive(authPath);
     expectNoMigratedArchive(oauthPath);
+  });
+
+  it("preserves state-only profile IDs while migrating shared OAuth", async () => {
+    const state = await makeTestState();
+    writePersistedAuthProfileStateRaw(
+      {
+        version: 1,
+        order: { openai: ["openai:external"] },
+        lastGood: { openai: "openai:external" },
+        usageStats: { "openai:external": { cooldownUntil: 1_900_000_000_000 } },
+      },
+      state.agentDir(),
+    );
+    await state.writeJson("credentials/oauth.json", {
+      anthropic: {
+        access: "not-a-real",
+        refresh: "not-a-real",
+        expires: 1_900_000_000_000,
+      },
+    });
+
+    const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
+      cfg: {},
+      prompter: makePrompter(true),
+      env: state.env,
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(loadPersistedAuthProfileStore(state.agentDir())).toMatchObject({
+      profiles: {
+        "anthropic:default": { type: "oauth", provider: "anthropic" },
+      },
+      order: { openai: ["openai:external"] },
+      lastGood: { openai: "openai:external" },
+      usageStats: { "openai:external": { cooldownUntil: 1_900_000_000_000 } },
+    });
   });
 
   it("archives restored OAuth bytes without replaying a terminal receipt", async () => {
