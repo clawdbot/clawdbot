@@ -6,7 +6,7 @@ import type { GatewaySessionRow } from "../../../api/types.ts";
 import type {
   NativeGatewaysCapability,
   NativeGatewaysSnapshot,
-} from "../../../app/native-gateways.ts";
+} from "../../../app/native-gateways.runtime.ts";
 import {
   COMMAND_PALETTE_OPEN_EVENT,
   SHELL_NAV_DRAWER_TOGGLE_EVENT,
@@ -35,7 +35,6 @@ function nativeGateways(snapshot: NativeGatewaysSnapshot): NativeGatewaysCapabil
     openWindow: vi.fn(),
     setPrimary: vi.fn(),
     openSettings: vi.fn(),
-    dispose: vi.fn(),
   };
 }
 

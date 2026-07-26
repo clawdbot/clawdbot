@@ -39,7 +39,6 @@ import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
 import { createInitialUserMessageHandoff } from "./initial-user-message-handoff.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
-import { createNativeGatewaysCapability } from "./native-gateways.ts";
 import { startNativeLinkRouting } from "./native-link-routing.ts";
 import { createNativeNotificationsCapability } from "./native-notifications.ts";
 import { createApplicationOverlays } from "./overlays.ts";
@@ -328,7 +327,6 @@ export function bootstrapApplication(): ApplicationRuntime {
   const theme = createApplicationTheme(settings);
   const nativeChatDrafts = createNativeChatDrafts();
   const nativeLinkRouting = startNativeLinkRouting();
-  const nativeGateways = createNativeGatewaysCapability();
   const nativeNotifications = createNativeNotificationsCapability();
   const webPush = createWebPushCapability(gateway);
   const skillWorkshopRevision = createSkillWorkshopRevisionHandoff();
@@ -416,7 +414,6 @@ export function bootstrapApplication(): ApplicationRuntime {
     navigation,
     theme,
     nativeChatDrafts,
-    nativeGateways,
     nativeNotifications,
     webPush,
     skillWorkshopRevision,
@@ -479,7 +476,6 @@ export function bootstrapApplication(): ApplicationRuntime {
       theme.dispose();
       nativeChatDrafts.dispose();
       nativeLinkRouting.dispose();
-      nativeGateways?.dispose();
       nativeNotifications?.dispose();
       webPush.dispose();
       skillWorkshopRevision.clear();

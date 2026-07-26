@@ -5,7 +5,7 @@ import type {
   NativeGatewaysCapability,
   NativeGatewaysSnapshot,
   NativeGateway,
-} from "../../../app/native-gateways.ts";
+} from "../../../app/native-gateways.runtime.ts";
 import { isNativeWebChromeHost } from "../../../app/native-web-chrome.ts";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
 import {

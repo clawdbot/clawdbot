@@ -3,8 +3,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createNativeGatewaysCapability,
+  nativeGatewaysCapability,
   type NativeGatewaysCapability,
-} from "./native-gateways.ts";
+} from "./native-gateways.runtime.ts";
 
 const EVENT = "openclaw:native-gateways-changed";
 const snapshot = {
@@ -31,7 +32,6 @@ const snapshot = {
 let capability: NativeGatewaysCapability | null = null;
 
 afterEach(() => {
-  capability?.dispose();
   capability = null;
   Reflect.deleteProperty(window, "__OPENCLAW_NATIVE_GATEWAYS__");
   vi.unstubAllGlobals();
@@ -65,20 +65,43 @@ describe("native gateways", () => {
     ]);
   });
 
-  it("updates from events and removes the listener on dispose", () => {
+  it("updates from events and stops notifying after unsubscribe", () => {
     installBridge();
     capability = createNativeGatewaysCapability();
     const listener = vi.fn();
-    capability?.subscribe(listener);
+    const unsubscribe = capability?.subscribe(listener);
     window.dispatchEvent(new CustomEvent(EVENT, { detail: snapshot }));
     expect(capability?.snapshot).toEqual(snapshot);
     expect(listener).toHaveBeenCalledWith(snapshot);
-    capability?.dispose();
-    capability = null;
+    unsubscribe?.();
     listener.mockClear();
     window.dispatchEvent(
       new CustomEvent(EVENT, { detail: { ...snapshot, currentId: "profile:studio" } }),
     );
     expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("reads the latest global when attached lazily, then publishes native updates", () => {
+    installBridge();
+    const attachedSnapshot = { ...snapshot, currentId: "profile:studio" };
+    Object.assign(window, { __OPENCLAW_NATIVE_GATEWAYS__: attachedSnapshot });
+    capability = createNativeGatewaysCapability();
+    expect(capability?.snapshot).toEqual(attachedSnapshot);
+
+    const listener = vi.fn();
+    capability?.subscribe(listener);
+    window.dispatchEvent(new CustomEvent(EVENT, { detail: snapshot }));
+    expect(listener).toHaveBeenCalledWith(snapshot);
+  });
+
+  it("creates the app-lifetime singleton only once", () => {
+    installBridge();
+    Object.assign(window, { __OPENCLAW_NATIVE_GATEWAYS__: snapshot });
+
+    const first = nativeGatewaysCapability();
+    const second = nativeGatewaysCapability();
+
+    expect(first).not.toBeNull();
+    expect(second).toBe(first);
   });
 });

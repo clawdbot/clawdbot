@@ -27,29 +27,17 @@ export type NativeGatewaysCapability = {
   openWindow(id: string): void;
   setPrimary(id: string): void;
   openSettings(): void;
-  dispose(): void;
 };
 
 function snapshotFrom(value: unknown): NativeGatewaysSnapshot | null {
-  if (!value || typeof value !== "object" || !("gateways" in value) || !("currentId" in value)) {
+  if (!value || typeof value !== "object") {
     return null;
   }
-  const { gateways, currentId } = value as { gateways: unknown; currentId: unknown };
-  if (!Array.isArray(gateways) || typeof currentId !== "string") {
-    return null;
-  }
-  const valid = gateways.every(
-    (gateway) =>
-      gateway &&
-      typeof gateway === "object" &&
-      typeof gateway.id === "string" &&
-      typeof gateway.name === "string" &&
-      (gateway.kind === "local" || gateway.kind === "remote") &&
-      typeof gateway.isPrimary === "boolean" &&
-      typeof gateway.canPromote === "boolean" &&
-      (gateway.health === "ok" || gateway.health === "error" || gateway.health === "unknown"),
-  );
-  return valid ? { gateways: gateways as NativeGateway[], currentId } : null;
+  const snapshot = value as Partial<NativeGatewaysSnapshot>;
+  // The embedder owns this payload; deep validation only defends the Mac app from itself.
+  return Array.isArray(snapshot.gateways) && typeof snapshot.currentId === "string"
+    ? (snapshot as NativeGatewaysSnapshot)
+    : null;
 }
 
 export function createNativeGatewaysCapability(): NativeGatewaysCapability | null {
@@ -62,6 +50,8 @@ export function createNativeGatewaysCapability(): NativeGatewaysCapability | nul
     return null;
   }
   const post = handler.postMessage.bind(handler);
+  const postWithId = (type: "select" | "open-window" | "set-primary", id: string) =>
+    post({ type, id });
   let snapshot = snapshotFrom(nativeWindow["__OPENCLAW_NATIVE_GATEWAYS__"]);
   const listeners = new Set<(snapshot: NativeGatewaysSnapshot) => void>();
   const onChange = (event: Event) => {
@@ -81,13 +71,19 @@ export function createNativeGatewaysCapability(): NativeGatewaysCapability | nul
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    select: (id) => post({ type: "select", id }),
-    openWindow: (id) => post({ type: "open-window", id }),
-    setPrimary: (id) => post({ type: "set-primary", id }),
+    select: (id) => postWithId("select", id),
+    openWindow: (id) => postWithId("open-window", id),
+    setPrimary: (id) => postWithId("set-primary", id),
     openSettings: () => post({ type: "open-settings" }),
-    dispose() {
-      window.removeEventListener(NATIVE_GATEWAYS_CHANGED_EVENT, onChange);
-      listeners.clear();
-    },
   };
+}
+
+let singleton: NativeGatewaysCapability | null | undefined;
+
+// Chat-chunk-owned so this capability never enters the QA-smoke startup bundle.
+export function nativeGatewaysCapability(): NativeGatewaysCapability | null {
+  if (singleton === undefined) {
+    singleton = createNativeGatewaysCapability();
+  }
+  return singleton;
 }

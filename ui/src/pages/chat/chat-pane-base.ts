@@ -1,7 +1,7 @@
 import type {
   NativeGatewaysCapability,
   NativeGatewaysSnapshot,
-} from "../../app/native-gateways.ts";
+} from "../../app/native-gateways.runtime.ts";
 import {
   consume,
   applicationContext,
