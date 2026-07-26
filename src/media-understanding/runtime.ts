@@ -96,14 +96,12 @@ function buildFileContext(params: {
     (remoteRef && params.capability ? `${params.capability}/*` : undefined);
   if (remoteRef) {
     return {
-      MediaUrl: remoteRef,
-      MediaType: mediaType,
+      media: [{ url: remoteRef, contentType: mediaType }],
       ...scopeFields,
     };
   }
   return {
-    MediaPath: params.filePath,
-    MediaType: mediaType,
+    media: [{ path: params.filePath, contentType: mediaType }],
     ...scopeFields,
   };
 }
@@ -149,9 +147,9 @@ export async function runMediaUnderstandingFile(
     params.timeoutMs > 0
       ? Math.ceil(params.timeoutMs / 1000)
       : undefined;
-  const cfg =
+  const cfg: OpenClawConfig =
     requestPrompt || requestTimeoutSeconds !== undefined
-      ? {
+      ? ({
           ...params.cfg,
           tools: {
             ...params.cfg.tools,
@@ -171,7 +169,7 @@ export async function runMediaUnderstandingFile(
               },
             },
           },
-        }
+        } as OpenClawConfig)
       : params.cfg;
   const ctx = buildFileContext({
     ...params,
@@ -396,9 +394,9 @@ export async function describeVideoFile(
 export async function transcribeAudioFile(
   params: TranscribeAudioFileParams,
 ): Promise<RunMediaUnderstandingFileResult> {
-  const cfg =
+  const cfg: OpenClawConfig =
     params.language || params.prompt
-      ? {
+      ? ({
           ...params.cfg,
           tools: {
             ...params.cfg.tools,
@@ -413,7 +411,7 @@ export async function transcribeAudioFile(
               },
             },
           },
-        }
+        } as OpenClawConfig)
       : params.cfg;
   const result = await runMediaUnderstandingFile({ ...params, cfg, capability: "audio" });
   return result;

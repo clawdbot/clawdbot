@@ -548,6 +548,7 @@ final class NodeAppModel {
     let voiceWake = VoiceWakeManager()
     let voiceNoteRecorder: OpenClawVoiceNoteRecorder
     let talkMode: TalkModeManager
+    private(set) var locationAuthorizationSnapshot = LocationAuthorizationSnapshot.undetermined
     private let locationService: any LocationServicing
     private let deviceStatusService: any DeviceStatusServicing
     private let photosService: any PhotosServicing
@@ -592,7 +593,8 @@ final class NodeAppModel {
     @ObservationIgnored private var watchMessageRetryTask: Task<Void, Never>?
     @ObservationIgnored private let appleReviewDemoChatTransport = AppleReviewDemoChatTransport()
     @ObservationIgnored private var clientDatabases: OpenClawClientDatabases?
-    @ObservationIgnored private var chatTranscriptCachesByGatewayID: [String: OpenClawChatSQLiteTranscriptCache] = [:]
+    @ObservationIgnored private var chatTranscriptCachesByGatewayID:
+        [GatewayStableIdentifier.Key: OpenClawChatSQLiteTranscriptCache] = [:]
     @ObservationIgnored private var chatSessionRoutingRestoreTask: Task<Void, Never>?
     private var watchExecApprovalPromptsByID: [ExecApprovalIdentifier.Key: ExecApprovalPrompt] = [:]
     private var execApprovalInboxPromptsByKey: [ExecApprovalInboxKey: ExecApprovalPrompt] = [:]
@@ -693,7 +695,8 @@ final class NodeAppModel {
     /// "operator" must rebuild the view model so transcripts are never read
     /// from or written under another gateway's cache scope.
     var chatViewModelIdentityID: String {
-        "\(self.chatTransportModeID)|\(self.chatTranscriptCacheGatewayID ?? "")|\(self.chatTranscriptCacheGeneration)"
+        let gatewayID = self.chatTranscriptCacheGatewayIdentityComponent
+        return "\(self.chatTransportModeID)|\(gatewayID)|\(self.chatTranscriptCacheGeneration)"
     }
 
     /// Stable owner key for the long-lived chat view model. Connectivity still
@@ -701,17 +704,25 @@ final class NodeAppModel {
     /// not rebuild Chat and discard an offline draft on the same gateway.
     var chatViewModelOwnerID: String {
         let modeID = self.isLocalGatewayFixtureEnabled ? self.chatTransportModeID : "gateway"
-        return "\(modeID)|\(self.chatTranscriptCacheGatewayID ?? "")|\(self.chatTranscriptCacheGeneration)"
+        return "\(modeID)|\(self.chatTranscriptCacheGatewayIdentityComponent)|\(self.chatTranscriptCacheGeneration)"
+    }
+
+    private var chatTranscriptCacheGatewayIdentityComponent: String {
+        self.chatTranscriptCacheGatewayID.flatMap(GatewayStableIdentifier.storageComponent) ?? ""
     }
 
     private var chatTranscriptCacheGeneration = 0
-    private var quarantinedChatOfflineGatewayIDs: Set<String> = []
+    private var quarantinedChatOfflineGatewayIDs: Set<GatewayStableIdentifier.Key> = []
+    #if DEBUG
+    @ObservationIgnored private var testRemoveAllChatDatabaseFilesHandler: (() throws -> Void)?
+    #endif
 
     /// Gateway-scoped facade over the installation-wide cache and client-state
     /// databases. Nil for fixture/unpaired transports: no cache and no outbox.
     func makeChatOfflineStore() -> OpenClawChatSQLiteTranscriptCache? {
         guard let gatewayID = self.chatTranscriptCacheGatewayID,
-              !self.quarantinedChatOfflineGatewayIDs.contains(gatewayID)
+              let gatewayKey = GatewayStableIdentifier.key(gatewayID),
+              !self.quarantinedChatOfflineGatewayIDs.contains(gatewayKey)
         else { return nil }
         if self.clientDatabases == nil {
             self.clientDatabases = Self.makeClientDatabases()
@@ -721,14 +732,14 @@ final class NodeAppModel {
         // relaunch. Never expose even an existing facade while cleanup can
         // still delete rows written through it.
         guard !clientDatabases.hasPendingGatewayRemoval(gatewayID: gatewayID) else {
-            self.quarantinedChatOfflineGatewayIDs.insert(gatewayID)
+            self.quarantinedChatOfflineGatewayIDs.insert(gatewayKey)
             return nil
         }
-        if let cache = self.chatTranscriptCachesByGatewayID[gatewayID] {
+        if let cache = self.chatTranscriptCachesByGatewayID[gatewayKey] {
             return cache
         }
         let cache = clientDatabases.store(gatewayID: gatewayID)
-        self.chatTranscriptCachesByGatewayID[gatewayID] = cache
+        self.chatTranscriptCachesByGatewayID[gatewayKey] = cache
         return cache
     }
 
@@ -751,7 +762,7 @@ final class NodeAppModel {
         #endif
         guard !Task.isCancelled,
               let identity,
-              self.chatTranscriptCacheGatewayID == store.gatewayID,
+              GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, store.gatewayID),
               self.chatSessionRoutingContract == nil
         else { return }
         self.selectedAgentId = GatewaySettingsStore.loadGatewaySelectedAgentId(stableID: store.gatewayID)
@@ -775,13 +786,14 @@ final class NodeAppModel {
     /// Delete one forgotten gateway's cache and durable state, or both
     /// installation-wide databases during a full onboarding reset.
     func stageChatOfflineDataRemoval(gatewayID: String) async -> Bool {
+        guard let gatewayKey = GatewayStableIdentifier.key(gatewayID) else { return false }
         if self.clientDatabases == nil {
             self.clientDatabases = Self.makeClientDatabases()
         }
         guard let clientDatabases else { return false }
         do {
             try clientDatabases.stageGatewayRemoval(gatewayID: gatewayID)
-            await self.chatTranscriptCachesByGatewayID[gatewayID]?.retire()
+            await self.chatTranscriptCachesByGatewayID[gatewayKey]?.retire()
             return true
         } catch {
             clientDatabaseLogger.error(
@@ -791,11 +803,13 @@ final class NodeAppModel {
     }
 
     func commitChatOfflineDataRemoval(gatewayID: String) -> Bool {
-        guard let clientDatabases else { return false }
+        guard let gatewayKey = GatewayStableIdentifier.key(gatewayID),
+              let clientDatabases
+        else { return false }
         do {
             try clientDatabases.commitGatewayRemoval(gatewayID: gatewayID)
-            self.quarantinedChatOfflineGatewayIDs.remove(gatewayID)
-            self.chatTranscriptCachesByGatewayID.removeValue(forKey: gatewayID)
+            self.quarantinedChatOfflineGatewayIDs.remove(gatewayKey)
+            self.chatTranscriptCachesByGatewayID.removeValue(forKey: gatewayKey)
             self.chatTranscriptCacheGeneration &+= 1
             return true
         } catch {
@@ -803,15 +817,17 @@ final class NodeAppModel {
                 "gateway removal commit failed: \(error.localizedDescription, privacy: .public)")
             // The removal may already be irreversible. Keep this gateway
             // quarantined until foreground recovery proves no marker remains.
-            self.quarantinedChatOfflineGatewayIDs.insert(gatewayID)
-            self.chatTranscriptCachesByGatewayID.removeValue(forKey: gatewayID)
+            self.quarantinedChatOfflineGatewayIDs.insert(gatewayKey)
+            self.chatTranscriptCachesByGatewayID.removeValue(forKey: gatewayKey)
             self.chatTranscriptCacheGeneration &+= 1
             return false
         }
     }
 
     func cancelChatOfflineDataRemoval(gatewayID: String) {
-        guard let clientDatabases else { return }
+        guard let gatewayKey = GatewayStableIdentifier.key(gatewayID),
+              let clientDatabases
+        else { return }
         do {
             try clientDatabases.cancelGatewayRemoval(gatewayID: gatewayID)
         } catch {
@@ -821,9 +837,9 @@ final class NodeAppModel {
         // The registry owner did not commit, so cleanup never crossed into the
         // irreversible phase. Repair the retired live facade even if the
         // cancellation transaction or its checkpoint must be retried later.
-        self.quarantinedChatOfflineGatewayIDs.remove(gatewayID)
-        if self.chatTranscriptCachesByGatewayID[gatewayID] != nil {
-            self.chatTranscriptCachesByGatewayID[gatewayID] = clientDatabases.store(gatewayID: gatewayID)
+        self.quarantinedChatOfflineGatewayIDs.remove(gatewayKey)
+        if self.chatTranscriptCachesByGatewayID[gatewayKey] != nil {
+            self.chatTranscriptCachesByGatewayID[gatewayKey] = clientDatabases.store(gatewayID: gatewayID)
             self.chatTranscriptCacheGeneration &+= 1
         }
     }
@@ -840,36 +856,52 @@ final class NodeAppModel {
         for cache in self.chatTranscriptCachesByGatewayID.values {
             await cache.retire()
         }
+        var closeError: (any Error)?
         do {
             try self.clientDatabases?.close()
-            self.clientDatabases = nil
-            try Self.removeAllChatDatabaseFiles()
+        } catch {
+            closeError = error
+        }
+        self.clientDatabases = nil
+        self.chatTranscriptCachesByGatewayID.removeAll()
+        self.quarantinedChatOfflineGatewayIDs.removeAll()
+        self.chatTranscriptCacheGeneration &+= 1
+        do {
+            if let closeError {
+                throw closeError
+            }
+            try self.removeAllChatDatabaseFiles()
         } catch {
             clientDatabaseLogger.error(
                 "full database reset failed: \(error.localizedDescription, privacy: .public)")
             return false
         }
-        self.chatTranscriptCachesByGatewayID.removeAll()
-        self.quarantinedChatOfflineGatewayIDs.removeAll()
-        self.chatTranscriptCacheGeneration &+= 1
         return true
     }
 
     /// Debug launch reset runs before Chat can create a cache actor, so direct
     /// file removal preserves the launch flag's synchronous startup contract.
     func purgeChatTranscriptCacheBeforeStartup() {
+        var closeError: (any Error)?
         do {
             try self.clientDatabases?.close()
-            self.clientDatabases = nil
-            try Self.removeAllChatDatabaseFiles()
+        } catch {
+            closeError = error
+        }
+        self.clientDatabases = nil
+        self.chatTranscriptCachesByGatewayID.removeAll()
+        self.quarantinedChatOfflineGatewayIDs.removeAll()
+        self.chatTranscriptCacheGeneration &+= 1
+        do {
+            if let closeError {
+                throw closeError
+            }
+            try self.removeAllChatDatabaseFiles()
         } catch {
             clientDatabaseLogger.error(
                 "startup database reset failed: \(error.localizedDescription, privacy: .public)")
             return
         }
-        self.chatTranscriptCachesByGatewayID.removeAll()
-        self.quarantinedChatOfflineGatewayIDs.removeAll()
-        self.chatTranscriptCacheGeneration &+= 1
     }
 
     static func chatDatabaseDirectoryURL() -> URL? {
@@ -882,8 +914,14 @@ final class NodeAppModel {
             .appendingPathComponent("chat-cache", isDirectory: true)
     }
 
-    private static func removeAllChatDatabaseFiles() throws {
-        if let directoryURL = chatDatabaseDirectoryURL() {
+    private func removeAllChatDatabaseFiles() throws {
+        #if DEBUG
+        if let testRemoveAllChatDatabaseFilesHandler {
+            try testRemoveAllChatDatabaseFilesHandler()
+            return
+        }
+        #endif
+        if let directoryURL = Self.chatDatabaseDirectoryURL() {
             try OpenClawClientDatabases.removeDatabaseFiles(in: directoryURL)
         }
         if let legacyDirectoryURL = Self.legacyChatDatabaseDirectoryURL(),
@@ -900,7 +938,7 @@ final class NodeAppModel {
             return try OpenClawClientDatabases(
                 directoryURL: directoryURL,
                 legacyDirectoryURLs: legacyDirectories,
-                registeredGatewayIDs: Set(GatewaySettingsStore.loadGatewayRegistry().entries.map(\.stableID)))
+                registeredGatewayIDs: GatewaySettingsStore.loadGatewayRegistry().entries.map(\.stableID))
         } catch {
             clientDatabaseLogger.error(
                 "client databases unavailable: \(error.localizedDescription, privacy: .public)")
@@ -953,6 +991,7 @@ final class NodeAppModel {
             rawValue: UserDefaults.standard.string(forKey: Self.preferredCameraFacingKey))
         self.screenRecorder = screenRecorder
         self.locationService = locationService
+        self.locationAuthorizationSnapshot = locationService.authorizationSnapshot()
         self.notificationCenter = notificationCenter
         self.deviceStatusService = deviceStatusService
         self.photosService = photosService
@@ -1052,11 +1091,12 @@ final class NodeAppModel {
         refreshLastShareEventFromRelay()
         let talkEnabled = UserDefaults.standard.bool(forKey: "talk.enabled")
         self.setTalkEnabled(talkEnabled)
-        self.locationService.setAuthorizationChangeHandler { [weak self] status in
+        self.locationService.setAuthorizationChangeHandler { [weak self] snapshot in
             guard let self else { return }
+            self.locationAuthorizationSnapshot = snapshot
             self.reconcileSignificantLocationMonitoring(
                 mode: self.locationMode(),
-                authorizationStatus: status)
+                authorizationStatus: snapshot.authorizationStatus)
         }
 
         // Wire up deep links from canvas taps
@@ -1195,13 +1235,12 @@ final class NodeAppModel {
                 // no chat facade may remain to initialize the container.
                 self.clientDatabases = Self.makeClientDatabases()
             }
-            let registeredGatewayIDs = Set(
-                GatewaySettingsStore.loadGatewayRegistry().entries.map(\.stableID))
+            let registeredGatewayIDs = GatewaySettingsStore.loadGatewayRegistry().entries.map(\.stableID)
             self.clientDatabases?.resolvePendingGatewayRemovals(
                 registeredGatewayIDs: registeredGatewayIDs)
             if let clientDatabases = self.clientDatabases {
                 let recoveredGatewayIDs = self.quarantinedChatOfflineGatewayIDs.filter {
-                    !clientDatabases.hasPendingGatewayRemoval(gatewayID: $0)
+                    !clientDatabases.hasPendingGatewayRemoval(gatewayID: $0.rawValue)
                 }
                 if !recoveredGatewayIDs.isEmpty {
                     self.quarantinedChatOfflineGatewayIDs.subtract(recoveredGatewayIDs)
@@ -1658,7 +1697,9 @@ final class NodeAppModel {
             let session = config["session"] as? [String: Any]
             let mainKey = SessionKey.normalizeMainKey(session?["mainKey"] as? String)
             let scope = (session?["scope"] as? String) ?? "per-sender"
-            guard shouldApply(), self.chatTranscriptCacheGatewayID == sourceGatewayID else { return }
+            guard shouldApply(),
+                  GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceGatewayID)
+            else { return }
             await MainActor.run {
                 self.mainSessionBaseKey = mainKey
                 self.gatewaySessionScope = scope
@@ -1680,7 +1721,7 @@ final class NodeAppModel {
         do {
             guard let sourceGatewayID = self.chatTranscriptCacheGatewayID,
                   let sourceStore = self.makeChatOfflineStore(),
-                  sourceStore.gatewayID == sourceGatewayID,
+                  GatewayStableIdentifier.matches(sourceStore.gatewayID, sourceGatewayID),
                   let sourceRoute = await operatorGateway.currentRoute(ifGatewayID: sourceGatewayID)
             else { return }
             let request = OpenClawChatGatewayRequests.agentsList(timeoutMs: 8000)
@@ -1692,7 +1733,9 @@ final class NodeAppModel {
                 scope: decoded.scope.value as? String,
                 mainSessionKey: decoded.mainkey,
                 defaultAgentID: decoded.defaultid)
-            guard shouldApply(), self.chatTranscriptCacheGatewayID == sourceGatewayID else { return }
+            guard shouldApply(),
+                  GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceGatewayID)
+            else { return }
             await MainActor.run {
                 self.gatewayDefaultAgentId = decoded.defaultid
                 self.gatewayAgents = decoded.agents
@@ -4185,7 +4228,9 @@ extension NodeAppModel {
         self.apnsLastRegisteredTokenHex = nil
         self.apnsLastRegisteredGatewayStableID = nil
         self.chatSessionRoutingRestoreTask = Task { [weak self] in
-            guard !Task.isCancelled, self?.connectedGatewayID == stableID else { return }
+            guard !Task.isCancelled,
+                  GatewayStableIdentifier.matches(self?.connectedGatewayID, stableID)
+            else { return }
             await self?.restoreChatSessionRoutingIdentityIfNeeded()
         }
     }
@@ -5300,7 +5345,10 @@ extension NodeAppModel {
             role: "operator",
             scopes: scopes,
             scopesAreExplicit: forceExplicitScopes,
-            caps: [OpenClawGatewayClientCapability.inlineWidgets],
+            caps: [
+                OpenClawGatewayClientCapability.agentKind,
+                OpenClawGatewayClientCapability.inlineWidgets,
+            ],
             commands: [],
             permissions: [:],
             clientId: clientId,
@@ -10698,6 +10746,10 @@ extension NodeAppModel {
 
     func _test_setChatSessionRoutingRestoreHandler(_ handler: (() async -> Void)?) {
         self.testChatSessionRoutingRestoreHandler = handler
+    }
+
+    func _test_setRemoveAllChatDatabaseFilesHandler(_ handler: (() throws -> Void)?) {
+        self.testRemoveAllChatDatabaseFilesHandler = handler
     }
 
     func _test_hasChatSessionRoutingRestoreTask() -> Bool {

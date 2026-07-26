@@ -3,6 +3,7 @@ import { render } from "lit";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import "../../styles.css";
 import type { ThemeMode, ThemeName } from "../../app/theme.ts";
+import { renderConfigForm } from "../../components/config-form.ts";
 import { warmJson5 } from "../../lib/json5-runtime.ts";
 import { createConfigViewState, renderConfig, type ConfigProps } from "./view.ts";
 
@@ -68,6 +69,10 @@ describe("config view", () => {
     setTextScale: vi.fn(),
     sidebarLiveActivity: true,
     setSidebarLiveActivity: vi.fn(),
+    chatMessageMaxWidth: undefined,
+    setChatMessageMaxWidth: vi.fn(),
+    showAdvancedSettings: false,
+    setShowAdvancedSettings: vi.fn(),
     chatSendShortcut: "enter" as const,
     setChatSendShortcut: vi.fn(),
     chatFollowUpMode: undefined,
@@ -133,6 +138,202 @@ describe("config view", () => {
     return container.textContent?.replace(/\s+/g, " ").trim() ?? "";
   }
 
+  it("uses one global advanced toggle while preserving deep-link reveals", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        gateway: {
+          type: "object",
+          properties: {
+            port: { type: "integer", title: "Port" },
+            reload: { type: "string", title: "Reload mode" },
+          },
+        },
+      },
+    };
+    const uiHints = {
+      "gateway.port": { advanced: false },
+      "gateway.reload": { advanced: true },
+    };
+    const setShowAdvancedSettings = vi.fn();
+    const collapsed = renderConfigView({
+      schema,
+      uiHints,
+      formValue: { gateway: { port: 18789, reload: "hybrid" } },
+      activeSection: "gateway",
+      setShowAdvancedSettings,
+    });
+
+    const ghost = queryRequired(collapsed.container, ".config-advanced-ghost", HTMLButtonElement);
+    expect(ghost.textContent?.replace(/\s+/g, " ").trim()).toBe(
+      "1 advanced setting hidden Show advanced",
+    );
+    ghost.click();
+    expect(setShowAdvancedSettings).toHaveBeenCalledWith(true);
+
+    const global = renderConfigView({
+      schema,
+      uiHints,
+      formValue: { gateway: { port: 18789, reload: "hybrid" } },
+      activeSection: "gateway",
+      showAdvancedSettings: true,
+    });
+    expect(global.container.querySelector(".config-advanced-ghost")).toBeNull();
+    expect(global.container.querySelector(".config-advanced-divider")?.textContent?.trim()).toBe(
+      "Advanced",
+    );
+    expect(normalizedText(global.container)).toContain("Reload mode");
+
+    const searchHit = renderConfigView({
+      schema,
+      uiHints,
+      formValue: { gateway: { port: 18789, reload: "hybrid" } },
+      activeSection: "gateway",
+      forceAdvancedSection: "gateway",
+    });
+    expect(searchHit.container.querySelector(".config-advanced-ghost")).toBeNull();
+    expect(normalizedText(searchHit.container)).toContain("Reload mode");
+
+    const nested = document.createElement("div");
+    render(
+      renderConfigForm({
+        schema: {
+          type: "object",
+          properties: {
+            agents: {
+              type: "object",
+              properties: {
+                defaults: {
+                  type: "object",
+                  properties: { tuning: { type: "boolean" } },
+                },
+              },
+            },
+          },
+        },
+        uiHints: { "agents.defaults.tuning": { advanced: true } },
+        value: { agents: { defaults: { tuning: true } } },
+        activeSection: "agents",
+        activeSubsection: "defaults",
+        forceAdvancedSection: "agents",
+        onShowAdvanced: vi.fn(),
+        onPatch: vi.fn(),
+      }),
+      nested,
+    );
+    expect(nested.querySelector(".config-advanced-ghost")).toBeNull();
+    expect(normalizedText(nested)).toContain("Tuning");
+
+    const forcedPage = renderConfigView({
+      schema,
+      uiHints,
+      formValue: { gateway: { port: 18789, reload: "hybrid" } },
+      activeSection: "gateway",
+      forceShowAdvanced: true,
+    });
+    expect(findOptionalButtonByText(forcedPage.container, "Show advanced")).toBeUndefined();
+    expect(forcedPage.container.querySelector(".config-advanced-ghost")).toBeNull();
+    expect(normalizedText(forcedPage.container)).toContain("Reload mode");
+  });
+
+  it("offers the toggle exactly when the active scope can hide advanced fields", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        gateway: {
+          type: "object",
+          properties: { mode: { type: "string", title: "Mode" } },
+        },
+        diagnostics: {
+          type: "object",
+          properties: { flags: { type: "string", title: "Flags" } },
+        },
+      },
+    };
+
+    // Unhinted leaves default to the advanced tier: the toggle must show even
+    // though no hint carries advanced === true, or the ghost row's enable has
+    // no matching control to turn advanced back off.
+    const unhinted = renderConfigView({
+      schema,
+      uiHints: {},
+      formValue: { diagnostics: { flags: "all" } },
+      activeSection: "diagnostics",
+    });
+    expect(findOptionalButtonByText(unhinted.container, "Show advanced")).toBeDefined();
+    expect(unhinted.container.querySelector(".config-advanced-ghost")).not.toBeNull();
+
+    // An advanced hint in a different top-level section must not surface a
+    // no-op toggle on a fully-common active section.
+    const offScope = renderConfigView({
+      schema,
+      uiHints: {
+        "gateway.mode": { advanced: false },
+        "diagnostics.flags": { advanced: true },
+      },
+      formValue: { gateway: { mode: "local" } },
+      activeSection: "gateway",
+    });
+    expect(findOptionalButtonByText(offScope.container, "Show advanced")).toBeUndefined();
+    expect(offScope.container.querySelector(".config-advanced-ghost")).toBeNull();
+  });
+
+  it("shows the form-unsafe banner only for populated unsupported paths", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        gateway: {
+          type: "object",
+          properties: {
+            opaque: {
+              title: "Opaque setting",
+              anyOf: [{ type: "string" }, {}],
+            },
+          },
+        },
+        agents: {
+          type: "object",
+          properties: {
+            opaque: { anyOf: [{ type: "string" }, {}] },
+          },
+        },
+      },
+    };
+
+    const empty = renderConfigView({
+      schema,
+      formValue: { gateway: {}, agents: { opaque: "off-scope" } },
+      activeSection: "gateway",
+    });
+    expect(empty.container.querySelector(".config-content-callout .info")).toBeNull();
+    expect(findButtonByText(empty.container, "Form").getAttribute("title")).toBe("");
+
+    const onFormModeChange = vi.fn();
+    const populated = renderConfigView({
+      schema,
+      formValue: {
+        gateway: { opaque: "custom" },
+        agents: { opaque: "off-scope" },
+      },
+      activeSection: "gateway",
+      onFormModeChange,
+    });
+    const banner = queryRequired(
+      populated.container,
+      ".config-content-callout .callout.info",
+      HTMLElement,
+    );
+    expect(normalizedText(banner)).toBe(
+      "1 setting in this config can only be edited as text: gateway.opaque Open Raw editor",
+    );
+    expect(banner.querySelector("code")?.textContent).toBe("gateway.opaque");
+    expect(findButtonByText(populated.container, "Form").getAttribute("title")).toBe(
+      "Form view can't safely edit some fields",
+    );
+    findButtonByText(banner, "Open Raw editor").click();
+    expect(onFormModeChange).toHaveBeenCalledWith("raw");
+  });
+
   function findButtonByText(container: HTMLElement, text: string): HTMLButtonElement {
     const button = Array.from(container.querySelectorAll("button")).find(
       (btn) => btn.textContent?.trim() === text,
@@ -190,6 +391,7 @@ describe("config view", () => {
           gateway: { type: "object", properties: { mode: { type: "string" } } },
         },
       },
+      uiHints: { "gateway.mode": { advanced: false } },
       formValue: { gateway: { mode: "remote" } },
       originalValue: { gateway: { mode: "local" } },
     });
@@ -354,6 +556,7 @@ describe("config view", () => {
           gateway: { type: "object", properties: { mode: { type: "string" } } },
         },
       },
+      uiHints: { "gateway.mode": { advanced: false } },
       formValue: { gateway: { mode: "remote" } },
       originalValue: { gateway: { mode: "local" } },
     });
@@ -394,12 +597,12 @@ describe("config view", () => {
 
     render(renderConfig({ ...props, formMode: "form" }), container);
     expect(normalizedText(container)).toContain(
-      "Your config contains fields the form editor can't safely represent. Use Raw mode to edit those entries.",
+      "1 setting in this config can only be edited as text: lastTouchedAt Open Raw editor",
     );
 
     render(renderConfig({ ...props, formMode: "raw" }), container);
     expect(normalizedText(container)).not.toContain(
-      "Your config contains fields the form editor can't safely represent. Use Raw mode to edit those entries.",
+      "1 setting in this config can only be edited as text: lastTouchedAt Open Raw editor",
     );
     expect(container.querySelector(".config-raw-field")).not.toBeNull();
   });
@@ -561,6 +764,7 @@ describe("config view", () => {
           },
         },
       },
+      uiHints: { "channels.telegram": { advanced: false } },
       formValue: {
         channels: { telegram: "on" },
         messages: { inbox: "smart" },
@@ -661,6 +865,7 @@ describe("config view", () => {
           models: offScopeSchema,
         },
       },
+      uiHints: { "channels.telegram": { advanced: false } },
       formValue: {
         channels: { telegram: "enabled" },
         models: {},
@@ -694,6 +899,7 @@ describe("config view", () => {
           },
         },
       },
+      uiHints: { "auth.order": { advanced: false } },
       formValue: {
         auth: {
           order: {},
@@ -854,7 +1060,7 @@ describe("config view", () => {
       raw: '{\n  channels: { discord: { token: { id: "TOKEN_AFTER" } } }\n}\n',
       originalRaw: '{\n  channels: { discord: { token: { id: "TOKEN_BEFORE" } } }\n}\n',
       uiHints: {
-        "channels.discord.token": { sensitive: true },
+        "channels.discord.token": { sensitive: true, advanced: false },
       },
       formValue: {
         channels: {
@@ -1116,7 +1322,7 @@ describe("config view", () => {
     const { container } = renderConfigView({
       schema: secretRefSchema,
       uiHints: {
-        "channels.discord.token": { sensitive: true },
+        "channels.discord.token": { sensitive: true, advanced: false },
       },
       formMode: "form",
       formValue: secretRefValue,
@@ -1140,7 +1346,7 @@ describe("config view", () => {
         formMode: "raw",
         schema: secretRefSchema,
         uiHints: {
-          "channels.discord.token": { sensitive: true },
+          "channels.discord.token": { sensitive: true, advanced: false },
         },
         formValue: secretRefValue,
         originalValue: secretRefOriginalValue,
@@ -1170,6 +1376,7 @@ describe("config view", () => {
           },
         },
       },
+      uiHints: { "gateway.mode": { advanced: false } },
       formValue: {
         gateway: {
           mode: { malformed: true },
@@ -1292,25 +1499,29 @@ describe("config view", () => {
   });
 
   it("names the chat preference selects for assistive tech", () => {
+    const onMicrophoneRefresh = vi.fn();
+    const onCameraRefresh = vi.fn();
     const { container } = renderConfigView({
       activeSection: "__appearance__",
       includeSections: ["__appearance__"],
       microphone: {
         devices: [{ deviceId: "mic-1", label: "Desk Mic" }],
+        permissionRequired: false,
         selectedDeviceId: "mic-1",
         loading: false,
         error: null,
       },
       onMicrophoneSelect: vi.fn(),
-      onMicrophoneRefresh: vi.fn(),
+      onMicrophoneRefresh,
       camera: {
         devices: [{ deviceId: "camera-1", label: "Desk Camera" }],
+        permissionRequired: false,
         selectedDeviceId: "camera-1",
         loading: false,
         error: null,
       },
       onCameraSelect: vi.fn(),
-      onCameraRefresh: vi.fn(),
+      onCameraRefresh,
       composerHoldToRecord: true,
       setComposerHoldToRecord: vi.fn(),
     });
@@ -1340,13 +1551,178 @@ describe("config view", () => {
       HTMLSelectElement,
     );
     expect(microphoneSelect.getAttribute("aria-label")).toBe("Microphone input");
+    expect(microphoneSelect.classList.contains("settings-select--media-device")).toBe(true);
     const cameraSelect = queryRequired(container, "[data-settings-camera]", HTMLSelectElement);
     expect(cameraSelect.getAttribute("aria-label")).toBe("Camera");
+    expect(cameraSelect.classList.contains("settings-select--media-device")).toBe(true);
     expect(Array.from(cameraSelect.options, (option) => option.textContent?.trim())).toEqual([
       "System default",
       "Desk Camera",
     ]);
     expect(container.textContent).toContain("Hold microphone button to dictate");
+
+    microphoneSelect.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
+    cameraSelect.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
+    expect(onMicrophoneRefresh).not.toHaveBeenCalled();
+    expect(onCameraRefresh).not.toHaveBeenCalled();
+  });
+
+  it("requests media access for each native picker opening gesture", () => {
+    const cases = [
+      {
+        devices: [{ deviceId: "anonymous", label: "Microphone 1" }],
+        gesture: new MouseEvent("pointerdown", { bubbles: true, button: 0 }),
+      },
+      { devices: [], gesture: new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }) },
+      { devices: [], gesture: new KeyboardEvent("keydown", { key: "F4", bubbles: true }) },
+    ];
+
+    for (const { devices, gesture } of cases) {
+      const onMicrophoneRefresh = vi.fn();
+      const { container } = renderConfigView({
+        activeSection: "__appearance__",
+        includeSections: ["__appearance__"],
+        microphone: {
+          devices,
+          permissionRequired: true,
+          selectedDeviceId: "",
+          loading: false,
+          error: null,
+        },
+        onMicrophoneSelect: vi.fn(),
+        onMicrophoneRefresh,
+      });
+      const microphoneSelect = queryRequired(
+        container,
+        "[data-settings-microphone]",
+        HTMLSelectElement,
+      );
+
+      microphoneSelect.dispatchEvent(gesture);
+      expect(onMicrophoneRefresh).toHaveBeenCalledOnce();
+    }
+  });
+
+  it("coalesces picker gestures while media access is starting", () => {
+    const onCameraRefresh = vi.fn();
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      camera: {
+        devices: [],
+        permissionRequired: true,
+        selectedDeviceId: "",
+        loading: true,
+        error: null,
+      },
+      onCameraSelect: vi.fn(),
+      onCameraRefresh,
+    });
+    const cameraSelect = queryRequired(container, "[data-settings-camera]", HTMLSelectElement);
+
+    cameraSelect.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 2 }));
+    expect(onCameraRefresh).not.toHaveBeenCalled();
+
+    cameraSelect.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
+    cameraSelect.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    cameraSelect.dispatchEvent(new KeyboardEvent("keydown", { key: "F4", bubbles: true }));
+    expect(onCameraRefresh).toHaveBeenCalledOnce();
+  });
+
+  it("previews lobster sounds only when the user enables them", () => {
+    const param = () => ({
+      setValueAtTime: vi.fn(),
+      exponentialRampToValueAtTime: vi.fn(),
+    });
+    const audioContextCtor = vi.fn(function MockAudioContext() {
+      return {
+        state: "running",
+        currentTime: 0,
+        destination: {},
+        resume: vi.fn(),
+        close: vi.fn(() => Promise.resolve()),
+        createOscillator: vi.fn(() => ({
+          type: "sine",
+          frequency: param(),
+          connect: (node: unknown) => node,
+          start: vi.fn(),
+          stop: vi.fn(),
+        })),
+        createGain: vi.fn(() => ({ gain: param(), connect: vi.fn() })),
+      };
+    });
+    vi.stubGlobal("AudioContext", audioContextCtor);
+
+    const activateSwitch = (element: HTMLElement & { checked: boolean }, nextChecked: boolean) => {
+      const dispatchClick = (path: EventTarget[]) => {
+        const event = new MouseEvent("click", { bubbles: true, composed: true });
+        Object.defineProperty(event, "composedPath", { value: () => path });
+        element.dispatchEvent(event);
+      };
+      dispatchClick([document.createElement("span"), element]);
+      element.checked = nextChecked;
+      dispatchClick([document.createElement("input"), element]);
+      element.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+    };
+
+    const setLobsterPetSounds = vi.fn();
+    const disabled = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      lobsterPetVisits: true,
+      setLobsterPetVisits: vi.fn(),
+      lobsterPetSounds: false,
+      setLobsterPetSounds,
+    });
+    const disabledRow = Array.from(
+      disabled.container.querySelectorAll<HTMLElement>(".settings-row--toggle"),
+    ).find((candidate) => candidate.textContent?.includes("Lobster sounds"));
+    const disabledSwitch = disabledRow?.querySelector<HTMLElement & { checked: boolean }>(
+      "wa-switch",
+    );
+    expect(disabledSwitch).toBeDefined();
+    if (!disabledSwitch) {
+      return;
+    }
+
+    expect(audioContextCtor).not.toHaveBeenCalled();
+    activateSwitch(disabledSwitch, true);
+    expect(audioContextCtor).toHaveBeenCalledTimes(1);
+    expect(setLobsterPetSounds).toHaveBeenCalledWith(true);
+
+    const enabled = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      lobsterPetVisits: true,
+      setLobsterPetVisits: vi.fn(),
+      lobsterPetSounds: true,
+      setLobsterPetSounds,
+    });
+    const enabledRow = Array.from(
+      enabled.container.querySelectorAll<HTMLElement>(".settings-row--toggle"),
+    ).find((candidate) => candidate.textContent?.includes("Lobster sounds"));
+    const enabledSwitch = enabledRow?.querySelector<HTMLElement & { checked: boolean }>(
+      "wa-switch",
+    );
+    expect(enabledSwitch).toBeDefined();
+    if (!enabledSwitch) {
+      return;
+    }
+
+    const noOpKey = new KeyboardEvent("keydown", {
+      key: "ArrowRight",
+      bubbles: true,
+      composed: true,
+    });
+    Object.defineProperty(noOpKey, "composedPath", {
+      value: () => [document.createElement("input"), enabledSwitch],
+    });
+    enabledSwitch.dispatchEvent(noOpKey);
+    expect(audioContextCtor).toHaveBeenCalledTimes(1);
+
+    activateSwitch(enabledSwitch, false);
+    expect(audioContextCtor).toHaveBeenCalledTimes(1);
+    expect(setLobsterPetSounds).toHaveBeenLastCalledWith(false);
   });
 
   it("renders and changes the live sidebar activity preference", () => {
@@ -1365,6 +1741,26 @@ describe("config view", () => {
     expect(row?.querySelector<HTMLElement & { checked: boolean }>("wa-switch")?.checked).toBe(true);
     row?.click();
     expect(setSidebarLiveActivity).toHaveBeenCalledWith(false);
+  });
+
+  it("validates and changes the browser-local chat width", () => {
+    const setChatMessageMaxWidth = vi.fn();
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      setChatMessageMaxWidth,
+    });
+    const input = container.querySelector<HTMLInputElement>("[data-settings-chat-message-width]");
+    expect(input).not.toBeNull();
+
+    input!.value = " min(1280px,  82%) ";
+    input!.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(setChatMessageMaxWidth).toHaveBeenCalledWith("min(1280px, 82%)");
+
+    input!.value = "960px; color: red";
+    input!.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(input!.validationMessage).not.toBe("");
+    expect(setChatMessageMaxWidth).toHaveBeenCalledTimes(1);
   });
 
   it("marks browser follow-up overrides and resets them to the server", () => {

@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { syncDirectoryBestEffortSync } from "../../infra/directory-durability.js";
 import {
   encodeSessionArchiveContent,
   readSessionArchiveContentSync,
   SESSION_ARCHIVE_ZSTD_SUFFIX,
 } from "./archive-compression.js";
-import { formatSessionArchiveTimestamp } from "./artifacts.js";
+import { formatSessionArchiveTimestamp, type SessionArchiveReason } from "./artifacts.js";
 import type { SessionLifecycleArchivedTranscript } from "./session-accessor.sqlite-contract.js";
 
 export type SqliteSessionStateDeletePlan = {
@@ -24,7 +25,7 @@ export type MaterializedSqliteSessionStateDeletePlan = SqliteSessionStateDeleteP
 
 function resolveSqliteTranscriptArchivePath(params: {
   archiveDirectory: string;
-  reason: "deleted" | "reset";
+  reason: SessionArchiveReason;
   sessionId: string;
   nowMs?: number;
 }): string {
@@ -42,7 +43,7 @@ function resolveSqliteTranscriptArchivePath(params: {
 function findMatchingSqliteTranscriptArchive(params: {
   archiveDirectory: string;
   content: string;
-  reason: "deleted" | "reset";
+  reason: SessionArchiveReason;
   sessionId: string;
 }): string | null {
   let entries: string[];
@@ -76,10 +77,11 @@ function findMatchingSqliteTranscriptArchive(params: {
   return null;
 }
 
-function writeSqliteTranscriptArchive(params: {
+/** Writes or reuses a transcript archive and returns its durable path. */
+export function writeSqliteTranscriptArchive(params: {
   archiveDirectory: string;
   content: string;
-  reason: "deleted" | "reset";
+  reason: SessionArchiveReason;
   sessionId: string;
 }): string {
   fs.mkdirSync(params.archiveDirectory, { recursive: true });
@@ -104,7 +106,7 @@ function writeSqliteTranscriptArchive(params: {
     try {
       writeDurableFileExclusive(tempPath, encoded.bytes);
       fs.renameSync(tempPath, archivePath);
-      fsyncDirectory(params.archiveDirectory);
+      syncDirectoryBestEffortSync(params.archiveDirectory);
       // Full readback is bounded by the same single-generation content the
       // delete plan already buffers (Node string limits cap both); a partial
       // or corrupt archive must fail here, before any rows are reclaimed.
@@ -133,20 +135,6 @@ function writeDurableFileExclusive(filePath: string, content: Buffer): void {
     fs.fsyncSync(fd);
   } finally {
     fs.closeSync(fd);
-  }
-}
-
-function fsyncDirectory(dirPath: string): void {
-  let fd: number | undefined;
-  try {
-    fd = fs.openSync(dirPath, "r");
-    fs.fsyncSync(fd);
-  } catch {
-    // Directory fsync is not available on every supported platform/filesystem.
-  } finally {
-    if (fd !== undefined) {
-      fs.closeSync(fd);
-    }
   }
 }
 

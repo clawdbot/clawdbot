@@ -107,6 +107,14 @@ export async function finalizeEmbeddedAgentCommand(params: {
         ),
       };
     }
+    const resultErrorPayload = result.payloads?.find((payload) => payload.isError === true);
+    if (resultErrorPayload) {
+      const message =
+        typeof resultErrorPayload.text === "string" && resultErrorPayload.text.trim()
+          ? resultErrorPayload.text
+          : undefined;
+      params.opts.onResultErrorPayload?.(message);
+    }
     params.onTerminalDeliveryEvidenceChanged(buildRestartRecoveryTerminalDeliveryEvidence(result));
 
     const rotatedSessionFile = result.meta.agentMeta?.sessionFile;
@@ -272,8 +280,8 @@ export async function finalizeEmbeddedAgentCommand(params: {
     const resolveFreshSessionEntryForDelivery =
       sessionStore && sessionKey && !params.suppressVisibleSessionEffects
         ? async (): Promise<SessionEntry | undefined> => {
-            const { loadSessionEntry } = await loadSessionStoreRuntime();
-            const freshEntry = loadSessionEntry({
+            const { loadSessionEntryReadOnly } = await loadSessionStoreRuntime();
+            const freshEntry = loadSessionEntryReadOnly({
               storePath,
               sessionKey,
               readConsistency: "latest",

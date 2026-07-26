@@ -3,7 +3,8 @@ scenario:
   id: whatsapp-audio-preflight
   surface: channels
   coverage:
-    primary: [channels.group-messages]
+    primary:
+      - whatsapp.inbound-media-download
   execution:
     profiles: { "whatsapp:mock-default": 17 }
     kind: flow

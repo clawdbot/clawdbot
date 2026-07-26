@@ -16,9 +16,24 @@ import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snaps
 import * as videoGenerationRuntime from "../../video-generation/runtime.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.test-support.js";
+import { canonicalizeMediaGenerationTestConfig } from "./media-generation-config.test-support.js";
 import * as videoGenerateBackground from "./video-generate-background.js";
-import { createVideoGenerateTool } from "./video-generate-tool.js";
+import { createVideoGenerateTool as createVideoGenerateToolImpl } from "./video-generate-tool.js";
 import { resolveVideoGenerationModelConfigForTool } from "./video-generate-tool.test-support.js";
+
+function createVideoGenerateTool(
+  params: Parameters<typeof createVideoGenerateToolImpl>[0],
+): ReturnType<typeof createVideoGenerateToolImpl> {
+  const options = params ?? {};
+  return createVideoGenerateToolImpl({
+    ...options,
+    config: canonicalizeMediaGenerationTestConfig(
+      options.config ?? {},
+      "video",
+      "videoGenerationModel",
+    ),
+  });
+}
 
 const taskRuntimeInternalMocks = vi.hoisted(() => {
   const mocks = {
@@ -364,7 +379,7 @@ describe("createVideoGenerateTool", () => {
         config: asConfig({
           agents: {
             defaults: {
-              videoGenerationModel: { primary: "qwen/wan2.6-t2v" },
+              mediaModels: { video: { primary: "qwen/wan2.6-t2v" } },
             },
           },
         }),
@@ -384,7 +399,7 @@ describe("createVideoGenerateTool", () => {
         config: asConfig({
           agents: {
             defaults: {
-              videoGenerationModel: { primary: "qwen/wan2.6-t2v" },
+              mediaModels: { video: { primary: "qwen/wan2.6-t2v" } },
             },
           },
         }),
@@ -552,7 +567,7 @@ describe("createVideoGenerateTool", () => {
         cfg: asConfig({
           agents: {
             defaults: {
-              videoGenerationModel: { primary: "qwen/wan2.6-t2v" },
+              mediaModels: { video: { primary: "qwen/wan2.6-t2v" } },
             },
           },
         }),

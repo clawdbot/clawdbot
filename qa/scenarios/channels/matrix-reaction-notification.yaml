@@ -4,7 +4,7 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.message-actions
+      - matrix.message-send-read-edit-delete
   execution:
     profiles: { "matrix:all": 21, "matrix:fast": 4, "matrix:transport": 20 }
     kind: flow

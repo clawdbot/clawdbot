@@ -30,9 +30,14 @@
       "@openclaw/ai/diagnostics": ["./packages/ai/src/utils/diagnostics.ts"],
       "@openclaw/ai/event-stream": ["./packages/ai/src/utils/event-stream.ts"],
       "@openclaw/ai/providers": ["./packages/ai/src/providers.ts"],
+      "@openclaw/ai/transports": ["./packages/ai/src/transports.ts"],
       "@openclaw/ai/types": ["./packages/ai/src/types.ts"],
       "@openclaw/ai/validation": ["./packages/ai/src/validation.ts"],
-      "@openclaw/ai/internal/*": ["./packages/ai/src/internal/*.ts"],
+      "@openclaw/ai/internal/anthropic": ["./packages/ai/src/internal/anthropic.ts"],
+      "@openclaw/ai/internal/openai": ["./packages/ai/src/internal/openai.ts"],
+      "@openclaw/ai/internal/retry-after": ["./packages/ai/src/internal/retry-after.ts"],
+      "@openclaw/ai/internal/runtime": ["./packages/ai/src/internal/runtime.ts"],
+      "@openclaw/ai/internal/shared": ["./packages/ai/src/internal/shared.ts"],
       "@openclaw/agent-core": ["./packages/agent-core/src/index.ts"],
       "@openclaw/agent-core/*": ["./packages/agent-core/src/*"],
       "@openclaw/llm-core": ["./packages/llm-core/src/index.ts"],
@@ -147,6 +152,9 @@
       "@openclaw/normalization-core/number-coercion": [
         "./packages/normalization-core/src/number-coercion.ts"
       ],
+      "@openclaw/normalization-core/phone-presentation": [
+        "./packages/normalization-core/src/phone-presentation.ts"
+      ],
       "@openclaw/normalization-core/record-coerce": [
         "./packages/normalization-core/src/record-coerce.ts"
       ],
@@ -164,6 +172,8 @@
       ],
       "@openclaw/normalization-core/*": ["./packages/normalization-core/src/*"],
       "@openclaw/retry": ["./packages/retry/src/index.ts"],
+      "@openclaw/session-url-contract": ["./packages/session-url-contract/src/index.ts"],
+      "@openclaw/session-url-contract/*": ["./packages/session-url-contract/src/*"],
       "@openclaw/workboard-contract": ["./packages/workboard-contract/src/index.ts"],
       "@openclaw/acp-core": ["./packages/acp-core/src/index.ts"],
       "@openclaw/acp-core/meta": ["./packages/acp-core/src/meta.ts"],

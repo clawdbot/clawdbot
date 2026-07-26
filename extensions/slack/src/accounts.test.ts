@@ -67,7 +67,7 @@ describe("resolveSlackOperationToken", () => {
         cfg: {
           channels: {
             slack: {
-              identity: "user",
+              postAs: "user",
               userToken: "test-user-token",
               userTokenReadOnly: true,
             },
@@ -84,7 +84,7 @@ describe("resolveSlackOperationToken", () => {
       cfg: {
         channels: {
           slack: {
-            identity: "user",
+            postAs: "user",
             botToken: "test-bot-token",
           },
         },

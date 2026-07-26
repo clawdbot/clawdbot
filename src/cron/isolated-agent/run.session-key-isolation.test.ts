@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
+  cleanupBrowserSessionsForLifecycleEndMock,
   isCliProviderMock,
   loadSessionEntryMock,
   loadRunCronIsolatedAgentTurn,
@@ -76,6 +77,12 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     expect(runRequest.promptCacheKey).not.toContain("daily-monitor");
     expect(runRequest.bootstrapContextMode).toBe("lightweight");
     expect(runRequest.bootstrapContextRunKind).toBe("cron");
+    expect(cleanupBrowserSessionsForLifecycleEndMock).toHaveBeenCalledOnce();
+    expect(cleanupBrowserSessionsForLifecycleEndMock).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
+      sessionKeys: ["agent:default:cron:daily-monitor:run:isolated-run-1"],
+      onWarn: expect.any(Function),
+    });
     const embeddedRunOrder = runEmbeddedAgentMock.mock.invocationCallOrder[0];
     if (embeddedRunOrder === undefined) {
       throw new Error("Expected embedded cron execution order");

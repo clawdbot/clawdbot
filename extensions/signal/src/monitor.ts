@@ -46,6 +46,7 @@ import { resolveSignalAccount, resolveSignalReplyToMode } from "./accounts.js";
 import { isSignalNativeApprovalHandlerConfigured } from "./approval-native.js";
 import { addSignalApprovalReactionHintToStructuredPayload } from "./approval-reactions.js";
 import { signalRpcRequest, signalCheck } from "./client-adapter.js";
+import type { SignalTransportKind } from "./client-adapter.js";
 import { formatSignalDaemonExit, spawnSignalDaemon, type SignalDaemonHandle } from "./daemon.js";
 import { isSignalSenderAllowed, type resolveSignalSender } from "./identity.js";
 import { createSignalEventHandler } from "./monitor/event-handler.js";
@@ -272,7 +273,7 @@ function deriveSignalAttachmentRpcMaxResponseBytes(maxBytes: number): number | u
 async function fetchAttachment(params: {
   baseUrl: string;
   account?: string;
-  apiMode?: "native" | "container" | "auto";
+  transportKind?: SignalTransportKind;
   attachment: SignalAttachment;
   sender?: string;
   groupId?: string;
@@ -304,7 +305,7 @@ async function fetchAttachment(params: {
   const result = await signalRpcRequest<{ data?: string }>("getAttachment", rpcParams, {
     baseUrl: params.baseUrl,
     maxResponseBytes: deriveSignalAttachmentRpcMaxResponseBytes(params.maxBytes),
-    apiMode: params.apiMode,
+    transportKind: params.transportKind,
   });
   if (!result?.data) {
     return null;
@@ -569,15 +570,17 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   const reactionMode = accountInfo.config.reactionNotifications ?? "own";
   const reactionAllowlist = normalizeStringEntries(accountInfo.config.reactionAllowlist);
   const mediaMaxBytes = (opts.mediaMaxMb ?? accountInfo.config.mediaMaxMb ?? 8) * 1024 * 1024;
+  const transportKind = accountInfo.transport.kind;
+  const managedTransport =
+    accountInfo.transport.kind === "managed-native" ? accountInfo.transport : undefined;
   const ignoreAttachments = opts.ignoreAttachments ?? accountInfo.config.ignoreAttachments ?? false;
   const sendReadReceipts = Boolean(opts.sendReadReceipts ?? accountInfo.config.sendReadReceipts);
   const waitForTransportReadyFn = opts.waitForTransportReady ?? waitForTransportReady;
 
-  const autoStart = opts.autoStart ?? accountInfo.config.autoStart ?? !accountInfo.config.httpUrl;
-  const configuredApiMode = cfg.channels?.signal?.apiMode ?? "auto";
+  const autoStart = Boolean(managedTransport) && (opts.autoStart ?? true);
   const startupTimeoutMs = Math.min(
     120_000,
-    Math.max(1_000, opts.startupTimeoutMs ?? accountInfo.config.startupTimeoutMs ?? 30_000),
+    Math.max(1_000, opts.startupTimeoutMs ?? managedTransport?.startupTimeoutMs ?? 30_000),
   );
   const readReceiptsViaDaemon = autoStart && sendReadReceipts;
   const daemonLifecycle = createSignalDaemonLifecycle({ abortSignal: opts.abortSignal });
@@ -585,28 +588,22 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   let daemonHandle: SignalDaemonHandle | null = null;
   let ingressMonitor: SignalIngressMonitor | undefined;
 
-  if (autoStart && configuredApiMode === "container") {
-    throw new Error(
-      "channels.signal.autoStart=true is incompatible with channels.signal.apiMode=container",
-    );
-  }
-
   if (autoStart) {
-    const cliPath = opts.cliPath ?? accountInfo.config.cliPath ?? "signal-cli";
+    const cliPath = opts.cliPath ?? managedTransport?.cliPath ?? "signal-cli";
     const configPath =
       normalizeOptionalString(opts.configPath) ??
-      normalizeOptionalString(accountInfo.config.configPath);
-    const httpHost = opts.httpHost ?? accountInfo.config.httpHost ?? "127.0.0.1";
-    const httpPort = opts.httpPort ?? accountInfo.config.httpPort ?? 8080;
+      normalizeOptionalString(managedTransport?.configPath);
+    const httpHost = opts.httpHost ?? managedTransport?.httpHost ?? "127.0.0.1";
+    const httpPort = opts.httpPort ?? managedTransport?.httpPort ?? 8080;
     daemonHandle = spawnSignalDaemon({
       cliPath,
       ...(configPath ? { configPath } : {}),
       account,
       httpHost,
       httpPort,
-      receiveMode: opts.receiveMode ?? accountInfo.config.receiveMode,
+      receiveMode: opts.receiveMode ?? managedTransport?.receiveMode,
       ignoreAttachments: opts.ignoreAttachments ?? accountInfo.config.ignoreAttachments,
-      ignoreStories: opts.ignoreStories ?? accountInfo.config.ignoreStories,
+      ignoreStories: opts.ignoreStories ?? managedTransport?.ignoreStories,
       sendReadReceipts,
       runtime,
     });
@@ -677,7 +674,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       ignoreAttachments,
       sendReadReceipts,
       readReceiptsViaDaemon,
-      fetchAttachment: (params) => fetchAttachment({ ...params, apiMode: configuredApiMode }),
+      fetchAttachment: (params) => fetchAttachment({ ...params, transportKind }),
       deliverReplies: (params) => deliverReplies({ ...params, cfg, chunkMode }),
       resolveSignalReactionTargets,
       isSignalReactionMessage,
@@ -698,7 +695,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       runtime,
       // signal-cli can keep the SSE event endpoint idle until the next inbound event.
       timeoutMs: 0,
-      apiMode: configuredApiMode,
+      transportKind,
       policy: opts.reconnectPolicy,
       onEvent: (event) =>
         monitorTaskRunner.runTask(async () => await ingressMonitor?.receive(event)),

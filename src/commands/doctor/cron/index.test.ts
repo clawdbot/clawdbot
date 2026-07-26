@@ -400,7 +400,7 @@ describe("maybeRepairLegacyCronStore", () => {
             model: { primary: "openai/gpt-5.5", fallbacks: [] },
           },
         },
-      },
+      } as unknown as OpenClawConfig,
       options: {},
       prompter,
     });
@@ -476,7 +476,7 @@ describe("maybeRepairLegacyCronStore", () => {
             model: { primary: "test:opus", fallbacks: [] },
           },
         },
-      },
+      } as unknown as OpenClawConfig,
       options: {},
       prompter: makePrompter(true),
     });
@@ -1083,7 +1083,11 @@ describe("maybeRepairLegacyCronStore", () => {
     let injectedFailure = false;
     const openSpy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
       const handle = await realOpen(...args);
-      if (args[0] === path.dirname(storePath) && args[1] === "r" && !injectedFailure) {
+      const flags = args[1];
+      const opensDirectory =
+        flags === "r" ||
+        (typeof flags === "number" && (flags & fsSync.constants.O_DIRECTORY) !== 0);
+      if (args[0] === path.dirname(storePath) && opensDirectory && !injectedFailure) {
         injectedFailure = true;
         vi.spyOn(handle, "sync").mockRejectedValueOnce(
           createFsError("EIO", "directory fsync failed"),
@@ -1779,7 +1783,7 @@ describe("maybeRepairLegacyCronStore", () => {
       }),
     ]);
 
-    const cfg = { cron: { store: storePath } } as OpenClawConfig;
+    const cfg = { cron: { store: storePath } } as unknown as OpenClawConfig;
     await maybeRepairLegacyCronStore({
       cfg,
       options: {},
@@ -1817,7 +1821,7 @@ describe("maybeRepairLegacyCronStore", () => {
       }),
     ]);
 
-    const cfg = { cron: { store: storePath } } as OpenClawConfig;
+    const cfg = { cron: { store: storePath } } as unknown as OpenClawConfig;
     await maybeRepairLegacyCronStore({
       cfg,
       options: {},
@@ -1949,7 +1953,7 @@ describe("maybeRepairLegacyCronStore", () => {
 
     await expect(
       maybeRepairLegacyCronStore({
-        cfg: { cron: { store: storePath } },
+        cfg: { cron: { store: storePath } } as unknown as OpenClawConfig,
         options: {},
         prompter,
       }),

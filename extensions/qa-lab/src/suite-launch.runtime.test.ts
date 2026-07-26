@@ -2,6 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { QaSuiteScenarioResult } from "./suite.js";
+import type {
+  QaTestFileScenario,
+  QaTestFileScenarioRunResult,
+} from "./test-file-scenario-runner.js";
 
 const { crablineRuntimeLoads, runQaFlowSuite, runQaTestFileScenarios } = vi.hoisted(() => ({
   crablineRuntimeLoads: vi.fn(),
@@ -47,6 +52,28 @@ async function writeEvidence(pathLocal: string, writeFile = true) {
     await fs.writeFile(pathLocal, `${JSON.stringify(evidence, null, 2)}\n`, "utf8");
   }
   return evidence;
+}
+
+function trackMaxActiveFlowRuns() {
+  const run = runQaFlowSuite.getMockImplementation();
+  if (!run) {
+    throw new Error("expected default QA flow suite mock implementation");
+  }
+  let active = 0;
+  let maxActive = 0;
+  runQaFlowSuite.mockImplementation(async (params) => {
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 1);
+    });
+    try {
+      return await run(params);
+    } finally {
+      active -= 1;
+    }
+  });
+  return () => maxActive;
 }
 
 describe("qa suite runtime launcher", () => {
@@ -260,6 +287,59 @@ describe("qa suite runtime launcher", () => {
         scenarioIds: ["matrix-restart-resume"],
       }),
     );
+  });
+
+  it("runs distinct pluggable-driver channels within the global concurrency budget", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-pluggable-channel-concurrency-");
+    const maxActive = trackMaxActiveFlowRuns();
+
+    await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/pluggable-channel-concurrency",
+      providerMode: "mock-openai",
+      channelDriver: "live",
+      adapterFactories: [{ id: "portable-driver", matches: vi.fn(), create: vi.fn() }],
+      concurrency: 2,
+      scenarioIds: ["telegram-help-command", "matrix-restart-resume"],
+    });
+
+    expect(maxActive()).toBe(2);
+  });
+
+  it("runs isolated same-channel adapter instances at suite concurrency", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-pluggable-same-channel-concurrency-");
+    const maxActive = trackMaxActiveFlowRuns();
+
+    const scenarioIds = [
+      "matrix-approval-channel-target-both",
+      "matrix-approval-deny-reaction",
+      "matrix-approval-exec-metadata-chunked",
+      "matrix-approval-exec-metadata-single-event",
+      "matrix-approval-plugin-metadata-single-event",
+      "matrix-approval-thread-target",
+    ];
+    await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/pluggable-same-channel-concurrency",
+      providerMode: "mock-openai",
+      channelDriver: "live",
+      adapterFactories: [
+        {
+          id: "matrix",
+          isolatesInstances: true,
+          matches: ({ channelId, driver }) => driver === "live" && channelId === "matrix",
+          create: vi.fn(),
+        },
+      ],
+      concurrency: 6,
+      scenarioIds,
+    });
+
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(6);
+    expect(runQaFlowSuite.mock.calls.map(([params]) => params?.scenarioIds)).toEqual(
+      scenarioIds.map((scenarioId) => [scenarioId]),
+    );
+    expect(maxActive()).toBe(6);
   });
 
   it("binds one portable channel scenario without an explicit channel override", async () => {
@@ -788,6 +868,417 @@ describe("qa suite runtime launcher", () => {
     expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
   });
 
+  it("stops unified suite partitions after the first failed flow scenario", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-fail-fast-flow-");
+    const defaultFlowImplementation = runQaFlowSuite.getMockImplementation();
+    if (!defaultFlowImplementation) {
+      throw new Error("expected default QA flow suite mock implementation");
+    }
+    runQaFlowSuite.mockImplementationOnce(async (params) => {
+      const result = await defaultFlowImplementation(params);
+      return {
+        ...result,
+        scenarios: result.scenarios.map((scenario: QaSuiteScenarioResult) =>
+          Object.assign({}, scenario, {
+            status: "fail" as const,
+            details: "first scenario failed",
+          }),
+        ),
+      };
+    });
+
+    const result = await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/fail-fast-flow",
+      concurrency: 8,
+      failFast: true,
+      scenarioIds: [
+        "dm-chat-baseline",
+        "group-visible-reply-tool",
+        "control-ui-chat-flow-playwright",
+        "docker-npm-onboard-channel-agent",
+      ],
+    });
+
+    expect(result.executionKind).toBe("suite");
+    if (result.executionKind !== "suite") {
+      throw new Error("expected unified suite result");
+    }
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(1);
+    expect(runQaFlowSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        concurrency: 1,
+        failFast: true,
+        scenarioIds: ["dm-chat-baseline"],
+      }),
+    );
+    expect(runQaTestFileScenarios).not.toHaveBeenCalled();
+    expect(result.result.scenarios).toMatchObject([
+      { name: "dm-chat-baseline", status: "fail", details: "first scenario failed" },
+    ]);
+    const summary = JSON.parse(await fs.readFile(result.result.summaryPath, "utf8")) as {
+      run?: { concurrency?: number; scenarioIds?: string[] };
+      scenarios?: Array<{ name?: string; status?: string }>;
+    };
+    expect(summary.run?.concurrency).toBe(1);
+    expect(summary.run?.scenarioIds).toEqual([
+      "dm-chat-baseline",
+      "group-visible-reply-tool",
+      "control-ui-chat-flow-playwright",
+      "docker-npm-onboard-channel-agent",
+    ]);
+    expect(summary.scenarios).toMatchObject([{ name: "dm-chat-baseline", status: "fail" }]);
+  });
+
+  it("stops pending flow and script partitions after a native scenario fails", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-fail-fast-native-");
+    const defaultTestFileImplementation = runQaTestFileScenarios.getMockImplementation();
+    if (!defaultTestFileImplementation) {
+      throw new Error("expected default QA test-file scenario mock implementation");
+    }
+    runQaTestFileScenarios.mockImplementationOnce(async (params) => {
+      const result = await defaultTestFileImplementation(params);
+      return {
+        ...result,
+        results: result.results.map((scenario: QaTestFileScenarioRunResult["results"][number]) =>
+          Object.assign({}, scenario, {
+            status: "fail" as const,
+            failureMessage: "native scenario failed",
+          }),
+        ),
+      };
+    });
+
+    const result = await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/fail-fast-native",
+      concurrency: 8,
+      failFast: true,
+      scenarioIds: [
+        "dm-chat-baseline",
+        "group-visible-reply-tool",
+        "control-ui-chat-flow-playwright",
+        "docker-npm-onboard-channel-agent",
+      ],
+    });
+
+    expect(result.executionKind).toBe("suite");
+    if (result.executionKind !== "suite") {
+      throw new Error("expected unified suite result");
+    }
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(1);
+    expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
+    expect(runQaTestFileScenarios).toHaveBeenCalledWith(
+      expect.objectContaining({
+        failFast: true,
+        scenarios: [expect.objectContaining({ id: "control-ui-chat-flow-playwright" })],
+      }),
+    );
+    expect(result.result.scenarios).toMatchObject([
+      { name: "dm-chat-baseline", status: "pass" },
+      { name: "Control UI chat flow Playwright coverage", status: "fail" },
+    ]);
+  });
+
+  it("fails and stops when a started flow partition omits its scenario result", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-fail-fast-missing-flow-");
+    const defaultFlowImplementation = runQaFlowSuite.getMockImplementation();
+    if (!defaultFlowImplementation) {
+      throw new Error("expected default QA flow suite mock implementation");
+    }
+    runQaFlowSuite.mockImplementationOnce(async (params) => ({
+      ...(await defaultFlowImplementation(params)),
+      scenarios: [],
+    }));
+
+    const result = await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/fail-fast-missing-flow",
+      concurrency: 8,
+      failFast: true,
+      scenarioIds: [
+        "dm-chat-baseline",
+        "group-visible-reply-tool",
+        "control-ui-chat-flow-playwright",
+        "docker-npm-onboard-channel-agent",
+      ],
+    });
+
+    expect(result.executionKind).toBe("suite");
+    if (result.executionKind !== "suite") {
+      throw new Error("expected unified suite result");
+    }
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(1);
+    expect(runQaTestFileScenarios).not.toHaveBeenCalled();
+    expect(result.result.scenarios).toMatchObject([
+      {
+        name: "DM baseline conversation",
+        status: "fail",
+        details: "suite partition returned no scenario result",
+      },
+    ]);
+    const summary = JSON.parse(await fs.readFile(result.result.summaryPath, "utf8")) as {
+      scenarios?: Array<{ details?: string; name?: string; status?: string }>;
+    };
+    expect(summary.scenarios).toMatchObject([
+      {
+        name: "DM baseline conversation",
+        status: "fail",
+        details: "suite partition returned no scenario result",
+      },
+    ]);
+    const evidence = JSON.parse(await fs.readFile(result.result.evidencePath, "utf8")) as {
+      entries?: Array<{
+        result?: { failure?: { reason?: string }; status?: string };
+        test?: { id?: string };
+      }>;
+    };
+    expect(evidence.entries).toMatchObject([
+      {
+        test: { id: "dm-chat-baseline" },
+        result: {
+          status: "fail",
+          failure: { reason: "suite partition returned no scenario result" },
+        },
+      },
+    ]);
+  });
+
+  it("fails and stops when a started native partition omits its scenario result", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-fail-fast-missing-native-");
+    const defaultTestFileImplementation = runQaTestFileScenarios.getMockImplementation();
+    if (!defaultTestFileImplementation) {
+      throw new Error("expected default QA test-file scenario mock implementation");
+    }
+    runQaTestFileScenarios.mockImplementationOnce(async (params) => ({
+      ...(await defaultTestFileImplementation(params)),
+      results: [],
+    }));
+
+    const result = await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/fail-fast-missing-native",
+      concurrency: 8,
+      failFast: true,
+      scenarioIds: [
+        "dm-chat-baseline",
+        "group-visible-reply-tool",
+        "control-ui-chat-flow-playwright",
+        "docker-npm-onboard-channel-agent",
+      ],
+    });
+
+    expect(result.executionKind).toBe("suite");
+    if (result.executionKind !== "suite") {
+      throw new Error("expected unified suite result");
+    }
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(1);
+    expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
+    expect(result.result.scenarios).toMatchObject([
+      { name: "dm-chat-baseline", status: "pass" },
+      {
+        name: "Control UI chat flow Playwright coverage",
+        status: "fail",
+        details: "suite partition returned no scenario result",
+      },
+    ]);
+    const evidence = JSON.parse(await fs.readFile(result.result.evidencePath, "utf8")) as {
+      entries?: Array<{
+        result?: { failure?: { reason?: string }; status?: string };
+        test?: { id?: string };
+      }>;
+    };
+    expect(evidence.entries).toMatchObject([
+      {
+        test: { id: "control-ui-chat-flow-playwright" },
+        result: {
+          status: "fail",
+          failure: { reason: "suite partition returned no scenario result" },
+        },
+      },
+    ]);
+  });
+
+  it("stops later native execution kinds after a started kind omits its result", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-fail-fast-missing-native-kind-");
+    const defaultTestFileImplementation = runQaTestFileScenarios.getMockImplementation();
+    if (!defaultTestFileImplementation) {
+      throw new Error("expected default QA test-file scenario mock implementation");
+    }
+    runQaTestFileScenarios.mockImplementationOnce(async (params) => ({
+      ...(await defaultTestFileImplementation(params)),
+      results: [],
+    }));
+
+    const scenarioIds = [
+      "dm-chat-baseline",
+      "control-ui-assistant-media-tickets",
+      "control-ui-chat-flow-playwright",
+      "docker-npm-onboard-channel-agent",
+    ];
+    const result = await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/fail-fast-missing-native-kind",
+      concurrency: 8,
+      failFast: true,
+      scenarioIds,
+    });
+
+    expect(result.executionKind).toBe("suite");
+    if (result.executionKind !== "suite") {
+      throw new Error("expected unified suite result");
+    }
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(1);
+    expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
+    expect(runQaTestFileScenarios).toHaveBeenCalledWith(
+      expect.objectContaining({
+        failFast: true,
+        scenarios: [expect.objectContaining({ id: "control-ui-assistant-media-tickets" })],
+      }),
+    );
+    expect(result.result.scenarios).toMatchObject([
+      { name: "dm-chat-baseline", status: "pass" },
+      {
+        name: "Control UI assistant media ticket evidence",
+        status: "fail",
+        details: "suite partition returned no scenario result",
+      },
+    ]);
+    const summary = JSON.parse(await fs.readFile(result.result.summaryPath, "utf8")) as {
+      run?: { scenarioIds?: string[] };
+      scenarios?: Array<{ details?: string; name?: string; status?: string }>;
+    };
+    expect(summary.run?.scenarioIds).toEqual(scenarioIds);
+    expect(summary.scenarios).toMatchObject([
+      { name: "dm-chat-baseline", status: "pass" },
+      {
+        name: "Control UI assistant media ticket evidence",
+        status: "fail",
+        details: "suite partition returned no scenario result",
+      },
+    ]);
+  });
+
+  it("omits a native fail-fast tail after the first missing scenario result", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-fail-fast-missing-native-tail-");
+    const defaultTestFileImplementation = runQaTestFileScenarios.getMockImplementation();
+    if (!defaultTestFileImplementation) {
+      throw new Error("expected default QA test-file scenario mock implementation");
+    }
+    runQaTestFileScenarios.mockImplementationOnce(async (params) => {
+      const result = await defaultTestFileImplementation(params);
+      return {
+        ...result,
+        evidence: {
+          ...result.evidence,
+          entries: params.scenarios.map((scenario: QaTestFileScenario) => ({
+            test: {
+              kind: "qa-scenario",
+              id: scenario.id,
+              title: scenario.title,
+            },
+            coverage: [],
+            result: { status: "pass" as const },
+          })),
+        },
+        results: [result.results[0], result.results[2]].filter(
+          (scenario): scenario is (typeof result.results)[number] => Boolean(scenario),
+        ),
+      };
+    });
+
+    const result = await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/fail-fast-missing-native-tail",
+      concurrency: 8,
+      failFast: true,
+      scenarioIds: [
+        "dm-chat-baseline",
+        "control-ui-assistant-media-tickets",
+        "auth-profile-doctor-migration-safety",
+        "auth-profile-codex-mixed-profiles",
+        "control-ui-chat-flow-playwright",
+      ],
+    });
+
+    expect(result.executionKind).toBe("suite");
+    if (result.executionKind !== "suite") {
+      throw new Error("expected unified suite result");
+    }
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(1);
+    expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
+    expect(result.result.scenarios).toMatchObject([
+      { name: "dm-chat-baseline", status: "pass" },
+      { name: "Control UI assistant media ticket evidence", status: "pass" },
+      {
+        name: "Codex doctor migration safety matrix",
+        status: "fail",
+        details: "suite partition returned no scenario result",
+      },
+    ]);
+    expect(result.result.scenarios).toHaveLength(3);
+    const evidence = JSON.parse(await fs.readFile(result.result.evidencePath, "utf8")) as {
+      entries?: Array<{
+        result?: { failure?: { reason?: string }; status?: string };
+        test?: { id?: string };
+      }>;
+    };
+    expect(evidence.entries).toMatchObject([
+      { test: { id: "control-ui-assistant-media-tickets" }, result: { status: "pass" } },
+      {
+        test: { id: "auth-profile-doctor-migration-safety" },
+        result: {
+          status: "fail",
+          failure: { reason: "suite partition returned no scenario result" },
+        },
+      },
+    ]);
+  });
+
+  it("continues every unified partition after a failure when fail-fast is disabled", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-continue-after-failure-");
+    const defaultFlowImplementation = runQaFlowSuite.getMockImplementation();
+    if (!defaultFlowImplementation) {
+      throw new Error("expected default QA flow suite mock implementation");
+    }
+    runQaFlowSuite.mockImplementationOnce(async (params) => {
+      const result = await defaultFlowImplementation(params);
+      return {
+        ...result,
+        scenarios: result.scenarios.map((scenario: QaSuiteScenarioResult) =>
+          Object.assign({}, scenario, {
+            status: "fail" as const,
+          }),
+        ),
+      };
+    });
+
+    const result = await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/continue-after-failure",
+      concurrency: 1,
+      scenarioIds: [
+        "dm-chat-baseline",
+        "group-visible-reply-tool",
+        "control-ui-chat-flow-playwright",
+        "docker-npm-onboard-channel-agent",
+      ],
+    });
+
+    expect(result.executionKind).toBe("suite");
+    if (result.executionKind !== "suite") {
+      throw new Error("expected unified suite result");
+    }
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(2);
+    expect(runQaTestFileScenarios).toHaveBeenCalledTimes(2);
+    expect(result.result.scenarios.map((scenario) => scenario.status)).toEqual([
+      "fail",
+      "pass",
+      "pass",
+      "pass",
+    ]);
+  });
+
   it("runs script scenarios after flow Gateways stop without serializing Playwright", async () => {
     const repoRoot = await makeTempRepo("qa-suite-script-isolation-");
     let releaseFlow!: () => void;
@@ -1053,7 +1544,13 @@ describe("qa suite runtime launcher", () => {
     const testFileBlocked = new Promise<void>((resolve) => {
       releaseTestFile = resolve;
     });
-    runQaFlowSuite.mockRejectedValueOnce(new Error("flow partition failed"));
+    runQaFlowSuite.mockRejectedValueOnce(
+      new Error("flow partition failed", {
+        cause: Object.assign(new Error("unrelated capacity failure"), {
+          code: "POOL_EXHAUSTED",
+        }),
+      }),
+    );
     runQaTestFileScenarios.mockImplementationOnce(
       async (params: {
         outputDir: string;
@@ -1095,6 +1592,96 @@ describe("qa suite runtime launcher", () => {
     releaseTestFile();
     await expect(runPromise).rejects.toThrow("flow partition failed");
     expect(rejected).toBe(true);
+  });
+
+  it("reuses unavailable channel credential evidence across serial partitions", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-credential-unavailable-");
+    const poolError = Object.assign(new Error("no WhatsApp credential is available"), {
+      code: "POOL_EXHAUSTED",
+    });
+    runQaFlowSuite.mockRejectedValueOnce(
+      new Error("failed to create QA transport live:whatsapp: credential acquire failed", {
+        cause: new Error("credential acquire timed out", { cause: poolError }),
+      }),
+    );
+
+    const result = await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/credential-unavailable",
+      providerMode: "mock-openai",
+      channelDriver: "live",
+      adapterFactories: [{ id: "whatsapp", matches: () => true, create: vi.fn() }],
+      scenarioIds: [
+        "whatsapp-status-command",
+        "whatsapp-access-control-dm-open",
+        "control-ui-chat-flow-playwright",
+      ],
+    });
+
+    expect(result.executionKind).toBe("suite");
+    if (result.executionKind !== "suite") {
+      throw new Error("expected unified suite result");
+    }
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(1);
+    expect(result.result.scenarios.slice(0, 2)).toMatchObject([
+      { status: "fail", details: expect.stringContaining("channel credential unavailable") },
+      { status: "fail", details: expect.stringContaining("channel credential unavailable") },
+    ]);
+    const evidence = JSON.parse(await fs.readFile(result.result.evidencePath, "utf8")) as {
+      entries?: Array<{
+        execution?: { channel?: { id?: string } };
+        result?: { status?: string };
+        test?: { id?: string };
+      }>;
+    };
+    for (const scenarioId of ["whatsapp-status-command", "whatsapp-access-control-dm-open"]) {
+      const blocked = evidence.entries?.find((entry) => entry.test?.id === scenarioId);
+      expect(blocked).toMatchObject({
+        execution: { channel: { id: "whatsapp", driver: "live", live: true } },
+        result: { status: "blocked" },
+      });
+    }
+  });
+
+  it("omits later credential failures after the first failed flow scenario", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-fail-fast-credential-unavailable-");
+    const poolError = Object.assign(new Error("no WhatsApp credential is available"), {
+      code: "POOL_EXHAUSTED",
+    });
+    runQaFlowSuite.mockRejectedValueOnce(
+      new Error("failed to create QA transport live:whatsapp: credential acquire failed", {
+        cause: new Error("credential acquire timed out", { cause: poolError }),
+      }),
+    );
+
+    const result = await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/fail-fast-credential-unavailable",
+      providerMode: "mock-openai",
+      channelDriver: "live",
+      adapterFactories: [{ id: "whatsapp", matches: () => true, create: vi.fn() }],
+      failFast: true,
+      scenarioIds: [
+        "whatsapp-status-command",
+        "whatsapp-access-control-dm-open",
+        "control-ui-chat-flow-playwright",
+      ],
+    });
+
+    expect(result.executionKind).toBe("suite");
+    if (result.executionKind !== "suite") {
+      throw new Error("expected unified suite result");
+    }
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(1);
+    expect(runQaTestFileScenarios).not.toHaveBeenCalled();
+    expect(result.result.scenarios).toHaveLength(1);
+    expect(result.result.scenarios).toMatchObject([
+      { status: "fail", details: expect.stringContaining("channel credential unavailable") },
+    ]);
+    const evidence = JSON.parse(await fs.readFile(result.result.evidencePath, "utf8")) as {
+      entries?: Array<{ test?: { id?: string } }>;
+    };
+    expect(evidence.entries?.map((entry) => entry.test?.id)).toEqual(["whatsapp-status-command"]);
   });
 
   it("shares ordinary flow scenarios and isolates flow scenarios with config patches", async () => {

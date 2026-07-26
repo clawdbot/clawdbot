@@ -38,6 +38,7 @@ type CronAddToolPayload = {
     payload?: {
       kind?: string;
       message?: string;
+      toolsAllow?: string[];
     };
     delivery?: {
       mode?: string;
@@ -73,6 +74,7 @@ describe("bridge/tools/remind", () => {
     expect(addPayload?.job?.sessionTarget).toBe("isolated");
     expect(addPayload?.job?.payload?.kind).toBe("agentTurn");
     expect(addPayload?.job?.payload?.message).toContain("drink water");
+    expect(addPayload?.job?.payload?.toolsAllow).toEqual([]);
     expect(addPayload?.job?.delivery).toEqual({
       mode: "announce",
       channel: "qqbot",

@@ -10,6 +10,12 @@ import type {
 /** Channel-agnostic assistant reply payload. */
 export type ReplyPayload = {
   text?: string;
+  /** Visible body a channel adapter may use when native structured content requires text. */
+  fallbackText?: {
+    text: string;
+    /** Batch payload replaced when the adapter adopts this fallback body. */
+    replacesPayloadIndex?: number;
+  };
   mediaUrl?: string;
   mediaUrls?: string[];
   /** Internal-only trust signal for gateway webchat local media embedding. */
@@ -211,6 +217,8 @@ export type ReplyPayloadMetadata = {
   assistantMessageIndex?: number;
   /** The runtime owns the transcript decision for this assistant payload. */
   assistantTranscriptOwned?: boolean;
+  /** Exact key for replacing a runtime-owned assistant row after media materialization. */
+  assistantTranscriptIdempotencyKey?: string;
   /** Foreground freshness prevented a visible final after transcript persistence. */
   foregroundDeliverySuppression?: {
     reason: "stale-foreground";
@@ -245,6 +253,9 @@ export type ReplyPayloadMetadata = {
   sourceReplyTranscriptMirror?: {
     sessionKey: string;
     agentId?: string;
+    expectedSessionId?: string;
+    /** Delivery stays live, but neither side may be appended to a transcript. */
+    transcriptWriteBlocked?: boolean;
     text?: string;
     mediaUrls?: string[];
     idempotencyKey?: string;

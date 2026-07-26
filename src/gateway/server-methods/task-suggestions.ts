@@ -16,7 +16,7 @@ import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { buildDashboardSessionKey } from "../session-create-service.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { loadSessionEntryReadOnly } from "../session-utils.js";
 import {
   abandonTaskSuggestionAcceptance,
   beginTaskSuggestionAcceptance,
@@ -71,7 +71,10 @@ async function rollbackSuggestedTaskSession(params: {
     // and its worktree were fully removed despite a handler-level failure.
   }
   try {
-    if (!deletionConfirmed && loadSessionEntry(params.key, { agentId: params.agentId }).entry) {
+    if (
+      !deletionConfirmed &&
+      loadSessionEntryReadOnly(params.key, { agentId: params.agentId }).entry
+    ) {
       return false;
     }
   } catch {

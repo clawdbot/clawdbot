@@ -165,6 +165,17 @@ function createCronScheduleSchema(): TSchema {
           }),
         ),
         staggerMs: optionalNonNegativeIntegerSchema({ description: "Jitter ms (kind=cron)" }),
+        command: Type.Optional(
+          Type.Array(Type.String({ minLength: 1 }), {
+            minItems: 1,
+            description: "Supervised source argv (kind=stream; requires cron.triggers.enabled)",
+          }),
+        ),
+        cwd: Type.Optional(Type.String({ description: "Working directory (kind=stream)" })),
+        mode: optionalStringEnum(["line", "match"] as const),
+        match: Type.Optional(Type.String({ description: "Regex source (stream match mode)" })),
+        batchMs: optionalNonNegativeIntegerSchema(),
+        maxBatchBytes: optionalNonNegativeIntegerSchema(),
       },
       { additionalProperties: true },
     ),
@@ -546,8 +557,11 @@ function assertCronSelfRemoveScope(
   if (!selfRemoveOnlyJobId || isCronSelfIntrospectionAction(action)) {
     return;
   }
-  if (action === "next_check" && params.jobId === undefined && params.id === undefined) {
-    return;
+  if (action === "next_check") {
+    const id = readCronJobIdParam(params);
+    if (!id || id === selfRemoveOnlyJobId) {
+      return;
+    }
   }
   if (action === "get" || action === "remove" || action === "runs") {
     const id = readCronJobIdParam(params);
@@ -778,7 +792,14 @@ Restricted isolated runs may only self status/list, current get/runs/remove, and
       const callerScope = resolveCronToolCallerScope(opts, runtimeConfig);
       const callerIdentity =
         callerScope && opts?.agentSessionKey?.trim()
-          ? { agentId: callerScope.agentId, sessionKey: opts.agentSessionKey.trim() }
+          ? {
+              agentId: callerScope.agentId,
+              sessionKey: opts.agentSessionKey.trim(),
+              turnSourceAccountId: opts.agentAccountId,
+              ...(readCronSelfRemoveOnlyJobId(opts)
+                ? { cronSelfManagementJobId: readCronSelfRemoveOnlyJobId(opts) }
+                : {}),
+            }
           : undefined;
 
       return await withGatewayToolCallerIdentity(callerIdentity, async () => {

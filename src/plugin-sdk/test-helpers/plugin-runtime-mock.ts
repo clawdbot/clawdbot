@@ -163,14 +163,20 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     const routeSessionKey = params.routeSessionKey as string;
     const storePath = params.storePath as string;
     const sourceDelivery = params.delivery as {
-      deliver: (payload: unknown, info: unknown) => Promise<unknown>;
+      deliver?: (payload: unknown, info: unknown) => Promise<unknown>;
+      deliverWithProviderMessageSending?: (payload: unknown, info: unknown) => Promise<unknown>;
       onDelivered?: (payload: unknown, info: unknown, result: unknown) => Promise<void> | void;
       onError?: (err: unknown, info: unknown) => void;
     };
+    const sourceDeliver =
+      sourceDelivery.deliverWithProviderMessageSending ?? sourceDelivery.deliver;
+    if (admission.kind !== "observeOnly" && !sourceDeliver) {
+      throw new Error("channel delivery mock requires a delivery callback");
+    }
     const delivery =
       admission.kind === "observeOnly"
         ? { deliver: async () => ({ visibleReplySent: false }) }
-        : sourceDelivery;
+        : { ...sourceDelivery, deliver: sourceDeliver! };
     const ctxSessionKey = ctxPayload.SessionKey;
     const sessionKey = typeof ctxSessionKey === "string" ? ctxSessionKey : routeSessionKey;
     const dispatchReplyWithBufferedBlockDispatcher =
@@ -417,9 +423,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       MessageSidFull: params.messageIdFull,
       ReplyToId: params.reply.replyToId ?? params.supplemental?.quote?.id,
       ReplyToIdFull: params.reply.replyToIdFull ?? params.supplemental?.quote?.fullId,
-      MediaPath: params.media?.[0]?.path,
-      MediaUrl: params.media?.[0]?.url ?? params.media?.[0]?.path,
-      MediaType: params.media?.[0]?.contentType ?? params.media?.[0]?.kind,
+      media: params.media,
       ChatType: params.conversation.kind,
       ConversationLabel: params.conversation.label,
       SenderName: params.sender.name ?? params.sender.displayLabel,
@@ -529,12 +533,30 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
           ) => {
             const sessionId = "plugin-runtime-mock-session";
             const key = params.key;
+            const sessionInitialEntry =
+              "acpSessionBinding" in params.initialEntry
+                ? {
+                    acpSessionBinding: {
+                      acpBackendId: params.initialEntry.acpBackendId,
+                      ...params.initialEntry.acpSessionBinding,
+                    },
+                    ...(params.initialEntry.modelSelectionLocked
+                      ? { modelSelectionLocked: true as const }
+                      : {}),
+                    ...(params.initialEntry.pluginExtensions
+                      ? { pluginExtensions: structuredClone(params.initialEntry.pluginExtensions) }
+                      : {}),
+                    ...(params.initialEntry.pluginOwnerId
+                      ? { pluginOwnerId: params.initialEntry.pluginOwnerId }
+                      : {}),
+                  }
+                : structuredClone(params.initialEntry);
             const initialEntry = {
               sessionId,
               updatedAt: Date.now(),
               ...(params.label !== undefined ? { label: params.label } : {}),
               ...(params.spawnedCwd !== undefined ? { spawnedCwd: params.spawnedCwd } : {}),
-              ...structuredClone(params.initialEntry),
+              ...sessionInitialEntry,
               ...(params.afterCreate ? { initializationPending: true as const } : {}),
             };
             const initialized = {

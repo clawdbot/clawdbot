@@ -57,6 +57,9 @@ function createOpenRouterDoneStreamWithoutGeneration() {
 }
 
 type OpenRouterManifest = {
+  modelCatalog?: {
+    discovery?: Record<string, string>;
+  };
   providerAuthChoices?: Array<{
     provider?: string;
     method?: string;
@@ -76,6 +79,10 @@ function readManifest(): OpenRouterManifest {
 }
 
 describe("openrouter provider hooks", () => {
+  it("declares runtime text catalog discovery", () => {
+    expect(readManifest().modelCatalog?.discovery).toEqual({ openrouter: "runtime" });
+  });
+
   it("registers OpenRouter speech alongside model, media, and catalog providers", async () => {
     const {
       providers,

@@ -152,7 +152,7 @@ function createSandboxBackendTestConfig(
       binds: [],
       cdpPort: 0,
       cdpSourceRange: undefined,
-      enableNoVnc: false,
+      noVncEnabled: false,
       headless: true,
       image: "",
       network: "",

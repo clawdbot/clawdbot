@@ -6,13 +6,17 @@ import { describe, expect, it, vi } from "vitest";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import type { GatewayService } from "../../daemon/service.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
-import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
+import {
+  updatePluginsAfterCoreUpdate,
+  type PostCorePluginUpdateResult,
+} from "./update-command-plugins.js";
 import {
   buildInvalidConfigPostCoreUpdateResult,
   collectMissingPluginInstallPayloads,
   resolvePostSyncPluginUpdateSkipIds,
 } from "./update-command-plugins.test-support.js";
 import { resolvePostCoreUpdateChildStdio } from "./update-command-post-core.js";
+import { applyPostPluginConfigValidation } from "./update-command-post-plugin-validation.js";
 import {
   resolvePostInstallDoctorEnv,
   resolvePostUpdateServiceStateReadEnv,
@@ -48,6 +52,45 @@ describe("resolveGatewayInstallEntrypoint", () => {
     await expect(
       resolveGatewayInstallEntrypoint(root, async (candidate) => candidate === entryPath),
     ).resolves.toBe(entryPath);
+  });
+});
+
+describe("applyPostPluginConfigValidation", () => {
+  const pluginUpdate = {
+    status: "ok",
+    changed: true,
+    sync: {
+      changed: true,
+      switchedToBundled: [],
+      switchedToNpm: [],
+      warnings: [],
+      errors: [],
+    },
+    npm: { changed: true, outcomes: [] },
+    integrityDrifts: [],
+    warnings: [],
+  } satisfies PostCorePluginUpdateResult;
+
+  it("fails closed when updated plugin migrations leave config invalid", () => {
+    expect(applyPostPluginConfigValidation(pluginUpdate, false)).toMatchObject({
+      status: "error",
+      reason: "post-plugin-doctor-invalid-config",
+      warnings: [
+        {
+          guidance: ["Run `openclaw doctor --fix`, then rerun `openclaw update repair`."],
+        },
+      ],
+    });
+  });
+
+  it("preserves an earlier plugin update error", () => {
+    const failed = {
+      ...pluginUpdate,
+      status: "error" as const,
+      reason: "plugin-sync-failed",
+    };
+
+    expect(applyPostPluginConfigValidation(failed, false)).toBe(failed);
   });
 });
 
@@ -842,6 +885,11 @@ describe("resolvePostCoreUpdateChildStdio", () => {
   it('returns "inherit" on non-Windows platforms', () => {
     expect(resolvePostCoreUpdateChildStdio("linux")).toBe("inherit");
     expect(resolvePostCoreUpdateChildStdio("darwin")).toBe("inherit");
+  });
+
+  it('returns "pipe" for JSON output on every platform', () => {
+    expect(resolvePostCoreUpdateChildStdio("linux", true)).toBe("pipe");
+    expect(resolvePostCoreUpdateChildStdio("darwin", true)).toBe("pipe");
   });
 });
 

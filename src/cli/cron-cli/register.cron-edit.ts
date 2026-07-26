@@ -10,11 +10,18 @@ import { danger } from "../../globals.js";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
-import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
+import {
+  addGatewayClientOptions,
+  callGatewayFromCli,
+  type GatewayRpcOpts,
+} from "../gateway-rpc.js";
+import { isUnknownCronGetMethodError, listCronJobsFromGateway } from "./list-jobs.js";
 import { resolveCronEditPayloadDeliveryPatch } from "./register.cron-edit-options.js";
 import {
   applyExistingCronSchedulePatch,
+  applyExistingStreamSchedulePatch,
   resolveCronEditScheduleRequest,
+  validateStreamScheduleMetadata,
 } from "./schedule-options.js";
 import {
   getCronChannelOptions,
@@ -24,45 +31,7 @@ import {
 import { normalizeCronSessionTargetOption } from "./thread-id-shared.js";
 import { readCronTriggerScript } from "./trigger-options.js";
 
-const CRON_EDIT_LOOKUP_PAGE_SIZE = 200;
-const CRON_EDIT_LOOKUP_MAX_PAGES = 50;
-
-function isUnknownCronGetMethodError(error: unknown): error is Error {
-  return (
-    error instanceof Error &&
-    error.name === "GatewayClientRequestError" &&
-    (error as Error & { gatewayCode?: unknown }).gatewayCode === "INVALID_REQUEST" &&
-    error.message.includes("unknown method: cron.get")
-  );
-}
-
-async function loadCronJobForEditViaList(
-  opts: Record<string, unknown>,
-  id: string,
-): Promise<CronJob | undefined> {
-  let offset = 0;
-  for (let page = 0; page < CRON_EDIT_LOOKUP_MAX_PAGES; page += 1) {
-    const listed = (await callGatewayFromCli("cron.list", opts, {
-      includeDisabled: true,
-      limit: CRON_EDIT_LOOKUP_PAGE_SIZE,
-      offset,
-    })) as { jobs?: CronJob[]; hasMore?: boolean; nextOffset?: number | null } | null;
-    const existing = (listed?.jobs ?? []).find((job) => job.id === id);
-    if (existing) {
-      return existing;
-    }
-    if (!listed?.hasMore || typeof listed.nextOffset !== "number") {
-      return undefined;
-    }
-    if (listed.nextOffset <= offset) {
-      throw new Error("cron.list pagination did not advance while looking up cron job");
-    }
-    offset = listed.nextOffset;
-  }
-  throw new Error("cron.list pagination exceeded maximum pages while looking up cron job");
-}
-
-async function readCronJobForEdit(opts: Record<string, unknown>, id: string): Promise<CronJob> {
+async function readCronJobForEdit(opts: GatewayRpcOpts, id: string): Promise<CronJob> {
   try {
     return (await callGatewayFromCli("cron.get", opts, { id })) as CronJob;
   } catch (error) {
@@ -71,7 +40,12 @@ async function readCronJobForEdit(opts: Record<string, unknown>, id: string): Pr
     }
     // Protocol-v4 gateways shipped before cron.get; keep remote edits working
     // without paying the paginated lookup cost on current gateways.
-    const existing = await loadCronJobForEditViaList(opts, id);
+    const inventory = await listCronJobsFromGateway(
+      opts,
+      { includeDisabled: true },
+      { allowLegacyUnversionedPagination: true },
+    );
+    const existing = inventory.jobs.find((job) => job.id === id);
     if (!existing) {
       throw new Error(`unknown cron job id: ${id}`, { cause: error });
     }
@@ -103,6 +77,12 @@ export function registerCronEditCommand(cron: Command) {
       .option("--pacing-max <duration>", "Set maximum delay for a dynamic next check")
       .option("--clear-pacing", "Remove dynamic-cadence bounds", false)
       .option("--cron <expr>", "Set cron expression")
+      .option("--stream-command <json>", "Set stream source argv as a JSON array of strings")
+      .option("--stream-cwd <path>", "Set stream source working directory")
+      .option("--stream-mode <mode>", "Set stream selection mode (line|match)")
+      .option("--stream-match <regex>", "Set stream match regex source")
+      .option("--stream-batch-ms <n>", "Set stream quiet-window delay in milliseconds")
+      .option("--stream-max-batch-bytes <n>", "Set maximum UTF-8 bytes per stream batch")
       .option(
         "--tz <iana>",
         "Timezone for cron expressions (IANA; cron default: Gateway host local timezone)",
@@ -337,12 +317,37 @@ export function registerCronEditCommand(cron: Command) {
             at: opts.at,
             cron: opts.cron,
             every: opts.every,
+            streamCommand: opts.streamCommand,
+            streamCwd: opts.streamCwd,
+            streamMode: opts.streamMode,
+            streamMatch: opts.streamMatch,
+            streamBatchMs: opts.streamBatchMs,
+            streamMaxBatchBytes: opts.streamMaxBatchBytes,
             exact: opts.exact,
             stagger: opts.stagger,
             tz: opts.tz,
           });
           if (scheduleRequest.kind === "direct") {
-            if (
+            if (scheduleRequest.schedule.kind === "stream") {
+              const existing = await readCronJobForEdit(opts, String(id));
+              if (existing.schedule.kind === "stream") {
+                const metadataRequest = resolveCronEditScheduleRequest({
+                  streamCwd: opts.streamCwd,
+                  streamMode: opts.streamMode,
+                  streamMatch: opts.streamMatch,
+                  streamBatchMs: opts.streamBatchMs,
+                  streamMaxBatchBytes: opts.streamMaxBatchBytes,
+                });
+                const merged =
+                  metadataRequest.kind === "patch-existing-stream"
+                    ? applyExistingStreamSchedulePatch(existing.schedule, metadataRequest)
+                    : existing.schedule;
+                patch.schedule = { ...merged, command: scheduleRequest.schedule.command };
+              } else {
+                validateStreamScheduleMetadata(scheduleRequest.schedule);
+                patch.schedule = scheduleRequest.schedule;
+              }
+            } else if (
               scheduleRequest.schedule.kind === "cron" &&
               scheduleRequest.schedule.tz === undefined
             ) {
@@ -357,6 +362,9 @@ export function registerCronEditCommand(cron: Command) {
           } else if (scheduleRequest.kind === "patch-existing-cron") {
             const existing = await readCronJobForEdit(opts, String(id));
             patch.schedule = applyExistingCronSchedulePatch(existing.schedule, scheduleRequest);
+          } else if (scheduleRequest.kind === "patch-existing-stream") {
+            const existing = await readCronJobForEdit(opts, String(id));
+            patch.schedule = applyExistingStreamSchedulePatch(existing.schedule, scheduleRequest);
           }
 
           Object.assign(

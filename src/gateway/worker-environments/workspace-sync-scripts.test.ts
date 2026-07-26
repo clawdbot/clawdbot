@@ -1,4 +1,6 @@
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,11 +11,13 @@ import {
   serializeWorkerWorkspaceManifest,
 } from "./workspace-manifest.js";
 import {
-  REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS,
-  REMOTE_WORKSPACE_MANIFEST_JS,
   REMOTE_WORKSPACE_QUIESCE_JS,
   REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
   REMOTE_WORKSPACE_RESUME_JS,
+} from "./workspace-quiescence-scripts.js";
+import {
+  REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS,
+  REMOTE_WORKSPACE_MANIFEST_JS,
 } from "./workspace-sync-scripts.js";
 
 const roots: string[] = [];
@@ -35,7 +39,7 @@ async function fixture() {
   await fs.mkdir(bin);
   await fs.writeFile(
     path.join(bin, "ps"),
-    '#!/bin/sh\ncase "$*" in\n  *"stat=,lstart= -p"*) printf "T Tue Jul 15 08:00:00 2026\\n" ;;\n  *"lstart= -p"*) printf "Tue Jul 15 08:00:00 2026\\n" ;;\n  *) printf "%s %s %s S Tue Jul 15 08:00:00 2026\\n" "$$" "$PPID" "$(id -u)"; if [ -f "$OPENCLAW_TEST_PS_EXTRA" ]; then cat "$OPENCLAW_TEST_PS_EXTRA"; fi ;;\nesac\n',
+    '#!/bin/sh\ncase "$*" in\n  *"stat=,lstart= -p"*|*"lstart= -p"*) exec /bin/ps "$@" ;;\n  *) printf "%s %s %s S Tue Jul 15 08:00:00 2026\\n" "$$" "$PPID" "$(id -u)"; if [ -f "$OPENCLAW_TEST_PS_EXTRA" ]; then extra_pid=$(cat "$OPENCLAW_TEST_PS_EXTRA"); /bin/ps -o pid=,ppid=,uid=,stat=,lstart= -p "$extra_pid"; fi ;;\nesac\n',
   );
   await fs.chmod(path.join(bin, "ps"), 0o755);
   return {
@@ -143,13 +147,14 @@ describe("remote workspace quiescence scripts", () => {
     await resume(input, nonce);
   });
 
-  it("rejects a writable process that appeared after the workspace was quiesced", async () => {
+  it("stops a writable process that appeared after the workspace was quiesced", async () => {
     const input = await fixture();
     const nonce = await quiesce(input);
-    await fs.writeFile(
-      input.extraProcessPath,
-      `999999 1 ${process.getuid?.() ?? 0} S Tue Jul 15 08:01:00 2026\n`,
-    );
+    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      stdio: "ignore",
+    });
+    expect(child.pid).toBeDefined();
+    await fs.writeFile(input.extraProcessPath, `${child.pid}\n`);
 
     const heartbeat = await runCommandWithTimeout(
       [
@@ -165,15 +170,26 @@ describe("remote workspace quiescence scripts", () => {
     );
     expect(heartbeat.code).toBe(0);
 
-    const result = await runCommandWithTimeout(
-      [process.execPath, "-e", REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS, input.workspace, nonce],
-      { timeoutMs: 10_000, baseEnv: input.env },
-    );
+    try {
+      const result = await runCommandWithTimeout(
+        [process.execPath, "-e", REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS, input.workspace, nonce],
+        { timeoutMs: 10_000, baseEnv: input.env },
+      );
 
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("new writable process");
-    await fs.rm(input.extraProcessPath);
-    await resume(input, nonce);
+      expect(result.code).toBe(0);
+      const lease = JSON.parse(
+        await fs.readFile(leasePath(input.home, input.workspace, nonce), "utf8"),
+      ) as { processes: Array<{ pid: number }> };
+      expect(lease.processes.some((entry) => entry.pid === child.pid)).toBe(true);
+    } finally {
+      await resume(input, nonce);
+      child.kill("SIGCONT");
+      child.kill("SIGTERM");
+      if (child.exitCode === null) {
+        await once(child, "exit");
+      }
+      await fs.rm(input.extraProcessPath, { force: true });
+    }
   });
 
   it("fails closed when the watchdog lease no longer exists", async () => {
@@ -453,9 +469,8 @@ describe("remote workspace manifest script", () => {
         entry.mode = (entry.mode & 0o111) === 0 ? 0o644 : 0o755;
       }
     }
-    const legacyProducerLocale = "en-US";
     legacyCanonical.entries.sort((left, right) =>
-      left.path.localeCompare(right.path, legacyProducerLocale),
+      left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
     );
     const acceptedRaw = JSON.stringify(legacyCanonical);
     const acceptedDigest = createHash("sha256").update(acceptedRaw).digest("hex");
@@ -471,7 +486,6 @@ describe("remote workspace manifest script", () => {
         "",
         "resolve",
         acceptedDigest,
-        legacyProducerLocale,
       ],
       { timeoutMs: 10_000, baseEnv: env },
     );

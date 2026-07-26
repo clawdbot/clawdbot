@@ -27,13 +27,17 @@ vi.mock("./model-selection.js", async () => {
   };
 });
 
-vi.mock("../config/sessions/session-accessor.js", () => ({
-  loadSessionEntry: (scope: { sessionKey: string }) => {
+vi.mock("../config/sessions/session-accessor.js", () => {
+  const loadSessionEntry = (scope: { sessionKey: string }) => {
     const store = state.loadSessionStoreMock(scope) as Record<string, unknown> | undefined;
     return store?.[scope.sessionKey];
-  },
-  patchSessionEntry: (...args: unknown[]) => state.updateSessionStoreMock(...args),
-}));
+  };
+  return {
+    loadSessionEntry,
+    loadSessionEntryReadOnly: loadSessionEntry,
+    patchSessionEntry: (...args: unknown[]) => state.updateSessionStoreMock(...args),
+  };
+});
 
 vi.mock("../config/sessions/paths.js", () => ({
   resolveStorePath: (...args: unknown[]) => state.resolveStorePathMock(...args),

@@ -260,7 +260,7 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
       });
       writeAcpSessionMetaForMigration({
         sessionKey: acpKey,
-        sessionId: "sess-acp-harness",
+        lifecycleRevision: undefined,
         meta: {
           backend: "acpx",
           agent: "claude",
@@ -311,7 +311,7 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
       });
       writeAcpSessionMetaForMigration({
         sessionKey: legacyAcpKey,
-        sessionId: "sess-acp-harness-partial",
+        lifecycleRevision: undefined,
         meta: {
           backend: "acpx",
           agent: "claude",

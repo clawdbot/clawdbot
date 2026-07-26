@@ -127,6 +127,7 @@ export function createWhatsAppOutboundBase({
       fromMe: cachedMeta?.fromMe ?? false,
       participant: cachedMeta?.participant,
       messageText: cachedMeta?.body,
+      media: cachedMeta?.media,
     };
   };
 

@@ -3,10 +3,10 @@ title: "Runtime tool fixture — apply-patch"
 scenario:
   id: runtime-tool-apply-patch
   surface: runtime-tools
-  runtimeParityTier: standard
+  runtimePairLane: core
   coverage:
     primary:
-      - tools.apply-patch
+      - agent-runtime.tool-apply-patch
   objective: Verify apply_patch behavior is tracked across OpenClaw and Codex while Codex owns patching natively.
   successCriteria:
     - OpenClaw may expose OpenClaw apply_patch while Codex app-server mode may omit duplicate OpenClaw dynamic apply_patch.

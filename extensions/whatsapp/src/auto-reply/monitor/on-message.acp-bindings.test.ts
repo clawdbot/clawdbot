@@ -342,10 +342,11 @@ function createGroupAudioMessage() {
       },
     },
     payload: {
-      body: "<media:audio>",
+      body: "",
       media: {
         type: "audio/ogg; codecs=opus",
         path: "/tmp/voice.ogg",
+        kind: "audio",
       },
     },
     platform: {

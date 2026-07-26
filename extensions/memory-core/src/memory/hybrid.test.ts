@@ -562,4 +562,97 @@ describe("memory hybrid helpers", () => {
     expect(merged[0]?.vectorScore).toBeCloseTo(0.2);
     expect(merged[0]?.textScore).toBeCloseTo(1);
   });
+
+  const vectorResult = (id: string, path: string, vectorScore: number) => ({
+    id,
+    path,
+    startLine: 1,
+    endLine: 1,
+    source: "memory",
+    snippet: `vector ${id}`,
+    vectorScore,
+  });
+  const keywordResult = (id: string, path: string, textScore: number) => ({
+    id,
+    path,
+    startLine: 1,
+    endLine: 1,
+    source: "memory",
+    snippet: `keyword ${id}`,
+    textScore,
+  });
+
+  it("removes the text-weight discount only from vector-only non-text media", async () => {
+    const paths = {
+      vectorMedia: "memory/generated/photo.png",
+      vectorText: "memory/notes.md",
+      keywordMedia: "memory/clip.wav",
+      bothMedia: "memory/matched.png",
+      bothText: "memory/matched.md",
+    };
+    const merged = await mergeHybridResults({
+      vectorWeight: 0.7,
+      textWeight: 0.3,
+      isNonTextMediaPath: (path) => /\.(?:png|wav)$/u.test(path),
+      vector: [
+        vectorResult("vector-media", paths.vectorMedia, 0.8),
+        vectorResult("vector-text", paths.vectorText, 0.8),
+        vectorResult("both-media", paths.bothMedia, 0.95),
+        vectorResult("both-text", paths.bothText, 0.6),
+      ],
+      keyword: [
+        keywordResult("keyword-media", paths.keywordMedia, 0.9),
+        keywordResult("both-media", paths.bothMedia, 0.8),
+        keywordResult("both-text", paths.bothText, 0.9),
+      ],
+    });
+    const byPath = new Map(merged.map((entry) => [entry.path, entry]));
+
+    expect(byPath.get(paths.vectorMedia)?.score).toBeCloseTo(0.8);
+    expect(byPath.get(paths.vectorText)?.score).toBeCloseTo(0.7 * 0.8);
+    expect(byPath.get(paths.keywordMedia)?.score).toBeCloseTo(0.3 * 0.9);
+    expect(byPath.get(paths.bothMedia)?.score).toBeCloseTo(0.7 * 0.95 + 0.3 * 0.8);
+    expect(byPath.get(paths.bothMedia)?.textScore).toBeCloseTo(0.8);
+    expect(byPath.get(paths.bothText)?.score).toBeCloseTo(0.7 * 0.6 + 0.3 * 0.9);
+  });
+
+  it.each([
+    {
+      name: "keeps media keyword scoring when vector weight is zero",
+      vectorWeight: 0,
+      textWeight: 1,
+      path: "memory/photo.png",
+      vector: [vectorResult("candidate", "memory/photo.png", 0.95)],
+      keyword: [keywordResult("candidate", "memory/photo.png", 0.8)],
+      expected: 0.8,
+    },
+    {
+      name: "keeps vector-only text scoring when weights total two",
+      vectorWeight: 1,
+      textWeight: 1,
+      path: "memory/notes.md",
+      vector: [vectorResult("candidate", "memory/notes.md", 0.6)],
+      keyword: [],
+      expected: 0.6,
+    },
+    {
+      name: "keeps both-signal text scoring when weights total two",
+      vectorWeight: 1,
+      textWeight: 1,
+      path: "memory/notes.md",
+      vector: [vectorResult("candidate", "memory/notes.md", 0.6)],
+      keyword: [keywordResult("candidate", "memory/notes.md", 0.9)],
+      expected: 1.5,
+    },
+  ])("$name", async ({ vectorWeight, textWeight, path, vector, keyword, expected }) => {
+    const merged = await mergeHybridResults({
+      vectorWeight,
+      textWeight,
+      isNonTextMediaPath: (candidatePath) => candidatePath.endsWith(".png"),
+      vector,
+      keyword,
+    });
+
+    expect(merged.find((entry) => entry.path === path)?.score).toBeCloseTo(expected);
+  });
 });

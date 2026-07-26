@@ -5,19 +5,25 @@ import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { CronRunLogEntry } from "../../api/types.ts";
 import type { CronDeliveryStatus, CronRunsStatusValue, CronSortDir } from "../../api/types.ts";
-import { pathForRoute } from "../../app-route-paths.ts";
 import { icon } from "../../components/icons.ts";
 import "../../components/web-awesome.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { t } from "../../i18n/index.ts";
-import { formatRelativeTimestamp, formatMs } from "../../lib/format.ts";
-import { searchForSession } from "../../lib/sessions/index.ts";
+import {
+  formatDurationCompact,
+  formatDurationHuman,
+  formatRelativeTimestamp,
+  formatMs,
+  formatTokens,
+} from "../../lib/format.ts";
+import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 
 // Leaf contract: the slice of the cron view props this module needs. Keeping
 // it local (instead of importing CronProps from view.ts) avoids a module
 // cycle between view.ts and view-runs.ts.
 type CronRunsSectionProps = {
   basePath: string;
+  agentId: string;
   runs: CronRunLogEntry[];
   runsHasMore: boolean;
   runsLoadingMore: boolean;
@@ -225,7 +231,9 @@ export function renderRunsSection(props: CronRunsSectionProps) {
             `
         : html`
             <div class="cron-runs__list">
-              ${runs.map((entry) => renderRun(entry, props.basePath, props.onNavigateToChat))}
+              ${runs.map((entry) =>
+                renderRun(entry, props.agentId, props.basePath, props.onNavigateToChat),
+              )}
             </div>
           `}
       ${props.runsHasMore
@@ -276,21 +284,27 @@ function runDeliveryLabel(value: string): string {
 
 function renderRun(
   entry: CronRunLogEntry,
+  fallbackAgentId: string,
   basePath: string,
   onNavigateToChat?: (sessionKey: string) => void,
 ) {
   const chatUrl =
     typeof entry.sessionKey === "string" && entry.sessionKey.trim().length > 0
-      ? `${pathForRoute("chat", basePath)}${searchForSession(entry.sessionKey)}`
+      ? sessionNavigationTarget({
+          face: "chat",
+          sessionKey: entry.sessionKey,
+          fallbackAgentId,
+          basePath,
+        }).href
       : null;
   const status = runStatusLabel(entry.status ?? "unknown");
   const delivery = runDeliveryLabel(entry.deliveryStatus ?? "not-requested");
   const usage = entry.usage;
   const usageSummary =
     usage && typeof usage.total_tokens === "number"
-      ? `${usage.total_tokens} tokens`
+      ? `${formatTokens(usage.total_tokens)} ${t("usage.metrics.tokens")}`
       : usage && typeof usage.input_tokens === "number" && typeof usage.output_tokens === "number"
-        ? `${usage.input_tokens} in / ${usage.output_tokens} out`
+        ? `${formatTokens(usage.input_tokens)} in / ${formatTokens(usage.output_tokens)} out`
         : null;
   const bodySource = entry.summary || entry.error || t("cron.runEntry.noSummary");
   const showErrorInMeta = Boolean(entry.error) && Boolean(entry.summary);
@@ -310,7 +324,12 @@ function renderRun(
           ${typeof entry.runAtMs === "number"
             ? html`<div class="muted">${t("cron.runEntry.runAt")} ${formatMs(entry.runAtMs)}</div>`
             : nothing}
-          <div class="muted">${entry.durationMs ?? 0}ms</div>
+          <div class="muted">
+            ${typeof entry.durationMs === "number" && Number.isFinite(entry.durationMs)
+              ? (formatDurationCompact(entry.durationMs, { spaced: true }) ??
+                formatDurationHuman(entry.durationMs, t("common.na")))
+              : t("common.na")}
+          </div>
           ${typeof entry.nextRunAtMs === "number"
             ? html`<div class="muted">${formatRunNextLabel(entry.nextRunAtMs)}</div>`
             : nothing}

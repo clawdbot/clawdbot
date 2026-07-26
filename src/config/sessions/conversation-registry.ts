@@ -1,13 +1,16 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import type { OpenClawConfig } from "../types.openclaw.js";
 import type { ConversationIdentity, ConversationKind } from "./conversation-identity.js";
+import { resolveStorePath } from "./paths.js";
 import { upsertConversationIdentity } from "./session-accessor.sqlite-conversation.js";
 import {
   getSessionKysely,
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { parseSqliteSessionEntryJson } from "./session-accessor.sqlite-status.js";
 
 const CONVERSATION_REF_PATTERN = /^conv_[a-f0-9]{32}$/u;
 
@@ -35,6 +38,19 @@ export type ConversationRegistryScope = {
   storePath?: string;
 };
 
+export function resolveConversationRegistryScope(params: {
+  agentId: string;
+  config: OpenClawConfig;
+}): ConversationRegistryScope {
+  const configuredStore = params.config.session?.store;
+  return {
+    agentId: params.agentId,
+    ...(configuredStore
+      ? { storePath: resolveStorePath(configuredStore, { agentId: params.agentId }) }
+      : {}),
+  };
+}
+
 function normalizeConversationRef(value: string): string {
   const normalized = value.trim().toLowerCase();
   if (!CONVERSATION_REF_PATTERN.test(normalized)) {
@@ -60,6 +76,7 @@ function mapConversationRow(row: {
   peer_id: string;
   role: string | null;
   current_session_id: string | null;
+  current_entry_json: string | null;
   current_session_key: string | null;
   thread_id: string | null;
 }): ConversationRecord | null {
@@ -70,6 +87,10 @@ function mapConversationRow(row: {
     row.role === "primary" || row.role === "participant" || row.role === "related"
       ? row.role
       : undefined;
+  const currentEntry = row.current_entry_json
+    ? parseSqliteSessionEntryJson({ entry_json: row.current_entry_json })
+    : null;
+  const hasCurrentBinding = currentEntry?.sessionId === row.current_session_id;
   return {
     conversationRef: row.conversation_id,
     channel: row.channel,
@@ -81,9 +102,9 @@ function mapConversationRow(row: {
     ...(row.native_channel_id ? { nativeChannelId: row.native_channel_id } : {}),
     ...(row.native_direct_user_id ? { nativeDirectUserId: row.native_direct_user_id } : {}),
     ...(row.label ? { label: row.label } : {}),
-    // Only the current session_entries row can bind an address. The joined
-    // sessions row may be historical after reset, rebind, or deletion.
-    ...(role && row.current_session_id && row.current_session_key
+    // Only the current session_nodes row can bind an address. The joined
+    // window row may be historical after reset, rebind, or deletion.
+    ...(role && hasCurrentBinding && row.current_session_id && row.current_session_key
       ? {
           sessionId: row.current_session_id,
           sessionKey: row.current_session_key,
@@ -109,10 +130,10 @@ function selectConversationRows(
   let query = db
     .selectFrom("conversations as c")
     .leftJoin("session_conversations as sc", "sc.conversation_id", "c.conversation_id")
-    .leftJoin("sessions as s", "s.session_id", "sc.session_id")
-    // Historical sessions retain address activity, while session_entries owns
+    .leftJoin("session_windows as s", "s.session_id", "sc.session_id")
+    // Historical windows retain address activity, while session_nodes owns
     // the current session binding after reset/rebind.
-    .leftJoin("session_entries as se", "se.session_key", "s.session_key")
+    .leftJoin("session_nodes as sn", "sn.session_key", "s.session_key")
     .select([
       "c.conversation_id",
       "c.channel",
@@ -130,8 +151,9 @@ function selectConversationRows(
       "sc.role",
       "sc.first_seen_at",
       "sc.last_seen_at",
-      "se.session_id as current_session_id",
-      "se.session_key as current_session_key",
+      "sn.current_session_id as current_session_id",
+      "sn.entry_json as current_entry_json",
+      "sn.session_key as current_session_key",
     ]);
   const channel = normalizeOptionalLowercaseString(options.channel);
   if (channel) {
@@ -148,7 +170,7 @@ function selectConversationRows(
     database.db,
     query
       .orderBy((eb) => eb.fn.coalesce("sc.last_seen_at", "c.updated_at"), "desc")
-      .orderBy("se.updated_at", "desc"),
+      .orderBy("sn.updated_at", "desc"),
   ).rows;
   const unique = new Map<string, ConversationRecord>();
   for (const row of rows) {

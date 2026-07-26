@@ -116,52 +116,6 @@ describe("registerPolicyDoctorChecks", () => {
     ]);
   });
 
-  it("skips scoped data-handling repairs that would mutate shared config", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
-    const cfg = {
-      ...cfgWithPolicy({ workspaceRepairs: true }),
-      logging: { redactSensitive: "off" },
-      agents: {
-        list: [{ id: "reviewer" }],
-      },
-    } as unknown as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        scopes: {
-          reviewer: {
-            agentIds: ["reviewer"],
-            dataHandling: {
-              sensitiveLogging: { requireRedaction: true },
-            },
-          },
-        },
-      }),
-      "utf-8",
-    );
-
-    const result = await runPolicyRepairCheck(
-      "policy/data-handling-redaction-disabled",
-      repairCtx(configPath, cfg),
-    );
-
-    expect(result.status).toBe("skipped");
-    expect(result.reason).toBe("policy automatic repair had no config changes to apply");
-    expect(result.changes).toEqual([]);
-    expect(result.warnings).toEqual([
-      "Skipped scoped data-handling repair. The finding reports shared logging config, so changing it would affect more than the scoped policy target.",
-    ]);
-    expect(result.config.logging?.redactSensitive).toBe("off");
-    expect(result.remainingFindings).toEqual([
-      expect.objectContaining({
-        checkId: "policy/data-handling-redaction-disabled",
-        requirement:
-          "oc://policy.jsonc/scopes/reviewer/dataHandling/sensitiveLogging/requireRedaction",
-      }),
-    ]);
-  });
-
   it("does not register repair for non-previewable policy findings", () => {
     const check = registerChecks().find(
       (entry) => entry.id === "policy/gateway-http-url-fetch-unrestricted",

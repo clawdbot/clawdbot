@@ -42,6 +42,7 @@ describe("engine/tools/remind-logic", () => {
       expect(call.job.payload).toEqual({
         kind: "agentTurn",
         message: expect.stringContaining("test reminder"),
+        toolsAllow: [],
       });
       expect(call.job.delivery).toEqual({
         mode: "announce",

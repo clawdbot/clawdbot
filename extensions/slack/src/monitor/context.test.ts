@@ -2,7 +2,8 @@
 import type { App } from "@slack/bolt";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setSlackRuntime } from "../runtime.js";
 import { createSlackMonitorContext } from "./context.js";
 import type { SlackEventScope } from "./event-scope.js";
 
@@ -11,6 +12,7 @@ function createTestContext(params?: {
   groupDmEnabled?: boolean;
   groupDmChannels?: string[];
   appClient?: App["client"];
+  apiAppId?: string;
 }) {
   return createSlackMonitorContext({
     cfg: {
@@ -24,7 +26,7 @@ function createTestContext(params?: {
     botUserId: "U_BOT",
     botId: "B_BOT",
     teamId: "T_EXPECTED",
-    apiAppId: "A_EXPECTED",
+    apiAppId: params?.apiAppId ?? "A_EXPECTED",
     historyLimit: 0,
     sessionScope: "per-sender",
     mainKey: "main",
@@ -52,9 +54,11 @@ function createTestContext(params?: {
     typingReaction: "",
     ackReactionScope: "group-mentions",
     mediaMaxBytes: 20 * 1024 * 1024,
-    removeAckAfterReply: false,
   });
 }
+
+beforeEach(() => setSlackRuntime(null as never));
+afterEach(() => setSlackRuntime(null as never));
 
 describe("createSlackMonitorContext shouldDropMismatchedSlackEvent", () => {
   it("drops mismatched top-level app/team identifiers", () => {
@@ -235,5 +239,207 @@ describe("createSlackMonitorContext channel metadata cache", () => {
     const before = usersInfo.mock.calls.length;
     await expect(ctx.resolveUserName("U0KEEP")).resolves.toEqual({ name: "name-U0KEEP" });
     expect(usersInfo).toHaveBeenCalledTimes(before);
+  });
+});
+
+describe("createSlackMonitorContext Agent View state", () => {
+  it("records Agent View in the account context without runtime state", async () => {
+    const ctx = createTestContext();
+
+    await expect(ctx.isSlackAgentView()).resolves.toBe(false);
+    await ctx.recordSlackAgentView();
+    await expect(ctx.isSlackAgentView()).resolves.toBe(true);
+  });
+
+  it("persists and restores Agent View through plugin state", async () => {
+    const stored = new Map<string, { experience: "agent"; observedAt: number }>();
+    const register = vi.fn(
+      async (key: string, value: { experience: "agent"; observedAt: number }) => {
+        stored.set(key, value);
+      },
+    );
+    const lookup = vi.fn(async (key: string) => stored.get(key));
+    const openKeyedStore = vi.fn(() => ({ register, lookup }));
+    setSlackRuntime({
+      state: { openKeyedStore },
+      logging: { getChildLogger: () => ({ warn: vi.fn() }) },
+    } as never);
+
+    const first = createTestContext();
+    await first.recordSlackAgentView();
+    const restarted = createTestContext();
+
+    const stateKey = JSON.stringify(["workspace", "default", "T_EXPECTED", "A_EXPECTED"]);
+    expect(register).toHaveBeenCalledWith(stateKey, {
+      experience: "agent",
+      observedAt: expect.any(Number),
+    });
+    expect(openKeyedStore).toHaveBeenCalledWith({
+      namespace: "agent-view-workspaces",
+      maxEntries: 4096,
+    });
+    await expect(restarted.isSlackAgentView()).resolves.toBe(true);
+    expect(lookup).toHaveBeenCalledWith(stateKey);
+
+    const replacementApp = createTestContext({ apiAppId: "A_REPLACEMENT" });
+    await expect(replacementApp.isSlackAgentView()).resolves.toBe(false);
+    expect(lookup).toHaveBeenCalledWith(
+      JSON.stringify(["workspace", "default", "T_EXPECTED", "A_REPLACEMENT"]),
+    );
+  });
+
+  it("persists managed view roots without enabling unrelated DM threads", async () => {
+    const stored = new Map<
+      string,
+      { experience: "agent" | "managed-thread"; observedAt: number }
+    >();
+    const register = vi.fn(
+      async (
+        key: string,
+        value: { experience: "agent" | "managed-thread"; observedAt: number },
+      ) => {
+        stored.set(key, value);
+      },
+    );
+    const lookup = vi.fn(async (key: string) => stored.get(key));
+    const openKeyedStore = vi.fn(() => ({ register, lookup }));
+    setSlackRuntime({
+      state: { openKeyedStore },
+      logging: { getChildLogger: () => ({ warn: vi.fn() }) },
+    } as never);
+
+    const first = createTestContext();
+    await first.recordSlackManagedViewThread("D123", "10.000");
+    const restarted = createTestContext();
+
+    await expect(restarted.isSlackManagedViewThread("D123", "10.000")).resolves.toBe(true);
+    await expect(restarted.isSlackManagedViewThread("D123", "20.000")).resolves.toBe(false);
+
+    const stateKey = JSON.stringify([
+      "thread",
+      "default",
+      "T_EXPECTED",
+      "A_EXPECTED",
+      "D123",
+      "10.000",
+    ]);
+    expect(register).toHaveBeenCalledWith(stateKey, {
+      experience: "managed-thread",
+      observedAt: expect.any(Number),
+    });
+    expect(openKeyedStore).toHaveBeenCalledWith({
+      namespace: "agent-view-threads",
+      maxEntries: 4096,
+    });
+    expect(lookup).toHaveBeenCalledWith(stateKey);
+  });
+
+  it("retries opening managed view state after a transient failure", async () => {
+    const register = vi.fn(async () => undefined);
+    const openKeyedStore = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw new Error("sqlite unavailable");
+      })
+      .mockImplementation(() => ({ register, lookup: vi.fn() }));
+    setSlackRuntime({
+      state: { openKeyedStore },
+      logging: { getChildLogger: () => ({ warn: vi.fn() }) },
+    } as never);
+    const ctx = createTestContext();
+
+    await ctx.recordSlackManagedViewThread("D123", "10.000");
+    await ctx.recordSlackManagedViewThread("D123", "10.000");
+
+    expect(openKeyedStore).toHaveBeenCalledTimes(2);
+    expect(register).toHaveBeenCalledOnce();
+  });
+
+  it("retries managed view persistence after a transient write failure", async () => {
+    const register = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("sqlite busy"))
+      .mockResolvedValue(undefined);
+    setSlackRuntime({
+      state: { openKeyedStore: vi.fn(() => ({ register, lookup: vi.fn() })) },
+      logging: { getChildLogger: () => ({ warn: vi.fn() }) },
+    } as never);
+    const ctx = createTestContext();
+
+    await ctx.recordSlackManagedViewThread("D123", "10.000");
+    await ctx.recordSlackManagedViewThread("D123", "10.000");
+
+    expect(register).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache negative managed view root lookups", async () => {
+    const lookup = vi.fn(async () => undefined);
+    setSlackRuntime({
+      state: { openKeyedStore: vi.fn(() => ({ register: vi.fn(), lookup })) },
+      logging: { getChildLogger: () => ({ warn: vi.fn() }) },
+    } as never);
+    const ctx = createTestContext();
+
+    await expect(ctx.isSlackManagedViewThread("D123", "10.000")).resolves.toBe(false);
+    await expect(ctx.isSlackManagedViewThread("D123", "10.000")).resolves.toBe(false);
+
+    expect(lookup).toHaveBeenCalledTimes(2);
+  });
+
+  it("evicts the oldest managed view root from the bounded memory cache", async () => {
+    const lookup = vi.fn(async () => ({
+      experience: "managed-thread" as const,
+      observedAt: Date.now(),
+    }));
+    setSlackRuntime({
+      state: { openKeyedStore: vi.fn(() => ({ register: vi.fn(), lookup })) },
+      logging: { getChildLogger: () => ({ warn: vi.fn() }) },
+    } as never);
+    const ctx = createTestContext();
+
+    await ctx.isSlackManagedViewThread("D123", "oldest");
+    for (let index = 0; index < 4096; index += 1) {
+      await ctx.isSlackManagedViewThread("D123", `thread-${index}`);
+    }
+    await ctx.isSlackManagedViewThread("D123", "oldest");
+
+    expect(lookup).toHaveBeenCalledTimes(4098);
+  });
+
+  it("does not persist Agent View without a stable Slack app identity", async () => {
+    const register = vi.fn();
+    const lookup = vi.fn();
+    setSlackRuntime({
+      state: { openKeyedStore: vi.fn(() => ({ register, lookup })) },
+      logging: { getChildLogger: () => ({ warn: vi.fn() }) },
+    } as never);
+
+    const ctx = createTestContext({ apiAppId: "" });
+    await ctx.recordSlackAgentView();
+    await ctx.recordSlackManagedViewThread("D123", "10.000");
+    await expect(ctx.isSlackAgentView()).resolves.toBe(true);
+    await expect(ctx.isSlackManagedViewThread("D123", "10.000")).resolves.toBe(true);
+    expect(register).not.toHaveBeenCalled();
+
+    const restarted = createTestContext({ apiAppId: "" });
+    await expect(restarted.isSlackAgentView()).resolves.toBe(false);
+    await expect(restarted.isSlackManagedViewThread("D123", "10.000")).resolves.toBe(false);
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it("keeps event-derived Agent View when persistent state cannot open", async () => {
+    setSlackRuntime({
+      state: {
+        openKeyedStore: vi.fn(() => {
+          throw new Error("sqlite unavailable");
+        }),
+      },
+      logging: { getChildLogger: () => ({ warn: vi.fn() }) },
+    } as never);
+    const ctx = createTestContext();
+
+    await ctx.recordSlackAgentView();
+
+    await expect(ctx.isSlackAgentView()).resolves.toBe(true);
   });
 });

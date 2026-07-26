@@ -38,7 +38,7 @@ import type {
 type DownloadCandidate =
   | {
       kind: "remote";
-      mediaKind: "image" | "document";
+      mediaKind: MSTeamsInboundMedia["kind"];
       url: string;
       fileHint?: string;
       contentTypeHint?: string;
@@ -51,7 +51,7 @@ type DownloadCandidate =
       contentType?: string;
       sourceId?: string;
     }
-  | { kind: "unavailable"; mediaKind: "image" | "document"; sourceId?: string };
+  | { kind: "unavailable"; mediaKind: MSTeamsInboundMedia["kind"]; sourceId?: string };
 
 function withSourceId(
   media: MSTeamsInboundMedia,

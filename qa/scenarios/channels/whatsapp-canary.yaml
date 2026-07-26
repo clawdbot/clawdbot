@@ -3,7 +3,8 @@ scenario:
   id: whatsapp-canary
   surface: channels
   coverage:
-    primary: [channels.group-messages]
+    primary:
+      - whatsapp.outbound-text-sends
   execution:
     profiles: { "whatsapp:default": 0, "whatsapp:mock-default": 0 }
     kind: flow

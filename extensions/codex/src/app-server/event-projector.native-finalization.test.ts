@@ -13,6 +13,7 @@ import {
   buildEmptyToolTelemetry,
   requireRecord,
   requireArray,
+  readAttemptTerminal,
   findAgentEvent,
   forCurrentTurn,
   turnCompleted,
@@ -463,8 +464,8 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(result.promptError).toBeNull();
-    expect(result.promptErrorSource).toBeNull();
+    expect(readAttemptTerminal(result).promptError).toBeNull();
+    expect(readAttemptTerminal(result).promptErrorSource).toBeNull();
     expect(result.lastToolError).toMatchObject({
       toolName: "bash",
       error: expect.stringContaining("without a matching tool.result"),
@@ -549,8 +550,8 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(result.promptError).toContain("without a matching tool.result");
-    expect(result.promptErrorSource).toBe("prompt");
+    expect(readAttemptTerminal(result).promptError).toContain("without a matching tool.result");
+    expect(readAttemptTerminal(result).promptErrorSource).toBe("prompt");
     expect(result.lastToolError).toBeUndefined();
     expect(result.assistantTexts).toEqual([]);
   });

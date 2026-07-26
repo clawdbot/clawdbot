@@ -510,6 +510,7 @@ export function createPluginApprovalIosPushDelivery(params: { log: GatewayLikeLo
     driver: {
       approvalKind: "plugin",
       sendRequested: async ({ request, target, plan, gatewayDeviceId }) =>
+        // Keep reviewer-only detail out of size-constrained lock-screen push payloads.
         target.registration.transport === "direct"
           ? await sendApnsPluginApprovalAlert({
               registration: target.registration,

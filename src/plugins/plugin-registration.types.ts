@@ -192,7 +192,7 @@ export type OpenClawPluginNodeInvokePolicy = {
   commands: string[];
   /**
    * Platforms where these node-handled commands should be allowlisted by default.
-   * Omit for commands that require explicit `gateway.nodes.allowCommands`.
+   * Omit for commands that require explicit `gateway.nodes.commands.allow`.
    */
   defaultPlatforms?: Array<"ios" | "android" | "macos" | "windows" | "linux" | "unknown">;
   /**

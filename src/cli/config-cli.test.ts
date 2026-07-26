@@ -69,9 +69,8 @@ vi.mock("./config-model-validation.js", () => ({
 
 vi.mock("../gateway/config-reload-plan.js", () => ({
   buildGatewayReloadPlan: (changedPaths: string[]) => {
-    const restartReasons = changedPaths.filter(
-      (changedPath) =>
-        changedPath.startsWith("models.pricing.") || changedPath.startsWith("plugins.load."),
+    const restartReasons = changedPaths.filter((changedPath) =>
+      changedPath.startsWith("plugins.load."),
     );
     const hotReasons = changedPaths.filter(
       (changedPath) =>
@@ -143,7 +142,7 @@ function buildSnapshot(params: {
 }
 
 function setSnapshot(resolved: OpenClawConfig, config: OpenClawConfig) {
-  mockReadConfigFileSnapshot.mockResolvedValueOnce(buildSnapshot({ resolved, config }));
+  mockReadConfigFileSnapshot.mockResolvedValue(buildSnapshot({ resolved, config }));
 }
 
 function setSnapshotOnce(snapshot: ConfigFileSnapshot) {
@@ -466,6 +465,8 @@ describe("config cli", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockReadConfigFileSnapshot.mockReset();
+    mockReadConfigFileSnapshot.mockResolvedValue(buildSnapshot({ resolved: {}, config: {} }));
     resetRuntimeCapture();
     mockLoadPluginMetadataSnapshot.mockReturnValue(createPluginMetadataSnapshot());
     mockReadBestEffortRuntimeConfigSchema.mockResolvedValue({
@@ -934,32 +935,6 @@ describe("config cli", () => {
       expectErrorIncludes("auto-managed");
     });
 
-    it("rejects auto-managed meta.lastTouchedAt config updates (#80849)", async () => {
-      await expect(
-        runConfigCommand([
-          "config",
-          "set",
-          "meta.lastTouchedAt",
-          "1999-01-01T00:00:00.000Z",
-          "--dry-run",
-        ]),
-      ).rejects.toThrow(ExitError);
-
-      expect(mockWriteConfigFile).not.toHaveBeenCalled();
-      expectErrorIncludes("meta.lastTouchedAt");
-      expectErrorIncludes("auto-managed");
-    });
-
-    it("rejects auto-managed meta paths via config unset (#80849)", async () => {
-      await expect(runConfigCommand(["config", "unset", "meta.lastTouchedAt"])).rejects.toThrow(
-        ExitError,
-      );
-
-      expect(mockWriteConfigFile).not.toHaveBeenCalled();
-      expectErrorIncludes("meta.lastTouchedAt");
-      expectErrorIncludes("auto-managed");
-    });
-
     it("rejects parent meta path mutations when payload merges an auto-managed child (#80849)", async () => {
       await expect(
         runConfigCommand([
@@ -984,7 +959,7 @@ describe("config cli", () => {
           "config",
           "set",
           "meta",
-          '{"lastTouchedAt":"1999-01-01T00:00:00.000Z"}',
+          '{"lastTouchedVersion":"BOGUS-NOT-A-VERSION"}',
           "--strict-json",
           "--replace",
           "--dry-run",
@@ -992,7 +967,7 @@ describe("config cli", () => {
       ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
-      expectErrorIncludes("meta.lastTouchedAt");
+      expectErrorIncludes("meta.lastTouchedVersion");
       expectErrorIncludes("auto-managed");
     });
 
@@ -1776,7 +1751,6 @@ describe("config cli", () => {
         "/tmp/vault.json",
         "--provider-mode",
         "json",
-        "--provider-allow-insecure-path",
       ]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
@@ -1785,7 +1759,6 @@ describe("config cli", () => {
         source: "file",
         path: "/tmp/vault.json",
         mode: "json",
-        allowInsecurePath: true,
       });
     });
 
@@ -1931,14 +1904,14 @@ describe("config cli", () => {
           "config",
           "set",
           "--batch-json",
-          '[{"path":"hooks.token","ref":{"source":"env","provider":"default","id":"HOOK_TOKEN"}},{"path":"commands.ownerDisplaySecret","ref":{"source":"env","provider":"default","id":"OWNER_DISPLAY_SECRET"}}]',
+          '[{"path":"hooks.token","ref":{"source":"env","provider":"default","id":"HOOK_TOKEN"}},{"path":"hooks.gmail.pushToken","ref":{"source":"env","provider":"default","id":"GMAIL_PUSH_TOKEN"}}]',
           "--dry-run",
         ]),
       ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expectErrorIncludes("hooks.token");
-      expectErrorIncludes("commands.ownerDisplaySecret");
+      expectErrorIncludes("hooks.gmail.pushToken");
     });
 
     it("does not duplicate policy errors in --dry-run --json mode for parent-object writes", async () => {
@@ -2019,7 +1992,6 @@ describe("config cli", () => {
             runner: {
               source: "exec",
               command: "/usr/bin/env",
-              allowInsecurePath: true,
             },
           },
         },
@@ -2054,7 +2026,6 @@ describe("config cli", () => {
             runner: {
               source: "exec",
               command: "/usr/bin/env",
-              allowInsecurePath: true,
             },
           },
         },
@@ -2160,37 +2131,31 @@ describe("config cli", () => {
       expectErrorIncludes('Secret provider "runner" has source "env" but ref requests "exec".');
     });
 
-    it("writes sibling SecretRef paths when target uses sibling-ref shape", async () => {
+    it("writes inline SecretRef paths when target uses secret-input shape", async () => {
       const resolved: OpenClawConfig = {
-        gateway: { port: 18789 },
-        channels: {
-          googlechat: {
-            enabled: true,
-          } as never,
-        } as never,
+        gateway: { port: 18789, auth: { mode: "token" } },
       };
       setSnapshot(resolved, resolved);
 
       await runConfigCommand([
         "config",
         "set",
-        "channels.googlechat.serviceAccount",
+        "gateway.auth.token",
         "--ref-provider",
         "vaultfile",
         "--ref-source",
         "file",
         "--ref-id",
-        "/providers/googlechat/serviceAccount",
+        "/gateway/auth/token",
       ]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
       const written = firstWrittenConfig();
-      expect(written.channels?.googlechat?.serviceAccountRef).toEqual({
+      expect(written.gateway?.auth?.token).toEqual({
         source: "file",
         provider: "vaultfile",
-        id: "/providers/googlechat/serviceAccount",
+        id: "/gateway/auth/token",
       });
-      expect(written.channels?.googlechat?.serviceAccount).toBeUndefined();
     });
 
     it("rejects mixing ref-builder and provider-builder flags", async () => {
@@ -2280,9 +2245,9 @@ describe("config cli", () => {
       fs.writeFileSync(
         pathname,
         JSON.stringify([
-          { path: "agents.defaults.memorySearch.enabled", value: true },
-          { path: "agents.defaults.memorySearch.provider", value: "gemini" },
-          { path: "agents.defaults.memorySearch.sources", value: ["memory"] },
+          { path: "memory.search.enabled", value: true },
+          { path: "memory.search.provider", value: "gemini" },
+          { path: "memory.search.sources", value: ["memory"] },
         ]),
         "utf8",
       );
@@ -2296,7 +2261,7 @@ describe("config cli", () => {
       const written = firstWrittenConfig();
       expect(written.agents?.defaults?.models).toEqual(resolved.agents?.defaults?.models);
       expect(written.agents?.defaults?.model).toEqual(resolved.agents?.defaults?.model);
-      expect(written.agents?.defaults?.memorySearch).toEqual({
+      expect(written.memory?.search).toEqual({
         enabled: true,
         provider: "gemini",
         sources: ["memory"],
@@ -2589,7 +2554,7 @@ describe("config cli", () => {
         fs.rmSync(pathname, { force: true });
       }
 
-      expectErrorIncludes("File exceeds 8388608 bytes");
+      expectErrorIncludes("--file exceeds the 8 MiB supported maximum (8388608 bytes)");
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
     });
 
@@ -3079,7 +3044,6 @@ describe("config cli", () => {
             runner: {
               source: "exec",
               command: "/usr/bin/env",
-              allowInsecurePath: true,
             },
           },
         },
@@ -3496,7 +3460,7 @@ describe("config cli", () => {
   describe("config unset - issue #6070", () => {
     it("preserves existing config keys when unsetting a value", async () => {
       const resolved: OpenClawConfig = {
-        agents: { list: [{ id: "main" }] },
+        agents: { entries: { main: {} } },
         gateway: { port: 18789 },
         tools: {
           profile: "coding",
@@ -3574,7 +3538,7 @@ describe("config cli", () => {
 
     it("dry-runs an unset without writing the config file", async () => {
       const resolved: OpenClawConfig = {
-        agents: { list: [{ id: "main" }] },
+        agents: { entries: { main: {} } },
         gateway: { port: 18789 },
         tools: {
           profile: "coding",
@@ -3674,7 +3638,7 @@ describe("config cli", () => {
 
     it("prints JSON for config unset dry-run", async () => {
       const resolved: OpenClawConfig = {
-        agents: { list: [{ id: "main" }] },
+        agents: { entries: { main: {} } },
         gateway: { port: 18789 },
         tools: {
           profile: "coding",
@@ -3953,7 +3917,7 @@ describe("config cli", () => {
       expectLogExcludes("Change will apply without restarting the gateway.");
     });
 
-    it("keeps the restart hint for hot-path edits when reload mode is restart", async () => {
+    it("normalizes legacy restart mode to hot apply semantics", async () => {
       const resolved: OpenClawConfig = {
         agents: {
           list: [{ id: "main", model: { primary: "openai/gpt-5.4" } }],
@@ -3973,8 +3937,8 @@ describe("config cli", () => {
       ]);
 
       expectLogIncludes("Updated agents.list.0.model.primary");
-      expectLogIncludes("Restart the gateway to apply.");
-      expectLogExcludes("Change will apply without restarting the gateway.");
+      expectLogIncludes("Change will apply without restarting the gateway.");
+      expectLogExcludes("Restart the gateway to apply.");
     });
 
     it("prints a hot-reload hint when removing legacy per-agent agentRuntime", async () => {
@@ -4020,34 +3984,6 @@ describe("config cli", () => {
       expectLogExcludes("Restart the gateway to apply.");
     });
 
-    it("keeps the restart hint for broad models writes that change pricing bootstrap", async () => {
-      const resolved: OpenClawConfig = {
-        models: {
-          pricing: {
-            enabled: false,
-          },
-          providers: {
-            openai: {
-              agentRuntime: { id: "node" },
-            },
-          },
-        },
-      } as unknown as OpenClawConfig;
-      setSnapshot(resolved, resolved);
-
-      await runConfigCommand([
-        "config",
-        "set",
-        "models",
-        '{"pricing":{"enabled":true},"providers":{"openai":{"agentRuntime":{"id":"node"}}}}',
-        "--strict-json",
-        "--replace",
-      ]);
-
-      expectLogIncludes("Updated models. Restart the gateway to apply.");
-      expectLogExcludes("Change will apply without restarting the gateway.");
-    });
-
     it("keeps the restart hint for broad plugins writes that change load paths", async () => {
       const resolved: OpenClawConfig = {
         plugins: {
@@ -4071,27 +4007,6 @@ describe("config cli", () => {
       ]);
 
       expectLogIncludes("Updated plugins. Restart the gateway to apply.");
-      expectLogExcludes("Change will apply without restarting the gateway.");
-    });
-
-    it("keeps the restart hint for broad models unsets that remove pricing bootstrap", async () => {
-      const resolved: OpenClawConfig = {
-        models: {
-          pricing: {
-            enabled: false,
-          },
-          providers: {
-            openai: {
-              agentRuntime: { id: "node" },
-            },
-          },
-        },
-      } as unknown as OpenClawConfig;
-      setSnapshot(resolved, resolved);
-
-      await runConfigCommand(["config", "unset", "models"]);
-
-      expectLogIncludes("Removed models. Restart the gateway to apply.");
       expectLogExcludes("Change will apply without restarting the gateway.");
     });
 

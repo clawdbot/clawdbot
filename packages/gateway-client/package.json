@@ -13,6 +13,7 @@
     "url": "https://github.com/openclaw/openclaw/issues"
   },
   "license": "MIT",
+  "author": "OpenClaw Foundation (https://openclaw.org)",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/openclaw/openclaw.git",
@@ -20,7 +21,6 @@
   },
   "files": [
     "dist",
-    "npm-shrinkwrap.json",
     "LICENSE",
     "README.md",
     "CHANGELOG.md"
@@ -57,7 +57,7 @@
   "dependencies": {
     "@openclaw/gateway-protocol": "workspace:*",
     "ipaddr.js": "2.4.0",
-    "ws": "8.21.0"
+    "ws": "8.21.1"
   },
   "engines": {
     "node": ">=22.19.0"

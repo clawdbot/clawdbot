@@ -137,14 +137,12 @@ Use `https://www.vydra.ai/api/v1` as the base URL. Vydra's apex host (`https://v
 
     ```json5
     {
-      messages: {
-        tts: {
-          provider: "vydra",
-          providers: {
-            vydra: {
-              apiKey: "${VYDRA_API_KEY}",
-              voiceId: "21m00Tcm4TlvDq8ikWAM",
-            },
+      tts: {
+        provider: "vydra",
+        providers: {
+          vydra: {
+            apiKey: "${VYDRA_API_KEY}",
+            voiceId: "21m00Tcm4TlvDq8ikWAM",
           },
         },
       },

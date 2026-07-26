@@ -160,6 +160,26 @@ describe("loadPreparedModelCatalogSnapshotForBrowse", () => {
     expect(onTimeout).toHaveBeenCalledExactlyOnceWith(5);
   });
 
+  it("can preserve the timeout fallback while escalating to full discovery", async () => {
+    vi.useFakeTimers();
+    const onTimeout = vi.fn();
+    const loadCatalog = vi.fn(() => new Promise<ModelCatalogSnapshot>(() => {}));
+
+    const resultPromise = loadPreparedModelCatalogSnapshotForBrowse({
+      cfg: config({ providerWildcard: true }),
+      view: "configured",
+      loadCatalog,
+      timeoutFullDiscovery: true,
+      timeoutMs: 5,
+      onTimeout,
+    });
+
+    await vi.advanceTimersByTimeAsync(5);
+    await expect(resultPromise).resolves.toEqual({ entries: [], routeVariants: [] });
+    expect(loadCatalog).toHaveBeenCalledExactlyOnceWith({ readOnly: false });
+    expect(onTimeout).toHaveBeenCalledExactlyOnceWith(5);
+  });
+
   it("uses the default timeout when timeoutMs is non-finite", async () => {
     const onTimeout = vi.fn();
     const setTimeout = vi.spyOn(globalThis, "setTimeout");

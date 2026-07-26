@@ -1,3 +1,5 @@
+export type ConfigUiPresentation = "phone-number";
+
 /** UI metadata attached to config schema paths for forms, docs, and redaction policy. */
 export type ConfigUiHint = {
   label?: string;
@@ -8,6 +10,7 @@ export type ConfigUiHint = {
   advanced?: boolean;
   sensitive?: boolean;
   placeholder?: string;
+  presentation?: ConfigUiPresentation;
   itemTemplate?: unknown;
 };
 

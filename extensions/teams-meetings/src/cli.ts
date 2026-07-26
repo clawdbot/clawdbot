@@ -158,10 +158,8 @@ export function registerTeamsMeetingsCli(params: {
     ],
   ] as const) {
     const command = root.command(`${name} <url>`).description(description);
-    (name === "test-speech" ? addProbeOptions(command) : addJoinOptions(command)).action(
-      async (url: string, options: JoinOptions) => {
-        await call({ config: params.config, method, payload: joinPayload(url, options) });
-      },
-    );
+    addProbeOptions(command).action(async (url: string, options: JoinOptions) => {
+      await call({ config: params.config, method, payload: joinPayload(url, options) });
+    });
   }
 }

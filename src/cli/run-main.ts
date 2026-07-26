@@ -35,7 +35,7 @@ import {
   resolveGatewayRunPreBootstrapOptions,
 } from "./gateway-run-argv.js";
 import { hasJsonOutputFlag, withConsoleLogsRoutedToStderrForJson } from "./json-output-mode.js";
-import { flushExitAfterOneShotOutput, requestExitAfterOneShotOutput } from "./one-shot-exit.js";
+import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import { tryOutputPrecomputedCommandHelp } from "./precomputed-help.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
 import { formatCliCommandSuggestions } from "./program/command-suggestions.js";
@@ -677,6 +677,10 @@ function shouldLoadCliDotEnv(env: NodeJS.ProcessEnv = process.env): boolean {
   return existsSync(path.join(resolveStateDir(env), ".env"));
 }
 
+function isAgentExecInvocation(commandPath: string[]): boolean {
+  return commandPath[0] === "agent" && commandPath[1] === "exec";
+}
+
 function isCommanderParseExit(error: unknown): error is { exitCode: number } {
   if (!error || typeof error !== "object") {
     return false;
@@ -999,7 +1003,11 @@ export async function runCli(argv: string[] = process.argv) {
   // Enforce the minimum supported runtime before gateway selection can read or recover config.
   assertSupportedRuntime();
 
-  if (!isHelpOrVersionInvocation && (isGatewayRunInvocation || shouldLoadCliDotEnv())) {
+  if (
+    !isHelpOrVersionInvocation &&
+    !isAgentExecInvocation(normalizedInvocation.commandPath) &&
+    (isGatewayRunInvocation || shouldLoadCliDotEnv())
+  ) {
     await startupTrace.measure("dotenv", async () => {
       if (isRemoteAgentDispatchInvocation(normalizedArgv, normalizedInvocation.primary)) {
         const { loadGatewayDispatchCliDotEnv } = await import("./gateway-dispatch-dotenv.js");
@@ -1116,7 +1124,6 @@ export async function runCli(argv: string[] = process.argv) {
     });
   }
 
-  let flushedHelpExit = false;
   try {
     if (shouldUseRootHelpFastPath(normalizedArgv)) {
       const { loadRootHelpRenderOptionsForConfigSensitivePlugins } =
@@ -1420,10 +1427,9 @@ export async function runCli(argv: string[] = process.argv) {
       }
       if (completedHelpOrVersion) {
         // Lazy command-group registrars can import native/runtime resources solely to
-        // render complete help. Exit after Commander has rendered and streams flush.
+        // render complete help. Request an exit now; the top-level finally flushes it
+        // after shared async teardown completes.
         requestExitAfterOneShotOutput();
-        flushExitAfterOneShotOutput();
-        flushedHelpExit = true;
       }
     } finally {
       stopStartupProgress();
@@ -1434,9 +1440,6 @@ export async function runCli(argv: string[] = process.argv) {
     await disposeCliAgentHarnesses();
     await closeCliMemoryManagers();
     pauseNonTtyStdinForCliExit();
-    if (!flushedHelpExit) {
-      flushExitAfterOneShotOutput();
-    }
   }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,0 +1,87 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <string name="app_name" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw"</string>
+    <string name="chat" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"채팅"</string>
+    <string name="session" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"세션"</string>
+    <string name="model" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"모델"</string>
+    <string name="previous_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"이전 %1$s"</string>
+    <string name="next_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"다음 %1$s"</string>
+    <string name="controls" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"제어"</string>
+    <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"말하기"</string>
+    <string name="real_time_audio_failed" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Watch 오디오 실패"</string>
+    <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"받아쓰기"</string>
+    <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"라이브"</string>
+    <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"스레드"</string>
+    <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← 스와이프 →"</string>
+    <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"길게 누르기"</string>
+    <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"탭"</string>
+    <string name="double_tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"두 번 탭"</string>
+    <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"대화를 보려면 Live를 시작하세요."</string>
+    <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"새로 만들기"</string>
+    <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"입력"</string>
+    <string name="message" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"메시지"</string>
+    <string name="message_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"에이전트에게 메시지 보내기"</string>
+    <string name="send" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"보내기"</string>
+    <string name="speak_to_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"에이전트에게 말하기"</string>
+    <string name="stop_speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"말하기 중지"</string>
+    <string name="speak_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"최근 답변 읽기"</string>
+    <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"말하는 중"</string>
+    <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"듣는 중"</string>
+    <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"연결 중"</string>
+    <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"생각하는 중"</string>
+    <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"입력 중"</string>
+    <string name="sending" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"보내는 중"</string>
+    <string name="agent_working" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"에이전트 작업 중"</string>
+    <string name="error" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"오류"</string>
+    <string name="ready" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"준비됨"</string>
+    <string name="you" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"나"</string>
+    <string name="agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"에이전트"</string>
+    <string name="system" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"시스템"</string>
+    <string name="start_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"대화 시작"</string>
+    <string name="start_conversation_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"시계에서 말하거나 입력하세요. 페어링된 휴대전화가 인증된 OpenClaw 세션을 통해 메시지를 전송합니다."</string>
+    <string name="current_session" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"현재 세션"</string>
+    <string name="appearance" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"화면 모드"</string>
+    <string name="theme_dark" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"다크"</string>
+    <string name="theme_light" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"라이트"</string>
+    <string name="auto_speak" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"답변 자동 음성 재생"</string>
+    <string name="reply_alerts" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"답변 알림"</string>
+    <string name="enable_alerts" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"알림 사용"</string>
+    <string name="abort_run" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"실행 중단"</string>
+    <string name="open_notification_settings" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"알림 설정 열기"</string>
+    <string name="on" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"켜짐"</string>
+    <string name="off" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"꺼짐"</string>
+    <string name="connection" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"연결"</string>
+    <string name="gateway" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway"</string>
+    <string name="security_boundary" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"보안"</string>
+    <string name="phone_controlled" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"휴대전화에서 제어"</string>
+    <string name="phone_controlled_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway 자격 증명과 ID는 페어링된 휴대전화에 유지됩니다. 시계는 Wear Data Layer만 사용합니다."</string>
+    <string name="checking_phone" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"휴대전화 확인 중"</string>
+    <string name="reading_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"에이전트, 세션 및 채팅을 불러오는 중"</string>
+    <string name="phone_ready" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"휴대전화 준비 완료"</string>
+    <string name="gateway_connected" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway 연결됨"</string>
+    <string name="gateway_offline" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway 오프라인"</string>
+    <string name="gateway_offline_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"페어링된 휴대전화의 OpenClaw에서 Gateway를 다시 연결하세요."</string>
+    <string name="open_phone_app" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"휴대전화에서 OpenClaw 열기"</string>
+    <string name="phone_not_ready_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"시계 자체에서는 Gateway를 시작하거나 인증하지 않습니다."</string>
+    <string name="phone_unavailable" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"휴대전화에 연결할 수 없음"</string>
+    <string name="phone_unavailable_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"페어링된 휴대전화를 가까이 두고 호환되는 OpenClaw 앱을 설치하세요."</string>
+    <string name="selection_not_found" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"선택 항목을 더 이상 사용할 수 없음"</string>
+    <string name="message_not_sent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"작업이 수락되지 않음"</string>
+    <string name="something_went_wrong" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"문제가 발생했습니다"</string>
+    <string name="refresh_and_try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"목록을 새로 고친 후 다시 시도하세요."</string>
+    <string name="try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"시계에서 다시 시도하세요."</string>
+    <string name="update_required" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"업데이트 필요"</string>
+    <string name="update_required_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"휴대전화와 시계 모두에서 OpenClaw를 업데이트하세요."</string>
+    <string name="refresh" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"새로 고침"</string>
+    <string name="retry" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"다시 시도"</string>
+    <string name="notification_channel_name" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw 답변"</string>
+    <string name="notification_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"답장"</string>
+    <string name="notification_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw 답장"</string>
+    <string name="notification_reply_failed_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"답장을 보내지 못했습니다"</string>
+    <string name="notification_reply_failed_text" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"휴대전화를 사용할 수 없습니다. 다시 시도하려면 답장을 탭하세요."</string>
+    <string name="notification_phone_changed_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"답장하려면 OpenClaw 열기"</string>
+    <string name="notification_phone_changed_text" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"기본 휴대전화가 변경되었습니다. 답장하기 전에 앱을 열어 세션을 다시 불러오세요."</string>
+    <string name="tile_label" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw"</string>
+    <string name="tile_description" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"세션을 열고 페어링된 휴대전화를 통해 답장하세요"</string>
+    <string name="tile_open" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"열기"</string>
+    <string name="tile_phone_proxy" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"휴대전화 프록시"</string>
+</resources>

@@ -3,9 +3,9 @@ import { describe, expect, it } from "vitest";
 import { GoogleChatConfigSchema } from "../runtime-api.js";
 
 describe("googlechat config schema", () => {
-  it("accepts serviceAccount refs", () => {
+  it("accepts inline serviceAccount refs", () => {
     const result = GoogleChatConfigSchema.safeParse({
-      serviceAccountRef: {
+      serviceAccount: {
         source: "file",
         provider: "filemain",
         id: "/channels/googlechat/serviceAccount",
@@ -35,7 +35,7 @@ describe("googlechat config schema", () => {
       dmPolicy: "allowlist",
       allowFrom: ["users/1234567890"],
       markdown: { tables: "bullets" },
-      heartbeat: { showOk: false },
+      heartbeatVisibility: { showOk: false },
       contextVisibility: "allowlist_quote",
     });
 

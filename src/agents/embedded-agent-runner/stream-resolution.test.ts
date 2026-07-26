@@ -1,6 +1,7 @@
 import type { LlmRuntime } from "@openclaw/ai";
 import { defaultLlmRuntime, getApiProvider } from "@openclaw/ai/internal/runtime";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
+import * as providerTransportStream from "@openclaw/ai/transports";
 // Stream resolution tests cover how embedded runs choose provider, boundary,
 // native Codex, or custom stream functions and pass auth/cache/signal options.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
@@ -8,7 +9,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import { streamSimple } from "../../llm/stream.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
-import * as providerTransportStream from "../provider-transport-stream.js";
 import {
   describeEmbeddedAgentStreamStrategy as describeEmbeddedAgentStreamStrategyImpl,
   resolveEmbeddedAgentApiKey,
@@ -32,7 +32,7 @@ vi.mock("../../llm/stream.js", async (importOriginal) => {
 // real transport stream; per-test overrideBoundaryAwareStreamFnOnce() injects
 // a probe stream when a regression test needs to inspect the wrapped
 // transport's options.
-vi.mock("../provider-transport-stream.js", async (importOriginal) => {
+vi.mock("@openclaw/ai/transports", async (importOriginal) => {
   const actual = await importOriginal<typeof providerTransportStream>();
   return {
     ...actual,

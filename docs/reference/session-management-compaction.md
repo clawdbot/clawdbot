@@ -198,7 +198,7 @@ Compaction summarizes older conversation into a persisted `compaction` entry in 
 
 Embedded OpenClaw compaction inherits the session thinking level by default. Set `agents.defaults.compaction.thinkingLevel` to use a separate level for summary calls; the runtime clamps it to each concrete compaction model or fallback. Native Codex app-server compaction owns its compact request and cannot accept a per-compaction thinking override, so OpenClaw warns and leaves that setting to Codex.
 
-AGENTS.md section reinjection after compaction is opt-in via `agents.defaults.compaction.postCompactionSections`; when unset or `[]`, OpenClaw does not append AGENTS.md excerpts on top of the compaction summary.
+AGENTS.md section reinjection after compaction remains opt-in via `agents.defaults.compaction.postCompactionSections`. Plugins can add other prompt context through `before_prompt_build`.
 
 ### Chunk boundaries and tool pairing
 
@@ -282,12 +282,10 @@ Config (`agents.defaults.compaction.memoryFlush`), full reference at [/gateway/c
 | `model`                     | unset            | exact provider/model override for the flush turn only, for example `ollama/qwen3:8b`                                                   |
 | `softThresholdTokens`       | `4000`           | gap below the compaction threshold that triggers a flush                                                                               |
 | `forceFlushTranscriptBytes` | unset (disabled) | force a flush once the transcript file reaches this byte size (or string like `"2mb"`), even if token counters are stale; `0` disables |
-| `prompt`                    | built-in         | user message for the flush turn                                                                                                        |
-| `systemPrompt`              | built-in         | extra system prompt appended for the flush turn                                                                                        |
 
 Notes:
 
-- The default prompt/system prompt include a `NO_REPLY` hint to suppress delivery.
+- The built-in prompt and system prompt include a `NO_REPLY` hint to suppress delivery.
 - When `model` is set, the flush turn uses that model without inheriting the active session's fallback chain, so local-only housekeeping does not silently fall back to a paid conversation model on failure.
 - The flush runs once per compaction cycle (tracked in the session row).
 - The flush runs only for embedded OpenClaw sessions; CLI backends and heartbeat turns skip it.

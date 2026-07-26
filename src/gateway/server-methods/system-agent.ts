@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 // OpenClaw gateway methods host the setup/repair conversation for clients.
 import {
   buildSystemAgentSessionInvalidatedErrorDetails,
@@ -18,6 +17,7 @@ import {
   SYSTEM_AGENT_APPROVAL_TIMEOUT_MS,
   type SystemAgentApprovalRequestPayload,
 } from "../../infra/system-agent-approvals.js";
+import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { enqueueCommandInLane, setCommandLaneConcurrency } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime } from "../../runtime.js";

@@ -54,6 +54,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Computer",
       detailKeys: ["action", "coordinate", "text", "node", "nodeId", "screenIndex"],
     },
+    mobile_ui: {
+      emoji: "📱",
+      title: "Mobile UI",
+      detailKeys: ["action", "mobileAction", "snapshotId", "node", "nodeId"],
+    },
     screen: {
       emoji: "🖥️",
       title: "Screen",

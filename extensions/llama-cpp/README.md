@@ -31,9 +31,9 @@ for custom GGUF model configuration and hardware guidance.
 
 ## Configure embeddings
 
-Set `agents.defaults.memorySearch.provider` to `local`. By default, the plugin
+Set `memory.search.provider` to `local`. By default, the plugin
 downloads and uses the EmbeddingGemma GGUF model. Configure
-`agents.defaults.memorySearch.local.modelPath` to use another local path, Hugging
+`memory.search.local.modelPath` to use another local path, Hugging
 Face model URI, or HTTPS model URL.
 
 ## Package

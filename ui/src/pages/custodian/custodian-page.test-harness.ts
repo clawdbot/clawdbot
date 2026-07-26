@@ -34,8 +34,9 @@ export function createContext(
   const client = { request } as unknown as GatewayBrowserClient;
   let snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected: true,
-    reconnecting: false,
+    phase: "connected",
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: {
       type: "hello-ok" as const,
       protocol: 1,
@@ -71,6 +72,11 @@ export function createContext(
   } as unknown as ApplicationGateway;
   const context = {
     gateway,
+    agents: {
+      state: { agentsList: { mainKey: "main" } },
+      refreshList: vi.fn(),
+    },
+    agentSelection: { state: { selectedId: "main" } },
     basePath: "",
     navigate: vi.fn(),
   } as unknown as ApplicationContext;

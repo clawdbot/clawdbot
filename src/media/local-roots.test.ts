@@ -2,13 +2,32 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
+import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnv } from "../test-utils/env.js";
 import {
   appendLocalMediaParentRoots,
-  getAgentScopedMediaLocalRoots,
-  getAgentScopedMediaLocalRootsForSources,
+  getAgentScopedMediaLocalRoots as getAgentScopedMediaLocalRootsBase,
+  getAgentScopedMediaLocalRootsForSources as getAgentScopedMediaLocalRootsForSourcesBase,
   getDefaultMediaLocalRoots,
 } from "./local-roots.js";
+
+function loadedConfig(config: OpenClawConfig): OpenClawConfig {
+  return migratePersistedImplicitMainRoster(config).config as OpenClawConfig;
+}
+
+function getAgentScopedMediaLocalRoots(config: OpenClawConfig, agentId: string) {
+  return getAgentScopedMediaLocalRootsBase(loadedConfig(config), agentId);
+}
+
+function getAgentScopedMediaLocalRootsForSources(
+  params: Parameters<typeof getAgentScopedMediaLocalRootsForSourcesBase>[0],
+) {
+  return getAgentScopedMediaLocalRootsForSourcesBase({
+    ...params,
+    cfg: loadedConfig(params.cfg),
+  });
+}
 
 function normalizeHostPath(value: string): string {
   return path.normalize(path.resolve(value));

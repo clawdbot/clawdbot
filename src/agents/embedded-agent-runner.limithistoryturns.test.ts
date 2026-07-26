@@ -152,6 +152,23 @@ describe("limitHistoryTurns", () => {
     expect(expectDefined(limited[0], "limited[0] test invariant").role).toBe("branchSummary");
   });
 
+  it("preserves the reset kept-tail prelude while limiting post-boundary turns", () => {
+    const prelude = makeMessages(["user", "assistant"]);
+    for (const message of prelude) {
+      Object.defineProperty(message, Symbol.for("openclaw.sessionHistoryPrelude"), {
+        enumerable: false,
+        value: true,
+      });
+    }
+    const messages = [...prelude, ...makeMessages(["user", "assistant", "user", "assistant"])];
+
+    const limited = limitHistoryTurns(messages, 1);
+
+    expect(limited).toHaveLength(4);
+    expect(firstText(expectDefined(limited[0], "limited[0] test invariant"))).toBe("message 0");
+    expect(firstText(expectDefined(limited[2], "limited[2] test invariant"))).toBe("message 2");
+  });
+
   it("returns all when only non-conversation messages exist", () => {
     const compactionSummary: AgentMessage = {
       role: "compactionSummary",

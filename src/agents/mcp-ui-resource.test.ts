@@ -1,17 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { updateMcpAppModelContext } from "./mcp-app-model-context.js";
-import {
-  buildMcpAppContentSecurityPolicy,
-  buildMcpAppSandboxPath,
-  buildMcpAppSandboxProxyHtml,
-  decodeMcpAppSandboxCsp,
-  resolveMcpAppSandboxPort,
-} from "./mcp-app-sandbox.js";
+import { buildMcpAppSandboxPath, resolveMcpAppSandboxPort } from "./mcp-app-sandbox.js";
 import {
   acquireMcpAppViewRequest,
   fetchMcpAppView,
   getMcpAppViewLease,
+  getMcpAppViewLeaseForSession,
 } from "./mcp-ui-resource.js";
 import { testing as mcpUiResourceTesting } from "./mcp-ui-resource.test-support.js";
 
@@ -21,6 +16,7 @@ const MCP_APP_RESOURCE_MAX_BYTES = 2 * 1024 * 1024;
 function runtime(readResource: SessionMcpRuntime["readResource"]): SessionMcpRuntime {
   return {
     sessionId: "session-1",
+    sessionKey: "agent:main:main",
     workspaceDir: "/tmp",
     configFingerprint: "fingerprint",
     createdAt: 0,
@@ -86,6 +82,11 @@ describe("MCP App UI resources", () => {
         runtime(async () => ({ contents: [] })),
       ),
     ).toBeUndefined();
+    expect(getMcpAppViewLeaseForSession(result?.viewId ?? "", "agent:main:main")).toMatchObject({
+      html: "<html>demo</html>",
+      runtime: sessionRuntime,
+    });
+    expect(getMcpAppViewLeaseForSession(result?.viewId ?? "", "agent:other:main")).toBeUndefined();
   });
 
   it("keeps valid Apps when optional listing metadata fails", async () => {
@@ -161,7 +162,7 @@ describe("MCP App UI resources", () => {
     releases.slice(1).forEach((entry) => entry());
   });
 
-  it("injects a restrictive CSP and drops invalid metadata origins", async () => {
+  it("normalizes CSP metadata before retaining the view", async () => {
     const sessionRuntime = runtime(async () => ({
       contents: [
         {
@@ -188,50 +189,12 @@ describe("MCP App UI resources", () => {
       toolResult: { content: [] },
     });
     const view = getMcpAppViewLease(result?.viewId ?? "", sessionRuntime);
-    const policy = buildMcpAppContentSecurityPolicy(view?.csp);
-
-    expect(policy).toContain("connect-src https://api.example.com");
-    expect(policy).toContain("script-src 'self' 'unsafe-inline' https://cdn.example.com");
-    expect(policy).toContain("font-src 'self' https://cdn.example.com");
-    expect(policy).not.toContain("worker-src");
-    expect(policy).not.toContain("script-src 'self' 'unsafe-inline' blob:");
-    expect(policy).toContain("base-uri 'self'");
-    expect(policy).not.toContain("javascript:alert");
+    expect(view?.csp).toEqual({
+      connectDomains: ["https://api.example.com"],
+      resourceDomains: ["https://cdn.example.com"],
+    });
     expect(view?.html.startsWith("<!doctype html>")).toBe(true);
-    expect(policy).toContain("frame-ancestors http: https:");
-    const sandboxPath = buildMcpAppSandboxPath(view?.csp);
-    const encodedCsp = new URL(sandboxPath, "https://gateway.example").searchParams.get("csp");
-    expect(decodeMcpAppSandboxCsp(encodedCsp)).toStrictEqual(view?.csp);
-  });
-
-  it.each(["bm90LWpzb24", Buffer.from("{not json}", "utf8").toString("base64url")])(
-    "rejects malformed encoded CSP metadata",
-    (value) => {
-      expect(() => decodeMcpAppSandboxCsp(value)).toThrow();
-    },
-  );
-
-  it("rejects CSP metadata with invalid UTF-8 instead of silently narrowing it", () => {
-    const value = Buffer.concat([
-      Buffer.from('{"connectDomains":["https://api.example.com","https://cdn-'),
-      Buffer.from([0xff]),
-      Buffer.from('.example.com"]}'),
-    ]).toString("base64url");
-    // A forgiving decode would drop the corrupted domain and accept the rest of
-    // the policy, violating the malformed-input-must-throw contract.
-    expect(() => decodeMcpAppSandboxCsp(value)).toThrow();
-  });
-
-  it("builds proxy HTML", () => {
-    const proxyHtml = buildMcpAppSandboxProxyHtml();
-    expect(proxyHtml).toContain('inner.setAttribute("sandbox", "allow-scripts allow-forms")');
-    expect(proxyHtml).toContain("inner.srcdoc = params.html");
-    expect(proxyHtml).not.toContain("doc.write");
-    expect(proxyHtml).not.toContain("params.sandbox");
-    expect(proxyHtml).not.toContain("params.permissions");
-    expect(proxyHtml).toContain("document.referrer");
-    expect(proxyHtml).not.toContain("hostOrigin === null");
-    expect(proxyHtml).toContain('startsWith("ui/notifications/sandbox-")');
+    expect(buildMcpAppSandboxPath(view?.csp)).toContain("?csp=");
   });
 
   it("deletes sensitive view data when the lease expires without later activity", async () => {
@@ -276,7 +239,7 @@ describe("MCP App UI resources", () => {
     );
     const path = buildMcpAppSandboxPath({ connectDomains: shortDomains });
     const encoded = new URL(path, "https://gateway.example").searchParams.get("csp");
-    expect(decodeMcpAppSandboxCsp(encoded)?.connectDomains).toStrictEqual(shortDomains);
+    expect(encoded).toBeTruthy();
 
     const domains = Array.from(
       { length: 64 },
@@ -290,18 +253,6 @@ describe("MCP App UI resources", () => {
         baseUriDomains: domains,
       }),
     ).toThrow("MCP App CSP metadata exceeds safe HTTP limits");
-  });
-
-  it("uses the stable restrictive CSP when metadata is omitted", () => {
-    const policy = buildMcpAppContentSecurityPolicy();
-    expect(policy).toContain("default-src 'none'");
-    expect(policy).toContain("script-src 'self' 'unsafe-inline'");
-    expect(policy).toContain("style-src 'self' 'unsafe-inline'");
-    expect(policy).toContain("img-src 'self' data:");
-    expect(policy).toContain("media-src 'self' data:");
-    expect(policy).toContain("connect-src 'none'");
-    expect(policy).not.toMatch(/\b(?:blob|font|worker)-src\b/u);
-    expect(policy).not.toContain("blob:");
   });
 
   it("derives a distinct listener port without wrapping", () => {

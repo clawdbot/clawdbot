@@ -9,8 +9,8 @@ extension RootTabs {
 
     static let sidebarSplitIdealWidth: CGFloat = 316
     static let sidebarSplitMaximumWidth: CGFloat = 340
-    // Mirrors the web mobile drawer cap (min(86vw, 320px)).
-    static let sidebarDrawerMaximumWidth: CGFloat = 320
+    // Keep the web drawer's 86% reveal while using more of current iPhone widths.
+    static let sidebarDrawerMaximumWidth: CGFloat = 340
     static let sidebarShowButtonAccessibilityIdentifier = "RootTabs.Sidebar.Show"
     static let sidebarHideButtonAccessibilityIdentifier = "RootTabs.Sidebar.Hide"
 

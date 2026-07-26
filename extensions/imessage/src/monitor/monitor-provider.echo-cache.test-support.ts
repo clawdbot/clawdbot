@@ -153,6 +153,48 @@ describe("iMessage sent-message echo cache", () => {
     expect(cache.has(scope, { messageId: "id-only" })).toBe(true);
   });
 
+  it("does not match persisted media when both message ids differ", () => {
+    const scope = "acct:imessage:+1555";
+    const media = { contentType: "image/png", kind: "image" as const };
+    rememberPersistedIMessageEcho({ scope, media, messageId: "guid-agent-image" });
+
+    expect(hasPersistedIMessageEcho({ scope, media, messageId: "guid-user-image" })).toBe(false);
+    expect(
+      hasPersistedIMessageEcho({
+        scope,
+        media: { contentType: "image/jpeg", kind: "image" },
+      }),
+    ).toBe(true);
+  });
+
+  it("matches persisted media through the primary sent-message cache", () => {
+    const scope = "acct:imessage:+1555";
+    const media = { contentType: "image/png", kind: "image" as const };
+    rememberPersistedIMessageEcho({ scope, media, pending: true });
+
+    const cache = createSentMessageCache();
+    expect(cache.has(scope, { media })).toBe(false);
+    expect(cache.has(scope, { media }, { includePendingText: true })).toBe(true);
+  });
+
+  it("does not use id-backed in-memory media after a different message id", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-25T00:00:00Z"));
+    const scope = "acct:imessage:+1555";
+    const media = { contentType: "image/png", kind: "image" as const };
+    const cache = createSentMessageCache();
+    cache.remember(scope, { media, messageId: "guid-agent-image" });
+
+    expect(
+      cache.has(scope, { media, messageId: "guid-user-image" }, { skipIdShortCircuit: true }),
+    ).toBe(false);
+    vi.advanceTimersByTime(1);
+    cache.remember(scope, { media });
+    expect(
+      cache.has(scope, { media, messageId: "guid-user-image" }, { skipIdShortCircuit: true }),
+    ).toBe(true);
+  });
+
   it("keeps short-lived pending persisted echoes out of generic text matching", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-02-25T00:00:00Z"));

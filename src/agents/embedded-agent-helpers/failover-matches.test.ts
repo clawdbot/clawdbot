@@ -5,6 +5,7 @@ import {
   isAuthErrorMessage,
   isBillingErrorMessage,
   isOverloadedErrorMessage,
+  isProviderCompletedErrorFinishReasonMessage,
   isRateLimitErrorMessage,
   isServerErrorMessage,
   isTimeoutErrorMessage,
@@ -177,6 +178,26 @@ describe("server error status classification", () => {
 
   it("does not classify prefixed plain internal server error status prose", () => {
     expect(isServerErrorMessage("Proxy notice: Status: Internal Server Error")).toBe(false);
+  });
+});
+
+describe("provider-completed finish_reason error (#109218)", () => {
+  it("matches bare finish/stop error reasons as provider-completed failures", () => {
+    expect(isProviderCompletedErrorFinishReasonMessage("Provider finish_reason: error")).toBe(true);
+    expect(isTimeoutErrorMessage("Provider finish_reason: error")).toBe(false);
+    expect(classifyFailoverReason("Provider finish_reason: error")).toBe("server_error");
+  });
+
+  it("keeps abort/network/malformed finish reasons in the timeout lane", () => {
+    for (const sample of [
+      "Provider finish_reason: abort",
+      "Provider finish_reason: network_error",
+      "Provider finish_reason: malformed_response",
+    ]) {
+      expect(isProviderCompletedErrorFinishReasonMessage(sample)).toBe(false);
+      expect(isTimeoutErrorMessage(sample)).toBe(true);
+      expect(classifyFailoverReason(sample)).toBe("timeout");
+    }
   });
 });
 

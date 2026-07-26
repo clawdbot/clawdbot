@@ -1,7 +1,4 @@
 // Telegram tests cover thread bindings plugin behavior.
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -10,6 +7,7 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
+import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setTelegramRuntime } from "./runtime.js";
 import { clearTelegramRuntimeForTest } from "./runtime.test-support.js";
@@ -73,8 +71,7 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 describe("telegram thread bindings", () => {
-  const originalStateDir = process.env.OPENCLAW_STATE_DIR;
-  let stateDirOverride: string | undefined;
+  let openClawState: OpenClawTestState;
   let threadBindingStore: PluginStateSyncKeyedStore<ThreadBindingStoreEntry>;
 
   function createThreadBindingStore(): PluginStateSyncKeyedStore<ThreadBindingStoreEntry> {
@@ -102,6 +99,10 @@ describe("telegram thread bindings", () => {
   }
 
   beforeEach(async () => {
+    openClawState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-telegram-bindings-",
+    });
     resetPluginStateStoreForTests({ closeDatabase: false });
     installThreadBindingStore(createThreadBindingStore());
     threadBindingStore.clear();
@@ -118,15 +119,7 @@ describe("telegram thread bindings", () => {
     await testing.resetTelegramThreadBindingsForTests();
     clearTelegramRuntimeForTest();
     resetPluginStateStoreForTests();
-    if (stateDirOverride) {
-      fs.rmSync(stateDirOverride, { recursive: true, force: true });
-      stateDirOverride = undefined;
-    }
-    if (originalStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = originalStateDir;
-    }
+    await openClawState.cleanup();
   });
 
   it("registers a telegram binding adapter and binds current conversations", async () => {
@@ -304,8 +297,6 @@ describe("telegram thread bindings", () => {
   });
 
   it("does not persist lifecycle updates when manager persistence is disabled", async () => {
-    stateDirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-bindings-"));
-    process.env.OPENCLAW_STATE_DIR = stateDirOverride;
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-06T10:00:00.000Z"));
 
@@ -342,9 +333,6 @@ describe("telegram thread bindings", () => {
   });
 
   it("persists unbinds before restart so removed bindings do not come back", async () => {
-    stateDirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-bindings-"));
-    process.env.OPENCLAW_STATE_DIR = stateDirOverride;
-
     createTelegramThreadBindingManager({
       accountId: "default",
       persist: true,
@@ -434,9 +422,6 @@ describe("telegram thread bindings", () => {
   });
 
   it("cleans up stale ACP bindings before restart routing can reuse them", async () => {
-    stateDirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-bindings-"));
-    process.env.OPENCLAW_STATE_DIR = stateDirOverride;
-
     createTelegramThreadBindingManager({
       accountId: "default",
       persist: true,
@@ -476,9 +461,6 @@ describe("telegram thread bindings", () => {
   });
 
   it("keeps plugin-owned bindings when ACP cleanup runs on startup", async () => {
-    stateDirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-bindings-"));
-    process.env.OPENCLAW_STATE_DIR = stateDirOverride;
-
     createTelegramThreadBindingManager({
       accountId: "default",
       persist: true,
@@ -510,9 +492,6 @@ describe("telegram thread bindings", () => {
   });
 
   it("keeps ACP bindings when the session store cannot be read during startup cleanup", async () => {
-    stateDirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-bindings-"));
-    process.env.OPENCLAW_STATE_DIR = stateDirOverride;
-
     createTelegramThreadBindingManager({
       accountId: "default",
       persist: true,
@@ -552,8 +531,6 @@ describe("telegram thread bindings", () => {
   });
 
   it("flushes pending lifecycle update persists before test reset", async () => {
-    stateDirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-bindings-"));
-    process.env.OPENCLAW_STATE_DIR = stateDirOverride;
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-06T10:00:00.000Z"));
 
@@ -587,8 +564,6 @@ describe("telegram thread bindings", () => {
   });
 
   it("does not leak unhandled rejections when a persist write fails", async () => {
-    stateDirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-bindings-"));
-    process.env.OPENCLAW_STATE_DIR = stateDirOverride;
     const unhandled: unknown[] = [];
     const onUnhandledRejection = (reason: unknown) => {
       unhandled.push(reason);

@@ -3,7 +3,8 @@ scenario:
   id: whatsapp-outbound-send-serialization
   surface: channels
   coverage:
-    primary: [channels.group-messages]
+    primary:
+      - whatsapp.outbound-text-sends
   execution:
     kind: flow
     channel: whatsapp

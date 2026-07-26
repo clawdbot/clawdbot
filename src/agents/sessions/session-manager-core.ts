@@ -275,6 +275,8 @@ export class SessionManagerCore {
     this.appendParentId = null;
     this.promptReleasedSideBranchParentId = undefined;
     let opaqueIndex = 0;
+    let latestResetId: string | undefined;
+    const resetDescendantIds = new Set<string>();
     for (let index = 0; index <= this.fileEntries.length; index += 1) {
       while (this.opaqueFileEntries[opaqueIndex]?.index === index) {
         const opaqueRecord = this.opaqueFileEntries[opaqueIndex]?.record;
@@ -290,17 +292,39 @@ export class SessionManagerCore {
             opaqueIndex += 1;
             continue;
           }
-          this.opaqueParentsById.set(leafEntry.id, leafState.leafId);
-          this.leafId = leafState.leafId;
-          this.appendParentId = leafState.appendParentId;
+          const crossesResetBoundary =
+            latestResetId !== undefined &&
+            (leafState.leafId === null || !resetDescendantIds.has(leafState.leafId));
+          const effectiveLeafState: typeof leafState = crossesResetBoundary
+            ? { leafId: this.leafId, appendParentId: this.leafId }
+            : leafState;
+          this.opaqueParentsById.set(leafEntry.id, effectiveLeafState.leafId);
+          if (
+            latestResetId !== undefined &&
+            effectiveLeafState.leafId !== null &&
+            resetDescendantIds.has(effectiveLeafState.leafId)
+          ) {
+            resetDescendantIds.add(leafEntry.id);
+          }
+          this.leafId = effectiveLeafState.leafId;
+          this.appendParentId = effectiveLeafState.appendParentId;
           this.promptReleasedSideBranchParentId =
-            leafState.appendMode === "side" ? leafState.appendParentId : undefined;
+            effectiveLeafState.appendMode === "side"
+              ? effectiveLeafState.appendParentId
+              : undefined;
           opaqueIndex += 1;
           continue;
         }
         const link = parseParentLinkedOpaqueEntry(opaqueRecord);
         if (link) {
           this.opaqueParentsById.set(link.id, link.parentId);
+          if (
+            latestResetId !== undefined &&
+            link.parentId !== null &&
+            resetDescendantIds.has(link.parentId)
+          ) {
+            resetDescendantIds.add(link.id);
+          }
           this.appendParentId = link.id;
           if (this.promptReleasedSideBranchParentId !== undefined) {
             this.promptReleasedSideBranchParentId = link.id;
@@ -312,7 +336,12 @@ export class SessionManagerCore {
       if (!isIndexedSessionEntry(entry)) {
         continue;
       }
+      const crossesResetBoundary =
+        latestResetId !== undefined &&
+        !isSessionTranscriptSideAppendEntry(entry) &&
+        (entry.parentId === null || !resetDescendantIds.has(entry.parentId));
       if (
+        crossesResetBoundary ||
         !Object.hasOwn(entry, "parentId") ||
         (!isSessionTranscriptSideAppendEntry(entry) &&
           entry.parentId === this.appendParentId &&
@@ -321,6 +350,22 @@ export class SessionManagerCore {
         this.logicalParentsById.set(entry.id, this.leafId);
       }
       this.byId.set(entry.id, entry);
+      if (entry.type === "reset") {
+        latestResetId = entry.id;
+        resetDescendantIds.clear();
+        resetDescendantIds.add(entry.id);
+      } else {
+        const logicalParentId = this.logicalParentsById.has(entry.id)
+          ? (this.logicalParentsById.get(entry.id) ?? null)
+          : entry.parentId;
+        if (
+          latestResetId !== undefined &&
+          logicalParentId !== null &&
+          resetDescendantIds.has(logicalParentId)
+        ) {
+          resetDescendantIds.add(entry.id);
+        }
+      }
       this.appendParentId = entry.id;
       if (isSessionTranscriptSideAppendEntry(entry)) {
         this.promptReleasedSideBranchParentId = entry.id;
@@ -359,7 +404,8 @@ export class SessionManagerCore {
       : this.resolveCanonicalParentId(entry.parentId);
     let normalized = parentId === entry.parentId ? entry : { ...entry, parentId };
     if (
-      normalized.type === "compaction" &&
+      (normalized.type === "compaction" || normalized.type === "reset") &&
+      normalized.firstKeptEntryId !== undefined &&
       !this.byId.has(normalized.firstKeptEntryId) &&
       this.opaqueParentsById.has(normalized.firstKeptEntryId)
     ) {
@@ -580,6 +626,15 @@ export class SessionManagerCore {
     if (rememberedWrite.verifiedWrite && options?.publishSnapshot !== false) {
       publishRememberedSessionFileSnapshot(this.sessionFile, rememberedWrite.snapshot);
     }
+  }
+
+  /** Makes pending append-oriented persistence durable without replacing SQLite transcripts. */
+  protected flushPendingPersistence(): void {
+    if (!this.shouldPersist || this.sqlitePersistence || this.flushed || !this.sessionFile) {
+      return;
+    }
+    this.replacePersistedTranscript();
+    this.flushed = true;
   }
 
   isPersisted(): boolean {

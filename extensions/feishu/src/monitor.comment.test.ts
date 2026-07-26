@@ -858,11 +858,72 @@ describe("resolveDriveCommentEventTurn", () => {
     expect(turn).toBeNull();
   });
 
-  it("skips comment notices when bot open_id is unavailable", async () => {
+  it("uses a mentioned event recipient when startup bot identity is unavailable", async () => {
     const turn = await resolveDriveCommentEventTurn({
       cfg: buildMonitorConfig(),
       accountId: "default",
       event: makeDriveCommentEvent(),
+      botOpenId: undefined,
+      createClient: () => makeOpenApiClient({}) as never,
+    });
+
+    expect(turn?.senderId).toBe("ou_509d4d7ace4a9addec2312676ffcba9b");
+  });
+
+  it("uses the event recipient to reject self-authored cold-start notices", async () => {
+    const turn = await resolveDriveCommentEventTurn({
+      cfg: buildMonitorConfig(),
+      accountId: "default",
+      event: makeDriveCommentEvent({
+        notice_meta: {
+          ...makeDriveCommentEvent().notice_meta,
+          from_user_id: { open_id: "ou_bot" },
+        },
+      }),
+      botOpenId: undefined,
+      createClient: () => makeOpenApiClient({}) as never,
+    });
+
+    expect(turn).toBeNull();
+  });
+
+  it("prefers startup bot identity over a mismatched event recipient", async () => {
+    const turn = await resolveDriveCommentEventTurn({
+      cfg: buildMonitorConfig(),
+      accountId: "default",
+      event: makeDriveCommentEvent({
+        notice_meta: {
+          ...makeDriveCommentEvent().notice_meta,
+          from_user_id: { open_id: "ou_configured_bot" },
+          to_user_id: { open_id: "ou_other_bot" },
+        },
+      }),
+      botOpenId: "ou_configured_bot",
+      createClient: () => makeOpenApiClient({}) as never,
+    });
+
+    expect(turn).toBeNull();
+  });
+
+  it.each([
+    {
+      name: "not explicitly mentioned",
+      event: makeDriveCommentEvent({ is_mentioned: false }),
+    },
+    {
+      name: "missing recipient identity",
+      event: makeDriveCommentEvent({
+        notice_meta: {
+          ...makeDriveCommentEvent().notice_meta,
+          to_user_id: undefined,
+        },
+      }),
+    },
+  ])("skips a cold-start comment notice when $name", async ({ event }) => {
+    const turn = await resolveDriveCommentEventTurn({
+      cfg: buildMonitorConfig(),
+      accountId: "default",
+      event,
       botOpenId: undefined,
       createClient: () => makeOpenApiClient({}) as never,
     });

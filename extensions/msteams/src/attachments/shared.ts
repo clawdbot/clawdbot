@@ -16,7 +16,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { MSTEAMS_REQUEST_TIMEOUT_MS } from "../request-timeout.js";
 import { responseWithRelease } from "../response-with-release.js";
-import type { MSTeamsAttachmentLike } from "./types.js";
+import type { MSTeamsAttachmentLike, MSTeamsInboundMedia } from "./types.js";
 
 type InlineImageCandidate =
   | {
@@ -236,7 +236,7 @@ export function resolveMSTeamsMediaKind(params: {
   contentType?: string;
   fileName?: string;
   fileType?: string;
-}): "image" | "document" {
+}): MSTeamsInboundMedia["kind"] {
   const mime = normalizeLowercaseStringOrEmpty(params.contentType ?? "");
   const name = normalizeLowercaseStringOrEmpty(params.fileName ?? "");
   const fileType = normalizeLowercaseStringOrEmpty(params.fileType ?? "");

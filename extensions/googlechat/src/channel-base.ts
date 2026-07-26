@@ -15,7 +15,7 @@ import {
   resolveGoogleChatAccount,
   type ResolvedGoogleChatAccount,
 } from "./accounts.js";
-import { googlechatSetupAdapter } from "./setup-core.js";
+import { googlechatSetupAdapter, googlechatSetupContract } from "./setup-core.js";
 import { googlechatSetupWizard } from "./setup-surface.js";
 
 export const GOOGLECHAT_CHANNEL_ID = "googlechat" as const;
@@ -76,6 +76,7 @@ type GoogleChatPluginBase = Pick<
   | "id"
   | "meta"
   | "setup"
+  | "setupContract"
   | "setupWizard"
   | "capabilities"
   | "streaming"
@@ -93,6 +94,7 @@ export function createGoogleChatPluginBase(
     id: GOOGLECHAT_CHANNEL_ID,
     meta: { ...googlechatMeta },
     setup: googlechatSetupAdapter,
+    setupContract: googlechatSetupContract,
     setupWizard: googlechatSetupWizard,
     capabilities: {
       chatTypes: ["direct", "group", "thread"],

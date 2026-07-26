@@ -1,6 +1,7 @@
 // Control UI runtime config capability and shared config-domain mutations.
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot, ConfigUiHints } from "../../api/types.ts";
+import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { schemaType, type JsonSchema } from "../../components/config-form.shared.ts";
 import { t } from "../../i18n/index.ts";
 import { copyToClipboard } from "../clipboard.ts";
@@ -76,7 +77,7 @@ const connectionEpochsByState = new WeakMap<object, number>();
 
 type RuntimeConfigGatewaySnapshot = {
   client: GatewayBrowserClient | null;
-  connected: boolean;
+  phase: ApplicationGatewayPhase;
   sessionKey: string;
 };
 
@@ -151,7 +152,7 @@ type ConfigGatewayState = Pick<
 function createInitialConfigState(snapshot?: Partial<RuntimeConfigGatewaySnapshot>): ConfigState {
   return {
     client: snapshot?.client ?? null,
-    connected: snapshot?.connected ?? false,
+    connected: snapshot?.phase === "connected",
     applySessionKey: snapshot?.sessionKey ?? "main",
     configLoading: false,
     configRaw: "{\n}\n",
@@ -1471,9 +1472,10 @@ export function createRuntimeConfigCapability(
     state.configSchema ? Promise.resolve() : loadOnce("schema", () => loadConfigSchema(state));
   const stopGateway = gateway.subscribe((snapshot) => {
     const clientChanged = state.client !== snapshot.client;
-    const connectionChanged = state.connected !== snapshot.connected;
+    const connected = snapshot.phase === "connected";
+    const connectionChanged = state.connected !== connected;
     state.client = snapshot.client;
-    state.connected = snapshot.connected;
+    state.connected = connected;
     state.applySessionKey = snapshot.sessionKey;
     if (clientChanged || connectionChanged) {
       configLoad = null;

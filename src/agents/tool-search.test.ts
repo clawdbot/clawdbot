@@ -3,6 +3,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
+import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   initializeGlobalHookRunner,
@@ -100,6 +101,29 @@ function mockCall(mock: { mock: { calls: unknown[][] } }, index = 0): unknown[] 
 }
 
 describe("Tool Search", () => {
+  const limitSearchTool = expectDefined(
+    createToolSearchTools({}).find((tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME),
+    "tool_search test invariant",
+  );
+
+  it.each([
+    { limit: undefined, valid: true },
+    { limit: 1, valid: true },
+    { limit: 50, valid: true },
+    { limit: 5.5, valid: false },
+    { limit: 0, valid: false },
+    { limit: -1, valid: false },
+  ])("validates schema limit $limit", ({ limit, valid }) => {
+    const input = limit === undefined ? { query: "test" } : { query: "test", limit };
+    expect(Value.Check(limitSearchTool.parameters, input)).toBe(valid);
+  });
+
+  it.each([5.5, 0, -1])("rejects runtime limit %s", async (limit) => {
+    await expect(limitSearchTool.execute("call-limit", { query: "test", limit })).rejects.toThrow(
+      "limit must be a positive integer",
+    );
+  });
+
   it("keeps direct-only tools visible and out of the structured catalog", () => {
     const catalogRef = createToolSearchCatalogRef();
     const computer = directOnlyTool("computer", "Control a desktop");

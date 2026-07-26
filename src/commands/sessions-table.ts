@@ -7,6 +7,7 @@
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 
 /** Display row derived from a persisted session entry. */
@@ -66,7 +67,7 @@ export function toSessionDisplayRow(key: string, entry: SessionEntry): SessionDi
     spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
     spawnedCwd: entry?.spawnedCwd,
     parentSessionKey: entry?.parentSessionKey,
-    forkedFromParent: entry?.forkedFromParent,
+    forkedFromParent: sessionEntryForkedFromParent(entry) ? true : undefined,
     spawnDepth: entry?.spawnDepth,
     subagentRole: entry?.subagentRole,
     subagentControlScope: entry?.subagentControlScope,

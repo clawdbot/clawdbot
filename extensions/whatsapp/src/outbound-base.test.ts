@@ -465,6 +465,79 @@ describe("createWhatsAppOutboundBase", () => {
     });
   });
 
+  it("keeps concurrent same-id replies isolated by target and account", async () => {
+    const replyToId = "reply-concurrent";
+    cacheInboundMessageMeta("account-a", "11111@s.whatsapp.net", replyToId, {
+      participant: "11111@s.whatsapp.net",
+      body: "account a body",
+    });
+    cacheInboundMessageMeta("account-b", "22222@s.whatsapp.net", replyToId, {
+      participant: "22222@s.whatsapp.net",
+      body: "account b body",
+    });
+    const sendMessageWhatsApp = vi.fn<
+      Parameters<typeof createWhatsAppOutboundBase>[0]["sendMessageWhatsApp"]
+    >(async (to) => ({
+      messageId: `sent-${to}`,
+      toJid: to,
+    }));
+    const outbound = createWhatsAppOutboundBase({
+      chunker: (text) => [text],
+      sendMessageWhatsApp,
+      sendPollWhatsApp: vi.fn(),
+      shouldLogVerbose: () => false,
+      resolveTarget: ({ to }) => ({ ok: true as const, to: to ?? "" }),
+    });
+
+    await Promise.all([
+      outbound.sendText!({
+        cfg: {} as never,
+        to: "whatsapp:+11111",
+        text: "reply a",
+        accountId: "account-a",
+        deps: { sendWhatsApp: sendMessageWhatsApp },
+        replyToId,
+      }),
+      outbound.sendText!({
+        cfg: {} as never,
+        to: "whatsapp:+22222",
+        text: "reply b",
+        accountId: "account-b",
+        deps: { sendWhatsApp: sendMessageWhatsApp },
+        replyToId,
+      }),
+    ]);
+
+    const calls = sendMessageWhatsApp.mock.calls.map((call) => ({
+      text: call[1],
+      quotedMessageKey: call[2].quotedMessageKey,
+    }));
+    expect(calls).toEqual(
+      expect.arrayContaining([
+        {
+          text: "reply a",
+          quotedMessageKey: {
+            id: replyToId,
+            remoteJid: "11111@s.whatsapp.net",
+            fromMe: false,
+            participant: "11111@s.whatsapp.net",
+            messageText: "account a body",
+          },
+        },
+        {
+          text: "reply b",
+          quotedMessageKey: {
+            id: replyToId,
+            remoteJid: "22222@s.whatsapp.net",
+            fromMe: false,
+            participant: "22222@s.whatsapp.net",
+            messageText: "account b body",
+          },
+        },
+      ]),
+    );
+  });
+
   it("normalizes mediaUrls before payload delivery", async () => {
     const sendMessageWhatsApp = vi.fn(async () => ({
       messageId: "msg-1",

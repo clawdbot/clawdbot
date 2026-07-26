@@ -8,7 +8,7 @@ import {
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { validateNodePresenceActivityPayload } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { updatePairedDeviceMetadata } from "../infra/device-pairing.js";
+import { updatePairedDevicePresence, type NodePairingGeneration } from "../infra/device-pairing.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   resolveEventSessionKeyForPolicy,
@@ -23,9 +23,11 @@ import {
   NODE_PRESENCE_ACTIVITY_EVENT,
   normalizeNodePresenceAliveReason,
 } from "../shared/node-presence.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import {
   agentCommandFromIngress,
+  ApnsRegistrationPairingChangedError,
   buildOutboundSessionContext,
   createOutboundSendDeps,
   defaultRuntime,
@@ -62,6 +64,18 @@ const NODE_PRESENCE_PERSIST_MIN_INTERVAL_MS = 60_000;
 const MAX_RECENT_NODE_PRESENCE_KEYS = 1024;
 
 const recentVoiceTranscripts = new Map<string, { fingerprint: string; ts: number }>();
+type VoiceTranscriptReservationAdmission = { work: Promise<unknown> } | null;
+type VoiceTranscriptReservation = {
+  fingerprint: string;
+  receivedAt: number;
+  status: "pending" | "ready" | "checking" | "rejected";
+  isConnectionCurrent?: () => boolean | Promise<boolean>;
+  start?: () => Promise<unknown>;
+  resolve: (admission: VoiceTranscriptReservationAdmission) => void;
+  rejectDecision: (reason: unknown) => void;
+  decision: Promise<VoiceTranscriptReservationAdmission>;
+};
+const pendingVoiceTranscriptReservations = new Map<string, VoiceTranscriptReservation[]>();
 const recentExecFinishedRuns = new Map<string, number>();
 const recentNodePresencePersistAt = new Map<string, number>();
 
@@ -82,12 +96,19 @@ function dispatchNodeAgentCommand(
   ctx: NodeEventContext,
   nodeId: string,
   input: NodeAgentCommandInput,
+  isConnectionCurrent?: () => boolean | Promise<boolean>,
+  onAdmissionRejected?: () => void | Promise<void>,
 ): void {
   // The node RPC can finish before the agent starts its own session admission.
-  // Reserve a root now so suspension cannot acknowledge and then strand the turn.
-  void runWithGatewayIndependentRootWorkContinuation(() =>
-    agentCommandFromIngress(input, defaultRuntime, ctx.deps),
-  ).catch((err: unknown) => {
+  // Reserve a root now so suspension cannot acknowledge and then strand the turn,
+  // but recheck the admitted connection before agent work actually starts.
+  void runWithGatewayIndependentRootWorkContinuation(async () => {
+    if (isConnectionCurrent && !(await isConnectionCurrent())) {
+      await onAdmissionRejected?.();
+      return;
+    }
+    await agentCommandFromIngress(input, defaultRuntime, ctx.deps);
+  }).catch((err: unknown) => {
     ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
   });
 }
@@ -162,6 +183,125 @@ function shouldDropDuplicateVoiceTranscript(params: {
   }
 
   return false;
+}
+
+function reserveVoiceTranscript(params: {
+  sessionKey: string;
+  fingerprint: string;
+  receivedAt: number;
+}): {
+  admit: (params: {
+    isConnectionCurrent?: () => boolean | Promise<boolean>;
+    start: () => Promise<unknown>;
+  }) => Promise<VoiceTranscriptReservationAdmission>;
+  reject: () => void;
+} {
+  // Resolve reservations in receipt order so delayed currentness checks cannot
+  // change the dedupe window, while rejected connections leave no committed state.
+  let resolveDecision: (admission: VoiceTranscriptReservationAdmission) => void = () => {};
+  let rejectDecision: (reason: unknown) => void = () => {};
+  const decision = new Promise<VoiceTranscriptReservationAdmission>((resolve, reject) => {
+    resolveDecision = resolve;
+    rejectDecision = reject;
+  });
+  const reservation: VoiceTranscriptReservation = {
+    fingerprint: params.fingerprint,
+    receivedAt: params.receivedAt,
+    status: "pending",
+    resolve: resolveDecision,
+    rejectDecision,
+    decision,
+  };
+  const queue = pendingVoiceTranscriptReservations.get(params.sessionKey) ?? [];
+  queue.push(reservation);
+  pendingVoiceTranscriptReservations.set(params.sessionKey, queue);
+
+  const drain = () => {
+    while (queue[0]?.status === "rejected") {
+      const next = queue.shift();
+      if (!next) {
+        break;
+      }
+      next.resolve(null);
+    }
+    const next = queue[0];
+    if (!next) {
+      pendingVoiceTranscriptReservations.delete(params.sessionKey);
+      return;
+    }
+    if (next.status !== "ready") {
+      return;
+    }
+    next.status = "checking";
+    void (async () => {
+      try {
+        const isCurrent = next.isConnectionCurrent ? await next.isConnectionCurrent() : true;
+        const admission =
+          isCurrent &&
+          !shouldDropDuplicateVoiceTranscript({
+            sessionKey: params.sessionKey,
+            fingerprint: next.fingerprint,
+            now: next.receivedAt,
+          }) &&
+          next.start
+            ? { work: next.start() }
+            : null;
+        queue.shift();
+        next.resolve(admission);
+      } catch (err) {
+        queue.shift();
+        next.rejectDecision(err);
+      }
+      drain();
+    })();
+  };
+  const settle = (status: "ready" | "rejected") => {
+    if (reservation.status !== "pending") {
+      return;
+    }
+    reservation.status = status;
+    drain();
+  };
+
+  return {
+    admit: ({ isConnectionCurrent, start }) => {
+      reservation.isConnectionCurrent = isConnectionCurrent;
+      reservation.start = start;
+      settle("ready");
+      return reservation.decision;
+    },
+    reject: () => settle("rejected"),
+  };
+}
+
+function dispatchReservedVoiceAgentCommand(params: {
+  ctx: NodeEventContext;
+  nodeId: string;
+  input: NodeAgentCommandInput;
+  reservation: ReturnType<typeof reserveVoiceTranscript>;
+  isConnectionCurrent?: () => boolean | Promise<boolean>;
+  onStart: () => void;
+}): void {
+  void runWithGatewayIndependentRootWorkContinuation(async () => {
+    if (params.isConnectionCurrent && !(await params.isConnectionCurrent())) {
+      params.reservation.reject();
+      return;
+    }
+    const admission = await params.reservation.admit({
+      isConnectionCurrent: params.isConnectionCurrent,
+      start: () => {
+        params.onStart();
+        return agentCommandFromIngress(params.input, defaultRuntime, params.ctx.deps);
+      },
+    });
+    if (!admission) {
+      return;
+    }
+    await admission.work;
+  }).catch((err: unknown) => {
+    params.reservation.reject();
+    params.ctx.logGateway.warn(`agent failed node=${params.nodeId}: ${formatForLog(err)}`);
+  });
 }
 
 function shouldDropDuplicateExecFinished(params: {
@@ -280,10 +420,7 @@ async function touchSessionStore(params: {
       reasoningLevel: params.entry?.reasoningLevel,
       systemSent: params.entry?.systemSent,
       sendPolicy: params.entry?.sendPolicy,
-      lastChannel: params.entry?.lastChannel,
-      lastTo: params.entry?.lastTo,
-      lastAccountId: params.entry?.lastAccountId,
-      lastThreadId: params.entry?.lastThreadId,
+      delivery: params.entry?.delivery,
     }),
   });
 }
@@ -296,21 +433,57 @@ function queueSessionStoreTouch(params: {
   entry: LoadedSessionEntry["entry"];
   sessionId: string;
   now: number;
+  isConnectionCurrent?: () => boolean | Promise<boolean>;
 }) {
   // Voice dispatch intentionally does not wait for persistence, but a host
   // snapshot must not race the accepted write after its node RPC returns.
-  void runWithGatewayIndependentRootWorkContinuation(() =>
-    touchSessionStore({
+  void runWithGatewayIndependentRootWorkContinuation(async () => {
+    if (params.isConnectionCurrent && !(await params.isConnectionCurrent())) {
+      return;
+    }
+    await touchSessionStore({
       storePath: params.storePath,
       canonicalKey: params.canonicalKey,
       storeKeys: params.storeKeys,
       entry: params.entry,
       sessionId: params.sessionId,
       now: params.now,
-    }),
-  ).catch((err: unknown) => {
+    });
+  }).catch((err: unknown) => {
     params.ctx.logGateway.warn("voice session-store update failed: " + formatForLog(err));
   });
+}
+
+async function isNodeEventConnectionCurrent(opts?: {
+  isConnectionCurrent?: () => boolean | Promise<boolean>;
+}): Promise<boolean> {
+  if (!opts?.isConnectionCurrent) {
+    return true;
+  }
+  try {
+    return await opts.isConnectionCurrent();
+  } catch {
+    return false;
+  }
+}
+
+function pairingChangedResult(event: string): NodeEventHandleResult {
+  return { ok: true, event, handled: false, reason: "pairing_changed" };
+}
+
+async function cleanupNodeEventMedia(
+  ids: Iterable<string>,
+  ctx: Pick<NodeEventContext, "logGateway">,
+): Promise<void> {
+  for (const id of ids) {
+    try {
+      await deleteMediaBuffer(id);
+    } catch (cleanupErr) {
+      ctx.logGateway.warn(
+        `Failed to cleanup orphaned media ${id}: ${formatErrorMessage(cleanupErr)}`,
+      );
+    }
+  }
 }
 
 function parseSessionKeyFromPayloadJSON(payloadJSON: string): string | null {
@@ -383,8 +556,18 @@ export const handleNodeEvent = async (
   ctx: NodeEventContext,
   nodeId: string,
   evt: NodeEvent,
-  opts?: { connId?: string; deviceId?: string; presenceAllowed?: boolean },
+  opts?: {
+    connId?: string;
+    deviceId?: string;
+    pairingGeneration?: NodePairingGeneration;
+    presenceAllowed?: boolean;
+    isConnectionCurrent?: () => boolean | Promise<boolean>;
+    resolveApnsRegistrationGeneration?: () => string | null | Promise<string | null>;
+  },
 ): Promise<NodeEventHandleResult | undefined> => {
+  if (!(await isNodeEventConnectionCurrent(opts))) {
+    return pairingChangedResult(evt.event);
+  }
   switch (evt.event) {
     case "voice.transcript": {
       const obj = parsePayloadObject(evt.payloadJSON);
@@ -406,44 +589,55 @@ export const handleNodeEvent = async (
       if (resolveAgentHarnessSessionContextError(canonicalKey, entry)) {
         return undefined;
       }
-      const now = Date.now();
+      const receivedAt = Date.now();
       const fingerprint = resolveVoiceTranscriptFingerprint(obj, text);
-      if (shouldDropDuplicateVoiceTranscript({ sessionKey: canonicalKey, fingerprint, now })) {
-        return undefined;
-      }
       const sessionId = entry?.sessionId ?? randomUUID();
-      queueSessionStoreTouch({
-        ctx,
-        storePath,
-        canonicalKey,
-        storeKeys,
-        entry,
-        sessionId,
-        now,
-      });
       const runId = randomUUID();
-
-      // Ensure chat UI clients refresh when this run completes (even though it wasn't started via chat.send).
-      // This maps agent bus events (keyed by per-turn runId) to chat events (keyed by clientRunId).
-      ctx.addChatRun(runId, {
+      const transcriptReservation = reserveVoiceTranscript({
         sessionKey: canonicalKey,
-        clientRunId: `voice-${randomUUID()}`,
+        fingerprint,
+        receivedAt,
       });
 
-      dispatchNodeAgentCommand(ctx, nodeId, {
-        runId,
-        message: text,
-        sessionId,
-        sessionKey: canonicalKey,
-        thinking: "low",
-        deliver: false,
-        messageChannel: "node",
-        inputProvenance: {
-          kind: "external_user",
-          sourceChannel: "voice",
-          sourceTool: "gateway.voice.transcript",
+      dispatchReservedVoiceAgentCommand({
+        ctx,
+        nodeId,
+        input: {
+          runId,
+          message: text,
+          sessionId,
+          sessionKey: canonicalKey,
+          thinking: "low",
+          deliver: false,
+          messageChannel: "node",
+          inputProvenance: {
+            kind: "external_user",
+            sourceChannel: "voice",
+            sourceTool: "gateway.voice.transcript",
+          },
+          allowModelOverride: false,
         },
-        allowModelOverride: false,
+        reservation: transcriptReservation,
+        isConnectionCurrent: opts?.isConnectionCurrent,
+        onStart: () => {
+          queueSessionStoreTouch({
+            ctx,
+            storePath,
+            canonicalKey,
+            storeKeys,
+            entry,
+            sessionId,
+            now: receivedAt,
+            isConnectionCurrent: opts?.isConnectionCurrent,
+          });
+
+          // Ensure chat UI clients refresh when this run completes (even though it wasn't started via chat.send).
+          // This maps agent bus events (keyed by per-turn runId) to chat events (keyed by clientRunId).
+          ctx.addChatRun(runId, {
+            sessionKey: canonicalKey,
+            clientRunId: `voice-${randomUUID()}`,
+          });
+        },
       });
       return undefined;
     }
@@ -508,16 +702,26 @@ export const handleNodeEvent = async (
           provider: modelRef.provider,
           model: modelRef.model,
         });
+        if (!(await isNodeEventConnectionCurrent(opts))) {
+          return pairingChangedResult(evt.event);
+        }
         try {
           const parsed = await parseMessageWithAttachments(message, normalizedAttachments, {
             maxBytes: resolveChatAttachmentMaxBytes(cfg),
             log: ctx.logGateway,
             supportsInlineImages,
             // server-node-events dispatches via agentCommandFromIngress which
-            // has no ctx.MediaPaths wiring; reject non-image attachments
+            // has no structured media wiring; reject non-image attachments
             // explicitly rather than saving them where the agent cannot reach them.
             acceptNonImage: false,
           });
+          if (!(await isNodeEventConnectionCurrent(opts))) {
+            await cleanupNodeEventMedia(
+              (parsed.offloadedRefs ?? []).map((ref) => ref.id),
+              ctx,
+            );
+            return pairingChangedResult(evt.event);
+          }
           message = parsed.message.trim();
           images = parsed.images;
           imageOrder = parsed.imageOrder;
@@ -527,15 +731,10 @@ export const handleNodeEvent = async (
               `agent.request message exceeds limit after attachment parsing (length=${message.length})`,
             );
             if (parsed.offloadedRefs && parsed.offloadedRefs.length > 0) {
-              for (const ref of parsed.offloadedRefs) {
-                try {
-                  await deleteMediaBuffer(ref.id);
-                } catch (cleanupErr) {
-                  ctx.logGateway.warn(
-                    `Failed to cleanup orphaned media ${ref.id}: ${formatErrorMessage(cleanupErr)}`,
-                  );
-                }
-              }
+              await cleanupNodeEventMedia(
+                parsed.offloadedRefs.map((ref) => ref.id),
+                ctx,
+              );
             }
             return undefined;
           }
@@ -560,6 +759,13 @@ export const handleNodeEvent = async (
 
       const now = Date.now();
       const sessionId = entry?.sessionId ?? randomUUID();
+      if (!(await isNodeEventConnectionCurrent(opts))) {
+        await cleanupNodeEventMedia(
+          (offloadedRefs ?? []).map((ref) => ref.id),
+          ctx,
+        );
+        return pairingChangedResult(evt.event);
+      }
       await touchSessionStore({
         storePath,
         canonicalKey,
@@ -568,13 +774,20 @@ export const handleNodeEvent = async (
         sessionId,
         now,
       });
+      if (!(await isNodeEventConnectionCurrent(opts))) {
+        await cleanupNodeEventMedia(
+          (offloadedRefs ?? []).map((ref) => ref.id),
+          ctx,
+        );
+        return pairingChangedResult(evt.event);
+      }
 
       if (deliverRequested && (!channel || !to)) {
-        const entryChannel =
-          typeof entry?.lastChannel === "string"
-            ? normalizeChannelId(entry.lastChannel)
-            : undefined;
-        const entryTo = normalizeOptionalString(entry?.lastTo) ?? "";
+        const entryContext = deliveryContextFromSession(entry);
+        const entryChannel = entryContext?.channel
+          ? normalizeChannelId(entryContext.channel)
+          : undefined;
+        const entryTo = normalizeOptionalString(entryContext?.to) ?? "";
         if (!channel && entryChannel) {
           channel = entryChannel;
         }
@@ -591,19 +804,48 @@ export const handleNodeEvent = async (
         );
       }
 
+      if (!(await isNodeEventConnectionCurrent(opts))) {
+        await cleanupNodeEventMedia(
+          (offloadedRefs ?? []).map((ref) => ref.id),
+          ctx,
+        );
+        return pairingChangedResult(evt.event);
+      }
+      const persistedTranscriptMedia = await persistInboundImagesForTranscript({
+        images,
+        imageOrder,
+        offloadedRefs,
+        log: ctx.logGateway,
+        logContext: "agent.request",
+      });
+      if (!(await isNodeEventConnectionCurrent(opts))) {
+        await cleanupNodeEventMedia(
+          persistedTranscriptMedia.map((media) => media.id),
+          ctx,
+        );
+        return pairingChangedResult(evt.event);
+      }
+      const transcriptMedia = persistedTranscriptMedia.map((media) => ({
+        path: media.path,
+        contentType: media.contentType,
+      }));
+
       if (wantsReceipt && deliveryChannel && deliveryTo) {
         // Delivery stays detached from agent startup, but remains part of the
         // accepted node request until the durable send settles.
-        void runWithGatewayIndependentRootWorkContinuation(() =>
-          sendReceiptAck({
+        void runWithGatewayIndependentRootWorkContinuation(async () => {
+          if (!(await isNodeEventConnectionCurrent(opts))) {
+            return;
+          }
+          await sendReceiptAck({
             cfg,
             deps: ctx.deps,
             sessionKey: canonicalKey,
             channel: deliveryChannel,
             to: deliveryTo,
             text: receiptText,
-          }),
-        ).catch((err: unknown) => {
+          });
+        }).catch((err: unknown) => {
           ctx.logGateway.warn(`agent receipt failed node=${nodeId}: ${formatForLog(err)}`);
         });
       } else if (wantsReceipt) {
@@ -612,33 +854,33 @@ export const handleNodeEvent = async (
         );
       }
 
-      const transcriptMedia = (
-        await persistInboundImagesForTranscript({
+      dispatchNodeAgentCommand(
+        ctx,
+        nodeId,
+        {
+          runId: sessionId,
+          message,
           images,
           imageOrder,
-          offloadedRefs,
-          log: ctx.logGateway,
-          logContext: "agent.request",
-        })
-      ).map((media) => ({ path: media.path, contentType: media.contentType }));
-
-      dispatchNodeAgentCommand(ctx, nodeId, {
-        runId: sessionId,
-        message,
-        images,
-        imageOrder,
-        ...(transcriptMedia.length > 0 ? { transcriptMessage, transcriptMedia } : {}),
-        sessionId,
-        sessionKey: canonicalKey,
-        thinking: link?.thinking ?? undefined,
-        deliver,
-        to: deliveryTo,
-        channel: deliveryChannel,
-        timeout:
-          typeof link?.timeoutSeconds === "number" ? link.timeoutSeconds.toString() : undefined,
-        messageChannel: "node",
-        allowModelOverride: false,
-      });
+          ...(transcriptMedia.length > 0 ? { transcriptMessage, transcriptMedia } : {}),
+          sessionId,
+          sessionKey: canonicalKey,
+          thinking: link?.thinking ?? undefined,
+          deliver,
+          to: deliveryTo,
+          channel: deliveryChannel,
+          timeout:
+            typeof link?.timeoutSeconds === "number" ? link.timeoutSeconds.toString() : undefined,
+          messageChannel: "node",
+          allowModelOverride: false,
+        },
+        opts?.isConnectionCurrent,
+        () =>
+          cleanupNodeEventMedia(
+            persistedTranscriptMedia.map((media) => media.id),
+            ctx,
+          ),
+      );
       return undefined;
     }
     case "notifications.changed": {
@@ -705,7 +947,7 @@ export const handleNodeEvent = async (
       if (!sessionKey) {
         return undefined;
       }
-      ctx.nodeSubscribe(nodeId, sessionKey);
+      await ctx.nodeSubscribe(nodeId, sessionKey, opts?.connId);
       return undefined;
     }
     case "chat.unsubscribe": {
@@ -716,7 +958,7 @@ export const handleNodeEvent = async (
       if (!sessionKey) {
         return undefined;
       }
-      ctx.nodeUnsubscribe(nodeId, sessionKey);
+      await ctx.nodeUnsubscribe(nodeId, sessionKey, opts?.connId);
       return undefined;
     }
     case "exec.started":
@@ -847,6 +1089,13 @@ export const handleNodeEvent = async (
       const topic = typeof obj.topic === "string" ? obj.topic : "";
       const environment = obj.environment;
       try {
+        const expectedPairingGeneration = await opts?.resolveApnsRegistrationGeneration?.();
+        if (!expectedPairingGeneration) {
+          ctx.logGateway.warn(
+            `push apns register rejected node=${nodeId}: stale or invalidated pairing session`,
+          );
+          return pairingChangedResult(evt.event);
+        }
         if (transport === "relay") {
           const gatewayDeviceId = normalizeOptionalString(obj.gatewayDeviceId) ?? "";
           const currentGatewayDeviceId = loadOrCreateProcessDeviceIdentity().deviceId;
@@ -867,6 +1116,7 @@ export const handleNodeEvent = async (
             distribution: obj.distribution,
             relayOrigin: obj.relayOrigin,
             tokenDebugSuffix: obj.tokenDebugSuffix,
+            expectedPairingGeneration,
           });
         } else {
           await registerApnsRegistration({
@@ -875,9 +1125,16 @@ export const handleNodeEvent = async (
             token: typeof obj.token === "string" ? obj.token : "",
             topic,
             environment,
+            expectedPairingGeneration,
           });
         }
       } catch (err) {
+        if (err instanceof ApnsRegistrationPairingChangedError) {
+          ctx.logGateway.warn(
+            `push apns register rejected node=${nodeId}: stale or invalidated pairing session`,
+          );
+          return pairingChangedResult(evt.event);
+        }
         ctx.logGateway.warn(`push apns register failed node=${nodeId}: ${formatForLog(err)}`);
       }
       return undefined;
@@ -886,6 +1143,25 @@ export const handleNodeEvent = async (
       const obj = parsePayloadObject(evt.payloadJSON);
       if (!obj || !validateNodePresenceActivityPayload(obj)) {
         return { ok: true, event: evt.event, handled: false, reason: "invalid_payload" };
+      }
+      if ("action" in obj) {
+        const cleared = ctx.clearNodePresenceActivity?.({ nodeId, connId: opts?.connId });
+        if (cleared === null || cleared === undefined) {
+          return { ok: true, event: evt.event, handled: false, reason: "stale_connection" };
+        }
+        if (cleared) {
+          ctx.broadcast(
+            "node.presence",
+            { nodeId, lastActiveAtMs: null, presenceUpdatedAtMs: null },
+            { dropIfSlow: true },
+          );
+        }
+        return {
+          ok: true,
+          event: evt.event,
+          handled: true,
+          reason: cleared ? "cleared" : "already_clear",
+        };
       }
       if (opts?.presenceAllowed !== true) {
         return { ok: true, event: evt.event, handled: false, reason: "permission_required" };
@@ -911,8 +1187,13 @@ export const handleNodeEvent = async (
       if (!deviceId) {
         return { ok: true, event: evt.event, handled: false, reason: "missing_device_identity" };
       }
+      const pairingGeneration = opts?.pairingGeneration;
+      if (!pairingGeneration || pairingGeneration.nodeId !== deviceId) {
+        return pairingChangedResult(evt.event);
+      }
       const now = Date.now();
-      const lastPersistedAt = recentNodePresencePersistAt.get(deviceId) ?? 0;
+      const presenceOwnerKey = `${deviceId}\0${pairingGeneration.key}`;
+      const lastPersistedAt = recentNodePresencePersistAt.get(presenceOwnerKey) ?? 0;
       if (now - lastPersistedAt < NODE_PRESENCE_PERSIST_MIN_INTERVAL_MS) {
         return { ok: true, event: evt.event, handled: true, reason: "throttled" };
       }
@@ -921,14 +1202,18 @@ export const handleNodeEvent = async (
       try {
         // Node last-seen lives on the device record; node.pair.list projects
         // it from there, so one write covers both surfaces.
-        const deviceUpdated = await updatePairedDeviceMetadata(deviceId, {
-          lastSeenAtMs: now,
-          lastSeenReason,
-        });
+        const deviceUpdated = await updatePairedDevicePresence(
+          deviceId,
+          {
+            lastSeenAtMs: now,
+            lastSeenReason,
+          },
+          pairingGeneration,
+        );
         if (!deviceUpdated) {
-          return { ok: true, event: evt.event, handled: false, reason: "unpaired" };
+          return pairingChangedResult(evt.event);
         }
-        recentNodePresencePersistAt.set(deviceId, now);
+        recentNodePresencePersistAt.set(presenceOwnerKey, now);
         pruneBoundedTimestampMap(recentNodePresencePersistAt, {
           now,
           ttlMs: NODE_PRESENCE_PERSIST_MIN_INTERVAL_MS * 10,

@@ -108,6 +108,41 @@ describe("renderMemoryImport", () => {
     expect(container.textContent).not.toContain("private memory body");
   });
 
+  it("renders the avatar agent picker and routes agent changes", async () => {
+    const onSelectAgent = vi.fn();
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
+      renderMemoryImport(
+        createProps({
+          agents: [
+            { id: "research", name: "Research", identity: { emoji: "🔎" } },
+            { id: "writer", name: "Writer" },
+          ],
+          onSelectAgent,
+        }),
+      ),
+      container,
+    );
+
+    const picker = container.querySelector<
+      HTMLElement & {
+        options: Array<{ value: string }>;
+        onSelect: (value: string) => void;
+        updateComplete: Promise<boolean>;
+      }
+    >('openclaw-agent-select[name="memory-import-agent"]');
+    await picker?.updateComplete;
+    expect(picker?.options.map((option) => option.value)).toEqual(["research", "writer"]);
+    expect(picker?.querySelector(".agent-select__avatar--text")?.getAttribute("data-avatar")).toBe(
+      "🔎",
+    );
+
+    picker?.onSelect("writer");
+    expect(onSelectAgent).toHaveBeenCalledWith("writer");
+    container.remove();
+  });
+
   it("passes the exact collection item ids when selection changes", () => {
     const onToggleCollection = vi.fn();
     const container = document.createElement("div");
@@ -186,6 +221,11 @@ describe("renderMemoryImport", () => {
       (button) => button.textContent?.trim() === "Refresh",
     );
     expect(refresh?.disabled).toBe(true);
+    expect(
+      container.querySelector<HTMLElement & { disabled: boolean }>(
+        'openclaw-agent-select[name="memory-import-agent"]',
+      )?.disabled,
+    ).toBe(true);
     expect(
       container.querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']")
         ?.disabled,

@@ -45,6 +45,7 @@ vi.mock("../infra/state-migrations.js", async () => ({
 
 vi.mock("../config/sessions/session-accessor.js", () => ({
   listSessionEntries: listSessionEntriesMock,
+  listSessionEntriesReadOnly: listSessionEntriesMock,
 }));
 
 import { sessionsCommand } from "./sessions.js";

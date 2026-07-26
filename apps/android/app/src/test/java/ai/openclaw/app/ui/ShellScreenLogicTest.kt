@@ -139,6 +139,19 @@ class ShellScreenLogicTest {
   }
 
   @Test
+  fun sessionDashboardRoutePreservesTheOpeningSessionAndReturnsToChat() {
+    val nav = ShellNavigation()
+    nav.selectTab(Tab.Chat)
+
+    nav.openSessionDashboard("agent:main:phone")
+
+    assertEquals(Tab.Dashboard, nav.activeTab)
+    assertEquals("agent:main:phone", nav.dashboardSessionKey)
+    nav.back()
+    assertEquals(Tab.Chat, nav.activeTab)
+  }
+
+  @Test
   fun tabBarSelectionClearsCrossTabReturnOrigin() {
     val nav = ShellNavigation()
     nav.selectTab(Tab.Chat)
@@ -768,6 +781,7 @@ class ShellScreenLogicTest {
   fun settingsSectionTitlesGroupPowerSettingsByMeaning() {
     assertEquals("Connection", settingsSectionTitleForRoute(SettingsRoute.Gateway).resolveNativeText())
     assertEquals("Connection", settingsSectionTitleForRoute(SettingsRoute.NodesDevices).resolveNativeText())
+    assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.SystemAgent).resolveNativeText())
     assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.ProvidersModels).resolveNativeText())
     assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.Approvals).resolveNativeText())
     assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.CronJobs).resolveNativeText())

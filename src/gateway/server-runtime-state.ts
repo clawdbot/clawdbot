@@ -9,7 +9,7 @@ import {
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import { WebSocketServer } from "ws";
-import { resolveMcpAppSandboxPort } from "../agents/mcp-app-sandbox.js";
+import { resolveSandboxHostPort } from "../agents/sandbox-host.js";
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { resolveCanvasNodeCapability } from "../canvas/constants.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -29,7 +29,7 @@ import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import type { HooksConfigResolved } from "./hooks.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
-import { createMcpAppSandboxHttpServer } from "./mcp-app-sandbox-http.js";
+import { createSandboxHostHttpServer } from "./mcp-app-sandbox-http.js";
 import { isLoopbackHost, resolveGatewayListenHosts } from "./net.js";
 import type {
   GatewayBroadcastFn,
@@ -44,7 +44,6 @@ import {
   createChatRunState,
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
-  createToolEventRecipientRegistry,
 } from "./server-chat-state.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 import {
@@ -67,6 +66,7 @@ import {
 import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayTlsRuntime } from "./server/tls.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { canReceiveSessionEvent } from "./session-sharing.js";
 
 type GatewayPluginRequestHandler = (
   req: IncomingMessage,
@@ -142,9 +142,6 @@ export async function createGatewayRuntimeState(params: {
   agentRunSeq: Map<string, number>;
   dedupe: Map<string, DedupeEntry>;
   chatRunState: ReturnType<typeof createChatRunState>;
-  chatRunBuffers: Map<string, string>;
-  chatDeltaSentAt: Map<string, number>;
-  chatDeltaLastBroadcastLen: Map<string, number>;
   addChatRun: (sessionId: string, entry: ChatRunRegistration) => void;
   removeChatRun: (
     sessionId: string,
@@ -153,11 +150,12 @@ export async function createGatewayRuntimeState(params: {
   ) => ChatRunEntry | undefined;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatQueuedTurns: Map<string, import("./chat-queued-turns.js").QueuedChatTurnEntry>;
-  toolEventRecipients: ReturnType<typeof createToolEventRecipientRegistry>;
+  toolEventRecipients: ReturnType<typeof createChatRunState>["toolEventRecipients"];
   sessionEventSubscribers: ReturnType<typeof createSessionEventSubscriberRegistry>;
   sessionMessageSubscribers: ReturnType<typeof createSessionMessageSubscriberRegistry>;
   getWorkerIngressEndpoint: () => { host: "127.0.0.1"; port: number } | undefined;
   getMcpAppSandboxPort: () => number | undefined;
+  ensureSandboxHostPort: () => Promise<number>;
 }> {
   pinActivePluginHttpRouteRegistry(params.pluginRegistry);
   pinActivePluginSessionExtensionRegistry(params.pluginRegistry);
@@ -173,7 +171,19 @@ export async function createGatewayRuntimeState(params: {
     const clients = new Set<GatewayWsClient>();
     const sessionEventSubscribers = createSessionEventSubscriberRegistry();
     const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
-    const gatewayBroadcaster = createGatewayBroadcaster({ clients, sessionMessageSubscribers });
+    const gatewayBroadcaster = createGatewayBroadcaster({
+      clients,
+      sessionMessageSubscribers,
+      canReceiveSessionEvent: (client, sessionKeys, agentId, event, payload) =>
+        canReceiveSessionEvent({
+          cfg: loadRuntimeConfig(),
+          client,
+          sessionKeys,
+          agentId,
+          event,
+          payload,
+        }),
+    });
 
     let loadedHooksRequestHandler: HooksRequestHandler | null = null;
     const handleHooksRequest: HooksRequestHandler = async (req, res) => {
@@ -335,15 +345,6 @@ export async function createGatewayRuntimeState(params: {
       gatewayHttpServers.push(httpServer);
       httpServers.push(httpServer);
     }
-    const mcpAppSandboxServers =
-      params.cfg.mcp?.apps?.enabled === true
-        ? bindHosts.map(() =>
-            createMcpAppSandboxHttpServer(
-              params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
-            ),
-          )
-        : [];
-    httpServers.push(...mcpAppSandboxServers);
     let workerIngressPort: number | undefined;
     const workerHttpServer = params.workerIngressEnabled
       ? createHttpServer((_req, res) => {
@@ -364,7 +365,89 @@ export async function createGatewayRuntimeState(params: {
       throw new Error("Gateway HTTP server failed to start");
     }
     let mcpAppSandboxPort: number | undefined;
+    let sandboxHostStartPromise: Promise<number> | null = null;
     let startListeningPromise: Promise<void> | null = null;
+    let startListeningComplete = false;
+    const startSandboxHost = async (): Promise<number> => {
+      if (sandboxHostStartPromise) {
+        return await sandboxHostStartPromise;
+      }
+      // MCP Apps retain their eager startup path. Board-only gateways defer the
+      // second listener until an admitted HTML widget actually needs isolation.
+      sandboxHostStartPromise = (async () => {
+        if (httpBindHosts.length === 0) {
+          throw new Error("Gateway listener must start before the sandbox host");
+        }
+        const sandboxPort = resolveSandboxHostPort(params.port, params.cfg.mcp?.apps?.sandboxPort);
+        const sandboxServers = bindHosts.map(() =>
+          createSandboxHostHttpServer(
+            params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
+          ),
+        );
+        // Register before binding so normal runtime cleanup closes a partially
+        // started multi-host listener after any later bind failure.
+        httpServers.push(...sandboxServers);
+        try {
+          for (const host of httpBindHosts) {
+            const index = bindHosts.indexOf(host);
+            const server = sandboxServers[index];
+            if (!server) {
+              throw new Error(`Missing sandbox host HTTP server for bind host ${host}`);
+            }
+            await listenGatewayHttpServer({
+              httpServer: server,
+              bindHost: host,
+              port: sandboxPort,
+              retryEaddrinuse: false,
+              serviceName: "MCP App sandbox",
+              endpointScheme: params.gatewayTls?.enabled ? "https" : "http",
+            });
+          }
+        } catch (error) {
+          await Promise.all(
+            sandboxServers.map(
+              (server) =>
+                new Promise<void>((resolve) => {
+                  if (!server.listening) {
+                    resolve();
+                    return;
+                  }
+                  server.close(() => resolve());
+                }),
+            ),
+          );
+          for (const server of sandboxServers) {
+            const index = httpServers.indexOf(server);
+            if (index >= 0) {
+              httpServers.splice(index, 1);
+            }
+          }
+          throw error;
+        }
+        mcpAppSandboxPort = sandboxPort;
+        return sandboxPort;
+      })();
+      const startAttempt = sandboxHostStartPromise;
+      void startAttempt.catch(() => {
+        // Lazy startup failures are recoverable: the next admitted widget may
+        // retry after an occupied port or other transient bind error clears.
+        if (sandboxHostStartPromise === startAttempt) {
+          sandboxHostStartPromise = null;
+        }
+      });
+      return await startAttempt;
+    };
+    const ensureSandboxHostPort = async (): Promise<number> => {
+      if (!startListeningComplete) {
+        if (!startListeningPromise) {
+          throw new Error("Gateway listener must start before the sandbox host");
+        }
+        // Gateway sockets begin accepting independently. Wait for every bind
+        // host before freezing the shared sandbox listener set.
+        await startListeningPromise;
+      }
+      return await startSandboxHost();
+    };
     const startListening = async (): Promise<void> => {
       if (startListeningPromise) {
         await startListeningPromise;
@@ -413,26 +496,8 @@ export async function createGatewayRuntimeState(params: {
         if (httpBindHosts.length === 0) {
           throw new Error("Gateway HTTP server failed to start");
         }
-        if (mcpAppSandboxServers.length > 0) {
-          mcpAppSandboxPort = resolveMcpAppSandboxPort(
-            params.port,
-            params.cfg.mcp?.apps?.sandboxPort,
-          );
-          for (const host of httpBindHosts) {
-            const index = bindHosts.indexOf(host);
-            const server = mcpAppSandboxServers[index];
-            if (!server) {
-              throw new Error(`Missing MCP App sandbox HTTP server for bind host ${host}`);
-            }
-            await listenGatewayHttpServer({
-              httpServer: server,
-              bindHost: host,
-              port: mcpAppSandboxPort,
-              retryEaddrinuse: false,
-              serviceName: "MCP App sandbox",
-              endpointScheme: params.gatewayTls?.enabled ? "https" : "http",
-            });
-          }
+        if (params.cfg.mcp?.apps?.enabled === true) {
+          await startSandboxHost();
         }
         if (workerHttpServer) {
           await listenGatewayHttpServer({
@@ -448,6 +513,7 @@ export async function createGatewayRuntimeState(params: {
           workerIngressPort = address.port;
           httpServers.push(workerHttpServer);
         }
+        startListeningComplete = true;
       })();
       await startListeningPromise;
     };
@@ -455,14 +521,11 @@ export async function createGatewayRuntimeState(params: {
     const dedupe = new Map<string, DedupeEntry>();
     const chatRunState = createChatRunState();
     const chatRunRegistry = chatRunState.registry;
-    const chatRunBuffers = chatRunState.buffers;
-    const chatDeltaSentAt = chatRunState.deltaSentAt;
-    const chatDeltaLastBroadcastLen = chatRunState.deltaLastBroadcastLen;
     const addChatRun = chatRunRegistry.add;
     const removeChatRun = chatRunRegistry.remove;
     const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
     const chatQueuedTurns = new Map<string, import("./chat-queued-turns.js").QueuedChatTurnEntry>();
-    const toolEventRecipients = createToolEventRecipientRegistry();
+    const toolEventRecipients = chatRunState.toolEventRecipients;
 
     return {
       releasePluginRouteRegistry: () => {
@@ -487,9 +550,6 @@ export async function createGatewayRuntimeState(params: {
       agentRunSeq,
       dedupe,
       chatRunState,
-      chatRunBuffers,
-      chatDeltaSentAt,
-      chatDeltaLastBroadcastLen,
       addChatRun,
       removeChatRun,
       chatAbortControllers,
@@ -502,6 +562,7 @@ export async function createGatewayRuntimeState(params: {
           ? undefined
           : { host: "127.0.0.1" as const, port: workerIngressPort },
       getMcpAppSandboxPort: () => mcpAppSandboxPort,
+      ensureSandboxHostPort,
     };
   } catch (err) {
     // If state creation fails after pins are installed, release them immediately so later

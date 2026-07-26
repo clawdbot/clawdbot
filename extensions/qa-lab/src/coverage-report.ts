@@ -22,7 +22,7 @@ type QaScenarioSearchMatch = QaCoverageScenarioSummary & {
   codeRefs: string[];
   executionKind: QaSeedScenarioWithSource["execution"]["kind"];
   executionPath?: string;
-  runtimeParityTier?: string;
+  runtimePairLane?: string;
   requiredProviderMode?: string;
   requiredProvider?: string;
   requiredModel?: string;
@@ -124,7 +124,7 @@ function scenarioSearchText(scenario: QaSeedScenarioWithSource) {
       scenario.surface,
       ...(scenario.surfaces ?? []),
       scenario.category ?? "",
-      scenario.runtimeParityTier ?? "",
+      scenario.runtimePairLane ?? "",
       scenario.risk ?? "",
       scenario.riskLevel ?? "",
       scenario.objective,
@@ -160,7 +160,7 @@ function summarizeScenarioSearchMatch(scenario: QaSeedScenarioWithSource): QaSce
     executionKind: scenario.execution.kind,
     channel: scenario.execution.channel,
     ...(scenario.execution.kind !== "flow" ? { executionPath: scenario.execution.path } : {}),
-    runtimeParityTier: scenario.runtimeParityTier,
+    runtimePairLane: scenario.runtimePairLane,
     requiredProviderMode: stringifyConfigValue(config.requiredProviderMode),
     requiredProvider: stringifyConfigValue(config.requiredProvider),
     requiredModel: stringifyConfigValue(config.requiredModel),
@@ -436,7 +436,7 @@ export function renderQaCoverageMarkdownReport(inventory: QaCoverageInventory): 
 
 function formatOptionalScenarioMetadata(match: QaScenarioSearchMatch) {
   const metadata = [
-    match.runtimeParityTier ? `runtimeParityTier=${match.runtimeParityTier}` : "",
+    match.runtimePairLane ? `runtimePairLane=${match.runtimePairLane}` : "",
     match.requiredProviderMode ? `providerMode=${match.requiredProviderMode}` : "",
     match.requiredProvider ? `provider=${match.requiredProvider}` : "",
     match.requiredModel ? `model=${match.requiredModel}` : "",

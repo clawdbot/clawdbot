@@ -1,3 +1,5 @@
+import { isFastTestRuntimeEnv } from "../infra/env.js";
+
 type QueuedSwarmRun = {
   runId: string;
   start?: () => Promise<void>;
@@ -42,7 +44,7 @@ function startQueuedRun(lane: SwarmGroupLane, item: QueuedSwarmRun) {
           item.retryReady = true;
           pumpLane(lane);
         },
-        process.env.OPENCLAW_TEST_FAST === "1" ? 1 : 1_000,
+        isFastTestRuntimeEnv() ? 1 : 1_000,
       );
       timer.unref?.();
     });

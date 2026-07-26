@@ -6,19 +6,22 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import { sanitizeAgentId } from "../routing/session-key.js";
 import { isRecord } from "../utils.js";
 import { shouldDefaultCronDeliveryToAnnounce } from "./delivery-defaults.js";
 import { parseDeliveryInput } from "./delivery-field-schemas.js";
-import { normalizeCronPayload } from "./normalize-payload.js";
+import { normalizeCronCommandArgv, normalizeCronPayload } from "./normalize-payload.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
 import { coerceFiniteScheduleNumber } from "./schedule-number.js";
+import { normalizeCronScheduledToolPolicy } from "./scheduled-tool-policy.js";
 import { inferCronJobName } from "./service/normalize.js";
 import {
   assertSafeCronSessionTargetId,
   resolveCronCurrentSessionTarget,
 } from "./session-target.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "./stagger.js";
+import { normalizeCronStreamBatching } from "./stream-schedule.js";
 import type { CronJobCreate, CronJobPatch } from "./types.js";
 
 type UnknownRecord = Record<string, unknown>;
@@ -37,13 +40,20 @@ function coerceSchedule(schedule: UnknownRecord) {
   const next: UnknownRecord = { ...schedule };
   const rawKind = normalizeLowercaseStringOrEmpty(schedule.kind);
   const kind =
-    rawKind === "at" || rawKind === "every" || rawKind === "cron" || rawKind === "on-exit"
+    rawKind === "at" ||
+    rawKind === "every" ||
+    rawKind === "cron" ||
+    rawKind === "on-exit" ||
+    rawKind === "stream"
       ? rawKind
       : undefined;
   const exprRaw = normalizeOptionalString(schedule.expr) ?? "";
   const timezone = normalizeOptionalString(schedule.tz);
   const commandRaw = normalizeOptionalString(schedule.command) ?? "";
+  const streamCommand = normalizeCronCommandArgv(schedule.command);
   const cwdRaw = normalizeOptionalString(schedule.cwd) ?? "";
+  const streamMode = normalizeOptionalLowercaseString(schedule.mode);
+  const streamMatch = typeof schedule.match === "string" ? schedule.match : undefined;
   const everyMs = coerceFiniteScheduleNumber(schedule.everyMs);
   const anchorMs = coerceFiniteScheduleNumber(schedule.anchorMs);
   const atString = normalizeOptionalString(schedule.at) ?? "";
@@ -77,7 +87,9 @@ function coerceSchedule(schedule: UnknownRecord) {
   if (anchorMs !== undefined && anchorMs >= 0) {
     next.anchorMs = Math.floor(anchorMs);
   }
-  if (commandRaw) {
+  if (kind === "stream" && streamCommand) {
+    next.command = streamCommand;
+  } else if (commandRaw) {
     next.command = commandRaw;
   } else if ("command" in next) {
     delete next.command;
@@ -86,6 +98,19 @@ function coerceSchedule(schedule: UnknownRecord) {
     next.cwd = cwdRaw;
   } else if ("cwd" in next) {
     delete next.cwd;
+  }
+  if (kind === "stream") {
+    if (streamMode === "line" || streamMode === "match") {
+      next.mode = streamMode;
+    } else if ("mode" in next) {
+      delete next.mode;
+    }
+    if (streamMatch !== undefined) {
+      next.match = streamMatch;
+    } else if ("match" in next) {
+      delete next.match;
+    }
+    normalizeCronStreamBatching(next);
   }
   const staggerMs = normalizeCronStaggerMs(schedule.staggerMs);
   if (staggerMs !== undefined) {
@@ -120,11 +145,28 @@ function coerceSchedule(schedule: UnknownRecord) {
     delete next.expr;
     delete next.tz;
     delete next.staggerMs;
+    delete next.mode;
+    delete next.match;
+    delete next.batchMs;
+    delete next.maxBatchBytes;
+  } else if (next.kind === "stream") {
+    delete next.at;
+    delete next.everyMs;
+    delete next.anchorMs;
+    delete next.expr;
+    delete next.tz;
+    delete next.staggerMs;
   }
 
-  if (next.kind !== "on-exit") {
+  if (next.kind !== "on-exit" && next.kind !== "stream") {
     delete next.command;
     delete next.cwd;
+  }
+  if (next.kind !== "stream") {
+    delete next.mode;
+    delete next.match;
+    delete next.batchMs;
+    delete next.maxBatchBytes;
   }
 
   return next;
@@ -330,13 +372,26 @@ export function normalizeCronJobInput(
   if (isRecord(base.owner)) {
     const agentId = normalizeOptionalString(base.owner.agentId);
     const sessionKey = normalizeOptionalString(base.owner.sessionKey);
-    if (agentId || sessionKey) {
+    const accountId = normalizeOptionalAccountId(
+      typeof base.owner.accountId === "string" ? base.owner.accountId : undefined,
+    );
+    if (agentId || sessionKey || accountId) {
       next.owner = {
         ...(agentId ? { agentId: sanitizeAgentId(agentId) } : {}),
         ...(sessionKey ? { sessionKey } : {}),
+        ...(accountId ? { accountId } : {}),
       };
     } else {
       delete next.owner;
+    }
+  }
+
+  if ("scheduledToolPolicy" in base) {
+    const scheduledToolPolicy = normalizeCronScheduledToolPolicy(base.scheduledToolPolicy);
+    if (scheduledToolPolicy) {
+      next.scheduledToolPolicy = scheduledToolPolicy;
+    } else {
+      delete next.scheduledToolPolicy;
     }
   }
 
@@ -448,7 +503,7 @@ export function normalizeCronJobInput(
       const kind = typeof next.payload.kind === "string" ? next.payload.kind : "";
       // Keep create-time defaults explicit: system events join main, while agent
       // turns isolate by default to avoid unbounded token accumulation.
-      if (kind === "systemEvent") {
+      if (kind === "systemEvent" || kind === "heartbeat") {
         next.sessionTarget = "main";
       } else if (kind === "agentTurn" || kind === "command" || kind === "script") {
         next.sessionTarget = "isolated";

@@ -461,6 +461,51 @@ describe("buildTailscaleHttpsUrl", () => {
 });
 
 describe("resolveSharedMemoryStatusSnapshot", () => {
+  it.each([
+    {
+      name: "top-level defaults",
+      cfg: { memory: { search: { provider: "local" } } },
+    },
+    {
+      name: "per-agent overrides",
+      cfg: {
+        agents: {
+          entries: { main: { memory: { search: { provider: "local" } } } },
+        },
+      },
+    },
+  ])("inspects explicitly configured memory from $name", async ({ cfg }) => {
+    const manager = {
+      probeVectorStoreAvailability: vi.fn(async () => true),
+      probeVectorAvailability: vi.fn(async () => true),
+      status: vi.fn(() => ({
+        backend: "builtin" as const,
+        provider: "local",
+        files: 0,
+        chunks: 0,
+      })),
+      close: vi.fn(async () => {}),
+    };
+    const resolveMemoryConfig = vi.fn(() => ({
+      store: { databasePath: `/tmp/openclaw-missing-memory-${process.pid}.sqlite` },
+    }));
+    const getMemorySearchManager = vi.fn(async () => ({ manager }));
+
+    const result = await resolveSharedMemoryStatusSnapshot({
+      cfg,
+      agentStatus: { defaultId: "main" },
+      memoryPlugin: { enabled: true, slot: "memory-core" },
+      resolveMemoryConfig,
+      getMemorySearchManager,
+      requireDefaultDatabasePath: () =>
+        `/tmp/openclaw-missing-default-memory-${process.pid}.sqlite`,
+    });
+
+    expect(resolveMemoryConfig).toHaveBeenCalledOnce();
+    expect(getMemorySearchManager).toHaveBeenCalledOnce();
+    expect(result?.provider).toBe("local");
+  });
+
   it("asks custom memory-slot runtimes for status without requiring built-in memorySearch", async () => {
     const manager = {
       probeVectorStoreAvailability: vi.fn(async () => true),
@@ -486,10 +531,10 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
         plugins: {
           slots: { memory: "memory-lancedb-pro" },
         },
+        memory: { search: { enabled: false } },
+
         agents: {
-          defaults: {
-            memorySearch: { enabled: false },
-          },
+          defaults: {},
         },
       },
       agentStatus: { defaultId: "main" },

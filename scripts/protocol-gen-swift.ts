@@ -408,6 +408,27 @@ function emitStruct(name: string, schema: JsonSchema): string {
   return lines.join("\n");
 }
 
+function emitBoardEventParamsModels(schema: JsonSchema): string {
+  const variants = schema.anyOf ?? schema.oneOf ?? [];
+  const legacy = variants.find(
+    (variant) =>
+      variant.type === "object" &&
+      variant.properties?.sessionKey &&
+      variant.properties.widget &&
+      variant.properties.payload,
+  );
+  const ticket = variants.find(
+    (variant) =>
+      variant.type === "object" && variant.properties?.ticket && variant.properties.payload,
+  );
+  if (!legacy || !ticket) {
+    throw new Error("BoardEventParams must retain legacy and ticket object variants");
+  }
+  // BoardEventParams shipped as the legacy struct before the schema became a
+  // union. Preserve that source API and expose the ticket form separately.
+  return `${emitStruct("BoardEventParams", legacy)}\n${emitStruct("BoardTicketEventParams", ticket)}`;
+}
+
 function emitStructCustomCodable(
   name: string,
   props: Record<string, JsonSchema>,
@@ -589,6 +610,8 @@ function emitDiscriminatedUnionCompatibility(name: string): string[] {
     "        switch self {",
     "        case .missingScope(let value): value.code",
     "        case .mcpAppViewExpired(let value): value.code",
+    "        case .unknownAgentId(let value): value.code",
+    "        case .wizardNotFound(let value): value.code",
     "        }",
     "    }",
     "",
@@ -779,13 +802,17 @@ async function generate() {
     if (name === "GatewayFrame") {
       continue;
     }
+    if (name === "BoardEventParams") {
+      parts.push(emitBoardEventParamsModels(schema));
+      continue;
+    }
     if (schema.type === "object") {
       parts.push(emitStruct(name, schema));
     }
   }
 
   for (const [name, schema] of definitions) {
-    if (name === "GatewayFrame") {
+    if (name === "GatewayFrame" || name === "BoardEventParams") {
       continue;
     }
     const union = emitDiscriminatedUnion(name, schema);

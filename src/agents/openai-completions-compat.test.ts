@@ -1,6 +1,6 @@
+import { detectOpenAICompletionsCompat } from "@openclaw/ai/transports";
 // Verifies OpenAI-compatible endpoint defaults for streaming usage and reasoning payloads.
 import { describe, expect, it } from "vitest";
-import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import { resolveOpenAICompletionsCompatDefaults } from "./openai-completions-compat.test-support.js";
 
 describe("resolveOpenAICompletionsCompatDefaults", () => {

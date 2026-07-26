@@ -12,8 +12,11 @@ import type { NodesRouteData } from "./nodes-page.ts";
 async function loadNodesRouteData(context: ApplicationContext): Promise<NodesRouteData> {
   const gateway = context.gateway;
   const gatewaySnapshot = gateway.snapshot;
-  const nodes = createInitialNodesState(gatewaySnapshot);
-  if (!gatewaySnapshot.connected || !gatewaySnapshot.client) {
+  const nodes = createInitialNodesState({
+    client: gatewaySnapshot.client,
+    connected: gatewaySnapshot.phase === "connected",
+  });
+  if (gatewaySnapshot.phase !== "connected" || !gatewaySnapshot.client) {
     return { gateway, gatewaySnapshot, nodes };
   }
   await Promise.all([

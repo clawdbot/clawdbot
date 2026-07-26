@@ -285,7 +285,7 @@ async function readFileProviderPayload(params: {
         filePath,
         label: `secrets.providers.${params.providerName}.path`,
         io: { maxBytes, timeoutMs },
-        permissions: { allowInsecure: params.providerConfig.allowInsecurePath },
+        permissions: { allowInsecure: false },
       });
       const text = payload.toString("utf8").replace(/^\uFEFF/, "");
       if (params.providerConfig.mode === "singleValue") {
@@ -518,9 +518,8 @@ async function resolveExecRefs(params: {
       targetPath: commandPath,
       label: `secrets.providers.${params.providerName}.command`,
       trustedDirs: params.providerConfig.trustedDirs,
-      allowInsecurePath: params.providerConfig.allowInsecurePath,
       allowReadableByOthers: true,
-      allowSymlinkPath: params.providerConfig.allowSymlinkCommand,
+      allowSymlinkPath: false,
     });
   } catch (err) {
     throwUnknownProviderResolutionError({
@@ -530,12 +529,11 @@ async function resolveExecRefs(params: {
     });
   }
 
-  const requestPayload = {
+  const input = JSON.stringify({
     protocolVersion: 1,
     provider: params.providerName,
     ids,
-  };
-  const input = JSON.stringify(requestPayload);
+  });
   if (Buffer.byteLength(input, "utf8") > params.limits.maxBatchBytes) {
     throw providerResolutionError({
       code: "SECRET_PROVIDER_INVALID",

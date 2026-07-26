@@ -14,7 +14,6 @@ const SESSION_MEMORY_DROP_BLOCK_RE = new RegExp(
 );
 const SESSION_MEMORY_ROLE_DIRECTIVE_BLOCK_RE = /<(system|assistant|user)\b[^>]*>[\s\S]*?<\/\1>/gi;
 const SESSION_MEMORY_ROLE_DIRECTIVE_TAG_RE = /<\/?(?:system|assistant|user)\b[^>]*>/gi;
-const SESSION_MEMORY_MEDIA_PLACEHOLDER_RE = /(^|\n)\s*<media:[^>]+>(?:\s*\([^)]*\))?\s*/gi;
 const SESSION_MEMORY_TRAILING_NO_REPLY_RE = /(?:^|\n)\s*NO_REPLY\s*$/i;
 
 function isNoReplyMarker(text: string): boolean {
@@ -30,7 +29,6 @@ function sanitizeSessionMemoryTranscriptText(text: string): string | null {
     .replace(SESSION_MEMORY_DROP_BLOCK_RE, "")
     .replace(SESSION_MEMORY_ROLE_DIRECTIVE_BLOCK_RE, "")
     .replace(SESSION_MEMORY_ROLE_DIRECTIVE_TAG_RE, "")
-    .replace(SESSION_MEMORY_MEDIA_PLACEHOLDER_RE, "$1")
     .replace(SESSION_MEMORY_TRAILING_NO_REPLY_RE, "")
     .trim();
 

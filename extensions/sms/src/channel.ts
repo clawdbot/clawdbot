@@ -16,6 +16,10 @@ import {
   defineChannelMessageAdapter,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createConditionalWarningCollector } from "openclaw/plugin-sdk/channel-policy";
+import {
+  defineChannelSetupContract,
+  type ChannelSetupInput,
+} from "openclaw/plugin-sdk/channel-setup";
 import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
@@ -40,6 +44,16 @@ import { formatSmsProbeLines, probeSmsAccount, type SmsProbe } from "./status.js
 import type { ResolvedSmsAccount } from "./types.js";
 
 const CHANNEL_ID = "sms";
+
+type SmsSetupInput = ChannelSetupInput & {
+  accountSid?: string;
+  authToken?: string;
+  fromNumber?: string;
+  messagingServiceSid?: string;
+  webhookPath?: string;
+  publicWebhookUrl?: string;
+  dmPolicy?: string;
+};
 
 const smsConfigAdapter = createHybridChannelConfigAdapter<ResolvedSmsAccount>({
   sectionKey: CHANNEL_ID,
@@ -85,7 +99,7 @@ const collectSmsSecurityWarnings = createConditionalWarningCollector<ResolvedSms
     '- SMS: dmPolicy="open" allows any phone number to message the bot.',
 );
 
-function smsSetupPatch(input: Record<string, unknown>): Record<string, unknown> {
+function smsSetupPatch(input: SmsSetupInput): Record<string, unknown> {
   const patch: Record<string, unknown> = {};
   for (const key of [
     "accountSid",
@@ -97,7 +111,7 @@ function smsSetupPatch(input: Record<string, unknown>): Record<string, unknown> 
     "publicWebhookUrl",
     "dmPolicy",
     "allowFrom",
-  ]) {
+  ] as const) {
     if (input[key] !== undefined) {
       patch[key] = input[key];
     }
@@ -108,7 +122,7 @@ function smsSetupPatch(input: Record<string, unknown>): Record<string, unknown> 
 function applySmsAccountConfig(params: {
   cfg: OpenClawConfig;
   accountId: string;
-  input: Record<string, unknown>;
+  input: SmsSetupInput;
 }): OpenClawConfig {
   const patch = smsSetupPatch(params.input);
   const channels = { ...params.cfg.channels };
@@ -125,6 +139,51 @@ function applySmsAccountConfig(params: {
   channels[CHANNEL_ID] = { ...current, accounts };
   return { ...params.cfg, channels };
 }
+
+const smsSetupContract = defineChannelSetupContract({
+  fields: {
+    accountSid: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--account-sid <sid>", description: "Twilio account SID" },
+    },
+    authToken: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--auth-token <token>", description: "Twilio auth token" },
+    },
+    fromNumber: {
+      kind: "string",
+      cli: { flags: "--from-number <e164>", description: "Twilio sender phone number" },
+    },
+    messagingServiceSid: {
+      kind: "string",
+      cli: { flags: "--messaging-service-sid <sid>", description: "Twilio Messaging Service SID" },
+    },
+    defaultTo: {
+      kind: "string",
+      cli: { flags: "--default-to <e164>", description: "Default SMS recipient" },
+    },
+    webhookPath: {
+      kind: "string",
+      cli: { flags: "--webhook-path <path>", description: "SMS webhook path" },
+    },
+    publicWebhookUrl: {
+      kind: "string",
+      cli: { flags: "--public-webhook-url <url>", description: "Public SMS webhook URL" },
+    },
+    dmPolicy: {
+      kind: "choice",
+      choices: ["pairing", "allowlist", "open", "disabled"],
+      cli: { flags: "--dm-policy <policy>", description: "SMS DM policy" },
+    },
+    allowFrom: {
+      kind: "string-list",
+      cli: { flags: "--allow-from <numbers>", description: "Allowed SMS senders" },
+    },
+  },
+  adapter: { applyAccountConfig: applySmsAccountConfig },
+});
 
 function createSmsReceipt(params: {
   results: Array<{ sid: string; to: string; from?: string; status?: string }>;
@@ -240,8 +299,10 @@ export const smsPlugin: ChannelPlugin<ResolvedSmsAccount, SmsProbe> = createChat
     reload: { configPrefixes: [`channels.${CHANNEL_ID}`] },
     configSchema: SmsChannelConfigSchema,
     setup: {
-      applyAccountConfig: applySmsAccountConfig,
+      applyAccountConfig: ({ cfg, accountId, input }) =>
+        applySmsAccountConfig({ cfg, accountId, input: input as SmsSetupInput }),
     },
+    setupContract: smsSetupContract,
     config: {
       ...smsConfigAdapter,
       inspectAccount: inspectSmsAccount,

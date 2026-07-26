@@ -215,9 +215,9 @@ describe("qa cli registration", () => {
       "--qa-profile",
       "smoke-ci",
       "--surface",
-      "channel-framework",
+      "channels",
       "--category",
-      "channel-framework.conversation-routing-and-delivery",
+      "channels.conversation-routing-and-delivery",
       "--scenario",
       "dm-chat-baseline",
       "--evidence-mode",
@@ -240,8 +240,8 @@ describe("qa cli registration", () => {
       repoRoot: "/tmp/openclaw-repo",
       outputDir: ".artifacts/qa-e2e/smoke-ci",
       profile: "smoke-ci",
-      surface: "channel-framework",
-      category: "channel-framework.conversation-routing-and-delivery",
+      surface: "channels",
+      category: "channels.conversation-routing-and-delivery",
       scenarioIds: ["dm-chat-baseline"],
       evidenceMode: "slim",
       transportId: "qa-channel",
@@ -255,10 +255,27 @@ describe("qa cli registration", () => {
     expect(runQaLabSelfCheckCommand).not.toHaveBeenCalled();
   });
 
+  it("forwards fail-fast to taxonomy-backed QA profile runs", async () => {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "qa",
+      "run",
+      "--qa-profile",
+      "smoke-ci",
+      "--fail-fast",
+    ]);
+
+    expect(runQaProfileCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ failFast: true, profile: "smoke-ci" }),
+    );
+    expect(runQaLabSelfCheckCommand).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["--output-dir", [".artifacts/qa-e2e/smoke-ci"]],
-    ["--surface", ["agent-runtime-and-provider-execution"]],
-    ["--category", ["channel-framework.conversation-routing-and-delivery"]],
+    ["--surface", ["agents"]],
+    ["--category", ["channels.conversation-routing-and-delivery"]],
     ["--scenario", ["dm-chat-baseline"]],
     ["--evidence-mode", ["slim"]],
     ["--exclude-test-execution-evidence", []],
@@ -268,6 +285,7 @@ describe("qa cli registration", () => {
     ["--alt-model", ["anthropic/claude-sonnet-4-6"]],
     ["--concurrency", ["2"]],
     ["--allow-failures", []],
+    ["--fail-fast", []],
     ["--fast", []],
   ])("rejects qa run profile-only flag %s without --qa-profile", async (flag, values) => {
     await expect(
@@ -894,6 +912,20 @@ describe("qa cli registration", () => {
     expect(options.providerMode).toBeUndefined();
   });
 
+  it.each(["host", "multipass"])("forwards --fail-fast to the %s suite runner", async (runner) => {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "qa",
+      "suite",
+      "--runner",
+      runner,
+      "--fail-fast",
+    ]);
+
+    expect(requireQaSuiteOptions()).toEqual(expect.objectContaining({ failFast: true, runner }));
+  });
+
   it("forwards --pack for suite runs", async () => {
     await program.parseAsync(["node", "openclaw", "qa", "suite", "--pack", "personal-agent"]);
 
@@ -901,20 +933,20 @@ describe("qa cli registration", () => {
     expect(options.pack).toBe("personal-agent");
   });
 
-  it("forwards --runtime-parity-tier for suite runs", async () => {
+  it("forwards --runtime-pair-lane for suite runs", async () => {
     await program.parseAsync([
       "node",
       "openclaw",
       "qa",
       "suite",
-      "--runtime-parity-tier",
-      "standard",
-      "--runtime-parity-tier",
-      "optional,soak",
+      "--runtime-pair-lane",
+      "core",
+      "--runtime-pair-lane",
+      "extended,soak",
     ]);
 
     const options = requireQaSuiteOptions();
-    expect(options.runtimeParityTier).toEqual(["standard", "optional,soak"]);
+    expect(options.runtimePairLane).toEqual(["core", "extended,soak"]);
   });
 
   it("routes credential add flags into the qa runtime command", async () => {

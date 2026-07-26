@@ -31,6 +31,14 @@ export function createAgentAttemptLifecycleCallbacks(state: AgentAttemptLifecycl
       if (evt.stream !== "lifecycle" || typeof evt.data?.phase !== "string") {
         return;
       }
+      if (evt.data.phase === "start") {
+        // A same-candidate retry replaces deferred terminal state from the
+        // preceding attempt; retaining it would abort a recovered run.
+        state.lifecycleError = undefined;
+        state.lifecycleFinishing = false;
+        state.lifecycleEnded = false;
+        return;
+      }
       if (typeof evt.data.error === "string" && evt.data.error.trim()) {
         state.lifecycleError = evt.data.error;
       }

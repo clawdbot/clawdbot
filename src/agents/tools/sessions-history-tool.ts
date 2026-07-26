@@ -13,6 +13,7 @@ import { capArrayByJsonBytes } from "../../gateway/session-transcript-readers.js
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
 import { truncateUtf16Safe } from "../../utils.js";
+import { resolveDefaultAgentId } from "../agent-scope-config.js";
 import { optionalPositiveIntegerSchema } from "../schema/typebox.js";
 import {
   describeSessionsHistoryTool,
@@ -432,6 +433,7 @@ export function createSessionsHistoryTool(opts?: {
       });
       const visibilityGuard = await createSessionVisibilityGuard({
         action: "history",
+        defaultAgentId: resolveDefaultAgentId(cfg),
         requesterSessionKey: effectiveRequesterKey,
         visibility,
         a2aPolicy,

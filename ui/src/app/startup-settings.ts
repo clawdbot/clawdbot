@@ -1,4 +1,5 @@
 // Control UI startup settings resolve native auth handoff and URL parameters.
+import { inferBasePathFromPathname, sessionRouteNamespaceFromPath } from "../app-route-paths.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import type { UiSettings } from "./settings.ts";
 
@@ -103,8 +104,11 @@ export function resolveApplicationStartupSettings(
   const token = normalizeOptionalString(hashToken ?? queryToken);
   const hasBootstrapTokenParam = hashParams.has("bootstrapToken");
   const bootstrapToken = normalizeOptionalString(hashParams.get("bootstrapToken"));
-  const session = normalizeOptionalString(params.get("session") ?? hashParams.get("session"));
-  const shouldResetSessionForToken = Boolean(token && !session && !gatewayUrlChanged);
+  const sessionPath = sessionRouteNamespaceFromPath(
+    location.pathname,
+    inferBasePathFromPathname(location.pathname),
+  );
+  const shouldResetSessionForToken = Boolean(token && !sessionPath && !gatewayUrlChanged);
   let shouldCleanUrl = false;
 
   if (params.has("token")) {
@@ -145,13 +149,6 @@ export function resolveApplicationStartupSettings(
     params.delete("password");
     hashParams.delete("password");
     shouldCleanUrl = true;
-  }
-
-  if (session) {
-    updateSettings({
-      sessionKey: session,
-      lastActiveSessionKey: session,
-    });
   }
 
   if (gatewayUrlRaw != null) {

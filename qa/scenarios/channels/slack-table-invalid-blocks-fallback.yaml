@@ -3,7 +3,8 @@ scenario:
   id: slack-table-invalid-blocks-fallback
   surface: channels
   coverage:
-    primary: [channels.media-rich-content]
+    primary:
+      - slack.media-and-rich-content
   execution:
     kind: flow
     channel: slack

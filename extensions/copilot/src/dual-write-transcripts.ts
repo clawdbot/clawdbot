@@ -30,6 +30,7 @@
 
 import { createHash } from "node:crypto";
 import {
+  projectAgentHarnessTranscriptMessageForDisplay,
   runAgentHarnessBeforeMessageWriteHook,
   type AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -153,7 +154,7 @@ async function mirrorCopilotTranscript(params: MirrorCopilotTranscriptParams): P
         if (!nextMessage) {
           continue;
         }
-        const messageToAppend = (
+        const messageWithIdentity = (
           idempotencyKey
             ? {
                 ...(nextMessage as unknown as Record<string, unknown>),
@@ -161,6 +162,10 @@ async function mirrorCopilotTranscript(params: MirrorCopilotTranscriptParams): P
               }
             : nextMessage
         ) as AgentMessage;
+        const messageToAppend = projectAgentHarnessTranscriptMessageForDisplay({
+          hidden: (message as { display?: boolean }).display === false,
+          message: messageWithIdentity,
+        });
         const appended = await transcript.appendMessage({
           message: messageToAppend,
           idempotencyLookup: idempotencyKey ? "caller-checked" : "scan",

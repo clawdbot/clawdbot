@@ -88,6 +88,40 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("Bedrock inbound image base64", () => {
+  const model = () => bedrockModel({ input: ["text", "image"] });
+  const userImage = (data: string) =>
+    ({
+      messages: [{ role: "user", content: [{ type: "image", mimeType: "image/png", data }] }],
+    }) as never;
+
+  it("rejects malformed base64 and decodes a valid PNG without Node Buffer", () => {
+    expect(() => testing.convertMessages(userImage("!!!not-base64!!!"), model(), "none")).toThrow(
+      /Amazon Bedrock image content has malformed base64/,
+    );
+    const png =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    const messages = (() => {
+      const nodeBuffer = globalThis.Buffer;
+      try {
+        Reflect.deleteProperty(globalThis, "Buffer");
+        return testing.convertMessages(userImage(png), model(), "none");
+      } finally {
+        Reflect.set(globalThis, "Buffer", nodeBuffer);
+      }
+    })();
+    const firstMessage = messages[0];
+    expect(firstMessage).toBeDefined();
+    if (!firstMessage) {
+      throw new Error("expected at least one message");
+    }
+    const content = firstMessage.content as Array<{
+      image?: { source?: { bytes?: Uint8Array } };
+    }>;
+    expect(content[0]?.image?.source?.bytes?.byteLength).toBeGreaterThan(0);
+  });
+});
+
 describe("Bedrock tool-result replay", () => {
   it("drops payload-less image husks from consecutive tool results", () => {
     const messages = testing.convertMessages(
@@ -325,6 +359,34 @@ describe("Bedrock stop reasons", () => {
 });
 
 describe("Bedrock thinking effort mapping", () => {
+  it.each([
+    { reasoning: undefined, expected: "high", maxTokens: 128_000, fields: true },
+    { reasoning: "off" as const, expected: "off", maxTokens: undefined, fields: false },
+  ])(
+    "uses the Opus 5 default for reasoning=$reasoning",
+    ({ reasoning, expected, maxTokens, fields }) => {
+      const model = bedrockModel({
+        id: "global.anthropic.claude-opus-5",
+        name: "Claude Opus 5",
+        reasoning: true,
+        contextWindow: 1_000_000,
+        maxTokens: 128_000,
+        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      });
+      const options = testing.resolveSimpleBedrockOptions(model, { reasoning });
+
+      expect(options).toMatchObject({ maxTokens, reasoning: expected });
+      expect(testing.buildAdditionalModelRequestFields(model, options)).toEqual(
+        fields
+          ? {
+              thinking: { type: "adaptive", display: "summarized" },
+              output_config: { effort: "high" },
+            }
+          : undefined,
+      );
+    },
+  );
+
   it.each([
     { reasoning: undefined, expected: "high" },
     { reasoning: "off" as const, expected: "low" },

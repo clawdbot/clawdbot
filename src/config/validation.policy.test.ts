@@ -208,3 +208,31 @@ describe("config validation SecretRef policy guards", () => {
     }
   });
 });
+
+describe("config validation gateway.port policy", () => {
+  it("rejects gateway.port values outside the 1–65535 TCP range", () => {
+    // port 0 — not a valid TCP port
+    const zero = validateConfigObjectRaw({ gateway: { port: 0 } });
+    expect(zero.ok).toBe(false);
+    if (!zero.ok) {
+      const issue = requireIssue(zero.issues, "gateway.port");
+      expect(issue.message).toContain("expected number to be >=1");
+    }
+
+    // port 65536 — above TCP max
+    const above = validateConfigObjectRaw({ gateway: { port: 65_536 } });
+    expect(above.ok).toBe(false);
+    if (!above.ok) {
+      const issue = requireIssue(above.issues, "gateway.port");
+      expect(issue.message).toBeDefined();
+    }
+
+    // port 65535 — valid TCP max
+    const valid = validateConfigObjectRaw({ gateway: { port: 65_535 } });
+    expect(valid.ok).toBe(true);
+
+    // port 1 — valid TCP min
+    const min = validateConfigObjectRaw({ gateway: { port: 1 } });
+    expect(min.ok).toBe(true);
+  });
+});

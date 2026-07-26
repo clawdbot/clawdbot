@@ -3,10 +3,10 @@ title: "Runtime tool fixture — fs.read"
 scenario:
   id: runtime-tool-fs-read
   surface: runtime-tools
-  runtimeParityTier: standard
+  runtimePairLane: core
   coverage:
     primary:
-      - tools.fs.read
+      - agent-runtime.tool-fs-read
   objective: Verify file read behavior is tracked across OpenClaw and Codex while Codex owns read natively.
   successCriteria:
     - OpenClaw may expose OpenClaw read while Codex app-server mode may omit duplicate OpenClaw dynamic read.

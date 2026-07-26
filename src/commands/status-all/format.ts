@@ -512,14 +512,6 @@ export function buildGatewayStatusJsonPayload(params: {
     self: params.gatewaySelf ?? null,
     error: params.gatewayProbe?.error ?? null,
     authWarning: params.gatewayProbeAuthWarning ?? null,
-    ...(params.gatewayProbe?.health &&
-    typeof params.gatewayProbe.health === "object" &&
-    "modelPricing" in params.gatewayProbe.health
-      ? {
-          // Preserve model pricing when the gateway already returned it; do not synthesize pricing locally.
-          modelPricing: (params.gatewayProbe.health as { modelPricing?: unknown }).modelPricing,
-        }
-      : {}),
   };
 }
 

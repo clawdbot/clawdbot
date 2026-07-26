@@ -1,5 +1,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntryReadOnly,
+  updateSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
@@ -114,7 +117,7 @@ export function capturePendingFinalDeliveryIdentity(params: {
     return undefined;
   }
   try {
-    const entry = loadSessionEntry({
+    const entry = loadSessionEntryReadOnly({
       storePath: params.storePath,
       sessionKey: params.sessionKey,
       hydrateSkillPromptRefs: false,

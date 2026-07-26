@@ -805,6 +805,19 @@ describe("resolveGatewayStartupPluginIds", () => {
       ["demo-channel", "browser", "amazon-bedrock", "memory-core"],
     ],
     [
+      "includes bundled model providers selected only as agent fallbacks at startup",
+      {
+        agents: {
+          defaults: {
+            model: {
+              fallbacks: ["amazon-bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0"],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      ["demo-channel", "browser", "amazon-bedrock", "memory-core"],
+    ],
+    [
       "honors explicit plugin disablement for selected model providers",
       {
         agents: {
@@ -820,7 +833,7 @@ describe("resolveGatewayStartupPluginIds", () => {
       "includes configured bundled speech providers at startup",
       {
         channels: {},
-        messages: { tts: { provider: "microsoft" } },
+        tts: { provider: "microsoft" },
       } as OpenClawConfig,
       ["browser", "microsoft", "memory-core"],
     ],
@@ -828,7 +841,7 @@ describe("resolveGatewayStartupPluginIds", () => {
       "includes bundled speech providers configured by provider block",
       {
         channels: {},
-        messages: { tts: { providers: { "tts-local-cli": { command: "say" } } } },
+        tts: { providers: { "tts-local-cli": { command: "say" } } },
       } as OpenClawConfig,
       ["browser", "tts-local-cli", "memory-core"],
     ],
@@ -836,7 +849,7 @@ describe("resolveGatewayStartupPluginIds", () => {
       "maps legacy edge TTS selection to the Microsoft speech plugin",
       {
         channels: {},
-        messages: { tts: { provider: "edge" } },
+        tts: { provider: "edge" },
       } as OpenClawConfig,
       ["browser", "microsoft", "memory-core"],
     ],
@@ -844,7 +857,7 @@ describe("resolveGatewayStartupPluginIds", () => {
       "includes explicitly enabled external speech providers at startup",
       {
         channels: {},
-        messages: { tts: { provider: "gradium" } },
+        tts: { provider: "gradium" },
         plugins: { entries: { gradium: { enabled: true } } },
       } as OpenClawConfig,
       ["browser", "gradium", "memory-core"],
@@ -853,14 +866,12 @@ describe("resolveGatewayStartupPluginIds", () => {
       "includes active persona speech providers at startup",
       {
         channels: {},
-        messages: {
-          tts: {
-            persona: "narrator",
-            personas: {
-              narrator: {
-                label: "Narrator",
-                provider: "microsoft",
-              },
+        tts: {
+          persona: "narrator",
+          personas: {
+            narrator: {
+              label: "Narrator",
+              provider: "microsoft",
             },
           },
         },
@@ -871,13 +882,11 @@ describe("resolveGatewayStartupPluginIds", () => {
       "includes agent-inherited active persona speech providers at startup",
       {
         channels: {},
-        messages: {
-          tts: {
-            personas: {
-              narrator: {
-                label: "Narrator",
-                provider: "microsoft",
-              },
+        tts: {
+          personas: {
+            narrator: {
+              label: "Narrator",
+              provider: "microsoft",
             },
           },
         },
@@ -893,13 +902,11 @@ describe("resolveGatewayStartupPluginIds", () => {
         channels: {
           "demo-channel": { tts: { persona: "narrator" } },
         },
-        messages: {
-          tts: {
-            personas: {
-              narrator: {
-                label: "Narrator",
-                provider: "microsoft",
-              },
+        tts: {
+          personas: {
+            narrator: {
+              label: "Narrator",
+              provider: "microsoft",
             },
           },
         },
@@ -916,13 +923,11 @@ describe("resolveGatewayStartupPluginIds", () => {
             },
           },
         },
-        messages: {
-          tts: {
-            personas: {
-              narrator: {
-                label: "Narrator",
-                provider: "microsoft",
-              },
+        tts: {
+          personas: {
+            narrator: {
+              label: "Narrator",
+              provider: "microsoft",
             },
           },
         },
@@ -933,11 +938,9 @@ describe("resolveGatewayStartupPluginIds", () => {
       "honors disabled speech provider config blocks at startup",
       {
         channels: {},
-        messages: {
-          tts: {
-            provider: "microsoft",
-            providers: { microsoft: { enabled: false } },
-          },
+        tts: {
+          provider: "microsoft",
+          providers: { microsoft: { enabled: false } },
         },
       } as OpenClawConfig,
       ["browser", "memory-core"],
@@ -946,7 +949,7 @@ describe("resolveGatewayStartupPluginIds", () => {
       "honors explicit plugin disablement for configured speech providers",
       {
         channels: {},
-        messages: { tts: { provider: "microsoft" } },
+        tts: { provider: "microsoft" },
         plugins: { entries: { microsoft: { enabled: false } } },
       } as OpenClawConfig,
       ["browser", "memory-core"],
@@ -957,15 +960,13 @@ describe("resolveGatewayStartupPluginIds", () => {
         channels: {},
         agents: {
           defaults: {
-            imageGenerationModel: {
-              primary: "openai/gpt-image-2",
-              fallbacks: ["google/gemini-3-pro-image-preview"],
-            },
-            videoGenerationModel: {
-              primary: "google/veo-3.1-fast-generate-preview",
-            },
-            musicGenerationModel: {
-              primary: "google/lyria-3-clip-preview",
+            mediaModels: {
+              image: {
+                primary: "openai/gpt-image-2",
+                fallbacks: ["google/gemini-3-pro-image-preview"],
+              },
+              video: { primary: "google/veo-3.1-fast-generate-preview" },
+              music: { primary: "google/lyria-3-clip-preview" },
             },
           },
         },
@@ -978,7 +979,9 @@ describe("resolveGatewayStartupPluginIds", () => {
         channels: {},
         agents: {
           defaults: {
-            imageGenerationModel: { primary: "google/gemini-3-pro-image-preview" },
+            mediaModels: {
+              image: { primary: "google/gemini-3-pro-image-preview" },
+            },
           },
         },
         plugins: { entries: { google: { enabled: false } } },
@@ -1017,10 +1020,10 @@ describe("resolveGatewayStartupPluginIds", () => {
       "includes the owning plugin for a configured memory embedding provider at startup",
       {
         channels: {},
+        memory: { search: { provider: "openai" } },
+
         agents: {
-          defaults: {
-            memorySearch: { provider: "openai" },
-          },
+          defaults: {},
         },
       } as OpenClawConfig,
       ["browser", "openai", "memory-core"],
@@ -1029,10 +1032,10 @@ describe("resolveGatewayStartupPluginIds", () => {
       "includes the owning plugin for a configured memory embedding fallback at startup",
       {
         channels: {},
+        memory: { search: { provider: "ollama", fallback: "openai" } },
+
         agents: {
-          defaults: {
-            memorySearch: { provider: "ollama", fallback: "openai" },
-          },
+          defaults: {},
         },
       } as OpenClawConfig,
       ["browser", "openai", "ollama", "memory-core"],
@@ -1042,7 +1045,7 @@ describe("resolveGatewayStartupPluginIds", () => {
       {
         channels: {},
         agents: {
-          list: [{ id: "researcher", memorySearch: { provider: "openai" } }],
+          list: [{ id: "researcher", memory: { search: { provider: "openai" } } }],
         },
       } as OpenClawConfig,
       ["browser", "openai", "memory-core"],
@@ -1051,12 +1054,10 @@ describe("resolveGatewayStartupPluginIds", () => {
       "includes the api-owner plugin for a custom models.providers memory embedding provider at startup",
       {
         channels: {},
+        memory: { search: { provider: "ollama-5080" } },
+
         agents: {
-          defaults: {
-            // Custom id resolves to its `api` owner ("ollama") for the embedding
-            // adapter, so the owning plugin must load at startup.
-            memorySearch: { provider: "ollama-5080" },
-          },
+          defaults: {},
         },
         models: {
           providers: {
@@ -1074,10 +1075,10 @@ describe("resolveGatewayStartupPluginIds", () => {
       "includes the api-owner plugin for a custom models.providers memory embedding fallback at startup",
       {
         channels: {},
+        memory: { search: { provider: "openai", fallback: "ollama-5080" } },
+
         agents: {
-          defaults: {
-            memorySearch: { provider: "openai", fallback: "ollama-5080" },
-          },
+          defaults: {},
         },
         models: {
           providers: {
@@ -1095,10 +1096,10 @@ describe("resolveGatewayStartupPluginIds", () => {
       "includes generic embedding provider owners for configured memory search at startup",
       {
         channels: {},
+        memory: { search: { provider: "generic-embed" } },
+
         agents: {
-          defaults: {
-            memorySearch: { provider: "generic-embed" },
-          },
+          defaults: {},
         },
       } as OpenClawConfig,
       ["browser", "generic-embedding", "memory-core"],
@@ -1107,10 +1108,10 @@ describe("resolveGatewayStartupPluginIds", () => {
       "does not load plugin owners for core generic memory embedding providers",
       {
         channels: {},
+        memory: { search: { provider: "openai-compatible" } },
+
         agents: {
-          defaults: {
-            memorySearch: { provider: "openai-compatible" },
-          },
+          defaults: {},
         },
       } as OpenClawConfig,
       ["browser", "memory-core"],
@@ -1119,10 +1120,10 @@ describe("resolveGatewayStartupPluginIds", () => {
       "does not load plugin owners for custom providers backed by core generic embeddings",
       {
         channels: {},
+        memory: { search: { provider: "tenant-embeddings" } },
+
         agents: {
-          defaults: {
-            memorySearch: { provider: "tenant-embeddings" },
-          },
+          defaults: {},
         },
         models: {
           providers: {
@@ -1140,10 +1141,10 @@ describe("resolveGatewayStartupPluginIds", () => {
       "does not load memory embedding provider owners when the memory slot is disabled",
       {
         channels: {},
+        memory: { search: { provider: "openai", fallback: "ollama" } },
+
         agents: {
-          defaults: {
-            memorySearch: { provider: "openai", fallback: "ollama" },
-          },
+          defaults: {},
         },
         plugins: {
           slots: { memory: "none" },
@@ -1155,10 +1156,10 @@ describe("resolveGatewayStartupPluginIds", () => {
       "ignores memory embedding fallbacks when primary provider is fts-only",
       {
         channels: {},
+        memory: { search: { provider: "none", fallback: "openai" } },
+
         agents: {
-          defaults: {
-            memorySearch: { provider: "none", fallback: "openai" },
-          },
+          defaults: {},
         },
       } as OpenClawConfig,
       ["browser", "memory-core"],
@@ -1167,10 +1168,10 @@ describe("resolveGatewayStartupPluginIds", () => {
       "includes the llama.cpp provider for configured local memory embeddings",
       {
         channels: {},
+        memory: { search: { provider: "local", fallback: "auto" } },
+
         agents: {
-          defaults: {
-            memorySearch: { provider: "local", fallback: "auto" },
-          },
+          defaults: {},
         },
       } as OpenClawConfig,
       ["browser", "llama-cpp", "memory-core"],
@@ -1179,10 +1180,10 @@ describe("resolveGatewayStartupPluginIds", () => {
       "skips memory embedding providers from disabled memory search blocks",
       {
         channels: {},
+        memory: { search: { enabled: false, provider: "openai", fallback: "ollama" } },
+
         agents: {
-          defaults: {
-            memorySearch: { enabled: false, provider: "openai", fallback: "ollama" },
-          },
+          defaults: {},
         },
       } as OpenClawConfig,
       ["browser", "memory-core"],
@@ -1191,10 +1192,10 @@ describe("resolveGatewayStartupPluginIds", () => {
       "honors explicit plugin disablement for configured memory embedding providers",
       {
         channels: {},
+        memory: { search: { provider: "openai" } },
+
         agents: {
-          defaults: {
-            memorySearch: { provider: "openai" },
-          },
+          defaults: {},
         },
         plugins: { entries: { openai: { enabled: false } } },
       } as OpenClawConfig,
@@ -1204,10 +1205,10 @@ describe("resolveGatewayStartupPluginIds", () => {
       "honors denied plugins for configured memory embedding providers",
       {
         channels: {},
+        memory: { search: { provider: "openai" } },
+
         agents: {
-          defaults: {
-            memorySearch: { provider: "openai" },
-          },
+          defaults: {},
         },
         plugins: { deny: ["openai"] },
       } as OpenClawConfig,
@@ -1217,11 +1218,13 @@ describe("resolveGatewayStartupPluginIds", () => {
       "skips a per-agent memory embedding provider when memory search is disabled by inherited defaults",
       {
         channels: {},
+        memory: { search: { enabled: false } },
+
         agents: {
-          defaults: {
-            memorySearch: { enabled: false },
-          },
-          list: [{ id: "researcher", memorySearch: { provider: "openai", fallback: "ollama" } }],
+          defaults: {},
+          list: [
+            { id: "researcher", memory: { search: { provider: "openai", fallback: "ollama" } } },
+          ],
         },
       } as OpenClawConfig,
       ["browser", "memory-core"],
@@ -1230,11 +1233,11 @@ describe("resolveGatewayStartupPluginIds", () => {
       "includes the inherited default provider when a per-agent override re-enables memory search",
       {
         channels: {},
+        memory: { search: { enabled: false, provider: "openai", fallback: "ollama" } },
+
         agents: {
-          defaults: {
-            memorySearch: { enabled: false, provider: "openai", fallback: "ollama" },
-          },
-          list: [{ id: "researcher", memorySearch: { enabled: true } }],
+          defaults: {},
+          list: [{ id: "researcher", memory: { search: { enabled: true } } }],
         },
       } as OpenClawConfig,
       ["browser", "openai", "ollama", "memory-core"],
@@ -1243,13 +1246,13 @@ describe("resolveGatewayStartupPluginIds", () => {
       "includes default memory embedding providers for unlisted agents even when listed agents override memory search",
       {
         channels: {},
+        memory: { search: { provider: "openai" } },
+
         agents: {
-          defaults: {
-            memorySearch: { provider: "openai" },
-          },
+          defaults: {},
           list: [
-            { id: "muted", memorySearch: { enabled: false } },
-            { id: "researcher", memorySearch: { provider: "ollama" } },
+            { id: "muted", memory: { search: { enabled: false } } },
+            { id: "researcher", memory: { search: { provider: "ollama" } } },
           ],
         },
       } as OpenClawConfig,
@@ -1259,10 +1262,10 @@ describe("resolveGatewayStartupPluginIds", () => {
       "includes default memory embedding providers for listed agents that inherit defaults",
       {
         channels: {},
+        memory: { search: { provider: "openai" } },
+
         agents: {
-          defaults: {
-            memorySearch: { provider: "openai" },
-          },
+          defaults: {},
           list: [{ id: "researcher" }],
         },
       } as OpenClawConfig,
@@ -1343,7 +1346,9 @@ describe("resolveGatewayStartupPluginIds", () => {
         channels: {},
         agents: {
           defaults: {
-            imageGenerationModel: { primary: "google/gemini-3-pro-image-preview" },
+            mediaModels: {
+              image: { primary: "google/gemini-3-pro-image-preview" },
+            },
           },
         },
         plugins: { allow: ["browser"] },
@@ -2169,7 +2174,7 @@ describe("resolveGatewayStartupPluginIds", () => {
             defaults: {
               model: "amazon-bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             },
-            list: [{ id: "ops", utilityModel: "openai/gpt-5.5-nano" }],
+            entries: { ops: { utilityModel: "openai/gpt-5.5-nano" } },
           },
           channels: {},
           plugins: {
@@ -2192,10 +2197,10 @@ describe("resolveGatewayStartupPluginIds", () => {
     expect(
       resolveGatewayStartupMetadataPluginIds({
         config: {
+          memory: { search: { provider: "openai", fallback: "ollama" } },
+
           agents: {
-            defaults: {
-              memorySearch: { provider: "openai", fallback: "ollama" },
-            },
+            defaults: {},
           },
           channels: {},
           plugins: {
@@ -2382,7 +2387,7 @@ describe("resolveGatewayStartupPluginIds", () => {
         config: {
           agents: {
             defaults: {
-              imageGenerationModel: "unknown-provider/model",
+              mediaModels: { image: { primary: "unknown-provider/model" } },
             },
           },
           plugins: {
@@ -3286,7 +3291,7 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         } as OpenClawConfig,
         workspaceDir: "/tmp",
         env: {
-          DEMO_CHANNEL_TOKEN: "token",
+          DEMO_FAKE_TEST_TRIGGER: "present",
         } as NodeJS.ProcessEnv,
         includePersistedAuthState: false,
       }),
@@ -3301,7 +3306,7 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         } as OpenClawConfig,
         workspaceDir: "/tmp",
         env: {
-          DEMO_CHANNEL_TOKEN: "token",
+          DEMO_FAKE_TEST_TRIGGER: "present",
         } as NodeJS.ProcessEnv,
         includePersistedAuthState: false,
       }),
@@ -3323,7 +3328,7 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         } as OpenClawConfig,
         workspaceDir: "/tmp",
         env: {
-          DEMO_CHANNEL_TOKEN: "token",
+          DEMO_FAKE_TEST_TRIGGER: "present",
         } as NodeJS.ProcessEnv,
         includePersistedAuthState: false,
       }),
@@ -3334,6 +3339,69 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         effective: false,
         pluginIds: [],
         blockedReasons: ["not-in-allowlist"],
+      },
+    ]);
+  });
+
+  it("suppresses env-only presence when ambient triggers are disabled", () => {
+    listPotentialConfiguredChannelPresenceSignals.mockReturnValue([
+      { channelId: "demo-channel", source: "env" },
+    ]);
+
+    expect(
+      resolveConfiguredChannelPresencePolicy({
+        config: {},
+        workspaceDir: "/tmp",
+        env: { DEMO_FAKE_TEST_TRIGGER: "present" } as NodeJS.ProcessEnv,
+        includePersistedAuthState: false,
+        ambientEnvTriggers: "suppress",
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("suppresses manifest-env-only presence when ambient triggers are disabled", () => {
+    expect(
+      resolveConfiguredChannelPresencePolicy({
+        config: {
+          plugins: {
+            allow: ["external-env-channel-plugin"],
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {
+          EXTERNAL_ENV_CHANNEL_HOST: "irc.example.com",
+          EXTERNAL_ENV_CHANNEL_NICK: "openclaw",
+        } as NodeJS.ProcessEnv,
+        includePersistedAuthState: false,
+        ambientEnvTriggers: "suppress",
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("retains mixed explicit-config and env presence under suppression", () => {
+    listPotentialConfiguredChannelPresenceSignals.mockReturnValue([
+      { channelId: "demo-channel", source: "env" },
+    ]);
+
+    expect(
+      resolveConfiguredChannelPresencePolicy({
+        config: {
+          channels: {
+            "demo-channel": { enabled: true },
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: { DEMO_FAKE_TEST_TRIGGER: "present" } as NodeJS.ProcessEnv,
+        includePersistedAuthState: false,
+        ambientEnvTriggers: "suppress",
+      }),
+    ).toEqual([
+      {
+        channelId: "demo-channel",
+        sources: ["env", "explicit-config"],
+        effective: true,
+        pluginIds: ["demo-channel"],
+        blockedReasons: [],
       },
     ]);
   });
@@ -3357,7 +3425,7 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         } as OpenClawConfig,
         workspaceDir: "/tmp",
         env: {
-          DEMO_CHANNEL_TOKEN: "token",
+          DEMO_FAKE_TEST_TRIGGER: "present",
         } as NodeJS.ProcessEnv,
         includePersistedAuthState: false,
       }),
@@ -3460,7 +3528,7 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         config,
         workspaceDir: "/tmp",
         env: {
-          DEMO_CHANNEL_TOKEN: "ambient",
+          DEMO_FAKE_TEST_TRIGGER: "ambient",
         } as NodeJS.ProcessEnv,
         includePersistedAuthState: false,
       }),
@@ -3470,7 +3538,7 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         config,
         workspaceDir: "/tmp",
         env: {
-          DEMO_CHANNEL_TOKEN: "ambient",
+          DEMO_FAKE_TEST_TRIGGER: "ambient",
         } as NodeJS.ProcessEnv,
         includePersistedAuthState: false,
       }),
@@ -3520,7 +3588,7 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         } as OpenClawConfig,
         workspaceDir: "/tmp",
         env: {
-          EXTERNAL_ENV_CHANNEL_TOKEN: "token",
+          EXTERNAL_ENV_CHANNEL_TOKEN: "present",
         } as NodeJS.ProcessEnv,
         includePersistedAuthState: false,
       }),
@@ -3703,7 +3771,7 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         } as OpenClawConfig,
         workspaceDir: "/tmp",
         env: {
-          DEMO_CHANNEL_TOKEN: "ambient",
+          DEMO_FAKE_TEST_TRIGGER: "ambient",
         } as NodeJS.ProcessEnv,
       }),
     ).toStrictEqual([]);
@@ -3730,7 +3798,7 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         } as OpenClawConfig,
         workspaceDir: "/tmp",
         env: {
-          DEMO_CHANNEL_TOKEN: "ambient",
+          DEMO_FAKE_TEST_TRIGGER: "ambient",
         } as NodeJS.ProcessEnv,
       }),
     ).toEqual(["demo-other-channel"]);

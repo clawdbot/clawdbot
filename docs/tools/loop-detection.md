@@ -43,7 +43,7 @@ Global setting:
 }
 ```
 
-Per-agent override (optional, at `agents.list[].tools.loopDetection`):
+Per-agent override (optional, at `agents.entries.*.tools.loopDetection`):
 
 ```json5
 {

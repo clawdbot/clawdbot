@@ -8,7 +8,7 @@
   },
   "type": "module",
   "dependencies": {
-    "@line/bot-sdk": "11.1.0",
+    "@line/bot-sdk": "11.2.0",
     "zod": "4.4.3"
   },
   "devDependencies": {
@@ -46,7 +46,15 @@
       "blurb": "LINE Messaging API webhook bot.",
       "systemImage": "message",
       "order": 75,
-      "quickstartAllowFrom": true
+      "quickstartAllowFrom": true,
+      "setup": { "fields": [
+        { "key": "channelAccessToken", "kind": "string", "sensitive": true, "cli": { "flags": "--channel-access-token <token>", "description": "LINE channel access token" } },
+        { "key": "token", "kind": "string", "sensitive": true, "cli": { "flags": "--token <token>", "description": "LINE channel access token (alias)" } },
+        { "key": "channelSecret", "kind": "string", "sensitive": true, "cli": { "flags": "--channel-secret <secret>", "description": "LINE channel secret" } },
+        { "key": "tokenFile", "kind": "string", "sensitive": true, "cli": { "flags": "--token-file <path>", "description": "LINE access token file" } },
+        { "key": "secretFile", "kind": "string", "sensitive": true, "cli": { "flags": "--secret-file <path>", "description": "LINE channel secret file" } },
+        { "key": "useEnv", "kind": "boolean", "cli": { "flags": "--use-env", "description": "Use LINE environment credentials" } }
+      ] }
     },
     "install": {
       "npmSpec": "@openclaw/line",

@@ -238,9 +238,7 @@ export type CoreConfig = {
       botLoopProtection?: ChannelBotLoopProtectionConfig;
     };
   };
-  commands?: {
-    useAccessGroups?: boolean;
-  };
+  commands?: OpenClawConfig["commands"];
   session?: {
     store?: string;
     dmScope?: NonNullable<OpenClawConfig["session"]>["dmScope"];

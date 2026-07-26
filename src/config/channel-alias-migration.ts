@@ -9,6 +9,7 @@ import {
   type LegacyStreamingAliasOptions,
   type NormalizeLegacyChannelAccountParams,
 } from "./channel-compat-normalization.js";
+import { materializeInheritedAccountStreaming } from "./channel-doctor-helpers.js";
 import type { LegacyConfigRule } from "./legacy.shared.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
@@ -58,6 +59,8 @@ export type ChannelAliasMigrationSpec<TMode extends string = StreamingAliasMode>
    * would freeze inheritance into the account config.
    */
   accountStreamingReplacesRoot?: boolean;
+  /** Account resolution layers accounts.default between root and named accounts. */
+  accountStreamingInheritsDefaultAccount?: boolean;
   dm?: {
     root?: boolean;
     accounts?: boolean;
@@ -156,6 +159,9 @@ export function defineChannelAliasMigration<TMode extends string = StreamingAlia
     if (!entry) {
       return { config: params.cfg, changes };
     }
+    const accountsBefore = spec.accountStreamingInheritsDefaultAccount
+      ? asObjectRecord(entry.accounts)
+      : null;
     if (
       streaming.deliveryOnly === true &&
       !hasLegacyAliases(entry) &&
@@ -179,11 +185,19 @@ export function defineChannelAliasMigration<TMode extends string = StreamingAlia
     if (!result.changed) {
       return { config: params.cfg, changes };
     }
+    const config = {
+      ...params.cfg,
+      channels: { ...channels, [spec.channelId]: result.entry },
+    } as OpenClawConfig;
     return {
-      config: {
-        ...params.cfg,
-        channels: { ...channels, [spec.channelId]: result.entry },
-      } as OpenClawConfig,
+      config: spec.accountStreamingInheritsDefaultAccount
+        ? materializeInheritedAccountStreaming({
+            cfg: config,
+            channelId: spec.channelId,
+            accountsBefore,
+            changes,
+          })
+        : config,
       changes,
     };
   };

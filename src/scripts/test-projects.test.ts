@@ -225,11 +225,11 @@ describe("test-projects args", () => {
   });
 
   it("routes plugin-sdk targets to the plugin-sdk config", () => {
-    expect(buildVitestRunPlans(["src/plugin-sdk/anthropic-vertex-auth-presence.test.ts"])).toEqual([
+    expect(buildVitestRunPlans(["src/plugin-sdk/migration-runtime.test.ts"])).toEqual([
       {
         config: "test/vitest/vitest.plugin-sdk.config.ts",
         forwardedArgs: [],
-        includePatterns: ["src/plugin-sdk/anthropic-vertex-auth-presence.test.ts"],
+        includePatterns: ["src/plugin-sdk/migration-runtime.test.ts"],
         watchMode: false,
       },
     ]);
@@ -657,6 +657,7 @@ describe("test-projects args", () => {
         includePatterns: [
           "extensions/memory-core/src/memory/index.test.ts",
           "extensions/memory-core/src/memory/manager.fts-only-reindex.test.ts",
+          "extensions/memory-core/src/memory/manager.legacy-migration-cleanup.test.ts",
           "extensions/memory-core/src/memory/manager.reindex-recovery.test.ts",
           "extensions/memory-core/src/memory/manager.self-heal-missing-identity.test.ts",
         ],

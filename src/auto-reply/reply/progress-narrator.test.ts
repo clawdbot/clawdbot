@@ -135,7 +135,7 @@ describe("progress narration through reply options", () => {
     expect(generate).toHaveBeenCalledTimes(1);
     expect(onUpdate).toHaveBeenCalledWith({ text: "Working on the request." });
     expect(inputs[0]?.userMessage).toBe("change the default model");
-    expect(inputs[0]?.activityNotes.join("\n")).toContain("ls");
+    expect(inputs[0]?.activityNotes).toContain('Tool exec: {"command":"ls"}');
   });
 
   it("ignores non-work tools and non-start phases", async () => {
@@ -294,7 +294,7 @@ describe("progress narration through reply options", () => {
       await flushNarrations();
 
       expect(generate).toHaveBeenCalledTimes(1);
-      expect(inputs[0]?.activityNotes).toContain("model: Checking the current configuration.");
+      expect(inputs[0]?.activityNotes).toContain("Assistant: Checking the current configuration.");
     } finally {
       vi.useRealTimers();
     }
@@ -356,18 +356,26 @@ describe("progress narration through reply options", () => {
     expect(generate).toHaveBeenCalledTimes(2);
   });
 
-  it("narrates failures immediately", async () => {
+  it("narrates metadata-only command failures immediately", async () => {
     const { narrator, generate, onUpdate, inputs } = createNarratorHarness({
       texts: ["Running a command.", "The command failed, retrying."],
     });
 
     narrator.noteToolStart({ name: "exec", phase: "start" });
     await flushNarrations();
-    narrator.noteCommandOutput({ name: "exec", title: "pnpm test", phase: "end", exitCode: 1 });
+    narrator.noteCommandOutput({
+      name: "exec",
+      title: "pnpm test",
+      phase: "end",
+      exitCode: 1,
+      output: "private command output must not reach narration",
+    });
     await flushNarrations();
 
     expect(generate).toHaveBeenCalledTimes(2);
-    expect(inputs[1]?.activityNotes.join("\n")).toContain("pnpm test failed (exit 1)");
+    const notes = inputs[1]?.activityNotes.join("\n") ?? "";
+    expect(notes).toContain("pnpm test: failed (exit 1)");
+    expect(notes).not.toContain("private command output");
     expect(onUpdate).toHaveBeenLastCalledWith({ text: "The command failed, retrying." });
   });
 
@@ -452,7 +460,7 @@ describe("progress narration through reply options", () => {
 
     const notes = inputs.at(-1)?.activityNotes.join("\n") ?? "";
     expect(notes).not.toContain("/etc/hosts");
-    expect(notes).toContain("exec failed (exit 1)");
+    expect(notes).toContain("exec: failed (exit 1)");
   });
 
   it("normalizes narration text to one bounded plain line", async () => {

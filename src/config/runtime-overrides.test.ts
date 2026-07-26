@@ -17,11 +17,11 @@ describe("runtime overrides", () => {
 
   it("sets and applies nested overrides", () => {
     const cfg = {
-      messages: { responsePrefix: "[openclaw]" },
+      channels: { whatsapp: { responsePrefix: "[openclaw]" } },
     } as OpenClawConfig;
-    setConfigOverride("messages.responsePrefix", "[debug]");
+    setConfigOverride("channels.whatsapp.responsePrefix", "[debug]");
     const next = applyConfigOverrides(cfg);
-    expect(next.messages?.responsePrefix).toBe("[debug]");
+    expect(next.channels?.whatsapp?.responsePrefix).toBe("[debug]");
   });
 
   it("captures an immutable override applier", () => {

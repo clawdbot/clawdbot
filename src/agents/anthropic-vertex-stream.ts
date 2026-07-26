@@ -1,10 +1,10 @@
+import type { StreamFn } from "@openclaw/llm-core";
 /**
  * Anthropic Vertex stream facade.
  * Keeps Vertex-specific provider implementation in the bundled provider plugin
  * while core imports a small stable factory.
  */
 import { loadBundledPluginPublicSurfaceModuleSync } from "../plugin-sdk/facade-runtime.js";
-import type { StreamFn } from "./runtime/index.js";
 
 type AnthropicVertexStreamFacade = {
   createAnthropicVertexStreamFn: (

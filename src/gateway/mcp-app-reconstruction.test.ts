@@ -30,6 +30,7 @@ vi.mock("./session-transcript-readers.js", () => ({
 }));
 vi.mock("./session-utils.js", () => ({
   loadSessionEntry: mocks.loadSessionEntry,
+  loadSessionEntryReadOnly: mocks.loadSessionEntry,
 }));
 
 import { mintMcpAppViewFromTranscript, restoreMcpAppView } from "./mcp-app-reconstruction.js";

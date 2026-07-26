@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { appendFileSync } from "node:fs";
-import type { AgentOutputOptions, AgentTurnResult } from "./config.ts";
+import type { AgentOutputOptions } from "./config.ts";
 import { CROSS_OS_AGENT_TURN_OPTIONAL, CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS } from "./config.ts";
 import { readLogTextTail } from "./logs.ts";
 
@@ -73,22 +73,9 @@ export function buildReleaseAgentTurnArgs(sessionId: string) {
 
 export function shouldRetryCrossOsAgentTurnError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
-  return /Agent output did not contain the expected OK marker|Agent turn used embedded fallback instead of gateway|model idle timeout|did not produce a response before the model idle timeout|gateway request timeout for agent|Command timed out|timed out and could not be terminated cleanly|rate limit reached|rate_limit_exceeded|HTTP 429|HTTP 503|upstream connect error|disconnect\/reset before headers|connection timeout/u.test(
+  return /Agent output did not contain the expected OK marker|model idle timeout|did not produce a response before the model idle timeout|gateway request timeout for agent|Command timed out|timed out and could not be terminated cleanly|rate limit reached|rate_limit_exceeded|HTTP 429|HTTP 503|upstream connect error|disconnect\/reset before headers|connection timeout/u.test(
     message,
   );
-}
-
-export function agentTurnUsedEmbeddedFallback(
-  result: Pick<AgentTurnResult, "stdout" | "stderr">,
-  options: AgentOutputOptions = {},
-) {
-  const logText =
-    typeof options.logText === "string"
-      ? options.logText
-      : typeof options.logPath === "string"
-        ? readLogTextTail(options.logPath)
-        : "";
-  return /EMBEDDED FALLBACK:/u.test(`${result.stdout ?? ""}\n${result.stderr ?? ""}\n${logText}`);
 }
 
 export function agentOutputHasExpectedOkMarker(stdout: string, options: AgentOutputOptions = {}) {

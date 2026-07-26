@@ -35,6 +35,7 @@ const controlUiSurfaces = new Set<PluginControlUiDescriptor["surface"]>([
   "run",
   "settings",
   "tab",
+  "widget",
 ]);
 
 function normalizeHostHookString(value: unknown): string {

@@ -18,9 +18,10 @@ The `google-meet` plugin joins explicit Meet URLs on behalf of an OpenClaw agent
 
 ## Quick start
 
-Install the local audio dependencies, then set a realtime provider key. OpenAI is the default transcription provider for `agent` mode; Google Gemini Live is available as the `bidi`-mode voice provider:
+Install the plugin and local audio dependencies, then set a realtime provider key. OpenAI is the default transcription provider for `agent` mode; Google Gemini Live is available as the `bidi`-mode voice provider:
 
 ```bash
+openclaw plugins install npm:@openclaw/google-meet
 brew install blackhole-2ch sox
 export OPENAI_API_KEY=sk-...
 # only needed when realtime.voiceProvider is "google" for bidi mode
@@ -40,20 +41,21 @@ system_profiler SPAudioDataType | grep -i BlackHole
 command -v sox
 ```
 
-Enable the plugin:
+The plugin is enabled by default after installation. Add an entry only to customize it:
 
 ```json5
 {
   plugins: {
     entries: {
       "google-meet": {
-        enabled: true,
         config: {},
       },
     },
   },
 }
 ```
+
+Run `openclaw plugins disable google-meet` if you do not want the plugin active.
 
 Check setup, then join:
 
@@ -119,7 +121,7 @@ If the browser fallback hits a Google login or Meet permission blocker, the tool
 
 ### Observe-only join
 
-Set `"mode": "transcribe"` to skip the duplex realtime bridge (no BlackHole/SoX requirement, no talk-back). Transcribe-mode Chrome joins also skip OpenClaw's microphone/camera permission grant and the Meet **Use microphone** path; if Meet shows the audio-choice interstitial, automation tries **Continue without microphone** first. Managed Chrome transports in this mode install a best-effort Meet caption observer. `googlemeet status --json` and `googlemeet doctor` report `captioning`, `captionsEnabledAttempted`, `transcriptLines`, `lastCaptionAt`, `lastCaptionSpeaker`, `lastCaptionText`, and a `recentTranscript` tail.
+Set `"mode": "transcribe"` to skip the duplex realtime bridge (no BlackHole/SoX requirement, no talk-back). Transcribe-mode Chrome joins also skip OpenClaw's microphone/camera permission grant and the Meet **Use microphone** path; if Meet shows the audio-choice interstitial, automation tries **Continue without microphone** first. Managed Chrome transports install a best-effort Meet caption observer in every mode so durable notes are available without changing the live agent-consult path. `googlemeet status --json` and `googlemeet doctor` report `captioning`, `captionsEnabledAttempted`, `transcriptLines`, `lastCaptionAt`, `lastCaptionSpeaker`, `lastCaptionText`, and a `recentTranscript` tail.
 
 For the bounded session transcript, read the exact tracked Meet tab:
 
@@ -128,7 +130,12 @@ openclaw googlemeet transcript <session-id>
 openclaw googlemeet transcript <session-id> --since <next-index> --json
 ```
 
-The observer keeps at most 2,000 completed caption lines in the Meet page. Visible progressive text stays in the status health tail until the caption row completes, so saving `nextIndex` cannot skip a later text expansion; leaving finalizes visible rows before the snapshot. `droppedLines` reports lines lost from the head when the cap is exceeded. The four most recently ended session transcripts remain readable until the gateway restarts. Older ended transcripts return `evicted: true`. This is intentionally runtime memory, not durable meeting-history storage: restarting the gateway, closing the tab before a snapshot, or exceeding the documented caps can lose captions.
+The observer keeps at most 2,000 completed caption lines in the Meet page. Visible progressive text stays in the status health tail until the caption row completes, so saving `nextIndex` cannot skip a later text expansion; leaving finalizes visible rows before the snapshot. `droppedLines` reports lines lost from the head when the cap is exceeded. The bounded `googlemeet transcript` tail still keeps only the four most recently ended sessions and resets with the Gateway. Separately, OpenClaw appends completed caption rows to the shared state database throughout the meeting and writes a derived summary on leave. Use [`openclaw transcripts`](/cli/transcripts) to inspect or export those durable notes.
+
+Automatic notes are enabled by default. Set `transcripts.enabled: false` to
+disable durable notes globally; explicit `transcribe` mode still exposes only
+its bounded live tail. Twilio joins do not have the browser caption stream and
+are not captured by this path.
 
 For a yes/no listen probe:
 
@@ -163,10 +170,10 @@ system_profiler SPAudioDataType | grep -i BlackHole
 command -v sox
 ```
 
-Enable the plugin in the VM and start the node host:
+Install the plugin in the VM, where it is enabled by default, and start the node host:
 
 ```bash
-openclaw plugins enable google-meet
+openclaw plugins install npm:@openclaw/google-meet
 openclaw node run --host <gateway-host> --port 18789 --display-name parallels-macos
 ```
 
@@ -199,7 +206,7 @@ Route Meet through that node:
 {
   gateway: {
     nodes: {
-      allowCommands: ["googlemeet.chrome", "browser.proxy"],
+      commands: { allow: ["googlemeet.chrome", "browser.proxy"] },
     },
   },
   plugins: {
@@ -241,15 +248,15 @@ If `chromeNode.node` is omitted, OpenClaw auto-selects only when exactly one con
 
 ### Common failure checks
 
-| Symptom                                                  | Fix                                                                                                                                                                                                                                                                 |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Configured Google Meet node ... is not usable: offline` | The pinned node is known but unavailable. Report the setup blocker; do not silently fall back to another transport unless asked.                                                                                                                                    |
-| `No connected Google Meet-capable node`                  | Run `openclaw node run` in the VM, approve pairing, and run `openclaw plugins enable google-meet` and `openclaw plugins enable browser` there. Confirm `gateway.nodes.allowCommands` includes `googlemeet.chrome` and `browser.proxy`.                              |
-| `BlackHole 2ch audio device not found`                   | Install `blackhole-2ch` on the host being checked and reboot.                                                                                                                                                                                                       |
-| `BlackHole 2ch audio device not found on the node`       | Install `blackhole-2ch` in the VM and reboot the VM.                                                                                                                                                                                                                |
-| Chrome opens but cannot join                             | Sign in to the browser profile in the VM, or keep `chrome.guestName` set. Guest auto-join uses OpenClaw browser automation through the node browser proxy; point the node's `browser.defaultProfile` (or a named existing-session profile) at the profile you want. |
-| Duplicate Meet tabs                                      | Leave `chrome.reuseExistingTab: true`. OpenClaw activates an existing tab for the same URL, and creation reuses an in-progress `.../new` or Google account prompt tab, before opening another.                                                                      |
-| No audio                                                 | Route Meet mic/speaker through the virtual audio path used by OpenClaw; use separate virtual devices or Loopback-style routing for clean duplex audio.                                                                                                              |
+| Symptom                                                  | Fix                                                                                                                                                                                                                                                                                   |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Configured Google Meet node ... is not usable: offline` | The pinned node is known but unavailable. Report the setup blocker; do not silently fall back to another transport unless asked.                                                                                                                                                      |
+| `No connected Google Meet-capable node`                  | Install `npm:@openclaw/google-meet` in the VM, run `openclaw plugins enable browser`, start `openclaw node run`, and approve pairing. If Google Meet was explicitly disabled, enable it too. Confirm `gateway.nodes.commands.allow` includes `googlemeet.chrome` and `browser.proxy`. |
+| `BlackHole 2ch audio device not found`                   | Install `blackhole-2ch` on the host being checked and reboot.                                                                                                                                                                                                                         |
+| `BlackHole 2ch audio device not found on the node`       | Install `blackhole-2ch` in the VM and reboot the VM.                                                                                                                                                                                                                                  |
+| Chrome opens but cannot join                             | Sign in to the browser profile in the VM, or keep `chrome.guestName` set. Guest auto-join uses OpenClaw browser automation through the node browser proxy; point the node's `browser.defaultProfile` (or a named existing-session profile) at the profile you want.                   |
+| Duplicate Meet tabs                                      | Leave `chrome.reuseExistingTab: true`. OpenClaw activates an existing tab for the same URL, and creation reuses an in-progress `.../new` or Google account prompt tab, before opening another.                                                                                        |
+| No audio                                                 | Route Meet mic/speaker through the virtual audio path used by OpenClaw; use separate virtual devices or Loopback-style routing for clean duplex audio.                                                                                                                                |
 
 ## Install notes
 
@@ -762,14 +769,12 @@ ElevenLabs for both agent-mode listening and speaking:
 
 ```json5
 {
-  messages: {
-    tts: {
-      provider: "elevenlabs",
-      providers: {
-        elevenlabs: {
-          modelId: "eleven_v3",
-          speakerVoiceId: "pMsXgVXv3BLzUgSXRplE",
-        },
+  tts: {
+    provider: "elevenlabs",
+    providers: {
+      elevenlabs: {
+        modelId: "eleven_v3",
+        speakerVoiceId: "pMsXgVXv3BLzUgSXRplE",
       },
     },
   },
@@ -795,7 +800,7 @@ ElevenLabs for both agent-mode listening and speaking:
 }
 ```
 
-The persistent Meet voice comes from `messages.tts.providers.elevenlabs.speakerVoiceId`. Agent replies can also use per-reply `[[tts:speakerVoiceId=... model=eleven_v3]]` directives when TTS model overrides are enabled, but config is the deterministic default for meetings. On join, logs show `transcriptionProvider=elevenlabs`, and each spoken reply logs `provider=elevenlabs model=eleven_v3 speakerVoiceId=<voiceId>`.
+The persistent Meet voice comes from `tts.providers.elevenlabs.speakerVoiceId`. Agent replies can also use per-reply `[[tts:speakerVoiceId=... model=eleven_v3]]` directives when TTS model overrides are enabled, but config is the deterministic default for meetings. On join, logs show `transcriptionProvider=elevenlabs`, and each spoken reply logs `provider=elevenlabs model=eleven_v3 speakerVoiceId=<voiceId>`.
 
 Twilio-only config:
 
@@ -854,7 +859,7 @@ Agents use the `google_meet` tool:
 | `test_speech`           | Create/reuse a session, trigger a known phrase, return Chrome health                              |
 | `test_listen`           | Create/reuse an observe-only session, wait for caption/transcript movement                        |
 
-`test_speech` always forces `mode: "agent"` or `"bidi"` and fails if asked to run in `mode: "transcribe"`, because observe-only sessions cannot emit speech. Its `speechOutputVerified` result is based on realtime audio output bytes increasing during that call, so a reused session with older audio does not count as a fresh check.
+`test_speech` always forces `mode: "agent"` or `"bidi"` and fails if asked to run in `mode: "transcribe"`, because observe-only sessions cannot emit speech. `speechOutputVerified` requires both fresh realtime output bytes and fresh non-silent audio returning on the bridge's microphone capture path during that output. A reused session's older output or loopback signal does not count, and sink-byte growth alone no longer reports verified speech.
 
 For Chrome transports, `leave` keeps a reused user-owned tab open after clicking Meet's Leave call button. Tabs opened by OpenClaw are closed after departure.
 
@@ -912,6 +917,10 @@ Speaking on demand:
 | `providerConnected` / `realtimeReady`                                 | Realtime voice bridge state                                                                                            |
 | `lastInputAt` / `lastOutputAt`                                        | Last audio seen from/sent to the bridge                                                                                |
 | `audioOutputRouted` / `audioOutputDeviceLabel`                        | Whether the Meet tab's media output was actively routed to the bridge's BlackHole device                               |
+| `lastOutputLoopbackAt` / `outputLoopbackSignalBytes`                  | Fresh output whose waveform fingerprint was correlated on the BlackHole microphone capture path                        |
+| `lastOutputLoopbackCorrelation`                                       | Correlation score tying the captured signal to the current assistant-output generation                                 |
+| `outputGeneration` / `verifiedOutputGeneration`                       | Monotonic ids; equality means the current output, rather than an older utterance, passed loopback proof                |
+| `lastOutputLoopbackRms` / `lastOutputLoopbackPeak`                    | Audio-energy diagnostics for the latest verified loopback capture chunk                                                |
 | `lastSuppressedInputAt` / `suppressedInputBytes`                      | Loopback input ignored while assistant playback is active                                                              |
 
 ## Agent and bidi modes
@@ -1018,7 +1027,7 @@ On non-macOS Gateway hosts, `google_meet` stays visible, but local Chrome talk-b
 On the node host:
 
 ```bash
-openclaw plugins enable google-meet
+openclaw plugins install npm:@openclaw/google-meet
 openclaw plugins enable browser
 OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 \
   openclaw node run --host <gateway-lan-ip> --port 18789 --display-name parallels-macos
@@ -1038,7 +1047,7 @@ The node must be connected and list `googlemeet.chrome` plus `browser.proxy`; th
 {
   gateway: {
     nodes: {
-      allowCommands: ["browser.proxy", "googlemeet.chrome"],
+      commands: { allow: ["browser.proxy", "googlemeet.chrome"] },
     },
   },
 }

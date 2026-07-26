@@ -8,12 +8,14 @@
   },
   "type": "module",
   "dependencies": {
-    "@slack/bolt": "4.7.3",
-    "@slack/types": "2.21.1",
-    "@slack/web-api": "7.18.0",
+    "@slack/bolt": "5.0.0",
+    "@slack/socket-mode": "3.0.0",
+    "@slack/types": "3.0.0",
+    "@slack/web-api": "8.0.0",
     "p-map": "7.0.5",
-    "typebox": "1.3.3",
-    "ws": "8.21.0",
+    "typebox": "1.3.6",
+    "undici": "7.28.0",
+    "ws": "8.21.1",
     "zod": "4.4.3"
   },
   "devDependencies": {
@@ -33,6 +35,9 @@
       "./index.ts"
     ],
     "setupEntry": "./setup-entry.ts",
+    "setupFeatures": {
+      "configPromotion": true
+    },
     "channel": {
       "id": "slack",
       "configuredState": {
@@ -44,7 +49,9 @@
           ]
         }
       },
-      "approvalFlags": ["native"],
+      "approvalFlags": [
+        "native"
+      ],
       "label": "Slack",
       "selectionLabel": "Slack (Socket Mode)",
       "detailLabel": "Slack Bot",
@@ -56,7 +63,16 @@
       "commands": {
         "nativeCommandsAutoEnabled": false,
         "nativeSkillsAutoEnabled": false
-      }
+      },
+      "setup": { "fields": [
+        { "key": "botToken", "kind": "string", "sensitive": true, "cli": { "flags": "--bot-token <token>", "description": "Slack bot token" } },
+        { "key": "appToken", "kind": "string", "sensitive": true, "cli": { "flags": "--app-token <token>", "description": "Slack app token" } },
+        { "key": "userToken", "kind": "string", "sensitive": true, "cli": { "flags": "--user-token <token>", "description": "Slack user token" } },
+        { "key": "signingSecret", "kind": "string", "sensitive": true, "cli": { "flags": "--signing-secret <secret>", "description": "Slack signing secret" } },
+        { "key": "identity", "kind": "choice", "choices": ["bot", "user"], "cli": { "flags": "--identity <kind>", "description": "Slack identity" } },
+        { "key": "mode", "kind": "choice", "choices": ["socket", "http"], "cli": { "flags": "--mode <mode>", "description": "Slack connection mode" } },
+        { "key": "useEnv", "kind": "boolean", "cli": { "flags": "--use-env", "description": "Use Slack environment credentials" } }
+      ] }
     },
     "install": {
       "npmSpec": "@openclaw/slack",

@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { parseReleaseVersion } from "./npm-publish-plan.mjs";
+import { parseReleaseVersion } from "./release-version.mjs";
 
 function parseVersion(version) {
   return parseReleaseVersion(String(version ?? "").trim()) ?? undefined;

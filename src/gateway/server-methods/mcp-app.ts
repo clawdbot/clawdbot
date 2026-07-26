@@ -82,7 +82,8 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
         }
         const updateModelContextSupported =
           interactive && active.runtime.mcpAppModelContextRevoked !== true;
-        const sandboxPort = context.getMcpAppSandboxPort?.();
+        const sandboxPort =
+          context.getMcpAppSandboxPort?.() ?? (await context.ensureSandboxHostPort?.());
         if (sandboxPort === undefined) {
           throw new Error("MCP App sandbox listener is unavailable; restart the Gateway");
         }

@@ -1094,7 +1094,7 @@ describe("gateway server cron", () => {
         mainKey: "main",
       },
       agents: {
-        list: [{ id: "ops", default: true }],
+        entries: { ops: { default: true } },
       },
       channels: {
         telegram: {
@@ -1190,7 +1190,7 @@ describe("gateway server cron", () => {
         mainKey: "main",
       },
       agents: {
-        list: [{ id: "ops", default: true }],
+        entries: { ops: { default: true } },
       },
       channels: {
         telegram: {
@@ -1221,7 +1221,7 @@ describe("gateway server cron", () => {
           mainKey: "main",
         },
         agents: {
-          list: [{ id: "main", default: true }, { id: "ops" }],
+          entries: { main: { default: true }, ops: {} },
         },
         channels: {
           telegram: {
@@ -1230,11 +1230,7 @@ describe("gateway server cron", () => {
         },
       });
 
-      const agentIds =
-        cronState
-          .getRuntimeConfig()
-          .agents?.list?.map((agent) => agent.id)
-          .filter((id): id is string => typeof id === "string") ?? [];
+      const agentIds = Object.keys(cronState.getRuntimeConfig().agents?.entries ?? {});
       expect(agentIds).toContain("main");
       expect(agentIds).toContain("ops");
 
@@ -1297,7 +1293,7 @@ describe("gateway server cron", () => {
       cronEnabled: true,
     });
     await writeCronConfig({
-      agents: { list: [{ id: "main", default: true }, { id: "writer" }] },
+      agents: { entries: { main: { default: true }, writer: {} } },
     });
     const events = createCronEventCollector();
     const cronState = await createDirectCronState({ broadcast: events["broadcast"] });
@@ -1967,7 +1963,9 @@ describe("gateway server cron", () => {
 
     await writeCronConfig({
       cron: {
-        failureDestination: {
+        failureAlert: {
+          enabled: true,
+          after: 1,
           mode: "webhook",
           to: "https://hook.example/cron",
         },

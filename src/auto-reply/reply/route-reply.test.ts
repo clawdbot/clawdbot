@@ -703,7 +703,7 @@ describe("routeReply", () => {
 
   it("applies responsePrefix when routing", async () => {
     const cfg = {
-      messages: { responsePrefix: "[openclaw]" },
+      channels: { slack: { responsePrefix: "[openclaw]" } },
     } as unknown as OpenClawConfig;
     await routeReply({
       payload: { text: "hi" },
@@ -716,7 +716,6 @@ describe("routeReply", () => {
 
   it("interpolates responsePrefix from the routed channel and account", async () => {
     const cfg = {
-      messages: { responsePrefix: "[global]" },
       channels: {
         slack: {
           responsePrefix: "[slack]",

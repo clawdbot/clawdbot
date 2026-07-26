@@ -109,6 +109,7 @@ function resolveSqliteMarkerSessionKey(
   }
   const entries = listSessionEntries({
     agentId: marker.agentId,
+    readOnly: true,
     storePath: marker.storePath,
   });
   const exactEntry = entries.find(({ entry }) => {

@@ -138,6 +138,8 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     const filteredBundledTools = applyFinalEffectiveToolPolicy({
       bundledTools: [...allowedBundleMcpTools, ...allowedBundleLspTools],
       config: params.attempt.config,
+      workspaceDir: params.effectiveWorkspace,
+      metadataSnapshot: bundleMetadataSnapshot,
       conversationCapabilityProfile: runtimeCapabilityProfile,
       warn: (message) => log.warn(message),
     });
@@ -150,6 +152,8 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       const allowedAppTools = applyFinalEffectiveToolPolicy({
         bundledTools: runtimeAllowedAppTools,
         config: params.attempt.config,
+        workspaceDir: params.effectiveWorkspace,
+        metadataSnapshot: bundleMetadataSnapshot,
         conversationCapabilityProfile: runtimeCapabilityProfile,
         warn: (message) => log.warn(message),
       });

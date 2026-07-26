@@ -117,6 +117,12 @@ function createRuntime(): RuntimeEnv {
   } as unknown as RuntimeEnv;
 }
 
+describe("WhatsApp setup promotion contract", () => {
+  it("exposes authDir on the setup-only plugin surface", () => {
+    expect(whatsappSetupPlugin.setup?.singleAccountKeysToMove).toEqual(["authDir"]);
+  });
+});
+
 async function runConfigureWithHarness(params: {
   harness: ReturnType<typeof createQueuedWizardPrompter>;
   cfg?: OpenClawConfig;
@@ -476,6 +482,21 @@ describe("whatsapp setup wizard", () => {
     });
 
     expect(result).toEqual({ ok: true, reason: "ok" });
+  });
+
+  it("heartbeat readiness honors the channel disable flag", async () => {
+    const result = await checkWhatsAppHeartbeatReady({
+      cfg: { channels: { whatsapp: { enabled: false } } } as OpenClawConfig,
+      deps: {
+        readWebAuthExistsForDecision: async () => ({
+          outcome: "stable" as const,
+          exists: true,
+        }),
+        hasActiveWebListener: () => true,
+      },
+    });
+
+    expect(result).toEqual({ ok: false, reason: "whatsapp-disabled" });
   });
 
   it("heartbeat readiness returns unstable when auth state timing is unresolved", async () => {

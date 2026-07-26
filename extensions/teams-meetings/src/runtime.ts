@@ -2,19 +2,23 @@ import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
+  createMeetingSession,
   MeetingSessionRuntime,
   type MeetingSessionRuntimeHandles,
   type MeetingSessionRuntimeJoinContext,
 } from "openclaw/plugin-sdk/meeting-runtime";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import type {
+  TranscriptStartRequest,
+  TranscriptStopRequest,
+} from "openclaw/plugin-sdk/transcripts";
 import type { TeamsMeetingsConfig, TeamsMeetingsMode, TeamsMeetingsTransport } from "./config.js";
 import {
   testTeamsMeetingListening,
   testTeamsMeetingSpeech,
   type TeamsMeetingsProbeContext,
 } from "./runtime-probes.js";
-import { createTeamsMeetingsSession } from "./runtime-session.js";
 import { getTeamsMeetingsSetupStatus } from "./runtime-setup.js";
 import {
   launchTeamsMeetingInChrome,
@@ -139,7 +143,12 @@ export class TeamsMeetingsRuntime {
         agentId: normalizeAgentId(request.agentId ?? this.#defaultAgentId),
       }),
       createSession: ({ request, resolved, createdAt }) => {
-        const session = createTeamsMeetingsSession({ config: params.config, resolved, createdAt });
+        const session: TeamsMeetingsSession = createMeetingSession({
+          platform: TEAMS_MEETINGS_PLATFORM_ADAPTER,
+          config: params.config,
+          resolved,
+          createdAt,
+        });
         if (request.requesterSessionKey) {
           this.#requesterSessionKeys.set(session.id, request.requesterSessionKey);
         }
@@ -186,11 +195,24 @@ export class TeamsMeetingsRuntime {
       captureTranscript: async (session, options) =>
         await this.#captureTranscript(session, options),
       speakViaTransport: async () => undefined,
+      durableTranscripts: {
+        config: params.fullConfig.transcripts,
+        providerId: "teams",
+        providerName: "Microsoft Teams",
+      },
     });
   }
 
   list(): TeamsMeetingsSession[] {
     return this.#sessions.list();
+  }
+
+  async startTranscriptSource(request: TranscriptStartRequest) {
+    return await this.#sessions.startTranscriptSource(request);
+  }
+
+  async stopTranscriptSource(request: TranscriptStopRequest) {
+    return await this.#sessions.stopTranscriptSource(request);
   }
 
   ownsSession(agentId: string, sessionId: string): boolean {
@@ -419,6 +441,7 @@ export class TeamsMeetingsRuntime {
       const result = await recoverCurrentTeamsMeetingTab({
         runtime: this.params.runtime,
         config: this.params.config,
+        fullConfig: this.params.fullConfig,
         meetingSessionId: session.id,
         mode: session.mode,
         nodeId: session.chrome?.nodeId,

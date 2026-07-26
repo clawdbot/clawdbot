@@ -55,8 +55,9 @@ function worktree(id = "worktree-1"): WorktreeRecord {
 function gatewayWithSnapshot(client: GatewayBrowserClient | null, connected: boolean) {
   const snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected,
-    reconnecting: false,
+    phase: connected ? "connected" : "stopped",
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: null,
     sessionKey: "main",
@@ -89,7 +90,7 @@ function mutableGateway(client: GatewayBrowserClient) {
   } as unknown as ApplicationContext["gateway"];
   return {
     emit(connected: boolean) {
-      (snapshot as ApplicationGatewaySnapshot).connected = connected;
+      (snapshot as ApplicationGatewaySnapshot).phase = connected ? "connected" : "stopped";
       listener?.(snapshot as ApplicationGatewaySnapshot);
     },
     gateway,

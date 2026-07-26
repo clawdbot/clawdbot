@@ -5,6 +5,10 @@ import {
   parseThreadSessionSuffix,
   requiresFoldedSessionKeyAliasProof,
 } from "../../sessions/session-key-utils.js";
+import {
+  deliveryContextFromSession,
+  sessionDeliveryOrigin,
+} from "../../utils/delivery-context.shared.js";
 import type { SessionEntry } from "./types.js";
 
 export function normalizeStoreSessionKey(sessionKey: string): string {
@@ -46,13 +50,9 @@ function normalizeEntryTarget(value: unknown): string {
 }
 
 function entryDeliveryTargets(entry: SessionEntry | undefined): string[] {
-  const candidates = [
-    entry?.deliveryContext?.to,
-    entry?.lastTo,
-    entry?.origin?.nativeChannelId,
-    entry?.origin?.to,
-    entry?.groupId,
-  ];
+  const context = deliveryContextFromSession(entry);
+  const origin = sessionDeliveryOrigin(entry);
+  const candidates = [context?.to, origin?.nativeChannelId, origin?.to, entry?.groupId];
   return candidates.map(normalizeEntryTarget).filter(Boolean);
 }
 
@@ -67,9 +67,7 @@ function normalizeEntryThreadId(value: unknown): string {
 }
 
 function entryThreadId(entry: SessionEntry | undefined): string {
-  return normalizeEntryThreadId(
-    entry?.deliveryContext?.threadId ?? entry?.lastThreadId ?? entry?.origin?.threadId,
-  );
+  return normalizeEntryThreadId(deliveryContextFromSession(entry)?.threadId);
 }
 
 /** Tail-preserved keys like Matrix rooms need delivery-target proof before a
