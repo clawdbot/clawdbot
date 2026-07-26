@@ -767,12 +767,12 @@ final class SkillsSettingsModel {
             let report = try await GatewayConnection.shared.skillsStatus()
             self.skills = report.skills.sorted { $0.name < $1.name }
             self.hasLoaded = true
-        } 
+        }
         catch {
             self.error = error.localizedDescription
         }
         self.isLoading = false
-    }    
+    }
 
     func acceptInstalledSkills(_ skills: [SkillStatus]) {
         self.skills = skills.sorted { $0.name < $1.name }
