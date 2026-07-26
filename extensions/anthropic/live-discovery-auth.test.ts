@@ -11,6 +11,8 @@ const guardedFetchCalls = vi.hoisted(
     >,
 );
 
+const discoveryRows = vi.hoisted(() => ({ value: [] as unknown[] }));
+
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
   return {
@@ -18,7 +20,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
     fetchWithSsrFGuard: (params: Parameters<typeof actual.fetchWithSsrFGuard>[0]) => {
       guardedFetchCalls.push(params);
       return Promise.resolve({
-        response: new Response(JSON.stringify({ data: [] })),
+        response: new Response(JSON.stringify({ data: discoveryRows.value })),
         finalUrl: "https://api.anthropic.com/v1/models",
         release: async () => undefined,
       });
@@ -45,6 +47,7 @@ async function readDiscoveryHeaders(apiKey: string): Promise<Headers> {
 describe("anthropic live model discovery auth", () => {
   beforeEach(() => {
     guardedFetchCalls.length = 0;
+    discoveryRows.value = [];
     clearLiveCatalogCacheForTests();
   });
 
@@ -70,5 +73,41 @@ describe("anthropic live model discovery auth", () => {
     // so the OAuth branch must replace x-api-key rather than add to it.
     const headers = await readDiscoveryHeaders("sk-ant-oat01-test-token");
     expect(headers.get("x-api-key")).toBeNull();
+  });
+
+  it("keeps shipped models Anthropic does not publish while adding discovered ones", async () => {
+    // Discovery replaces the seed catalog, so a shipped model with no live row
+    // would silently vanish from the provider listing once discovery succeeds.
+    discoveryRows.value = [
+      {
+        id: "claude-opus-5",
+        type: "model",
+        max_input_tokens: 1_000_000,
+        max_tokens: 128_000,
+      },
+      {
+        id: "claude-brand-new-9",
+        type: "model",
+        max_input_tokens: 1_000_000,
+        max_tokens: 128_000,
+        capabilities: {
+          // Advertises the Claude 5 contract our predicates do not yet grant an
+          // unrecognized id, so the gate must keep it hidden.
+          thinking: { types: { adaptive: { supported: true } } },
+          effort: { xhigh: { supported: true }, max: { supported: true } },
+        },
+      },
+    ];
+    const provider = buildAnthropicProvider();
+    const result = await provider.catalog?.run?.(buildCatalogContext("sk-ant-oat01-test-token"));
+    const ids = new Set(
+      result && "provider" in result ? (result.provider.models ?? []).map((model) => model.id) : [],
+    );
+
+    expect(ids.has("claude-opus-5")).toBe(true);
+    // Shipped but absent from the live response: must survive discovery.
+    expect(ids.has("claude-mythos-5")).toBe(true);
+    // Unknown id whose advertised capabilities disagree with our contracts stays gated out.
+    expect(ids.has("claude-brand-new-9")).toBe(false);
   });
 });
