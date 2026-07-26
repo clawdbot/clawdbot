@@ -31,8 +31,8 @@ function successfulCheck(name: string, id: number) {
     name,
     status: "completed",
     conclusion: "success",
-    head_sha: headSha,
-    html_url: `https://github.com/${repo}/actions/runs/${id}`,
+    headSha,
+    url: `https://github.com/${repo}/actions/runs/${id}`,
     required: true,
   };
 }

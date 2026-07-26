@@ -110,28 +110,11 @@ export const EVIDENCE_SURFACES: {
   readonly CHECK_RUN: "check_run";
 };
 
-export function normalizeFormalReview(
-  review: Record<string, unknown>,
-  repo: string,
-  pr: number,
-): NormalizedEvidenceItem;
-
-export function normalizeInlineReviewComment(
-  comment: Record<string, unknown>,
-  repo: string,
-  pr: number,
-): NormalizedEvidenceItem;
-
 export function normalizeIssueComment(
   comment: Record<string, unknown>,
   repo: string,
   pr: number,
 ): NormalizedEvidenceItem;
-
-export function normalizeCheckRun(
-  check: Record<string, unknown>,
-  required?: boolean,
-): NormalizedCheckRun;
 
 export function extractFindingsFromEvidenceItem(
   item: NormalizedEvidenceItem & {

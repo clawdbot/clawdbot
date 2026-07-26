@@ -206,7 +206,7 @@ function extractClawSweeperMarkerKinds(body = "") {
   });
 }
 
-export function normalizeFormalReview(review, repo, pr) {
+function normalizeFormalReview(review, repo, pr) {
   const id = String(review?.id ?? "");
   const commitId = normalizeSha(review?.commit_id ?? review?.commitId);
   return {
@@ -224,7 +224,7 @@ export function normalizeFormalReview(review, repo, pr) {
   };
 }
 
-export function normalizeInlineReviewComment(comment, repo, pr) {
+function normalizeInlineReviewComment(comment, repo, pr) {
   const id = String(comment?.id ?? "");
   const commitId = normalizeSha(comment?.commit_id ?? comment?.original_commit_id);
   return {
@@ -258,7 +258,7 @@ export function normalizeIssueComment(comment, repo, pr) {
   };
 }
 
-export function normalizeCheckRun(check, required = true) {
+function normalizeCheckRun(check, required = true) {
   const id = String(check?.id ?? check?.name ?? "");
   return {
     id,

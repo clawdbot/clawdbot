@@ -8908,6 +8908,20 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Safety rules
   - H2: Passing result
 
+## reference/pr-convergence-audit.md
+
+- Route: /reference/pr-convergence-audit
+- Headings:
+  - H2: Evidence surfaces
+  - H2: Finding detection
+  - H2: Decision semantics
+  - H3: BLOCKED
+  - H3: UNKNOWN
+  - H3: READY
+  - H2: Required triggers
+  - H2: Implementation
+  - H2: Related
+
 ## reference/prompt-caching.md
 
 - Route: /reference/prompt-caching
