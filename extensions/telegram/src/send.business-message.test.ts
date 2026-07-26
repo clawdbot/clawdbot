@@ -118,7 +118,7 @@ describe("sendMessageTelegram business_connection_id + read receipt", () => {
       });
 
       expect(botApi.readBusinessMessage).not.toHaveBeenCalled();
-      const [, , params] = botApi.sendMessage.mock.calls[0] ?? [];
+      const params = botApi.sendMessage.mock.calls[0]?.[2];
       expect(params as Record<string, unknown> | undefined).not.toHaveProperty(
         "business_connection_id",
       );

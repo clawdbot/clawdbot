@@ -283,6 +283,9 @@
       "excludeFiles": [
         "**/*.test.*",
         "**/*.spec.*",
+        "**/*test-harness.ts",
+        "**/*test-helpers.ts",
+        "**/*test-support.ts",
         "**/__generated__/**",
         "**/generated/**",
         "**/protocol-gen/**",
@@ -348,7 +351,10 @@
         "packages/**/*.test.*",
         "packages/**/*.spec.*",
         "extensions/**/*.test.*",
-        "extensions/**/*.spec.*"
+        "extensions/**/*.spec.*",
+        "**/*test-harness.ts",
+        "**/*test-helpers.ts",
+        "**/*test-support.ts"
       ],
       "excludeFiles": [
         "**/__generated__/**",

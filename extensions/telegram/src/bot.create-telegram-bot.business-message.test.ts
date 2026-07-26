@@ -6,7 +6,9 @@ import { clearTelegramRuntimeForTest } from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
-const { getLoadConfigMock, getOnHandler, replySpy, getBusinessConnectionSpy } = harness;
+const { getLoadConfigMock, getOnHandler, replySpy } = harness;
+const { businessApi } = await import("./bot.create-telegram-bot.business-spies.js");
+const getBusinessConnectionSpy = businessApi.getBusinessConnection;
 const { createTelegramBotCore: createTelegramBotBase } = await import("./bot-core.js");
 
 let createTelegramBot: (
@@ -233,14 +235,16 @@ describe("createTelegramBot business_message", () => {
       businessMessageContext({ fromId: CUSTOMER_USER_ID, messageId: 5, text: "via business chat" }),
     );
     await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(1));
-    const businessSessionKey = (replySpy.mock.calls[0]?.[0] as { SessionKey?: unknown }).SessionKey;
+    const businessSessionKey = (replySpy.mock.calls[0]?.[0] as { SessionKey?: unknown } | undefined)
+      ?.SessionKey;
 
     replySpy.mockClear();
     await messageHandler(
       plainDmContext({ fromId: CUSTOMER_USER_ID, messageId: 6, text: "via plain dm" }),
     );
     await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(1));
-    const plainDmSessionKey = (replySpy.mock.calls[0]?.[0] as { SessionKey?: unknown }).SessionKey;
+    const plainDmSessionKey = (replySpy.mock.calls[0]?.[0] as { SessionKey?: unknown } | undefined)
+      ?.SessionKey;
 
     expect(businessSessionKey).toBeDefined();
     expect(plainDmSessionKey).toBeDefined();

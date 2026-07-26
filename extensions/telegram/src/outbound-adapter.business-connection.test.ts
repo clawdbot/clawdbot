@@ -14,12 +14,14 @@ import { clearTelegramRuntimeForTest } from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 
 const sendMessageTelegramMock = vi.fn();
+const sendPollTelegramMock = vi.fn();
+const sendLocationTelegramMock = vi.fn();
 
 vi.mock("./send.js", () => ({
   pinMessageTelegram: vi.fn(),
   reactMessageTelegram: vi.fn(),
-  sendPollTelegram: vi.fn(),
-  sendLocationTelegram: vi.fn(),
+  sendPollTelegram: (...args: unknown[]) => sendPollTelegramMock(...args),
+  sendLocationTelegram: (...args: unknown[]) => sendLocationTelegramMock(...args),
   sendMessageTelegram: (...args: unknown[]) => sendMessageTelegramMock(...args),
 }));
 
@@ -85,6 +87,8 @@ async function withBusinessTestEnv(fn: () => Promise<void>): Promise<void> {
 describe("telegramOutbound business connection routing", () => {
   beforeEach(() => {
     sendMessageTelegramMock.mockReset();
+    sendPollTelegramMock.mockReset();
+    sendLocationTelegramMock.mockReset();
     installBusinessStoreRuntime();
   });
 
@@ -126,7 +130,7 @@ describe("telegramOutbound business connection routing", () => {
         deps: { sendTelegram: sendMessageTelegramMock },
       });
 
-      const [, , options] = sendMessageTelegramMock.mock.calls[0] ?? [];
+      const options = sendMessageTelegramMock.mock.calls[0]?.[2];
       expect(options as Record<string, unknown> | undefined).not.toHaveProperty(
         "businessConnectionId",
       );
@@ -145,5 +149,37 @@ describe("telegramOutbound business connection routing", () => {
         }),
       ).rejects.toThrow(/disconnected/);
       expect(sendMessageTelegramMock).not.toHaveBeenCalled();
+    }));
+
+  it("rejects sendPoll for a business chat instead of silently sending as the bot", async () =>
+    withBusinessTestEnv(async () => {
+      await seedConnection(true);
+
+      await expect(
+        telegramOutbound.sendPoll!({
+          cfg: {} as never,
+          to: CHAT_ID,
+          poll: { question: "Retry?", options: ["Yes", "No"] },
+        }),
+      ).rejects.toThrow(/Business mode/);
+      expect(sendPollTelegramMock).not.toHaveBeenCalled();
+    }));
+
+  it("rejects a location send for a business chat instead of silently sending as the bot", async () =>
+    withBusinessTestEnv(async () => {
+      await seedConnection(true);
+
+      await expect(
+        telegramOutbound.sendPayload!({
+          cfg: {} as never,
+          to: CHAT_ID,
+          text: "",
+          payload: {
+            location: { latitude: 48.858844, longitude: 2.294351, name: "Eiffel Tower" },
+          },
+          deps: { sendTelegram: sendMessageTelegramMock },
+        }),
+      ).rejects.toThrow(/Business mode/);
+      expect(sendLocationTelegramMock).not.toHaveBeenCalled();
     }));
 });

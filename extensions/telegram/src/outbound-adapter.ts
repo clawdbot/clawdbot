@@ -336,6 +336,12 @@ export async function sendTelegramPayloadMessages(params: {
     ...(payload.videoAsNote === true ? { asVideoNote: true } : {}),
   };
   if (payload.location) {
+    if (params.baseOpts.businessConnectionId) {
+      // MVP: fail loudly instead of silently sending the location as the
+      // bot's own identity — sendLocationTelegram does not yet forward
+      // business_connection_id.
+      throw new Error("Telegram location sends are not supported in Business mode yet.");
+    }
     if (
       mediaUrls.length > 0 ||
       reactionEmoji ||
@@ -578,6 +584,16 @@ export function createTelegramOutboundAdapter(
       gatewayClientScopes,
     }) => {
       const outboundTo = normalizeTelegramOutboundTarget(to);
+      const pollChatKey = parseTelegramTarget(outboundTo).chatId;
+      const pollBusinessRoute = pollChatKey
+        ? await resolveBusinessChatRoute(pollChatKey)
+        : undefined;
+      if (pollBusinessRoute) {
+        // MVP: fail loudly instead of silently sending the poll as the bot's
+        // own identity — sendPollTelegram does not yet forward
+        // business_connection_id.
+        throw new Error("Telegram polls are not supported in Business mode yet.");
+      }
       const { sendPollTelegram } = await loadSendModule();
       return await sendPollTelegram(outboundTo, poll, {
         cfg,

@@ -14,7 +14,7 @@ const BUSINESS_CONNECTION_NAMESPACE = "telegram.business-connections";
 const BUSINESS_CHAT_ROUTE_NAMESPACE = "telegram.business-chat-routes";
 const BUSINESS_STORE_MAX_ENTRIES = 5_000;
 
-export type StoredBusinessConnection = {
+type StoredBusinessConnection = {
   id: string;
   userId: number;
   userChatId: number;
@@ -24,13 +24,13 @@ export type StoredBusinessConnection = {
   updatedAt: number;
 };
 
-export type StoredBusinessChatRoute = {
+type StoredBusinessChatRoute = {
   businessConnectionId: string;
   latestUnreadMessageId?: number;
   updatedAt: number;
 };
 
-export class BusinessConnectionNotReadyError extends Error {}
+class BusinessConnectionNotReadyError extends Error {}
 
 // The outbound send path (resolveTelegramOutboundSendContext) probes for a
 // business route on every send, including from callers/tests that never
@@ -84,7 +84,7 @@ export async function upsertBusinessConnection(
   return stored;
 }
 
-export async function getStoredBusinessConnection(
+async function getStoredBusinessConnection(
   businessConnectionId: string,
   env?: NodeJS.ProcessEnv,
 ): Promise<StoredBusinessConnection | undefined> {
