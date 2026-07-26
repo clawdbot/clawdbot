@@ -517,8 +517,8 @@ describe("getMemorySearchManager caching", () => {
     firstPrimary.search.mockRejectedValueOnce(new Error("qmd query failed"));
     firstPrimary.close.mockImplementationOnce(async () => await closeGate.promise);
     createQmdManagerMock
-      .mockImplementationOnce(async () => firstPrimary)
-      .mockImplementationOnce(async () => secondPrimary);
+      .mockImplementationOnce(async () => firstPrimary as unknown as QmdManagerInstance)
+      .mockImplementationOnce(async () => secondPrimary as unknown as QmdManagerInstance);
 
     const first = requireManager(await getMemorySearchManager({ cfg, agentId }));
     await expect(first.search("hello")).resolves.toHaveLength(1);
@@ -858,9 +858,9 @@ describe("getMemorySearchManager caching", () => {
     firstPrimary.close.mockRejectedValueOnce(new Error("old close failed"));
     secondPrimary.close.mockRejectedValueOnce(new Error("candidate close failed"));
     createQmdManagerMock
-      .mockImplementationOnce(async () => firstPrimary)
-      .mockImplementationOnce(async () => secondPrimary)
-      .mockImplementationOnce(async () => thirdPrimary);
+      .mockImplementationOnce(async () => firstPrimary as unknown as QmdManagerInstance)
+      .mockImplementationOnce(async () => secondPrimary as unknown as QmdManagerInstance)
+      .mockImplementationOnce(async () => thirdPrimary as unknown as QmdManagerInstance);
 
     await getMemorySearchManager({ cfg: firstCfg, agentId });
     await expect(getMemorySearchManager({ cfg: secondCfg, agentId })).rejects.toThrow(
@@ -883,8 +883,8 @@ describe("getMemorySearchManager caching", () => {
     firstPrimary.close.mockRejectedValueOnce(new Error("old close failed"));
     secondPrimary.close.mockRejectedValue(new Error("candidate close failed"));
     createQmdManagerMock
-      .mockImplementationOnce(async () => firstPrimary)
-      .mockImplementationOnce(async () => secondPrimary);
+      .mockImplementationOnce(async () => firstPrimary as unknown as QmdManagerInstance)
+      .mockImplementationOnce(async () => secondPrimary as unknown as QmdManagerInstance);
 
     await getMemorySearchManager({ cfg: firstCfg, agentId });
     await expect(getMemorySearchManager({ cfg: secondCfg, agentId })).rejects.toThrow(
