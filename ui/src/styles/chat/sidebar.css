@@ -333,6 +333,39 @@ openclaw-chat-sidebar-region,
   z-index: 2;
 }
 
+.sidebar-empty-side-drop-zone {
+  position: absolute;
+  z-index: 3;
+  top: 0;
+  bottom: 0;
+  width: 48px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+
+.sidebar-empty-side-drop-zone--left {
+  left: 0;
+}
+
+.sidebar-empty-side-drop-zone--right {
+  right: 0;
+}
+
+.sidebar-empty-side-drop-zone__boundary {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+}
+
+.sidebar-empty-side-drop-zone--left .sidebar-empty-side-drop-zone__boundary {
+  right: 0;
+}
+
+.sidebar-empty-side-drop-zone--right .sidebar-empty-side-drop-zone__boundary {
+  left: 0;
+}
+
 .sidebar-region--narrow {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
