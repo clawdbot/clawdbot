@@ -426,6 +426,43 @@ describe("phase hooks merger", () => {
     });
   });
 
+  it("derives subagent-ended scope from child and target session keys", async () => {
+    const capturedAgentIds: Array<string | undefined> = [];
+    const { runner } = createHookRunnerWithRegistry([
+      {
+        hookName: "subagent_ended",
+        pluginId: "subagent-plugin",
+        handler: () => {
+          capturedAgentIds.push(getPluginRuntimeGatewayRequestScope()?.agentId);
+        },
+      },
+    ]);
+
+    await withPluginRuntimeGatewayRequestScope(
+      { agentId: "ambient-agent", isWebchatConnect: () => false },
+      async () => {
+        await runner.runSubagentEnded(
+          {
+            targetSessionKey: "agent:target-agent:subagent:child",
+            targetKind: "subagent",
+            reason: "subagent-complete",
+          },
+          {},
+        );
+        await runner.runSubagentEnded(
+          {
+            targetSessionKey: "legacy-child",
+            targetKind: "subagent",
+            reason: "session-reset",
+          },
+          { childSessionKey: "agent:child-agent:subagent:child" },
+        );
+      },
+    );
+
+    expect(capturedAgentIds).toEqual(["target-agent", "child-agent"]);
+  });
+
   it("preserves ambient agent scope for replay reply payload hooks", async () => {
     let captured: { pluginId?: string; agentId?: string } | undefined;
     const { runner } = createHookRunnerWithRegistry([

@@ -217,19 +217,29 @@ function resolvePluginHookAgentId(...sources: unknown[]): string | undefined {
       return rawAgentId.trim();
     }
   }
-  // Some message lifecycle owners carry only the canonical session identity.
-  // Parse that trusted key after checking every explicit agent; opaque legacy keys stay unscoped.
+  // Some hook owners carry only canonical session identities under lifecycle-specific fields.
+  // Parse them after checking every explicit agent; opaque legacy keys stay unscoped.
   for (const source of sources) {
-    const rawSessionKey =
-      typeof source === "object" && source !== null && "sessionKey" in source
-        ? (source as { sessionKey?: unknown }).sessionKey
-        : undefined;
-    if (typeof rawSessionKey !== "string" || !rawSessionKey.trim()) {
+    if (typeof source !== "object" || source === null) {
       continue;
     }
-    const sessionAgentId = parseAgentSessionKey(rawSessionKey)?.agentId;
-    if (sessionAgentId) {
-      return sessionAgentId;
+    const sessionKeys = source as {
+      sessionKey?: unknown;
+      targetSessionKey?: unknown;
+      childSessionKey?: unknown;
+    };
+    for (const rawSessionKey of [
+      sessionKeys.sessionKey,
+      sessionKeys.targetSessionKey,
+      sessionKeys.childSessionKey,
+    ]) {
+      if (typeof rawSessionKey !== "string" || !rawSessionKey.trim()) {
+        continue;
+      }
+      const sessionAgentId = parseAgentSessionKey(rawSessionKey)?.agentId;
+      if (sessionAgentId) {
+        return sessionAgentId;
+      }
     }
   }
   return undefined;
