@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { QQBotInboundAccess } from "../adapter/index.js";
 import type { RefIndexEntry } from "../ref/types.js";
+import { MSG_TYPE_QUOTE } from "../utils/text-parsing.js";
 import type { ProcessedAttachments } from "./inbound-attachments.js";
 import type { InboundPipelineDeps } from "./inbound-context.js";
 import { buildInboundContext } from "./inbound-pipeline.js";
@@ -71,6 +72,69 @@ const emptyAllowlist: QQBotInboundAccess["state"]["allowlists"]["dm"] = {
     matchedEntryIds: [],
   },
 };
+
+function makeAccessResult(
+  input: { isGroup?: boolean; allowed?: boolean } = {},
+): QQBotInboundAccess {
+  const allowed = input.allowed ?? true;
+  const isGroup = input.isGroup ?? false;
+  return {
+    state: {
+      channelId: "qqbot",
+      accountId: "qq-main",
+      conversationKind: isGroup ? "group" : "direct",
+      event: {
+        kind: "message",
+        authMode: "inbound",
+        mayPair: true,
+        hasOriginSubject: false,
+        originSubjectMatched: false,
+      },
+      routeFacts: [],
+      allowlists: {
+        dm: emptyAllowlist,
+        pairingStore: emptyAllowlist,
+        group: emptyAllowlist,
+        commandOwner: emptyAllowlist,
+        commandGroup: emptyAllowlist,
+      },
+    },
+    ingress: {
+      admission: allowed ? "dispatch" : "drop",
+      decision: allowed ? "allow" : "deny",
+      decisiveGateId: allowed ? "activation" : "sender",
+      reasonCode: allowed ? "activation_allowed" : "dm_policy_not_allowlisted",
+      graph: { gates: [] },
+    },
+    senderAccess: {
+      allowed,
+      decision: allowed ? "allow" : "deny",
+      reasonCode: allowed
+        ? isGroup
+          ? "group_policy_allowed"
+          : "dm_policy_open"
+        : "dm_policy_not_allowlisted",
+      effectiveAllowFrom: [],
+      effectiveGroupAllowFrom: [],
+      providerMissingFallbackApplied: false,
+    },
+    commandAccess: {
+      requested: true,
+      authorized: allowed,
+      shouldBlockControlCommand: false,
+      reasonCode: allowed ? "command_authorized" : "command_not_authorized",
+    },
+    routeAccess: {
+      allowed,
+    },
+    activationAccess: {
+      ran: false,
+      allowed,
+      shouldSkip: false,
+      reasonCode: allowed ? "activation_allowed" : "sender_denied",
+    },
+  };
+}
 
 function makeRuntime(): GatewayPluginRuntime {
   return {
@@ -165,60 +229,7 @@ function makeDeps(overrides: Partial<InboundPipelineDeps> = {}): InboundPipeline
         })),
       },
       access: {
-        resolveInboundAccess: vi.fn(
-          (input): QQBotInboundAccess => ({
-            state: {
-              channelId: "qqbot",
-              accountId: "qq-main",
-              conversationKind: input.isGroup ? "group" : "direct",
-              event: {
-                kind: "message",
-                authMode: "inbound",
-                mayPair: true,
-                hasOriginSubject: false,
-                originSubjectMatched: false,
-              },
-              routeFacts: [],
-              allowlists: {
-                dm: emptyAllowlist,
-                pairingStore: emptyAllowlist,
-                group: emptyAllowlist,
-                commandOwner: emptyAllowlist,
-                commandGroup: emptyAllowlist,
-              },
-            },
-            ingress: {
-              admission: "dispatch",
-              decision: "allow",
-              decisiveGateId: "activation",
-              reasonCode: "activation_allowed",
-              graph: { gates: [] },
-            },
-            senderAccess: {
-              allowed: true,
-              decision: "allow",
-              reasonCode: input.isGroup ? "group_policy_allowed" : "dm_policy_open",
-              effectiveAllowFrom: [],
-              effectiveGroupAllowFrom: [],
-              providerMissingFallbackApplied: false,
-            },
-            commandAccess: {
-              requested: true,
-              authorized: true,
-              shouldBlockControlCommand: false,
-              reasonCode: "command_authorized",
-            },
-            routeAccess: {
-              allowed: true,
-            },
-            activationAccess: {
-              ran: false,
-              allowed: true,
-              shouldSkip: false,
-              reasonCode: "activation_allowed",
-            },
-          }),
-        ),
+        resolveInboundAccess: vi.fn((input): QQBotInboundAccess => makeAccessResult(input)),
         resolveSlashCommandAuthorization: vi.fn(() => true),
       },
       audioConvert: {
@@ -289,6 +300,88 @@ describe("buildInboundContext bot self-echo suppression", () => {
     });
     expect(deps.startTyping).toHaveBeenCalledTimes(1);
     expect(processAttachmentsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits cache-miss quoted content when restricted policy cannot verify the quoted sender", async () => {
+    const deps = makeDeps({
+      account: {
+        ...account,
+        config: { allowFrom: ["user-openid"], dmPolicy: "allowlist" },
+      },
+    });
+
+    const inbound = await buildInboundContext(
+      makeEvent({
+        refMsgIdx: "REF_UNKNOWN",
+        msgType: MSG_TYPE_QUOTE,
+        msgElements: [{ msg_idx: "REF_UNKNOWN", content: "quoted outsider content" }],
+      }),
+      deps,
+    );
+
+    expect(inbound.replyTo).toStrictEqual({
+      id: "REF_UNKNOWN",
+      isQuote: true,
+    });
+    expect(inbound.agentBody).toContain("Original content unavailable");
+    expect(inbound.agentBody).not.toContain("quoted outsider content");
+  });
+
+  it("keeps cache-miss quoted content for open conversations", async () => {
+    const deps = makeDeps({
+      account: {
+        ...account,
+        config: { dmPolicy: "open" },
+      },
+    });
+
+    const inbound = await buildInboundContext(
+      makeEvent({
+        refMsgIdx: "REF_UNKNOWN",
+        msgType: MSG_TYPE_QUOTE,
+        msgElements: [{ msg_idx: "REF_UNKNOWN", content: "quoted open content" }],
+      }),
+      deps,
+    );
+
+    expect(inbound.replyTo).toStrictEqual({
+      id: "REF_UNKNOWN",
+      body: "quoted open content",
+      isQuote: true,
+    });
+    expect(inbound.agentBody).toContain("quoted open content");
+  });
+
+  it("omits cached quoted content when the quoted sender no longer passes restricted policy", async () => {
+    getRefIndexMock.mockReturnValue({
+      content: "quoted outsider cache",
+      senderId: "outsider-openid",
+      timestamp: 1,
+    });
+    const deps = makeDeps({
+      account: {
+        ...account,
+        config: { allowFrom: ["user-openid"], dmPolicy: "allowlist" },
+      },
+    });
+    deps.adapters.access.resolveInboundAccess = vi.fn(
+      (input): QQBotInboundAccess =>
+        makeAccessResult({
+          isGroup: input.isGroup,
+          allowed: input.senderId === "user-openid",
+        }),
+    );
+
+    const inbound = await buildInboundContext(makeEvent({ refMsgIdx: "REF_OTHER" }), deps);
+
+    expect(inbound.replyTo).toStrictEqual({
+      id: "REF_OTHER",
+      sender: "outsider-openid",
+      isQuote: true,
+    });
+    expect(inbound.agentBody).toContain("Original content unavailable");
+    expect(inbound.agentBody).not.toContain("quoted outsider cache");
+    expect(formatRefEntryForAgentMock).not.toHaveBeenCalled();
   });
 
   it("does not block matching refs from another QQ Bot account", async () => {
