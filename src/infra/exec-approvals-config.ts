@@ -153,10 +153,6 @@ function isValidPersistedExecApprovals(value: unknown): value is ExecApprovalsFi
   return true;
 }
 
-export function parsePersistedExecApprovals(raw: string): ExecApprovalsFile {
-  return tryParsePersistedExecApprovals(raw) ?? createFailClosedExecApprovalsFallback();
-}
-
 /** Parse only structurally valid persisted approvals without inventing fallback policy. */
 export function tryParsePersistedExecApprovals(raw: string): ExecApprovalsFile | null {
   try {

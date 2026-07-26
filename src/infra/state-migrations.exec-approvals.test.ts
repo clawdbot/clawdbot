@@ -1,7 +1,6 @@
 // Covers Doctor-only import of the retired exec approvals JSON file.
 import fs from "node:fs";
 import fsp from "node:fs/promises";
-import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -11,16 +10,14 @@ import {
 } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { resolveExecApprovalsPath } from "./exec-approvals-config.js";
+import { ExecApprovalsMigrationRequiredError } from "./exec-approvals-migration-gate.js";
 import {
   readExecApprovalsConfigRow,
   serializeExecApprovals,
   writeExecApprovalsConfigRow,
 } from "./exec-approvals-sqlite.js";
-import {
-  ExecApprovalsMigrationRequiredError,
-  loadExecApprovals,
-  resetExecApprovalsStoreForTest,
-} from "./exec-approvals-store.js";
+import { loadExecApprovals } from "./exec-approvals-store.js";
+import { testing as execApprovalsStoreTesting } from "./exec-approvals-store.test-support.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 import {
@@ -35,7 +32,7 @@ describe("legacy exec approvals migration", () => {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     afterEach(() => {
       closeOpenClawStateDatabaseForTest();
-      resetExecApprovalsStoreForTest();
+      execApprovalsStoreTesting.reset();
       envSnapshot.restore();
       cleanup();
     });
@@ -298,7 +295,7 @@ describe("legacy exec approvals migration", () => {
     const { env, stateDir, sourcePath } = useStateDir();
     await writeLegacy(sourcePath, { version: 1, defaults: { security: "deny" }, agents: {} });
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-    resetExecApprovalsStoreForTest();
+    execApprovalsStoreTesting.reset();
     expect(() => loadExecApprovals()).toThrow(ExecApprovalsMigrationRequiredError);
 
     const result = await migrate({ env, stateDir });

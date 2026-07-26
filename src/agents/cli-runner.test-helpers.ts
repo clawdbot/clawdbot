@@ -10,10 +10,8 @@ import {
   type DiagnosticEventPrivateData,
 } from "../infra/diagnostic-events.js";
 import type { ExecApprovalsFile } from "../infra/exec-approvals-core.js";
-import {
-  resetExecApprovalsStoreForTest,
-  saveExecApprovals,
-} from "../infra/exec-approvals-store.js";
+import { saveExecApprovals } from "../infra/exec-approvals-store.js";
+import { testing as execApprovalsStoreTesting } from "../infra/exec-approvals-store.test-support.js";
 import type { CliBackendPlugin } from "../plugins/cli-backend.types.js";
 import type { RunExit } from "../process/supervisor/types.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -364,13 +362,13 @@ export async function withTempExecApprovalsState(
   const stateDir = path.join(home, ".openclaw");
   try {
     await withEnvAsync({ HOME: home, OPENCLAW_STATE_DIR: stateDir }, async () => {
-      resetExecApprovalsStoreForTest();
+      execApprovalsStoreTesting.reset();
       saveExecApprovals(file as ExecApprovalsFile);
       await run();
     });
   } finally {
     closeOpenClawStateDatabaseForTest();
-    resetExecApprovalsStoreForTest();
+    execApprovalsStoreTesting.reset();
     await fs.promises.rm(home, { recursive: true, force: true });
   }
 }

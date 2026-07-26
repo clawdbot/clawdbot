@@ -281,20 +281,6 @@ enum ExecApprovalsStore {
         }.value
     }
 
-    /// Read-only resolve: loads SQLite without creating or normalizing a row.
-    /// Safe to call from background threads / off MainActor.
-    static func resolveReadOnly(agentId: String?) -> ExecApprovalsResolved {
-        let file: ExecApprovalsFile
-        do {
-            file = try self.loadFileForMutation(
-                ExecApprovalsSQLiteStore.read(stateDirectoryURL: self.stateDirURL()))
-        } catch {
-            self.logger.warning("exec approvals read-only load failed: \(error.localizedDescription, privacy: .public)")
-            file = self.failClosedFallbackFile()
-        }
-        return self.resolveFromFile(file, agentId: agentId)
-    }
-
     static func resolveDefaults(from file: ExecApprovalsFile) -> ExecApprovalsResolvedDefaults {
         let defaults = file.defaults ?? ExecApprovalsDefaults()
         return ExecApprovalsResolvedDefaults(

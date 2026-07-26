@@ -10,9 +10,13 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
-import { assertNoPendingLegacyExecApprovals } from "./exec-approvals-migration-gate.js";
+import { sha256Hex } from "./crypto-digest.js";
 import {
-  hashExecApprovalsRaw,
+  assertNoPendingLegacyExecApprovals,
+  ExecApprovalsMigrationRequiredError,
+} from "./exec-approvals-migration-gate.js";
+import {
+  ExecApprovalsMutationFencedError,
   readExecApprovalsConfigRow,
   serializeExecApprovals,
   snapshotFromExecApprovalsRow,
@@ -20,18 +24,15 @@ import {
 } from "./exec-approvals-sqlite.js";
 import {
   ensureExecApprovals,
-  ExecApprovalsMigrationRequiredError,
-  ExecApprovalsMutationFencedError,
-  ExecApprovalsStoreUnavailableError,
   loadExecApprovals,
   readExecApprovalsSnapshot,
-  resetExecApprovalsStoreForTest,
   restoreExecApprovalsSnapshot,
   restoreExecApprovalsSnapshotLocked,
   saveExecApprovals,
   updateExecApprovals,
   withAgentExecApprovalsRemoved,
 } from "./exec-approvals-store.js";
+import { testing as execApprovalsStoreTesting } from "./exec-approvals-store.test-support.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
@@ -79,12 +80,12 @@ function makeStateDatabaseUnavailable(): void {
 beforeEach(() => {
   createStateDir();
   loggerWarn.mockReset();
-  resetExecApprovalsStoreForTest();
+  execApprovalsStoreTesting.reset();
 });
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
-  resetExecApprovalsStoreForTest();
+  execApprovalsStoreTesting.reset();
   envSnapshot.restore();
   for (const directory of tempDirs.splice(0)) {
     fs.rmSync(directory, { recursive: true, force: true });
@@ -151,7 +152,8 @@ describe("exec approvals SQLite store", () => {
       baseHash: missing.hash,
       update: () => ({ version: 1, defaults: { security: "deny" }, agents: {} }),
     });
-    expect(first?.hash).toBe(hashExecApprovalsRaw(first?.raw ?? null));
+    expect(first?.raw).not.toBeNull();
+    expect(first?.hash).toBe(sha256Hex(first?.raw ?? ""));
 
     await expect(
       updateExecApprovals({
@@ -191,7 +193,7 @@ describe("exec approvals SQLite store", () => {
   it("throws typed snapshot failures while enforcement reads fail closed", () => {
     makeStateDatabaseUnavailable();
 
-    expect(() => readExecApprovalsSnapshot()).toThrow(ExecApprovalsStoreUnavailableError);
+    expect(() => readExecApprovalsSnapshot()).toThrow("Exec approvals SQLite state is unavailable");
     expect(loadExecApprovals().defaults?.security).toBe("deny");
     expect(loadExecApprovals().defaults?.security).toBe("deny");
     expect(loggerWarn).toHaveBeenCalledTimes(1);
@@ -202,8 +204,8 @@ describe("exec approvals SQLite store", () => {
     makeStateDatabaseUnavailable();
     const commit = vi.fn(async () => "committed");
 
-    await expect(withAgentExecApprovalsRemoved("removed", commit)).rejects.toBeInstanceOf(
-      ExecApprovalsStoreUnavailableError,
+    await expect(withAgentExecApprovalsRemoved("removed", commit)).rejects.toThrow(
+      "Exec approvals SQLite state is unavailable",
     );
     expect(commit).not.toHaveBeenCalled();
   });
@@ -391,7 +393,7 @@ describe("exec approvals SQLite store", () => {
       path.join(stateDir, "exec-approvals.json"),
       serializeExecApprovals({ version: 1, agents: {} }),
     );
-    resetExecApprovalsStoreForTest();
+    execApprovalsStoreTesting.reset();
     expect(() => loadExecApprovals()).toThrow(ExecApprovalsMigrationRequiredError);
   });
 

@@ -12,6 +12,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { OpenClawStateLeaseError, withOpenClawStateLease } from "../state/openclaw-state-lease.js";
+import { formatErrorMessage } from "./errors.js";
 import {
   createFailClosedExecApprovalsFallback,
   generateToken,
@@ -29,7 +30,6 @@ import {
   EXEC_APPROVALS_MUTATION_LEASE_KEY,
   EXEC_APPROVALS_MUTATION_LEASE_SCOPE,
   deleteExecApprovalsConfigRow,
-  ExecApprovalsMutationFencedError,
   type ExecApprovalsMutationLeaseOwner,
   readExecApprovalsConfigRow,
   serializeExecApprovals,
@@ -43,9 +43,7 @@ const EXEC_APPROVALS_DELETION_LEASE_MS = 120_000;
 const EXEC_APPROVALS_DELETION_LEASE_WAIT_MS = 10_000;
 let lastWarnAt: number | undefined;
 
-export { ExecApprovalsMigrationRequiredError, ExecApprovalsMutationFencedError };
-
-export class ExecApprovalsStoreUnavailableError extends Error {
+class ExecApprovalsStoreUnavailableError extends Error {
   constructor(cause: unknown) {
     super(`Exec approvals SQLite state is unavailable: ${String(cause)}`, { cause });
     this.name = "ExecApprovalsStoreUnavailableError";
@@ -61,7 +59,7 @@ function warnFailClosed(message: string, error?: unknown): void {
   if (error === undefined) {
     log.warn(message);
   } else {
-    log.warn(message, { error: String(error) });
+    log.warn(message, { error: formatErrorMessage(error) });
   }
 }
 
@@ -379,8 +377,14 @@ export function ensureExecApprovals(): ExecApprovalsFile {
   ).file;
 }
 
-/** Test-only reset for process caches and warning throttling. */
-export function resetExecApprovalsStoreForTest(): void {
-  resetExecApprovalsMigrationGateForTest();
-  lastWarnAt = undefined;
+const testing = {
+  reset(): void {
+    resetExecApprovalsMigrationGateForTest();
+    lastWarnAt = undefined;
+  },
+};
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.execApprovalsStoreTestApi")] =
+    testing;
 }

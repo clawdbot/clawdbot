@@ -31,7 +31,6 @@ export {
 export {
   ensureExecApprovals,
   ensureExecApprovalsSnapshot,
-  ExecApprovalsStoreUnavailableError,
   loadExecApprovals,
   loadExecApprovalsAsync,
   readExecApprovalsSnapshot,

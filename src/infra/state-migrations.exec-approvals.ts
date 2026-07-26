@@ -23,6 +23,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import type { LegacyExecApprovalsDetection } from "./state-migrations.exec-approvals.types.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
 const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
@@ -37,11 +38,6 @@ type ExecApprovalsMigrationDatabase = Pick<
   OpenClawStateKyselyDatabase,
   "exec_approvals_config" | "migration_runs" | "migration_sources"
 >;
-
-export type LegacyExecApprovalsDetection = {
-  sourcePath: string;
-  hasLegacy: boolean;
-};
 
 type LegacySourceSnapshot = {
   buffer: Buffer;

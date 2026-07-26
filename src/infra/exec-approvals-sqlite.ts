@@ -14,8 +14,7 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 
-export const EXEC_APPROVALS_CONFIG_KEY = "current";
-export const EXEC_APPROVALS_SQLITE_LOCATOR = "state/openclaw.sqlite#exec_approvals_config";
+const EXEC_APPROVALS_CONFIG_KEY = "current";
 export const EXEC_APPROVALS_MUTATION_LEASE_SCOPE = "exec-approvals";
 export const EXEC_APPROVALS_MUTATION_LEASE_KEY = "mutation";
 
@@ -36,7 +35,7 @@ export class ExecApprovalsMutationFencedError extends Error {
   }
 }
 
-export function assertExecApprovalsMutationAllowed(params: {
+function assertExecApprovalsMutationAllowed(params: {
   db: DatabaseSync;
   leaseOwner?: ExecApprovalsMutationLeaseOwner;
   now?: number;
@@ -59,20 +58,16 @@ export function assertExecApprovalsMutationAllowed(params: {
   }
 }
 
-export type ExecApprovalsConfigRow = {
+type ExecApprovalsConfigRow = {
   raw_json: string;
 };
 
-export function hashExecApprovalsRaw(raw: string | null): string {
+function hashExecApprovalsRaw(raw: string | null): string {
   return raw === null ? `missing:${sha256Hex("")}` : sha256Hex(raw);
 }
 
 export function serializeExecApprovals(file: ExecApprovalsFile): string {
   return `${JSON.stringify(file, null, 2)}\n`;
-}
-
-export function hashExecApprovalsFile(file: ExecApprovalsFile): string {
-  return hashExecApprovalsRaw(serializeExecApprovals(file));
 }
 
 export function readExecApprovalsConfigRow(db: DatabaseSync): ExecApprovalsConfigRow | undefined {
