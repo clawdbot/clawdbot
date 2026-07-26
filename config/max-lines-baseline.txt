@@ -718,7 +718,6 @@ src/flows/doctor-core-checks.runtime.test.ts
 src/flows/doctor-core-checks.runtime.ts
 src/flows/doctor-core-checks.ts
 src/flows/doctor-health-contributions.test.ts
-src/flows/doctor-health-contributions.ts
 src/flows/model-picker.ts
 src/gateway/auth.test.ts
 src/gateway/call.test.ts
