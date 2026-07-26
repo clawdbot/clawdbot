@@ -16,15 +16,17 @@ import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "./memory-dreaming-page.ts";
 import {
   memorySchemaKeysForTab,
-  renderMemory,
   resolveMemoryBackend,
   resolveMemoryEngineSelection,
   selectedEngineId,
-  type MemoryAddonRow,
-  type MemoryPluginState,
-  type MemoryEngineOption,
   type MemoryEngineSelection,
   type MemoryTab,
+} from "./memory-schema.ts";
+import {
+  renderMemory,
+  type MemoryAddonRow,
+  type MemoryEngineOption,
+  type MemoryPluginState,
 } from "./memory.ts";
 
 // Curated presentation list. These bundled plugins declare no manifest `kind`,

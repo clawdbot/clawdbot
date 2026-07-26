@@ -49,7 +49,7 @@ import {
 } from "./config-sections.ts";
 import { renderMcp } from "./mcp.ts";
 import { renderMemoryPage } from "./memory-page.ts";
-import { narrowMemorySchema, normalizeMemoryTab } from "./memory.ts";
+import { narrowMemorySchema, normalizeMemoryTab } from "./memory-schema.ts";
 import { renderQuickSettings } from "./quick.ts";
 import { configTargetIdFromHash, type ConfigRouteData } from "./route-data.ts";
 import { renderSecurity, type SecurityOverview } from "./security.ts";

@@ -6,9 +6,9 @@ import {
   memorySchemaKeysForTab,
   memoryVisibleSchemaKeys,
   narrowMemorySchema,
-  renderMemory,
   resolveMemoryBackend,
-} from "./memory.ts";
+} from "./memory-schema.ts";
+import { renderMemory } from "./memory.ts";
 
 /** The view is the only public surface, so its props type comes from its signature. */
 type MemoryViewProps = Parameters<typeof renderMemory>[0];
