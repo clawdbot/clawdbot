@@ -459,6 +459,31 @@ describe("chat page split layout host", () => {
     ).resolves.toMatchObject({ kind: "session", sessionKey: CATALOG_SESSION_KEY });
   });
 
+  it("preserves a resolved long prefix through drafts and face changes", async () => {
+    const page = new ChatPage();
+    const navigation = setNavigationContext(page);
+    page.data = {
+      sessionKey: WORK_SESSION_KEY,
+      shortId: "1234567890",
+      draft: "ship",
+      face: "chat",
+    };
+    document.body.append(page);
+    await page.updateComplete;
+    await Promise.resolve();
+    await page.updateComplete;
+
+    expect(navigation.replace).toHaveBeenCalledWith("chat", {
+      pathname: "/chat/main/1234567890",
+    });
+    navigation.navigate.mockClear();
+    const pane = page.querySelector<RenderedPane>("openclaw-chat-pane");
+    pane?.onFaceChange?.("dashboard");
+    expect(navigation.navigate).toHaveBeenCalledWith("dashboard", {
+      pathname: "/dashboard/main/1234567890",
+    });
+  });
+
   it("passes an empty session key while route data is still unresolved", async () => {
     // Regression: a fabricated fallback key here made the pane canonicalize
     // against it and skip gateway startup entirely (chat.startup never sent).

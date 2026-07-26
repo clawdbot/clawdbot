@@ -113,7 +113,7 @@ export function buildControlUiSessionPath(params: BuildControlUiSessionPathParam
   const normalizedRest = rest.toLowerCase();
   const mainKey = optionalString(params.mainKey)?.toLowerCase() ?? DEFAULT_MAIN_KEY;
   if (
-    normalizedRest === DEFAULT_MAIN_KEY ||
+    (!parsed && normalizedRest === DEFAULT_MAIN_KEY) ||
     normalizedRest === mainKey ||
     normalizedRest === "global"
   ) {

@@ -23,6 +23,7 @@ type ContextSessionNavigationTargetParams<TRouteId extends string> = {
   basePath?: never;
   row?: never;
   mainKey?: never;
+  shortIdLength?: number;
 };
 
 type ExplicitSessionNavigationTargetParams = {
@@ -33,6 +34,7 @@ type ExplicitSessionNavigationTargetParams = {
   basePath?: string;
   row?: Pick<GatewaySessionRow, "displayName" | "key">;
   mainKey?: string | null;
+  shortIdLength?: number;
   agentId?: never;
 };
 
@@ -63,6 +65,7 @@ function pathForNonCatalogSessionKey(params: {
   basePath: string;
   row?: Pick<GatewaySessionRow, "displayName" | "key">;
   mainKey?: string | null;
+  shortIdLength?: number;
 }): string {
   const key = params.row?.key ?? params.sessionKey;
   const agentId =
@@ -74,6 +77,7 @@ function pathForNonCatalogSessionKey(params: {
     pathForSession(params.face, normalizeAgentId(agentId), key, params.basePath, {
       displayName: params.row?.displayName,
       mainKey: params.mainKey,
+      shortIdLength: params.shortIdLength,
     }) ?? pathForRoute(params.face, params.basePath)
   );
 }
@@ -114,6 +118,7 @@ export function sessionNavigationTarget<TRouteId extends string>(
     sessionKey: targetKey,
     fallbackAgentId,
     basePath,
+    shortIdLength: params.shortIdLength,
     ...(catalogKey ? { mainKey } : { row, mainKey }),
   });
   const search = catalogKey ? catalogSessionSearch(catalogKey) : undefined;

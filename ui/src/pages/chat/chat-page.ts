@@ -340,7 +340,6 @@ export class ChatPage extends OpenClawLightDomElement {
     };
   }
 
-  // Route and active pane mirror each other; equality guards keep the two paths from looping.
   private syncRouteToActivePane() {
     const layout = this.layout;
     const sessionKey = this.data?.sessionKey?.trim();
@@ -367,18 +366,16 @@ export class ChatPage extends OpenClawLightDomElement {
   }
 
   private updateRoute(sessionKey: string, replace = false, face = this.data.face ?? "chat") {
-    if (
-      this.data?.sessionKey === sessionKey &&
-      (this.data.face ?? "chat") === face &&
-      !this.data.draft
-    ) {
+    const data = this.data;
+    if (data?.sessionKey === sessionKey && (data.face ?? "chat") === face && !data.draft) {
       return;
     }
     const options = sessionNavigationTarget({
       context: this.context,
       face,
       sessionKey,
-      agentId: this.data?.agentId,
+      agentId: data?.agentId,
+      shortIdLength: data?.sessionKey === sessionKey ? data.shortId?.length : undefined,
     }).options;
     if (replace) {
       this.context.replace(face, options);

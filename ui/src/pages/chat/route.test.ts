@@ -138,6 +138,7 @@ describe("loadChatRoute", () => {
       sessionKey: target.key,
       draft: undefined,
       face: "chat",
+      shortId: "123456780a",
     });
     expect(list).toHaveBeenCalledWith(expect.objectContaining({ search: "123456780a" }));
     expect(list).not.toHaveBeenCalledWith(expect.objectContaining({ search: "12345678" }));
@@ -262,6 +263,7 @@ describe("loadChatRoute", () => {
         sessionKey: expectedRow?.key,
         draft: "ship",
         face: "dashboard",
+        shortId: candidate.idPrefix,
       });
     }
   });

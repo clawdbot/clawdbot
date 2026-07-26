@@ -21,12 +21,24 @@ const SESSION_URL_CONTRACT_CASES = [
     expectedPath: "/chat/main",
   },
   { sessionKey: "main", agentId: "research", mainKey: undefined, expectedPath: "/chat/research" },
+  {
+    sessionKey: "main",
+    agentId: "research",
+    mainKey: "workspace",
+    expectedPath: "/chat/research",
+  },
   { sessionKey: "main", agentId: "..", mainKey: undefined, expectedPath: "/chat/main" },
   {
     sessionKey: "agent:research:workspace",
     agentId: "main",
     mainKey: "workspace",
     expectedPath: "/chat/research",
+  },
+  {
+    sessionKey: "agent:research:main",
+    agentId: "main",
+    mainKey: "workspace",
+    expectedPath: "/chat/research/main",
   },
   {
     sessionKey: "telegram:12345",

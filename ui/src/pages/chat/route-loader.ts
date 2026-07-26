@@ -37,6 +37,7 @@ export type ChatRouteData =
       agentId?: string;
       draft?: string;
       face: BoardFace;
+      shortId?: string;
       canonicalLocation?: RouteLocation;
       canonicalLocationReady?: Promise<RouteLocation | null>;
     }
@@ -350,6 +351,7 @@ export async function loadChatRoute(
     sessionKey: row.key,
     draft: draftFromLocation(location),
     face,
+    ...(target.shortId.length > 8 ? { shortId: target.shortId } : {}),
     ...(!resolvedTarget.normalized && location.pathname !== canonicalPath
       ? { canonicalLocation: { ...location, pathname: canonicalPath } }
       : {}),
