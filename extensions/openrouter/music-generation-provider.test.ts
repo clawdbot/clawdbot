@@ -211,6 +211,29 @@ describe("openrouter music generation provider", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it("rejects malformed base64 audio in streamed OpenRouter deltas", async () => {
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: sseResponse([
+        `data: ${JSON.stringify({ choices: [{ delta: { audio: { data: "%%%not-base64!!" } } }] })}\n`,
+        "data: [DONE]\n",
+      ]),
+      release,
+    });
+
+    await expect(
+      buildOpenRouterMusicGenerationProvider().generateMusic({
+        provider: "openrouter",
+        model: "",
+        prompt: "bright soundtrack",
+        cfg: {},
+        instrumental: true,
+        format: "wav",
+      }),
+    ).rejects.toThrow("OpenRouter music generation returned malformed base64 audio data");
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("preserves completed OpenRouter audio when reader cleanup fails", async () => {
     const cancel = vi.fn(async () => {
       throw new Error("cancel failed");
