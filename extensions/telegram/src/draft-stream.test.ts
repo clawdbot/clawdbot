@@ -311,6 +311,65 @@ describe("createTelegramDraftStream", () => {
     });
   });
 
+  it("disables link previews on the streamed send and on every edit", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, { linkPreview: false });
+
+    stream.update("see https://example.com");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "see https://example.com", {
+      link_preview_options: { is_disabled: true },
+    });
+
+    // The edit matters as much as the send: Telegram re-enables the preview on
+    // any edit that omits the field, and finalization skips the edit when the
+    // streamed draft already equals the final text.
+    stream.update("see https://example.com now");
+    await stream.flush();
+
+    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "see https://example.com now", {
+      link_preview_options: { is_disabled: true },
+    });
+  });
+
+  it("keeps parse_mode alongside disabled link previews on the HTML transport", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, {
+      linkPreview: false,
+      renderText: (text) => ({ text: `<i>${text}</i>`, parseMode: "HTML" }),
+    });
+
+    stream.update("https://example.com");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "<i>https://example.com</i>", {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    });
+
+    stream.update("https://example.com/two");
+    await stream.flush();
+
+    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "<i>https://example.com/two</i>", {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    });
+  });
+
+  it("omits link_preview_options entirely when linkPreview is not disabled", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api);
+
+    stream.update("see https://example.com");
+    await stream.flush();
+    stream.update("see https://example.com now");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "see https://example.com", {});
+    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "see https://example.com now");
+  });
+
   it("finalizeToPreview edits the live window message in place without deleting", async () => {
     const api = createMockDraftApi();
     const stream = createDraftStream(api, { thread: { id: 42, scope: "dm" } });
