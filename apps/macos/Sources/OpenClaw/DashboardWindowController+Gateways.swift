@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import OpenClawKit
 import WebKit
 
 enum DashboardGatewaysRequest: Equatable {
@@ -20,6 +21,59 @@ final class DashboardGatewaysMessageHandler: NSObject, WKScriptMessageHandler {
 
 extension DashboardWindowController {
     static let gatewaysMessageHandlerName = "openclawGateways"
+
+    func hasTLSParams(_ params: GatewayTLSParams?) -> Bool {
+        self.tlsParams == params
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping @MainActor @Sendable (
+            URLSession.AuthChallengeDisposition,
+            URLCredential?) -> Void)
+    {
+        guard webView === self.webView,
+              challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust
+        else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+        guard let params = self.tlsParams else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+        guard Self.isExpectedTLSAuthority(
+            host: challenge.protectionSpace.host,
+            port: challenge.protectionSpace.port,
+            dashboardURL: self.currentURL)
+        else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+        guard let trust = challenge.protectionSpace.serverTrust else {
+            completionHandler(.cancelAuthenticationChallenge, nil)
+            return
+        }
+        switch GatewayTLSServerTrust.evaluate(
+            trust: trust,
+            host: challenge.protectionSpace.host,
+            port: challenge.protectionSpace.port,
+            params: params)
+        {
+        case .accept:
+            completionHandler(.useCredential, URLCredential(trust: trust))
+        case .reject:
+            completionHandler(.cancelAuthenticationChallenge, nil)
+        }
+    }
+
+    static func isExpectedTLSAuthority(host: String, port: Int, dashboardURL: URL) -> Bool {
+        let expectedHost = dashboardURL.host?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let challengedHost = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let expectedPort = dashboardURL.port ?? (dashboardURL.scheme?.lowercased() == "https" ? 443 : 80)
+        return expectedHost?.isEmpty == false && challengedHost == expectedHost && port == expectedPort
+    }
 
     static func gatewaysRequest(from body: Any) -> DashboardGatewaysRequest? {
         guard let payload = body as? [String: Any], let type = payload["type"] as? String else {
@@ -51,6 +105,16 @@ extension DashboardWindowController {
         DashboardManager.shared.handleGatewayRequest(request, from: self)
     }
 
+    func updateGatewaySnapshot(_ snapshot: DashboardGatewaySnapshot) {
+        self.gatewaySnapshot = snapshot
+        let controller = self.webView.configuration.userContentController
+        controller.removeAllUserScripts()
+        Self.installNativeChromeScript(into: controller)
+        Self.installNativeGatewaysScript(into: controller, snapshot: snapshot)
+        Self.installNativeAuthScript(into: controller, url: self.currentURL, auth: self.auth)
+        self.webView.evaluateJavaScript(Self.nativeGatewaysScriptSource(snapshot: snapshot, dispatch: true))
+    }
+
     static func installNativeGatewaysScript(
         into userContentController: WKUserContentController,
         snapshot: DashboardGatewaySnapshot?)
@@ -72,7 +136,8 @@ extension DashboardWindowController {
             return ""
         }
         let event = dispatch
-            ? "window.dispatchEvent(new CustomEvent('openclaw:native-gateways-changed',{detail:window.__OPENCLAW_NATIVE_GATEWAYS__}));"
+            ? "window.dispatchEvent(new CustomEvent('openclaw:native-gateways-changed'," +
+            "{detail:window.__OPENCLAW_NATIVE_GATEWAYS__}));"
             : ""
         return "window.__OPENCLAW_NATIVE_GATEWAYS__=\(json);\(event)"
     }

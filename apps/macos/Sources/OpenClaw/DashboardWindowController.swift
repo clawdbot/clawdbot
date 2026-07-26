@@ -95,9 +95,9 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private let splitViewController: NSSplitViewController
     private let updateMessageHandler: DashboardUpdateMessageHandler
     private(set) var currentURL: URL
-    private var auth: DashboardWindowAuth
-    private var gatewaySnapshot: DashboardGatewaySnapshot?
-    private let tlsParams: GatewayTLSParams?
+    var auth: DashboardWindowAuth
+    var gatewaySnapshot: DashboardGatewaySnapshot?
+    let tlsParams: GatewayTLSParams?
     private let dashboardFrameAutosaveName: String
     private let updater: UpdaterProviding?
     private var updateBridgeEnabled: Bool
@@ -251,60 +251,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             "window.dispatchEvent(new CustomEvent('openclaw:native-update-availability-changed'))")
     }
 
-    func hasTLSParams(_ params: GatewayTLSParams?) -> Bool {
-        self.tlsParams == params
-    }
-
     // MARK: - WKUIDelegate
-
-    func webView(
-        _ webView: WKWebView,
-        didReceive challenge: URLAuthenticationChallenge,
-        completionHandler: @escaping @MainActor @Sendable (
-            URLSession.AuthChallengeDisposition,
-            URLCredential?) -> Void)
-    {
-        guard webView === self.webView,
-              challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust
-        else {
-            completionHandler(.performDefaultHandling, nil)
-            return
-        }
-        guard let params = self.tlsParams else {
-            completionHandler(.performDefaultHandling, nil)
-            return
-        }
-        guard Self.isExpectedTLSAuthority(
-            host: challenge.protectionSpace.host,
-            port: challenge.protectionSpace.port,
-            dashboardURL: self.currentURL)
-        else {
-            completionHandler(.performDefaultHandling, nil)
-            return
-        }
-        guard let trust = challenge.protectionSpace.serverTrust else {
-            completionHandler(.cancelAuthenticationChallenge, nil)
-            return
-        }
-        switch GatewayTLSServerTrust.evaluate(
-            trust: trust,
-            host: challenge.protectionSpace.host,
-            port: challenge.protectionSpace.port,
-            params: params)
-        {
-        case .accept:
-            completionHandler(.useCredential, URLCredential(trust: trust))
-        case .reject:
-            completionHandler(.cancelAuthenticationChallenge, nil)
-        }
-    }
-
-    static func isExpectedTLSAuthority(host: String, port: Int, dashboardURL: URL) -> Bool {
-        let expectedHost = dashboardURL.host?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let challengedHost = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let expectedPort = dashboardURL.port ?? (dashboardURL.scheme?.lowercased() == "https" ? 443 : 80)
-        return expectedHost?.isEmpty == false && challengedHost == expectedHost && port == expectedPort
-    }
 
     /// Bridges JavaScript `window.confirm` calls in the embedded Control UI to a
     /// native confirmation sheet; without this callback, WebKit treats every
@@ -488,16 +435,6 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         // replaces this controller so the successor can restore the saved frame.
         self.window?.saveFrame(usingName: self.dashboardFrameAutosaveName)
         self.windowFrameAutosaveName = ""
-    }
-
-    func updateGatewaySnapshot(_ snapshot: DashboardGatewaySnapshot) {
-        self.gatewaySnapshot = snapshot
-        let controller = self.webView.configuration.userContentController
-        controller.removeAllUserScripts()
-        Self.installNativeChromeScript(into: controller)
-        Self.installNativeGatewaysScript(into: controller, snapshot: snapshot)
-        Self.installNativeAuthScript(into: controller, url: self.currentURL, auth: self.auth)
-        self.webView.evaluateJavaScript(Self.nativeGatewaysScriptSource(snapshot: snapshot, dispatch: true))
     }
 
     func showFailure(title: String, message: String, detail: String? = nil) {
@@ -885,7 +822,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         return window
     }
 
-    private static func installNativeChromeScript(into userContentController: WKUserContentController) {
+    static func installNativeChromeScript(into userContentController: WKUserContentController) {
         // Deliberately no native fallback for pages that ignore this flag
         // (older gateway bundles, failure pages): they keep their own in-page
         // toggles plus back/forward gestures and the Cmd-[/] menu items.
@@ -927,7 +864,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             WKUserScript(source: script, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
     }
 
-    private static func installNativeAuthScript(
+    static func installNativeAuthScript(
         into userContentController: WKUserContentController,
         url: URL,
         auth: DashboardWindowAuth)

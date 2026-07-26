@@ -176,10 +176,8 @@ public enum GatewayTLSServerTrust {
         let systemTrustOk = SecTrustEvaluateWithError(trust, nil)
         let fingerprint = certificateFingerprint(trust)
         let expected = expectedFingerprint.map(normalizeFingerprint)
-        let failure: (GatewayTLSValidationFailureKind, String?, String?) -> GatewayTLSServerTrustEvaluation = {
-            kind,
-            expectedFingerprint,
-            enforcedFingerprint in
+        let failure: (GatewayTLSValidationFailureKind, String?, String?) -> GatewayTLSServerTrustEvaluation
+        failure = { kind, expectedFingerprint, enforcedFingerprint in
             .reject(
                 failure: GatewayTLSValidationFailure(
                     kind: kind,
