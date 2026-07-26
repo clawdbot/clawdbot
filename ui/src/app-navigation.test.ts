@@ -16,7 +16,6 @@ import {
   normalizeBasePath,
   pathForSession,
   pathForWorkboardBoard,
-  sessionRefFromPath,
   workboardBoardIdFromPath,
 } from "./app-route-paths.ts";
 import {
@@ -25,6 +24,7 @@ import {
   routeIdFromPath,
   type RouteId,
 } from "./app-routes.ts";
+import { sessionRefFromPath } from "./app-session-route-paths.ts";
 import { pluginTabKey, pluginTabRefFromSearch, pluginTabSearch } from "./pages/plugin/route.ts";
 
 type SessionUrlContractCase = {

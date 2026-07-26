@@ -1,8 +1,4 @@
-import {
-  buildControlUiSessionPath,
-  parseControlUiSessionPath,
-  type ControlUiSessionPathTarget,
-} from "@openclaw/session-url-contract";
+import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import { normalizeRouteBasePath, normalizeRoutePath } from "@openclaw/uirouter";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
@@ -82,8 +78,6 @@ export function pathForWorkboardBoard(boardId: string, basePath = ""): string {
   return `${pathForRoute("workboard", basePath)}/${encodedBoardId}`;
 }
 
-export type SessionPathTarget = ControlUiSessionPathTarget;
-
 type SessionPathDetails = {
   displayName?: string | null;
   mainKey?: string | null;
@@ -108,16 +102,20 @@ export function pathForSession(
   });
 }
 
-export function sessionRefFromPath(
-  pathname: string,
-  basePath = "",
-  mainKey?: string,
-): SessionPathTarget | null {
-  return parseControlUiSessionPath(pathname, basePath, mainKey);
-}
-
 export function isSessionRouteId(routeId: string | null | undefined): routeId is BoardFace {
   return routeId === "chat" || routeId === "dashboard";
+}
+
+export function sessionRouteNamespaceFromPath(pathname: string, basePath = ""): BoardFace | null {
+  const normalizedPath = normalizePath(pathname);
+  const normalizedBasePath = normalizeBasePath(basePath);
+  for (const face of ["chat", "dashboard"] as const) {
+    const prefix = `${normalizedBasePath}/${face}/`;
+    if (normalizedPath.startsWith(prefix) && normalizedPath.length > prefix.length) {
+      return face;
+    }
+  }
+  return null;
 }
 
 export function workboardBoardIdFromPath(pathname: string, basePath = ""): string | null {
@@ -155,9 +153,9 @@ export function routeIdFromPath(pathname: string, basePath = ""): RouteId | null
   if (workboardBoardIdFromPath(normalizedPath, normalizedBasePath)) {
     return "workboard";
   }
-  const sessionRef = sessionRefFromPath(normalizedPath, normalizedBasePath);
-  if (sessionRef) {
-    return sessionRef.namespace;
+  const sessionNamespace = sessionRouteNamespaceFromPath(normalizedPath, normalizedBasePath);
+  if (sessionNamespace) {
+    return sessionNamespace;
   }
   for (const routeId of APP_ROUTE_IDS) {
     const definition = APP_ROUTE_DEFINITIONS[routeId];
@@ -192,7 +190,7 @@ export function inferBasePathFromPathname(pathname: string): string {
     const candidate = `/${segments.slice(index).join("/")}`;
     const routePath = routePaths.find((path) => normalizePath(path) === candidate);
     const dynamicWorkboardRoute = workboardBoardIdFromPath(candidate) !== null;
-    const dynamicSessionRoute = sessionRefFromPath(candidate) !== null;
+    const dynamicSessionRoute = sessionRouteNamespaceFromPath(candidate) !== null;
     if (!routePath && !dynamicWorkboardRoute && !dynamicSessionRoute) {
       continue;
     }

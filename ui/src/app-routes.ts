@@ -4,7 +4,7 @@ import {
   INTERNAL_SESSION_PATH_PARAM,
   pathForRoute,
   routeIdFromPath,
-  sessionRefFromPath,
+  sessionRouteNamespaceFromPath,
   workboardBoardIdFromPath,
   type RouteId,
 } from "./app-route-paths.ts";
@@ -108,15 +108,15 @@ function routerHistoryLocation(location: ReturnType<RouterHistory["location"]>, 
       search: `?${search.toString()}`,
     };
   }
-  const sessionRef = sessionRefFromPath(location.pathname, basePath);
-  if (!sessionRef) {
+  const sessionNamespace = sessionRouteNamespaceFromPath(location.pathname, basePath);
+  if (!sessionNamespace) {
     return location;
   }
   const search = new URLSearchParams(location.search);
   search.set(INTERNAL_SESSION_PATH_PARAM, location.pathname);
   return {
     ...location,
-    pathname: pathForRoute(sessionRef.namespace, basePath),
+    pathname: pathForRoute(sessionNamespace, basePath),
     search: `?${search.toString()}`,
   };
 }
@@ -138,7 +138,7 @@ export async function startApplicationRouter(
     location = history.location();
   }
   const initialBoardId = workboardBoardIdFromPath(location.pathname, basePath);
-  const initialSessionRef = sessionRefFromPath(location.pathname, basePath);
+  const initialSessionNamespace = sessionRouteNamespaceFromPath(location.pathname, basePath);
   const applicationHistory: RouterHistory = {
     location: () => routerHistoryLocation(history.location(), basePath),
     push: (next) => history.push(next),
@@ -153,10 +153,10 @@ export async function startApplicationRouter(
             });
           return;
         }
-        const sessionRef = sessionRefFromPath(next.pathname, basePath);
-        if (sessionRef) {
+        const sessionNamespace = sessionRouteNamespaceFromPath(next.pathname, basePath);
+        if (sessionNamespace) {
           void router
-            .navigate(sessionRef.namespace, context, { history: "none" }, next)
+            .navigate(sessionNamespace, context, { history: "none" }, next)
             .catch((error: unknown) => {
               console.error("[openclaw] Session route navigation failed", error);
             });
@@ -170,9 +170,9 @@ export async function startApplicationRouter(
     // Replace the synthetic exact-match location with the real browser path
     // before the shell renders; the matching board data is already cached.
     await router.navigate("workboard", context, { history: "none", revalidate: true }, location);
-  } else if (initialSessionRef) {
+  } else if (initialSessionNamespace) {
     await router.navigate(
-      initialSessionRef.namespace,
+      initialSessionNamespace,
       context,
       { history: "none", revalidate: true },
       location,

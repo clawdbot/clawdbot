@@ -1,22 +1,5 @@
 // Control UI session URL grammar shared by browser and plugin consumers.
-const CONTROL_UI_SESSION_NAMESPACES = ["chat", "dashboard"] as const;
-
-export type ControlUiSessionNamespace = (typeof CONTROL_UI_SESSION_NAMESPACES)[number];
-
-export type ControlUiSessionPathTarget =
-  | { namespace: ControlUiSessionNamespace; kind: "main"; agentId: string }
-  | {
-      namespace: ControlUiSessionNamespace;
-      kind: "short";
-      agentId: string;
-      shortId: string;
-    }
-  | {
-      namespace: ControlUiSessionNamespace;
-      kind: "literal";
-      agentId: string;
-      sessionKey: string;
-    };
+export type ControlUiSessionNamespace = "chat" | "dashboard";
 
 type BuildControlUiSessionPathParams = {
   namespace: ControlUiSessionNamespace;
@@ -64,15 +47,6 @@ function normalizeBasePath(basePath: string | undefined): string {
   return trimmed ? `/${trimmed}` : "";
 }
 
-function normalizePath(path: string): string {
-  const trimmed = path.trim();
-  if (!trimmed) {
-    return "/";
-  }
-  const withSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-  return withSlash.length > 1 && withSlash.endsWith("/") ? withSlash.slice(0, -1) : withSlash;
-}
-
 function agentSessionKeyParts(sessionKey: string): { agentId: string; rest: string } | null {
   const parts = sessionKey.split(":");
   if (parts.length < 3 || parts[0]?.toLowerCase() !== "agent") {
@@ -84,20 +58,6 @@ function agentSessionKeyParts(sessionKey: string): { agentId: string; rest: stri
     return null;
   }
   return { agentId: normalizeAgentId(agentId), rest: restSegments.join(":") };
-}
-
-function decodePathSegment(segment: string): string | null {
-  if (segment === "~dot") {
-    return ".";
-  }
-  if (segment === "~dotdot") {
-    return "..";
-  }
-  try {
-    return decodeURIComponent(segment.startsWith("~~") ? segment.slice(1) : segment) || null;
-  } catch {
-    return null;
-  }
 }
 
 function encodePathSegment(segment: string): string {
@@ -134,17 +94,6 @@ function controlUiSessionSlug(displayName: string | undefined | null): string {
 
 function controlUiShortIdFromSessionRef(sessionRef: string): string | null {
   return sessionRef.match(SHORT_SESSION_REF_RE)?.[1]?.toLowerCase() ?? null;
-}
-
-function buildControlUiLiteralSessionKey(
-  agentId: string,
-  restSegments: readonly string[],
-): string | null {
-  const normalizedAgentId = optionalString(agentId);
-  if (!normalizedAgentId || restSegments.length === 0 || restSegments.some((segment) => !segment)) {
-    return null;
-  }
-  return `agent:${normalizeAgentId(normalizedAgentId)}:${restSegments.join(":")}`;
 }
 
 export function buildControlUiSessionPath(params: BuildControlUiSessionPathParams): string | null {
@@ -196,44 +145,4 @@ export function buildControlUiSessionPath(params: BuildControlUiSessionPathParam
     }
   }
   return `${namespace}/${encodedAgentId}/${segments.map(encodePathSegment).join("/")}`;
-}
-
-export function parseControlUiSessionPath(
-  pathname: string,
-  basePath = "",
-  mainKey?: string,
-): ControlUiSessionPathTarget | null {
-  const normalizedPath = normalizePath(pathname);
-  for (const namespace of CONTROL_UI_SESSION_NAMESPACES) {
-    const prefix = `${normalizeBasePath(basePath)}/${namespace}/`;
-    if (!normalizedPath.startsWith(prefix)) {
-      continue;
-    }
-    const segments = normalizedPath.slice(prefix.length).split("/").map(decodePathSegment);
-    const rawAgentId = segments[0];
-    if (!rawAgentId || segments.some((segment) => segment === null)) {
-      return null;
-    }
-    const agentId = normalizeAgentId(rawAgentId);
-    if (segments.length === 1) {
-      return { namespace, kind: "main", agentId };
-    }
-    const restSegments = segments.slice(1) as string[];
-    const sessionKey = buildControlUiLiteralSessionKey(agentId, restSegments);
-    if (!sessionKey) {
-      return null;
-    }
-    if (restSegments.length !== 1) {
-      return { namespace, kind: "literal", agentId, sessionKey };
-    }
-    const segment = restSegments[0] ?? "";
-    if (isReservedSessionRest(segment, mainKey)) {
-      return { namespace, kind: "literal", agentId, sessionKey };
-    }
-    const shortId = controlUiShortIdFromSessionRef(segment);
-    return shortId
-      ? { namespace, kind: "short", agentId, shortId }
-      : { namespace, kind: "literal", agentId, sessionKey };
-  }
-  return null;
 }

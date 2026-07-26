@@ -2,12 +2,8 @@ import type { RouteLocation } from "@openclaw/uirouter";
 import { notFound } from "@openclaw/uirouter";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import {
-  INTERNAL_SESSION_PATH_PARAM,
-  pathForSession,
-  sessionRefFromPath,
-  type SessionPathTarget,
-} from "../../app-route-paths.ts";
+import { INTERNAL_SESSION_PATH_PARAM, pathForSession } from "../../app-route-paths.ts";
+import { sessionRefFromPath, type SessionPathTarget } from "../../app-session-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import {

@@ -1,5 +1,5 @@
 import type { RouteLocation } from "@openclaw/uirouter";
-import { sessionRefFromPath } from "../../app-route-paths.ts";
+import { sessionRouteNamespaceFromPath } from "../../app-route-paths.ts";
 import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
@@ -16,7 +16,7 @@ export function isDefaultChatLanding(
   if (routeId !== null && routeId !== "chat") {
     return false;
   }
-  return sessionRefFromPath(location.pathname, basePath) === null;
+  return sessionRouteNamespaceFromPath(location.pathname, basePath) === null;
 }
 
 export function locationsMatch(left: RouteLocation, right: RouteLocation): boolean {
