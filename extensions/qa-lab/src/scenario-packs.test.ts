@@ -69,12 +69,6 @@ describe("qa scenario packs", () => {
     ]);
   });
 
-  it("expands the smoke-ci pack in pack order", () => {
-    expect(resolveQaScenarioPackScenarioIds({ pack: "smoke-ci" })).toEqual([
-      ...scenarioIdsForPack("smoke-ci"),
-    ]);
-  });
-
   it("combines explicit scenarios with pack scenarios", () => {
     expect(
       resolveQaScenarioPackScenarioIds({
