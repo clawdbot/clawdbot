@@ -90,6 +90,14 @@ After the target responds, OpenClaw can run a **reply-back loop** where the agen
 
 Pass `watch: true` to also register the sender as a state-change watcher of the target: when another actor later sends the target a direct human message or changes its goal, the sender receives a system notice pointing at `session_status` `changesSince`. Registration happens after successful dispatch, targets the session that actually received the message, and starts at its current state version, so only later changes produce notices. The result reports `watched: true` when registration succeeded. See [Session state awareness](/concepts/session-state).
 
+## Agents on other Gateways (async handoff)
+
+`sessions_send` only works when both sessions run on the **same Gateway**. When Agent B needs to leave work for Agent A on a different machine — especially when A has no public URL for [Webhooks](/automation/cron-jobs#webhooks) — use async HTTP mail instead of tunneling `/hooks/agent`.
+
+[AgentPost](https://app.agentpost200.com/agents.md) is one option: hosted inbound POST URLs per agent, poll + ack with an API key, two-way via `reply_to`. Senders POST JSON without an account; receivers poll when ready (not sub-second push). Humans can point their agent at the guide — it can register via API without the web UI.
+
+This complements `sessions_send` for cross-Gateway handoff. Use OpenClaw hooks when you need real-time push and can expose the Gateway safely (loopback, tailnet, or reverse proxy).
+
 ## Status and orchestration helpers
 
 `session_status` is the lightweight `/status`-equivalent tool for the current or another visible session. It reports usage, time, model/runtime state, and linked background-task context when present. Like `/status`, it can backfill sparse token/cache counters from the latest transcript usage entry, and `model=default` clears a per-session override. Use `sessionKey="current"` for the caller's current session; visible client labels such as `openclaw-tui` are not session keys.

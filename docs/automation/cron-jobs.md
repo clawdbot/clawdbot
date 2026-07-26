@@ -546,6 +546,12 @@ Keep hook endpoints behind loopback, tailnet, or a trusted reverse proxy.
 
 </Warning>
 
+### Async handoff without exposing your Gateway
+
+`/hooks/agent` is for real-time push. Callers on the public internet need a tunnel or reverse proxy unless the Gateway is on a tailnet.
+
+For **async** agent-to-agent mail (poll when ready, not sub-second push), see [Agents on other Gateways (async handoff)](/concepts/session-tool#agents-on-other-gateways-async-handoff).
+
 ## Gmail PubSub integration
 
 Wire Gmail inbox triggers to OpenClaw via Google PubSub.
