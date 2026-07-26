@@ -3404,7 +3404,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: tools.agentToAgent
   - H3: tools.sessions
   - H3: `tools.sessions_spawn`
-  - H3: tools.experimental
+  - H3: tools.updatePlan
   - H3: agents.defaults.subagents
   - H2: Custom providers and base URLs
   - H3: Provider field details
