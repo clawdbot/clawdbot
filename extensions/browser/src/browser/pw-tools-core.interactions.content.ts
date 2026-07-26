@@ -64,7 +64,9 @@ async function toPlaywrightFilePayloads(paths: string[]): Promise<PlaywrightFile
   );
 }
 
-function shouldUsePlaywrightFilePayloads(opts: Pick<NavigationTargetOptions, "ssrfPolicy">): boolean {
+function shouldUsePlaywrightFilePayloads(
+  opts: Pick<NavigationTargetOptions, "ssrfPolicy">,
+): boolean {
   return Boolean(opts.ssrfPolicy);
 }
 
