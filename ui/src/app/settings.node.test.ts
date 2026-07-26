@@ -63,7 +63,6 @@ function makeSettings(gatewayUrl: string, overrides: Partial<UiSettings> = {}): 
     navCollapsed: false,
     navWidth: 258,
     sidebarEntries: [],
-    sessionSectionOrder: [],
     ...overrides,
   };
 }
@@ -265,7 +264,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navCollapsed: false,
       navWidth: 258,
       sidebarEntries: [],
-      sessionSectionOrder: [],
       textScale: 100,
     });
 
@@ -295,7 +293,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navCollapsed: false,
       navWidth: 258,
       sidebarEntries: [],
-      sessionSectionOrder: [],
     });
 
     saveSettings({
@@ -310,7 +307,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navCollapsed: false,
       navWidth: 258,
       sidebarEntries: [],
-      sessionSectionOrder: [],
     });
 
     const settings = loadSettings();
@@ -338,7 +334,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navCollapsed: false,
       navWidth: 258,
       sidebarEntries: [],
-      sessionSectionOrder: [],
     });
     const settings = loadSettings();
     expect(settings.gatewayUrl).toBe(gwUrl);
@@ -355,7 +350,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navCollapsed: false,
       navWidth: 258,
       sidebarEntries: [],
-      sessionSectionOrder: [],
       textScale: 100,
       sessionsByGateway: {
         [gwUrl]: {
@@ -387,7 +381,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navCollapsed: false,
       navWidth: 258,
       sidebarEntries: [],
-      sessionSectionOrder: [],
       pinnedAgentIds: ["main", "research"],
     });
     expect(loadSettings().pinnedAgentIds).toEqual(["main", "research"]);
@@ -700,7 +693,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navCollapsed: false,
       navWidth: 258,
       sidebarEntries: [],
-      sessionSectionOrder: [],
     });
     saveSettings({
       gatewayUrl: gwUrl,
@@ -714,7 +706,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navCollapsed: false,
       navWidth: 258,
       sidebarEntries: [],
-      sessionSectionOrder: [],
     });
 
     expect(loadSettings().token).toBe("");
@@ -741,7 +732,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navCollapsed: false,
       navWidth: 320,
       sidebarEntries: [],
-      sessionSectionOrder: [],
     });
 
     const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
@@ -880,7 +870,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navCollapsed: false,
       navWidth: 258,
       sidebarEntries: [],
-      sessionSectionOrder: [],
       customTheme,
     });
 
@@ -909,7 +898,6 @@ describe("loadSettings default gateway URL derivation", () => {
         navCollapsed: false,
         navWidth: 258,
         sidebarEntries: [],
-        sessionSectionOrder: [],
         customTheme: {
           sourceUrl: "https://tweakcn.com/themes/broken",
           themeId: "broken",
@@ -952,7 +940,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navCollapsed: false,
       navWidth: 258,
       sidebarEntries: [],
-      sessionSectionOrder: [],
     });
 
     const settings = loadSettings();
@@ -994,7 +981,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navCollapsed: false,
       navWidth: 258,
       sidebarEntries: [],
-      sessionSectionOrder: [],
     });
 
     const persisted = JSON.parse(localStorage.getItem(scopedKey) ?? "{}");

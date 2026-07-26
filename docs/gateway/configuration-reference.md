@@ -529,7 +529,6 @@ See [Plugins](/tools/plugin).
       chatPersistCommentary: true, // Keep commentary after runs in Control UI; does not deliver it to channels
       chatSendShortcut: "enter", // enter | modifier-enter
       chatFollowUpMode: "steer", // steer | queue; omit to use the server queue mode
-      sessionSectionOrder: ["category:Research", "ungrouped", "groups", "work"],
       showAdvancedSettings: false, // Expand every Advanced group in Settings
     },
   },
@@ -546,9 +545,6 @@ See [Plugins](/tools/plugin).
   commentary visible during a run but removes it at completion and prevents new
   Codex commentary from entering the durable transcript mirror. Messaging-channel
   delivery remains separate and unchanged.
-  `sessionSectionOrder` interleaves custom session groups (`category:<name>`) with
-  the built-in `ungrouped`, `groups`, and `work` sidebar sections. An empty or
-  omitted list keeps the default custom-groups-first order.
   `showAdvancedSettings` defaults to `false`; Settings search may temporarily
   open one matching advanced group without changing this preference.
   Presentation-only preferences such as text scale, chat width, and live
