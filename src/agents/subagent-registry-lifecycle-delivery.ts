@@ -280,7 +280,7 @@ export function createSubagentRegistryLifecycleDelivery(
       const sessionId =
         transcriptTarget?.sessionId ??
         (agentId && storePath
-          ? loadSessionEntryReadOnly({ agentId, sessionKey, storePath })?.entry.sessionId
+          ? loadSessionEntryReadOnly({ agentId, sessionKey, storePath })?.sessionId
           : undefined);
       const sessionTarget: SessionTranscriptRuntimeTarget | undefined =
         agentId && sessionId && storePath
