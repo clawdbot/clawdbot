@@ -60,6 +60,20 @@ describe("Gateway startup plugin quarantine", () => {
       conditions?: Array<{ type: string }>;
     };
     expect(canonical.conditions?.map((condition) => condition.type)).toContain("ConfigLoaded");
+
+    const { callGateway } = await import("./call.js");
+    const rpcReadiness = await callGateway<{ ready: boolean; conditions: Array<{ type: string }> }>(
+      {
+        url: `ws://127.0.0.1:${port}`,
+        token: "readiness-rpc-test-token",
+        method: "ready",
+        params: {},
+        timeoutMs: 5_000,
+        deviceIdentity: null,
+      },
+    );
+    expect(rpcReadiness.ready).toBe(true);
+    expect(rpcReadiness.conditions.map((condition) => condition.type)).toContain("ConfigLoaded");
   });
 
   it("reaches readiness without importing one broken configured plugin", async () => {
