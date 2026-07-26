@@ -173,7 +173,9 @@ function loadBackgroundTasks(
       if (current !== state || current.requestId !== requestId) {
         return;
       }
-      let merged = mergeTaskLists(recent, active);
+      // The active query is issued first. Apply the later recent snapshot last
+      // so same-millisecond running progress cannot regress when events drop.
+      let merged = mergeTaskLists(active, recent);
       for (const event of eventBuffer.events) {
         merged = applyTaskEvent(merged, event).tasks;
       }

@@ -92,20 +92,20 @@ describe("background tasks rail state", () => {
     expect(props.tasks?.map((task) => task.id)).toEqual(["task-1"]);
   });
 
-  it("uses the active page's equally current running progress", async () => {
+  it("keeps the later recent page's equally current running progress", async () => {
     const recent = makeTask({
-      id: "task-1",
-      toolUseCount: 2,
-      lastToolName: "write",
-      progressSummary: "Preparing the concurrent task report",
-    });
-    const active = makeTask({
       id: "task-1",
       toolUseCount: 2,
       lastToolName: "write",
       progressSummary: "Finishing the concurrent task report",
     });
-    const { host } = createHost({
+    const active = makeTask({
+      id: "task-1",
+      toolUseCount: 2,
+      lastToolName: "write",
+      progressSummary: "Preparing the concurrent task report",
+    });
+    const { host, request } = createHost({
       request: (method, params) => {
         expect(method).toBe("tasks.list");
         const status = (params as { status?: string[] }).status;
@@ -116,7 +116,9 @@ describe("background tasks rail state", () => {
     createBackgroundTasksProps(host, openSession);
     await flushAsync();
 
-    expect(createBackgroundTasksProps(host, openSession).tasks).toEqual([active]);
+    expect(request.mock.calls[0]?.[1]).toMatchObject({ status: ["queued", "running"] });
+    expect(request.mock.calls[1]?.[1]).not.toHaveProperty("status");
+    expect(createBackgroundTasksProps(host, openSession).tasks).toEqual([recent]);
   });
 
   it("loads the snapshot when a task event arrives before any load", async () => {

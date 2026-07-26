@@ -262,7 +262,9 @@ class TasksPage extends OpenClawLightDomElement {
         throw new Error(t("tasksPage.invalidResponse"));
       }
       if (this.isLoadScopeCurrent(gateway, client, generation)) {
-        let tasks = mergeTaskLists(recent, active);
+        // The active query is issued first; a same-millisecond recent page
+        // must win running-progress ties when a pushed event is dropped.
+        let tasks = mergeTaskLists(active, recent);
         for (const event of taskRefreshEvents.events) {
           tasks = applyTaskEvent(tasks, event).tasks;
         }

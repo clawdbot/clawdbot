@@ -148,6 +148,28 @@ afterEach(() => {
 });
 
 describe("TasksPage concurrent refresh events", () => {
+  it("keeps the later recent page's equally current running progress", async () => {
+    const initial = createTask("task-progress", "running", {
+      toolUseCount: 2,
+      progressSummary: "Preparing the concurrent task report",
+    });
+    const recent = createTask("task-progress", "running", {
+      toolUseCount: 2,
+      progressSummary: "Finishing the concurrent task report",
+    });
+    const refresh = await createDeferredTaskRefresh([initial]);
+    const pending = refresh.startRefresh();
+
+    const refreshCalls = refresh.request.mock.calls.slice(-2);
+    expect(refreshCalls[0]?.[1]).toMatchObject({ status: ["queued", "running"] });
+    expect(refreshCalls[1]?.[1]).not.toHaveProperty("status");
+    refresh.active.resolve({ tasks: [initial] });
+    refresh.recent.resolve({ tasks: [recent] });
+    await pending;
+
+    expect(refresh.page.tasks).toEqual([recent]);
+  });
+
   it("preserves all ten same-title task completions while stale snapshot pages resolve", async () => {
     const initialTasks = Array.from({ length: 10 }, (_, index) =>
       createTask(`task-${index}`, "running", { title: "Investigate concurrent sessions" }),
