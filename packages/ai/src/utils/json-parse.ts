@@ -110,7 +110,28 @@ export function parseJsonWithRepair(json: string): unknown {
 
 function looksLikeWindowsPathPrefix(prefix: string): boolean {
   const tail = prefix.slice(-160);
-  return /(?:^|[^A-Za-z0-9])[A-Za-z]:(?:[\\/][^"\\/:*?<>|\r\n]*)*$/.test(tail);
+  const m = tail.match(/(^|[^A-Za-z0-9])([A-Za-z]):(?:[\\/][^"\\/:*?<>|\r\n]*)*$/);
+  if (!m) {
+    return false;
+  }
+
+  const separator = m[1] ?? "";
+  const driveCandidate = m[2] ?? "";
+  const matchIndex = m.index ?? 0;
+  const keywordSubject = tail.slice(0, matchIndex);
+  // Lowercase candidates after code keywords favor code; conventional uppercase
+  // drive letters favor paths.
+  if (
+    /^[a-z]$/.test(driveCandidate) &&
+    /\s/.test(separator) &&
+    /(?:^|[^A-Za-z0-9]|\\[nrt])(?:as|if|in|for|def|not|try|else|elif|while|class|with|return|except|finally|match|case)\s*$/.test(
+      keywordSubject,
+    )
+  ) {
+    return false;
+  }
+
+  return true;
 }
 
 function asStreamingJsonRecord(value: unknown): Record<string, unknown> {

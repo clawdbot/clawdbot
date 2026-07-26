@@ -44,3 +44,54 @@ describe("json-parse repairJson invalid \\u escapes", () => {
     },
   );
 });
+
+describe("json-parse repairJson Windows-path false positives (issue #93139)", () => {
+  it.each([
+    ["if x", '{"command": "if x:\\n    pass"}', "if x:\n    pass"],
+    [
+      "as f",
+      '{"command": "with open(path) as f:\\n    read(f)"}',
+      "with open(path) as f:\n    read(f)",
+    ],
+    ["in d", '{"command": "if x in d:\\n    pass"}', "if x in d:\n    pass"],
+    ["match x", '{"command": "match x:\\n    pass"}', "match x:\n    pass"],
+    ["case x", '{"command": "case x:\\n    pass"}', "case x:\n    pass"],
+  ])("preserves real newlines after code keyword candidates: %s", (_name, input, expected) => {
+    expect(parseJsonWithRepair(input)).toEqual({ command: expected });
+    expect(parseStreamingJson(input)).toEqual({ command: expected });
+  });
+
+  it("preserves the reported if r code candidate", () => {
+    const input = '{"command": "r = re.match(p, s)\\nif r:\\n    print(r)"}';
+    const expected = { command: "r = re.match(p, s)\nif r:\n    print(r)" };
+    expect(parseJsonWithRepair(input)).toEqual(expected);
+    expect(parseStreamingJson(input)).toEqual(expected);
+  });
+
+  it("preserves uppercase batch paths after guarded keywords", () => {
+    const input = '{"command":"if C:\\new==C:\\temp echo same"}';
+    const expected = { command: "if C:\\new==C:\\temp echo same" };
+    expect(parseJsonWithRepair(input)).toEqual(expected);
+    expect(parseStreamingJson(input)).toEqual(expected);
+  });
+
+  it.each([
+    ["comma", '{"value":"if,C:\\new"}', "if,C:\\new"],
+    ["parentheses", '{"value":"(C:\\new)"}', "(C:\\new)"],
+    ["braces", '{"value":"{C:\\new}"}', "{C:\\new}"],
+  ])("preserves punctuation-wrapped Windows paths: %s", (_name, input, expected) => {
+    expect(parseJsonWithRepair(input)).toEqual({ value: expected });
+    expect(parseStreamingJson(input)).toEqual({ value: expected });
+  });
+
+  it("preserves a malformed Windows path after code-like command text", () => {
+    const input = '{"cmd": "python -c \'x\'; C:\\new\\file.txt"}';
+    expect(repairJson(input)).not.toBe(input);
+    expect(parseJsonWithRepair(input)).toEqual({
+      cmd: "python -c 'x'; C:\\new\\file.txt",
+    });
+    expect(parseStreamingJson(input)).toEqual({
+      cmd: "python -c 'x'; C:\\new\\file.txt",
+    });
+  });
+});
