@@ -476,9 +476,11 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         payload: visiblePayload,
         explicitCommandTurn: false,
       });
+    if (params.sendPolicyDenied) {
+      return false;
+    }
     const allowOperationalSuppressionBypass =
       isOperationalReply &&
-      !params.sendPolicyDenied &&
       params.sourceReplyDeliveryMode === "message_tool_only" &&
       params.suppressUserDeliveryBySourceReplyPolicy === true &&
       params.ctx.InboundEventKind !== "room_event";

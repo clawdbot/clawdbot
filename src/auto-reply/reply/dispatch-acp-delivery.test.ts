@@ -778,6 +778,37 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(onReplyStart).not.toHaveBeenCalled();
   });
 
+  it("enforces ACP send-policy denial without a separate suppression flag", async () => {
+    const dispatcher = createDispatcher();
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig({
+        messages: { operationalReplies: { policy: "redirect" } },
+      }),
+      ctx: buildTestCtx({
+        Provider: "visiblechat",
+        Surface: "visiblechat",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher,
+      inboundAudio: false,
+      sendPolicyDenied: true,
+      shouldRouteToOriginating: false,
+    });
+
+    const ordinaryDelivered = await coordinator.deliver("final", { text: "private final" });
+    const noticeDelivered = await coordinator.deliver(
+      "final",
+      markOperationalReplyPayloadForSourceSuppressionDelivery({
+        text: "private operational failure",
+        isError: true,
+      }),
+    );
+
+    expect(ordinaryDelivered).toBe(false);
+    expect(noticeDelivered).toBe(false);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
   it("can start reply lifecycle while user delivery is suppressed", async () => {
     const onReplyStart = vi.fn(async () => {});
     const dispatcher = createDispatcher();
