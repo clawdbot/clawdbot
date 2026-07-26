@@ -2017,16 +2017,22 @@ describe("state migrations", () => {
     await loadVoiceWakeConfig(stateDir);
 
     const realExec = DatabaseSync.prototype.exec;
-    const execSpy = vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (sql) {
-      if (sql === "COMMIT") {
-        execSpy.mockImplementation(realExec);
-        throw new Error("commit blocked");
-      }
-      return realExec.call(this, sql);
-    });
+    const execSpy = vi
+      .spyOn(DatabaseSync.prototype, "exec")
+      .mockImplementation(function (this: DatabaseSync, sql) {
+        if (sql === "COMMIT") {
+          execSpy.mockImplementation(realExec);
+          throw new Error("commit blocked");
+        }
+        return realExec.call(this, sql);
+      });
     try {
       const first = migrateLegacyVoiceWakeSettings({
-        detected: { triggersPath, routingPath: path.join(settingsDir, "missing-routing.json") },
+        detected: {
+          triggersPath,
+          routingPath: path.join(settingsDir, "missing-routing.json"),
+          hasLegacy: true,
+        },
         stateDir,
       });
       expect(first.warnings).toContain(
@@ -2039,7 +2045,11 @@ describe("state migrations", () => {
     }
 
     const retry = migrateLegacyVoiceWakeSettings({
-      detected: { triggersPath, routingPath: path.join(settingsDir, "missing-routing.json") },
+      detected: {
+        triggersPath,
+        routingPath: path.join(settingsDir, "missing-routing.json"),
+        hasLegacy: true,
+      },
       stateDir,
     });
     expect(retry.warnings).toStrictEqual([]);
