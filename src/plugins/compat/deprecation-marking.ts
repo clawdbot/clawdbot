@@ -294,13 +294,10 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
       "TypeScript @deprecated annotations on published official-plugin exports",
       "plugin boundary report compatibility inventory",
     ],
-    tests: [
-      "extensions/google-meet/index.test.ts",
-      "extensions/discord/src/shared-interactive.test.ts",
-      "extensions/discord/src/monitor/timeouts.test.ts",
-      "extensions/slack/src/shared-interactive.test.ts",
-      "src/plugins/compat/registry.test.ts",
-    ],
+    // Owning discord/slack suites live under extensions/*/src; the core import
+    // guardrail forbids that path shape in core string literals, so cite the
+    // package-root and registry tests here.
+    tests: ["extensions/google-meet/index.test.ts", "src/plugins/compat/registry.test.ts"],
     releaseNote:
       "Published Google Meet testing, channel presentation, and Discord timeout aliases remain available while consumers move to their canonical exports and host-owned behavior.",
   },
