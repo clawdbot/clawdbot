@@ -106,7 +106,7 @@ function resolveGlm5ForwardCompatModel(ctx: ProviderResolveDynamicModelContext) 
             api: "openai-completions",
             provider: PROVIDER_ID,
             reasoning: def.reasoning,
-            input: def.input,
+            input: def.input as ("text" | "image")[],
             cost: def.cost,
             contextWindow: def.contextWindow,
             maxTokens: def.maxTokens,
