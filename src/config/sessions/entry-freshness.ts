@@ -54,7 +54,8 @@ export function hasProviderOwnedSession(entry: SessionEntry | undefined): boolea
 export function resolveSessionEntryResetFreshness(
   params: ResolveSessionEntryResetFreshnessParams,
 ): ResolvedSessionEntryResetFreshness {
-  const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
+  const agentId =
+    params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey, params.defaultAgentId);
   const sessionCfg = params.sessionCfg;
   const storePath =
     params.storePath ??
