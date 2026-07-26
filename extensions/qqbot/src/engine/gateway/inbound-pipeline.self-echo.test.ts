@@ -389,6 +389,37 @@ describe("buildInboundContext bot self-echo suppression", () => {
     expect(inbound.agentBody).toContain("quoted open content");
   });
 
+  it("omits cached quoted content when open DM policy is narrowed by allowFrom", async () => {
+    getRefIndexMock.mockReturnValue({
+      content: "quoted narrowed outsider",
+      senderId: "outsider-openid",
+      timestamp: 1,
+    });
+    const deps = makeDeps({
+      account: {
+        ...account,
+        config: { allowFrom: ["user-openid"], dmPolicy: "open" },
+      },
+    });
+    deps.adapters.access.resolveInboundAccess = vi.fn(
+      (input): QQBotInboundAccess =>
+        makeAccessResult({
+          isGroup: input.isGroup,
+          allowed: input.senderId === "user-openid",
+        }),
+    );
+
+    const inbound = await buildInboundContext(makeEvent({ refMsgIdx: "REF_NARROWED" }), deps);
+
+    expect(inbound.replyTo).toStrictEqual({
+      id: "REF_NARROWED",
+      sender: "outsider-openid",
+      isQuote: true,
+    });
+    expect(inbound.agentBody).toContain("Original content unavailable");
+    expect(inbound.agentBody).not.toContain("quoted narrowed outsider");
+  });
+
   it("omits cached quoted content when the quoted sender no longer passes restricted policy", async () => {
     getRefIndexMock.mockReturnValue({
       content: "quoted outsider cache",

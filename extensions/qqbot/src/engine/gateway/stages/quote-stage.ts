@@ -10,6 +10,7 @@
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveQQBotEffectivePolicies } from "../../access/resolve-policy.js";
+import { normalizeQQBotSenderId } from "../../access/sender-match.js";
 import {
   formatMessageReferenceForAgent,
   type AttachmentProcessor,
@@ -146,8 +147,10 @@ async function shouldIncludeQuoteContext(params: {
   senderId?: string;
   senderIsCurrentAccountBot?: boolean;
 }): Promise<boolean> {
-  const visibilityMode = resolveQuoteVisibilityMode(params.event, params.deps.account.config);
-  if (params.senderIsCurrentAccountBot || visibilityMode === "all") {
+  if (
+    params.senderIsCurrentAccountBot ||
+    !quoteContextRequiresSenderCheck(params.event, params.deps.account.config)
+  ) {
     return true;
   }
 
@@ -168,24 +171,33 @@ async function shouldIncludeQuoteContext(params: {
   }
 
   return evaluateSupplementalContextVisibility({
-    mode: visibilityMode,
+    mode: "allowlist",
     kind: "quote",
     senderAllowed,
   }).include;
 }
 
-function resolveQuoteVisibilityMode(
+function quoteContextRequiresSenderCheck(
   event: QueuedMessage,
   config: InboundPipelineDeps["account"]["config"],
-): "all" | "allowlist" {
+): boolean {
   const policies = resolveQQBotEffectivePolicies(config ?? {});
-  return isGroupConversation(event)
-    ? policies.groupPolicy === "open"
-      ? "all"
-      : "allowlist"
-    : policies.dmPolicy === "open"
-      ? "all"
-      : "allowlist";
+  if (isGroupConversation(event)) {
+    if (policies.groupPolicy === "open") {
+      return false;
+    }
+    if (policies.groupPolicy === "disabled") {
+      return true;
+    }
+    return !hasUniversalAllowlist(resolveGroupQuoteAllowFrom(config));
+  }
+  if (policies.dmPolicy === "disabled") {
+    return true;
+  }
+  if (hasUniversalAllowlist(config?.allowFrom)) {
+    return false;
+  }
+  return policies.dmPolicy !== "open" || hasRestrictedAllowlist(config?.allowFrom);
 }
 
 function isGroupConversation(event: QueuedMessage): boolean {
@@ -200,4 +212,23 @@ function resolveConversationId(event: QueuedMessage): string {
     return event.groupOpenid ?? "unknown";
   }
   return event.senderId;
+}
+
+function resolveGroupQuoteAllowFrom(
+  config: InboundPipelineDeps["account"]["config"],
+): Array<string | number> | undefined {
+  return config?.groupAllowFrom && config.groupAllowFrom.length > 0
+    ? config.groupAllowFrom
+    : config?.allowFrom;
+}
+
+function hasUniversalAllowlist(list: Array<string | number> | undefined | null): boolean {
+  return (list ?? []).some((entry) => normalizeQQBotSenderId(entry) === "*");
+}
+
+function hasRestrictedAllowlist(list: Array<string | number> | undefined | null): boolean {
+  return (list ?? []).some((entry) => {
+    const normalized = normalizeQQBotSenderId(entry);
+    return normalized !== "" && normalized !== "*";
+  });
 }
