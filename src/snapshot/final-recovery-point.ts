@@ -191,7 +191,7 @@ export async function captureFinalRecoveryPoint(
     }
     throw new FinalRecoveryPointError(
       "final-capture.snapshot-failed",
-      "hold",
+      "quarantine",
       "Final recovery-point SQLite capture failed after durable intent.",
       { cause: error },
     );
@@ -213,7 +213,7 @@ export async function captureFinalRecoveryPoint(
   } catch (error) {
     throw new FinalRecoveryPointError(
       "final-capture.verification-failed",
-      "hold",
+      "quarantine",
       "Final recovery-point aggregate verification failed after durable intent.",
       { cause: error },
     );

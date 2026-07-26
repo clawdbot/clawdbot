@@ -93,6 +93,20 @@ describe("final recovery-point capture", () => {
     });
   });
 
+  it("quarantines the first failure after durable intent and its exact replay", async () => {
+    const fixture = await createFixture();
+    await fs.rm(resolveOpenClawStateSqlitePath());
+
+    await expect(captureFinalRecoveryPoint(fixture.request)).rejects.toMatchObject({
+      code: "final-capture.snapshot-failed",
+      disposition: "quarantine",
+    });
+    await expect(captureFinalRecoveryPoint(fixture.request)).rejects.toMatchObject({
+      code: "final-capture.operation-conflict",
+      disposition: "quarantine",
+    });
+  });
+
   it("quarantines a committed recovery point whose component bytes changed", async () => {
     const fixture = await createFixture();
     const result = await captureFinalRecoveryPoint(fixture.request);
