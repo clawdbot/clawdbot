@@ -568,12 +568,17 @@ describe("memory plugin e2e", () => {
 
   test("uses provider adapter auth when embedding apiKey is omitted", async () => {
     const embedQuery = vi.fn(async () => [0.1, 0.2, 0.3]);
+    const closeProvider = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("provider close failed"))
+      .mockResolvedValue(undefined);
     const createProvider = vi.fn(async (options: Record<string, unknown>) => ({
       provider: {
         id: "openai",
         model: options.model,
         embedQuery,
         embedBatch: vi.fn(async () => [[0.1, 0.2, 0.3]]),
+        close: closeProvider,
       },
     }));
     const getMemoryEmbeddingProvider = vi.fn(() => ({
@@ -586,12 +591,14 @@ describe("memory plugin e2e", () => {
     const loadLanceDbModule = vi.fn(async () => ({
       connect: vi.fn(async () => ({
         tableNames: vi.fn(async () => ["memories"]),
+        close: vi.fn(),
         openTable: vi.fn(async () => ({
           schema: createAgentScopedSchemaMock(),
           vectorSearch,
           countRows: vi.fn(async () => 0),
           add: vi.fn(async () => undefined),
           delete: vi.fn(async () => undefined),
+          close: vi.fn(),
         })),
       })),
     }));
@@ -621,6 +628,7 @@ describe("memory plugin e2e", () => {
         },
       };
       const registerTool = vi.fn();
+      const registerService = vi.fn();
       const mockApi = {
         id: "memory-lancedb",
         name: "Memory (LanceDB)",
@@ -649,7 +657,7 @@ describe("memory plugin e2e", () => {
         },
         registerTool,
         registerCli: vi.fn(),
-        registerService: vi.fn(),
+        registerService,
         on: vi.fn(),
         resolvePath: (filePath: string) => filePath,
       };
@@ -679,6 +687,11 @@ describe("memory plugin e2e", () => {
       expect(embedQuery).toHaveBeenCalledWith("project memory", {
         signal: expect.any(AbortSignal),
       });
+      const service = firstObjectArg(registerService as unknown as MockCallSource, "service");
+      const stop = service.stop as () => Promise<void>;
+      await expect(stop()).rejects.toThrow("provider close failed");
+      await expect(stop()).resolves.toBeUndefined();
+      expect(closeProvider).toHaveBeenCalledTimes(2);
     } finally {
       vi.doUnmock("openclaw/plugin-sdk/memory-core-host-engine-embeddings");
       vi.doUnmock("openai");

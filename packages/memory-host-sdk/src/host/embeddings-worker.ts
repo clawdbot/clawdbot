@@ -519,19 +519,19 @@ class LocalEmbeddingWorkerClient {
   }
 }
 
-const FAILED_CONSTRUCTION_CLIENTS = new Set<LocalEmbeddingWorkerClient>();
-const FAILED_CONSTRUCTION_DRAIN_RETRY_MS = 1_000;
+const RETAINED_WORKER_CLIENTS = new Set<LocalEmbeddingWorkerClient>();
+const RETAINED_WORKER_DRAIN_RETRY_MS = 1_000;
 let workerProviderCreationTail: Promise<void> = Promise.resolve();
-let failedConstructionDrainPromise: Promise<void> | null = null;
-let failedConstructionDrainTimer: NodeJS.Timeout | null = null;
+let retainedWorkerDrainPromise: Promise<void> | null = null;
+let retainedWorkerDrainTimer: NodeJS.Timeout | null = null;
 
-async function drainFailedConstructionClientsNow(): Promise<void> {
+async function drainRetainedWorkerClientsNow(): Promise<void> {
   let firstError: unknown;
   let closeFailed = false;
-  for (const client of FAILED_CONSTRUCTION_CLIENTS) {
+  for (const client of RETAINED_WORKER_CLIENTS) {
     try {
       await client.close();
-      FAILED_CONSTRUCTION_CLIENTS.delete(client);
+      RETAINED_WORKER_CLIENTS.delete(client);
     } catch (err) {
       if (!closeFailed) {
         firstError = err;
@@ -544,32 +544,32 @@ async function drainFailedConstructionClientsNow(): Promise<void> {
   }
 }
 
-function scheduleFailedConstructionDrain(): void {
-  if (FAILED_CONSTRUCTION_CLIENTS.size === 0 || failedConstructionDrainTimer) {
+function scheduleRetainedWorkerDrain(): void {
+  if (RETAINED_WORKER_CLIENTS.size === 0 || retainedWorkerDrainTimer) {
     return;
   }
-  failedConstructionDrainTimer = setTimeout(() => {
-    failedConstructionDrainTimer = null;
-    void drainFailedConstructionClients().catch(() => {});
-  }, FAILED_CONSTRUCTION_DRAIN_RETRY_MS);
-  failedConstructionDrainTimer.unref?.();
+  retainedWorkerDrainTimer = setTimeout(() => {
+    retainedWorkerDrainTimer = null;
+    void drainRetainedWorkerClients().catch(() => {});
+  }, RETAINED_WORKER_DRAIN_RETRY_MS);
+  retainedWorkerDrainTimer.unref?.();
 }
 
-async function drainFailedConstructionClients(): Promise<void> {
-  if (failedConstructionDrainPromise) {
-    return await failedConstructionDrainPromise;
+async function drainRetainedWorkerClients(): Promise<void> {
+  if (retainedWorkerDrainPromise) {
+    return await retainedWorkerDrainPromise;
   }
-  if (failedConstructionDrainTimer) {
-    clearTimeout(failedConstructionDrainTimer);
-    failedConstructionDrainTimer = null;
+  if (retainedWorkerDrainTimer) {
+    clearTimeout(retainedWorkerDrainTimer);
+    retainedWorkerDrainTimer = null;
   }
-  const drain = drainFailedConstructionClientsNow();
-  failedConstructionDrainPromise = drain;
+  const drain = drainRetainedWorkerClientsNow();
+  retainedWorkerDrainPromise = drain;
   const settle = () => {
-    if (failedConstructionDrainPromise === drain) {
-      failedConstructionDrainPromise = null;
+    if (retainedWorkerDrainPromise === drain) {
+      retainedWorkerDrainPromise = null;
     }
-    scheduleFailedConstructionDrain();
+    scheduleRetainedWorkerDrain();
   };
   void drain.then(settle, settle);
   return await drain;
@@ -581,7 +581,7 @@ export async function createLocalEmbeddingWorkerProvider(
   runtimeOptions?: LocalEmbeddingProviderRuntimeOptions,
 ): Promise<EmbeddingProvider> {
   const create = async () => {
-    await drainFailedConstructionClients();
+    await drainRetainedWorkerClients();
     return await createLocalEmbeddingWorkerProviderOnce(options, runtimeOptions);
   };
   const creation = workerProviderCreationTail.then(create, create);
@@ -607,8 +607,8 @@ async function createLocalEmbeddingWorkerProviderOnce(
     try {
       await client.close();
     } catch {
-      FAILED_CONSTRUCTION_CLIENTS.add(client);
-      scheduleFailedConstructionDrain();
+      RETAINED_WORKER_CLIENTS.add(client);
+      scheduleRetainedWorkerDrain();
     }
     throw err;
   }
@@ -640,10 +640,13 @@ async function createLocalEmbeddingWorkerProviderOnce(
       const pendingClose = closePromise;
       try {
         await pendingClose;
+        RETAINED_WORKER_CLIENTS.delete(client);
       } catch (err) {
         if (closePromise === pendingClose) {
           closePromise = null;
         }
+        RETAINED_WORKER_CLIENTS.add(client);
+        scheduleRetainedWorkerDrain();
         throw err;
       }
     },

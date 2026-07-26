@@ -25,6 +25,7 @@ const loadMemoryHostCoreModule = createLazyRuntimeModule(
 
 export type Embeddings = {
   embed(text: string, options?: { timeoutMs?: number }): Promise<number[]>;
+  close?(): Promise<void>;
 };
 
 class OpenAiCompatibleEmbeddings implements Embeddings {
@@ -152,6 +153,8 @@ function truncateEmbeddingVector(embedding: number[], dimensions: number, model:
 
 class ProviderAdapterEmbeddings implements Embeddings {
   private providerPromise: Promise<MemoryEmbeddingProvider> | undefined;
+  private closePromise: Promise<void> | null = null;
+  private closed = false;
 
   constructor(
     private api: OpenClawPluginApi,
@@ -159,6 +162,9 @@ class ProviderAdapterEmbeddings implements Embeddings {
   ) {}
 
   private getProvider(): Promise<MemoryEmbeddingProvider> {
+    if (this.closed) {
+      throw new Error("memory-lancedb embeddings are closed");
+    }
     // Auth profiles and local providers can be repaired while the Gateway stays up.
     // Cache successful setup, but retry after failed provider discovery/auth.
     this.providerPromise ??= this.createProvider().catch((err: unknown) => {
@@ -221,6 +227,37 @@ class ProviderAdapterEmbeddings implements Embeddings {
       if (timer) {
         clearTimeout(timer);
       }
+    }
+  }
+
+  async close(): Promise<void> {
+    const existingClose = this.closePromise;
+    if (existingClose) {
+      await existingClose;
+      return;
+    }
+    const closeOperation = this.closeOnce();
+    this.closePromise = closeOperation;
+    try {
+      await closeOperation;
+    } catch (err) {
+      if (this.closePromise === closeOperation) {
+        this.closePromise = null;
+      }
+      throw err;
+    }
+  }
+
+  private async closeOnce(): Promise<void> {
+    this.closed = true;
+    const providerPromise = this.providerPromise;
+    if (!providerPromise) {
+      return;
+    }
+    const provider = await providerPromise.catch(() => null);
+    await provider?.close?.();
+    if (this.providerPromise === providerPromise) {
+      this.providerPromise = undefined;
     }
   }
 }

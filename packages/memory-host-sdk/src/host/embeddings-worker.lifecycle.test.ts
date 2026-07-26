@@ -188,3 +188,46 @@ it("retries failed construction cleanup without another provider creation", asyn
   expect(forkMock).toHaveBeenCalledTimes(1);
   expect(failedChild.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"], ["SIGTERM"]]);
 });
+
+it("retries failed provider close without another owner call", async () => {
+  const child = Object.assign(new EventEmitter(), {
+    connected: true,
+    exitCode: null as number | null,
+    signalCode: null as NodeJS.Signals | null,
+    disconnect: vi.fn(function (this: { connected: boolean }) {
+      this.connected = false;
+    }),
+    kill: vi.fn(function (this: EventEmitter, _signal?: NodeJS.Signals) {
+      queueMicrotask(() => this.emit("error", new Error("kill failed")));
+      return false;
+    }),
+    send: vi.fn(function (
+      this: EventEmitter,
+      message: { id: number },
+      callback: (err?: Error | null) => void,
+    ) {
+      callback();
+      queueMicrotask(() => this.emit("message", { id: message.id, ok: true }));
+      return true;
+    }),
+  });
+  forkMock.mockReturnValue(child);
+  const provider = await createLocalEmbeddingWorkerProvider(
+    { config: {} as never, provider: "local", model: "", fallback: "none" },
+    { workerScriptPath: "/mock/worker.cjs" },
+  );
+
+  await expect(provider.close?.()).rejects.toThrow("did not exit after SIGKILL");
+  child.kill.mockImplementationOnce(function (
+    this: typeof child,
+    signal: NodeJS.Signals = "SIGTERM",
+  ) {
+    this.signalCode = signal;
+    queueMicrotask(() => this.emit("close", null, signal));
+    return true;
+  });
+  await vi.waitFor(() => expect(child.kill).toHaveBeenCalledTimes(3), { timeout: 2_000 });
+
+  expect(forkMock).toHaveBeenCalledTimes(1);
+  expect(child.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"], ["SIGTERM"]]);
+});
