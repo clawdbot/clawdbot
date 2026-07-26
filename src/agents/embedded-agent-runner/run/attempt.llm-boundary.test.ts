@@ -112,7 +112,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
       [
         "Conversation info (untrusted metadata):",
         "```json",
-        '{\n  "sender": {\n    "id": "alice-id",\n    "name": "Alice",\n    "username": "alice"\n  }\n}',
+        '{"sender":{"id":"alice-id","name":"Alice","username":"alice"}}',
         "```",
         "",
         "The launch is Friday",
@@ -122,7 +122,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
       [
         "Conversation info (untrusted metadata):",
         "```json",
-        '{\n  "sender": {\n    "id": "bob-id",\n    "name": "Bob"\n  }\n}',
+        '{"sender":{"id":"bob-id","name":"Bob"}}',
         "```",
         "",
         "Who said the launch is Friday?",
@@ -244,8 +244,12 @@ describe("normalizeMessagesForLlmBoundary", () => {
       timestamp,
       MediaPath: "/tmp/input.png",
       MediaPaths: ["/tmp/input.png"],
+      __openclaw: {
+        media: [{ path: "/tmp/input.png", contentType: "image/png" }],
+      },
     };
-    const legacy = { ...persisted, content: MEDIA_ONLY_USER_TEXT };
+    const { __openclaw: _canonicalMedia, ...legacyFields } = persisted;
+    const legacy = { ...legacyFields, content: MEDIA_ONLY_USER_TEXT };
     const [normalizedPersisted] = normalizeMessagesForLlmBoundary(
       [persisted] as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
       { timezone: "UTC" },
@@ -256,7 +260,9 @@ describe("normalizeMessagesForLlmBoundary", () => {
     ) as unknown as Array<{ content?: unknown }>;
     const expectedText = `${buildTimestampPrefix(new Date(timestamp), { timezone: "UTC" })}${MEDIA_ONLY_USER_TEXT}`;
 
-    expect(normalizedPersisted).toEqual(normalizedLegacy);
+    const { __openclaw: _persistedFacts, ...persistedProviderFields } =
+      normalizedPersisted as Record<string, unknown>;
+    expect(persistedProviderFields).toEqual(normalizedLegacy);
     expect(normalizedPersisted?.content).toBe(expectedText);
 
     const image = { type: "image", data: "aGVsbG8=", mimeType: "image/png" };
@@ -272,17 +278,17 @@ describe("normalizeMessagesForLlmBoundary", () => {
     expect(normalizedArray?.content).toEqual([{ type: "text", text: expectedText }, image]);
   });
 
-  it("synthesizes marked late-media path lines with legacy-identical string bytes", () => {
+  it("synthesizes marked late-media path lines with reference-identical string bytes", () => {
     const timestamp = 1717570800000;
     const mediaText = "[media attached: /tmp/a.png]\n[media attached: media://inbound/b.jpg]";
     const marked = {
       role: "user",
       content: "",
       timestamp,
-      MediaPath: "/tmp/a.png",
-      MediaPaths: ["/tmp/a.png", ""],
-      MediaUrls: ["", "media://inbound/b.jpg"],
-      __openclaw: { lateMedia: true },
+      __openclaw: {
+        lateMedia: true,
+        media: [{ path: "/tmp/a.png" }, { url: "media://inbound/b.jpg" }],
+      },
     };
     const legacy = { ...marked, content: mediaText, __openclaw: undefined };
     const [normalizedMarked] = normalizeMessagesForLlmBoundary(
@@ -305,8 +311,10 @@ describe("normalizeMessagesForLlmBoundary", () => {
           role: "user",
           content: "",
           timestamp,
-          MediaUrl: "https://example.test/late.png",
-          __openclaw: { lateMedia: true },
+          __openclaw: {
+            lateMedia: true,
+            media: [{ url: "https://example.test/late.png" }],
+          },
         },
       ] as unknown as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
       { timezone: "UTC" },
@@ -320,18 +328,13 @@ describe("normalizeMessagesForLlmBoundary", () => {
     const timestamp = 1717570800000;
     const mediaText = "[media attached: /tmp/input.png]";
     const image = { type: "image", data: "aGVsbG8=", mimeType: "image/png" };
-    const fields = {
-      role: "user",
-      timestamp,
-      MediaPath: "/tmp/input.png",
-      MediaPaths: ["/tmp/input.png"],
-    };
+    const fields = { role: "user", timestamp };
     const [normalizedMarked] = normalizeMessagesForLlmBoundary(
       [
         {
           ...fields,
           content: [image],
-          __openclaw: { lateMedia: true },
+          __openclaw: { lateMedia: true, media: [{ path: "/tmp/input.png" }] },
         },
       ] as unknown as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
       { timezone: "UTC" },
@@ -642,8 +645,8 @@ describe("normalizeMessagesForLlmBoundary", () => {
     const content = output[0]?.content ?? "";
 
     expect(content.match(/Conversation info \(untrusted metadata\):/g)).toHaveLength(1);
-    expect(content).toContain('"channel": "discord"');
-    expect(content).toContain('"name": "Alice"');
+    expect(content).toContain('"channel":"discord"');
+    expect(content).toContain('"name":"Alice"');
     expect(content).toContain("Current ask");
   });
 

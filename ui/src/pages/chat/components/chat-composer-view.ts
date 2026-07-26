@@ -102,6 +102,20 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     composerRunStatus,
   } = context;
   let questionDock: HTMLElement | null = null;
+  const disabledBanner = props.disabledBanner
+    ? html`
+        <div class="agent-chat__disabled-banner callout info callout--action" role="status">
+          <span class="callout__content">${props.disabledBanner.text}</span>
+          <button type="button" class="btn btn--xs" @click=${props.disabledBanner.onAction}>
+            ${props.disabledBanner.actionLabel}
+          </button>
+          ${props.disabledBanner.kind === "composer-replacement" && showAbortableUi
+            ? renderChatPrimaryActions(runControlsProps)
+            : nothing}
+        </div>
+      `
+    : nothing;
+  const showComposerInput = showComposer && props.disabledBanner?.kind !== "composer-replacement";
 
   return html`
     ${renderChatQueue({
@@ -141,17 +155,8 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             </div>
           `
         : nothing}
-      ${props.disabledBanner
-        ? html`
-            <div class="agent-chat__disabled-banner callout info callout--action" role="status">
-              <span class="callout__content">${props.disabledBanner.text}</span>
-              <button type="button" class="btn btn--xs" @click=${props.disabledBanner.onAction}>
-                ${props.disabledBanner.actionLabel}
-              </button>
-            </div>
-          `
-        : nothing}
-      ${showComposer
+      ${disabledBanner}
+      ${showComposerInput
         ? html`<div
             class="agent-chat__input ${props.offline ? "agent-chat__input--offline" : ""}"
             @click=${(event: MouseEvent) => focusComposerFromChrome(event, canCompose)}

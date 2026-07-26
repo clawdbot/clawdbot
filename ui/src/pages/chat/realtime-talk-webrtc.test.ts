@@ -558,6 +558,52 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     transport.stop();
   });
 
+  it("maps frameless Codex transcript events by role and finality", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("answer-sdp")) as unknown as typeof fetch,
+    );
+    const onTalkEvent = vi.fn();
+    const transport = new WebRtcSdpRealtimeTalkTransport(
+      {
+        provider: "openai",
+        transport: "webrtc",
+        clientSecret: "client-secret-123",
+      },
+      {
+        client: {} as never,
+        sessionKey: "main",
+        callbacks: { onTalkEvent },
+      },
+    );
+
+    await transport.start();
+    const peer = FakePeerConnection.instances[0];
+    for (const event of [
+      { type: "input_transcript.added", item: { id: "user-live", text: "hel" } },
+      { type: "output_transcript.added", item: { id: "assistant-live", text: "hi" } },
+      {
+        type: "turn.done",
+        turn: { id: "user-final", role: "user", transcript: "hello" },
+      },
+      {
+        type: "turn.done",
+        turn: { id: "assistant-final", role: "assistant", transcript: "hi there" },
+      },
+    ]) {
+      peer?.channel.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(event) }));
+    }
+
+    expect(onTalkEvent.mock.calls.map(([event]) => event.type)).toEqual([
+      "transcript.delta",
+      "output.text.delta",
+      "transcript.done",
+      "output.text.done",
+      "turn.ended",
+    ]);
+    transport.stop();
+  });
+
   // Audio output sends the final string in `transcript`; text output sends it in
   // `text`. Both must surface the same assistant transcript + talk events.
   it.each([

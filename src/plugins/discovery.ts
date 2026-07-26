@@ -402,12 +402,39 @@ function mergeDiscoveryResult(
   }
 }
 
-function addMissingRequiredPluginDiagnostics(result: PluginDiscoveryResult): void {
+function addMissingRequiredPluginDiagnostics(
+  result: PluginDiscoveryResult,
+  params: { env: NodeJS.ProcessEnv; realpathCache: Map<string, string> },
+): void {
   const candidateIds = new Set(result.candidates.map((candidate) => candidate.idHint));
   const seen = new Set<string>();
+  let configuredFileManifestIds: Set<string> | undefined;
   for (const candidate of result.candidates) {
     for (const requiredPluginId of candidate.requiredPluginIds ?? []) {
       if (candidateIds.has(requiredPluginId) || requiredPluginId === candidate.idHint) {
+        continue;
+      }
+      if (!configuredFileManifestIds) {
+        configuredFileManifestIds = new Set();
+        // Explicit files keep filename hints; only a validated root manifest
+        // can establish their canonical identity for a missing dependency.
+        for (const configuredCandidate of result.candidates) {
+          if (configuredCandidate.origin !== "config" || configuredCandidate.packageDir) {
+            continue;
+          }
+          const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
+            origin: configuredCandidate.origin,
+            rootDir: configuredCandidate.rootDir,
+            env: params.env,
+            realpathCache: params.realpathCache,
+          });
+          const manifest = resolveCandidateManifest(configuredCandidate.rootDir, rejectHardlinks);
+          if (manifest) {
+            configuredFileManifestIds.add(manifest.manifest.id);
+          }
+        }
+      }
+      if (configuredFileManifestIds.has(requiredPluginId)) {
         continue;
       }
       const key = `${candidate.idHint}\0${requiredPluginId}`;
@@ -1711,7 +1738,7 @@ export function discoverOpenClawPlugins(params: {
   const seenDiagnostics = new Set<string>();
   mergeDiscoveryResult(result, scopedResult, seenSources, seenDiagnostics);
   mergeDiscoveryResult(result, sharedResult, seenSources, seenDiagnostics);
-  addMissingRequiredPluginDiagnostics(result);
+  addMissingRequiredPluginDiagnostics(result, { env, realpathCache });
   return result;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

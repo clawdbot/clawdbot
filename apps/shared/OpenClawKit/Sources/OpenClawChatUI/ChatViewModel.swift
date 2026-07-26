@@ -26,8 +26,8 @@ public final class OpenClawChatViewModel {
     public internal(set) var replyTarget: OpenClawChatReplyTarget?
     @ObservationIgnored
     var inputHistoriesBySession: [String: ChatInputHistory] = [:]
-    /// Unlike web persistence, native drafts stay in memory. Attachments are excluded because
-    /// the staging guard prevents session switches while they are being prepared.
+    /// Native attachments, including images restored by rewind/fork, stay in memory only.
+    /// The staging guard prevents session switches while attachments are being prepared.
     @ObservationIgnored
     var draftsBySession: [String: String] = [:]
     @ObservationIgnored
@@ -129,6 +129,18 @@ public final class OpenClawChatViewModel {
     public internal(set) var sessions: [OpenClawChatSessionEntry] = [] {
         didSet { syncContextUsageFraction() }
     }
+
+    public internal(set) var swarmSessions: [OpenClawChatSessionEntry] = []
+    var activeSwarmGroups: [OpenClawChatSwarmGroup] = []
+    var swarmActivityState = OpenClawChatSwarmActivityState()
+    @ObservationIgnored
+    var swarmRefreshGeneration: UInt64 = 0
+    @ObservationIgnored
+    var swarmSessionKey: String?
+    @ObservationIgnored
+    var swarmEnabled = false
+    @ObservationIgnored
+    var swarmRefreshTask: Task<Void, Never>?
 
     public internal(set) var contextUsageFraction: Double?
     /// True while the visible transcript came from the offline cache and no
@@ -531,6 +543,7 @@ public final class OpenClawChatViewModel {
         self.reportToolActivityChanges(from: self.pendingToolCallsById, to: [:])
         self.eventTask?.cancel()
         self.bootstrapTask?.cancel()
+        self.swarmRefreshTask?.cancel()
         self.outboxRetryTask?.cancel()
         for task in self.outboxBranchReconcileRetryTasks.values {
             task.cancel()
@@ -883,6 +896,10 @@ extension OpenClawChatViewModel {
     {
         let sessionKey = requestedSessionKey ?? self.sessionKey
         guard sessionKey == self.sessionKey else { return }
+        if self.swarmSessionKey != sessionKey {
+            self.swarmEnabled = false
+            self.resetSwarmProgress()
+        }
         self.unreadPatchGuard.activate(key: self.sessionMutationIdentity(for: sessionKey))
         self.bootstrapGeneration &+= 1
         self.bootstrapTask?.cancel()
@@ -940,6 +957,7 @@ extension OpenClawChatViewModel {
             guard self.isCurrentBootstrap(context) else { return }
 
             Task { [weak self] in await self?.refreshQuestions() }
+            Task { [weak self] in await self?.refreshSwarmCapability(sessionSnapshot: context.session) }
 
             let payload = try await transport.requestHistory(sessionKey: context.session.key)
             guard self.isCurrentBootstrap(context) else { return }

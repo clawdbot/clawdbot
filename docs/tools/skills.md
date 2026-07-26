@@ -164,6 +164,7 @@ publish and sync.
 | Action                             | Command                                                |
 | ---------------------------------- | ------------------------------------------------------ |
 | Install a skill into the workspace | `openclaw skills install @owner/<slug>`                |
+| Install an external skills.sh ref  | `openclaw skills install skills-sh:owner/repo/slug`    |
 | Install from a Git repository      | `openclaw skills install git:owner/repo@ref`           |
 | Install a local skill directory    | `openclaw skills install ./path/to/skill --as my-tool` |
 | Install for all local agents       | `openclaw skills install @owner/<slug> --global`       |

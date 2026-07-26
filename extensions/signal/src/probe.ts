@@ -1,6 +1,7 @@
 // Signal plugin module implements probe behavior.
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { type SignalTransportKind, signalCheck, signalRpcRequest } from "./client-adapter.js";
 import { detectSignalTransport } from "./transport-detection.js";
 
@@ -32,49 +33,39 @@ export async function probeSignal(
     apiMode?: "auto" | "native" | "container";
   } = {},
 ): Promise<SignalProbe> {
-  const started = Date.now();
-  const result: SignalProbe = {
-    ok: false,
-    status: null,
-    error: null,
-    elapsedMs: 0,
-    version: null,
-  };
-  let transportKind: SignalTransportKind;
-  try {
-    transportKind = await resolveProbeTransportKind(baseUrl, timeoutMs, options);
-  } catch (error) {
-    return {
-      ...result,
-      error: formatErrorMessage(error),
-      elapsedMs: Date.now() - started,
+  return await runChannelProbe(undefined, async () => {
+    const result: Omit<SignalProbe, "elapsedMs"> = {
+      ok: false,
+      status: null,
+      error: null,
+      version: null,
     };
-  }
-  const check = await signalCheck(baseUrl, timeoutMs, { transportKind });
-  if (!check.ok) {
-    return {
-      ...result,
-      status: check.status ?? null,
-      error: check.error ?? "unreachable",
-      elapsedMs: Date.now() - started,
-    };
-  }
-  try {
-    const version = await signalRpcRequest("version", undefined, {
-      baseUrl,
-      timeoutMs,
-      transportKind,
-    });
-    result.version = parseSignalVersion(version);
-  } catch (err) {
-    result.error = formatErrorMessage(err);
-  }
-  return {
-    ...result,
-    ok: true,
-    status: check.status ?? null,
-    elapsedMs: Date.now() - started,
-  };
+    let transportKind: SignalTransportKind;
+    try {
+      transportKind = await resolveProbeTransportKind(baseUrl, timeoutMs, options);
+    } catch (error) {
+      return { ...result, error: formatErrorMessage(error) };
+    }
+    const check = await signalCheck(baseUrl, timeoutMs, { transportKind });
+    if (!check.ok) {
+      return {
+        ...result,
+        status: check.status ?? null,
+        error: check.error ?? "unreachable",
+      };
+    }
+    try {
+      const version = await signalRpcRequest("version", undefined, {
+        baseUrl,
+        timeoutMs,
+        transportKind,
+      });
+      result.version = parseSignalVersion(version);
+    } catch (error) {
+      result.error = formatErrorMessage(error);
+    }
+    return { ...result, ok: true, status: check.status ?? null };
+  });
 }
 
 async function resolveProbeTransportKind(

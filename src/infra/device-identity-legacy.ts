@@ -1,5 +1,6 @@
 // Canonicalizes retired Node and Swift identity payloads for Doctor import.
 import { createHash } from "node:crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   validateStoredDeviceIdentity,
   type StoredDeviceIdentity,
@@ -16,10 +17,6 @@ export type NormalizedLegacyDeviceIdentity = StoredDeviceIdentity;
 
 function fingerprintPublicKey(publicKeyPem: string): string {
   return createHash("sha256").update(deriveEd25519PublicKeyRaw(publicKeyPem)).digest("hex");
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function isValidCreatedAtMs(value: unknown): value is number {

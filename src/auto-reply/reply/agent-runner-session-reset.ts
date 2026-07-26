@@ -3,7 +3,6 @@ import { clearAllCliSessions } from "../../agents/cli-session.js";
 // Handles session reset requests produced during agent runner execution.
 import { transitionMainSessionRecovery } from "../../agents/main-session-recovery-state.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { resolveAgentIdFromSessionKey } from "../../config/sessions.js";
 import { persistSessionResetLifecycle } from "../../config/sessions/session-accessor.js";
 import {
   formatSqliteSessionFileMarker,
@@ -107,7 +106,7 @@ export async function resetReplyRunSession(params: {
   clearAllCliSessions(nextEntry);
   nextEntry.agentHarnessId = undefined;
   transitionMainSessionRecovery(nextEntry, { kind: "clear" });
-  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+  const agentId = params.followupRun.run.agentId;
   const nextSessionFile =
     (sqliteSessionFileMarkerMatchesTarget(prevEntry.sessionFile, {
       agentId,

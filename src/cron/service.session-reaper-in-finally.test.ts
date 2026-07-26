@@ -70,6 +70,7 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       requestHeartbeat: vi.fn(),
       // This will throw, simulating a failure during job execution.
       runIsolatedAgentJob: vi.fn().mockRejectedValue(new Error("gateway down")),
+      defaultAgentId: "main",
       sessionStorePath,
     });
 
@@ -87,16 +88,43 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
     });
   });
 
-  it("session reaper runs when resolveSessionStorePath is provided", async () => {
+  it("keeps same-path session reaper targets distinct by agent", async () => {
     const store = await makeStorePath();
     const now = Date.parse("2026-02-10T10:00:00.000Z");
 
     await saveCronStore(store.storePath, {
       version: 1,
-      jobs: [createDueIsolatedJob({ id: "ok-job", nowMs: now })],
+      jobs: [
+        createDueIsolatedJob({ id: "default-job", nowMs: now }),
+        {
+          ...createDueIsolatedJob({ id: "worker-job", nowMs: now }),
+          agentId: undefined,
+          enabled: false,
+          sessionKey: "agent:worker:main",
+          sessionTarget: "main",
+          payload: { kind: "systemEvent", text: "worker task" },
+        },
+      ],
     });
 
-    const resolvedPaths: string[] = [];
+    const resolvedAgentIds: string[] = [];
+    const sharedStorePath = path.join(path.dirname(store.storePath), "sessions", "sessions.json");
+    await replaceSessionEntry(
+      {
+        agentId: "main",
+        storePath: sharedStorePath,
+        sessionKey: "agent:main:cron:default-job:run:expired",
+      },
+      { sessionId: "main-expired", updatedAt: now - 25 * 3_600_000 },
+    );
+    await replaceSessionEntry(
+      {
+        agentId: "worker",
+        storePath: sharedStorePath,
+        sessionKey: "agent:worker:cron:worker-job:run:expired",
+      },
+      { sessionId: "worker-expired", updatedAt: now - 25 * 3_600_000 },
+    );
     const state = createCronServiceState({
       storePath: store.storePath,
       cronEnabled: true,
@@ -105,20 +133,143 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "done" }),
+      defaultAgentId: "main",
       resolveSessionStorePath: (agentId) => {
-        const p = path.join(path.dirname(store.storePath), `${agentId}-sessions`, "sessions.json");
-        resolvedPaths.push(p);
-        return p;
+        if (!agentId) {
+          throw new Error("expected prepared agent id");
+        }
+        resolvedAgentIds.push(agentId);
+        return sharedStorePath;
       },
     });
 
     await withCronServiceStateForTest(state, async () => {
       await onTimer(state);
 
-      // The resolveSessionStorePath callback should have been invoked to build
-      // the set of store paths for the session reaper.
-      expect(resolvedPaths.length).toBeGreaterThan(0);
+      expect([...new Set(resolvedAgentIds)].toSorted()).toEqual(["main", "worker"]);
+      expect(listSessionEntries({ agentId: "main", storePath: sharedStorePath })).toStrictEqual([]);
+      expect(listSessionEntries({ agentId: "worker", storePath: sharedStorePath })).toStrictEqual(
+        [],
+      );
       expect(state.running).toBe(false);
+    });
+  });
+
+  it("resolves the current default agent for the session reaper", async () => {
+    const store = await makeStorePath();
+    const now = Date.parse("2026-02-10T10:00:00.000Z");
+    const sessionStorePath = path.join(path.dirname(store.storePath), "sessions", "sessions.json");
+    await saveCronStore(store.storePath, { version: 1, jobs: [] });
+    await replaceSessionEntry(
+      {
+        agentId: "ops",
+        storePath: sessionStorePath,
+        sessionKey: "agent:ops:cron:default:run:expired",
+      },
+      { sessionId: "ops-expired", updatedAt: now - 25 * 3_600_000 },
+    );
+
+    const resolvedAgentIds: string[] = [];
+    const state = createCronServiceState({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(),
+      resolveDefaultAgentId: () => "ops",
+      resolveSessionStorePath: (agentId) => {
+        if (!agentId) {
+          throw new Error("expected prepared agent id");
+        }
+        resolvedAgentIds.push(agentId);
+        return sessionStorePath;
+      },
+    });
+
+    await withCronServiceStateForTest(state, async () => {
+      await expect(onTimer(state)).resolves.toBeUndefined();
+
+      expect([...new Set(resolvedAgentIds)]).toEqual(["ops"]);
+      expect(listSessionEntries({ agentId: "ops", storePath: sessionStorePath })).toStrictEqual([]);
+    });
+  });
+
+  it("sweeps every job owner in one static session store", async () => {
+    const store = await makeStorePath();
+    const now = Date.parse("2026-02-10T10:00:00.000Z");
+    const sessionStorePath = path.join(path.dirname(store.storePath), "sessions", "sessions.json");
+    await saveCronStore(store.storePath, {
+      version: 1,
+      jobs: [createDueIsolatedJob({ id: "default-job", nowMs: now })],
+    });
+    for (const agentId of ["main", "worker"]) {
+      await replaceSessionEntry(
+        {
+          agentId,
+          storePath: sessionStorePath,
+          sessionKey: `agent:${agentId}:cron:expired:run:stale`,
+        },
+        { sessionId: `${agentId}-expired`, updatedAt: now - 25 * 3_600_000 },
+      );
+    }
+    const state = createCronServiceState({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "done" }),
+      defaultAgentId: "main",
+      resolveSessionStoreAgentIds: () => ["main", "worker"],
+      sessionStorePath,
+    });
+
+    await withCronServiceStateForTest(state, async () => {
+      await onTimer(state);
+
+      expect(listSessionEntries({ agentId: "main", storePath: sessionStorePath })).toStrictEqual(
+        [],
+      );
+      expect(listSessionEntries({ agentId: "worker", storePath: sessionStorePath })).toStrictEqual(
+        [],
+      );
+    });
+  });
+
+  it("sweeps a persisted owner after it leaves the roster and cron store", async () => {
+    const store = await makeStorePath();
+    const now = Date.parse("2026-02-10T10:00:00.000Z");
+    const sessionStorePath = path.join(path.dirname(store.storePath), "sessions", "sessions.json");
+    await saveCronStore(store.storePath, { version: 1, jobs: [] });
+    await replaceSessionEntry(
+      {
+        agentId: "retired",
+        storePath: sessionStorePath,
+        sessionKey: "agent:retired:cron:old-job:run:expired",
+      },
+      { sessionId: "retired-expired", updatedAt: now - 25 * 3_600_000 },
+    );
+
+    const state = createCronServiceState({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(),
+      defaultAgentId: "ops",
+      resolveSessionStoreAgentIds: () => ["retired"],
+      sessionStorePath,
+    });
+
+    await withCronServiceStateForTest(state, async () => {
+      await onTimer(state);
+
+      expect(listSessionEntries({ agentId: "retired", storePath: sessionStorePath })).toEqual([]);
     });
   });
 
@@ -149,13 +300,16 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
+      defaultAgentId: "agent-default",
       sessionStorePath,
     });
 
     await withCronServiceStateForTest(state, async () => {
       await expect(onTimer(state)).resolves.toBeUndefined();
 
-      expect(listSessionEntries({ storePath: sessionStorePath })).toStrictEqual([]);
+      expect(
+        listSessionEntries({ agentId: "agent-default", storePath: sessionStorePath }),
+      ).toStrictEqual([]);
       expect(state.running).toBe(false);
     });
   });

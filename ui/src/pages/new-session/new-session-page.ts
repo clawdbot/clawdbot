@@ -13,7 +13,7 @@ import "../../components/tooltip.ts";
 import "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
-import { searchForSession } from "../../lib/sessions/index.ts";
+import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -33,6 +33,7 @@ import {
   buildDraftSessionCreateParams,
   canStartSessionAsDraft,
   isWorktreeNameValid,
+  type NewSessionVisibility,
 } from "./create-params.ts";
 import {
   type BrowserTarget,
@@ -47,7 +48,7 @@ import { NewSessionModelControl } from "./model-control.ts";
 import { isAbsolutePath } from "./path.ts";
 import { renderPlaceSelect } from "./place-picker.ts";
 import { retainRejectedInitialTurn } from "./rejected-initial-turn.ts";
-import { renderAgentSelect, renderStartAsDraftToggle } from "./target-controls.ts";
+import { renderAgentSelect } from "./target-controls.ts";
 
 const CATALOG_RETRY_DELAYS_MS = [0, 1_000, 3_000] as const;
 
@@ -60,9 +61,8 @@ class NewSessionPage extends OpenClawLightDomElement {
   @state() private agentId = "";
   @state() private folder = "";
   @state() private worktree = false;
-  @state() private incognito = false;
+  @state() private visibility: NewSessionVisibility = "normal";
   @state() private worktreeName = "";
-  @state() private startAsDraft = false;
   @state() private baseRef = "";
   @state() private repository: DraftRepositoryState = { kind: "idle" };
   @state() private nodes: DraftNode[] = [];
@@ -178,8 +178,8 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.gatewayRecoveryScope = recoveryScope.next;
     this.gatewayRecoveryScopeReady = snapshot.client?.recoveryScopeReady === true;
     this.gatewayConnected = connected;
-    if (this.startAsDraft && !this.canStartAsDraft()) {
-      this.startAsDraft = false;
+    if (this.visibility === "draft" && !this.canStartAsDraft()) {
+      this.visibility = "normal";
     }
     if (gatewayUrlChanged || identityChanged || connectionChanged || recoveryScope.changed) {
       this.invalidateGatewayDiscovery(gatewayUrlChanged || recoveryScope.changed);
@@ -241,9 +241,8 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.folder = "";
     this.folderSelectedByUser = false;
     this.worktree = false;
-    this.incognito = false;
+    this.visibility = "normal";
     this.worktreeName = "";
-    this.startAsDraft = false;
     this.baseRefEditGeneration += 1;
     this.nodes = [];
     this.execNode = "";
@@ -470,9 +469,8 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.folder = "";
     this.folderSelectedByUser = false;
     this.worktree = false;
-    this.incognito = false;
+    this.visibility = "normal";
     this.worktreeName = "";
-    this.startAsDraft = false;
     this.baseRef = "";
     this.repository = { kind: "idle" };
     this.execNode = "";
@@ -486,7 +484,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       this.agentId = this.pendingCloud.agentId;
       this.cloudProfileId = this.pendingCloud.profileId;
       this.worktree = true;
-      this.incognito = this.pendingCloud.createParams?.incognito === true;
+      this.visibility = this.pendingCloud.createParams?.incognito === true ? "incognito" : "normal";
       // Show the staged repo (not the agent workspace) while the draft is locked.
       this.folder = this.pendingCloud.createParams?.cwd ?? "";
       this.pendingCloud.restored = false;
@@ -538,7 +536,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.agentId = recovery.agentId;
     this.cloudProfileId = recovery.profileId;
     this.worktree = true;
-    this.incognito = recovery.createParams?.incognito === true;
+    this.visibility = recovery.createParams?.incognito === true ? "incognito" : "normal";
     // Show the staged repo (not the agent workspace) while the draft is locked.
     this.folder = recovery.createParams?.cwd ?? "";
     this.message = recovery.message;
@@ -781,8 +779,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       ? this.pendingCloud.gatewayUrl
       : context.gateway.connection.gatewayUrl;
     const submissionClient = context.gateway.snapshot.client;
-    const submissionConnection = context.gateway.snapshot.hello;
-    if (!submissionClient || !submissionConnection) {
+    if (!submissionClient || !context.gateway.snapshot.hello) {
       return;
     }
     const submissionRecoveryScope = pendingCloud
@@ -801,12 +798,14 @@ class NewSessionPage extends OpenClawLightDomElement {
     }
     try {
       const cloudProfileId = this.cloudProfileForSubmission();
+      // Draft mode can go stale if sharing policy changed since it was selected.
+      const draftRetired = this.visibility === "draft" && !this.canStartAsDraft();
       const createParams = buildDraftSessionCreateParams({
         agentId: this.agentId,
         message: cloudProfileId ? "" : message,
         model: this.modelControl.selected,
         thinkingLevel: this.modelControl.thinkingLevel,
-        incognito: this.incognito,
+        visibility: draftRetired ? "normal" : this.visibility,
         attachments: cloudProfileId ? undefined : apiAttachments,
         worktree: this.worktree,
         baseRef: this.baseRef,
@@ -815,7 +814,6 @@ class NewSessionPage extends OpenClawLightDomElement {
         workspace: this.workspacePath(),
         execNode: this.execNode,
         catalogId: this.data?.catalogId,
-        startAsDraft: this.startAsDraft && this.canStartAsDraft(),
       });
       const cloudCreateParams = cloudProfileId
         ? pendingCloud
@@ -828,7 +826,7 @@ class NewSessionPage extends OpenClawLightDomElement {
               gatewayUrl: submissionGatewayUrl,
               recoveryScope: submissionRecoveryScope,
               createParams,
-              persistent: !this.incognito,
+              persistent: this.visibility !== "incognito",
             })
         : undefined;
       if (cloudProfileId && !pendingCloud && !cloudCreateParams) {
@@ -970,7 +968,7 @@ class NewSessionPage extends OpenClawLightDomElement {
             attachments,
             createdAt: submittedAt,
           },
-          submissionConnection,
+          submissionClient,
           { messageId: cloudStart.messageId, messageSeq: cloudStart.messageSeq },
         );
         this.attachmentDraft.clearAfterSubmit(true);
@@ -997,7 +995,7 @@ class NewSessionPage extends OpenClawLightDomElement {
               attachments,
               createdAt: submittedAt,
             },
-            submissionConnection,
+            submissionClient,
             {
               messageId: result.initialRun.messageId,
               messageSeq: result.initialRun.messageSeq,
@@ -1010,7 +1008,15 @@ class NewSessionPage extends OpenClawLightDomElement {
         return;
       }
       context.gateway.setSessionKey(result.key);
-      context.navigate("chat", { search: searchForSession(result.key) });
+      context.navigate(
+        "chat",
+        sessionNavigationTarget({
+          context,
+          face: "chat",
+          sessionKey: result.key,
+          agentId: this.agentId,
+        }).options,
+      );
     } finally {
       if (requestId === this.submitRequestToken) {
         this.submitting = false;
@@ -1368,17 +1374,6 @@ class NewSessionPage extends OpenClawLightDomElement {
       data: this.data,
       agentSelect: agents.length > 1 ? this.renderAgentSelect(agents) : nothing,
       placeSelect: this.renderPlaceSelect(),
-      draftVisibilityControl: this.canStartAsDraft()
-        ? renderStartAsDraftToggle({
-            checked: this.startAsDraft,
-            disabled: this.submitting || Boolean(this.pendingCloud.sessionKey),
-            onChange: (checked) => {
-              if (!this.submitting && !this.pendingCloud.sessionKey) {
-                this.startAsDraft = checked;
-              }
-            },
-          })
-        : nothing,
       retrying: this.catalogRetrying,
       onRetry: this.handleCatalogRetry,
     });
@@ -1403,7 +1398,8 @@ class NewSessionPage extends OpenClawLightDomElement {
           context: this.context,
           isCatalogTarget: catalog.isTarget(this.data),
           message: this.message,
-          incognito: this.incognito,
+          visibility: this.visibility,
+          draftAvailable: this.canStartAsDraft(),
           modelControl: this.modelControl,
           requiresModifier: loadSettings().chatSendShortcut === "modifier-enter",
           submitting: this.submitting,
@@ -1413,9 +1409,9 @@ class NewSessionPage extends OpenClawLightDomElement {
               this.message = message;
             }
           },
-          onToggleIncognito: () => {
+          onVisibilityChange: (visibility) => {
             if (!this.submitting && !this.pendingCloud.sessionKey) {
-              this.incognito = !this.incognito;
+              this.visibility = visibility;
             }
           },
           onSubmit: () => void this.submit(),
@@ -1455,8 +1451,19 @@ class NewSessionPage extends OpenClawLightDomElement {
         if (this.submitting || this.pendingCloud.sessionKey) {
           return;
         }
-        this.context?.gateway.setSessionKey(sessionKey);
-        this.context?.navigate("chat", { search: searchForSession(sessionKey) });
+        const context = this.context;
+        if (!context) {
+          return;
+        }
+        context.gateway.setSessionKey(sessionKey);
+        context.navigate(
+          "chat",
+          sessionNavigationTarget({
+            context,
+            face: "chat",
+            sessionKey,
+          }).options,
+        );
       },
     });
   }

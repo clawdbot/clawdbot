@@ -11,8 +11,8 @@ import { AUTH_STORE_VERSION } from "./constants.js";
 import { resolveAuthProfileOrder } from "./order.js";
 import {
   applyLegacyAuthStore,
+  coerceLegacyAuthStore,
   coercePersistedAuthProfileStore,
-  loadLegacyAuthProfileStore,
   mergeAuthProfileStores,
 } from "./persisted.js";
 import type { AuthProfileStore } from "./types.js";
@@ -459,7 +459,9 @@ describe("applyLegacyAuthStore", () => {
         chatgptPlanType: "pro",
       },
     });
-    const legacy = loadLegacyAuthProfileStore(agentDir);
+    const legacy = coerceLegacyAuthStore(
+      JSON.parse(fs.readFileSync(path.join(agentDir, "auth.json"), "utf8")),
+    );
     expect(legacy).not.toBeNull();
 
     const store: AuthProfileStore = { version: AUTH_STORE_VERSION, profiles: {} };
@@ -489,7 +491,9 @@ describe("applyLegacyAuthStore", () => {
         tokenRef: { source: "env", id: "ANTHROPIC_TOKEN" },
       },
     });
-    const legacy = loadLegacyAuthProfileStore(agentDir);
+    const legacy = coerceLegacyAuthStore(
+      JSON.parse(fs.readFileSync(path.join(agentDir, "auth.json"), "utf8")),
+    );
     expect(legacy).not.toBeNull();
 
     const store: AuthProfileStore = { version: AUTH_STORE_VERSION, profiles: {} };

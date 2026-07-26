@@ -135,6 +135,22 @@ export type BrowserOpenResult = BrowserTab & {
   resolvedProfile?: string;
 };
 
+/** Private page capture returned to Browser extraction callers. */
+export type BrowserPageContentResult =
+  | {
+      ok: true;
+      targetId: string;
+      url: string;
+      html: string;
+    }
+  | {
+      ok: false;
+      error: "invalid_selector" | "selector_not_found";
+      message: string;
+      targetId: string;
+      url: string;
+    };
+
 /** ARIA snapshot node exposed in structured snapshot responses. */
 export type SnapshotAriaNode = {
   ref: string;

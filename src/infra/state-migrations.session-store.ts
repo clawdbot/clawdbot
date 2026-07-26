@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
@@ -20,7 +21,7 @@ import {
   listPluginDoctorSessionStoreAgentIds,
 } from "../plugins/doctor-contract-registry.js";
 import {
-  DEFAULT_AGENT_ID,
+  LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
   isValidAgentId,
   normalizeAgentId,
@@ -950,7 +951,7 @@ export async function migrateLegacyAcpSessionMetadata(params: {
   const pluginTargets = declaredTargets.filter(
     ({ agentId }) => agentId !== DEFAULT_AGENT_ID && normalizedPluginAgentIds.has(agentId),
   );
-  const configuredAgents = Array.isArray(params.cfg.agents?.list) ? params.cfg.agents.list : [];
+  const configuredAgents = listAgentEntries(params.cfg);
   const configuredAgentIds = new Set(
     configuredAgents.flatMap((entry) => (entry?.id ? [normalizeAgentId(entry.id)] : [])),
   );

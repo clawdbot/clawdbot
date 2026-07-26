@@ -43,6 +43,32 @@ describe("resolveSessionEntryResetFreshness", () => {
     });
   });
 
+  it("uses the configured default agent for an unqualified session key", async () => {
+    const sessionKey = "global";
+    const now = new Date("2026-01-02T12:00:00Z").getTime();
+    await upsertSessionEntry(
+      { agentId: "ops", defaultAgentId: "ops", sessionKey, storePath },
+      {
+        sessionId: "session-global-ops",
+        updatedAt: now,
+        sessionStartedAt: now,
+        lastInteractionAt: now,
+      },
+    );
+
+    const result = resolveSessionEntryResetFreshness({
+      defaultAgentId: "ops",
+      sessionKey,
+      storePath,
+      sessionCfg: {},
+      resetType: "direct",
+      now,
+    });
+
+    expect(result.state).toBe("fresh");
+    expect(result.entry?.sessionId).toBe("session-global-ops");
+  });
+
   it("resolves stale daily freshness from lifecycle timestamps instead of activity", async () => {
     const sessionKey = "agent:main:main:thread:100.000";
     const now = new Date("2026-01-02T12:00:00Z").getTime();

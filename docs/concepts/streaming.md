@@ -68,10 +68,8 @@ exceeds the limit.
 Bundled channels spell these overrides as
 `channels.<id>.streaming.{chunkMode,block.enabled,block.coalesce}`. The flat
 `*.chunkMode` / `*.blockStreaming` / `*.blockStreamingCoalesce` spellings are
-legacy on every bundled channel: `openclaw doctor --fix` migrates them into
-the nested shape, and channel schemas reject them. External SDK plugin
-configs that still use the flat spellings keep working through a deprecated
-fallback (with a runtime warning) until the next release train.
+rejected everywhere. `openclaw doctor --fix` migrates legacy configs into the
+nested shape.
 
 **Boundary semantics** for `blockStreamingBreak`:
 

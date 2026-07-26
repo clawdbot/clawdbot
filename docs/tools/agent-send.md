@@ -11,6 +11,9 @@ inbound chat message. Use it for scripted workflows, testing, and
 programmatic delivery. Full flag and behavior reference:
 [Agent CLI reference](/cli/agent).
 
+For strict, ephemeral CI or coding automation that should own setup, cleanup,
+output projection, and process status, use [`openclaw agent exec`](/cli/agent#agent-exec).
+
 ## Quick start
 
 <Steps>

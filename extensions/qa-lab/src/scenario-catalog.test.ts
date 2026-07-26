@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveQaParityPackScenarioIds } from "./agentic-parity.js";
+import { resolveQaRepoPath } from "./repo-path.js";
 import {
   listQaScenarioYamlPaths,
   readQaBootstrapScenarioCatalog,
@@ -89,6 +90,24 @@ describe("qa scenario catalog", () => {
     ).toBe(true);
     const recall = readQaScenarioById("memory-recall");
     expect(recall.coverage?.primary).toContain(`${memory}.memory-recall`);
+  });
+
+  it("keeps scenario documentation and code references backed by the repository", () => {
+    for (const scenario of readQaScenarioPack().scenarios) {
+      const referenceGroups = [
+        ["docsRefs", scenario.docsRefs],
+        ["codeRefs", scenario.codeRefs],
+      ] as const;
+
+      for (const [kind, references] of referenceGroups) {
+        for (const reference of references ?? []) {
+          const resolvedReference =
+            resolveQaRepoPath(import.meta.dirname, reference, "file") ??
+            resolveQaRepoPath(import.meta.dirname, reference, "directory");
+          expect(resolvedReference, `${scenario.id} ${kind} ${reference} exists`).not.toBeNull();
+        }
+      }
+    }
   });
 
   it("exposes bootstrap data from the YAML pack", () => {
@@ -448,14 +467,26 @@ describe("qa scenario catalog", () => {
     ).toContain('"alsoAllow":["qa_restart_wait","qa_restart_unsafe_probe"]');
     expect(gatewayRestartContract).toContain("plannedToolName === 'wait'");
     expect(gatewayRestartContract).toContain("lastAssistantToolNames?.includes('wait')");
-    expect(gatewayRestartContract).toContain('"taskTracking":false');
+    expect(gatewayRestartContract).toContain("restartRecoveryDeliveryContext");
+    expect(gatewayRestartContract).toContain("sendInbound");
+    expect(gatewayRestartContract).not.toContain("startAgentRun");
     expect(gatewayRestartContract).toContain('"restartGatewayWithConfigPatch"');
     expect(gatewayRestartContract).toContain("interruptedMatches.length === 1");
     expect(gatewayRestartContract).toContain("restartNotices.length === 0");
     expect(gatewayRestartContract).toContain("dispatching restart-safe recovery");
     expect(gatewayRestartContract).toContain("[OpenClaw heartbeat poll]");
     expect(gatewayRestartContract).toContain("liveTurnTimeoutMs(env, 180000)");
-    expect(gatewayRestartContract).toContain("dmScope: 'per-channel-peer'");
+    expect(gatewayRestartContract).toContain("id: `dm:${conversationId}`");
+    expect(gatewayRestartContract).toContain("dmScope: env.cfg.session?.dmScope");
+    expect(readQaScenarioById("gateway-restart-inflight-run").gatewayConfigPatch).toMatchObject({
+      plugins: {
+        slots: { memory: "none" },
+        entries: {
+          acpx: { enabled: false },
+          "memory-core": { enabled: false },
+        },
+      },
+    });
     const liveMultiRestart = readQaScenarioById("gateway-restart-multi-live");
     const liveMultiRestartContract = JSON.stringify(liveMultiRestart.execution.flow);
     expect(JSON.stringify(liveMultiRestart.gatewayConfigPatch)).toContain(
