@@ -10,7 +10,10 @@ import {
 } from "../claws/provenance.js";
 import type { ClawAddPlan } from "../claws/types.js";
 import { markClawPackageIndependentlyOwned } from "./claw-package-adoption.js";
-import { acquireClawPackageLifecycleLease } from "./claw-package-lifecycle-lease.js";
+import {
+  acquireClawPackageLifecycleLease,
+  withClawPackageLifecycleLease,
+} from "./claw-package-lifecycle-lease.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
 afterEach(() => closeOpenClawStateDatabaseForTest());
@@ -235,6 +238,34 @@ describe("Claw package independent adoption", () => {
       ),
     ).toThrow("being changed by another OpenClaw lifecycle");
     directLease?.release();
+  });
+
+  it("releases a package lease when process exit bypasses async cleanup", async () => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("claw-exit-lease-") };
+    const artifact = { kind: "plugin", source: "clawhub", ref: "@acme/audit" } as const;
+    const existingExitListeners = new Set(process.listeners("exit"));
+
+    await expect(
+      withClawPackageLifecycleLease(
+        artifact,
+        async () => {
+          const exitCleanup = process
+            .listeners("exit")
+            .find((listener) => !existingExitListeners.has(listener));
+          expect(exitCleanup).toBeTypeOf("function");
+          exitCleanup?.(1);
+          throw new Error("simulated process exit");
+        },
+        { env, required: true },
+      ),
+    ).rejects.toThrow("simulated process exit");
+
+    expect(
+      process.listeners("exit").filter((listener) => !existingExitListeners.has(listener)),
+    ).toEqual([]);
+    const nextLease = acquireClawPackageLifecycleLease(artifact, { env, required: true });
+    expect(nextLease).not.toBeNull();
+    nextLease?.release();
   });
 
   it("fails open only for optional direct leases when lifecycle state is unavailable", () => {
