@@ -123,8 +123,8 @@ describe("session cost usage", () => {
         timestamp: now.toISOString(),
         message: {
           role: "assistant",
-          provider: "openai",
-          model: "gpt-5.4",
+          provider: "test-pricing",
+          model: "cost-fixture-model",
           usage: {
             input: 10,
             output: 20,
@@ -140,8 +140,8 @@ describe("session cost usage", () => {
         timestamp: now.toISOString(),
         message: {
           role: "assistant",
-          provider: "openai",
-          model: "gpt-5.4",
+          provider: "test-pricing",
+          model: "cost-fixture-model",
           usage: {
             input: 10,
             output: 10,
@@ -156,8 +156,8 @@ describe("session cost usage", () => {
         timestamp: older.toISOString(),
         message: {
           role: "assistant",
-          provider: "openai",
-          model: "gpt-5.4",
+          provider: "test-pricing",
+          model: "cost-fixture-model",
           usage: {
             input: 5,
             output: 5,
@@ -177,10 +177,10 @@ describe("session cost usage", () => {
     const config = {
       models: {
         providers: {
-          openai: {
+          "test-pricing": {
             models: [
               {
-                id: "gpt-5.4",
+                id: "cost-fixture-model",
                 cost: {
                   input: 1,
                   output: 2,
@@ -537,8 +537,8 @@ describe("session cost usage", () => {
       timestamp: now,
       message: {
         role: "assistant",
-        provider: "openai",
-        model: "gpt-5.4",
+        provider: "test-pricing",
+        model: "cost-fixture-model",
         usage: { input: 10, output: 20, totalTokens: 30 },
       },
     }));
@@ -547,10 +547,10 @@ describe("session cost usage", () => {
     const config = {
       models: {
         providers: {
-          openai: {
+          "test-pricing": {
             models: [
               {
-                id: "gpt-5.4",
+                id: "cost-fixture-model",
                 cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
               },
             ],
