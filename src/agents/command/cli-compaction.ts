@@ -473,14 +473,13 @@ async function compactNativeHarnessCliTranscript(params: {
     const nativeHarnessId = params.sessionEntry.agentHarnessId?.trim();
     const modelSelectionLocked = params.sessionEntry.modelSelectionLocked === true;
     const authProfileId = params.sessionEntry.authProfileOverride?.trim() || undefined;
+    const usesCodexNativeCompaction = normalizeOptionalAgentRuntimeId(nativeHarnessId) === "codex";
     const compactHarnessSession = (
       request: Parameters<typeof cliCompactionDeps.maybeCompactAgentHarnessSession>[0],
     ) =>
       cliCompactionDeps.maybeCompactAgentHarnessSession(
         request,
-        normalizeOptionalAgentRuntimeId(nativeHarnessId) === "codex"
-          ? { nativeCompactionRequest: "after_context_engine" }
-          : undefined,
+        usesCodexNativeCompaction ? { nativeCompactionRequest: "after_context_engine" } : undefined,
       );
     await cliCompactionDeps.ensureSelectedAgentHarnessPlugin({
       provider: params.provider,
@@ -491,62 +490,67 @@ async function compactNativeHarnessCliTranscript(params: {
       ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
       ...(nativeHarnessId ? { agentHarnessRuntimeOverride: nativeHarnessId } : {}),
     });
-    result = await compactWithSafetyTimeout(
-      (abortSignal) =>
-        compactHarnessSession({
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-          sessionFile: params.sessionFile,
-          workspaceDir: params.workspaceDir,
-          cwd: params.cwd,
-          agentDir: params.agentDir,
-          config: params.cfg,
-          skillsSnapshot: params.skillsSnapshot,
-          provider: params.provider,
-          model: params.model,
-          authProfileId,
-          contextTokenBudget: params.contextTokenBudget,
-          currentTokenCount: params.currentTokenCount,
-          trigger: "budget",
-          force: true,
-          messageChannel: params.messageChannel,
-          agentAccountId: params.agentAccountId,
-          senderIsOwner: params.senderIsOwner,
-          thinkLevel: params.thinkLevel,
-          extraSystemPrompt: params.extraSystemPrompt,
-          modelSelectionLocked,
-          allowGatewaySubagentBinding: true,
-          ...(params.contextEngine
-            ? {
-                contextEngine: params.contextEngine,
-                contextEngineRuntimeContext: buildCliCompactionRuntimeContext({
-                  sessionKey: params.sessionKey,
-                  messageChannel: params.messageChannel,
-                  agentAccountId: params.agentAccountId,
-                  authProfileId,
-                  workspaceDir: params.workspaceDir,
-                  cwd: params.cwd,
-                  agentDir: params.agentDir,
-                  cfg: params.cfg,
-                  skillsSnapshot: params.skillsSnapshot,
-                  senderIsOwner: params.senderIsOwner,
-                  provider: params.provider,
-                  model: params.model,
-                  harnessRuntime: nativeHarnessId,
-                  modelSelectionLocked,
-                  thinkLevel: params.thinkLevel,
-                  extraSystemPrompt: params.extraSystemPrompt,
-                  currentTokenCount: params.currentTokenCount,
-                  contextTokenBudget: params.contextTokenBudget,
-                  trigger: "cli_native_budget",
-                }),
-              }
-            : {}),
-          ...(nativeHarnessId ? { agentHarnessId: nativeHarnessId } : {}),
-          ...(abortSignal ? { abortSignal } : {}),
-        }),
-      resolveCompactionTimeoutMs(params.cfg),
-    );
+    const runHarnessCompaction = (abortSignal?: AbortSignal) =>
+      compactHarnessSession({
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        sessionFile: params.sessionFile,
+        workspaceDir: params.workspaceDir,
+        cwd: params.cwd,
+        agentDir: params.agentDir,
+        config: params.cfg,
+        skillsSnapshot: params.skillsSnapshot,
+        provider: params.provider,
+        model: params.model,
+        authProfileId,
+        contextTokenBudget: params.contextTokenBudget,
+        currentTokenCount: params.currentTokenCount,
+        trigger: "budget",
+        force: true,
+        messageChannel: params.messageChannel,
+        agentAccountId: params.agentAccountId,
+        senderIsOwner: params.senderIsOwner,
+        thinkLevel: params.thinkLevel,
+        extraSystemPrompt: params.extraSystemPrompt,
+        modelSelectionLocked,
+        allowGatewaySubagentBinding: true,
+        ...(params.contextEngine
+          ? {
+              contextEngine: params.contextEngine,
+              contextEngineRuntimeContext: buildCliCompactionRuntimeContext({
+                sessionKey: params.sessionKey,
+                messageChannel: params.messageChannel,
+                agentAccountId: params.agentAccountId,
+                authProfileId,
+                workspaceDir: params.workspaceDir,
+                cwd: params.cwd,
+                agentDir: params.agentDir,
+                cfg: params.cfg,
+                skillsSnapshot: params.skillsSnapshot,
+                senderIsOwner: params.senderIsOwner,
+                provider: params.provider,
+                model: params.model,
+                harnessRuntime: nativeHarnessId,
+                modelSelectionLocked,
+                thinkLevel: params.thinkLevel,
+                extraSystemPrompt: params.extraSystemPrompt,
+                currentTokenCount: params.currentTokenCount,
+                contextTokenBudget: params.contextTokenBudget,
+                trigger: "cli_native_budget",
+              }),
+            }
+          : {}),
+        ...(nativeHarnessId ? { agentHarnessId: nativeHarnessId } : {}),
+        ...(abortSignal ? { abortSignal } : {}),
+      });
+    // Codex owns the terminal-event watchdog for this asynchronous request.
+    // Keep transcript ownership until the native bridge has fully settled.
+    result = usesCodexNativeCompaction
+      ? await runHarnessCompaction()
+      : await compactWithSafetyTimeout(
+          (abortSignal) => runHarnessCompaction(abortSignal),
+          resolveCompactionTimeoutMs(params.cfg),
+        );
   } catch (error) {
     log.warn(
       `CLI native harness compaction failed for ${params.provider}/${params.model}: ${error instanceof Error ? error.message : String(error)}`,

@@ -827,6 +827,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     const maintenance = vi.fn(async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 }));
     const compactAgentHarnessSession = vi.fn(
       async (_params: Record<string, unknown>, options?: { nativeCompactionRequest?: string }) => {
+        expect(_params).not.toHaveProperty("abortSignal");
         expect(options).toEqual({ nativeCompactionRequest: "after_context_engine" });
         return {
           ok: true,
@@ -868,7 +869,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     });
 
     const result = await runCliTurnCompactionLifecycle({
-      cfg: {} as OpenClawConfig,
+      cfg: { agents: { defaults: { compaction: { timeoutSeconds: 1 } } } } as OpenClawConfig,
       sessionId,
       sessionKey,
       sessionEntry,
@@ -896,7 +897,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     const lockedEntry: SessionEntry = { ...sessionEntry, modelSelectionLocked: true };
     sessionStore[sessionKey] = lockedEntry;
     const lockedResult = await runCliTurnCompactionLifecycle({
-      cfg: {} as OpenClawConfig,
+      cfg: { agents: { defaults: { compaction: { timeoutSeconds: 1 } } } } as OpenClawConfig,
       sessionId,
       sessionKey,
       sessionEntry: lockedEntry,
