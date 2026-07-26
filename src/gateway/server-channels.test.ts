@@ -3165,6 +3165,90 @@ describe("server-channels auto restart", () => {
     await manager.stopChannel("discord");
   });
 
+  it("waits for aborted private handoff tasks before retrying rollback starts", async () => {
+    let accountIds = ["account-a"];
+    let accountAStarts = 0;
+    const firstTaskSettled = createDeferred();
+    const startAccount = vi.fn(
+      async ({ accountId, abortSignal }: { accountId: string; abortSignal: AbortSignal }) => {
+        if (accountId === "account-a") {
+          accountAStarts += 1;
+          if (accountAStarts === 1) {
+            await new Promise<void>((resolve) => {
+              abortSignal.addEventListener("abort", () => resolve(), { once: true });
+            });
+            await firstTaskSettled.promise;
+            return;
+          }
+        }
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+    );
+    const stopAccount = vi.fn(async () => {
+      if (stopAccount.mock.calls.length === 1) {
+        throw new Error("stop failed during drain");
+      }
+    });
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        stopAccount,
+        listAccountIds: () => accountIds,
+        resolveAccount: () => ({ enabled: true, configured: true }),
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannel("discord");
+    await waitForMicrotaskCondition(
+      () => startAccount.mock.calls.length === 1,
+      "expected account-a to be running before failed stop",
+    );
+
+    accountIds = ["account-b"];
+    await expect(
+      manager.stopChannel("discord", undefined, {
+        manual: false,
+        restartPending: false,
+        preserveKnownAccount: true,
+      }),
+    ).rejects.toThrow("stop failed during drain");
+    const reloadStart = manager.startChannel("discord", undefined, { includeKnownAccounts: true });
+    let reloadSettled = false;
+    void reloadStart.then(() => {
+      reloadSettled = true;
+    });
+
+    await flushMicrotasks();
+    expect(reloadSettled).toBe(false);
+    expect(
+      startAccount.mock.calls.filter(([ctx]) => ctx?.accountId === "account-a"),
+    ).toHaveLength(1);
+
+    firstTaskSettled.resolve();
+    await reloadStart;
+    await waitForMicrotaskCondition(
+      () => startAccount.mock.calls.length === 3,
+      "expected the rollback start to retry account-a after the aborted task settled",
+    );
+
+    expect(startAccount.mock.calls.map(([ctx]) => ctx?.accountId)).toEqual([
+      "account-a",
+      "account-b",
+      "account-a",
+    ]);
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.["account-a"]?.running).toBe(
+      true,
+    );
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.["account-b"]?.running).toBe(
+      true,
+    );
+
+    await manager.stopChannel("discord");
+  });
+
   it("keeps aborted starting accounts known when startup cleanup settles before reload start", async () => {
     let accountIds = ["account-a"];
     let configuredCalls = 0;
