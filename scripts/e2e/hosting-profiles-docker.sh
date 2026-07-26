@@ -48,7 +48,7 @@ run_scenario() {
   local container_name="openclaw-hosting-profiles-${scenario}-$$"
   local auth_args=(-e "OPENCLAW_GATEWAY_TOKEN=$TOKEN")
   local profile_args=()
-  local runtime_args=(--tmpfs "/tmp/hosting-profile-workspace:rw,size=8m")
+  local runtime_args=(--tmpfs "/tmp/hosting-profile-workspace:rw,uid=1001,gid=1001,mode=0700,size=8m")
   local gateway_setup=""
   echo "==> Hosting profile scenario: $scenario"
   CONTAINER_NAMES+=("$container_name")
@@ -63,7 +63,7 @@ run_scenario() {
     # surface pending, unlike silent same-host or SSH-verified approval.
     gateway_setup='node "$entry" config set gateway.nodes.pairing.autoApproveCidrs '\''["127.0.0.1"]'\'' --strict-json >/dev/null;'
   elif [ "$scenario" = "workspace-ready" ]; then
-    runtime_args=(--tmpfs "/tmp/hosting-profile-workspace:rw,size=1m")
+    runtime_args=(--tmpfs "/tmp/hosting-profile-workspace:rw,uid=1001,gid=1001,mode=0700,size=1m")
     gateway_setup='node "$entry" config set agents.defaults.workspace /tmp/hosting-profile-workspace >/dev/null;'
   fi
 
