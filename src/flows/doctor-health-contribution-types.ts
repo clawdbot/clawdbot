@@ -8,7 +8,7 @@ import type { HealthCheckInput, RunnableHealthCheck } from "./health-check-runne
 import type { HealthCheck } from "./health-checks.js";
 import type { FlowContribution } from "./types.js";
 
-export type DoctorConfigResult = {
+type DoctorConfigResult = {
   cfg: OpenClawConfig;
   path?: string;
   shouldWriteConfig?: boolean;
