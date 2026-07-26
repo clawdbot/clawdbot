@@ -1,4 +1,5 @@
 // Telegram tests cover state migrations plugin behavior.
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -128,7 +129,7 @@ describe("telegram state migrations", () => {
   it("detects legacy message-cache import for the runtime sidecar path", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-state-migration-"));
     const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
-    const storePath = resolveStorePath(undefined, { env });
+    const storePath = resolveStorePath(undefined, { env, agentId: "main" });
     const persistedPath = resolveTelegramMessageCachePath(storePath);
     try {
       await mkdir(path.dirname(persistedPath), { recursive: true });
@@ -339,7 +340,7 @@ describe("telegram state migrations", () => {
   it("detects remaining Telegram JSON sidecars for plugin-state import", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-state-migration-"));
     const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
-    const storePath = resolveStorePath(undefined, { env });
+    const storePath = resolveStorePath(undefined, { env, agentId: "main" });
     const now = Date.now();
     const updateOffsetPath = path.join(dir, "telegram", "update-offset-ops.json");
     const stickerCachePath = path.join(dir, "telegram", "sticker-cache.json");
@@ -483,7 +484,7 @@ describe("telegram state migrations", () => {
     vi.setSystemTime(new Date("2026-07-15T12:00:00.000Z"));
     const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-state-migration-"));
     const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
-    const storePath = resolveStorePath(undefined, { env });
+    const storePath = resolveStorePath(undefined, { env, agentId: "main" });
     const sentMessagePath = `${storePath}.telegram-sent-messages.json`;
     const dispatchPath = resolveTelegramMessageDispatchLegacyPath({
       storePath,
@@ -711,7 +712,7 @@ describe("telegram state migrations", () => {
   it("imports legacy session-store sidecars into the current runtime scope", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-state-migration-"));
     const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
-    const storePath = resolveStorePath(undefined, { env });
+    const storePath = resolveStorePath(undefined, { env, agentId: "main" });
     const legacyStorePath = path.join(dir, "sessions", "sessions.json");
     const currentSentPath = `${storePath}.telegram-sent-messages.json`;
     const legacySentPath = `${legacyStorePath}.telegram-sent-messages.json`;
@@ -771,9 +772,11 @@ describe("telegram state migrations", () => {
 
       const stripTtl = (entries: Awaited<ReturnType<typeof currentSentPlan.readEntries>>) =>
         entries.map(({ ttlMs: _ttlMs, ...entry }) => entry);
-      expect(stripTtl(await legacySentPlan.readEntries())).toStrictEqual(
-        stripTtl(await currentSentPlan.readEntries()),
-      );
+      const currentSentEntries = stripTtl(await currentSentPlan.readEntries());
+      expect(stripTtl(await legacySentPlan.readEntries())).toStrictEqual(currentSentEntries);
+      expect(currentSentEntries[0]?.value).toMatchObject({
+        scopeKey: createHash("sha256").update(storePath, "utf8").digest("hex").slice(0, 24),
+      });
       const stripDispatchSourceKey = (
         entries: Awaited<ReturnType<typeof currentDispatchPlan.readEntries>>,
       ) => entries.map(({ key: _key, ttlMs: _ttlMs, ...entry }) => entry);

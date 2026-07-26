@@ -8,6 +8,22 @@ function parseStrictPositiveInteger(value: string): number | undefined {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
+function isTestRuntimeEnv(env: NodeJS.ProcessEnv): boolean {
+  return (
+    env.VITEST === "true" ||
+    env.VITEST === "1" ||
+    env.VITEST_POOL_ID !== undefined ||
+    env.VITEST_WORKER_ID !== undefined ||
+    env.NODE_ENV === "test" ||
+    (env !== process.env &&
+      (process.env.VITEST === "true" ||
+        process.env.VITEST === "1" ||
+        process.env.VITEST_POOL_ID !== undefined ||
+        process.env.VITEST_WORKER_ID !== undefined ||
+        process.env.NODE_ENV === "test"))
+  );
+}
+
 /** Maximum delay Node timers can represent without overflow warnings. */
 export const MAX_SAFE_TIMEOUT_DELAY_MS = 2_147_483_647;
 /** Default server-side window for gateway preauth handshakes. */
@@ -120,7 +136,8 @@ export function resolvePreauthHandshakeTimeoutMs(params?: {
 }): number {
   const env = params?.env ?? process.env;
   const configuredTimeout =
-    env.OPENCLAW_HANDSHAKE_TIMEOUT_MS || (env.VITEST && env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS);
+    env.OPENCLAW_HANDSHAKE_TIMEOUT_MS ||
+    (isTestRuntimeEnv(env) ? env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS : undefined);
   if (configuredTimeout) {
     const parsed = parseStrictPositiveInteger(configuredTimeout);
     if (parsed !== undefined) {

@@ -453,7 +453,6 @@ function createPreparedTraceMessage(scenario: SlackTraceScenarioName): PreparedS
       botId: "BBOT",
       textLimit: 4000,
       typingReaction: "",
-      removeAckAfterReply: false,
       allowFrom: [],
       // Mirrors the monitor's setSlackThreadStatus wiring
       // (extensions/slack/src/monitor/context.ts): typing travels over

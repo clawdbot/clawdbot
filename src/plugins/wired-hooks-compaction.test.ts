@@ -19,6 +19,9 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
 
 vi.mock("../infra/agent-events.js", () => ({
   emitAgentEvent: hookMocks.emitAgentEvent,
+  getAgentEventLifecycleGeneration: () => "test-generation",
+  isAgentEventLifecycleGenerationCurrent: (generation: string) => generation === "test-generation",
+  registerAgentEventLifecycleRotationHandler: vi.fn(),
 }));
 
 import {

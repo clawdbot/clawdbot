@@ -16,7 +16,11 @@ import {
   normalizeInboundTextNewlines,
   sanitizeInboundSystemTags,
 } from "../../auto-reply/reply/inbound-text.js";
-import type { FinalizedMsgContext, MentionSource } from "../../auto-reply/templating.js";
+import type {
+  FinalizedMsgContext,
+  MentionSource,
+  SessionTranscriptContext,
+} from "../../auto-reply/templating.js";
 import type { ContextVisibilityMode } from "../../config/types.base.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-channel-context.types.js";
 import { shouldIncludeSupplementalContext } from "../../security/context-visibility.js";
@@ -85,6 +89,7 @@ export type BuildChannelInboundEventContextParams = {
   route: RouteFacts;
   reply: ReplyPlanFacts;
   message: MessageFacts;
+  sessionTranscript?: SessionTranscriptContext;
   access?: BuildChannelInboundEventAccess;
   command?: CommandFacts;
   commandTurn?: CommandTurnContext;
@@ -314,32 +319,6 @@ function resolveChannelInboundSupplementalForFinalizer(params: {
   return isPromiseLike(resolved) ? resolved.then(finalizeQuote) : finalizeQuote(resolved);
 }
 
-/**
- * @deprecated Prefer `buildChannelInboundEventContext({ resolveSupplementalMedia: true })`
- * for channel inbound payloads.
- */
-export async function resolveChannelInboundSupplementalContext(params: {
-  supplemental?: ChannelInboundSupplementalFacts;
-  contextVisibility?: ContextVisibilityMode;
-  media?: readonly InboundMediaFacts[];
-  suppressSelfQuoteBody?: boolean;
-  suppressSelfQuoteMedia?: boolean;
-}): Promise<{
-  supplemental?: SupplementalContextFacts;
-  media: InboundMediaFacts[];
-  quoteHidden: boolean;
-}> {
-  const resolved = await resolveChannelInboundSupplementalForFinalizer({
-    ...params,
-    resolveSupplementalMedia: true,
-  });
-  return {
-    supplemental: resolved.supplemental,
-    media: [...(resolved.media ?? [])],
-    quoteHidden: Boolean(resolved.rawSupplemental?.quote && !resolved.supplemental?.quote),
-  };
-}
-
 function finalizePreparedChannelInboundContext<T extends Record<string, unknown>>(params: {
   originalContext: T;
   rawSupplemental?: SupplementalContextFacts | ChannelInboundSupplementalFacts;
@@ -354,6 +333,7 @@ function finalizePreparedChannelInboundContext<T extends Record<string, unknown>
   const baseContext = {
     ...params.originalContext,
     SupplementalContext: params.supplemental,
+    ...(params.media ? { media: [...params.media] } : {}),
     ...mediaPayload,
   };
   const untrustedStructuredContext = resolveUntrustedStructuredContext({
@@ -509,6 +489,10 @@ export function buildChannelInboundEventContext(
     InboundEventKind: params.message.inboundEventKind ?? "user_request",
     BodyForAgent: params.message.bodyForAgent ?? params.message.rawBody,
     InboundHistory: params.message.inboundHistory,
+    SessionTranscriptContext:
+      params.sessionTranscript && params.sessionTranscript.historyLimit > 0
+        ? params.sessionTranscript
+        : undefined,
     SourceModality: params.message.sourceModality,
     RawBody: params.message.rawBody,
     CommandBody: params.message.commandBody ?? params.message.rawBody,

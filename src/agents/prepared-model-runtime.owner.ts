@@ -1,11 +1,20 @@
-/** Construction and owner identity for prepared model runtime generations. */
 import path from "node:path";
+import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import type { PreparedMessageToolCatalog } from "../channels/plugins/message-action-discovery.js";
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import { MODEL_APIS } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withTimeout } from "../node-host/with-timeout.js";
+import { prepareMediaCapabilityProviders } from "../plugins/capability-provider-runtime.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import {
+  EMPTY_PREPARED_MESSAGE_TOOL_CATALOG,
+  getPreparedMessageToolCatalog,
+  getPreparedMessageToolCatalogForRegistry,
+} from "../plugins/prepared-message-tool-catalog.js";
+import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
 import {
   listAgentIds,
@@ -19,18 +28,24 @@ import { buildPreparedModelCatalogSnapshot, type ModelCatalogEntry } from "./mod
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { ensureRuntimePluginsLoaded } from "./runtime-plugins.js";
-import { AuthStorage } from "./sessions/auth-storage.js";
+import { AuthStorage, type AuthStorageData } from "./sessions/auth-storage.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
 
 const MODEL_RUNTIME_PROVIDER_DISCOVERY_TIMEOUT_MS = 5_000;
+
+type PreparedModelRuntimeCatalogMode = "live" | "static";
 
 export type PreparedModelRuntimeSnapshot = Readonly<{
   agentId?: string;
   agentDir: string;
   inheritedAuthDir?: string;
   workspaceDir?: string;
+  /** Run-prepared repository root; null means discovery completed without a match. */
+  repoRoot?: string | null;
   config: OpenClawConfig;
   metadataSnapshot: PluginMetadataSnapshot;
+  messageToolCatalog?: PreparedMessageToolCatalog;
+  mediaCapabilityProviders?: ReturnType<typeof prepareMediaCapabilityProviders>;
   modelCatalog: ModelCatalogSnapshot;
   createStores: () => PreparedModelRuntimeStores;
 }>;
@@ -57,9 +72,22 @@ export type PreparedModelRuntimeLease = Readonly<{
   release: () => void;
 }>;
 
+export type PreparedModelRuntimePublicationOptions = {
+  force?: boolean;
+  provenance?: PreparedModelRuntimeOwner["provenance"];
+  catalogMode?: PreparedModelRuntimeCatalogMode;
+};
+
+export type PreparedModelRuntimeRefreshOptions = {
+  gatewayLifecycle?: boolean;
+  defaultWorkspaceDir?: string;
+  catalogMode?: PreparedModelRuntimeCatalogMode;
+};
+
 export type PreparedModelRuntimeOwner = {
   input: PreparedModelRuntimeInput;
   environmentFingerprint: string;
+  catalogMode: PreparedModelRuntimeCatalogMode;
   provenance: "configured" | "standalone" | "explicit" | "run" | "ephemeral";
   generation: number;
   needsRefresh: boolean;
@@ -69,6 +97,21 @@ export type PreparedModelRuntimeOwner = {
   buildCompletion?: Promise<void>;
   leaseCount?: number;
 };
+
+export function createPreparedModelRuntimeOwner(
+  input: PreparedModelRuntimeInput,
+  provenance: PreparedModelRuntimeOwner["provenance"],
+  catalogMode: PreparedModelRuntimeCatalogMode = "live",
+): PreparedModelRuntimeOwner {
+  return {
+    input,
+    environmentFingerprint: effectiveEnvironmentFingerprint(input),
+    catalogMode,
+    provenance,
+    generation: 0,
+    needsRefresh: true,
+  };
+}
 
 export type PreparedModelRuntimeReplacement = {
   gateId: PreparedModelRuntimeReplacementGateId;
@@ -81,20 +124,46 @@ export class PreparedModelRuntimeOwnerNotPublishedError extends Error {}
 
 export class PreparedModelRuntimePublicationSupersededError extends PreparedModelRuntimeOwnerNotPublishedError {}
 
+function findConfiguredOwnerCandidates(
+  owners: Map<string, PreparedModelRuntimeOwner>,
+  rawInput: PreparedModelRuntimeInput,
+): PreparedModelRuntimeOwner[] {
+  const input = normalizePreparedModelRuntimeInput(rawInput);
+  const configured = [...owners.values()].filter((owner) => owner.provenance === "configured");
+  const identityCandidates =
+    input.agentId === undefined
+      ? []
+      : configured.filter((owner) => owner.input.agentId === input.agentId);
+  const exactCandidates = identityCandidates.filter(
+    (owner) => owner.input.agentDir === input.agentDir,
+  );
+  const directoryCandidates = configured.filter((owner) => owner.input.agentDir === input.agentDir);
+  // Unbound inputs and reserved setup identities derive ownership from the configured directory.
+  // Ordinary agent runs stay bound to their explicit identity, even when handed a stale directory.
+  const canRebindByDirectory =
+    input.agentId === undefined || isReservedSystemAgentId(input.agentId);
+  return exactCandidates.length > 0
+    ? exactCandidates
+    : canRebindByDirectory && directoryCandidates.length > 0
+      ? directoryCandidates
+      : identityCandidates;
+}
+
+/** Whether a configured owner matches the requesting runtime's identity/directory. */
+export function hasConfiguredOwnerMatching(
+  owners: Map<string, PreparedModelRuntimeOwner>,
+  rawInput: PreparedModelRuntimeInput,
+): boolean {
+  return findConfiguredOwnerCandidates(owners, rawInput).length > 0;
+}
+
 export function rebindInputToCommittedConfiguredOwner(
   owners: Map<string, PreparedModelRuntimeOwner>,
   rawInput: PreparedModelRuntimeInput,
 ): PreparedModelRuntimeInput {
   const input = normalizePreparedModelRuntimeInput(rawInput);
-  const candidates = [...owners.values()].filter(
-    (owner) =>
-      owner.provenance === "configured" &&
-      owner.snapshot &&
-      !owner.needsRefresh &&
-      !owner.pending &&
-      (input.agentId === undefined
-        ? owner.input.agentDir === input.agentDir
-        : owner.input.agentId === input.agentId),
+  const candidates = findConfiguredOwnerCandidates(owners, rawInput).filter(
+    (owner) => owner.snapshot && !owner.needsRefresh && !owner.pending,
   );
   if (candidates.length !== 1) {
     throw new PreparedModelRuntimeOwnerNotPublishedError(
@@ -104,9 +173,12 @@ export function rebindInputToCommittedConfiguredOwner(
   const owner = candidates[0]!;
   const preserveWorkspaceDir =
     input.preserveWorkspaceDirOnRefresh === true && input.workspaceDir !== undefined;
+  // Reserved execution identities (for example setup's `openclaw` agent) intentionally borrow a
+  // configured agent directory. Rebase their lifecycle inputs without erasing that run identity.
+  const agentId = input.agentId ?? owner.input.agentId;
   return normalizePreparedModelRuntimeInput({
     ...input,
-    ...(owner.input.agentId ? { agentId: owner.input.agentId } : {}),
+    ...(agentId ? { agentId } : {}),
     agentDir: owner.input.agentDir,
     config: owner.input.config,
     inheritedAuthDir: owner.input.inheritedAuthDir,
@@ -192,6 +264,32 @@ function toStaticCatalogEntry(
     ...(model.compat ? { compat: model.compat } : {}),
     ...(model.mediaInput ? { mediaInput: model.mediaInput } : {}),
   };
+}
+
+function collectPreparedModelRuntimeProviderIds(
+  config: OpenClawConfig,
+  credentials: Readonly<AuthStorageData>,
+): string[] {
+  const providerIds = new Set<string>();
+  const addProviderId = (value: string) => {
+    const providerId = normalizeProviderId(value);
+    if (providerId) {
+      providerIds.add(providerId);
+    }
+  };
+  for (const providerId of Object.keys(credentials)) {
+    addProviderId(providerId);
+  }
+  for (const providerId of Object.keys(config.models?.providers ?? {})) {
+    addProviderId(providerId);
+  }
+  for (const ref of collectConfiguredModelRefs(config)) {
+    const separator = ref.value.indexOf("/");
+    if (separator > 0) {
+      addProviderId(ref.value.slice(0, separator));
+    }
+  }
+  return [...providerIds].toSorted((left, right) => left.localeCompare(right));
 }
 
 export function ownerKey(input: PreparedModelRuntimeInput): string {
@@ -295,50 +393,69 @@ export function listConfiguredOwnerInputs(
 
 async function buildSnapshot(
   input: PreparedModelRuntimeInput,
+  catalogMode: PreparedModelRuntimeCatalogMode,
 ): Promise<PreparedModelRuntimeSnapshot> {
   const env = input.env ?? process.env;
-  if (!input.readOnly) {
-    // Writable lifecycle publication owns process-global runtime plugin activation. Read-only
-    // drafts consume manifest metadata only and must not mutate live hooks outside that gate.
-    ensureRuntimePluginsLoaded({
-      config: input.config,
-      ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-    });
-  }
+  const runtimePluginRegistry = !input.readOnly
+    ? ensureRuntimePluginsLoaded({
+        config: input.config,
+        ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+      })
+    : undefined;
   const pluginMetadataSnapshot = resolvePluginMetadataSnapshot({
     config: input.config,
     env,
     ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
   });
-  if (!input.readOnly) {
-    await ensureOpenClawModelsJson(input.config, input.agentDir, {
-      ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-      ...(input.env ? { env } : {}),
-      providerDiscoveryTimeoutMs: MODEL_RUNTIME_PROVIDER_DISCOVERY_TIMEOUT_MS,
-    });
-  }
+  const mediaCapabilityProviders = input.readOnly
+    ? undefined
+    : prepareMediaCapabilityProviders({
+        cfg: input.config,
+        pluginMetadataSnapshot,
+        registry: runtimePluginRegistry,
+      });
+  const messageToolCatalog =
+    (runtimePluginRegistry
+      ? getPreparedMessageToolCatalogForRegistry(runtimePluginRegistry)
+      : getPreparedMessageToolCatalog()) ?? EMPTY_PREPARED_MESSAGE_TOOL_CATALOG;
   const templateAuthStorage = discoverAuthStorage(input.agentDir, {
     config: input.config,
-    // Snapshot construction never initializes, migrates, or externally syncs auth. A writable
-    // generation performs its file preparation above; ModelRegistry discovery only parses it.
+    // Snapshot construction never initializes, migrates, or externally syncs auth. ModelRegistry
+    // discovery only parses the credential generation captured here.
     readOnly: true,
     ...(input.skipCredentials ? { skipCredentials: true } : {}),
     ...(input.inheritedAuthDir ? { inheritedAuthDir: input.inheritedAuthDir } : {}),
     ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     ...(input.env ? { env } : {}),
   });
+  const credentials = templateAuthStorage.getAll();
+  const providerIds = collectPreparedModelRuntimeProviderIds(input.config, credentials);
+  if (!input.readOnly) {
+    await ensureOpenClawModelsJson(input.config, input.agentDir, {
+      pluginMetadataSnapshot,
+      ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+      ...(input.env ? { env } : {}),
+      ...(catalogMode === "static"
+        ? {
+            providerDiscoveryEntriesOnly: true,
+            providerDiscoveryProviderIds: providerIds,
+          }
+        : { providerDiscoveryTimeoutMs: MODEL_RUNTIME_PROVIDER_DISCOVERY_TIMEOUT_MS }),
+    });
+  }
   const templateModelRegistry = discoverModels(templateAuthStorage, input.agentDir, {
     config: input.config,
     ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+    ...(catalogMode === "static" ? { normalizeModels: false } : {}),
   });
-  const credentials = templateAuthStorage.getAll();
   const modelCatalog = await buildPreparedModelCatalogSnapshot({
     agentDir: input.agentDir,
     authCredentials: credentials,
     config: input.config,
     modelRegistry: templateModelRegistry,
     metadataSnapshot: pluginMetadataSnapshot,
+    includeProviderPluginAugmentation: catalogMode === "live",
     ...(input.env ? { env } : {}),
     ...(input.readOnly ? { readOnly: true } : {}),
     ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
@@ -347,6 +464,7 @@ async function buildSnapshot(
     await loadBundledProviderStaticCatalogContextModels({
       cfg: input.config,
       env,
+      ...(catalogMode === "static" ? { providerIds } : {}),
       ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     })
   ).map(toStaticCatalogEntry);
@@ -363,6 +481,8 @@ async function buildSnapshot(
     ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     config: input.config,
     metadataSnapshot: pluginMetadataSnapshot,
+    messageToolCatalog,
+    ...(mediaCapabilityProviders ? { mediaCapabilityProviders } : {}),
     modelCatalog: { ...modelCatalog, staticEntries },
     createStores,
   });
@@ -372,6 +492,7 @@ export function startSerializedSnapshotBuild(
   input: PreparedModelRuntimeInput,
   agentBuildCompletions: Map<string, Promise<void>>,
   buildTimeoutMs: number,
+  catalogMode: PreparedModelRuntimeCatalogMode = "live",
 ): {
   pending: Promise<PreparedModelRuntimeSnapshot>;
   completion: Promise<void>;
@@ -383,7 +504,7 @@ export function startSerializedSnapshotBuild(
     if (previousBuildCompletion) {
       await previousBuildCompletion;
     }
-    return { actualBuild: buildSnapshot(input) };
+    return { actualBuild: buildSnapshot(input, catalogMode) };
   })();
   const completion = startBuild
     .then(async ({ actualBuild }) => await actualBuild)
@@ -417,23 +538,24 @@ export async function publishModelRuntimeSnapshot(
   buildTimeoutMs: number,
   existing?: PreparedModelRuntimeOwner,
   provenance: PreparedModelRuntimeOwner["provenance"] = "explicit",
+  catalogMode: PreparedModelRuntimeCatalogMode = existing?.catalogMode ?? "live",
 ): Promise<PreparedModelRuntimeSnapshot> {
   const key = ownerKey(input);
-  const owner: PreparedModelRuntimeOwner = existing ?? {
-    input,
-    environmentFingerprint: effectiveEnvironmentFingerprint(input),
-    provenance,
-    generation: 0,
-    needsRefresh: false,
-  };
+  const owner = existing ?? createPreparedModelRuntimeOwner(input, provenance, catalogMode);
   owner.input = input;
   owner.environmentFingerprint = effectiveEnvironmentFingerprint(input);
+  owner.catalogMode = catalogMode;
   owner.provenance = provenance;
   owner.generation += 1;
   owner.needsRefresh = true;
   owner.refreshError = undefined;
   const generation = owner.generation;
-  const build = startSerializedSnapshotBuild(input, agentBuildCompletions, buildTimeoutMs);
+  const build = startSerializedSnapshotBuild(
+    input,
+    agentBuildCompletions,
+    buildTimeoutMs,
+    catalogMode,
+  );
   owner.buildCompletion = build.completion;
   void build.completion.then(() => {
     if (owner.buildCompletion === build.completion) {

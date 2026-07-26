@@ -155,11 +155,39 @@ Shared infrastructure underneath (this is where the simplification lands):
   one-tap **Allow**/**Reject**. Grants are per widget name; for `html` widgets
   they are byte-frozen (sha256), and changed bytes keep the grant only if the
   declaration shrank.
-- **Authoring shim.** The document wrapper injects
-  `window.openclaw.sendPrompt/emitState/read/call` as the stable author API;
-  whether the transport underneath is our channel or the AppBridge is an
-  internal detail the widget author never sees. Size reporting and theme
-  tokens ride the same bridge.
+- **Authoring shim.** The document wrapper injects `window.openclaw.prompt`,
+  `window.openclaw.state`, `window.openclaw.data`, and `window.openclaw.cron`
+  as the stable author API. Dashboard calls share one view-ticket-bound
+  request channel; size reporting and theme tokens remain separate host
+  notifications.
+
+### Plugin capability declarations
+
+Enabled plugins can extend the widget host through `dashboard.dataBindings`
+and `dashboard.actionVerbs` in `openclaw.plugin.json`. Plugin-local ids become
+grant names prefixed by the plugin id, such as `workboard.cards.list` and
+`workboard.dispatch`; `%` and `.` in the plugin-id segment are escaped so a
+different plugin/local-id split cannot inherit the same persisted grant. During
+plugin registration, OpenClaw verifies that every binding targets an RPC
+registered by the same plugin with `operator.read` and every action targets one
+with `operator.write`; invalid declarations fail the plugin load. The validated
+registry is rebuilt only with plugin lifecycle changes, while widget grants
+remain per-widget and byte-and-revision-bound.
+
+### Modeled residual: WebRTC data channels
+
+The sandbox CSP emits the proposed `webrtc 'block'` directive, but
+[Chromium's current CSP directive set](https://chromium.googlesource.com/chromium/src/+/main/services/network/public/mojom/content_security_policy.mojom#95)
+does not implement it. Scriptable widgets can therefore use WebRTC data
+channels for egress in current Chromium. The same residual already ships for
+inline chat widgets and the MCP Apps host on `main`.
+
+**Accepted tradeoff:** OpenClaw does not gate scriptable widgets on this
+residual. Widget content gains access to sensitive OpenClaw data only through
+an operator-granted, byte-frozen `data:read` capability, and the sandbox
+Permissions Policy blocks camera and microphone access. A DOM API guard is
+best-effort defense-in-depth, not a security boundary, and belongs in
+follow-up hardening.
 
 ### Transcript display: one widget card
 
@@ -198,6 +226,10 @@ from the minting run. Ungranted pins stay read-only — still useful for display
 dashboards. v1 pins to the originating session's board; cross-session pinning
 needs a lease broker and waits. Coordinate with open PR #109807 (`ui/message`
 composer routing, theme/size propagation).
+
+### WorkBoard integration
+
+The WorkBoard integration program keeps cards and boards plugin-owned while stitching dispatched cards back to their session boards through the existing `sessionKey` and `runId`, exposing WorkBoard feeds and dispatch through plugin-declared bindings and actions, and composing those results with the existing `html` and `mcp-app` widget kinds instead of introducing a WorkBoard-specific widget type.
 
 ## Layout: fluid grid
 
@@ -262,8 +294,16 @@ RPCs (core method table, typebox schemas in `gateway-protocol`):
 - `board.widget.put { sessionKey, name, html, manifest, placement }` —
   `operator.write` (agent tool path and pin path)
 - `board.widget.grant { sessionKey, name, decision }` — `operator.approvals`
-- `board.event { sessionKey, widget, payload }` — tier-1 state event ingest —
+- `board.event { ticket, payload }` — ticket-bound tier-1 state event ingest;
+  the legacy trusted-host `{ sessionKey, widget, payload }` shape remains —
   `operator.write`
+- `board.prompt.authorize { ticket }` — returns whether a visible prompt send
+  still needs per-click confirmation — `operator.read`
+- `board.data.read { ticket, bindingId, params? }` — gateway-side allowlisted
+  core or active-plugin read binding resolution — `operator.read`
+- `board.action { ticket, action, ... }` — exact-grant automation dispatch
+  through the existing cron run-now path or an active plugin's validated action
+  verb — `operator.write`
 
 Events (in `EVENT_SCOPE_GUARDS`, read scope):
 
@@ -304,7 +344,6 @@ false`, never in a stable release (first appeared in 2026.7.2 betas). No
   A2UI. The `pluginSurfaceUrls["canvas"]` advertisement and
   `/__openclaw__/canvas` paths are shipped native-client contracts and stay
   stable. Discord sessions keep the Discord-owned `show_widget` variant.
-- **WorkBoard is untouched** (integration is a follow-up program).
 
 ## Non-goals (this program)
 
@@ -313,7 +352,6 @@ false`, never in a stable release (first appeared in 2026.7.2 betas). No
   Control UI; the inline-widget path is unchanged).
 - Builtin data widgets (sessions/usage/cron cards) — the capability bridge plus
   agent-authored widgets cover v1; a builtin kind registry can come later.
-- WorkBoard-on-dashboard.
 
 ## Implementation plan
 

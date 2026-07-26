@@ -3,7 +3,8 @@ scenario:
   id: whatsapp-group-outbound-poll
   surface: channels
   coverage:
-    primary: [channels.group-messages]
+    primary:
+      - channels.provider-specific-channeldata
   execution:
     profiles: { "whatsapp:mock-default": 23 }
     kind: flow

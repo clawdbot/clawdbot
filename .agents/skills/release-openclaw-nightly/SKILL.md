@@ -19,6 +19,38 @@ Use for Tideclaw/OpenClaw alpha/nightly release automation, manual alpha trigger
 - Forward-port PRs contain only reusable fixes needed to make nightly/release checks pass. They must not contain alpha version bumps, release notes, changelog release entries, tags, generated artifacts, or state-file updates.
 - Keep only alpha/nightly branches from the last 3 days, plus any branch with an active run, open PR, or release tag.
 - Never run broad env/token dumps. For GitHub writes on the Tideclaw host, use the Tideclaw `gh` write wrapper below.
+- When an alpha, beta, or repair branch needs to discover or reuse backports
+  beyond its pinned base, complete the self-contained audit below before
+  mutating the candidate. Starting an alpha directly from the current pinned
+  `origin/main` does not create a backport audit by itself.
+
+## Audit Nightly Backports
+
+For any backport discovery, pin the exact release baseline and source main SHA.
+Start from the last accepted audit cursor or, when none exists, their merge
+base. Enumerate every non-patch-equivalent source commit, reconcile authorized
+public and private advisories, and record the bounds, counts, filters,
+applicability results, decisions, exclusions, dependencies, and blocked items
+in the existing alpha state file.
+
+Titles are signals, never gates. Classify the complete inventory, inspect every
+security- or reliability-signalled production diff, and separately review
+conventional `fix`, `perf`, and `doctor` commits in execution, authentication,
+sandboxing, networking, persistence, delivery, gateway, configuration, plugin,
+and major-channel paths. Mechanically try each such diff against a detached
+baseline worktree and record whether it is clean, conflicted,
+empty/already-covered, or failed. A clean patch is triage evidence, not an
+automatic backport.
+
+For every proposed item, inspect the complete change, baseline behavior,
+callers, callees, siblings, tests, dependency contracts, security impact, and
+publication surface. Collapse overlapping or dependent commits to the smallest
+final fix. Exclude features, migrations, new configuration or runtime
+requirements, and broad redesigns unless a maintainer explicitly approves them.
+Present the complete categorized set for approval before changing the candidate;
+then keep provenance in that state file, run focused proof and release
+validation, and dispatch npm preflight only after the canonical branch/tag has
+the exact final version and SHA.
 
 ## Identity
 
@@ -136,7 +168,11 @@ git for-each-ref refs/remotes/origin/tideclaw/alpha --format='%(refname:short) %
 git log --no-merges --reverse --format='%H%x09%s' origin/main..origin/tideclaw/alpha/YYYY-MM-DD-HHMMZ
 ```
 
-5. Cherry-pick only real stabilization fixes that still apply to the new alpha branch. Prefer commits recorded as `fixCommitShas` in the state file.
+5. Cherry-pick only real stabilization fixes that still apply to the new alpha
+   branch. When this is discovery rather than reuse of an already approved
+   state-file fix, apply the nightly backport audit before
+   selecting it; a clean cherry-pick or a benign title is not approval. Prefer
+   commits recorded as `fixCommitShas` in the state file.
 6. Skip version bumps, changelog release entries, tag artifacts, generated release notes, state-file-only commits, and one-off debug instrumentation.
 7. If a cherry-pick conflicts, inspect whether current main already contains an equivalent fix. If not, resolve minimally and keep the commit message clear.
 8. Record reused commit SHAs separately from newly authored fix SHAs in the alpha state and final Discord summary.

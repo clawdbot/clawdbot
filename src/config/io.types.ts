@@ -45,6 +45,10 @@ export type ConfigWriteOptions = {
   explicitSetPaths?: readonly (readonly string[])[];
   /** Source-shaped values paired with explicitSetPaths. */
   explicitSetValueSource?: OpenClawConfig;
+  /** Agent ids that this write intentionally removes from the canonical roster. */
+  allowedAgentRosterRemovals?: readonly string[];
+  /** Permit explicit local overrides below an ancestor $include without flattening it. */
+  allowIncludeAncestorExplicitSetPaths?: boolean;
   /** Fresh snapshot fast path for an immediate write. */
   baseSnapshot?: ConfigFileSnapshot;
   /** Plugin metadata paired with baseSnapshot. */
@@ -142,13 +146,4 @@ export type ReadConfigFileSnapshotWithPluginMetadataResult = {
 export type BestEffortConfigSnapshot = {
   config: OpenClawConfig;
   sourceConfig: OpenClawConfig;
-};
-
-export type ShippedPluginInstallConfigWriteMigration = { migrated: false } | { migrated: true };
-
-export type ShippedPluginInstallConfigReadMigration = {
-  config: unknown;
-  validationConfig?: unknown;
-  persistedRootParsed?: unknown;
-  persistedRootRaw?: string;
 };

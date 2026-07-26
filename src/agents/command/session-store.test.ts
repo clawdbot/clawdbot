@@ -24,8 +24,8 @@ import {
 import { resolveSession } from "./session.js";
 
 vi.mock("../model-selection.js", () => ({
-  isCliProvider: (provider: string, cfg?: OpenClawConfig) =>
-    Object.hasOwn(cfg?.agents?.defaults?.cliBackends ?? {}, provider),
+  isCliProvider: (provider: string, _cfg?: OpenClawConfig) =>
+    ["claude-cli", "codex-cli", "google-gemini-cli"].includes(provider.trim().toLowerCase()),
   normalizeProviderId: (provider: string) => provider.trim().toLowerCase(),
 }));
 
@@ -94,7 +94,9 @@ async function withTempSessionStore<T>(
     return await run({ dir, storePath: path.join(dir, "sessions.json") });
   } finally {
     closeOpenClawAgentDatabasesForTest();
-    await fs.rm(dir, { recursive: true, force: true });
+    // SQLite teardown can race fixture removal on loaded CI hosts. Keep the
+    // retries bounded so persistent cleanup failures still surface.
+    await fs.rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });
   }
 }
 
@@ -497,11 +499,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {
         agents: {
-          defaults: {
-            cliBackends: {
-              "claude-cli": { command: "claude" },
-            },
-          },
+          defaults: {},
         },
       } as unknown as OpenClawConfig;
       const sessionKey = "agent:main:explicit:test-claude-cli-configured-context";
@@ -546,13 +544,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {
         agents: {
-          defaults: {
-            cliBackends: {
-              "claude-cli": {
-                command: "claude",
-              },
-            },
-          },
+          defaults: {},
         },
       } as OpenClawConfig;
       const sessionKey = "agent:main:explicit:test-harness-pin-cli";
@@ -598,13 +590,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {
         agents: {
-          defaults: {
-            cliBackends: {
-              "claude-cli": {
-                command: "claude",
-              },
-            },
-          },
+          defaults: {},
         },
       } as OpenClawConfig;
       const sessionKey = "agent:main:explicit:test-claude-cli";
@@ -664,13 +650,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {
         agents: {
-          defaults: {
-            cliBackends: {
-              "claude-cli": {
-                command: "claude",
-              },
-            },
-          },
+          defaults: {},
         },
       } as OpenClawConfig;
       const sessionKey = "agent:main:explicit:test-clear-unflushed-cli";
@@ -911,11 +891,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           mainKey: "main",
         },
         agents: {
-          defaults: {
-            cliBackends: {
-              "claude-cli": { command: "claude" },
-            },
-          },
+          defaults: {},
         },
       } as never;
 
@@ -1189,11 +1165,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {
         agents: {
-          defaults: {
-            cliBackends: {
-              "claude-cli": { command: "claude" },
-            },
-          },
+          defaults: {},
         },
       } as OpenClawConfig;
       const sessionKey = "agent:main:explicit:test-cli-cumulative-usage";
@@ -1355,11 +1327,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {
         agents: {
-          defaults: {
-            cliBackends: {
-              "claude-cli": { command: "claude" },
-            },
-          },
+          defaults: {},
         },
       } as OpenClawConfig;
       const sessionKey = "agent:main:explicit:test-cli-last-call-usage";
@@ -2218,11 +2186,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {
         agents: {
-          defaults: {
-            cliBackends: {
-              "claude-cli": { command: "claude" },
-            },
-          },
+          defaults: {},
         },
       } as OpenClawConfig;
       const sessionKey = "agent:main:explicit:test-preserve-user-facing-run-state";
@@ -2463,6 +2427,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       const replacementEntry: SessionEntry = {
         sessionId: "replacement-session-id",
         updatedAt: 2,
+        delivery: { kind: "none" },
         modelProvider: "openai",
         model: "gpt-5.5",
       };

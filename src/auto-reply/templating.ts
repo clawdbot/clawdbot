@@ -5,6 +5,7 @@ import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
 } from "../media-understanding/types.js";
+import type { MediaFact } from "../media/media-facts.js";
 import type { PluginHookChannelContext } from "../plugins/hook-channel-context.types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { CommandTurnContext } from "./command-turn-context.js";
@@ -42,6 +43,18 @@ type UntrustedStructuredContextEntry = {
   source?: string;
   type?: string;
   payload: unknown;
+  /** Internal exact-id hints for canonical transcript/live-cache deduplication. */
+  sessionTranscriptDedupeMessageIds?: string[];
+  /** Internal visible-text hints for legacy assistant rows without transcript ids. */
+  sessionTranscriptAssistantTextDedupeKeys?: string[];
+};
+
+export type SessionTranscriptContext = {
+  chatWindow?: boolean;
+  historyLimit: number;
+  beforeTimestampMs?: number;
+  minTimestampMs?: number;
+  senderLabels?: { assistant: string; user: string };
 };
 
 /** Structured supplemental facts projected into prompt context by inbound finalization. */
@@ -77,8 +90,18 @@ export type SupplementalContextFacts = {
   untrustedGroupSystemPrompt?: string;
 };
 
+/** Canonical normalized inbound text populated once by `finalizeInboundContext`. */
+export type CanonicalInboundText = {
+  /** Clean text used for command and directive parsing. */
+  commandText: string;
+  /** Prompt-facing text used for the agent turn. */
+  agentText: string;
+  /** Normalized visible/raw inbound text before command-specific projection. */
+  rawText: string;
+};
+
 /** Raw inbound message context accepted from channels before finalization. */
-export type MsgContext = {
+export type MsgContext = Partial<CanonicalInboundText> & {
   Body?: string;
   InboundEventKind?: InboundEventKind;
   /**
@@ -91,6 +114,8 @@ export type MsgContext = {
    * as structured context blocks in the user prompt rather than rendering plaintext envelopes.
    */
   InboundHistory?: HistoryEntry[];
+  /** Internal facts used to merge canonical transcript turns before dispatch. */
+  SessionTranscriptContext?: SessionTranscriptContext;
   /**
    * @deprecated Use CommandBody.
    *
@@ -199,27 +224,39 @@ export type MsgContext = {
   ThreadHistoryBody?: string;
   IsFirstThreadTurn?: boolean;
   ThreadLabel?: string;
+  /** @deprecated Use `media?.[0]?.path`. */
   MediaPath?: string;
+  /** @deprecated Use `media?.[0]?.url`. */
   MediaUrl?: string;
+  /** @deprecated Use `media?.[0]?.contentType` or `.kind`. */
   MediaType?: string;
+  /** @deprecated Derive the directory from `media?.[0]?.path` at the consuming boundary. */
   MediaDir?: string;
+  /** @deprecated Use `media?.map((entry) => entry.path)`. */
   MediaPaths?: string[];
+  /** @deprecated Use `media?.map((entry) => entry.url)`. */
   MediaUrls?: string[];
+  /** @deprecated Use `media?.map((entry) => entry.contentType ?? entry.kind)`. */
   MediaTypes?: string[];
+  /** Ordered current-turn media facts; array position is attachment identity. */
+  media?: MediaFact[];
   /** Original message modality before transcription or other media normalization. */
   SourceModality?: InboundSourceModality;
+  /** @deprecated Use each media fact's `workspaceDir`. */
   MediaWorkspaceDir?: string;
   /** Attachment indexes whose audio was already transcribed before media understanding runs. */
+  /** @deprecated Use each media fact's `transcribed` field. */
   MediaTranscribedIndexes?: number[];
   /**
    * Marker: skip downstream stageSandboxMedia. chat.send RPC sets this so
    * staging runs synchronously before respond() and surfaces 5xx to the
    * client; any later failure only reaches the broadcast channel.
    */
+  /** @deprecated Use each media fact's `workspaceDir` or `staged` proof. */
   MediaStaged?: boolean;
   /** Telegram sticker metadata (emoji, set name, file IDs, cached description). */
   Sticker?: StickerContextMetadata;
-  /** True when current-turn sticker media is present in MediaPaths. */
+  /** True when current-turn sticker media is present in structured facts. */
   StickerMediaIncluded?: boolean;
   /** Skip automatic understanding for the current sticker because its cached description is used. */
   SkipStickerMediaUnderstanding?: boolean;
@@ -259,6 +296,11 @@ export type MsgContext = {
   OwnerAllowFrom?: Array<string | number>;
   SenderName?: string;
   SenderId?: string;
+  /** Trusted in-process creation provenance; never populated from channel payloads. */
+  SessionCreation?: {
+    via: import("../config/sessions/session-entry-provenance.js").SessionCreatedVia;
+    actor?: import("../config/sessions/session-entry-provenance.js").SessionCreatedActor;
+  };
   SenderUsername?: string;
   SenderTag?: string;
   SenderE164?: string;
@@ -377,11 +419,56 @@ export type FinalizedMsgContext = Omit<MsgContext, "CommandAuthorized"> & {
   CommandTurn?: CommandTurnContext;
 };
 
-export type TemplateContext = MsgContext & {
+type RuntimeMediaContextKey =
+  | "MediaPath"
+  | "MediaUrl"
+  | "MediaType"
+  | "MediaDir"
+  | "MediaPaths"
+  | "MediaUrls"
+  | "MediaTypes"
+  | "MediaWorkspaceDir"
+  | "MediaTranscribedIndexes"
+  | "MediaStaged";
+
+/** Internal inbound context; legacy media fields exist only on the shipped SDK adapter. */
+export type RuntimeMsgContext = Omit<MsgContext, RuntimeMediaContextKey>;
+
+export type FinalizedRuntimeMsgContext = Omit<
+  RuntimeMsgContext,
+  "CommandAuthorized" | keyof CanonicalInboundText
+> &
+  CanonicalInboundText & {
+    CommandAuthorized: boolean;
+    CommandTurn?: CommandTurnContext;
+  };
+
+export type TemplateContext = RuntimeMsgContext & {
   BodyStripped?: string;
   SessionId?: string;
   IsNewSession?: string;
+  /** Local path for the attachment currently being processed. */
+  AttachmentPath?: string;
+  /** Original URL/reference for the attachment currently being processed. */
+  AttachmentUrl?: string;
+  /** MIME content type for the attachment currently being processed. */
+  AttachmentContentType?: string;
+  /** Directory containing AttachmentPath. */
+  AttachmentDir?: string;
+  /** Stable zero-based source fact index for the attachment currently being processed. */
+  AttachmentIndex?: number;
+  /** @deprecated Use AttachmentPath. */
+  MediaPath?: string;
+  /** @deprecated Use AttachmentUrl. */
+  MediaUrl?: string;
+  /** @deprecated Use AttachmentContentType. */
+  MediaType?: string;
+  /** @deprecated Use AttachmentDir. */
+  MediaDir?: string;
 };
+
+export type FinalizedTemplateContext = Omit<TemplateContext, keyof CanonicalInboundText> &
+  CanonicalInboundText;
 
 function formatTemplateValue(value: unknown): string {
   if (value == null) {

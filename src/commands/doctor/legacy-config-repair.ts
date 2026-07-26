@@ -1,33 +1,21 @@
 // Update-channel config repair for legacy config files before normal command startup.
 import { readConfigFileSnapshot, replaceConfigFile } from "../../config/config.js";
-import { INCLUDE_KEY } from "../../config/includes.js";
 import { validateConfigObjectWithPlugins } from "../../config/validation.js";
-import { isRecord } from "../../utils.js";
+import {
+  containsAuthoredInclude,
+  isSingleTopLevelIncludeMigration,
+} from "./shared/include-migration-ownership.js";
 import { migrateLegacyConfig } from "./shared/legacy-config-migrate.js";
 
 type ConfigSnapshot = Awaited<ReturnType<typeof readConfigFileSnapshot>>;
 
-/** Return true when a config tree uses authored includes that doctor must not flatten. */
-function containsAuthoredInclude(value: unknown): boolean {
-  if (!isRecord(value)) {
-    return false;
-  }
-  if (Object.hasOwn(value, INCLUDE_KEY)) {
-    return true;
-  }
-  return Object.values(value).some((entry) => containsAuthoredInclude(entry));
-}
-
-/** Migrate a legacy config snapshot during update, unless includes or validation block it. */
+/** Migrate a legacy config snapshot during update, unless validation blocks it. */
 export async function repairLegacyConfigForUpdateChannel(params: {
   configSnapshot: ConfigSnapshot;
   jsonMode: boolean;
 }): Promise<{ snapshot: ConfigSnapshot; repaired: boolean }> {
-  if (containsAuthoredInclude(params.configSnapshot.parsed)) {
-    return { snapshot: params.configSnapshot, repaired: false };
-  }
-
-  const migrated = migrateLegacyConfig(params.configSnapshot.parsed);
+  const hasAuthoredIncludes = containsAuthoredInclude(params.configSnapshot.parsed);
+  const migrated = migrateLegacyConfig(params.configSnapshot.sourceConfig);
   if (!migrated.config) {
     return { snapshot: params.configSnapshot, repaired: false };
   }
@@ -37,8 +25,21 @@ export async function repairLegacyConfigForUpdateChannel(params: {
     return { snapshot: params.configSnapshot, repaired: false };
   }
 
+  const nextConfig =
+    hasAuthoredIncludes && migrated.sourceConfig ? migrated.sourceConfig : validated.config;
+  if (
+    hasAuthoredIncludes &&
+    !isSingleTopLevelIncludeMigration({
+      parsed: params.configSnapshot.parsed,
+      sourceConfig: params.configSnapshot.sourceConfig,
+      candidate: nextConfig,
+    })
+  ) {
+    return { snapshot: params.configSnapshot, repaired: false };
+  }
+
   await replaceConfigFile({
-    nextConfig: validated.config,
+    nextConfig,
     baseHash: params.configSnapshot.hash,
     writeOptions: {
       auditOrigin: "doctor",

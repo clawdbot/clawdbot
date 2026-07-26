@@ -145,6 +145,26 @@ describe("assertSqliteSchemaContains", () => {
     }
   });
 
+  it("accepts only allowlisted missing lazy-additive tables", () => {
+    const migratedSchema = CANONICAL_SCHEMA.replace(
+      / {2}CREATE TABLE events \([\s\S]*?\n {2}\);\n/u,
+      "",
+    );
+    const database = createDatabase(migratedSchema);
+    try {
+      expect(() => assertSqliteSchemaContains(database, "test database", CANONICAL_SCHEMA)).toThrow(
+        "missing table events",
+      );
+      expect(() =>
+        assertSqliteSchemaContains(database, "test database", CANONICAL_SCHEMA, {
+          allowedMissingTables: ["events"],
+        }),
+      ).not.toThrow();
+    } finally {
+      database.close();
+    }
+  });
+
   it("accepts equivalent foreign keys declared in migration order", () => {
     const migratedSchema = CANONICAL_SCHEMA.replace(
       `    FOREIGN KEY (parent_id) REFERENCES parents(id) ON DELETE CASCADE,

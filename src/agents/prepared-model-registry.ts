@@ -18,7 +18,7 @@ import {
 } from "./prepared-model-runtime.js";
 import { AuthStorage, type ModelRegistry } from "./sessions/index.js";
 
-export type LoadPreparedAgentModelRegistryOptions = {
+type LoadPreparedAgentModelRegistryOptions = {
   agentId?: string;
   agentDir?: string;
   loadAvailability?: boolean;

@@ -43,7 +43,6 @@ const TSDOWN_MAIN_PACKAGE_OUTPUT_ROOTS = TSDOWN_PACKAGE_OUTPUT_ROOTS.filter(
 const TSDOWN_DECLARATION_TOOL_INPUTS = [
   "package.json",
   "pnpm-lock.yaml",
-  "npm-shrinkwrap.json",
   "tsconfig.json",
   "scripts/tsdown-build.mjs",
   "scripts/lib/bundled-plugin-build-entries.mjs",
@@ -97,7 +96,6 @@ const PLUGIN_SDK_SELF_BUILT_ENTRY_DTS_CACHE_INPUTS = [
   ...PLUGIN_SDK_ENTRY_DTS_SHARED_CACHE_INPUTS,
   "package.json",
   "pnpm-lock.yaml",
-  "npm-shrinkwrap.json",
   "tsconfig.json",
   "tsconfig.plugin-sdk.dts.json",
   {
@@ -112,7 +110,6 @@ const PLUGIN_SDK_SELF_BUILT_ENTRY_DTS_CACHE_INPUTS = [
   },
 ];
 const PLUGIN_SDK_ENTRY_DTS_CACHE_OUTPUTS = [
-  "dist/plugin-sdk/webhook-path.js",
   "dist/plugin-sdk/.boundary-entry-shims.stamp",
   ...pluginSdkEntrypoints.map((entry) => `packages/plugin-sdk/dist/src/plugin-sdk/${entry}.d.ts`),
 ];

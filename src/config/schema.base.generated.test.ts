@@ -30,6 +30,8 @@ function schemaAt(schema: TestJsonSchema, path: string[]): TestJsonSchema | unde
     }
     if (segment === "[]") {
       node = Array.isArray(node.items) ? node.items[0] : node.items;
+    } else if (segment === "*") {
+      node = typeof node.additionalProperties === "object" ? node.additionalProperties : undefined;
     } else {
       node = node.properties?.[segment];
     }
@@ -146,22 +148,18 @@ describe("base config schema", () => {
     ).properties?.agents?.properties?.defaults?.properties;
     const uiHints = BASE_CONFIG_SCHEMA.uiHints as Record<string, unknown>;
 
-    expect(agentDefaultsProperties).toHaveProperty("videoGenerationModel");
+    expect(agentDefaultsProperties).toHaveProperty("mediaModels");
     expect(agentDefaultsProperties).toHaveProperty("voiceModel");
-    expect(uiHints).toHaveProperty("agents.defaults.videoGenerationModel.primary");
-    expect(uiHints).toHaveProperty("agents.defaults.videoGenerationModel.fallbacks");
+    expect(uiHints).toHaveProperty("agents.defaults.mediaModels.video.primary");
+    expect(uiHints).toHaveProperty("agents.defaults.mediaModels.video.fallbacks");
     expect(uiHints).toHaveProperty("agents.defaults.voiceModel.primary");
     expect(uiHints).toHaveProperty("agents.defaults.voiceModel.fallbacks");
-    expect(uiHints).toHaveProperty("agents.defaults.mediaGenerationAutoProviderFallback");
   });
 
   it("publishes accepted input shapes for transform-backed config fields", () => {
-    const lastTouchedAtBranches = expectAnyOfTypes(["meta", "lastTouchedAt"], ["number", "string"]);
-    expect(lastTouchedAtBranches.every((branch) => Object.keys(branch).length > 0)).toBe(true);
-
     for (const path of [
       ["agents", "defaults", "sandbox", "docker", "setupCommand"],
-      ["agents", "list", "[]", "sandbox", "docker", "setupCommand"],
+      ["agents", "entries", "*", "sandbox", "docker", "setupCommand"],
     ]) {
       const branches = expectAnyOfTypes(path, ["array", "string"]);
       expect(itemSchema(branches.find((branch) => branch.type === "array"))?.type).toBe("string");
@@ -189,10 +187,6 @@ describe("base config schema", () => {
     expect(codexUserLocation?.properties?.region?.type).toBe("string");
     expect(codexUserLocation?.properties?.city?.type).toBe("string");
     expect(codexUserLocation?.properties?.timezone?.type).toBe("string");
-
-    expect(schemaAt(BASE_SCHEMA, ["gateway", "controlUi", "chatMessageMaxWidth"])?.type).toBe(
-      "string",
-    );
   });
 
   it("does not publish metadata-only composition branches", () => {

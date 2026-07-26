@@ -3,8 +3,8 @@
 import fs from "node:fs";
 import { StringDecoder } from "node:string_decoder";
 import {
-  parseSessionTranscriptTreeEntry,
   scanSessionTranscriptTree,
+  selectSessionTranscriptActiveEntries,
 } from "../config/sessions/transcript-tree.js";
 import {
   extractJsonNullableStringFieldPrefix,
@@ -42,7 +42,6 @@ type SessionTranscriptIndex = {
 
 type IndexedRawEntry = {
   id?: string;
-  parentId?: string | null;
   offset: number;
   byteLength: number;
   record: ParsedTranscriptRecord;
@@ -135,10 +134,8 @@ function buildOversizedIndexedRawEntry(params: {
       __openclaw: { truncated: true, reason: "oversized" },
     },
   };
-  const treeEntry = parseSessionTranscriptTreeEntry(record);
   return {
     ...(id ? { id } : {}),
-    ...(treeEntry ? { parentId: treeEntry.parentId } : parentId !== undefined ? { parentId } : {}),
     offset: params.offset,
     byteLength: params.byteLength,
     record,
@@ -190,28 +187,6 @@ async function visitTranscriptJsonLines(
   }
 }
 
-function buildActiveTreeEntries(params: {
-  byId: Map<string, IndexedRawEntry>;
-  leafId?: string | null;
-}): IndexedRawEntry[] {
-  const out: IndexedRawEntry[] = [];
-  const seen = new Set<string>();
-  let currentId = params.leafId;
-  while (currentId) {
-    if (seen.has(currentId)) {
-      return [];
-    }
-    seen.add(currentId);
-    const entry = params.byId.get(currentId);
-    if (!entry) {
-      break;
-    }
-    out.push(entry);
-    currentId = entry.parentId ?? undefined;
-  }
-  return out.toReversed();
-}
-
 function toIndexedEntries(rawEntries: IndexedRawEntry[]): IndexedTranscriptEntry[] {
   const entries: IndexedTranscriptEntry[] = [];
   let seq = 0;
@@ -229,6 +204,32 @@ function toIndexedEntries(rawEntries: IndexedRawEntry[]): IndexedTranscriptEntry
     });
   }
   return entries;
+}
+
+function projectResetBoundary(rawEntries: IndexedRawEntry[]): IndexedRawEntry[] {
+  const boundaryIndex = rawEntries.findLastIndex((entry) => {
+    const type = entry.record.type;
+    return type === "compaction" || type === "reset";
+  });
+  if (boundaryIndex < 0 || rawEntries[boundaryIndex]?.record.type !== "reset") {
+    return rawEntries;
+  }
+  const reset = rawEntries[boundaryIndex]?.record;
+  const firstKeptEntryId = reset?.firstKeptEntryId;
+  const firstKeptIndex =
+    typeof firstKeptEntryId === "string"
+      ? rawEntries.findIndex(
+          (entry, index) => index < boundaryIndex && entry.id === firstKeptEntryId,
+        )
+      : -1;
+  const kept =
+    firstKeptIndex < 0
+      ? []
+      : rawEntries.slice(firstKeptIndex, boundaryIndex).filter((entry) => {
+          const role = (entry.record.message as { role?: unknown } | undefined)?.role;
+          return role === "user" || role === "assistant";
+        });
+  return [...kept, ...rawEntries.slice(boundaryIndex + 1)];
 }
 
 async function buildSessionTranscriptIndex(
@@ -259,18 +260,8 @@ async function buildSessionTranscriptIndex(
       return;
     }
     const id = readNonBlankStringPreservingWhitespace(parsed.id);
-    const parentId =
-      parsed.parentId === null
-        ? null
-        : (readNonBlankStringPreservingWhitespace(parsed.parentId) ?? undefined);
-    const treeEntry = parseSessionTranscriptTreeEntry(parsed);
     const rawEntry: IndexedRawEntry = {
       ...(id ? { id } : {}),
-      ...(treeEntry
-        ? { parentId: treeEntry.parentId }
-        : parentId !== undefined
-          ? { parentId }
-          : {}),
       offset,
       byteLength,
       record: parsed,
@@ -279,25 +270,18 @@ async function buildSessionTranscriptIndex(
   });
 
   const tree = scanSessionTranscriptTree(rawEntries.map((entry) => entry.record));
-  const rawByRecord = new Map(rawEntries.map((entry) => [entry.record, entry]));
-  const byId = new Map<string, IndexedRawEntry>();
-  for (const node of tree.nodes) {
-    const rawEntry = rawByRecord.get(node.entry);
-    if (rawEntry) {
-      rawEntry.parentId = node.parentId;
-      byId.set(node.id, rawEntry);
-    }
-  }
-  const activeRawEntries = tree.hasExplicitLeafUpdate
-    ? buildActiveTreeEntries({ byId, leafId: tree.leafId })
-    : rawEntries;
+  const activeRawEntries = selectSessionTranscriptActiveEntries({
+    entries: rawEntries,
+    recordOf: (entry) => entry.record,
+    tree,
+  });
   return {
     filePath,
     mtimeMs: stat.mtimeMs,
     size: stat.size,
     hasTreeEntries: tree.hasExplicitLeafUpdate,
     ...(tree.hasExplicitLeafUpdate ? { leafId: tree.leafId } : {}),
-    entries: toIndexedEntries(activeRawEntries),
+    entries: toIndexedEntries(projectResetBoundary(activeRawEntries)),
     allEntries: toIndexedEntries(rawEntries),
   };
 }

@@ -1,3 +1,4 @@
+import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { fingerprint } from "../protocol/index.js";
 import {
@@ -55,6 +56,11 @@ export const reefSetupAdapter = {
     }) as OpenClawConfig,
 };
 
+export const reefSetupContract = defineChannelSetupContract({
+  fields: {},
+  adapter: reefSetupAdapter,
+});
+
 export const reefSetupWizard = {
   channel: "reef",
   getStatus: async ({ cfg }: { cfg: OpenClawConfig }) => {
@@ -69,7 +75,15 @@ export const reefSetupWizard = {
     };
   },
   configure: async ({ cfg }: { cfg: OpenClawConfig }) => ({ cfg }),
-  configureInteractive: async ({ cfg, prompter }: { cfg: OpenClawConfig; prompter: Prompt }) => {
+  configureInteractive: async ({
+    cfg,
+    prompter,
+    options,
+  }: {
+    cfg: OpenClawConfig;
+    prompter: Prompt;
+    options?: { beforePersistentEffect?: () => Promise<void> };
+  }) => {
     const rawRelayUrl = await prompter.text({
       message: "Reef relay origin URL",
       initialValue: "https://reefwire.ai",
@@ -125,6 +139,7 @@ export const reefSetupWizard = {
       );
     }
     const configuredStateDir = (cfg.channels?.reef as { stateDir?: unknown } | undefined)?.stateDir;
+    await options?.beforePersistentEffect?.();
     const keys = await loadKeys(runtime).catch(async (error: unknown) => {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;

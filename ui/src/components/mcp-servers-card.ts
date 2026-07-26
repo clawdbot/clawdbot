@@ -84,7 +84,7 @@ class McpServersCard extends OpenClawLightDomElement {
 
   private mutationBlockedReason(): string | null {
     const gateway = this.context?.gateway;
-    if (!gateway?.snapshot.connected) {
+    if (gateway?.snapshot.phase !== "connected") {
       return t("mcpServers.connectRequired");
     }
     if (!hasOperatorAdminAccess(gateway.snapshot.hello?.auth ?? null)) {
@@ -124,7 +124,7 @@ class McpServersCard extends OpenClawLightDomElement {
       this.message = { kind: "error", text: t("mcpServers.nameInvalid") };
       return;
     }
-    const config = parseMcpTarget(form.target);
+    const config = parseMcpTarget(form.target, form.transport);
     if (!config) {
       this.message = { kind: "error", text: t("mcpServers.targetInvalid") };
       return;

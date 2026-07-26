@@ -4477,15 +4477,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       runOverrides: {
         provider: "anthropic",
         model: "claude-opus-4-7",
-        config: {
-          agents: {
-            defaults: {
-              cliBackends: {
-                "claude-cli": { command: "claude" },
-              },
-            },
-          },
-        },
+        config: {},
       },
     });
     await run();
@@ -4520,7 +4512,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       throw new Error("expected payload");
     }
     expect(payload.text).toContain("Auto-compaction could not recover this turn");
-    expect(payload.text).toContain("reserveTokensFloor");
+    expect(payload.text).toContain("fresh session or using a model with a larger context window");
     expect(payload.text).toContain("/new");
   });
 
@@ -4543,7 +4535,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       throw new Error("expected payload");
     }
     expect(payload.text).toContain("Auto-compaction could not recover this turn");
-    expect(payload.text).toContain("reserveTokensFloor");
+    expect(payload.text).toContain("fresh session or using a model with a larger context window");
     expect(payload.text).toContain("/new");
   });
 

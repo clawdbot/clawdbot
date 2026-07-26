@@ -641,6 +641,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
         }
       }
     },
+    waitForPumpIdle,
     isRunning: () => running,
     isStopped: () => stopped,
   };

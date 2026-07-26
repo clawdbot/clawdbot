@@ -2,10 +2,11 @@ title: Telegram status command reply
 
 scenario:
   id: telegram-status-command
-  surface: channel-framework
-  category: channel-framework.channel-actions-commands-and-approvals
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
   coverage:
-    primary: [channels.native-commands]
+    primary:
+      - channels.channel-native-commands
   regressionRefs:
     - openclaw/openclaw#74698
   objective: Verify Telegram status returns model, session, and activation details.

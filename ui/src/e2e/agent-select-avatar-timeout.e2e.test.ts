@@ -92,7 +92,9 @@ describeControlUiE2e("Control UI agent picker avatar timeout", () => {
       await expect.poll(() => avatarRequestCount).toBe(1);
       const picker = page.locator("openclaw-agent-select");
       await expect
-        .poll(() => picker.locator(".agent-select__avatar--text").first().textContent())
+        .poll(() =>
+          picker.locator(".agent-select__avatar--text").first().getAttribute("data-avatar"),
+        )
         .toBe("O");
       expect(avatarAuthorization).toBe("Bearer e2e-device-token");
       await screenshot(page, "01-request-stalled.png");
@@ -101,7 +103,9 @@ describeControlUiE2e("Control UI agent picker avatar timeout", () => {
       await expect.poll(() => failedAvatarRequests.length).toBe(1);
       await expect.poll(() => picker.locator("img.agent-select__avatar").count()).toBe(0);
       await expect
-        .poll(() => picker.locator(".agent-select__avatar--text").first().textContent())
+        .poll(() =>
+          picker.locator(".agent-select__avatar--text").first().getAttribute("data-avatar"),
+        )
         .toBe("O");
 
       // A later render must use the cached miss instead of launching another fetch.

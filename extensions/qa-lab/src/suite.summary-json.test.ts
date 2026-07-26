@@ -134,6 +134,25 @@ describe("buildQaSuiteSummaryJson", () => {
       total: 2,
       passed: 1,
       failed: 1,
+      skipped: 0,
+    });
+  });
+
+  it("includes skipped scenarios in the canonical summary counts", () => {
+    const json = buildQaSuiteSummaryJson({
+      ...baseParams,
+      scenarios: [
+        ...baseParams.scenarios,
+        { name: "Scenario C", status: "skip" as const, steps: [] },
+        { name: "Scenario D", status: "skip" as const, steps: [] },
+      ],
+    });
+
+    expect(json.counts).toEqual({
+      total: 4,
+      passed: 1,
+      failed: 1,
+      skipped: 2,
     });
   });
 

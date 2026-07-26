@@ -17,6 +17,7 @@
     <string name="tap">Tap</string>
     <string name="double_tap">Double tap</string>
     <string name="no_live_conversation">Start Live to see the conversation here.</string>
+    <string name="new_messages">New</string>
     <string name="type">Type</string>
     <string name="message">Message</string>
     <string name="message_agent">Message agent</string>

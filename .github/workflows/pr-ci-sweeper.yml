@@ -1,9 +1,8 @@
 name: PR CI Sweeper
 
-# Re-fires pull_request CI runs that GitHub dropped at PR open (merge-ref
-# race: no CI run attaches, or an un-rerunnable startup_failure is created).
-# Close/reopen with an app token re-fires the event; GITHUB_TOKEN events
-# would not trigger workflows.
+# Repairs dropped pull_request CI via close/reopen and non-destructively revives
+# cancelled GitHub Actions checks attached to auto-merge PR heads. The app token
+# authorizes reruns; GITHUB_TOKEN close/reopen events would not trigger CI.
 
 on:
   schedule:
@@ -11,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: Log intended re-fires without closing/reopening.
+        description: Log intended repairs without closing/reopening or rerunning workflows.
         required: false
         default: false
         type: boolean
@@ -31,17 +30,22 @@ jobs:
       contents: read
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+      # No permission-* subset here: requesting a permission the installation
+      # does not grant fails token minting outright, and these installations
+      # lack actions:write/checks:read (every sweep failed 2026-07-24 until the
+      # subset was reverted). No inputs = the app's full granted set, which the
+      # sweep's re-fire lane is known to work with.
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # zizmor: ignore[github-app] v3
         id: app-token
         continue-on-error: true
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # zizmor: ignore[github-app] v3
         id: app-token-fallback
         if: steps.app-token.outcome == 'failure'
         with:

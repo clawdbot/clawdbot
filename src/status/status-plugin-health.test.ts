@@ -132,8 +132,8 @@ describe("plugin health status formatting", () => {
           {
             pluginId: "compat-only",
             severity: "warn",
-            code: "legacy-before-agent-start",
-            message: "still uses legacy before_agent_start",
+            code: "hook-only",
+            message: "is hook-only",
           },
         ],
       },
@@ -192,8 +192,8 @@ describe("plugin health status formatting", () => {
     expect(snapshot.compatibilityNotices).toContainEqual({
       pluginId: "compat-only",
       severity: "warn",
-      code: "legacy-before-agent-start",
-      message: "still uses legacy before_agent_start",
+      code: "hook-only",
+      message: "is hook-only",
     });
   });
 

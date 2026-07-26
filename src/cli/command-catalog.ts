@@ -71,6 +71,12 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { bypassConfigGuard: true, loadPlugins: "never", ensureCliPath: false },
   },
   {
+    commandPath: ["qa"],
+    // Private QA commands create or inspect repo-owned fixtures. They must not
+    // read, validate, migrate, or inherit proxy policy from operator state.
+    policy: { bypassConfigGuard: true, loadPlugins: "never", networkProxy: "bypass" },
+  },
+  {
     commandPath: ["crestodian"], // hidden alias
     policy: { bypassConfigGuard: true, loadPlugins: "never", ensureCliPath: false },
   },
@@ -82,7 +88,18 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
       networkProxy: ({ argv }) => (hasFlag(argv, "--local") ? "default" : "bypass"),
     },
   },
+  {
+    commandPath: ["agent", "exec"],
+    policy: {
+      bypassConfigGuard: true,
+      loadPlugins: "never",
+      ownsProtocolStdout: true,
+      hideBanner: true,
+      networkProxy: "default",
+    },
+  },
   { commandPath: ["message"], policy: { loadPlugins: "never" } },
+  { commandPath: ["docs"], policy: { bypassConfigGuard: true } },
   {
     commandPath: ["channels"],
     policy: {
@@ -455,4 +472,5 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   { commandPath: ["skills", "list"], exact: true, policy: { networkProxy: "bypass" } },
   { commandPath: ["skills", "search"], exact: true },
   { commandPath: ["skills", "update"], exact: true },
+  { commandPath: ["skills", "verify"], exact: true },
 ];

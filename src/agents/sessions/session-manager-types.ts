@@ -56,6 +56,14 @@ export interface CompactionEntry<T = unknown> extends SessionEntryBase {
   fromHook?: boolean;
 }
 
+export type ResetReason = "new" | "reset" | "idle" | "daily" | "cron-stale";
+
+export interface ResetEntry extends SessionEntryBase {
+  type: "reset";
+  reason: ResetReason;
+  firstKeptEntryId?: string;
+}
+
 export interface BranchSummaryEntry<T = unknown> extends SessionEntryBase {
   type: "branch_summary";
   fromId: string;
@@ -98,6 +106,7 @@ export type SessionEntry =
   | ThinkingLevelChangeEntry
   | ModelChangeEntry
   | CompactionEntry
+  | ResetEntry
   | BranchSummaryEntry
   | CustomEntry
   | CustomMessageEntry
@@ -124,22 +133,6 @@ export interface SessionContext {
   thinkingLevel: string;
   model: { provider: string; modelId: string } | null;
 }
-
-export interface SessionInfo {
-  path: string;
-  id: string;
-  /** Working directory where the session started. Empty for old sessions. */
-  cwd: string;
-  name?: string;
-  parentSessionPath?: string;
-  created: Date;
-  modified: Date;
-  messageCount: number;
-  firstMessage: string;
-  allMessagesText: string;
-}
-
-export type SessionListProgress = (loaded: number, total: number) => void;
 
 interface PromptReleasedOpaqueEntry {
   type: "prompt_released_opaque";

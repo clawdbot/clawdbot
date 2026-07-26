@@ -232,8 +232,13 @@ export function resolveConfigIncludesForRead(
   deps: NormalizedConfigIoDeps,
   includeFileHashesForWrite?: Record<string, string>,
   includeFileTargetsForWrite?: Record<string, string>,
+  includeFilePathsForWatch?: Set<string>,
+  onIncludeResolved?: (event: { path: readonly string[]; value: unknown }) => void,
 ): unknown {
   const allowedRoots = resolveIncludeRoots(deps.env, deps.homedir);
+  const recordIncludeWatchPath = (resolvedPath: string) => {
+    includeFilePathsForWatch?.add(path.normalize(resolvedPath));
+  };
   const recordIncludeTarget = (resolvedPath: string, canonicalPath?: string) => {
     if (!includeFileTargetsForWrite) {
       return;
@@ -253,6 +258,8 @@ export function resolveConfigIncludesForRead(
     configPath,
     {
       readFile: (candidate) => deps.fs.readFileSync(candidate, "utf-8"),
+      onLexicalPath: recordIncludeWatchPath,
+      onIncludeResolved,
       readFileWithGuards: ({ includePath, resolvedPath, rootRealDir }) => {
         try {
           const raw = readConfigIncludeFileWithGuards({
@@ -260,7 +267,10 @@ export function resolveConfigIncludesForRead(
             resolvedPath,
             rootRealDir,
             ioFs: deps.fs,
-            onResolvedPath: (canonicalPath) => recordIncludeTarget(resolvedPath, canonicalPath),
+            onResolvedPath: (canonicalPath) => {
+              recordIncludeWatchPath(canonicalPath);
+              recordIncludeTarget(resolvedPath, canonicalPath);
+            },
           });
           if (includeFileHashesForWrite) {
             includeFileHashesForWrite[path.normalize(resolvedPath)] = hashConfigIncludeRaw(raw);

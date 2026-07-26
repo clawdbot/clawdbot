@@ -75,6 +75,10 @@ beforeEach(() => {
   ensureOllamaModelPulledMock.mockClear();
   buildOllamaProviderMock.mockReset();
   queryOllamaModelShowInfoMock.mockReset();
+  queryOllamaModelShowInfoMock.mockResolvedValue({
+    contextWindow: 32_768,
+    capabilities: ["completion", "tools"],
+  });
   buildOllamaModelDefinitionMock.mockClear();
   createConfiguredOllamaStreamFnMock.mockClear();
 });
@@ -356,6 +360,45 @@ describe("ollama plugin", () => {
         detail: "qwen3.5:4b at http://127.0.0.1:11434",
       },
     );
+  });
+
+  it("skips preferred models whose measured context is below 16k", async () => {
+    const provider = registerProvider();
+    buildOllamaProviderMock.mockResolvedValue({
+      baseUrl: "http://127.0.0.1:11434",
+      api: "ollama",
+      models: [
+        { id: "llama3.3:70b", name: "llama3.3:70b", compat: { supportsTools: true } },
+        { id: "qwen3.5:4b", name: "qwen3.5:4b", compat: { supportsTools: true } },
+      ],
+    });
+    queryOllamaModelShowInfoMock.mockImplementation(async (_baseUrl: string, modelId: string) => ({
+      contextWindow: modelId === "qwen3.5:4b" ? 8_192 : 16_384,
+      capabilities: ["completion", "tools"],
+    }));
+
+    await expect(provider.auth[0].appGuidedSetup?.detect({ config: {}, env: {} })).resolves.toEqual(
+      {
+        modelRef: "ollama/llama3.3:70b",
+        detail: "llama3.3:70b at http://127.0.0.1:11434",
+      },
+    );
+  });
+
+  it("does not auto-detect a model without measured context metadata", async () => {
+    const provider = registerProvider();
+    buildOllamaProviderMock.mockResolvedValue({
+      baseUrl: "http://127.0.0.1:11434",
+      api: "ollama",
+      models: [{ id: "qwen3.5:4b", name: "qwen3.5:4b", compat: { supportsTools: true } }],
+    });
+    queryOllamaModelShowInfoMock.mockResolvedValue({
+      capabilities: ["completion", "tools"],
+    });
+
+    await expect(
+      provider.auth[0].appGuidedSetup?.detect({ config: {}, env: {} }),
+    ).resolves.toBeNull();
   });
 
   it("uses configured Ollama access while discovering installed models", async () => {
@@ -892,14 +935,13 @@ describe("ollama plugin", () => {
               fallbacks: ["ollama/global-fallback:cloud"],
             },
           },
-          list: [
-            {
-              id: "ops",
+          entries: {
+            ops: {
               model: {
                 primary: "ollama/per-agent:cloud@work",
               },
             },
-          ],
+          },
         },
       },
       env: process.env,
@@ -1637,10 +1679,32 @@ describe("ollama plugin", () => {
     }
     expect(result.provider.baseUrl).toBe("https://ollama.com");
     expect(result.provider.models?.map((model: { id: string }) => model.id)).toEqual([
-      "kimi-k2.5:cloud",
-      "minimax-m2.7:cloud",
-      "glm-5.1:cloud",
-      "glm-5.2:cloud",
+      "minimax-m2.7",
+      "glm-5.1",
+      "glm-5.2",
+    ]);
+    expect(result.provider.models).toEqual([
+      expect.objectContaining({
+        id: "minimax-m2.7",
+        contextWindow: 196_608,
+        reasoning: true,
+        input: ["text"],
+        compat: { supportsTools: true, supportsUsageInStreaming: true },
+      }),
+      expect.objectContaining({
+        id: "glm-5.1",
+        contextWindow: 202_752,
+        reasoning: true,
+        input: ["text"],
+        compat: { supportsTools: true, supportsUsageInStreaming: true },
+      }),
+      expect.objectContaining({
+        id: "glm-5.2",
+        contextWindow: 1_000_000,
+        reasoning: true,
+        input: ["text"],
+        compat: { supportsTools: true, supportsUsageInStreaming: true },
+      }),
     ]);
 
     provider.createStreamFn?.({
@@ -1656,7 +1720,7 @@ describe("ollama plugin", () => {
     buildOllamaProviderMock.mockResolvedValueOnce({
       baseUrl: "https://ollama.com",
       api: "ollama",
-      models: [buildOllamaModelDefinitionMock("glm-5.2:cloud")],
+      models: [buildOllamaModelDefinitionMock("glm-5.2")],
     });
 
     const result = await provider.catalog.run({
@@ -1674,9 +1738,7 @@ describe("ollama plugin", () => {
     });
     expect(result?.provider.apiKey).toBe("OLLAMA_API_KEY");
     expect(result?.provider.models).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: "glm-5.2:cloud", name: "glm-5.2:cloud" }),
-      ]),
+      expect.arrayContaining([expect.objectContaining({ id: "glm-5.2", name: "glm-5.2" })]),
     );
   });
 
@@ -1685,7 +1747,7 @@ describe("ollama plugin", () => {
     buildOllamaProviderMock.mockResolvedValueOnce({
       baseUrl: "https://ollama.com",
       api: "ollama",
-      models: [buildOllamaModelDefinitionMock("kimi-k2.5:cloud")],
+      models: [buildOllamaModelDefinitionMock("kimi-k2.6")],
     });
     queryOllamaModelShowInfoMock.mockResolvedValueOnce({
       contextWindow: 1_000_000,
@@ -1693,7 +1755,7 @@ describe("ollama plugin", () => {
     });
     const result = await provider.catalog.run({
       config: {
-        agents: { defaults: { model: { primary: "ollama-cloud/glm-5.2:cloud" } } },
+        agents: { defaults: { model: { primary: "ollama-cloud/glm-5.2" } } },
       },
       env: {},
       resolveProviderApiKey: () => ({
@@ -1706,15 +1768,13 @@ describe("ollama plugin", () => {
       apiKey: "cloud-key",
       quiet: true,
     });
-    expect(queryOllamaModelShowInfoMock).toHaveBeenCalledWith(
-      "https://ollama.com",
-      "glm-5.2:cloud",
-      { apiKey: "cloud-key" },
-    );
+    expect(queryOllamaModelShowInfoMock).toHaveBeenCalledWith("https://ollama.com", "glm-5.2", {
+      apiKey: "cloud-key",
+    });
     expect(result?.provider.models).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          id: "glm-5.2:cloud",
+          id: "glm-5.2",
           contextWindow: 1_000_000,
           maxTokens: 8192,
           reasoning: true,
@@ -1727,13 +1787,13 @@ describe("ollama plugin", () => {
     const provider = registerOllamaCloudProvider();
     const model = provider.resolveDynamicModel?.({
       provider: "ollama-cloud",
-      modelId: "glm-5.2:cloud",
+      modelId: "glm-5.2",
     } as never);
 
     expect(model).toEqual(
       expect.objectContaining({
         provider: "ollama-cloud",
-        id: "glm-5.2:cloud",
+        id: "glm-5.2",
         contextWindow: 1_000_000,
         maxTokens: 8192,
         reasoning: true,

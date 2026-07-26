@@ -128,9 +128,7 @@ describe("setup migration import options", () => {
 
   it("offers official installable Codex when bundled plugins are unavailable", async () => {
     const previousDisableBundled = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
-    const previousDisablePersisted = process.env.OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY;
     process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
-    process.env.OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY = "1";
     try {
       const options = await listSetupMigrationOptions({
         baseConfig: {},
@@ -145,11 +143,6 @@ describe("setup migration import options", () => {
         delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
       } else {
         process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = previousDisableBundled;
-      }
-      if (previousDisablePersisted === undefined) {
-        delete process.env.OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY;
-      } else {
-        process.env.OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY = previousDisablePersisted;
       }
     }
   });

@@ -202,7 +202,6 @@ export async function resolveEmbeddedRunModelSetup(params: {
     modelId,
     requestedModelId,
     modelSelectionChangedByHook,
-    beforeAgentStartResult: hookSelection.beforeAgentStartResult,
     requestStreamTransportOverrides,
     expectedHarnessArtifact,
     agentHarness,

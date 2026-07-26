@@ -10,6 +10,7 @@ import {
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { stripMarkdown } from "openclaw/plugin-sdk/text-chunking";
 import type { ChannelOutboundAdapter, ChannelPlugin } from "./channel-api.js";
 import type { MetricEvent, MetricsSnapshot } from "./metrics.js";
 import { startNostrBus, type NostrBusHandle } from "./nostr-bus.js";
@@ -201,7 +202,12 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
                 channel: "nostr",
                 accountId: account.accountId,
               });
-              await reply(runtime.channel.text.convertMarkdownTables(outboundText, tableMode));
+              const message = stripMarkdown(
+                runtime.channel.text.convertMarkdownTables(outboundText, tableMode),
+              );
+              if (message) {
+                await reply(message);
+              }
             },
             onRecordError: (err) => {
               ctx.log?.error?.(
@@ -324,7 +330,10 @@ export const nostrOutboundAdapter: NostrOutboundAdapter = {
       channel: "nostr",
       accountId: aid,
     });
-    const message = core.channel.text.convertMarkdownTables(text ?? "", tableMode);
+    const message = stripMarkdown(core.channel.text.convertMarkdownTables(text ?? "", tableMode));
+    if (!message) {
+      throw new Error("Nostr send requires non-empty text after markdown stripping.");
+    }
     const normalizedTo = normalizePubkey(to);
     const eventId = await bus.sendDm(normalizedTo, message);
     return attachChannelToResult("nostr", {

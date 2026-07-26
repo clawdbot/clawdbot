@@ -1,7 +1,7 @@
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 
 export type CloudSessionCreateParams = SessionCreateParams & {
-  key: string;
+  key?: string;
   agentId: string;
   message: "";
   worktree: true;
@@ -56,6 +56,7 @@ export function parseCloudSessionCreateParams(
     "agentId",
     "message",
     "worktree",
+    "incognito",
     ...CLOUD_CREATE_STRING_FIELDS,
   ]);
   if (
@@ -64,6 +65,7 @@ export function parseCloudSessionCreateParams(
     record.agentId !== agentId ||
     record.message !== "" ||
     record.worktree !== true ||
+    (record.incognito !== undefined && record.incognito !== true) ||
     CLOUD_CREATE_STRING_FIELDS.some(
       (key) => record[key] !== undefined && !isNonEmptyString(record[key]),
     )
@@ -86,6 +88,10 @@ export function readCloudSessionRecovery(
       return null;
     }
     const value = JSON.parse(raw) as Partial<CloudSessionRecovery>;
+    if (value.createParams?.incognito === true) {
+      globalThis.sessionStorage?.removeItem(storageKey(gatewayUrl, recoveryScope));
+      return null;
+    }
     if (
       !isNonEmptyString(value.sessionKey) ||
       !isNonEmptyString(value.messageId) ||

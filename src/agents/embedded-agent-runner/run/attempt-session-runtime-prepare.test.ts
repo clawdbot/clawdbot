@@ -155,7 +155,7 @@ function createFixture() {
   };
   const input = {
     attempt: {
-      model: { api: "openai-responses" },
+      model: { api: "openai-responses", contextWindow: 128_000 },
       modelId: "gpt-5",
       provider: "openai",
       runId: "run-1",

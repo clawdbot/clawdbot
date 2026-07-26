@@ -275,19 +275,44 @@ describe("native app i18n inventory", () => {
     expect(entries.map((entry) => entry.source)).toEqual(["Gateway ready"]);
   });
 
-  it("ignores Android collection resource references", () => {
+  it("extracts only localizable usage descriptions from Apple plists", () => {
+    const entries = extractNativeI18nCandidates(
+      "apple",
+      "apps/ios/Fixture/Info.plist",
+      `<plist><dict>
+        <key>CFBundleDisplayName</key>
+        <string>OpenClaw Fixture</string>
+        <key>NSCameraUsageDescription</key>
+        <string>OpenClaw uses the camera to scan setup codes &amp; documents.</string>
+        <key>OpenClawFixtureValue</key>
+        <string>Runtime configuration value</string>
+      </dict></plist>`,
+    );
+
+    expect(entries.map((entry) => entry.source)).toEqual([
+      "OpenClaw uses the camera to scan setup codes & documents.",
+    ]);
+  });
+
+  it("respects non-translatable Android collections and retains lowercase choices", () => {
     const entries = extractNativeI18nCandidates(
       "android",
       "apps/android/app/src/main/res/values/wear.xml",
       `<resources>
-        <string-array name="capabilities">
+        <string-array name="capabilities" translatable="false">
           <item>@string/native_capability</item>
+          <item>openclaw_wear_companion_v1</item>
+          <item>Visible choice</item>
+        </string-array>
+        <string-array name="modes">
+          <item>@string/native_mode</item>
+          <item>off</item>
           <item>Visible choice</item>
         </string-array>
       </resources>`,
     );
 
-    expect(entries.map((entry) => entry.source)).toEqual(["Visible choice"]);
+    expect(entries.map((entry) => entry.source)).toEqual(["off", "Visible choice"]);
   });
 
   it("collects stable Android and Apple UI entries", async () => {
@@ -318,6 +343,40 @@ describe("native app i18n inventory", () => {
           ),
         ),
     ).toBe(true);
+    expect(
+      entries
+        .filter((entry) => entry.surface === "android")
+        .every(
+          (entry) =>
+            entry.path.startsWith("apps/android/app/src/main/") ||
+            entry.path.startsWith("apps/android/app/src/play/") ||
+            entry.path.startsWith("apps/android/app/src/thirdParty/") ||
+            entry.path === "apps/android/wear/src/main/res/values/strings.xml",
+        ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.path === "apps/android/wear/src/main/res/values/strings.xml" &&
+          entry.source === "Current session",
+      ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.path.endsWith(
+            "/thirdParty/java/ai/openclaw/app/ui/SensitivePhoneCapabilitiesSettings.kt",
+          ) && entry.source === "Control other apps",
+      ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.path.endsWith("/accessibility/AccessibilityDevActivity.kt") &&
+          entry.source === "Accessibility executor",
+      ),
+    ).toBe(true);
+    expect(entries.some((entry) => entry.source === "n${nodes.size}")).toBe(false);
     expect(entries.some((entry) => entry.source === "QR Scanner Unavailable")).toBe(true);
     expect(
       entries.some((entry) =>
@@ -1163,6 +1222,16 @@ describe("native app i18n inventory", () => {
   });
 
   it("validates locale refresh arguments before write paths run", () => {
+    expect(parseNativeI18nCommand(["baseline", "--write"])).toEqual({
+      command: "baseline",
+      locale: undefined,
+      write: true,
+    });
+    expect(parseNativeI18nCommand(["verify"])).toEqual({
+      command: "verify",
+      locale: undefined,
+      write: false,
+    });
     expect(parseNativeI18nCommand(["sync", "--write", "--locale", "sv"])).toEqual({
       command: "sync",
       locale: "sv",
@@ -1179,6 +1248,10 @@ describe("native app i18n inventory", () => {
     );
     expect(() => parseNativeI18nCommand(["check", "--locale", "sv"])).toThrow(
       "requires `sync --write",
+    );
+    expect(() => parseNativeI18nCommand(["baseline"])).toThrow("requires `--write`");
+    expect(() => parseNativeI18nCommand(["verify", "--write"])).toThrow(
+      "does not accept `--write`",
     );
   });
 });

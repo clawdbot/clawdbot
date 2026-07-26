@@ -176,12 +176,12 @@ vi.mock("./dispatch-acp-media.runtime.js", () => ({
     mediaUnderstandingMocks.applyMediaUnderstanding(params),
   isMediaUnderstandingSkipError: (error: unknown): error is MediaUnderstandingSkipError =>
     error instanceof Error && error.name === "MediaUnderstandingSkipError",
-  normalizeAttachments: (ctx: { MediaPath?: string; MediaType?: string }) =>
-    ctx.MediaPath
+  normalizeAttachments: (ctx: { media?: Array<{ path?: string; contentType?: string }> }) =>
+    ctx.media?.[0]?.path
       ? [
           {
-            path: ctx.MediaPath,
-            mime: ctx.MediaType,
+            path: ctx.media[0].path,
+            mime: ctx.media[0].contentType,
             index: 0,
           },
         ]
@@ -657,6 +657,17 @@ describe("tryDispatchAcpReply", () => {
     expect(String(transcript.finalText)).toContain("acp died after streaming");
   });
 
+  it("preserves an intentionally empty canonical agent prompt", async () => {
+    setReadyAcpResolution();
+
+    await runDispatch({
+      bodyForAgent: "",
+      ctxOverrides: { BodyForCommands: "/status", CommandBody: "/status" },
+    });
+
+    expect(managerMocks.runTurn).not.toHaveBeenCalled();
+  });
+
   it("adds source delivery guidance to tool-only ACP turns", async () => {
     setReadyAcpResolution();
 
@@ -959,7 +970,7 @@ describe("tryDispatchAcpReply", () => {
       cfg: createAcpTestConfig({
         acp: {
           enabled: true,
-          stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 64 },
+          stream: { deliveryMode: "live" },
         },
       }),
       dispatcher,
@@ -989,7 +1000,7 @@ describe("tryDispatchAcpReply", () => {
       mockArg(transcriptMocks.persistAcpDispatchTranscript, 0, 0, "transcript call"),
       "transcript call",
     );
-    expect(transcript.finalText).toBe(deliveredText);
+    expect(transcript.finalText).toBe(deliveredText.trimEnd());
   });
 
   it("keeps caller abort authoritative until completed output settles", async () => {
@@ -1324,8 +1335,7 @@ describe("tryDispatchAcpReply", () => {
         ctx: buildTestCtx({
           Provider: "discord",
           Surface: "discord",
-          MediaPath: currentPath,
-          MediaType: "image/png",
+          media: [{ path: currentPath, contentType: "image/png" }],
           Timestamp: 1_700_000_000_000,
           InboundHistory: [
             {
@@ -1349,7 +1359,9 @@ describe("tryDispatchAcpReply", () => {
           } as unknown as typeof import("./dispatch-acp-media.runtime.js").MediaAttachmentCache,
           isMediaUnderstandingSkipError: (_error: unknown): _error is MediaUnderstandingSkipError =>
             false,
-          normalizeAttachments: (ctx) => [{ path: ctx.MediaPath, mime: ctx.MediaType, index: 0 }],
+          normalizeAttachments: (ctx) => [
+            { path: ctx.media?.[0]?.path, mime: ctx.media?.[0]?.contentType, index: 0 },
+          ],
           resolveMediaAttachmentLocalRoots: () => [tempDir],
         },
       });
@@ -1374,8 +1386,7 @@ describe("tryDispatchAcpReply", () => {
         ctx: buildTestCtx({
           Provider: "discord",
           Surface: "discord",
-          MediaPath: currentPath,
-          MediaType: "image/png",
+          media: [{ path: currentPath, contentType: "image/png" }],
           Timestamp: 1_700_000_000_000,
           InboundHistory: [
             {
@@ -1403,7 +1414,9 @@ describe("tryDispatchAcpReply", () => {
           } as unknown as typeof import("./dispatch-acp-media.runtime.js").MediaAttachmentCache,
           isMediaUnderstandingSkipError: (_error: unknown): _error is MediaUnderstandingSkipError =>
             false,
-          normalizeAttachments: (ctx) => [{ path: ctx.MediaPath, mime: ctx.MediaType, index: 1 }],
+          normalizeAttachments: (ctx) => [
+            { path: ctx.media?.[0]?.path, mime: ctx.media?.[0]?.contentType, index: 1 },
+          ],
           resolveMediaAttachmentLocalRoots: () => [tempDir],
         },
       });
@@ -1434,8 +1447,7 @@ describe("tryDispatchAcpReply", () => {
         ctx: buildTestCtx({
           Provider: "discord",
           Surface: "discord",
-          MediaPath: documentPath,
-          MediaType: "application/pdf",
+          media: [{ path: documentPath, contentType: "application/pdf" }],
           Timestamp: 1_700_000_000_000,
           InboundHistory: [
             {
@@ -1455,7 +1467,9 @@ describe("tryDispatchAcpReply", () => {
           } as unknown as typeof import("./dispatch-acp-media.runtime.js").MediaAttachmentCache,
           isMediaUnderstandingSkipError: (_error: unknown): _error is MediaUnderstandingSkipError =>
             false,
-          normalizeAttachments: (ctx) => [{ path: ctx.MediaPath, mime: ctx.MediaType, index: 0 }],
+          normalizeAttachments: (ctx) => [
+            { path: ctx.media?.[0]?.path, mime: ctx.media?.[0]?.contentType, index: 0 },
+          ],
           resolveMediaAttachmentLocalRoots: () => [tempDir],
         },
       });
@@ -1477,8 +1491,7 @@ describe("tryDispatchAcpReply", () => {
         ctx: buildTestCtx({
           Provider: "discord",
           Surface: "discord",
-          MediaUrl: "https://example.com/current.png",
-          MediaType: "image/png",
+          media: [{ url: "https://example.com/current.png", contentType: "image/png" }],
           Timestamp: 1_700_000_000_000,
           InboundHistory: [
             {
@@ -1505,7 +1518,9 @@ describe("tryDispatchAcpReply", () => {
           } as unknown as typeof import("./dispatch-acp-media.runtime.js").MediaAttachmentCache,
           isMediaUnderstandingSkipError: (_error: unknown): _error is MediaUnderstandingSkipError =>
             false,
-          normalizeAttachments: (ctx) => [{ url: ctx.MediaUrl, mime: ctx.MediaType, index: 0 }],
+          normalizeAttachments: (ctx) => [
+            { url: ctx.media?.[0]?.url, mime: ctx.media?.[0]?.contentType, index: 0 },
+          ],
           resolveMediaAttachmentLocalRoots: () => [tempDir],
         },
       });
@@ -1581,8 +1596,7 @@ describe("tryDispatchAcpReply", () => {
     await runDispatch({
       bodyForAgent: "describe current image and scanned PDF",
       ctxOverrides: {
-        MediaPath: currentPath,
-        MediaType: "image/png",
+        media: [{ path: currentPath, contentType: "image/png" }],
       },
     });
 
@@ -2309,8 +2323,6 @@ describe("tryDispatchAcpReply", () => {
         enabled: true,
         stream: {
           deliveryMode: "live",
-          coalesceIdleMs: 0,
-          maxChunkChars: 64,
         },
       },
     });
@@ -2347,8 +2359,6 @@ describe("tryDispatchAcpReply", () => {
         enabled: true,
         stream: {
           deliveryMode: "live",
-          coalesceIdleMs: 0,
-          maxChunkChars: 64,
         },
       },
     });

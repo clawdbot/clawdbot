@@ -3,7 +3,8 @@ scenario:
   id: discord-mention-gating
   surface: channels
   coverage:
-    primary: [channels.group-messages]
+    primary:
+      - discord.mention-gating
   execution:
     profiles: { "discord:adapter": 1, "discord:default": 1 }
     kind: flow

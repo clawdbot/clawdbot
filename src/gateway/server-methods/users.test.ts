@@ -215,6 +215,27 @@ describe("users gateway methods", () => {
     expect(ensureProfileForEmail).toHaveBeenCalledWith("ada@example.com");
   });
 
+  it("denies an identified write caller changing another profile's avatar", async () => {
+    ensureProfileForEmail.mockReturnValue(profile);
+    resolveUserProfileId.mockReturnValue("profile-2");
+
+    expect(
+      await runUsersHandler(
+        "users.setAvatar",
+        { profileId: "profile-2", mime: "image/png", avatarBase64: "AQ==" },
+        selfClient,
+      ),
+    ).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "FORBIDDEN",
+        message: "profile edits require the owning user or operator.admin",
+      }),
+    );
+    expect(setAvatar).not.toHaveBeenCalled();
+  });
+
   it("allows an owner to edit through a tombstoned durable profile id", async () => {
     ensureProfileForEmail.mockReturnValue(profile);
     resolveUserProfileId.mockReturnValue(profile.id);

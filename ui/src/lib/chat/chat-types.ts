@@ -2,6 +2,7 @@
  * Chat message types for the UI layer.
  */
 
+import type { MediaKind } from "@openclaw/media-core/constants";
 import type { SenderIdentity } from "./sender-label.ts";
 
 export type ChatAttachment = {
@@ -50,6 +51,7 @@ export type ChatQueueItem = {
 /** Union type for items in the chat thread */
 export type ChatItem =
   | { kind: "message"; key: string; message: unknown; duplicateCount?: number }
+  | { kind: "notice"; key: string; text: string; timestamp: number }
   | {
       kind: "divider";
       key: string;
@@ -93,6 +95,7 @@ export type MessageGroup = {
   role: string;
   senderLabel?: string | null;
   sender?: SenderIdentity;
+  replyToSender?: SenderIdentity;
   messages: Array<{ message: unknown; key: string; duplicateCount?: number }>;
   timestamp: number;
   isStreaming: boolean;
@@ -111,7 +114,7 @@ export type MessageContentItem =
       type: "attachment";
       attachment: {
         url: string;
-        kind: "image" | "audio" | "video" | "document";
+        kind: Exclude<MediaKind, "sticker" | "unknown">;
         label: string;
         mimeType?: string;
         isVoiceNote?: boolean;
@@ -170,12 +173,14 @@ export type ToolCard = {
     className?: string;
     style?: string;
     sandbox?: "strict" | "scripts";
+    boardWidgetName?: string;
     mcpApp?: {
       viewId: string;
       serverName?: string;
       toolName?: string;
       uiResourceUri?: string;
       toolCallId?: string;
+      originSessionKey?: string;
     };
   };
 };

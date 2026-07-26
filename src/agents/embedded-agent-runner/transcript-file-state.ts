@@ -27,6 +27,7 @@ type CustomEntry = Extract<SessionEntry, { type: "custom" }>;
 type CustomMessageEntry = Extract<SessionEntry, { type: "custom_message" }>;
 type LabelEntry = Extract<SessionEntry, { type: "label" }>;
 type ModelChangeEntry = Extract<SessionEntry, { type: "model_change" }>;
+type ResetEntry = Extract<SessionEntry, { type: "reset" }>;
 type SessionInfoEntry = Extract<SessionEntry, { type: "session_info" }>;
 type SessionMessageEntry = Extract<SessionEntry, { type: "message" }>;
 type ThinkingLevelChangeEntry = Extract<SessionEntry, { type: "thinking_level_change" }>;
@@ -51,6 +52,7 @@ const sessionEntryTypes = new Set<string>([
   "label",
   "message",
   "model_change",
+  "reset",
   "session_info",
   "thinking_level_change",
 ] satisfies SessionEntry["type"][]);
@@ -248,6 +250,13 @@ function isSessionEntry(entry: FileEntry): entry is SessionEntry {
         typeof candidate.tokensBefore === "number"
       );
     }
+    case "reset": {
+      const candidate = entry as Pick<ResetEntry, "firstKeptEntryId" | "reason">;
+      return (
+        (candidate.firstKeptEntryId === undefined || isString(candidate.firstKeptEntryId)) &&
+        ["new", "reset", "idle", "daily", "cron-stale"].includes(candidate.reason)
+      );
+    }
     case "custom":
       return isString((entry as { customType?: unknown }).customType);
     case "custom_message": {
@@ -420,7 +429,11 @@ function readableSessionState(fileEntries: FileEntry[]): ReadableSessionState {
           : null
         : (entry.parentId ?? null);
     let repaired = parentId === entry.parentId ? entry : ({ ...entry, parentId } as SessionEntry);
-    if (repaired.type === "compaction" && rejectedIds.has(repaired.firstKeptEntryId)) {
+    if (
+      (repaired.type === "compaction" || repaired.type === "reset") &&
+      repaired.firstKeptEntryId !== undefined &&
+      rejectedIds.has(repaired.firstKeptEntryId)
+    ) {
       // A rejected first-kept row would make compaction summaries unusable.
       // Prefer the closest readable parent, then a readable descendant on the
       // same branch, before falling back to the repaired parent.
@@ -436,7 +449,7 @@ function readableSessionState(fileEntries: FileEntry[]): ReadableSessionState {
         repaired = { ...repaired, firstKeptEntryId } as SessionEntry;
       }
     }
-    if (repaired.type !== "compaction") {
+    if (repaired.type !== "compaction" && repaired.type !== "reset") {
       for (const rejectedId of rejectedAncestors) {
         if (!firstReadableDescendantByRejectedId.has(rejectedId)) {
           firstReadableDescendantByRejectedId.set(rejectedId, repaired.id);
@@ -817,6 +830,17 @@ export class TranscriptFileState {
       tokensBefore,
       details,
       fromHook,
+    });
+  }
+
+  appendResetBoundary(reason: ResetEntry["reason"], firstKeptEntryId?: string): ResetEntry {
+    return this.appendEntry({
+      type: "reset",
+      id: generateEntryId(this.byId),
+      parentId: this.appendParentId,
+      timestamp: new Date().toISOString(),
+      reason,
+      ...(firstKeptEntryId ? { firstKeptEntryId } : {}),
     });
   }
 

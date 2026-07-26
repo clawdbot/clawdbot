@@ -1,17 +1,21 @@
 import Foundation
 
 struct TalkRealtimeClientCreateParams: Encodable {
+    var sessionKey: String?
+    var voiceSessionId: String?
     var mode = "realtime"
     var provider: String?
     var transport = "webrtc"
     var brain = "agent-consult"
     var model: String?
     var voice: String?
+    var capabilities: [String]
 }
 
 struct TalkRealtimeClientSession: Decodable {
     let provider: String
     let transport: String
+    let voiceSessionId: String?
     let clientSecret: String
     let offerUrl: String?
     let offerHeaders: [String: String]?
@@ -22,6 +26,25 @@ struct TalkRealtimeClientSession: Decodable {
     var isWebRTC: Bool {
         self.transport.caseInsensitiveCompare("webrtc") == .orderedSame
     }
+}
+
+enum TalkRealtimeTranscriptRole: String, Encodable {
+    case user
+    case assistant
+}
+
+struct TalkRealtimeTranscriptParams: Encodable {
+    let sessionKey: String
+    let voiceSessionId: String
+    let entryId: String
+    let role: TalkRealtimeTranscriptRole
+    let text: String
+    let timestamp: Double?
+}
+
+struct TalkRealtimeClientCloseParams: Encodable {
+    let sessionKey: String
+    let voiceSessionId: String
 }
 
 struct TalkRealtimeToolCallResponse: Decodable {

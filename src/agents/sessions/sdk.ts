@@ -19,6 +19,7 @@ import {
   type AgentTool,
   type ThinkingLevel,
 } from "../runtime/index.js";
+import type { AgentSessionConfig } from "./agent-session-types.js";
 import { AgentSession, type AgentSessionWriteLockRunner } from "./agent-session.js";
 import { formatNoModelsAvailableMessage } from "./auth-guidance.js";
 import { AuthStorage } from "./auth-storage.js";
@@ -119,6 +120,8 @@ export interface CreateAgentSessionOptions {
   /** Optional lock used before session-file writes or write-capable extension hooks. */
   withSessionWriteLock?: AgentSessionWriteLockRunner;
 }
+
+type CreateAgentSessionInternalOptions = Pick<AgentSessionConfig, "contextOverflowRecoveryOwner">;
 
 /** Result from createAgentSession */
 interface CreateAgentSessionResult {
@@ -276,6 +279,21 @@ function getAttributionHeaders(
  */
 export async function createAgentSession(
   options: CreateAgentSessionOptions = {},
+): Promise<CreateAgentSessionResult> {
+  return await createAgentSessionImpl(options);
+}
+
+/** Internal embedded-runner seam; keep recovery ownership out of the public session SDK. */
+export async function createAgentSessionForEmbeddedRunner(
+  options: CreateAgentSessionOptions,
+  internalOptions: CreateAgentSessionInternalOptions,
+): Promise<CreateAgentSessionResult> {
+  return await createAgentSessionImpl(options, internalOptions);
+}
+
+async function createAgentSessionImpl(
+  options: CreateAgentSessionOptions,
+  internalOptions: CreateAgentSessionInternalOptions = {},
 ): Promise<CreateAgentSessionResult> {
   const cwd = options.cwd ?? options.sessionManager?.getCwd() ?? process.cwd();
   const agentDir = options.agentDir ?? getDefaultAgentDir();
@@ -542,6 +560,7 @@ export async function createAgentSession(
     extensionRunnerRef,
     sessionStartEvent: options.sessionStartEvent,
     withSessionWriteLock: options.withSessionWriteLock,
+    contextOverflowRecoveryOwner: internalOptions.contextOverflowRecoveryOwner,
   });
   const extensionsResult = resourceLoader.getExtensions();
 

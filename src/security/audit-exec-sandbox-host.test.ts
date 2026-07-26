@@ -24,6 +24,7 @@ describe("security audit exec sandbox host findings", () => {
           },
         },
         agents: {
+          list: [{ id: "main", default: true }],
           defaults: {
             sandbox: {
               mode: "off",
@@ -50,6 +51,7 @@ describe("security audit exec sandbox host findings", () => {
           list: [
             {
               id: "ops",
+              default: true,
               tools: {
                 exec: {
                   host: "sandbox",

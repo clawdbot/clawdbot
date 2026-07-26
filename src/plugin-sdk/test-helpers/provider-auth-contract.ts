@@ -298,7 +298,10 @@ export function describeOpenAICodexProviderAuthContract(
   });
 }
 
-export function describeGithubCopilotProviderAuthContract(load: ProviderAuthContractPluginLoader) {
+export function describeGithubCopilotProviderAuthContract(
+  load: ProviderAuthContractPluginLoader,
+  defaultModel: string,
+) {
   const state = {
     authStore: { version: 1, profiles: {} } as AuthProfileStore,
   };
@@ -341,7 +344,7 @@ export function describeGithubCopilotProviderAuthContract(load: ProviderAuthCont
               },
             },
           ],
-          defaultModel: "github-copilot/claude-opus-4.7",
+          defaultModel,
         });
       } finally {
         if (previousIsTTYDescriptor) {
@@ -424,7 +427,7 @@ export function describeGithubCopilotProviderAuthContract(load: ProviderAuthCont
             },
           },
         ],
-        defaultModel: "github-copilot/claude-opus-4.7",
+        defaultModel,
       });
       // Credential is sourced from the device flow response, not from the existing
       // on-disk auth store. ensureAuthProfileStore is still called by the

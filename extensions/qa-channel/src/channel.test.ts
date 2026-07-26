@@ -510,18 +510,15 @@ describe("qa-channel plugin", () => {
       });
 
       const mediaCtx = expectDispatchedContext(dispatchedCtx) as {
-        MediaPath?: string;
-        MediaPaths?: string[];
-        MediaType?: string;
-        MediaTypes?: string[];
+        media?: Array<{ path?: string; contentType?: string }>;
       };
-      expect(typeof mediaCtx.MediaPath).toBe("string");
-      expect(path.basename(mediaCtx.MediaPath ?? "")).toMatch(
+      const media = mediaCtx.media?.[0];
+      expect(typeof media?.path).toBe("string");
+      expect(path.basename(media?.path ?? "")).toMatch(
         /^red-top-blue-bottom---[a-f0-9-]{36}\.png$/,
       );
-      expect(mediaCtx.MediaType).toBe("image/png");
-      expect(mediaCtx.MediaPaths).toEqual([mediaCtx.MediaPath]);
-      expect(mediaCtx.MediaTypes).toEqual(["image/png"]);
+      expect(media?.contentType).toBe("image/png");
+      expect(mediaCtx.media).toHaveLength(1);
     } finally {
       await harness.stop();
     }

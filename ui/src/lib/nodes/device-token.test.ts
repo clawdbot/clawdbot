@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
+  clearDeviceAuthToken,
   loadDeviceAuthToken,
   revokeDeviceToken,
   rotateDeviceToken,
@@ -55,6 +56,16 @@ const tokenParams = {
   gatewayUrl: "wss://gateway.test",
   role: "operator",
 };
+
+function storedTokenKey(): string {
+  const key = Array.from({ length: localStorage.length }, (_, index) =>
+    localStorage.key(index),
+  ).find((candidate) => candidate?.startsWith("openclaw.device.auth.v1:"));
+  if (!key) {
+    throw new Error("missing device-auth test storage key");
+  }
+  return key;
+}
 
 beforeEach(() => {
   vi.stubGlobal("localStorage", createStorageMock());
@@ -111,5 +122,47 @@ describe("device token request lifecycle", () => {
     await operation;
 
     expect(loadDeviceAuthToken(tokenParams)?.token).toBe("current-token");
+  });
+
+  it("normalizes malformed persisted scopes without breaking token loading", () => {
+    storeDeviceAuthToken({ ...tokenParams, token: "current-token", scopes: [] });
+    const key = storedTokenKey();
+    const store = JSON.parse(localStorage.getItem(key) ?? "null");
+    store.tokens.operator.scopes = "not-an-array";
+    localStorage.setItem(key, JSON.stringify(store));
+
+    expect(loadDeviceAuthToken(tokenParams)).toMatchObject({
+      token: "current-token",
+      scopes: [],
+    });
+  });
+
+  it("canonicalizes persisted role aliases before storing another token", () => {
+    storeDeviceAuthToken({ ...tokenParams, token: "operator-token", scopes: [] });
+    const key = storedTokenKey();
+    const store = JSON.parse(localStorage.getItem(key) ?? "null");
+    store.tokens = { " operator ": store.tokens.operator };
+    localStorage.setItem(key, JSON.stringify(store));
+
+    storeDeviceAuthToken({
+      ...tokenParams,
+      role: "node",
+      token: "node-token",
+      scopes: ["node.invoke"],
+    });
+
+    expect(loadDeviceAuthToken(tokenParams)?.token).toBe("operator-token");
+  });
+
+  it("removes persisted role aliases when clearing a token", () => {
+    storeDeviceAuthToken({ ...tokenParams, token: "operator-token", scopes: [] });
+    const key = storedTokenKey();
+    const store = JSON.parse(localStorage.getItem(key) ?? "null");
+    store.tokens[" operator "] = store.tokens.operator;
+    localStorage.setItem(key, JSON.stringify(store));
+
+    clearDeviceAuthToken(tokenParams);
+
+    expect(loadDeviceAuthToken(tokenParams)).toBeNull();
   });
 });

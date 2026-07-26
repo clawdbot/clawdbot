@@ -2,44 +2,9 @@
  *
  * Quick Settings now renders through the shared settings design language
  * (ui/src/styles/settings.css). This file keeps only genuinely page-specific
- * rules: the logs-page fill layout, the Simple/Advanced view toggle, the
- * advanced-view accordion nav (used by view.ts), and the documented
- * gateway-host stats-grid escape hatch.
+ * rules: the Simple/Advanced view toggle, the advanced-view accordion nav
+ * (used by view.ts), and the documented gateway-host stats-grid escape hatch.
  */
-
-.content:has(openclaw-logs-page) {
-  overflow: hidden;
-}
-
-.content:has(openclaw-logs-page) > openclaw-router-outlet {
-  display: flex;
-  flex-direction: column;
-  margin-top: 0;
-  min-height: 0;
-  height: 100%;
-  width: 100%;
-}
-
-openclaw-logs-page {
-  display: contents;
-}
-
-.content:has(openclaw-logs-page) .content-header {
-  flex: 0 0 auto;
-}
-
-.settings-workspace--fill-height .logs-card {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.settings-workspace--fill-height .log-stream {
-  flex: 1 1 auto;
-  min-height: 0;
-  max-height: none;
-}
 
 /* ── Config Accordion Nav (Advanced Settings, rendered by view.ts) ── */
 

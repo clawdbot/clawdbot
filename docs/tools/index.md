@@ -179,7 +179,7 @@ the current turn:
 
 ## Related
 
-- [Automation](/automation) for cron, tasks, heartbeat, commitments, hooks,
+- [Automation](/automation) for cron, tasks, heartbeat, hooks,
   standing orders, and Task Flow
 - [Agents](/concepts/agent) for the agent model, sessions, memory, and
   multi-agent coordination

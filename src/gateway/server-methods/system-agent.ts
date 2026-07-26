@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 // OpenClaw gateway methods host the setup/repair conversation for clients.
 import {
+  buildSystemAgentSessionInvalidatedErrorDetails,
   ErrorCodes,
   errorShape,
   validateSystemAgentChatParams,
+  validateSystemAgentChatHistoryParams,
   validateSystemAgentSetupActivateParams,
   validateSystemAgentSetupAuthStartParams,
   validateSystemAgentSetupDetectParams,
@@ -16,16 +17,27 @@ import {
   SYSTEM_AGENT_APPROVAL_TIMEOUT_MS,
   type SystemAgentApprovalRequestPayload,
 } from "../../infra/system-agent-approvals.js";
+import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { enqueueCommandInLane, setCommandLaneConcurrency } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime } from "../../runtime.js";
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
 import { resolveSystemAgentDelegationKey } from "../../system-agent/delegation-session.js";
+import {
+  acknowledgeSystemAgentGreetingDelivery,
+  buildSystemAgentGreetingQuestion,
+  loadSystemAgentGreetingFacts,
+  resolveSystemAgentGreeting,
+} from "../../system-agent/greeting.js";
 import { isSystemAgentInferenceUnavailableError } from "../../system-agent/inference-error.js";
 import { buildNewAgentWelcome } from "../../system-agent/new-agent-welcome.js";
 import { buildOnboardingWelcome } from "../../system-agent/onboarding-welcome.js";
 import { describeSystemAgentPersistentOperation } from "../../system-agent/operations.js";
-import { formatSystemAgentStartupMessage } from "../../system-agent/overview.js";
+import {
+  appendTranscriptReset,
+  appendTranscriptTurn,
+  readTranscriptTail,
+} from "../../system-agent/transcript-store.js";
 import { resolveUserPath } from "../../utils.js";
 import { WizardSession } from "../../wizard/session.js";
 import {
@@ -33,7 +45,7 @@ import {
   handlePendingApprovalRequest,
   listVisiblePendingApprovalRequests,
 } from "./approval-shared.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+import type { GatewayClient, GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 /**
@@ -42,14 +54,16 @@ import { assertValidParams } from "./validation.js";
  * the pre-inference phase; a new chat session starts only after a live model
  * turn succeeds.
  *
- * Sessions are process-local by design — OpenClaw state is an in-flight
- * conversation, not persisted data. The map is bounded; the oldest session is
- * evicted first, and `reset: true` starts a session over explicitly.
+ * The bounded session map owns only in-flight wizard and approval state. The
+ * sanitized conversation is a durable machine-wide logbook; `reset: true`
+ * replaces the in-memory session without deleting that transcript.
  */
 export type SystemAgentChatSession =
   GatewayRequestContext["systemAgentSessions"] extends Map<string, infer Session> ? Session : never;
 
 const MAX_SYSTEM_AGENT_SESSIONS = 8;
+const SYSTEM_AGENT_SEED_HISTORY_LIMIT = 30;
+const DEFAULT_SYSTEM_AGENT_HISTORY_LIMIT = 100;
 const PROVIDER_AUTH_SESSION_TIMEOUT_MS = 25 * 60 * 1000;
 const PROVIDER_PREPARE_SESSION_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 const SYSTEM_AGENT_GATEWAY_EXECUTION_KEY = "gateway";
@@ -70,6 +84,15 @@ function getSystemAgentSessionQueue(
   return queue;
 }
 
+function acknowledgeDeliveredSystemAgentWelcome(session: SystemAgentChatSession): void {
+  const auditSequence = session.welcomeAuditSequence;
+  if (auditSequence === undefined) {
+    return;
+  }
+  acknowledgeSystemAgentGreetingDelivery({ auditSequence });
+  delete session.welcomeAuditSequence;
+}
+
 async function runSystemAgentGatewayTask<T>(task: () => Promise<T>): Promise<T> {
   // Track every accepted RPC as active, never queued: restart draining snapshots
   // active ids, so a queued OpenClaw request could otherwise outlive its socket.
@@ -80,6 +103,30 @@ async function runSystemAgentGatewayTask<T>(task: () => Promise<T>): Promise<T> 
     // setup writes atomic with respect to other OpenClaw gateway requests.
     systemAgentGatewayExecutionQueue.enqueue(SYSTEM_AGENT_GATEWAY_EXECUTION_KEY, task),
   );
+}
+
+function resolveSystemAgentSessionOwnerKey(params: {
+  delegation?: { agentId?: string; sessionKey?: string };
+  client: GatewayClient | null;
+}): string | undefined {
+  const delegationKey = resolveSystemAgentDelegationKey(params.delegation);
+  if (delegationKey !== undefined) {
+    // Delegation is the host-only, cross-connection owner asserted by the regular-agent
+    // tool path. Keep its agent/session tuple authoritative across gateway reconnects.
+    return delegationKey;
+  }
+  // Authenticated users survive reconnects and may span paired devices. Otherwise
+  // bind to the verified device, with the server-issued connection as a last resort.
+  const userId = params.client?.authenticatedUserId?.trim();
+  if (userId) {
+    return `user:${userId}`;
+  }
+  const deviceId = params.client?.connect.device?.id.trim();
+  if (deviceId) {
+    return `device:${deviceId}`;
+  }
+  const connId = params.client?.connId?.trim();
+  return connId ? `connection:${connId}` : undefined;
 }
 
 let systemAgentSetupActivationInProgress = false;
@@ -125,6 +172,15 @@ async function evictOldestSession(
     }
     await oldest?.engine.dispose();
     sessions.delete(oldestKey);
+  }
+}
+
+function persistEngineHistory(engine: SystemAgentChatSession["engine"], startIndex: number): void {
+  const at = Date.now();
+  for (const turn of engine.historySince(startIndex)) {
+    // Engine history is authoritative here: sensitive user text has already
+    // been replaced by the mask marker before it crosses this boundary.
+    appendTranscriptTurn({ ...turn, at });
   }
 }
 
@@ -199,6 +255,23 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     respond(
       true,
       manager ? listVisiblePendingApprovalRequests({ manager, client }) : [],
+      undefined,
+    );
+  },
+  "openclaw.chat.history": ({ params, respond }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSystemAgentChatHistoryParams,
+        "openclaw.chat.history",
+        respond,
+      )
+    ) {
+      return;
+    }
+    respond(
+      true,
+      { turns: readTranscriptTail(params.limit ?? DEFAULT_SYSTEM_AGENT_HISTORY_LIMIT) },
       undefined,
     );
   },
@@ -418,7 +491,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       );
     }
   },
-  "openclaw.chat": async ({ params, respond, context }) => {
+  "openclaw.chat": async ({ params, respond, client, context }) => {
     if (!assertValidParams(params, validateSystemAgentChatParams, "openclaw.chat", respond)) {
       return;
     }
@@ -429,9 +502,20 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       // it, concurrent first messages can create competing engines and lose
       // conversation state when the later initializer replaces the first.
       await getSystemAgentSessionQueue(sessions).enqueue(sessionId, async () => {
-        const delegationKey = resolveSystemAgentDelegationKey(params.delegation);
+        const ownerKey = resolveSystemAgentSessionOwnerKey({
+          delegation: params.delegation,
+          client,
+        });
+        if (!ownerKey) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, "OpenClaw caller identity unavailable."),
+          );
+          return;
+        }
         const boundSession = sessions.get(sessionId);
-        if (boundSession && boundSession.delegationKey !== delegationKey) {
+        if (boundSession && boundSession.ownerKey !== ownerKey) {
           respond(
             false,
             undefined,
@@ -451,6 +535,8 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           await existing?.engine.dispose();
         }
         let session = sessions.get(sessionId);
+        let greetingAuditSequence: number | undefined;
+        const welcomeOnly = params.message === undefined || !params.message.trim();
         if (!session) {
           const inference = params.delegation
             ? await import("../../system-agent/inference-fallback.js").then(
@@ -482,6 +568,16 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             verifiedInference: inference.binding,
             operatorApprovalOnly: params.delegation !== undefined,
           });
+          // `reset: true` keeps the durable logbook but deliberately starts
+          // model context clean; only ordinary fresh sessions receive its tail.
+          if (!params.reset) {
+            engine.seedHistory(
+              readTranscriptTail(SYSTEM_AGENT_SEED_HISTORY_LIMIT, { afterLastReset: true }).map(
+                ({ role, text }) => ({ role, text }),
+              ),
+            );
+          }
+          const welcomeHistoryStart = engine.historyLength();
           let welcome: string;
           let welcomeQuestion: SystemAgentChatQuestion | undefined;
           try {
@@ -492,7 +588,18 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             } else if (params.welcomeVariant === "new-agent") {
               welcome = buildNewAgentWelcome({ engine });
             } else {
-              welcome = formatSystemAgentStartupMessage(await engine.loadOverview());
+              const overview = await engine.loadOverview();
+              const facts = loadSystemAgentGreetingFacts();
+              greetingAuditSequence = facts.auditSequence;
+              welcome = (
+                await resolveSystemAgentGreeting({
+                  overview,
+                  facts,
+                  planner: (plannerParams) => engine.planGreeting(plannerParams),
+                  allowInference: welcomeOnly,
+                })
+              ).text;
+              welcomeQuestion = buildSystemAgentGreetingQuestion(overview, facts);
               engine.noteAssistantMessage(welcome);
             }
           } catch (error) {
@@ -503,16 +610,23 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, error.message));
             return;
           }
+          if (params.reset) {
+            appendTranscriptReset();
+          }
+          persistEngineHistory(engine, welcomeHistoryStart);
           await evictOldestSession(sessions, context);
           session = {
             engine,
             welcome,
             ...(welcomeQuestion ? { welcomeQuestion } : {}),
+            ...(greetingAuditSequence !== undefined
+              ? { welcomeAuditSequence: greetingAuditSequence }
+              : {}),
             lastUsedAt: Date.now(),
-            delegationKey,
+            ownerKey,
           };
           sessions.set(sessionId, session);
-          if (params.message === undefined || !params.message.trim()) {
+          if (welcomeOnly) {
             respond(
               true,
               {
@@ -523,10 +637,12 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
               },
               undefined,
             );
+            acknowledgeDeliveredSystemAgentWelcome(session);
             return;
           }
         }
         session.lastUsedAt = Date.now();
+        // Inline check (not `welcomeOnly`) so TS narrows params.message below.
         if (params.message === undefined || !params.message.trim()) {
           respond(
             true,
@@ -538,18 +654,22 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             },
             undefined,
           );
+          acknowledgeDeliveredSystemAgentWelcome(session);
           return;
         }
+        const historyStart = session.engine.historyLength();
         let reply: Awaited<ReturnType<SystemAgentChatEngine["handle"]>>;
         try {
           reply = await session.engine.handle(params.message);
         } catch (error) {
+          persistEngineHistory(session.engine, historyStart);
           if (!isSystemAgentInferenceUnavailableError(error)) {
             throw error;
           }
           // A failed inference turn invalidates this conversation. Remove the
           // exact engine before cleanup so a retry must pass the live gate and
           // cannot resume partial proposal or CLI-session state.
+          // Initialization failures stay unmarked because no live session existed.
           if (sessions.get(sessionId)?.engine === session.engine) {
             sessions.delete(sessionId);
           }
@@ -558,9 +678,16 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           } catch {
             // The inference error is authoritative; cleanup stays best-effort.
           }
-          respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, error.message));
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.UNAVAILABLE, error.message, {
+              details: buildSystemAgentSessionInvalidatedErrorDetails(),
+            }),
+          );
           return;
         }
+        persistEngineHistory(session.engine, historyStart);
         // The TUI-only "open-tui" handoff becomes a client-visible "open-agent"
         // signal: the app should move the user to their normal agent chat.
         const action =
@@ -603,6 +730,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
               ? { agentId: reply.handoff.agentId }
               : {}),
             ...(reply.sensitive === true ? { sensitive: true } : {}),
+            ...(reply.wizardInputPending === true ? { wizardInputPending: true } : {}),
             ...(reply.question ? { question: reply.question } : {}),
             ...(proposalId ? { needsApproval: true, proposalId } : {}),
           },

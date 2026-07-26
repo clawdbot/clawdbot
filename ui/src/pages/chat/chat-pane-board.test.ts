@@ -9,12 +9,21 @@ import {
   type BoardCommandEvent,
   type BoardProvider,
 } from "../../lib/board/provider.ts";
+import type { ObserverDigestHistory } from "../../lib/observer-digest.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import "./chat-pane.ts";
+import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import type { ChatPageHost } from "./chat-state.ts";
+import {
+  detachPanelToColumn,
+  mergePanelIntoColumn,
+  openSlot,
+  type SidebarLayout,
+} from "./sidebar-layout.ts";
 
 type TestChatPane = HTMLElement & {
+  boardChatDockSize: { height: number };
   boardProvider?: BoardProvider;
   connectedClient: GatewayBrowserClient | null;
   connectionGeneration: number;
@@ -22,14 +31,27 @@ type TestChatPane = HTMLElement & {
   state: ChatPageHost;
   createSession: () => Promise<boolean>;
   resetConfirmationOpen: boolean;
+  observerDigestHistory: ObserverDigestHistory;
   confirmConversationReset: () => Promise<boolean>;
   settleResetConfirmation: (confirmed: boolean) => void;
   updated: () => void;
   handleBoardCommand: (event: BoardCommandEvent) => void;
   handleBoardDockChange: (dock: "bottom" | "hidden" | "left" | "right") => void;
+  handleBoardDockResize: (
+    dock: "bottom" | "left" | "right",
+    event: CustomEvent<{ splitRatio: number }>,
+  ) => void;
+  commitSidebarPanelMove: (
+    layout: SidebarLayout,
+    panelId: string,
+    targetSide: "left" | "right",
+    board: ResolvedBoardView,
+  ) => void;
+  syncChatSidebarForDock: (dock: "bottom" | "hidden" | "left" | "right") => boolean;
   persistBoardSessionView: (patch: { face?: "chat" | "dashboard"; activeTabId?: string }) => void;
   resolveBoardProvider: () => BoardProvider;
-  resolveBoardView: () => { activeTabId: string; dock: string; face: string };
+  refreshBuiltinBoardSnapshot: () => void;
+  resolveBoardView: () => ResolvedBoardView;
 };
 
 type MockProvider = BoardProvider & { emitCommand(command: BoardCommandEvent["command"]): void };
@@ -39,7 +61,7 @@ function mockBoardProvider(sessionKey: string): MockProvider {
 }
 
 function nullBoardProvider(sessionKey: string): BoardProvider {
-  document.querySelector("script[data-openclaw-control-ui-mock-gateway]")?.remove();
+  window.history.replaceState({}, "", "/");
   return boardProviderForSession(sessionKey);
 }
 
@@ -49,7 +71,7 @@ function createTestPane(sessions: SessionCapability = {} as SessionCapability) {
   Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
   pane.context = {
     sessions,
-    gateway: { snapshot: { client, connected: true } },
+    gateway: { snapshot: { client, phase: "connected" } },
   } as unknown as ApplicationContext;
   pane.state = {
     chatError: null,
@@ -64,10 +86,20 @@ function createTestPane(sessions: SessionCapability = {} as SessionCapability) {
     renderLifecycle: { afterCommit: () => () => {}, invalidate: () => {} },
     requestUpdate: vi.fn(),
     sessionKey: "agent:main:current",
+    sidebarFocusPanelId: "",
+    sidebarFocusVersion: 0,
+    sidebarLayout: { columns: [] },
     sessions,
     sessionsError: null,
     sessionsLoading: false,
   } as unknown as ChatPageHost;
+  pane.state.updateSidebarLayout = (layout) => {
+    pane.state.sidebarLayout = layout;
+  };
+  pane.state.updateSidebarActivePanel = (panelId) => {
+    pane.state.sidebarFocusPanelId = panelId;
+    pane.state.sidebarFocusVersion += 1;
+  };
   pane.connectedClient = client;
   pane.connectionGeneration = 1;
   return pane;
@@ -76,19 +108,43 @@ function createTestPane(sessions: SessionCapability = {} as SessionCapability) {
 beforeEach(() => {
   vi.stubGlobal("localStorage", createStorageMock());
   vi.stubGlobal("sessionStorage", createStorageMock());
-  const marker = document.createElement("script");
-  marker.dataset.openclawControlUiMockGateway = "";
-  document.head.append(marker);
+  window.history.replaceState({}, "", "/?mockBoard=1");
 });
 
 afterEach(() => {
-  document.querySelector("script[data-openclaw-control-ui-mock-gateway]")?.remove();
+  window.history.replaceState({}, "", "/");
   localStorage.clear();
   sessionStorage.clear();
   vi.unstubAllGlobals();
 });
 
 describe("chat pane board shell", () => {
+  it("adds the observer-only board face without replacing the default chat face", async () => {
+    const pane = createTestPane();
+    pane.boardProvider = nullBoardProvider("agent:main:observer-only");
+    pane.state.sessionKey = "agent:main:observer-only";
+    pane.observerDigestHistory.record({
+      sessionKey: "agent:main:observer-only",
+      runId: "run-1",
+      revision: 1,
+      updatedAt: 1_000,
+      headline: "Reviewing the board tests",
+      health: "on-track",
+    });
+
+    pane.refreshBuiltinBoardSnapshot();
+
+    await vi.waitFor(() =>
+      expect(pane.resolveBoardView()).toMatchObject({
+        activeTabId: "builtin-observer",
+        face: "chat",
+        hasBoard: true,
+      }),
+    );
+    pane.persistBoardSessionView({ face: "dashboard" });
+    expect(pane.resolveBoardView().face).toBe("dashboard");
+  });
+
   it("gates New Chat when the current session has a board", async () => {
     const sessions = {
       create: vi.fn(async () => "agent:main:new"),
@@ -123,7 +179,7 @@ describe("chat pane board shell", () => {
     pane.state.client = client;
     pane.context = {
       ...pane.context,
-      gateway: { snapshot: { client, connected: true } },
+      gateway: { snapshot: { client, phase: "connected" } },
     } as unknown as ApplicationContext;
     pane.connectedClient = client;
     pane.boardProvider = mockBoardProvider("agent:main:current");
@@ -219,12 +275,72 @@ describe("chat pane board shell", () => {
     pane.handleBoardDockChange("left");
     pane.handleBoardDockChange("hidden");
 
+    expect(
+      pane.state.sidebarLayout.columns.flatMap((column) =>
+        column.panels.map((panel) => panel.slot),
+      ),
+    ).toContain("chat");
+
     const reloadedPane = createTestPane();
     reloadedPane.boardProvider = provider;
     expect(reloadedPane.resolveBoardView()).toMatchObject({
       dock: "hidden",
       reopenDock: "left",
     });
+  });
+
+  it("updates the board dock when chat is dragged across sides", () => {
+    const pane = createTestPane();
+    const provider = mockBoardProvider("agent:main:current");
+    pane.boardProvider = provider;
+    const renderedLayout = openSlot({ columns: [] }, "chat", "left");
+    pane.state.sidebarLayout = { columns: [] };
+    const chatPanel = renderedLayout.columns[0]!.panels[0]!;
+    const moved = detachPanelToColumn(renderedLayout, chatPanel.id, "right", 0);
+    const board = { ...pane.resolveBoardView(), dock: "left" as const };
+
+    pane.commitSidebarPanelMove(moved, chatPanel.id, "right", board);
+
+    expect(pane.state.sidebarLayout.columns[0]?.side).toBe("right");
+    expect(pane.resolveBoardView().dock).toBe("right");
+  });
+
+  it("persists the moved panel as the collapsed active panel", () => {
+    const pane = createTestPane();
+    const renderedLayout = openSlot(openSlot({ columns: [] }, "detail"), "discussion");
+    pane.state.sidebarLayout = renderedLayout;
+    const discussionPanel = renderedLayout.columns[1]!.panels[0]!;
+    const moved = mergePanelIntoColumn(
+      renderedLayout,
+      discussionPanel.id,
+      renderedLayout.columns[0]!.id,
+      0,
+    );
+
+    pane.commitSidebarPanelMove(moved, discussionPanel.id, "right", pane.resolveBoardView());
+
+    // The collapsed layout reads this separate selection, so a drag must update it
+    // or the narrow view foregrounds a stale panel after resizing.
+    expect(pane.state.sidebarFocusPanelId).toBe(discussionPanel.id);
+  });
+
+  it("activates an existing tabbed chat panel when reopening a side dock", () => {
+    const pane = createTestPane();
+    const withChat = openSlot(openSlot({ columns: [] }, "chat"), "discussion");
+    const chatPanel = withChat.columns[0]!.panels[0]!;
+    const discussionPanel = withChat.columns[1]!.panels[0]!;
+    pane.state.sidebarLayout = mergePanelIntoColumn(
+      withChat,
+      discussionPanel.id,
+      withChat.columns[0]!.id,
+      1,
+    );
+    pane.state.sidebarLayout.columns[0]!.activePanelId = discussionPanel.id;
+
+    expect(pane.syncChatSidebarForDock("right")).toBe(true);
+
+    expect(pane.state.sidebarLayout.columns[0]?.activePanelId).toBe(chatPanel.id);
+    expect(pane.state.sidebarFocusPanelId).toBe(chatPanel.id);
   });
 
   it("restores one board view across equivalent main session keys", () => {
@@ -317,9 +433,6 @@ describe("chat pane board shell", () => {
   });
 
   it("resolves configured main aliases before selecting a provider", () => {
-    const marker = document.createElement("script");
-    marker.dataset.openclawControlUiMockGateway = "";
-    document.head.append(marker);
     const pane = createTestPane();
     pane.state.sessionKey = "primary";
     pane.context = {
@@ -342,6 +455,106 @@ describe("chat pane board shell", () => {
     };
 
     expect(pane.resolveBoardProvider().snapshot$.value.sessionKey).toBe("agent:work:primary");
-    marker.remove();
+  });
+
+  it("enables MCP App pinning only when app-view and put methods are both advertised", () => {
+    window.history.replaceState({}, "", "/");
+    const cases = [
+      { suffix: "put-only", methods: ["board.get", "board.widget.put"], expected: false },
+      { suffix: "view-only", methods: ["board.get", "board.widget.appView"], expected: false },
+      {
+        suffix: "complete",
+        methods: ["board.get", "board.widget.appView", "board.widget.put"],
+        expected: true,
+      },
+    ];
+
+    for (const testCase of cases) {
+      const pane = createTestPane();
+      const sessionKey = `agent:main:${testCase.suffix}`;
+      const client = {
+        request: vi.fn(async () => ({ sessionKey, revision: 0, tabs: [], widgets: [] })),
+        addEventListener: vi.fn(() => () => {}),
+      } as unknown as GatewayBrowserClient;
+      pane.state.sessionKey = sessionKey;
+      pane.context = {
+        ...pane.context,
+        gateway: {
+          ...pane.context.gateway,
+          snapshot: {
+            client,
+            phase: "connected",
+            hello: { features: { methods: testCase.methods } },
+          } as never,
+        },
+      };
+
+      expect(pane.resolveBoardProvider().canPinMcpApps).toBe(testCase.expected);
+    }
+  });
+
+  it.each([
+    {
+      profile: "read-only",
+      scopes: ["operator.read"],
+      canMutate: false,
+      canGrant: false,
+    },
+    {
+      profile: "writer with approvals",
+      scopes: ["operator.read", "operator.write", "operator.approvals"],
+      canMutate: true,
+      canGrant: true,
+    },
+  ])("derives board actions from the $profile connection scopes", (profile) => {
+    window.history.replaceState({}, "", "/");
+    const pane = createTestPane();
+    const sessionKey = `agent:main:scope-${profile.profile.replaceAll(" ", "-")}`;
+    const client = {
+      request: vi.fn(async () => ({ sessionKey, revision: 0, tabs: [], widgets: [] })),
+      addEventListener: vi.fn(() => () => {}),
+    } as unknown as GatewayBrowserClient;
+    pane.state.sessionKey = sessionKey;
+    pane.context = {
+      ...pane.context,
+      gateway: {
+        ...pane.context.gateway,
+        snapshot: {
+          client,
+          phase: "connected",
+          hello: {
+            auth: { role: "operator", scopes: profile.scopes },
+            features: {
+              methods: ["board.get", "board.widget.appView", "board.widget.put"],
+              capabilities: ["board-widget-put-canvas-doc"],
+            },
+          },
+        } as never,
+      },
+    };
+
+    const provider = pane.resolveBoardProvider();
+    expect(provider.canMutate).toBe(profile.canMutate);
+    expect(provider.canGrant).toBe(profile.canGrant);
+    expect(provider.canPinWidgets).toBe(profile.canMutate);
+    expect(provider.canPinMcpApps).toBe(profile.canMutate);
+  });
+
+  it("persists bottom chat dock resizing across pane recreation", () => {
+    const pane = createTestPane();
+    const previous = document.createElement("div");
+    const divider = document.createElement("div");
+    const next = document.createElement("div");
+    previous.getBoundingClientRect = () => ({ height: 650 }) as DOMRect;
+    next.getBoundingClientRect = () => ({ height: 350 }) as DOMRect;
+    const container = document.createElement("div");
+    container.append(previous, divider, next);
+    divider.addEventListener("resize", (event) => {
+      pane.handleBoardDockResize("bottom", event as unknown as CustomEvent<{ splitRatio: number }>);
+    });
+    divider.dispatchEvent(new CustomEvent("resize", { detail: { splitRatio: 0.65 } }));
+
+    const recreated = createTestPane();
+    expect(recreated.boardChatDockSize.height).toBe(350);
   });
 });

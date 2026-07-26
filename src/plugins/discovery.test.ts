@@ -557,6 +557,39 @@ describe("discoverOpenClawPlugins", () => {
     });
   });
 
+  it("recognizes the validated manifest id of an explicitly configured plugin file", async () => {
+    const stateDir = makeTempDir();
+    const coreDir = path.join(stateDir, "configured-plugins", "acme-core");
+    const coreEntry = path.join(coreDir, "index.ts");
+    mkdirSafe(coreDir);
+    writePluginManifest({ pluginDir: coreDir, id: "acme-core" });
+    writePluginEntry(coreEntry);
+
+    const dependentDir = path.join(stateDir, "extensions", "acme-addon");
+    createPackagePluginWithEntry({
+      packageDir: dependentDir,
+      packageName: "@acme/acme-addon",
+      pluginId: "acme-addon",
+    });
+    writePluginManifest({
+      pluginDir: dependentDir,
+      id: "acme-addon",
+      requiresPlugins: ["acme-core"],
+    });
+
+    const result = await discoverWithStateDir(stateDir, { extraPaths: [coreEntry] });
+
+    expectCandidatePresence(result, {
+      present: ["index", "acme-addon"],
+      absent: ["acme-core"],
+    });
+    expectNoDiagnostic({
+      diagnostics: result.diagnostics,
+      pluginId: "acme-addon",
+      messageIncludes: 'requires plugin "acme-core"',
+    });
+  });
+
   it.skipIf(!canCreateDirectorySymlinks)(
     "discovers symlinked plugin directories in global roots",
     async () => {
@@ -762,73 +795,6 @@ describe("discoverOpenClawPlugins", () => {
 
     expectCandidateOrder(candidates, ["real-plugin"]);
     expect(diagnostics).toStrictEqual([]);
-  });
-
-  it("ignores packaged bundled plugin paths in configured load paths", () => {
-    const stateDir = makeTempDir();
-    const packageRoot = path.join(stateDir, "node_modules", "openclaw");
-    const bundledRoot = path.join(packageRoot, "dist", "extensions");
-    const bundledPluginDir = path.join(bundledRoot, "feishu");
-    mkdirSafe(bundledPluginDir);
-    writePluginManifest({ pluginDir: bundledPluginDir, id: "feishu" });
-    writePluginEntry(path.join(bundledPluginDir, "index.js"));
-
-    const { candidates, diagnostics } = withOpenClawPackageArgv(packageRoot, () =>
-      discoverOpenClawPlugins({
-        extraPaths: [bundledPluginDir],
-        env: {
-          ...buildDiscoveryEnv(stateDir),
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-          OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
-        },
-      }),
-    );
-
-    expectCandidateFields(findCandidateById(candidates, "feishu"), { origin: "bundled" });
-    expect(countMatching(candidates, (candidate) => candidate.idHint === "feishu")).toBe(1);
-    expect(diagnostics).toHaveLength(1);
-    expectDiagnostic({
-      diagnostics,
-      level: "warn",
-      source: bundledPluginDir,
-      messageIncludes: "ignored plugins.load.paths entry",
-    });
-  });
-
-  it("ignores legacy bundled plugin load paths that would shadow packaged bundled plugins", () => {
-    const stateDir = makeTempDir();
-    const packageRoot = path.join(stateDir, "node_modules", "openclaw");
-    const bundledRoot = path.join(packageRoot, "dist-runtime", "extensions");
-    const bundledPluginDir = path.join(bundledRoot, "telegram");
-    const legacyPluginDir = path.join(packageRoot, "extensions", "telegram");
-    mkdirSafe(bundledPluginDir);
-    mkdirSafe(legacyPluginDir);
-    mkdirSafe(path.join(packageRoot, "dist", "extensions"));
-    writePluginManifest({ pluginDir: bundledPluginDir, id: "telegram" });
-    writePluginManifest({ pluginDir: legacyPluginDir, id: "telegram" });
-    writePluginEntry(path.join(bundledPluginDir, "index.js"));
-    writePluginEntry(path.join(legacyPluginDir, "index.js"));
-
-    const { candidates, diagnostics } = withOpenClawPackageArgv(packageRoot, () =>
-      discoverOpenClawPlugins({
-        extraPaths: [legacyPluginDir],
-        env: {
-          ...buildDiscoveryEnv(stateDir),
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-          OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
-        },
-      }),
-    );
-
-    expectCandidateFields(findCandidateById(candidates, "telegram"), { origin: "bundled" });
-    expect(countMatching(candidates, (candidate) => candidate.idHint === "telegram")).toBe(1);
-    expect(diagnostics).toHaveLength(1);
-    expectDiagnostic({
-      diagnostics,
-      level: "warn",
-      source: legacyPluginDir,
-      messageIncludes: "legacy bundled plugin directory",
-    });
   });
 
   it("discovers bind-mounted bundled source overlays before packaged dist bundles", () => {
@@ -1581,7 +1547,7 @@ describe("discoverOpenClawPlugins", () => {
       pluginId: "future-channel",
       source: path.join(pluginDir, "package.json"),
       messageIncludes:
-        "plugin requires plugin API >=2026.5.27-beta.2, but this host is 2026.5.27-beta.1; skipping discovery",
+        'plugin requires plugin API >=2026.5.27-beta.2, but this host is 2026.5.27-beta.1; skipping discovery (check "openclaw --version", OPENCLAW_COMPATIBILITY_HOST_VERSION, or run "openclaw doctor")',
     });
   });
 
@@ -1617,7 +1583,7 @@ describe("discoverOpenClawPlugins", () => {
       pluginId: "malformed-channel",
       source: path.join(pluginDir, "package.json"),
       messageIncludes:
-        "invalid package plugin API metadata: package.json openclaw.compat.pluginApi must be a string; skipping discovery",
+        "invalid package plugin API metadata: package.json openclaw.compat.pluginApi must be a string; skipping discovery (check package.json openclaw.compat.pluginApi)",
     });
   });
 

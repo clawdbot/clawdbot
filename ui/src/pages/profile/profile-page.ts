@@ -138,13 +138,14 @@ export class ProfilePage extends OpenClawLightDomElement {
 
   private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
     const clientChanged = snapshot.client !== this.client;
-    const becameConnected = snapshot.connected && !this.connected;
-    const nextSelfUser = snapshot.connected
-      ? resolveCurrentSelfUser({ snapshotUser: snapshot.selfUser })
-      : null;
+    const becameConnected = snapshot.phase === "connected" && !this.connected;
+    const nextSelfUser =
+      snapshot.phase === "connected"
+        ? resolveCurrentSelfUser({ snapshotUser: snapshot.selfUser })
+        : null;
     const selfProfileChanged = nextSelfUser?.id !== this.selfUser?.id;
     this.client = snapshot.client;
-    this.connected = snapshot.connected;
+    this.connected = snapshot.phase === "connected";
     this.selfUser = nextSelfUser;
     if (clientChanged) {
       // Never keep one gateway's stats on screen while another gateway loads
@@ -167,7 +168,7 @@ export class ProfilePage extends OpenClawLightDomElement {
       this.identityBusy = null;
       this.identityError = null;
     }
-    if (!snapshot.connected || !snapshot.client) {
+    if (snapshot.phase !== "connected" || !snapshot.client) {
       this.profileReloadPending ||= this.loading;
       this.requestId += 1;
       this.clearRefreshTimer();
@@ -310,14 +311,16 @@ export class ProfilePage extends OpenClawLightDomElement {
     this.identityLoading = true;
     this.identityError = null;
     try {
-      const result = await client.request<UsersSelfResult>("users.self", {});
+      const result = await client.request<Partial<UsersSelfResult> | null>("users.self", {});
       if (requestId !== this.identityRequestId) {
         return;
       }
-      this.ownProfile = result.profile;
-      this.displayName = hasUnsavedDisplayName
-        ? displayNameDraft
-        : (result.profile.displayName ?? "");
+      const profile = result?.profile;
+      if (!profile) {
+        return;
+      }
+      this.ownProfile = profile;
+      this.displayName = hasUnsavedDisplayName ? displayNameDraft : (profile.displayName ?? "");
     } catch (error) {
       if (requestId === this.identityRequestId) {
         this.identityError = toIdentityErrorMessage(error);
@@ -436,24 +439,32 @@ export class ProfilePage extends OpenClawLightDomElement {
       return nothing;
     }
     if (!this.ownProfile) {
+      // users.self is the idempotent gateway-owned profile ensure path. Retrying
+      // keeps profile ids and authenticated email linkage authoritative server-side.
+      const emptyState = this.identityLoading
+        ? t("profilePage.identity.loading")
+        : this.identityError
+          ? this.identityError
+          : html`<div class="profile-identity-empty">
+              <span>${t("profilePage.identity.notSet")}</span>
+              <button type="button" class="btn btn--sm" @click=${() => void this.loadIdentity()}>
+                ${t("profilePage.identity.setIdentity")}
+              </button>
+            </div>`;
       return html`<div id=${PROFILE_SETTINGS_TARGET_IDS.identity}>
         ${renderSettingsSection(
           { title: t("profilePage.identity.title") },
-          renderSettingsEmpty(
-            this.identityLoading
-              ? t("profilePage.identity.loading")
-              : (this.identityError ?? t("profilePage.identity.profileUnavailable")),
-          ),
+          renderSettingsEmpty(emptyState),
         )}
       </div>`;
     }
-    const avatarUrl = this.ownProfile.hasAvatar
-      ? userProfileAvatarUrl(
-          this.context.gateway.connection.gatewayUrl,
-          this.ownProfile.id,
-          this.ownProfile.updatedAt,
-        )
-      : null;
+    // The gateway route serves an uploaded avatar first and its private Gravatar
+    // fallback second, while a 404 still leaves the viewer-avatar initials visible.
+    const avatarUrl = userProfileAvatarUrl(
+      this.context.gateway.connection.gatewayUrl,
+      this.ownProfile.id,
+      this.ownProfile.updatedAt,
+    );
     return renderIdentitySection({
       profile: this.ownProfile,
       avatarUrl,

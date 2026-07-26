@@ -477,25 +477,4 @@ describe("createChannelApprovalCapability", () => {
       native,
     });
   });
-
-  it("keeps the deprecated approvals alias as a compatibility shim", () => {
-    const delivery = { hasConfiguredDmRoute: vi.fn() };
-
-    expect(
-      createChannelApprovalCapability({
-        approvals: { delivery },
-      }),
-    ).toEqual({
-      authorizeActorAction: undefined,
-      getActionAvailabilityState: undefined,
-      getExecInitiatingSurfaceState: undefined,
-      resolveApproveCommandBehavior: undefined,
-      describeExecApprovalSetup: undefined,
-      describePluginApprovalSetup: undefined,
-      delivery,
-      nativeRuntime: undefined,
-      render: undefined,
-      native: undefined,
-    });
-  });
 });

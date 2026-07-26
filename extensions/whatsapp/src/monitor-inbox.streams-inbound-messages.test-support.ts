@@ -19,7 +19,6 @@ import {
   type InboxMonitorOptions,
   buildNotifyMessageUpsert,
   DEFAULT_ACCOUNT_ID,
-  DEFAULT_WEB_INBOX_CONFIG,
   getAuthDir,
   getSock,
   installWebMonitorInboxUnitTestHooks,
@@ -1221,41 +1220,6 @@ describe("web monitor inbox", () => {
     expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
 
     await listener.close();
-  });
-
-  it("lets configured slow socket sends complete beyond thirty seconds", async () => {
-    const onMessage = vi.fn(async () => undefined);
-    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
-      cfg: {
-        ...DEFAULT_WEB_INBOX_CONFIG,
-        web: { whatsapp: { defaultQueryTimeoutMs: 45_000 } },
-      },
-    });
-    vi.useFakeTimers();
-    try {
-      sock.sendMessage.mockImplementationOnce(
-        async () =>
-          await new Promise((resolve) => {
-            setTimeout(() => resolve({ key: { id: "slow-success" } }), 40_000);
-          }),
-      );
-
-      let settled = false;
-      const sendPromise = listener.sendMessage("+1555", "hello").finally(() => {
-        settled = true;
-      });
-
-      await vi.advanceTimersByTimeAsync(30_000);
-      expect(settled).toBe(false);
-
-      await vi.advanceTimersByTimeAsync(10_000);
-      await expect(sendPromise).resolves.toMatchObject({ messageId: "slow-success" });
-      expect(vi.getTimerCount()).toBe(0);
-      expect(sock.sendMessage).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
-      await listener.close();
-    }
   });
 
   it("rejects direct sends before Baileys sendMessage when reachout timelock is active", async () => {

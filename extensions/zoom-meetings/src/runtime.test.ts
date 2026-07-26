@@ -152,12 +152,13 @@ describe("Zoom meeting session flow", () => {
         defaultMode: "transcribe",
         chrome: { waitForInCallMs: 1 },
       }),
-      fullConfig: {},
+      fullConfig: { agents: { list: [{ id: "operator", default: true }] } },
       runtime: harness.runtime,
       logger,
     });
 
     const first = await runtime.join({ url: URL, mode: "transcribe" });
+    expect(first.session.agentId).toBe("operator");
     expect(first.session.chrome?.health).toMatchObject({ inCall: true, cameraOff: true });
 
     const reused = await runtime.join({

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
+import { qaCoverageIdSchema } from "./coverage-id.js";
 import { resolveQaRepoPath, type QaRepoPathKind } from "./repo-path.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
@@ -23,13 +24,6 @@ const qaScorecardIdSchema = z
   .trim()
   .regex(/^[a-z0-9]+(?:[.-][a-z0-9]+)*$/, {
     message: "scorecard ids must use lowercase dotted or dashed tokens",
-  });
-
-const qaCoverageIdSchema = z
-  .string()
-  .trim()
-  .regex(/^[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+$/, {
-    message: "coverage ids must use lowercase dotted tokens",
   });
 
 function isRepoRootRelativeRef(value: string) {
@@ -156,7 +150,9 @@ const qaMaturityScoresSchema = z.strictObject({
 
 const qaMaturityFeatureSchema = z.object({
   name: z.string().trim().min(1),
-  coverageIds: z.array(qaCoverageIdSchema).default([]),
+  coverageIds: z
+    .array(qaCoverageIdSchema)
+    .length(1, { message: "taxonomy features must define exactly one coverage ID" }),
   description: z.string().trim().min(1).optional(),
 });
 
@@ -255,6 +251,7 @@ const qaMaturityTaxonomySchema = z
     }
 
     const categoryIds = new Set<string>();
+    const coverageIdOwners = new Map<string, { key: string; label: string }>();
     const surfaceIds = new Set<string>();
     for (const [surfaceIndex, surface] of taxonomy.surfaces.entries()) {
       if (surfaceIds.has(surface.id)) {
@@ -277,6 +274,50 @@ const qaMaturityTaxonomySchema = z
         }
         localCategoryIds.add(category.id);
         categoryIds.add(`${surface.id}.${category.id}`);
+
+        for (const [featureIndex, feature] of category.features.entries()) {
+          const featureOwner = {
+            key: `${surfaceIndex}.${categoryIndex}.${featureIndex}`,
+            label: `${surface.id}.${category.id} feature ${feature.name}`,
+          };
+          for (const [coverageIdIndex, coverageId] of feature.coverageIds.entries()) {
+            if (!coverageId.startsWith(`${surface.id}.`)) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: [
+                  "surfaces",
+                  surfaceIndex,
+                  "categories",
+                  categoryIndex,
+                  "features",
+                  featureIndex,
+                  "coverageIds",
+                  coverageIdIndex,
+                ],
+                message: `coverage ID ${coverageId} must belong to surface ${surface.id}`,
+              });
+            }
+            const existingOwner = coverageIdOwners.get(coverageId);
+            if (existingOwner && existingOwner.key !== featureOwner.key) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: [
+                  "surfaces",
+                  surfaceIndex,
+                  "categories",
+                  categoryIndex,
+                  "features",
+                  featureIndex,
+                  "coverageIds",
+                  coverageIdIndex,
+                ],
+                message: `coverage ID ${coverageId} already belongs to ${existingOwner.label}; coverage IDs must identify exactly one taxonomy feature`,
+              });
+              continue;
+            }
+            coverageIdOwners.set(coverageId, featureOwner);
+          }
+        }
       }
     }
 

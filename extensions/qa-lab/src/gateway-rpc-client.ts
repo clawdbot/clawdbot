@@ -15,7 +15,7 @@ type QaGatewayRpcClient = {
 
 function formatQaGatewayRpcError(error: unknown, logs: () => string) {
   const details = formatErrorMessage(error);
-  return new Error(`${details}${formatQaGatewayLogsForError(logs())}`);
+  return new Error(`${details}${formatQaGatewayLogsForError(logs())}`, { cause: error });
 }
 
 function runQueuedQaGatewayRpc<T>(queue: Promise<void>, task: () => Promise<T>) {

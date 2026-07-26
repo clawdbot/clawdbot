@@ -153,11 +153,9 @@ describe("sessions_spawn tool", () => {
       agentChannel: "discord",
       agentAccountId: "default",
       config: {
-        channels: {
-          discord: {
-            threadBindings: {
-              spawnSessions: true,
-            },
+        session: {
+          threadBindings: {
+            spawnSessions: true,
           },
         },
       },
@@ -382,12 +380,26 @@ describe("sessions_spawn tool", () => {
   it("advertises visible sessions with terse UI guidance", () => {
     const tool = createSessionsSpawnTool();
     const schema = tool.parameters as {
-      properties?: { visible?: { description?: string }; worktree?: unknown };
+      properties?: Record<
+        string,
+        { anyOf?: unknown; description?: string; enum?: string[] } | undefined
+      >;
     };
 
     expect(schema.properties?.visible?.description).toBe(
-      "visible: user sees session in UI. Use when user asked or talks via web/app.",
+      "Persistent UI session; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs; unavailable with inherited tool allow/denylist.",
     );
+    expect(tool.description).toContain("`visible=true`: persistent dashboard session");
+    expect(tool.description).toContain('no `mode="run"`');
+    expect(tool.description).toContain("inherited tool allow/denylist");
+    expect(tool.description).toContain("`tools.sessions.visibility`");
+    expect(schema.properties?.runtime?.description).toContain("visible=true");
+    expect(schema.properties?.mode?.description).toContain("Omit with visible=true");
+    expect(schema.properties?.lightContext?.description).toContain("unavailable with visible=true");
+    expect(schema.properties?.attachments?.description).toContain("unavailable with visible=true");
+    expect(schema.properties?.attachAs?.description).toContain("unavailable with visible=true");
+    expect(schema.properties?.mode?.enum).toEqual(["run"]);
+    expect(schema.properties?.mode?.anyOf).toBeUndefined();
     expect(schema.properties?.worktree).toBeDefined();
   });
 
@@ -446,6 +458,7 @@ describe("sessions_spawn tool", () => {
         model: "anthropic/claude-sonnet-4-6",
         task: "inspect issue",
         parentSessionKey: "agent:main:main",
+        spawnDepth: 1,
         fork: true,
         cwd: dir,
         worktree: true,
@@ -477,7 +490,7 @@ describe("sessions_spawn tool", () => {
 
     await expect(
       tool.execute("hidden-worktree", { task: "inspect", worktree: true }),
-    ).rejects.toThrow("worktree options require visible=true");
+    ).rejects.toThrow("Parameters require visible=true: worktree");
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
@@ -515,6 +528,7 @@ describe("sessions_spawn tool", () => {
         agentId: "reviewer",
         model: "anthropic/claude-sonnet-4-6",
         parentSessionKey: "agent:main:main",
+        spawnDepth: 1,
       }),
     );
     expect(mockCallArg(callGateway, 0, 1, "sessions.create")).not.toHaveProperty("fork");
@@ -616,32 +630,32 @@ describe("sessions_spawn tool", () => {
     [
       "thinking",
       { thinking: "high" },
-      "thinking unavailable with visible=true: thinking overrides are not wired to the sessions.create path",
+      "Parameters unavailable with visible=true: thinking: thinking overrides are not wired to the sessions.create path",
     ],
     [
       "thread",
       { thread: true },
-      "thread unavailable with visible=true: visible sessions route to the dashboard, not a channel thread",
+      "Parameters unavailable with visible=true: thread: visible sessions route to the dashboard, not a channel thread",
     ],
     [
       "mode",
       { mode: "session" },
-      "mode unavailable with visible=true: visible sessions are persistent dashboard sessions",
+      "Parameters unavailable with visible=true: mode: visible sessions are persistent dashboard sessions",
     ],
     [
       "lightContext",
       { lightContext: true },
-      "lightContext unavailable with visible=true: bootstrap staging is not wired to the sessions.create path",
+      "Parameters unavailable with visible=true: lightContext: bootstrap staging is not wired to the sessions.create path",
     ],
     [
       "attachments",
       { attachments: [{ name: "note.txt", content: "hello" }] },
-      "attachments unavailable with visible=true: attachment staging is not wired to the sessions.create path",
+      "Parameters unavailable with visible=true: attachments: attachment staging is not wired to the sessions.create path",
     ],
     [
       "attachAs",
       { attachAs: { mountPath: "inputs" } },
-      "attachAs unavailable with visible=true: attachment staging is not wired to the sessions.create path",
+      "Parameters unavailable with visible=true: attachAs: attachment staging is not wired to the sessions.create path",
     ],
   ] as const)("rejects visible %s overrides with a reason", async (_name, override, message) => {
     const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main" });
@@ -649,6 +663,26 @@ describe("sessions_spawn tool", () => {
     await expect(
       tool.execute("visible-unsupported", { task: "inspect", visible: true, ...override }),
     ).rejects.toThrow(message);
+  });
+
+  it("reports every unsupported visible parameter in one error", async () => {
+    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main" });
+
+    await expect(
+      tool.execute("visible-unsupported-many", {
+        task: "inspect",
+        runtime: "acp",
+        thinking: "high",
+        thread: true,
+        mode: "run",
+        lightContext: true,
+        attachments: [{ name: "note.txt", content: "hello" }],
+        attachAs: { mountPath: "inputs" },
+        visible: true,
+      }),
+    ).rejects.toThrow(
+      'Parameters unavailable with visible=true: runtime: supports runtime="subagent" only; thinking: thinking overrides are not wired to the sessions.create path; thread: visible sessions route to the dashboard, not a channel thread; mode: visible sessions are persistent dashboard sessions; lightContext: bootstrap staging is not wired to the sessions.create path; attachments: attachment staging is not wired to the sessions.create path; attachAs: attachment staging is not wired to the sessions.create path',
+    );
   });
 
   it("denies visible sessions when tool restrictions cannot carry forward", async () => {
@@ -667,7 +701,8 @@ describe("sessions_spawn tool", () => {
 
     expect(result.details).toMatchObject({
       status: "forbidden",
-      error: "Visible sessions unavailable with inherited tool restrictions.",
+      error:
+        "Visible sessions unavailable with inherited tool restrictions. This session was spawned with a tool allow/denylist; visible sessions require an unrestricted session.",
     });
     expect(callGateway).not.toHaveBeenCalled();
   });
@@ -941,7 +976,9 @@ describe("sessions_spawn tool", () => {
       );
       await upsertSessionEntry(
         { agentId: "main", sessionKey: childKey, storePath },
-        { sessionId: "child", updatedAt: 1, parentSessionKey: "agent:main:main" },
+        // Canonical spawn-child shape: sessions.create persists explicit
+        // spawnDepth; parentSessionKey alone is UI threading and adds no depth.
+        { sessionId: "child", updatedAt: 1, spawnDepth: 1, parentSessionKey: "agent:main:main" },
       );
       const callGateway = vi.fn();
       const tool = createSessionsSpawnTool({
@@ -969,11 +1006,9 @@ describe("sessions_spawn tool", () => {
       agentChannel: "discord",
       agentAccountId: "default",
       config: {
-        channels: {
-          discord: {
-            threadBindings: {
-              spawnSessions: false,
-            },
+        session: {
+          threadBindings: {
+            spawnSessions: false,
           },
         },
       },
@@ -996,11 +1031,9 @@ describe("sessions_spawn tool", () => {
       agentChannel: "discord",
       agentAccountId: "default",
       config: {
-        channels: {
-          discord: {
-            threadBindings: {
-              spawnSessions: true,
-            },
+        session: {
+          threadBindings: {
+            spawnSessions: true,
           },
         },
       },

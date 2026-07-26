@@ -1,7 +1,7 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { isModernCohereModelId } from "./models.js";
 import { applyCohereConfig, COHERE_DEFAULT_MODEL_REF } from "./onboard.js";
-import { buildCohereProvider } from "./provider-catalog.js";
+import { buildCohereProvider, COHERE_LIVE_MODEL_DISCOVERY } from "./provider-catalog.js";
 import { createCohereCompletionsWrapper } from "./stream.js";
 
 export default defineSingleProviderPluginEntry({
@@ -31,6 +31,7 @@ export default defineSingleProviderPluginEntry({
     catalog: {
       buildProvider: buildCohereProvider,
       buildStaticProvider: buildCohereProvider,
+      liveModelDiscovery: COHERE_LIVE_MODEL_DISCOVERY,
     },
     wrapStreamFn: (ctx) => createCohereCompletionsWrapper(ctx.streamFn),
     wrapSimpleCompletionStreamFn: (ctx) => createCohereCompletionsWrapper(ctx.streamFn),

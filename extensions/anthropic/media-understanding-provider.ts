@@ -12,7 +12,7 @@ import {
 export const anthropicMediaUnderstandingProvider: MediaUnderstandingProvider = {
   id: "anthropic",
   capabilities: ["image"],
-  defaultModels: { image: "claude-opus-4-8" },
+  defaultModels: { image: "claude-opus-5" },
   autoPriority: { image: 20 },
   nativeDocumentInputs: ["pdf"],
   describeImage: describeImageWithModel,

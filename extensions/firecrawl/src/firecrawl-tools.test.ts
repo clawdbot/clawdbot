@@ -1199,6 +1199,39 @@ describe("firecrawl tools", () => {
     ).rejects.toThrow("Firecrawl Search API error: malformed JSON response");
   });
 
+  it.each([
+    ["null", "null"],
+    ["array", "[]"],
+  ])("rejects a %s Firecrawl search envelope with a stable provider error", async (kind, body) => {
+    global.fetch = vi.fn(
+      async () =>
+        new Response(body, {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    ) as typeof fetch;
+
+    await expect(
+      runActualFirecrawlSearch({
+        cfg: {
+          plugins: {
+            entries: {
+              firecrawl: {
+                config: {
+                  webSearch: {
+                    baseUrl: "https://api.firecrawl.dev",
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        query: `openclaw malformed ${kind} search`,
+        access: "keyless",
+      }),
+    ).rejects.toThrow("Firecrawl Search API error: malformed JSON response");
+  });
+
   it("bounds successful Firecrawl JSON bodies before parsing", async () => {
     const streamed = createStreamingResponse({
       chunkCount: 32,
@@ -1251,15 +1284,51 @@ describe("firecrawl tools", () => {
     ).rejects.toThrow("Firecrawl fetch failed: malformed JSON response");
   });
 
+  it.each([
+    ["null", "null"],
+    ["array", "[]"],
+  ])("rejects a %s Firecrawl scrape envelope with a stable provider error", async (kind, body) => {
+    global.fetch = vi.fn(
+      async () =>
+        new Response(body, {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    ) as typeof fetch;
+
+    await expect(
+      runActualFirecrawlScrape({
+        cfg: {
+          plugins: {
+            entries: {
+              firecrawl: {
+                config: {
+                  webFetch: {
+                    baseUrl: "https://api.firecrawl.dev",
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        url: `https://example.com/firecrawl-malformed-${kind}-scrape`,
+        extractMode: "markdown",
+        access: "keyless",
+      }),
+    ).rejects.toThrow("Firecrawl fetch failed: malformed JSON response");
+  });
+
   it("respects positive numeric overrides for scrape and cache behavior", () => {
     const cfg = {
-      tools: {
-        web: {
-          fetch: {
-            firecrawl: {
-              onlyMainContent: false,
-              maxAgeMs: 1234,
-              timeoutSeconds: 42,
+      plugins: {
+        entries: {
+          firecrawl: {
+            config: {
+              webFetch: {
+                onlyMainContent: false,
+                maxAgeMs: 1234,
+                timeoutSeconds: 42,
+              },
             },
           },
         },

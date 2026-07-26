@@ -12,6 +12,7 @@ import {
   recoverConfigFromLastKnownGood,
 } from "../config/io.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
+import { resolveCanonicalConfigPath } from "../config/paths.js";
 import type { ConfigFileSnapshot, LegacyConfigIssue } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -80,8 +81,8 @@ async function maybeMigrateLegacyConfig(): Promise<string[]> {
     return changes;
   }
 
-  const targetDir = path.join(home, ".openclaw");
-  const targetPath = path.join(targetDir, "openclaw.json");
+  const targetPath = resolveCanonicalConfigPath();
+  const targetDir = path.dirname(targetPath);
   try {
     await fs.access(targetPath);
     return changes;
@@ -424,6 +425,7 @@ export async function runDoctorConfigPreflight(
   let startupMigrationHeartbeatError: unknown;
   const startupMigrationWarnings: string[] = [];
   const cronCodexRuntimePolicyTargets: CronCodexRuntimePolicyTarget[] = [];
+  let doctorMediaPersistenceAttempted = false;
   const noteStartupStateMigrationResult = (result: {
     changes: string[];
     warnings: string[];
@@ -604,17 +606,17 @@ export async function runDoctorConfigPreflight(
             cronCodexRuntimePolicyTargets.push(...cronCodexPlan.targets);
             noteStartupStateMigrationResult({ changes: [], warnings: cronCodexPlan.warnings });
           }
-          noteStartupStateMigrationResult(
-            await autoMigrateLegacyState({
-              cfg: stateMigrationInput.cfg,
-              ...(stateMigrationInput.pluginDoctorConfig
-                ? { pluginDoctorConfig: stateMigrationInput.pluginDoctorConfig }
-                : {}),
-              env: process.env,
-              recoverCorruptTargetStore: options.recoverCorruptTargetStore,
-              doctorOnlyStateMigrations: options.doctorOnlyStateMigrations,
-            }),
-          );
+          const legacyStateResult = await autoMigrateLegacyState({
+            cfg: stateMigrationInput.cfg,
+            ...(stateMigrationInput.pluginDoctorConfig
+              ? { pluginDoctorConfig: stateMigrationInput.pluginDoctorConfig }
+              : {}),
+            env: process.env,
+            recoverCorruptTargetStore: options.recoverCorruptTargetStore,
+            doctorOnlyStateMigrations: options.doctorOnlyStateMigrations,
+          });
+          doctorMediaPersistenceAttempted = options.doctorOnlyStateMigrations === true;
+          noteStartupStateMigrationResult(legacyStateResult);
         } else if (stateMigrationInput.pluginDoctorConfig) {
           noteStartupStateMigrationResult(
             await autoMigrateLegacyPluginDoctorState({
@@ -636,7 +638,17 @@ export async function runDoctorConfigPreflight(
         );
       }
     }
-
+    if (
+      stateMigrations &&
+      stateMigrationsAllowed &&
+      freshConfigGuardAllowed &&
+      options.doctorOnlyStateMigrations === true &&
+      !doctorMediaPersistenceAttempted
+    ) {
+      noteStartupStateMigrationResult(
+        stateMigrations.migrateLegacyMediaPersistence({ env: process.env }),
+      );
+    }
     if (startupCheckpoint) {
       if (shouldRecordStartupCheckpoint) {
         if (startupMigrationHeartbeatError) {

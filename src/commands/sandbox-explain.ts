@@ -40,6 +40,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { sessionDeliveryChannel } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 
 type SandboxExplainOptions = {
@@ -113,21 +114,10 @@ function resolveActiveChannel(params: {
   entry?: SessionEntry;
   sessionKey: string;
 }): string | undefined {
-  const legacyEntry = params.entry as
-    | (SessionEntry & { lastProvider?: string; provider?: string })
-    | undefined;
-  const candidate = (
-    params.entry?.lastChannel ??
-    params.entry?.channel ??
-    // Legacy keys (pre-rename).
-    legacyEntry?.lastProvider ??
-    legacyEntry?.provider ??
-    ""
-  ).trim();
+  const candidate = (sessionDeliveryChannel(params.entry) ?? "").trim();
   const normalizedCandidate = normalizeOptionalLowercaseString(candidate);
   if (!normalizedCandidate) {
-    // Empty session-store channel fields can still be recovered from legacy key
-    // shapes, which keeps explain useful for old persisted sessions.
+    // Empty canonical delivery can still be recovered from the session key.
     return inferProviderFromSessionKey({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
@@ -209,7 +199,13 @@ export async function sandboxExplainCommand(
     normalizeOptionalString(sessionEntry?.spawnedCwd) ?? effectiveAgentWorkspaceDir;
   const workspaceLayout = resolveSandboxWorkspaceLayoutPaths({
     cfg: sandboxCfg,
-    rawSessionKey: sessionKey,
+    rawSessionKey:
+      sessionKey === "global"
+        ? buildAgentMainSessionKey({
+            agentId: resolvedAgentId,
+            mainKey: normalizeMainKey(cfg.session?.mainKey),
+          })
+        : sessionKey,
     workspaceDir: effectiveAgentWorkspaceDir,
   });
   const sandboxWorkdir = getSandboxBackendWorkdirResolver(sandboxCfg.backend)?.({
@@ -277,7 +273,7 @@ export async function sandboxExplainCommand(
   if (!elevatedAgentEnabled) {
     elevatedFailures.push({
       gate: "enabled",
-      key: "agents.list[].tools.elevated.enabled",
+      key: "agents.entries.*.tools.elevated.enabled",
     });
   }
   if (channel && globalAllowTokens.length === 0) {
@@ -289,21 +285,21 @@ export async function sandboxExplainCommand(
   if (channel && elevatedAgent?.allowFrom && agentAllowTokens.length === 0) {
     elevatedFailures.push({
       gate: "allowFrom",
-      key: `agents.list[].tools.elevated.allowFrom.${channel}`,
+      key: `agents.entries.*.tools.elevated.allowFrom.${channel}`,
     });
   }
 
   const fixIt: string[] = [];
   if (sandboxCfg.mode !== "off") {
     fixIt.push("agents.defaults.sandbox.mode=off");
-    fixIt.push("agents.list[].sandbox.mode=off");
+    fixIt.push("agents.entries.*.sandbox.mode=off");
   }
   fixIt.push("tools.sandbox.tools.allow");
   fixIt.push("tools.sandbox.tools.alsoAllow");
   fixIt.push("tools.sandbox.tools.deny");
-  fixIt.push("agents.list[].tools.sandbox.tools.allow");
-  fixIt.push("agents.list[].tools.sandbox.tools.alsoAllow");
-  fixIt.push("agents.list[].tools.sandbox.tools.deny");
+  fixIt.push("agents.entries.*.tools.sandbox.tools.allow");
+  fixIt.push("agents.entries.*.tools.sandbox.tools.alsoAllow");
+  fixIt.push("agents.entries.*.tools.sandbox.tools.deny");
   fixIt.push("tools.elevated.enabled");
   if (channel) {
     fixIt.push(`tools.elevated.allowFrom.${channel}`);

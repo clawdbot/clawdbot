@@ -14,7 +14,7 @@ function formatSchemaError(errors: Array<{ text: string }>): string {
     .join("; ");
 }
 
-function readSwarmStructuredOutput(runId: string): SwarmStructuredOutputState | undefined {
+export function peekSwarmStructuredOutput(runId: string): SwarmStructuredOutputState | undefined {
   const state = states.get(runId);
   return state ? structuredClone(state) : undefined;
 }
@@ -22,7 +22,7 @@ function readSwarmStructuredOutput(runId: string): SwarmStructuredOutputState | 
 export function consumeSwarmStructuredOutput(
   runId: string,
 ): SwarmStructuredOutputState | undefined {
-  const state = readSwarmStructuredOutput(runId);
+  const state = peekSwarmStructuredOutput(runId);
   states.delete(runId);
   return state;
 }
@@ -59,8 +59,16 @@ export function createStructuredOutputTool(params: {
     displaySummary: "Record the collector result.",
     description: `Call exactly once as {"result": ...}, where result matches this JSON Schema: ${requestedSchema}`,
     // Runtime argument validation must reach execute so invalid attempts consume
-    // the durable one-retry budget. The requested schema remains model-visible above.
-    parameters: Type.Object({ result: Type.Unknown() }, { additionalProperties: false }),
+    // the durable one-retry budget. Providers still require every tool property to
+    // declare a JSON type before they will send the request.
+    parameters: Type.Object(
+      {
+        result: Type.Unsafe({
+          type: ["object", "array", "string", "number", "boolean", "null"],
+        }),
+      },
+      { additionalProperties: false },
+    ),
     execute: async (_toolCallId, args) => {
       const prior = states.get(params.runId);
       if (prior?.structured !== undefined) {
@@ -99,7 +107,7 @@ export function createStructuredOutputTool(params: {
 }
 
 const testing = {
-  readSwarmStructuredOutput,
+  readSwarmStructuredOutput: peekSwarmStructuredOutput,
   reset() {
     states.clear();
   },

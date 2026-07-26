@@ -4,8 +4,12 @@ import {
   isHostScopedAgentToolActive,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { buildCodexUserMcpServersThreadConfigPatchForRuntime } from "openclaw/plugin-sdk/codex-mcp-projection";
+import { isIncognitoSessionKey } from "../incognito-session.js";
 import { closeCodexStartupClientBestEffort } from "./attempt-client-cleanup.js";
-import { getCodexAppServerClientInstanceId } from "./client.js";
+import {
+  getCodexAppServerClientInstanceId,
+  resolveCodexAppServerClientInstanceId,
+} from "./client.js";
 import { isSystemAgentOnlyCodexDynamicToolAllowlist } from "./dynamic-tool-profile.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
@@ -66,6 +70,8 @@ import { resolveCodexWebSearchPlan } from "./web-search.js";
 export async function startOrResumeThread(
   params: CodexStartOrResumeThreadParams,
 ): Promise<CodexAppServerThreadLifecycleBinding> {
+  const incognito = isIncognitoSessionKey(params.params.sessionKey);
+  const clientId = resolveCodexAppServerClientInstanceId(params.client);
   const bindingIdentity: CodexAppServerBindingIdentity = sessionBindingIdentity({
     sessionId: params.params.sessionId,
     sessionKey: params.params.sessionKey,
@@ -243,6 +249,7 @@ export async function startOrResumeThread(
         normalizeBindingModelProvider,
         bindingPatch: {
           cwd: params.cwd,
+          ...(clientId ? { clientId } : {}),
           // Supervised threads stay on the native user-home connection. Never
           // persist an outer OpenClaw auth profile onto that private ownership.
           authProfileId: undefined,
@@ -605,6 +612,23 @@ export async function startOrResumeThread(
           );
           await clearCurrentBinding("rotating a stale thread binding");
         }
+      } else if (incognito) {
+        if (binding.clientId && binding.clientId === clientId) {
+          // Ephemeral threads have no cold-resume source; reuse only the live client that started it.
+          params.buildFinalConfigPatch?.({ action: "resume", binding });
+          throwIfAborted();
+          lifecycleTiming.mark("thread-ready");
+          lifecycleTiming.logSummary({
+            runId: params.params.runId,
+            sessionId: params.params.sessionId,
+            sessionKey: params.params.sessionKey,
+            threadId: binding.threadId,
+            action: "resumed",
+          });
+          return { ...binding, lifecycle: { action: "resumed" } };
+        }
+        await clearCurrentBinding("rotating an unavailable ephemeral thread binding");
+        binding = undefined;
       } else {
         const resumed = await resumeExistingCodexThread(params, {
           binding,

@@ -119,6 +119,7 @@ function forkControl(forkThread: ForkThreadStub = vi.fn(async () => forkResponse
   const archiveThread = vi.fn(async () => undefined);
   const control = {
     archiveThread,
+    clientId: "client-pinned",
     connectionFingerprint: "fingerprint",
     forkThread,
   } as unknown as CodexSessionCatalogControl;
@@ -196,6 +197,55 @@ describe("forkCodexUpstreamSession", () => {
       editorText: "edit me",
     });
     expect(archiveThread).not.toHaveBeenCalled();
+  });
+
+  it("forks incognito sessions ephemerally and imports history from the live response", async () => {
+    const retainedTurn = turn("turn-1", "one");
+    boundaryMocks.listTurns.mockResolvedValueOnce([turn("turn-2", "edit me")]);
+    const forkThread = vi.fn(async () => {
+      const response = forkResponse();
+      return {
+        ...response,
+        thread: { ...response.thread, ephemeral: true, turns: [retainedTurn] },
+      };
+    });
+    const { control } = forkControl(forkThread);
+    const params = forkParams();
+    params.targetKey = "agent:main:dashboard:incognito-forked";
+    const mutate = vi.fn(async () => true);
+
+    await expect(
+      forkCodexUpstreamSession(params, {
+        bindingStore: { mutate } as unknown as CodexAppServerBindingStore,
+        control,
+        harnessRuntimeId: "codex",
+        resolveConfig: () => ({}),
+        runtime: createPluginRuntimeMock(),
+      }),
+    ).resolves.toMatchObject({ status: "created", key: params.targetKey });
+
+    expect(forkThread).toHaveBeenCalledWith({
+      threadId: "thread-source",
+      beforeTurnId: "turn-2",
+      ephemeral: true,
+      excludeTurns: false,
+    });
+    expect(boundaryMocks.listTurns).toHaveBeenCalledTimes(1);
+    expect(transcriptMocks.importHistory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: params.targetKey,
+        thread: expect.objectContaining({
+          turns: expect.arrayContaining([expect.objectContaining({ id: retainedTurn.id })]),
+        }),
+      }),
+    );
+    expect(mutate).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        kind: "set",
+        binding: expect.objectContaining({ clientId: "client-pinned" }),
+      }),
+    );
   });
 
   it("archives a fork whose read-back history proves beforeTurnId was ignored", async () => {

@@ -3,6 +3,7 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import type { AgentsListResult, GatewayAgentRow } from "../api/types.ts";
 import {
   COMMAND_PALETTE_OPEN_EVENT,
   SHELL_NAV_DRAWER_TOGGLE_EVENT,
@@ -12,6 +13,7 @@ import {
   TERMINAL_PANEL_TOGGLE_EVENT,
   UI_COMMAND_EVENT,
 } from "../components/panel-toggle-contract.ts";
+import { createStorageMock } from "../test-helpers/storage.ts";
 import "./app-host.ts";
 import type {
   ApplicationContext,
@@ -21,6 +23,7 @@ import type {
 import { shouldMergeChatChrome } from "./mobile-nav-layout.ts";
 import { navigationSurfaceIsHidden, renderFloatingUpdateCard } from "./navigation-surface.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
+import { resetServerUiPrefsSync } from "./server-prefs.ts";
 
 type AppLifecycleState = {
   loginToken: string;
@@ -34,13 +37,18 @@ type AppLifecycleState = {
 type ShellInitializationState = {
   routeState: { routeId?: string };
   ensureAgentsList: (
-    snapshot: { client: GatewayBrowserClient | null; connected: boolean },
+    snapshot: ApplicationGatewaySnapshot,
     agents: ApplicationContext["agents"],
   ) => void;
   ensureRuntimeConfig: (
-    snapshot: { client: GatewayBrowserClient | null; connected: boolean },
+    snapshot: ApplicationGatewaySnapshot,
     runtimeConfig: ApplicationContext["runtimeConfig"],
   ) => void;
+};
+
+type ShellServerPreferencesState = {
+  runtime: { context: ApplicationContext };
+  reconcileServerUiPrefs: (runtimeConfig: ApplicationContext["runtimeConfig"]) => void;
 };
 
 type ShellKeyboardState = {
@@ -73,6 +81,59 @@ type ShellApprovalLazyState = {
 type ShellUiCommandState = ShellKeyboardState & {
   handleGatewayEvent: (event: { event: string; payload: unknown }) => void;
 };
+
+function roster(defaultId: string, agents: GatewayAgentRow[]): AgentsListResult {
+  return { defaultId, mainKey: "main", scope: "per-sender", agents };
+}
+
+function createRosterRefreshContext(params: {
+  previous: AgentsListResult;
+  next: AgentsListResult;
+  selectedId: string;
+}) {
+  const agentsState = { agentsList: params.previous };
+  const selectionState = { selectedId: params.selectedId, scopeId: params.selectedId };
+  const refreshList = vi.fn(async () => {
+    agentsState.agentsList = params.next;
+    return params.next;
+  });
+  const invalidateFiles = vi.fn();
+  const invalidateIdentity = vi.fn();
+  const ensureIdentity = vi.fn(async () => undefined);
+  const setSelection = vi.fn((agentId: string) => {
+    selectionState.selectedId = agentId;
+    selectionState.scopeId = agentId;
+  });
+  const refreshConfig = vi.fn(async () => null);
+  const context = {
+    agents: {
+      state: agentsState,
+      refreshList,
+      invalidateFiles,
+    },
+    agentIdentity: {
+      invalidate: invalidateIdentity,
+      ensure: ensureIdentity,
+    },
+    agentSelection: {
+      state: selectionState,
+      set: setSelection,
+    },
+    runtimeConfig: {
+      state: { configFormDirty: false },
+      refresh: refreshConfig,
+    },
+  } as unknown as ApplicationContext;
+  return {
+    context,
+    refreshList,
+    invalidateFiles,
+    invalidateIdentity,
+    ensureIdentity,
+    setSelection,
+    refreshConfig,
+  };
+}
 
 let lazyElementSequence = 0;
 
@@ -111,6 +172,13 @@ type ShellChromeEventState = {
   disconnectedCallback: () => void;
 };
 
+function createDragEvent(type: "dragover" | "drop", types: string[]) {
+  const event = new Event(type, { bubbles: true, cancelable: true }) as DragEvent;
+  const dataTransfer = { dropEffect: "copy", types };
+  Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
+  return { dataTransfer, event };
+}
+
 type ShellSettingsSearchLoadState = {
   runtime: {
     context: ApplicationContext;
@@ -135,6 +203,7 @@ type MacosTitlebarControlsState = HTMLElement & {
 };
 
 afterEach(() => {
+  vi.useRealTimers();
   Reflect.deleteProperty(window, "webkit");
   document.documentElement.classList.remove(
     "openclaw-native-macos",
@@ -175,8 +244,7 @@ describe("OpenClaw app lifecycle", () => {
     const app = document.createElement("openclaw-app") as unknown as AppLifecycleState;
     const snapshot = {
       client: null,
-      connected: false,
-      reconnecting: false,
+      phase: "stopped",
       lastError: null,
       lastErrorCode: null,
     } as ApplicationGatewaySnapshot;
@@ -248,7 +316,7 @@ describe("OpenClaw shell source initialization", () => {
     ) as unknown as ShellInitializationState;
     shell.routeState = { routeId: "usage" };
     const client = {} as GatewayBrowserClient;
-    const snapshot = { client, connected: true };
+    const snapshot = { client, phase: "connected" } as ApplicationGatewaySnapshot;
     const firstAgents = {
       state: { agentsList: null },
       ensureList: vi.fn(() => Promise.resolve(null)),
@@ -275,6 +343,39 @@ describe("OpenClaw shell source initialization", () => {
     expect(secondAgents.ensureList).toHaveBeenCalledOnce();
     expect(firstRuntimeConfig.ensureLoaded).toHaveBeenCalledOnce();
     expect(secondRuntimeConfig.ensureLoaded).toHaveBeenCalledOnce();
+  });
+});
+
+describe("OpenClaw shell server preferences", () => {
+  it("refreshes live navigation when a sidebar preference arrives from the gateway", () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    resetServerUiPrefsSync();
+    const sidebarEntries = ["route:usage", "session:agent:main:test"];
+    const updateNavigation = vi.fn();
+    const refreshTheme = vi.fn();
+    const runtimeConfig = {
+      state: {
+        configSnapshot: {
+          config: { ui: { prefs: { sidebarEntries } } },
+          hash: "sidebar-config-hash",
+        },
+      },
+    } as unknown as ApplicationContext["runtimeConfig"];
+    const context = {
+      gateway: { connection: { gatewayUrl: "ws://sidebar.test" } },
+      navigation: { update: updateNavigation },
+      theme: { refresh: refreshTheme },
+    } as unknown as ApplicationContext;
+    const shell = document.createElement(
+      "openclaw-app-shell",
+    ) as unknown as ShellServerPreferencesState;
+    shell.runtime = { context };
+
+    shell.reconcileServerUiPrefs(runtimeConfig);
+
+    expect(updateNavigation).toHaveBeenCalledWith({ sidebarEntries });
+    expect(refreshTheme).toHaveBeenCalledOnce();
+    resetServerUiPrefsSync();
   });
 });
 
@@ -406,6 +507,46 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     addEventListener.mockRestore();
   });
 
+  it("prevents unhandled window file drops without overriding accepted targets", () => {
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellChromeEventState;
+    const acceptedDropTarget = document.createElement("div");
+    const nativeFileInput = document.createElement("input");
+    nativeFileInput.type = "file";
+    document.body.append(acceptedDropTarget, nativeFileInput);
+    shell.connectedCallback();
+
+    try {
+      for (const type of ["dragover", "drop"] as const) {
+        const unhandled = createDragEvent(type, ["Files"]);
+        window.dispatchEvent(unhandled.event);
+        expect(unhandled.event.defaultPrevented).toBe(true);
+        expect(unhandled.dataTransfer.dropEffect).toBe("none");
+
+        const accepted = createDragEvent(type, ["Files"]);
+        acceptedDropTarget.addEventListener(type, (event) => event.preventDefault(), {
+          once: true,
+        });
+        acceptedDropTarget.dispatchEvent(accepted.event);
+        expect(accepted.event.defaultPrevented).toBe(true);
+        expect(accepted.dataTransfer.dropEffect).toBe("copy");
+
+        const nativeAccepted = createDragEvent(type, ["Files"]);
+        nativeFileInput.dispatchEvent(nativeAccepted.event);
+        expect(nativeAccepted.event.defaultPrevented).toBe(false);
+        expect(nativeAccepted.dataTransfer.dropEffect).toBe("copy");
+
+        const nonFile = createDragEvent(type, ["text/plain"]);
+        window.dispatchEvent(nonFile.event);
+        expect(nonFile.event.defaultPrevented).toBe(false);
+        expect(nonFile.dataTransfer.dropEffect).toBe("copy");
+      }
+    } finally {
+      shell.disconnectedCallback();
+      acceptedDropTarget.remove();
+      nativeFileInput.remove();
+    }
+  });
+
   it("handles merged header drawer and palette requests", () => {
     vi.stubGlobal(
       "matchMedia",
@@ -473,7 +614,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       context: {
         gateway: {
           snapshot: {
-            connected: true,
+            phase: "connected",
             hello: {
               auth: { role: "operator", scopes: ["operator.admin"] },
               features: { methods: ["terminal.open", "browser.request"] },
@@ -599,6 +740,92 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     window.removeEventListener(UI_COMMAND_EVENT, uiCommandEvent);
   });
 
+  it("refreshes the roster on config.changed and invalidates removed or changed agents", async () => {
+    vi.useFakeTimers();
+    const harness = createRosterRefreshContext({
+      previous: roster("main", [
+        { id: "main", name: "Main" },
+        { id: "writer", name: "Writer" },
+        { id: "retired", name: "Retired" },
+      ]),
+      next: roster("main", [
+        { id: "main", name: "Main" },
+        { id: "writer", name: "Editor" },
+        { id: "new-agent", name: "New" },
+      ]),
+      selectedId: "main",
+    });
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellUiCommandState;
+    shell.runtime = { context: harness.context };
+
+    shell.handleGatewayEvent({ event: "config.changed", payload: {} });
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(harness.refreshConfig).toHaveBeenCalledOnce();
+    expect(harness.refreshList).toHaveBeenCalledOnce();
+    expect(harness.invalidateFiles).toHaveBeenCalledWith(["writer", "retired"]);
+    expect(harness.invalidateIdentity).toHaveBeenCalledWith(["writer", "retired"]);
+    expect(harness.ensureIdentity).toHaveBeenCalledWith(["writer"]);
+    expect(harness.setSelection).not.toHaveBeenCalled();
+  });
+
+  it("moves a deleted active agent to the refreshed roster default", async () => {
+    vi.useFakeTimers();
+    const harness = createRosterRefreshContext({
+      previous: roster("writer", [{ id: "fallback" }, { id: "main" }, { id: "writer" }]),
+      next: roster("main", [{ id: "fallback" }, { id: "main" }]),
+      selectedId: "writer",
+    });
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellUiCommandState;
+    shell.runtime = { context: harness.context };
+
+    shell.handleGatewayEvent({ event: "config.changed", payload: {} });
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(harness.setSelection).toHaveBeenCalledExactlyOnceWith("main");
+  });
+
+  it("keeps caches intact when a config.changed refresh returns the same roster", async () => {
+    vi.useFakeTimers();
+    const unchanged = roster("main", [{ id: "main", name: "Main" }, { id: "writer" }]);
+    const harness = createRosterRefreshContext({
+      previous: unchanged,
+      next: structuredClone(unchanged),
+      selectedId: "main",
+    });
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellUiCommandState;
+    shell.runtime = { context: harness.context };
+
+    shell.handleGatewayEvent({ event: "config.changed", payload: {} });
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(harness.refreshList).toHaveBeenCalledOnce();
+    expect(harness.invalidateFiles).not.toHaveBeenCalled();
+    expect(harness.invalidateIdentity).not.toHaveBeenCalled();
+    expect(harness.ensureIdentity).not.toHaveBeenCalled();
+  });
+
+  it("coalesces config.changed bursts into one roster refresh", async () => {
+    vi.useFakeTimers();
+    const unchanged = roster("main", [{ id: "main" }]);
+    const harness = createRosterRefreshContext({
+      previous: unchanged,
+      next: unchanged,
+      selectedId: "main",
+    });
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellUiCommandState;
+    shell.runtime = { context: harness.context };
+
+    shell.handleGatewayEvent({ event: "config.changed", payload: {} });
+    shell.handleGatewayEvent({ event: "config.changed", payload: {} });
+    shell.handleGatewayEvent({ event: "config.changed", payload: {} });
+    await vi.advanceTimersByTimeAsync(99);
+    expect(harness.refreshList).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(harness.refreshList).toHaveBeenCalledOnce();
+  });
+
   it("opens Settings with Shift-Command-Comma", () => {
     const navigate = vi.fn();
     const shell = document.createElement("openclaw-app-shell") as unknown as ShellKeyboardState;
@@ -611,6 +838,28 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       key: "<",
       code: "Comma",
       metaKey: true,
+      shiftKey: true,
+      cancelable: true,
+    });
+
+    shell.handleDocumentKeydown(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(navigate).toHaveBeenCalledWith("config", undefined);
+  });
+
+  it("opens Settings with Ctrl-Shift-Comma", () => {
+    const navigate = vi.fn();
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellKeyboardState;
+    shell.runtime = {
+      context: {
+        navigate,
+      } as unknown as ApplicationContext,
+    };
+    const event = new KeyboardEvent("keydown", {
+      key: "<",
+      code: "Comma",
+      ctrlKey: true,
       shiftKey: true,
       cancelable: true,
     });

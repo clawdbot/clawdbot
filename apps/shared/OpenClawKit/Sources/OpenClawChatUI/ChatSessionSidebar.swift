@@ -2,6 +2,12 @@
 import AppKit
 import SwiftUI
 
+extension ChatSessionSidebarModel.Node {
+    fileprivate var outlineChildren: [Self]? {
+        self.children.isEmpty ? nil : self.children
+    }
+}
+
 @MainActor
 struct ChatSessionSidebar: View {
     @Bindable var viewModel: OpenClawChatViewModel
@@ -25,6 +31,11 @@ struct ChatSessionSidebar: View {
             groups: self.groups,
             query: self.query)
         List(selection: self.selectionBinding) {
+            Color.clear
+                .frame(height: 8)
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.hidden)
+                .accessibilityHidden(true)
             ForEach(sections) { section in
                 if section.id.hasPrefix("group:"), let title = section.title {
                     Section {
@@ -222,7 +233,9 @@ struct ChatSessionSidebar: View {
         let isCurrentSession = self.viewModel.matchesCurrentSessionKey(
             incoming: node.session.key,
             current: self.viewModel.sessionKey)
-        if node.hasUnreadDescendant || (node.session.unread == true && !isCurrentSession) {
+        if node.children.contains(where: \.badges.hasUnread) ||
+            (node.session.unread == true && !isCurrentSession)
+        {
             Circle()
                 .fill(.tint)
                 .frame(width: 7, height: 7)
@@ -322,7 +335,9 @@ struct ChatSessionSidebar: View {
             let date = Date(timeIntervalSince1970: updatedAt / 1000)
             parts.append(date.formatted(.relative(presentation: .named)))
         }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        return ChatSessionSidebarModel.subtitle(
+            for: session,
+            workSubtitle: parts.isEmpty ? nil : parts.joined(separator: " · "))
     }
 
     private var connectionFooter: some View {

@@ -9,7 +9,7 @@
     "./runtime-api.js": "./dist/runtime-api.js"
   },
   "dependencies": {
-    "ws": "8.21.0",
+    "ws": "8.21.1",
     "zod": "4.4.3"
   },
   "devDependencies": {
@@ -31,6 +31,13 @@
     "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "clickclack",
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "CLICKCLACK_BOT_TOKEN"
+          ]
+        }
+      },
       "label": "ClickClack",
       "selectionLabel": "ClickClack",
       "detailLabel": "ClickClack Bot",
@@ -45,16 +52,19 @@
         "nativeCommandsAutoEnabled": false,
         "nativeSkillsAutoEnabled": false
       },
-      "cliAddOptions": [
-        {
-          "flags": "--code <code>",
-          "description": "ClickClack one-time setup code or setup URL"
-        },
-        {
-          "flags": "--workspace <workspace>",
-          "description": "ClickClack workspace id, slug, or name"
-        }
-      ]
+      "setup": {
+        "fields": [
+          { "key": "code", "kind": "string", "sensitive": true, "cli": { "flags": "--code <code>", "description": "ClickClack one-time setup code or setup URL" } },
+          { "key": "token", "kind": "string", "sensitive": true, "cli": { "flags": "--token <token>", "description": "ClickClack bot token" } },
+          { "key": "tokenFile", "kind": "string", "sensitive": true, "cli": { "flags": "--token-file <path>", "description": "ClickClack bot token file" } },
+          { "key": "baseUrl", "kind": "string", "cli": { "flags": "--base-url <url>", "description": "ClickClack API base URL" } },
+          { "key": "workspace", "kind": "string", "cli": { "flags": "--workspace <workspace>", "description": "ClickClack workspace id, slug, or name" } },
+          { "key": "defaultTo", "kind": "string", "cli": { "flags": "--default-to <target>", "description": "Default ClickClack target" } },
+          { "key": "allowFrom", "kind": "string-list", "cli": { "flags": "--allow-from <ids>", "description": "Allowed ClickClack senders" } },
+          { "key": "agentActivity", "kind": "boolean", "cli": { "flags": "--agent-activity", "description": "Enable ClickClack agent activity" } },
+          { "key": "useEnv", "kind": "boolean", "cli": { "flags": "--use-env", "description": "Use CLICKCLACK_BOT_TOKEN" } }
+        ]
+      }
     },
     "install": {
       "clawhubSpec": "clawhub:@openclaw/clickclack",

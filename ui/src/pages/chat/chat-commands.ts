@@ -193,17 +193,27 @@ export function shouldQueueLocalSlashCommand(name: string): boolean {
   return !["stop", "export-session", "steer", "redirect", "new"].includes(name);
 }
 
-async function confirmConversationResetForCurrentSession(
+export async function confirmConversationResetForCurrentSession(
   host: ChatCommandHost,
+  target?: { sessionKey: string; agentId?: string },
 ): Promise<"confirmed" | "cancelled" | "deferred"> {
+  const resetSessionKey = target?.sessionKey ?? host.sessionKey;
+  const targetIsCurrent = target
+    ? () => visibleSessionMatches(host, target.sessionKey, target.agentId)
+    : () =>
+        host.sessionKey === resetSessionKey ||
+        areUiSessionKeysEquivalent(host.sessionKey, resetSessionKey);
+  if (!targetIsCurrent()) {
+    return "deferred";
+  }
   if (!host.confirmConversationReset) {
     return "confirmed";
   }
-  const resetSessionKey = host.sessionKey;
-  if (!(await host.confirmConversationReset())) {
-    return "cancelled";
+  const confirmed = await host.confirmConversationReset();
+  if (!targetIsCurrent()) {
+    return target ? "deferred" : "cancelled";
   }
-  if (!areUiSessionKeysEquivalent(host.sessionKey, resetSessionKey)) {
+  if (!confirmed) {
     return "cancelled";
   }
   return host.chatRunId ? "deferred" : "confirmed";

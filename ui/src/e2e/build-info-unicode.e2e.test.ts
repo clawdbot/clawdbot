@@ -81,6 +81,7 @@ describeControlUiE2e("Control UI Unicode build identity mocked Gateway E2E", () 
     server = await startControlUiE2eServer({
       version: "2026.7.10",
       commit: "0123456789abcdef0123456789abcdef01234567",
+      commitAt: "2026-07-10T11:22:33.000Z",
       builtAt: "2026-07-10T12:34:56.000Z",
       branch: RAW_BRANCH,
       dirty: true,

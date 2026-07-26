@@ -93,6 +93,7 @@ const CronJobsScheduleKindFilterSchema = Type.Union([
   Type.Literal("every"),
   Type.Literal("cron"),
   Type.Literal("on-exit"),
+  Type.Literal("stream"),
 ]);
 const CronJobsLastRunStatusFilterSchema = Type.Union([
   Type.Literal("all"),
@@ -129,7 +130,17 @@ const CronDisplayNameSchema = Type.String({ minLength: 1, maxLength: 200, patter
 const CronOwnerSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   sessionKey: Type.Optional(NonEmptyString),
+  accountId: Type.Optional(NonEmptyString),
 });
+const CronScheduledToolPolicySchema = Type.Union([
+  closedObject({ version: Type.Literal(1), mode: Type.Literal("trusted") }),
+  closedObject({
+    version: Type.Literal(1),
+    mode: Type.Literal("account"),
+    ownerSessionKey: NonEmptyString,
+    ownerAccountId: NonEmptyString,
+  }),
+]);
 const CronAnnounceChannelSchema = Type.Union([Type.Literal("last"), NonBlankString]);
 const CronFailoverReasonSchema = Type.Union([
   Type.Literal("auth"),
@@ -227,6 +238,19 @@ const CronScheduleSchema = Type.Union([
     command: NonEmptyString,
     cwd: Type.Optional(NonEmptyString),
   }),
+  closedObject({
+    kind: Type.Literal("stream"),
+    command: Type.Array(NonEmptyString, { minItems: 1 }),
+    cwd: Type.Optional(NonEmptyString),
+    mode: Type.Optional(Type.Union([Type.Literal("line"), Type.Literal("match")])),
+    match: Type.Optional(Type.String()),
+    batchMs: Type.Optional(
+      Type.Integer({ description: "Quiet-window milliseconds; clamped to 50-5000" }),
+    ),
+    maxBatchBytes: Type.Optional(
+      Type.Integer({ description: "UTF-8 batch byte cap; clamped to 1024-65536" }),
+    ),
+  }),
 ]);
 
 /** Headless condition script evaluated before a recurring cron payload runs. */
@@ -270,6 +294,15 @@ const CronPayloadSchema = Type.Union([
     script: Type.String({ minLength: 1, maxLength: 65_536 }),
     toolsAllow: Type.Array(Type.String()),
   }),
+]);
+
+/**
+ * Reported payloads add the system-owned heartbeat monitor kind; it is
+ * gateway-converged only, so create/patch schemas intentionally omit it.
+ */
+const CronReportedPayloadSchema = Type.Union([
+  ...CronPayloadSchema.anyOf,
+  closedObject({ kind: Type.Literal("heartbeat") }),
 ]);
 
 /** Partial cron payload for job updates. */
@@ -421,6 +454,27 @@ export const CronJobStateSchema = closedObject({
   triggerEvalCount: Type.Optional(Type.Integer({ minimum: 0 })),
   lastTriggerFireAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
   triggerState: Type.Optional(Type.Unknown()),
+  streamStatus: Type.Optional(
+    Type.Union([
+      Type.Literal("starting"),
+      Type.Literal("running"),
+      Type.Literal("restarting"),
+      Type.Literal("stopped"),
+      Type.Literal("disabled"),
+      Type.Literal("error"),
+    ]),
+  ),
+  streamError: Type.Optional(Type.String()),
+  streamConsecutiveFailures: Type.Optional(Type.Integer({ minimum: 0 })),
+  streamRestartExhausted: Type.Optional(Type.Boolean()),
+  // Internal logical-source identity used for cron.run admission fencing. It is
+  // reported for diagnostics but intentionally absent from the writable patch
+  // schema so external callers cannot spoof source ownership.
+  streamSourceIdentity: Type.Optional(Type.String()),
+  streamDroppedBatches: Type.Optional(Type.Integer({ minimum: 0 })),
+  streamCoalescedBatches: Type.Optional(Type.Integer({ minimum: 0 })),
+  streamLastStartedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  streamLastExitAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 
 const CronJobStatePatchSchema = closedObject({
@@ -445,6 +499,23 @@ const CronJobStatePatchSchema = closedObject({
   triggerEvalCount: Type.Optional(Type.Integer({ minimum: 0 })),
   lastTriggerFireAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
   triggerState: Type.Optional(Type.Unknown()),
+  streamStatus: Type.Optional(
+    Type.Union([
+      Type.Literal("starting"),
+      Type.Literal("running"),
+      Type.Literal("restarting"),
+      Type.Literal("stopped"),
+      Type.Literal("disabled"),
+      Type.Literal("error"),
+    ]),
+  ),
+  streamError: Type.Optional(Type.String()),
+  streamConsecutiveFailures: Type.Optional(Type.Integer({ minimum: 0 })),
+  streamRestartExhausted: Type.Optional(Type.Boolean()),
+  streamDroppedBatches: Type.Optional(Type.Integer({ minimum: 0 })),
+  streamCoalescedBatches: Type.Optional(Type.Integer({ minimum: 0 })),
+  streamLastStartedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  streamLastExitAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 
 /** Persisted cron job definition returned by scheduler list/get APIs. */
@@ -453,6 +524,7 @@ export const CronJobSchema = closedObject({
   declarationKey: Type.Optional(CronDeclarationKeySchema),
   displayName: Type.Optional(CronDisplayNameSchema),
   owner: Type.Optional(CronOwnerSchema),
+  scheduledToolPolicy: Type.Optional(CronScheduledToolPolicySchema),
   agentId: Type.Optional(NonEmptyString),
   sessionKey: Type.Optional(NonEmptyString),
   name: NonEmptyString,
@@ -468,7 +540,7 @@ export const CronJobSchema = closedObject({
   trigger: Type.Optional(CronTriggerSchema),
   sessionTarget: CronSessionTargetSchema,
   wakeMode: CronWakeModeSchema,
-  payload: CronPayloadSchema,
+  payload: CronReportedPayloadSchema,
   delivery: Type.Optional(CronDeliverySchema),
   failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
   state: CronJobStateSchema,
@@ -504,6 +576,40 @@ export const CronStatusParamsSchema = closedObject({});
 
 /** Looks up a job by stable id or legacy jobId alias. */
 export const CronGetParamsSchema = cronIdOrJobIdParams({});
+
+export const CronScratchSchema = closedObject({
+  content: Type.String({ maxLength: 262144 }),
+  revision: Type.Integer({ minimum: 1 }),
+  updatedAtMs: Type.Integer({ minimum: 0 }),
+});
+
+/** Reads private per-job scratch without adding it to the public job schema. */
+export const CronScratchGetParamsSchema = cronIdOrJobIdParams({});
+export const CronScratchGetResultSchema = closedObject({
+  scratch: Type.Union([CronScratchSchema, Type.Null()]),
+  // Monotonic across unset/recreate; pass as expectedRevision for safe writes.
+  currentRevision: Type.Integer({ minimum: 0 }),
+  maxBytes: Type.Integer({ minimum: 1 }),
+});
+
+/** Compare-and-swaps or clears private per-job scratch. */
+export const CronScratchSetParamsSchema = cronIdOrJobIdParams({
+  content: Type.Union([Type.String({ maxLength: 262144 }), Type.Null()]),
+  expectedRevision: Type.Optional(Type.Integer({ minimum: 0 })),
+});
+export const CronScratchSetResultSchema = Type.Union([
+  closedObject({
+    ok: Type.Literal(true),
+    scratch: Type.Union([CronScratchSchema, Type.Null()]),
+    currentRevision: Type.Integer({ minimum: 0 }),
+    maxBytes: Type.Integer({ minimum: 1 }),
+  }),
+  closedObject({
+    ok: Type.Literal(false),
+    reason: Type.Literal("revision-conflict"),
+    currentRevision: Type.Integer({ minimum: 0 }),
+  }),
+]);
 
 /** Creates a scheduled job with schedule, target, payload, and delivery policy. */
 export const CronAddParamsSchema = closedObject({

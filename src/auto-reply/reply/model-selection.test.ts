@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import {
   MODEL_CONTEXT_TOKEN_CACHE,
   providerContextTokenCacheKey,
@@ -116,6 +117,7 @@ vi.mock("../../agents/auth-profiles/order.js", () => ({
 
 afterEach(() => {
   MODEL_CONTEXT_TOKEN_CACHE.clear();
+  cliBackendsTesting.resetDepsForTest();
   vi.mocked(loadManifestModelCatalog).mockReset();
   vi.mocked(loadManifestModelCatalog).mockReturnValue([]);
   authProfileStoreMock.reset();
@@ -404,7 +406,7 @@ describe("createModelSelectionState catalog loading", () => {
     expect(loadModelCatalogLocal).not.toHaveBeenCalled();
   });
 
-  it("keeps configured compat when runtime thinking catalog is already loaded", async () => {
+  it("uses only configured compat for a custom route when the catalog is loaded", async () => {
     vi.mocked(loadModelCatalogLocal).mockClear();
     vi.mocked(loadModelCatalogLocal).mockResolvedValueOnce([
       {
@@ -454,10 +456,7 @@ describe("createModelSelectionState catalog loading", () => {
         provider: "vllm",
         id: "Qwen/Qwen3-8B",
         reasoning: true,
-        compat: {
-          supportedReasoningEfforts: ["xhigh"],
-          thinkingFormat: "qwen-chat-template",
-        },
+        compat: { thinkingFormat: "qwen-chat-template" },
       }),
     ]);
     expect(loadModelCatalogLocal).toHaveBeenCalledOnce();
@@ -753,6 +752,7 @@ describe("resolveContextTokens", () => {
 const makeEntry = (overrides: Partial<SessionEntry> = {}): SessionEntry => ({
   sessionId: "session-id",
   updatedAt: Date.now(),
+  delivery: { kind: "none" },
   ...overrides,
 });
 
@@ -1219,6 +1219,110 @@ describe("createModelSelectionState respects session model override", () => {
       modelOverrideSource: "user",
       modelSelectionLocked: true,
     });
+  });
+
+  it("preserves a locked CLI runtime alias when its canonical model is allowed", async () => {
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [],
+      resolvePluginSetupCliBackend: ({ backend }) =>
+        backend === "claude-cli"
+          ? ({
+              pluginId: "anthropic",
+              backend: {
+                id: "claude-cli",
+                modelProvider: "anthropic",
+                config: { command: "claude" },
+                bundleMcp: false,
+              },
+            } as never)
+          : undefined,
+    });
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-sol" },
+          models: {
+            "openai/gpt-5.6-sol": {},
+            "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:plugin:anthropic:catalog-adopt:claude:test";
+    const sessionEntry = makeEntry({
+      providerOverride: "claude-cli",
+      modelOverride: "claude-opus-4-8",
+      modelSelectionLocked: true,
+      pluginOwnerId: "anthropic",
+      cliSessionBindings: {
+        "claude-cli": {
+          sessionId: "native-claude-session",
+          forceReuse: true,
+          forkNextResume: true,
+        },
+      },
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.6-sol",
+      provider: "claude-cli",
+      model: "claude-opus-4-8",
+      hasModelDirective: false,
+    });
+
+    expect(state).toMatchObject({
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      resetModelOverride: false,
+    });
+    expect(sessionStore[sessionKey]).toMatchObject({
+      providerOverride: "claude-cli",
+      modelOverride: "claude-opus-4-8",
+      modelSelectionLocked: true,
+    });
+  });
+
+  it("keeps ordinary provider overrides off the CLI setup-registry path", async () => {
+    const resolvePluginSetupCliBackend = vi.fn(() => undefined);
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [],
+      resolvePluginSetupCliBackend,
+    });
+    const cfg = {
+      agents: {
+        defaults: {
+          models: { "custom-provider/custom-model": {} },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:custom-provider";
+    const sessionEntry = makeEntry({
+      providerOverride: "custom-provider",
+      modelOverride: "custom-model",
+    });
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      defaultProvider: "custom-provider",
+      defaultModel: "custom-model",
+      provider: "custom-provider",
+      model: "custom-model",
+      hasModelDirective: false,
+    });
+
+    expect(state).toMatchObject({ provider: "custom-provider", model: "custom-model" });
+    expect(resolvePluginSetupCliBackend).not.toHaveBeenCalled();
   });
 
   it("adopts a concurrent valid model while repairing a stale override", async () => {

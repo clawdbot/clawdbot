@@ -17,7 +17,6 @@ import {
   resolveGroupDmAllow,
   shouldEmitDiscordReactionNotification,
 } from "./monitor/allow-list.js";
-import { buildDiscordMediaPayload } from "./monitor/message-utils.js";
 import { resolveDiscordReplyTarget, sanitizeDiscordThreadName } from "./monitor/threading.js";
 type DiscordReactionEvent = Parameters<
   import("./monitor/listeners.js").DiscordReactionListener["handle"]
@@ -243,20 +242,22 @@ describe("discord allowlist helpers", () => {
       ["123", "steipete", "Friends of OpenClaw"],
       ["discord:", "user:", "guild:", "channel:"],
     );
-    expect(allowListMatches(allow, { id: "123" })).toBe(true);
-    expect(allowListMatches(allow, { name: "steipete" })).toBe(false);
-    expect(allowListMatches(allow, { name: "friends-of-openclaw" })).toBe(false);
+    expect(allowListMatches(allow, { id: "123" }, { allowNameMatching: false })).toBe(true);
+    expect(allowListMatches(allow, { name: "steipete" }, { allowNameMatching: false })).toBe(false);
+    expect(
+      allowListMatches(allow, { name: "friends-of-openclaw" }, { allowNameMatching: false }),
+    ).toBe(false);
     expect(allowListMatches(allow, { name: "steipete" }, { allowNameMatching: true })).toBe(true);
     expect(
       allowListMatches(allow, { name: "friends-of-openclaw" }, { allowNameMatching: true }),
     ).toBe(true);
-    expect(allowListMatches(allow, { name: "other" })).toBe(false);
+    expect(allowListMatches(allow, { name: "other" }, { allowNameMatching: false })).toBe(false);
   });
 
   it("matches pk-prefixed allowlist entries", () => {
     const allow = expectNormalizedAllowList(["pk:member-123"], ["discord:", "user:", "pk:"]);
-    expect(allowListMatches(allow, { id: "member-123" })).toBe(true);
-    expect(allowListMatches(allow, { id: "member-999" })).toBe(false);
+    expect(allowListMatches(allow, { id: "member-123" }, { allowNameMatching: false })).toBe(true);
+    expect(allowListMatches(allow, { id: "member-999" }, { allowNameMatching: false })).toBe(false);
   });
 
   it("does not treat DM wildcard access as owner access", () => {
@@ -900,21 +901,6 @@ describe("discord reaction notification gating", () => {
         testCase.name,
       ).toBe(testCase.expected);
     }
-  });
-});
-
-describe("discord media payload", () => {
-  it("preserves attachment order for MediaPaths/MediaUrls", () => {
-    const payload = buildDiscordMediaPayload([
-      { path: "/tmp/a.png", contentType: "image/png" },
-      { path: "/tmp/b.png", contentType: "image/png" },
-      { path: "/tmp/c.png", contentType: "image/png" },
-    ]);
-    expect(payload.MediaPath).toBe("/tmp/a.png");
-    expect(payload.MediaUrl).toBe("/tmp/a.png");
-    expect(payload.MediaType).toBe("image/png");
-    expect(payload.MediaPaths).toEqual(["/tmp/a.png", "/tmp/b.png", "/tmp/c.png"]);
-    expect(payload.MediaUrls).toEqual(["/tmp/a.png", "/tmp/b.png", "/tmp/c.png"]);
   });
 });
 

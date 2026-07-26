@@ -55,6 +55,69 @@ describe("agent defaults schema", () => {
     );
   });
 
+  it("rejects malformed model policy refs during config validation", () => {
+    for (const entry of ["", "///", "provider//model", "nogarbageprovider"]) {
+      const result = validateConfigObject({
+        agents: {
+          defaults: { modelPolicy: { allow: [entry] } },
+          entries: { main: { default: true } },
+        },
+      });
+
+      expect(result.ok, entry || "empty entry").toBe(false);
+      if (result.ok) {
+        continue;
+      }
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({ path: "agents.defaults.modelPolicy.allow.0" }),
+      );
+    }
+  });
+
+  it("accepts exact refs, nested wildcards, configured aliases, and compat selectors", () => {
+    const result = validateConfigObject({
+      agents: {
+        entries: { main: { default: true } },
+        defaults: {
+          models: {
+            "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+            "openrouter/openai/gpt-oss-120b:free": {},
+          },
+          modelPolicy: {
+            allow: [
+              "openai/gpt-5.6-sol",
+              "provider/a/b/c/d/e/f",
+              "clawrouter/anthropic/*",
+              "provider/a/b/c/d/*",
+              "sonnet",
+              "openrouter:free",
+            ],
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("reports keyed per-agent policy paths", () => {
+    const result = validateConfigObject({
+      agents: {
+        entries: {
+          main: { default: true },
+          runner: { modelPolicy: { allow: ["not-a-model-ref"] } },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({ path: "agents.entries.runner.modelPolicy.allow.0" }),
+      );
+    }
+  });
+
   it("accepts subagent archiveAfterMinutes=0 to disable archiving", () => {
     expectSchemaSuccess(
       AgentDefaultsSchema.safeParse({
@@ -91,12 +154,14 @@ describe("agent defaults schema", () => {
     );
   });
 
-  it("accepts videoGenerationModel", () => {
+  it("accepts mediaModels.video", () => {
     expectSchemaSuccess(
       AgentDefaultsSchema.safeParse({
-        videoGenerationModel: {
-          primary: "qwen/wan2.6-t2v",
-          fallbacks: ["minimax/video-01"],
+        mediaModels: {
+          video: {
+            primary: "qwen/wan2.6-t2v",
+            fallbacks: ["minimax/video-01"],
+          },
         },
       }),
     );
@@ -113,26 +178,24 @@ describe("agent defaults schema", () => {
     );
   });
 
-  it("accepts imageGenerationModel timeoutMs", () => {
+  it("accepts mediaModels.image timeoutMs", () => {
     const defaults = AgentDefaultsSchema.parse({
-      imageGenerationModel: {
-        primary: "openrouter/openai/gpt-5.4-image-2",
-        timeoutMs: 180_000,
+      mediaModels: {
+        image: { primary: "openrouter/openai/gpt-5.4-image-2", timeoutMs: 180_000 },
       },
     })!;
 
-    expect(defaults.imageGenerationModel).toEqual({
+    expect(defaults.mediaModels?.image).toEqual({
       primary: "openrouter/openai/gpt-5.4-image-2",
       timeoutMs: 180_000,
     });
     expectSchemaFailurePath(
       AgentDefaultsSchema.safeParse({
-        imageGenerationModel: {
-          primary: "openrouter/openai/gpt-5.4-image-2",
-          timeoutMs: 0,
+        mediaModels: {
+          image: { primary: "openrouter/openai/gpt-5.4-image-2", timeoutMs: 0 },
         },
       }),
-      "imageGenerationModel.timeoutMs",
+      "mediaModels.image.timeoutMs",
     );
   });
 
@@ -175,14 +238,6 @@ describe("agent defaults schema", () => {
         subagents: { model: { primary: "openai/gpt-5.5", timeoutMs: 30_000 } },
       }),
       "subagents.model",
-    );
-  });
-
-  it("accepts mediaGenerationAutoProviderFallback", () => {
-    expectSchemaSuccess(
-      AgentDefaultsSchema.safeParse({
-        mediaGenerationAutoProviderFallback: false,
-      }),
     );
   });
 
@@ -279,14 +334,8 @@ describe("agent defaults schema", () => {
 
   it("rejects legacy whole-agent runtime pins outside doctor migration", () => {
     expect(AgentDefaultsSchema.safeParse({ agentRuntime: { id: "codex" } }).success).toBe(false);
-    expect(AgentDefaultsSchema.safeParse({ embeddedHarness: { runtime: "codex" } }).success).toBe(
-      false,
-    );
     expect(
       AgentEntrySchema.safeParse({ id: "legacy", agentRuntime: { id: "codex" } }).success,
-    ).toBe(false);
-    expect(
-      AgentEntrySchema.safeParse({ id: "legacy", embeddedHarness: { runtime: "codex" } }).success,
     ).toBe(false);
   });
 
@@ -299,38 +348,6 @@ describe("agent defaults schema", () => {
     })!;
     expect(result.embeddedAgent?.executionContract).toBe("strict-agentic");
     expect(result.embeddedAgent?.projectSettingsPolicy).toBe("sanitize");
-  });
-
-  it("accepts runRetries configuration on defaults and agent entries", () => {
-    const result = AgentDefaultsSchema.parse({
-      runRetries: {
-        base: 24,
-        max: 160,
-      },
-    });
-    expect(result?.runRetries?.base).toBe(24);
-    expect(result?.runRetries?.max).toBe(160);
-
-    const agentResult = AgentEntrySchema.parse({
-      id: "test",
-      runRetries: {
-        min: 10,
-        max: 50,
-      },
-    });
-    expect(agentResult?.runRetries?.min).toBe(10);
-    expect(agentResult?.runRetries?.max).toBe(50);
-  });
-
-  it("rejects runRetries with max < min", () => {
-    expectSchemaFailurePath(
-      AgentDefaultsSchema.safeParse({ runRetries: { min: 100, max: 50 } }),
-      "runRetries.max",
-    );
-    expectSchemaFailurePath(
-      AgentEntrySchema.safeParse({ id: "test", runRetries: { min: 100, max: 50 } }),
-      "runRetries.max",
-    );
   });
 
   it("accepts compaction.truncateAfterCompaction", () => {
@@ -397,8 +414,6 @@ describe("agent defaults schema", () => {
     const defaults = AgentDefaultsSchema.parse({
       contextLimits: {
         memoryGetMaxChars: 20_000,
-        memoryGetDefaultLines: 200,
-        toolResultMaxChars: 24_000,
         postCompactionMaxChars: 4_000,
       },
     })!;
@@ -413,25 +428,23 @@ describe("agent defaults schema", () => {
     });
 
     expect(defaults.contextLimits?.memoryGetMaxChars).toBe(20_000);
-    expect(defaults.contextLimits?.memoryGetDefaultLines).toBe(200);
-    expect(defaults.contextLimits?.toolResultMaxChars).toBe(24_000);
     expect(agent.skillsLimits?.maxSkillsPromptChars).toBe(30_000);
     expect(agent.contextLimits?.memoryGetMaxChars).toBe(18_000);
   });
 
   it("accepts positive heartbeat timeoutSeconds on defaults and agent entries", () => {
     const defaults = AgentDefaultsSchema.parse({
-      heartbeat: { timeoutSeconds: 45, skipWhenBusy: true },
+      heartbeat: { timeoutSeconds: 45 },
     })!;
     const agent = AgentEntrySchema.parse({
       id: "ops",
-      heartbeat: { timeoutSeconds: 45, skipWhenBusy: true },
+      heartbeat: { timeoutSeconds: 45 },
     });
 
     expect(defaults.heartbeat?.timeoutSeconds).toBe(45);
-    expect(defaults.heartbeat?.skipWhenBusy).toBe(true);
+    expect(defaults.heartbeat?.timeoutSeconds).toBe(45);
     expect(agent.heartbeat?.timeoutSeconds).toBe(45);
-    expect(agent.heartbeat?.skipWhenBusy).toBe(true);
+    expect(agent.heartbeat?.timeoutSeconds).toBe(45);
   });
 
   it("accepts per-agent TTS overrides", () => {
@@ -467,12 +480,12 @@ describe("agent defaults schema", () => {
   it("preserves per-agent contextTokens through config validation", () => {
     const result = validateConfigObject({
       agents: {
-        list: [
-          {
-            id: "ops",
+        entries: {
+          ops: {
+            default: true,
             contextTokens: 1_048_576,
           },
-        ],
+        },
       },
     });
 
@@ -480,8 +493,10 @@ describe("agent defaults schema", () => {
     if (!result.ok) {
       throw new Error("expected config validation to succeed");
     }
-    const config = result.config as { agents?: { list?: Array<{ contextTokens?: number }> } };
-    expect(config.agents?.list?.[0]?.contextTokens).toBe(1_048_576);
+    const config = result.config as {
+      agents?: { entries?: Record<string, { contextTokens?: number }> };
+    };
+    expect(config.agents?.entries?.ops?.contextTokens).toBe(1_048_576);
   });
 
   it("accepts per-agent tools.codeMode config", () => {

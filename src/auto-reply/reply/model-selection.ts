@@ -11,7 +11,6 @@ import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
-import { parseConfiguredModelVisibilityEntries } from "../../agents/model-selection-shared.js";
 import {
   type ModelAliasIndex,
   buildConfiguredModelCatalog,
@@ -51,6 +50,7 @@ export {
 } from "./model-selection-directive.js";
 import {
   isStaleHeartbeatAutoFallbackOverride,
+  normalizeStoredRuntimeModelRef,
   resolveStoredModelOverride,
 } from "./stored-model-override.js";
 
@@ -217,14 +217,14 @@ export async function createModelSelectionState(params: {
   const hasConfiguredModels =
     Object.keys(agentCfg?.models ?? {}).length > 0 ||
     Object.keys(agentEntry?.models ?? {}).length > 0;
-  const visibility = parseConfiguredModelVisibilityEntries({ cfg, agentId: params.agentId });
-  const defaultProviderVisibleByWildcard = visibility.providerWildcards.has(
-    normalizeProviderId(defaultProvider),
-  );
+  const defaultModelVisibleByWildcard = visibilityPolicy.allowsByWildcard({
+    provider: defaultProvider,
+    model: defaultModel,
+  });
   const configuredModelCatalog = buildConfiguredModelCatalog({ cfg });
   const needsModelCatalog =
     params.hasModelDirective ||
-    (hasAllowlist && visibility.providerWildcards.size > 0 && !defaultProviderVisibleByWildcard);
+    (hasAllowlist && visibilityPolicy.hasProviderWildcards && !defaultModelVisibleByWildcard);
 
   let allowedModelKeys = new Set<string>();
   let allowedModelCatalog: ModelCatalog = configuredModelCatalog;
@@ -341,9 +341,11 @@ export async function createModelSelectionState(params: {
     directStoredOverride &&
     !hasOneTurnModelOverride
   ) {
-    const normalizedOverride = normalizeRuntimeModelRef(
+    const normalizedOverride = normalizeStoredRuntimeModelRef(
       directStoredOverride.provider,
       directStoredOverride.model,
+      cfg,
+      sessionEntry,
     );
     const key = modelKey(normalizedOverride.provider, normalizedOverride.model);
     const overrideAllowed = visibilityPolicy.allowsKey(key);
@@ -430,9 +432,11 @@ export async function createModelSelectionState(params: {
     (resetModelOverride && staleDirectStoredOverride && storedOverride?.source === "session");
 
   if (storedOverride?.model && !skipStoredOverride) {
-    const normalizedStoredOverride = normalizeRuntimeModelRef(
+    const normalizedStoredOverride = normalizeStoredRuntimeModelRef(
       storedOverride.provider || defaultProvider,
       storedOverride.model,
+      cfg,
+      sessionEntry,
     );
     const key = modelKey(normalizedStoredOverride.provider, normalizedStoredOverride.model);
     if (visibilityPolicy.allowsKey(key)) {

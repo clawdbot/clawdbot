@@ -13,6 +13,10 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <script>
+      // Configure Zod before module evaluation so its JIT probe cannot violate strict CSP.
+      globalThis.__zod_globalConfig ??= {};
+      globalThis.__zod_globalConfig.jitless = true;
+
       (function () {
         var THEMES = { claw: 1, knot: 1, dash: 1 };
         var MODES = { system: 1, light: 1, dark: 1 };
@@ -58,14 +62,54 @@
                   ? "light"
                   : "dark";
           document.documentElement.setAttribute("data-theme", resolved);
-          document.documentElement.setAttribute(
-            "data-theme-mode",
-            resolved.includes("light") ? "light" : "dark",
-          );
+          var resolvedMode = resolved.includes("light") ? "light" : "dark";
+          document.documentElement.setAttribute("data-theme-mode", resolvedMode);
+          // Carapace CSS selects on [data-theme-resolved]; keep in lockstep.
+          document.documentElement.setAttribute("data-theme-resolved", resolvedMode);
         } catch (e) {}
       })();
     </script>
     <style>
+      /* Paint before the app stylesheet arrives so WebKit never exposes a white
+         document between its native dark canvas and the persisted UI theme. */
+      html,
+      body {
+        min-height: 100%;
+      }
+
+      html {
+        background: #0e1015;
+        color-scheme: dark;
+      }
+
+      html[data-theme-mode="light"] {
+        background: #faf9f7;
+        color-scheme: light;
+      }
+
+      html[data-theme="openknot"] {
+        background: #080808;
+      }
+
+      html[data-theme="openknot-light"] {
+        background: #f9f9fb;
+      }
+
+      html[data-theme="dash"] {
+        background: #1a1210;
+      }
+
+      html[data-theme="dash-light"] {
+        background: #f7f2ec;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100%;
+        background: inherit;
+        color-scheme: inherit;
+      }
+
       body.openclaw-mount-fallback-active {
         margin: 0;
         min-width: 320px;

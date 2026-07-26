@@ -1,11 +1,22 @@
 package ai.openclaw.app
 
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 internal object AndroidScreenshotFixture {
+  @Volatile private var scene: AndroidScreenshotScene = AndroidScreenshotScene.Home
+
+  fun configure(scene: AndroidScreenshotScene) {
+    this.scene = scene
+  }
+
+  const val gatewayId = "android-screenshot-gateway"
   const val mainSessionKey = "agent:main:node-screenshot"
   const val primarySessionTitle = "Android release planning"
   const val cronJobId = "android-release-digest"
@@ -94,13 +105,66 @@ internal object AndroidScreenshotFixture {
     when (method) {
       "health" -> buildJsonObject { put("ok", JsonPrimitive(true)) }.toString()
       "chat.history" -> chatHistory()
-      "sessions.list" -> sessionList()
+      "sessions.list" -> sessionList(paramsJson)
       "chat.metadata" -> chatMetadata()
       "cron.list" -> cronList()
       "cron.get" -> cronJob().toString()
       "cron.runs" -> cronRuns()
+      "openclaw.chat" -> systemAgentChat(paramsJson)
       else -> error("Screenshot fixture does not implement gateway method $method with params $paramsJson")
     }
+
+  private fun systemAgentChat(paramsJson: String?): String {
+    val message =
+      paramsJson
+        ?.let { Json.parseToJsonElement(it).jsonObject["message"] }
+        ?.jsonPrimitive
+        ?.contentOrNull
+    return buildJsonObject {
+      put("sessionId", JsonPrimitive("android-screenshot-openclaw"))
+      put(
+        "reply",
+        JsonPrimitive(
+          if (message == null) {
+            "I can check Gateway status, repair configuration, change models, or connect channels."
+          } else {
+            "I’ll keep this conversation separate from ordinary agent chat."
+          },
+        ),
+      )
+      put("action", JsonPrimitive("none"))
+      if (message == null) {
+        put(
+          "question",
+          buildJsonObject {
+            put("id", JsonPrimitive("help"))
+            put("header", JsonPrimitive("OpenClaw"))
+            put("question", JsonPrimitive("What should we look at first?"))
+            put(
+              "options",
+              buildJsonArray {
+                add(
+                  buildJsonObject {
+                    put("label", JsonPrimitive("Check status"))
+                    put("description", JsonPrimitive("Review the Gateway and active services."))
+                    put("recommended", JsonPrimitive(true))
+                    put("reply", JsonPrimitive("Check Gateway status"))
+                  },
+                )
+                add(
+                  buildJsonObject {
+                    put("label", JsonPrimitive("Review setup"))
+                    put("description", JsonPrimitive("Inspect models, channels, and configuration."))
+                    put("reply", JsonPrimitive("Review setup"))
+                  },
+                )
+              },
+            )
+          },
+        )
+      }
+    }.toString()
+  }
 
   private fun cronList(): String =
     buildJsonObject {
@@ -247,8 +311,28 @@ internal object AndroidScreenshotFixture {
     put("timestamp", JsonPrimitive(timestamp))
   }
 
-  private fun sessionList(): String =
-    buildJsonObject {
+  private fun sessionList(paramsJson: String?): String {
+    val spawnedBy =
+      paramsJson
+        ?.let {
+          runCatching {
+            Json
+              .parseToJsonElement(it)
+              .jsonObject["spawnedBy"]
+              ?.jsonPrimitive
+              ?.contentOrNull
+          }.getOrNull()
+        }
+    if (scene == AndroidScreenshotScene.Swarm && spawnedBy != null) {
+      val children = swarmChildren(spawnedBy)
+      return buildJsonObject {
+        put("sessions", buildJsonArray { children.forEach(::add) })
+        put("count", JsonPrimitive(children.size))
+        put("totalCount", JsonPrimitive(children.size))
+        put("hasMore", JsonPrimitive(false))
+      }.toString()
+    }
+    return buildJsonObject {
       put(
         "sessions",
         buildJsonArray {
@@ -259,6 +343,37 @@ internal object AndroidScreenshotFixture {
       )
       put("totalCount", JsonPrimitive(3))
     }.toString()
+  }
+
+  private fun swarmChildren(parentKey: String) =
+    listOf(
+      swarmChild("research-polling", "National polling", "done", parentKey),
+      swarmChild("research-work", "Work and labor", "running", parentKey),
+      swarmChild("research-health", "Health", "running", parentKey),
+      swarmChild("research-trust", "Governance and trust", null, parentKey, queued = true),
+      swarmChild("research-media", "Media signals", "failed", parentKey),
+    )
+
+  private fun swarmChild(
+    key: String,
+    label: String,
+    status: String?,
+    parentKey: String,
+    queued: Boolean = false,
+  ) = session("agent:main:subagent:$key", label, 1_783_555_320_000).toMutableMap().let { values ->
+    buildJsonObject {
+      values.forEach { (field, value) -> put(field, value) }
+      put("parentSessionKey", JsonPrimitive(parentKey))
+      put("spawnedBy", JsonPrimitive(parentKey))
+      put("swarmGroupId", JsonPrimitive("swarm:$parentKey:research"))
+      put("swarmPhase", JsonPrimitive("Research"))
+      put("swarmPhaseRank", JsonPrimitive(0))
+      put("swarmLog", JsonPrimitive("Comparing labor, education, health, trust, and media signals."))
+      status?.let { put("status", JsonPrimitive(it)) }
+      if (queued) put("subagentRunState", JsonPrimitive("active"))
+      if (status == "running") put("hasActiveRun", JsonPrimitive(true))
+    }
+  }
 
   private fun session(
     key: String,
@@ -280,6 +395,7 @@ internal object AndroidScreenshotFixture {
 
   private fun chatMetadata(): String =
     buildJsonObject {
+      put("swarmEnabled", JsonPrimitive(scene == AndroidScreenshotScene.Swarm))
       put(
         "commands",
         buildJsonArray {

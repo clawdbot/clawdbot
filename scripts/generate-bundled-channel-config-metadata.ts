@@ -16,7 +16,6 @@ type BundledPluginSource = {
   manifest: {
     id: string;
     channels?: unknown;
-    channelEnvVars?: unknown;
     name?: string;
     description?: string;
   } & Record<string, unknown>;
@@ -173,17 +172,25 @@ function resolveRootConfigurable(source: BundledPluginSource, channelId: string)
 }
 
 function resolveRootChannelEnvVars(source: BundledPluginSource, channelId: string): string[] {
-  const raw = source.manifest.channelEnvVars;
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+  const channelMeta = resolvePackageChannelMeta(source);
+  if (channelMeta?.id !== channelId) {
     return [];
   }
-  const value = (raw as Record<string, unknown>)[channelId];
-  if (!Array.isArray(value)) {
+  const configuredState = channelMeta.configuredState;
+  if (!configuredState || typeof configuredState !== "object" || Array.isArray(configuredState)) {
     return [];
   }
+  const env = (configuredState as Record<string, unknown>).env;
+  if (!env || typeof env !== "object" || Array.isArray(env)) {
+    return [];
+  }
+  const envRecord = env as Record<string, unknown>;
+  const values = [envRecord.allOf, envRecord.anyOf].flatMap((value) =>
+    Array.isArray(value) ? value : [],
+  );
   return [
     ...new Set(
-      value
+      values
         .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
         .filter((entry) => entry.length > 0),
     ),

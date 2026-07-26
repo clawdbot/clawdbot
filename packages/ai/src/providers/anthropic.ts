@@ -11,6 +11,12 @@ import type {
 } from "@anthropic-ai/sdk/resources/messages.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
+import {
+  createAnthropicInlineImageBudget,
+  normalizeAnthropicInlineContent,
+  resolveAnthropicImageMediaType,
+  type AnthropicInlineImageBudget,
+} from "../internal/anthropic-inline-images.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import type {
   AnthropicMessagesCompat,
@@ -47,8 +53,9 @@ import {
 } from "./anthropic-auth-headers.js";
 import {
   applyClaudeRequestContract,
-  prepareClaudeSonnet5RequestContext,
+  prepareClaudeNoPrefillRequestContext,
   resolveClaudeNativeThinkingLevelMap,
+  resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   requiresClaudeAdaptiveThinking,
   supportsClaudeAdaptiveThinking,
@@ -60,10 +67,10 @@ import {
 import { applyAnthropicRefusal } from "./anthropic-refusal.js";
 import {
   ANTHROPIC_SERVER_SIDE_FALLBACK_BETA,
-  CLAUDE_FABLE_5_FALLBACK_MODEL_COST,
+  ANTHROPIC_SERVER_SIDE_FALLBACKS,
   applyAnthropicFallbackBoundary,
-  buildAnthropicServerSideFallbacks,
   readAnthropicFallbackBoundary,
+  resolveAnthropicFallbackServingModelCost,
 } from "./anthropic-server-fallback.js";
 import {
   ANTHROPIC_OMITTED_REASONING_TEXT,
@@ -153,10 +160,11 @@ const toClaudeCodeName = (name: string) => ccToolLookup.get(name.toLowerCase()) 
 /**
  * Convert content blocks to Anthropic API format
  */
-function convertContentBlocks(
+async function convertContentBlocks(
   content: readonly unknown[],
   isError: boolean,
-):
+  imageBudget: AnthropicInlineImageBudget,
+): Promise<
   | string
   | Array<
       | { type: "text"; text: string }
@@ -168,7 +176,8 @@ function convertContentBlocks(
             data: string;
           };
         }
-    > {
+    >
+> {
   const text = extractToolResultText(content);
   const mediaPlaceholder = describeToolResultMediaPlaceholder(content);
   const hasImages = content.some(isImageWithMediaPayload);
@@ -206,16 +215,25 @@ function convertContentBlocks(
     if (!isImageWithMediaPayload(record)) {
       continue;
     }
+    const [normalizedImage] = await normalizeAnthropicInlineContent(
+      [
+        {
+          type: "image" as const,
+          data: typeof record.data === "string" ? record.data : "",
+          mimeType: typeof record.mimeType === "string" ? record.mimeType : "image/jpeg",
+        },
+      ],
+      imageBudget,
+    );
+    if (normalizedImage?.type !== "image") {
+      continue;
+    }
     blocks.push({
       type: "image" as const,
       source: {
         type: "base64" as const,
-        media_type: (typeof record.mimeType === "string" ? record.mimeType : "image/jpeg") as
-          | "image/jpeg"
-          | "image/png"
-          | "image/gif"
-          | "image/webp",
-        data: record.data,
+        media_type: resolveAnthropicImageMediaType(normalizedImage.mimeType),
+        data: normalizedImage.data,
       },
     });
   }
@@ -363,7 +381,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
   options?: AnthropicOptions,
 ) => {
   const stream = new AssistantMessageEventStream();
-  const requestContext = prepareClaudeSonnet5RequestContext(model, context);
+  const requestContext = prepareClaudeNoPrefillRequestContext(model, context);
   const requestOptions = normalizeAnthropicThinkingOptions(model, options);
 
   void (async () => {
@@ -437,7 +455,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
         isOAuth = created.isOAuthToken;
         serverSideFallback = created.serverSideFallback;
       }
-      const builtParams = buildParams(
+      const builtParams = await buildParams(
         model,
         requestContext,
         isOAuth,
@@ -542,7 +560,14 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
             // Cost intentionally mirrors top-level usage (serving attempt at
             // serving-model rates). A mid-stream decline's billed partial is
             // only in usage.iterations and is not folded in here.
-            costModel = { ...model, cost: CLAUDE_FABLE_5_FALLBACK_MODEL_COST };
+            costModel = {
+              ...model,
+              cost: resolveAnthropicFallbackServingModelCost({
+                requestedModelId: model.id,
+                servingModelId: fallbackBoundary.toModel,
+                requestedCost: model.cost,
+              }),
+            };
             calculateCost(costModel, output.usage);
             eventSink.push({ type: "start", partial: output });
             for (const [i, block] of blocks.entries()) {
@@ -929,7 +954,7 @@ export const streamSimpleAnthropic: StreamFunction<
         ? "low"
         : "high"
       : options?.reasoning;
-  if (resolveClaudeSonnet5ModelIdentity(model)) {
+  if (resolveClaudeOpus5ModelIdentity(model) || resolveClaudeSonnet5ModelIdentity(model)) {
     return streamAnthropic(model, context, {
       ...base,
       thinkingEnabled: true,
@@ -1001,7 +1026,11 @@ function isAnthropicPublicEndpoint(baseUrl: string | undefined): boolean {
  * identity) requests are excluded until the beta is verified there.
  */
 function supportsAnthropicServerSideFallback(model: Model<"anthropic-messages">): boolean {
-  if (!usesClaudeFable5MessagesContract(model) || model.provider !== "anthropic") {
+  if (
+    (!usesClaudeFable5MessagesContract(model) &&
+      resolveClaudeOpus5ModelIdentity(model) === undefined) ||
+    model.provider !== "anthropic"
+  ) {
     return false;
   }
   return isAnthropicPublicEndpoint(model.baseUrl);
@@ -1160,16 +1189,16 @@ function createClient(
   return { client, isOAuthToken: false, serverSideFallback };
 }
 
-function buildParams(
+async function buildParams(
   model: Model<"anthropic-messages">,
   context: Context,
   isOAuthTokenResult: boolean,
   options?: AnthropicOptions,
   serverSideFallback = false,
-): {
+): Promise<{
   params: MessageCreateParamsStreaming;
   toolProjection?: AnthropicToolProjection;
-} {
+}> {
   const mandatoryAdaptiveThinking = requiresClaudeAdaptiveThinking(model);
   const replayThinkingEnabled = mandatoryAdaptiveThinking || options?.thinkingEnabled === true;
   const { cacheControl } = getCacheControl(model, options?.cacheRetention);
@@ -1193,7 +1222,7 @@ function buildParams(
   );
   const params: MessageCreateParamsStreaming = {
     model: model.id,
-    messages: convertMessages(
+    messages: await convertMessages(
       context.messages,
       model,
       isOAuthTokenResult,
@@ -1210,12 +1239,11 @@ function buildParams(
     params.system = system;
   }
 
-  // Fable safety classifiers can decline benign-adjacent work; server-side
-  // fallback re-serves the same call on claude-opus-4-8 instead of failing
-  // the turn. Only set when createClient added the matching beta header.
+  // Fable 5 and Opus 5 safety classifiers can decline benign-adjacent work.
+  // Anthropic owns the per-category fallback recommendation so routing can
+  // evolve without a client release.
   if (serverSideFallback) {
-    (params as { fallbacks?: Array<{ model: string }> }).fallbacks =
-      buildAnthropicServerSideFallbacks();
+    (params as { fallbacks?: "default" }).fallbacks = ANTHROPIC_SERVER_SIDE_FALLBACKS;
   }
 
   // Thinking and post-4.6 Claude models reject custom temperature values.
@@ -1297,7 +1325,7 @@ function normalizeToolCallId(id: string): string {
   return id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
 }
 
-function convertMessages(
+async function convertMessages(
   messages: Message[],
   model: Model<"anthropic-messages">,
   isOAuthTokenValue: boolean,
@@ -1305,8 +1333,9 @@ function convertMessages(
   messageCacheControlLimit = 4,
   replayThinkingEnabled = true,
   allowEmptySignature = false,
-): MessageParam[] {
+): Promise<MessageParam[]> {
   const params: MessageParam[] = [];
+  const imageBudget = createAnthropicInlineImageBudget();
   // Param indexes for transient runtime-context carriers — excluded from
   // cache_control breakpoint selection so the deepest breakpoint anchors on the
   // last stable user turn, not the volatile carrier appended after it.
@@ -1337,7 +1366,8 @@ function convertMessages(
           });
         }
       } else {
-        const blocks: ContentBlockParam[] = msg.content.map((item) => {
+        const normalizedContent = await normalizeAnthropicInlineContent(msg.content, imageBudget);
+        const blocks: ContentBlockParam[] = normalizedContent.map((item) => {
           if (item.type === "text") {
             return {
               type: "text",
@@ -1348,7 +1378,7 @@ function convertMessages(
             type: "image",
             source: {
               type: "base64",
-              media_type: item.mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
+              media_type: resolveAnthropicImageMediaType(item.mimeType),
               data: item.data,
             },
           };
@@ -1450,7 +1480,7 @@ function convertMessages(
       toolResults.push({
         type: "tool_result",
         tool_use_id: msg.toolCallId,
-        content: convertContentBlocks(msg.content, msg.isError),
+        content: await convertContentBlocks(msg.content, msg.isError, imageBudget),
         is_error: msg.isError,
       });
 
@@ -1463,7 +1493,7 @@ function convertMessages(
         toolResults.push({
           type: "tool_result",
           tool_use_id: nextMsg.toolCallId,
-          content: convertContentBlocks(nextMsg.content, nextMsg.isError),
+          content: await convertContentBlocks(nextMsg.content, nextMsg.isError, imageBudget),
           is_error: nextMsg.isError,
         });
         j++;

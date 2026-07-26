@@ -60,6 +60,7 @@ export function normalizeControlUiBuildInfo(value: unknown): ControlUiBuildInfo 
   const metadata = { version, commit, builtAt };
   return {
     ...metadata,
+    commitAt: normalizeControlUiBuildTimestamp(record.commitAt),
     branch: normalizeControlUiBranch(record.branch),
     dirty: typeof record.dirty === "boolean" ? record.dirty : null,
     buildId: normalizeControlUiBuildId(record.buildId ?? deriveControlUiBuildId(metadata)),

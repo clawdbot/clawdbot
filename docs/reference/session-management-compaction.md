@@ -78,13 +78,9 @@ OpenClaw no longer creates automatic `sessions.json.bak.*` rotation backups duri
 
 Transcript mutations use the session write queue for the SQLite transcript target:
 
-| Setting                              | Default   | Env override                                     |
-| ------------------------------------ | --------- | ------------------------------------------------ |
-| `session.writeLock.acquireTimeoutMs` | `60000`   | `OPENCLAW_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS` |
-| `session.writeLock.staleMs`          | `1800000` | `OPENCLAW_SESSION_WRITE_LOCK_STALE_MS`           |
-| `session.writeLock.maxHoldMs`        | `300000`  | `OPENCLAW_SESSION_WRITE_LOCK_MAX_HOLD_MS`        |
-
-`acquireTimeoutMs` is how long a lock wait surfaces a busy-session error before giving up; raise it only when legitimate prep, cleanup, compaction, or transcript mirror work contends longer on slow machines. `staleMs` is when an existing lock can be reclaimed as stale. `maxHoldMs` is the in-process watchdog release threshold.
+Session write locks use fixed production defaults. The corresponding
+`OPENCLAW_SESSION_WRITE_LOCK_*` environment variables remain available for
+process-level diagnostics and emergency overrides.
 
 ### Downgrading After The SQLite Flip
 
@@ -202,7 +198,7 @@ Compaction summarizes older conversation into a persisted `compaction` entry in 
 
 Embedded OpenClaw compaction inherits the session thinking level by default. Set `agents.defaults.compaction.thinkingLevel` to use a separate level for summary calls; the runtime clamps it to each concrete compaction model or fallback. Native Codex app-server compaction owns its compact request and cannot accept a per-compaction thinking override, so OpenClaw warns and leaves that setting to Codex.
 
-AGENTS.md section reinjection after compaction is opt-in via `agents.defaults.compaction.postCompactionSections`; when unset or `[]`, OpenClaw does not append AGENTS.md excerpts on top of the compaction summary.
+AGENTS.md section reinjection after compaction remains opt-in via `agents.defaults.compaction.postCompactionSections`. Plugins can add other prompt context through `before_prompt_build`.
 
 ### Chunk boundaries and tool pairing
 
@@ -217,7 +213,7 @@ When splitting a long transcript into compaction chunks, OpenClaw keeps assistan
 Two triggers in the embedded OpenClaw agent:
 
 1. **Overflow recovery**: the model returns a context-overflow error (`request_too_large`, `context length exceeded`, `input exceeds the maximum number of tokens`, `input token count exceeds the maximum number of input tokens`, `input is too long for the model`, `ollama error: context length exceeded`, and other provider-shaped variants) - compact, then retry. When the provider reports the attempted token count, OpenClaw forwards that observed count into overflow-recovery compaction; if the provider confirms overflow but exposes no parseable count, OpenClaw passes a minimally over-budget synthetic count to compaction engines and diagnostics. If overflow recovery still fails, OpenClaw surfaces explicit guidance and preserves the current session mapping instead of silently rotating to a fresh session id - retry the message, run `/compact`, or run `/new`.
-2. **Threshold maintenance**: after a successful turn, when `contextTokens > contextWindow - reserveTokens`, where `contextWindow` is the model's context window and `reserveTokens` is headroom reserved for prompts plus the next model output.
+2. **Threshold maintenance**: after a successful turn, when the current context exceeds the model window minus OpenClaw's built-in headroom for prompts and the next model output.
 
 Two additional guards run outside these two triggers:
 
@@ -232,7 +228,6 @@ Two additional guards run outside these two triggers:
     defaults: {
       compaction: {
         enabled: true,
-        reserveTokens: 16384,
         keepRecentTokens: 20000,
       },
     },
@@ -240,7 +235,7 @@ Two additional guards run outside these two triggers:
 }
 ```
 
-OpenClaw also enforces a safety floor for embedded runs: if `compaction.reserveTokens` is below `reserveTokensFloor` (default `20000`), OpenClaw bumps it up. Set `agents.defaults.compaction.reserveTokensFloor: 0` to disable the floor. When the active model context window is known, both the floor and the final effective reserve are capped so the reserve cannot consume the whole prompt budget. This keeps small-context models (for example a 16K-token local model) from entering compaction from the first token; without a known context window, configured and current reserve budgets remain uncapped. Why a floor at all: leave enough headroom for multi-turn "housekeeping" (like the memory flush, below) before compaction becomes unavoidable. Implementation: `applyAgentCompactionSettingsFromConfig()` in `src/agents/agent-settings.ts`, called from embedded-runner turn and compaction setup paths.
+OpenClaw enforces a built-in reserve for embedded runs and caps it against the active model context window so it cannot consume the whole prompt budget. This keeps small-context local models from entering compaction from the first token while leaving enough headroom for multi-turn housekeeping such as the memory flush.
 
 Manual `/compact` honors an explicit `agents.defaults.compaction.keepRecentTokens` and keeps the runtime's recent-tail cut point. Without an explicit keep budget, manual compaction is a hard checkpoint and rebuilt context starts from the new summary.
 
@@ -287,12 +282,10 @@ Config (`agents.defaults.compaction.memoryFlush`), full reference at [/gateway/c
 | `model`                     | unset            | exact provider/model override for the flush turn only, for example `ollama/qwen3:8b`                                                   |
 | `softThresholdTokens`       | `4000`           | gap below the compaction threshold that triggers a flush                                                                               |
 | `forceFlushTranscriptBytes` | unset (disabled) | force a flush once the transcript file reaches this byte size (or string like `"2mb"`), even if token counters are stale; `0` disables |
-| `prompt`                    | built-in         | user message for the flush turn                                                                                                        |
-| `systemPrompt`              | built-in         | extra system prompt appended for the flush turn                                                                                        |
 
 Notes:
 
-- The default prompt/system prompt include a `NO_REPLY` hint to suppress delivery.
+- The built-in prompt and system prompt include a `NO_REPLY` hint to suppress delivery.
 - When `model` is set, the flush turn uses that model without inheriting the active session's fallback chain, so local-only housekeeping does not silently fall back to a paid conversation model on failure.
 - The flush runs once per compaction cycle (tracked in the session row).
 - The flush runs only for embedded OpenClaw sessions; CLI backends and heartbeat turns skip it.
@@ -305,7 +298,7 @@ OpenClaw exposes a `session_before_compact` hook in the extension API, but the f
 
 - **Session key wrong?** Start with [/concepts/session](/concepts/session) and confirm the `sessionKey` in `/status`.
 - **Store vs transcript mismatch?** Confirm the Gateway host and the store path from `openclaw status`.
-- **Compaction spam?** Check the model's context window (too small forces frequent compaction), `reserveTokens` (too high for the model window causes earlier compaction), and tool-result bloat (tune session pruning).
+- **Compaction spam?** Check the model's context window (too small forces frequent compaction) and tool-result bloat (tune session pruning).
 - **Every prompt seems to overflow on a small local model?** Confirm the provider reports the correct model context window. OpenClaw can cap the effective reserve only when that window is known.
 - **Silent turns leaking?** Confirm the reply starts with the exact silent token `NO_REPLY` (case-insensitive) and you are on a build that includes the streaming-suppression fix (`2026.1.10`+).
 

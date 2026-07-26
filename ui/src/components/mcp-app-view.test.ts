@@ -1,13 +1,21 @@
+import { GatewayErrorDetailCodes } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
-import { WIDGET_PROMPT_EVENT, type WidgetPromptEventDetail } from "./mcp-app-security.ts";
+import {
+  MCP_APP_VIEW_EXPIRED_EVENT,
+  WIDGET_PROMPT_EVENT,
+  type WidgetPromptEventDetail,
+} from "./mcp-app-security.ts";
 
 const bridgeMocks = vi.hoisted(() => ({
   instances: [] as Array<Record<string, unknown>>,
   transports: [] as Array<Record<string, unknown>>,
 }));
 
-vi.mock("@modelcontextprotocol/ext-apps/app-bridge", () => {
+// This constructor seam is a complete factory, and the unit-mock-registry
+// project prevents its substituted classes from reaching unrelated files.
+vi.mock("@modelcontextprotocol/ext-apps/app-bridge", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@modelcontextprotocol/ext-apps/app-bridge")>();
   class AppBridge {
     oninitialized?: () => void;
     messageHandler?: (params: {
@@ -64,7 +72,7 @@ vi.mock("@modelcontextprotocol/ext-apps/app-bridge", () => {
     }
   }
 
-  return { AppBridge, PostMessageTransport };
+  return { ...actual, AppBridge, PostMessageTransport };
 });
 
 const { McpAppView } = await import("./mcp-app-view.ts");
@@ -93,6 +101,8 @@ describe("mcp-app-view localization", () => {
     document.body.replaceChildren();
     delete (document as unknown as Record<string, unknown>).activeElement;
     delete document.documentElement.dataset.themeMode;
+    document.documentElement.style.removeProperty("--card");
+    document.documentElement.style.removeProperty("--text");
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     await i18n.setLocale("en");
@@ -172,6 +182,7 @@ describe("mcp-app-view localization", () => {
           content?: Array<{ type: string; text?: string }>;
           structuredContent?: Record<string, unknown>;
         }) => Promise<Record<string, never>>;
+        onsizechange?: (params: { height?: number }) => void;
         setHostContext: ReturnType<typeof vi.fn>;
         teardownResource: ReturnType<typeof vi.fn>;
         emit(type: string): void;
@@ -233,6 +244,54 @@ describe("mcp-app-view localization", () => {
     expect(received).toHaveLength(9);
   });
 
+  it("signals its board owner when the view lease has expired", async () => {
+    const request = vi.fn(async () => {
+      throw Object.assign(new Error("MCP App view expired"), {
+        details: { code: GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED },
+      });
+    });
+    const view = document.createElement(MCP_APP_VIEW_ELEMENT_NAME) as McpAppViewElement;
+    Reflect.set(view, "context", {
+      gateway: {
+        snapshot: { client: { request } },
+        connection: { gatewayUrl: "ws://gateway.example:8443/openclaw" },
+      },
+    });
+    view.sessionKey = "agent:main:main";
+    view.viewId = "mcp-app-expired";
+    const expired = vi.fn();
+    view.addEventListener(MCP_APP_VIEW_EXPIRED_EVENT, expired);
+    document.body.append(view);
+
+    await expect.poll(() => expired).toHaveBeenCalledOnce();
+    await expect
+      .poll(() => view.shadowRoot?.querySelector(".error")?.textContent)
+      .toContain("MCP App view expired");
+  });
+
+  it("does not renew the view for unrelated upstream expiry errors", async () => {
+    const request = vi.fn(async () => {
+      throw new Error("upstream token expired");
+    });
+    const view = document.createElement(MCP_APP_VIEW_ELEMENT_NAME) as McpAppViewElement;
+    Reflect.set(view, "context", {
+      gateway: {
+        snapshot: { client: { request } },
+        connection: { gatewayUrl: "ws://gateway.example:8443/openclaw" },
+      },
+    });
+    view.sessionKey = "agent:main:main";
+    view.viewId = "mcp-app-upstream-expired";
+    const expired = vi.fn();
+    view.addEventListener(MCP_APP_VIEW_EXPIRED_EVENT, expired);
+    document.body.append(view);
+
+    await expect
+      .poll(() => view.shadowRoot?.querySelector(".error")?.textContent)
+      .toContain("upstream token expired");
+    expect(expired).not.toHaveBeenCalled();
+  });
+
   it("does not advertise or install message support for read-only views", async () => {
     const { bridge } = await mountBridge(`view-read-only-${crypto.randomUUID()}`, false);
     expect(bridge.capabilities).not.toHaveProperty("message");
@@ -276,6 +335,8 @@ describe("mcp-app-view localization", () => {
       () => ({ width }) as DOMRect,
     );
     document.documentElement.dataset.themeMode = "dark";
+    document.documentElement.style.setProperty("--card", "#161920");
+    document.documentElement.style.setProperty("--text", "#d4d4d8");
 
     const { bridge, themeListeners, unsubscribe, view } = await mountBridge(
       `view-context-${crypto.randomUUID()}`,
@@ -283,19 +344,54 @@ describe("mcp-app-view localization", () => {
     expect(bridge.options.hostContext).toMatchObject({
       theme: "dark",
       containerDimensions: { width: 640, height: 600 },
+      styles: {
+        variables: {
+          "--color-background-primary": "#161920",
+          "--color-text-primary": "#d4d4d8",
+        },
+      },
     });
     await expect.poll(() => themeListeners.size).toBe(1);
 
     document.documentElement.dataset.themeMode = "light";
+    document.documentElement.style.setProperty("--card", "#ffffff");
+    document.documentElement.style.setProperty("--text", "#403c35");
     themeListeners.values().next().value?.();
     expect(bridge.setHostContext).toHaveBeenLastCalledWith(
-      expect.objectContaining({ theme: "light" }),
+      expect.objectContaining({
+        theme: "light",
+        styles: {
+          variables: expect.objectContaining({
+            "--color-background-primary": "#ffffff",
+            "--color-text-primary": "#403c35",
+          }),
+        },
+      }),
     );
 
     width = 720;
     resize?.();
     expect(bridge.setHostContext).toHaveBeenLastCalledWith(
       expect.objectContaining({ containerDimensions: { width: 720, height: 600 } }),
+    );
+
+    view.height = 480;
+    await view.updateComplete;
+    expect(view.shadowRoot?.querySelector("iframe")?.style.height).toBe("480px");
+    expect(bridge.setHostContext).toHaveBeenLastCalledWith(
+      expect.objectContaining({ containerDimensions: { width: 720, height: 480 } }),
+    );
+
+    bridge.onsizechange?.({ height: 900 });
+    expect(view.shadowRoot?.querySelector("iframe")?.style.height).toBe("900px");
+
+    view.fixedHeight = true;
+    await view.updateComplete;
+    expect(view.shadowRoot?.querySelector("iframe")?.style.height).toBe("480px");
+    bridge.onsizechange?.({ height: 900 });
+    expect(view.shadowRoot?.querySelector("iframe")?.style.height).toBe("480px");
+    expect(bridge.setHostContext).toHaveBeenLastCalledWith(
+      expect.objectContaining({ containerDimensions: { width: 720, height: 480 } }),
     );
 
     view.remove();

@@ -1,4 +1,6 @@
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
+import { isPluginMetadataSnapshotCompatible } from "../../../plugins/plugin-metadata-snapshot.js";
+import { resolveProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { isProfileInCooldown } from "../../auth-profiles.js";
 import type { ResolvedProviderAuth } from "../../model-auth.js";
@@ -70,10 +72,10 @@ export async function prepareEmbeddedRunRuntime(input: {
   });
   provider = modelSetup.provider;
   modelId = modelSetup.modelId;
+  const pluginMetadataSnapshot = input.preparedModelRuntime?.metadataSnapshot;
   const {
     requestedModelId,
     modelSelectionChangedByHook,
-    beforeAgentStartResult,
     requestStreamTransportOverrides,
     expectedHarnessArtifact,
     nativeModelOwnedHarnessId,
@@ -463,12 +465,34 @@ export async function prepareEmbeddedRunRuntime(input: {
   }
   input.markStartupStage("auth");
   input.notifyExecutionPhase("auth", { provider, model: modelId });
+  const compatibleMetadataSnapshot =
+    pluginMetadataSnapshot &&
+    pluginMetadataSnapshot.pluginIds === undefined &&
+    isPluginMetadataSnapshotCompatible({
+      snapshot: pluginMetadataSnapshot,
+      config: params.config,
+      env: process.env,
+      workspaceDir: input.workspaceDir,
+    })
+      ? pluginMetadataSnapshot
+      : undefined;
+  const providerRuntimeHandle = {
+    ...resolveProviderRuntimePluginHandle({
+      provider,
+      modelId,
+      config: params.config,
+      workspaceDir: input.workspaceDir,
+      env: process.env,
+      ...(compatibleMetadataSnapshot ? { pluginMetadataSnapshot: compatibleMetadataSnapshot } : {}),
+    }),
+    modelId,
+    prepared: true as const,
+  };
 
   return {
     provider,
     modelId,
     requestedModelId,
-    beforeAgentStartResult,
     expectedHarnessArtifact,
     nativeModelOwned,
     model,
@@ -516,6 +540,8 @@ export async function prepareEmbeddedRunRuntime(input: {
       apiKeyInfo,
       lastProfileId,
       runtimeAuthState,
+      pluginMetadataSnapshot,
+      providerRuntimeHandle,
     }),
   };
 }

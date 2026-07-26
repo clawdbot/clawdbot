@@ -27,7 +27,10 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentDir,
 } from "../agent-scope.js";
-import { acquireAgentRunPreparedModelRuntime } from "../prepared-model-runtime.js";
+import {
+  acquireAgentRunPreparedModelRuntime,
+  acquireReadOnlyPreparedModelRuntime,
+} from "../prepared-model-runtime.js";
 import {
   applyAgentRunSessionTargetIdentity,
   resolveAgentRunSessionTarget,
@@ -38,6 +41,7 @@ import {
   suspendSession,
   type SessionSuspensionParams,
 } from "../session-suspension.js";
+import { resolveSystemPromptRepoRoot } from "../system-prompt-params.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { runEmbeddedAgentViaCliBackendIfEligible } from "./cli-backend-dispatch.js";
 import { waitForDeferredTurnMaintenanceForSession } from "./context-engine-maintenance.js";
@@ -195,6 +199,7 @@ async function runEmbeddedAgentInternal(
       const config = params.config ?? EMPTY_EMBEDDED_AGENT_CONFIG;
       const requestedAgentDir =
         params.agentDir ?? resolveAgentDir(config, requestedWorkspaceResolution.agentId);
+      const retainIdleRunOwner = params.config === undefined;
       const preparedInput = {
         config,
         agentId: requestedWorkspaceResolution.agentId,
@@ -203,20 +208,32 @@ async function runEmbeddedAgentInternal(
         workspaceDir: requestedWorkspaceResolution.workspaceDir,
         preserveWorkspaceDirOnRefresh: !requestedWorkspaceResolution.isCanonicalWorkspace,
       };
-      // Every admitted run leases its exact generation. Non-gateway hosts release dynamic
-      // workspaces after the run so one-off workspace paths cannot accumulate persistent owners.
-      const preparedModelRuntimeLease = await acquireAgentRunPreparedModelRuntime(preparedInput);
-      const preparedModelRuntime = preparedModelRuntimeLease.snapshot;
+      // Configless direct hosts reuse one bounded idle generation. Gateway and explicitly
+      // configured runs release dynamic workspaces so one-off paths cannot accumulate owners.
+      const preparedModelRuntimeLease =
+        params.preparedModelRuntimeMode === "isolated-read-only"
+          ? await acquireReadOnlyPreparedModelRuntime(preparedInput)
+          : await acquireAgentRunPreparedModelRuntime(preparedInput, { retainIdleRunOwner });
+      const preparedModelRuntimeOwnerSnapshot = preparedModelRuntimeLease.snapshot;
       try {
         // A reload may complete while admission waits. The committed generation owns config,
         // directories, model selection, hooks, fallbacks, and every later run projection.
         const rebound = bindRunToPreparedModelRuntime({
           runParams: params,
           requestedWorkspaceResolution,
-          preparedModelRuntime,
+          preparedModelRuntime: preparedModelRuntimeOwnerSnapshot,
         });
         params = rebound.runParams;
         const workspaceResolution = rebound.workspaceResolution;
+        const preparedModelRuntime = Object.freeze({
+          ...preparedModelRuntimeOwnerSnapshot,
+          repoRoot:
+            resolveSystemPromptRepoRoot({
+              config: rebound.runParams.config,
+              workspaceDir: workspaceResolution.workspaceDir,
+              cwd: rebound.runParams.cwd,
+            }) ?? null,
+        });
         const preparedAgentId = workspaceResolution.agentId;
         const resolvedWorkspace = workspaceResolution.workspaceDir;
         const agentDir = preparedModelRuntime.agentDir;

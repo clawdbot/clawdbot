@@ -918,76 +918,6 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(
       testing.resolveGatewayMemoryStartupPolicy({ memory: { backend: "qmd" } } as never),
     ).toEqual({ mode: "off" });
-    expect(
-      testing.resolveGatewayMemoryStartupPolicy({
-        memory: { backend: "qmd", qmd: { update: { startup: "immediate", onBoot: false } } },
-      } as never),
-    ).toEqual({ mode: "immediate" });
-  });
-
-  it("allows qmd startup initialization when manager-start boot sync is disabled", async () => {
-    await startGatewayPostAttachRuntime({
-      ...createPostAttachParams(),
-      gatewayPluginConfigAtStart: {
-        hooks: { internal: { enabled: false } },
-        memory: { backend: "qmd", qmd: { update: { startup: "immediate", onBoot: false } } },
-      } as never,
-    });
-
-    await waitForGatewayTestState(() => {
-      expect(hoisted.startGatewayMemoryBackend).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  it("starts the qmd memory backend when startup refresh is immediate", async () => {
-    await startGatewayPostAttachRuntime({
-      ...createPostAttachParams(),
-      gatewayPluginConfigAtStart: {
-        hooks: { internal: { enabled: false } },
-        memory: { backend: "qmd", qmd: { update: { startup: "immediate" } } },
-      } as never,
-    });
-
-    await waitForGatewayTestState(() => {
-      expect(hoisted.startGatewayMemoryBackend).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  it("defers qmd memory backend startup refresh until the idle delay elapses", async () => {
-    vi.useFakeTimers();
-    try {
-      await startGatewaySidecars({
-        cfg: {
-          hooks: { internal: { enabled: false } },
-          memory: { backend: "qmd", qmd: { update: { startup: "idle", startupDelayMs: 25 } } },
-        } as never,
-        pluginRegistry: createPostAttachParams().pluginRegistry,
-        defaultWorkspaceDir: "/tmp/openclaw-workspace",
-        deps: {} as never,
-        startChannels: vi.fn(async () => {}),
-        log: { warn: vi.fn() },
-        logHooks: {
-          info: vi.fn(),
-          warn: vi.fn(),
-          error: vi.fn(),
-        },
-        logChannels: {
-          info: vi.fn(),
-          error: vi.fn(),
-        },
-      });
-
-      expect(hoisted.startGatewayMemoryBackend).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(24);
-      expect(hoisted.startGatewayMemoryBackend).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1);
-
-      await waitForGatewayTestState(() => {
-        expect(hoisted.startGatewayMemoryBackend).toHaveBeenCalledTimes(1);
-      });
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it("cleans startup session locks with bounded concurrency", async () => {
@@ -2172,12 +2102,21 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(startGatewaySidecarsValue).toHaveBeenCalledTimes(1);
   });
 
-  it("reconciles worker placement before starting channels and sidecars", async () => {
+  it("warms the CA cache before worker placement and sidecar startup", async () => {
+    let finishWarmup: (() => void) | undefined;
+    const warmupReady = new Promise<void>((resolve) => {
+      finishWarmup = resolve;
+    });
     let finishReconcile: (() => void) | undefined;
     const reconcileReady = new Promise<void>((resolve) => {
       finishReconcile = resolve;
     });
     const startupOrder: string[] = [];
+    const warmSystemCa = vi.fn(async () => {
+      startupOrder.push("ca-warmup");
+      await warmupReady;
+      startupOrder.push("ca-ready");
+    });
     const workerSidecar = { stop: vi.fn() };
     const startWorkerEnvironmentRuntime = vi.fn(async () => {
       startupOrder.push("worker-reconcile");
@@ -2195,7 +2134,7 @@ describe("startGatewayPostAttachRuntime", () => {
     const onGatewayLifetimeSidecars = vi.fn();
     const unavailableGatewayMethods = new Set<string>(STARTUP_UNAVAILABLE_GATEWAY_METHODS);
 
-    await startGatewayPostAttachRuntime(
+    const runtimePromise = startGatewayPostAttachRuntime(
       {
         ...createPostAttachParams(),
         unavailableGatewayMethods,
@@ -2205,21 +2144,37 @@ describe("startGatewayPostAttachRuntime", () => {
       },
       createPostAttachRuntimeDeps({
         startGatewaySidecars: startGatewaySidecarsValue,
+        warmSystemCa,
       }),
     );
 
     await waitForGatewayTestState(() => {
+      expect(warmSystemCa).toHaveBeenCalledTimes(1);
+    });
+    expect(startWorkerEnvironmentRuntime).not.toHaveBeenCalled();
+    expect(startGatewaySidecarsValue).not.toHaveBeenCalled();
+    expect(startupOrder).toEqual(["ca-warmup"]);
+
+    finishWarmup?.();
+    await runtimePromise;
+    await waitForGatewayTestState(() => {
       expect(startWorkerEnvironmentRuntime).toHaveBeenCalledTimes(1);
     });
     expect(startGatewaySidecarsValue).not.toHaveBeenCalled();
-    expect(startupOrder).toEqual(["worker-reconcile"]);
+    expect(startupOrder).toEqual(["ca-warmup", "ca-ready", "worker-reconcile"]);
     expect([...unavailableGatewayMethods]).toEqual([...STARTUP_UNAVAILABLE_GATEWAY_METHODS]);
 
     finishReconcile?.();
     await waitForGatewayTestState(() => {
       expect(startGatewaySidecarsValue).toHaveBeenCalledTimes(1);
     });
-    expect(startupOrder).toEqual(["worker-reconcile", "worker-ready", "gateway-sidecars"]);
+    expect(startupOrder).toEqual([
+      "ca-warmup",
+      "ca-ready",
+      "worker-reconcile",
+      "worker-ready",
+      "gateway-sidecars",
+    ]);
     expect([...unavailableGatewayMethods]).toEqual([]);
     expect(onGatewayLifetimeSidecars).toHaveBeenCalledWith(expect.arrayContaining([workerSidecar]));
   });
@@ -2521,6 +2476,7 @@ function createPostAttachRuntimeDeps(
     refreshLatestUpdateRestartSentinel: hoisted.refreshLatestUpdateRestartSentinel,
     scheduleGatewayUpdateCheck: hoisted.scheduleGatewayUpdateCheck,
     startGatewaySidecars: vi.fn(async () => ({ pluginServices: null, postReadySidecars: [] })),
+    warmSystemCa: vi.fn(async () => {}),
     startGatewayTailscaleExposure: hoisted.startGatewayTailscaleExposure,
     ...overrides,
   };

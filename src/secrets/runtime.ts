@@ -80,6 +80,7 @@ async function resolveLoadablePluginOrigins(params: {
   const workspaceDir = resolveAgentWorkspaceDir(
     params.config,
     resolveDefaultAgentId(params.config),
+    params.env,
   );
   const { listPluginOriginsFromMetadataSnapshot, loadPluginMetadataSnapshot } =
     await loadRuntimeManifestHelpers();

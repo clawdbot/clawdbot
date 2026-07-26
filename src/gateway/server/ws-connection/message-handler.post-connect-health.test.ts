@@ -48,7 +48,6 @@ const {
       auth: { mode: "none" },
       controlUi: {
         allowedOrigins: ["http://127.0.0.1:19001"],
-        dangerouslyDisableDeviceAuth: true,
       },
     },
   })),
@@ -322,7 +321,6 @@ function connectTrustedProxyUser(connId: string) {
       trustedProxies: ["10.0.0.1"],
       controlUi: {
         allowedOrigins: ["http://127.0.0.1:19001"],
-        dangerouslyDisableDeviceAuth: true,
       },
     },
   }));
@@ -540,7 +538,6 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     const isClosed = vi.fn(() => false);
     const harness = attachGatewayHarness({
       connId: "conn-1",
-      requestOrigin: "http://127.0.0.1:19001",
       connectNonce: "nonce-1",
       refreshHealthSnapshot,
       isClosed,
@@ -552,10 +549,10 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         minProtocol: PROTOCOL_VERSION,
         maxProtocol: PROTOCOL_VERSION,
         client: {
-          id: "openclaw-control-ui",
+          id: "gateway-client",
           version: "dev",
           platform: "test",
-          mode: "ui",
+          mode: "backend",
         },
         role: "operator",
         caps: [],
@@ -582,7 +579,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         auth_mode: "none",
         auth_method: "none",
         auth_provided: "none",
-        client_mode: "ui",
+        client_mode: "backend",
         has_device_identity: false,
         scope_count: 0,
       },
@@ -617,6 +614,12 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         id: profileId,
         email: "alice@example.com",
         name: "alice",
+        // Published route carries the profile revision (?v=<updatedAt>) so a
+        // reconnecting viewer's <img> refetches after an avatar upload instead
+        // of reusing the stale cached image for an unchanged URL.
+        avatarUrl: expect.stringMatching(
+          new RegExp(`^/api/users/${profileId}/avatar\\?v=\\d+$`, "u"),
+        ),
       });
       expect(first.harness.client).toMatchObject({
         authenticatedUserId: "alice@example.com",
@@ -633,7 +636,9 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         id: profileId,
         email: "alice@example.com",
         name: "alice",
-        avatarUrl: `/api/users/${profileId}/avatar`,
+        avatarUrl: expect.stringMatching(
+          new RegExp(`^/api/users/${profileId}/avatar\\?v=\\d+$`, "u"),
+        ),
       });
       expect(second.harness.client).toMatchObject({
         authenticatedUserProfile: { profileId, hasAvatar: true },
@@ -667,13 +672,10 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     );
   });
 
-  it("keeps token-authenticated presence free of user identity", async () => {
+  it("does not project user identity for a token-authenticated backend", async () => {
     const harness = attachGatewayHarness({
       connId: "conn-token-userless",
       connectNonce: "nonce-token-userless",
-      requestHost: "gateway.example.com:18789",
-      requestOrigin: "http://127.0.0.1:19001",
-      remoteAddr: "203.0.113.50",
       resolvedAuth: {
         mode: "token",
         token: "gateway-token",
@@ -685,10 +687,10 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
       client: {
-        id: "openclaw-control-ui",
+        id: "gateway-client",
         version: "dev",
         platform: "test",
-        mode: "ui",
+        mode: "backend",
       },
       role: "operator",
       caps: [],
@@ -706,12 +708,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     ).toMatchObject({
       ok: true,
     });
-    await waitForFast(() => {
-      expect(upsertPresenceMock).toHaveBeenCalledWith(
-        "conn-token-userless",
-        expect.not.objectContaining({ user: expect.anything() }),
-      );
-    });
+    expect(upsertPresenceMock).not.toHaveBeenCalled();
     expect(harness.client).not.toMatchObject({ authenticatedUserId: expect.anything() });
     expect(ensureProfileForEmailMock).not.toHaveBeenCalled();
   });

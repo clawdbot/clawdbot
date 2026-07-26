@@ -1,5 +1,6 @@
 import { normalizeRouteBasePath, normalizeRoutePath } from "@openclaw/uirouter";
 import type { RouteLocation } from "@openclaw/uirouter";
+import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
 
 const APP_ROUTE_DEFINITIONS = {
   chat: { path: "/chat" },
@@ -65,6 +66,33 @@ export function pathForRoute(routeId: RouteId, basePath = ""): string {
   return normalizedBasePath ? `${normalizedBasePath}${path}` : path;
 }
 
+export function pathForWorkboardBoard(boardId: string, basePath = ""): string {
+  if (!isValidWorkboardBoardId(boardId)) {
+    throw new Error("Invalid Workboard board id.");
+  }
+  const encodedBoardId = encodeURIComponent(boardId).replaceAll(".", "%2E");
+  return `${pathForRoute("workboard", basePath)}/${encodedBoardId}`;
+}
+
+export function workboardBoardIdFromPath(pathname: string, basePath = ""): string | null {
+  const normalizedPath = normalizePath(pathname);
+  const workboardPath = pathForRoute("workboard", basePath);
+  const prefix = `${workboardPath}/`;
+  if (!normalizedPath.startsWith(prefix)) {
+    return null;
+  }
+  const encodedBoardId = normalizedPath.slice(prefix.length);
+  if (!encodedBoardId || encodedBoardId.includes("/")) {
+    return null;
+  }
+  try {
+    const boardId = decodeURIComponent(encodedBoardId);
+    return isValidWorkboardBoardId(boardId) ? boardId : null;
+  } catch {
+    return null;
+  }
+}
+
 export function routeIdFromPath(pathname: string, basePath = ""): RouteId | null {
   const normalizedPath = normalizePath(pathname);
   const normalizedBasePath = normalizeBasePath(basePath);
@@ -78,6 +106,9 @@ export function routeIdFromPath(pathname: string, basePath = ""): RouteId | null
   const routePath = normalizedBasePath
     ? normalizedPath.slice(normalizedBasePath.length) || "/"
     : normalizedPath;
+  if (workboardBoardIdFromPath(normalizedPath, normalizedBasePath)) {
+    return "workboard";
+  }
   for (const routeId of APP_ROUTE_IDS) {
     const definition = APP_ROUTE_DEFINITIONS[routeId];
     const paths: readonly string[] =
@@ -110,12 +141,19 @@ export function inferBasePathFromPathname(pathname: string): string {
   for (let index = 0; index < segments.length; index += 1) {
     const candidate = `/${segments.slice(index).join("/")}`;
     const routePath = routePaths.find((path) => normalizePath(path) === candidate);
-    if (!routePath) {
+    const dynamicWorkboardRoute = workboardBoardIdFromPath(candidate) !== null;
+    if (!routePath && !dynamicWorkboardRoute) {
       continue;
     }
     const previousSegment = segments[index - 1];
-    const firstRouteSegment = routePath.split("/").find(Boolean);
-    if (index > 0 && previousSegment === firstRouteSegment && candidate === routePath) {
+    const firstRouteSegment = (routePath ?? APP_ROUTE_DEFINITIONS.workboard.path)
+      .split("/")
+      .find(Boolean);
+    if (
+      index > 0 &&
+      previousSegment === firstRouteSegment &&
+      (candidate === routePath || dynamicWorkboardRoute)
+    ) {
       return "";
     }
     return index ? `/${segments.slice(0, index).join("/")}` : "";

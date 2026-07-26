@@ -9,12 +9,12 @@
   },
   "type": "module",
   "dependencies": {
-    "@tencent-connect/qqbot-connector": "1.1.0",
+    "@tencent-connect/qqbot-connector": "1.2.0",
     "mpg123-decoder": "1.0.3",
     "p-map": "7.0.5",
     "pretty-ms": "9.3.0",
     "silk-wasm": "3.7.1",
-    "ws": "8.21.0",
+    "ws": "8.21.1",
     "zod": "4.4.3"
   },
   "devDependencies": {
@@ -37,14 +37,29 @@
     "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "qqbot",
-      "approvalFlags": ["native"],
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "QQBOT_APP_ID",
+            "QQBOT_CLIENT_SECRET"
+          ]
+        }
+      },
+      "approvalFlags": [
+        "native"
+      ],
       "label": "QQ Bot",
       "selectionLabel": "QQ Bot (Official API)",
       "detailLabel": "QQ Bot",
       "docsPath": "/channels/qqbot",
       "docsLabel": "qqbot",
       "blurb": "connect to QQ via official QQ Bot API with group chat and direct message support.",
-      "systemImage": "bubble.left.and.bubble.right"
+      "systemImage": "bubble.left.and.bubble.right",
+      "setup": { "fields": [
+        { "key": "token", "kind": "string", "sensitive": true, "cli": { "flags": "--token <appId:secret>", "description": "QQBot app id and client secret" } },
+        { "key": "tokenFile", "kind": "string", "sensitive": true, "cli": { "flags": "--token-file <path>", "description": "QQBot client secret file" } },
+        { "key": "useEnv", "kind": "boolean", "cli": { "flags": "--use-env", "description": "Use QQBOT environment credentials" } }
+      ] }
     },
     "install": {
       "npmSpec": "@openclaw/qqbot",

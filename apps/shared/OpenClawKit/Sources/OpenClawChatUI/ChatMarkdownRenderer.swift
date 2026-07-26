@@ -14,7 +14,7 @@ struct ChatMarkdownRenderer: View {
         case assistant
     }
 
-    struct InlineMathTypography {
+    struct InlineMathTypography: Equatable {
         static let body = Self(size: OpenClawChatTypography.bodySize, relativeTo: .body)
         static let callout = Self(size: 16, relativeTo: .callout)
 
@@ -27,6 +27,13 @@ struct ChatMarkdownRenderer: View {
     let variant: ChatMarkdownVariant
     let font: Font
     let textColor: Color
+    let inlineMathTypography: InlineMathTypography
+
+    static func styledText(_ content: String, font: Font) -> SwiftUI.Text {
+        SwiftUI.Text(content)
+            .font(font)
+    }
+
     var reveal: ChatMarkdownProseReveal?
 
     @ScaledMetric private var inlineMathFontSize: CGFloat
@@ -64,6 +71,7 @@ struct ChatMarkdownRenderer: View {
         self.variant = variant
         self.font = font
         self.textColor = textColor
+        self.inlineMathTypography = inlineMathTypography
         self.reveal = reveal
         self._inlineMathFontSize = ScaledMetric(
             wrappedValue: inlineMathTypography.size,
@@ -108,7 +116,22 @@ struct ChatMarkdownRenderer: View {
             ChatMathBlockView(block: math, textColor: self.textColor)
         case let .table(table):
             ChatMarkdownTableView(table: table)
+        case let .list(list):
+            self.listView(list)
+        case .thematicBreak:
+            Divider()
+                .accessibilityHidden(true)
         }
+    }
+
+    func listView(_ list: ChatMarkdownList) -> ChatMarkdownListView {
+        ChatMarkdownListView(
+            list: list,
+            context: self.context,
+            variant: self.variant,
+            font: self.font,
+            textColor: self.textColor,
+            inlineMathTypography: self.inlineMathTypography)
     }
 
     private func proseText(_ prose: ChatMarkdownProse, index: Int) -> SwiftUI.Text {
@@ -163,6 +186,10 @@ struct ChatMarkdownRenderSnapshot {
                 .math(math)
             case let .table(table):
                 .table(table)
+            case let .list(list):
+                .list(list)
+            case .thematicBreak:
+                .thematicBreak
             }
         }
         self.images = processed.images
@@ -184,6 +211,8 @@ enum ChatMarkdownRenderedBlock {
     case code(ChatCodeBlock)
     case math(ChatMathBlock)
     case table(ChatMarkdownTable)
+    case list(ChatMarkdownList)
+    case thematicBreak
 }
 
 @MainActor
@@ -463,7 +492,7 @@ private struct ChatInlineMathAccessibilityModifier: ViewModifier {
     }
 }
 
-/// Headings, fenced code, display math, and GFM tables are split out by `ChatMarkdownBlockSegmenter`
+/// Structural Markdown blocks are split out by `ChatMarkdownBlockSegmenter`
 /// before this runs, so prose only needs chat-style soft-break preservation.
 enum ChatMarkdownDisplayPreprocessor {
     static func preserveChatSoftBreaks(in markdown: String) -> String {

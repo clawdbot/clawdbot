@@ -168,7 +168,7 @@ export async function createLmstudioEmbeddingProvider(
   const remoteApiKey = !isFallbackActivation
     ? resolveMemorySecretInputString({
         value: options.remote?.apiKey,
-        path: "agents.*.memorySearch.remote.apiKey",
+        path: "memory.search.remote.apiKey",
       })
     : undefined;
   // memorySearch.remote is shared across primary + fallback providers.

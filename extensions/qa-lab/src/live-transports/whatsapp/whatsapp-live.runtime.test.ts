@@ -2091,9 +2091,11 @@ describe("WhatsApp QA live runtime", () => {
     });
 
     expect(cfg.plugins?.allow).toContain("whatsapp");
-    expect(cfg.tools?.media?.audio).toEqual({
-      enabled: true,
-      models: [{ provider: "openai", model: "gpt-4o-transcribe" }],
+    expect(cfg.tools?.media?.audio).toEqual({ enabled: true });
+    expect(cfg.tools?.media?.models?.[0]).toEqual({
+      provider: "openai",
+      model: "gpt-4o-transcribe",
+      capabilities: ["audio"],
     });
   });
 
@@ -2175,28 +2177,17 @@ describe("WhatsApp QA live runtime", () => {
       overrides: {
         inboundDebounceMs: 250,
         replyToMode: "all",
-        statusReactions: {
-          removeAckAfterReply: true,
-          timing: {
-            debounceMs: 0,
-            stallSoftMs: 60_000,
-          },
-        },
+        statusReactions: true,
       },
     });
 
     expect(cfg.channels?.whatsapp?.accounts?.sut?.replyToMode).toBe("all");
-    expect(cfg.channels?.whatsapp?.accounts?.sut?.debounceMs).toBe(250);
+    expect(cfg.messages?.inbound?.byChannel?.whatsapp).toBe(250);
     expect(cfg.channels?.whatsapp?.ackReaction).toMatchObject({
       direct: true,
       emoji: "👀",
     });
-    expect(cfg.messages?.removeAckAfterReply).toBe(true);
     expect(cfg.messages?.statusReactions?.enabled).toBe(true);
-    expect(cfg.messages?.statusReactions?.timing).toMatchObject({
-      debounceMs: 0,
-      stallSoftMs: 60_000,
-    });
   });
 
   it("maps WhatsApp broadcast overrides without deleting existing agent defaults", () => {
@@ -2261,7 +2252,7 @@ describe("WhatsApp QA live runtime", () => {
     expect(supportedHistoryLimit).toEqual(expect.any(Number));
     expect(supportedHistoryLimit).toBeGreaterThan(0);
     expect(cfg.channels?.whatsapp?.accounts?.sut?.replyToMode).toBe("all");
-    expect(cfg.channels?.whatsapp?.accounts?.sut?.debounceMs).toBe(0);
+    expect(cfg.messages?.inbound?.byChannel?.whatsapp).toBe(0);
     expect(cfg.channels?.whatsapp?.accounts?.sut?.groups?.[groupJid]?.requireMention).toBe(true);
   });
 

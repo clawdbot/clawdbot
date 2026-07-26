@@ -177,6 +177,7 @@ export async function discoverKilocodeModels(): Promise<ModelDefinitionConfig[]>
     });
     try {
       if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
         log.warn(`Failed to discover models: HTTP ${response.status}, using static catalog`);
         return buildStaticCatalog();
       }
@@ -198,7 +199,11 @@ export async function discoverKilocodeModels(): Promise<ModelDefinitionConfig[]>
         const id = readGatewayModelId(rawEntry);
         try {
           const entry = asGatewayModelEntry(rawEntry);
-          if (!id || discoveredIds.has(id)) {
+          if (
+            !id ||
+            discoveredIds.has(id) ||
+            entry.architecture?.output_modalities?.includes("image")
+          ) {
             continue;
           }
           models.push(toModelDefinition(entry));

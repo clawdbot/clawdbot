@@ -3,7 +3,8 @@ scenario:
   id: whatsapp-group-reply-to-bot-triggers
   surface: channels
   coverage:
-    primary: [channels.group-messages]
+    primary:
+      - whatsapp.group-allowlists
   execution:
     profiles: { "whatsapp:mock-default": 5 }
     kind: flow

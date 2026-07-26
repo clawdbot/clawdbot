@@ -1,12 +1,9 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { markAutoFallbackPrimaryProbe } from "../../agents/agent-scope.js";
-import { mergeEmbeddedAgentRunResultForModelFallbackExhaustion } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
+import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
-import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
-import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { buildAgentRuntimeOutcomePlan } from "../../agents/runtime-plan/build.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
 import { resolveHeartbeatRunScope } from "../../infra/heartbeat-run-scope.js";
@@ -30,7 +27,6 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
   const preserveProgressCallbackStartOrder = turn.opts?.preserveProgressCallbackStartOrder === true;
   const sourceRepliesAreToolOnly =
     turn.followupRun.run.sourceReplyDeliveryMode === "message_tool_only";
-  const outcomePlan = buildAgentRuntimeOutcomePlan();
   const runLane = CommandLane.Main;
   let queuedUserMessagePersistedAcrossFallback = false;
   let assistantErrorPersistedAcrossFallback = false;
@@ -58,47 +54,55 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
     sessionKey: turn.sessionKey,
     milestone: "before_model_fallback",
   });
+  const selection = resolveModelFallbackOptions(params.effectiveRun, params.runtimeConfig);
   return params.timing.measure("model_fallback", () =>
-    runWithModelFallback<EmbeddedAgentRunResult>({
-      ...resolveModelFallbackOptions(params.effectiveRun, params.runtimeConfig),
-      runId: params.runId,
-      sessionId: turn.followupRun.run.sessionId,
-      lane: runLane,
-      abortSignal: params.runAbortSignal,
-      resolveAgentHarnessRuntimeOverride: (provider) =>
-        resolveSessionRuntimeOverrideForProvider({
-          provider,
-          entry: params.liveModelSwitchRuntimeEntry ?? turn.getActiveSessionEntry(),
-          cfg: params.runtimeConfig,
-        }),
-      prepareAgentHarnessRuntime: async ({ provider, model, agentHarnessRuntimeOverride }) => {
-        await params.timing.measure("fallback_prepare_harness", () =>
-          ensureSelectedAgentHarnessPlugin({
-            config: params.runtimeConfig,
+    runEmbeddedAgentEntry<EmbeddedAgentRunResult>({
+      selection: {
+        cfg: selection.cfg,
+        provider: selection.provider,
+        model: selection.model,
+        agentDir: selection.agentDir,
+        fallbacksOverride: selection.fallbacksOverride,
+      },
+      identity: {
+        runId: params.runId,
+        agentId: turn.followupRun.run.agentId,
+        sessionId: turn.followupRun.run.sessionId,
+        sessionKey: selection.sessionKey,
+        lane: runLane,
+      },
+      harness: {
+        workspaceDir: turn.followupRun.run.workspaceDir,
+        sessionKey: turn.followupRun.run.runtimePolicySessionKey ?? turn.sessionKey,
+        preparation: {
+          kind: "measured",
+          run: (prepare) => params.timing.measure("fallback_prepare_harness", prepare),
+        },
+        resolveRuntimeOverride: (provider) =>
+          resolveSessionRuntimeOverrideForProvider({
             provider,
-            modelId: model,
-            agentId: turn.followupRun.run.agentId,
-            sessionKey: turn.followupRun.run.runtimePolicySessionKey ?? turn.sessionKey,
-            agentHarnessRuntimeOverride,
-            workspaceDir: turn.followupRun.run.workspaceDir,
+            entry: params.liveModelSwitchRuntimeEntry ?? turn.getActiveSessionEntry(),
+            cfg: params.runtimeConfig,
           }),
-        );
       },
-      onFallbackStep: (step) => {
-        emitModelFallbackStepLifecycle({ runId: params.runId, sessionKey: turn.sessionKey, step });
-      },
-      classifyResult: ({ result, provider, model }) =>
-        outcomePlan.classifyRunResult({
-          result,
-          provider,
-          model,
+      behavior: {
+        kind: "channel-delivery",
+        readDeliveryEvidence: () => ({
           hasDirectlySentBlockReply: params.directlySentBlockKeys.size > 0,
           hasBlockReplyPipelineOutput: Boolean(
             turn.blockReplyPipeline?.hasBuffered() || turn.blockReplyPipeline?.didStream(),
           ),
         }),
-      mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
-      run: async (provider, model, runOptions) => {
+      },
+      sessionOverride: {
+        kind: "reconcile-completed",
+        reconcile: params.clearRecoveredAutoFallbackPrimaryProbe,
+      },
+      abortSignal: params.runAbortSignal,
+      onFallbackStep: (step) => {
+        emitModelFallbackStepLifecycle({ runId: params.runId, sessionKey: turn.sessionKey, step });
+      },
+      runCandidate: async (provider, model, runOptions) => {
         params.state.attemptedRuntimeProvider = provider;
         params.state.attemptedRuntimeModel = model;
         const candidateRun = resolveFallbackCandidateRun(params.effectiveRun, provider, model);

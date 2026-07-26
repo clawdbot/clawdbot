@@ -61,6 +61,8 @@ import {
 } from "./runtime-options.js";
 import { SessionActorQueue } from "./session-actor-queue.js";
 
+const DEFAULT_ACP_MAX_CONCURRENT_SESSIONS = Number.POSITIVE_INFINITY;
+
 /** Coordinates ACP session metadata, runtime handles, per-session queues, and turn execution. */
 export class AcpSessionManager {
   private readonly actorQueue = new SessionActorQueue();
@@ -114,12 +116,12 @@ export class AcpSessionManager {
     };
   }
 
-  getObservabilitySnapshot(cfg: OpenClawConfig): AcpManagerObservabilitySnapshot {
+  getObservabilitySnapshot(): AcpManagerObservabilitySnapshot {
     const completedTurns = this.turnLatencyStats.completed + this.turnLatencyStats.failed;
     const averageLatencyMs =
       completedTurns > 0 ? Math.round(this.turnLatencyStats.totalMs / completedTurns) : 0;
     return {
-      runtimeCache: this.runtimeHandles.getObservabilitySnapshot(cfg),
+      runtimeCache: this.runtimeHandles.getObservabilitySnapshot(),
       turns: {
         active: this.activeTurnBySession.size,
         queueDepth: this.actorQueue.getTotalPendingCount(),
@@ -159,7 +161,7 @@ export class AcpSessionManager {
     if (!sessionKey) {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
-    await this.evictIdleRuntimeHandles(input.cfg);
+    await this.evictIdleRuntimeHandles();
     return await this.withSessionActor(sessionKey, async () => {
       return await runManagerInitializeSession({
         input,
@@ -182,7 +184,7 @@ export class AcpSessionManager {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
     this.throwIfAborted(params.signal);
-    await this.evictIdleRuntimeHandles(params.cfg);
+    await this.evictIdleRuntimeHandles();
     return await this.withSessionActor(
       sessionKey,
       async () =>
@@ -211,7 +213,7 @@ export class AcpSessionManager {
     }
     const runtimeMode = validateRuntimeModeInput(params.runtimeMode);
 
-    await this.evictIdleRuntimeHandles(params.cfg);
+    await this.evictIdleRuntimeHandles();
     return await this.withSessionActor(sessionKey, async () => {
       return await runSetManagerSessionRuntimeMode({
         cfg: params.cfg,
@@ -236,7 +238,7 @@ export class AcpSessionManager {
     const key = normalizedOption.key;
     const value = normalizedOption.value;
 
-    await this.evictIdleRuntimeHandles(params.cfg);
+    await this.evictIdleRuntimeHandles();
     return await this.withSessionActor(sessionKey, async () => {
       return await runSetManagerSessionConfigOption({
         cfg: params.cfg,
@@ -259,7 +261,7 @@ export class AcpSessionManager {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
 
-    await this.evictIdleRuntimeHandles(params.cfg);
+    await this.evictIdleRuntimeHandles();
     return await this.withSessionActor(sessionKey, async () => {
       return await runUpdateManagerSessionRuntimeOptions({
         cfg: params.cfg,
@@ -278,7 +280,7 @@ export class AcpSessionManager {
     if (!sessionKey) {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
-    await this.evictIdleRuntimeHandles(params.cfg);
+    await this.evictIdleRuntimeHandles();
     return await this.withSessionActor(sessionKey, async () => {
       return await runResetManagerSessionRuntimeOptions({
         cfg: params.cfg,
@@ -296,7 +298,7 @@ export class AcpSessionManager {
     if (!sessionKey) {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
-    await this.evictIdleRuntimeHandles(input.cfg);
+    await this.evictIdleRuntimeHandles();
     await this.withSessionActor(
       sessionKey,
       async () =>
@@ -327,7 +329,7 @@ export class AcpSessionManager {
     if (!sessionKey) {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
-    await this.evictIdleRuntimeHandles(params.cfg);
+    await this.evictIdleRuntimeHandles();
     await runManagerCancelSession({
       cfg: params.cfg,
       sessionKey,
@@ -348,7 +350,7 @@ export class AcpSessionManager {
     if (!sessionKey) {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
-    await this.evictIdleRuntimeHandles(input.cfg);
+    await this.evictIdleRuntimeHandles();
     return await this.withSessionActor(
       sessionKey,
       async () =>
@@ -390,11 +392,7 @@ export class AcpSessionManager {
   }
 
   private enforceConcurrentSessionLimit(params: { cfg: OpenClawConfig; sessionKey: string }): void {
-    const configuredLimit = params.cfg.acp?.maxConcurrentSessions;
-    if (typeof configuredLimit !== "number" || !Number.isFinite(configuredLimit)) {
-      return;
-    }
-    const limit = Math.max(1, Math.floor(configuredLimit));
+    const limit = DEFAULT_ACP_MAX_CONCURRENT_SESSIONS;
     if (this.runtimeHandles.has(params.sessionKey)) {
       return;
     }
@@ -432,9 +430,8 @@ export class AcpSessionManager {
     return await resolveManagerRuntimeCapabilities(params);
   }
 
-  private async evictIdleRuntimeHandles(cfg: OpenClawConfig): Promise<void> {
+  private async evictIdleRuntimeHandles(): Promise<void> {
     await this.runtimeHandles.evictIdle({
-      cfg,
       actorQueue: this.actorQueue,
       activeTurnBySession: this.activeTurnBySession,
     });

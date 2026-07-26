@@ -59,7 +59,8 @@ vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal)
   getCurrentPluginMetadataSnapshot: hoisted.getCurrentPluginMetadataSnapshotMock,
 }));
 
-vi.mock("./simple-completion-transport.js", () => ({
+vi.mock("@openclaw/ai/transports", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/ai/transports")>()),
   prepareModelForSimpleCompletion: hoisted.prepareModelForSimpleCompletionMock,
 }));
 
@@ -640,11 +641,10 @@ describe("prepareSimpleCompletionModel", () => {
     );
   });
 
-  it("can preserve asynchronous provider model discovery", async () => {
+  it("uses asynchronous provider model discovery", async () => {
     // Use a standalone mock so the default beforeEach delegation from
     // resolveModelAsyncMock → resolveModelMock does not pollute call
-    // history. The point of the test is that when useAsyncModelResolution
-    // is true, only the async resolver is invoked.
+    // history. Only the async resolver should be invoked.
     const resolveModelAsync = vi.fn().mockResolvedValue({
       model: {
         provider: "anthropic",
@@ -663,7 +663,6 @@ describe("prepareSimpleCompletionModel", () => {
       cfg: undefined,
       provider: "anthropic",
       modelId: "claude-opus-4-6",
-      useAsyncModelResolution: true,
       modelResolver: resolveModelAsync,
     });
 

@@ -1,6 +1,6 @@
 // Tests plugin activation boundaries during root package startup.
 import { describe, expect, it, vi } from "vitest";
-import { normalizeModelRef } from "./agents/model-selection-normalize.js";
+import { normalizeModelRef } from "./agents/model-ref-shared.js";
 import { isStaticallyChannelConfigured } from "./config/channel-configured-shared.js";
 import { parseBrowserMajorVersion } from "./plugin-sdk/browser-host-inspection.js";
 
@@ -45,11 +45,9 @@ const loadPluginManifestRegistryForPluginRegistry = vi.hoisted(() =>
         channels: ["discord", "irc", "slack", "telegram"],
         providers: [],
         cliBackends: [],
-        channelEnvVars: {
-          discord: ["DISCORD_BOT_TOKEN"],
-          irc: ["IRC_HOST", "IRC_NICK"],
-          slack: ["SLACK_BOT_TOKEN"],
-          telegram: ["TELEGRAM_BOT_TOKEN"],
+        packageChannel: {
+          id: "discord",
+          configuredState: { env: { anyOf: ["DISCORD_BOT_TOKEN"] } },
         },
         modelIdNormalization: testModelIdNormalization,
         skills: [],

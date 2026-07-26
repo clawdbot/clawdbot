@@ -18,6 +18,7 @@ export function createNostrRelaySubscriptionGroup(options: {
   const relays = [...new Set(options.relays)];
   const subscriptions: Array<ReturnType<SimplePool["subscribeMany"]>> = [];
   const deadlineTimers = new Set<ReturnType<typeof setTimeout>>();
+  let locallyClosing = false;
   const backfillStatus = new Map<string, BackfillStatus>(
     relays.map((relay): [string, BackfillStatus] => [relay, "pending"]),
   );
@@ -74,7 +75,9 @@ export function createNostrRelaySubscriptionGroup(options: {
               clearTimeout(deadlineTimer);
               deadlineTimers.delete(deadlineTimer);
               settleBackfill(relay, "incomplete");
-              options.onClose(relay, reasons);
+              if (!locallyClosing && !options.abort.aborted) {
+                options.onClose(relay, reasons);
+              }
             },
             // Own earlier deadline marks synthetic library EOSE as incomplete.
             maxWait: confirmDeadlineMs + LIBRARY_EOSE_TIMEOUT_MARGIN_MS,
@@ -84,6 +87,8 @@ export function createNostrRelaySubscriptionGroup(options: {
       }
     },
     close: async (reason: string): Promise<void> => {
+      // nostr-tools reports caller-requested closes through the same callback as relay failures.
+      locallyClosing = true;
       clearDeadlines();
       await Promise.all(subscriptions.map(async (subscription) => subscription.close(reason)));
     },

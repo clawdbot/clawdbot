@@ -8,6 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 const execSyncMock = vi.fn();
 const CLI_CREDENTIALS_CACHE_TTL_MS = 15 * 60 * 1000;
 let readClaudeCliCredentialsCached: typeof import("./cli-credentials.js").readClaudeCliCredentialsCached;
+let readCodexCliActiveApiKey: typeof import("./cli-credentials.js").readCodexCliActiveApiKey;
 let readCodexCliCredentialsCached: typeof import("./cli-credentials.js").readCodexCliCredentialsCached;
 let readGeminiCliCredentialsCached: typeof import("./cli-credentials.js").readGeminiCliCredentialsCached;
 let readMiniMaxCliCredentialsCached: typeof import("./cli-credentials.js").readMiniMaxCliCredentialsCached;
@@ -62,6 +63,7 @@ describe("cli credentials", () => {
   beforeAll(async () => {
     ({
       readClaudeCliCredentialsCached,
+      readCodexCliActiveApiKey,
       readCodexCliCredentialsCached,
       readGeminiCliCredentialsCached,
       readMiniMaxCliCredentialsCached,
@@ -597,6 +599,83 @@ describe("cli credentials", () => {
     );
 
     expect(readCodexAuth({ platform: "linux", execSync: execSyncMock })).toBeNull();
+  });
+
+  it("reads API-key auth from the active Codex Keychain store", () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-keychain-api-key-"));
+    execSyncMock.mockImplementation((command: unknown) =>
+      String(command).includes("codex login status")
+        ? "Logged in using an API key - keychain***i-key"
+        : JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "keychain-api-key" }),
+    );
+
+    expect(
+      readCodexCliActiveApiKey({
+        codexHome: tempHome,
+        platform: "darwin",
+        execSync: execSyncMock,
+      }),
+    ).toEqual({ type: "api_key", provider: "openai", key: "keychain-api-key" });
+  });
+
+  it("prefers active Codex OAuth over a stale file API key", () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-keychain-oauth-"));
+    fs.writeFileSync(
+      path.join(tempHome, "auth.json"),
+      JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "stale-file-api-key" }),
+      "utf8",
+    );
+    execSyncMock.mockReturnValue("Logged in using ChatGPT");
+
+    expect(
+      readCodexCliActiveApiKey({
+        codexHome: tempHome,
+        platform: "darwin",
+        execSync: execSyncMock,
+      }),
+    ).toBeNull();
+    expect(execSyncMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the API key that Codex reports active instead of a stale Keychain record", () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-default-file-"));
+    fs.writeFileSync(
+      path.join(tempHome, "auth.json"),
+      JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "active-file-api-key" }),
+      "utf8",
+    );
+    execSyncMock.mockImplementation((command: unknown) =>
+      String(command).includes("codex login status")
+        ? "Logged in using an API key - active-f***i-key"
+        : JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "stale-keychain-api-key" }),
+    );
+
+    expect(
+      readCodexCliActiveApiKey({
+        codexHome: tempHome,
+        platform: "darwin",
+        execSync: execSyncMock,
+      }),
+    ).toEqual({ type: "api_key", provider: "openai", key: "active-file-api-key" });
+    expect(execSyncMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("accepts legacy Codex API-key status only with one readable candidate", () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-legacy-status-"));
+    fs.writeFileSync(
+      path.join(tempHome, "auth.json"),
+      JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "legacy-file-api-key" }),
+      "utf8",
+    );
+    execSyncMock.mockReturnValue("Logged in using an API key");
+
+    expect(
+      readCodexCliActiveApiKey({
+        codexHome: tempHome,
+        platform: "linux",
+        execSync: execSyncMock,
+      }),
+    ).toEqual({ type: "api_key", provider: "openai", key: "legacy-file-api-key" });
   });
 
   it("treats an empty Codex auth.json API-key field as API-key mode", () => {

@@ -51,7 +51,7 @@ Before proposing or building a custom system, feature, workflow, tool, integrati
 
 ## Heartbeats (optional)
 
-- HEARTBEAT.md can hold a tiny checklist for heartbeat runs; keep it small.
+- The heartbeat monitor's cron scratch can hold a tiny checklist for heartbeat runs; keep it small.
 
 ## Customize
 

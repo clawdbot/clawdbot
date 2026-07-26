@@ -879,6 +879,24 @@ describe("handleModelsCommand", () => {
     });
   });
 
+  it("filters nested provider namespaces with the same prefix policy as enforcement", async () => {
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { provider: "clawrouter", id: "anthropic/claude-haiku-4-5", name: "Claude Haiku" },
+      { provider: "clawrouter", id: "google/gemini-3.5-flash", name: "Gemini Flash" },
+      { provider: "openai", id: "gpt-5.6-sol", name: "GPT-5.6 Sol" },
+    ]);
+    modelProviderAuthMocks.authenticatedProviders = new Set(["clawrouter", "openai"]);
+
+    const data = await buildModelsProviderData({
+      agents: { defaults: { modelPolicy: { allow: ["clawrouter/anthropic/*"] } } },
+    } as OpenClawConfig);
+
+    expect(data.providers).toEqual(["clawrouter"]);
+    expect([...expectDefined(data.byProvider.get("clawrouter"), "clawrouter models")]).toEqual([
+      "anthropic/claude-haiku-4-5",
+    ]);
+  });
+
   it("keeps the telegram provider picker browse-only", async () => {
     modelCatalogMocks.loadModelCatalog.mockResolvedValue([
       { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
@@ -1079,30 +1097,14 @@ describe("handleModelsCommand", () => {
     expect(authCheckerParams?.workspaceDir).toBe("/tmp/spawned-workspace");
   });
 
-  it("returns a deprecation message for /models add when no provider is given", async () => {
-    const result = await handleModelsCommand(buildParams("/models add"), true);
-
-    expect(result).toEqual({
-      shouldContinue: false,
-      reply: { text: MODELS_ADD_DEPRECATED_TEXT },
-    });
-  });
-
-  it("returns a deprecation message for /models add <provider>", async () => {
-    const result = await handleModelsCommand(buildParams("/models add ollama"), true);
-
-    expect(result).toEqual({
-      shouldContinue: false,
-      reply: { text: MODELS_ADD_DEPRECATED_TEXT },
-    });
-  });
-
-  it("returns a deprecation message for /models add <provider> <modelId>", async () => {
-    const result = await handleModelsCommand(buildParams("/models add openai gpt-5.5"), true);
-
-    expect(result).toEqual({
-      shouldContinue: false,
-      reply: { text: MODELS_ADD_DEPRECATED_TEXT },
-    });
-  });
+  it.each(["/models add", "/models add ollama", "/models add openai gpt-5.5"])(
+    "returns a deprecation message for %s",
+    async (command) => {
+      const result = await handleModelsCommand(buildParams(command), true);
+      expect(result).toEqual({
+        shouldContinue: false,
+        reply: { text: MODELS_ADD_DEPRECATED_TEXT },
+      });
+    },
+  );
 });

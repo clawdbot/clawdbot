@@ -2,11 +2,8 @@
  * Server channel lifecycle tests.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  ChannelGatewayContext,
-  ChannelId,
-  ChannelPlugin,
-} from "../channels/plugins/types.public.js";
+import type { ChannelGatewayContext } from "../channels/plugins/types.adapters.js";
+import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.public.js";
 import {
   createSubsystemLogger,
   type SubsystemLogger,
@@ -224,6 +221,7 @@ function createManager(options?: {
   startupTrace?: { measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T> };
   deferStartupAccountStartsUntil?: Promise<void>;
   fillChannelDependencies?: boolean;
+  ambientAutostartSuppressedChannelIds?: ReadonlySet<string>;
 }) {
   const log = createSubsystemLogger("gateway/server-channels-test");
   const channelLogs = { discord: log } as Record<ChannelId, SubsystemLogger>;
@@ -247,6 +245,9 @@ function createManager(options?: {
     ...(options?.startupTrace ? { startupTrace: options.startupTrace } : {}),
     ...(options?.deferStartupAccountStartsUntil
       ? { deferStartupAccountStartsUntil: options.deferStartupAccountStartsUntil }
+      : {}),
+    ...(options?.ambientAutostartSuppressedChannelIds
+      ? { ambientAutostartSuppressedChannelIds: options.ambientAutostartSuppressedChannelIds }
       : {}),
   });
   createdManagers.push({ channelIds, manager });
@@ -1102,6 +1103,25 @@ describe("server-channels auto restart", () => {
 
     expect(startAccount).toHaveBeenCalledTimes(1);
     expect(manager.getAutostartSuppression()?.reason).toBe("crash-loop-breaker");
+  });
+
+  it("suppresses ambient dev channel autostart while allowing manual starts", async () => {
+    const startAccount = vi.fn(async (_ctx: ChannelGatewayContext<TestAccount>) => {});
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager({
+      ambientAutostartSuppressedChannelIds: new Set(["discord"]),
+    });
+
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    expect(startAccount).not.toHaveBeenCalled();
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.default?.lastError).toBe(
+      "ambient channel credentials suppressed for dev gateway",
+    );
+
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID, { manual: true });
+    await flushMicrotasks();
+
+    expect(startAccount).toHaveBeenCalledTimes(1);
   });
 
   it("deduplicates concurrent start requests for the same account", async () => {

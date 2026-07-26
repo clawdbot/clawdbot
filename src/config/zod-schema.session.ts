@@ -10,11 +10,8 @@ import {
   InboundDebounceSchema,
   NativeCommandsSettingSchema,
   QueueSchema,
-  TypingModeSchema,
-  TtsConfigSchema,
   VisibleRepliesSchema,
 } from "./zod-schema.core.js";
-import { sensitive } from "./zod-schema.sensitive.js";
 
 const SessionResetConfigSchema = z
   .object({
@@ -58,7 +55,6 @@ export const SessionSchema = z
       .optional(),
     identityLinks: z.record(z.string(), z.array(z.string())).optional(),
     resetTriggers: z.array(z.string()).optional(),
-    idleMinutes: z.number().int().positive().optional(),
     reset: SessionResetConfigSchema.optional(),
     resetByType: z
       .object({
@@ -70,24 +66,8 @@ export const SessionSchema = z
       .optional(),
     resetByChannel: z.record(z.string(), SessionResetConfigSchema).optional(),
     store: z.string().optional(),
-    typingIntervalSeconds: z.number().int().positive().optional(),
-    typingMode: TypingModeSchema.optional(),
     mainKey: z.string().optional(),
     sendPolicy: SessionSendPolicySchema.optional(),
-    writeLock: z
-      .object({
-        acquireTimeoutMs: z.number().int().positive().optional(),
-        staleMs: z.number().int().positive().optional(),
-        maxHoldMs: z.number().int().positive().optional(),
-      })
-      .strict()
-      .optional(),
-    agentToAgent: z
-      .object({
-        maxPingPongTurns: z.number().int().min(0).max(20).optional(),
-      })
-      .strict()
-      .optional(),
     threadBindings: z
       .object({
         enabled: z.boolean().optional(),
@@ -95,6 +75,14 @@ export const SessionSchema = z
         maxAgeHours: z.number().nonnegative().optional(),
         spawnSessions: z.boolean().optional(),
         defaultSpawnContext: z.enum(["isolated", "fork"]).optional(),
+      })
+      .strict()
+      .optional(),
+    sharing: z
+      .object({
+        readOnly: z.boolean().optional(),
+        suggest: z.boolean().optional(),
+        drafts: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -158,43 +146,13 @@ export const MessagesSchema = z
     ackReactionScope: z
       .enum(["group-mentions", "group-all", "direct", "all", "off", "none"])
       .optional(),
-    removeAckAfterReply: z.boolean().optional(),
     statusReactions: z
       .object({
         enabled: z.boolean().optional(),
-        emojis: z
-          .object({
-            queued: z.string().optional(),
-            thinking: z.string().optional(),
-            tool: z.string().optional(),
-            coding: z.string().optional(),
-            web: z.string().optional(),
-            deploy: z.string().optional(),
-            build: z.string().optional(),
-            concierge: z.string().optional(),
-            done: z.string().optional(),
-            error: z.string().optional(),
-            stallSoft: z.string().optional(),
-            stallHard: z.string().optional(),
-            compacting: z.string().optional(),
-          })
-          .strict()
-          .optional(),
-        timing: z
-          .object({
-            debounceMs: z.number().int().min(0).optional(),
-            stallSoftMs: z.number().int().min(0).optional(),
-            stallHardMs: z.number().int().min(0).optional(),
-            doneHoldMs: z.number().int().min(0).optional(),
-            errorHoldMs: z.number().int().min(0).optional(),
-          })
-          .strict()
-          .optional(),
       })
       .strict()
       .optional(),
     suppressToolErrors: z.boolean().optional(),
-    tts: TtsConfigSchema,
   })
   .strict()
   .optional();
@@ -211,10 +169,7 @@ export const CommandsSchema = z
     plugins: z.boolean().optional(),
     debug: z.boolean().optional(),
     restart: z.boolean().optional().default(true),
-    useAccessGroups: z.boolean().optional(),
     ownerAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-    ownerDisplay: z.enum(["raw", "hash"]).optional().default("raw"),
-    ownerDisplaySecret: z.string().optional().register(sensitive),
     allowFrom: ElevatedAllowFromSchema.optional(),
   })
   .strict()
@@ -225,6 +180,5 @@ export const CommandsSchema = z
         native: "auto",
         nativeSkills: "auto",
         restart: true,
-        ownerDisplay: "raw",
       }) as const,
   );

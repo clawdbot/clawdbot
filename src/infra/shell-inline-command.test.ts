@@ -33,6 +33,18 @@ describe("resolveInlineCommandMatch", () => {
       expected: { command: "echo hi", valueTokenIndex: 2 },
     },
     {
+      name: "extracts yash long cmdline option",
+      argv: ["yash", "--cmdline", "echo hi"],
+      opts: {},
+      expected: { command: "echo hi", valueTokenIndex: 2 },
+    },
+    {
+      name: "keeps pre-c clustered shell flags separate from the command",
+      argv: ["yash", "-xc", "echo hi"],
+      opts: { allowCombinedC: true },
+      expected: { command: "echo hi", valueTokenIndex: 2 },
+    },
+    {
       name: "rejects combined -c forms when disabled",
       argv: ["sh", "-cecho hi"],
       opts: { allowCombinedC: false },

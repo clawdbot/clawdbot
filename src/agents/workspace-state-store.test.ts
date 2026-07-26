@@ -49,6 +49,17 @@ function deleteState(targetDir: string): void {
   deleteWorkspaceState(prepareWorkspaceStateDeletion(targetDir));
 }
 
+function insertPersistedAttestationHash(filename: string, sha256: string): void {
+  const identity = resolveWorkspaceStateIdentity(workspaceDir());
+  const db = openOpenClawStateDatabase().db;
+  db.prepare(
+    "INSERT INTO workspace_attestations (workspace_key, attested_at_ms, updated_at_ms) VALUES (?, 1, 1)",
+  ).run(identity.workspaceKey);
+  db.prepare(
+    "INSERT INTO workspace_generated_bootstrap_hashes (workspace_key, filename, sha256) VALUES (?, ?, ?)",
+  ).run(identity.workspaceKey, filename, sha256);
+}
+
 describe("workspace state store", () => {
   it("round-trips setup and attestation state after a database restart", () => {
     const dir = workspaceDir();
@@ -79,6 +90,44 @@ describe("workspace state store", () => {
       ["AGENTS.md", "a".repeat(64)],
       ["TOOLS.md", "b".repeat(64)],
     ]);
+  });
+
+  it.each(["HEARTBEAT.md", "RETIRED.md"])(
+    "reads a persisted hash for a retired or unknown bootstrap filename: %s",
+    (filename) => {
+      insertPersistedAttestationHash(filename, "a".repeat(64));
+
+      expect([
+        ...readWorkspaceStateSnapshot(workspaceDir()).attestation!.generatedHashes.entries(),
+      ]).toStrictEqual([[filename, "a".repeat(64)]]);
+    },
+  );
+
+  it.each([
+    "../AGENTS.md",
+    "nested\\AGENTS.md",
+    "C:outside.md",
+    "NUL.md",
+    "com1.md",
+    "CON.md",
+    "COM¹.md",
+    "CONIN$.md",
+    "CONOUT$.md",
+    ".hidden.md",
+  ])("rejects an unsafe persisted attestation filename: %s", (filename) => {
+    insertPersistedAttestationHash(filename, "a".repeat(64));
+
+    expect(() => readWorkspaceStateSnapshot(workspaceDir())).toThrow(
+      "workspace attestation hash row is invalid",
+    );
+  });
+
+  it("rejects a malformed persisted attestation hash", () => {
+    insertPersistedAttestationHash("AGENTS.md", "a".repeat(63));
+
+    expect(() => readWorkspaceStateSnapshot(workspaceDir())).toThrow(
+      "workspace attestation hash row is invalid",
+    );
   });
 
   it("never regresses persisted setup milestones", () => {

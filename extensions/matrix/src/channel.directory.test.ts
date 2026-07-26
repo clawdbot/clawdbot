@@ -5,6 +5,7 @@ import type { RuntimeEnv } from "../runtime-api.js";
 import { matrixPlugin } from "./channel.js";
 import { resolveMatrixAccount } from "./matrix/accounts.js";
 import { resolveMatrixConfigForAccount } from "./matrix/client/config.js";
+import type { MatrixSetupInput } from "./setup-config.js";
 import { installMatrixTestRuntime } from "./test-runtime.js";
 import type { CoreConfig } from "./types.js";
 
@@ -360,7 +361,7 @@ describe("matrix directory", () => {
         homeserver: "https://matrix.example.org",
         userId: "@ops:example.org",
         accessToken: "ops-token",
-      },
+      } as MatrixSetupInput,
     }) as CoreConfig;
 
     expect(updated.channels?.["matrix"]?.accessToken).toBeUndefined();
@@ -405,7 +406,7 @@ describe("matrix directory", () => {
         homeserver: "https://matrix.example.org",
         userId: "@bot:example.org",
         accessToken: "bot-token",
-      },
+      } as MatrixSetupInput,
     }) as CoreConfig;
 
     const matrixConfig = updated.channels?.["matrix"];
@@ -580,7 +581,7 @@ describe("matrix directory", () => {
         homeserver: "https://matrix.example.org",
         userId: "@bot:example.org",
         password: "new-password", // pragma: allowlist secret
-      },
+      } as MatrixSetupInput,
     }) as CoreConfig;
 
     expect(updated.channels?.["matrix"]?.accounts?.default?.password).toBe("new-password");
@@ -608,7 +609,7 @@ describe("matrix directory", () => {
       input: {
         homeserver: "https://matrix.example.org",
         accessToken: "new-token",
-      },
+      } as MatrixSetupInput,
     }) as CoreConfig;
 
     expect(updated.channels?.["matrix"]?.accounts?.default?.accessToken).toBe("new-token");

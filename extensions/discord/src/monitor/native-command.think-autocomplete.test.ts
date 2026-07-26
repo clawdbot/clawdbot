@@ -42,10 +42,7 @@ const resolveConfiguredBindingRouteMock = vi.hoisted(() =>
   vi.fn<ResolveConfiguredBindingRoute>(() => createUnboundConfiguredRouteResult()),
 );
 const providerThinkingMocks = vi.hoisted(() => ({
-  resolveProviderBinaryThinking: vi.fn(),
-  resolveProviderDefaultThinkingLevel: vi.fn(),
   resolveProviderThinkingProfile: vi.fn(),
-  resolveProviderXHighThinking: vi.fn(),
 }));
 const buildModelsProviderDataMock = vi.hoisted(() => vi.fn());
 
@@ -166,23 +163,8 @@ function installProviderThinkingRegistryForTest(): void {
       label: "Discord Test Thinking",
       aliases: ["anthropic", "openai"],
       auth: [],
-      isBinaryThinking: (context) =>
-        providerThinkingMocks.resolveProviderBinaryThinking({
-          provider: context.provider,
-          context,
-        }),
-      supportsXHighThinking: (context) =>
-        providerThinkingMocks.resolveProviderXHighThinking({
-          provider: context.provider,
-          context,
-        }),
       resolveThinkingProfile: (context) =>
         providerThinkingMocks.resolveProviderThinkingProfile({
-          provider: context.provider,
-          context,
-        }),
-      resolveDefaultThinkingLevel: (context) =>
-        providerThinkingMocks.resolveProviderDefaultThinkingLevel({
           provider: context.provider,
           context,
         }),
@@ -204,13 +186,19 @@ async function loadDiscordThinkAutocompleteModulesForTest() {
 
 describe("discord native /think autocomplete", () => {
   beforeAll(async () => {
-    providerThinkingMocks.resolveProviderBinaryThinking.mockReturnValue(undefined);
-    providerThinkingMocks.resolveProviderDefaultThinkingLevel.mockReturnValue(undefined);
-    providerThinkingMocks.resolveProviderThinkingProfile.mockReturnValue(undefined);
-    providerThinkingMocks.resolveProviderXHighThinking.mockImplementation(({ provider, context }) =>
-      provider === "openai" && ["gpt-5.4", "gpt-5.4-pro"].includes(context.modelId)
-        ? true
-        : undefined,
+    providerThinkingMocks.resolveProviderThinkingProfile.mockImplementation(
+      ({ provider, context }) =>
+        provider === "openai" && ["gpt-5.4", "gpt-5.4-pro"].includes(context.modelId)
+          ? {
+              levels: [
+                { id: "off" },
+                { id: "low" },
+                { id: "medium" },
+                { id: "high" },
+                { id: "xhigh" },
+              ],
+            }
+          : undefined,
     );
     buildModelsProviderDataMock.mockResolvedValue({
       byProvider: new Map<string, Set<string>>(),
@@ -235,17 +223,20 @@ describe("discord native /think autocomplete", () => {
     ensureConfiguredBindingRouteReadyMock.mockResolvedValue({ ok: true });
     resolveConfiguredBindingRouteMock.mockReset();
     resolveConfiguredBindingRouteMock.mockReturnValue(createUnboundConfiguredRouteResult());
-    providerThinkingMocks.resolveProviderBinaryThinking.mockReset();
-    providerThinkingMocks.resolveProviderBinaryThinking.mockReturnValue(undefined);
-    providerThinkingMocks.resolveProviderDefaultThinkingLevel.mockReset();
-    providerThinkingMocks.resolveProviderDefaultThinkingLevel.mockReturnValue(undefined);
     providerThinkingMocks.resolveProviderThinkingProfile.mockReset();
-    providerThinkingMocks.resolveProviderThinkingProfile.mockReturnValue(undefined);
-    providerThinkingMocks.resolveProviderXHighThinking.mockReset();
-    providerThinkingMocks.resolveProviderXHighThinking.mockImplementation(({ provider, context }) =>
-      provider === "openai" && ["gpt-5.4", "gpt-5.4-pro"].includes(context.modelId)
-        ? true
-        : undefined,
+    providerThinkingMocks.resolveProviderThinkingProfile.mockImplementation(
+      ({ provider, context }) =>
+        provider === "openai" && ["gpt-5.4", "gpt-5.4-pro"].includes(context.modelId)
+          ? {
+              levels: [
+                { id: "off" },
+                { id: "low" },
+                { id: "medium" },
+                { id: "high" },
+                { id: "xhigh" },
+              ],
+            }
+          : undefined,
     );
     installProviderThinkingRegistryForTest();
     await saveSessionOverride({

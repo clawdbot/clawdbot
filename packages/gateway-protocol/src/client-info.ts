@@ -79,6 +79,7 @@ export type GatewayClientInfo = {
 
 /** Capability flags a client may advertise during the gateway handshake. */
 export const GATEWAY_CLIENT_CAPS = {
+  AGENT_KIND: "agent-kind",
   APPROVALS: "approvals",
   EXEC_APPROVALS: "exec-approvals",
   INLINE_WIDGETS: "inline-widgets",

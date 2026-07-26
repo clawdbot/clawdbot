@@ -1,15 +1,22 @@
+// @vitest-environment node
 // Control UI tests cover navigation behavior.
 import { describe, expect, it } from "vitest";
 import {
   SETTINGS_NAVIGATION_GROUPS,
   SIDEBAR_NAV_ROUTES,
+  formatDocumentTitle,
   isPluginsHubRoute,
   navigationIconForRoute,
   settingsSearchTextMatches,
   subtitleForRoute,
   titleForRoute,
 } from "./app-navigation.ts";
-import { inferBasePathFromPathname, normalizeBasePath } from "./app-route-paths.ts";
+import {
+  inferBasePathFromPathname,
+  normalizeBasePath,
+  pathForWorkboardBoard,
+  workboardBoardIdFromPath,
+} from "./app-route-paths.ts";
 import {
   createApplicationRouter,
   pathForRoute,
@@ -85,7 +92,7 @@ describe("navigationIconForRoute", () => {
       custodian: "lobster",
       activity: "activity",
       apps: "layoutGrid",
-      approvals: "shieldCheck",
+      approvals: "badgeCheck",
       workboard: "kanban",
       worktrees: "folder",
       channels: "link",
@@ -100,19 +107,19 @@ describe("navigationIconForRoute", () => {
       "skill-workshop": "wrench",
       nodes: "monitorSmartphone",
       config: "settings",
-      profile: "lobster",
+      profile: "circleUser",
       communications: "send",
-      appearance: "spark",
+      appearance: "palette",
       automation: "terminal",
       mcp: "wrench",
       infrastructure: "globe",
-      labs: "spark",
+      labs: "flaskConical",
       about: "fileText",
       "ai-agents": "brain",
       "model-setup": "spark",
       "model-providers": "plug",
       "memory-import": "download",
-      notifications: "send",
+      notifications: "bell",
       security: "shieldCheck",
       advanced: "fileCode",
       debug: "bug",
@@ -135,7 +142,56 @@ describe("settingsSearchTextMatches", () => {
   });
 });
 
+describe("formatDocumentTitle", () => {
+  it("suffixes the brand after a plain context", () => {
+    expect(formatDocumentTitle({ context: "Usage" })).toBe("Usage — OpenClaw");
+  });
+
+  it("does not duplicate a context ending in the brand", () => {
+    expect(formatDocumentTitle({ context: "Ask OpenClaw" })).toBe("Ask OpenClaw");
+    expect(formatDocumentTitle({ context: "OpenClaw" })).toBe("OpenClaw");
+  });
+
+  it("prefixes a positive attention count", () => {
+    expect(formatDocumentTitle({ context: "Usage", attentionCount: 2 })).toBe(
+      "(2) Usage — OpenClaw",
+    );
+  });
+
+  it("does not add a queued count for an empty offline outbox", () => {
+    expect(formatDocumentTitle({ context: "Usage", offline: true, queuedCount: 0 })).toBe(
+      "(Offline) Usage — OpenClaw",
+    );
+  });
+
+  it("includes the queued outbox count in the offline marker", () => {
+    expect(formatDocumentTitle({ context: "Usage", offline: true, queuedCount: 3 })).toBe(
+      "(Offline · 3 queued) Usage — OpenClaw",
+    );
+  });
+
+  it("ignores a queued count while online", () => {
+    expect(formatDocumentTitle({ context: "Usage", queuedCount: 3 })).toBe("Usage — OpenClaw");
+  });
+
+  it("suppresses the attention count while offline", () => {
+    expect(formatDocumentTitle({ context: "Usage", attentionCount: 2, offline: true })).toBe(
+      "(Offline) Usage — OpenClaw",
+    );
+  });
+});
+
 describe("titleForRoute", () => {
+  it("keeps every navigation title and subtitle backed by an English translation", () => {
+    // t() returns the raw dotted key (e.g. "tabs.advanced") when a catalog
+    // entry is missing; resolved copy is Title/Sentence case and never matches.
+    const rawI18nKey = /^[a-z][a-zA-Z0-9]*\.[a-zA-Z]/;
+    for (const routeId of ALL_ROUTES) {
+      expect(titleForRoute(routeId), routeId).not.toMatch(rawI18nKey);
+      expect(subtitleForRoute(routeId), routeId).not.toMatch(rawI18nKey);
+    }
+  });
+
   it("returns expected titles for every route", () => {
     expect(
       Object.fromEntries(ALL_ROUTES.map((routeId) => [routeId, titleForRoute(routeId)])),
@@ -286,6 +342,27 @@ describe("routeIdFromPath", () => {
     expect(routeIdFromPath("/ui/chat", "/ui")).toBe("chat");
     expect(routeIdFromPath("/apps/openclaw/sessions", "/apps/openclaw")).toBe("sessions");
     expect(routeIdFromPath("/ui/settings/plugins", "/ui")).toBe("plugins");
+  });
+
+  it("round-trips Workboard board paths", () => {
+    expect(pathForWorkboardBoard("ops.v2")).toBe("/workboard/ops%2Ev2");
+    expect(workboardBoardIdFromPath("/workboard/ops%2Ev2")).toBe("ops.v2");
+    expect(routeIdFromPath("/workboard/ops%2Ev2")).toBe("workboard");
+    expect(createApplicationRouter().routeIdFromPath("/workboard/ops%2Ev2")).toBe("workboard");
+    expect(pathForWorkboardBoard("ops", "/ui")).toBe("/ui/workboard/ops");
+    expect(workboardBoardIdFromPath("/ui/workboard/ops", "/ui")).toBe("ops");
+    expect(inferBasePathFromPathname("/ui/workboard/ops")).toBe("/ui");
+  });
+
+  it("keeps dotted board IDs from resembling static asset paths", () => {
+    expect(pathForWorkboardBoard("release.js")).toBe("/workboard/release%2Ejs");
+    expect(workboardBoardIdFromPath("/workboard/release%2Ejs")).toBe("release.js");
+  });
+
+  it("rejects malformed Workboard board paths", () => {
+    expect(workboardBoardIdFromPath("/workboard/ops/extra")).toBeNull();
+    expect(workboardBoardIdFromPath("/workboard/%2F")).toBeNull();
+    expect(routeIdFromPath("/workboard/ops/extra")).toBeNull();
   });
 
   it("rejects route-shaped paths outside the configured base path", () => {

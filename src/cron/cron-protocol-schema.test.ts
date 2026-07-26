@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   CronJobStateSchema,
   CronPacingSchema,
+  CronUpdateParamsSchema,
 } from "../../packages/gateway-protocol/src/schema.js";
 
 type SchemaLike = {
@@ -26,6 +27,17 @@ describe("cron protocol schema", () => {
     expect(properties.lastFailureNotificationDelivered).toBeDefined();
     expect(properties.lastFailureNotificationDeliveryStatus).toBeDefined();
     expect(properties.lastFailureNotificationDeliveryError).toBeDefined();
+  });
+
+  it("reports stream identity without accepting it in state patches", () => {
+    const stateProperties = (CronJobStateSchema as SchemaLike).properties ?? {};
+    expect(stateProperties.streamSourceIdentity).toBeDefined();
+
+    const updateProperties = (CronUpdateParamsSchema as SchemaLike).properties ?? {};
+    const patchProperties = (updateProperties.patch as SchemaLike | undefined)?.properties ?? {};
+    const patchStateProperties =
+      (patchProperties.state as SchemaLike | undefined)?.properties ?? {};
+    expect(patchStateProperties.streamSourceIdentity).toBeUndefined();
   });
 
   it("documents that pacing requires at least one bound", () => {

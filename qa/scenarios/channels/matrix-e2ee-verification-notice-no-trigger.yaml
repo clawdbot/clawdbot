@@ -4,7 +4,7 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.access-and-identity
+      - matrix.encrypted-media-upload-download
   execution:
     profiles: { "matrix:all": 82, "matrix:e2ee-deep": 16 }
     kind: flow

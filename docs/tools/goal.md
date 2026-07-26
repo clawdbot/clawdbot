@@ -20,6 +20,10 @@ Goals are session state: they move with the session key, survive process
 restarts, and appear in `/goal`, the model-facing goal tools, and the TUI
 footer.
 
+Detached command completions return to the originating user-facing thread, so
+the next turn continues to see the same goal even when command execution used
+a separate sandbox policy session.
+
 ## Quick start
 
 ```text

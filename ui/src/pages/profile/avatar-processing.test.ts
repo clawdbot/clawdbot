@@ -44,7 +44,7 @@ describe("profile avatar processing", () => {
     ).rejects.toMatchObject({ code: "too-large" } satisfies Partial<ProfileAvatarError>);
   });
 
-  it("does not upscale smaller uploads through the upload surface", async () => {
+  it("center-crops without upscaling smaller uploads through the upload surface", async () => {
     class StubImage {
       decoding = "auto";
       src = "";
@@ -67,7 +67,7 @@ describe("profile avatar processing", () => {
 
     await processProfileAvatar(new File(["source"], "avatar.png", { type: "image/png" }));
 
-    expect(drawImage).toHaveBeenCalledWith(expect.any(StubImage), 0, 0, 80, 60);
+    expect(drawImage).toHaveBeenCalledWith(expect.any(StubImage), 10, 0, 60, 60, 0, 0, 60, 60);
   });
 
   it("decodes, downsizes, and encodes an uploaded image before the RPC payload", async () => {
@@ -98,7 +98,7 @@ describe("profile avatar processing", () => {
       new File(["source"], "avatar.jpg", { type: "image/jpeg" }),
     );
 
-    expect(drawImage).toHaveBeenCalledWith(expect.any(StubImage), 0, 0, 256, 128);
+    expect(drawImage).toHaveBeenCalledWith(expect.any(StubImage), 256, 0, 512, 512, 0, 0, 512, 512);
     expect(result).toEqual({ mime: "image/png", avatarBase64: "AQID", byteLength: 3 });
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:avatar");
   });

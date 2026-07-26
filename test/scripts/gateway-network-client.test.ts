@@ -8,6 +8,7 @@ import {
   assertGatewaySuspendingError,
   assertReadySuspensionResponse,
   assertSuspendedProbes,
+  prepareReadySuspension,
   runGatewayNetworkClient,
   runGatewaySuspensionPostRestartClient,
   runGatewaySuspensionPreRestartClient,
@@ -78,6 +79,68 @@ describe("gateway network client", () => {
         OPENCLAW_GATEWAY_NETWORK_CONNECT_READY_TIMEOUT_MS: "3000",
       }),
     ).toBe(3000);
+  });
+
+  it("retries busy suspension preparation using the server delay", async () => {
+    const expiresAtMs = Date.now() + 10_000;
+    const rpc = vi
+      .fn()
+      .mockResolvedValueOnce({
+        status: 200,
+        body: {
+          ok: true,
+          payload: { status: "busy", retryAfterMs: 250, activeCount: 1, blockers: ["agent"] },
+        },
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        body: {
+          ok: true,
+          payload: {
+            status: "ready",
+            suspensionId: "lease-1",
+            expiresAtMs,
+            activeCount: 0,
+            blockers: [],
+          },
+        },
+      });
+    const delayImpl = vi.fn(async () => undefined);
+
+    await expect(
+      prepareReadySuspension(
+        { deadline: Date.now() + 5_000, requestId: "request-1", rpc },
+        { delayImpl },
+      ),
+    ).resolves.toMatchObject({ status: "ready", suspensionId: "lease-1" });
+    expect(rpc).toHaveBeenCalledTimes(2);
+    expect(rpc).toHaveBeenNthCalledWith(1, "gateway.suspend.prepare", {
+      requestId: "request-1",
+    });
+    expect(delayImpl).toHaveBeenCalledWith(250);
+  });
+
+  it("stops busy suspension retries at the client deadline", async () => {
+    let nowMs = 1_000;
+    const rpc = vi.fn(async () => ({
+      status: 200,
+      body: {
+        ok: true,
+        payload: { status: "busy", retryAfterMs: 250, activeCount: 1, blockers: ["agent"] },
+      },
+    }));
+    const delayImpl = vi.fn(async (ms: number) => {
+      nowMs += ms;
+    });
+
+    await expect(
+      prepareReadySuspension(
+        { deadline: 1_250, requestId: "request-busy", rpc },
+        { delayImpl, now: () => nowMs },
+      ),
+    ).rejects.toMatchObject({ name: "TimeoutError" });
+    expect(rpc).toHaveBeenCalledOnce();
+    expect(delayImpl).toHaveBeenCalledWith(250);
   });
 
   it("bounds a stalled suspension admin request by the client deadline", async () => {

@@ -1278,8 +1278,8 @@ describe("memory_search corpus labels", () => {
       config: asOpenClawConfig({
         agents: {
           list: [
-            { id: "main", default: true, memorySearch: { enabled: false } },
-            { id: "recall", memorySearch: { enabled: true } },
+            { id: "main", default: true, memory: { search: { enabled: false } } },
+            { id: "recall", memory: { search: { enabled: true } } },
           ],
         },
       }),
@@ -1295,30 +1295,30 @@ describe("memory_search corpus labels", () => {
   it("re-resolves config when executing a previously created tool", async () => {
     const startupConfig = asOpenClawConfig({
       agents: {
-        defaults: {
-          memorySearch: {
-            provider: "ollama",
-            model: "nomic-embed-text",
-          },
-        },
+        defaults: {},
         list: [{ id: "main", default: true }],
       },
       memory: {
         backend: "builtin",
+
+        search: {
+          provider: "ollama",
+          model: "nomic-embed-text",
+        },
       },
     });
     const patchedConfig = asOpenClawConfig({
       agents: {
-        defaults: {
-          memorySearch: {
-            provider: "openai",
-            model: "text-embedding-3-small",
-          },
-        },
+        defaults: {},
         list: [{ id: "main", default: true }],
       },
       memory: {
         backend: "builtin",
+
+        search: {
+          provider: "openai",
+          model: "text-embedding-3-small",
+        },
       },
     });
     let liveConfig = startupConfig;
@@ -1345,10 +1345,13 @@ describe("memory_search corpus labels", () => {
     const tool = createMemorySearchToolOrThrow({
       config: {
         agents: {
-          defaults: { memorySearch: { rememberAcrossConversations: true } },
+          defaults: {},
           list: [{ id: "main", default: true }],
         },
-        memory: { citations: "off" },
+        memory: {
+          citations: "off",
+          search: { rememberAcrossConversations: true },
+        },
         tools: { sessions: { visibility: "all" } },
       },
       agentSessionKey: "agent:main:main",
@@ -1379,10 +1382,13 @@ describe("memory_search corpus labels", () => {
       const tool = createMemorySearchToolOrThrow({
         config: {
           agents: {
-            defaults: { memorySearch: { rememberAcrossConversations: true } },
+            defaults: {},
             list: [{ id: "main", default: true }],
           },
-          memory: { citations: "off" },
+          memory: {
+            citations: "off",
+            search: { rememberAcrossConversations: true },
+          },
           tools: { sessions: { visibility: "all" } },
         },
         agentSessionKey: "agent:main:main",
@@ -1407,15 +1413,16 @@ describe("memory_search corpus labels", () => {
       const tool = createMemorySearchToolOrThrow({
         config: {
           agents: {
-            defaults: {
-              memorySearch: {
-                rememberAcrossConversations: true,
-                sources: ["sessions"],
-              },
-            },
+            defaults: {},
             list: [{ id: "main", default: true }],
           },
-          memory: { citations: "off" },
+          memory: {
+            citations: "off",
+            search: {
+              rememberAcrossConversations: true,
+              sources: ["sessions"],
+            },
+          },
           tools: { sessions: { visibility: "all" } },
         },
         agentSessionKey: "agent:main:main",
@@ -1488,10 +1495,13 @@ describe("memory_search corpus labels", () => {
     const tool = createMemorySearchToolOrThrow({
       config: {
         agents: {
-          defaults: { memorySearch: { rememberAcrossConversations: true } },
+          defaults: {},
           list: [{ id: "main", default: true }],
         },
-        memory: { citations: "off" },
+        memory: {
+          citations: "off",
+          search: { rememberAcrossConversations: true },
+        },
         tools: { sessions: { visibility: "self" } },
       },
       agentSessionKey: "agent:main:main",
@@ -1579,15 +1589,16 @@ describe("memory_search corpus labels", () => {
     const tool = createMemorySearchToolOrThrow({
       config: {
         agents: {
-          defaults: {
-            memorySearch: {
-              sources: ["memory", "sessions"],
-              experimental: { sessionMemory: true },
-            },
-          },
+          defaults: {},
           list: [{ id: "main", default: true }],
         },
-        memory: { citations: "off" },
+        memory: {
+          citations: "off",
+          search: {
+            sources: ["memory", "sessions"],
+            rememberAcrossConversations: true,
+          },
+        },
         tools: { sessions: { visibility: "all" } },
       },
       agentSessionKey: "agent:main:main",

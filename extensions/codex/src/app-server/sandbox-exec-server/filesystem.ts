@@ -40,11 +40,7 @@ export async function readFile(
   if (!stat) {
     throw new JsonRpcProtocolError(JSON_RPC_NOT_FOUND, "file not found");
   }
-  if (stat.type === "file" && stat.size > CODEX_SANDBOX_EXEC_SERVER_MAX_READ_FILE_BYTES) {
-    throw new Error(
-      `file is too large to read through Codex sandbox exec-server: ${stat.size} bytes`,
-    );
-  }
+  assertSandboxFileReadWithinLimit(stat);
   const data = await fsBridge.readFile({
     filePath,
   });
@@ -260,12 +256,32 @@ async function copySandboxPath(
     return;
   }
 
+  if (sourceStat.type === "file" && fsBridge.copyFile) {
+    await fsBridge.copyFile({
+      sourcePath: params.sourcePath,
+      destinationPath: params.destinationPath,
+      mkdir: true,
+    });
+    return;
+  }
+
+  // Shipped third-party bridges may not expose streaming copy yet. Keep their
+  // buffered fallback bounded while built-in bridges use the path-native copy above.
+  assertSandboxFileReadWithinLimit(sourceStat);
   const data = await fsBridge.readFile({ filePath: params.sourcePath });
   await fsBridge.writeFile({
     filePath: params.destinationPath,
     data,
     mkdir: true,
   });
+}
+
+function assertSandboxFileReadWithinLimit(stat: SandboxFsStat): void {
+  if (stat.type === "file" && stat.size > CODEX_SANDBOX_EXEC_SERVER_MAX_READ_FILE_BYTES) {
+    throw new Error(
+      `file is too large to read through Codex sandbox exec-server: ${stat.size} bytes`,
+    );
+  }
 }
 
 function metadataResponse(stat: SandboxFsStat | null): JsonObject {

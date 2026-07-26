@@ -139,62 +139,7 @@ describe("buildEmbeddedAttemptToolRunContext", () => {
 });
 
 describe("resolvePromptBuildHookResult", () => {
-  function createBeforeAgentStartOnlyHookRunner() {
-    return {
-      hasHooks: vi.fn(
-        (
-          hookName:
-            | "agent_turn_prepare"
-            | "heartbeat_prompt_contribution"
-            | "before_prompt_build"
-            | "before_agent_start",
-        ) => hookName === "before_agent_start",
-      ),
-      runBeforePromptBuild: vi.fn(async () => undefined),
-      runBeforeAgentStart: vi.fn(async () => ({ prependContext: "from-hook" })),
-    };
-  }
-
-  it("reuses precomputed before_agent_start result without invoking hook again", async () => {
-    const hookRunner = createBeforeAgentStartOnlyHookRunner();
-    const result = await resolvePromptBuildHookResult({
-      config: {},
-      prompt: "hello",
-      messages: [],
-      hookCtx: {},
-      hookRunner,
-      beforeAgentStartResult: { prependContext: "from-cache", systemPrompt: "agent-start-system" },
-    });
-
-    expect(hookRunner.runBeforeAgentStart).not.toHaveBeenCalled();
-    expect(result).toEqual({
-      prependContext: "from-cache",
-      appendContext: undefined,
-      systemPrompt: "agent-start-system",
-      prependSystemContext: undefined,
-      appendSystemContext: undefined,
-    });
-  });
-
-  it("calls before_agent_start hook when precomputed result is absent", async () => {
-    const hookRunner = createBeforeAgentStartOnlyHookRunner();
-    const messages = [{ role: "user", content: "ctx" }];
-    const result = await resolvePromptBuildHookResult({
-      config: {},
-      prompt: "hello",
-      messages,
-      hookCtx: {},
-      hookRunner,
-    });
-
-    expect(hookRunner.runBeforeAgentStart).toHaveBeenCalledTimes(1);
-    expect(hookRunner.runBeforeAgentStart).toHaveBeenCalledWith({ prompt: "hello", messages }, {});
-    expect(result.prependContext).toBe("from-hook");
-  });
-
-  it("merges prompt-build and before_agent_start context fields in deterministic order", async () => {
-    // Prompt-build hook context comes before before_agent_start context so plugin
-    // injections are replayed in stable order.
+  it("preserves prompt-build context fields", async () => {
     const hookRunner = {
       hasHooks: vi.fn(() => true),
       runBeforePromptBuild: vi.fn(async () => ({
@@ -203,12 +148,6 @@ describe("resolvePromptBuildHookResult", () => {
         prependSystemContext: "prompt prepend",
         appendSystemContext: "prompt append",
       })),
-      runBeforeAgentStart: vi.fn(async () => ({
-        prependContext: "agent start context",
-        appendContext: "agent start append context",
-        prependSystemContext: "agent start prepend",
-        appendSystemContext: "agent start append",
-      })),
     };
 
     const result = await resolvePromptBuildHookResult({
@@ -219,14 +158,10 @@ describe("resolvePromptBuildHookResult", () => {
       hookRunner,
     });
 
-    expect(result.prependContext).toBe("prompt context\n\nagent start context");
-    expect(result.appendContext).toBe("prompt append context\n\nagent start append context");
-    expect(result.prependSystemContext).toBe(
-      `${wrappedPluginSystemContext("prompt prepend")}\n\n${wrappedPluginSystemContext("agent start prepend")}`,
-    );
-    expect(result.appendSystemContext).toBe(
-      `${wrappedPluginSystemContext("prompt append")}\n\n${wrappedPluginSystemContext("agent start append")}`,
-    );
+    expect(result.prependContext).toBe("prompt context");
+    expect(result.appendContext).toBe("prompt append context");
+    expect(result.prependSystemContext).toBe(wrappedPluginSystemContext("prompt prepend"));
+    expect(result.appendSystemContext).toBe(wrappedPluginSystemContext("prompt append"));
   });
 
   it("applies heartbeat prompt contributions only during heartbeat turns", async () => {
@@ -237,7 +172,6 @@ describe("resolvePromptBuildHookResult", () => {
         appendContext: "heartbeat append",
       })),
       runBeforePromptBuild: vi.fn(async () => undefined),
-      runBeforeAgentStart: vi.fn(async () => undefined),
     };
 
     const heartbeatResult = await resolvePromptBuildHookResult({

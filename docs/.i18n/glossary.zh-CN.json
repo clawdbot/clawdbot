@@ -44,6 +44,18 @@
     "target": "ClawHub"
   },
   {
+    "source": "Claws",
+    "target": "Claws"
+  },
+  {
+    "source": "Cron jobs",
+    "target": "定时任务"
+  },
+  {
+    "source": "MCP configuration",
+    "target": "MCP 配置"
+  },
+  {
     "source": "ClawRouter (managed multi-provider routing)",
     "target": "ClawRouter（托管式多提供商路由）"
   },
@@ -130,6 +142,14 @@
   {
     "source": "Gateway RPC reference",
     "target": "Gateway RPC 参考"
+  },
+  {
+    "source": "Building a Gateway client",
+    "target": "构建 Gateway 客户端"
+  },
+  {
+    "source": "Embedding OpenClaw",
+    "target": "嵌入 OpenClaw"
   },
   {
     "source": "Secure file operations",
@@ -1594,5 +1614,33 @@
   {
     "source": "Baseten (Inkling + Model APIs)",
     "target": "Baseten（Inkling + Model APIs）"
+  },
+  {
+    "source": "Multi-user mode",
+    "target": "多用户模式"
+  },
+  {
+    "source": "The main session",
+    "target": "主会话"
+  },
+  {
+    "source": "Session management",
+    "target": "会话管理"
+  },
+  {
+    "source": "Presence",
+    "target": "在线状态"
+  },
+  {
+    "source": "Gateway security",
+    "target": "Gateway 安全"
+  },
+  {
+    "source": "Retired HEARTBEAT.md workspace file",
+    "target": "已弃用的 HEARTBEAT.md 工作区文件"
+  },
+  {
+    "source": "Cron CLI",
+    "target": "Cron CLI"
   }
 ]

@@ -124,6 +124,7 @@ function isTrustedRetryEndpoint(url: string): boolean {
 }
 
 export type GatewayControlUiPluginTab = NonNullable<HelloOk["controlUiTabs"]>[number];
+export type GatewayControlUiPluginWidgetKind = NonNullable<HelloOk["controlUiWidgetKinds"]>[number];
 export type GatewayHelloOk = Omit<HelloOk, "server" | "features" | "snapshot" | "policy"> & {
   server?: Partial<HelloOk["server"]>;
   features?: Partial<HelloOk["features"]>;
@@ -365,6 +366,10 @@ export class GatewayBrowserClient {
     return this.opts.instanceId;
   }
 
+  get gatewayUrl(): string {
+    return this.opts.url;
+  }
+
   start() {
     this.client.start();
   }
@@ -463,6 +468,7 @@ export class GatewayBrowserClient {
         scopes,
         device,
         caps: [
+          GATEWAY_CLIENT_CAPS.AGENT_KIND,
           GATEWAY_CLIENT_CAPS.APPROVALS,
           GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
           GATEWAY_CLIENT_CAPS.TERMINAL_OFFSET_SEQ,

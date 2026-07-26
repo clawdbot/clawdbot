@@ -1,6 +1,7 @@
 // @vitest-environment node
 // Channel wizard controller: step/answer state machine over wizard.* RPCs.
 import { describe, expect, it, vi } from "vitest";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import { ChannelWizardController } from "./wizard-controller.ts";
 
 type RequestHandler = (method: string, params?: unknown) => Promise<unknown>;
@@ -8,7 +9,12 @@ type RequestHandler = (method: string, params?: unknown) => Promise<unknown>;
 function createController(handler: RequestHandler) {
   const request = vi.fn(handler);
   const onChange = vi.fn();
-  const controller = new ChannelWizardController(() => ({ request: request as never }), onChange);
+  const controller = new ChannelWizardController(
+    () => ({ request: request as never }),
+    onChange,
+    () => false,
+    () => "Setup expired. Close and restart setup.",
+  );
   return { controller, request, onChange };
 }
 
@@ -88,6 +94,66 @@ describe("ChannelWizardController", () => {
       validationError: "Token looks invalid.",
       busy: false,
     });
+  });
+
+  it("clears an expired session without cancelling, restarting, or replaying the answer", async () => {
+    const { controller, request } = createController(async (method) => {
+      if (method === "wizard.start") {
+        return { sessionId: "s-expired", done: false, status: "running", step: tokenStep };
+      }
+      if (method === "wizard.next") {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "wizard not found",
+          details: { code: "WIZARD_NOT_FOUND" },
+        });
+      }
+      if (method === "wizard.cancel") {
+        return { status: "cancelled" };
+      }
+      throw new Error(`unexpected ${method}`);
+    });
+
+    await controller.start("telegram");
+    await controller.answer("secret-token");
+
+    expect(controller.state).toEqual({
+      phase: "error",
+      channel: "telegram",
+      message: "Setup expired. Close and restart setup.",
+    });
+    await controller.cancel();
+    expect(request.mock.calls.filter(([method]) => method === "wizard.start")).toHaveLength(1);
+    expect(request.mock.calls.filter(([method]) => method === "wizard.next")).toHaveLength(1);
+    expect(request.mock.calls.filter(([method]) => method === "wizard.cancel")).toEqual([]);
+  });
+
+  it("keeps generic request errors cancellable", async () => {
+    const { controller, request } = createController(async (method) => {
+      if (method === "wizard.start") {
+        return { sessionId: "s-failed", done: false, status: "running", step: tokenStep };
+      }
+      if (method === "wizard.next") {
+        throw new Error("wizard unavailable");
+      }
+      if (method === "wizard.cancel") {
+        return { status: "cancelled" };
+      }
+      throw new Error(`unexpected ${method}`);
+    });
+
+    await controller.start("telegram");
+    await controller.answer("token");
+    expect(controller.state).toEqual({
+      phase: "error",
+      channel: "telegram",
+      message: "Error: wizard unavailable",
+    });
+
+    await controller.cancel();
+    expect(request.mock.calls.filter(([method]) => method === "wizard.cancel")).toEqual([
+      ["wizard.cancel", { sessionId: "s-failed" }],
+    ]);
   });
 
   it("maps runner failures to the error phase", async () => {

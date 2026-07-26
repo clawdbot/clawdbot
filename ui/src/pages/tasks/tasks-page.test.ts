@@ -21,8 +21,9 @@ function deferred<T>() {
 function createGateway(client: GatewayBrowserClient) {
   const snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected: true,
-    reconnecting: false,
+    phase: "connected",
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: null,
     sessionKey: "main",
@@ -44,7 +45,7 @@ function createGateway(client: GatewayBrowserClient) {
   } as unknown as ApplicationContext["gateway"];
   return {
     emitConnected(connected: boolean) {
-      snapshot.connected = connected;
+      snapshot.phase = connected ? "connected" : "stopped";
       snapshotListener?.(snapshot);
     },
     gateway,

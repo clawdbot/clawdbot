@@ -101,12 +101,9 @@ export function createPluginApiFactory(
     registerSessionAction,
     registerTypedHook,
     registerMemoryCapability,
-    registerMemoryPromptSection,
     registerMemoryPromptSupplement,
     registerMemoryPromptPreparation,
     registerMemoryCorpusSupplement,
-    registerMemoryFlushPlan,
-    registerMemoryRuntime,
     registerMemoryEmbeddingProvider,
     registerCli,
     registerChannel,
@@ -360,16 +357,12 @@ export function createPluginApiFactory(
               },
               registerMemoryCapability: (capability) =>
                 registerMemoryCapability(record, capability),
-              registerMemoryPromptSection: (builder) =>
-                registerMemoryPromptSection(record, builder),
               registerMemoryPromptSupplement: (builder) =>
                 registerMemoryPromptSupplement(record, builder),
               registerMemoryPromptPreparation: (prepare) =>
                 registerMemoryPromptPreparation(record, prepare),
               registerMemoryCorpusSupplement: (supplement) =>
                 registerMemoryCorpusSupplement(record, supplement),
-              registerMemoryFlushPlan: (resolver) => registerMemoryFlushPlan(record, resolver),
-              registerMemoryRuntime: (runtime) => registerMemoryRuntime(record, runtime),
               registerMemoryEmbeddingProvider: (adapter) =>
                 registerMemoryEmbeddingProvider(record, adapter),
               on: (hookName, handler, opts) =>

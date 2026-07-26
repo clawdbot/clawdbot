@@ -65,6 +65,7 @@ import {
   sendExecApprovalFollowupResult,
   shouldResolveExecApprovalUnavailableInline,
 } from "./bash-tools.exec-host-shared.js";
+import { appendExecTimeoutRetryGuidance } from "./bash-tools.exec-output.js";
 import {
   DEFAULT_NOTIFY_TAIL_CHARS,
   createApprovalSlug,
@@ -390,6 +391,7 @@ function buildGatewayExecApprovalFollowupSummary(params: {
   approvalFollowupText?: string;
 }): string {
   const exitLabel = formatOutcomeExitLabel(params.outcome);
+  let summary: string;
   if (params.trigger === "diagnostics") {
     const diagnosticsText =
       params.outcome.status === "completed" && params.outcome.exitCode === 0
@@ -397,15 +399,16 @@ function buildGatewayExecApprovalFollowupSummary(params: {
         : formatDiagnosticsExportFailure({ outcome: params.outcome, exitLabel });
     const followupText = params.approvalFollowupText?.trim();
     const body = [diagnosticsText, followupText].filter(Boolean).join("\n\n");
-    return `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})\n${body}`;
+    summary = `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})\n${body}`;
+  } else {
+    const output = normalizeNotifyOutput(
+      tail(params.outcome.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
+    );
+    summary = output
+      ? `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})\n${output}`
+      : `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})`;
   }
-
-  const output = normalizeNotifyOutput(
-    tail(params.outcome.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
-  );
-  return output
-    ? `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})\n${output}`
-    : `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})`;
+  return appendExecTimeoutRetryGuidance(summary, params.outcome.exitReason);
 }
 
 function shouldAwaitGatewayApprovalInline(params: {
@@ -425,12 +428,15 @@ function shouldAwaitGatewayApprovalInline(params: {
 }
 
 function buildGatewayExecApprovalDeniedToolResult(params: {
-  approvalId: string;
+  approvalId?: string;
   deniedReason: string;
   command: string;
   cwd: string;
 }): AgentToolResult<ExecToolDetails> {
-  const text = `Exec denied (gateway id=${params.approvalId}, ${params.deniedReason}): ${params.command}`;
+  const denialContext = params.approvalId
+    ? `gateway id=${params.approvalId}, ${params.deniedReason}`
+    : params.deniedReason;
+  const text = `Exec denied (${denialContext}): ${params.command}`;
   return {
     content: [{ type: "text", text }],
     details: {
@@ -685,6 +691,35 @@ export async function processGatewayAllowlist(
     params.warnings.push(
       `Warning: allowlist auto-execution is unavailable on ${process.platform}; reviewer or explicit approval is required.`,
     );
+  }
+  const shouldDenyUnpromptedShellExpansion =
+    requiresAllowlistPlanApproval &&
+    allowlistPlanUnavailableReason === "shell expansion in enforced arguments" &&
+    hostAsk === "off" &&
+    askFallback === "deny";
+  if (shouldDenyUnpromptedShellExpansion) {
+    const deniedReason = "ask-fallback-deny: execution-plan-miss";
+    // The allowlist matched, but the gateway cannot bind an enforceable command.
+    // With prompting disabled, apply the fail-closed fallback before registration.
+    emitGatewayExecApprovalSecurityEvent({
+      action: "exec.approval.denied",
+      outcome: "denied",
+      severity: "medium",
+      agentId: params.agentId,
+      reason: deniedReason,
+      hostSecurity,
+      hostAsk,
+      host: "gateway",
+      segmentCount: allowlistEval.segments.length,
+      trigger: params.trigger,
+    });
+    return {
+      deniedResult: buildGatewayExecApprovalDeniedToolResult({
+        deniedReason,
+        command: params.command,
+        cwd: params.workdir,
+      }),
+    };
   }
   const effectiveAllowAlwaysPersistence = resolveGatewayEffectiveAllowAlwaysPersistence({
     command: params.command,

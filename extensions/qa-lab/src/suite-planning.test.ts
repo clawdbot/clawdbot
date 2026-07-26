@@ -371,7 +371,7 @@ describe("qa suite planning helpers", () => {
     const scenarios = [
       makeQaSuiteTestScenario("strict-live-lane", {
         channel: "matrix",
-        runtimeParityTier: "live-only",
+        runtimePairLane: "core",
         config: {
           requiredProviderMode: "live-frontier",
           requiredProvider: "claude-cli",
@@ -392,6 +392,50 @@ describe("qa suite planning helpers", () => {
         channel: "matrix",
       }).map((scenario) => scenario.id),
     ).toEqual(["strict-live-lane"]);
+  });
+
+  it.each([
+    { channelDriver: "qa-channel" as const, channel: undefined, expectedChannel: "qa-channel" },
+    { channelDriver: "crabline" as const, channel: "telegram", expectedChannel: "telegram" },
+  ])(
+    "selects the real channel streaming scenario for the $channelDriver driver",
+    ({ channelDriver, channel, expectedChannel }) => {
+      const scenario = readQaScenarioById("channel-message-flows");
+      const selected = selectQaFlowSuiteScenarios({
+        scenarios: [scenario],
+        scenarioIds: [scenario.id],
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        channelDriver,
+        channel,
+      });
+
+      expect(selected).toEqual([scenario]);
+      expect(
+        resolveQaSuiteScenarioChannel({
+          defaultChannel: expectedChannel,
+          explicitChannel: channel,
+          scenarios: selected,
+        }),
+      ).toBe(expectedChannel);
+    },
+  );
+
+  it("rejects channel streaming evidence on unsupported Crabline channels", () => {
+    const scenario = readQaScenarioById("channel-message-flows");
+
+    expect(() =>
+      selectQaFlowSuiteScenarios({
+        scenarios: [scenario],
+        scenarioIds: [scenario.id],
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        channelDriver: "crabline",
+        channel: "discord",
+      }),
+    ).toThrow(
+      "selected QA scenario(s) do not match the current QA lane: channel-message-flows (channel=qa-channel|telegram)",
+    );
   });
 
   it("keeps explicitly requested scenarios in request order", () => {
@@ -599,14 +643,14 @@ describe("qa suite planning helpers", () => {
   });
 
   it("targets the selected adapter account in scenario startup config patches", () => {
-    const scenarios = [readQaScenarioById("thread-reply-override")];
+    const scenarios = [readQaScenarioById("whatsapp-access-control-dm-open")];
 
-    expect(collectQaSuiteGatewayConfigPatch(scenarios, "matrix-alt")).toEqual({
+    expect(collectQaSuiteGatewayConfigPatch(scenarios, "whatsapp-alt")).toEqual({
       channels: {
-        matrix: {
+        whatsapp: {
           accounts: {
-            "matrix-alt": {
-              threadReplies: "always",
+            "whatsapp-alt": {
+              dmPolicy: "open",
             },
           },
         },
@@ -778,7 +822,7 @@ describe("qa suite planning helpers", () => {
   it("filters provider-mode-specific scenarios from implicit suite selections", () => {
     const scenarios = [
       makeQaSuiteTestScenario("generic"),
-      makeQaSuiteTestScenario("live-only", {
+      makeQaSuiteTestScenario("live-provider", {
         config: { requiredProviderMode: "live-frontier" },
       }),
       makeQaSuiteTestScenario("mock-only", {
@@ -800,7 +844,7 @@ describe("qa suite planning helpers", () => {
         providerMode: "live-frontier",
         primaryModel: "openai/gpt-5.6-luna",
       }).map((scenario) => scenario.id),
-    ).toEqual(["generic", "live-only"]);
+    ).toEqual(["generic", "live-provider"]);
   });
 
   it("filters scenario-selected providers from implicit suite selections", () => {
@@ -925,11 +969,12 @@ describe("qa suite planning helpers", () => {
     ).toEqual(["matrix-transport"]);
   });
 
-  it("keeps live-only runtime parity scenarios out of every mock selection", () => {
+  it("keeps provider eligibility independent from runtime-pair membership", () => {
     const scenarios = [
       makeQaSuiteTestScenario("generic"),
       makeQaSuiteTestScenario("live-runtime", {
-        runtimeParityTier: "live-only",
+        runtimePairLane: "core",
+        config: { requiredProviderMode: "live-frontier" },
       }),
     ];
 
@@ -949,7 +994,7 @@ describe("qa suite planning helpers", () => {
         primaryModel: "mock-openai/gpt-5.6-luna",
       }),
     ).toThrow(
-      "selected QA scenario(s) do not match the current QA lane: live-runtime (live provider mode)",
+      "selected QA scenario(s) do not match the current QA lane: live-runtime (providerMode=live-frontier)",
     );
   });
 });

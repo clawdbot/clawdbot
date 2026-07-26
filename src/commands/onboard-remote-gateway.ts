@@ -46,6 +46,7 @@ function toSetupInferenceDetection(result: SystemAgentSetupDetectResult): SetupI
   return {
     candidates: result.candidates.map((candidate) => ({
       kind: candidate.kind,
+      ...(candidate.brandId !== undefined ? { brandId: candidate.brandId } : {}),
       label: candidate.label,
       detail: candidate.detail,
       modelRef: candidate.modelRef,
@@ -58,6 +59,7 @@ function toSetupInferenceDetection(result: SystemAgentSetupDetectResult): SetupI
     })),
     manualProviders: result.manualProviders.map((provider) => ({
       id: provider.id,
+      ...(provider.brandId !== undefined ? { brandId: provider.brandId } : {}),
       label: provider.label,
       ...(provider.hint !== undefined ? { hint: provider.hint } : {}),
       ...(provider.icon !== undefined ? { icon: provider.icon } : {}),
@@ -67,6 +69,7 @@ function toSetupInferenceDetection(result: SystemAgentSetupDetectResult): SetupI
       Object.assign(
         {
           id: option.id,
+          ...(option.brandId !== undefined ? { brandId: option.brandId } : {}),
           label: option.label,
           kind: option.kind,
           featured: option.featured,

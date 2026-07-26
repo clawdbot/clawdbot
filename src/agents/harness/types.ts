@@ -46,13 +46,69 @@ export type AgentHarnessSupport =
 
 type InternalEmbeddedRunAttemptParams =
   import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptParams;
+/** @deprecated Read `terminal` instead. Remove no earlier than the 2026.9 stable release. */
+type AgentHarnessDeprecatedAttemptTerminalFields = {
+  aborted?: boolean;
+  externalAbort?: boolean;
+  timedOut?: boolean;
+  idleTimedOut?: boolean;
+  timedOutDuringCompaction?: boolean;
+  timedOutDuringToolExecution?: boolean;
+  timedOutByRunBudget?: boolean;
+  promptError?: unknown;
+  promptErrorSource?:
+    | import("../agent-run-terminal-outcome.js").AgentRunAttemptFailureSource
+    | null;
+};
+type AgentHarnessCanonicalAttemptResult =
+  import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptResult &
+    AgentHarnessDeprecatedAttemptTerminalFields;
+
+/** @deprecated Return `terminal` instead. Remove no earlier than the 2026.9 stable release. */
+type AgentHarnessLegacyAttemptResult = Omit<
+  import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptResult,
+  "terminal"
+> &
+  AgentHarnessDeprecatedAttemptTerminalFields & {
+    aborted: boolean;
+    externalAbort: boolean;
+    timedOut: boolean;
+    idleTimedOut: boolean;
+    timedOutDuringCompaction: boolean;
+    timedOutDuringToolExecution?: boolean;
+    timedOutByRunBudget?: boolean;
+    promptError: unknown;
+    promptErrorSource:
+      | import("../agent-run-terminal-outcome.js").AgentRunAttemptFailureSource
+      | null;
+  };
 
 export type AgentHarnessAttemptParams = Omit<
   InternalEmbeddedRunAttemptParams,
   "trajectoryRecorder"
 >;
 export type AgentHarnessAttemptResult =
-  import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptResult;
+  | AgentHarnessCanonicalAttemptResult
+  | AgentHarnessLegacyAttemptResult;
+type AgentHarnessSettledTurnFinalizationParams = {
+  /** Fully prepared attempt context for the isolated finalization operation. */
+  attempt: AgentHarnessAttemptParams;
+  /** Settled result whose completed tool transcript needs a final visible answer. */
+  settledAttempt: AgentHarnessCanonicalAttemptResult;
+};
+export type AgentHarnessSettledTurnFinalizationResult = {
+  /** The single completed assistant answer produced by the isolated operation. */
+  assistant: import("../../llm/types.js").AssistantMessage;
+  /** Normalized usage for the finalization model call only. */
+  usage?: import("../usage.js").NormalizedUsage;
+  /** True when the harness already persisted the assistant into the application transcript. */
+  assistantTranscriptOwned?: boolean;
+  /** Exact idempotency key for the harness-owned assistant transcript row. */
+  assistantTranscriptIdempotencyKey?: string;
+  /** Assistant stream generation index used to correlate final reply delivery. */
+  assistantMessageIndex?: number;
+  diagnosticTrace?: import("../../infra/diagnostic-trace-context.js").DiagnosticTraceContext;
+};
 export type AgentHarnessAuthBindingFingerprintParams = {
   authProfileId: string;
   authProfileStore: import("../auth-profiles/types.js").AuthProfileStore;
@@ -202,6 +258,13 @@ type AgentHarnessRunCapability = {
   /** Lets this harness resolve forwarded profiles or its own native credentials. */
   authBootstrap?: "harness";
   runAttempt(params: AgentHarnessAttemptParams): Promise<AgentHarnessAttemptResult>;
+  /**
+   * Produces one final answer from a settled tool transcript without exposing
+   * capabilities that can repeat or extend the completed work.
+   */
+  finalizeSettledTurn?(
+    params: AgentHarnessSettledTurnFinalizationParams,
+  ): Promise<AgentHarnessSettledTurnFinalizationResult>;
 };
 
 type AgentHarnessSideQuestionCapability = {

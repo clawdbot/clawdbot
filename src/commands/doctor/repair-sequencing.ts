@@ -4,6 +4,7 @@ import {
   applyPluginAutoEnable,
   materializePluginAutoEnableCandidates,
 } from "../../config/plugin-auto-enable.js";
+import { migrateLegacyOnboardingRecommendationsScope } from "../../infra/state-migrations.onboarding-recommendations.js";
 import {
   collectOpenAICodexAuthProfileStoreIdMap,
   maybeMigrateAuthProfileJsonStoresToSqlite,
@@ -20,6 +21,7 @@ import { maybeRepairGroupAllowFromFallback } from "./shared/allowfrom-fallback-m
 import { maybeRepairAllowlistPolicyAllowFrom } from "./shared/allowlist-policy-repair.js";
 import { maybeRepairBundledPluginLoadPaths } from "./shared/bundled-plugin-load-paths.js";
 import {
+  collectChannelDoctorCompatibilityMutations,
   createChannelDoctorEmptyAllowlistPolicyHooks,
   collectChannelDoctorRepairMutations,
 } from "./shared/channel-doctor.js";
@@ -143,6 +145,19 @@ export async function runDoctorRepairSequence(params: {
           })),
         }),
       );
+      // Missing external plugins cannot expose their doctor contracts until
+      // installation completes. Normalize legacy shapes before channel repair
+      // so later validation and gateway restart consume canonical config.
+      for (const mutation of collectChannelDoctorCompatibilityMutations(state.candidate, { env })) {
+        applyMutation(mutation);
+      }
+      for (const mutation of await collectChannelDoctorRepairMutations({
+        cfg: state.candidate,
+        doctorFixCommand: params.doctorFixCommand,
+        env,
+      })) {
+        applyMutation(mutation);
+      }
     }
   }
   if (missingConfiguredPluginInstallRepair.warnings.length > 0) {
@@ -187,6 +202,16 @@ export async function runDoctorRepairSequence(params: {
   }
   if (pluginDependencyCleanup.warnings.length > 0) {
     warningNotes.push(sanitizeLines(pluginDependencyCleanup.warnings));
+  }
+  const onboardingRecommendationsMigration = migrateLegacyOnboardingRecommendationsScope({
+    cfg: state.candidate,
+    env,
+  });
+  if (onboardingRecommendationsMigration.changes.length > 0) {
+    changeNotes.push(sanitizeLines(onboardingRecommendationsMigration.changes));
+  }
+  if (onboardingRecommendationsMigration.warnings.length > 0) {
+    warningNotes.push(sanitizeLines(onboardingRecommendationsMigration.warnings));
   }
   const legacyOAuthSidecarRepair = await maybeRepairLegacyOAuthSidecarProfiles({
     cfg: state.candidate,

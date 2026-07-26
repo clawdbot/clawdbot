@@ -81,9 +81,7 @@ Example answered result:
   "status": "answered",
   "answers": {
     "answers": {
-      "deploy_target": {
-        "answers": ["Staging (Recommended)"]
-      }
+      "deploy_target": ["Staging (Recommended)"]
     }
   }
 }

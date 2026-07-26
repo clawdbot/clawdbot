@@ -188,6 +188,7 @@ async function drainActiveAppServerAttemptsForTest(): Promise<void> {
 }
 
 export function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAttemptParams {
+  const model = createCodexTestModel("codex");
   return {
     prompt: "hello",
     sessionId: "session-1",
@@ -197,7 +198,10 @@ export function createParams(sessionFile: string, workspaceDir: string): Embedde
     runId: "run-1",
     provider: "codex",
     modelId: "gpt-5.4-codex",
-    model: createCodexTestModel("codex"),
+    model: {
+      ...model,
+      compat: { ...model.compat, supportsTools: false },
+    } as EmbeddedRunAttemptParams["model"] & { compat: { supportsTools: boolean } },
     contextTokenBudget: 150_000,
     contextWindowInfo: {
       tokens: 150_000,
@@ -205,13 +209,28 @@ export function createParams(sessionFile: string, workspaceDir: string): Embedde
       source: "agentContextTokens",
     },
     thinkLevel: "medium",
-    disableTools: true,
+    disableTools: false,
+    config: { tools: { web: { search: { enabled: false } } } },
     timeoutMs: 5_000,
     authStorage: {} as never,
     authProfileStore: { version: 1, profiles: {} },
     modelRegistry: {} as never,
     observeToolTerminal: createCodexTestToolTerminalObserver(),
   } as EmbeddedRunAttemptParams;
+}
+
+export function createTestParams(): EmbeddedRunAttemptParams {
+  return createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace"));
+}
+
+export function setCodexTestModelSupportsTools(
+  params: EmbeddedRunAttemptParams,
+  supportsTools: boolean,
+): void {
+  params.model = {
+    ...params.model,
+    compat: { ...params.model.compat, supportsTools },
+  } as EmbeddedRunAttemptParams["model"] & { compat: { supportsTools: boolean } };
 }
 
 export function createCodexRuntimePlanFixture(): NonNullable<

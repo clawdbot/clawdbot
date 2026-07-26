@@ -13,8 +13,8 @@
     "fake-indexeddb": "6.2.5",
     "markdown-it": "14.3.0",
     "matrix-js-sdk": "41.9.0-rc.0",
-    "music-metadata": "11.13.0",
-    "typebox": "1.3.3",
+    "music-metadata": "11.14.0",
+    "typebox": "1.3.6",
     "zod": "4.4.3"
   },
   "devDependencies": {
@@ -39,7 +39,25 @@
     },
     "channel": {
       "id": "matrix",
-      "approvalFlags": ["native"],
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "MATRIX_HOMESERVER",
+            "MATRIX_USER_ID",
+            "MATRIX_ACCESS_TOKEN",
+            "MATRIX_PASSWORD",
+            "MATRIX_DEVICE_ID",
+            "MATRIX_DEVICE_NAME",
+            "MATRIX_OPS_HOMESERVER",
+            "MATRIX_OPS_ACCESS_TOKEN",
+            "MATRIX_OPS_DEVICE_ID",
+            "MATRIX_OPS_DEVICE_NAME"
+          ]
+        }
+      },
+      "approvalFlags": [
+        "native"
+      ],
       "label": "Matrix",
       "selectionLabel": "Matrix (plugin)",
       "docsPath": "/channels/matrix",
@@ -54,28 +72,20 @@
         "groupAllowFromFallbackToAllowFrom": false,
         "warnOnEmptyGroupSenderAllowlist": true
       },
-      "cliAddOptions": [
-        {
-          "flags": "--homeserver <url>",
-          "description": "Matrix homeserver URL"
-        },
-        {
-          "flags": "--user-id <id>",
-          "description": "Matrix user ID"
-        },
-        {
-          "flags": "--access-token <token>",
-          "description": "Matrix access token"
-        },
-        {
-          "flags": "--device-name <name>",
-          "description": "Matrix device name"
-        },
-        {
-          "flags": "--initial-sync-limit <n>",
-          "description": "Matrix initial sync limit"
-        }
-      ],
+      "setup": {
+        "fields": [
+          { "key": "homeserver", "kind": "string", "cli": { "flags": "--homeserver <url>", "description": "Matrix homeserver URL" } },
+          { "key": "userId", "kind": "string", "cli": { "flags": "--user-id <id>", "description": "Matrix user id" } },
+          { "key": "accessToken", "kind": "string", "sensitive": true, "cli": { "flags": "--access-token <token>", "description": "Matrix access token" } },
+          { "key": "password", "kind": "string", "sensitive": true, "cli": { "flags": "--password <password>", "description": "Matrix password" } },
+          { "key": "deviceName", "kind": "string", "cli": { "flags": "--device-name <name>", "description": "Matrix device name" } },
+          { "key": "avatarUrl", "kind": "string", "cli": { "flags": "--avatar-url <url>", "description": "Matrix avatar URL" } },
+          { "key": "initialSyncLimit", "kind": "integer", "cli": { "flags": "--initial-sync-limit <n>", "description": "Matrix initial sync room limit" } },
+          { "key": "proxy", "kind": "string", "cli": { "flags": "--proxy <url>", "description": "Matrix proxy URL" } },
+          { "key": "dangerouslyAllowPrivateNetwork", "kind": "boolean", "cli": { "flags": "--dangerously-allow-private-network", "description": "Allow private-network Matrix homeservers" } },
+          { "key": "useEnv", "kind": "boolean", "cli": { "flags": "--use-env", "description": "Use Matrix environment credentials" } }
+        ]
+      },
       "persistedAuthState": {
         "specifier": "./auth-presence",
         "exportName": "hasAnyMatrixAuth"

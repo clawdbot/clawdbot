@@ -1,8 +1,8 @@
 import { html, nothing, type TemplateResult } from "lit";
-import { until } from "lit/directives/until.js";
 import { formatSenderLabel } from "../../../lib/chat/sender-label.ts";
 import {
   resolveAvatar,
+  resolveAvatarInitials,
   type IdentityAvatarInput,
   type ResolvedIdentityAvatar,
 } from "../../../lib/identity-avatar.ts";
@@ -63,18 +63,15 @@ export function renderChatAuthorAvatar(
   if (!sender || !label) {
     return nothing;
   }
-  const resolved = Promise.all([resolveAvatar(sender), resolveAvatar({ name: label })]).then(
-    ([avatar, fallback]) => {
-      const initials =
-        fallback.kind === "initials"
-          ? fallback
-          : ({ kind: "initials", initials: "?", colorSeed: 0 } as const);
-      return renderResolvedAvatar(avatar, initials);
-    },
-  );
+  const fallback = resolveAvatarInitials(sender);
+  const avatar = resolveAvatar(sender);
+  const resolved =
+    avatar.kind === "initials"
+      ? renderInitialsAvatar(avatar)
+      : renderResolvedAvatar(avatar, fallback);
   return html`
     <span class="chat-author-avatar" role="img" aria-label=${label} title=${label}>
-      ${until(resolved, nothing)}
+      ${resolved}
     </span>
   `;
 }

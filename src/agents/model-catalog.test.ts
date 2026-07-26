@@ -36,6 +36,7 @@ async function build(params: {
   config?: OpenClawConfig;
   entries?: ModelCatalogEntry[];
   readOnly?: boolean;
+  includeProviderPluginAugmentation?: boolean;
 }) {
   return await buildPreparedModelCatalogSnapshot({
     agentDir: "/tmp/model-catalog-test",
@@ -44,6 +45,9 @@ async function build(params: {
     metadataSnapshot,
     modelRegistry: registry(params.entries ?? []),
     readOnly: params.readOnly ?? true,
+    ...(params.includeProviderPluginAugmentation !== undefined
+      ? { includeProviderPluginAugmentation: params.includeProviderPluginAugmentation }
+      : {}),
   });
 }
 
@@ -121,6 +125,62 @@ describe("prepared model catalog builder", () => {
     expect(snapshot.routeVariants).toHaveLength(2);
   });
 
+  it("keeps compat from the catalog route selected by config", async () => {
+    mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValueOnce([
+      {
+        id: "demo",
+        name: "Route B",
+        provider: "custom",
+        api: "openai-completions",
+        baseUrl: "https://route-b.example.test/v1",
+        compat: { supportsTools: false },
+      },
+    ]);
+    const snapshot = await build({
+      config: {
+        plugins: { enabled: false },
+        models: {
+          providers: {
+            custom: {
+              api: "openai-responses",
+              baseUrl: "https://route-a.example.test/v1",
+              models: [
+                {
+                  id: "demo",
+                  name: "Configured Demo",
+                  contextWindow: 32_000,
+                  maxTokens: 4_096,
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                },
+              ],
+            },
+          },
+        },
+      },
+      entries: [
+        {
+          id: "demo",
+          name: "Route A",
+          provider: "custom",
+          api: "openai-responses",
+          baseUrl: "https://route-a.example.test/v1",
+          compat: { supportsTools: true },
+        },
+      ],
+      readOnly: false,
+    });
+
+    expect(
+      findModelCatalogEntry(snapshot.entries, { provider: "custom", modelId: "demo" }),
+    ).toMatchObject({
+      api: "openai-responses",
+      baseUrl: "https://route-a.example.test/v1",
+      compat: { supportsTools: true },
+    });
+  });
+
   it("keeps configured models absent from registry discovery", async () => {
     const snapshot = await build({
       config: {
@@ -169,6 +229,31 @@ describe("prepared model catalog builder", () => {
         readOnly: true,
       }),
     ).rejects.toBe(projectionError);
+  });
+
+  it("keeps static publication off provider runtime catalog augmentation", async () => {
+    const snapshot = await build({
+      config: {
+        plugins: { enabled: false },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              api: "openai-responses",
+              models: [],
+            },
+          },
+        },
+      },
+      entries: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai" }],
+      readOnly: false,
+      includeProviderPluginAugmentation: false,
+    });
+
+    expect(snapshot.entries).toEqual([
+      expect.objectContaining({ id: "gpt-5.5", provider: "openai" }),
+    ]);
+    expect(mocks.augmentModelCatalogWithProviderPlugins).not.toHaveBeenCalled();
   });
 
   it("uses the lifecycle auth snapshot for provider catalog augmentation", async () => {

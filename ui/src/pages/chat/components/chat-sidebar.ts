@@ -3,12 +3,11 @@ import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { icons } from "../../../components/icons.ts";
+import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
+import { handleMarkdownCodeBlockCopy } from "../../../components/markdown-code-blocks.ts";
+import { markdownFileLinkFromEvent } from "../../../components/markdown-file-links.ts";
 import "../../../components/web-awesome.ts";
-import {
-  handleMarkdownCodeBlockCopy,
-  markdownFileLinkFromEvent,
-  toSanitizedMarkdownHtml,
-} from "../../../components/markdown.ts";
+import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
 import "../../../components/tooltip.ts";
 import { extractRawText } from "../../../lib/chat/message-extract.ts";
@@ -19,13 +18,12 @@ import {
 } from "../../../lib/chat/tool-display.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { type EditorId, openEditor } from "../../../lib/editor-links.ts";
+import { openExternalUrlSafe } from "../../../lib/open-external-url.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import "./session-diff-panel.ts";
 import { renderChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.ts";
 import type { FileEditorViewHandle } from "./file-editor-view.ts";
 import type { SessionDiffLoader } from "./session-diff-panel.ts";
-
-export const CHAT_DETAIL_FULL_MESSAGE_MAX_CHARS = 500_000;
 
 type DetailUnavailableReason = "not_found" | "oversized" | "not_visible";
 export type DetailFullMessageResult = {
@@ -475,22 +473,39 @@ function resolveSidebarCanvasSandbox(
     : "allow-scripts";
 }
 
+function openSidebarImage(
+  onOpenImage: ((item: ImageLightboxItem) => void) | undefined,
+  src: string,
+  title: string,
+) {
+  if (onOpenImage) {
+    onOpenImage({ src, title });
+  } else {
+    openExternalUrlSafe(src, { allowDataImage: true });
+  }
+}
+
 type MarkdownSidebarProps = {
   content: SidebarContent | null;
   error: string | null;
   fileView?: FileViewControls;
   onClose: () => void;
+  onOpenImage?: (item: ImageLightboxItem) => void;
   onViewRawText: () => void;
   canvasPluginSurfaceUrl?: string | null;
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
+  embedded?: boolean;
 };
 
 function renderMarkdownSidebar(props: MarkdownSidebarProps) {
   const content = props.content;
   const markdownHtml =
     content?.kind === "markdown" && content.content.trim()
-      ? toSanitizedMarkdownHtml(content.content, { fileLinks: true })
+      ? toSanitizedMarkdownHtml(content.content, {
+          fileLinks: true,
+          interactiveImages: props.onOpenImage !== undefined,
+        })
       : "";
   const canvasSandbox =
     content?.kind === "canvas"
@@ -518,19 +533,23 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
               : "Tool Details";
   return html`
     <div class="sidebar-panel">
-      <div class="sidebar-header">
-        <div class="sidebar-title">${title}</div>
-        <openclaw-tooltip .content=${t("chat.detailPanel.close")}>
-          <button
-            @click=${props.onClose}
-            class="btn"
-            type="button"
-            aria-label=${t("chat.detailPanel.close")}
-          >
-            ${icons.x}
-          </button>
-        </openclaw-tooltip>
-      </div>
+      ${props.embedded
+        ? nothing
+        : html`<div class="sidebar-header">
+            <div class="sidebar-title">${title}</div>
+            <div class="sidebar-header__actions">
+              <openclaw-tooltip .content=${t("chat.detailPanel.close")}>
+                <button
+                  @click=${props.onClose}
+                  class="btn"
+                  type="button"
+                  aria-label=${t("chat.detailPanel.close")}
+                >
+                  ${icons.x}
+                </button>
+              </openclaw-tooltip>
+            </div>
+          </div> `}
       <div class="sidebar-content">
         ${props.error
           ? html`
@@ -587,12 +606,20 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                     ? html`
                         <div class="chat-tool-card__preview" data-kind="image">
                           <div class="chat-tool-card__preview-panel" data-side="front">
-                            <img
-                              class="chat-tool-card__preview-image"
-                              src=${content.src}
-                              alt=${title}
-                              style="display:block;max-width:100%;height:auto;border-radius:8px;"
-                            />
+                            <button
+                              type="button"
+                              class="chat-tool-card__preview-image-button"
+                              aria-label=${t("chat.imageLightbox.open", { title })}
+                              @click=${() =>
+                                openSidebarImage(props.onOpenImage, content.src, title)}
+                            >
+                              <img
+                                class="chat-tool-card__preview-image"
+                                src=${content.src}
+                                alt=${title}
+                                style="display:block;max-width:100%;height:auto;border-radius:8px;"
+                              />
+                            </button>
                           </div>
                           ${content.rawText?.trim()
                             ? html`
@@ -648,10 +675,12 @@ class ChatDetailPanel extends OpenClawLightDomElement {
   @property() canvasPluginSurfaceUrl: string | null = null;
   @property() embedSandboxMode: EmbedSandboxMode = "scripts";
   @property({ type: Boolean }) allowExternalEmbedUrls = false;
+  @property({ type: Boolean }) embedded = false;
   @property({ attribute: false }) onOpenWorkspaceFile?:
     | ((target: { path: string; line?: number | null }) => void)
     | null = null;
   @property({ attribute: false }) onRevealInWorkspace?: ((path: string) => void) | null = null;
+  @property({ attribute: false }) onOpenImage?: ((item: ImageLightboxItem) => void) | null = null;
 
   @state() private visibleContent: SidebarContent | null = null;
   @state() private error: string | null = null;
@@ -1222,6 +1251,23 @@ class ChatDetailPanel extends OpenClawLightDomElement {
   };
 
   private readonly handlePanelClick = (event: Event) => {
+    const imageButton = event
+      .composedPath()
+      .find(
+        (target): target is HTMLElement =>
+          target instanceof HTMLElement &&
+          target.classList.contains("markdown-inline-image-button"),
+      );
+    const image = imageButton?.querySelector<HTMLImageElement>(".markdown-inline-image");
+    if (image) {
+      event.preventDefault();
+      openSidebarImage(
+        this.onOpenImage ?? undefined,
+        image.currentSrc || image.src,
+        image.alt.trim() || t("chat.imageLightbox.untitled"),
+      );
+      return;
+    }
     handleMarkdownCodeBlockCopy(event);
     const target = markdownFileLinkFromEvent(event);
     if (target) {
@@ -1272,7 +1318,9 @@ class ChatDetailPanel extends OpenClawLightDomElement {
           canvasPluginSurfaceUrl: this.canvasPluginSurfaceUrl,
           embedSandboxMode: this.embedSandboxMode,
           allowExternalEmbedUrls: this.allowExternalEmbedUrls,
+          embedded: this.embedded,
           onClose: this.close,
+          onOpenImage: this.onOpenImage ?? undefined,
           onViewRawText: this.showRawText,
         })}
       </div>

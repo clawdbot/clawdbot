@@ -14,7 +14,11 @@ import {
   projectChatDisplayMessage,
   resolveEffectiveChatHistoryMaxChars,
 } from "../chat-display-projection.js";
-import { loadSessionEntry, resolveSessionModelRef } from "../session-utils.js";
+import {
+  loadSessionEntry,
+  loadSessionEntryReadOnly,
+  resolveSessionModelRef,
+} from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
 import { sendGlobalAwareNodeChatPayload } from "./chat-broadcast.js";
@@ -88,7 +92,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       // Session entry carries per-session model overrides; utility routing must
       // derive its small-model default from the provider this session actually
       // uses, not the agent's configured default.
-      const { cfg: sessionCfg, entry } = loadSessionEntry(
+      const { cfg: sessionCfg, entry } = loadSessionEntryReadOnly(
         params.sessionKey,
         selectedAgent.agentId ? { agentId: selectedAgent.agentId } : undefined,
       );

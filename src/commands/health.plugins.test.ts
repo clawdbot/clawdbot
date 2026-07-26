@@ -25,6 +25,7 @@ describe("getHealthSnapshot plugin state", () => {
     }));
     vi.doMock("../config/sessions/session-accessor.js", () => ({
       listSessionEntries: () => [],
+      listSessionEntriesReadOnly: () => [],
     }));
     vi.doMock("../channels/plugins/read-only.js", () => ({
       listReadOnlyChannelPluginsForConfig: () => [],

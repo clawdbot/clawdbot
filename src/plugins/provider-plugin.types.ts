@@ -23,7 +23,6 @@ import type {
   ProviderBuiltInModelSuppressionResult,
   ProviderModernModelPolicyContext,
   ProviderAugmentModelCatalogContext,
-  ProviderPluginDiscovery,
 } from "./provider-catalog.types.js";
 import type {
   ProviderApplyConfigDefaultsContext,
@@ -32,15 +31,12 @@ import type {
 } from "./provider-config-context.types.js";
 import type {
   ProviderExternalAuthProfile,
-  ProviderExternalOAuthProfile,
   ProviderResolveExternalAuthProfilesContext,
-  ProviderResolveExternalOAuthProfilesContext,
   ProviderResolveSyntheticAuthContext,
   ProviderSyntheticAuthResult,
 } from "./provider-external-auth.types.js";
 import type {
   ProviderReasoningOutputMode,
-  ProviderCapabilities,
   ProviderReplayPolicy,
   ProviderReplayPolicyContext,
   ProviderSanitizeReplayHistoryContext,
@@ -74,7 +70,6 @@ import type {
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingProfile,
-  ProviderThinkingPolicyContext,
 } from "./provider-thinking.types.js";
 import type {
   ProviderCreateStreamFnContext,
@@ -146,13 +141,6 @@ export type ProviderPlugin = {
    * alongside `moonshotai/kimi-k2.5`).
    */
   preserveLiteralProviderPrefix?: boolean;
-  /**
-   * @deprecated Use catalog.
-   *
-   * Legacy alias for catalog.
-   * Kept for compatibility with existing provider plugins.
-   */
-  discovery?: ProviderPluginDiscovery;
   /**
    * Sync runtime fallback for model ids not present in the local catalog.
    *
@@ -231,13 +219,6 @@ export type ProviderPlugin = {
    * markers rather than a normal API-key env var.
    */
   resolveConfigApiKey?: (ctx: ProviderResolveConfigApiKeyContext) => string | null | undefined;
-  /**
-   * @deprecated Legacy static capability bag kept only for compatibility.
-   *
-   * New provider behavior should use explicit hooks instead. Core replay and
-   * stream/runtime logic no longer consumes this field.
-   */
-  capabilities?: ProviderCapabilities;
   /**
    * Provider-owned replay/compaction policy override.
    *
@@ -474,23 +455,6 @@ export type ProviderPlugin = {
     | null
     | undefined;
   /**
-   * Provider-owned binary thinking toggle.
-   *
-   * Return true when the provider exposes a coarse on/off reasoning control
-   * instead of the normal multi-level ladder shown by `/think`.
-   *
-   * @deprecated Prefer `resolveThinkingProfile`.
-   */
-  isBinaryThinking?: (ctx: ProviderThinkingPolicyContext) => boolean | undefined;
-  /**
-   * Provider-owned xhigh reasoning support.
-   *
-   * Return true only for models that should expose the `xhigh` thinking level.
-   *
-   * @deprecated Prefer `resolveThinkingProfile`.
-   */
-  supportsXHighThinking?: (ctx: ProviderThinkingPolicyContext) => boolean | undefined;
-  /**
    * Provider-owned thinking level profile.
    *
    * Prefer this over the individual thinking capability hooks when a provider
@@ -501,17 +465,6 @@ export type ProviderPlugin = {
   resolveThinkingProfile?: (
     ctx: ProviderDefaultThinkingPolicyContext,
   ) => ProviderThinkingProfile | null | undefined;
-  /**
-   * Provider-owned default thinking level.
-   *
-   * Use this to keep model-family defaults (for example Claude 4.6 =>
-   * adaptive) out of core command logic.
-   *
-   * @deprecated Prefer `resolveThinkingProfile`.
-   */
-  resolveDefaultThinkingLevel?: (
-    ctx: ProviderDefaultThinkingPolicyContext,
-  ) => "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | null | undefined;
   /**
    * Provider-owned system-prompt contribution.
    *
@@ -665,18 +618,6 @@ export type ProviderPlugin = {
   ) =>
     | Array<ProviderExternalAuthProfile>
     | ReadonlyArray<ProviderExternalAuthProfile>
-    | null
-    | undefined;
-  /**
-   * @deprecated Declare `contracts.externalAuthProviders` in the plugin manifest
-   * and implement `resolveExternalAuthProfiles` instead. Kept at the public
-   * plugin boundary until the SDK removal window closes.
-   */
-  resolveExternalOAuthProfiles?: (
-    ctx: ProviderResolveExternalOAuthProfilesContext,
-  ) =>
-    | Array<ProviderExternalOAuthProfile>
-    | ReadonlyArray<ProviderExternalOAuthProfile>
     | null
     | undefined;
   /**

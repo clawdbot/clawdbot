@@ -214,6 +214,7 @@ export async function startSignalIngressMonitor(params: {
   return {
     receive: async (event) => {
       await monitor.admit(event);
+      await monitor.waitForPumpIdle();
     },
     stop: monitor.stop,
     waitForIdle: monitor.waitForIdle,

@@ -1189,6 +1189,7 @@ export class GatewayClient {
       expectFinal,
       timeoutMs,
       signal: opts?.signal,
+      onSent: opts?.onSent,
       onAccepted: opts?.onAccepted,
     });
   }

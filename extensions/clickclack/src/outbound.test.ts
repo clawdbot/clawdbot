@@ -30,6 +30,7 @@ vi.mock("openclaw/plugin-sdk/outbound-media", () => ({ loadOutboundMediaFromUrl 
 vi.mock("./accounts.js", () => ({
   resolveClickClackAccount: () => ({
     baseUrl: "https://clickclack.example",
+    apiEndpoint: "http://127.0.0.1:8484",
     token: "test-token-placeholder",
     workspace: "wsp_1",
   }),
@@ -111,7 +112,7 @@ describe("sendClickClackText routing", () => {
     });
 
     expect(createClientOptions).toHaveBeenCalledWith({
-      baseUrl: "https://clickclack.example",
+      baseUrl: "http://127.0.0.1:8484",
       token: "test-token-placeholder",
       correlationId: "fakeco.case_1",
     });

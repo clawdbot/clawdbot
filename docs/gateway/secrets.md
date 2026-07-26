@@ -190,11 +190,6 @@ Define providers under `secrets.providers`:
       file: "filemain",
       exec: "vault",
     },
-    resolution: {
-      maxProviderConcurrency: 4,
-      maxRefsPerProvider: 512,
-      maxBatchBytes: 262144,
-    },
   },
 }
 ```
@@ -287,19 +282,24 @@ See [SecretRef Credential Surface](/reference/secretref-credential-surface) for 
 For a dedicated 1Password guide covering service accounts, the bundled agent skill, and troubleshooting, see [1Password](/gateway/1password).
 
 <AccordionGroup>
-  <Accordion title="1Password CLI">
+  <Accordion title="1Password">
     ```json5
     {
+      plugins: {
+        entries: {
+          onepassword: {
+            enabled: true,
+          },
+        },
+      },
       secrets: {
         providers: {
-          onepassword_openai: {
+          onepassword: {
             source: "exec",
-            command: "/opt/homebrew/bin/op",
-            allowSymlinkCommand: true, // required for Homebrew symlinked binaries
-            trustedDirs: ["/opt/homebrew"],
-            args: ["read", "op://Personal/OpenClaw QA API Key/password"],
-            passEnv: ["HOME"],
-            jsonOnly: false,
+            pluginIntegration: {
+              pluginId: "onepassword",
+              integrationId: "onepassword",
+            },
           },
         },
       },
@@ -308,12 +308,20 @@ For a dedicated 1Password guide covering service accounts, the bundled agent ski
           openai: {
             baseUrl: "https://api.openai.com/v1",
             models: [{ id: "gpt-5", name: "gpt-5" }],
-            apiKey: { source: "exec", provider: "onepassword_openai", id: "value" },
+            apiKey: {
+              source: "exec",
+              provider: "onepassword",
+              id: "op://Engineering/OpenAI/apiKey",
+            },
           },
         },
       },
     }
     ```
+
+    The bundled [1Password plugin](/plugins/onepassword) uses the official
+    `op` CLI and the plugin's service-account token file.
+
   </Accordion>
   <Accordion title="Bitwarden Secrets Manager (`bws`)">
     Use a resolver wrapper to map SecretRef ids to Bitwarden Secrets Manager item keys. The repository includes `scripts/secrets/openclaw-bws-resolver.mjs`; install or copy it to an absolute trusted path on the host that runs the Gateway.
@@ -580,7 +588,7 @@ Warning and audit signals:
 - `SECRETS_REF_OVERRIDES_PLAINTEXT` (runtime warning)
 - `REF_SHADOWED` (audit finding when `auth-profiles.json` credentials take precedence over `openclaw.json` refs)
 
-Google Chat compatibility: `serviceAccountRef` takes precedence over plaintext `serviceAccount`; the plaintext value is ignored once the sibling ref is set.
+Google Chat `serviceAccount` accepts inline JSON or a SecretRef. Doctor moves the retired sibling `serviceAccountRef` into this canonical field when it is unset.
 
 ## Activation triggers
 

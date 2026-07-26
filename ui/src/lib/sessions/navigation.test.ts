@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { resolveSessionNavigation, visibleSessionMatches } from "./navigation.ts";
@@ -32,7 +33,7 @@ describe("resolveSessionNavigation", () => {
   it("hides cron sessions unless showCron opts in", () => {
     const rows: GatewaySessionRow[] = [
       { key: "agent:main:chat", kind: "direct", updatedAt: 300 },
-      { key: "agent:main:cron:job", kind: "cron", updatedAt: 200 },
+      { key: "agent:main:cron:job", kind: "cron" as never, updatedAt: 200 },
     ];
 
     const hidden = resolveSessionNavigation({
@@ -113,6 +114,36 @@ describe("resolveSessionNavigation", () => {
     expect(navigation.visibleSessions.slice(1).map((row) => row.key)).toEqual(
       Array.from({ length: 11 }, (_, index) => `agent:main:recent-${index}`),
     );
+  });
+
+  it("keeps the selected archived session ahead of an active-filtered result", () => {
+    const selectedSession = {
+      key: "agent:main:archived",
+      kind: "direct" as const,
+      archived: true,
+      updatedAt: 50,
+    };
+    const navigation = resolveSessionNavigation({
+      result: sessionsResult([{ key: "agent:main:recent", kind: "direct", updatedAt: 100 }]),
+      activeSession: selectedSession,
+      resultAgentId: "main",
+      sessionKey: selectedSession.key,
+      archivedFilter: "active",
+    });
+
+    expect(navigation.visibleSessions.map((row) => row.key)).toEqual([
+      selectedSession.key,
+      "agent:main:recent",
+    ]);
+    expect(navigation.visibleSessions[0]).toMatchObject({
+      key: selectedSession.key,
+      archived: true,
+    });
+    expect(navigation.activeRowKey).toBe(selectedSession.key);
+    expect(navigation.selectedSession).toMatchObject({
+      key: selectedSession.key,
+      archived: true,
+    });
   });
 
   it("keeps the selected session in place in a long list", () => {

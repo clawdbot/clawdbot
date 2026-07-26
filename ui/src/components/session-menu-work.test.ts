@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ControlUiSessionPullRequest } from "../../../src/gateway/control-ui-contract.js";
-import { fetchSessionMenuWork } from "./session-menu-work.ts";
+import {
+  fetchSessionMenuWork,
+  fetchSessionPullRequestIndicatorState,
+} from "./session-menu-work.ts";
 
 function pullRequest(overrides: Partial<ControlUiSessionPullRequest>): ControlUiSessionPullRequest {
   return {
@@ -14,6 +17,68 @@ function pullRequest(overrides: Partial<ControlUiSessionPullRequest>): ControlUi
     ...overrides,
   };
 }
+
+describe("session pull request indicators", () => {
+  it.each([
+    {
+      name: "prioritizes an active PR over merged history",
+      pullRequests: [
+        pullRequest({ number: 1, state: "merged" }),
+        pullRequest({ number: 2, state: "draft" }),
+      ],
+      expected: "open",
+    },
+    {
+      name: "shows merged history",
+      pullRequests: [pullRequest({ state: "merged" })],
+      expected: "merged",
+    },
+    {
+      name: "ignores closed history",
+      pullRequests: [pullRequest({ state: "closed" })],
+      expected: "none",
+    },
+  ] as const)("$name", async ({ pullRequests, expected }) => {
+    const request = vi.fn(() => Promise.resolve({ pullRequests, rateLimited: false }));
+    await expect(
+      fetchSessionPullRequestIndicatorState({
+        client: { request: request as never },
+        pullRequestsAvailable: true,
+        sessionKey: "agent:main:demo",
+      }),
+    ).resolves.toBe(expected);
+  });
+
+  it("preserves the prior indicator when the gateway is rate limited", async () => {
+    const request = vi.fn(() => Promise.resolve({ pullRequests: [], rateLimited: true }));
+    await expect(
+      fetchSessionPullRequestIndicatorState({
+        client: { request: request as never },
+        pullRequestsAvailable: true,
+        sessionKey: "agent:main:demo",
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it("loads the compact indicator state through the existing PR surface", async () => {
+    const request = vi.fn(() =>
+      Promise.resolve({ pullRequests: [pullRequest({ state: "merged" })], rateLimited: false }),
+    );
+
+    await expect(
+      fetchSessionPullRequestIndicatorState({
+        client: { request: request as never },
+        pullRequestsAvailable: true,
+        sessionKey: "agent:main:demo",
+        agentId: "main",
+      }),
+    ).resolves.toBe("merged");
+    expect(request).toHaveBeenCalledWith("controlUi.sessionPullRequests", {
+      sessionKey: "agent:main:demo",
+      agentId: "main",
+    });
+  });
+});
 
 describe("fetchSessionMenuWork", () => {
   it("resolves the PR URL and worktree path in one pass", async () => {

@@ -2,12 +2,12 @@ title: Session memory ranking
 
 scenario:
   id: session-memory-ranking
-  surface: memory
+  surface: session-memory
   coverage:
     primary:
-      - memory.ranking
+      - session-memory.embedding-search-ranking
     secondary:
-      - memory.recall
+      - session-memory.embedding-search-recall
   objective: Verify session-transcript memory can outrank stale durable notes and drive the final answer toward the newer fact.
   successCriteria:
     - Session memory indexing is enabled for the scenario.
@@ -49,7 +49,7 @@ flow:
             - ref: env
         - set: originalMemorySearch
           value:
-            expr: "original.config.agents && typeof original.config.agents === 'object' && typeof original.config.agents.defaults === 'object' ? original.config.agents.defaults.memorySearch : undefined"
+            expr: "original.config.memory && typeof original.config.memory === 'object' ? structuredClone(original.config.memory.search) : undefined"
         - set: originalToolsSessions
           value:
             expr: "original.config.tools && typeof original.config.tools === 'object' && typeof original.config.tools.sessions === 'object' ? structuredClone(original.config.tools.sessions) : undefined"
@@ -61,21 +61,20 @@ flow:
                 tools:
                   sessions:
                     visibility: all
-                agents:
-                  defaults:
-                    memorySearch:
-                      sources:
-                        - memory
-                        - sessions
-                      experimental:
-                        sessionMemory: true
-                      query:
-                        minScore: 0
-                        hybrid:
+                memory:
+                  search:
+                    sources:
+                      - memory
+                      - sessions
+                    experimental:
+                      sessionMemory: true
+                    query:
+                      minScore: 0
+                      hybrid:
+                        enabled: true
+                        temporalDecay:
                           enabled: true
-                          temporalDecay:
-                            enabled: true
-                            halfLifeDays: 1
+                          halfLifeDays: 1
         - call: waitForGatewayHealthy
           args:
             - ref: env
@@ -192,10 +191,9 @@ flow:
                       tools:
                         sessions:
                           expr: "originalToolsSessions === undefined ? null : structuredClone(originalToolsSessions)"
-                      agents:
-                        defaults:
-                          memorySearch:
-                            expr: "originalMemorySearch === undefined ? null : structuredClone(originalMemorySearch)"
+                      memory:
+                        search:
+                          expr: "originalMemorySearch === undefined ? null : structuredClone(originalMemorySearch)"
               - call: waitForGatewayHealthy
                 args:
                   - ref: env

@@ -4,7 +4,6 @@ import type {
   ChannelStreamingPreviewConfig,
   DmPolicy,
   GroupPolicy,
-  OutboundRetryConfig,
   SessionThreadBindingsConfig,
 } from "./types.base.js";
 import type {
@@ -102,14 +101,6 @@ export type TelegramAccountConfig = CommonChannelMessagingConfig<
      * Default: false.
      */
     richMessages?: boolean;
-    /** Telegram API client timeout in seconds (grammY ApiClientOptions). */
-    timeoutSeconds?: number;
-    /** Buffer window for Telegram media groups/albums before dispatching them as one inbound message. Default: 500ms. */
-    mediaGroupFlushMs?: number;
-    /** Telegram polling watchdog threshold in milliseconds. Default: 120000. */
-    pollingStallThresholdMs?: number;
-    /** Retry policy for outbound Telegram API calls. */
-    retry?: OutboundRetryConfig;
     /** Network transport overrides for Telegram. */
     network?: TelegramNetworkConfig;
     proxy?: string;
@@ -145,12 +136,10 @@ export type TelegramAccountConfig = CommonChannelMessagingConfig<
     silentErrorReplies?: boolean;
     /** Controls outbound error reporting: always, once per cooldown window, or silent. */
     errorPolicy?: "always" | "once" | "silent";
-    /** Cooldown window for `errorPolicy: "once"` in milliseconds. */
-    errorCooldownMs?: number;
     /**
      * Per-channel outbound response prefix override.
      *
-     * When set, this takes precedence over the global `messages.responsePrefix`.
+     * Account values take precedence over the channel-level value.
      * Use `""` to explicitly disable a global prefix for this channel.
      * Use `"auto"` to derive `[{identity.name}]` from the routed agent.
      */
@@ -186,8 +175,6 @@ export type TelegramTopicConfig = {
   agentId?: string;
   /** Controls outbound error reporting for this topic. */
   errorPolicy?: "always" | "once" | "silent";
-  /** Cooldown window for `errorPolicy: "once"` in milliseconds. */
-  errorCooldownMs?: number;
 };
 
 export type TelegramGroupConfig = {
@@ -213,8 +200,6 @@ export type TelegramGroupConfig = {
   disableAudioPreflight?: boolean;
   /** Controls outbound error reporting for this group. */
   errorPolicy?: "always" | "once" | "silent";
-  /** Cooldown window for `errorPolicy: "once"` in milliseconds. */
-  errorCooldownMs?: number;
 };
 
 /** Config for LLM-based auto-topic labeling. */
@@ -246,8 +231,6 @@ export type TelegramDirectConfig = {
   systemPrompt?: string;
   /** Controls outbound error reporting for this DM. */
   errorPolicy?: "always" | "once" | "silent";
-  /** Cooldown window for `errorPolicy: "once"` in milliseconds. */
-  errorCooldownMs?: number;
   /** Auto-rename DM forum topics on first message using LLM. Default: true. */
   autoTopicLabel?: AutoTopicLabelConfig;
 };

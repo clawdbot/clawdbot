@@ -588,9 +588,8 @@ describe("runAgentTurnWithFallback: terminal failures", () => {
         expect(result.payload.text).toContain("CLI subprocess");
         expect(result.payload.text).toContain("no-output watchdog");
         expect(result.payload.text).toContain("separate from the overall agent timeout");
-        expect(result.payload.text).toContain(
-          "agents.defaults.cliBackends.<id>.reliability.watchdog.{fresh,resume}.noOutputTimeoutMs",
-        );
+        expect(result.payload.text).toContain("produced no output before its watchdog expired");
+        expect(result.payload.text).not.toContain("noOutputTimeoutMs");
         expect(result.payload.text).not.toContain("agents.defaults.timeoutSeconds");
       }
       expect(result.payload.text).not.toContain("/new");

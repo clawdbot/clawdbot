@@ -83,7 +83,9 @@ async function fetchDocsSearch(query: string): Promise<DocResult[]> {
     });
     let payload: DocsSearchResponse;
     try {
-      payload = JSON.parse(new TextDecoder().decode(bytes)) as DocsSearchResponse;
+      payload = JSON.parse(
+        new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+      ) as DocsSearchResponse;
     } catch (cause) {
       throw new Error("Docs search response is malformed JSON", { cause });
     }

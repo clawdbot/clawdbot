@@ -41,6 +41,26 @@ import { describe, it, expect } from "vitest";
 import { markdownToIR } from "./ir.js";
 
 describe("Nested Lists - 2 Level Nesting", () => {
+  it("records parser-owned item spans and list ancestry", () => {
+    const result = markdownToIR("- parent\n  - child\n- next\n# Heading");
+    const items = [...(result.listItems ?? [])].toSorted(
+      (left, right) => (left.listMarker?.start ?? 0) - (right.listMarker?.start ?? 0),
+    );
+    const [parent, child, next] = items;
+    expect(items).toHaveLength(3);
+    expect(parent).toMatchObject({ depth: 0, start: 0 });
+    expect(child).toMatchObject({ depth: 1, parentListId: parent?.listId });
+    expect(next?.listId).toBe(parent?.listId);
+    expect(result.text.slice(parent?.start, parent?.end)).toContain("child");
+    expect(result.text.slice(next?.start, next?.end)).not.toContain("Heading");
+  });
+
+  it("keeps loose continuation paragraphs inside the item span", () => {
+    const result = markdownToIR("- first\n\n  continuation\n- next");
+    const first = result.listItems?.find((item) => item.listMarker?.start === 0);
+    expect(result.text.slice(first?.start, first?.end)).toContain("continuation");
+  });
+
   it("renders bullet items nested inside bullet items with proper indentation", () => {
     const input = `- Item 1
   - Nested 1.1

@@ -27,6 +27,11 @@ struct ChatProTab: View {
         let fileURL: URL
     }
 
+    private struct SessionDashboardPresentation: Identifiable {
+        let id = UUID()
+        let sessionKey: String
+    }
+
     @Environment(NodeAppModel.self) private var appModel
     @AppStorage("openclaw.webchat.showAssistantTrace")
     private var showsAssistantTrace = true
@@ -37,6 +42,7 @@ struct ChatProTab: View {
     @State private var showsBackgroundTasks = false
     @State private var showsSessions = false
     @State private var showsNewSessionOptions = false
+    @State private var sessionDashboardPresentation: SessionDashboardPresentation?
     // Transport can start unscoped while the UI uses its "main" fallback.
     // Track the real agent so gateway metadata replaces the captured transport.
     @State private var viewModelTransportAgentID = ""
@@ -47,20 +53,20 @@ struct ChatProTab: View {
     @State private var viewModelHasVerifiedOfflineRoutingIdentity = false
     @State private var speech: OpenClawChatSpeechController?
     @State private var isGatewayStatusManuallyExpanded = false
-    let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let headerSidebarAction: OpenClawSidebarHeaderAction?
     let headerTitle: String?
     let showsAgentBadge: Bool
     let ownsNavigationStack: Bool
     let openSettings: (() -> Void)?
 
     init(
-        headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
+        headerSidebarAction: OpenClawSidebarHeaderAction? = nil,
         headerTitle: String? = nil,
         showsAgentBadge: Bool = true,
         ownsNavigationStack: Bool = true,
         openSettings: (() -> Void)? = nil)
     {
-        self.headerLeadingAction = headerLeadingAction
+        self.headerSidebarAction = headerSidebarAction
         self.headerTitle = headerTitle
         self.showsAgentBadge = showsAgentBadge
         self.ownsNavigationStack = ownsNavigationStack
@@ -82,6 +88,7 @@ struct ChatProTab: View {
         .task {
             await self.appModel.restoreChatSessionRoutingIdentityIfNeeded()
             self.syncChatViewModel()
+            await self.handleNewChatRequest(self.appModel.newChatRequestID)
             if self.speech == nil {
                 let gateway = self.appModel.operatorSession
                 self.speech = OpenClawChatSpeechController { text in
@@ -125,6 +132,9 @@ struct ChatProTab: View {
             self.syncChatViewModel()
             self.viewModel?.refresh()
         }
+        .onChange(of: self.appModel.newChatRequestID) { _, requestID in
+            Task { await self.handleNewChatRequest(requestID) }
+        }
     }
 
     private var content: some View {
@@ -133,10 +143,10 @@ struct ChatProTab: View {
             .navigationTitle(self.showsAgentBadge ? "" : self.headerDisplayTitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                if let headerLeadingAction {
-                    ToolbarItem(placement: .topBarLeading) {
-                        OpenClawSidebarRevealButton(action: headerLeadingAction)
-                    }
+                if let headerSidebarAction {
+                    OpenClawSidebarToolbarItem(
+                        action: headerSidebarAction,
+                        placement: .topBarLeading)
                 }
                 if self.showsAgentBadge {
                     if #available(iOS 26.0, *) {
@@ -176,6 +186,11 @@ struct ChatProTab: View {
                     }
                     .presentationDetents([.medium])
                     .presentationDragIndicator(.visible)
+                }
+            }
+            .sheet(item: self.$sessionDashboardPresentation) { presentation in
+                NavigationStack {
+                    SessionDashboardScreen(sessionKey: presentation.sessionKey)
                 }
             }
             .alert(
@@ -229,7 +244,7 @@ struct ChatProTab: View {
             ContentUnavailableView(
                 "Preparing Chat",
                 systemImage: "bubble.left.and.bubble.right",
-                description: Text("The thread attaches once the gateway is ready.")
+                description: Text("The session attaches once the gateway is ready.")
                     .font(OpenClawType.body))
         }
     }
@@ -270,12 +285,12 @@ struct ChatProTab: View {
     }
 
     private var headerAgentIdentity: some View {
-        HStack {
-            self.headerAgentIdentityControl
-        }
-        .frame(minHeight: 44)
-        .accessibilityIdentifier("chat-agent-identity")
-        .animation(.snappy(duration: 0.24), value: self.showsExpandedGatewayStatus)
+        HStack { self.headerAgentIdentityControl }
+            .frame(minHeight: 44)
+            .accessibilityElement(children: .contain) // Keep the parent reachable and its child actionable.
+            .accessibilityIdentifier("chat-agent-identity")
+            .accessibilityValue(self.showsExpandedGatewayStatus ? "Expanded" : "Collapsed")
+            .animation(.snappy(duration: 0.24), value: self.showsExpandedGatewayStatus)
     }
 
     @ViewBuilder
@@ -457,6 +472,13 @@ struct ChatProTab: View {
         }
     }
 
+    private func handleNewChatRequest(_ requestID: Int) async {
+        guard let viewModel,
+              self.appModel.consumeNewChatRequest(requestID)
+        else { return }
+        _ = await viewModel.startNewSession()
+    }
+
     private func captureCurrentPresentationIdentity() {
         self.viewModelPresentationAgentID = self.currentAgentID
         self.viewModelPresentationAgentName = self.currentAgentDisplayName
@@ -465,8 +487,8 @@ struct ChatProTab: View {
     }
 
     private func makeChatViewModel(sessionKey: String) -> OpenClawChatViewModel {
-        // One store instance backs both seams so the transcript cache and the
-        // offline outbox share a single SQLite connection.
+        // One gateway facade backs both seams while routing cache and outbox
+        // operations to their separate installation-wide databases.
         let offlineStore = self.appModel.makeChatOfflineStore()
         let voiceNoteRecorder = self.appModel.voiceNoteRecorder
         return OpenClawChatViewModel(
@@ -611,12 +633,25 @@ struct ChatProTab: View {
                 self.showsSessions = true
             } label: {
                 Label {
-                    Text(String(localized: "Threads…"))
+                    Text(String(localized: "Sessions…"))
                         .font(OpenClawType.body)
                 } icon: {
                     Image(systemName: "rectangle.stack")
                 }
             }
+
+            Button {
+                guard let sessionKey = self.viewModel?.sessionKey else { return }
+                self.sessionDashboardPresentation = SessionDashboardPresentation(sessionKey: sessionKey)
+            } label: {
+                Label {
+                    Text("Dashboard")
+                        .font(OpenClawType.body)
+                } icon: {
+                    Image(systemName: "rectangle.grid.2x2")
+                }
+            }
+            .disabled(self.viewModel == nil)
 
             Divider()
 

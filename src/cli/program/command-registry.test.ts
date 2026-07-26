@@ -88,6 +88,18 @@ describe("command-registry", () => {
     expect(names).toContain("agents");
   });
 
+  it("only exposes Claws after an explicit process opt-in", () => {
+    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "");
+    expect(getCoreCliCommandNames()).not.toContain("claws");
+    expect(getCoreCliCommandsWithSubcommands()).not.toContain("claws");
+
+    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "1");
+    expect(getCoreCliCommandNames()).toContain("claws");
+    expect(getCoreCliCommandsWithSubcommands()).toContain("claws");
+
+    vi.unstubAllEnvs();
+  });
+
   it("returns only commands that support subcommands", () => {
     const names = getCoreCliCommandsWithSubcommands();
     expect(names).toContain("config");
@@ -97,7 +109,7 @@ describe("command-registry", () => {
     expect(names).toContain("sessions");
     expect(names).toContain("commitments");
     expect(names).toContain("tasks");
-    expect(names).not.toContain("agent");
+    expect(names).toContain("agent");
     expect(names).not.toContain("setup");
     expect(names).not.toContain("status");
     expect(names).not.toContain("doctor");

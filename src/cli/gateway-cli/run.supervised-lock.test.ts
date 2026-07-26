@@ -4,6 +4,14 @@ import { describe, expect, it, vi } from "vitest";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { testing } from "./run.test-support.js";
 
+const loadGatewayTlsRuntimeMock = vi.hoisted(() =>
+  vi.fn(async () => ({ enabled: false, required: true })),
+);
+
+vi.mock("../../infra/tls/gateway.js", () => ({
+  loadGatewayTlsRuntime: loadGatewayTlsRuntimeMock,
+}));
+
 function createLogger() {
   return {
     info: vi.fn(),
@@ -61,26 +69,28 @@ describe("supervised gateway lock recovery", () => {
     });
     const probeHealth = vi.fn(async () => true);
 
-    await expect(
-      testing.runGatewayLoopWithSupervisedLockRecovery({
+    let failure: unknown;
+    try {
+      await testing.runGatewayLoopWithSupervisedLockRecovery({
         startLoop,
         supervisor: "systemd",
         port: 18789,
         healthHost: "127.0.0.1",
         log: createLogger(),
         probeHealth,
-      }),
-    ).rejects.toThrow("exiting with code 78 to prevent a systemd Restart=always loop");
+      });
+    } catch (err) {
+      failure = err;
+    }
 
+    expect(failure).toMatchObject({
+      message: expect.stringContaining(
+        "exiting with code 78 to prevent a systemd Restart=always loop",
+      ),
+    });
     expect(startLoop).toHaveBeenCalledTimes(1);
     expect(probeHealth).toHaveBeenCalledWith({ host: "127.0.0.1", port: 18789 });
-    expect(
-      testing.resolveGatewayLockErrorExitCode(
-        new GatewayLockError("gateway already running under systemd; existing gateway is healthy"),
-        "systemd",
-        true,
-      ),
-    ).toBe(78);
+    expect(testing.resolveGatewayLockErrorExitCode(failure)).toBe(78);
   });
 
   it("bounds supervised retries when the existing gateway stays unhealthy", async () => {
@@ -92,8 +102,9 @@ describe("supervised gateway lock recovery", () => {
       now += ms;
     });
 
-    await expect(
-      testing.runGatewayLoopWithSupervisedLockRecovery({
+    let failure: unknown;
+    try {
+      await testing.runGatewayLoopWithSupervisedLockRecovery({
         startLoop,
         supervisor: "systemd",
         port: 18789,
@@ -104,11 +115,16 @@ describe("supervised gateway lock recovery", () => {
         sleep,
         retryMs: 5,
         timeoutMs: 12,
-      }),
-    ).rejects.toThrow(
-      "gateway already running under systemd; existing gateway did not become healthy after 12ms",
-    );
+      });
+    } catch (err) {
+      failure = err;
+    }
 
+    expect(failure).toMatchObject({
+      message:
+        "gateway already running under systemd; existing gateway did not become healthy after 12ms",
+    });
+    expect(testing.resolveGatewayLockErrorExitCode(failure)).toBe(1);
     expect(startLoop).toHaveBeenCalledTimes(4);
     expect(sleep).toHaveBeenNthCalledWith(1, 5);
     expect(sleep).toHaveBeenNthCalledWith(2, 5);
@@ -149,11 +165,31 @@ describe("supervised gateway lock recovery", () => {
     expect(sleep).toHaveBeenNthCalledWith(3, 2);
   });
 
-  it("requires a confirmed healthy gateway for unmanaged duplicate starts", () => {
-    const err = new GatewayLockError("another gateway instance is already listening");
+  it.each(["gateway already running", "another gateway instance is already listening"])(
+    "uses exit 1 for unmanaged lock errors: %s",
+    (message) => {
+      expect(testing.resolveGatewayLockErrorExitCode(new GatewayLockError(message))).toBe(1);
+    },
+  );
 
-    expect(testing.resolveGatewayLockErrorExitCode(err, null, false)).toBe(1);
-    expect(testing.resolveGatewayLockErrorExitCode(err, null, true)).toBe(0);
+  it("retries non-mutating TLS fingerprint loads until certificate material is ready", async () => {
+    loadGatewayTlsRuntimeMock.mockClear();
+    const probeHealth = testing.createConfiguredGatewayHealthProbe({
+      gateway: { tls: { enabled: true, autoGenerate: true } },
+    });
+
+    await expect(probeHealth({ host: "127.0.0.1", port: 18789 })).resolves.toBe(false);
+    await expect(probeHealth({ host: "127.0.0.1", port: 18789 })).resolves.toBe(false);
+
+    expect(loadGatewayTlsRuntimeMock).toHaveBeenCalledTimes(2);
+    expect(loadGatewayTlsRuntimeMock).toHaveBeenNthCalledWith(1, {
+      enabled: true,
+      autoGenerate: false,
+    });
+    expect(loadGatewayTlsRuntimeMock).toHaveBeenNthCalledWith(2, {
+      enabled: true,
+      autoGenerate: false,
+    });
   });
 
   it("recognizes only the OpenClaw health response", () => {

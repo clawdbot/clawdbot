@@ -1,5 +1,9 @@
 // Read-side chat handlers own history projection, startup metadata, and message lookup.
 import {
+  GATEWAY_CLIENT_CAPS,
+  hasGatewayClientCap,
+} from "../../../packages/gateway-protocol/src/client-info.js";
+import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
@@ -13,6 +17,8 @@ import {
 } from "../../agents/agent-scope.js";
 import { modelCatalogBrowseRequiresFullDiscovery } from "../../agents/model-catalog-browse.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
+import { resolveSwarmConfig } from "../../agents/swarm-config.js";
+import { hashRuntimeConfigValue } from "../../config/runtime-snapshot.js";
 import {
   isSessionTranscriptProjectionUnavailableError,
   resolveTranscriptSessionKeyBySessionId,
@@ -29,11 +35,12 @@ import {
 } from "../chat-abort.js";
 import { resolveEffectiveChatHistoryMaxChars } from "../chat-display-projection.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
+import type { GatewayModelCatalogSnapshot } from "../server-model-catalog.types.js";
 import { capArrayByJsonBytes } from "../session-transcript-readers.js";
 import {
   buildGatewaySessionInfo,
   getSessionDefaults,
-  loadSessionEntry,
+  loadSessionEntryReadOnly,
   listAgentsForGateway,
   resolveSessionModelRef,
   resolveSessionStoreKey,
@@ -54,7 +61,6 @@ import {
 import { resolveRequestedChatAgentId, validateChatSelectedAgent } from "./chat-origin-routing.js";
 import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
 import {
-  loadOptionalServerMethodModelCatalog,
   loadOptionalServerMethodModelCatalogSnapshot,
   startOptionalServerMethodModelCatalogSnapshotLoad,
 } from "./optional-model-catalog.js";
@@ -70,7 +76,19 @@ type ChatHistoryMethod = "chat.history" | "chat.startup";
 type ChatMetadataResult = {
   commands?: unknown[];
   models?: unknown[];
+  swarmEnabled: boolean;
 };
+
+function runtimeConfigsMatch(left: OpenClawConfig, right: OpenClawConfig): boolean {
+  if (left === right) {
+    return true;
+  }
+  try {
+    return hashRuntimeConfigValue(left) === hashRuntimeConfigValue(right);
+  } catch {
+    return false;
+  }
+}
 
 async function handleChatMetadataRequest({
   params,
@@ -140,14 +158,18 @@ async function buildChatMetadataResult(params: {
       }),
     ),
   ]);
-  return { ...models, ...commands };
+  return {
+    ...models,
+    ...commands,
+    swarmEnabled: resolveSwarmConfig(params.cfg, params.agentId).enabled,
+  };
 }
 
 async function buildChatStartupMetadataResult(params: {
   cfg: OpenClawConfig;
   context: GatewayRequestContext;
   agentId: string;
-  modelCatalog: ModelCatalogSnapshot | undefined;
+  modelCatalog: GatewayModelCatalogSnapshot | undefined;
   catalogProjector?: ReturnType<
     (typeof import("./models-list-result.js"))["createGatewayAgentModelCatalogProjector"]
   >;
@@ -160,16 +182,29 @@ async function buildChatStartupMetadataResult(params: {
   }
   try {
     const { buildModelsListResult } = await import("./models-list-result.js");
-    return await buildModelsListResult({
+    const currentConfig = params.context.getRuntimeConfig();
+    if (
+      params.modelCatalog.agentId !== params.agentId ||
+      !runtimeConfigsMatch(currentConfig, params.cfg)
+    ) {
+      return undefined;
+    }
+    const models = await buildModelsListResult({
       context: params.context,
       agentId: params.agentId,
       params: { view: "configured" },
       preloadedCatalog: {
         agentId: params.agentId,
+        config: currentConfig,
         snapshot: params.modelCatalog,
       },
+      preloadedOnly: true,
       ...(params.catalogProjector ? { catalogProjector: params.catalogProjector } : {}),
     });
+    return {
+      ...models,
+      swarmEnabled: resolveSwarmConfig(params.cfg, params.agentId).enabled,
+    };
   } catch (err) {
     params.context.logGateway.debug(
       `chat.startup continuing without metadata: ${formatErrorMessage(err)}`,
@@ -182,7 +217,7 @@ async function buildChatStartupModelCatalogProjection(params: {
   cfg: OpenClawConfig;
   snapshot: ModelCatalogSnapshot;
   sessionAgentId: string;
-  sessionEntry: ReturnType<typeof loadSessionEntry>["entry"];
+  sessionEntry: ReturnType<typeof loadSessionEntryReadOnly>["entry"];
   defaultAgentId: string;
   includeAgentsList: boolean;
 }) {
@@ -289,6 +324,7 @@ async function handleChatHistoryRequest({
   params,
   respond,
   context,
+  client,
   method,
   includeAgentsList,
   includeMetadata,
@@ -347,7 +383,7 @@ async function handleChatHistoryRequest({
     agentId: agentIdOverride,
   });
   const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
-  const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntry(
+  const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntryReadOnly(
     sessionKey,
     sessionLoadOptions,
   );
@@ -388,7 +424,7 @@ async function handleChatHistoryRequest({
   }
   const startupModelCatalogLoad =
     method === "chat.startup"
-      ? startOptionalServerMethodModelCatalogSnapshotLoad(context)
+      ? startOptionalServerMethodModelCatalogSnapshotLoad(context, { agentId: sessionAgentId })
       : undefined;
   const modelCatalogPromise = measureDiagnosticsTimelineSpan(
     `gateway.${method}.model_catalog`,
@@ -399,9 +435,9 @@ async function handleChatHistoryRequest({
             startedLoad: startupModelCatalogLoad,
             timeoutMs: CHAT_STARTUP_OPTIONAL_MODEL_CATALOG_TIMEOUT_MS,
           })
-        : loadOptionalServerMethodModelCatalog(context, method).then((entries) =>
-            entries ? { entries, routeVariants: entries } : undefined,
-          ),
+        : loadOptionalServerMethodModelCatalogSnapshot(context, method, {
+            loadParams: { agentId: sessionAgentId },
+          }),
     {
       config: cfg,
       phase: method,
@@ -499,12 +535,14 @@ async function handleChatHistoryRequest({
     logDebug: (message) => context.logGateway.debug(message),
   });
   const modelCatalogSnapshot = await modelCatalogPromise;
-  const modelCatalog = modelCatalogSnapshot?.entries;
-  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const catalogOwnedBySessionAgent = modelCatalogSnapshot?.agentId === sessionAgentId;
+  const catalogConfig = catalogOwnedBySessionAgent ? modelCatalogSnapshot.config : cfg;
+  const modelCatalog = catalogOwnedBySessionAgent ? modelCatalogSnapshot.entries : undefined;
+  const defaultAgentId = resolveDefaultAgentId(catalogConfig);
   const startupCatalogProjection =
-    method === "chat.startup" && modelCatalogSnapshot
+    method === "chat.startup" && catalogOwnedBySessionAgent
       ? await buildChatStartupModelCatalogProjection({
-          cfg,
+          cfg: catalogConfig,
           snapshot: modelCatalogSnapshot,
           sessionAgentId,
           sessionEntry: entry,
@@ -518,7 +556,7 @@ async function handleChatHistoryRequest({
     modelCatalog;
   const startupMetadata = includeMetadata
     ? await buildChatStartupMetadataResult({
-        cfg,
+        cfg: catalogConfig,
         context,
         agentId: sessionAgentId,
         modelCatalog: modelCatalogSnapshot,
@@ -548,6 +586,9 @@ async function handleChatHistoryRequest({
   });
   sessionInfo.hasActiveRun = activeRunState.active;
   sessionInfo.activeRunIds = activeRunState.runIds;
+  if (Object.hasOwn(historyPage, "activeLeafEntryId")) {
+    sessionInfo.activeLeafEntryId = historyPage.activeLeafEntryId ?? null;
+  }
   const defaults = getSessionDefaults(cfg, defaultModelCatalog, {
     allowPluginNormalization: false,
   });
@@ -559,8 +600,7 @@ async function handleChatHistoryRequest({
   // can restore the in-flight assistant text on switch-back.
   const inFlightRun = resolveInFlightRunSnapshot({
     chatAbortControllers: context.chatAbortControllers,
-    chatRunBuffers: context.chatRunBuffers,
-    chatRunPlanSnapshots: context.chatRunPlanSnapshots,
+    chatRunState: context.chatRunState,
     requestedSessionKey: sessionKey,
     canonicalSessionKey: resolveSessionStoreKey({ cfg, sessionKey }),
     agentId: activeRunAgentId,
@@ -590,13 +630,15 @@ async function handleChatHistoryRequest({
     ...(boundedInFlightRun ? { inFlightRun: boundedInFlightRun } : {}),
     ...(includeAgentsList
       ? {
-          agentsList: listAgentsForGateway(
-            cfg,
-            modelCatalog,
-            startupCatalogProjection
+          agentsList: listAgentsForGateway(cfg, modelCatalog, {
+            ...(startupCatalogProjection
               ? { modelCatalogByAgentId: startupCatalogProjection.modelCatalogByAgentId }
-              : undefined,
-          ),
+              : {}),
+            includeSystem: hasGatewayClientCap(
+              client?.connect.caps,
+              GATEWAY_CLIENT_CAPS.AGENT_KIND,
+            ),
+          }),
         }
       : {}),
     ...(startupMetadata ? { metadata: startupMetadata } : {}),

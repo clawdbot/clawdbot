@@ -458,12 +458,12 @@ describe("media store", () => {
       },
     },
     {
-      name: "prefers detected stream mime over generic zip header extension",
+      name: "prefers detected stream mime over mixed-case generic zip header extension",
       run: async () => {
         await withTempStore(async (storeLocal10) => {
           const saved = await storeLocal10.saveMediaStream(
             Readable.from([Buffer.from("docx")]),
-            "application/zip",
+            "Application/Zip",
             "stream-inbound",
             1024,
             undefined,
@@ -687,13 +687,13 @@ describe("media store", () => {
       expectedExtension: ".custom",
     },
     {
-      name: "does not preserve image header extensions for generic container buffers",
+      name: "does not preserve mixed-case image header extensions for generic container buffers",
       bufferFactory: async () => {
         const zip = new JSZip();
         zip.file("hello.txt", "hi");
         return await zip.generateAsync({ type: "nodebuffer" });
       },
-      contentType: "image/png",
+      contentType: "IMAGE/PNG",
       originalFilename: "fake.png",
       expectedContentType: "application/zip",
       expectedExtension: ".zip",
@@ -1039,6 +1039,11 @@ describe("media store", () => {
         name: "falls back to UUID-only when originalFilename not provided",
         expectedIdPattern: /^[a-f0-9-]{36}\.txt$/,
         expectUuidOnly: true,
+      },
+      {
+        name: "strips controls and neutralizes bidi/zero-width formatting",
+        originalFilename: "report\rC\nL\tT\fF\x1bE\x00N\x7fD\u202efd\u200bp\ufeffsafe.exe",
+        expectedIdPattern: /^reportCLTFEND_fd_p_safe---[a-f0-9-]{36}\.txt$/,
       },
     ] as const)("$name", async (testCase) => {
       await expectSavedOriginalFilenameCase(testCase);

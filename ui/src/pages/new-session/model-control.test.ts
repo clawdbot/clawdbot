@@ -8,7 +8,7 @@ function contextWith(models: ModelCatalogEntry[], runtime = "openclaw") {
   const context = {
     gateway: {
       snapshot: {
-        connected: true,
+        phase: "connected",
         client: { request },
       },
     },

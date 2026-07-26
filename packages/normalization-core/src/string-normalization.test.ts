@@ -3,10 +3,12 @@ import { describe, expect, it } from "vitest";
 import {
   normalizeAtHashSlug,
   normalizeHyphenSlug,
+  normalizeOptionalTrimmedStringList,
   normalizeSortedUniqueStringEntries,
   normalizeSortedUniqueTrimmedStringList,
   normalizeStringEntries,
   normalizeStringEntriesLower,
+  normalizeTrimmedStringList,
   normalizeUniqueSingleOrTrimmedStringList,
   normalizeUniqueStringEntries,
   normalizeUniqueStringEntriesLower,
@@ -57,6 +59,14 @@ describe("normalization-core/string-normalization", () => {
   it("normalizes unique trimmed string lists", () => {
     expect(normalizeUniqueTrimmedStringList([" b ", "a", "b", "", "a"])).toEqual(["b", "a"]);
     expect(normalizeUniqueTrimmedStringList("b")).toEqual([]);
+  });
+
+  it("normalizes array-backed trimmed string lists", () => {
+    const values = [" first ", "", 42, " second ", null];
+    expect(normalizeTrimmedStringList(values)).toEqual(["first", "second"]);
+    expect(normalizeTrimmedStringList("first")).toEqual([]);
+    expect(normalizeOptionalTrimmedStringList(values)).toEqual(["first", "second"]);
+    expect(normalizeOptionalTrimmedStringList(["", 42])).toBeUndefined();
   });
 
   it("normalizes sorted unique trimmed string lists", () => {

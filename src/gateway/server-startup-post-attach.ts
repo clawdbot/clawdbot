@@ -1,6 +1,7 @@
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { setTimeout as sleep } from "node:timers/promises";
 import pMap from "p-map";
+import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
@@ -34,6 +35,7 @@ import {
   type GatewayStartupOutcomeRecorder,
 } from "./server-startup-outcomes.js";
 import type { startGatewayTailscaleExposure } from "./server-tailscale.js";
+import { warmMacOSSystemCaOffMainThread } from "./system-ca-warmup.js";
 const ACP_BACKEND_READY_TIMEOUT_MS = 5_000;
 const ACP_BACKEND_READY_POLL_MS = 50;
 const PROVIDER_AUTH_PREWARM_START_DELAY_MS = 5_000;
@@ -42,7 +44,6 @@ const AGENT_RUNTIME_PLUGIN_PREWARM_START_DELAY_MS = 0;
 const DEFERRED_SIDECAR_START_DELAY_MS = 100;
 const SESSION_LOCK_CLEANUP_CONCURRENCY = 4;
 const SKIP_STARTUP_MODEL_PREWARM_ENV = "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM";
-const QMD_STARTUP_IDLE_DELAY_MS = 120_000;
 type Awaitable<T> = T | Promise<T>;
 type GatewayStartupTrace = {
   detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
@@ -131,21 +132,7 @@ function shouldSkipStartupModelPrewarm(env: NodeJS.ProcessEnv = process.env): bo
 }
 
 function resolveGatewayMemoryStartupPolicy(cfg: OpenClawConfig): GatewayMemoryStartupPolicy {
-  if (cfg.memory?.backend !== "qmd") {
-    return { mode: "off" };
-  }
-  const startup = cfg.memory.qmd?.update?.startup;
-  if (startup === "immediate") {
-    return { mode: "immediate" };
-  }
-  if (startup === "idle") {
-    const rawDelayMs = cfg.memory.qmd?.update?.startupDelayMs;
-    const delayMs =
-      typeof rawDelayMs === "number" && Number.isFinite(rawDelayMs) && rawDelayMs >= 0
-        ? Math.floor(rawDelayMs)
-        : QMD_STARTUP_IDLE_DELAY_MS;
-    return { mode: "idle", delayMs };
-  }
+  void cfg;
   return { mode: "off" };
 }
 
@@ -572,6 +559,7 @@ async function publishConfiguredModelRuntimeSnapshots(params: {
     await import("../agents/prepared-model-runtime.js");
   await refreshPreparedModelRuntimeSnapshots(params.cfg, {
     gatewayLifecycle: true,
+    catalogMode: "static",
     ...(params.workspaceDir ? { defaultWorkspaceDir: params.workspaceDir } : {}),
   });
 }
@@ -650,8 +638,8 @@ export async function startGatewaySidecars(params: {
   const skipChannels =
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS);
-  // Agent RPC remains available when transports are disabled. Publish its mandatory lifecycle
-  // owner before accepting work so request paths can only observe pending or ready snapshots.
+  // Agent RPC remains available when transports are disabled. Publish configured/static facts before
+  // accepting work; live provider catalogs stay advisory and never enter the Gateway lifecycle.
   await measureStartup(params.startupTrace, "sidecars.model-runtime", () =>
     publishStartupModelRuntime(
       {
@@ -909,6 +897,7 @@ type GatewayPostAttachRuntimeDeps = {
     ...args: Parameters<typeof scheduleGatewayUpdateCheck>
   ) => Awaitable<ReturnType<typeof scheduleGatewayUpdateCheck>>;
   startGatewaySidecars: typeof startGatewaySidecars;
+  warmSystemCa: typeof warmMacOSSystemCaOffMainThread;
   startGatewayTailscaleExposure: (
     ...args: Parameters<typeof startGatewayTailscaleExposure>
   ) => ReturnType<typeof startGatewayTailscaleExposure>;
@@ -923,6 +912,7 @@ const defaultGatewayPostAttachRuntimeDeps: GatewayPostAttachRuntimeDeps = {
   scheduleGatewayUpdateCheck: async (...args) =>
     (await import("../infra/update-startup.js")).scheduleGatewayUpdateCheck(...args),
   startGatewaySidecars,
+  warmSystemCa: warmMacOSSystemCaOffMainThread,
   startGatewayTailscaleExposure: async (...args) =>
     (await import("./server-tailscale.js")).startGatewayTailscaleExposure(...args),
 };
@@ -1022,6 +1012,7 @@ export async function startGatewayPostAttachRuntime(
     };
     gatewayPluginConfigAtStart: OpenClawConfig;
     activationSourceConfig: OpenClawConfig;
+    ambientEnvTriggers?: AmbientEnvTriggerPolicy;
     pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
     defaultWorkspaceDir: string;
     deps: CliDeps;
@@ -1066,6 +1057,14 @@ export async function startGatewayPostAttachRuntime(
   },
   runtimeDeps: GatewayPostAttachRuntimeDeps = defaultGatewayPostAttachRuntimeDeps,
 ) {
+  if (!params.minimalTestGateway) {
+    // The HTTP server is already attached, so keep health probes responsive while the worker
+    // resolves Node's effective default CA set before any plugin or worker provider can use TLS.
+    await measureStartup(params.startupTrace, "post-attach.system-ca", () =>
+      runtimeDeps.warmSystemCa({ log: params.log }),
+    );
+  }
+
   let pluginRegistry = params.pluginRegistry;
   let startupPluginsLoaded = false;
   let startupPluginsLoadPromise: Promise<{
@@ -1111,6 +1110,7 @@ export async function startGatewayPostAttachRuntime(
     runtimeDeps.logGatewayStartup({
       cfg: params.cfgAtStart,
       activationSourceConfig: params.activationSourceConfig,
+      ...(params.ambientEnvTriggers ? { ambientEnvTriggers: params.ambientEnvTriggers } : {}),
       bindHost: params.bindHost,
       bindHosts: params.bindHosts,
       port: params.port,

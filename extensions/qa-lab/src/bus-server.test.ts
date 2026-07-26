@@ -200,6 +200,40 @@ describe("qa-bus server", () => {
     ).toEqual([queuedAfterReset.id]);
   });
 
+  it("paginates a burst without advancing past events omitted by the poll limit", async () => {
+    const state = createQaBusState();
+    const bus = await startQaBusServer({ state });
+    stops.push(bus["stop"]);
+
+    for (let index = 1; index <= 101; index += 1) {
+      state.addInboundMessage({
+        accountId: "acct-a",
+        conversation: { id: "burst", kind: "direct" },
+        senderId: "acct-a-user",
+        text: `burst event ${index}`,
+      });
+    }
+
+    const firstPage = await pollQaBus({
+      baseUrl: bus.baseUrl,
+      accountId: "acct-a",
+      cursor: 0,
+      timeoutMs: 0,
+    });
+    expect(firstPage.events).toHaveLength(100);
+    expect(firstPage.cursor).toBe(100);
+
+    const secondPage = await pollQaBus({
+      baseUrl: bus.baseUrl,
+      accountId: "acct-a",
+      cursor: firstPage.cursor,
+      timeoutMs: 0,
+    });
+    expect(secondPage.events).toHaveLength(1);
+    expect(secondPage.events[0]?.cursor).toBe(101);
+    expect(secondPage.cursor).toBe(101);
+  });
+
   it("rejects malformed poll numeric fields before long-polling", async () => {
     const state = createQaBusState();
     const bus = await startQaBusServer({ state });

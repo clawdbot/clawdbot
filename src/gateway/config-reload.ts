@@ -1,4 +1,5 @@
 import { homedir } from "node:os";
+import nodePath from "node:path";
 // Gateway config hot-reload watcher.
 // Diffs config/plugin install snapshots and dispatches hot reload or restart plans.
 import chokidar from "chokidar";
@@ -32,6 +33,7 @@ import { createConfigAppliedRevisionTracker } from "./config-applied-revision.js
 import { diffConfigPaths, diffGatewayReloadPaths } from "./config-diff.js";
 import {
   buildGatewayReloadPlan,
+  isNoopGatewayReloadPlan,
   listPluginInstallTimestampMetadataPaths,
   listPluginInstallWholeRecordPaths,
   type GatewayReloadPlan,
@@ -83,22 +85,6 @@ function matchesSkillsInvalidationPrefix(path: string): boolean {
 
 function firstSkillsChangedPath(changedPaths: string[]): string | undefined {
   return changedPaths.find(matchesSkillsInvalidationPrefix);
-}
-
-function isNoopReloadPlan(plan: GatewayReloadPlan): boolean {
-  return (
-    !plan.restartGateway &&
-    plan.hotReasons.length === 0 &&
-    !plan.reloadHooks &&
-    !plan.restartGmailWatcher &&
-    !plan.restartCron &&
-    !plan.restartHeartbeat &&
-    !plan.restartHealthMonitor &&
-    !plan.reloadPlugins &&
-    !plan.disposeMcpRuntimes &&
-    plan.restartChannels.size === 0 &&
-    (plan.restartChannelAccounts?.size ?? 0) === 0
-  );
 }
 
 type GatewayConfigReloader = {
@@ -162,8 +148,13 @@ export function startGatewayConfigReloader(opts: {
   initialCompareConfig?: OpenClawConfig;
   initialSnapshotRawHash: string | null;
   initialAuthoredConfig: unknown;
+  initialIncludedPaths?: readonly string[];
   initialSnapshotValid: boolean;
   initialSnapshotIssues: ConfigFileSnapshot["issues"];
+  /** Keeps watcher-heavy tests immediate without reopening config-level debounce tuning. */
+  testDebounceMs?: number;
+  /** Per-instance test hook for synchronizing filesystem edits with watcher startup. */
+  onWatcherReady?: () => void;
   prepareConfigCandidate?: (params: {
     runtimeConfig: OpenClawConfig;
     sourceConfig: OpenClawConfig;
@@ -259,7 +250,13 @@ export function startGatewayConfigReloader(opts: {
   let currentReapplyRuntimeOverlays =
     initialCandidate?.reapplyRuntimeOverlays ?? ((config: OpenClawConfig) => config);
   let currentRuntimeRefresh: RuntimeConfigSnapshotRefreshOptions | undefined;
-  let settings = resolveGatewayReloadSettings(currentConfig);
+  const resolveSettings = (config: OpenClawConfig) => {
+    const resolved = resolveGatewayReloadSettings(config);
+    return opts.testDebounceMs === undefined
+      ? resolved
+      : { ...resolved, debounceMs: opts.testDebounceMs };
+  };
+  let settings = resolveSettings(currentConfig);
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   let pending = false;
   let running = false;
@@ -467,7 +464,7 @@ export function startGatewayConfigReloader(opts: {
     let committedRuntimeConfig: OpenClawConfig | null = null;
     let publishedRuntimeEnv: ConfigRuntimeEnvPublication | undefined;
     let runtimeEnvCommitted = false;
-    const nextSettings = resolveGatewayReloadSettings(nextConfig);
+    const nextSettings = resolveSettings(nextConfig);
     const isCurrent = () => configWriteEpoch === transactionEpoch;
     const assertCurrent = () => {
       if (!isCurrent()) {
@@ -513,7 +510,7 @@ export function startGatewayConfigReloader(opts: {
         currentReapplyRuntimeOverlays = ownership.reapplyRuntimeOverlays;
         currentRuntimeRefresh = ownership.runtimeRefresh;
         currentPluginInstallRecords = nextPluginInstallRecords;
-        settings = resolveGatewayReloadSettings(runtimeConfig);
+        settings = resolveSettings(runtimeConfig);
         appliedRevision.defer(plan, nextConfigRevisionHash);
       },
     };
@@ -636,9 +633,7 @@ export function startGatewayConfigReloader(opts: {
         currentReapplyRuntimeOverlays = ownership.reapplyRuntimeOverlays;
         currentRuntimeRefresh = ownership.runtimeRefresh;
         currentPluginInstallRecords = nextPluginInstallRecords;
-        settings = committedRuntimeConfig
-          ? resolveGatewayReloadSettings(committedRuntimeConfig)
-          : nextSettings;
+        settings = committedRuntimeConfig ? resolveSettings(committedRuntimeConfig) : nextSettings;
         commitPublishedRuntimeEnv();
       } catch (error) {
         ownership.rollbackRuntimeEnv();
@@ -700,7 +695,7 @@ export function startGatewayConfigReloader(opts: {
       await commitReloadBaseline({ runtimeApplied: false });
       return;
     }
-    if (isNoopReloadPlan(plan) && !followUp.requiresRestart) {
+    if (isNoopGatewayReloadPlan(plan) && !followUp.requiresRestart) {
       await opts.onConfigChange?.(plan, nextConfig);
       // No-op plans still change the runtime config snapshot. Commit before
       // marking applied so getRuntimeConfig() readers do not stay stale until restart.
@@ -721,23 +716,7 @@ export function startGatewayConfigReloader(opts: {
       await commitReloadBaseline();
       return;
     }
-    if (nextSettings.mode === "restart") {
-      const restartPlan = { ...plan, restartGateway: true };
-      await opts.onConfigChange?.(restartPlan, nextConfig);
-      await prepareRestart(restartPlan, nextConfig, ownership, nextSourceConfig);
-      await commitReloadBaseline();
-      return;
-    }
     if (plan.restartGateway) {
-      if (nextSettings.mode === "hot") {
-        opts.log.warn(
-          `config reload requires gateway restart; hot mode ignoring (${plan.restartReasons.join(
-            ", ",
-          )})`,
-        );
-        await commitReloadBaseline({ runtimeApplied: false });
-        return;
-      }
       await opts.onConfigChange?.(plan, nextConfig);
       await prepareRestart(plan, nextConfig, ownership, nextSourceConfig);
       await commitReloadBaseline();
@@ -803,6 +782,9 @@ export function startGatewayConfigReloader(opts: {
         updateAcceptedSnapshot(snapshot.hash, snapshot.parsed);
       }
     });
+    if (snapshot?.valid) {
+      await acceptWatchedPaths(snapshot.includedPaths ?? []);
+    }
   };
 
   const promoteAcceptedInProcessWrite = async (persistedHash: string) => {
@@ -812,6 +794,7 @@ export function startGatewayConfigReloader(opts: {
         return;
       }
       updateAcceptedSnapshot(snapshot.hash, snapshot.parsed);
+      await acceptWatchedPaths(snapshot.includedPaths ?? []);
       await promoteAcceptedSnapshot(snapshot, "in-process-write");
     } catch (err) {
       opts.log.warn(`config reload in-process last-known-good promotion failed: ${String(err)}`);
@@ -882,6 +865,7 @@ export function startGatewayConfigReloader(opts: {
         await appliedRevision.flush(currentConfig);
         return;
       }
+      await observeCandidateWatchedPaths(snapshot.includedPaths ?? []);
       const observedRawHash = snapshot.hash ?? null;
       const previousObservedRawHash = lastObservedRawHash;
       const newObservedRawHash = observedRawHash !== previousObservedRawHash;
@@ -932,6 +916,7 @@ export function startGatewayConfigReloader(opts: {
           }
           throw err;
         }
+        await acceptWatchedPaths(snapshot.includedPaths ?? []);
         return;
       }
       if (watcherIntentCandidate === intentCandidate) {
@@ -977,6 +962,7 @@ export function startGatewayConfigReloader(opts: {
                 updateAcceptedSnapshot(snapshot.hash, snapshot.parsed);
               }
             });
+            await acceptWatchedPaths(snapshot.includedPaths ?? []);
             return;
           }
           await acceptCurrentRuntimeEcho(transactionEpoch, snapshot);
@@ -1041,6 +1027,7 @@ export function startGatewayConfigReloader(opts: {
         );
         await promoteAcceptedSnapshot(snapshot, "valid-config");
       });
+      await acceptWatchedPaths(snapshot.includedPaths ?? []);
     } catch (err) {
       if (isGatewayConfigReloadSupersededError(err)) {
         opts.log.info(`config reload superseded: ${String(err)}`);
@@ -1115,6 +1102,9 @@ export function startGatewayConfigReloader(opts: {
     }) ?? (() => {});
 
   let watcher: ReturnType<typeof chokidar.watch> | null = null;
+  const acceptedIncludedPaths = new Set(opts.initialIncludedPaths ?? []);
+  let candidateIncludedPaths = new Set<string>();
+  const watchedPaths = new Set([opts.watchPath, ...acceptedIncludedPaths]);
   let watcherRecreateRetries = 0;
   let watcherRecreateTimer: ReturnType<typeof setTimeout> | null = null;
   let hotReloadStatus: GatewayHotReloadStatus = "active";
@@ -1126,14 +1116,18 @@ export function startGatewayConfigReloader(opts: {
       return;
     }
     const usePolling = resolveChokidarUsePolling(degradedToPolling);
-    const next = chokidar.watch(opts.watchPath, {
+    const next = chokidar.watch([...watchedPaths], {
+      depth: 0,
       ignoreInitial: true,
       awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
       usePolling,
     });
     // A file event proves this watcher recovered. Reset only here so plugin
     // metadata refreshes and consecutive watcher errors cannot refill the budget.
-    const scheduleFromWatcherEvent = () => {
+    const scheduleFromWatcherEvent = (eventPath: string) => {
+      if (!watchedPaths.has(nodePath.normalize(eventPath))) {
+        return;
+      }
       watcherRecreateRetries = 0;
       scheduleExternalRefresh();
     };
@@ -1143,15 +1137,16 @@ export function startGatewayConfigReloader(opts: {
     next.on("error", (err) => {
       handleWatcherError(next, err);
     });
-    if (reconcileAfterReady) {
-      next.on("ready", () => {
+    next.on("ready", () => {
+      opts.onWatcherReady?.();
+      if (reconcileAfterReady) {
         // Replacement watchers suppress their initial add event. Reconcile only after the
         // scan completes, and ignore a watcher that failed again before reaching ready.
         if (!stopped && watcher === next) {
           scheduleExternalRefresh();
         }
-      });
-    }
+      }
+    });
     watcher = next;
     watcherUsesPolling = next.options.usePolling;
     hotReloadStatus = "active";
@@ -1201,6 +1196,50 @@ export function startGatewayConfigReloader(opts: {
       watcherRecreateTimer = null;
       createWatcher(true);
     }, backoff);
+  };
+
+  const reconcileWatchedPaths = async (includedPaths: readonly string[]) => {
+    const nextPaths = new Set([opts.watchPath, ...includedPaths]);
+    const additions = [...nextPaths].filter((candidate) => !watchedPaths.has(candidate));
+    const removals = [...watchedPaths].filter((candidate) => !nextPaths.has(candidate));
+    if (additions.length === 0 && removals.length === 0) {
+      return;
+    }
+
+    watchedPaths.clear();
+    for (const candidate of nextPaths) {
+      watchedPaths.add(candidate);
+    }
+    const activeWatcher = watcher;
+    if (!activeWatcher) {
+      return;
+    }
+    try {
+      await activeWatcher.close();
+    } catch (err) {
+      handleWatcherError(activeWatcher, err);
+      return;
+    }
+    if (stopped || watcher !== activeWatcher) {
+      return;
+    }
+    watcher = null;
+    watcherUsesPolling = false;
+    createWatcher(true);
+  };
+
+  const observeCandidateWatchedPaths = async (includedPaths: readonly string[]) => {
+    candidateIncludedPaths = new Set(includedPaths);
+    await reconcileWatchedPaths([...acceptedIncludedPaths, ...candidateIncludedPaths]);
+  };
+
+  const acceptWatchedPaths = async (includedPaths: readonly string[]) => {
+    acceptedIncludedPaths.clear();
+    for (const candidate of includedPaths) {
+      acceptedIncludedPaths.add(candidate);
+    }
+    candidateIncludedPaths.clear();
+    await reconcileWatchedPaths([...acceptedIncludedPaths]);
   };
 
   createWatcher();

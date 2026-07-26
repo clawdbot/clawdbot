@@ -1,8 +1,9 @@
+import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-id";
+import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
 /**
  * Twitch setup wizard surface for CLI setup.
  */
-
-import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-id";
+import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
 import { getChatChannelMeta, type ChannelPlugin } from "openclaw/plugin-sdk/core";
 import {
   formatDocsLink,
@@ -313,33 +314,39 @@ function setTwitchGroupPolicy(
   return setTwitchAccessControl(cfg, allowedRoles, true, accountId);
 }
 
-const twitchDmPolicy: ChannelSetupDmPolicy = {
+const twitchDmPolicy = createChannelDmPolicy({
   label: "Twitch",
   channel,
   policyKey: "channels.twitch.accounts.default.allowedRoles",
   allowFromKey: "channels.twitch.accounts.default.allowFrom",
-  resolveConfigKeys: (cfg, accountId) => {
+  policyPath: "allowedRoles",
+  resolveAccount: (cfg, accountId) => {
     const resolvedAccountId = resolveSetupAccountId(cfg, accountId);
+    const account = getAccountConfig(cfg, resolvedAccountId);
     return {
-      policyKey: `channels.twitch.accounts.${resolvedAccountId}.allowedRoles`,
-      allowFromKey: `channels.twitch.accounts.${resolvedAccountId}.allowFrom`,
+      accountId: resolvedAccountId,
+      config: {
+        dmPolicy: account?.allowedRoles?.includes("all")
+          ? "open"
+          : account?.allowFrom?.length
+            ? "allowlist"
+            : "disabled",
+        allowFrom: account?.allowFrom,
+      },
     };
   },
-  getCurrent: (cfg, accountId) => {
-    const account = getAccountConfig(cfg, resolveSetupAccountId(cfg, accountId));
-    if (account?.allowedRoles?.includes("all")) {
-      return "open";
-    }
-    if (account?.allowFrom && account.allowFrom.length > 0) {
-      return "allowlist";
-    }
-    return "disabled";
-  },
-  setPolicy: (cfg, policy, accountId) => {
+  resolveConfigKeys: ({ account }) => ({
+    policyKey: `channels.twitch.accounts.${account.accountId}.allowedRoles`,
+    allowFromKey: `channels.twitch.accounts.${account.accountId}.allowFrom`,
+  }),
+  resolveAllowFrom: () => undefined,
+  buildPatch: ({ policy }) => {
     const allowedRoles: TwitchRole[] =
       policy === "open" ? ["all"] : policy === "allowlist" ? [] : ["moderator"];
-    return setTwitchAccessControl(cfg, allowedRoles, true, accountId);
+    return { allowedRoles };
   },
+  applyPatch: ({ cfg, account, patch }) =>
+    setTwitchAccessControl(cfg, patch.allowedRoles as TwitchRole[], true, account.accountId),
   promptAllowFrom: async ({ cfg, prompter, accountId }) => {
     const resolvedAccountId = resolveSetupAccountId(cfg, accountId);
     const account = getAccountConfig(cfg, resolvedAccountId);
@@ -362,7 +369,7 @@ const twitchDmPolicy: ChannelSetupDmPolicy = {
       resolvedAccountId,
     );
   },
-};
+});
 
 const twitchGroupAccess: NonNullable<ChannelSetupWizard["groupAccess"]> = {
   label: "Twitch chat",
@@ -383,6 +390,7 @@ const twitchGroupAccess: NonNullable<ChannelSetupWizard["groupAccess"]> = {
 };
 
 export const twitchSetupAdapter: ChannelSetupAdapter = {
+  singleAccountKeysToMove: ["accessToken"],
   resolveAccountId: ({ cfg }) => resolveSetupAccountId(cfg),
   applyAccountConfig: ({ cfg, accountId }) =>
     setTwitchAccount(
@@ -393,6 +401,14 @@ export const twitchSetupAdapter: ChannelSetupAdapter = {
       accountId,
     ),
 };
+
+// Intentionally empty: Twitch setup stores no flag values (the adapter only
+// enables the account; credentials flow through the wizard). Shipped CLIs
+// parsed-and-ignored global channel flags here; rejecting them is by design.
+export const twitchSetupContract = defineChannelSetupContract({
+  fields: {},
+  legacyAdapter: twitchSetupAdapter,
+});
 
 export const twitchSetupWizard: ChannelSetupWizard = {
   channel,
@@ -510,5 +526,6 @@ export const twitchSetupPlugin: ChannelPlugin<ResolvedTwitchAccount> = {
     isEnabled: (account) => account.enabled !== false,
   },
   setup: twitchSetupAdapter,
+  setupContract: twitchSetupContract,
   setupWizard: twitchSetupWizard,
 };

@@ -1,4 +1,3 @@
-// Fireworks plugin entrypoint registers its OpenClaw integration.
 import type { ProviderResolveDynamicModelContext } from "openclaw/plugin-sdk/plugin-entry";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import {
@@ -8,13 +7,14 @@ import {
   normalizeModelCompat,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { isFireworksKimiModelId } from "./model-id.js";
-import { applyFireworksConfig, FIREWORKS_DEFAULT_MODEL_REF } from "./onboard.js";
+import { applyFireworksConfig } from "./onboard.js";
 import {
   buildFireworksProvider,
   FIREWORKS_BASE_URL,
   FIREWORKS_DEFAULT_CONTEXT_WINDOW,
   FIREWORKS_DEFAULT_MAX_TOKENS,
   FIREWORKS_DEFAULT_MODEL_ID,
+  FIREWORKS_DEFAULT_MODEL_REF,
   isFireworksCatalogModelId,
 } from "./provider-catalog.js";
 import { wrapFireworksProviderStream } from "./stream.js";
@@ -95,7 +95,9 @@ export default defineSingleProviderPluginEntry({
     ],
     catalog: {
       buildProvider: buildFireworksProvider,
+      buildStaticProvider: buildFireworksProvider,
       allowExplicitBaseUrl: true,
+      liveModelDiscovery: true,
     },
     ...buildProviderReplayFamilyHooks({ family: "openai-compatible" }),
     wrapStreamFn: wrapFireworksProviderStream,

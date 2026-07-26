@@ -170,6 +170,8 @@ export async function executeNodeClaudeRun(params: {
   executionArgs: string[];
   stdinPayload: string;
   nodeSystemPrompt?: string;
+  nodeEnv?: Record<string, string>;
+  nodeClearEnv?: string[];
   noOutputTimeoutMs: number;
   consumeStdout: (chunk: string) => void;
   consumeStderr: (chunk: string) => void;
@@ -230,6 +232,8 @@ export async function executeNodeClaudeRun(params: {
         stdin: params.stdinPayload,
         ...(params.nodePlacement.cwd ? { cwd: params.nodePlacement.cwd } : {}),
         ...(params.nodeSystemPrompt !== undefined ? { systemPrompt: params.nodeSystemPrompt } : {}),
+        ...(params.nodeEnv ? { env: params.nodeEnv } : {}),
+        ...(params.nodeClearEnv ? { clearEnv: params.nodeClearEnv } : {}),
         ...(contextParams.agentId ? { agentId: contextParams.agentId } : {}),
         ...(contextParams.sessionKey ? { sessionKey: contextParams.sessionKey } : {}),
         ...(approval

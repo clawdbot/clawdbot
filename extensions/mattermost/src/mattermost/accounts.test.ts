@@ -209,10 +209,10 @@ describe("resolveMattermostReplyToMode", () => {
       cfg: {
         channels: {
           mattermost: {
-            streaming: "partial",
+            streaming: { mode: "partial" },
             accounts: {
               work: {
-                streaming: "off",
+                streaming: { mode: "off" },
               },
             },
           },

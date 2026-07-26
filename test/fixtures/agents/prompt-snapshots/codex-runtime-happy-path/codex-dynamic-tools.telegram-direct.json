@@ -138,13 +138,14 @@
     "type": "function"
   },
   {
-    "description": "Spawn clean child; default `runtime=\"subagent\"`. `mode=\"run\"` one-shot background. Inherits parent workspace. Native task arrives as first `[Subagent Task]`. Native transcript needed: `context=\"fork\"`; else omit/isolated. Use fresh child for sidecar/parallel batch reads, multi-step search, data collection; avoid quick lookup/single read unless policy prefers. After spawn, do non-overlap work while run result returns.",
+    "description": "Spawn clean child; default `runtime=\"subagent\"`. `mode=\"run\"` one-shot background. `visible=true`: persistent dashboard session; subagent only; omit `mode` (no `mode=\"run\"`), `thread`, `thinking`, `lightContext`, `attachments`, `attachAs`; inherited tool allow/denylist blocks it at spawn with no config override. Session listing/addressing obeys `tools.sessions.visibility` (`tree` default: current + own spawn subtree). Inherits parent workspace. Native task arrives as first `[Subagent Task]`. Native transcript needed: `context=\"fork\"`; else omit/isolated. Use fresh child for sidecar/parallel batch reads, multi-step search, data collection; avoid quick lookup/single read unless policy prefers. After spawn, do non-overlap work while run result returns.",
     "inputSchema": {
       "properties": {
         "agentId": {
           "type": "string"
         },
         "attachAs": {
+          "description": "Attachment mount hint; unavailable with visible=true.",
           "properties": {
             "mountPath": {
               "type": "string"
@@ -153,6 +154,7 @@
           "type": "object"
         },
         "attachments": {
+          "description": "Inline snapshots; unavailable with visible=true.",
           "items": {
             "properties": {
               "content": {
@@ -176,11 +178,12 @@
           "type": "array"
         },
         "cleanup": {
+          "description": "Hidden session cleanup; visible=true always keeps the session.",
           "enum": ["delete", "keep"],
           "type": "string"
         },
         "context": {
-          "description": "Native: omit/isolated clean; fork only needing requester transcript.",
+          "description": "Native: omit/isolated clean; fork only needing requester transcript; visible fork requires same agent.",
           "enum": ["isolated", "fork"],
           "type": "string"
         },
@@ -188,13 +191,15 @@
           "type": "string"
         },
         "label": {
+          "description": "Short task title shown in UI lists; name the work, not the agent.",
           "type": "string"
         },
         "lightContext": {
-          "description": "Light bootstrap; subagent only.",
+          "description": "Light bootstrap; subagent only; unavailable with visible=true.",
           "type": "boolean"
         },
         "mode": {
+          "description": "\"run\" one-shot. Omit with visible=true; visible sessions are persistent.",
           "enum": ["run"],
           "type": "string"
         },
@@ -202,6 +207,7 @@
           "type": "string"
         },
         "runtime": {
+          "description": "Runtime; visible=true requires \"subagent\".",
           "enum": ["subagent"],
           "type": "string"
         },
@@ -217,10 +223,11 @@
           "type": "string"
         },
         "thinking": {
+          "description": "Thinking override; unavailable with visible=true.",
           "type": "string"
         },
         "visible": {
-          "description": "visible: user sees session in UI. Use when user asked or talks via web/app.",
+          "description": "Persistent UI session; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs; unavailable with inherited tool allow/denylist.",
           "type": "boolean"
         },
         "worktree": {
@@ -709,6 +716,23 @@
                       "description": "ISO-8601 time (kind=at)",
                       "type": "string"
                     },
+                    "batchMs": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "command": {
+                      "description": "Supervised source argv (kind=stream; requires cron.triggers.enabled)",
+                      "items": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "cwd": {
+                      "description": "Working directory (kind=stream)",
+                      "type": "string"
+                    },
                     "everyMs": {
                       "description": "Interval ms (kind=every)",
                       "minimum": 1,
@@ -721,6 +745,18 @@
                     "kind": {
                       "description": "Schedule kind",
                       "enum": ["at", "every", "cron"],
+                      "type": "string"
+                    },
+                    "match": {
+                      "description": "Regex source (stream match mode)",
+                      "type": "string"
+                    },
+                    "maxBatchBytes": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "mode": {
+                      "enum": ["line", "match"],
                       "type": "string"
                     },
                     "staggerMs": {
@@ -1093,6 +1129,23 @@
                       "description": "ISO-8601 time (kind=at)",
                       "type": "string"
                     },
+                    "batchMs": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "command": {
+                      "description": "Supervised source argv (kind=stream; requires cron.triggers.enabled)",
+                      "items": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "cwd": {
+                      "description": "Working directory (kind=stream)",
+                      "type": "string"
+                    },
                     "everyMs": {
                       "description": "Interval ms (kind=every)",
                       "minimum": 1,
@@ -1105,6 +1158,18 @@
                     "kind": {
                       "description": "Schedule kind",
                       "enum": ["at", "every", "cron"],
+                      "type": "string"
+                    },
+                    "match": {
+                      "description": "Regex source (stream match mode)",
+                      "type": "string"
+                    },
+                    "maxBatchBytes": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "mode": {
+                      "enum": ["line", "match"],
                       "type": "string"
                     },
                     "staggerMs": {

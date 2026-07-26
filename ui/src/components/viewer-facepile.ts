@@ -1,7 +1,11 @@
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import type { PresenceEntry } from "../api/types.ts";
+import { CONTROL_UI_BUILD_INFO, type ControlUiBuildInfo } from "../build-info.ts";
+import { t } from "../i18n/index.ts";
+import { resolveAvatar } from "../lib/identity-avatar.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
+import { renderSidebarServerDetails } from "./sidebar-build-chip-format.ts";
 import "./tooltip.ts";
 
 export type PresenceViewer = {
@@ -87,6 +91,21 @@ function projectPresencePayload(value: unknown, selfInstanceId?: string) {
   return cachedPresenceProjection;
 }
 
+export function hasSessionPresenceViewers(
+  value: unknown,
+  selfInstanceId: string | undefined,
+  sessionKey: string,
+): boolean {
+  const projection = projectPresencePayload(value, selfInstanceId);
+  return projection.users.some(
+    (user) => user.id !== projection.selfUserId && user.watchedSessions.includes(sessionKey),
+  );
+}
+
+export function hasMultiplePresenceIdentities(value: unknown): boolean {
+  return projectPresencePayload(value).users.length >= 2;
+}
+
 export function presenceViewerLabel(user: PresenceViewer): string {
   return user.name ?? user.email ?? user.id;
 }
@@ -112,6 +131,41 @@ function avatarColor(userId: string): string {
   return `hsl(${(hash >>> 0) % 360} 48% 42%)`;
 }
 
+function renderAvatarInitials(user: PresenceViewer) {
+  return html`<span style=${`background: ${avatarColor(user.id)}`}>${initialsFor(user)}</span>`;
+}
+
+function resolveViewerAvatar(user: PresenceViewer) {
+  const avatar = resolveAvatar({
+    id: user.email ?? user.id,
+    name: user.name,
+    profileAvatarUrl: user.avatarUrl,
+  });
+  if (avatar.kind === "initials") {
+    return renderAvatarInitials(user);
+  }
+  return html`<img
+      src=${avatar.url}
+      alt=""
+      referrerpolicy="no-referrer"
+      @error=${(event: Event) => {
+        const image = event.currentTarget;
+        if (image instanceof HTMLImageElement) {
+          image.closest<HTMLElement>(".viewer-avatar")?.classList.add("is-fallback");
+        }
+      }}
+      @load=${(event: Event) => {
+        const image = event.currentTarget;
+        if (image instanceof HTMLImageElement) {
+          image.closest<HTMLElement>(".viewer-avatar")?.classList.remove("is-fallback");
+        }
+      }}
+    />
+    <span class="viewer-avatar__fallback" style=${`background: ${avatarColor(user.id)}`}
+      >${initialsFor(user)}</span
+    >`;
+}
+
 export type ViewerAvatarVariant = "session" | "footer" | "profile";
 
 class ViewerAvatar extends OpenClawLightDomContentsElement {
@@ -129,11 +183,29 @@ class ViewerAvatar extends OpenClawLightDomContentsElement {
       data-viewer-id=${user.id}
       aria-label=${label}
     >
-      ${user.avatarUrl
-        ? html`<img src=${user.avatarUrl} alt="" referrerpolicy="no-referrer" />`
-        : html`<span style=${`background: ${avatarColor(user.id)}`}>${initialsFor(user)}</span>`}
+      ${resolveViewerAvatar(user)}
     </span>`;
   }
+}
+
+function renderPresenceCardRow(user: PresenceViewer, isSelf: boolean) {
+  const label = presenceViewerLabel(user);
+  // The email doubles as the label when no display name exists; repeating it
+  // as a subtitle would just echo the same line.
+  const subtitle = user.email && user.email !== label ? user.email : undefined;
+  return html`<div class="sidebar-hover-card__person" data-viewer-id=${user.id}>
+    <openclaw-viewer-avatar .user=${user} variant="footer"></openclaw-viewer-avatar>
+    <span class="sidebar-hover-card__person-text">
+      <span class="sidebar-hover-card__person-name"
+        >${label}${isSelf
+          ? html` <span class="sidebar-hover-card__you">(${t("presence.you")})</span>`
+          : nothing}</span
+      >
+      ${subtitle
+        ? html`<span class="sidebar-hover-card__person-email">${subtitle}</span>`
+        : nothing}
+    </span>
+  </div>`;
 }
 
 class ViewerFacepile extends OpenClawLightDomContentsElement {
@@ -142,6 +214,8 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) sessionKey?: string;
   @property({ type: Number, attribute: "max-visible" }) maxVisible = 3;
   @property() variant: "session" | "footer" = "session";
+  @property({ attribute: false }) buildInfo: ControlUiBuildInfo = CONTROL_UI_BUILD_INFO;
+  @property({ attribute: false }) gatewayVersion: string | null = null;
 
   override render() {
     const projection = projectPresencePayload(this.presencePayload, this.selfInstanceId);
@@ -158,27 +232,76 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
     }
     const visible = users.slice(0, this.maxVisible);
     const overflow = users.slice(this.maxVisible);
-    return html`<span
+    const facepile = html`<span
       class="viewer-facepile viewer-facepile--${this.variant}"
       data-viewer-count=${users.length}
       aria-label=${users.map(presenceViewerLabel).join(", ")}
     >
-      ${visible.map((user) => {
-        const label = presenceViewerLabel(user);
-        return html`<openclaw-tooltip .content=${label}>
-          <openclaw-viewer-avatar .user=${user} .variant=${this.variant}></openclaw-viewer-avatar>
-        </openclaw-tooltip>`;
-      })}
+      ${visible.map((user) =>
+        this.variant === "footer"
+          ? html`<openclaw-viewer-avatar .user=${user} variant="footer"></openclaw-viewer-avatar>`
+          : html`<openclaw-tooltip .content=${presenceViewerLabel(user)}>
+              <span class="viewer-facepile__tooltip-anchor">
+                <openclaw-viewer-avatar .user=${user} variant="session"></openclaw-viewer-avatar>
+              </span>
+            </openclaw-tooltip>`,
+      )}
       ${overflow.length > 0
-        ? html`<openclaw-tooltip .content=${overflow.map(presenceViewerLabel).join("\n")}>
-            <span
+        ? this.variant === "footer"
+          ? html`<span
               class="viewer-avatar viewer-avatar--overflow"
               aria-label=${overflow.map(presenceViewerLabel).join(", ")}
               >+${overflow.length}</span
-            >
-          </openclaw-tooltip>`
+            >`
+          : html`<openclaw-tooltip .content=${overflow.map(presenceViewerLabel).join("\n")}>
+              <span
+                class="viewer-avatar viewer-avatar--overflow"
+                aria-label=${overflow.map(presenceViewerLabel).join(", ")}
+                >+${overflow.length}</span
+              >
+            </openclaw-tooltip>`
         : nothing}
     </span>`;
+    if (this.variant !== "footer") {
+      return facepile;
+    }
+    // Self anchors the hover card; everyone else keeps the projection order.
+    const roster = [...projection.users].toSorted((a, b) =>
+      a.id === projection.selfUserId ? -1 : b.id === projection.selfUserId ? 1 : 0,
+    );
+    return html`
+      <openclaw-tooltip class="sidebar-hover-tooltip">
+        <span
+          class="viewer-facepile-trigger"
+          role="group"
+          tabindex="0"
+          aria-label=${t("presence.rosterLabel")}
+        >
+          ${facepile}
+        </span>
+        <div slot="content" class="sidebar-hover-card sidebar-presence-hover-card">
+          <section class="sidebar-hover-card__region">
+            <div class="sidebar-hover-card__heading">
+              ${t("presence.rosterTitle")} · ${roster.length}
+            </div>
+            <div
+              class="sidebar-hover-card__people"
+              tabindex="0"
+              aria-label=${`${t("presence.rosterTitle")} · ${roster.length}`}
+            >
+              ${roster.map((user) =>
+                renderPresenceCardRow(user, user.id === projection.selfUserId),
+              )}
+            </div>
+          </section>
+          <div class="sidebar-hover-card__divider" role="separator"></div>
+          <section class="sidebar-hover-card__region">
+            <div class="sidebar-hover-card__heading">${t("presence.serverRegion")}</div>
+            ${renderSidebarServerDetails(this.buildInfo, this.gatewayVersion)}
+          </section>
+        </div>
+      </openclaw-tooltip>
+    `;
   }
 }
 

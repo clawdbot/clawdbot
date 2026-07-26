@@ -8,6 +8,16 @@ function createPolicy(cfg: OpenClawConfig, agentId?: string) {
     cfg,
     catalog: [
       { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
+      {
+        provider: "clawrouter",
+        id: "anthropic/claude-haiku-4-5",
+        name: "Claude Haiku via ClawRouter",
+      },
+      {
+        provider: "clawrouter",
+        id: "google/gemini-3.5-flash",
+        name: "Gemini Flash via ClawRouter",
+      },
       { provider: "external", id: "sensitive", name: "Sensitive external model" },
       { provider: "openai", id: "gpt-5.5", name: "GPT 5.5" },
       { provider: "openai", id: "gpt-5.6-sol", name: "GPT 5.6 Sol" },
@@ -19,6 +29,56 @@ function createPolicy(cfg: OpenClawConfig, agentId?: string) {
 }
 
 describe("explicit model visibility policy", () => {
+  it("tracks every exact configured picker ref independently of the allow policy", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "demo/default-primary",
+            fallbacks: ["demo/default-fallback"],
+          },
+          models: { "demo/default-alias": { alias: "default" } },
+          utilityModel: "demo/default-utility",
+          imageModel: {
+            primary: "demo/image",
+            fallbacks: ["demo/image-fallback"],
+          },
+          pdfModel: { primary: "demo/pdf", fallbacks: ["demo/pdf-fallback"] },
+          modelPolicy: { allow: [] },
+        },
+        list: [
+          {
+            id: "research",
+            model: { primary: "demo/primary", fallbacks: ["demo/fallback"] },
+            models: { "demo/agent-alias": { alias: "agent" } },
+            utilityModel: "demo/agent-utility",
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const policy = createModelVisibilityPolicy({
+      cfg,
+      catalog: [],
+      defaultProvider: "openai",
+      agentId: "research",
+    });
+
+    const configuredRefs = [
+      "demo/default-alias",
+      "demo/default-primary",
+      "demo/default-fallback",
+      "demo/agent-alias",
+      "demo/agent-utility",
+      "demo/image",
+      "demo/image-fallback",
+      "demo/pdf",
+      "demo/pdf-fallback",
+      "demo/primary",
+      "demo/fallback",
+    ];
+    expect(configuredRefs.filter((key) => !policy.configuredKeys.has(key))).toEqual([]);
+  });
+
   it("keeps overrides open when model entries only configure aliases or params", () => {
     const policy = createPolicy({
       meta: { migrations: { modelPolicyAllowlist: true } },
@@ -85,6 +145,11 @@ describe("explicit model visibility policy", () => {
     expect(policy.allows({ provider: "openai", model: "gpt-5.5" })).toBe(true);
     expect(policy.allows({ provider: "openai", model: "safe" })).toBe(true);
     expect(policy.allows({ provider: "external", model: "sensitive" })).toBe(false);
+    expect(
+      policy.allowedCatalog.some(
+        (entry) => entry.provider === "external" && entry.id === "sensitive",
+      ),
+    ).toBe(false);
     expect(policy.automaticFallbackKeys).toEqual(new Set(["external/sensitive"]));
   });
 
@@ -119,6 +184,47 @@ describe("explicit model visibility policy", () => {
       "openai/gpt-5.6-sol",
     ]);
     expect(policy.allows({ provider: "anthropic", model: "claude-sonnet-4-6" })).toBe(false);
+  });
+
+  it("matches nested prefix wildcards on canonical model-key segment boundaries", () => {
+    const policy = createPolicy({
+      agents: {
+        defaults: {
+          modelPolicy: { allow: ["clawrouter/anthropic/*", "openai/gpt-5.5"] },
+        },
+      },
+    });
+
+    expect(policy.allowsKey("clawrouter/anthropic/claude-haiku-4-5")).toBe(true);
+    expect(
+      policy.allowsByWildcard({
+        provider: "clawrouter",
+        model: "anthropic/claude-haiku-4-5",
+      }),
+    ).toBe(true);
+    expect(policy.allowsKey("clawrouter/anthropicX/claude-haiku-4-5")).toBe(false);
+    expect(policy.allowsKey("clawrouter/google/gemini-3.5-flash")).toBe(false);
+    expect(policy.allowsKey("openai/gpt-5.5")).toBe(true);
+    expect(policy.allowsByWildcard({ provider: "openai", model: "gpt-5.5" })).toBe(false);
+    expect(policy.allowsKey("openai/gpt-5.6-sol")).toBe(false);
+    expect(policy.allowedCatalog.map((entry) => `${entry.provider}/${entry.id}`)).toEqual([
+      "clawrouter/anthropic/claude-haiku-4-5",
+      "openai/gpt-5.5",
+    ]);
+  });
+
+  it("keeps top-level provider wildcard behavior for nested model ids", () => {
+    const policy = createPolicy({
+      agents: {
+        defaults: {
+          modelPolicy: { allow: ["clawrouter/*"] },
+        },
+      },
+    });
+
+    expect(policy.allowsKey("clawrouter/anthropic/claude-haiku-4-5")).toBe(true);
+    expect(policy.allowsKey("clawrouter/google/gemini-3.5-flash")).toBe(true);
+    expect(policy.allowsKey("openai/gpt-5.6-sol")).toBe(false);
   });
 
   it("resolves conflicting policy aliases in each agent's model map", () => {
@@ -215,7 +321,7 @@ describe("explicit model visibility policy", () => {
     };
 
     const research = createPolicy(cfg, "research");
-    expect(research.allowConfigPath).toBe("agents.list[].modelPolicy.allow");
+    expect(research.allowConfigPath).toBe("agents.entries.*.modelPolicy.allow");
     expect(research.allows({ provider: "anthropic", model: "claude-sonnet-4-6" })).toBe(true);
     expect(research.allows({ provider: "openai", model: "gpt-5.6-sol" })).toBe(false);
 

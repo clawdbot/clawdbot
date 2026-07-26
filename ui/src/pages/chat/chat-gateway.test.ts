@@ -1,12 +1,8 @@
+// @vitest-environment node
 // Control UI tests cover chat behavior.
 import { describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
-import { retirePendingChatSideQuestion } from "../../lib/chat/side-result.ts";
-import {
-  handleChatGatewayEvent,
-  handleChatSideResultGatewayEvent,
-  type ChatEventPayload,
-} from "./chat-gateway.ts";
+import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
 import { loadChatHistory, type ChatState } from "./chat-history.ts";
 import { readChatMessagesFromCache } from "./session-message-cache.ts";
 
@@ -21,8 +17,7 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     chatSending: false,
     chatStream: null,
     chatStreamStartedAt: null,
-    chatSideChatTurns: [],
-    chatSideResultTerminalRuns: new Set<string>(),
+    chatRunStartup: null,
     chatThinkingLevel: null,
     chatVerboseLevel: null,
     client: null,
@@ -108,289 +103,112 @@ function createOtherRunNoReplyFinalPayload(): ChatEventPayload {
   return createOtherRunSilentFinalPayload("NO_REPLY");
 }
 
-describe("chat side result gateway events", () => {
-  it("stores BTW side results for the active session", () => {
-    const state = createState();
-
-    expect(
-      handleChatSideResultGatewayEvent(state, {
-        kind: "btw",
-        runId: "btw-run-1",
-        sessionKey: "main",
-        question: "what changed?",
-        text: "Only the UI layer was missing support.",
-        ts: 123,
-      }),
-    ).toBe(true);
-
-    expect(state.chatSideChatTurns).toHaveLength(1);
-    expect(state.chatSideChatTurns?.[0]).toMatchObject({
-      kind: "btw",
-      runId: "btw-run-1",
-      sessionKey: "main",
-      question: "what changed?",
-      text: "Only the UI layer was missing support.",
-    });
-    expect(state.chatSideResultTerminalRuns?.has("btw-run-1")).toBe(true);
-  });
-
-  it("stores selected-global BTW side results for agent main aliases", () => {
-    const state = createState({
-      sessionKey: "agent:work:main",
-      agentsList: { defaultId: "main" },
-    });
-
-    expect(
-      handleChatSideResultGatewayEvent(state, {
-        kind: "btw",
-        runId: "btw-work-global",
-        sessionKey: "global",
-        agentId: "work",
-        question: "what changed?",
-        text: "The alias receives canonical global side results.",
-        ts: 123,
-      }),
-    ).toBe(true);
-
-    expect(state.chatSideChatTurns?.[0]).toMatchObject({
-      kind: "btw",
-      runId: "btw-work-global",
-      sessionKey: "global",
-      agentId: "work",
-      text: "The alias receives canonical global side results.",
-    });
-    expect(state.chatSideResultTerminalRuns?.has("btw-work-global")).toBe(true);
-  });
-
-  it("ignores selected-global BTW side results from another agent", () => {
-    const state = createState({
-      sessionKey: "global",
-      assistantAgentId: "work",
-      agentsList: { defaultId: "main" },
-    });
-
-    expect(
-      handleChatSideResultGatewayEvent(state, {
-        kind: "btw",
-        runId: "btw-main-global",
-        sessionKey: "global",
-        agentId: "main",
-        question: "what changed?",
-        text: "This belongs to another selected agent.",
-        ts: 123,
-      }),
-    ).toBe(false);
-
-    expect(state.chatSideChatTurns).toEqual([]);
-    expect(state.chatSideResultTerminalRuns?.has("btw-main-global")).toBe(false);
-  });
-
-  it("clears the pending side question when its result arrives", () => {
-    const state = createState();
-    state.chatSideResultPending = { question: "what changed?", ts: 1, runId: "btw-run-1" };
-
-    handleChatSideResultGatewayEvent(state, {
-      kind: "btw",
-      runId: "btw-run-1",
-      sessionKey: "main",
-      question: "what changed?",
-      text: "Answer.",
-      ts: 123,
-    });
-
-    expect(state.chatSideResultPending).toBeNull();
-    expect(state.chatSideChatTurns).toHaveLength(1);
-  });
-
-  it("accumulates follow-up answers as turns and reopens a hidden panel", () => {
-    const state = createState();
-    state.chatSideChatTurns = [
-      {
-        kind: "btw",
-        runId: "btw-run-1",
-        sessionKey: "main",
-        question: "what changed?",
-        text: "First answer.",
-        isError: false,
-        ts: 123,
-      },
-    ];
-    state.chatSideChatHidden = true;
-    state.chatSideResultPending = { question: "and why?", ts: 2, runId: "btw-run-2" };
-
-    handleChatSideResultGatewayEvent(state, {
-      kind: "btw",
-      runId: "btw-run-2",
-      sessionKey: "main",
-      // Follow-up commands embed prior-turn context; the server echoes the
-      // whole blob back as the question.
-      question:
-        'Context — the previous side question "what changed?" was answered: "First answer." Follow-up question: and why?',
-      text: "Second answer.",
-      ts: 124,
-    });
-
-    expect(state.chatSideChatTurns).toHaveLength(2);
-    // The correlated pending record supplies the user's typed question.
-    expect(state.chatSideChatTurns?.[1]).toMatchObject({
-      runId: "btw-run-2",
-      question: "and why?",
-      text: "Second answer.",
-    });
-    expect(state.chatSideResultPending).toBeNull();
-    // An arriving answer reopens a panel hidden via X/Escape.
-    expect(state.chatSideChatHidden).toBe(false);
-  });
-
-  it("converts a resultless terminal BTW run into an error turn and swallows the event", () => {
-    const state = createState();
-    state.chatSideResultPending = { question: "what changed?", ts: 1, runId: "btw-run-3" };
-
-    const result = handleChatGatewayEvent(state, {
-      runId: "btw-run-3",
-      sessionKey: "main",
-      state: "final",
-      message: {
-        role: "assistant",
-        content: [
-          { type: "text", text: "⚠️ /btw requires an active session with existing context." },
-        ],
-      },
-    });
-
-    expect(result).toBeNull();
-    expect(state.chatSideResultPending).toBeNull();
-    expect(state.chatSideChatTurns?.[0]).toMatchObject({
-      kind: "btw",
-      runId: "btw-run-3",
-      question: "what changed?",
-      text: "⚠️ /btw requires an active session with existing context.",
-      isError: true,
-    });
-    // Swallowed: the detached failure must not be adopted into the transcript.
-    expect(state.chatMessages).toEqual([]);
-  });
-
-  it("ignores side results from retired (superseded or dismissed) runs", () => {
-    const state = createState();
-    // A newer question retired the old pending run before its result arrived.
-    state.chatSideResultPending = { question: "older question", ts: 1, runId: "btw-run-old" };
-    retirePendingChatSideQuestion(state);
-    state.chatSideResultPending = { question: "newer question", ts: 2, runId: "btw-run-new" };
-
-    expect(
-      handleChatSideResultGatewayEvent(state, {
-        kind: "btw",
-        runId: "btw-run-old",
-        sessionKey: "main",
-        question: "older question",
-        text: "Stale answer.",
-        ts: 123,
-      }),
-    ).toBe(true);
-
-    expect(state.chatSideChatTurns).toEqual([]);
-    expect(state.chatSideResultPending).toMatchObject({ runId: "btw-run-new" });
-    // The entry stays so the retired run's terminal chat event is swallowed too.
-    expect(state.chatSideResultTerminalRuns?.has("btw-run-old")).toBe(true);
-  });
-
-  it("keeps this pane's pending card when another run's result arrives", () => {
-    const state = createState();
-    state.chatSideResultPending = { question: "my question", ts: 1, runId: "btw-run-mine" };
-
-    // Same session, different run (e.g. a split pane) that was never retired
-    // here: it must not replace the live pending card, but its terminal chat
-    // event must still be swallowed in this pane.
-    expect(
-      handleChatSideResultGatewayEvent(state, {
-        kind: "btw",
-        runId: "btw-run-other-pane",
-        sessionKey: "main",
-        question: "other pane question",
-        text: "Other pane answer.",
-        ts: 123,
-      }),
-    ).toBe(true);
-
-    expect(state.chatSideChatTurns).toEqual([]);
-    expect(state.chatSideResultPending).toMatchObject({ runId: "btw-run-mine" });
-    expect(state.chatSideResultTerminalRuns?.has("btw-run-other-pane")).toBe(true);
-
-    // This pane's own run still resolves its pending card.
-    handleChatSideResultGatewayEvent(state, {
-      kind: "btw",
-      runId: "btw-run-mine",
-      sessionKey: "main",
-      question: "my question",
-      text: "My answer.",
-      ts: 124,
-    });
-    expect(state.chatSideChatTurns?.at(-1)).toMatchObject({ runId: "btw-run-mine" });
-    expect(state.chatSideResultPending).toBeNull();
-  });
-
-  it("keeps a dismissed pending run's terminal reply out of the transcript", () => {
-    const state = createState();
-    state.chatSideResultPending = { question: "dismissed question", ts: 1, runId: "btw-run-5" };
-    retirePendingChatSideQuestion(state);
-    expect(state.chatSideResultPending).toBeNull();
-
-    const result = handleChatGatewayEvent(state, {
-      runId: "btw-run-5",
-      sessionKey: "main",
-      state: "final",
-      message: { role: "assistant", content: [{ type: "text", text: "Late reply." }] },
-    });
-
-    expect(result).toBeNull();
-    expect(state.chatMessages).toEqual([]);
-    expect(state.chatSideChatTurns).toEqual([]);
-  });
-
-  it("keeps the pending side question when an unrelated run terminates", () => {
-    const state = createState();
-    state.chatSideResultPending = { question: "what changed?", ts: 1, runId: "btw-run-4" };
-
-    handleChatGatewayEvent(state, {
-      runId: "main-run-9",
-      sessionKey: "main",
-      state: "final",
-    });
-
-    expect(state.chatSideResultPending).toMatchObject({ runId: "btw-run-4" });
-  });
-
-  it("ignores tracked BTW terminal events without touching the active run", () => {
-    const state = createState({
-      chatRunId: "main-run-1",
-      chatStream: "still streaming",
-      chatMessages: [{ role: "assistant", content: [{ type: "text", text: "existing" }] }],
-    });
-    state.chatSideResultTerminalRuns?.add("btw-run-2");
-
-    expect(
-      handleChatGatewayEvent(state, {
-        runId: "btw-run-2",
-        sessionKey: "main",
-        state: "final",
-      }),
-    ).toBe(null);
-
-    expect(state.chatSideResultTerminalRuns?.has("btw-run-2")).toBe(false);
-    expect(state.chatRunId).toBe("main-run-1");
-    expect(state.chatStream).toBe("still streaming");
-    expect(state.chatMessages).toEqual([
-      { role: "assistant", content: [{ type: "text", text: "existing" }] },
-    ]);
-    expect(state.lastError).toBeNull();
-  });
-});
-
 describe("handleChatGatewayEvent", () => {
   it("returns null when payload is missing", () => {
     const state = createState();
     expect(handleChatGatewayEvent(state, undefined)).toBe(null);
+  });
+
+  it("drops sessionless run-idless terminal events instead of materializing them", () => {
+    // Companion/internal runs can surface unkeyed terminal events; with no
+    // active run, undefined === undefined must not pass the run-id fallback.
+    const state = createState({ sessionKey: "main" });
+    const before = state.chatMessages.length;
+    handleChatGatewayEvent(state, {
+      state: "final",
+      message: { role: "assistant", content: [{ type: "text", text: "leaked companion answer" }] },
+    } as ChatEventPayload);
+    expect(state.chatMessages.length).toBe(before);
+    expect(JSON.stringify(state.chatMessages)).not.toContain("leaked companion answer");
+  });
+
+  it("adopts startup status only for the queued local run before its ACK", () => {
+    const state = createState({
+      chatQueue: [
+        {
+          id: "queued-1",
+          text: "hello",
+          createdAt: 1,
+          sendRunId: "run-1",
+          sendState: "sending",
+        },
+      ],
+      sessionKey: "main",
+    });
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "run-other",
+        sessionKey: "main",
+        state: "status",
+        phase: "preparing_workspace",
+      }),
+    ).toBeNull();
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatRunStartup).toBeNull();
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "status",
+        phase: "preparing_workspace",
+      }),
+    ).toBe("status");
+    expect(state.chatRunId).toBe("run-1");
+    expect(state.chatRunStartup).toEqual({
+      state: "status",
+      runId: "run-1",
+      phase: "preparing_workspace",
+    });
+  });
+
+  it("shows startup status until the first chat delta and ignores late status", () => {
+    const state = createState({
+      chatRunId: "run-1",
+      chatStream: "",
+      sessionKey: "main",
+    });
+    const status: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "status",
+      phase: "preparing_context",
+    };
+
+    expect(handleChatGatewayEvent(state, status)).toBe("status");
+    expect(state.chatRunStartup).toEqual({
+      state: "status",
+      runId: "run-1",
+      phase: "preparing_context",
+    });
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "run-other",
+        sessionKey: "main",
+        state: "delta",
+        deltaText: "Other reply",
+      }),
+    ).toBeNull();
+    expect(state.chatRunStartup).toEqual({
+      state: "status",
+      runId: "run-1",
+      phase: "preparing_context",
+    });
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "delta",
+        deltaText: "Hello",
+      }),
+    ).toBe("delta");
+    expect(state.chatRunStartup).toEqual({ state: "activity", runId: "run-1" });
+
+    expect(handleChatGatewayEvent(state, status)).toBe("status");
+    expect(state.chatRunStartup).toEqual({ state: "activity", runId: "run-1" });
   });
 
   it("returns null when sessionKey does not match and no active run is in flight", () => {
@@ -754,6 +572,7 @@ describe("handleChatGatewayEvent", () => {
     const state = createState({
       sessionKey: "agent:main:feishu:direct:peer-1",
       chatRunId: null,
+      chatRunError: { summary: "Previous run failed" },
       chatStream: null,
       chatStreamStartedAt: null,
     });
@@ -769,6 +588,7 @@ describe("handleChatGatewayEvent", () => {
 
     expect(handleChatGatewayEvent(state, payload)).toBe("delta");
     expect(state.chatRunId).toBe("run-feishu-1");
+    expect(state.chatRunError).toBeNull();
     expect(state.chatStream).toBe("Observed reply");
     expect(state.chatStreamStartedAt).toEqual(expect.any(Number));
   });
@@ -843,7 +663,7 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatStreamStartedAt).toBe(null);
   });
 
-  it("clears keyed commentary with the final answer by default", () => {
+  it("persists keyed commentary with the final answer by default", () => {
     const user = { role: "user", content: [{ type: "text", text: "Ask" }], timestamp: 1 };
     const state = createState({
       sessionKey: "main",
@@ -851,37 +671,6 @@ describe("handleChatGatewayEvent", () => {
       chatMessages: [user],
       chatStream: null,
       chatStreamStartedAt: null,
-    }) as ChatState & {
-      chatStreamSegments: Array<{ text: string; ts: number; itemId: string }>;
-    };
-    state.chatStreamSegments = [{ text: "Looking into it.", ts: 2, itemId: "preamble-1" }];
-    const payload: ChatEventPayload = {
-      runId: "run-1",
-      sessionKey: "main",
-      state: "final",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Final answer." }],
-        timestamp: 5,
-      },
-    };
-
-    expect(handleChatGatewayEvent(state, payload)).toBe("final");
-    expect(state.chatMessages).toHaveLength(2);
-    expectTextChatMessage(state.chatMessages[0], "user", "Ask");
-    expectTextChatMessage(state.chatMessages[1], "assistant", "Final answer.");
-    expect(state.chatStreamSegments).toEqual([]);
-  });
-
-  it("persists keyed commentary alongside the final answer when chatPersistCommentary is true", () => {
-    const user = { role: "user", content: [{ type: "text", text: "Ask" }], timestamp: 1 };
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "run-1",
-      chatMessages: [user],
-      chatStream: null,
-      chatStreamStartedAt: null,
-      settings: { chatPersistCommentary: true },
     }) as ChatState & {
       chatStreamSegments: Array<{ text: string; ts: number; itemId: string }>;
     };
@@ -902,6 +691,154 @@ describe("handleChatGatewayEvent", () => {
     expectTextChatMessage(state.chatMessages[0], "user", "Ask");
     expectTextChatMessage(state.chatMessages[1], "assistant", "Looking into it.");
     expectTextChatMessage(state.chatMessages[2], "assistant", "Final answer.");
+    expect(state.chatStreamSegments).toEqual([]);
+  });
+
+  it("does not replay persisted keyed commentary after retiring a same-run steer", () => {
+    const originalUser = {
+      role: "user",
+      content: [{ type: "text", text: "Ask" }],
+      timestamp: 1,
+    };
+    const persistedCommentary = {
+      role: "assistant",
+      content: [{ type: "text", text: "Looking into it." }],
+      timestamp: 2,
+      openclawStreamFallback: {
+        itemId: "preamble-1",
+        replacementText: "Looking into it.",
+        source: "segment",
+      },
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatMessages: [originalUser, persistedCommentary],
+      chatQueue: [
+        {
+          id: "steer-1",
+          text: "Focus on the deployment too",
+          createdAt: 3,
+          kind: "steered",
+          pendingRunId: "run-1",
+          sendRunId: "steer-send-1",
+          sessionKey: "main",
+        },
+      ],
+      chatStream: null,
+      chatStreamStartedAt: null,
+    }) as ChatState & {
+      chatStreamSegments: Array<{ text: string; ts: number; itemId: string }>;
+    };
+    state.chatStreamSegments = [{ text: "Looking into it.", ts: 2, itemId: "preamble-1" }];
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Final answer." }],
+          timestamp: 5,
+        },
+      }),
+    ).toBe("final");
+
+    expect(state.chatQueue).toEqual([]);
+    expect(state.chatMessages).toHaveLength(4);
+    expectTextChatMessage(state.chatMessages[0], "user", "Ask");
+    expectTextChatMessage(state.chatMessages[1], "assistant", "Looking into it.");
+    expectTextChatMessage(state.chatMessages[2], "user", "Focus on the deployment too");
+    expectTextChatMessage(state.chatMessages[3], "assistant", "Final answer.");
+  });
+
+  it("uses an already-persisted steer to recover the active stream boundary", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatMessages: [
+        { role: "user", content: [{ type: "text", text: "Ask" }], timestamp: 1 },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Looking into it." }],
+          timestamp: 2,
+          openclawStreamFallback: {
+            itemId: "preamble-1",
+            replacementText: "Looking into it.",
+            source: "segment",
+          },
+        },
+        {
+          role: "user",
+          content: [{ type: "text", text: "Focus on deployment" }],
+          timestamp: 3,
+          __openclaw: { idempotencyKey: "steer-send-1:user" },
+        },
+      ],
+      chatQueue: [
+        {
+          id: "steer-1",
+          text: "Focus on deployment",
+          createdAt: 3,
+          kind: "steered",
+          pendingRunId: "run-1",
+          sendRunId: "steer-send-1",
+          sessionKey: "main",
+        },
+      ],
+    }) as ChatState & {
+      chatStreamSegments: Array<{ text: string; ts: number; itemId: string }>;
+    };
+    state.chatStreamSegments = [{ text: "Looking into it.", ts: 2, itemId: "preamble-1" }];
+
+    handleChatGatewayEvent(state, {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Final answer." }],
+        timestamp: 5,
+      },
+    });
+
+    expect(state.chatQueue).toEqual([]);
+    expect(state.chatMessages).toHaveLength(4);
+    expectTextChatMessage(state.chatMessages[0], "user", "Ask");
+    expectTextChatMessage(state.chatMessages[1], "assistant", "Looking into it.");
+    expectTextChatMessage(state.chatMessages[2], "user", "Focus on deployment");
+    expectTextChatMessage(state.chatMessages[3], "assistant", "Final answer.");
+  });
+
+  it("clears keyed commentary when chatPersistCommentary is false", () => {
+    const user = { role: "user", content: [{ type: "text", text: "Ask" }], timestamp: 1 };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatMessages: [user],
+      chatStream: null,
+      chatStreamStartedAt: null,
+      settings: { chatPersistCommentary: false },
+    }) as ChatState & {
+      chatStreamSegments: Array<{ text: string; ts: number; itemId: string }>;
+    };
+    state.chatStreamSegments = [{ text: "Looking into it.", ts: 2, itemId: "preamble-1" }];
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Final answer." }],
+        timestamp: 5,
+      },
+    };
+
+    expect(handleChatGatewayEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toHaveLength(2);
+    expectTextChatMessage(state.chatMessages[0], "user", "Ask");
+    expectTextChatMessage(state.chatMessages[1], "assistant", "Final answer.");
     expect(state.chatStreamSegments).toEqual([]);
   });
 
@@ -1667,7 +1604,7 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatMessages).toEqual([existingMessage]);
   });
 
-  it("appends visible assistant text for error events with an error message", () => {
+  it("keeps error events outside the assistant transcript", () => {
     const existingMessage = {
       role: "user",
       content: [{ type: "text", text: "Ping" }],
@@ -1683,17 +1620,19 @@ describe("handleChatGatewayEvent", () => {
       sessionKey: "main",
       state: "error",
       errorMessage: 'No API key found for provider "openai".',
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: 'Error: No API key found for provider "openai".' }],
+        timestamp: 10,
+      },
     };
 
     expect(handleChatGatewayEvent(state, payload)).toBe("error");
     expect(state.chatRunId).toBe(null);
-    expect(state.chatMessages).toHaveLength(2);
-    expectTextChatMessage(
-      state.chatMessages[1],
-      "assistant",
-      'Error: No API key found for provider "openai".',
-    );
-    expect(state.lastError).toBe('No API key found for provider "openai".');
+    expect(state.chatMessages).toEqual([existingMessage]);
+    expect(state.chatRunError).toEqual({
+      summary: 'Error: No API key found for provider "openai".',
+    });
   });
 
   it("keeps streamed assistant text visible when an error ends the run", () => {
@@ -1720,21 +1659,20 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatRunId).toBe(null);
     expect(state.chatStream).toBe(null);
     expect(state.chatStreamStartedAt).toBe(null);
-    expect(state.chatMessages).toHaveLength(3);
+    expect(state.chatMessages).toHaveLength(2);
     expect(state.chatMessages[0]).toEqual(existingMessage);
     expectTextChatMessage(
       state.chatMessages[1],
       "assistant",
       "Partial answer before gateway error.",
     );
-    expectTextChatMessage(state.chatMessages[2], "assistant", "Error: gateway disconnected");
-    expect(state.lastError).toBe("gateway disconnected");
+    expect(state.chatRunError).toEqual({ summary: "Error: gateway disconnected" });
   });
 
-  it("does not duplicate streamed text when the error payload already carries it", () => {
+  it("keeps streamed text without appending the error payload message", () => {
     const message = {
       role: "assistant",
-      content: [{ type: "text", text: "Partial answer before gateway error." }],
+      content: [{ type: "text", text: "Error: gateway disconnected" }],
       timestamp: 101,
       metadata: { source: "gateway" },
     };
@@ -1753,10 +1691,42 @@ describe("handleChatGatewayEvent", () => {
     };
 
     expect(handleChatGatewayEvent(state, payload)).toBe("error");
-    expect(state.chatMessages).toEqual([message]);
+    expect(state.chatMessages).toHaveLength(1);
+    expectTextChatMessage(
+      state.chatMessages[0],
+      "assistant",
+      "Partial answer before gateway error.",
+    );
   });
 
-  it("does not keep partial stream when the error payload contains the fuller text", () => {
+  it("uses the gateway error when the payload message repeats the streamed text", () => {
+    const partialText = "Partial answer before gateway error.";
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: partialText,
+      chatStreamStartedAt: 100,
+    });
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "error",
+        errorMessage: "gateway disconnected",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: partialText }],
+          timestamp: 101,
+        },
+      }),
+    ).toBe("error");
+    expect(state.chatMessages).toHaveLength(1);
+    expectTextChatMessage(state.chatMessages[0], "assistant", partialText);
+    expect(state.chatRunError).toEqual({ summary: "Error: gateway disconnected" });
+  });
+
+  it("preserves terminal assistant content that extends the streamed text", () => {
     const message = {
       role: "assistant",
       content: [{ type: "text", text: "Partial answer before gateway error. Final detail." }],
@@ -1777,7 +1747,138 @@ describe("handleChatGatewayEvent", () => {
     };
 
     expect(handleChatGatewayEvent(state, payload)).toBe("error");
-    expect(state.chatMessages).toEqual([message]);
+    expect(state.chatMessages).toHaveLength(1);
+    expectTextChatMessage(
+      state.chatMessages[0],
+      "assistant",
+      "Partial answer before gateway error. Final detail.",
+    );
+    expect(state.chatRunError).toEqual({ summary: "Error: gateway disconnected" });
+  });
+
+  it("preserves streamed text before a differing terminal assistant message", () => {
+    const terminalMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "Configure provider auth, then try again." }],
+      timestamp: 101,
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Partial answer before gateway error.",
+      chatStreamStartedAt: 100,
+    });
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "error",
+        errorMessage: "gateway disconnected",
+        message: terminalMessage,
+      }),
+    ).toBe("error");
+    expect(state.chatMessages).toHaveLength(2);
+    expectTextChatMessage(
+      state.chatMessages[0],
+      "assistant",
+      "Partial answer before gateway error.",
+    );
+    expect(state.chatMessages[1]).toEqual(terminalMessage);
+  });
+
+  it("preserves terminal extensions after a tool splits the stream", () => {
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "First thought. After tool. Final detail." }],
+      timestamp: 101,
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "After tool.",
+      chatStreamStartedAt: 100,
+    }) as ChatState & {
+      chatStreamSegments: Array<{ text: string; ts: number; toolCallId: string }>;
+    };
+    state.chatStreamSegments = [{ text: "First thought.", ts: 90, toolCallId: "call-1" }];
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "error",
+        errorMessage: "gateway disconnected",
+        message,
+      }),
+    ).toBe("error");
+    expect(state.chatMessages).toHaveLength(1);
+    expectTextChatMessage(
+      state.chatMessages[0],
+      "assistant",
+      "First thought. After tool. Final detail.",
+    );
+    expect(state.chatRunError).toEqual({ summary: "Error: gateway disconnected" });
+  });
+
+  it("preserves a split stream when the terminal message only overlaps its prefix", () => {
+    const terminalMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "First thought. Configure provider auth." }],
+      timestamp: 101,
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "After tool.",
+      chatStreamStartedAt: 100,
+    }) as ChatState & {
+      chatStreamSegments: Array<{ text: string; ts: number; toolCallId: string }>;
+    };
+    state.chatStreamSegments = [{ text: "First thought.", ts: 90, toolCallId: "call-1" }];
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "error",
+        errorMessage: "gateway disconnected",
+        message: terminalMessage,
+      }),
+    ).toBe("error");
+    expect(state.chatMessages).toHaveLength(3);
+    expectTextChatMessage(state.chatMessages[0], "assistant", "First thought.");
+    expectTextChatMessage(state.chatMessages[1], "assistant", "After tool.");
+    expect(state.chatMessages[2]).toEqual(terminalMessage);
+  });
+
+  it("preserves terminal extensions when split stream punctuation is adjacent", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: ", world",
+      chatStreamStartedAt: 100,
+    }) as ChatState & {
+      chatStreamSegments: Array<{ text: string; ts: number; toolCallId: string }>;
+    };
+    state.chatStreamSegments = [{ text: "Hello", ts: 90, toolCallId: "call-1" }];
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "error",
+        errorMessage: "gateway disconnected",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Hello, world!" }],
+          timestamp: 101,
+        },
+      }),
+    ).toBe("error");
+    expect(state.chatMessages).toHaveLength(1);
+    expectTextChatMessage(state.chatMessages[0], "assistant", "Hello, world!");
+    expect(state.chatRunError).toEqual({ summary: "Error: gateway disconnected" });
   });
 
   it("keeps stream segments visible when an error ends after a tool event", () => {
@@ -1802,16 +1903,15 @@ describe("handleChatGatewayEvent", () => {
     };
 
     expect(handleChatGatewayEvent(state, payload)).toBe("error");
-    expect(state.chatMessages).toHaveLength(3);
+    expect(state.chatMessages).toHaveLength(2);
     expect(state.chatMessages[0]).toEqual(existingMessage);
     expectTextChatMessage(state.chatMessages[1], "assistant", "Visible text before tool.");
-    expectTextChatMessage(state.chatMessages[2], "assistant", "Error: gateway disconnected");
   });
 
-  it("does not treat substring matches as stream replacement", () => {
+  it("does not let a substring-matching error projection replace streamed text", () => {
     const message = {
       role: "assistant",
-      content: [{ type: "text", text: "Error: provider said NOT OK yet." }],
+      content: [{ type: "text", text: "Error: provider said NOT OK yet" }],
       timestamp: 101,
     };
     const state = createState({
@@ -1829,15 +1929,14 @@ describe("handleChatGatewayEvent", () => {
     };
 
     expect(handleChatGatewayEvent(state, payload)).toBe("error");
-    expect(state.chatMessages).toHaveLength(2);
+    expect(state.chatMessages).toHaveLength(1);
     expectTextChatMessage(state.chatMessages[0], "assistant", "OK");
-    expect(state.chatMessages[1]).toEqual(message);
   });
 
-  it("does not duplicate post-tool stream tail when error payload has full text", () => {
+  it("keeps the post-tool stream tail without appending the error projection", () => {
     const message = {
       role: "assistant",
-      content: [{ type: "text", text: "First thought. After tool. Final detail." }],
+      content: [{ type: "text", text: "Error: gateway disconnected" }],
       timestamp: 101,
     };
     const state = createState({
@@ -1856,17 +1955,91 @@ describe("handleChatGatewayEvent", () => {
     };
 
     expect(handleChatGatewayEvent(state, payload)).toBe("error");
-    expect(state.chatMessages).toEqual([message]);
+    expect(state.chatMessages).toHaveLength(2);
+    expectTextChatMessage(state.chatMessages[0], "assistant", "First thought.");
+    expectTextChatMessage(state.chatMessages[1], "assistant", "After tool.");
   });
 
-  it("prefers server-provided assistant error messages", () => {
+  it("does not append legacy assistant-shaped error projections", () => {
     const state = createState({
       sessionKey: "main",
       chatRunId: "run-1",
     });
     const message = {
       role: "assistant",
-      content: [{ type: "text", text: "Configure provider auth, then try again." }],
+      content: [{ type: "text", text: "Error: raw gateway error" }],
+      timestamp: 10,
+    };
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "error",
+      errorMessage: "raw gateway error",
+      message,
+    };
+
+    expect(handleChatGatewayEvent(state, payload)).toBe("error");
+    expect(state.chatMessages).toEqual([]);
+    expect(state.lastError).toBeNull();
+    expect(state.chatRunError).toEqual({ summary: "Error: raw gateway error" });
+  });
+
+  it.each([
+    "Error: the configuration uses an unsupported field.",
+    "⚠️ This operation may require additional review.",
+  ])("preserves message-only terminal output beginning with %s", (text) => {
+    const state = createState({ sessionKey: "main", chatRunId: "run-1" });
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text }],
+      timestamp: 10,
+    };
+
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "error",
+      message,
+    };
+
+    expect(handleChatGatewayEvent(state, payload)).toBe("error");
+    expect(state.chatMessages).toEqual([message]);
+    expect(state.lastError).toBeNull();
+    expect(state.chatRunError).toEqual({ summary: "chat error" });
+  });
+
+  it("preserves a legacy terminal message that completes streamed assistant content", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Partial answer",
+      chatStreamStartedAt: 9,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "error",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Partial answer. Final detail." }],
+        timestamp: 10,
+      },
+    };
+
+    expect(handleChatGatewayEvent(state, payload)).toBe("error");
+    expect(state.chatMessages).toHaveLength(1);
+    expectTextChatMessage(state.chatMessages[0], "assistant", "Partial answer. Final detail.");
+    expect(state.chatRunError).toEqual({ summary: "chat error" });
+  });
+
+  it("preserves a differing terminal message instead of classifying it as an error projection", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+    });
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "⚠️ Configure provider auth, then try again." }],
       timestamp: 10,
     };
     const payload: ChatEventPayload = {
@@ -1879,7 +2052,46 @@ describe("handleChatGatewayEvent", () => {
 
     expect(handleChatGatewayEvent(state, payload)).toBe("error");
     expect(state.chatMessages).toEqual([message]);
-    expect(state.lastError).toBe("raw gateway error");
+    expect(state.lastError).toBeNull();
+    expect(state.chatRunError).toEqual({ summary: "Error: raw gateway error" });
+  });
+
+  it("uses server guidance when an error follows a source-reply final", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+    });
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Source reply delivered." }],
+          timestamp: 9,
+        },
+      }),
+    ).toBe("final");
+    expect(state.chatRunId).toBeNull();
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "error",
+        errorMessage: "raw provider failure",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Configure provider auth, then try again." }],
+          timestamp: 10,
+        },
+      }),
+    ).toBe("error");
+    expect(state.chatMessages).toHaveLength(1);
+    expectTextChatMessage(state.chatMessages[0], "assistant", "Source reply delivered.");
+    expect(state.chatRunError).toEqual({ summary: "Error: raw provider failure" });
   });
 
   it("does not append an orphan error bubble when no run was active", () => {
@@ -1903,7 +2115,24 @@ describe("handleChatGatewayEvent", () => {
     expect(handleChatGatewayEvent(state, payload)).toBe("error");
     expect(state.chatMessages).toEqual([existingMessage]);
     expect(state.chatRunId).toBe(null);
-    expect(state.lastError).toBe("request failed before start");
+    expect(state.lastError).toBeNull();
+    expect(state.chatRunError).toEqual({ summary: "Error: request failed before start" });
+  });
+
+  it("uses the generic alert fallback for a blank orphan error", () => {
+    const state = createState({ sessionKey: "main", chatRunId: null });
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "run-failed-before-start",
+        sessionKey: "main",
+        state: "error",
+        errorMessage: "   ",
+      }),
+    ).toBe("error");
+    expect(state.chatMessages).toEqual([]);
+    expect(state.lastError).toBeNull();
+    expect(state.chatRunError).toEqual({ summary: "chat error" });
   });
 
   it("drops NO_REPLY final payload from another run", () => {
@@ -2128,13 +2357,19 @@ describe("loadChatHistory filtering", () => {
     expect(state.chatMessages).toEqual([messages[0], messages[2]]);
   });
 
-  it("keeps image-only user messages that carry transcript media paths", async () => {
+  it("keeps image-only user messages that carry transcript media facts", async () => {
     const messages = [
-      { role: "user", content: "", MediaPath: "/tmp/openclaw/user-upload.png" },
       {
         role: "user",
         content: "",
-        MediaPaths: ["/tmp/openclaw/first.png", "/tmp/openclaw/second.jpg"],
+        __openclaw: { media: [{ path: "/tmp/openclaw/user-upload.png" }] },
+      },
+      {
+        role: "user",
+        content: "",
+        __openclaw: {
+          media: [{ path: "/tmp/openclaw/first.png" }, { path: "/tmp/openclaw/second.jpg" }],
+        },
       },
       { role: "user", content: "" },
     ];
@@ -2183,6 +2418,7 @@ describe("loadChatHistory filtering", () => {
       thinkingLevel: "low",
       verboseLevel: "full",
       sessionInfo: {
+        activeLeafEntryId: "leaf-rendered",
         key: "main",
         sessionId: "session-main",
         effectiveQueueMode: "interrupt",
@@ -2202,10 +2438,31 @@ describe("loadChatHistory filtering", () => {
 
     expect(result?.sessionInfo?.sessionId).toBe("session-main");
     expect(state.currentSessionId).toBe("session-main");
+    expect(state.chatDisplayedLeafEntryId).toBe("leaf-rendered");
     expect(state.chatThinkingLevel).toBe("medium");
     expect(state.chatVerboseLevel).toBe("full");
     expect(state.chatQueueModeOverride).toBe("interrupt");
     expect(state.chatEffectiveQueueMode).toBe("interrupt");
+  });
+
+  it("preserves the displayed leaf when history metadata is not authoritative for it", async () => {
+    const request = vi.fn().mockResolvedValue({
+      messages: [],
+      sessionInfo: {
+        key: "main",
+        sessionId: "session-main",
+        updatedAt: 123,
+      },
+    });
+    const state = createState({
+      chatDisplayedLeafEntryId: "leaf-from-tail",
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatDisplayedLeafEntryId).toBe("leaf-from-tail");
   });
 
   it("omits literal global agentId until selected/default agent is known", async () => {
@@ -2509,6 +2766,661 @@ describe("loadChatHistory retry handling", () => {
 
     expect(state.chatMessages).toEqual([persistedUser, optimisticUser, optimisticAssistant]);
     expect(state.chatStream).toBeNull();
+  });
+
+  it("keeps a newly sent repeated user message when history reload is still stale", async () => {
+    const persistedUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      timestamp: 10,
+      __openclaw: {
+        id: "first-user-message",
+        idempotencyKey: "first-run:user",
+        seq: 1,
+      },
+    };
+    const optimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      timestamp: 20,
+      __openclaw: { idempotencyKey: "second-run:user" },
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [persistedUser],
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [persistedUser, optimisticUser],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([persistedUser, optimisticUser]);
+  });
+
+  it("preserves a distinct pending turn after an earlier repeated-history anchor", async () => {
+    const firstRepeatedUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      __openclaw: { seq: 1 },
+    };
+    const secondRepeatedUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      __openclaw: { seq: 2 },
+    };
+    const optimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "a distinct pending turn" }],
+      __openclaw: { idempotencyKey: "third-run:user" },
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [firstRepeatedUser, secondRepeatedUser],
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [firstRepeatedUser, optimisticUser],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([firstRepeatedUser, secondRepeatedUser, optimisticUser]);
+  });
+
+  it("does not revive an unmatched pending turn beyond unrelated history", async () => {
+    const sharedUser = {
+      role: "user",
+      content: [{ type: "text", text: "shared earlier turn" }],
+      __openclaw: { id: "shared-user", seq: 1 },
+    };
+    const laterUser = {
+      role: "user",
+      content: [{ type: "text", text: "different authoritative turn" }],
+      __openclaw: { id: "later-user", seq: 2 },
+    };
+    const optimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "unmatched pending turn" }],
+      __openclaw: { idempotencyKey: "pending-run:user" },
+    };
+    const request = vi.fn().mockResolvedValue({ messages: [sharedUser, laterUser] });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [sharedUser, optimisticUser],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([sharedUser, laterUser]);
+  });
+
+  it("does not adopt an imported message through a colliding native transcript id", async () => {
+    const nativeUser = {
+      role: "user",
+      content: [{ type: "text", text: "native transcript" }],
+      __openclaw: { id: "source-local-id" },
+    };
+    const importedUser = {
+      role: "user",
+      content: [{ type: "text", text: "imported transcript" }],
+      __openclaw: {
+        id: "source-local-id",
+        externalId: "source-local-id",
+        importedFrom: "claude-cli",
+        cliSessionId: "imported-session",
+      },
+    };
+    const optimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "unmatched pending turn" }],
+      __openclaw: { idempotencyKey: "pending-run:user" },
+    };
+    const request = vi.fn().mockResolvedValue({ messages: [nativeUser, importedUser] });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [nativeUser, optimisticUser],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([nativeUser, importedUser]);
+  });
+
+  it("does not guess an imported source identity when its session is missing", async () => {
+    const firstImportedUser = {
+      role: "user",
+      content: [{ type: "text", text: "repeated imported turn" }],
+      __openclaw: {
+        id: "source-local-id",
+        externalId: "source-local-id",
+        importedFrom: "claude-cli",
+      },
+    };
+    const secondImportedUser = {
+      role: "user",
+      content: [{ type: "text", text: "repeated imported turn" }],
+      __openclaw: {
+        id: "source-local-id",
+        externalId: "source-local-id",
+        importedFrom: "claude-cli",
+      },
+    };
+    const previousImportedUser = {
+      role: "user",
+      content: [{ type: "text", text: "repeated imported turn" }],
+      __openclaw: {
+        id: "source-local-id",
+        externalId: "source-local-id",
+        importedFrom: "claude-cli",
+      },
+    };
+    const optimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "unmatched pending turn" }],
+      __openclaw: { idempotencyKey: "pending-run:user" },
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [firstImportedUser, secondImportedUser],
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [previousImportedUser, optimisticUser],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([firstImportedUser, secondImportedUser]);
+  });
+
+  it("does not anchor a missing canonical id to another same-sequence projection", async () => {
+    const unrelatedProjection = {
+      role: "user",
+      content: [{ type: "text", text: "different sequence projection" }],
+      __openclaw: { seq: 7 },
+    };
+    const previousProjection = {
+      role: "user",
+      content: [{ type: "text", text: "original sequence projection" }],
+      __openclaw: { id: "missing-canonical-id", seq: 7 },
+    };
+    const optimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "unmatched pending turn" }],
+      __openclaw: { idempotencyKey: "pending-run:user" },
+    };
+    const request = vi.fn().mockResolvedValue({ messages: [unrelatedProjection] });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [previousProjection, optimisticUser],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([unrelatedProjection]);
+  });
+
+  it("does not adopt import provenance lacking an external id as a native row", async () => {
+    const nativeUser = {
+      role: "user",
+      content: [{ type: "text", text: "native transcript" }],
+      __openclaw: { id: "source-local-id" },
+    };
+    const importedUser = {
+      role: "user",
+      content: [{ type: "text", text: "imported transcript" }],
+      __openclaw: {
+        id: "source-local-id",
+        importedFrom: "claude-cli",
+        cliSessionId: "imported-session",
+      },
+    };
+    const optimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "unmatched pending turn" }],
+      __openclaw: { idempotencyKey: "pending-run:user" },
+    };
+    const request = vi.fn().mockResolvedValue({ messages: [nativeUser, importedUser] });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [nativeUser, optimisticUser],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([nativeUser, importedUser]);
+  });
+
+  it("does not use matching display text to adopt an incomplete imported source", async () => {
+    const previousImportedUser = {
+      role: "user",
+      content: [{ type: "text", text: "repeated imported turn" }],
+      __openclaw: { externalId: "first-import", importedFrom: "claude-cli" },
+    };
+    const otherImportedUser = {
+      role: "user",
+      content: [{ type: "text", text: "repeated imported turn" }],
+      __openclaw: { externalId: "different-import", importedFrom: "claude-cli" },
+    };
+    const optimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "unmatched pending turn" }],
+      __openclaw: { idempotencyKey: "pending-run:user" },
+    };
+    const request = vi.fn().mockResolvedValue({ messages: [otherImportedUser] });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [previousImportedUser, optimisticUser],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([otherImportedUser]);
+  });
+
+  it("does not drop a canonical id for a same-text sequence projection", async () => {
+    const unrelatedProjection = {
+      role: "user",
+      content: [{ type: "text", text: "repeated projection" }],
+      __openclaw: { seq: 7 },
+    };
+    const previousProjection = {
+      role: "user",
+      content: [{ type: "text", text: "repeated projection" }],
+      __openclaw: { id: "missing-canonical-id", seq: 7 },
+    };
+    const optimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "unmatched pending turn" }],
+      __openclaw: { idempotencyKey: "pending-run:user" },
+    };
+    const request = vi.fn().mockResolvedValue({ messages: [unrelatedProjection] });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [previousProjection, optimisticUser],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([unrelatedProjection]);
+  });
+
+  it("does not revive an identity-free tail after a distinct repeated history turn", async () => {
+    const firstUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      __openclaw: { id: "first-user", seq: 1 },
+    };
+    const secondUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      __openclaw: { id: "second-user", seq: 2 },
+    };
+    const identityFreeTail = {
+      role: "user",
+      content: [{ type: "text", text: "identity-free pending turn" }],
+    };
+    const request = vi.fn().mockResolvedValue({ messages: [firstUser, secondUser] });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [firstUser, identityFreeTail],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([firstUser, secondUser]);
+  });
+
+  it("does not reconcile native legacy history with an imported display match", async () => {
+    const previousNativeUser = {
+      role: "user",
+      content: [{ type: "text", text: "same visible turn" }],
+      __openclaw: { senderId: "native-user" },
+    };
+    const importedUser = {
+      role: "user",
+      content: [{ type: "text", text: "same visible turn" }],
+      __openclaw: {
+        externalId: "external-user",
+        importedFrom: "claude-cli",
+        cliSessionId: "external-session",
+      },
+    };
+    const optimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "unmatched pending turn" }],
+      __openclaw: { idempotencyKey: "pending-run:user" },
+    };
+    const request = vi.fn().mockResolvedValue({ messages: [importedUser] });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [previousNativeUser, optimisticUser],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([importedUser]);
+  });
+
+  it("does not replay an optimistic send already persisted before the history anchor", async () => {
+    const persistedUser = {
+      role: "user",
+      content: [{ type: "text", text: "already persisted prompt" }],
+      __openclaw: { id: "persisted-user", seq: 1, idempotencyKey: "persisted-run:user" },
+    };
+    const persistedAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "already persisted answer" }],
+      __openclaw: { id: "persisted-assistant", seq: 2 },
+    };
+    const staleOptimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "already persisted prompt" }],
+      __openclaw: { idempotencyKey: "persisted-run:user" },
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [persistedUser, persistedAssistant],
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [persistedUser, persistedAssistant, staleOptimisticUser],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([persistedUser, persistedAssistant]);
+  });
+
+  it("does not cross unrelated signature-free history markers", async () => {
+    const firstMarker = {
+      content: [{ type: "status", value: "first marker" }],
+      __openclaw: { id: "first-marker", seq: 1 },
+    };
+    const laterMarker = {
+      content: [{ type: "status", value: "different marker" }],
+      __openclaw: { id: "later-marker", seq: 2 },
+    };
+    const optimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "unmatched pending turn" }],
+      __openclaw: { idempotencyKey: "pending-run:user" },
+    };
+    const request = vi.fn().mockResolvedValue({ messages: [firstMarker, laterMarker] });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [firstMarker, optimisticUser],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([firstMarker, laterMarker]);
+  });
+
+  it("does not duplicate repeated history without an echoed send identity", async () => {
+    const firstUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      __openclaw: { id: "first-user", seq: 1 },
+    };
+    const persistedRepeatedUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      __openclaw: { id: "persisted-repeated-user", seq: 2 },
+    };
+    const optimisticRepeatedUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      __openclaw: { idempotencyKey: "repeated-run:user" },
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [firstUser, persistedRepeatedUser],
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [firstUser, optimisticRepeatedUser],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([firstUser, persistedRepeatedUser]);
+  });
+
+  it("does not revive an assistant after its user was persisted before the anchor", async () => {
+    const persistedUser = {
+      role: "user",
+      content: [{ type: "text", text: "already persisted prompt" }],
+      __openclaw: { id: "persisted-user", seq: 1, idempotencyKey: "persisted-run:user" },
+    };
+    const persistedAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "already persisted answer" }],
+      __openclaw: { id: "persisted-assistant", seq: 2 },
+    };
+    const staleOptimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "already persisted prompt" }],
+      __openclaw: { idempotencyKey: "persisted-run:user" },
+    };
+    const staleOptimisticAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "stale streamed assistant" }],
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [persistedUser, persistedAssistant],
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [
+        persistedUser,
+        persistedAssistant,
+        staleOptimisticUser,
+        staleOptimisticAssistant,
+      ],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([persistedUser, persistedAssistant]);
+  });
+
+  it("preserves a distinct repeated send when the earlier anchor has different text", async () => {
+    const setupUser = {
+      role: "user",
+      content: [{ type: "text", text: "setup" }],
+      __openclaw: { id: "setup-user", seq: 1, idempotencyKey: "setup-run:user" },
+    };
+    const secondUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      __openclaw: { id: "second-user", seq: 2, idempotencyKey: "second-run:user" },
+    };
+    const thirdUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      __openclaw: { idempotencyKey: "third-run:user" },
+    };
+    const request = vi.fn().mockResolvedValue({ messages: [setupUser, secondUser] });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [setupUser, thirdUser],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([setupUser, secondUser, thirdUser]);
+  });
+
+  it("keeps a new repeated prompt after a different same-text turn reaches history", async () => {
+    const firstUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      __openclaw: { id: "first-user", idempotencyKey: "first-run:user", seq: 1 },
+    };
+    const secondUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      __openclaw: { id: "second-user", idempotencyKey: "second-run:user", seq: 2 },
+    };
+    const optimisticThirdUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      __openclaw: { idempotencyKey: "third-run:user" },
+    };
+    const request = vi.fn().mockResolvedValue({ messages: [firstUser, secondUser] });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [firstUser, optimisticThirdUser],
+      chatRunId: "third-run",
+      chatStream: "Still working on the third turn.",
+      chatStreamStartedAt: 100,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([firstUser, secondUser, optimisticThirdUser]);
+    expect(state.chatRunId).toBe("third-run");
+    expect(state.chatStream).toBe("Still working on the third turn.");
+    expect(state.chatStreamStartedAt).toBe(100);
+  });
+
+  it("reconciles repeated imported messages using the complete external source identity", async () => {
+    const firstImportedUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      __openclaw: {
+        id: "shared-external-id",
+        externalId: "shared-external-id",
+        importedFrom: "claude-cli",
+        cliSessionId: "first-session",
+      },
+    };
+    const secondImportedUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      __openclaw: {
+        id: "shared-external-id",
+        externalId: "shared-external-id",
+        importedFrom: "claude-cli",
+        cliSessionId: "second-session",
+      },
+    };
+    const optimisticSecondUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [firstImportedUser, secondImportedUser],
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [firstImportedUser, optimisticSecondUser],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([firstImportedUser, secondImportedUser]);
+  });
+
+  it("does not invent an anchor for ambiguous identity-free repeated history", async () => {
+    const firstLegacyUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      __openclaw: { senderId: "alice" },
+    };
+    const secondLegacyUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      __openclaw: { senderId: "alice" },
+    };
+    const previousLegacyUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      __openclaw: { senderId: "alice" },
+    };
+    const optimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "unproven pending turn" }],
+      __openclaw: { idempotencyKey: "pending-run:user" },
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [firstLegacyUser, secondLegacyUser],
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [previousLegacyUser, optimisticUser],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([firstLegacyUser, secondLegacyUser]);
+  });
+
+  it("does not attach a current optimistic turn to an unrelated older snapshot", async () => {
+    const olderHistoryUser = {
+      role: "user",
+      content: [{ type: "text", text: "older snapshot" }],
+      __openclaw: { id: "older-user", seq: 1 },
+    };
+    const currentHistoryUser = {
+      role: "user",
+      content: [{ type: "text", text: "current snapshot" }],
+      __openclaw: { id: "current-user", seq: 2 },
+    };
+    const optimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "pending on the current snapshot" }],
+      __openclaw: { idempotencyKey: "pending-run:user" },
+    };
+    const request = vi.fn().mockResolvedValue({ messages: [olderHistoryUser] });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [currentHistoryUser, optimisticUser],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([olderHistoryUser]);
+  });
+
+  it("never restores a hidden optimistic assistant during history reconciliation", async () => {
+    const persistedUser = {
+      role: "user",
+      content: [{ type: "text", text: "visible prompt" }],
+      __openclaw: { id: "visible-user", seq: 1 },
+    };
+    const hiddenAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "NO_REPLY" }],
+    };
+    const request = vi.fn().mockResolvedValue({ messages: [persistedUser] });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [persistedUser, hiddenAssistant],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([persistedUser]);
   });
 
   it("keeps active streamed assistant text when history reload returns a stale snapshot", async () => {

@@ -44,6 +44,10 @@ import type {
   GatewayRequestHandlers,
   GatewayRequestOptions,
 } from "./server-methods/types.js";
+import {
+  resolveSessionMutationAuthorization,
+  SessionMutationAuthorizationChangedError,
+} from "./session-sharing.js";
 
 const loadAgentHandlers = lazyHandlerModule(
   () => import("./server-methods/agent.js"),
@@ -80,6 +84,10 @@ const loadAttachHandlers = lazyHandlerModule(
 const loadChannelsHandlers = lazyHandlerModule(
   () => import("./server-methods/channels.js"),
   (module) => module.channelsHandlers,
+);
+const loadChannelPairingHandlers = lazyHandlerModule(
+  () => import("./server-methods/channel-pairing.js"),
+  (module) => module.channelPairingHandlers,
 );
 const loadChatHandlers = lazyHandlerModule(
   () => import("./server-methods/chat.js"),
@@ -224,6 +232,18 @@ const loadSessionsHandlers = lazyHandlerModule(
 const loadSessionCatalogHandlers = lazyHandlerModule(
   () => import("./server-methods/session-catalog.js"),
   (module) => module.sessionCatalogHandlers,
+);
+const loadSessionDiscussionHandlers = lazyHandlerModule(
+  () => import("./server-methods/session-discussion.js"),
+  (module) => module.sessionDiscussionHandlers,
+);
+const loadSessionObserverHandlers = lazyHandlerModule(
+  () => import("./session-observer-rpc.js"),
+  (module) => module.sessionObserverHandlers,
+);
+const loadSessionCompanionHandlers = lazyHandlerModule(
+  () => import("./session-companion-rpc.js"),
+  (module) => module.sessionCompanionHandlers,
 );
 const loadSkillsHandlers = lazyHandlerModule(
   () => import("./server-methods/skills.js"),
@@ -389,7 +409,17 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadUiCommandHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["board.get", "board.update", "board.widget.put", "board.widget.grant", "board.event"],
+    methods: [
+      "board.get",
+      "board.update",
+      "board.widget.put",
+      "board.widget.grant",
+      "board.widget.appView",
+      "board.event",
+      "board.prompt.authorize",
+      "board.data.read",
+      "board.action",
+    ],
     loadHandlers: loadBoardHandlers,
   }),
   ...createLazyCoreHandlers({
@@ -407,6 +437,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["channels.status", "channels.start", "channels.stop", "channels.logout"],
     loadHandlers: loadChannelsHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["channels.pairing.list", "channels.pairing.approve", "channels.pairing.dismiss"],
+    loadHandlers: loadChannelPairingHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [
@@ -431,6 +465,8 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "cron.list",
       "cron.status",
       "cron.get",
+      "cron.scratch.get",
+      "cron.scratch.set",
       "cron.add",
       "cron.update",
       "cron.remove",
@@ -563,6 +599,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: [
       "openclaw.chat",
+      "openclaw.chat.history",
       "openclaw.approval.list",
       "openclaw.setup.detect",
       "openclaw.setup.verify",
@@ -676,6 +713,18 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadSessionCatalogHandlers,
   }),
   ...createLazyCoreHandlers({
+    methods: ["session.discussion.info", "session.discussion.open"],
+    loadHandlers: loadSessionDiscussionHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["sessions.observer.visibility"],
+    loadHandlers: loadSessionObserverHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["sessions.companion.ask", "sessions.companion.state", "sessions.companion.reset"],
+    loadHandlers: loadSessionCompanionHandlers,
+  }),
+  ...createLazyCoreHandlers({
     methods: [
       "sessions.list",
       "sessions.search",
@@ -711,6 +760,14 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "sessions.groups.delete",
       "sessions.dispatch",
       "sessions.reclaim",
+      "session.visibility.set",
+      "session.members.list",
+      "session.members.add",
+      "session.members.remove",
+      "session.suggestions.add",
+      "session.suggestions.list",
+      "session.suggestions.resolve",
+      "session.typing",
     ],
     loadHandlers: loadSessionsHandlers,
   }),
@@ -895,6 +952,30 @@ export async function handleGatewayRequest(
     respond(false, undefined, authError);
     return;
   }
+  const sessionMutation = resolveSessionMutationAuthorization({
+    client: client ?? null,
+    method: req.method,
+    requestParams: req.params,
+    context,
+  });
+  if (sessionMutation.error) {
+    respond(false, undefined, sessionMutation.error);
+    return;
+  }
+  if (
+    client?.connect.role === "node" &&
+    (!client.connId || !(await context.nodeRegistry.isConnectionCurrentPairingState(client.connId)))
+  ) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, "node pairing changed before request dispatch", {
+        retryable: true,
+        details: { code: "PAIRING_CHANGED" },
+      }),
+    );
+    return;
+  }
   if (context.unavailableGatewayMethods?.has(req.method)) {
     // During startup, methods can be listed before their runtime is ready. Return the protocol
     // retry shape so clients can back off without treating startup as a permanent unknown method.
@@ -1005,16 +1086,28 @@ export async function handleGatewayRequest(
       isWebchatConnect,
       respond,
       context,
+      ...(sessionMutation.authorization
+        ? { sessionMutationAuthorization: sessionMutation.authorization }
+        : {}),
     });
   // All handlers run inside a request scope so that plugin runtime
   // subagent methods (e.g. context engine tools spawning sub-agents
   // during tool execution) can dispatch back into the gateway.
   // The scope also carries caller identity into plugin-owned gateway methods.
-  const invokeWithRequestScope = async () =>
-    await withPluginRuntimeGatewayRequestScope(
-      { context, client, isWebchatConnect },
-      invokeHandler,
-    );
+  const invokeWithRequestScope = async () => {
+    try {
+      await withPluginRuntimeGatewayRequestScope(
+        { context, client, isWebchatConnect },
+        invokeHandler,
+      );
+    } catch (error) {
+      if (error instanceof SessionMutationAuthorizationChangedError) {
+        respond(false, undefined, error.error);
+        return;
+      }
+      throw error;
+    }
+  };
   if (!rootWorkAdmission) {
     await invokeWithRequestScope();
     return;

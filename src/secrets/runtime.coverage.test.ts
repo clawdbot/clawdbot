@@ -11,7 +11,6 @@ import type {
   PluginWebSearchProviderEntry,
 } from "../plugins/types.js";
 import { getPath, setPathCreateStrict } from "./path-utils.js";
-import { canonicalizeSecretTargetCoverageId } from "./target-registry-test-helpers.js";
 
 const COVERAGE_WEB_PROVIDER_PLUGIN_IDS = vi.hoisted(() => ({
   search: [
@@ -37,11 +36,25 @@ vi.mock("../plugins/installed-plugin-index-records.js", () => ({
   loadInstalledPluginIndexInstallRecordsSync: () => ({}),
 }));
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
-  loadPluginMetadataSnapshot: () => {
-    throw new Error("runtime coverage expects bundled channel secret contracts");
-  },
-}));
+vi.mock("../plugins/plugin-metadata-snapshot.js", () => {
+  const plugins = COVERAGE_WEB_PROVIDER_PLUGIN_IDS.search.map((id) => ({
+    id,
+    origin: "bundled",
+    contracts: {
+      webSearchProviders: [id],
+      ...(COVERAGE_WEB_PROVIDER_PLUGIN_IDS.fetch.includes(id) ? { webFetchProviders: [id] } : {}),
+    },
+  }));
+  const createSnapshot = () => ({
+    index: { diagnostics: [], plugins: [] },
+    manifestRegistry: { diagnostics: [], plugins },
+    plugins,
+  });
+  return {
+    loadPluginMetadataSnapshot: createSnapshot,
+    resolvePluginMetadataSnapshot: createSnapshot,
+  };
+});
 
 vi.mock("./runtime-web-tools-manifest.runtime.js", () => ({
   resolveManifestContractPluginIds: ({ contract }: { contract: string }) => {
@@ -286,10 +299,6 @@ const COVERAGE_LOADABLE_PLUGIN_ORIGINS =
   buildCoverageLoadablePluginOrigins(COVERAGE_REGISTRY_ENTRIES);
 const PLUGIN_OWNED_OPENCLAW_COVERAGE_EXCLUSIONS = new Set([
   "channels.googlechat.accounts.*.serviceAccount",
-  // Doctor migrates legacy web search config into plugin-owned webSearch config.
-  "tools.web.search.apiKey",
-  "tools.web.search.*.apiKey",
-  "tools.web.fetch.firecrawl.apiKey",
 ]);
 
 let applyResolvedAssignments: typeof import("./runtime-shared.js").applyResolvedAssignments;
@@ -355,8 +364,7 @@ function toConcretePathSegments(pathPattern: string, wildcardToken = "sample"): 
 }
 
 function resolveCoverageEnvId(entry: SecretRegistryEntry, fallbackEnvId: string): string {
-  return entry.id === "plugins.entries.firecrawl.config.webFetch.apiKey" ||
-    entry.id === "tools.web.fetch.firecrawl.apiKey"
+  return entry.id === "plugins.entries.firecrawl.config.webFetch.apiKey"
     ? "FIRECRAWL_API_KEY"
     : fallbackEnvId;
 }
@@ -374,7 +382,7 @@ function toCoverageEnvRefId(prefix: string, id: string): string {
 }
 
 function resolveCoverageResolvedPath(entry: SecretRegistryEntry): string {
-  return canonicalizeSecretTargetCoverageId(entry.id);
+  return entry.id;
 }
 
 function resolveCoverageWildcardToken(index: number): string {
@@ -438,7 +446,7 @@ function resolveCoverageBatchKey(entry: SecretRegistryEntry): string {
   if (entry.id.startsWith("agents.defaults.")) {
     return entry.id;
   }
-  if (entry.id.startsWith("agents.list[].")) {
+  if (entry.id.startsWith("agents.entries.*.")) {
     return entry.id;
   }
   if (entry.id.startsWith("gateway.auth.")) {
@@ -468,8 +476,8 @@ function resolveCoverageBatchKey(entry: SecretRegistryEntry): string {
     const scope = segments[2] === "accounts" ? "accounts" : "root";
     return `channels.${channelId}.${scope}`;
   }
-  if (entry.id.startsWith("messages.tts.providers.")) {
-    return "messages.tts.providers";
+  if (entry.id.startsWith("tts.providers.")) {
+    return "tts.providers";
   }
   if (entry.id.startsWith("models.providers.")) {
     return "models.providers";
@@ -575,7 +583,7 @@ function applyConfigForOpenClawTarget(
       addCoveragePluginLoadPath(config, pluginId);
     }
   }
-  if (entry.id === "agents.defaults.memorySearch.remote.apiKey") {
+  if (entry.id === "memory.search.remote.apiKey") {
     setPathCreateStrict(config, ["agents", "list", "0", "id"], "sample-agent");
   }
   if (entry.id === "gateway.auth.password") {

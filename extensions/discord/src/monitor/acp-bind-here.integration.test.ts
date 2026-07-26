@@ -35,6 +35,9 @@ const baseCfg = {
   session: {
     mainKey: "main",
     scope: "per-sender",
+    threadBindings: {
+      enabled: true,
+    },
   },
   acp: {
     enabled: true,
@@ -42,13 +45,6 @@ const baseCfg = {
       enabled: true,
     },
     backend: "acpx",
-  },
-  channels: {
-    discord: {
-      threadBindings: {
-        enabled: true,
-      },
-    },
   },
 } satisfies OpenClawConfig;
 

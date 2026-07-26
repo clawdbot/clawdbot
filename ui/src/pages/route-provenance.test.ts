@@ -1,3 +1,4 @@
+// @vitest-environment node
 import type { RouteLoaderOptions } from "@openclaw/uirouter";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
@@ -44,8 +45,9 @@ function snapshot(
 ): ApplicationGatewaySnapshot {
   return {
     client,
-    connected,
-    reconnecting: !connected,
+    phase: connected ? "connected" : "reconnecting",
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: null,
     sessionKey: "main",
@@ -132,7 +134,7 @@ describe("route preload gateway provenance", () => {
       search: undefined,
       includeGlobal: true,
       includeUnknown: false,
-      showArchived: false,
+      archivedFilter: "active",
     });
     expect(list.mock.calls[0]?.[0]).not.toHaveProperty("activeMinutes");
   });
@@ -166,6 +168,16 @@ describe("route preload gateway provenance", () => {
     const mutable = mutableGateway(snapshot(originalClient, true));
     const request = loadRoute<ModelProvidersRouteData>(modelProvidersPage, {
       gateway: mutable.gateway,
+      agents: {
+        state: { agentsList: null },
+        ensureList: vi.fn(async () => ({
+          defaultId: "main",
+          mainKey: "main",
+          scope: "project",
+          agents: [{ id: "main" }],
+        })),
+      },
+      agentSelection: { state: { selectedId: null, scopeId: null } },
     } as unknown as ApplicationContext);
 
     mutable.replaceSnapshot(snapshot(replacementClient, true));

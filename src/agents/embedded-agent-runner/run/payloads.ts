@@ -33,6 +33,7 @@ import {
   extractAssistantTextForPhase,
   parseAssistantTextSignature,
 } from "../../../shared/chat-message-content.js";
+import { formatInlineCodeSpan } from "../../../shared/markdown-code.js";
 import {
   sanitizeAssistantFinalAnswerText,
   sanitizeAssistantVisibleText,
@@ -421,25 +422,7 @@ function formatConciseExecExitSuffix(error: string | undefined): string {
   return code ? ` (exit ${code})` : "";
 }
 function maybeWrapInlineCode(value: string, markdown: boolean): string {
-  if (!markdown) {
-    return value;
-  }
-  const delimiter = "`".repeat(longestBacktickRun(value) + 1);
-  const padding = value.startsWith("`") || value.endsWith("`") || value.includes("\n") ? " " : "";
-  return `${delimiter}${padding}${value}${padding}${delimiter}`;
-}
-function longestBacktickRun(value: string): number {
-  let longest = 0;
-  let current = 0;
-  for (const char of value) {
-    if (char === "`") {
-      current += 1;
-      longest = Math.max(longest, current);
-      continue;
-    }
-    current = 0;
-  }
-  return longest;
+  return markdown ? formatInlineCodeSpan(value) : value;
 }
 /**
  * Chooses whether a tool failure needs a separate user-visible warning and
@@ -517,6 +500,7 @@ export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
   assistantMessageIndex?: number;
   assistantTranscriptOwned?: boolean;
+  assistantTranscriptIdempotencyKey?: string;
   toolMetas: ToolMetaEntry[];
   lastAssistant: AssistantMessage | undefined;
   currentAssistant?: AssistantMessage | null;
@@ -891,6 +875,11 @@ export function buildEmbeddedRunPayloads(params: {
             ? { assistantMessageIndex: params.assistantMessageIndex }
             : {}),
           ...(params.assistantTranscriptOwned === true ? { assistantTranscriptOwned: true } : {}),
+          ...(params.assistantTranscriptIdempotencyKey
+            ? {
+                assistantTranscriptIdempotencyKey: params.assistantTranscriptIdempotencyKey,
+              }
+            : {}),
         });
       }
       if (item.replyToId) {

@@ -4,6 +4,7 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 import {
   ensureApiKeyFromEnvOrPrompt,
   ensureApiKeyFromOptionEnvOrPrompt,
+  formatApiKeyPreview,
   normalizeApiKeyInput,
   normalizeTokenProviderInput,
   validateApiKeyInput,
@@ -463,5 +464,18 @@ describe("ensureApiKeyFromOptionEnvOrPrompt", () => {
     expect(confirm).toHaveBeenCalled();
     expect(text).not.toHaveBeenCalled();
     expect(setCredential).toHaveBeenCalledWith("env-key", "plaintext");
+  });
+});
+
+describe("formatApiKeyPreview", () => {
+  it.each([
+    ["sk-abcdef", "sk-a…cdef"],
+    ["short", "sh…rt"],
+    ["a😀b", "a…b"],
+    [`abc😀${"x".repeat(20)}`, "abc…xxxx"],
+    [`${"x".repeat(20)}😀abc`, "xxxx…abc"],
+    ["😀".repeat(10), "😀😀…😀😀"],
+  ])("redacts %p without splitting surrogate pairs", (value, expected) => {
+    expect(formatApiKeyPreview(value)).toBe(expected);
   });
 });

@@ -83,4 +83,48 @@ describe("bash tool output lifecycle", () => {
 
     expect(result.content[0]).toEqual({ type: "text", text: "before\n" });
   });
+
+  it.runIf(process.platform !== "win32")(
+    "tags stdout and stderr from the local shell backend",
+    async () => {
+      const operations = createLocalBashOperations();
+      const chunks: Array<{ data: Buffer; stream?: "stdout" | "stderr" }> = [];
+
+      const result = await operations.exec("printf stdout; printf stderr >&2", process.cwd(), {
+        onData: (data, stream) => chunks.push({ data, stream }),
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(
+        Buffer.concat(
+          chunks.filter((chunk) => chunk.stream === "stdout").map((chunk) => chunk.data),
+        ).toString("utf8"),
+      ).toBe("stdout");
+      expect(
+        Buffer.concat(
+          chunks.filter((chunk) => chunk.stream === "stderr").map((chunk) => chunk.data),
+        ).toString("utf8"),
+      ).toBe("stderr");
+      expect(chunks.every((chunk) => chunk.stream !== undefined)).toBe(true);
+    },
+  );
+
+  it("decodes a split multi-byte character when the other stream interleaves", async () => {
+    // stdout and stderr are independent pipes: each needs its own decoder, or a
+    // character straddling a stdout read boundary is corrupted by an stderr write
+    // landing between its bytes.
+    const operations: BashOperations = {
+      exec: async (_command, _cwd, { onData }) => {
+        onData(Buffer.from([0xe6, 0x97]), "stdout"); // leading bytes of 日
+        onData(Buffer.from("E"), "stderr"); // interleaves mid-character
+        onData(Buffer.from([0xa5, 0x0a]), "stdout");
+        return { exitCode: 0 };
+      },
+    };
+    const tool = createBashTool(process.cwd(), { operations });
+
+    const result = await tool.execute("call-split-utf8", { command: "ignored" });
+
+    expect(result.content[0]).toEqual({ type: "text", text: "E日\n" });
+  });
 });
