@@ -8,6 +8,7 @@ import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveCronDeliveryPlan } from "../../../cron/delivery-plan.js";
 import type { CronJob } from "../../../cron/types.js";
+import { normalizeHttpWebhookUrl } from "../../../cron/webhook-url.js";
 import { runExec } from "../../../process/exec.js";
 import { shortenHomePath } from "../../../utils.js";
 
@@ -237,6 +238,80 @@ export function noteCronDeliveryTargetAdvisory(params: {
     // Channel resolution is best-effort; never let an advisory break the doctor cron flow.
     return;
   }
+  if (advisory) {
+    note(advisory, "Cron");
+  }
+}
+
+function listCronWebhookDestinationHosts(jobs: Array<Record<string, unknown>>): string[] {
+  const hosts: string[] = [];
+  for (const job of jobs) {
+    const delivery = getRecord(job.delivery);
+    if (!delivery) {
+      continue;
+    }
+    const mode = normalizeOptionalString(delivery.mode)?.toLowerCase();
+    const candidates = [
+      mode === "webhook" ? delivery.to : undefined,
+      getRecord(delivery.completionDestination)?.to,
+      getRecord(delivery.failureDestination)?.to,
+    ];
+    for (const candidate of candidates) {
+      const url = normalizeHttpWebhookUrl(candidate);
+      if (!url) {
+        continue;
+      }
+      let hostname: string;
+      try {
+        hostname = new URL(url).hostname.toLowerCase().replace(/\.+$/, "");
+      } catch {
+        continue;
+      }
+      if (hostname && !hosts.includes(hostname)) {
+        hosts.push(hostname);
+      }
+    }
+  }
+  return hosts.toSorted((left, right) => left.localeCompare(right));
+}
+
+export function collectCronWebhookTokenHostsAdvisory(params: {
+  cfg: OpenClawConfig;
+  jobs: Array<Record<string, unknown>>;
+}): string | null {
+  if (!params.cfg.cron?.webhookToken) {
+    return null;
+  }
+  const configured = params.cfg.cron?.webhookTokenHosts;
+  if (Array.isArray(configured) && configured.some((host) => normalizeOptionalString(host))) {
+    return null;
+  }
+
+  const hosts = listCronWebhookDestinationHosts(params.jobs);
+  const lines = [
+    "Cron webhook bearer token is not bound to any destination host.",
+    "- `cron.webhookToken` is set but `cron.webhookTokenHosts` is empty, so cron webhook POSTs are delivered without an `Authorization` header",
+    "- Webhook destinations come from job records, which an agent turn can create or edit, so the token now travels only to hosts you name",
+  ];
+  if (hosts.length > 0) {
+    lines.push(
+      `- Destinations currently in the store: ${hosts.join(", ")}`,
+      "- Add only the hosts you own and recognize; a destination you do not recognize should be removed from its job instead",
+    );
+  } else {
+    lines.push("- No webhook destinations are currently stored");
+  }
+  lines.push(
+    `Set \`cron.webhookTokenHosts\` to your receiver hostnames, or \`["*"]\` to keep sending the token to every destination a job names. Review jobs with ${formatCliCommand("openclaw cron list")} and ${formatCliCommand("openclaw cron show <job-id>")}.`,
+  );
+  return lines.join("\n");
+}
+
+export function noteCronWebhookTokenHostsAdvisory(params: {
+  cfg: OpenClawConfig;
+  jobs: Array<Record<string, unknown>>;
+}): void {
+  const advisory = collectCronWebhookTokenHostsAdvisory(params);
   if (advisory) {
     note(advisory, "Cron");
   }

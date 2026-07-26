@@ -1,6 +1,7 @@
 // Doctor cron delivery-target advisory tests cover concrete-vs-pseudo channel detection.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  collectCronWebhookTokenHostsAdvisory,
   collectLegacyWhatsAppCrontabHealthWarning,
   noteCronDeliveryTargetAdvisory,
 } from "./warnings.js";
@@ -173,6 +174,70 @@ describe("collectCronDeliveryTargetAdvisory", () => {
     });
     expect(advisory).toContain("Nightly digest -> ghost");
     expect(advisory).toContain("<unnamed> -> ghost");
+  });
+});
+
+describe("collectCronWebhookTokenHostsAdvisory", () => {
+  const tokenCfg = { cron: { webhookToken: "operator-secret" } } as never;
+
+  it("returns null when no webhook token is configured", () => {
+    expect(collectCronWebhookTokenHostsAdvisory({ cfg: {} as never, jobs: [] })).toBeNull();
+  });
+
+  it("returns null once the allowlist names a host", () => {
+    expect(
+      collectCronWebhookTokenHostsAdvisory({
+        cfg: {
+          cron: { webhookToken: "operator-secret", webhookTokenHosts: ["a.invalid"] },
+        } as never,
+        jobs: [],
+      }),
+    ).toBeNull();
+  });
+
+  it("treats a blank allowlist as unconfigured", () => {
+    const advisory = collectCronWebhookTokenHostsAdvisory({
+      cfg: { cron: { webhookToken: "operator-secret", webhookTokenHosts: ["  "] } } as never,
+      jobs: [],
+    });
+    expect(advisory).toContain("not bound to any destination host");
+  });
+
+  it("enumerates stored webhook destinations as candidates", () => {
+    const advisory = collectCronWebhookTokenHostsAdvisory({
+      cfg: tokenCfg,
+      jobs: [
+        job({ delivery: { mode: "webhook", to: "https://receiver.example.invalid/cron" } }),
+        job({
+          delivery: {
+            mode: "announce",
+            channel: "slack",
+            completionDestination: { mode: "webhook", to: "https://done.example.invalid/x" },
+            failureDestination: { mode: "webhook", to: "https://alerts.example.invalid/y" },
+          },
+        }),
+        job({ delivery: { mode: "webhook", to: "https://receiver.example.invalid./dupe" } }),
+        job({ delivery: { mode: "none" } }),
+      ],
+    });
+    expect(advisory).toContain(
+      "Destinations currently in the store: alerts.example.invalid, done.example.invalid, receiver.example.invalid",
+    );
+    expect(advisory).toContain("Add only the hosts you own and recognize");
+  });
+
+  it("reports the gap even when no destinations are stored", () => {
+    const advisory = collectCronWebhookTokenHostsAdvisory({ cfg: tokenCfg, jobs: [] });
+    expect(advisory).toContain("No webhook destinations are currently stored");
+    expect(advisory).toContain("cron.webhookTokenHosts");
+  });
+
+  it("ignores non-webhook delivery targets", () => {
+    const advisory = collectCronWebhookTokenHostsAdvisory({
+      cfg: tokenCfg,
+      jobs: [job({ delivery: { mode: "announce", channel: "slack", to: "#ops" } })],
+    });
+    expect(advisory).toContain("No webhook destinations are currently stored");
   });
 });
 

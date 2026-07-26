@@ -15,6 +15,10 @@ export function normalizeHttpWebhookUrl(value: unknown): string | null {
   return trimmed;
 }
 
+function normalizeWebhookTokenHost(value: string): string {
+  return value.trim().toLowerCase().replace(/\.+$/, "");
+}
+
 function normalizeWebhookTokenHosts(hosts: unknown): string[] {
   if (!Array.isArray(hosts)) {
     return [];
@@ -24,7 +28,7 @@ function normalizeWebhookTokenHosts(hosts: unknown): string[] {
     if (typeof host !== "string") {
       continue;
     }
-    const entry = host.trim().toLowerCase().replace(/\.+$/, "");
+    const entry = normalizeWebhookTokenHost(host);
     if (entry && !normalized.includes(entry)) {
       normalized.push(entry);
     }
@@ -41,7 +45,7 @@ export function isCronWebhookTokenHostAllowed(url: string, allowedHosts: unknown
     return true;
   }
   try {
-    return entries.includes(new URL(url).hostname.toLowerCase());
+    return entries.includes(normalizeWebhookTokenHost(new URL(url).hostname));
   } catch {
     return false;
   }

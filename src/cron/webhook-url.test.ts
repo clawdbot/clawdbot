@@ -63,4 +63,22 @@ describe("isCronWebhookTokenHostAllowed", () => {
       ]),
     ).toBe(true);
   });
+
+  it("tolerates a DNS trailing dot in the destination URL", () => {
+    expect(
+      isCronWebhookTokenHostAllowed("https://receiver.example.invalid./cron", [
+        "receiver.example.invalid",
+      ]),
+    ).toBe(true);
+    expect(
+      isCronWebhookTokenHostAllowed("https://receiver.example.invalid./cron", [
+        "receiver.example.invalid.",
+      ]),
+    ).toBe(true);
+    expect(
+      isCronWebhookTokenHostAllowed("https://attacker.example.invalid./collect", [
+        "receiver.example.invalid",
+      ]),
+    ).toBe(false);
+  });
 });
