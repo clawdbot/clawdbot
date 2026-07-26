@@ -1359,6 +1359,9 @@ describe("buildGatewayCronService", () => {
   });
 
   it("keeps command execution errors on backoff when announce delivery also fails", async () => {
+    const baseMs = Date.parse("2026-07-14T12:00:00.000Z");
+    vi.useFakeTimers();
+    vi.setSystemTime(baseMs);
     const cfg = createCronConfig("server-cron-command-execution-failure");
     loadConfigMock.mockReturnValue(cfg);
     const deliveryError = "Channel is required (no configured channels detected)";
@@ -1374,7 +1377,7 @@ describe("buildGatewayCronService", () => {
         name: "failed-headless-command",
         enabled: true,
         deleteAfterRun: false,
-        schedule: { kind: "every", everyMs: 20_000, anchorMs: Date.now() },
+        schedule: { kind: "every", everyMs: 20_000, anchorMs: baseMs },
         sessionTarget: "isolated",
         wakeMode: "next-heartbeat",
         payload: {
@@ -1383,14 +1386,16 @@ describe("buildGatewayCronService", () => {
         },
       });
 
-      const dueAtMs = job.state.nextRunAtMs;
-      expect(dueAtMs).toBeTypeOf("number");
-      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(dueAtMs ?? 0);
-      try {
-        await state.cron.run(job.id, "due");
-      } finally {
-        nowSpy.mockRestore();
-      }
+      // Drive a real scheduled tick (origin=timer): the scheduler owns state, so
+      // a failed recurring run applies error backoff. The public run path is
+      // operator-only and never reschedules (#83538). Fake timers advance to the
+      // due slot to fire onTimer; real timers then let the spawned command drain.
+      await state.cron.start();
+      const dueAtMs = job.state.nextRunAtMs ?? 0;
+      vi.setSystemTime(dueAtMs);
+      await vi.advanceTimersByTimeAsync(dueAtMs - baseMs);
+      vi.useRealTimers();
+      await vi.waitFor(() => expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBe("error"));
 
       const updated = state.cron.getJob(job.id);
       expect(updated?.state.lastRunStatus).toBe("error");
@@ -1403,6 +1408,7 @@ describe("buildGatewayCronService", () => {
       );
     } finally {
       state.cron.stop();
+      vi.useRealTimers();
     }
   });
 
@@ -1432,7 +1438,11 @@ describe("buildGatewayCronService", () => {
         delivery: { mode: "announce", bestEffort: false },
       });
 
-      await state.cron.run(job.id, "force");
+      // Drive a real scheduled tick (origin=timer): a required-delivery failure
+      // errors the run, so the scheduler retains the one-shot (no delete on
+      // error) and applies backoff. A public operator run would not (#83538).
+      await state.cron.start();
+      await vi.waitFor(() => expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBe("error"));
 
       const updated = state.cron.getJob(job.id);
       expect(updated?.state.lastRunStatus).toBe("error");
@@ -1515,7 +1525,12 @@ describe("buildGatewayCronService", () => {
         },
       });
 
-      await state.cron.run(job.id, "force");
+      // Drive a real scheduled tick (origin=timer): the scheduler consumes the
+      // one-shot, so a successful deleteAfterRun job is deleted even when announce
+      // delivery fails (delivery failure never demotes an ok run). A public
+      // operator run would preserve it instead (#83538/#83933).
+      await state.cron.start();
+      await vi.waitFor(() => expect(state.cron.getJob(job.id)).toBeUndefined());
 
       expect(state.cron.getJob(job.id)).toBeUndefined();
     } finally {
