@@ -85,6 +85,14 @@ describe("createExecutionCapabilityReadinessResolver", () => {
 
     expect(
       resolve({ config: {}, criterionIds: selected }).get(CONTEXT_ENGINE_READY_CRITERION_ID),
+    ).toMatchObject({ status: "True", reason: "LegacyContextEngineReady" });
+    expect(deps.contextEngineRegistration).not.toHaveBeenCalled();
+
+    expect(
+      resolve({
+        config: { plugins: { slots: { contextEngine: "custom" } } },
+        criterionIds: selected,
+      }).get(CONTEXT_ENGINE_READY_CRITERION_ID),
     ).toMatchObject({ status: "True", reason: "ContextEngineReady" });
 
     deps.contextEngineQuarantines.mockReturnValueOnce([{ engineId: "custom" }]);
@@ -97,7 +105,10 @@ describe("createExecutionCapabilityReadinessResolver", () => {
 
     deps.contextEngineRegistration.mockReturnValueOnce({ lifecycle: "readOnlyDiscovery" });
     expect(
-      resolve({ config: {}, criterionIds: selected }).get(CONTEXT_ENGINE_READY_CRITERION_ID),
+      resolve({
+        config: { plugins: { slots: { contextEngine: "custom" } } },
+        criterionIds: selected,
+      }).get(CONTEXT_ENGINE_READY_CRITERION_ID),
     ).toMatchObject({ status: "False", reason: "ContextEngineUnavailable" });
   });
 
