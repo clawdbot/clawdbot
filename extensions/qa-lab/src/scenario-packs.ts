@@ -52,10 +52,10 @@ export const QA_SCENARIO_PACKS = [
       "group-visible-reply-tool",
       "long-running-release-audit",
       "matrix-restart-resume",
-      "native-command-session-target",
       "personal-task-followthrough-status",
       "plugin-lifecycle-hot-reload",
       "subagent-completion-direct-fallback",
+      "telegram-commands-command",
     ],
   },
 ] as const satisfies readonly QaScenarioPackDefinition[];
