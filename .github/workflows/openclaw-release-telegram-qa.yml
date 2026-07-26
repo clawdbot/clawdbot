@@ -1894,7 +1894,7 @@ jobs:
             unset "$key"
           done
           export SUT_UID SUT_GID RUNNER_UID RUNNER_GID RUNNER_HOME RUNNER_TEMP_DIR
-          export CANDIDATE_ROOT RUNTIME_ROOT NODE_BIN
+          export CANDIDATE_ROOT CANDIDATE_ARTIFACTS_DIR RUNTIME_ROOT NODE_BIN
           export PRELOAD_PATH RUNNER_SENTINEL TRUSTED_WORKSPACE EVIDENCE_ROOT
           export boundary_mode generation command_file identity_file sandbox_file
           export command_sha256 expected_env_keys_b64 sandbox_payload_b64

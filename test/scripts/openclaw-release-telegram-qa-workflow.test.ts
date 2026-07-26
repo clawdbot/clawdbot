@@ -858,6 +858,9 @@ describe("release Telegram QA workflow", () => {
     );
     expect(source).toContain("printf 'CANDIDATE_ARTIFACTS_DIR=%q\\n' \"$candidate_artifacts_dir\"");
     expect(source).toContain(
+      "export CANDIDATE_ROOT CANDIDATE_ARTIFACTS_DIR RUNTIME_ROOT NODE_BIN",
+    );
+    expect(source).toContain(
       '[[ -d "${CANDIDATE_ARTIFACTS_DIR:?}" && -w "$CANDIDATE_ARTIFACTS_DIR" ]]',
     );
     expect(source).toContain("CANDIDATE_ARTIFACTS_DIR \\");
