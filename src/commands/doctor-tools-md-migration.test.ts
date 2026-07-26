@@ -153,6 +153,51 @@ describe("TOOLS.md migration", () => {
     expect(rerunAgents.match(/migrated from TOOLS\.md/gu)).toHaveLength(1);
   });
 
+  it("keeps live claims created from old source files fresh", async () => {
+    const ownerPid = process.ppid;
+    const oldTimestamp = new Date("2000-01-01T00:00:00.000Z");
+
+    const toolsFixture = await createFixture();
+    await fs.writeFile(toolsFixture.toolsPath, "old tool notes\n");
+    await fs.utimes(toolsFixture.toolsPath, oldTimestamp, oldTimestamp);
+    const toolsClaimPath = `${toolsFixture.toolsPath}.doctor-importing-${ownerPid}-${Date.now()}-claim`;
+    await fs.rename(toolsFixture.toolsPath, toolsClaimPath);
+
+    const toolsResult = await maybeMigrateToolsMd({
+      cfg: toolsFixture.cfg,
+      shouldRepair: true,
+      env: toolsFixture.env,
+    });
+
+    expect(toolsResult.warnings).toEqual([
+      expect.stringContaining(`TOOLS.md migration claim is held by running process ${ownerPid}`),
+    ]);
+    await expect(fs.stat(toolsClaimPath)).resolves.toMatchObject({
+      mtimeMs: oldTimestamp.getTime(),
+    });
+
+    const agentsFixture = await createFixture();
+    await fs.writeFile(agentsFixture.toolsPath, "old tool notes\n");
+    await fs.writeFile(agentsFixture.agentsPath, "# Agent\n");
+    await fs.utimes(agentsFixture.agentsPath, oldTimestamp, oldTimestamp);
+    const agentsClaimPath = `${agentsFixture.agentsPath}.doctor-backup-${ownerPid}-${Date.now()}`;
+    await fs.rename(agentsFixture.agentsPath, agentsClaimPath);
+
+    const agentsResult = await maybeMigrateToolsMd({
+      cfg: agentsFixture.cfg,
+      shouldRepair: true,
+      env: agentsFixture.env,
+    });
+
+    expect(agentsResult.warnings).toEqual([
+      expect.stringContaining(`AGENTS.md migration claim is held by running process ${ownerPid}`),
+    ]);
+    await expect(fs.readFile(agentsFixture.toolsPath, "utf8")).resolves.toBe("old tool notes\n");
+    await expect(fs.stat(agentsClaimPath)).resolves.toMatchObject({
+      mtimeMs: oldTimestamp.getTime(),
+    });
+  });
+
   it("appends a Tools section when AGENTS.md has no Tools heading", async () => {
     const fixture = await createFixture();
     const agents = "# Agent\n\nKeep safe.";

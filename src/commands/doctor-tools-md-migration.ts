@@ -97,8 +97,26 @@ type ToolsMdSource = {
   sha256: string;
 };
 
+type MigrationClaimIdentity = {
+  ownerPid: number;
+  createdAtMs: number;
+};
+
 function sha256(content: string): string {
   return createHash("sha256").update(content).digest("hex");
+}
+
+function parseMigrationClaimIdentity(
+  claimName: string,
+  prefix: string,
+): MigrationClaimIdentity | undefined {
+  const [ownerPidText, createdAtMsText] = claimName.slice(prefix.length).split("-");
+  const ownerPid = Number(ownerPidText);
+  const createdAtMs = Number(createdAtMsText);
+  if (!Number.isSafeInteger(ownerPid) || !Number.isSafeInteger(createdAtMs) || createdAtMs <= 0) {
+    return undefined;
+  }
+  return { ownerPid, createdAtMs };
 }
 
 async function readToolsMd(
@@ -124,19 +142,20 @@ async function readToolsMd(
         });
       }
       const claimPath = path.join(workspaceDir, claims[0]!);
-      const claimStat = await fs.lstat(claimPath);
-      const ownerPid = Number(
-        claims[0]!.slice(`${DEFAULT_TOOLS_FILENAME}${TOOLS_CLAIM_INFIX}`.length).split("-")[0],
+      const claimIdentity = parseMigrationClaimIdentity(
+        claims[0]!,
+        `${DEFAULT_TOOLS_FILENAME}${TOOLS_CLAIM_INFIX}`,
       );
       if (
-        Number.isSafeInteger(ownerPid) &&
-        ownerPid !== process.pid &&
-        Date.now() - claimStat.mtimeMs < ACTIVE_CLAIM_MAX_AGE_MS &&
-        isProcessAlive(ownerPid)
+        claimIdentity &&
+        claimIdentity.ownerPid !== process.pid &&
+        Date.now() - claimIdentity.createdAtMs < ACTIVE_CLAIM_MAX_AGE_MS &&
+        isProcessAlive(claimIdentity.ownerPid)
       ) {
-        throw new Error(`TOOLS.md migration claim is held by running process ${ownerPid}`, {
-          cause: error,
-        });
+        throw new Error(
+          `TOOLS.md migration claim is held by running process ${claimIdentity.ownerPid}`,
+          { cause: error },
+        );
       }
       if (!options?.recoverClaims) {
         throw new Error("an interrupted TOOLS.md migration claim requires doctor --fix", {
@@ -411,15 +430,16 @@ async function recoverInterruptedAgentsClaim(params: {
     throw new Error("multiple interrupted AGENTS.md migration claims require manual recovery");
   }
   const claimPath = path.join(path.dirname(agentsPath), claims[0]!);
-  const claimStat = await fs.lstat(claimPath);
-  const ownerPid = Number(claims[0]!.slice(prefix.length).split("-")[0]);
+  const claimIdentity = parseMigrationClaimIdentity(claims[0]!, prefix);
   if (
-    Number.isSafeInteger(ownerPid) &&
-    ownerPid !== process.pid &&
-    Date.now() - claimStat.mtimeMs < ACTIVE_CLAIM_MAX_AGE_MS &&
-    isProcessAlive(ownerPid)
+    claimIdentity &&
+    claimIdentity.ownerPid !== process.pid &&
+    Date.now() - claimIdentity.createdAtMs < ACTIVE_CLAIM_MAX_AGE_MS &&
+    isProcessAlive(claimIdentity.ownerPid)
   ) {
-    throw new Error(`AGENTS.md migration claim is held by running process ${ownerPid}`);
+    throw new Error(
+      `AGENTS.md migration claim is held by running process ${claimIdentity.ownerPid}`,
+    );
   }
   try {
     await fs.lstat(agentsPath);
@@ -619,7 +639,7 @@ export async function maybeMigrateToolsMd(params: {
         source.content !== LEGACY_TOOLS_DEV_MD_TEMPLATE &&
         source.content !== LEGACY_TOOLS_DEV_FALLBACK;
       await archiveSource({ agentId: target.agentId, source, env });
-      const claimPath = `${source.path}${TOOLS_CLAIM_INFIX}${process.pid}-${source.sha256.slice(0, 12)}`;
+      const claimPath = `${source.path}${TOOLS_CLAIM_INFIX}${process.pid}-${Date.now()}-${source.sha256.slice(0, 12)}`;
       await fs.rename(source.path, claimPath);
       try {
         if (sha256(await fs.readFile(claimPath, "utf8")) !== source.sha256) {
