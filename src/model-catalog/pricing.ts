@@ -105,6 +105,7 @@ function buildPricingContext(config: OpenClawConfig): PricingContext {
   const fingerprint = JSON.stringify({
     catalog: [...catalog.entries()].toSorted(([a], [b]) => a.localeCompare(b)),
     hosted: Object.entries(hosted).toSorted(([a], [b]) => a.localeCompare(b)),
+    normalizedHosted: [...normalizedHosted.entries()].toSorted(([a], [b]) => a.localeCompare(b)),
     policies: [...policies.entries()].toSorted(([a], [b]) => a.localeCompare(b)),
   });
   return { snapshot, catalog, hosted, normalizedHosted, policies, fingerprint };
@@ -242,10 +243,10 @@ export function resolveHostedModelPricing(params: {
     return undefined;
   }
   const key = modelKey(normalized.provider, normalized.model);
-  return (
+  const pricing =
     context.hosted[key] ??
-    (context.policies.has(normalized.provider) ? undefined : context.normalizedHosted.get(key))
-  );
+    (context.policies.has(normalized.provider) ? undefined : context.normalizedHosted.get(key));
+  return pricing && hasKnownPricing(pricing) ? pricing : undefined;
 }
 
 export function modelCatalogPricingFingerprint(config?: OpenClawConfig): string {

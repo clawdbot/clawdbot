@@ -180,6 +180,7 @@ describe("publish model catalog", () => {
             },
             { id: "openai/gpt-2", pricing: { prompt: "-1", completion: "0.000004" } },
             { id: "unknown/new-model", pricing: { prompt: "1", completion: "1" } },
+            { id: "custom/secondary-wins", pricing: { prompt: "0", completion: "0" } },
           ],
         });
       }
@@ -209,12 +210,17 @@ describe("publish model catalog", () => {
           input_cost_per_token: 0.000009,
           output_cost_per_token: 0.00001,
         },
+        "secondary-wins": {
+          litellm_provider: "custom",
+          input_cost_per_token: 0.000011,
+          output_cost_per_token: 0.000012,
+        },
       });
     };
 
     await expect(enrichModelCatalogPricing({ bundle, manifests, fetchImpl })).resolves.toEqual({
       modelsEnriched: 2,
-      pricingEntries: 8,
+      pricingEntries: 10,
     });
     expect(bundle.providers.anthropic?.models[0]?.cost).toMatchObject({ input: 1, output: 2 });
     expect(bundle.providers.openai?.models[0]?.cost).toMatchObject({
@@ -226,11 +232,13 @@ describe("publish model catalog", () => {
     expect(bundle.pricing).toEqual({
       "anthropic/claude-3.5-sonnet": { input: 1, output: 2 },
       "custom/external-model": { input: 7, output: 8 },
+      "custom/secondary-wins": { input: 11, output: 12 },
       "external-model": { input: 7, output: 8 },
       "forbidden-model": { input: 9, output: 10 },
       "openrouter/anthropic/claude-3.5-sonnet": { input: 1, output: 2 },
       "openrouter/openai/gpt-special": { input: 3, output: 4 },
       "openrouter/unknown/new-model": { input: 1_000_000, output: 1_000_000 },
+      "secondary-wins": { input: 11, output: 12 },
       "unknown/new-model": { input: 1_000_000, output: 1_000_000 },
     });
     expect(bundle.pricing).not.toHaveProperty("openrouter/forbidden-model");
@@ -239,7 +247,7 @@ describe("publish model catalog", () => {
     expect(summarizeModelCatalogBundle(bundle)).toMatchObject({
       models: 200,
       costModels: 2,
-      pricingEntries: 8,
+      pricingEntries: 10,
     });
     expect(Object.hasOwn(bundle.providers, "unknown")).toBe(false);
   });

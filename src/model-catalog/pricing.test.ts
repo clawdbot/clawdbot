@@ -41,6 +41,11 @@ beforeEach(() => {
       },
       pricing: {
         "openai/gpt-external": { input: 2.5, output: 10, cacheRead: 1.25 },
+        "openai/gpt-zero-hosted": {
+          input: 0,
+          output: 0,
+          tieredPricing: [{ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, range: [0] }],
+        },
         "openai/gpt-zero-tier": { input: 4, output: 8 },
         "openrouter/openai/gpt-catalog": { input: 1, output: 2 },
         "z-ai/forbidden": { input: 9, output: 18 },
@@ -142,6 +147,14 @@ describe("hosted model pricing", () => {
         agentDir,
         provider: "openai",
         model: "unknown-model",
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveModelCostConfig({
+        config: configFor("https://api.openai.com/v1"),
+        agentDir,
+        provider: "openai",
+        model: "gpt-zero-hosted",
       }),
     ).toBeUndefined();
     const disabled = configFor("https://api.openai.com/v1");

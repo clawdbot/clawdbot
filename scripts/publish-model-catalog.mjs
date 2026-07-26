@@ -226,8 +226,11 @@ function compactPricing(pricing) {
 }
 
 function mergePricing(primary, secondary) {
-  if (!primary) {
+  if (!primary || !hasKnownPricing(primary)) {
     return secondary;
+  }
+  if (!secondary || !hasKnownPricing(secondary)) {
+    return primary;
   }
   if (!secondary?.tieredPricing) {
     return primary;
