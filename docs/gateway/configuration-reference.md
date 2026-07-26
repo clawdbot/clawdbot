@@ -1446,6 +1446,7 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
       enabled: true,
     },
     webhookToken: "replace-with-dedicated-token", // optional bearer token for outbound webhook auth
+    webhookTokenHosts: ["hooks.example.com"], // destination hosts allowed to receive webhookToken
     sessionRetention: "24h", // duration string or false
   },
 }
@@ -1456,10 +1457,11 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
 - `sessionRetention`: how long to keep completed isolated cron run sessions before pruning SQLite session rows. Also controls cleanup of archived deleted cron transcripts. Default: `24h`; set `false` to disable.
 - Run history automatically keeps the newest 2000 terminal rows per job. Lost rows retain their 24-hour cleanup window.
 - `webhookToken`: bearer token used for cron webhook POST delivery (`delivery.mode = "webhook"`), if omitted no auth header is sent.
+- `webhookTokenHosts`: destination hostnames allowed to receive `webhookToken`. Webhook URLs come from job records that an agent turn can create or edit, so the token is withheld from every host that is not listed and the POST goes out unauthenticated. Set the hostnames of your own receivers, or `["*"]` to attach the token to any destination a job names.
 
 The `cron` block is strict; `cron.enabled`, `cron.triggers`, `cron.webhookToken`,
-`cron.sessionRetention`, and `cron.failureAlert` are the only accepted keys. The
-retired `cron.webhook` fallback URL is gone: runtime delivery uses per-job
+`cron.webhookTokenHosts`, `cron.sessionRetention`, and `cron.failureAlert` are the
+only accepted keys. The retired `cron.webhook` fallback URL is gone: runtime delivery uses per-job
 `delivery.mode = "webhook"` plus `delivery.to`, or `delivery.completionDestination`
 when preserving announce delivery. `openclaw doctor --fix` strips a leftover
 `cron.webhook` from existing config files.

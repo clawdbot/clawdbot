@@ -629,12 +629,13 @@ Use the latest-generation, best-tier model available from your provider for untr
       enabled: false,
     },
     webhookToken: "replace-with-dedicated-webhook-token",
+    webhookTokenHosts: ["hooks.example.com"],
     sessionRetention: "24h",
   },
 }
 ```
 
-`webhookToken` is sent as `Authorization: Bearer <token>` on cron webhook POSTs.
+`webhookToken` is sent as `Authorization: Bearer <token>` on cron webhook POSTs, but only to destination hosts listed in `webhookTokenHosts`. Cron webhook URLs are job-supplied, and jobs can be created or edited by an agent turn, so an unpinned token would follow any URL a job names. List the hostnames of the receivers you own; use `["*"]` to send the token to every destination a job names.
 
 `cron.store` is a logical store key and doctor migration path, not a live JSON file to hand-edit. Job data lives in SQLite; use the CLI or Gateway API for changes.
 

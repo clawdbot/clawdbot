@@ -89,6 +89,8 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Enables cron job execution for stored schedules managed by the gateway. Keep enabled for normal reminder/automation flows, and disable only to pause all cron execution without deleting jobs.",
   "cron.webhookToken":
     "Bearer token attached to cron webhook POST deliveries when webhook mode is used. Prefer secret/env substitution and rotate this token regularly if shared webhook endpoints are internet-reachable.",
+  "cron.webhookTokenHosts":
+    "Destination hostnames allowed to receive `cron.webhookToken`. Cron job webhook URLs are job-supplied, so the bearer token is withheld from every host that is not listed here; set the hostnames of your own receivers, or use `*` to send the token to any destination a job names.",
   "cron.sessionRetention":
     "Controls how long completed cron run sessions are kept before pruning (`24h`, `7d`, `1h30m`, or `false` to disable pruning; default: `24h`). Use shorter retention to reduce storage growth on high-frequency schedules.",
   transcripts:

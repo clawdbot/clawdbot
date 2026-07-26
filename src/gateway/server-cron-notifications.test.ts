@@ -60,6 +60,17 @@ function webhookRequestBody() {
   return JSON.parse(init.body);
 }
 
+function webhookRequestAuthorization(callIndex = 0) {
+  const call = (mocks.fetchWithSsrFGuard.mock.calls as unknown[][])[callIndex];
+  if (!call) {
+    throw new Error("expected webhook request call");
+  }
+  const request = requireRecord(call[0], "webhook request");
+  const init = requireRecord(request.init, "webhook request init");
+  const headers = requireRecord(init.headers, "webhook request headers");
+  return { url: request.url, authorization: headers.Authorization };
+}
+
 function createVoidDeferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve = () => {};
   const promise = new Promise<void>((resolvePromise) => {
@@ -221,6 +232,144 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
 
     expect(suspensionAdmission?.release()).toBe(true);
     await waitForFast(() => expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1));
+  });
+
+  it("withholds the cron webhook bearer token from unlisted destination hosts", async () => {
+    const logger = { warn: vi.fn() };
+    const job = createWebhookJob({
+      mode: "webhook",
+      to: "https://attacker.example.invalid/collect",
+    });
+
+    dispatchGatewayCronFinishedNotifications({
+      evt: { jobId: job.id, action: "finished", status: "ok", summary: "done" },
+      job,
+      deps: {} as CliDeps,
+      logger,
+      resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
+      webhookToken: "operator-secret",
+      webhookTokenHosts: ["receiver.example.invalid"],
+    });
+
+    await waitForFast(() => expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1));
+    const request = webhookRequestAuthorization();
+    expect(request.url).toBe("https://attacker.example.invalid/collect");
+    expect(request.authorization).toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        jobId: job.id,
+        webhookUrl: "https://attacker.example.invalid/collect",
+      }),
+      "cron: webhook token withheld, destination host is not listed in cron.webhookTokenHosts",
+    );
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  });
+
+  it("withholds the cron webhook bearer token when no destination hosts are configured", async () => {
+    const job = createWebhookJob({
+      mode: "webhook",
+      to: "https://receiver.example.invalid/cron",
+    });
+
+    dispatchGatewayCronFinishedNotifications({
+      evt: { jobId: job.id, action: "finished", status: "ok", summary: "done" },
+      job,
+      deps: {} as CliDeps,
+      logger: { warn: vi.fn() },
+      resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
+      webhookToken: "operator-secret",
+    });
+
+    await waitForFast(() => expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1));
+    expect(webhookRequestAuthorization().authorization).toBeUndefined();
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  });
+
+  it("sends the cron webhook bearer token to allowlisted destination hosts", async () => {
+    const job = createWebhookJob({
+      mode: "webhook",
+      to: "https://receiver.example.invalid/cron",
+    });
+
+    dispatchGatewayCronFinishedNotifications({
+      evt: { jobId: job.id, action: "finished", status: "ok", summary: "done" },
+      job,
+      deps: {} as CliDeps,
+      logger: { warn: vi.fn() },
+      resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
+      webhookToken: "operator-secret",
+      webhookTokenHosts: ["Receiver.Example.Invalid"],
+    });
+
+    await waitForFast(() => expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1));
+    expect(webhookRequestAuthorization().authorization).toBe("Bearer operator-secret");
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  });
+
+  it("sends the cron webhook bearer token to every host under a wildcard allowlist", async () => {
+    const job = createWebhookJob({
+      mode: "webhook",
+      to: "https://attacker.example.invalid/collect",
+    });
+
+    dispatchGatewayCronFinishedNotifications({
+      evt: { jobId: job.id, action: "finished", status: "ok", summary: "done" },
+      job,
+      deps: {} as CliDeps,
+      logger: { warn: vi.fn() },
+      resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
+      webhookToken: "operator-secret",
+      webhookTokenHosts: ["*"],
+    });
+
+    await waitForFast(() => expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1));
+    expect(webhookRequestAuthorization().authorization).toBe("Bearer operator-secret");
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  });
+
+  it("withholds the cron webhook bearer token from unlisted failure destination hosts", async () => {
+    const job = createWebhookJob({
+      mode: "announce",
+      channel: "last",
+      failureDestination: {
+        mode: "webhook",
+        to: "https://attacker.example.invalid/failure",
+      },
+    });
+
+    dispatchGatewayCronFinishedNotifications({
+      evt: { jobId: job.id, action: "finished", status: "error", error: "boom" },
+      job,
+      deps: {} as CliDeps,
+      logger: { warn: vi.fn() },
+      resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
+      webhookToken: "operator-secret",
+      webhookTokenHosts: ["receiver.example.invalid"],
+    });
+
+    await waitForFast(() => expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1));
+    expect(webhookRequestAuthorization().authorization).toBeUndefined();
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  });
+
+  it("withholds the cron webhook bearer token from unlisted failure alert hosts", async () => {
+    const job = createWebhookJob({ mode: "none" });
+
+    await sendGatewayCronFailureAlert({
+      deps: {} as CliDeps,
+      logger: { warn: vi.fn() },
+      resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
+      webhookToken: "operator-secret",
+      webhookTokenHosts: ["receiver.example.invalid"],
+      job,
+      text: "boom",
+      channel: "last",
+      to: "https://attacker.example.invalid/alert",
+      mode: "webhook",
+    });
+
+    expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
+    expect(webhookRequestAuthorization().authorization).toBeUndefined();
   });
 
   it("independently admits failure destination webhook delivery", async () => {

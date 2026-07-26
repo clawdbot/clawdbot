@@ -17,7 +17,7 @@ import {
 import type { CronEvent } from "../cron/service.js";
 import { resolveCronDeliverySessionKey } from "../cron/session-target.js";
 import type { CronJob, CronMessageChannel } from "../cron/types.js";
-import { normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
+import { isCronWebhookTokenHostAllowed, normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
@@ -45,6 +45,7 @@ type CronFailureAlertParams = {
   logger: CronLogger;
   resolveCronAgent: CronAgentResolver;
   webhookToken?: unknown;
+  webhookTokenHosts?: unknown;
   job: CronJob;
   text: string;
   channel: CronMessageChannel;
@@ -162,6 +163,29 @@ function buildCronWebhookHeaders(webhookToken?: string): Record<string, string> 
   return headers;
 }
 
+function resolveCronWebhookBearer(params: {
+  webhookUrl: string;
+  webhookToken?: string;
+  webhookTokenHosts?: unknown;
+  logContext: Record<string, unknown>;
+  logger: CronLogger;
+}): string | undefined {
+  if (!params.webhookToken) {
+    return undefined;
+  }
+  if (isCronWebhookTokenHostAllowed(params.webhookUrl, params.webhookTokenHosts)) {
+    return params.webhookToken;
+  }
+  params.logger.warn(
+    {
+      ...params.logContext,
+      webhookUrl: redactWebhookUrl(params.webhookUrl),
+    },
+    "cron: webhook token withheld, destination host is not listed in cron.webhookTokenHosts",
+  );
+  return undefined;
+}
+
 function buildCronFailureWebhookPayload(params: { evt: CronEvent; job: CronJob }) {
   const failureMessage = `Cron job "${params.job.name}" failed: ${params.evt.error ?? "unknown error"}`;
   return {
@@ -200,12 +224,20 @@ function buildCronFinishedWebhookPayload(evt: CronEvent) {
 async function postCronWebhook(params: {
   webhookUrl: string;
   webhookToken?: string;
+  webhookTokenHosts?: unknown;
   payload: unknown;
   logContext: Record<string, unknown>;
   blockedLog: string;
   failedLog: string;
   logger: CronLogger;
 }): Promise<void> {
+  const bearer = resolveCronWebhookBearer({
+    webhookUrl: params.webhookUrl,
+    webhookToken: params.webhookToken,
+    webhookTokenHosts: params.webhookTokenHosts,
+    logContext: params.logContext,
+    logger: params.logger,
+  });
   const abortController = new AbortController();
   const timeout = setTimeout(() => {
     abortController.abort();
@@ -217,7 +249,7 @@ async function postCronWebhook(params: {
       url: params.webhookUrl,
       init: {
         method: "POST",
-        headers: buildCronWebhookHeaders(params.webhookToken),
+        headers: buildCronWebhookHeaders(bearer),
         body: JSON.stringify(params.payload),
         signal: abortController.signal,
       },
@@ -289,6 +321,7 @@ async function sendGatewayCronFailureAlertUnderAdmission(
       await postCronWebhook({
         webhookUrl,
         webhookToken,
+        webhookTokenHosts: params.webhookTokenHosts,
         payload: {
           jobId: params.job.id,
           jobName: params.job.name,
@@ -336,6 +369,7 @@ export function dispatchGatewayCronFinishedNotifications(params: {
   logger: CronLogger;
   resolveCronAgent: CronAgentResolver;
   webhookToken?: unknown;
+  webhookTokenHosts?: unknown;
   globalFailureDestination?: CronFailureDestinationConfig;
 }): void {
   const webhookToken = normalizeOptionalString(params.webhookToken);
@@ -395,6 +429,7 @@ export function dispatchGatewayCronFinishedNotifications(params: {
           postCronWebhook({
             webhookUrl: webhookTarget.url,
             webhookToken,
+            webhookTokenHosts: params.webhookTokenHosts,
             payload,
             logContext: { jobId: params.evt.jobId, source: webhookTarget.source },
             blockedLog: "cron: webhook delivery blocked by SSRF guard",
@@ -412,6 +447,7 @@ export function dispatchGatewayCronFinishedNotifications(params: {
     logger: params.logger,
     resolveCronAgent: params.resolveCronAgent,
     webhookToken,
+    webhookTokenHosts: params.webhookTokenHosts,
     globalFailureDestination: params.globalFailureDestination,
   });
 }
@@ -423,6 +459,7 @@ function dispatchCronFailureDestinationNotifications(params: {
   logger: CronLogger;
   resolveCronAgent: CronAgentResolver;
   webhookToken?: string;
+  webhookTokenHosts?: unknown;
   globalFailureDestination?: CronFailureDestinationConfig;
 }): void {
   if (params.evt.status !== "error" || !params.job || params.job.delivery?.bestEffort === true) {
@@ -447,6 +484,7 @@ function dispatchCronFailureDestinationNotifications(params: {
             postCronWebhook({
               webhookUrl,
               webhookToken: params.webhookToken,
+              webhookTokenHosts: params.webhookTokenHosts,
               payload: failurePayload,
               logContext: { jobId: params.evt.jobId },
               blockedLog: "cron: failure destination webhook blocked by SSRF guard",

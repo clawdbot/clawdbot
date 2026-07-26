@@ -311,6 +311,7 @@ export const OpenClawSchemaShape = {
         })
         .optional(),
       webhookToken: SecretInputSchema.optional().register(sensitive),
+      webhookTokenHosts: z.array(z.string()).optional(),
       sessionRetention: z.union([z.string(), z.literal(false)]).optional(),
       failureAlert: z
         .strictObject({

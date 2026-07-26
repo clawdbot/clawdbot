@@ -91,6 +91,7 @@ export const TARGET_KEYS = [
   "cron",
   "cron.enabled",
   "cron.webhookToken",
+  "cron.webhookTokenHosts",
   "cron.sessionRetention",
   "session",
   "session.scope",
