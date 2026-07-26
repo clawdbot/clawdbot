@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import type { RemoteModelCatalogPricing } from "@openclaw/model-catalog-core";
 import type { ModelCatalogCost } from "@openclaw/model-catalog-core/model-catalog-types";
 import { modelKey, normalizeModelRef } from "../agents/model-selection.js";
@@ -242,20 +243,30 @@ function isPrivateOrLoopbackHost(hostname: string): boolean {
     host === "localhost" ||
     host === "localhost.localdomain" ||
     host.endsWith(".localhost") ||
-    host.endsWith(".local") ||
-    host === "::1" ||
-    host === "0:0:0:0:0:0:0:1" ||
-    host.startsWith("fe80:") ||
-    host.startsWith("fc") ||
-    host.startsWith("fd") ||
-    host.startsWith("127.") ||
-    host.startsWith("10.") ||
-    host.startsWith("192.168.") ||
-    host.startsWith("169.254.")
+    host.endsWith(".local")
   ) {
     return true;
   }
-  return /^172\.(1[6-9]|2\d|3[0-1])\./u.test(host);
+  const addressFamily = isIP(host);
+  if (addressFamily === 6) {
+    return (
+      host === "::1" ||
+      host === "0:0:0:0:0:0:0:1" ||
+      host.startsWith("fe80:") ||
+      host.startsWith("fc") ||
+      host.startsWith("fd")
+    );
+  }
+  if (addressFamily === 4) {
+    return (
+      host.startsWith("127.") ||
+      host.startsWith("10.") ||
+      host.startsWith("192.168.") ||
+      host.startsWith("169.254.") ||
+      /^172\.(1[6-9]|2\d|3[0-1])\./u.test(host)
+    );
+  }
+  return false;
 }
 
 function isPrivateOrLoopbackUrl(value: string | undefined): boolean {
@@ -380,7 +391,7 @@ export function modelCatalogPricingFingerprint(config?: OpenClawConfig): string 
     .map(([provider, providerConfig]) => ({
       provider,
       baseUrl: providerConfig.baseUrl,
-      models: providerConfig.models
+      models: (providerConfig.models ?? [])
         .map((model) => ({ id: model.id, baseUrl: model.baseUrl }))
         .toSorted((a, b) => a.id.localeCompare(b.id)),
     }));

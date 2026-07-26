@@ -101,6 +101,14 @@ describe("hosted model pricing", () => {
     );
     expect(
       resolveModelCostConfig({
+        config: configFor("https://fc-proxy.example.com/v1"),
+        agentDir,
+        provider: "openai",
+        model: "gpt-external",
+      }),
+    ).toEqual({ input: 2.5, output: 10, cacheRead: 1.25, cacheWrite: 0 });
+    expect(
+      resolveModelCostConfig({
         config: configFor("http://127.0.0.1:8080/v1"),
         agentDir,
         provider: "openai",
@@ -150,5 +158,12 @@ describe("hosted model pricing", () => {
         model: "openai/gpt-catalog",
       }),
     ).toEqual({ input: 1, output: 2, cacheRead: 0, cacheWrite: 0 });
+  });
+
+  it("fingerprints provider overlays without explicit model rows", () => {
+    const config = {
+      models: { providers: { openai: { baseUrl: "https://api.openai.com/v1" } } },
+    } as unknown as OpenClawConfig;
+    expect(() => resolveModelCostConfigFingerprint(config)).not.toThrow();
   });
 });
