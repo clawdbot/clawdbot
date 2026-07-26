@@ -2,6 +2,7 @@ import type {
   SessionCatalog,
   SessionCatalogSession,
 } from "../../../packages/gateway-protocol/src/index.ts";
+import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import type {
   CatalogSessionContinuedDetail,
@@ -42,7 +43,8 @@ export type CatalogBackingSessionDisplay = {
 
 export type CatalogSessionMenuRequest = {
   key: CatalogSessionKey;
-  search: string;
+  routeId: "chat" | "new-session";
+  navigation: ApplicationNavigationOptions;
   canOpenTerminal: boolean;
   meta: string;
 };

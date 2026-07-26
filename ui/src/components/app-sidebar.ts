@@ -1,6 +1,7 @@
 import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { state } from "lit/decorators.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import { isSessionRouteId } from "../app-route-paths.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { BoardAvailabilityController } from "../lib/board/availability-controller.ts";
 import "./menu-surface.ts";
@@ -191,7 +192,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       connectionIdentity: gateway?.client ?? null,
       source: this.context?.sessions ?? null,
       rows: this.visibleNarrationRowsInOrder(),
-      openSessionKey: this.activeRouteId === "chat" ? this.getRouteSessionKey() : "",
+      openSessionKey: isSessionRouteId(this.activeRouteId) ? this.getRouteSessionKey() : "",
       agentId: this.selectedAgentIdForSessions(),
     };
   }
@@ -360,8 +361,9 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
         catalogs: this.sessionData.sessionCatalogs,
         refreshStatus: this.sessionData.sessionCatalogRefreshStatus,
         basePath: this.basePath,
-        routeSessionKey: this.activeRouteId === "chat" ? this.getRouteSessionKey() : "",
+        routeSessionKey: isSessionRouteId(this.activeRouteId) ? this.getRouteSessionKey() : "",
         newSessionAgentId: expandedAgentId,
+        mainKey: this.sessionMainKey(),
         loadingMoreCatalogIds: this.sessionData.loadingMoreSessionCatalogIds,
         projectGrouping: this.catalogProjectGrouping,
         liveRows,

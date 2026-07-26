@@ -5,13 +5,13 @@ import {
   type NavigationRouteId,
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
-import { pathForRoute, type RouteId } from "../app-route-paths.ts";
+import { isSessionRouteId, pathForRoute, type RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
-import { searchForSession } from "../lib/sessions/index.ts";
+import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import { SidebarCatalogMenuController } from "./app-sidebar-catalog-menu.ts";
 import { isSidebarRouteActive, renderSidebarNavRoute } from "./app-sidebar-nav-menus.ts";
@@ -161,7 +161,7 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
       beforeOpen: () => void this.dismissTransientMenus(),
       requestUpdate: () => host.requestUpdate(),
       terminalAvailable: () => host.terminalAvailable,
-      navigate: (search) => host.onNavigate?.("chat", { search }),
+      navigate: ({ routeId, navigation }) => host.onNavigate?.(routeId, navigation),
     });
   }
 
@@ -531,19 +531,20 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     if (!this.isRouteEnabled(routeId)) {
       return nothing;
     }
-    const routeSessionKey = routeId === "chat" ? this.host.getRouteSessionKey() : "";
-    const chatSearch =
-      routeId === "chat" && routeSessionKey ? searchForSession(routeSessionKey) : "";
+    const routeSessionKey = isSessionRouteId(routeId) ? this.host.getRouteSessionKey() : "";
+    const context = this.host.sessionDataContext;
+    const sessionTarget =
+      isSessionRouteId(routeId) && routeSessionKey && context
+        ? sessionNavigationTarget({ context, face: routeId, sessionKey: routeSessionKey })
+        : null;
     return renderSidebarNavRoute({
       routeId,
-      href: chatSearch
-        ? `${pathForRoute("chat", this.host.basePath)}${chatSearch}`
-        : pathForRoute(routeId, this.host.basePath),
+      href: sessionTarget?.href ?? pathForRoute(routeId, this.host.basePath),
       active:
         isSidebarRouteActive(this.host.activeRouteId, routeId) &&
         !(routeId === "workboard" && this.activeWorkboardBoardIsPinned()),
       onNavigate: () => {
-        this.host.onNavigate?.(routeId, chatSearch ? { search: chatSearch } : undefined);
+        this.host.onNavigate?.(routeId, sessionTarget?.options);
       },
       onPreload: (event, immediate) => this.preloadRoute(routeId, event, immediate),
       onCancelPreload: this.cancelPreload,

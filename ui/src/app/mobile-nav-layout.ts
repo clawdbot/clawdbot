@@ -1,3 +1,4 @@
+import { isSessionRouteId } from "../app-route-paths.ts";
 import type { RouteId } from "../app-routes.ts";
 import { isNativeWebChromeHost } from "./native-web-chrome.ts";
 
@@ -33,7 +34,7 @@ export function shouldMergeChatChrome(params: {
 }): boolean {
   return (
     params.mobileNavLayout &&
-    params.routeId === "chat" &&
+    isSessionRouteId(params.routeId) &&
     !params.onboarding &&
     !hasNativeShellClass()
   );

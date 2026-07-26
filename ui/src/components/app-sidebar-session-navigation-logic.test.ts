@@ -8,6 +8,7 @@ function projectDraftOwnership(
 ): boolean | undefined {
   const context = {
     basePath: "",
+    agents: { state: { agentsList: { mainKey: "main" } } },
     agentSelection: { state: { selectedId: "main" } },
     gateway: {
       snapshot: {

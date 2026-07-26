@@ -1,8 +1,10 @@
 import { createRouter } from "@openclaw/uirouter";
 import type { PageDefinition, Router, RouterHistory } from "@openclaw/uirouter";
 import {
+  INTERNAL_SESSION_PATH_PARAM,
   pathForRoute,
   routeIdFromPath,
+  sessionRouteNamespaceFromPath,
   workboardBoardIdFromPath,
   type RouteId,
 } from "./app-route-paths.ts";
@@ -13,7 +15,7 @@ import { page as agentsPage } from "./pages/agents/route.ts";
 import { page as approvalsPage } from "./pages/approvals/route.ts";
 import { page as appsPage } from "./pages/apps/route.ts";
 import { page as channelsPage } from "./pages/channels/route.ts";
-import { page as chatPage } from "./pages/chat/route.ts";
+import { pages as chatPages } from "./pages/chat/route.ts";
 import { pages as configPages } from "./pages/config/route.ts";
 import { page as connectionPage } from "./pages/connection/route.ts";
 import { page as cronPage } from "./pages/cron/route.ts";
@@ -50,7 +52,7 @@ export type ApplicationRouter = Router<
 type AppRoute = PageDefinition<RouteId, ApplicationContext<RouteId>, AppRouteModule>;
 
 const APP_ROUTE_TREE = [
-  chatPage,
+  ...chatPages,
   custodianPage,
   newSessionPage,
   activityPage,
@@ -87,24 +89,36 @@ export function createApplicationRouter(): ApplicationRouter {
   const router = createRouter<RouteId, ApplicationContext<RouteId>, AppRouteModule>({
     routes: appRoutes,
   });
-  // The shared router intentionally matches exact paths only. Workboard board
-  // ids are runtime data, so the app owns this one dynamic path family.
+  // The shared router intentionally matches exact paths only. Workboard ids
+  // and session refs are runtime data, so the app owns those dynamic paths.
   return {
     ...router,
     routeIdFromPath,
   };
 }
 
+type DynamicRoute = readonly [routeId: RouteId, searchKey: string, searchValue: string];
+
+function dynamicRouteFromPath(pathname: string, basePath: string): DynamicRoute | null {
+  const boardId = workboardBoardIdFromPath(pathname, basePath);
+  if (boardId) {
+    return ["workboard", "board", boardId];
+  }
+  const sessionNamespace = sessionRouteNamespaceFromPath(pathname, basePath);
+  return sessionNamespace ? [sessionNamespace, INTERNAL_SESSION_PATH_PARAM, pathname] : null;
+}
+
 function routerHistoryLocation(location: ReturnType<RouterHistory["location"]>, basePath: string) {
-  const boardId = workboardBoardIdFromPath(location.pathname, basePath);
-  if (!boardId) {
+  const dynamicRoute = dynamicRouteFromPath(location.pathname, basePath);
+  if (!dynamicRoute) {
     return location;
   }
+  const [routeId, searchKey, searchValue] = dynamicRoute;
   const search = new URLSearchParams(location.search);
-  search.set("board", boardId);
+  search.set(searchKey, searchValue);
   return {
     ...location,
-    pathname: pathForRoute("workboard", basePath),
+    pathname: pathForRoute(routeId, basePath),
     search: `?${search.toString()}`,
   };
 }
@@ -125,18 +139,19 @@ export async function startApplicationRouter(
     });
     location = history.location();
   }
-  const initialBoardId = workboardBoardIdFromPath(location.pathname, basePath);
+  const initialDynamicRoute = dynamicRouteFromPath(location.pathname, basePath);
   const applicationHistory: RouterHistory = {
     location: () => routerHistoryLocation(history.location(), basePath),
     push: (next) => history.push(next),
     replace: (next) => history.replace(next),
     listen: (listener) =>
       history.listen((next) => {
-        if (workboardBoardIdFromPath(next.pathname, basePath)) {
+        const dynamicRoute = dynamicRouteFromPath(next.pathname, basePath);
+        if (dynamicRoute) {
           void router
-            .navigate("workboard", context, { history: "none" }, next)
+            .navigate(dynamicRoute[0], context, { history: "none" }, next)
             .catch((error: unknown) => {
-              console.error("[openclaw] Workboard route navigation failed", error);
+              console.error("[openclaw] Dynamic route navigation failed", error);
             });
           return;
         }
@@ -144,10 +159,15 @@ export async function startApplicationRouter(
       }),
   };
   await router.start(applicationHistory, basePath, context);
-  if (initialBoardId) {
+  if (initialDynamicRoute) {
     // Replace the synthetic exact-match location with the real browser path
-    // before the shell renders; the matching board data is already cached.
-    await router.navigate("workboard", context, { history: "none", revalidate: true }, location);
+    // before the shell renders; the matching loader data is already cached.
+    await router.navigate(
+      initialDynamicRoute[0],
+      context,
+      { history: "none", revalidate: true },
+      location,
+    );
   }
 }
 
@@ -155,7 +175,6 @@ export {
   APP_ROUTE_IDS,
   isRouteId,
   locationForRoute,
-  pathForRoute,
   routeIdFromPath,
   type RouteId,
 } from "./app-route-paths.ts";

@@ -5,6 +5,8 @@ import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
+  controlUiSessionPath,
+  controlUiSessionUrl,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -674,7 +676,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
     await installMockGateway(page);
 
     try {
-      await page.goto(`${server.baseUrl}chat?session=${encodeURIComponent("agent:main:work")}`);
+      await page.goto(controlUiSessionUrl(server.baseUrl, "agent:main:work"));
       await page.locator("openclaw-app-sidebar .sidebar-brand__new-thread").click();
 
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
@@ -931,8 +933,9 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
         .toBe(true);
       await captureUiProof(page, "agent-menu-without-new-session-rows.png");
       await page.keyboard.press("Enter");
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/chat");
-      expect(new URL(page.url()).searchParams.get("session")).toBe("agent:research:main");
+      await expect
+        .poll(() => new URL(page.url()).pathname)
+        .toBe(controlUiSessionPath("agent:research:main"));
     } finally {
       await context.close();
     }

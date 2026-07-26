@@ -1762,6 +1762,7 @@
                 "pages": [
                   "web/index",
                   "web/control-ui",
+                  "web/urls",
                   "web/dashboard",
                   "web/dashboards",
                   "web/dashboard-architecture",

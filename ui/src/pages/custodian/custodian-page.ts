@@ -12,7 +12,6 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
-import { searchForSession } from "../../lib/sessions/navigation.ts";
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -22,6 +21,7 @@ import "../../styles/chat/text.css";
 import "../../styles/custodian.css";
 import { renderChatAvatar } from "../chat/chat-avatar.ts";
 import { renderCustodianChangeHistory } from "./custodian-history.ts";
+import { pathForCustodianAgentHandoff } from "./custodian-navigation.ts";
 import * as eventNudgeState from "./event-nudge.ts";
 import {
   isCustodianSessionInvalidatedError,
@@ -450,7 +450,8 @@ export class CustodianPage extends OpenClawLightDomElement {
           // Preserve the destination session while preloading the localized
           // birth-sequence opener; draft-only chat routes are intentionally invalid.
           this.context.navigate("chat", {
-            search: `${searchForSession(sessionKey)}&draft=${encodeURIComponent(t("custodian.hatchDraft"))}`,
+            pathname: pathForCustodianAgentHandoff(this.context, sessionKey),
+            search: `?draft=${encodeURIComponent(t("custodian.hatchDraft"))}`,
           });
         } else {
           this.exitSetup();

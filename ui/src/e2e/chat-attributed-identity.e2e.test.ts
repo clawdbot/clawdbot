@@ -5,6 +5,7 @@ import { chromium, expect, type Browser, type Page } from "playwright/test";
 import { afterAll, beforeAll, describe, it } from "vitest";
 import {
   canRunPlaywrightChromium,
+  controlUiSessionUrl,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -100,7 +101,7 @@ describeControlUiE2e("Control UI attributed chat identity", () => {
       ],
     });
 
-    await page.goto(`${server.baseUrl}chat?session=agent%3Amain%3Amain`);
+    await page.goto(controlUiSessionUrl(server.baseUrl, "agent:main:main"));
     await page.getByText("This is much easier to scan in a team conversation.").waitFor();
 
     const userGroups = page.locator(".chat-group.user");

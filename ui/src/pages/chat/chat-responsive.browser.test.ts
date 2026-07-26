@@ -937,7 +937,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       page.on("pageerror", (error) => pageErrors.push(error.message));
       try {
         await installMockGateway(page);
-        await page.goto(`${realChatServer.baseUrl}chat`, {
+        await page.goto(`${realChatServer.baseUrl}chat/main`, {
           waitUntil: "domcontentloaded",
           timeout: APP_FIRST_RENDER_TIMEOUT_MS,
         });
@@ -996,7 +996,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             },
           ],
         });
-        await page.goto(`${realChatServer.baseUrl}chat`, {
+        await page.goto(`${realChatServer.baseUrl}chat/main`, {
           waitUntil: "domcontentloaded",
           timeout: APP_FIRST_RENDER_TIMEOUT_MS,
         });
@@ -1096,7 +1096,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             },
           ],
         });
-        await page.goto(`${realChatServer.baseUrl}chat`, {
+        await page.goto(`${realChatServer.baseUrl}chat/main`, {
           waitUntil: "domcontentloaded",
           timeout: APP_FIRST_RENDER_TIMEOUT_MS,
         });
@@ -2292,7 +2292,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           },
         ],
       });
-      await page.goto(`${realChatServer.baseUrl}chat`, {
+      await page.goto(`${realChatServer.baseUrl}chat/main`, {
         waitUntil: "domcontentloaded",
         timeout: APP_FIRST_RENDER_TIMEOUT_MS,
       });

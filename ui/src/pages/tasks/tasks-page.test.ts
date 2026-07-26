@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
+import { sessionRefFromPath } from "../../app-session-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { TaskStatus, TaskSummary } from "../../lib/tasks/data.ts";
 import "./tasks-page.ts";
@@ -127,7 +128,13 @@ function createContext(
     basePath: "",
     gateway,
     agents: {
-      state: { agentsList: { defaultId: "main", agents: [{ id: "main" }, { id: "writer" }] } },
+      state: {
+        agentsList: {
+          defaultId: scopeId ?? "main",
+          mainKey: "main",
+          agents: [{ id: "main" }, { id: "research" }, { id: "writer" }],
+        },
+      },
       ensureList: vi.fn(async () => undefined),
       subscribe,
     },
@@ -289,6 +296,33 @@ describe("TasksPage concurrent refresh events", () => {
 });
 
 describe("TasksPage cancellation lifecycle", () => {
+  it("qualifies unscoped task session links with the selected agent", async () => {
+    const request = vi.fn(async () => ({
+      tasks: [
+        {
+          id: "task-1",
+          taskId: "task-1",
+          status: "running",
+          sessionKey: "telegram:12345",
+        },
+      ],
+    }));
+    const source = createGateway({ request } as unknown as GatewayBrowserClient);
+    const page = document.createElement("openclaw-tasks-page") as TasksPageTestElement;
+    page.context = createContext(source.gateway, "research");
+    document.body.append(page);
+
+    await vi.waitFor(() =>
+      expect(page.querySelector<HTMLAnchorElement>(".session-link")?.getAttribute("href")).toBe(
+        "/chat/research/telegram/12345",
+      ),
+    );
+    expect(sessionRefFromPath("/chat/research/telegram/12345")).toMatchObject({
+      kind: "literal",
+      sessionKey: "agent:research:telegram:12345",
+    });
+  });
+
   it("scopes both active and recent task requests to the selected agent", async () => {
     const request = vi.fn(async () => ({ tasks: [] }));
     const source = createGateway({ request } as unknown as GatewayBrowserClient);

@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import { createServer as createNetServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import type { Page } from "playwright";
 import type { ViteDevServer } from "vite";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
@@ -16,6 +17,25 @@ import {
   resolveTsconfigPathAliasesForVite,
 } from "../../vite.config.ts";
 import type { ControlUiBuildInfo } from "../build-info.ts";
+
+export function controlUiSessionPath(sessionKey: string, basePath = ""): string {
+  return (
+    buildControlUiSessionPath({
+      namespace: "chat",
+      sessionKey,
+      fallbackAgentId: sessionKey.split(":")[1] || "main",
+      basePath,
+    }) ?? `${basePath}/chat`
+  );
+}
+
+export function controlUiSessionUrl(baseUrl: string, sessionKey: string): string {
+  const url = new URL(baseUrl);
+  url.pathname = controlUiSessionPath(sessionKey, url.pathname);
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+}
 
 const require = createRequire(import.meta.url);
 const json5EsmPath = require.resolve("json5/dist/index.mjs");
