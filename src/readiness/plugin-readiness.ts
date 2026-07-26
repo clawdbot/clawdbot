@@ -6,6 +6,7 @@ import type {
 import type { ReadinessCondition, ReadinessContribution } from "./conditions.js";
 import { READINESS_REASON_PATTERN, sanitizeProviderReadinessMessage } from "./sanitize.js";
 import {
+  CORE_READINESS_SUBJECT_REFS,
   createPluginReadinessSubjectCollection,
   InvalidReadinessSubjectError,
   normalizeRelatedSubjectRefs,
@@ -25,6 +26,14 @@ type PluginReadinessEvaluation = {
   condition: ReadinessCondition;
   subjects: ReadinessSubject[];
 };
+
+function defaultSubjects(
+  subjectCollection: ReturnType<typeof createPluginReadinessSubjectCollection>,
+): ReadinessSubject[] {
+  return subjectCollection.subjects.filter(
+    (subject) => subject.ref === subjectCollection.defaultRef,
+  );
+}
 
 function unavailableCondition(
   registration: PluginReadinessCriterionRegistration,
@@ -79,7 +88,7 @@ async function evaluateRegistration(params: {
           `Readiness criterion ${registration.id} returned an invalid result.`,
           params.subjectCollection.defaultRef,
         ),
-        subjects: params.subjectCollection.subjects,
+        subjects: defaultSubjects(params.subjectCollection),
       };
     }
     const message = sanitizeProviderReadinessMessage(result.message);
@@ -91,7 +100,7 @@ async function evaluateRegistration(params: {
           `Readiness criterion ${registration.id} returned an invalid result.`,
           params.subjectCollection.defaultRef,
         ),
-        subjects: params.subjectCollection.subjects,
+        subjects: defaultSubjects(params.subjectCollection),
       };
     }
     const subjectRef = result.subjectRef ?? params.subjectCollection.defaultRef;
@@ -108,7 +117,7 @@ async function evaluateRegistration(params: {
           `Readiness criterion ${registration.id} returned an invalid result.`,
           params.subjectCollection.defaultRef,
         ),
-        subjects: params.subjectCollection.subjects,
+        subjects: defaultSubjects(params.subjectCollection),
       };
     }
     return {
@@ -141,7 +150,7 @@ async function evaluateRegistration(params: {
             : `Readiness criterion ${registration.id} could not be evaluated.`,
         params.subjectCollection.defaultRef,
       ),
-      subjects: params.subjectCollection.subjects,
+      subjects: defaultSubjects(params.subjectCollection),
     };
   } finally {
     if (timeout) {
@@ -162,6 +171,7 @@ export function createPluginReadinessResolver(options?: {
   let activeRegistry: Pick<PluginRegistry, "readinessCriteria"> | undefined;
   let activeConfig: OpenClawConfig | undefined;
   const activeControllers = new Set<AbortController>();
+  const pendingByCriterionId = new Map<string, CachedEvaluation>();
 
   return async (params: {
     registry: Pick<PluginRegistry, "readinessCriteria">;
@@ -191,12 +201,30 @@ export function createPluginReadinessResolver(options?: {
       if (cached?.rawPending) {
         return cached.value;
       }
+      const pending = pendingByCriterionId.get(registration.id);
+      if (pending?.rawPending) {
+        return pending.value;
+      }
       const controller = new AbortController();
       activeControllers.add(controller);
-      const subjectCollection = createPluginReadinessSubjectCollection({
-        pluginId: registration.pluginId,
-        criterionId: registration.criterion.id,
-      });
+      let subjectCollection: ReturnType<typeof createPluginReadinessSubjectCollection>;
+      try {
+        subjectCollection = createPluginReadinessSubjectCollection({
+          pluginId: registration.pluginId,
+          criterionId: registration.criterion.id,
+        });
+      } catch {
+        activeControllers.delete(controller);
+        return Promise.resolve({
+          condition: unavailableCondition(
+            registration,
+            "CriterionInvalidResult",
+            `Readiness criterion ${registration.id} has invalid registration metadata.`,
+            CORE_READINESS_SUBJECT_REFS.plugins,
+          ),
+          subjects: [],
+        });
+      }
       const raw = Promise.resolve().then(() =>
         registration.criterion.check({
           config: params.config,
@@ -218,14 +246,21 @@ export function createPluginReadinessResolver(options?: {
         rawPending: true,
       };
       cache.set(registration, entry);
+      pendingByCriterionId.set(registration.id, entry);
       void raw.then(
         () => {
           entry.rawPending = false;
           activeControllers.delete(controller);
+          if (pendingByCriterionId.get(registration.id) === entry) {
+            pendingByCriterionId.delete(registration.id);
+          }
         },
         () => {
           entry.rawPending = false;
           activeControllers.delete(controller);
+          if (pendingByCriterionId.get(registration.id) === entry) {
+            pendingByCriterionId.delete(registration.id);
+          }
         },
       );
       return value;

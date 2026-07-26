@@ -28,6 +28,10 @@ import type {
   OpenClawPluginNodeInvokePolicy as _OpenClawPluginNodeInvokePolicy,
   OpenClawPluginNodeInvokePolicyContext as _OpenClawPluginNodeInvokePolicyContext,
   OpenClawPluginNodeInvokePolicyResult as _OpenClawPluginNodeInvokePolicyResult,
+  OpenClawPluginReadinessCriterion as _OpenClawPluginReadinessCriterion,
+  OpenClawPluginReadinessResult as _OpenClawPluginReadinessResult,
+  OpenClawPluginReadinessSubjectCollector as _OpenClawPluginReadinessSubjectCollector,
+  OpenClawPluginReadinessSubjectInput as _OpenClawPluginReadinessSubjectInput,
   OpenClawPluginReloadRegistration as _OpenClawPluginReloadRegistration,
   OpenClawPluginSecurityAuditCollector as _OpenClawPluginSecurityAuditCollector,
   OpenClawPluginSecurityAuditContext as _OpenClawPluginSecurityAuditContext,
@@ -164,6 +168,10 @@ export type OpenClawPluginNodeHostCommandAvailabilityContext =
 export type OpenClawPluginNodeInvokePolicy = _OpenClawPluginNodeInvokePolicy;
 export type OpenClawPluginNodeInvokePolicyContext = _OpenClawPluginNodeInvokePolicyContext;
 export type OpenClawPluginNodeInvokePolicyResult = _OpenClawPluginNodeInvokePolicyResult;
+export type OpenClawPluginReadinessCriterion = _OpenClawPluginReadinessCriterion;
+export type OpenClawPluginReadinessResult = _OpenClawPluginReadinessResult;
+export type OpenClawPluginReadinessSubjectCollector = _OpenClawPluginReadinessSubjectCollector;
+export type OpenClawPluginReadinessSubjectInput = _OpenClawPluginReadinessSubjectInput;
 export type OpenClawPluginReloadRegistration = _OpenClawPluginReloadRegistration;
 export type OpenClawPluginSecurityAuditCollector = _OpenClawPluginSecurityAuditCollector;
 export type OpenClawPluginSecurityAuditContext = _OpenClawPluginSecurityAuditContext;

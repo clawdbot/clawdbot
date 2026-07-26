@@ -6,6 +6,12 @@ import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 
 type ReadyCommandOptions = { json?: boolean; timeoutMs?: number };
 
+type ReadyCommandResult = Omit<
+  CanonicalReadinessResult,
+  "contractVersion" | "evaluatedAtMs" | "identity"
+> &
+  Partial<Pick<CanonicalReadinessResult, "contractVersion" | "evaluatedAtMs" | "identity">>;
+
 type ReadyCommandError = {
   ready: false;
   error: {
@@ -21,15 +27,18 @@ function conditionMark(condition: ReadinessCondition): string {
   return condition.requirement === "required" ? "FAIL" : "WARN";
 }
 
-function formatReadyResult(result: CanonicalReadinessResult): string {
+function formatReadyResult(result: ReadyCommandResult): string {
   const required = result.conditions.filter((condition) => condition.requirement === "required");
   const requiredPassing = required.filter((condition) => condition.status === "True").length;
-  const producer = result.identity.subjects.find(
-    (subject) => subject.ref === result.identity.producerRef,
+  const producer = result.identity?.subjects.find(
+    (subject) => subject.ref === result.identity?.producerRef,
   );
+  const producerLabel = result.identity
+    ? `${result.identity.producerRef}${producer?.id ? ` (${producer.id})` : ""}`
+    : "legacy Gateway";
   const lines = [
     `Ready: ${result.ready ? "yes" : "no"}`,
-    `Producer: ${result.identity.producerRef}${producer?.id ? ` (${producer.id})` : ""}`,
+    `Producer: ${producerLabel}`,
     `Required: ${requiredPassing}/${required.length}`,
     `Advisories: ${result.advisories.length}`,
   ];
@@ -76,19 +85,19 @@ export async function readyCommand(
   opts: ReadyCommandOptions,
   runtime: RuntimeEnv,
   dependencies: {
-    callReady?: (params: { timeoutMs?: number }) => Promise<CanonicalReadinessResult>;
+    callReady?: (params: { timeoutMs?: number }) => Promise<ReadyCommandResult>;
   } = {},
 ): Promise<void> {
   const callReady =
     dependencies.callReady ??
     (async ({ timeoutMs }) =>
-      await callGateway<CanonicalReadinessResult>({
+      await callGateway<ReadyCommandResult>({
         method: "ready",
         params: {},
         timeoutMs,
       }));
 
-  let readiness: CanonicalReadinessResult;
+  let readiness: ReadyCommandResult;
   try {
     readiness = await callReady({ timeoutMs: opts.timeoutMs });
   } catch (error) {

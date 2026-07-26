@@ -8,8 +8,12 @@ import {
 
 describe("readiness subjects", () => {
   it("keeps one Gateway identity stable and creates a new identity for another lifecycle", () => {
-    const first = createGatewayReadinessIdentity({ createInstanceId: () => "gateway-1" });
-    const second = createGatewayReadinessIdentity({ createInstanceId: () => "gateway-2" });
+    const first = createGatewayReadinessIdentity({
+      createGatewayInstanceId: () => "gateway-1",
+    });
+    const second = createGatewayReadinessIdentity({
+      createGatewayInstanceId: () => "gateway-2",
+    });
 
     expect(first.subjects.find((subject) => subject.ref === first.producerRef)?.id).toBe(
       "gateway-1",
@@ -19,14 +23,31 @@ describe("readiness subjects", () => {
     );
   });
 
-  it("accepts one host-supplied identity for the Gateway lifecycle", () => {
-    const identity = createGatewayReadinessIdentity({
+  it("keeps host and Gateway renewal scopes separate", () => {
+    const first = createGatewayReadinessIdentity({
       env: { OPENCLAW_INSTANCE_ID: "pod-7/restart-2" },
+      createGatewayInstanceId: () => "gateway-1",
+    });
+    const second = createGatewayReadinessIdentity({
+      env: { OPENCLAW_INSTANCE_ID: "pod-7/restart-2" },
+      createGatewayInstanceId: () => "gateway-2",
     });
 
-    expect(identity.subjects.find((subject) => subject.ref === identity.producerRef)?.id).toBe(
-      "pod-7/restart-2",
+    expect(first.subjects.find((subject) => subject.ref === first.producerRef)?.id).toBe(
+      "gateway-1",
     );
+    expect(second.subjects.find((subject) => subject.ref === second.producerRef)?.id).toBe(
+      "gateway-2",
+    );
+    const firstHost = first.subjects.find(
+      (subject) => subject.ref === CORE_READINESS_SUBJECT_REFS.hostInstance,
+    );
+    const secondHost = second.subjects.find(
+      (subject) => subject.ref === CORE_READINESS_SUBJECT_REFS.hostInstance,
+    );
+    expect(firstHost?.id).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(firstHost?.id).toBe(secondHost?.id);
+    expect(firstHost?.id).not.toContain("pod-7");
   });
 
   it("namespaces plugin subjects and reconciles equal declarations", () => {
@@ -66,6 +87,20 @@ describe("readiness subjects", () => {
     ).toThrow("conflicting plugin readiness subject declaration");
   });
 
+  it("allows exactly 64 explicit plugin subjects", () => {
+    const collection = createPluginReadinessSubjectCollection({
+      pluginId: "storage",
+      criterionId: "backend",
+    });
+    for (let index = 0; index < 64; index += 1) {
+      collection.collector.declare({ kind: "replica", key: `replica-${index}` });
+    }
+    expect(collection.subjects).toHaveLength(65);
+    expect(() =>
+      collection.collector.declare({ kind: "replica", key: "replica-overflow" }),
+    ).toThrow("plugin readiness subject limit exceeded");
+  });
+
   it("rejects plugin subjects parented to another plugin namespace", () => {
     const collection = createPluginReadinessSubjectCollection({
       pluginId: "storage",
@@ -81,23 +116,26 @@ describe("readiness subjects", () => {
     ).toThrow("invalid plugin readiness subject parent");
   });
 
-  it("rejects an undeclared parent in the plugin namespace", () => {
+  it("allows parent-independent declaration order and validates the completed graph", () => {
     const collection = createPluginReadinessSubjectCollection({
       pluginId: "storage",
       criterionId: "backend",
     });
 
-    expect(() =>
-      collection.collector.declare({
-        kind: "replica",
-        key: "secondary",
-        parentRef: "plugin.storage/backend/primary",
-      }),
-    ).toThrow("unresolved plugin readiness subject parent");
+    const child = collection.collector.declare({
+      kind: "replica",
+      key: "secondary",
+      parentRef: "plugin.storage/backend/primary",
+    });
+    expect(collection.validateReferences(child)).toBe(false);
+    collection.collector.declare({ kind: "backend", key: "primary" });
+    expect(collection.validateReferences(child)).toBe(true);
   });
 
   it("enriches a core placeholder with compatible owner identity", () => {
-    const base = createGatewayReadinessIdentity({ instanceId: "gateway-1" });
+    const base = createGatewayReadinessIdentity({
+      createGatewayInstanceId: () => "gateway-1",
+    });
     const identity = reconcileReadinessIdentity({
       base,
       subjects: [
@@ -116,7 +154,9 @@ describe("readiness subjects", () => {
   });
 
   it("retains referenced subjects and their parent chain in deterministic order", () => {
-    const base = createGatewayReadinessIdentity({ instanceId: "gateway-1" });
+    const base = createGatewayReadinessIdentity({
+      createGatewayInstanceId: () => "gateway-1",
+    });
     const collection = createPluginReadinessSubjectCollection({
       pluginId: "storage",
       criterionId: "backend",
@@ -142,7 +182,9 @@ describe("readiness subjects", () => {
   });
 
   it("rejects unresolved and cyclic references", () => {
-    const base = createGatewayReadinessIdentity({ instanceId: "gateway-1" });
+    const base = createGatewayReadinessIdentity({
+      createGatewayInstanceId: () => "gateway-1",
+    });
     expect(() =>
       reconcileReadinessIdentity({ base, references: [{ subjectRef: "plugin.missing/item/one" }] }),
     ).toThrow("unresolved readiness subject reference");

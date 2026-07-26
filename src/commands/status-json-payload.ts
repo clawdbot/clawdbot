@@ -6,6 +6,7 @@ import {
   buildUnobservedGatewayConditions,
   type CanonicalReadinessResult,
 } from "../readiness/conditions.js";
+import { CORE_READINESS_SUBJECT_REFS } from "../readiness/subjects.js";
 import { resolveStatusUpdateChannelInfo } from "./status-all/format.js";
 import {
   buildStatusGatewayJsonPayloadFromSurface,
@@ -18,6 +19,9 @@ function resolveReadiness(value: unknown): CanonicalReadinessResult | undefined 
   }
   const direct = value as Partial<CanonicalReadinessResult>;
   if (
+    direct.contractVersion === 1 &&
+    typeof direct.evaluatedAtMs === "number" &&
+    direct.identity !== undefined &&
     typeof direct.ready === "boolean" &&
     Array.isArray(direct.conditions) &&
     Array.isArray(direct.failures) &&
@@ -39,6 +43,7 @@ function withScannedGatewayReadiness(
   const gatewayCondition: CanonicalReadinessResult["conditions"][number] = gatewayReachable
     ? {
         type: "GatewayResponding",
+        subjectRef: CORE_READINESS_SUBJECT_REFS.gateway,
         status: "True",
         requirement: "required",
         reason: "GatewayResponding",
@@ -46,6 +51,7 @@ function withScannedGatewayReadiness(
       }
     : {
         type: "GatewayResponding",
+        subjectRef: CORE_READINESS_SUBJECT_REFS.gateway,
         status: "False",
         requirement: "required",
         reason: "GatewayUnavailable",

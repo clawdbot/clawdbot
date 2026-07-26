@@ -3,6 +3,7 @@ import type { CanonicalReadinessResult } from "../readiness/conditions.js";
 import { readyCommand } from "./ready.js";
 
 const ready: CanonicalReadinessResult = {
+  contractVersion: 1,
   evaluatedAtMs: 1_000,
   identity: {
     producerRef: "openclaw/gateway/current",
@@ -104,6 +105,21 @@ describe("readyCommand", () => {
       "GatewayReadinessUnavailable: unknown method: ready",
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("renders a legacy result from an older Gateway without crashing", async () => {
+    const runtime = createRuntime();
+    await readyCommand({}, runtime, {
+      callReady: async () => ({
+        ready: true,
+        conditions: [],
+        failures: [],
+        advisories: [],
+      }),
+    });
+
+    expect(runtime.log.mock.calls[0]?.[0]).toContain("Producer: legacy Gateway");
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 });
 

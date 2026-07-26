@@ -1,15 +1,17 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { getOpenClawProcessInstanceId } from "../infra/process-instance-id.js";
 import type { OpenClawPluginReadinessSubjectCollector } from "../plugins/plugin-registration.types.js";
 
 export const CORE_READINESS_SUBJECT_REFS = {
   process: "openclaw/process/current",
   gateway: "openclaw/gateway/current",
+  hostInstance: "openclaw/host-instance/current",
   config: "openclaw/config/active",
   plugins: "openclaw/plugins/active",
   workspace: "openclaw/workspace/default",
 } as const;
 const OPENCLAW_INSTANCE_ID_ENV = "OPENCLAW_INSTANCE_ID";
+const OPENCLAW_HOST_INSTANCE_ID = process.env[OPENCLAW_INSTANCE_ID_ENV]?.trim();
 
 const SUBJECT_REF_PATTERN = /^[a-z0-9][a-z0-9._/-]{0,191}$/;
 const SUBJECT_KIND_PATTERN = /^[a-z0-9][a-z0-9._-]{0,127}$/;
@@ -62,6 +64,20 @@ function isValidOpaqueIdentity(value: string | undefined): boolean {
   return value === undefined || SUBJECT_ID_PATTERN.test(value);
 }
 
+function fingerprintIdentity(value: string): string {
+  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
+}
+
+function resolveHostInstanceId(params?: {
+  hostInstanceId?: string;
+  env?: NodeJS.ProcessEnv;
+}): string | undefined {
+  return (
+    params?.hostInstanceId ??
+    (params?.env ? params.env[OPENCLAW_INSTANCE_ID_ENV] : OPENCLAW_HOST_INSTANCE_ID)
+  );
+}
+
 function mergeCompatibleSubjects(
   left: ReadinessSubject,
   right: ReadinessSubject,
@@ -104,17 +120,30 @@ function assertValidSubject(subject: ReadinessSubject): void {
   }
 }
 
-function createCoreSubjects(gatewayInstanceId?: string): ReadinessSubject[] {
+function createCoreSubjects(params?: {
+  gatewayInstanceId?: string;
+  hostInstanceId?: string;
+}): ReadinessSubject[] {
+  const hostInstanceId = params?.hostInstanceId?.trim();
+  const hostSubject = hostInstanceId
+    ? {
+        ref: CORE_READINESS_SUBJECT_REFS.hostInstance,
+        kind: "openclaw.host-instance",
+        id: fingerprintIdentity(hostInstanceId),
+      }
+    : undefined;
   return [
+    ...(hostSubject ? [hostSubject] : []),
     {
       ref: CORE_READINESS_SUBJECT_REFS.process,
       kind: "openclaw.process",
       id: getOpenClawProcessInstanceId(),
+      ...(hostSubject ? { parentRef: hostSubject.ref } : {}),
     },
     {
       ref: CORE_READINESS_SUBJECT_REFS.gateway,
       kind: "openclaw.gateway",
-      ...(gatewayInstanceId ? { id: gatewayInstanceId } : {}),
+      ...(params?.gatewayInstanceId ? { id: params.gatewayInstanceId } : {}),
       parentRef: CORE_READINESS_SUBJECT_REFS.process,
     },
     { ref: CORE_READINESS_SUBJECT_REFS.config, kind: "openclaw.config" },
@@ -124,25 +153,26 @@ function createCoreSubjects(gatewayInstanceId?: string): ReadinessSubject[] {
 }
 
 export function createGatewayReadinessIdentity(params?: {
-  instanceId?: string;
-  createInstanceId?: () => string;
+  hostInstanceId?: string;
+  createGatewayInstanceId?: () => string;
   env?: NodeJS.ProcessEnv;
 }): ReadinessIdentity {
-  const supplied = params?.instanceId ?? (params?.env ?? process.env)[OPENCLAW_INSTANCE_ID_ENV];
-  const instanceId = supplied?.trim() || (params?.createInstanceId ?? randomUUID)();
-  if (!isValidOpaqueIdentity(instanceId)) {
-    throw new Error("invalid Gateway readiness instance identity");
-  }
+  const hostInstanceId = resolveHostInstanceId(params);
+  const gatewayInstanceId = (params?.createGatewayInstanceId ?? randomUUID)();
   return {
     producerRef: CORE_READINESS_SUBJECT_REFS.gateway,
-    subjects: createCoreSubjects(instanceId),
+    subjects: createCoreSubjects({ gatewayInstanceId, hostInstanceId }),
   };
 }
 
-export function createProcessReadinessIdentity(): ReadinessIdentity {
+export function createProcessReadinessIdentity(params?: {
+  hostInstanceId?: string;
+  env?: NodeJS.ProcessEnv;
+}): ReadinessIdentity {
+  const hostInstanceId = resolveHostInstanceId(params);
   return {
     producerRef: CORE_READINESS_SUBJECT_REFS.process,
-    subjects: createCoreSubjects(),
+    subjects: createCoreSubjects({ hostInstanceId }),
   };
 }
 
@@ -161,7 +191,6 @@ export function createPluginReadinessSubjectCollection(params: {
   subjects.set(defaultRef, {
     ref: defaultRef,
     kind: `plugin.${pluginId}.criterion`,
-    id: criterionId,
   });
 
   return {
@@ -189,19 +218,18 @@ export function createPluginReadinessSubjectCollection(params: {
         ) {
           throw new InvalidReadinessSubjectError("invalid plugin readiness subject parent");
         }
-        if (input.parentRef?.startsWith(prefix) && !subjects.has(input.parentRef)) {
-          throw new InvalidReadinessSubjectError("unresolved plugin readiness subject parent");
-        }
         const subject: ReadinessSubject = {
           ref,
           kind: `plugin.${pluginId}.${kind}`,
-          ...(input.identity?.id ? { id: input.identity.id } : {}),
-          ...(input.identity?.generation ? { generation: input.identity.generation } : {}),
+          ...(input.identity?.id ? { id: fingerprintIdentity(input.identity.id) } : {}),
+          ...(input.identity?.generation
+            ? { generation: fingerprintIdentity(input.identity.generation) }
+            : {}),
           ...(input.parentRef ? { parentRef: input.parentRef } : {}),
         };
         assertValidSubject(subject);
         const existing = subjects.get(ref);
-        if (!existing && subjects.size > MAX_PLUGIN_SUBJECTS) {
+        if (!existing && subjects.size - 1 >= MAX_PLUGIN_SUBJECTS) {
           throw new InvalidReadinessSubjectError("plugin readiness subject limit exceeded");
         }
         const merged = existing ? mergeCompatibleSubjects(existing, subject) : subject;
@@ -222,13 +250,27 @@ export function createPluginReadinessSubjectCollection(params: {
         return false;
       }
       const references = [subjectRef, ...relatedSubjectRefs];
-      return references.every(
+      const referencesValid = references.every(
         (ref) =>
           subjects.has(ref) ||
           Object.values(CORE_READINESS_SUBJECT_REFS).includes(
             ref as (typeof CORE_READINESS_SUBJECT_REFS)[keyof typeof CORE_READINESS_SUBJECT_REFS],
           ),
       );
+      if (!referencesValid) {
+        return false;
+      }
+      try {
+        assertNoParentCycles(
+          new Map([
+            ...createCoreSubjects().map((subject) => [subject.ref, subject] as const),
+            ...subjects.entries(),
+          ]),
+        );
+        return true;
+      } catch {
+        return false;
+      }
     },
   };
 }

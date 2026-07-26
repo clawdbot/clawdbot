@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ChannelId } from "../../channels/plugins/index.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import { buildRuntimeReadiness, type ReadinessCondition } from "../../readiness/conditions.js";
+import { createGatewayReadinessIdentity } from "../../readiness/subjects.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import type { ChannelManager } from "../server-channels.js";
 import { createReadinessChecker, evaluateConfiguredGatewayReadiness } from "./readiness.js";
@@ -14,6 +15,10 @@ type ReadinessResult = Awaited<ReturnType<ReturnType<typeof createReadinessCheck
  */
 const FIVE_MIN_MS = 5 * 60_000;
 const THIRTY_ONE_MIN_MS = 31 * 60_000;
+
+function testReadinessIdentity() {
+  return createGatewayReadinessIdentity({ createGatewayInstanceId: () => "gateway-test" });
+}
 
 function snapshotWith(
   accounts: Record<string, Partial<ChannelAccountSnapshot>>,
@@ -524,6 +529,7 @@ describe("canonical configured Gateway readiness", () => {
 
     const result = await evaluateConfiguredGatewayReadiness({
       config: { gateway: { readiness: {} } },
+      identity: testReadinessIdentity(),
       evaluateGateway: () => gateway,
       evaluateRuntime: async () => runtime,
     });
@@ -546,6 +552,7 @@ describe("canonical configured Gateway readiness", () => {
     const gateway = readySnapshot() as ReadinessResult;
     const result = await evaluateConfiguredGatewayReadiness({
       config: { gateway: { readiness: {} } },
+      identity: testReadinessIdentity(),
       evaluateGateway: () => gateway,
       evaluateRuntime: () => new Promise<never>(() => {}),
       timeoutMs: 5,
@@ -570,6 +577,7 @@ describe("canonical configured Gateway readiness", () => {
   it("redacts unexpected extended evaluation failures", async () => {
     const result = await evaluateConfiguredGatewayReadiness({
       config: { gateway: { readiness: {} } },
+      identity: testReadinessIdentity(),
       evaluateGateway: () => readySnapshot() as ReadinessResult,
       evaluateRuntime: async () => {
         throw new Error("secret backend path");
@@ -583,6 +591,7 @@ describe("canonical configured Gateway readiness", () => {
   it("fails closed when merged conditions collide on subject and type", async () => {
     const result = await evaluateConfiguredGatewayReadiness({
       config: { gateway: { readiness: {} } },
+      identity: testReadinessIdentity(),
       evaluateGateway: () => readySnapshot() as ReadinessResult,
       evaluateRuntime: async () =>
         buildRuntimeReadiness({
@@ -609,6 +618,7 @@ describe("canonical configured Gateway readiness", () => {
   it("fails closed without rejecting when the core Gateway checker throws", async () => {
     const result = await evaluateConfiguredGatewayReadiness({
       config: { gateway: { readiness: {} } },
+      identity: testReadinessIdentity(),
       evaluateGateway: () => {
         throw new Error("unexpected core failure");
       },
@@ -628,7 +638,7 @@ describe("canonical configured Gateway readiness", () => {
 });
 
 describe("evaluateConfiguredGatewayReadiness", () => {
-  it("uses only the legacy Gateway checker when readiness is not configured", async () => {
+  it("projects the legacy Gateway checker into a canonical result when unconfigured", async () => {
     const gateway = readySnapshot() as ReadinessResult;
     const evaluateGateway = vi.fn(() => gateway);
     const evaluateRuntime = vi.fn(async () => {
@@ -637,36 +647,44 @@ describe("evaluateConfiguredGatewayReadiness", () => {
 
     const result = await evaluateConfiguredGatewayReadiness({
       config: {},
+      identity: testReadinessIdentity(),
       evaluateGateway,
       evaluateRuntime,
     });
 
     expect(result.ready).toBe(gateway.ready);
+    expect(result.contractVersion).toBe(1);
+    expect(result.identity.producerRef).toBe("openclaw/gateway/current");
     expect(result.failing).toEqual(gateway.failing);
     expect(evaluateGateway).toHaveBeenCalledTimes(1);
     expect(evaluateRuntime).not.toHaveBeenCalled();
   });
 
-  it("preserves legacy checker failures without canonicalizing them", async () => {
+  it("fails closed when the unconfigured legacy checker throws", async () => {
     const evaluateRuntime = vi.fn(async () =>
       buildRuntimeReadiness({ configLoaded: true, gateway: "responding" }),
     );
 
-    await expect(
-      evaluateConfiguredGatewayReadiness({
-        config: {},
-        evaluateGateway: () => {
-          throw new Error("legacy checker failed");
-        },
-        evaluateRuntime,
-      }),
-    ).rejects.toThrow("legacy checker failed");
+    const result = await evaluateConfiguredGatewayReadiness({
+      config: {},
+      identity: testReadinessIdentity(),
+      evaluateGateway: () => {
+        throw new Error("legacy checker failed");
+      },
+      evaluateRuntime,
+    });
+    expect(result).toMatchObject({
+      contractVersion: 1,
+      ready: false,
+      failures: ["ReadinessEvaluationFailed"],
+    });
     expect(evaluateRuntime).not.toHaveBeenCalled();
   });
 
   it("opts into fail-closed canonical evaluation when the section is present", async () => {
     const result = await evaluateConfiguredGatewayReadiness({
       config: { gateway: { readiness: {} } },
+      identity: testReadinessIdentity(),
       evaluateGateway: () => readySnapshot() as ReadinessResult,
       evaluateRuntime: async () => {
         throw new Error("runtime evaluation failed");

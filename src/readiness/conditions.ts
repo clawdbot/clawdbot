@@ -40,6 +40,7 @@ export type ReadinessCondition = {
 };
 
 export type CanonicalReadinessResult = {
+  contractVersion: 1;
   evaluatedAtMs: number;
   identity: ReadinessIdentity;
   ready: boolean;
@@ -235,6 +236,7 @@ export function buildRuntimeReadiness(input: RuntimeReadinessInput): CanonicalRe
     references: normalizedConditions as Array<ReadinessCondition & { subjectRef: string }>,
   });
   return {
+    contractVersion: 1,
     evaluatedAtMs: input.evaluatedAtMs ?? Date.now(),
     identity,
     ready: failures.length === 0,

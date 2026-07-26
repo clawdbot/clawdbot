@@ -53,7 +53,39 @@ const HealthSessionSummarySchema = closedObject({
   ),
 });
 
-const ReadinessConditionSchema = closedObject({
+const ReadinessRefSchema = Type.String({
+  minLength: 1,
+  maxLength: 192,
+  pattern: "^[a-z0-9][a-z0-9._/-]*$",
+});
+const ReadinessKindSchema = Type.String({
+  minLength: 1,
+  maxLength: 128,
+  pattern: "^[a-z0-9][a-z0-9._-]*$",
+});
+const ReadinessIdentityValueSchema = Type.String({
+  minLength: 1,
+  maxLength: 128,
+  pattern: "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+});
+const ReadinessReasonSchema = Type.String({
+  minLength: 1,
+  maxLength: 128,
+  pattern: "^[A-Za-z][A-Za-z0-9._-]*$",
+});
+
+const CanonicalReadinessConditionSchema = closedObject({
+  type: ReadinessReasonSchema,
+  subjectRef: ReadinessRefSchema,
+  relatedSubjectRefs: Type.Optional(Type.Array(ReadinessRefSchema, { maxItems: 16 })),
+  observedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  status: Type.Union([Type.Literal("True"), Type.Literal("False"), Type.Literal("Unknown")]),
+  requirement: Type.Union([Type.Literal("required"), Type.Literal("advisory")]),
+  reason: ReadinessReasonSchema,
+  message: Type.String({ maxLength: 512 }),
+});
+
+const LegacyReadinessConditionSchema = closedObject({
   type: NonEmptyString,
   subjectRef: Type.Optional(NonEmptyString),
   relatedSubjectRefs: Type.Optional(Type.Array(NonEmptyString, { maxItems: 16 })),
@@ -65,23 +97,29 @@ const ReadinessConditionSchema = closedObject({
 });
 
 const ReadinessSubjectSchema = closedObject({
-  ref: NonEmptyString,
-  kind: NonEmptyString,
-  id: Type.Optional(NonEmptyString),
-  generation: Type.Optional(NonEmptyString),
-  parentRef: Type.Optional(NonEmptyString),
+  ref: ReadinessRefSchema,
+  kind: ReadinessKindSchema,
+  id: Type.Optional(ReadinessIdentityValueSchema),
+  generation: Type.Optional(ReadinessIdentityValueSchema),
+  parentRef: Type.Optional(ReadinessRefSchema),
 });
 
 const CanonicalReadinessResultSchema = closedObject({
-  evaluatedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
-  identity: Type.Optional(
-    closedObject({
-      producerRef: NonEmptyString,
-      subjects: Type.Array(ReadinessSubjectSchema, { maxItems: 128 }),
-    }),
-  ),
+  contractVersion: Type.Literal(1),
+  evaluatedAtMs: Type.Integer({ minimum: 0 }),
+  identity: closedObject({
+    producerRef: ReadinessRefSchema,
+    subjects: Type.Array(ReadinessSubjectSchema, { maxItems: 128 }),
+  }),
   ready: Type.Boolean(),
-  conditions: Type.Array(ReadinessConditionSchema),
+  conditions: Type.Array(CanonicalReadinessConditionSchema, { maxItems: 256 }),
+  failures: Type.Array(ReadinessReasonSchema, { maxItems: 256 }),
+  advisories: Type.Array(ReadinessReasonSchema, { maxItems: 256 }),
+});
+
+const LegacyReadinessResultSchema = closedObject({
+  ready: Type.Boolean(),
+  conditions: Type.Array(LegacyReadinessConditionSchema),
   failures: Type.Array(Type.String()),
   advisories: Type.Array(Type.String()),
 });
@@ -92,7 +130,9 @@ const HealthSnapshotSchema = closedObject({
   ok: Type.Optional(Type.Literal(true)),
   ts: Type.Optional(Type.Integer({ minimum: 0 })),
   durationMs: Type.Optional(Type.Integer({ minimum: 0 })),
-  readiness: Type.Optional(CanonicalReadinessResultSchema),
+  readiness: Type.Optional(
+    Type.Union([CanonicalReadinessResultSchema, LegacyReadinessResultSchema]),
+  ),
   eventLoop: Type.Optional(
     closedObject({
       degraded: Type.Boolean(),

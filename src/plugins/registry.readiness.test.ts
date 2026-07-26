@@ -50,4 +50,32 @@ describe("plugin readiness registration", () => {
       }),
     );
   });
+
+  it("rejects criterion ids that cannot become bounded subject references", () => {
+    const pluginRegistry = createPluginRegistry({
+      logger: { info() {}, warn() {}, error() {}, debug() {} },
+      runtime: createPluginRuntime(),
+      activateGlobalSideEffects: false,
+    });
+    const record = createPluginRecord({
+      id: "storage",
+      name: "Storage",
+      source: "/plugins/storage/index.js",
+      origin: "global",
+      enabled: true,
+      configSchema: false,
+    });
+    const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
+
+    api.registerReadinessCriterion({
+      id: "x".repeat(65),
+      description: "Invalid oversized criterion.",
+      check: () => ({ status: "True", reason: "Ready", message: "Ready." }),
+    });
+
+    expect(pluginRegistry.registry.readinessCriteria).toEqual([]);
+    expect(pluginRegistry.registry.diagnostics).toContainEqual(
+      expect.objectContaining({ level: "error", pluginId: "storage" }),
+    );
+  });
 });

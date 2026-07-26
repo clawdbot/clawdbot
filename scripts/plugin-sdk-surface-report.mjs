@@ -184,7 +184,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: shared multi-claim ingress lifecycle fan-in.
       // +3: channel prompt-context entry/compat types and channel metadata builder.
       // +4: focused CLI root-option constants and parsers.
-      4731,
+      // +4: composable readiness criterion, result, subject input, and collector contracts.
+      4735,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
