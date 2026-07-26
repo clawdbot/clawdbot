@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isCronWebhookTokenHostAllowed, normalizeHttpWebhookUrl } from "./webhook-url.js";
+import {
+  isCronWebhookTokenHostAllowed,
+  isCronWebhookTokenHostEntry,
+  normalizeHttpWebhookUrl,
+} from "./webhook-url.js";
 
 describe("normalizeHttpWebhookUrl", () => {
   it("accepts http and https URLs and rejects everything else", () => {
@@ -80,5 +84,39 @@ describe("isCronWebhookTokenHostAllowed", () => {
         "receiver.example.invalid",
       ]),
     ).toBe(false);
+  });
+});
+
+describe("isCronWebhookTokenHostEntry", () => {
+  it("accepts bare hostnames, IP literals, and the wildcard", () => {
+    for (const entry of [
+      "hooks.example.com",
+      "Hooks.Example.COM",
+      "hooks.example.com.",
+      "localhost",
+      "my-host",
+      "203.0.113.10",
+      "[2001:db8::1]",
+      "*",
+    ]) {
+      expect(isCronWebhookTokenHostEntry(entry), entry).toBe(true);
+    }
+  });
+
+  it("rejects values that would never match a destination hostname", () => {
+    for (const entry of [
+      "https://hooks.example.com",
+      "hooks.example.com/cron",
+      "hooks.example.com:8443",
+      "*.example.com",
+      "user@hooks.example.com",
+      "-hooks.example.com",
+      "hooks..example.com",
+      "hooks example.com",
+      "",
+      "   ",
+    ]) {
+      expect(isCronWebhookTokenHostEntry(entry), entry).toBe(false);
+    }
   });
 });

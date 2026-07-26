@@ -991,6 +991,36 @@ describe("cron webhook schema", () => {
 
     expect(res.success).toBe(true);
   });
+
+  it("accepts hostname, IP literal, and wildcard entries in cron.webhookTokenHosts", () => {
+    const res = OpenClawSchema.safeParse({
+      cron: {
+        webhookToken: "token",
+        webhookTokenHosts: ["hooks.example.com", "203.0.113.10", "[2001:db8::1]", "*"],
+      },
+    });
+
+    expect(res.success).toBe(true);
+  });
+
+  it("rejects cron.webhookTokenHosts entries that are not bare hostnames", () => {
+    for (const entry of [
+      "https://hooks.example.com",
+      "hooks.example.com:8443",
+      "hooks.example.com/cron",
+      "*.example.com",
+      "",
+    ]) {
+      const res = OpenClawSchema.safeParse({
+        cron: { webhookToken: "token", webhookTokenHosts: [entry] },
+      });
+
+      expect(res.success, entry).toBe(false);
+      if (!res.success) {
+        expect(res.error.issues[0]?.path, entry).toEqual(["cron", "webhookTokenHosts", 0]);
+      }
+    }
+  });
 });
 
 describe("broadcast", () => {

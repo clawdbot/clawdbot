@@ -275,7 +275,7 @@ function listCronWebhookDestinationHosts(jobs: Array<Record<string, unknown>>): 
   return hosts.toSorted((left, right) => left.localeCompare(right));
 }
 
-export function collectCronWebhookTokenHostsAdvisory(params: {
+function collectCronWebhookTokenHostsAdvisory(params: {
   cfg: OpenClawConfig;
   jobs: Array<Record<string, unknown>>;
 }): string | null {

@@ -1,9 +1,9 @@
 // Doctor cron delivery-target advisory tests cover concrete-vs-pseudo channel detection.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  collectCronWebhookTokenHostsAdvisory,
   collectLegacyWhatsAppCrontabHealthWarning,
   noteCronDeliveryTargetAdvisory,
+  noteCronWebhookTokenHostsAdvisory,
 } from "./warnings.js";
 
 const mocks = vi.hoisted(() => ({
@@ -176,6 +176,16 @@ describe("collectCronDeliveryTargetAdvisory", () => {
     expect(advisory).toContain("<unnamed> -> ghost");
   });
 });
+
+function collectCronWebhookTokenHostsAdvisory(params: {
+  cfg: unknown;
+  jobs: Array<Record<string, unknown>>;
+}): string | null {
+  mocks.note.mockClear();
+  noteCronWebhookTokenHostsAdvisory({ cfg: params.cfg as never, jobs: params.jobs });
+  const body = mocks.note.mock.calls.at(-1)?.[0];
+  return typeof body === "string" ? body : null;
+}
 
 describe("collectCronWebhookTokenHostsAdvisory", () => {
   const tokenCfg = { cron: { webhookToken: "operator-secret" } } as never;
