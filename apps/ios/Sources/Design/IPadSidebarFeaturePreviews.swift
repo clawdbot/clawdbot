@@ -446,7 +446,8 @@ private enum IPadWorkboardPreviewFixtures {
             sessionKey: nil,
             position: 0,
             updatedAt: nil,
-            metadata: nil),
+            metadata: nil,
+            proofPage: IPadWorkboardProofPage(total: 100, hasMore: true, nextCursor: nil)),
         IPadWorkboardCard(
             id: "preview-running",
             title: "Verify phone workboard queue",
@@ -458,7 +459,8 @@ private enum IPadWorkboardPreviewFixtures {
             sessionKey: "session-preview",
             position: 1,
             updatedAt: nil,
-            metadata: nil),
+            metadata: nil,
+            proofPage: nil),
         IPadWorkboardCard(
             id: "preview-review",
             title: "Review adaptive shell",
@@ -470,7 +472,8 @@ private enum IPadWorkboardPreviewFixtures {
             sessionKey: nil,
             position: 2,
             updatedAt: nil,
-            metadata: nil),
+            metadata: nil,
+            proofPage: nil),
     ]
 }
 

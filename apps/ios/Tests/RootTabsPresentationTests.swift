@@ -330,6 +330,57 @@ struct RootTabsPresentationTests {
         #expect(IPadWorkboardScreen.compactWriteUnavailableMessage(canRead: true) == "Read-only gateway.")
     }
 
+    @Test func `workboard bounded list request retains the complete proof total`() throws {
+        let encodedParams = try JSONEncoder().encode(IPadWorkboardCardsListParams(boardId: nil))
+        let params = try #require(
+            JSONSerialization.jsonObject(with: encodedParams) as? [String: Any])
+        #expect(params["proofView"] as? String == "bounded")
+
+        let payload = Data(
+            """
+            {
+              "cards": [{
+                "id": "card-1",
+                "title": "Retained proof",
+                "status": "review",
+                "labels": [],
+                "position": 1000,
+                "proofPage": {
+                  "total": 100,
+                  "hasMore": true,
+                  "nextCursor": "redacted-cursor"
+                }
+              }],
+              "statuses": ["review"]
+            }
+            """.utf8)
+        let response = try JSONDecoder().decode(IPadWorkboardCardsResponse.self, from: payload)
+        let card = try #require(response.cards.first)
+
+        #expect(card.proofPage?.total == 100)
+        #expect(card.proofPage?.hasMore == true)
+        #expect(card.proofPage?.nextCursor == "redacted-cursor")
+        #expect(card.proofSummary == "Proof records: 100")
+
+        let mutationPayload = Data(
+            """
+            {
+              "id": "card-1",
+              "title": "Retained proof",
+              "status": "done",
+              "labels": [],
+              "position": 2000
+            }
+            """.utf8)
+        let mutationCard = try JSONDecoder().decode(IPadWorkboardCard.self, from: mutationPayload)
+        let replacement = mutationCard.retainingProofPage(from: card)
+
+        #expect(replacement.status == "done")
+        #expect(replacement.position == 2000)
+        #expect(replacement.proofPage?.total == 100)
+        #expect(replacement.proofSummary == "Proof records: 100")
+    }
+
     @Test func `skill workshop agent scope normalizes gateway ids`() {
         #expect(IPadSkillWorkshopScreen.normalizedScopeID("  aiden ") == "aiden")
         #expect(IPadSkillWorkshopScreen.normalizedScopeID(nil) == "")

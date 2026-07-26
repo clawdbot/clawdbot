@@ -851,8 +851,10 @@ struct IPadWorkboardScreen: View {
     }
 
     private func replace(_ card: IPadWorkboardCard) {
+        let previous = self.cards.first { $0.id == card.id }
+        let replacement = card.retainingProofPage(from: previous)
         self.cards.removeAll { $0.id == card.id }
-        self.cards.append(card)
+        self.cards.append(replacement)
         self.cards.sort { $0.position < $1.position }
     }
 
@@ -1049,6 +1051,11 @@ private struct IPadWorkboardKanbanCard: View {
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
+                    if let proofSummary = self.card.proofSummary {
+                        Text(proofSummary)
+                            .font(OpenClawType.caption2Medium)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -1153,6 +1160,11 @@ struct IPadWorkboardQueueRow: View {
                             .font(OpenClawType.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
+                        if let proofSummary = self.card.proofSummary {
+                            Text(proofSummary)
+                                .font(OpenClawType.caption2Medium)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     Spacer(minLength: 8)
                     ProValuePill(value: IPadWorkboardDefaults.label(for: self.card.status), color: self.color)
@@ -1302,6 +1314,11 @@ private struct IPadWorkboardCardDetailSheet: View {
                 Section {
                     self.detailRow("Title", value: self.card.title)
                     self.detailRow("Status", value: IPadWorkboardDefaults.label(for: self.card.status))
+                    if let proofTotal = self.card.proofPage?.total {
+                        self.detailRow(
+                            String(localized: "Proof records"),
+                            value: proofTotal.formatted())
+                    }
                     if let notes = self.card.notes?.trimmingCharacters(in: .whitespacesAndNewlines), !notes.isEmpty {
                         Text(notes)
                             .font(OpenClawType.subhead)
@@ -1415,7 +1432,7 @@ private enum IPadWorkboardDefaults {
     }
 }
 
-private struct IPadWorkboardCardsResponse: Decodable {
+struct IPadWorkboardCardsResponse: Decodable {
     let cards: [IPadWorkboardCard]
     let statuses: [String]?
 }
@@ -1444,6 +1461,29 @@ struct IPadWorkboardCard: Decodable, Identifiable {
     let position: Double
     let updatedAt: Double?
     let metadata: IPadWorkboardMetadata?
+    var proofPage: IPadWorkboardProofPage?
+
+    var proofSummary: String? {
+        guard let total = self.proofPage?.total else { return nil }
+        return String(
+            format: String(localized: "Proof records: %@"),
+            total.formatted())
+    }
+
+    func retainingProofPage(from previous: Self?) -> Self {
+        guard self.proofPage == nil, let previousProofPage = previous?.proofPage else {
+            return self
+        }
+        var replacement = self
+        replacement.proofPage = previousProofPage
+        return replacement
+    }
+}
+
+struct IPadWorkboardProofPage: Decodable {
+    let total: Int
+    let hasMore: Bool
+    let nextCursor: String?
 }
 
 struct IPadWorkboardMetadata: Decodable {
@@ -1459,7 +1499,7 @@ private struct IPadWorkboardListParams: Encodable {
     let boardId: String?
 }
 
-private struct IPadWorkboardCardsListParams: Encodable {
+struct IPadWorkboardCardsListParams: Encodable {
     let boardId: String?
     let proofView = "bounded"
 }
