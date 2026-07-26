@@ -307,6 +307,59 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
     });
   });
 
+  it("releases operational once reservations when heartbeat readiness throws", async () => {
+    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            heartbeat: { every: "5m", target: "whatsapp" },
+          },
+        },
+        channels: {
+          whatsapp: {
+            allowFrom: ["*"],
+            heartbeat: { showOk: false },
+          },
+        },
+        session: { store: storePath },
+        messages: {
+          operationalReplies: { policy: "once" },
+        },
+      } as unknown as OpenClawConfig;
+      const NOW = Date.now();
+      const sessionKey = await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "whatsapp",
+        lastProvider: "whatsapp",
+        lastTo: "whatsapp-chat",
+        updatedAt: NOW - 60_000,
+      });
+      replySpy.mockResolvedValue(
+        markReplyPayloadForSourceSuppressionDelivery({
+          text: "usage limit reached",
+          isError: true,
+        }),
+      );
+      const sendWhatsApp = vi.fn();
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: {
+          ...heartbeatDeps(sendWhatsApp, replySpy, NOW),
+          whatsapp: sendWhatsApp,
+          webAuthExists: async () => {
+            throw new Error("readiness probe failed");
+          },
+        },
+      });
+
+      expect(result).toMatchObject({ status: "failed", reason: "readiness probe failed" });
+      expect(sendWhatsApp).not.toHaveBeenCalled();
+      const entry = await readEntry(storePath, sessionKey);
+      expect(entry?.operationalReplyOnceKeys).toBeUndefined();
+      expect(entry?.operationalReplyPendingOnceKeys).toBeUndefined();
+    });
+  });
+
   it("clears pendingFinalDelivery* on a duplicate skip even when responsePrefix diverges the stored text", async () => {
     await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
       // The send-success clear never runs here: the run reproduces a payload we

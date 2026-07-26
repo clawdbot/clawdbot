@@ -113,6 +113,13 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     if (!policyResult.shouldDeliver) {
       return policyResult.redirected === true;
     }
+    if (
+      sendPolicyDenied ||
+      (suppressHookUserDelivery && !suppressUserDeliveryBySourceReplyPolicy)
+    ) {
+      await markOperationalReplyPolicyDelivered(policyResult, false);
+      return false;
+    }
     if (ctx.InboundEventKind === "room_event" && suppressAutomaticSourceDelivery) {
       await markOperationalReplyPolicyDelivered(policyResult, false);
       return false;

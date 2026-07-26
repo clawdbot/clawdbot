@@ -402,30 +402,35 @@ export async function finalizeHeartbeatOutcome(params: {
   }
 
   const deliveryAccountId = delivery.accountId;
-  const heartbeatPlugin = resolveHeartbeatChannelPlugin(delivery.channel);
-  if (heartbeatPlugin?.heartbeat?.checkReady) {
-    const readiness = await heartbeatPlugin.heartbeat.checkReady({
-      cfg,
-      accountId: deliveryAccountId,
-      deps: params.opts.deps,
-    });
-    if (!readiness.ok) {
-      emitHeartbeatEvent({
-        status: "skipped",
-        reason: readiness.reason,
-        preview: truncateHeartbeatPreview(previewText),
-        durationMs: Date.now() - startedAt,
-        hasMedia: mediaUrls.length > 0,
-        channel: delivery.channel,
-        accountId: delivery.accountId,
+  try {
+    const heartbeatPlugin = resolveHeartbeatChannelPlugin(delivery.channel);
+    if (heartbeatPlugin?.heartbeat?.checkReady) {
+      const readiness = await heartbeatPlugin.heartbeat.checkReady({
+        cfg,
+        accountId: deliveryAccountId,
+        deps: params.opts.deps,
       });
-      log.info("heartbeat: channel not ready", {
-        channel: delivery.channel,
-        reason: readiness.reason,
-      });
-      await markOperationalReplyPolicyDelivered(policyResult, false);
-      return { status: "skipped", reason: readiness.reason };
+      if (!readiness.ok) {
+        emitHeartbeatEvent({
+          status: "skipped",
+          reason: readiness.reason,
+          preview: truncateHeartbeatPreview(previewText),
+          durationMs: Date.now() - startedAt,
+          hasMedia: mediaUrls.length > 0,
+          channel: delivery.channel,
+          accountId: delivery.accountId,
+        });
+        log.info("heartbeat: channel not ready", {
+          channel: delivery.channel,
+          reason: readiness.reason,
+        });
+        await markOperationalReplyPolicyDelivered(policyResult, false);
+        return { status: "skipped", reason: readiness.reason };
+      }
     }
+  } catch (error) {
+    await markOperationalReplyPolicyDelivered(policyResult, false);
+    throw error;
   }
 
   let send: Awaited<ReturnType<typeof sendDurableMessageBatch>>;
