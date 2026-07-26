@@ -76,7 +76,6 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     shouldEmitVerboseProgress,
     shouldRouteToOriginating,
     sourceReplyDeliveryMode,
-    suppressAutomaticSourceDelivery,
     suppressDelivery,
     suppressHookReplyLifecycle,
     suppressHookUserDelivery,
@@ -115,20 +114,20 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     params.onSessionMetadataChanges?.(freshChanges);
   };
   const shouldDeliverVerboseProgressDespiteSourceSuppression = () =>
-    suppressAutomaticSourceDelivery &&
+    suppressUserDeliveryBySourceReplyPolicy &&
     sourceReplyDeliveryMode === "message_tool_only" &&
     ctx.InboundEventKind !== "room_event" &&
     !sendPolicyDenied &&
     shouldEmitVerboseProgress() &&
     shouldSendVerboseProgressMessages();
   const shouldDeliverForcedToolProgressDespiteSourceSuppression = () =>
-    suppressAutomaticSourceDelivery &&
+    suppressUserDeliveryBySourceReplyPolicy &&
     sourceReplyDeliveryMode === "message_tool_only" &&
     ctx.InboundEventKind !== "room_event" &&
     !sendPolicyDenied &&
     params.replyOptions?.forceToolResultProgress === true;
   const shouldDeliverFastModeAutoProgressDespiteSourceSuppression = () =>
-    suppressAutomaticSourceDelivery &&
+    suppressUserDeliveryBySourceReplyPolicy &&
     sourceReplyDeliveryMode === "message_tool_only" &&
     ctx.InboundEventKind !== "room_event" &&
     !sendPolicyDenied;

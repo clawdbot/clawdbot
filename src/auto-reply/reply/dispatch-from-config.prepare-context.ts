@@ -113,6 +113,10 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     if (!policyResult.shouldDeliver) {
       return policyResult.redirected === true;
     }
+    if (ctx.InboundEventKind === "room_event" && suppressAutomaticSourceDelivery) {
+      await markOperationalReplyPolicyDelivered(policyResult, false);
+      return false;
+    }
     let delivered: boolean;
     try {
       delivered = await deliverBindingPayload(noticePayload, mode, transcriptOwner);

@@ -231,7 +231,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       payloadMetadata?.nonTerminalToolErrorWarning === true;
                     const shouldEvaluateOperationalPayload =
                       !sendPolicyDenied &&
-                      (!suppressDelivery || suppressAutomaticSourceDelivery) &&
+                      (!suppressDelivery || suppressUserDeliveryBySourceReplyPolicy) &&
                       isOperationalReplyPayload({
                         payload,
                         explicitCommandTurn: false,
@@ -550,7 +550,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     });
                     const visiblePayloadMetadata = getReplyPayloadMetadata(visiblePayload);
                     const canBypassSourceSuppression =
-                      suppressAutomaticSourceDelivery &&
+                      suppressUserDeliveryBySourceReplyPolicy &&
                       isOperationalPayload &&
                       visiblePayloadMetadata?.deliverDespiteSourceReplySuppression === true &&
                       !visiblePayloadMetadata.sourceReplyTranscriptMirror &&

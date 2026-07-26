@@ -63,8 +63,8 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     sessionKey,
     sessionStoreEntry,
     sessionTtsAuto,
-    suppressAutomaticSourceDelivery,
     suppressDelivery,
+    suppressUserDeliveryBySourceReplyPolicy,
     throwIfDispatchOperationAborted,
     waitForPendingDirectBlockReplyDelivery,
   } = state;
@@ -118,7 +118,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       explicitCommandTurn: explicitCommandTurnCtx,
     });
     return (
-      suppressAutomaticSourceDelivery &&
+      suppressUserDeliveryBySourceReplyPolicy &&
       !sendPolicyDenied &&
       (getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true ||
         operationalReply) &&
