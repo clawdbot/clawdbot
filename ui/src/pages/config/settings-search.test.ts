@@ -131,6 +131,40 @@ describe("findSettingsSearchBlocks", () => {
     ]);
   });
 
+  it("offers memory.qmd only while qmd is the backend the page reveals", () => {
+    const memorySchema = {
+      type: "object",
+      properties: {
+        memory: {
+          type: "object",
+          properties: {
+            backend: { type: "string", title: "Backend" },
+            qmd: {
+              type: "object",
+              properties: { binaryPath: { type: "string", title: "QMD binary path" } },
+            },
+          },
+        },
+      },
+    };
+    const uiHints = {
+      "memory.backend": { advanced: false },
+      "memory.qmd": { advanced: false },
+      "memory.qmd.binaryPath": { advanced: false },
+    };
+    const find = (value: Record<string, unknown>) =>
+      findSettingsSearchBlocks({ query: "qmd binary path", schema: memorySchema, value, uiHints });
+
+    // Overview's editor omits memory.qmd under the built-in backend, so a hit
+    // there would open a page that cannot show the matched field.
+    expect(find({ memory: { backend: "builtin" } })).toEqual([]);
+    // Another plugin owns the slot: memory.backend and its sub-config are unread.
+    expect(find({ plugins: { slots: { memory: "memory-lancedb" } } })).toEqual([]);
+    expect(find({ memory: { backend: "qmd" } })).toEqual([
+      expect.objectContaining({ routeId: "memory", search: "?section=memory" }),
+    ]);
+  });
+
   it("routes moved static blocks to their dedicated pages", () => {
     const security = findSettingsSearchBlocks({
       query: "exec policy",

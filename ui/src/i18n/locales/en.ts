@@ -2146,6 +2146,7 @@ export const en: TranslationMap = {
       memoryWiki: {
         title: "Memory wiki",
       },
+      stateUnknown: "Unknown",
       manage: "Enable or disable add-ons",
       manageLink: "Open Plugins",
     },

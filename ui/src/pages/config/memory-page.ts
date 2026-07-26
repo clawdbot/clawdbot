@@ -1,11 +1,9 @@
-// Controller for the curated Memory settings page. Owns tab state, the plugin
-// catalog read used for the exclusive engine choice, and the two config writes
-// that live above the embedded schema editor.
+// Controller for the curated Memory settings page. Owns the plugin catalog read
+// used for the exclusive engine choice and the two config writes above the
+// embedded schema editor; the tab lives in the URL, not here.
 import { consume } from "@lit/context";
-import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
-import { resolveSlotSelection } from "../../../../src/plugins/slots.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import {
@@ -19,9 +17,11 @@ import "./memory-dreaming-page.ts";
 import {
   memorySchemaKeysForTab,
   renderMemory,
+  resolveMemoryBackend,
+  resolveMemoryEngineSelection,
   selectedEngineId,
   type MemoryAddonRow,
-  type MemoryBackend,
+  type MemoryAddonState,
   type MemoryEngineOption,
   type MemoryEngineSelection,
   type MemoryTab,
@@ -35,33 +35,60 @@ const MEMORY_ADDON_PLUGINS = [
   { id: "memory-wiki", labelKey: "memoryPage.addons.memoryWiki.title" },
 ] as const;
 
-// memory-core is the only plugin registering the memory runtime that resolves
-// `memory.backend`, so any other engine hides the backend row. This is a
-// runtime-ownership fact, not the slot default; the slot comes from
-// resolveSlotSelection.
-const MEMORY_CORE_PLUGIN_ID = "memory-core";
-
 /** Explicit-off sentinel; resolveSlotSelection maps it to an `off` selection. */
 const MEMORY_SLOT_OFF = "none";
 
 const MEMORY_SLOT_PATH = ["plugins", "slots", "memory"];
 
+type GatewayClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
+
+/**
+ * One gateway connection phase. `syncCatalog` mints a fresh object per (client,
+ * connected) transition and an in-flight load carries it, so the object identity
+ * is the request generation: a completion that started under an older phase is
+ * dropped instead of repopulating a disconnected page or clobbering a newer read.
+ */
+type CatalogConnection = {
+  client: GatewayClient | null;
+  connected: boolean;
+};
+
+/**
+ * What the page knows about the plugin catalog. Absence of an entry only means
+ * "not enabled" inside `ready`; every other state is genuinely unknown and must
+ * not be rendered as a decided value.
+ */
+type MemoryCatalog =
+  | { kind: "loading" }
+  | { kind: "unavailable" }
+  | { kind: "ready"; plugins: readonly PluginCatalogItem[] };
+
 type MemoryPageProps = {
   configObject: Record<string, unknown>;
   pluginsHref: string;
   memoryImportHref: string;
-  /** Tab requested via `?tab=`, so a settings-search hit opens where it matched. */
-  initialTab: MemoryTab | null;
+  /** The `?tab=` the URL currently describes; the page holds no tab state of its own. */
+  tab: MemoryTab | null;
   /** Builds the embedded schema editor over the given `memory.*` children. */
   buildEditor: (keys: readonly string[]) => TemplateResult;
 };
 
-function resolveBackend(configObject: Record<string, unknown>): MemoryBackend {
-  return asConfigRecord(configObject.memory)?.backend === "qmd" ? "qmd" : "builtin";
-}
-
 function isMemoryEngine(plugin: PluginCatalogItem): boolean {
   return plugin.installed && plugin.kind?.includes("memory") === true;
+}
+
+function addonState(
+  catalog: MemoryCatalog,
+  entry: PluginCatalogItem | undefined,
+): MemoryAddonState {
+  switch (catalog.kind) {
+    case "loading":
+      return "loading";
+    case "unavailable":
+      return "unknown";
+    case "ready":
+      return entry?.enabled === true ? "enabled" : "disabled";
+  }
 }
 
 function errorMessage(error: unknown): string {
@@ -75,18 +102,14 @@ class MemorySettingsPage extends OpenClawLightDomElement {
   @property({ attribute: false }) configObject: Record<string, unknown> = {};
   @property() pluginsHref = "";
   @property() memoryImportHref = "";
-  @property({ attribute: false }) initialTab: MemoryTab | null = null;
+  @property({ attribute: false }) tab: MemoryTab | null = null;
   @property({ attribute: false }) buildEditor: MemoryPageProps["buildEditor"] = () => html``;
 
-  @state() private activeTab: MemoryTab = "overview";
-  @state() private catalog: readonly PluginCatalogItem[] = [];
+  @state() private catalog: MemoryCatalog = { kind: "unavailable" };
   @state() private engineBusy = false;
   @state() private engineError: string | null = null;
 
-  private adoptedTab: MemoryTab | null = null;
-
-  private catalogClient: ApplicationContext["gateway"]["snapshot"]["client"] = null;
-  private catalogConnected = false;
+  private connection: CatalogConnection | null = null;
   private readonly subscriptions = new SubscriptionsController(this).watch(
     () => this.context?.gateway,
     (gateway, notify) => gateway.subscribe(notify),
@@ -95,89 +118,68 @@ class MemorySettingsPage extends OpenClawLightDomElement {
 
   override disconnectedCallback() {
     this.subscriptions.clear();
-    this.catalogClient = null;
-    this.catalogConnected = false;
-    this.catalog = [];
-    this.adoptedTab = null;
+    this.connection = null;
+    this.catalog = { kind: "unavailable" };
     super.disconnectedCallback();
   }
 
-  // `?tab=` is navigation intent, not state: adopt each distinct value once so a
-  // settings-search hit opens its tab while later manual tab clicks still stick.
-  override willUpdate() {
-    if (this.initialTab && this.initialTab !== this.adoptedTab) {
-      this.adoptedTab = this.initialTab;
-      this.activeTab = this.initialTab;
-    }
-  }
-
-  private syncCatalog(
-    client: ApplicationContext["gateway"]["snapshot"]["client"],
-    connected: boolean,
-  ) {
+  private syncCatalog(client: GatewayClient | null, connected: boolean) {
     // The connecting -> connected transition keeps the same client object, so
     // keying only on client identity would strand the catalog empty for a page
     // mounted before the handshake finished.
-    if (client === this.catalogClient && connected === this.catalogConnected) {
+    if (this.connection?.client === client && this.connection.connected === connected) {
       return;
     }
-    this.catalogClient = client;
-    this.catalogConnected = connected;
-    this.catalog = [];
-    if (client && connected) {
-      void this.loadCatalog(client);
+    const connection: CatalogConnection = { client, connected };
+    this.connection = connection;
+    if (!client || !connected) {
+      this.catalog = { kind: "unavailable" };
+      return;
     }
+    this.catalog = { kind: "loading" };
+    void this.loadCatalog(client, connection);
   }
 
-  private async loadCatalog(
-    client: NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>,
-  ) {
+  private async loadCatalog(client: GatewayClient, connection: CatalogConnection) {
     try {
       const result = await loadPluginCatalog(client);
-      if (this.isConnected && this.catalogClient === client) {
-        this.catalog = result.plugins;
-      }
+      this.applyCatalog(connection, { kind: "ready", plugins: result.plugins });
     } catch {
       // The catalog is a convenience for the engine picker; the page still
       // renders the configured slot id when it cannot be read.
-      if (this.isConnected && this.catalogClient === client) {
-        this.catalog = [];
-      }
+      this.applyCatalog(connection, { kind: "unavailable" });
     }
   }
 
+  private applyCatalog(connection: CatalogConnection, catalog: MemoryCatalog) {
+    if (!this.isConnected || this.connection !== connection) {
+      return;
+    }
+    this.catalog = catalog;
+  }
+
   private engineOptions(): MemoryEngineOption[] {
-    return this.catalog
+    if (this.catalog.kind !== "ready") {
+      return [];
+    }
+    return this.catalog.plugins
       .filter(isMemoryEngine)
       .map((plugin) => ({ id: plugin.id, label: plugin.name }))
       .toSorted((left, right) => left.label.localeCompare(right.label));
   }
 
-  /**
-   * Mirrors the runtime exactly: resolveSlotSelection owns the rule, so an unset
-   * slot reports the slot's default owner instead of guessing from the catalog.
-   */
-  private engineSelection(): MemoryEngineSelection {
-    const slots = asConfigRecord(asConfigRecord(this.configObject.plugins)?.slots);
-    const selection = resolveSlotSelection("memory", slots?.memory);
-    switch (selection.kind) {
-      case "off":
-        return { kind: "off" };
-      case "pinned":
-        return { kind: "pinned", engineId: selection.pluginId };
-      case "default":
-        return { kind: "auto", engineId: selection.pluginId };
-    }
-  }
-
   private addonRows(): MemoryAddonRow[] {
+    const catalog = this.catalog;
     return MEMORY_ADDON_PLUGINS.map((addon) => {
-      const entry = this.catalog.find((plugin) => plugin.id === addon.id);
+      const entry =
+        catalog.kind === "ready"
+          ? catalog.plugins.find((plugin) => plugin.id === addon.id)
+          : undefined;
       return {
         id: addon.id,
         label: t(addon.labelKey),
         description: entry?.description ?? addon.id,
-        enabled: entry?.enabled === true,
+        state: addonState(catalog, entry),
       };
     });
   }
@@ -190,7 +192,6 @@ class MemorySettingsPage extends OpenClawLightDomElement {
    * that plugin anywhere else would silently switch memory back on.
    */
   private async changeEngine(engineId: string | null, currentSelection: MemoryEngineSelection) {
-    const client = this.context.gateway.snapshot.client;
     if (this.engineBusy || engineId === selectedEngineId(currentSelection)) {
       return;
     }
@@ -199,7 +200,9 @@ class MemorySettingsPage extends OpenClawLightDomElement {
       this.context.runtimeConfig.patchForm(MEMORY_SLOT_PATH, MEMORY_SLOT_OFF);
       return;
     }
-    if (!client) {
+    const connection = this.connection;
+    const client = connection?.connected ? connection.client : null;
+    if (!connection || !client) {
       return;
     }
     this.engineBusy = true;
@@ -207,9 +210,9 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     try {
       await setPluginEnabled(client, engineId, true);
       await this.context.runtimeConfig.refresh();
-      if (this.isConnected && this.catalogClient === client) {
-        await this.loadCatalog(client);
-      }
+      // Reuses the same generation guard: a connection change mid-write drops
+      // the reload instead of writing a catalog the page no longer owns.
+      await this.loadCatalog(client, connection);
     } catch (error) {
       // Without this the selector just snaps back to the old engine and the
       // operator has no idea the gateway rejected the change.
@@ -222,15 +225,16 @@ class MemorySettingsPage extends OpenClawLightDomElement {
   override render() {
     const runtimeConfig = this.context.runtimeConfig;
     const options = this.engineOptions();
-    const engineSelection = this.engineSelection();
-    const engineId = selectedEngineId(engineSelection);
-    // Only memory-core's runtime reads memory.backend; under another engine the
-    // row would save a value nothing consumes.
-    const backend = engineId === MEMORY_CORE_PLUGIN_ID ? resolveBackend(this.configObject) : null;
+    const engineSelection = resolveMemoryEngineSelection(this.configObject);
+    const backend = resolveMemoryBackend(this.configObject);
+    const activeTab = this.tab ?? "overview";
     return renderMemory({
-      activeTab: this.activeTab,
+      activeTab,
+      // The URL is the only tab state, so every arrival honors its `?tab=` —
+      // including a repeat of one the user has since navigated away from — and
+      // history back/forward restores the tab the URL describes.
       onTabChange: (tab) => {
-        this.activeTab = tab;
+        this.context.navigate("memory", tab === "overview" ? undefined : { search: `?tab=${tab}` });
       },
       engineOptions: options,
       engineSelection,
@@ -243,7 +247,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
       addons: this.addonRows(),
       pluginsHref: this.pluginsHref,
       memoryImportHref: this.memoryImportHref,
-      editor: this.buildEditor(memorySchemaKeysForTab(this.activeTab, backend)),
+      editor: this.buildEditor(memorySchemaKeysForTab(activeTab, backend)),
       dreaming: html`<openclaw-memory-dreaming></openclaw-memory-dreaming>`,
     });
   }
@@ -259,7 +263,7 @@ export function renderMemoryPage(props: MemoryPageProps) {
       .configObject=${props.configObject}
       .pluginsHref=${props.pluginsHref}
       .memoryImportHref=${props.memoryImportHref}
-      .initialTab=${props.initialTab}
+      .tab=${props.tab}
       .buildEditor=${props.buildEditor}
     ></openclaw-memory-settings>
   `;

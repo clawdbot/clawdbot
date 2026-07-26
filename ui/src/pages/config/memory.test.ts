@@ -4,8 +4,10 @@ import { html, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import {
   memorySchemaKeysForTab,
+  memoryVisibleSchemaKeys,
   narrowMemorySchema,
   renderMemory,
+  resolveMemoryBackend,
   type MemoryViewProps,
 } from "./memory.ts";
 
@@ -25,8 +27,13 @@ function createProps(overrides: Partial<MemoryViewProps> = {}): MemoryViewProps 
     backendBusy: false,
     onBackendChange: vi.fn(),
     addons: [
-      { id: "active-memory", label: "Active memory", description: "Recent context", enabled: true },
-      { id: "memory-wiki", label: "Memory wiki", description: "Wiki pages", enabled: false },
+      {
+        id: "active-memory",
+        label: "Active memory",
+        description: "Recent context",
+        state: "enabled",
+      },
+      { id: "memory-wiki", label: "Memory wiki", description: "Wiki pages", state: "disabled" },
     ],
     pluginsHref: "/settings/plugins",
     memoryImportHref: "/memory-import",
@@ -98,8 +105,22 @@ describe("renderMemory", () => {
 
     expect(container.textContent).toContain("Active memory");
     expect(container.textContent).toContain("Memory wiki");
+    expect(container.textContent).toContain("Enabled");
+    expect(container.textContent).toContain("Disabled");
     const link = container.querySelector<HTMLAnchorElement>("a.memory-page__link");
     expect(link?.getAttribute("href")).toBe("/settings/plugins");
+  });
+
+  it("never states an add-on is off while the catalog is unread", () => {
+    for (const state of ["loading", "unknown"] as const) {
+      const container = renderInto(
+        createProps({
+          addons: [{ id: "active-memory", label: "Active memory", description: "x", state }],
+        }),
+      );
+      expect(container.textContent).not.toContain("Disabled");
+      expect(container.textContent).not.toContain("Enabled");
+    }
   });
 
   it("keeps the schema editor on the overview and search tabs and swaps in dreaming", () => {
@@ -121,6 +142,38 @@ describe("memorySchemaKeysForTab", () => {
     expect(memorySchemaKeysForTab("search", "qmd")).toEqual(["search"]);
     // No applicable backend: qmd's sub-config belongs to a backend nothing reads.
     expect(memorySchemaKeysForTab("overview", null)).toEqual(["citations"]);
+  });
+});
+
+describe("memoryVisibleSchemaKeys", () => {
+  it("hides qmd until qmd is the selected backend and backend when no engine reads it", () => {
+    expect([...memoryVisibleSchemaKeys("builtin")].toSorted()).toEqual([
+      "backend",
+      "citations",
+      "search",
+    ]);
+    expect([...memoryVisibleSchemaKeys("qmd")].toSorted()).toEqual([
+      "backend",
+      "citations",
+      "qmd",
+      "search",
+    ]);
+    expect([...memoryVisibleSchemaKeys(null)].toSorted()).toEqual(["citations", "search"]);
+  });
+});
+
+describe("resolveMemoryBackend", () => {
+  it("reports a backend only for the memory-core slot owner", () => {
+    expect(resolveMemoryBackend({})).toBe("builtin");
+    expect(resolveMemoryBackend({ memory: { backend: "qmd" } })).toBe("qmd");
+    // Another engine owns the slot, so nothing reads memory.backend.
+    expect(
+      resolveMemoryBackend({
+        memory: { backend: "qmd" },
+        plugins: { slots: { memory: "memory-lancedb" } },
+      }),
+    ).toBeNull();
+    expect(resolveMemoryBackend({ plugins: { slots: { memory: "none" } } })).toBeNull();
   });
 });
 

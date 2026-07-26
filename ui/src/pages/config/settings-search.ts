@@ -19,7 +19,11 @@ import {
   MEMORY_SECTION_KEYS,
   SECURITY_SECTION_KEYS,
 } from "./config-sections.ts";
-import { MEMORY_SEARCH_TAB_SCHEMA_KEYS } from "./memory.ts";
+import {
+  memoryVisibleSchemaKeys,
+  resolveMemoryBackend,
+  MEMORY_SEARCH_TAB_SCHEMA_KEYS,
+} from "./memory.ts";
 import {
   APPEARANCE_SETTINGS_TARGET_IDS,
   COMMUNICATION_SETTINGS_TARGET_IDS,
@@ -238,6 +242,29 @@ function resolveStaticSettingsBlock(block: StaticSettingsBlockDescriptor): Stati
 }
 
 /**
+ * The Memory page hides `memory.*` children the current engine/backend makes
+ * inapplicable — `memory.qmd` only renders once qmd is the selected backend.
+ * Matching the raw section would offer a destination whose editor omits the very
+ * field that matched, so search sees only what the page can show.
+ */
+function visibleMemorySchema(
+  sectionSchema: JsonSchema,
+  config: Record<string, unknown>,
+): JsonSchema {
+  const properties = sectionSchema.properties;
+  if (!properties) {
+    return sectionSchema;
+  }
+  const visible = new Set(memoryVisibleSchemaKeys(resolveMemoryBackend(config)));
+  return {
+    ...sectionSchema,
+    properties: Object.fromEntries(
+      Object.entries(properties).filter(([child]) => visible.has(child)),
+    ),
+  };
+}
+
+/**
  * The Memory page splits `memory.*` across tabs, so a bare section destination
  * drops the searcher on Overview, whose editor omits `memory.search`. Only a hit
  * the Search tab alone can show re-routes; a section-level match (key, label,
@@ -332,7 +359,10 @@ export function findSettingsSearchBlocks(params: {
     return matches;
   }
   const value = params.value ?? {};
-  for (const [key, sectionSchema] of Object.entries(schema.properties)) {
+  for (const [key, rawSectionSchema] of Object.entries(schema.properties)) {
+    const routeId = routeForConfigSection(key);
+    const sectionSchema =
+      routeId === "memory" ? visibleMemorySchema(rawSectionSchema, value) : rawSectionSchema;
     const meta = SECTION_META[key];
     const tierSplit = splitConfigSchemaByTier({
       schema: sectionSchema,
@@ -359,7 +389,6 @@ export function findSettingsSearchBlocks(params: {
       continue;
     }
     const encodedKey = encodeURIComponent(key);
-    const routeId = routeForConfigSection(key);
     const tabParam =
       routeId === "memory"
         ? memoryTabSearchParam({

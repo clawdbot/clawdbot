@@ -1,7 +1,9 @@
 // Curated Memory home: engine/backend/add-on rows above the embedded memory
 // schema editor, with Dreaming as a sibling tab (see security.ts for the same
 // curated-rows-above-schema shape).
+import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type TemplateResult } from "lit";
+import { resolveSlotSelection } from "../../../../src/plugins/slots.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import {
   renderSettingsRow,
@@ -22,12 +24,19 @@ export type MemoryEngineOption = {
   label: string;
 };
 
+/**
+ * Enablement as the page actually knows it. `loading` and `unknown` exist so a
+ * catalog that was never read cannot render as a definite "Disabled"; only a
+ * successful read distinguishes the two real states.
+ */
+export type MemoryAddonState = "enabled" | "disabled" | "loading" | "unknown";
+
 /** Additive memory plugin: no `kind`, so it layers on top of whichever engine wins the slot. */
 export type MemoryAddonRow = {
   id: string;
   label: string;
   description: string;
-  enabled: boolean;
+  state: MemoryAddonState;
 };
 
 /**
@@ -77,6 +86,43 @@ const MEMORY_ENGINE_OFF = "";
 /** The plugin that currently owns the slot, or null when nothing does. */
 export function selectedEngineId(selection: MemoryEngineSelection): string | null {
   return selection.kind === "off" ? null : selection.engineId;
+}
+
+// memory-core is the only plugin registering the memory runtime that resolves
+// `memory.backend`, so any other engine hides the backend row. This is a
+// runtime-ownership fact, not the slot default; the slot comes from
+// resolveSlotSelection.
+const MEMORY_CORE_PLUGIN_ID = "memory-core";
+
+/**
+ * Mirrors the runtime exactly: resolveSlotSelection owns the rule, so an unset
+ * slot reports the slot's default owner instead of guessing from the catalog.
+ */
+export function resolveMemoryEngineSelection(
+  configObject: Record<string, unknown>,
+): MemoryEngineSelection {
+  const slots = asConfigRecord(asConfigRecord(configObject.plugins)?.slots);
+  const selection = resolveSlotSelection("memory", slots?.memory);
+  switch (selection.kind) {
+    case "off":
+      return { kind: "off" };
+    case "pinned":
+      return { kind: "pinned", engineId: selection.pluginId };
+    case "default":
+      return { kind: "auto", engineId: selection.pluginId };
+  }
+}
+
+/**
+ * The retrieval backend the page shows, or null when the slot owner runs its own
+ * retrieval and `memory.backend` would save a value nothing consumes. Settings
+ * search resolves it from the same config so both agree on what is visible.
+ */
+export function resolveMemoryBackend(configObject: Record<string, unknown>): MemoryBackend | null {
+  if (selectedEngineId(resolveMemoryEngineSelection(configObject)) !== MEMORY_CORE_PLUGIN_ID) {
+    return null;
+  }
+  return asConfigRecord(configObject.memory)?.backend === "qmd" ? "qmd" : "builtin";
 }
 
 function engineHintKey(selection: MemoryEngineSelection): string {
@@ -167,6 +213,21 @@ function renderBackendSection(props: MemoryViewProps) {
   );
 }
 
+// Only `enabled` is a positive claim; the other three are deliberately muted so
+// an unread catalog never looks like a decided "off".
+function renderAddonStatus(state: MemoryAddonState) {
+  switch (state) {
+    case "enabled":
+      return renderSettingsStatus({ kind: "ok", label: t("common.enabled") });
+    case "disabled":
+      return renderSettingsStatus({ kind: "muted", label: t("common.disabled") });
+    case "loading":
+      return renderSettingsStatus({ kind: "muted", label: t("common.loading") });
+    case "unknown":
+      return renderSettingsStatus({ kind: "muted", label: t("memoryPage.addons.stateUnknown") });
+  }
+}
+
 function renderAddonsSection(props: MemoryViewProps) {
   return renderSettingsSection(
     { title: t("memoryPage.addons.title"), description: t("memoryPage.addons.description") },
@@ -175,10 +236,7 @@ function renderAddonsSection(props: MemoryViewProps) {
         renderSettingsRow({
           title: addon.label,
           description: addon.description,
-          control: renderSettingsStatus({
-            kind: addon.enabled ? "ok" : "muted",
-            label: addon.enabled ? t("common.enabled") : t("common.disabled"),
-          }),
+          control: renderAddonStatus(addon.state),
         }),
       )}
       ${renderSettingsRow({
@@ -299,4 +357,16 @@ export function memorySchemaKeysForTab(
   // `backend` is a curated row above the editor; qmd's sub-config only matters
   // once qmd is the selected backend.
   return backend === "qmd" ? ["citations", "qmd"] : ["citations"];
+}
+
+/**
+ * Every `memory.*` child the page surfaces for a config: both editor slices plus
+ * `backend`, which Overview renders as a curated row rather than through the
+ * editor. `qmd` and `backend` disappear with the backend/engine choice, so
+ * settings search filters the section through this before matching — otherwise a
+ * `memory.qmd` hit routes to an Overview whose editor omits it.
+ */
+export function memoryVisibleSchemaKeys(backend: MemoryBackend | null): readonly string[] {
+  const editor = [...MEMORY_SEARCH_TAB_SCHEMA_KEYS, ...memorySchemaKeysForTab("overview", backend)];
+  return backend === null ? editor : [...editor, "backend"];
 }
