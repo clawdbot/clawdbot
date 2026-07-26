@@ -125,9 +125,9 @@ describe("auth profile sqlite store", () => {
         "utf8",
       );
 
-      const loaded = ensureAuthProfileStore(agentDir, { syncExternalCli: false });
-
-      expect(loaded.profiles["openai:default"]).toBeUndefined();
+      expect(() => ensureAuthProfileStore(agentDir, { syncExternalCli: false })).toThrow(
+        "requires legacy credential migration",
+      );
     });
   });
 

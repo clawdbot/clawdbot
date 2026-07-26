@@ -1,25 +1,41 @@
 /**
- * Credential storage for API keys and OAuth tokens.
- * Handles loading, saving, and refreshing credentials from auth.json.
+ * Credential storage facade for API keys and OAuth tokens.
+ * Canonical persistence is the per-agent SQLite auth-profile store.
  *
- * Uses file locking to prevent race conditions when multiple agent sessions
- * try to refresh tokens simultaneously.
+ * The backend contract keeps the upstream session SDK shape while OpenClaw
+ * projects provider-default profiles into it.
  */
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { findEnvKeys, getEnvApiKey } from "@openclaw/ai/internal/runtime";
-import lockfile from "proper-lockfile";
-import { replaceFileAtomicSync } from "../../infra/replace-file.js";
+import { withFileLock } from "../../infra/file-lock.js";
 import type {
   OAuthCredentials,
   OAuthLoginCallbacks,
   OAuthProviderId,
 } from "../../llm/utils/oauth/types.js";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { AUTH_STORE_VERSION, OAUTH_REFRESH_LOCK_OPTIONS } from "../auth-profiles/constants.js";
+import {
+  assertAuthProfileMigrationReady,
+  AuthProfileStoreUnreadableError,
+} from "../auth-profiles/legacy-source-diagnostic.js";
+import { loadPersistedAuthProfileStore } from "../auth-profiles/persisted.js";
+import { getRuntimeAuthProfileStoreSnapshot } from "../auth-profiles/runtime-snapshots.js";
+import {
+  inspectPersistedAuthProfileStoreRaw,
+  resolveAuthProfileDatabasePath,
+  runAuthProfileWriteTransaction,
+} from "../auth-profiles/sqlite.js";
+import {
+  loadAuthProfileStoreForSecretsRuntime,
+  saveAuthProfileStore,
+} from "../auth-profiles/store.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { getAgentDir } from "../config.js";
 import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-registry.js";
 import { resolveConfigValue } from "./resolve-config-value.js";
-import { acquireLockSyncWithRetry } from "./storage-lock.js";
 
 export type ApiKeyCredential = {
   type: "api_key";
@@ -30,9 +46,29 @@ export type OAuthCredential = {
   type: "oauth";
 } & OAuthCredentials;
 
-export type AuthCredential = ApiKeyCredential | OAuthCredential;
+export type TokenCredential = {
+  type: "token";
+  token: string;
+  expires?: number;
+};
+
+export type AuthCredential = ApiKeyCredential | OAuthCredential | TokenCredential;
 
 export type AuthStorageData = Record<string, AuthCredential>;
+export const AUTH_STORAGE_CREATE_DEPRECATION_CODE = "AUTH_STORAGE_CREATE_DEPRECATED" as const;
+export const FILE_AUTH_STORAGE_BACKEND_DEPRECATION_CODE =
+  "FILE_AUTH_STORAGE_BACKEND_DEPRECATED" as const;
+let authStorageCreateWarningEmitted = false;
+let fileAuthStorageBackendWarningEmitted = false;
+
+function emitAuthStorageDeprecationWarning(params: {
+  message: string;
+  code:
+    | typeof AUTH_STORAGE_CREATE_DEPRECATION_CODE
+    | typeof FILE_AUTH_STORAGE_BACKEND_DEPRECATION_CODE;
+}): void {
+  process.emitWarning(params.message, { code: params.code, type: "DeprecationWarning" });
+}
 
 class AuthStoragePersistenceError extends Error {
   constructor(message: string, cause: unknown) {
@@ -63,88 +99,226 @@ export interface AuthStorageBackend {
   withLockAsync<T>(fn: (current: string | undefined) => Promise<LockResult<T>>): Promise<T>;
 }
 
-export class FileAuthStorageBackend implements AuthStorageBackend {
-  private authPath: string;
-
-  constructor(authPath: string = join(getAgentDir(), "auth.json")) {
-    this.authPath = authPath;
-  }
-
-  private ensureParentDir(): void {
-    const dir = dirname(this.authPath);
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true, mode: 0o700 });
+function projectAuthStorageData(store: AuthProfileStore | null): AuthStorageData {
+  const projected: AuthStorageData = {};
+  for (const [profileId, credential] of Object.entries(store?.profiles ?? {})) {
+    if (profileId !== `${credential.provider}:default`) {
+      continue;
+    }
+    if (credential.type === "api_key" && credential.key) {
+      projected[credential.provider] = { type: "api_key", key: credential.key };
+    } else if (credential.type === "token" && credential.token) {
+      projected[credential.provider] = {
+        type: "token",
+        token: credential.token,
+        ...(credential.expires !== undefined ? { expires: credential.expires } : {}),
+      };
+    } else if (credential.type === "oauth") {
+      projected[credential.provider] = { ...credential };
     }
   }
+  return projected;
+}
 
-  private ensureFileExists(): void {
-    if (!existsSync(this.authPath)) {
-      writeFileSync(this.authPath, "{}", "utf-8");
-      chmodSync(this.authPath, 0o600);
+function assertAuthStorageSecretRefsMaterialized(store: AuthProfileStore): void {
+  for (const [profileId, credential] of Object.entries(store.profiles)) {
+    if (profileId !== `${credential.provider}:default`) {
+      continue;
+    }
+    if (
+      (credential.type === "api_key" && credential.keyRef && !credential.key) ||
+      (credential.type === "token" && credential.tokenRef && !credential.token)
+    ) {
+      throw new AuthStoragePersistenceError(
+        "AuthStorage.forAgent requires the active secrets runtime to materialize SecretRef credentials.",
+        undefined,
+      );
     }
   }
+}
 
-  private replaceAuthFileAtomic(content: string): void {
-    const dirMode = statSync(dirname(this.authPath)).mode & 0o7777;
-    replaceFileAtomicSync({
-      filePath: this.authPath,
-      content,
-      dirMode,
-      mode: 0o600,
-      tempPrefix: "auth.json",
-      syncTempFile: true,
-      syncParentDir: true,
-    });
+function projectAuthoritativeAuthStorageData(
+  store: AuthProfileStore,
+  runtimeStore: AuthProfileStore | undefined,
+): AuthStorageData {
+  if (!runtimeStore) {
+    assertAuthStorageSecretRefsMaterialized(store);
+    return projectAuthStorageData(store);
+  }
+  const profiles = Object.fromEntries(
+    Object.entries(store.profiles).map(([profileId, credential]) => {
+      const runtimeCredential = runtimeStore.profiles[profileId];
+      const needsMaterializedRef =
+        (credential.type === "api_key" && Boolean(credential.keyRef)) ||
+        (credential.type === "token" && Boolean(credential.tokenRef));
+      return [profileId, needsMaterializedRef ? (runtimeCredential ?? credential) : credential];
+    }),
+  );
+  const materialized = { ...store, profiles };
+  assertAuthStorageSecretRefsMaterialized(materialized);
+  return projectAuthStorageData(materialized);
+}
+
+function applyAuthStorageData(
+  store: AuthProfileStore,
+  data: AuthStorageData,
+  materializedBaseline: AuthStorageData,
+): AuthProfileStore {
+  const profiles = { ...store.profiles };
+  const projectedProviders = new Set([
+    ...Object.keys(materializedBaseline),
+    ...Object.entries(store.profiles).flatMap(([profileId, credential]) =>
+      profileId === `${credential.provider}:default` ? [credential.provider] : [],
+    ),
+  ]);
+  for (const provider of projectedProviders) {
+    if (!data[provider]) {
+      delete profiles[`${provider}:default`];
+    }
+  }
+  for (const [provider, credential] of Object.entries(data)) {
+    const profileId = `${provider}:default`;
+    const existing = profiles[profileId];
+    if (
+      credential.type === "api_key" &&
+      existing?.type === "api_key" &&
+      existing.keyRef &&
+      materializedBaseline[provider]?.type === "api_key" &&
+      materializedBaseline[provider].key === credential.key
+    ) {
+      profiles[profileId] = existing;
+      continue;
+    }
+    if (
+      credential.type === "token" &&
+      existing?.type === "token" &&
+      existing.tokenRef &&
+      materializedBaseline[provider]?.type === "token" &&
+      materializedBaseline[provider].token === credential.token
+    ) {
+      profiles[profileId] = existing;
+      continue;
+    }
+    profiles[profileId] =
+      credential.type === "api_key"
+        ? { type: "api_key", provider, key: credential.key }
+        : credential.type === "token"
+          ? { type: "token", provider, token: credential.token, expires: credential.expires }
+          : { ...credential, provider };
+  }
+  return { ...store, profiles };
+}
+
+function loadSqliteAuthStorageStore(
+  agentDir: string,
+  database?: OpenClawAgentDatabase,
+): AuthProfileStore {
+  const inspection = inspectPersistedAuthProfileStoreRaw(agentDir, database);
+  if (inspection.status === "missing") {
+    return { version: AUTH_STORE_VERSION, profiles: {} };
+  }
+  const store = loadPersistedAuthProfileStore(agentDir, database ? { database } : undefined);
+  if (inspection.status === "unreadable" || !store) {
+    throw new AuthProfileStoreUnreadableError(agentDir);
+  }
+  return store;
+}
+
+class SqliteAuthStorageBackend implements AuthStorageBackend {
+  constructor(
+    private readonly agentDir: string,
+    private readonly preparedStore?: AuthProfileStore,
+  ) {}
+
+  private readRaw(): AuthProfileStore {
+    assertAuthProfileMigrationReady(this.agentDir);
+    return loadSqliteAuthStorageStore(this.agentDir);
   }
 
   withLock<T>(fn: (current: string | undefined) => LockResult<T>): T {
-    this.ensureParentDir();
-    this.ensureFileExists();
-
-    const release = acquireLockSyncWithRetry(this.authPath);
-    try {
-      const current = existsSync(this.authPath) ? readFileSync(this.authPath, "utf-8") : undefined;
-      const { result, next } = fn(current);
+    assertAuthProfileMigrationReady(this.agentDir);
+    const runtimeStore = this.preparedStore ?? getRuntimeAuthProfileStoreSnapshot(this.agentDir);
+    return runAuthProfileWriteTransaction(this.agentDir, (database) => {
+      const store = loadSqliteAuthStorageStore(this.agentDir, database);
+      const materializedData = projectAuthoritativeAuthStorageData(store, runtimeStore);
+      const { result, next } = fn(JSON.stringify(materializedData));
       if (next !== undefined) {
-        this.replaceAuthFileAtomic(next);
+        saveAuthProfileStore(
+          applyAuthStorageData(store, JSON.parse(next) as AuthStorageData, materializedData),
+          this.agentDir,
+          {
+            filterExternalAuthProfiles: false,
+            syncExternalCli: false,
+          },
+          database,
+        );
       }
       return result;
-    } finally {
-      release();
-    }
+    });
   }
 
   async withLockAsync<T>(fn: (current: string | undefined) => Promise<LockResult<T>>): Promise<T> {
-    this.ensureParentDir();
-    this.ensureFileExists();
+    assertAuthProfileMigrationReady(this.agentDir);
+    return await withFileLock(
+      resolveAuthProfileDatabasePath(this.agentDir),
+      OAUTH_REFRESH_LOCK_OPTIONS,
+      async () => {
+        const initialRaw = this.readRaw();
+        const initialData = projectAuthoritativeAuthStorageData(
+          initialRaw,
+          this.preparedStore ?? getRuntimeAuthProfileStoreSnapshot(this.agentDir),
+        );
+        const { result, next } = await fn(JSON.stringify(initialData));
+        if (next === undefined) {
+          return result;
+        }
+        runAuthProfileWriteTransaction(this.agentDir, (database) => {
+          const authoritative = loadSqliteAuthStorageStore(this.agentDir, database);
+          if (!isDeepStrictEqual(authoritative.profiles, initialRaw.profiles)) {
+            throw new AuthStoragePersistenceError(
+              "Cannot update auth storage because its SQLite credentials changed concurrently.",
+              undefined,
+            );
+          }
+          saveAuthProfileStore(
+            applyAuthStorageData(authoritative, JSON.parse(next) as AuthStorageData, initialData),
+            this.agentDir,
+            { filterExternalAuthProfiles: false, syncExternalCli: false },
+            database,
+          );
+        });
+        return result;
+      },
+    );
+  }
+}
 
-    let lockCompromisedError: Error | undefined;
-    const release = await lockfile.lock(this.authPath, {
-      retries: {
-        minTimeout: 100,
-        maxTimeout: 10000,
-        randomize: true,
-      },
-      stale: 30000,
-      onCompromised: (err) => {
-        lockCompromisedError = err;
-      },
-    });
-    try {
-      const current = existsSync(this.authPath) ? readFileSync(this.authPath, "utf-8") : undefined;
-      const { result, next } = await fn(current);
-      if (lockCompromisedError) {
-        throw lockCompromisedError;
-      }
-      if (next !== undefined) {
-        this.replaceAuthFileAtomic(next);
-      }
-      return result;
-    } finally {
-      if (!lockCompromisedError) {
-        await release();
-      }
+/**
+ * @deprecated Use AuthStorage.forAgent(agentDir). This compatibility adapter
+ * derives the owning agent directory from the old path and persists only to SQLite.
+ * It is eligible for removal after 2026-10-01 and a clean published-plugin sweep.
+ */
+export class FileAuthStorageBackend implements AuthStorageBackend {
+  private readonly delegate: SqliteAuthStorageBackend;
+
+  constructor(authPath?: string) {
+    if (!fileAuthStorageBackendWarningEmitted) {
+      fileAuthStorageBackendWarningEmitted = true;
+      emitAuthStorageDeprecationWarning({
+        code: FILE_AUTH_STORAGE_BACKEND_DEPRECATION_CODE,
+        message:
+          "FileAuthStorageBackend(path) is deprecated; use AuthStorage.forAgent(agentDir). The compatibility adapter persists to SQLite and never reads or writes auth.json.",
+      });
     }
+    this.delegate = new SqliteAuthStorageBackend(authPath ? dirname(authPath) : getAgentDir());
+  }
+
+  withLock<T>(fn: (current: string | undefined) => LockResult<T>): T {
+    return this.delegate.withLock(fn);
+  }
+
+  async withLockAsync<T>(fn: (current: string | undefined) => Promise<LockResult<T>>): Promise<T> {
+    return await this.delegate.withLockAsync(fn);
   }
 }
 
@@ -169,7 +343,7 @@ export class InMemoryAuthStorageBackend implements AuthStorageBackend {
 }
 
 /**
- * Credential storage backed by a JSON file.
+ * Provider-keyed credential facade backed by the canonical auth-profile store.
  */
 export class AuthStorage {
   private data: AuthStorageData = {};
@@ -184,10 +358,30 @@ export class AuthStorage {
     this.reload();
   }
 
+  static forAgent(agentDir: string = getAgentDir()): AuthStorage {
+    assertAuthProfileMigrationReady(agentDir);
+    const preparedStore =
+      getRuntimeAuthProfileStoreSnapshot(agentDir) ??
+      loadAuthProfileStoreForSecretsRuntime(agentDir);
+    assertAuthStorageSecretRefsMaterialized(preparedStore);
+    return new AuthStorage(new SqliteAuthStorageBackend(agentDir, preparedStore));
+  }
+
+  /**
+   * @deprecated Use AuthStorage.forAgent(agentDir). The path-taking compatibility
+   * form is eligible for removal after 2026-10-01 and a clean published-plugin
+   * reader sweep; it no longer reads or writes JSON.
+   */
   static create(authPath?: string): AuthStorage {
-    return new AuthStorage(
-      new FileAuthStorageBackend(authPath ?? join(getAgentDir(), "auth.json")),
-    );
+    if (!authStorageCreateWarningEmitted) {
+      authStorageCreateWarningEmitted = true;
+      emitAuthStorageDeprecationWarning({
+        code: AUTH_STORAGE_CREATE_DEPRECATION_CODE,
+        message:
+          "AuthStorage.create(path) is deprecated; use AuthStorage.forAgent(agentDir). The compatibility adapter persists to SQLite and never reads or writes auth.json.",
+      });
+    }
+    return AuthStorage.forAgent(authPath ? dirname(authPath) : getAgentDir());
   }
 
   static fromStorage(storage: AuthStorageBackend): AuthStorage {
@@ -481,6 +675,12 @@ export class AuthStorage {
 
     if (cred?.type === "api_key") {
       return resolveConfigValue(cred.key);
+    }
+
+    if (cred?.type === "token") {
+      if (cred.expires === undefined || Date.now() < cred.expires) {
+        return resolveConfigValue(cred.token);
+      }
     }
 
     if (cred?.type === "oauth") {

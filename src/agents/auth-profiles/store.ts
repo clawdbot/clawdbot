@@ -22,16 +22,22 @@ import {
 } from "./external-auth.js";
 import type { ExternalCliAuthDiscovery } from "./external-cli-discovery.js";
 import {
+  AuthProfileMigrationRequiredError,
+  AuthProfileStoreUnreadableError,
+  assertAuthProfileMigrationReady,
+  clearAuthProfileMigrationRequired,
+  listLegacyAuthProfileSources,
+  warnLegacyAuthProfileSourcesIgnored,
+} from "./legacy-source-diagnostic.js";
+import {
   isSafeToAdoptMainStoreOAuthIdentity,
   shouldPersistRuntimeExternalOAuthProfile,
   type RuntimeExternalOAuthProfile,
 } from "./oauth-shared.js";
-import { resolveAuthStorePath } from "./paths.js";
 import {
   buildPersistedAuthProfileSecretsStore,
   loadPersistedAuthProfileStore,
   mergeAuthProfileStores,
-  mergeOAuthFileIntoStore,
 } from "./persisted.js";
 import {
   clearRuntimeAuthProfileStoreSnapshot as clearRuntimeAuthProfileStoreSnapshotImpl,
@@ -45,14 +51,19 @@ import {
 } from "./runtime-snapshots.js";
 import {
   deletePersistedAuthProfileStoreRaw,
+  inspectPersistedAuthProfileStoreRaw,
   readPersistedAuthProfileStoreRaw,
   readPersistedAuthProfileStateRaw,
+  resolveAuthProfileDatabasePath,
   runAuthProfileWriteTransaction,
   writePersistedAuthProfileStateRaw,
   writePersistedAuthProfileStoreRaw,
 } from "./sqlite.js";
 import { buildPersistedAuthProfileState, loadPersistedAuthProfileState } from "./state.js";
 import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
+
+// Runtime identity is the canonical per-agent database, never a retired JSON filename.
+const resolveAuthStorePath = resolveAuthProfileDatabasePath;
 
 type LoadAuthProfileStoreOptions = {
   allowKeychainPrompt?: boolean;
@@ -968,12 +979,17 @@ function loadAuthProfileStoreForAgent(
   }
   const effectiveAgentDir = resolveRuntimeAuthProfileAgentDir(agentDir);
   const effectiveOptions = resolveRuntimeAuthProfileLoadOptions(options);
-  const readOnly = effectiveOptions?.readOnly === true;
+  assertAuthProfileMigrationReady(effectiveAgentDir);
   const asStore = loadPersistedAuthProfileStore(
     effectiveAgentDir,
     resolvePersistedLoadOptions(effectiveOptions),
   );
   if (asStore) {
+    warnLegacyAuthProfileSourcesIgnored({
+      agentDir: effectiveAgentDir,
+      sources: listLegacyAuthProfileSources({ agentDir: effectiveAgentDir }),
+    });
+    clearAuthProfileMigrationRequired(effectiveAgentDir);
     const synced = maybeSyncPersistedExternalCliAuthProfiles({
       store: asStore,
       agentDir: effectiveAgentDir,
@@ -982,18 +998,26 @@ function loadAuthProfileStoreForAgent(
     return markRuntimePersistedProfiles(synced.store);
   }
 
+  if (!effectiveOptions?.database) {
+    const inspection = inspectPersistedAuthProfileStoreRaw(effectiveAgentDir);
+    if (inspection.status !== "missing") {
+      throw new AuthProfileStoreUnreadableError(effectiveAgentDir);
+    }
+  }
+  const legacySources = listLegacyAuthProfileSources({ agentDir: effectiveAgentDir });
+  const credentialSources = legacySources.filter((source) => source.kind !== "auth-state");
+  if (credentialSources.length > 0) {
+    throw new AuthProfileMigrationRequiredError({
+      agentDir: effectiveAgentDir,
+      sources: credentialSources,
+    });
+  }
+  warnLegacyAuthProfileSourcesIgnored({ agentDir: effectiveAgentDir, sources: legacySources });
+  clearAuthProfileMigrationRequired(effectiveAgentDir);
   const store: AuthProfileStore = {
     version: AUTH_STORE_VERSION,
     profiles: {},
   };
-
-  const mergedOAuth = mergeOAuthFileIntoStore(store);
-  const forceReadOnly = process.env.OPENCLAW_AUTH_STORE_READONLY === "1";
-  const shouldWrite = !readOnly && !forceReadOnly && mergedOAuth;
-  if (shouldWrite) {
-    saveAuthProfileStore(store, effectiveAgentDir);
-  }
-
   const synced = maybeSyncPersistedExternalCliAuthProfiles({
     store,
     agentDir: effectiveAgentDir,
