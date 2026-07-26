@@ -1,9 +1,9 @@
 ---
 title: "OpenClaw Dashboard Report"
-version: "1.0"
+version: "1.1"
 status: "Architecture"
 owner: "OpenClaw Architecture"
-last_reviewed: "2026-07-19"
+last_reviewed: "2026-07-26"
 category: "Dashboard"
 source_document: "DASHBOARD_REPORT.md"
 ---
@@ -218,7 +218,44 @@ Current `app.py` is a **simplified single-page** layout vs. earlier multi-tab ve
 
 ---
 
-## 10. Gaps and Observations
+## 10. AI Model Scorecard Review Queue
+
+The deployment-local dashboard includes an operator review surface at
+`/ai-scorecard`.
+
+The review workflow:
+
+- displays the latest undecided Evaluation Lab pipeline;
+- links each promotion-eligible recommendation to a read-only evidence view;
+- shows benchmark prompts, model responses, deterministic validation, reviewer
+  scores, and findings when those source reports exist;
+- labels fixture-only or missing evidence and warns the operator not to treat it
+  as a real recommendation;
+- presents direct Approve and Reject actions with optional audit notes;
+- treats the decision-button click as confirmation;
+- binds the submitted action to the pipeline shown on the page so stale pages
+  cannot decide a newer evaluation;
+- restricts mutations to loopback requests;
+- returns successful decisions to the clean review URL;
+- preserves completed decisions and shows an explicit empty queue when no
+  evidence-backed evaluation remains;
+- leaves model routing disabled and does not modify the production model.
+
+Promotion remains a separate action with explicit decision-ID confirmation.
+The review queue does not generate synthetic evaluations. A new Evaluation Lab
+report becomes the next review item.
+
+### Scorecard routes
+
+| Route                                       | Purpose                               |
+| ------------------------------------------- | ------------------------------------- |
+| `GET /ai-scorecard`                         | Current pending review or empty queue |
+| `GET /ai-scorecard/evidence/<benchmark_id>` | Read-only decision evidence           |
+| `POST /ai-scorecard/approve`                | Record pipeline approval              |
+| `POST /ai-scorecard/reject`                 | Record pipeline rejection             |
+| `POST /ai-scorecard/promote`                | Promote an approved scorecard         |
+
+## 11. Gaps and Observations
 
 1. **Dead code:** `build_system_health()` result is unused; service grid is missing from UI.
 2. **Performance:** Six live Ollama tests on every page load can make the dashboard slow.

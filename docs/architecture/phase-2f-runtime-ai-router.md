@@ -437,12 +437,20 @@ Implemented:
 - Daily Executive Briefing AI routing telemetry summary;
 - OpenClaw dashboard AI routing telemetry panel.
 - OpenClaw dashboard AI Model Scorecard review page with immutable
-  approval, rejection, promotion, and audit views.
+  approval, rejection, promotion, evidence, queue, and audit views.
 
-Dashboard scorecard mutations are restricted to loopback requests and require
-the operator to type the exact current pipeline or decision ID. Remote
-dashboard connections remain review-only. Operators should use an SSH tunnel
-to `127.0.0.1:5051` when performing an approval action.
+Dashboard scorecard mutations are restricted to loopback requests. Approval
+and rejection are direct operator decisions bound to the pipeline displayed on
+the page; stale pipeline submissions are rejected. Promotion remains a
+separate action that requires the exact decision ID. Remote dashboard
+connections remain review-only. Operators should use an SSH tunnel to
+`127.0.0.1:5051` when performing a decision action.
+
+The scorecard exposes read-only evidence for each recommendation and must
+distinguish executed evidence from development fixtures or missing reports.
+After a completed rejection, the dashboard preserves the decision and shows an
+empty review queue until a new Evaluation Lab report exists. It must not create
+synthetic review items to keep the queue populated.
 
 ## 18. Production Promotion Requirements
 

@@ -333,6 +333,7 @@ knowledge/ranchbrain/archive/
 # Python packaging output
 *.egg-info/
 **/*.egg-info/
+.venv-dashboard/
 
 # PropertyManager live production CSV data
 tools/property_manager/maintenance_log.csv

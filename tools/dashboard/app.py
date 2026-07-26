@@ -48,6 +48,16 @@ AI_CANDIDATES_PATH = (
     AI_REPORT_DIR
     / "evaluation_approvals/approved-scorecard-candidates-latest.json"
 )
+AI_BENCHMARK_PATH = (
+    AI_REPORT_DIR / "benchmark_runs/local-benchmark-latest.json"
+)
+AI_VALIDATION_PATH = (
+    AI_REPORT_DIR
+    / "benchmark_validation/benchmark-validation-latest.json"
+)
+AI_REVIEW_PATH = (
+    AI_REPORT_DIR / "benchmark_reviews/benchmark-review-latest.json"
+)
 AI_PROMOTION_DIR = AI_REPORT_DIR / "scorecard_promotions"
 AI_SCORECARD_PATH = OPENCLAW_ROOT / "config/ai_intelligence/scorecard.json"
 AI_APPROVAL_TOOL = (
@@ -1350,6 +1360,14 @@ def scorecard_snapshot():
     candidates = load_json_object(AI_CANDIDATES_PATH)
     scorecard = load_json_object(AI_SCORECARD_PATH)
 
+    if (
+        evaluation
+        and approval
+        and str(approval.get("pipeline_id", ""))
+        != str(evaluation.get("pipeline_id", ""))
+    ):
+        approval = None
+
     audits = []
     if AI_PROMOTION_DIR.is_dir():
         for path in sorted(
@@ -1449,10 +1467,18 @@ def ai_scorecard():
   <td>{html_module.escape(str(candidate['benchmark_id']))}</td>
   <td>{html_module.escape(str(candidate['model']))}</td>
   <td>{html_module.escape(str(candidate['status']))}</td>
+  <td>
+    <a href="/ai-scorecard/evidence/{quote(str(candidate['benchmark_id']))}"
+       style="display:inline-block;background:#2563eb;color:white;
+              padding:10px 14px;border-radius:7px;text-decoration:none;
+              font-weight:bold;white-space:nowrap;">
+      View Decision Details
+    </a>
+  </td>
 </tr>
 """
         if not eligible_rows:
-            eligible_rows = "<tr><td colspan='3'>No promotion-eligible winners.</td></tr>"
+            eligible_rows = "<tr><td colspan='4'>No promotion-eligible winners.</td></tr>"
 
         audit_rows = ""
         for audit in snapshot["audits"]:
@@ -1482,28 +1508,69 @@ def ai_scorecard():
         if action_allowed:
             approval_forms = ""
             if pipeline_id and decision == "none":
+                pipeline_value = html_module.escape(
+                    pipeline_id,
+                    quote=True,
+                )
                 approval_forms = f"""
-<form method="POST" action="/ai-scorecard/approve">
-  <label>Type <code>APPROVE {html_module.escape(pipeline_id)}</code></label><br>
-  <input name="confirmation" style="width:100%;margin:8px 0;padding:8px;">
-  <input name="note" placeholder="Optional approval note"
-         style="width:100%;margin:8px 0;padding:8px;">
-  <button class="approve" type="submit">Approve Evaluation</button>
-</form>
-<form method="POST" action="/ai-scorecard/reject" style="margin-top:18px;">
-  <label>Type <code>REJECT {html_module.escape(pipeline_id)}</code></label><br>
-  <input name="confirmation" style="width:100%;margin:8px 0;padding:8px;">
-  <input name="note" placeholder="Optional rejection note"
-         style="width:100%;margin:8px 0;padding:8px;">
-  <button class="reject" type="submit">Reject Evaluation</button>
-</form>
+<div style="display:flex;gap:18px;flex-wrap:wrap;">
+  <form method="POST" action="/ai-scorecard/approve"
+        style="flex:1;min-width:300px;padding:18px;border:2px solid #22c55e;
+               border-radius:10px;background:#163329;box-sizing:border-box;">
+    <h3 style="margin-top:0;">Approve this evaluation</h3>
+    <p>Use when the evidence is acceptable. This records approval only;
+       automatic routing stays off.</p>
+    <input type="hidden" name="pipeline_id" value="{pipeline_value}">
+    <input name="note" placeholder="Optional approval note"
+           style="display:block;width:100%;margin:12px 0;padding:10px;
+                  box-sizing:border-box;">
+    <button class="approve" type="submit"
+            style="width:100%;padding:12px;font-size:16px;">
+      Approve Evaluation
+    </button>
+  </form>
+  <form method="POST" action="/ai-scorecard/reject"
+        style="flex:1;min-width:300px;padding:18px;border:2px solid #ef4444;
+               border-radius:10px;background:#3a2025;box-sizing:border-box;">
+    <h3 style="margin-top:0;">Reject this evaluation</h3>
+    <p>Use when the evidence is incomplete or the recommendation should
+       not be eligible for promotion.</p>
+    <input type="hidden" name="pipeline_id" value="{pipeline_value}">
+    <input name="note" placeholder="Optional rejection note"
+           style="display:block;width:100%;margin:12px 0;padding:10px;
+                  box-sizing:border-box;">
+    <button class="reject" type="submit"
+            style="width:100%;padding:12px;font-size:16px;">
+      Reject Evaluation
+    </button>
+  </form>
+</div>
 """
             elif decision == "approved" and decision_id and not snapshot["promotion_applied"]:
+                promote_confirmation = html_module.escape(
+                    f"PROMOTE {decision_id}",
+                    quote=True,
+                )
                 approval_forms = f"""
-<form method="POST" action="/ai-scorecard/promote">
-  <label>Type <code>PROMOTE {html_module.escape(decision_id)}</code></label><br>
-  <input name="confirmation" style="width:100%;margin:8px 0;padding:8px;">
-  <button class="approve" type="submit">Promote Approved Scorecard</button>
+<form method="POST" action="/ai-scorecard/promote"
+      style="max-width:680px;padding:18px;border:2px solid #22c55e;
+             border-radius:10px;background:#163329;">
+  <h3 style="margin-top:0;">Promote the approved scorecard</h3>
+  <p>This updates the official scorecard. It does not enable automatic
+     routing.</p>
+  <label for="promote-confirmation"><b>Confirmation</b></label>
+  <div style="display:flex;gap:8px;margin:8px 0 12px;">
+    <input id="promote-confirmation" name="confirmation"
+           placeholder="{promote_confirmation}"
+           style="flex:1;min-width:0;padding:10px;">
+    <button type="button" data-confirmation="{promote_confirmation}"
+            onclick="this.form.elements.confirmation.value=this.dataset.confirmation"
+            style="background:#475569;">Fill promotion confirmation</button>
+  </div>
+  <button class="approve" type="submit"
+          style="width:100%;padding:12px;font-size:16px;">
+    Promote Approved Scorecard
+  </button>
 </form>
 """
             else:
@@ -1513,10 +1580,56 @@ def ai_scorecard():
             actions = f"""
 <div class="panel">
   <h2>Approval Actions — Local Connection</h2>
-  <p>Every action requires the exact current pipeline or decision ID.</p>
+  <p>Review the evidence, add an optional note, then choose Approve or
+     Reject. Clicking the decision button is your confirmation, and every
+     change remains audited.</p>
   {approval_forms}
 </div>
 """
+
+        if decision == "rejected":
+            completed_note = str(approval.get("note") or "").strip()
+            note_line = (
+                "<p><b>Decision note:</b> "
+                + html_module.escape(completed_note)
+                + "</p>"
+                if completed_note
+                else ""
+            )
+            body = f"""
+<div class="panel" style="border:2px solid #64748b;">
+  <h2>Review Queue</h2>
+  <h3>No pending scorecard reviews</h3>
+  <p>The latest evaluation has been rejected and preserved in the decision
+     history. A newly generated evaluation will automatically appear here
+     as the next Approve/Reject item.</p>
+  <a href="/ai-scorecard"
+     style="display:inline-block;background:#2563eb;color:white;
+            padding:11px 16px;border-radius:7px;text-decoration:none;
+            font-weight:bold;">Check for Next Review</a>
+</div>
+<div class="panel">
+  <h2>Most Recent Completed Review</h2>
+  <p><b>Pipeline:</b> {html_module.escape(pipeline_id)}</p>
+  <p><b>Decision:</b> Rejected</p>
+  <p><b>Decision ID:</b> {html_module.escape(decision_id)}</p>
+  {note_line}
+  <p><b>Production model changed:</b> No</p>
+  <p><b>Automatic routing enabled:</b> No</p>
+</div>
+<div class="panel">
+  <h2>Decision Details</h2>
+  <p>The recommendation and its available evidence remain accessible for
+     audit and review.</p>
+  <a href="/ai-scorecard/evidence/{quote(next(iter(evaluation.get(
+      'benchmark_reconciliation', {}
+  )), ''))}"
+     style="display:inline-block;background:#475569;color:white;
+            padding:10px 14px;border-radius:7px;text-decoration:none;
+            font-weight:bold;">View Completed Decision Details</a>
+</div>
+"""
+            return ranchbrain_shell("AI Model Scorecard Review Queue", body)
 
         body = f"""
 {notice}
@@ -1532,7 +1645,7 @@ def ai_scorecard():
 <div class="panel">
   <h2>Promotion-Eligible Winners</h2>
   <table style="width:100%;border-collapse:collapse;">
-    <tr><th>Benchmark</th><th>Model</th><th>Status</th></tr>
+    <tr><th>Benchmark</th><th>Model</th><th>Status</th><th>Evidence</th></tr>
     {eligible_rows}
   </table>
 </div>
@@ -1553,6 +1666,174 @@ def ai_scorecard():
         ), 500
 
 
+@app.route("/ai-scorecard/evidence/<benchmark_id>")
+def ai_scorecard_evidence(benchmark_id):
+    evaluation = load_json_object(AI_EVALUATION_PATH) or {}
+    reconciliation = evaluation.get("benchmark_reconciliation", {})
+    if benchmark_id not in reconciliation:
+        abort(404)
+
+    benchmark_report = load_json_object(AI_BENCHMARK_PATH) or {}
+    validation_report = load_json_object(AI_VALIDATION_PATH) or {}
+    review_report = load_json_object(AI_REVIEW_PATH) or {}
+    decision = reconciliation.get(benchmark_id, {})
+    selected_model = str(decision.get("final_winner") or "")
+
+    benchmark_definition = next(
+        (
+            item
+            for item in benchmark_report.get("benchmarks", [])
+            if str(item.get("id", "")) == benchmark_id
+        ),
+        {},
+    )
+    prompt = str(benchmark_definition.get("prompt") or "")
+    responses = [
+        item
+        for item in benchmark_report.get("results", [])
+        if str(item.get("benchmark_id", "")) == benchmark_id
+    ]
+    validations = [
+        item
+        for item in validation_report.get("results", [])
+        if str(item.get("benchmark_id", "")) == benchmark_id
+    ]
+    review = (
+        review_report.get("benchmark_reviews", {}).get(benchmark_id, {})
+    )
+    is_fixture = evaluation.get("data_classification") == "ui_validation_fixture"
+    source_count = sum(
+        bool(value)
+        for value in (benchmark_definition, responses, validations, review)
+    )
+
+    source_notice = (
+        "<div class='panel' style='background:#713f12;'>"
+        "<b>Development fixture:</b> this recommendation validates the "
+        "dashboard workflow and is not a live benchmark decision.</div>"
+        if is_fixture
+        else ""
+    )
+    if source_count == 0:
+        source_notice += (
+            "<div class='panel' style='background:#7f1d1d;'>"
+            "<b>Evidence unavailable:</b> no benchmark, validation, or "
+            "review source reports exist for this decision. Do not approve "
+            "it as a real model recommendation.</div>"
+        )
+
+    prompt_panel = f"""
+<div class="panel">
+  <h2>Original Benchmark Prompt</h2>
+  <pre style="white-space:pre-wrap;">{
+      html_module.escape(prompt or "Prompt source is unavailable.")
+  }</pre>
+</div>
+"""
+
+    response_panels = ""
+    for item in responses:
+        model = str(item.get("ollama_name") or "unknown")
+        selected = " — selected winner" if model == selected_model else ""
+        response_panels += f"""
+<details class="panel" {'open' if model == selected_model else ''}>
+  <summary style="cursor:pointer;font-size:18px;font-weight:bold;">
+    {html_module.escape(model + selected)}
+  </summary>
+  <p><b>Status:</b> {html_module.escape(str(item.get('status', 'unknown')))}
+     &nbsp; <b>Latency:</b>
+     {html_module.escape(str(item.get('latency_seconds', 'unknown')))}s</p>
+  <pre style="white-space:pre-wrap;">{
+      html_module.escape(
+          str(item.get("response") or item.get("error") or "No response recorded.")
+      )
+  }</pre>
+</details>
+"""
+    if not response_panels:
+        response_panels = (
+            "<div class='panel'><h2>Model Responses</h2>"
+            "<p>No model response source is available.</p></div>"
+        )
+
+    validation_rows = ""
+    for item in validations:
+        finding_text = "; ".join(
+            f"{finding.get('severity', 'unknown')}: "
+            f"{finding.get('message', finding.get('description', ''))}"
+            for finding in item.get("findings", [])
+        )
+        validation_rows += f"""
+<tr>
+  <td>{html_module.escape(str(item.get('ollama_name', 'unknown')))}</td>
+  <td>{'Passed' if item.get('passed_deterministic_checks') else 'Failed'}</td>
+  <td>{html_module.escape(finding_text or 'No findings recorded')}</td>
+</tr>
+"""
+    if not validation_rows:
+        validation_rows = (
+            "<tr><td colspan='3'>No deterministic validation source is "
+            "available.</td></tr>"
+        )
+
+    scores = review.get("scores", {})
+    findings = review.get("findings", {})
+    review_rows = ""
+    for model in sorted(set(scores) | set(findings)):
+        review_rows += f"""
+<tr>
+  <td>{html_module.escape(str(model))}</td>
+  <td>{html_module.escape(str(scores.get(model, 'unscored')))}</td>
+  <td>{html_module.escape('; '.join(str(value) for value in findings.get(model, []))
+                          or 'No reviewer findings recorded')}</td>
+</tr>
+"""
+    if not review_rows:
+        review_rows = (
+            "<tr><td colspan='3'>No reviewer evidence is available.</td></tr>"
+        )
+
+    body = f"""
+<p><a href="/ai-scorecard" style="color:#93c5fd;font-weight:bold;">
+  ← Back to AI Model Scorecard
+</a></p>
+{source_notice}
+<div class="panel">
+  <h2>Decision Summary</h2>
+  <p><b>Benchmark:</b> {html_module.escape(benchmark_id)}</p>
+  <p><b>Selected model:</b>
+     {html_module.escape(selected_model or 'No winner selected')}</p>
+  <p><b>Final status:</b>
+     {html_module.escape(str(decision.get('final_status', 'unknown')))}</p>
+  <p><b>Deterministic validation passed:</b>
+     {'Yes' if decision.get('winner_passed_deterministic_validation') else 'No'}</p>
+  <p><b>Promotion eligible:</b>
+     {'Yes' if decision.get('promotion_eligible') else 'No'}</p>
+</div>
+{prompt_panel}
+<div class="panel">
+  <h2>Deterministic Validation</h2>
+  <table style="width:100%;border-collapse:collapse;">
+    <tr><th>Model</th><th>Result</th><th>Findings</th></tr>
+    {validation_rows}
+  </table>
+</div>
+<div class="panel">
+  <h2>Reviewer Scores and Findings</h2>
+  <table style="width:100%;border-collapse:collapse;">
+    <tr><th>Model</th><th>Score</th><th>Findings</th></tr>
+    {review_rows}
+  </table>
+</div>
+<h2>Original Model Responses</h2>
+{response_panels}
+"""
+    return ranchbrain_shell(
+        f"Evidence — {benchmark_id}",
+        body,
+    )
+
+
 def require_local_scorecard_action():
     if not scorecard_action_is_local():
         abort(403)
@@ -1563,14 +1844,19 @@ def ai_scorecard_approve():
     require_local_scorecard_action()
     evaluation = load_json_object(AI_EVALUATION_PATH) or {}
     pipeline_id = str(evaluation.get("pipeline_id", ""))
-    if not pipeline_id or request.form.get("confirmation", "") != f"APPROVE {pipeline_id}":
-        return scorecard_redirect("error", "Approval confirmation did not match.")
+    if not pipeline_id or request.form.get("pipeline_id", "") != pipeline_id:
+        return scorecard_redirect(
+            "error",
+            "The evaluation changed. Refresh the page and try again.",
+        )
     note = str(request.form.get("note") or "").strip()[:500]
     arguments = ["--approve", pipeline_id]
     if note:
         arguments.extend(["--note", note])
     success, output = run_scorecard_action(AI_APPROVAL_TOOL, *arguments)
-    return scorecard_redirect("success" if success else "error", output)
+    if success:
+        return redirect("/ai-scorecard")
+    return scorecard_redirect("error", output)
 
 
 @app.route("/ai-scorecard/reject", methods=["POST"])
@@ -1578,14 +1864,19 @@ def ai_scorecard_reject():
     require_local_scorecard_action()
     evaluation = load_json_object(AI_EVALUATION_PATH) or {}
     pipeline_id = str(evaluation.get("pipeline_id", ""))
-    if not pipeline_id or request.form.get("confirmation", "") != f"REJECT {pipeline_id}":
-        return scorecard_redirect("error", "Rejection confirmation did not match.")
+    if not pipeline_id or request.form.get("pipeline_id", "") != pipeline_id:
+        return scorecard_redirect(
+            "error",
+            "The evaluation changed. Refresh the page and try again.",
+        )
     note = str(request.form.get("note") or "").strip()[:500]
     arguments = ["--reject", pipeline_id]
     if note:
         arguments.extend(["--note", note])
     success, output = run_scorecard_action(AI_APPROVAL_TOOL, *arguments)
-    return scorecard_redirect("success" if success else "error", output)
+    if success:
+        return redirect("/ai-scorecard")
+    return scorecard_redirect("error", output)
 
 
 @app.route("/ai-scorecard/promote", methods=["POST"])

@@ -1,9 +1,9 @@
 ---
 title: "OpenClaw AI Governance Manifest"
-version: "1.0"
+version: "1.1"
 status: "Foundational"
 owner: "OpenClaw Architecture"
-last_reviewed: "2026-07-19"
+last_reviewed: "2026-07-26"
 category: "Governance"
 source_document: "AI_GOVERNANCE_MANIFEST.md"
 ---
@@ -189,6 +189,28 @@ Operational actions should record:
 AI recommendations are advisory until approved.
 
 The operator is the final decision maker.
+
+---
+
+# Model Scorecard Decisions
+
+Model recommendations must remain reviewable before approval.
+
+The operator review surface must:
+
+- expose the source prompt, response, deterministic validation, scores, and
+  findings when available;
+- clearly identify fixtures and missing evidence;
+- never fabricate a next review item;
+- preserve every approval or rejection as an immutable decision record;
+- bind a decision to the evaluation displayed to the operator;
+- keep automatic routing disabled unless separately activated through the
+  governed deployment process.
+
+Approval and rejection may use the operator's explicit decision-button click
+as confirmation when the action is local-only, pipeline-bound, and audited.
+Scorecard promotion is a separate operation and retains stronger explicit
+confirmation.
 
 ---
 

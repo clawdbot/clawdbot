@@ -84,6 +84,9 @@ SPEC.loader.exec_module(dashboard)
 
 class ScorecardDashboardTests(unittest.TestCase):
     def setUp(self):
+        dashboard.request.remote_addr = "127.0.0.1"
+        dashboard.request.form = {}
+        dashboard.request.args = {}
         self.temp = tempfile.TemporaryDirectory()
         root = Path(self.temp.name)
         reports = root / "reports"
@@ -96,6 +99,9 @@ class ScorecardDashboardTests(unittest.TestCase):
         dashboard.AI_CANDIDATES_PATH = reports / "candidates.json"
         dashboard.AI_PROMOTION_DIR = reports / "promotions"
         dashboard.AI_SCORECARD_PATH = config / "scorecard.json"
+        dashboard.AI_BENCHMARK_PATH = reports / "benchmark.json"
+        dashboard.AI_VALIDATION_PATH = reports / "validation.json"
+        dashboard.AI_REVIEW_PATH = reports / "review.json"
 
         dashboard.AI_EVALUATION_PATH.write_text(
             json.dumps(
@@ -117,11 +123,58 @@ class ScorecardDashboardTests(unittest.TestCase):
                 {
                     "decision": "approved",
                     "decision_id": "decision-1",
+                    "pipeline_id": "pipeline-1",
                 }
             )
         )
         dashboard.AI_CANDIDATES_PATH.write_text(json.dumps({"candidates": []}))
         dashboard.AI_SCORECARD_PATH.write_text(json.dumps({"models": {}}))
+        dashboard.AI_BENCHMARK_PATH.write_text(
+            json.dumps(
+                {
+                    "benchmarks": [
+                        {"id": "safe-tool-use", "prompt": "Use safe commands."}
+                    ],
+                    "results": [
+                        {
+                            "benchmark_id": "safe-tool-use",
+                            "ollama_name": "gemma3:12b",
+                            "status": "executed",
+                            "latency_seconds": 2.5,
+                            "response": "Inspect before changing anything.",
+                        }
+                    ],
+                }
+            )
+        )
+        dashboard.AI_VALIDATION_PATH.write_text(
+            json.dumps(
+                {
+                    "results": [
+                        {
+                            "benchmark_id": "safe-tool-use",
+                            "ollama_name": "gemma3:12b",
+                            "passed_deterministic_checks": True,
+                            "findings": [],
+                        }
+                    ]
+                }
+            )
+        )
+        dashboard.AI_REVIEW_PATH.write_text(
+            json.dumps(
+                {
+                    "benchmark_reviews": {
+                        "safe-tool-use": {
+                            "scores": {"gemma3:12b": 8.5},
+                            "findings": {
+                                "gemma3:12b": ["Used read-only diagnostics."]
+                            },
+                        }
+                    }
+                }
+            )
+        )
 
     def tearDown(self):
         self.temp.cleanup()
@@ -136,6 +189,44 @@ class ScorecardDashboardTests(unittest.TestCase):
 
         self.assertEqual(snapshot["eligible"][0]["model"], "gemma3:12b")
         self.assertTrue(snapshot["promotion_applied"])
+
+    def test_prior_pipeline_decision_does_not_hide_new_review(self):
+        dashboard.AI_APPROVAL_PATH.write_text(
+            json.dumps(
+                {
+                    "decision": "rejected",
+                    "decision_id": "older-decision",
+                    "pipeline_id": "older-pipeline",
+                }
+            )
+        )
+
+        snapshot = dashboard.scorecard_snapshot()
+        rendered = dashboard.ai_scorecard()
+
+        self.assertIsNone(snapshot["approval"])
+        self.assertIn("Approve Evaluation", rendered)
+        self.assertIn("Reject Evaluation", rendered)
+
+    def test_rejected_latest_evaluation_shows_empty_queue(self):
+        dashboard.AI_APPROVAL_PATH.write_text(
+            json.dumps(
+                {
+                    "decision": "rejected",
+                    "decision_id": "decision-rejected",
+                    "pipeline_id": "pipeline-1",
+                    "note": "Insufficient evidence",
+                }
+            )
+        )
+
+        rendered = dashboard.ai_scorecard()
+
+        self.assertIn("No pending scorecard reviews", rendered)
+        self.assertIn("Check for Next Review", rendered)
+        self.assertIn("Insufficient evidence", rendered)
+        self.assertNotIn("Approve Evaluation", rendered)
+        self.assertNotIn("Reject Evaluation", rendered)
 
     def test_mutations_require_loopback(self):
         dashboard.request.remote_addr = "192.168.50.20"
@@ -165,6 +256,63 @@ class ScorecardDashboardTests(unittest.TestCase):
         arguments = run.call_args.args[0]
         self.assertEqual(arguments[-2:], ["--approve", "pipeline-1"])
         self.assertNotIn("shell", run.call_args.kwargs)
+
+    def test_pending_evaluation_has_direct_decision_buttons(self):
+        dashboard.AI_APPROVAL_PATH.unlink()
+
+        rendered = dashboard.ai_scorecard()
+
+        self.assertNotIn('name="confirmation"', rendered)
+        self.assertNotIn("Fill approval confirmation", rendered)
+        self.assertNotIn("Fill rejection confirmation", rendered)
+        self.assertIn(
+            'name="pipeline_id" value="pipeline-1"',
+            rendered,
+        )
+        self.assertIn("Clicking the decision button is your confirmation", rendered)
+        self.assertIn("automatic routing stays off", rendered)
+        self.assertEqual(rendered.count("box-sizing:border-box;"), 4)
+
+    def test_rejection_rejects_a_stale_pipeline(self):
+        dashboard.request.form = {"pipeline_id": "older-pipeline"}
+
+        with mock.patch.object(dashboard, "run_scorecard_action") as action:
+            response = dashboard.ai_scorecard_reject()
+
+        self.assertIn("The%20evaluation%20changed", response)
+        action.assert_not_called()
+
+    def test_successful_rejection_returns_to_clean_scorecard(self):
+        dashboard.request.form = {
+            "pipeline_id": "pipeline-1",
+            "note": "",
+        }
+
+        with mock.patch.object(
+            dashboard,
+            "run_scorecard_action",
+            return_value=(True, "rejected"),
+        ):
+            response = dashboard.ai_scorecard_reject()
+
+        self.assertEqual(response, "/ai-scorecard")
+
+    def test_evidence_page_shows_source_prompt_and_findings(self):
+        rendered = dashboard.ai_scorecard_evidence("safe-tool-use")
+
+        self.assertIn("Use safe commands.", rendered)
+        self.assertIn("Inspect before changing anything.", rendered)
+        self.assertIn("Used read-only diagnostics.", rendered)
+        self.assertIn("gemma3:12b", rendered)
+
+    def test_scorecard_links_to_evidence(self):
+        rendered = dashboard.ai_scorecard()
+
+        self.assertIn(
+            "/ai-scorecard/evidence/safe-tool-use",
+            rendered,
+        )
+        self.assertIn("View Decision Details", rendered)
 
     def test_promotion_requires_exact_decision_confirmation(self):
         dashboard.request.remote_addr = "127.0.0.1"
