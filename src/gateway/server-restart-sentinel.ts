@@ -1,26 +1,11 @@
 // Gateway restart sentinel recovery.
 // Resumes pending restart continuations and outbound delivery after process restart.
-import { resolveSessionAgentId } from "../agents/agent-scope.js";
-import {
-  markDelegateArtifactDeliveryUnavailable,
-  prepareDelegateArtifactDelivery,
-  recordDelegateArtifactDeliveryBinding,
-} from "../agents/delegate-artifacts.js";
-import { replaceManagedDelegateReturnInPrompt } from "../agents/internal-events.js";
-import { resolveContinuationRuntimeConfig } from "../auto-reply/continuation/config.js";
-import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "../auto-reply/reply/get-reply-run-queue.js";
-import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
-import { deliverQueuedPostCompactionDelegate } from "../auto-reply/reply/post-compaction-delegate-delivery.js";
-import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
 import type { ChatType } from "../channels/chat-type.js";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
-import { recordInboundSession } from "../channels/session.js";
-import { dispatchAssembledChannelTurn } from "../channels/turn/kernel.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { parseSessionThreadInfo } from "../config/sessions/thread-info.js";
-import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
-import { requestHeartbeat } from "../infra/heartbeat-wake.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import {
   clearRestartSentinelIfRevision,
@@ -35,22 +20,14 @@ import {
   drainPendingSessionDeliveries,
   enqueueSessionDelivery,
   loadPendingSessionDelivery,
-  markSessionDeliveryAttemptStarted,
-  markSessionDeliverySettlement,
   recoverPendingSessionDeliveries,
-  SessionDeliveryDeadLetteredError,
-  SessionDeliveryDeferredError,
-  SessionDeliverySafeRetryError,
-  type QueuedSessionDelivery,
   type QueuedSessionDeliveryPayload,
   type SessionDeliveryRecoveryLogger,
   type SessionDeliveryRoute,
 } from "../infra/session-delivery-queue.js";
-import { enqueueSystemEvent } from "../infra/system-events.js";
 import { isPendingControlPlaneUpdateRestartSentinel } from "../infra/update-control-plane-sentinel.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
-import type { OutboundReplyPayload } from "../plugin-sdk/reply-payload.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { removeCronRunContinuationSessionIfIdle } from "../tasks/cron-run-continuation-cleanup.js";
 import {
@@ -58,8 +35,10 @@ import {
   mergeDeliveryContext,
   sessionDeliveryOrigin,
 } from "../utils/delivery-context.shared.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
-import { deliverQueuedGeneratedMediaAgentTurn } from "./server-restart-sentinel-agent-delivery.js";
+import {
+  deliverQueuedSessionDelivery,
+  isRestartContinuationBusyRetry,
+} from "./server-restart-sentinel-delivery.js";
 import {
   deliverRestartSentinelNotice,
   enqueueRestartSentinelNotice,
@@ -67,20 +46,14 @@ import {
 import { loadSessionEntry } from "./session-utils.js";
 import { runStartupTasks, type StartupTask } from "./startup-tasks.js";
 
+export { deliverQueuedSessionDelivery };
+
 const log = createSubsystemLogger("gateway/restart-sentinel");
 const RESTART_CONTINUATION_BUSY_RETRY_DELAY_MS = process.env.VITEST ? 1 : 6_000;
 const RESTART_CONTINUATION_BUSY_MAX_ATTEMPTS = 20;
 const CONTROL_PLANE_UPDATE_PENDING_RETRY_DELAY_MS = process.env.VITEST ? 1 : 2_000;
 const CONTROL_PLANE_UPDATE_PENDING_MAX_ATTEMPTS = 900;
-const RESTART_CONTINUATION_BUSY_RETRY_ERROR =
-  "restart continuation deferred because previous run is still shutting down";
 let latestUpdateRestartSentinel: RestartSentinelPayload | null = null;
-
-type QueuedAgentTurnSessionDelivery = Extract<QueuedSessionDelivery, { kind: "agentTurn" }>;
-
-function sessionDeliveryStateDirArgs(stateDir?: string): [] | [string] {
-  return stateDir === undefined ? [] : [stateDir];
-}
 
 function cloneRestartSentinelPayload(
   payload: RestartSentinelPayload | null,
@@ -96,36 +69,6 @@ function hasRoutableDeliveryContext(context?: {
   to?: string;
 }): context is { channel: string; to: string } {
   return Boolean(context?.channel && context?.to);
-}
-
-function enqueueRestartSentinelWake(
-  message: string,
-  sessionKey: string,
-  deliveryContext?: {
-    channel?: string;
-    to?: string;
-    accountId?: string;
-    threadId?: string | number;
-  },
-  traceparent?: string,
-  sessionDeliveryAckId?: string,
-  sessionDeliveryAckStateDir?: string,
-  expectedSessionId?: string,
-  delegateArtifactReceipt?: NonNullable<
-    Extract<QueuedSessionDelivery, { kind: "systemEvent" }>["managedDelegateArtifactDelivery"]
-  >["receipt"],
-) {
-  enqueueSystemEvent(message, {
-    sessionKey,
-    trusted: true,
-    ...(deliveryContext ? { deliveryContext } : {}),
-    ...(traceparent ? { traceparent } : {}),
-    ...(sessionDeliveryAckId ? { sessionDeliveryAckId } : {}),
-    ...(sessionDeliveryAckStateDir ? { sessionDeliveryAckStateDir } : {}),
-    ...(expectedSessionId ? { expectedSessionId } : {}),
-    ...(delegateArtifactReceipt ? { delegateArtifactReceipt } : {}),
-  });
-  requestHeartbeat({ source: "restart-sentinel", intent: "immediate", reason: "wake", sessionKey });
 }
 
 async function waitForRetry(delayMs: number) {
@@ -162,346 +105,6 @@ function resolveRestartContinuationRoute(params: {
     ...(params.threadId ? { threadId: params.threadId } : {}),
     chatType: params.chatType,
   };
-}
-
-function isRestartContinuationBusyPayload(payload: OutboundReplyPayload): boolean {
-  return (
-    typeof payload.text === "string" && payload.text.trim() === REPLY_RUN_STILL_SHUTTING_DOWN_TEXT
-  );
-}
-
-function isRestartContinuationBusyRetry(entry: QueuedSessionDelivery | null): boolean {
-  return entry?.lastError === RESTART_CONTINUATION_BUSY_RETRY_ERROR;
-}
-
-function resolveQueuedRestartContinuationMessageId(entry: QueuedAgentTurnSessionDelivery): string {
-  if (isRestartContinuationBusyRetry(entry) && entry.retryCount > 0) {
-    return `${entry.messageId}:retry:${entry.retryCount}`;
-  }
-  return entry.messageId;
-}
-
-function resolveQueuedSessionDeliveryContext(entry: QueuedSessionDelivery):
-  | {
-      channel?: string;
-      to?: string;
-      accountId?: string;
-      threadId?: string | number;
-    }
-  | undefined {
-  if (entry.kind === "agentTurn" && entry.route) {
-    return {
-      channel: entry.route.channel,
-      to: entry.route.to,
-      ...(entry.route.accountId ? { accountId: entry.route.accountId } : {}),
-      ...(entry.route.threadId ? { threadId: entry.route.threadId } : {}),
-    };
-  }
-  return entry.deliveryContext;
-}
-
-export async function deliverQueuedSessionDelivery(params: {
-  deps: CliDeps;
-  entry: QueuedSessionDelivery;
-  stateDir?: string;
-}) {
-  if (params.entry.kind === "postCompactionDelegate") {
-    await deliverQueuedPostCompactionDelegate({ entry: params.entry });
-    return;
-  }
-  const { cfg, entry, storePath, canonicalKey } = loadSessionEntry(params.entry.sessionKey);
-  const queuedDeliveryContext = resolveQueuedSessionDeliveryContext(params.entry);
-
-  if (params.entry.kind === "systemEvent") {
-    if (
-      params.entry.expectedSessionId &&
-      (!entry?.sessionId || entry.sessionId !== params.entry.expectedSessionId)
-    ) {
-      const receipt = params.entry.managedDelegateArtifactDelivery?.receipt;
-      if (receipt) {
-        markDelegateArtifactDeliveryUnavailable({
-          dispatchId: receipt.dispatchId,
-          recipientSessionKey: receipt.recipientSessionKey,
-          recipientSessionId: receipt.recipientSessionId,
-          reason: "recipient-incarnation-changed",
-          ...(params.stateDir
-            ? {
-                options: {
-                  env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir },
-                },
-              }
-            : {}),
-        });
-      }
-      log.warn("session event delivery skipped: session changed", {
-        sessionKey: canonicalKey,
-        queueId: params.entry.id,
-      });
-      return;
-    }
-    let deliveryText = params.entry.text;
-    const managedDelivery = params.entry.managedDelegateArtifactDelivery;
-    if (managedDelivery) {
-      const { projection, receipt } = managedDelivery;
-      if (
-        projection.arrivalContext.dispatchId !== receipt.dispatchId ||
-        projection.arrivalContext.binding.recipientSessionKey !== receipt.recipientSessionKey ||
-        projection.arrivalContext.binding.recipientSessionId !== receipt.recipientSessionId
-      ) {
-        markDelegateArtifactDeliveryUnavailable({
-          dispatchId: receipt.dispatchId,
-          recipientSessionKey: receipt.recipientSessionKey,
-          recipientSessionId: receipt.recipientSessionId,
-          reason: "delivery-state-unavailable",
-          ...(params.stateDir
-            ? {
-                options: {
-                  env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir },
-                },
-              }
-            : {}),
-        });
-        return;
-      }
-      const runtime = resolveContinuationRuntimeConfig(cfg);
-      const prepared = prepareDelegateArtifactDelivery({
-        projection,
-        runtimeEnabled: runtime.enabled,
-        crossSessionEnabled: runtime.crossSessionTargeting === "enabled",
-        currentRecipientSessionId: entry?.sessionId,
-        ...(params.stateDir
-          ? {
-              options: {
-                env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir },
-              },
-            }
-          : {}),
-      });
-      if (prepared.status === "deferred") {
-        throw new SessionDeliveryDeferredError("managed delegate return delivery is disabled");
-      }
-      if (prepared.status === "acknowledged") {
-        return;
-      }
-      if (prepared.status === "unavailable") {
-        markDelegateArtifactDeliveryUnavailable({
-          dispatchId: receipt.dispatchId,
-          recipientSessionKey: receipt.recipientSessionKey,
-          recipientSessionId: receipt.recipientSessionId,
-          reason: "delivery-state-unavailable",
-          ...(params.stateDir
-            ? {
-                options: {
-                  env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir },
-                },
-              }
-            : {}),
-        });
-        return;
-      }
-      const artifactOptions = params.stateDir
-        ? {
-            options: {
-              env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir },
-            },
-          }
-        : {};
-      recordDelegateArtifactDeliveryBinding({
-        dispatchId: receipt.dispatchId,
-        recipientSessionKey: receipt.recipientSessionKey,
-        recipientSessionId: receipt.recipientSessionId,
-        phase: "replay",
-        availability: prepared.projection.arrivalContext.availability,
-        ...artifactOptions,
-      });
-      const refreshed = prepareDelegateArtifactDelivery({
-        projection,
-        runtimeEnabled: runtime.enabled,
-        crossSessionEnabled: runtime.crossSessionTargeting === "enabled",
-        currentRecipientSessionId: entry?.sessionId,
-        ...artifactOptions,
-      });
-      if (refreshed.status === "acknowledged") {
-        return;
-      }
-      if (refreshed.status !== "ready") {
-        throw new SessionDeliverySafeRetryError(
-          "managed delegate return changed during replay preparation",
-        );
-      }
-      deliveryText = replaceManagedDelegateReturnInPrompt(params.entry.text, refreshed.projection);
-    }
-    enqueueRestartSentinelWake(
-      deliveryText,
-      canonicalKey,
-      queuedDeliveryContext,
-      params.entry.traceparent,
-      params.entry.id,
-      params.stateDir,
-      params.entry.expectedSessionId,
-      params.entry.managedDelegateArtifactDelivery?.receipt,
-    );
-    if (managedDelivery) {
-      // In-memory enqueue only makes the prompt eligible. The durable queue row
-      // remains pending until transcript admission adopts and acknowledges it.
-      throw new SessionDeliveryDeferredError(
-        "managed delegate return is awaiting durable recipient adoption",
-      );
-    }
-    return;
-  }
-
-  if (
-    params.entry.expectedSessionId &&
-    (!entry?.sessionId || entry.sessionId !== params.entry.expectedSessionId)
-  ) {
-    log.warn("restart continuation skipped: session changed", {
-      sessionKey: canonicalKey,
-      queueId: params.entry.id,
-      expectedSessionId: params.entry.expectedSessionId,
-      actualSessionId: entry?.sessionId ?? null,
-    });
-    enqueueRestartSentinelWake(
-      params.entry.message,
-      canonicalKey,
-      queuedDeliveryContext,
-      params.entry.traceparent,
-      params.entry.id,
-      params.stateDir,
-    );
-    return;
-  }
-
-  if (!params.entry.route) {
-    enqueueRestartSentinelWake(
-      params.entry.message,
-      canonicalKey,
-      queuedDeliveryContext,
-      params.entry.traceparent,
-      params.entry.id,
-      params.stateDir,
-    );
-    return;
-  }
-
-  if (
-    await deliverQueuedGeneratedMediaAgentTurn({
-      entry: params.entry,
-      canonicalKey,
-      sessionEntry: entry,
-      ...(params.stateDir !== undefined ? { stateDir: params.stateDir } : {}),
-    })
-  ) {
-    return;
-  }
-  if (params.entry.deliveryStartedAt !== undefined) {
-    await markSessionDeliverySettlement(
-      params.entry,
-      "moved-to-failed",
-      ...sessionDeliveryStateDirArgs(params.stateDir),
-    );
-    throw new SessionDeliveryDeadLetteredError(
-      "queued agent turn dead-lettered after an interrupted unproven attempt",
-    );
-  }
-
-  const route = params.entry.route;
-  const messageId = resolveQueuedRestartContinuationMessageId(params.entry);
-  const userMessage = params.entry.message.trim();
-  const agentId = resolveSessionAgentId({
-    sessionKey: canonicalKey,
-    config: cfg,
-  });
-  let dispatchError: unknown;
-  const ctxPayload = finalizeInboundContext(
-    {
-      // The per-message timestamp prefix is applied at the single LLM boundary
-      // (normalizeMessagesForLlmBoundary) from each message's own timestamp, so
-      // the current turn and historical turns carry identical bytes on the wire.
-      // See: https://github.com/openclaw/openclaw/issues/3658
-      Body: userMessage,
-      BodyForAgent: userMessage,
-      BodyForCommands: "",
-      RawBody: userMessage,
-      CommandBody: "",
-      SessionKey: canonicalKey,
-      AccountId: route.accountId,
-      MessageSid: messageId,
-      Timestamp: Date.now(),
-      InputProvenance: {
-        kind: "internal_system",
-        sourceChannel: route.channel,
-        sourceTool: "restart-sentinel",
-      },
-      Provider: INTERNAL_MESSAGE_CHANNEL,
-      Surface: INTERNAL_MESSAGE_CHANNEL,
-      ChatType: route.chatType,
-      CommandAuthorized: true,
-      GatewayClientScopes: ["operator.admin"],
-      GatewayClientCaps: [],
-      ReplyToId: route.replyToId,
-      OriginatingChannel: route.channel,
-      OriginatingTo: route.to,
-      ExplicitDeliverRoute: false,
-      MessageThreadId: route.threadId,
-    },
-    {
-      forceBodyForCommands: true,
-      forceChatType: true,
-    },
-  );
-  await dispatchAssembledChannelTurn({
-    cfg,
-    channel: route.channel,
-    accountId: route.accountId,
-    agentId,
-    routeSessionKey: canonicalKey,
-    storePath,
-    ctxPayload,
-    recordInboundSession,
-    dispatchReplyWithBufferedBlockDispatcher,
-    replyOptions: {
-      sourceReplyDeliveryMode: "message_tool_only",
-    },
-    // Preflight remains retryable. Ownership starts only after the agent runner
-    // has durably adopted the turn and before it can execute tools or reply.
-    turnAdoptionLifecycle: {
-      admission: "cancel-only",
-      onAdopted: () =>
-        markSessionDeliveryAttemptStarted(
-          params.entry,
-          ...sessionDeliveryStateDirArgs(params.stateDir),
-        ),
-    },
-    delivery: {
-      preparePayload: (payload) => {
-        if (isRestartContinuationBusyPayload(payload)) {
-          throw new SessionDeliverySafeRetryError(RESTART_CONTINUATION_BUSY_RETRY_ERROR);
-        }
-        return payload;
-      },
-      durable: false,
-      // Restart continuations are internal lifecycle turns. Visible follow-up
-      // must go through the message tool; automatic final delivery stays off.
-      deliver: async () => ({ visibleReplySent: false }),
-      onError: (err, info) => {
-        dispatchError ??= err;
-        log.warn(`restart continuation dispatch failed during ${info.kind}: ${String(err)}`, {
-          sessionKey: canonicalKey,
-        });
-      },
-    },
-    record: {
-      onRecordError: (err) => {
-        log.warn(`restart continuation failed to record inbound session metadata: ${String(err)}`, {
-          sessionKey: canonicalKey,
-        });
-      },
-    },
-  });
-  if (dispatchError) {
-    throw toErrorObject(dispatchError, "Non-Error thrown");
-  }
 }
 
 function buildQueuedRestartContinuation(params: {
