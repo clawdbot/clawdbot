@@ -220,7 +220,7 @@ export function handleBackgroundTasksEvent(host: BackgroundTasksHost, payload: u
   }
   const current = state.tasks.find((task) => task.id === event.task.id);
   const detail = state.taskDetails.get(event.task.id);
-  let newest = current ? newestTaskSnapshot(current, event.task) : event.task;
+  let newest = current ? newestTaskSnapshot(current, event.task, "event") : event.task;
   newest = newestTaskSnapshot(newest, detail);
   state.tasks = sortTasks([newest, ...state.tasks.filter((task) => task.id !== event.task.id)]);
   if (detail) {
