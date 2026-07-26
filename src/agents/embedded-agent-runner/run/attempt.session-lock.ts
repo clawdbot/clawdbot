@@ -47,7 +47,7 @@ export type EmbeddedAttemptSessionLockController = {
   publishValidatedSessionFileSnapshot(snapshot: OwnedSessionTranscriptCacheSnapshot): boolean;
   readTrustedCurrentSessionFileSnapshot(): Promise<undefined>;
   releaseForPrompt(): Promise<void>;
-  releaseHeldLockForAbort(): Promise<void>;
+  releaseHeldLockForAbort(options?: { terminal?: boolean }): Promise<void>;
   refreshAfterOwnedSessionWrite(): void;
   withOwnedSessionFileWrite<T>(
     run: () => T,
@@ -81,6 +81,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   const noOpLock = { release: async () => {} } as SessionLock;
   let disposed = false;
   let promptAborted = false;
+  let promptSubmissionBlocked = false;
   let takeoverDetected = false;
   let promptReleased = false;
   let cleanupStarted = false;
@@ -127,16 +128,23 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     readTrustedCurrentSessionFileSnapshot: async () => undefined,
     releaseForPrompt: async () =>
       await serializeLifecycle(() => {
-        if (disposed || promptAborted || cleanupStarted) {
+        if (disposed) {
           throw new Error("attempt disposed before prompt submission");
+        }
+        if (promptSubmissionBlocked) {
+          throw new Error("attempt aborted before prompt submission");
+        }
+        if (cleanupStarted) {
+          throw new Error("attempt cleanup started before prompt submission");
         }
         promptReleased = true;
         promptSettled = new Promise<void>((resolve) => {
           settlePrompt = resolve;
         });
       }),
-    releaseHeldLockForAbort: async () => {
+    releaseHeldLockForAbort: async (options) => {
       promptAborted = true;
+      promptSubmissionBlocked ||= options?.terminal !== false;
       promptReleased = false;
       settlePrompt?.();
       settlePrompt = undefined;

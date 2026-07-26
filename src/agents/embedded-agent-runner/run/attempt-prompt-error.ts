@@ -47,7 +47,7 @@ export async function handleEmbeddedAttemptPromptError(input: {
       runId: input.attempt.runId,
       sessionId: input.attempt.sessionId,
     });
-    await input.sessionLockController.releaseHeldLockForAbort();
+    await input.sessionLockController.releaseHeldLockForAbort({ terminal: false });
     await input.sessionLockController.waitForSessionEvents(input.activeSession);
     await input.withOwnedSessionWriteLock(async () => {
       stripSessionsYieldArtifacts(input.activeSession);

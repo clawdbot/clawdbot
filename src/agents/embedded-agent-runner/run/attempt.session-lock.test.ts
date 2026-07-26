@@ -188,4 +188,42 @@ describe("createEmbeddedAttemptSessionLockController", () => {
       vi.useRealTimers();
     }
   });
+
+  it("rejects a late SDK prompt handoff after cleanup has started", async () => {
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: vi.fn(async () => ({ release: async () => undefined })),
+      lockOptions: { sessionFile: "agent:main:main" },
+    });
+
+    await controller.acquireForCleanup();
+    await expect(controller.releaseForPrompt()).rejects.toThrow(
+      "attempt cleanup started before prompt submission",
+    );
+  });
+
+  it("rejects a late SDK prompt handoff after disposal", async () => {
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: vi.fn(async () => ({ release: async () => undefined })),
+      lockOptions: { sessionFile: "agent:main:main" },
+    });
+
+    await controller.dispose();
+    await expect(controller.releaseForPrompt()).rejects.toThrow(
+      "attempt disposed before prompt submission",
+    );
+  });
+
+  it("keeps sessions_yield abort release non-terminal for a delayed prompt", async () => {
+    const reloadPromptReleasedSessionFile = vi.fn();
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: vi.fn(async () => ({ release: async () => undefined })),
+      lockOptions: { sessionFile: "agent:main:main" },
+      reloadPromptReleasedSessionFile,
+    });
+
+    await controller.releaseHeldLockForAbort({ terminal: false });
+    await expect(controller.releaseForPrompt()).resolves.toBeUndefined();
+    await expect(controller.reacquireAfterPrompt()).resolves.toBeUndefined();
+    expect(reloadPromptReleasedSessionFile).not.toHaveBeenCalled();
+  });
 });

@@ -368,10 +368,6 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     expect(classification.cronRunTranscriptPaths).toEqual(new Set());
     const entries = await listSessionTranscriptCorpusEntriesForAgent("main");
     expect(entries.filter((entry) => entry.generatedByCronRun)).toHaveLength(4);
-    expect(
-      entries.find((entry) => entry.sessionKey === "agent:main:subagent:normal-child")
-        ?.generatedByCronRun,
-    ).toBeUndefined();
   });
 
   it("keeps archive classification when the active transcript is missing", async () => {

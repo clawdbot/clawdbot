@@ -2570,6 +2570,15 @@ describe("subagent registry lifecycle hardening", () => {
   it("does not wait for a completion reply when the run does not expect one", async () => {
     const entry = createRunEntry({
       expectsCompletionMessage: false,
+      execution: {
+        status: "running",
+        transcriptTarget: {
+          agentId: "main",
+          sessionId: "child-session",
+          sessionKey: "agent:main:subagent:child",
+          storePath: "/tmp/openclaw/agents/main/sessions/sessions.json",
+        },
+      },
     });
     const captureSubagentCompletionReply = vi.fn(async () => undefined);
 
@@ -2583,7 +2592,7 @@ describe("subagent registry lifecycle hardening", () => {
 
     expect(captureSubagentCompletionReply).toHaveBeenCalledWith(entry.childSessionKey, {
       waitForReply: false,
-      sessionFile: entry.childSessionKey,
+      sessionTarget: entry.execution?.transcriptTarget,
       outcome: {
         status: "ok",
         startedAt: 2_000,
