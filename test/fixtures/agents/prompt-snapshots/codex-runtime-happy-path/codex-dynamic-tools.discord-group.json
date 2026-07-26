@@ -230,6 +230,12 @@
           "description": "Bind new chat thread when supported; true defaults mode=\"session\"; unavailable with visible=true.",
           "type": "boolean"
         },
+        "timeoutSeconds": {
+          "description": "Run timeout in seconds; overrides agents.defaults.subagents.runTimeoutSeconds. Must match HANDOFF_TIMEOUT_SECONDS when declared in task.",
+          "maximum": 2147000,
+          "minimum": 0,
+          "type": "integer"
+        },
         "visible": {
           "description": "Persistent UI session; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs; unavailable with inherited tool allow/denylist.",
           "type": "boolean"
