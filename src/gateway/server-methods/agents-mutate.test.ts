@@ -112,6 +112,7 @@ vi.mock("../../config/config.js", async () => {
       snapshot: { sourceConfig: mocks.loadConfigReturn },
     }),
     mutateConfigFileWithRetry: async (params: {
+      writeOptions?: unknown;
       mutate: (draft: Record<string, unknown>, context: unknown) => unknown;
     }) => {
       const draft = structuredClone(mocks.loadConfigReturn);
@@ -120,7 +121,7 @@ vi.mock("../../config/config.js", async () => {
         previousHash: "test-hash",
         attempt: 0,
       });
-      await mocks.writeConfigFile(draft);
+      await mocks.writeConfigFile(draft, params.writeOptions);
       return {
         path: "/tmp/openclaw/config.json",
         previousHash: "test-hash",
@@ -2746,6 +2747,9 @@ describe("agents.delete", () => {
       ]),
     );
     expect(mocks.writeConfigFile).toHaveBeenCalled();
+    expect(mocks.writeConfigFile).toHaveBeenCalledWith(expect.anything(), {
+      allowedAgentRosterRemovals: ["test-agent"],
+    });
     expect(mocks.movePathToTrash).toHaveBeenCalled();
   });
 
