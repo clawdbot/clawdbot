@@ -455,6 +455,7 @@ export async function attachWebInboxToSocket(
     options.durableInboundQueue ?? createWhatsAppDurableInboundQueue(options.accountId);
   const inboundDebounceMs = Math.max(0, Math.trunc(options.debounceMs ?? 0));
   const pendingDebounceKeys = new Set<string>();
+  const pendingDebounceCounts = new Map<string, number>();
   const activeInboundFlushes = new Set<Promise<void>>();
   const pendingMessageHandlers = new Set<Promise<void>>();
   let durableIngressActive = false;
@@ -496,6 +497,22 @@ export async function attachWebInboxToSocket(
         (durableIngressActive ? 1 : 0),
       at,
     );
+  };
+  const retainPendingDebounceKey = (key: string) => {
+    pendingDebounceCounts.set(key, (pendingDebounceCounts.get(key) ?? 0) + 1);
+    pendingDebounceKeys.add(key);
+    publishPendingWorkState();
+    notifyDebounceWork();
+  };
+  const releasePendingDebounceKey = (key: string) => {
+    const remaining = (pendingDebounceCounts.get(key) ?? 1) - 1;
+    if (remaining > 0) {
+      pendingDebounceCounts.set(key, remaining);
+    } else {
+      pendingDebounceCounts.delete(key);
+      pendingDebounceKeys.delete(key);
+    }
+    publishPendingWorkState();
   };
   const buildInboundDebounceKey = (msg: QueuedInboundMessage): string | null => {
     const admission = requireWhatsAppInboundAdmission(msg);
@@ -632,17 +649,23 @@ export async function attachWebInboxToSocket(
       } finally {
         for (const entry of entries) {
           if (entry.debounceKey) {
-            pendingDebounceKeys.delete(entry.debounceKey);
+            releasePendingDebounceKey(entry.debounceKey);
           }
         }
         activeInboundFlushes.delete(flushTask);
         finishFlush();
-        publishPendingWorkState();
       }
     },
     onError: (err) => {
       inboundLogger.error({ error: String(err) }, "failed handling inbound web message");
       inboundConsoleLog.error(`Failed handling inbound web message: ${String(err)}`);
+    },
+    onCancel: (entries) => {
+      for (const entry of entries) {
+        if (entry.debounceKey) {
+          releasePendingDebounceKey(entry.debounceKey);
+        }
+      }
     },
   });
   const groupMetadataCache = options.groupMetadataCache ?? new Map();
@@ -1427,11 +1450,9 @@ export async function attachWebInboxToSocket(
     const debounceKey = buildInboundDebounceKey(inboundMessage);
     if (debounceKey) {
       inboundMessage.debounceKey = debounceKey;
-      if (inboundDebounceMs > 0 && shouldDebounceInboundMessage(inboundMessage)) {
-        pendingDebounceKeys.add(debounceKey);
-        publishPendingWorkState();
-        notifyDebounceWork();
-      }
+      // Track every keyed item before async plugin policy starts. Immediate
+      // delivery releases it in onFlush; buffered work stays visible to close.
+      retainPendingDebounceKey(debounceKey);
     }
     if (inboundMessage.event.id) {
       const admission = requireWhatsAppInboundAdmission(inboundMessage);
@@ -1451,7 +1472,14 @@ export async function attachWebInboxToSocket(
         },
       );
     }
-    await debouncer.enqueue(inboundMessage);
+    try {
+      await debouncer.enqueue(inboundMessage);
+    } catch (error) {
+      if (debounceKey) {
+        releasePendingDebounceKey(debounceKey);
+      }
+      throw error;
+    }
   };
 
   const processDurableInboundMessage = async (

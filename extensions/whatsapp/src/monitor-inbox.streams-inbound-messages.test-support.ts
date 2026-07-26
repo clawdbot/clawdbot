@@ -1073,7 +1073,7 @@ describe("web monitor inbox", () => {
     expect(onMessage).not.toHaveBeenCalled();
     releaseDecision();
     await closePromise;
-    await waitForMessageCalls(onMessage, 1);
+    expect(onMessage).toHaveBeenCalledTimes(1);
     expect(inboundMessage(onMessage).payload.body).toBe("held");
   });
 
