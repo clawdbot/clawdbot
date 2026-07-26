@@ -1,4 +1,3 @@
-import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import { normalizeRouteBasePath, normalizeRoutePath } from "@openclaw/uirouter";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
@@ -78,30 +77,6 @@ export function pathForWorkboardBoard(boardId: string, basePath = ""): string {
   return `${pathForRoute("workboard", basePath)}/${encodedBoardId}`;
 }
 
-type SessionPathDetails = {
-  displayName?: string | null;
-  mainKey?: string | null;
-  shortIdLength?: number;
-};
-
-export function pathForSession(
-  face: BoardFace,
-  agentId: string,
-  sessionKey: string,
-  basePath = "",
-  details: SessionPathDetails = {},
-): string | null {
-  return buildControlUiSessionPath({
-    namespace: face,
-    sessionKey,
-    fallbackAgentId: agentId,
-    basePath,
-    displayName: details.displayName ?? undefined,
-    mainKey: details.mainKey ?? undefined,
-    shortIdLength: details.shortIdLength,
-  });
-}
-
 export function isSessionRouteId(routeId: string | null | undefined): routeId is BoardFace {
   return routeId === "chat" || routeId === "dashboard";
 }
@@ -109,13 +84,19 @@ export function isSessionRouteId(routeId: string | null | undefined): routeId is
 export function sessionRouteNamespaceFromPath(pathname: string, basePath = ""): BoardFace | null {
   const normalizedPath = normalizePath(pathname);
   const normalizedBasePath = normalizeBasePath(basePath);
-  for (const face of ["chat", "dashboard"] as const) {
-    const prefix = `${normalizedBasePath}/${face}/`;
-    if (normalizedPath.startsWith(prefix) && normalizedPath.length > prefix.length) {
-      return face;
-    }
+  if (
+    normalizedBasePath &&
+    normalizedPath !== normalizedBasePath &&
+    !normalizedPath.startsWith(`${normalizedBasePath}/`)
+  ) {
+    return null;
   }
-  return null;
+  const routePath = normalizedPath.slice(normalizedBasePath.length);
+  return routePath.startsWith("/chat/")
+    ? "chat"
+    : routePath.startsWith("/dashboard/")
+      ? "dashboard"
+      : null;
 }
 
 export function workboardBoardIdFromPath(pathname: string, basePath = ""): string | null {

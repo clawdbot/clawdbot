@@ -20,6 +20,8 @@ export function isDefaultChatLanding(
 }
 
 export function locationsMatch(left: RouteLocation, right: RouteLocation): boolean {
+  // Session aliases are canonicalized into the pathname before this guard;
+  // the removed query-based session identity needs no separate comparison.
   return (
     left.pathname === right.pathname && left.search === right.search && left.hash === right.hash
   );

@@ -89,34 +89,36 @@ export function createApplicationRouter(): ApplicationRouter {
   const router = createRouter<RouteId, ApplicationContext<RouteId>, AppRouteModule>({
     routes: appRoutes,
   });
-  // The shared router intentionally matches exact paths only. Workboard board
-  // ids are runtime data, so the app owns this one dynamic path family.
+  // The shared router intentionally matches exact paths only. Workboard ids
+  // and session refs are runtime data, so the app owns those dynamic paths.
   return {
     ...router,
     routeIdFromPath,
   };
 }
 
-function routerHistoryLocation(location: ReturnType<RouterHistory["location"]>, basePath: string) {
-  const boardId = workboardBoardIdFromPath(location.pathname, basePath);
+type DynamicRoute = readonly [routeId: RouteId, searchKey: string, searchValue: string];
+
+function dynamicRouteFromPath(pathname: string, basePath: string): DynamicRoute | null {
+  const boardId = workboardBoardIdFromPath(pathname, basePath);
   if (boardId) {
-    const search = new URLSearchParams(location.search);
-    search.set("board", boardId);
-    return {
-      ...location,
-      pathname: pathForRoute("workboard", basePath),
-      search: `?${search.toString()}`,
-    };
+    return ["workboard", "board", boardId];
   }
-  const sessionNamespace = sessionRouteNamespaceFromPath(location.pathname, basePath);
-  if (!sessionNamespace) {
+  const sessionNamespace = sessionRouteNamespaceFromPath(pathname, basePath);
+  return sessionNamespace ? [sessionNamespace, INTERNAL_SESSION_PATH_PARAM, pathname] : null;
+}
+
+function routerHistoryLocation(location: ReturnType<RouterHistory["location"]>, basePath: string) {
+  const dynamicRoute = dynamicRouteFromPath(location.pathname, basePath);
+  if (!dynamicRoute) {
     return location;
   }
+  const [routeId, searchKey, searchValue] = dynamicRoute;
   const search = new URLSearchParams(location.search);
-  search.set(INTERNAL_SESSION_PATH_PARAM, location.pathname);
+  search.set(searchKey, searchValue);
   return {
     ...location,
-    pathname: pathForRoute(sessionNamespace, basePath),
+    pathname: pathForRoute(routeId, basePath),
     search: `?${search.toString()}`,
   };
 }
@@ -137,28 +139,19 @@ export async function startApplicationRouter(
     });
     location = history.location();
   }
-  const initialBoardId = workboardBoardIdFromPath(location.pathname, basePath);
-  const initialSessionNamespace = sessionRouteNamespaceFromPath(location.pathname, basePath);
+  const initialDynamicRoute = dynamicRouteFromPath(location.pathname, basePath);
   const applicationHistory: RouterHistory = {
     location: () => routerHistoryLocation(history.location(), basePath),
     push: (next) => history.push(next),
     replace: (next) => history.replace(next),
     listen: (listener) =>
       history.listen((next) => {
-        if (workboardBoardIdFromPath(next.pathname, basePath)) {
+        const dynamicRoute = dynamicRouteFromPath(next.pathname, basePath);
+        if (dynamicRoute) {
           void router
-            .navigate("workboard", context, { history: "none" }, next)
+            .navigate(dynamicRoute[0], context, { history: "none" }, next)
             .catch((error: unknown) => {
-              console.error("[openclaw] Workboard route navigation failed", error);
-            });
-          return;
-        }
-        const sessionNamespace = sessionRouteNamespaceFromPath(next.pathname, basePath);
-        if (sessionNamespace) {
-          void router
-            .navigate(sessionNamespace, context, { history: "none" }, next)
-            .catch((error: unknown) => {
-              console.error("[openclaw] Session route navigation failed", error);
+              console.error("[openclaw] Dynamic route navigation failed", error);
             });
           return;
         }
@@ -166,13 +159,11 @@ export async function startApplicationRouter(
       }),
   };
   await router.start(applicationHistory, basePath, context);
-  if (initialBoardId) {
+  if (initialDynamicRoute) {
     // Replace the synthetic exact-match location with the real browser path
-    // before the shell renders; the matching board data is already cached.
-    await router.navigate("workboard", context, { history: "none", revalidate: true }, location);
-  } else if (initialSessionNamespace) {
+    // before the shell renders; the matching loader data is already cached.
     await router.navigate(
-      initialSessionNamespace,
+      initialDynamicRoute[0],
       context,
       { history: "none", revalidate: true },
       location,
@@ -184,7 +175,6 @@ export {
   APP_ROUTE_IDS,
   isRouteId,
   locationForRoute,
-  pathForSession,
   pathForRoute,
   routeIdFromPath,
   type RouteId,

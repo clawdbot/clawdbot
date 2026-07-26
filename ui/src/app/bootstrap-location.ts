@@ -1,5 +1,6 @@
 import type { RouteLocation } from "@openclaw/uirouter";
-import { pathForSession, routeIdFromPath } from "../app-routes.ts";
+import { routeIdFromPath } from "../app-routes.ts";
+import { pathForSession } from "../app-session-path-builder.ts";
 import { resolveAgentIdFromSessionKey } from "../lib/sessions/session-key.ts";
 import { isDefaultChatLanding } from "../pages/model-setup/first-run.ts";
 

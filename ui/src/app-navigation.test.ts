@@ -14,7 +14,6 @@ import {
 import {
   inferBasePathFromPathname,
   normalizeBasePath,
-  pathForSession,
   pathForWorkboardBoard,
   workboardBoardIdFromPath,
 } from "./app-route-paths.ts";
@@ -24,6 +23,7 @@ import {
   routeIdFromPath,
   type RouteId,
 } from "./app-routes.ts";
+import { pathForSession } from "./app-session-path-builder.ts";
 import { sessionRefFromPath } from "./app-session-route-paths.ts";
 import { pluginTabKey, pluginTabRefFromSearch, pluginTabSearch } from "./pages/plugin/route.ts";
 
@@ -44,6 +44,7 @@ const SESSION_URL_CONTRACT_CASES = [
     expectedPath: "/chat/main",
   },
   { sessionKey: "main", agentId: "research", mainKey: undefined, expectedPath: "/chat/research" },
+  { sessionKey: "main", agentId: "..", mainKey: undefined, expectedPath: "/chat/main" },
   {
     sessionKey: "agent:research:workspace",
     agentId: "main",
@@ -406,6 +407,7 @@ describe("routeIdFromPath", () => {
     expect(routeIdFromPath("/ui/chat", "/ui")).toBe("chat");
     expect(routeIdFromPath("/apps/openclaw/sessions", "/apps/openclaw")).toBe("sessions");
     expect(routeIdFromPath("/ui/settings/plugins", "/ui")).toBe("plugins");
+    expect(routeIdFromPath("/xx/chat/main", "/ui")).toBeNull();
   });
 
   it("round-trips Workboard board paths", () => {

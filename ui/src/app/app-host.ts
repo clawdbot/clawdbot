@@ -8,7 +8,6 @@ import {
   type GatewayBrowserClient,
 } from "../api/gateway.ts";
 import type { GatewayAgentRow } from "../api/types.ts";
-import "../components/app-sidebar.ts";
 import "../components/app-topbar.ts";
 import "../components/gateway-url-confirmation.ts";
 import "../components/github-link-hovercard-registration.ts";
@@ -288,6 +287,7 @@ class OpenClawApp extends OpenClawLightDomElement {
 
   override connectedCallback() {
     super.connectedCallback();
+    void import("../components/app-sidebar.ts");
     this.resetLoginSensitivePresentation();
     this.runtime = bootstrapApplication();
     if (this.terminalOnly) {

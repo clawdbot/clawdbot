@@ -8,6 +8,7 @@ import {
   type ApplicationRouter,
   type RouteId,
 } from "../app-routes.ts";
+import { setSessionPathBuilder } from "../app-session-path-builder.ts";
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
 import { createChannelCapability } from "../lib/channels/index.ts";
@@ -23,7 +24,6 @@ import {
 } from "../pages/model-setup/first-run.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
 import { resolveApprovalDocumentMode, type ApprovalDocumentMode } from "./approval-deep-link.ts";
-import { normalizeInitialApplicationLocation } from "./bootstrap-location.ts";
 import { createBrowserHistory, resolveControlUiBasePath } from "./browser.ts";
 import { createApplicationConfigCapability } from "./config.ts";
 import type {
@@ -249,23 +249,28 @@ export function bootstrapApplication(): ApplicationRuntime {
   const basePath = resolveControlUiBasePath(
     startup.location.pathname || globalThis.location?.pathname || "/",
   );
-  const initialLocation = documentMode
-    ? startup.location
-    : normalizeInitialApplicationLocation(startup.location, basePath, startup.settings.sessionKey);
   const firstRunDefaultLanding =
     documentMode === null && isDefaultChatLanding(startup.location, basePath, routeIdFromPath);
-  const expectedDefaultLanding = {
-    ...initialLocation,
+  let expectedDefaultLanding = {
+    ...startup.location,
     pathname: pathForRoute("chat", basePath),
   };
-  const currentLocation = history.location();
-  if (
-    currentLocation.pathname !== initialLocation.pathname ||
-    currentLocation.search !== initialLocation.search ||
-    currentLocation.hash !== initialLocation.hash
-  ) {
-    history.replace(initialLocation);
-  }
+  const sessionPathBuilderReady = documentMode
+    ? Promise.resolve()
+    : import("@openclaw/session-url-contract").then((contract) => {
+        setSessionPathBuilder(contract.buildControlUiSessionPath);
+      });
+  const initialLocationReady = documentMode
+    ? Promise.resolve(startup.location)
+    : Promise.all([sessionPathBuilderReady, import("./bootstrap-location.ts")]).then(
+        ([, location]) => {
+          return location.normalizeInitialApplicationLocation(
+            startup.location,
+            basePath,
+            startup.settings.sessionKey,
+          );
+        },
+      );
 
   const settings = startup.settings;
   const gateway = createApplicationGateway(
@@ -429,6 +434,19 @@ export function bootstrapApplication(): ApplicationRuntime {
     confirmPendingGatewayConnection,
     cancelPendingGatewayConnection,
     start: async () => {
+      const initialLocation = await initialLocationReady;
+      expectedDefaultLanding = {
+        ...initialLocation,
+        pathname: pathForRoute("chat", basePath),
+      };
+      const currentLocation = history.location();
+      if (
+        currentLocation.pathname !== initialLocation.pathname ||
+        currentLocation.search !== initialLocation.search ||
+        currentLocation.hash !== initialLocation.hash
+      ) {
+        history.replace(initialLocation);
+      }
       void config.refresh({ skipWithoutAuthCandidate: true });
       const routerStart = documentMode
         ? Promise.resolve()

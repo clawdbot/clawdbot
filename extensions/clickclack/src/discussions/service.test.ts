@@ -21,6 +21,7 @@ const SESSION_URL_CONTRACT_CASES = [
     expectedPath: "/chat/main",
   },
   { sessionKey: "main", agentId: "research", mainKey: undefined, expectedPath: "/chat/research" },
+  { sessionKey: "main", agentId: "..", mainKey: undefined, expectedPath: "/chat/main" },
   {
     sessionKey: "agent:research:workspace",
     agentId: "main",

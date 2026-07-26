@@ -1,6 +1,7 @@
 import type { GatewayHelloOk } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import { pathForRoute, pathForSession } from "../../app-route-paths.ts";
+import { pathForRoute } from "../../app-route-paths.ts";
+import { pathForSession } from "../../app-session-path-builder.ts";
 import type { BoardFace } from "../board/settings.ts";
 import { isCronSessionKey } from "../session-display.ts";
 import {
