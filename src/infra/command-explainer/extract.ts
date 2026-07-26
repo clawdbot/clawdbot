@@ -251,6 +251,10 @@ function hasEscapedLineContinuation(text: string): boolean {
   return /\\(?:\r\n|[\r\n])/.test(text);
 }
 
+function hasLineBreakEscapedWordBoundary(text: string): boolean {
+  return /(?:\r\n|[\r\n])\\/.test(text);
+}
+
 function hasExecutableLineContinuation(text: string): boolean {
   return /^[^\s]*\\(?:\r\n|[\r\n])/.test(text);
 }
@@ -911,6 +915,8 @@ async function walk(
   const span = spanFromNode(node, state.spanBase);
   let childContext = context;
   if (node.type === "program" && hasEscapedLineContinuation(node.text)) {
+    output.risks.push({ kind: "line-continuation", text: node.text, span });
+  } else if (node.type === "word" && hasLineBreakEscapedWordBoundary(node.text)) {
     output.risks.push({ kind: "line-continuation", text: node.text, span });
   }
 
