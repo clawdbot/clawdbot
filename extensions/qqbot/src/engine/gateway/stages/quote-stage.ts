@@ -11,6 +11,7 @@ import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/secur
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveQQBotEffectivePolicies } from "../../access/resolve-policy.js";
 import { normalizeQQBotSenderId } from "../../access/sender-match.js";
+import type { QQBotDmPolicy, QQBotGroupPolicy } from "../../access/types.js";
 import {
   formatMessageReferenceForAgent,
   type AttachmentProcessor,
@@ -147,10 +148,8 @@ async function shouldIncludeQuoteContext(params: {
   senderId?: string;
   senderIsCurrentAccountBot?: boolean;
 }): Promise<boolean> {
-  if (
-    params.senderIsCurrentAccountBot ||
-    !quoteContextRequiresSenderCheck(params.event, params.deps.account.config)
-  ) {
+  const visibilityPolicy = resolveQuoteVisibilityPolicy(params.event, params.deps.account.config);
+  if (params.senderIsCurrentAccountBot || !visibilityPolicy.requiresSenderCheck) {
     return true;
   }
 
@@ -164,8 +163,8 @@ async function shouldIncludeQuoteContext(params: {
       conversationId: resolveConversationId(params.event),
       allowFrom: params.deps.account.config?.allowFrom,
       groupAllowFrom: params.deps.account.config?.groupAllowFrom,
-      dmPolicy: params.deps.account.config?.dmPolicy,
-      groupPolicy: params.deps.account.config?.groupPolicy,
+      dmPolicy: visibilityPolicy.dmPolicy ?? params.deps.account.config?.dmPolicy,
+      groupPolicy: visibilityPolicy.groupPolicy ?? params.deps.account.config?.groupPolicy,
     });
     senderAllowed = quotedAccess.senderAccess.decision === "allow";
   }
@@ -177,27 +176,41 @@ async function shouldIncludeQuoteContext(params: {
   }).include;
 }
 
-function quoteContextRequiresSenderCheck(
+type QuoteVisibilityPolicy = {
+  requiresSenderCheck: boolean;
+  dmPolicy?: QQBotDmPolicy;
+  groupPolicy?: QQBotGroupPolicy;
+};
+
+function resolveQuoteVisibilityPolicy(
   event: QueuedMessage,
   config: InboundPipelineDeps["account"]["config"],
-): boolean {
+): QuoteVisibilityPolicy {
   const policies = resolveQQBotEffectivePolicies(config ?? {});
   if (isGroupConversation(event)) {
+    const groupAllowFrom = resolveGroupQuoteAllowFrom(config);
+    if (hasUniversalAllowlist(groupAllowFrom)) {
+      return { requiresSenderCheck: false };
+    }
     if (policies.groupPolicy === "open") {
-      return false;
+      return hasRestrictedAllowlist(groupAllowFrom)
+        ? { requiresSenderCheck: true, groupPolicy: "allowlist" }
+        : { requiresSenderCheck: false };
     }
     if (policies.groupPolicy === "disabled") {
-      return true;
+      return { requiresSenderCheck: true };
     }
-    return !hasUniversalAllowlist(resolveGroupQuoteAllowFrom(config));
+    return { requiresSenderCheck: true };
   }
   if (policies.dmPolicy === "disabled") {
-    return true;
+    return { requiresSenderCheck: true };
   }
   if (hasUniversalAllowlist(config?.allowFrom)) {
-    return false;
+    return { requiresSenderCheck: false };
   }
-  return policies.dmPolicy !== "open" || hasRestrictedAllowlist(config?.allowFrom);
+  return {
+    requiresSenderCheck: policies.dmPolicy !== "open" || hasRestrictedAllowlist(config?.allowFrom),
+  };
 }
 
 function isGroupConversation(event: QueuedMessage): boolean {

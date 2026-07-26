@@ -420,6 +420,52 @@ describe("buildInboundContext bot self-echo suppression", () => {
     expect(inbound.agentBody).not.toContain("quoted narrowed outsider");
   });
 
+  it("omits cached quoted content when open group policy is narrowed by groupAllowFrom", async () => {
+    getRefIndexMock.mockReturnValue({
+      content: "quoted narrowed group outsider",
+      senderId: "outsider-openid",
+      timestamp: 1,
+    });
+    const deps = makeDeps({
+      account: {
+        ...account,
+        config: { groupAllowFrom: ["user-openid"], groupPolicy: "open" },
+      },
+    });
+    deps.adapters.access.resolveInboundAccess = vi.fn(
+      (input): QQBotInboundAccess =>
+        makeAccessResult({
+          isGroup: input.isGroup,
+          allowed: input.senderId === "user-openid",
+        }),
+    );
+
+    const inbound = await buildInboundContext(
+      makeEvent({
+        type: "group",
+        groupOpenid: "group-openid",
+        refMsgIdx: "REF_GROUP_NARROWED",
+      }),
+      deps,
+    );
+
+    expect(deps.adapters.access.resolveInboundAccess).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: "group-openid",
+        groupPolicy: "allowlist",
+        isGroup: true,
+        senderId: "outsider-openid",
+      }),
+    );
+    expect(inbound.replyTo).toStrictEqual({
+      id: "REF_GROUP_NARROWED",
+      sender: "outsider-openid",
+      isQuote: true,
+    });
+    expect(inbound.agentBody).toContain("Original content unavailable");
+    expect(inbound.agentBody).not.toContain("quoted narrowed group outsider");
+  });
+
   it("omits cached quoted content when the quoted sender no longer passes restricted policy", async () => {
     getRefIndexMock.mockReturnValue({
       content: "quoted outsider cache",
