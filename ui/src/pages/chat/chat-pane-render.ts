@@ -594,7 +594,7 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
               class="chat-sidebar"
               .content=${state.sidebarContent}
               .loadFullMessage=${loadSidebarFullMessage}
-              .canvasPluginSurfaceUrl=${state.hello?.pluginSurfaceUrls?.canvas ?? null}
+              .canvasPluginSurfaceUrl=${state.canvasPluginSurfaceUrl}
               .embedSandboxMode=${state.embedSandboxMode}
               .allowExternalEmbedUrls=${state.allowExternalEmbedUrls}
               .onOpenWorkspaceFile=${(target: { path: string; line?: number | null }) =>
