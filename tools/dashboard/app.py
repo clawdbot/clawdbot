@@ -1547,7 +1547,7 @@ def openclaw_shared_navigation():
     links = (
         ("/", "Overview"),
         ("/ranchbrain", "RanchBrain"),
-        ("/ranchbrain/review", "Notes"),
+        ("/notes", "Notes"),
         ("/ai-scorecard?view=all", "All Models Scorecard"),
         ("/ai-scorecard", "Review Queue"),
         ("/documentation", "Foundational Documentation"),
@@ -1746,9 +1746,27 @@ def ranchbrain_dashboard():
         ), 500
 
 
+@app.route("/notes")
 @app.route("/ranchbrain/review")
-def ranchbrain_review():
+def notes_dashboard():
     try:
+        if not ranchbrain_schema_is_ready():
+            body = """
+<div class="panel" style="border-left:7px solid #fbbf24;">
+  <h2>Notes Setup Required</h2>
+  <p>
+    The Notes page is connected to the approved development PostgreSQL
+    service, but its <code>long_term_memory</code> schema has not been
+    initialized.
+  </p>
+  <p>
+    No production data was queried or copied. Notes will remain unavailable
+    until an authoritative migration is added and approved for development.
+  </p>
+</div>
+"""
+            return ranchbrain_shell("Notes", body)
+
         pending = get_ranchbrain_notes("ranchbrain_pending")
 
         body = """
@@ -1783,11 +1801,11 @@ def ranchbrain_review():
 
         body += "</div>"
 
-        return ranchbrain_shell("RanchBrain Review", body)
+        return ranchbrain_shell("Notes", body)
 
     except Exception as exc:
         return ranchbrain_shell(
-            "RanchBrain Review",
+            "Notes",
             f"<div class='panel'>Error: {html_module.escape(str(exc))}</div>",
         ), 500
 
@@ -1812,10 +1830,10 @@ def ranchbrain_review_approve():
     memory_id = request.form.get("memory_id", "").strip()
 
     if not memory_id.isdigit():
-        return redirect("/ranchbrain/review")
+        return redirect("/notes")
 
     run_review_action("approve", memory_id)
-    return redirect("/ranchbrain/review")
+    return redirect("/notes")
 
 
 @app.route("/ranchbrain/review/reject", methods=["POST"])
@@ -1823,10 +1841,10 @@ def ranchbrain_review_reject():
     memory_id = request.form.get("memory_id", "").strip()
 
     if not memory_id.isdigit():
-        return redirect("/ranchbrain/review")
+        return redirect("/notes")
 
     run_review_action("reject", memory_id)
-    return redirect("/ranchbrain/review")
+    return redirect("/notes")
 
 
 def load_json_object(path):

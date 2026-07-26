@@ -289,9 +289,47 @@ class ScorecardDashboardTests(unittest.TestCase):
     def test_navigation_separates_scorecard_and_review_queue(self):
         rendered = dashboard.openclaw_shared_navigation()
 
+        self.assertIn('href="/notes"', rendered)
+        self.assertIn(">Notes<", rendered)
+        self.assertNotIn('href="/ranchbrain/review"', rendered)
         self.assertIn("/ai-scorecard?view=all", rendered)
         self.assertIn(">All Models Scorecard<", rendered)
         self.assertIn(">Review Queue<", rendered)
+
+    def test_notes_has_dedicated_route_and_title(self):
+        with (
+            mock.patch.object(
+                dashboard,
+                "ranchbrain_schema_is_ready",
+                return_value=True,
+            ),
+            mock.patch.object(
+                dashboard,
+                "get_ranchbrain_notes",
+                return_value=[],
+            ),
+        ):
+            rendered = dashboard.notes_dashboard()
+
+        self.assertIn("<title>Notes</title>", rendered)
+        self.assertIn("<h1>Notes</h1>", rendered)
+        self.assertIn("Pending Notes", rendered)
+        self.assertNotIn("<h1>RanchBrain Review</h1>", rendered)
+
+    def test_notes_missing_schema_is_clear_and_non_failing(self):
+        with (
+            mock.patch.object(
+                dashboard,
+                "ranchbrain_schema_is_ready",
+                return_value=False,
+            ),
+            mock.patch.object(dashboard, "get_ranchbrain_notes") as notes,
+        ):
+            rendered = dashboard.notes_dashboard()
+
+        self.assertIn("Notes Setup Required", rendered)
+        self.assertIn("No production data was queried or copied", rendered)
+        notes.assert_not_called()
 
     def test_generation_model_uses_configured_ollama_generate_endpoint(self):
         response = mock.Mock()
