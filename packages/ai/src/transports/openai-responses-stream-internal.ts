@@ -81,6 +81,7 @@ export async function processResponsesStream(
   let pendingMessageText: string | null = null;
   const streamStartedAt = Date.now();
   let eventCount = 0;
+  let terminalState: "none" | "completed" | "incomplete" = "none";
   const eventTypes = new Map<string, number>();
   const sseDebugMode = resolveModelSseDebugMode();
   const blockIndex = () => output.content.length - 1;
@@ -538,7 +539,8 @@ export async function processResponsesStream(
           currentItem = null;
         }
       }
-    } else if (type === "response.completed" || type === "response.incomplete") {
+    } else if (type === "response.completed") {
+      terminalState = "completed";
       if (streamingToolCalls.hasActive()) {
         throw new Error("Responses stream completed with unresolved tool calls");
       }
@@ -546,8 +548,22 @@ export async function processResponsesStream(
       if (typeof response?.id === "string") {
         output.responseId = response.id;
       }
-      if (type === "response.completed") {
-        backfillTerminalResponseOutput(response, { includeToolCalls: true });
+      backfillTerminalResponseOutput(response, { includeToolCalls: true });
+      recordResponsesTerminalOutcome({
+        response,
+        output,
+        model,
+        serviceTier: options?.serviceTier,
+        applyServiceTierPricing: options?.applyServiceTierPricing,
+      });
+    } else if (type === "response.incomplete") {
+      terminalState = "incomplete";
+      if (streamingToolCalls.hasActive()) {
+        throw new Error("Responses stream ended with unresolved tool calls");
+      }
+      const response = event.response as Record<string, unknown> | undefined;
+      if (typeof response?.id === "string") {
+        output.responseId = response.id;
       }
       recordResponsesTerminalOutcome({
         response,
@@ -556,7 +572,7 @@ export async function processResponsesStream(
         serviceTier: options?.serviceTier,
         applyServiceTierPricing: options?.applyServiceTierPricing,
       });
-      if (type === "response.incomplete" && output.stopReason === "length") {
+      if (output.stopReason === "length") {
         // Some compatible endpoints carry generated text only on the terminal event. Preserve
         // that partial answer, but never materialize an incomplete function call for execution.
         backfillTerminalResponseOutput(response, { includeToolCalls: false });
@@ -577,7 +593,9 @@ export async function processResponsesStream(
     }
     await cooperativeScheduler.afterEvent();
   }
-  if (streamingToolCalls.hasActive()) {
+  if (terminalState === "none") {
+    output.stopReason = "error";
+  } else if (streamingToolCalls.hasActive()) {
     throw new Error("Responses stream ended with unresolved tool calls");
   }
   const eventTypeSummary = [...eventTypes.entries()]
