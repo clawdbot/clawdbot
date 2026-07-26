@@ -1,5 +1,6 @@
 import { clearBootstrapSnapshotOnSessionBoundary } from "../../agents/bootstrap-cache.js";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
+import { resetRegisteredAgentHarnessSessions } from "../../agents/harness/registry.js";
 // Handles session reset requests produced during agent runner execution.
 import { transitionMainSessionRecovery } from "../../agents/main-session-recovery-state.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -27,6 +28,7 @@ const deps = {
   generateSecureUuid,
   persistSessionResetLifecycle,
   refreshQueuedFollowupSession,
+  resetRegisteredAgentHarnessSessions,
   error: (message: string) => defaultRuntime.error(message),
 };
 
@@ -35,6 +37,7 @@ function setAgentRunnerSessionResetTestDeps(overrides?: Partial<typeof deps>): v
     generateSecureUuid,
     persistSessionResetLifecycle,
     refreshQueuedFollowupSession,
+    resetRegisteredAgentHarnessSessions,
     error: (message: string) => defaultRuntime.error(message),
     ...overrides,
   });
@@ -141,6 +144,13 @@ export async function resetReplyRunSession(params: {
   clearBootstrapSnapshotOnSessionBoundary({
     boundaryAppended: true,
     sessionKey: params.sessionKey,
+  });
+  await deps.resetRegisteredAgentHarnessSessions({
+    agentId,
+    sessionId: nextSessionId,
+    sessionKey: params.sessionKey,
+    sessionFile: nextSessionFile,
+    reason: "reset",
   });
   params.followupRun.run.sessionId = nextSessionId;
   params.followupRun.run.sessionFile = nextSessionFile;

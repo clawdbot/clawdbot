@@ -15,6 +15,7 @@ import { setAgentRunnerSessionResetTestDeps } from "./agent-runner-session-reset
 import { createTestFollowupRun, writeTestSessionStore } from "./agent-runner.test-fixtures.js";
 
 const refreshQueuedFollowupSessionMock = vi.fn();
+const resetRegisteredAgentHarnessSessionsMock = vi.fn();
 const errorMock = vi.fn();
 
 async function writeFileTranscript(filePath: string, sessionId: string): Promise<void> {
@@ -55,10 +56,12 @@ describe("resetReplyRunSession", () => {
   beforeEach(async () => {
     rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-reset-run-"));
     refreshQueuedFollowupSessionMock.mockReset();
+    resetRegisteredAgentHarnessSessionsMock.mockReset();
     errorMock.mockReset();
     setAgentRunnerSessionResetTestDeps({
       generateSecureUuid: () => "00000000-0000-0000-0000-000000000123",
       refreshQueuedFollowupSession: refreshQueuedFollowupSessionMock as never,
+      resetRegisteredAgentHarnessSessions: resetRegisteredAgentHarnessSessionsMock,
       error: errorMock,
     });
   });
@@ -178,6 +181,13 @@ describe("resetReplyRunSession", () => {
       previousSessionId: "session",
       nextSessionId: activeSessionEntry?.sessionId,
       nextSessionFile: activeSessionEntry?.sessionFile,
+    });
+    expect(resetRegisteredAgentHarnessSessionsMock).toHaveBeenCalledWith({
+      agentId: followupRun.run.agentId,
+      sessionId: "session",
+      sessionKey: "main",
+      sessionFile: activeSessionEntry?.sessionFile,
+      reason: "reset",
     });
     expect(errorMock).toHaveBeenCalledWith("reset session");
 

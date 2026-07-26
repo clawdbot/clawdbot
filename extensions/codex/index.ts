@@ -348,6 +348,11 @@ export default definePluginEntry({
       if (endedSessionKey && nextSessionKey && nextSessionKey !== endedSessionKey) {
         return;
       }
+      // Reset hooks already clear in-place lifecycle state before the next turn.
+      // A delayed session_end must not retire a replacement that reuses the id.
+      if (event.nextSessionId?.trim() === event.sessionId.trim()) {
+        return;
+      }
       const config = resolveCurrentConfig();
       const { sessionBindingIdentity } = await import("./src/app-server/session-binding.js");
       await bindingStore.retireSessionGeneration(
