@@ -15,6 +15,7 @@ import { loadSessionEntry, loadTranscriptEvents } from "../../config/sessions/se
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildChannelSummary } from "../../infra/channel-summary.js";
 import { emitContinuationQueueDrainSpan } from "../../infra/continuation-tracer.js";
+import { toErrorObject } from "../../infra/errors.js";
 import {
   formatUtcTimestamp,
   formatZonedTimestamp,
@@ -131,12 +132,14 @@ export type PreparedFormattedSystemEvents = {
   managedDeliveries: PreparedManagedSystemEventDelivery[];
 };
 
+const OPENCLAW_MESSAGE_METADATA_KEY = "__openclaw";
+
 function readSessionDeliveryAckIds(message: unknown): Set<string> {
   const ids = new Set<string>();
   if (!message || typeof message !== "object" || Array.isArray(message)) {
     return ids;
   }
-  const metadata = (message as { __openclaw?: unknown }).__openclaw;
+  const metadata = (message as Record<string, unknown>)[OPENCLAW_MESSAGE_METADATA_KEY];
   if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
     return ids;
   }
@@ -158,7 +161,7 @@ export async function acknowledgePersistedManagedSystemEvents(params: {
   persistedMessage: unknown;
 }): Promise<void> {
   const adoptedIds = readSessionDeliveryAckIds(params.persistedMessage);
-  let firstError: unknown;
+  let firstError: Error | undefined;
   for (const delivery of params.deliveries) {
     if (!adoptedIds.has(delivery.id)) {
       continue;
@@ -166,7 +169,7 @@ export async function acknowledgePersistedManagedSystemEvents(params: {
     try {
       await delivery.acknowledge();
     } catch (error) {
-      firstError ??= error;
+      firstError ??= toErrorObject(error, "Managed session delivery acknowledgement failed");
     }
   }
   if (firstError !== undefined) {
@@ -299,6 +302,11 @@ export async function prepareFormattedSystemEvents(params: {
       return undefined;
     }
     return `${event.sessionDeliveryAckId ?? ""}\u0000${event.sessionDeliveryAckStateDir ?? ""}\u0000${receipt.dispatchId}\u0000${receipt.recipientSessionKey}\u0000${receipt.recipientSessionId}`;
+  };
+  const refreshManagedEvent = (event: SystemEvent): SystemEvent => {
+    const key = managedKey(event);
+    const text = key ? refreshedManagedText.get(key) : undefined;
+    return text ? { ...event, text } : event;
   };
   for (const event of selected) {
     const receipt = event.delegateArtifactReceipt;
@@ -479,21 +487,13 @@ export async function prepareFormattedSystemEvents(params: {
   const queued = consumeSelectedSystemEventEntries(
     params.sessionKey,
     selected.filter((event) => !event.delegateArtifactReceipt && !deferredManagedEvents.has(event)),
-  ).map((event) => {
-    const key = managedKey(event);
-    const text = key ? refreshedManagedText.get(key) : undefined;
-    return text ? { ...event, text } : event;
-  });
+  ).map(refreshManagedEvent);
   const deliverable = queued.filter(
     (event) => !event.expectedSessionId || event.expectedSessionId === currentSessionId,
   );
   const pendingManagedEvents = selected
     .filter((event) => pendingManagedKeys.has(managedKey(event) ?? ""))
-    .map((event) => {
-      const key = managedKey(event);
-      const text = key ? refreshedManagedText.get(key) : undefined;
-      return text ? { ...event, text } : event;
-    });
+    .map(refreshManagedEvent);
   const promptEvents = [...deliverable, ...pendingManagedEvents];
   const sessionDeliveryAcks = new Map<
     string,

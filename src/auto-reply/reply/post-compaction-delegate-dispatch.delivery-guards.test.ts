@@ -218,14 +218,15 @@ function createDeliveryDeps(params: {
     }
     return { status: params.spawnStatus ?? "accepted" };
   });
+  const loadSessionEntry = vi.fn(({ storePath, sessionKey }) =>
+    sessionAccessorModule.loadSessionEntry({ storePath, sessionKey }),
+  );
   const markPendingDelegateSpawnAccepted = vi.fn(() => true);
   const markPendingDelegateFailed = vi.fn(() => true);
   const deps: PostCompactionDelegateDeliveryDeps = {
     enqueueSystemEvent,
     getRuntimeConfig: vi.fn(() => cfg),
-    loadSessionEntry: vi.fn(({ storePath, sessionKey }) =>
-      sessionAccessorModule.loadSessionEntry({ storePath, sessionKey }),
-    ),
+    loadSessionEntry,
     log,
     now: vi.fn(() => 1_700_000_000_000),
     patchSessionEntry: sessionAccessorModule.patchSessionEntry,
@@ -242,6 +243,7 @@ function createDeliveryDeps(params: {
   return {
     deps,
     enqueueSystemEvent,
+    loadSessionEntry,
     log,
     markPendingDelegateFailed,
     markPendingDelegateSpawnAccepted,
@@ -647,7 +649,7 @@ describe("post-compaction delegate dispatch extraction", () => {
       await expect(
         deliverQueuedPostCompactionDelegate({ entry }, disabled.deps),
       ).rejects.toBeInstanceOf(SessionDeliveryDeferredError);
-      expect(disabled.deps.loadSessionEntry).not.toHaveBeenCalled();
+      expect(disabled.loadSessionEntry).not.toHaveBeenCalled();
       expect(disabled.spawnSubagentDirect).not.toHaveBeenCalled();
       expect(disabled.markPendingDelegateSpawnAccepted).not.toHaveBeenCalled();
       expect(disabled.markPendingDelegateFailed).not.toHaveBeenCalled();
