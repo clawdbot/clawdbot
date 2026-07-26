@@ -24,6 +24,12 @@ const uiProofArtifactDir = path.join(
   "control-ui-e2e",
   "cloud-worker-session",
 );
+const reconnectProofArtifactDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "initial-prompt-reconnect",
+);
 
 const WORKSPACE = "/home/peter/openclaw";
 const PICKED = "/home/peter/openclaw/packages";
@@ -201,6 +207,76 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         throw new Error("expected visible prompt and tool rows");
       }
       expect(userRow.y).toBeLessThan(toolRow.y);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps the initial prompt visible across a Gateway reconnect", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const sessionKey = "agent:main:reconnected-initial-prompt";
+    const message = "keep this first prompt through reconnect";
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.create": { key: sessionKey, runStarted: true },
+        "chat.history": {
+          messages: [],
+          sessionId: "reconnected-initial-prompt",
+          sessionInfo: { hasActiveRun: true, key: sessionKey, status: "running" },
+        },
+      },
+    });
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      await page.locator(".new-session-page__message").fill(message);
+      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
+        timeout: 30_000,
+      });
+      await gateway.waitForRequest("chat.history");
+      await expect.poll(() => page.locator(".chat-group.user").textContent()).toContain(message);
+
+      const socketsBeforeReconnect = await gateway.getSocketCount();
+      await gateway.setOnline(false);
+      await expect
+        .poll(() => gateway.getSocketCount(), { timeout: 10_000 })
+        .toBeGreaterThan(socketsBeforeReconnect);
+      await gateway.setOnline(true);
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const app = document.querySelector("openclaw-app") as HTMLElement & {
+              runtime?: { context: { gateway: { snapshot: { phase: string } } } };
+            };
+            return app.runtime?.context.gateway.snapshot.phase;
+          }),
+        )
+        .toBe("connected");
+      await page.evaluate((selectedSessionKey) => {
+        const pane = document.querySelector("openclaw-chat-pane") as unknown as HTMLElement & {
+          state: { chatMessages: unknown[]; chatMessagesBySession: Map<string, unknown> };
+          switchPaneSession: (sessionKey: string) => void;
+        };
+        pane.state.chatMessages = [];
+        pane.state.chatMessagesBySession.clear();
+        pane.switchPaneSession("agent:main:temporary-session");
+        pane.switchPaneSession(selectedSessionKey);
+      }, sessionKey);
+      if (captureUiProofEnabled) {
+        await mkdir(reconnectProofArtifactDir, { recursive: true });
+        await page.screenshot({
+          path: path.join(reconnectProofArtifactDir, "reconnected-session.png"),
+          fullPage: true,
+        });
+      }
+
+      await expect.poll(() => page.locator(".chat-group.user").textContent()).toContain(message);
+      await expect.poll(() => page.locator(".chat-group.user").count()).toBe(1);
     } finally {
       await context.close();
     }
