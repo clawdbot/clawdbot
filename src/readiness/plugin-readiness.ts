@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type {
   PluginReadinessCriterionRegistration,
   PluginRegistry,
@@ -15,6 +16,7 @@ import {
 
 const DEFAULT_TIMEOUT_MS = 1_000;
 const DEFAULT_CACHE_TTL_MS = 5_000;
+const log = createSubsystemLogger("readiness/plugins");
 
 type CachedEvaluation = {
   expiresAt: number;
@@ -239,6 +241,13 @@ export function createPluginReadinessResolver(options?: {
         controller,
         timeoutMs,
         subjectCollection,
+      });
+      void value.then((evaluation) => {
+        if (evaluation.condition.reason.startsWith("Criterion")) {
+          log.warn(
+            `readiness criterion ${registration.id} unavailable: ${evaluation.condition.reason}`,
+          );
+        }
       });
       const entry: CachedEvaluation = {
         expiresAt: currentTime + cacheTtlMs,
