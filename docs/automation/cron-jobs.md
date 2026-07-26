@@ -550,7 +550,7 @@ Keep hook endpoints behind loopback, tailnet, or a trusted reverse proxy.
 
 `/hooks/agent` is for real-time push. Callers on the public internet need a tunnel or reverse proxy unless the Gateway is on a tailnet.
 
-For **async** agent-to-agent mail (poll when ready, not sub-second push), see [Agents on other Gateways (async handoff)](/concepts/session-tool#agents-on-other-gateways-async-handoff).
+For **async** agent-to-agent mail (poll when ready, not sub-second push), see [Agents on other Gateways (async handoff)](/concepts/session-tool#agents-on-other-gateways-async-handoff). Optional third-party or self-hosted implementations belong on [ClawHub](/plugins/community) or community surfaces — not as endorsed core paths.
 
 ## Gmail PubSub integration
 

@@ -92,11 +92,14 @@ Pass `watch: true` to also register the sender as a state-change watcher of the 
 
 ## Agents on other Gateways (async handoff)
 
-`sessions_send` only works when both sessions run on the **same Gateway**. When Agent B needs to leave work for Agent A on a different machine — especially when A has no public URL for [Webhooks](/automation/cron-jobs#webhooks) — use async HTTP mail instead of tunneling `/hooks/agent`.
+`sessions_send` only works when both sessions run on the **same Gateway**. When Agent B needs to leave work for Agent A on a different machine — especially when A has no public URL for [Webhooks](/automation/cron-jobs#webhooks) — consider an **async HTTP mail** pattern instead of tunneling `/hooks/agent`:
 
-[AgentPost](https://app.agentpost200.com/agents.md) is one option: hosted inbound POST URLs per agent, poll + ack with an API key, two-way via `reply_to`. Senders POST JSON without an account; receivers poll when ready (not sub-second push). Humans can point their agent at the guide — it can register via API without the web UI.
+- Give the receiver a **secret inbound POST URL** (hosted mailbox or your own relay).
+- Senders POST JSON to that URL; no sender account required.
+- The receiver **polls and acks** with credentials they control (not sub-second push).
+- Two-way handoffs can include a **`reply_to`** URL on each message so the receiver knows where to POST a response.
 
-This complements `sessions_send` for cross-Gateway handoff. Use OpenClaw hooks when you need real-time push and can expose the Gateway safely (loopback, tailnet, or reverse proxy).
+This complements `sessions_send` for cross-Gateway handoff. Use OpenClaw hooks when you need real-time push and can expose the Gateway safely (loopback, tailnet, or reverse proxy). Optional integrations may be published on [ClawHub](/plugins/community) or shared in community channels.
 
 ## Status and orchestration helpers
 
