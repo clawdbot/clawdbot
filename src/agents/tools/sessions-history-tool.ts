@@ -30,8 +30,8 @@ import {
 } from "./common.js";
 import { runWithScopedSessionAccess } from "./scoped-session-access.js";
 import {
-  createSessionVisibilityGuard,
   createAgentToAgentPolicy,
+  resolveDirectSessionVisibility,
   resolveEffectiveSessionToolsVisibility,
   resolveSessionReference,
   resolveSandboxedSessionToolContext,
@@ -431,14 +431,15 @@ export function createSessionsHistoryTool(opts?: {
         cfg,
         sandboxed: opts?.sandboxed === true,
       });
-      const visibilityGuard = await createSessionVisibilityGuard({
+      const access = await resolveDirectSessionVisibility({
         action: "history",
         defaultAgentId: resolveDefaultAgentId(cfg),
         requesterSessionKey: effectiveRequesterKey,
+        targetSessionKey: resolvedKey,
         visibility,
         a2aPolicy,
+        callGateway: gatewayCall,
       });
-      const access = visibilityGuard.check(resolvedKey);
       if (!access.allowed) {
         return jsonResult({
           status: access.status,

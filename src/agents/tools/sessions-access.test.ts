@@ -17,7 +17,10 @@ import {
   registerSessionStateWatch,
 } from "../../sessions/session-state-events.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { resolveSandboxedSessionToolContext } from "./sessions-access.js";
+import {
+  resolveDirectSessionVisibility,
+  resolveSandboxedSessionToolContext,
+} from "./sessions-access.js";
 import { testing as sessionsResolutionTesting } from "./sessions-resolution.test-support.js";
 
 describe("resolveSessionToolsVisibility", () => {
@@ -538,5 +541,93 @@ describe("createSessionVisibilityGuard", () => {
       error:
         "Session history visibility is restricted to the current session (tools.sessions.visibility=self).",
     });
+  });
+});
+
+describe("resolveDirectSessionVisibility", () => {
+  it("uses durable parent lineage after spawned listings drop an old child", async () => {
+    const callGateway = vi.fn(async (request: { method?: string }) => {
+      if (request.method === "sessions.describe") {
+        return {
+          session: {
+            key: "agent:main:dashboard:old-child",
+            parentSessionKey: "agent:main:main",
+            status: "done",
+            endedAt: 1,
+          },
+        };
+      }
+      throw new Error(`unexpected method: ${request.method}`);
+    });
+
+    const access = await resolveDirectSessionVisibility({
+      action: "history",
+      requesterSessionKey: "agent:main:main",
+      targetSessionKey: "agent:main:dashboard:old-child",
+      visibility: "tree",
+      a2aPolicy: createAgentToAgentPolicy({} as OpenClawConfig),
+      callGateway: callGateway as never,
+    });
+
+    expect(access).toEqual({ allowed: true });
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "sessions.describe",
+      params: { key: "agent:main:dashboard:old-child" },
+    });
+  });
+
+  it("does not grant unrelated same-agent sessions from an exact row", async () => {
+    const access = await resolveDirectSessionVisibility({
+      action: "history",
+      requesterSessionKey: "agent:main:main",
+      targetSessionKey: "agent:main:dashboard:unrelated",
+      visibility: "tree",
+      a2aPolicy: createAgentToAgentPolicy({} as OpenClawConfig),
+      callGateway: vi.fn(async () => ({
+        session: {
+          key: "agent:main:dashboard:unrelated",
+          parentSessionKey: "agent:main:someone-else",
+        },
+      })) as never,
+    });
+
+    expect(access).toEqual({
+      allowed: false,
+      status: "forbidden",
+      error:
+        "Session history visibility is restricted to the current session tree (tools.sessions.visibility=tree).",
+    });
+  });
+
+  it("falls back to the existing fail-closed lookup when describe is unavailable", async () => {
+    const callGateway = vi.fn(async (request: { method?: string }) => {
+      if (request.method === "sessions.describe") {
+        throw new Error("method unavailable");
+      }
+      if (request.method === "sessions.list") {
+        return { sessions: [] };
+      }
+      throw new Error(`unexpected method: ${request.method}`);
+    });
+    sessionsResolutionTesting.setDepsForTest({ callGateway: callGateway as never });
+    try {
+      const access = await resolveDirectSessionVisibility({
+        action: "history",
+        requesterSessionKey: "agent:main:main",
+        targetSessionKey: "agent:main:dashboard:old-child",
+        visibility: "tree",
+        a2aPolicy: createAgentToAgentPolicy({} as OpenClawConfig),
+        callGateway: callGateway as never,
+      });
+
+      expect(access.allowed).toBe(false);
+      expect(callGateway.mock.calls.map(([request]) => request.method)).toEqual([
+        "sessions.describe",
+        "sessions.list",
+      ]);
+    } finally {
+      sessionsResolutionTesting.setDepsForTest();
+    }
   });
 });

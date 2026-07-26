@@ -482,6 +482,51 @@ describe("sessions_history redaction", () => {
     }
   });
 
+  it("reads an old child from durable lineage after spawned listings drop it", async () => {
+    const requesterSessionKey = "agent:main:main";
+    const targetSessionKey = "agent:main:dashboard:old-child";
+    const requests: CallGatewayRequest[] = [];
+    const tool = createSessionsHistoryTool({
+      agentSessionKey: requesterSessionKey,
+      config: {
+        tools: { sessions: { visibility: "tree" } },
+      } as OpenClawConfig,
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        if (request.method === "sessions.describe") {
+          return {
+            session: {
+              key: targetSessionKey,
+              parentSessionKey: requesterSessionKey,
+              status: "done",
+              endedAt: 1,
+            },
+          } as T;
+        }
+        if (request.method === "chat.history") {
+          return {
+            messages: [{ role: "assistant", content: "durable child history" }],
+          } as T;
+        }
+        throw new Error(`unexpected method: ${request.method}`);
+      },
+    });
+
+    const result = await tool.execute("old-child-history", {
+      sessionKey: targetSessionKey,
+      limit: 1,
+    });
+
+    expect(result.details).toMatchObject({
+      sessionKey: targetSessionKey,
+      messages: [{ role: "assistant", content: "durable child history" }],
+    });
+    expect(requests.map((request) => request.method)).toEqual([
+      "sessions.describe",
+      "chat.history",
+    ]);
+  });
+
   it("rejects a scoped grant when the target incarnation changes before the read", async () => {
     const requesterSessionKey = "agent:main:clickclack:discussion-race";
     const targetSessionKey = "agent:main:main";
