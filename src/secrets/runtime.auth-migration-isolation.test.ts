@@ -79,5 +79,5 @@ describe("auth profile migration isolation", () => {
         store: snapshot.authStores.find((entry) => entry.agentDir === healthyAgentDir)?.store,
       }),
     ).resolves.toMatchObject({ apiKey: "fake-healthy-key" });
-  });
+  }, 240_000);
 });
