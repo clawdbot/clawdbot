@@ -345,13 +345,16 @@ export async function synthesizeSessionObserverTerminalDigest(params: {
         return false;
       }
       try {
-        return await params.persistDigest({
+        // null means the store entry is gone (unpersistable session) — treat as
+        // a terminal false rather than a retryable failure.
+        const persisted = await params.persistDigest({
           sessionKey,
           sessionId,
           agentId,
           digest: candidate,
           stillCurrent: params.stillCurrent,
         });
+        return persisted === true;
       } catch (error) {
         lastError = error;
       }
