@@ -303,7 +303,12 @@ function readArtifactReturnFields(params: Record<string, unknown>): {
       throw new ToolInputError("recipientContext.purpose must be a non-empty string.");
     }
     purpose = record.purpose.trim();
-    if (/[\u0000-\u001f\u007f]/.test(purpose)) {
+    if (
+      Array.from(purpose).some((char) => {
+        const code = char.charCodeAt(0);
+        return code < 0x20 || code === 0x7f;
+      })
+    ) {
       throw new ToolInputError("recipientContext.purpose must not contain control characters.");
     }
     if (Buffer.byteLength(purpose, "utf8") > 1024) {

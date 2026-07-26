@@ -35,9 +35,14 @@ import {
 import { generateChainId } from "../../infra/secure-random.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { runWithGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
 import { sanitizeInboundSystemTags } from "../../security/system-tags.js";
 import { resolveContinuationRuntimeConfig } from "./config.js";
+import {
+  armDelegateDispatchHedge,
+  clearDelegateDispatchHedge,
+  DELEGATE_DISPATCH_RETRY_MS,
+} from "./delegate-dispatch-hedge.js";
+export { resetDelegateDispatchHedgesForTests } from "./delegate-dispatch-hedge.js";
 import {
   annotateQueuedDelegatesInheritedPolicy,
   clearRecoverableDelegatesChainTokensFold,
@@ -49,30 +54,10 @@ import {
   requeuePendingDelegate,
 } from "./delegate-store.js";
 import { checkContinuationBudget, type ChainState } from "./scheduler.js";
-import {
-  registerContinuationTimerHandle,
-  retainContinuationTimerRef,
-  unregisterContinuationTimerHandle,
-} from "./state.js";
 import { hasCrossSessionDelegateTargeting } from "./targeting-pure.js";
 import type { ContinuationRuntimeConfig, PendingContinuationDelegate } from "./types.js";
 
 const log = createSubsystemLogger("continuation/delegate-dispatch");
-const HEDGE_DISPATCH_FAILURE_RETRY_MS = 30_000;
-
-// Per-session hedge timer for re-checking unmatured pending delegates in fully
-// quiet channels (no further response-finalize event). Idempotent per
-// sessionKey: a fresh dispatch call cancels + replaces any existing hedge.
-const hedgeTimers = new Map<string, NodeJS.Timeout>();
-
-function clearHedgeTimer(sessionKey: string): void {
-  const existing = hedgeTimers.get(sessionKey);
-  if (existing) {
-    clearTimeout(existing);
-    hedgeTimers.delete(sessionKey);
-    unregisterContinuationTimerHandle(sessionKey, existing);
-  }
-}
 
 function formatErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -80,19 +65,6 @@ function formatErrorMessage(err: unknown): string {
 
 function formatDelegateTaskForSystemEvent(task: string): string {
   return sanitizeInboundSystemTags(task);
-}
-
-function surfaceHedgeDispatchFailure(sessionKey: string, errorMessage: string): void {
-  try {
-    enqueueSystemEvent(
-      `[system:continuation-warning] Hedge-timer dispatch failed; queued delegates may be orphaned. Error: ${errorMessage}. Re-issue continue_delegate if the work is still needed.`,
-      { sessionKey, trusted: true },
-    );
-  } catch (err) {
-    log.error(
-      `[continuation:delegate-hedge-event-error] error=${formatErrorMessage(err)} session=${sessionKey}`,
-    );
-  }
 }
 
 /** @internal One-way recovery classifier for persist-before-terminal failures. */
@@ -133,126 +105,51 @@ async function persistChainStateBeforeTerminalCommit(
   }
 }
 
-function armHedgeTimer(
-  sessionKey: string,
-  fireAt: number,
-  params: {
-    chainState: ChainState;
-    ctx: DelegateDispatchContext;
-    maxChainLength: number;
-    config?: ContinuationRuntimeConfig;
-    loadFreshChainState?: () => ChainState;
-    applyDelegateChainTokensFold?: boolean;
-    persistChainState?: (chainState: ChainState) => void | Promise<void>;
-    persistBeforeTerminalCommit?: boolean;
-    recoverRunningDelegates?: boolean;
-    queuedCreatedAtOrBefore?: number;
-    includeRunningUpdatedAtOrBefore?: number;
-    inheritedSilent?: boolean;
-    inheritedWake?: boolean;
-  },
-): void {
-  clearHedgeTimer(sessionKey);
-  const fireIn = Math.max(0, fireAt - Date.now());
-  log.info(
-    `[continuation:delegate-hedge-armed] fireIn=${fireIn}ms fireAt=${fireAt} session=${sessionKey}`,
-  );
-  retainContinuationTimerRef(sessionKey);
-  const handle = setTimeout(() => {
-    hedgeTimers.delete(sessionKey);
-    // Release ref + handle registration on natural fire (matches
-    // clearHedgeTimer on cancel). Without this, every hedge that fires
-    // naturally leaks a timer-ref and handle, keeping continuation state
-    // alive past its useful lifetime.
-    unregisterContinuationTimerHandle(sessionKey, handle);
-    log.info(`[continuation:delegate-hedge-fired] session=${sessionKey}`);
-    void runWithGatewayIndependentRootWorkAdmission(async () => {
-      // Re-load chain state at fire time when the caller supplies a
-      // fresh-loader. The originally-captured `params.chainState`
-      // is a snapshot from when the hedge was armed and may understate
-      // currentChainCount if other dispatches advanced it in between. The
-      // hedge must enforce the chain-budget against the latest persisted
-      // state, not the snapshot.
-      const refreshedChainState = params.loadFreshChainState
-        ? params.loadFreshChainState()
-        : params.chainState;
-      const result = await dispatchToolDelegates({
-        sessionKey,
-        chainState: refreshedChainState,
-        ctx: params.ctx,
-        maxChainLength: params.maxChainLength,
-        ...(params.config ? { config: params.config } : {}),
-        loadFreshChainState: params.loadFreshChainState,
-        // Carry the recovery fold flag across the hedge: a recovered delayed
-        // delegate annotated with `chainTokensFold` after a child chain-cost
-        // persist failure must still be checked against the folded (not stale)
-        // basis when its delay elapses and the hedge re-dispatches it.
-        ...(params.applyDelegateChainTokensFold ? { applyDelegateChainTokensFold: true } : {}),
-        persistChainState: params.persistChainState,
-        ...(params.persistBeforeTerminalCommit || params.persistChainState
-          ? { persistBeforeTerminalCommit: true }
-          : {}),
-        ...(params.recoverRunningDelegates ? { recoverRunningDelegates: true } : {}),
-        ...(params.queuedCreatedAtOrBefore !== undefined
-          ? { queuedCreatedAtOrBefore: params.queuedCreatedAtOrBefore }
-          : {}),
-        ...(params.includeRunningUpdatedAtOrBefore !== undefined
-          ? { includeRunningUpdatedAtOrBefore: params.includeRunningUpdatedAtOrBefore }
-          : {}),
-        // Inherited silent/wake policy must survive the hedge: a delayed delegate
-        // armed by a silent/wake parent chain must still spawn internal when the
-        // hedge finally dispatches it, not announce to the channel.
-        ...(params.inheritedSilent ? { inheritedSilent: true } : {}),
-        ...(params.inheritedWake ? { inheritedWake: true } : {}),
-      });
-      if (params.persistChainState && (result.dispatched > 0 || result.rejected > 0)) {
-        if (!result.chainStatePersistedBeforeTerminalCommit) {
-          await params.persistChainState(result.chainState);
-        }
-        if (result.appliedChainTokensFold && result.appliedChainTokensFold > 0) {
-          clearRecoverableDelegatesChainTokensFold(sessionKey);
-        }
-      }
-    }).catch((err: unknown) => {
-      const errorMessage = formatErrorMessage(err);
-      log.error(`[continuation:delegate-hedge-error] error=${errorMessage} session=${sessionKey}`);
-      surfaceHedgeDispatchFailure(sessionKey, errorMessage);
-      try {
-        armHedgeTimer(sessionKey, Date.now() + HEDGE_DISPATCH_FAILURE_RETRY_MS, {
-          ...params,
-          ...(params.persistChainState ? { persistBeforeTerminalCommit: true } : {}),
-          recoverRunningDelegates: true,
-          includeRunningUpdatedAtOrBefore: Date.now(),
-        });
-      } catch (rearmErr) {
-        log.error(
-          `[continuation:delegate-hedge-rearm-error] error=${formatErrorMessage(rearmErr)} session=${sessionKey}`,
-        );
-      }
-    });
-  }, fireIn);
-  registerContinuationTimerHandle(sessionKey, handle);
-  handle.unref();
-  hedgeTimers.set(sessionKey, handle);
-}
-
-/**
- * Test-only: cancel any pending hedge timers and clear the registry.
- */
-export function resetDelegateDispatchHedgesForTests(): void {
-  for (const [sessionKey, handle] of hedgeTimers) {
-    clearTimeout(handle);
-    unregisterContinuationTimerHandle(sessionKey, handle);
-  }
-  hedgeTimers.clear();
-}
-
 export type DelegateDispatchContext = {
   sessionKey: string;
   agentChannel?: string;
   agentAccountId?: string;
   agentTo?: string;
   agentThreadId?: string | number;
+};
+
+export type DelegateDispatchParams = {
+  sessionKey: string;
+  chainState: ChainState;
+  ctx: DelegateDispatchContext;
+  maxChainLength: number;
+  /**
+   * Resolved runtime config for the active run. Callers with scoped/runtime
+   * snapshots should pass it so delegate caps match the turn that queued them.
+   */
+  config?: ContinuationRuntimeConfig;
+  /**
+   * Delegate slots already consumed by another continuation signal in the same
+   * turn, e.g. a bracket-style CONTINUE_DELEGATE.
+   */
+  reservedDelegateSlots?: number;
+  /**
+   * Optional callback the hedge timer invokes to re-load the chain state
+   * from the persisted session entry at fire time.
+   */
+  loadFreshChainState?: () => ChainState;
+  recoverRunningDelegates?: boolean;
+  queuedCreatedAtOrBefore?: number;
+  includeRunningUpdatedAtOrBefore?: number;
+  dispatchQueuedRegardlessOfDelay?: boolean;
+  applyDelegateChainTokensFold?: boolean;
+  persistChainState?: (chainState: ChainState) => void | Promise<void>;
+  persistBeforeTerminalCommit?: boolean;
+  inheritedSilent?: boolean;
+  inheritedWake?: boolean;
+};
+
+export type DelegateDispatchResult = {
+  dispatched: number;
+  rejected: number;
+  chainState: ChainState;
+  appliedChainTokensFold?: number;
+  chainStatePersistedBeforeTerminalCommit?: boolean;
 };
 
 /**
@@ -277,98 +174,34 @@ function markDelegateFailed(
   return markPendingDelegateFailed(delegate, summary);
 }
 
-export async function dispatchToolDelegates(params: {
-  sessionKey: string;
-  chainState: ChainState;
-  ctx: DelegateDispatchContext;
-  maxChainLength: number;
-  /**
-   * Resolved runtime config for the active run. Callers with scoped/runtime
-   * snapshots should pass it so delegate caps match the turn that queued them.
-   */
-  config?: ContinuationRuntimeConfig;
-  /**
-   * Delegate slots already consumed by another continuation signal in the same
-   * turn, e.g. a bracket-style CONTINUE_DELEGATE.
-   */
-  reservedDelegateSlots?: number;
-  /**
-   * Optional callback the hedge timer invokes to re-load the chain state
-   * from the persisted session entry at fire time, so the re-dispatch sees
-   * any chain-count advancement that happened while the timer was pending.
-   * Without this the hedge captures a stale `chainState` snapshot and may
-   * dispatch past `maxChainLength`.
-   */
-  loadFreshChainState?: () => ChainState;
-  recoverRunningDelegates?: boolean;
-  queuedCreatedAtOrBefore?: number;
-  includeRunningUpdatedAtOrBefore?: number;
-  /**
-   * Dispatch queued delegates immediately even if their `delayMs` has not
-   * elapsed. Fail-closed lever for the child chain-cost persist-failure path:
-   * a delayed delegate left durably queued would recover from the stale child
-   * entry and under-enforce the cost cap, so dispatch it now on the correct
-   * in-memory folded basis instead.
-   */
-  dispatchQueuedRegardlessOfDelay?: boolean;
-  /**
-   * When true, add each consumed delegate's durable `chainTokensFold` to the
-   * chain cost basis. Set by restart recovery: recovery rebuilds chain cost from
-   * the child session entry, which is stale (missing this run's tokens) when the
-   * settle-time persist failed; the delegate carries the fold so the cost cap is
-   * still enforced against the post-run total. Live dispatch leaves this
-   * unset because the live drain already folds the cost into `chainState`.
-   */
-  applyDelegateChainTokensFold?: boolean;
-  /**
-   * Optional callback used by hedge-fired dispatches, where there is no
-   * enclosing runner finalize frame to persist the advanced chain state.
-   */
-  persistChainState?: (chainState: ChainState) => void | Promise<void>;
-  /**
-   * Recovery paths must persist the advanced/folded chain state before they
-   * terminalize a claimed TaskFlow row. If the write fails, the row stays
-   * `running` so the next recovery can reconcile an already-accepted child
-   * without losing the only durable chain-cost fold.
-   */
-  persistBeforeTerminalCommit?: boolean;
-  /**
-   * Inherited silent/wake policy from a silent/wake parent continuation chain.
-   * When set, a consumed delegate with its own `mode` unset (normal) still
-   * spawns internal (silent) — and wakes on return when `inheritedWake` is also
-   * set — instead of announcing to the channel. Mirrors the `parentWasSilent`
-   * handling the subagent-announce chain-hop guards apply, so descendants of a
-   * silent/wake chain drained early stay internal.
-   */
-  inheritedSilent?: boolean;
-  inheritedWake?: boolean;
-}): Promise<{
-  dispatched: number;
-  rejected: number;
-  chainState: ChainState;
-  appliedChainTokensFold?: number;
-  chainStatePersistedBeforeTerminalCommit?: boolean;
-}> {
+export async function dispatchToolDelegates(
+  params: DelegateDispatchParams,
+): Promise<DelegateDispatchResult> {
   const { sessionKey, chainState, ctx } = params;
   const config = params.config ?? resolveContinuationRuntimeConfig();
   const armManagedSpawnRetry = () => {
-    armHedgeTimer(sessionKey, Date.now() + HEDGE_DISPATCH_FAILURE_RETRY_MS, {
-      chainState: params.chainState,
-      ctx: params.ctx,
-      maxChainLength: params.maxChainLength,
-      ...(params.config ? { config: params.config } : {}),
-      loadFreshChainState: params.loadFreshChainState,
-      ...(params.applyDelegateChainTokensFold ? { applyDelegateChainTokensFold: true } : {}),
-      persistChainState: params.persistChainState,
-      ...(params.persistBeforeTerminalCommit ? { persistBeforeTerminalCommit: true } : {}),
-      recoverRunningDelegates: true,
-      ...(params.queuedCreatedAtOrBefore !== undefined
-        ? { queuedCreatedAtOrBefore: params.queuedCreatedAtOrBefore }
-        : {}),
-      includeRunningUpdatedAtOrBefore: Date.now(),
-      ...(params.inheritedSilent ? { inheritedSilent: true } : {}),
-      ...(params.inheritedWake ? { inheritedWake: true } : {}),
-    });
+    armDelegateDispatchHedge(
+      sessionKey,
+      Date.now() + DELEGATE_DISPATCH_RETRY_MS,
+      {
+        chainState: params.chainState,
+        ctx: params.ctx,
+        maxChainLength: params.maxChainLength,
+        ...(params.config ? { config: params.config } : {}),
+        loadFreshChainState: params.loadFreshChainState,
+        ...(params.applyDelegateChainTokensFold ? { applyDelegateChainTokensFold: true } : {}),
+        persistChainState: params.persistChainState,
+        ...(params.persistBeforeTerminalCommit ? { persistBeforeTerminalCommit: true } : {}),
+        recoverRunningDelegates: true,
+        ...(params.queuedCreatedAtOrBefore !== undefined
+          ? { queuedCreatedAtOrBefore: params.queuedCreatedAtOrBefore }
+          : {}),
+        includeRunningUpdatedAtOrBefore: Date.now(),
+        ...(params.inheritedSilent ? { inheritedSilent: true } : {}),
+        ...(params.inheritedWake ? { inheritedWake: true } : {}),
+      },
+      dispatchToolDelegates,
+    );
   };
   // Fail closed: applying a delegate chain-cost fold requires a persist path so
   // a hedge armed for a still-unmatured delegate can durably advance the folded
@@ -397,27 +230,32 @@ export async function dispatchToolDelegates(params: {
       ...(params.inheritedSilent ? { inheritedSilent: true } : {}),
       ...(params.inheritedWake ? { inheritedWake: true } : {}),
     });
-    armHedgeTimer(sessionKey, soonestUnmaturedDueAt, {
-      chainState: params.chainState,
-      ctx: params.ctx,
-      maxChainLength: params.maxChainLength,
-      ...(params.config ? { config: params.config } : {}),
-      loadFreshChainState: params.loadFreshChainState,
-      ...(params.applyDelegateChainTokensFold ? { applyDelegateChainTokensFold: true } : {}),
-      persistChainState: params.persistChainState,
-      ...(params.persistBeforeTerminalCommit ? { persistBeforeTerminalCommit: true } : {}),
-      ...(params.recoverRunningDelegates ? { recoverRunningDelegates: true } : {}),
-      ...(params.queuedCreatedAtOrBefore !== undefined
-        ? { queuedCreatedAtOrBefore: params.queuedCreatedAtOrBefore }
-        : {}),
-      ...(params.includeRunningUpdatedAtOrBefore !== undefined
-        ? { includeRunningUpdatedAtOrBefore: params.includeRunningUpdatedAtOrBefore }
-        : {}),
-      ...(params.inheritedSilent ? { inheritedSilent: true } : {}),
-      ...(params.inheritedWake ? { inheritedWake: true } : {}),
-    });
+    armDelegateDispatchHedge(
+      sessionKey,
+      soonestUnmaturedDueAt,
+      {
+        chainState: params.chainState,
+        ctx: params.ctx,
+        maxChainLength: params.maxChainLength,
+        ...(params.config ? { config: params.config } : {}),
+        loadFreshChainState: params.loadFreshChainState,
+        ...(params.applyDelegateChainTokensFold ? { applyDelegateChainTokensFold: true } : {}),
+        persistChainState: params.persistChainState,
+        ...(params.persistBeforeTerminalCommit ? { persistBeforeTerminalCommit: true } : {}),
+        ...(params.recoverRunningDelegates ? { recoverRunningDelegates: true } : {}),
+        ...(params.queuedCreatedAtOrBefore !== undefined
+          ? { queuedCreatedAtOrBefore: params.queuedCreatedAtOrBefore }
+          : {}),
+        ...(params.includeRunningUpdatedAtOrBefore !== undefined
+          ? { includeRunningUpdatedAtOrBefore: params.includeRunningUpdatedAtOrBefore }
+          : {}),
+        ...(params.inheritedSilent ? { inheritedSilent: true } : {}),
+        ...(params.inheritedWake ? { inheritedWake: true } : {}),
+      },
+      dispatchToolDelegates,
+    );
   } else {
-    clearHedgeTimer(sessionKey);
+    clearDelegateDispatchHedge(sessionKey);
   }
 
   if (toolDelegates.length === 0) {
@@ -447,16 +285,16 @@ export async function dispatchToolDelegates(params: {
     }
     return committed;
   };
-  const currentArtifactRuntime = resolveContinuationRuntimeConfig(getRuntimeConfig());
+  const artifactRuntimeSnapshot = resolveContinuationRuntimeConfig(getRuntimeConfig());
   const dispatchableDelegates: PendingContinuationDelegate[] = [];
   for (const delegate of toolDelegates) {
-    if (hasManagedArtifacts(delegate) && !currentArtifactRuntime.enabled) {
+    if (hasManagedArtifacts(delegate) && !artifactRuntimeSnapshot.enabled) {
       requeuePendingDelegate(delegate);
       continue;
     }
     if (
       hasManagedArtifacts(delegate) &&
-      currentArtifactRuntime.crossSessionTargeting === "disabled" &&
+      artifactRuntimeSnapshot.crossSessionTargeting === "disabled" &&
       hasCrossSessionDelegateTargeting(delegate, sessionKey)
     ) {
       requeuePendingDelegate(
