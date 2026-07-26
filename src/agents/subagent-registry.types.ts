@@ -2,10 +2,17 @@ import type { SubagentEndReason } from "../context-engine/types.js";
 /** Persisted execution, completion, delivery, and attachment state for child runs. */
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { AgentRunSessionTarget } from "./run-session-target.js";
-import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import type { SubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
+
+export type SubagentRunOutcome = {
+  status: "ok" | "error" | "timeout" | "unknown";
+  error?: string;
+  startedAt?: number;
+  endedAt?: number;
+  elapsedMs?: number;
+};
 
 export type SubagentCompletionRequest = {
   runId: string;

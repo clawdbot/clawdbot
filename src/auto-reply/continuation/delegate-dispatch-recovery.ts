@@ -11,10 +11,10 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.js";
 import { resolveContinuationRuntimeConfig } from "./config.js";
+import type { DelegateDispatchContext } from "./delegate-dispatch-contract.js";
 import {
   DelegateTerminalChainStatePersistError,
   dispatchToolDelegates,
-  type DelegateDispatchContext,
 } from "./delegate-dispatch.js";
 import {
   assertStagedPostCompactionFinalizationComplete,

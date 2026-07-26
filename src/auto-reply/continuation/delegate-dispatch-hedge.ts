@@ -1,7 +1,10 @@
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
-import type { DelegateDispatchParams, DelegateDispatchResult } from "./delegate-dispatch.js";
+import type {
+  DelegateDispatchParams,
+  DelegateDispatchResult,
+} from "./delegate-dispatch-contract.js";
 import { clearRecoverableDelegatesChainTokensFold } from "./delegate-store.js";
 import {
   registerContinuationTimerHandle,

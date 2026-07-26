@@ -2,7 +2,7 @@ import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.
 import { recordSubagentTerminalState } from "../sessions/session-state-events.js";
 import type { DetachedTaskFindResult } from "../tasks/detached-task-runtime-contract.js";
 import { isProvisionalSubagentKillTask } from "../tasks/task-cancellation-state.js";
-import { type SubagentRunOutcome, withSubagentOutcomeTiming } from "./subagent-announce-output.js";
+import { withSubagentOutcomeTiming } from "./subagent-announce-output.js";
 import { clearDeliveryState, ensureCompletionState } from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -28,7 +28,11 @@ import type {
 } from "./subagent-registry-lifecycle-contracts.js";
 import type { createSubagentRegistryLifecycleDelivery } from "./subagent-registry-lifecycle-delivery.js";
 import { createSubagentRegistryLifecycleTerminalCleanup } from "./subagent-registry-lifecycle-terminal-cleanup.js";
-import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
+import type {
+  SubagentCompletionRequest,
+  SubagentRunOutcome,
+  SubagentRunRecord,
+} from "./subagent-registry.types.js";
 import { updateSwarmCollectorCompletion } from "./swarm-collector.js";
 import { releaseSwarmRun } from "./swarm-scheduler.js";
 import { peekSwarmStructuredOutput } from "./tools/structured-output-tool.js";
