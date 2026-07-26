@@ -177,11 +177,28 @@ describe("phase hooks merger", () => {
           captureScope("agent_end");
         },
       },
+      {
+        hookName: "subagent_spawning",
+        pluginId: "spawning-plugin",
+        handler: () => {
+          captureScope("subagent_spawning");
+          return { status: "ok" };
+        },
+      },
     ]);
 
     await runner.runBeforePromptBuild({ prompt: "test", messages: [] }, { agentId: "codex" });
     await runner.runBeforeAgentReply({ cleanedBody: "test" }, { agentId: "codex" });
     await runner.runAgentEnd({ messages: [], success: true }, { agentId: "codex" });
+    await runner.runSubagentSpawning(
+      {
+        childSessionKey: "child",
+        agentId: "child-agent",
+        mode: "run",
+        threadRequested: false,
+      },
+      {},
+    );
 
     expect(scopes).toEqual({
       mutator_plugin: {
@@ -202,6 +219,11 @@ describe("phase hooks merger", () => {
       agent_end: {
         pluginId: "end-plugin",
         agentId: "codex",
+        pluginSource: "test",
+      },
+      subagent_spawning: {
+        pluginId: "spawning-plugin",
+        agentId: "child-agent",
         pluginSource: "test",
       },
     });
@@ -241,6 +263,20 @@ describe("phase hooks merger", () => {
           captureScope("before_message_write");
         },
       },
+      {
+        hookName: "subagent_spawned",
+        pluginId: "spawned-plugin",
+        handler: () => {
+          captureScope("subagent_spawned");
+        },
+      },
+      {
+        hookName: "cron_changed",
+        pluginId: "cron-plugin",
+        handler: () => {
+          captureScope("cron_changed");
+        },
+      },
     ]);
 
     await runner.runInboundClaimForPluginOutcome(
@@ -253,14 +289,27 @@ describe("phase hooks merger", () => {
       { channelId: "test" },
     );
     runner.runBeforeMessageWrite(
-      { message: { role: "user", content: "test", timestamp: 1 } },
+      { message: { role: "user", content: "test", timestamp: 1 }, agentId: "event-agent" },
       { agentId: "codex" },
     );
+    await runner.runSubagentSpawned(
+      {
+        runId: "run-1",
+        childSessionKey: "child",
+        agentId: "child-agent",
+        mode: "run",
+        threadRequested: false,
+      },
+      {},
+    );
+    await runner.runCronChanged({ action: "started", jobId: "job-1", agentId: "cron-agent" }, {});
 
     expect(scopes).toEqual({
       targeted_claim: { pluginId: "target-plugin", agentId: "codex" },
       reply_payload_sending: { pluginId: "payload-plugin", agentId: "codex" },
       before_message_write: { pluginId: "sync-plugin", agentId: "codex" },
+      subagent_spawned: { pluginId: "spawned-plugin", agentId: "child-agent" },
+      cron_changed: { pluginId: "cron-plugin", agentId: "cron-agent" },
     });
   });
 

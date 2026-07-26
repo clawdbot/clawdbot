@@ -200,12 +200,17 @@ type SyncHookEvent<K extends SyncHookName> = Parameters<SyncHookHandler<K>>[0];
 type SyncHookContext<K extends SyncHookName> = Parameters<SyncHookHandler<K>>[1];
 type SyncHookResult<K extends SyncHookName> = ReturnType<SyncHookHandler<K>>;
 
-function resolvePluginHookAgentId(ctx: unknown): string | undefined {
-  const rawAgentId =
-    typeof ctx === "object" && ctx !== null && "agentId" in ctx
-      ? (ctx as { agentId?: unknown }).agentId
-      : undefined;
-  return typeof rawAgentId === "string" ? rawAgentId.trim() || undefined : undefined;
+function resolvePluginHookAgentId(...sources: unknown[]): string | undefined {
+  for (const source of sources) {
+    const rawAgentId =
+      typeof source === "object" && source !== null && "agentId" in source
+        ? (source as { agentId?: unknown }).agentId
+        : undefined;
+    if (typeof rawAgentId === "string" && rawAgentId.trim()) {
+      return rawAgentId.trim();
+    }
+  }
+  return undefined;
 }
 
 function runWithPluginHookScope<K extends PluginHookName, T>(
@@ -213,8 +218,8 @@ function runWithPluginHookScope<K extends PluginHookName, T>(
   agentId: string | undefined,
   run: () => T,
 ): T {
-  // Hook registration owns plugin identity; host hook context owns agent identity.
-  // Bind both before plugin code runs so runtime helpers cannot use unrelated scope.
+  // Registration owns plugin identity; host context/event owns explicit agent identity.
+  // Omitting agentId preserves an already established host scope for replay paths.
   return withPluginRuntimePluginScope(
     {
       pluginId: hook.pluginId,
@@ -572,7 +577,7 @@ export function createHookRunner(
       return;
     }
 
-    const agentId = resolvePluginHookAgentId(ctx);
+    const agentId = resolvePluginHookAgentId(ctx, event);
     logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers)`);
 
     const promises = hooks.map(async (hook) => {
@@ -611,7 +616,7 @@ export function createHookRunner(
       return undefined;
     }
 
-    const agentId = resolvePluginHookAgentId(ctx);
+    const agentId = resolvePluginHookAgentId(ctx, event);
     logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers, sequential)`);
 
     let result: TResult | undefined;
@@ -699,7 +704,7 @@ export function createHookRunner(
     event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
     ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
   ): Promise<TResult | undefined> {
-    const agentId = resolvePluginHookAgentId(ctx);
+    const agentId = resolvePluginHookAgentId(ctx, event);
     for (const hook of hooks) {
       try {
         const promise = Promise.resolve(
@@ -752,7 +757,7 @@ export function createHookRunner(
       `[hooks] running ${hookName} for ${pluginId} (${hooks.length} handlers, targeted outcome)`,
     );
 
-    const agentId = resolvePluginHookAgentId(ctx);
+    const agentId = resolvePluginHookAgentId(ctx, event);
     let firstError: string | null = null;
     for (const hook of hooks) {
       try {
@@ -1072,8 +1077,8 @@ export function createHookRunner(
     logger?.debug?.(`[hooks] running reply_payload_sending (${hooks.length} handlers, sequential)`);
 
     // Live reply delivery carries host-owned agent identity on the per-turn usage event;
-    // durable/replay paths may omit it and therefore remain intentionally unscoped.
-    const agentId = resolvePluginHookAgentId(ctx) ?? resolvePluginHookAgentId(event.usageState);
+    // durable/replay paths may omit it and preserve an already established host scope.
+    const agentId = resolvePluginHookAgentId(ctx, event, event.usageState);
     let currentPayload: ReplyPayload = event.payload;
     let result: PluginHookReplyPayloadSendingResult | undefined;
 
@@ -1286,7 +1291,7 @@ export function createHookRunner(
       return undefined;
     }
 
-    const agentId = resolvePluginHookAgentId(ctx);
+    const agentId = resolvePluginHookAgentId(ctx, event);
     let current = event.message;
 
     for (const hook of hooks) {
@@ -1347,7 +1352,7 @@ export function createHookRunner(
       return undefined;
     }
 
-    const agentId = resolvePluginHookAgentId(ctx);
+    const agentId = resolvePluginHookAgentId(ctx, event);
     let current = event.message;
 
     for (const hook of hooks) {
