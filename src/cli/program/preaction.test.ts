@@ -406,7 +406,7 @@ describe("registerPreActionHooks", () => {
 
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
-      commandPath: ["agent", "hi"],
+      commandPath: ["agent"],
     });
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "all",
@@ -421,7 +421,7 @@ describe("registerPreActionHooks", () => {
 
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
-      commandPath: ["agent", "hi"],
+      commandPath: ["agent"],
       suppressDoctorStdout: true,
     });
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
