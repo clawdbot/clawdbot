@@ -44,7 +44,7 @@ export async function resolveAgentRunSessionTarget(params: {
   const legacySessionFile = normalizeOptionalString(params.sessionFile);
   const legacyMarker = parseSqliteSessionFileMarker(legacySessionFile);
   const plainCompatibilitySessionKey =
-    legacySessionFile === params.sessionId ? legacySessionFile : undefined;
+    legacySessionFile === (targetSessionId ?? params.sessionId) ? legacySessionFile : undefined;
   if (
     !hasCompleteTypedTarget &&
     legacySessionFile &&

@@ -5,6 +5,7 @@ import { createAssistantMessageEventStream, type AssistantMessage } from "opencl
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { loadSessionEntry, loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { ImageContent, Model, SimpleStreamOptions } from "../../llm/types.js";
 import { readRuntimePromptImageOrder } from "../../media/media-facts.js";
@@ -86,7 +87,17 @@ describe("createAgentSession runtime ownership", () => {
         modelRegistry: createTestModelRegistry(),
       });
 
-      expect(session.sessionManager.getSessionTarget()?.storePath).toBe(databasePath);
+      const target = session.sessionManager.getSessionTarget();
+      if (!target) {
+        throw new Error("Expected the default SDK session to have a transcript target");
+      }
+      expect(target.storePath).toBe(databasePath);
+      expect(loadSessionEntry(target)).toMatchObject({ sessionId: target.sessionId });
+      await expect(loadTranscriptEvents(target)).resolves.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: "session", id: target.sessionId }),
+        ]),
+      );
       session.dispose();
     } finally {
       disposeOpenClawAgentDatabaseByPath(databasePath);

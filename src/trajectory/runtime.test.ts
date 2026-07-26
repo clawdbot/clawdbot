@@ -145,6 +145,29 @@ describe("trajectory runtime", () => {
     ).toBeNull();
   });
 
+  it.each([
+    ["requested key", "agent:main:other", "main", "agent:main:main"],
+    ["target key agent", undefined, "main", "agent:worker:main"],
+  ])(
+    "rejects a complete target that conflicts with the %s",
+    (_label, sessionKey, agentId, targetKey) => {
+      const storePath = path.join(makeTempDir(), "sessions.json");
+
+      expect(
+        createTrajectoryRuntimeRecorder({
+          sessionId: "session-1",
+          ...(sessionKey ? { sessionKey } : {}),
+          sessionTarget: {
+            agentId,
+            sessionId: "session-1",
+            sessionKey: targetKey,
+            storePath,
+          },
+        }),
+      ).toBeNull();
+    },
+  );
+
   it("stores bounded oversized runtime events in SQLite", async () => {
     const tempDir = makeTempDir();
     const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");

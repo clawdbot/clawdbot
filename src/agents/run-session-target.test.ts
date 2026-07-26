@@ -195,6 +195,20 @@ describe("agent run session target", () => {
     ).rejects.toThrow("File-backed transcript targets are unsupported");
   });
 
+  it("uses a partial target session id as a plain compatibility key", async () => {
+    await expect(
+      resolveAgentRunSessionTarget({
+        sessionId: "previous-session",
+        sessionFile: "current-session",
+        sessionTarget: { agentId: "main", sessionId: "current-session" },
+      }),
+    ).resolves.toMatchObject({
+      agentId: "main",
+      sessionId: "current-session",
+      sessionKey: "current-session",
+    });
+  });
+
   it("rejects a partial typed target that conflicts with a legacy marker", async () => {
     await expect(
       resolveAgentRunSessionTarget({

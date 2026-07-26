@@ -443,13 +443,32 @@ describe("exportTrajectoryBundle", () => {
     const bundle = await exportTrajectoryBundle({
       outputDir,
       sessionFile,
-      sessionTarget: { agentId: "main" } as never,
+      sessionTarget: { agentId: "main", sessionKey: "agent:main:stale" } as never,
       sessionId: "session-1",
       workspaceDir: tmpDir,
       runtimeFile,
     });
 
     expect(eventTypes(bundle.events)).toContain("partial-target-runtime");
+    expect(bundle.manifest.sourceFiles.session).toBe("$WORKSPACE_DIR/session.jsonl");
+  });
+
+  it("rejects an incomplete target that conflicts with a legacy marker", async () => {
+    const tmpDir = makeTempDir();
+
+    await expect(
+      exportTrajectoryBundle({
+        outputDir: path.join(tmpDir, "bundle"),
+        sessionFile: formatSqliteSessionFileMarker({
+          agentId: "worker",
+          sessionId: "session-1",
+          storePath: path.join(tmpDir, "sessions.json"),
+        }),
+        sessionTarget: { agentId: "main" } as never,
+        sessionId: "session-1",
+        workspaceDir: tmpDir,
+      }),
+    ).rejects.toThrow("transcript target conflicts with the legacy marker");
   });
 
   it("exports usage from truncated model completion runtime events", async () => {

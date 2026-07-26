@@ -10,7 +10,7 @@ import {
   resolveThinkingDefaultForModel,
   type ThinkingCatalogEntry,
 } from "../../auto-reply/thinking.js";
-import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import { createSessionEntryWithTranscript } from "../../config/sessions/session-accessor.js";
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { Message, Model } from "../../llm/types.js";
 import { getAgentDir } from "../config.js";
@@ -583,6 +583,12 @@ async function createDefaultSdkSessionManager(
     sessionKey: `agent:main:sdk:${sessionId}`,
     storePath: join(agentDir, "openclaw-agent.sqlite"),
   };
-  await upsertSessionEntry(target, { sessionId, updatedAt: Date.now() });
+  const created = await createSessionEntryWithTranscript(target, () => ({
+    ok: true,
+    entry: { sessionId, updatedAt: Date.now() },
+  }));
+  if (!created.ok) {
+    throw new Error(`Failed to initialize SDK session transcript: ${String(created.error)}`);
+  }
   return SessionManager.open(target, cwd);
 }

@@ -1213,7 +1213,7 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
     warnings: sessionWarnings,
   } = await readSessionBranch({
     sessionFile: params.sessionFile,
-    sessionTarget,
+    sessionTarget: params.sessionTarget,
     sessionId: params.sessionId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
   });
@@ -1257,7 +1257,7 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
     transcriptEventCount: transcriptEvents.length,
     sourceFiles: {
       session: maybeRedactPathString(
-        params.sessionTarget?.sessionKey ?? params.sessionFile ?? params.sessionId,
+        sessionTarget?.sessionKey ?? params.sessionFile ?? params.sessionId,
         redaction,
       ),
       runtime:
