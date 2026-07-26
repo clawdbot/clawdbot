@@ -245,7 +245,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     const debounceMs = resolveDebounceMs(item);
     const shouldDebounce = params.shouldDebounce?.(item) ?? true;
     const existing = key ? buffers.get(key) : undefined;
-    if (existing && shouldDebounce) {
+    if (key && existing && shouldDebounce) {
       existing.items.push(item);
       // One buffered batch keeps the window selected by its first item.
       // Later aliases or config reloads must not change when that batch flushes.
