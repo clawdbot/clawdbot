@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import * as tar from "tar";
+import { formatErrorMessage as errorMessage } from "../infra/errors.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import {
   cellAuthSecretDir,
@@ -79,10 +80,6 @@ type FleetRestoreResult = {
   started: boolean;
   url: string;
 };
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function timestampBasename(tenant: string, nowMs: number): string {
   const stamp = new Date(nowMs)

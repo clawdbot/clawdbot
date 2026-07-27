@@ -127,6 +127,16 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
     public let details: AnyCodable?
     public let isError: Bool?
 
+    /// Gateway media and historical file attachments must stay visible in both chat and exports.
+    var isInlineAttachment: Bool {
+        switch self.type?.lowercased() {
+        case "file", "attachment", "image", "audio":
+            true
+        default:
+            false
+        }
+    }
+
     public init(
         type: String?,
         text: String?,
@@ -562,13 +572,56 @@ public struct OpenClawChatCreateSessionResponse: Codable, Sendable {
     public let sessionId: String?
 }
 
+public struct OpenClawChatEditorAttachment: Codable, Sendable {
+    public let mimeType: String
+    public let data: String
+}
+
 public struct OpenClawChatRewindResponse: Codable, Sendable {
     public let editorText: String?
+    public let editorAttachments: [OpenClawChatEditorAttachment]?
 }
 
 public struct OpenClawChatForkAtMessageResponse: Codable, Sendable {
     public let sessionKey: String
     public let editorText: String?
+    public let editorAttachments: [OpenClawChatEditorAttachment]?
+}
+
+public struct OpenClawChatSessionBranch: Codable, Sendable, Equatable, Identifiable {
+    public let leafEntryId: String
+    public let headline: String
+    public let messageCount: Int
+    public let updatedAt: String?
+    public let active: Bool
+
+    public var id: String {
+        self.leafEntryId
+    }
+
+    // periphery:ignore - package tests construct branch fixtures; app consumers decode them.
+    public init(
+        leafEntryId: String,
+        headline: String,
+        messageCount: Int,
+        updatedAt: String?,
+        active: Bool)
+    {
+        self.leafEntryId = leafEntryId
+        self.headline = headline
+        self.messageCount = messageCount
+        self.updatedAt = updatedAt
+        self.active = active
+    }
+}
+
+public struct OpenClawChatSessionBranchesResponse: Codable, Sendable {
+    public let branches: [OpenClawChatSessionBranch]
+
+    // periphery:ignore - package tests construct branch fixtures; app consumers decode them.
+    public init(branches: [OpenClawChatSessionBranch]) {
+        self.branches = branches
+    }
 }
 
 public struct OpenClawChatEventPayload: Codable, Sendable {

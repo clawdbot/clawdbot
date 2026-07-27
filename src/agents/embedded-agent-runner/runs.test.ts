@@ -10,6 +10,7 @@ import {
   isReplyRunActiveForSessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { testing as replyRunTesting } from "../../auto-reply/reply/reply-run-registry.test-support.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { setDiagnosticsEnabledForProcess } from "../../infra/diagnostic-events.js";
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
 import { markDiagnosticToolStartedForTest } from "../../logging/diagnostic-run-activity.test-support.js";
@@ -437,6 +438,7 @@ describe("embedded-agent runner run registry", () => {
     updateActiveEmbeddedRunSessionFile(
       "session-file-diagnostics",
       "/tmp/openclaw-run-registry-rotated.jsonl",
+      getAgentEventLifecycleGeneration(),
     );
 
     expect(getDiagnosticSessionState({ sessionId: "session-file-diagnostics" }).sessionFile).toBe(
@@ -848,11 +850,15 @@ describe("embedded-agent runner run registry", () => {
     vi.useFakeTimers();
     try {
       const abortRun = vi.fn();
-      setActiveEmbeddedRun("session-stuck", createRunHandle({ abort: abortRun }), "agent:main");
+      setActiveEmbeddedRun(
+        "session-stuck",
+        createRunHandle({ abort: abortRun }),
+        "agent:main:main",
+      );
 
       const resultPromise = abortAndDrainEmbeddedAgentRun({
         sessionId: "session-stuck",
-        sessionKey: "agent:main",
+        sessionKey: "agent:main:main",
         settleMs: 100,
         forceClear: true,
         reason: "test_timeout",
@@ -863,7 +869,7 @@ describe("embedded-agent runner run registry", () => {
       expect(result).toEqual({ aborted: true, drained: false, forceCleared: true });
       expect(abortRun).toHaveBeenCalledTimes(1);
       expect(isEmbeddedAgentRunHandleActive("session-stuck")).toBe(false);
-      expect(resolveActiveEmbeddedRunHandleSessionId("agent:main")).toBeUndefined();
+      expect(resolveActiveEmbeddedRunHandleSessionId("agent:main:main")).toBeUndefined();
     } finally {
       await vi.runOnlyPendingTimersAsync();
       vi.useRealTimers();

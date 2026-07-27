@@ -18,6 +18,13 @@ const ts = require("typescript");
 
 const repoRoot = resolveRepoRoot(import.meta.url);
 const sourceRoots = [path.join(repoRoot, "src")];
+const nodeSqliteBoundaryRoots = [
+  path.join(repoRoot, "src"),
+  path.join(repoRoot, "extensions"),
+  path.join(repoRoot, "packages"),
+];
+
+const nodeSqliteConstructorOwnerPaths = new Set(["src/infra/node-sqlite.ts"]);
 
 const kyselyRawAllowPaths = new Set(["src/infra/kysely-sync.ts"]);
 
@@ -40,8 +47,10 @@ const rawSqliteAllowPathGroups = {
     "src/infra/sqlite-wal.ts",
     "src/state/openclaw-agent-db-maintenance.ts",
     "src/state/openclaw-agent-db-registry.ts",
+    "src/state/openclaw-agent-db-registry-listing.ts",
     "src/state/openclaw-agent-db-schema-helpers.ts",
     "src/state/openclaw-agent-db-schema.ts",
+    "src/state/openclaw-agent-db-session-nodes-migration.ts",
     "src/state/openclaw-agent-db-session-migrations.ts",
     "src/state/openclaw-agent-db-session-provenance.ts",
     "src/state/openclaw-agent-db.ts",
@@ -54,6 +63,7 @@ const rawSqliteAllowPathGroups = {
     "src/state/openclaw-state-db-schema-repair.ts",
     "src/state/openclaw-state-db-startup-checkpoint.ts",
     "src/state/openclaw-state-db.ts",
+    "src/transcripts/sqlite-schema.ts",
     "src/state/sqlite-schema-shape.test-support.ts",
   ],
   "cross-process SQLite coordination locks": ["src/infra/device-identity-coordinator.ts"],
@@ -90,8 +100,16 @@ const rawSqliteAllowPathGroups = {
     "src/infra/state-migrations.storage.ts",
     "src/infra/state-migrations.cron-run-logs.ts",
     "src/infra/state-migrations.debug-proxy.ts",
+    "src/infra/state-migrations.meeting-transcripts-detection.ts",
+    "src/infra/state-migrations.meeting-transcripts-files.ts",
+    "src/infra/state-migrations.meeting-transcripts-verify.ts",
+    "src/infra/state-migrations.media-persistence.ts",
   ],
   "shared database stores with direct DatabaseSync access": ["src/proxy-capture/store.sqlite.ts"],
+  "session entry cache connection-local validity counters": [
+    "src/config/sessions/session-accessor.sqlite-entry-cache.ts",
+  ],
+  "device pairing cache connection-local validity counters": ["src/infra/device-pairing-store.ts"],
   "Kysely-backed stores that own a DatabaseSync boundary": [
     "src/acp/event-ledger.ts",
     "src/state/user-profiles.ts",
@@ -228,6 +246,63 @@ function isTestPath(relativePath) {
 
 function isSqliteStorePath(relativePath) {
   return relativePath.endsWith(".sqlite.ts") || relativePath.includes(".store.sqlite.ts");
+}
+
+function collectNodeSqliteBoundaryViolations(content, relativePath) {
+  if (isTestPath(relativePath) || nodeSqliteConstructorOwnerPaths.has(relativePath)) {
+    return [];
+  }
+  const sourceFile = ts.createSourceFile(relativePath, content, ts.ScriptTarget.Latest, true);
+  const constructorNames = new Set();
+
+  function collectConstructorNames(node) {
+    if (ts.isImportDeclaration(node) && importSource(node) === "node:sqlite") {
+      const namedBindings = node.importClause?.namedBindings;
+      if (namedBindings && ts.isNamedImports(namedBindings)) {
+        for (const element of namedBindings.elements) {
+          if ((element.propertyName?.text ?? element.name.text) === "DatabaseSync") {
+            constructorNames.add(element.name.text);
+          }
+        }
+      }
+    }
+    if (ts.isVariableDeclaration(node) && ts.isObjectBindingPattern(node.name)) {
+      for (const element of node.name.elements) {
+        if (
+          !element.dotDotDotToken &&
+          ts.isIdentifier(element.name) &&
+          (element.propertyName ? getPropertyNameText(element.propertyName) : element.name.text) ===
+            "DatabaseSync"
+        ) {
+          constructorNames.add(element.name.text);
+        }
+      }
+    }
+    ts.forEachChild(node, collectConstructorNames);
+  }
+
+  collectConstructorNames(sourceFile);
+  const violations = [];
+  function visit(node) {
+    if (ts.isNewExpression(node)) {
+      const expression = unwrapExpression(node.expression);
+      const isRawConstructor =
+        (ts.isIdentifier(expression) && constructorNames.has(expression.text)) ||
+        (ts.isPropertyAccessExpression(expression) &&
+          getPropertyNameText(expression.name) === "DatabaseSync");
+      if (isRawConstructor) {
+        addViolation(
+          violations,
+          sourceFile,
+          node,
+          "production node:sqlite connections must use openNodeSqliteDatabase",
+        );
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(sourceFile);
+  return violations;
 }
 
 function isLikelySqliteReceiver(expression) {
@@ -395,6 +470,16 @@ async function collectKyselyGuardrails() {
     const relativePath = path.relative(repoRoot, filePath).split(path.sep).join("/");
     const content = await fs.readFile(filePath, "utf8");
     for (const violation of collectKyselyGuardrailViolations(content, relativePath)) {
+      violations.push({ path: relativePath, ...violation });
+    }
+  }
+  const nodeSqliteFiles = await collectTypeScriptFilesFromRoots(nodeSqliteBoundaryRoots, {
+    includeTests: false,
+  });
+  for (const filePath of nodeSqliteFiles) {
+    const relativePath = path.relative(repoRoot, filePath).split(path.sep).join("/");
+    const content = await fs.readFile(filePath, "utf8");
+    for (const violation of collectNodeSqliteBoundaryViolations(content, relativePath)) {
       violations.push({ path: relativePath, ...violation });
     }
   }

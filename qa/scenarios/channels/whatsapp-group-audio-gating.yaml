@@ -3,7 +3,9 @@ scenario:
   id: whatsapp-group-audio-gating
   surface: channels
   coverage:
-    primary: [channels.group-messages]
+    primary:
+      - whatsapp.group-allowlists
+      - whatsapp.inbound-media-download
   execution:
     profiles: { "whatsapp:mock-default": 26 }
     kind: flow

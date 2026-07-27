@@ -9,7 +9,11 @@ import {
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/conversation-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
-import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
+import {
+  buildHistoryContextFromEntries,
+  buildInboundHistoryFromEntries,
+  createChannelHistoryWindow,
+} from "openclaw/plugin-sdk/reply-history";
 import { buildAgentSessionKey, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
@@ -24,6 +28,11 @@ import {
   createDiscordSupplementalContextAccessChecker,
 } from "./inbound-context.js";
 import { resolveDiscordMessageStickers } from "./message-forwarded.js";
+import {
+  createDiscordHistorySenderProvenance,
+  filterDiscordHistoryEntriesForContext,
+  type DiscordHistoryEntry,
+} from "./message-handler.history.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
 import { removeDiscordReplayHistoryEntry } from "./message-handler.retry.js";
 import {
@@ -120,14 +129,15 @@ export async function buildDiscordMessageProcessContext(params: {
   const senderUsername = sender.isPluralKit
     ? (sender.tag ?? sender.name ?? author.username)
     : author.username;
-  const { groupSystemPrompt, ownerAllowFrom, untrustedContext } = buildDiscordInboundAccessContext({
-    channelConfig,
-    guildInfo,
-    sender: { id: sender.id, name: sender.name, tag: sender.tag },
-    allowNameMatching: isDangerousNameMatchingEnabled(discordConfig),
-    isGuild: isGuildMessage,
-    channelTopic: channelInfo?.topic,
-  });
+  const { groupSystemPrompt, ownerAllowFrom, channelStructuredContext } =
+    buildDiscordInboundAccessContext({
+      channelConfig,
+      guildInfo,
+      sender: { id: sender.id, name: sender.name, tag: sender.tag },
+      allowNameMatching: isDangerousNameMatchingEnabled(discordConfig),
+      isGuild: isGuildMessage,
+      channelTopic: channelInfo?.topic,
+    });
   const pinnedMainDmOwner = isDirectMessage
     ? resolvePinnedMainDmOwnerFromAllowlist({
         dmScope: cfg.session?.dmScope,
@@ -156,6 +166,7 @@ export async function buildDiscordMessageProcessContext(params: {
     sessionKey: route.sessionKey,
   });
   const channelHistory = createChannelHistoryWindow({ historyMap: guildHistories });
+  let visibleChannelHistory: DiscordHistoryEntry[] | undefined;
   let combinedBody = formatInboundEnvelope({
     channel: "Discord",
     from: fromLabel,
@@ -172,21 +183,34 @@ export async function buildDiscordMessageProcessContext(params: {
       !(isGuildMessage && channelConfig?.autoThread && !threadChannel));
   if (shouldIncludeChannelHistory) {
     removeDiscordReplayHistoryEntry(guildHistories, messageChannelId, message.id);
-    combinedBody = channelHistory.buildPendingContext({
-      historyKey: messageChannelId,
-      limit: historyLimit,
-      currentMessage: combinedBody,
-      formatEntry: (entry) =>
-        formatInboundEnvelope({
-          channel: "Discord",
-          from: fromLabel,
-          timestamp: entry.timestamp,
-          body: `${entry.body} [id:${entry.messageId ?? "unknown"} channel:${messageChannelId}]`,
-          chatType: "channel",
-          senderLabel: entry.sender,
-          envelope: envelopeOptions,
-        }),
-    });
+    if (historyLimit > 0) {
+      const filteredHistory = filterDiscordHistoryEntriesForContext({
+        entries: guildHistories.get(messageChannelId) ?? [],
+        mode: contextVisibilityMode,
+        isSenderAllowed: isSupplementalContextSenderAllowed,
+      });
+      visibleChannelHistory = filteredHistory.entries;
+      if (filteredHistory.omitted > 0) {
+        logVerbose(
+          `discord: omit ${filteredHistory.omitted} pending history entries (mode=${contextVisibilityMode})`,
+        );
+      }
+      combinedBody = buildHistoryContextFromEntries({
+        entries: visibleChannelHistory,
+        currentMessage: combinedBody,
+        formatEntry: (entry) =>
+          formatInboundEnvelope({
+            channel: "Discord",
+            from: fromLabel,
+            timestamp: entry.timestamp,
+            body: `${entry.body} [id:${entry.messageId ?? "unknown"} channel:${messageChannelId}]`,
+            chatType: "channel",
+            senderLabel: entry.sender,
+            envelope: envelopeOptions,
+          }),
+        excludeLast: false,
+      });
+    }
   }
   const replyContext = resolveReplyContext(message, resolveDiscordMessageText);
   const replySenderAllowed = replyContext
@@ -306,8 +330,8 @@ export async function buildDiscordMessageProcessContext(params: {
   }
   const lastRouteTo = dmConversationTarget ?? effectiveTo;
   const inboundHistory = shouldIncludeChannelHistory
-    ? channelHistory.buildInboundHistory({
-        historyKey: messageChannelId,
+    ? buildInboundHistoryFromEntries({
+        entries: visibleChannelHistory ?? [],
         limit: historyLimit,
       })
     : undefined;
@@ -372,6 +396,9 @@ export async function buildDiscordMessageProcessContext(params: {
       commandBody: preflightAudioTranscript ?? baseText,
       inboundHistory,
     },
+    sessionTranscript: {
+      historyLimit: shouldIncludeChannelHistory ? historyLimit : 0,
+    },
     access: {
       mentions: {
         canDetectMention: ctx.canDetectMention,
@@ -432,7 +459,7 @@ export async function buildDiscordMessageProcessContext(params: {
       GroupSubject: isDirectMessage ? undefined : groupChannel,
       GroupChannel: groupChannel,
       ...(isGuildMessage ? { GroupRequireMention: ctx.groupRequireMention } : {}),
-      UntrustedStructuredContext: untrustedContext,
+      ChannelStructuredContext: channelStructuredContext,
       OwnerAllowFrom: ownerAllowFrom,
     },
   });
@@ -451,6 +478,10 @@ export async function buildDiscordMessageProcessContext(params: {
         body: historyText,
         timestamp: resolveTimestampMs(message.timestamp),
         messageId: message.id,
+        senderProvenance: createDiscordHistorySenderProvenance({
+          sender,
+          memberRoleIds,
+        }),
       },
       media: toHistoryMediaEntries(mediaList, { messageId: message.id }),
       messageId: message.id,

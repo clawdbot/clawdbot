@@ -2,13 +2,14 @@
 import { defaultQaModelForMode, isQaFastModeEnabled } from "../../model-selection.js";
 import { normalizeCaptureSavedView, normalizeCaptureSavedViews } from "./capture-saved-view.js";
 import { formatErrorMessage } from "./errors.js";
-import { getJson, getJsonNoStore, postJson } from "./http.js";
+import { getJson, getJsonNoStore, postJson, QaLabHttpError } from "./http.js";
 import { conversationSelectionKey, findConversationBySelectionKey } from "./ui-conversation-key.js";
 import {
   type Bootstrap,
   type EvidenceEnvelope,
   type OutcomesEnvelope,
   type ReportEnvelope,
+  type RunnerResolvedPlan,
   type RunnerSelection,
   type Snapshot,
   type TabId,
@@ -81,6 +82,14 @@ function defaultModelsForProviderMode(
     primaryModel,
     alternateModel,
     fastMode: isQaFastModeEnabled({ primaryModel, alternateModel }),
+  };
+}
+
+function cloneRunnerSelection(selection: RunnerSelection): RunnerSelection {
+  return {
+    ...selection,
+    runtimePair: selection.runtimePair ? [...selection.runtimePair] : null,
+    scenarioIds: selection.scenarioIds ? [...selection.scenarioIds] : null,
   };
 }
 
@@ -207,6 +216,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
     activeTab: initialUrl.pathname === "/evidence" || initialEvidencePath ? "evidence" : "chat",
     runnerDraft: null,
     runnerDraftDirty: false,
+    runnerPlanOverride: null,
     composer: {
       conversationKind: "direct",
       conversationId: "alice",
@@ -250,6 +260,9 @@ export async function createQaLabApp(root: HTMLDivElement) {
       ra: state.bootstrap?.runner.startedAt,
       rf: state.bootstrap?.runner.finishedAt,
       re: state.bootstrap?.runner.error,
+      rpo: state.runnerPlanOverride
+        ? `${state.runnerPlanOverride.status}:${state.runnerPlanOverride.selectedScenarios.length}:${state.runnerPlanOverride.exclusions.length}:${state.runnerPlanOverride.errors.join("|")}`
+        : null,
       ss: state.scenarioRun?.status,
       sc: state.scenarioRun?.counts,
       so: state.scenarioRun?.scenarios.map((o) => o.status).join(","),
@@ -341,10 +354,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
         state.evidencePathDraft = bootstrap.runner.artifacts.evidencePath;
       }
       if (!state.runnerDraft || !state.runnerDraftDirty) {
-        state.runnerDraft = {
-          ...bootstrap.runner.selection,
-          scenarioIds: [...bootstrap.runner.selection.scenarioIds],
-        };
+        state.runnerDraft = cloneRunnerSelection(bootstrap.runner.selection);
         state.runnerDraftDirty = false;
       }
       if (!state.selectedConversationKey) {
@@ -497,13 +507,14 @@ export async function createQaLabApp(root: HTMLDivElement) {
   function updateRunnerDraft(mutator: (draft: RunnerSelection) => RunnerSelection) {
     const fallback = state.bootstrap?.runner.selection;
     if (!state.runnerDraft && fallback) {
-      state.runnerDraft = { ...fallback, scenarioIds: [...fallback.scenarioIds] };
+      state.runnerDraft = cloneRunnerSelection(fallback);
     }
     if (!state.runnerDraft) {
       return;
     }
     state.runnerDraft = mutator(state.runnerDraft);
     state.runnerDraftDirty = true;
+    state.runnerPlanOverride = null;
     render();
   }
 
@@ -610,20 +621,32 @@ export async function createQaLabApp(root: HTMLDivElement) {
       const result = await postJson<{ runner: { selection: RunnerSelection } }>(
         "/api/scenario/suite",
         {
+          profile: state.runnerDraft.profile,
+          channel: state.runnerDraft.channel,
+          channelDriver: state.runnerDraft.channelDriver,
+          evidenceMode: state.runnerDraft.evidenceMode,
           providerMode: state.runnerDraft.providerMode,
           primaryModel: state.runnerDraft.primaryModel,
           alternateModel: state.runnerDraft.alternateModel,
+          fastMode: state.runnerDraft.fastMode,
+          runtimePair: state.runnerDraft.runtimePair,
+          runtimePairLane: state.runnerDraft.runtimePairLane,
           scenarioIds: state.runnerDraft.scenarioIds,
         },
       );
-      state.runnerDraft = {
-        ...result.runner.selection,
-        scenarioIds: [...result.runner.selection.scenarioIds],
-      };
+      state.runnerDraft = cloneRunnerSelection(result.runner.selection);
       state.runnerDraftDirty = false;
+      state.runnerPlanOverride = null;
       state.activeTab = "chat";
       await refresh();
     } catch (error) {
+      if (error instanceof QaLabHttpError) {
+        const plan = (error.payload as { plan?: RunnerResolvedPlan } | null)?.plan;
+        if (plan) {
+          state.runnerPlanOverride = plan;
+          state.sidebarPanel = "run";
+        }
+      }
       state.error = formatErrorMessage(error);
       render();
     } finally {
@@ -904,7 +927,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
     root
       .querySelector<HTMLElement>("[data-action='clear-scenarios']")
       ?.addEventListener("click", () => {
-        updateRunnerDraft((d) => ({ ...d, scenarioIds: [] }));
+        updateRunnerDraft((d) => ({ ...d, scenarioIds: null }));
       });
 
     /* Scenario toggles */
@@ -915,7 +938,13 @@ export async function createQaLabApp(root: HTMLDivElement) {
           return;
         }
         updateRunnerDraft((draft) => {
-          const selected = new Set(draft.scenarioIds);
+          const selected = new Set(
+            draft.scenarioIds ??
+              (!state.runnerDraftDirty
+                ? state.bootstrap?.runner.plan?.selectedScenarios.map((scenario) => scenario.id)
+                : undefined) ??
+              [],
+          );
           if (node.checked) {
             selected.add(scenarioId);
           } else {
@@ -930,6 +959,19 @@ export async function createQaLabApp(root: HTMLDivElement) {
     });
 
     /* Config form */
+    root.querySelector<HTMLSelectElement>("#run-profile")?.addEventListener("change", (e) => {
+      const profile = (e.currentTarget as HTMLSelectElement).value;
+      const profileDefaults = state.bootstrap?.runnerCatalog.profiles.find(
+        (entry) => entry.id === profile,
+      );
+      updateRunnerDraft((draft) => ({
+        ...draft,
+        profile,
+        channelDriver: profileDefaults?.channelDriver ?? draft.channelDriver,
+        evidenceMode: profileDefaults?.evidenceMode ?? draft.evidenceMode,
+        scenarioIds: null,
+      }));
+    });
     root.querySelector<HTMLSelectElement>("#provider-mode")?.addEventListener("change", (e) => {
       const mode =
         (e.currentTarget as HTMLSelectElement).value === "live-frontier"
@@ -940,6 +982,33 @@ export async function createQaLabApp(root: HTMLDivElement) {
         providerMode: mode,
         ...defaultModelsForProviderMode(mode, state.bootstrap),
       }));
+    });
+    root.querySelector<HTMLSelectElement>("#channel-driver")?.addEventListener("change", (e) => {
+      const value = (e.currentTarget as HTMLSelectElement).value;
+      const channelDriver = value === "crabline" || value === "live" ? value : "qa-channel";
+      updateRunnerDraft((draft) => ({ ...draft, channelDriver }));
+    });
+    root.querySelector<HTMLSelectElement>("#execution-channel")?.addEventListener("change", (e) => {
+      const channel = (e.currentTarget as HTMLSelectElement).value.trim() || null;
+      updateRunnerDraft((draft) => ({ ...draft, channel }));
+    });
+    root.querySelector<HTMLSelectElement>("#evidence-mode")?.addEventListener("change", (e) => {
+      const evidenceMode =
+        (e.currentTarget as HTMLSelectElement).value === "slim" ? "slim" : "full";
+      updateRunnerDraft((draft) => ({ ...draft, evidenceMode }));
+    });
+    root.querySelector<HTMLSelectElement>("#runtime-pair")?.addEventListener("change", (e) => {
+      const runtimePair: RunnerSelection["runtimePair"] =
+        (e.currentTarget as HTMLSelectElement).value === "openclaw,codex"
+          ? ["openclaw", "codex"]
+          : null;
+      updateRunnerDraft((draft) => ({ ...draft, runtimePair }));
+    });
+    root.querySelector<HTMLSelectElement>("#runtime-pair-lane")?.addEventListener("change", (e) => {
+      const value = (e.currentTarget as HTMLSelectElement).value;
+      const runtimePairLane =
+        value === "core" || value === "extended" || value === "soak" ? value : null;
+      updateRunnerDraft((draft) => ({ ...draft, runtimePairLane }));
     });
     root.querySelector<HTMLSelectElement>("#primary-model")?.addEventListener("change", (e) => {
       const primaryModel = (e.currentTarget as HTMLSelectElement).value;

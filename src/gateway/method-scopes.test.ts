@@ -3,7 +3,13 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  pinActivePluginHttpRouteRegistry,
+  pinActivePluginSessionExtensionRegistry,
+  releasePinnedPluginHttpRouteRegistry,
+  releasePinnedPluginSessionExtensionRegistry,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import {
   authorizeOperatorScopesForMethod,
   isGatewayMethodClassified,
@@ -35,6 +41,8 @@ function setPluginGatewayMethodScope(
 }
 
 afterEach(() => {
+  releasePinnedPluginHttpRouteRegistry();
+  releasePinnedPluginSessionExtensionRegistry();
   setActivePluginRegistry(createEmptyPluginRegistry());
 });
 
@@ -180,6 +188,29 @@ describe("method scope resolution", () => {
     ).toEqual({ allowed: true });
   });
 
+  it("requires admin only when DM pairing approval bootstraps a command owner", () => {
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("channels.pairing.approve", {})).toEqual([
+      "operator.pairing",
+    ]);
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("channels.pairing.approve", {
+        bootstrapCommandOwner: true,
+      }),
+    ).toEqual(["operator.pairing", "operator.admin"]);
+    expect(
+      authorizeOperatorScopesForMethod("channels.pairing.approve", ["operator.pairing"], {
+        bootstrapCommandOwner: true,
+      }),
+    ).toEqual({ allowed: false, missingScope: "operator.admin" });
+    expect(
+      authorizeOperatorScopesForMethod(
+        "channels.pairing.approve",
+        ["operator.pairing", "operator.admin"],
+        { bootstrapCommandOwner: true },
+      ),
+    ).toEqual({ allowed: true });
+  });
+
   it("classifies plugin session actions with a CLI-safe default operator scope", () => {
     expect(resolveLeastPrivilegeOperatorScopesForMethod("plugins.sessionAction")).toEqual([
       "operator.write",
@@ -272,11 +303,56 @@ describe("method scope resolution", () => {
     ).toEqual({ allowed: false, missingScope: "operator.approvals" });
   });
 
+  it("keeps session action scopes pinned when an agent replaces the active registry", () => {
+    const gatewayRegistry = createEmptyPluginRegistry();
+    gatewayRegistry.sessionActions = [
+      {
+        pluginId: "scope-plugin",
+        pluginName: "Scope Plugin",
+        source: "gateway",
+        action: {
+          id: "approve",
+          requiredScopes: ["operator.approvals"],
+          handler: () => ({ result: { owner: "gateway" } }),
+        },
+      },
+    ];
+    setActivePluginRegistry(gatewayRegistry);
+    pinActivePluginSessionExtensionRegistry(gatewayRegistry);
+
+    const scopedRegistry = createEmptyPluginRegistry();
+    scopedRegistry.sessionActions = [
+      {
+        pluginId: "scope-plugin",
+        pluginName: "Scope Plugin",
+        source: "agent",
+        action: {
+          id: "approve",
+          requiredScopes: ["operator.read"],
+          handler: () => ({ result: { owner: "agent" } }),
+        },
+      },
+    ];
+    setActivePluginRegistry(scopedRegistry);
+
+    const params = { pluginId: "scope-plugin", actionId: "approve" };
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("plugins.sessionAction", params)).toEqual([
+      "operator.approvals",
+    ]);
+    expect(
+      authorizeOperatorScopesForMethod("plugins.sessionAction", ["operator.read"], params),
+    ).toEqual({ allowed: false, missingScope: "operator.approvals" });
+    expect(
+      authorizeOperatorScopesForMethod("plugins.sessionAction", ["operator.approvals"], params),
+    ).toEqual({ allowed: true });
+  });
+
   it("resolves sessions.patch to write scope for chat-organization fields only", () => {
     expect(
       resolveLeastPrivilegeOperatorScopesForMethod("sessions.patch", {
         key: "agent:main:ios-1",
         label: "Trip planning",
+        boardFace: "dashboard",
         icon: "name:spark",
         pinned: true,
         archived: false,
@@ -317,6 +393,31 @@ describe("method scope resolution", () => {
         cwd: "/other/repo",
       }),
     ).toEqual({ allowed: false, missingScope: "operator.admin" });
+  });
+
+  it("requires admin for incognito session creation and inheritance", () => {
+    const incognitoKey = "agent:main:dashboard:incognito-parent";
+    for (const params of [
+      { agentId: "main", incognito: true },
+      { key: incognitoKey },
+      { parentSessionKey: incognitoKey },
+      { parentSessionKey: incognitoKey, fork: true },
+      { parentSessionKey: incognitoKey, spawnDepth: 1 },
+      { parentSessionKey: incognitoKey, succeedsParent: false, emitCommandHooks: true },
+    ]) {
+      expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", params)).toEqual([
+        "operator.admin",
+      ]);
+      expect(
+        authorizeOperatorScopesForMethod("sessions.create", ["operator.write"], params),
+      ).toEqual({ allowed: false, missingScope: "operator.admin" });
+      expect(
+        authorizeOperatorScopesForMethod("sessions.create", ["operator.admin"], params),
+      ).toEqual({ allowed: true });
+    }
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", { incognito: false }),
+    ).toEqual(["operator.write"]);
   });
 
   it("keeps keyed sessions.create model selection at write scope for handler-state checks", () => {
@@ -399,7 +500,11 @@ describe("method scope resolution", () => {
     ["model", { key: "agent:main:ios-1", model: "anthropic/claude-sonnet-5" }],
     ["sendPolicy", { key: "agent:main:ios-1", sendPolicy: "deny" }],
     ["inheritedToolAllow", { key: "agent:main:ios-1", inheritedToolAllow: ["exec"] }],
-    ["spawnedBy", { key: "agent:main:ios-1", spawnedBy: "agent:main:main" }],
+    ["inheritedToolPolicyVersion", { key: "agent:main:ios-1", inheritedToolPolicyVersion: 1 }],
+    [
+      "completionOwnerSessionKey",
+      { key: "agent:main:ios-1", completionOwnerSessionKey: "agent:main:main" },
+    ],
     ["mixed with safe fields", { key: "agent:main:ios-1", label: "x", execHost: "node-1" }],
     ["unknown fields", { key: "agent:main:ios-1", futureField: true }],
   ])("keeps sessions.patch admin-only when params include %s", (_name, params) => {
@@ -540,6 +645,40 @@ describe("method scope resolution", () => {
     expect(resolveLeastPrivilegeOperatorScopesForMethod("browser.request")).toEqual([
       "operator.admin",
     ]);
+  });
+
+  it("keeps gateway method scopes pinned when an agent replaces the active registry", () => {
+    const method = "fixture.gateway.inspect";
+    const gatewayRegistry = createEmptyPluginRegistry();
+    gatewayRegistry.gatewayHandlers[method] = pluginHandler;
+    gatewayRegistry.gatewayMethodDescriptors.push(
+      createPluginGatewayMethodDescriptor({
+        pluginId: "gateway-fixture",
+        name: method,
+        handler: pluginHandler,
+        scope: "operator.admin",
+      }),
+    );
+    setActivePluginRegistry(gatewayRegistry);
+    pinActivePluginHttpRouteRegistry(gatewayRegistry);
+
+    const scopedRegistry = createEmptyPluginRegistry();
+    scopedRegistry.gatewayHandlers[method] = pluginHandler;
+    scopedRegistry.gatewayMethodDescriptors.push(
+      createPluginGatewayMethodDescriptor({
+        pluginId: "agent-fixture",
+        name: method,
+        handler: pluginHandler,
+        scope: "operator.read",
+      }),
+    );
+    setActivePluginRegistry(scopedRegistry);
+
+    expect(resolveLeastPrivilegeOperatorScopesForMethod(method)).toEqual(["operator.admin"]);
+    expect(authorizeOperatorScopesForMethod(method, ["operator.read"])).toEqual({
+      allowed: false,
+      missingScope: "operator.admin",
+    });
   });
 
   it("keeps reserved admin namespaces admin-only even if a plugin scope is narrower", () => {

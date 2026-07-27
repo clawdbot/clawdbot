@@ -43,6 +43,7 @@ function buildCompactParams(
       Surface: "whatsapp",
       CommandSource: "text",
       CommandBody: commandBodyNormalized,
+      commandText: commandBodyNormalized,
     },
     command: {
       commandBodyNormalized,
@@ -155,6 +156,7 @@ describe("handleCompactCommand", () => {
           Surface: "whatsapp",
           CommandSource: "text",
           CommandBody: "/compact: focus on decisions",
+          commandText: "/compact: focus on decisions",
           From: "+15550001",
           To: "+15550002",
           SenderName: "Alice",
@@ -312,6 +314,33 @@ describe("handleCompactCommand", () => {
       "⚙️ Compaction skipped: context is already under the compaction target • Context 12.1k",
     );
     expect(result?.reply?.isStatusNotice).toBe(true);
+    expect(vi.mocked(incrementCompactionCount)).not.toHaveBeenCalled();
+  });
+
+  it("does not hide a failed manual compaction with an empty-transcript reason", async () => {
+    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
+      ok: false,
+      compacted: false,
+      reason: "no real conversation messages",
+    });
+
+    const result = await handleCompactCommand(
+      {
+        ...buildCompactParams("/compact", {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig),
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+        },
+      } as HandleCommandsParams,
+      true,
+    );
+
+    expect(result?.reply?.text).toBe(
+      "⚙️ Compaction failed: nothing compactable in this session yet • Context 12.1k",
+    );
     expect(vi.mocked(incrementCompactionCount)).not.toHaveBeenCalled();
   });
 

@@ -35,6 +35,8 @@ function createManager(snapshot: ChannelRuntimeSnapshot): ChannelManager {
     stopChannel: vi.fn(),
     setAutostartSuppression: vi.fn(),
     getAutostartSuppression: vi.fn(() => null),
+    setAmbientAutostartSuppressedChannelIds: vi.fn(),
+    isAmbientAutostartSuppressed: vi.fn(() => false),
     markChannelLoggedOut: vi.fn(),
     isHealthMonitorEnabled: vi.fn(() => true),
     isManuallyStopped: vi.fn(() => false),
@@ -285,6 +287,24 @@ describe("createReadinessChecker", () => {
         reason: "crash-loop-breaker",
         message: "safe mode",
       });
+
+      expect(readiness()).toEqual(readySnapshot(FIVE_MIN_MS, { suppressed: ["discord"] }));
+    });
+  });
+
+  it("reports ambient-suppressed dev channels without failing readiness", () => {
+    withReadinessClock(() => {
+      const { manager, readiness } = createReadinessHarness({
+        accounts: {
+          discord: stoppedAccount({
+            restartPending: false,
+            lastError: "ambient credentials suppressed",
+          }),
+        },
+      });
+      vi.mocked(manager.isAmbientAutostartSuppressed).mockImplementation(
+        (channelId) => channelId === "discord",
+      );
 
       expect(readiness()).toEqual(readySnapshot(FIVE_MIN_MS, { suppressed: ["discord"] }));
     });

@@ -19,7 +19,7 @@ extension MacGatewayChatTransport {
                 let result = try JSONDecoder().decode(AgentsListResult.self, from: data)
                 return OpenClawChatAgentsListResponse(
                     defaultId: result.defaultid,
-                    agents: result.agents.map {
+                    agents: result.agents.filter(\.isSelectableAgent).map {
                         OpenClawChatAgentChoice(
                             id: $0.id,
                             name: $0.name,
@@ -150,6 +150,27 @@ extension MacGatewayChatTransport {
             entryId: entryId)
         let data = try await self.requestSessionAction(request)
         return try JSONDecoder().decode(OpenClawChatForkAtMessageResponse.self, from: data)
+    }
+
+    func listSessionBranches(
+        sessionKey: String,
+        agentID: String?) async throws -> OpenClawChatSessionBranchesResponse
+    {
+        let target = self.sessionTarget(for: sessionKey, overrideAgentID: agentID)
+        let request = OpenClawChatGatewayRequests.listSessionBranches(
+            sessionKey: target.sessionKey,
+            agentID: target.agentID)
+        let data = try await self.requestSessionAction(request)
+        return try JSONDecoder().decode(OpenClawChatSessionBranchesResponse.self, from: data)
+    }
+
+    func switchSessionBranch(sessionKey: String, agentID: String?, leafEntryId: String) async throws {
+        let target = self.sessionTarget(for: sessionKey)
+        let request = OpenClawChatGatewayRequests.switchSessionBranch(
+            sessionKey: target.sessionKey,
+            agentID: agentID ?? target.agentID,
+            leafEntryId: leafEntryId)
+        _ = try await self.requestSessionAction(request)
     }
 
     static func rewindSessionRequest(

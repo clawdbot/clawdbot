@@ -19,7 +19,6 @@ import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import {
   createWorkerInferenceExecutor,
-  projectWorkerInferenceModelRouteConfig,
   type WorkerInferenceExecutionParams,
 } from "./inference-runtime.js";
 import { createWorkerToolCallStream } from "./inference-tool-call-stream.js";
@@ -284,19 +283,16 @@ const MODEL_ERROR = {
 };
 
 describe("worker inference provider runtime", () => {
-  it("projects the gateway-owned auth profile onto the provider route", () => {
-    const oauth = projectWorkerInferenceModelRouteConfig({
-      config: {},
-      provider: "openai",
-      modelId: "gpt-5.6-sol",
-      authMode: "oauth",
-    });
-    const apiKey = projectWorkerInferenceModelRouteConfig({
-      config: {},
-      provider: "openai",
-      modelId: "gpt-5.6-sol",
-      authMode: "api_key",
-    });
+  it("projects the gateway-owned auth profile onto the provider route", async () => {
+    const oauthRuntime = setup();
+    oauthRuntime.resolveAuthProfileMode.mockReturnValue("oauth");
+    await oauthRuntime.executor(params(request(), vi.fn()));
+    const oauth = oauthRuntime.prepareModel.mock.calls[0]?.[0].cfg ?? {};
+
+    const apiKeyRuntime = setup();
+    apiKeyRuntime.resolveAuthProfileMode.mockReturnValue("api_key");
+    await apiKeyRuntime.executor(params(request(), vi.fn()));
+    const apiKey = apiKeyRuntime.prepareModel.mock.calls[0]?.[0].cfg ?? {};
 
     expect(oauth.models?.providers?.openai).toMatchObject({
       auth: "oauth",

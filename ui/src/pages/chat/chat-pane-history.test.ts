@@ -7,7 +7,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import "./chat-pane.ts";
 import { loadChatHistory } from "./chat-history.ts";
-import type { ChatPageHost } from "./chat-state.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
 
 type TestChatPane = HTMLElement & {
   catalogMessages: unknown[];
@@ -44,7 +44,7 @@ function createSessionContext(
     gateway: {
       snapshot: {
         client,
-        connected: true,
+        phase: "connected",
         hello: { features: { methods: ["taskSuggestions.list"] } },
       },
     },
@@ -82,7 +82,7 @@ function createTestChatPane(params: { client: GatewayBrowserClient; sessions: Se
     sessionsError: null,
     sessionsLoading: false,
     sidebarContent: null,
-    sidebarOpen: false,
+    sidebarLayout: { columns: [] },
     chatScrollGeneration: 0,
     chatScrollCommitCleanup: null,
     handleChatScroll: vi.fn(),

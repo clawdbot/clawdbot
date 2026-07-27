@@ -45,6 +45,7 @@ final class GatewayOperatorFleet {
         var config: GatewayConnectConfig
         var name: String
         var task: Task<Void, Never>?
+        var isPausedForAttention = false
 
         init(config: GatewayConnectConfig, name: String) {
             self.config = config
@@ -75,8 +76,8 @@ final class GatewayOperatorFleet {
         }
         for (key, item) in desired {
             if let runtime = self.runtimes[key],
-               runtime.task != nil,
-               runtime.config.hasSameConnectionInputs(as: item.0)
+               runtime.config.hasSameConnectionInputs(as: item.0),
+               runtime.task != nil || runtime.isPausedForAttention
             {
                 runtime.name = item.1
                 self.setStatus(
@@ -198,6 +199,7 @@ final class GatewayOperatorFleet {
                 attempt += 1
                 let problem = GatewayConnectionProblemMapper.map(error: error)
                 let pauses = problem?.pauseReconnect == true || problem?.needsPairingApproval == true
+                runtime.isPausedForAttention = pauses
                 self.setStatus(
                     stableID: config.effectiveStableID,
                     name: runtime.name,
@@ -263,3 +265,21 @@ final class GatewayOperatorFleet {
         }
     }
 }
+
+#if DEBUG
+extension GatewayOperatorFleet {
+    func _test_pauseRuntimeForAttention(stableID: String, detail: String = "Approval required") {
+        guard let key = GatewayStableIdentifier.key(stableID),
+              let runtime = self.runtimes[key]
+        else { return }
+        runtime.task?.cancel()
+        runtime.task = nil
+        runtime.isPausedForAttention = true
+        self.setStatus(
+            stableID: runtime.config.effectiveStableID,
+            name: runtime.name,
+            state: .needsAttention,
+            detail: detail)
+    }
+}
+#endif

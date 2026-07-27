@@ -4,6 +4,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString as resolveOptionalStringParam } from "@openclaw/normalization-core/string-coerce";
 import {
+  GATEWAY_CLIENT_CAPS,
+  hasGatewayClientCap,
+} from "../../../packages/gateway-protocol/src/client-info.js";
+import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
@@ -30,6 +34,7 @@ import {
   beginAgentDeletion,
   claimCompletedAgentDeletion,
 } from "../../agents/agent-lifecycle-registry.js";
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -51,16 +56,12 @@ import {
   prepareWorkspaceStateDeletion,
 } from "../../agents/workspace-state-store.js";
 import {
-  DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
-  DEFAULT_HEARTBEAT_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
-  DEFAULT_MEMORY_FILENAME,
-  DEFAULT_SOUL_FILENAME,
-  DEFAULT_TOOLS_FILENAME,
-  DEFAULT_USER_FILENAME,
   ensureAgentWorkspace,
+  isExpectedAbsentBootstrapFile,
   isWorkspaceSetupCompleted,
+  WORKSPACE_BOOTSTRAP_FILENAMES,
 } from "../../agents/workspace.js";
 import { applyAgentConfig } from "../../commands/agents.config.js";
 import {
@@ -76,7 +77,7 @@ import { root, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "../../infra/sqlite-files.js";
 import { movePathToTrash } from "../../plugin-sdk/browser-maintenance.js";
-import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
+import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import {
   readAgentDeletionJournal,
   type AgentDeletionJournalCleanupPath,
@@ -99,16 +100,16 @@ import {
 import { loadOptionalServerMethodModelCatalog } from "./optional-model-catalog.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
-const BOOTSTRAP_FILE_NAMES = [
-  DEFAULT_AGENTS_FILENAME,
-  DEFAULT_SOUL_FILENAME,
-  DEFAULT_TOOLS_FILENAME,
-  DEFAULT_IDENTITY_FILENAME,
-  DEFAULT_USER_FILENAME,
-  DEFAULT_HEARTBEAT_FILENAME,
-  DEFAULT_BOOTSTRAP_FILENAME,
-] as const;
-const BOOTSTRAP_FILE_NAMES_POST_ONBOARDING = BOOTSTRAP_FILE_NAMES.filter(
+// Derived from the canonical workspace list so retiring a bootstrap file cannot
+// leave the Control UI advertising a file the runtime no longer reads.
+// IDENTITY.md is excluded: it is a parsed record that `agents.update` rewrites via
+// mergeIdentityMarkdownContent, so a second freeform editor would clobber fields
+// (Creature/Vibe, unfilled placeholders) that the identity form round-trips.
+// It stays writable through agents.files.set for clients that want raw access.
+const CORE_FILE_NAMES = WORKSPACE_BOOTSTRAP_FILENAMES.filter(
+  (name) => name !== DEFAULT_IDENTITY_FILENAME,
+);
+const CORE_FILE_NAMES_POST_ONBOARDING = CORE_FILE_NAMES.filter(
   (name) => name !== DEFAULT_BOOTSTRAP_FILENAME,
 );
 
@@ -137,10 +138,10 @@ export const testing = {
   },
 };
 
-const MEMORY_FILE_NAMES = [DEFAULT_MEMORY_FILENAME] as const;
-
-// Gateway file mutations are intentionally capped to the workspace files the UI owns.
-const ALLOWED_FILE_NAMES = new Set<string>([...BOOTSTRAP_FILE_NAMES, ...MEMORY_FILE_NAMES]);
+// Writes stay capped to canonical workspace files, and deliberately remain wider
+// than the listed core files: IDENTITY.md is not offered as an editor tab but is
+// still writable for clients that manage it directly.
+const ALLOWED_FILE_NAMES = new Set<string>(WORKSPACE_BOOTSTRAP_FILENAMES);
 
 function resolveAgentWorkspaceFileOrRespondError(
   params: Record<string, unknown>,
@@ -244,6 +245,7 @@ async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: 
     name: string;
     path: string;
     missing: boolean;
+    expectedAbsent?: boolean;
     size?: number;
     updatedAtMs?: number;
   }> = [];
@@ -251,21 +253,17 @@ async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: 
   const workspaceRoot = await openWorkspaceRootSafely(workspaceDir);
   if (!workspaceRoot) {
     // Keep the UI shape stable when the workspace path is missing or unsafe.
-    const missingNames = [
-      ...(options?.hideBootstrap ? BOOTSTRAP_FILE_NAMES_POST_ONBOARDING : BOOTSTRAP_FILE_NAMES),
-      DEFAULT_MEMORY_FILENAME,
-    ];
+    const missingNames = options?.hideBootstrap ? CORE_FILE_NAMES_POST_ONBOARDING : CORE_FILE_NAMES;
     return missingNames.map((name) => ({
       name,
       path: path.join(workspaceDir, name),
       missing: true,
+      expectedAbsent: isExpectedAbsentBootstrapFile(name),
     }));
   }
 
-  const bootstrapFileNames = options?.hideBootstrap
-    ? BOOTSTRAP_FILE_NAMES_POST_ONBOARDING
-    : BOOTSTRAP_FILE_NAMES;
-  for (const name of bootstrapFileNames) {
+  const coreFileNames = options?.hideBootstrap ? CORE_FILE_NAMES_POST_ONBOARDING : CORE_FILE_NAMES;
+  for (const name of coreFileNames) {
     const filePath = path.join(workspaceDir, name);
     const meta = await statWorkspaceFileSafely(workspaceRoot, workspaceDir, name);
     if (meta) {
@@ -277,29 +275,13 @@ async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: 
         updatedAtMs: meta.updatedAtMs,
       });
     } else {
-      files.push({ name, path: filePath, missing: true });
+      files.push({
+        name,
+        path: filePath,
+        missing: true,
+        expectedAbsent: isExpectedAbsentBootstrapFile(name),
+      });
     }
-  }
-
-  const primaryMeta = await statWorkspaceFileSafely(
-    workspaceRoot,
-    workspaceDir,
-    DEFAULT_MEMORY_FILENAME,
-  );
-  if (primaryMeta) {
-    files.push({
-      name: DEFAULT_MEMORY_FILENAME,
-      path: path.join(workspaceDir, DEFAULT_MEMORY_FILENAME),
-      missing: false,
-      size: primaryMeta.size,
-      updatedAtMs: primaryMeta.updatedAtMs,
-    });
-  } else {
-    files.push({
-      name: DEFAULT_MEMORY_FILENAME,
-      path: path.join(workspaceDir, DEFAULT_MEMORY_FILENAME),
-      missing: true,
-    });
   }
 
   return files;
@@ -790,7 +772,14 @@ function respondWorkspaceFileMissing(params: {
     {
       agentId: params.agentId,
       workspace: params.workspaceDir,
-      file: { name: params.name, path: params.filePath, missing: true },
+      // Clients merge this entry over the listed one, so it must carry the same
+      // absence classification or a picked optional file re-renders as a fault.
+      file: {
+        name: params.name,
+        path: params.filePath,
+        missing: true,
+        expectedAbsent: isExpectedAbsentBootstrapFile(params.name),
+      },
     },
     undefined,
   );
@@ -883,7 +872,7 @@ async function buildIdentityMarkdownOrRespondUnsafe(params: {
 }
 
 export const agentsHandlers: GatewayRequestHandlers = {
-  "agents.list": async ({ params, respond, context }) => {
+  "agents.list": async ({ params, respond, context, client }) => {
     if (!validateAgentsListParams(params)) {
       respondInvalidMethodParams(respond, "agents.list", validateAgentsListParams.errors);
       return;
@@ -893,7 +882,9 @@ export const agentsHandlers: GatewayRequestHandlers = {
     const modelCatalog = await loadOptionalServerMethodModelCatalog(context, "agents.list", {
       logOnceKey: "agents.list",
     });
-    const result = listAgentsForGateway(cfg, modelCatalog);
+    const result = listAgentsForGateway(cfg, modelCatalog, {
+      includeSystem: hasGatewayClientCap(client?.connect.caps, GATEWAY_CLIENT_CAPS.AGENT_KIND),
+    });
     respond(true, result, undefined);
   },
   "agents.create": async ({ params, respond }) => {
@@ -1027,11 +1018,13 @@ export const agentsHandlers: GatewayRequestHandlers = {
 
     const cfg = context.getRuntimeConfig();
     const agentId = normalizeAgentId(params.agentId);
-    if (agentId === DEFAULT_AGENT_ID) {
+    // agents/main/agent also owns the shipped shared legacy auth store.
+    // Keep main undeletable until named agents make auth-store ownership explicit.
+    if (agentId === LEGACY_IMPLICIT_AGENT_ID) {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `"${DEFAULT_AGENT_ID}" cannot be deleted`),
+        errorShape(ErrorCodes.INVALID_REQUEST, `"${LEGACY_IMPLICIT_AGENT_ID}" cannot be deleted`),
       );
       return;
     }
@@ -1043,6 +1036,17 @@ export const agentsHandlers: GatewayRequestHandlers = {
       respondAgentNotFound(respond, agentId);
       return;
     }
+    if (agentId === resolveDefaultAgentId(cfg)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `Agent "${agentId}" is the default and cannot be deleted. Reassign default first.`,
+        ),
+      );
+      return;
+    }
 
     const requestedDeleteFiles =
       typeof params.deleteFiles === "boolean" ? params.deleteFiles : true;
@@ -1052,6 +1056,11 @@ export const agentsHandlers: GatewayRequestHandlers = {
         const configured = isConfiguredAgent(lockedConfig, agentId);
         if (!configured && (!lockedJournal || lockedJournal.cleanupCompleted)) {
           throw new AgentConfigPreconditionError(`agent "${agentId}" not found`);
+        }
+        if (agentId === resolveDefaultAgentId(lockedConfig)) {
+          throw new AgentConfigPreconditionError(
+            `agent "${agentId}" is the default; reassign default first`,
+          );
         }
         if (configured && lockedJournal?.cleanupCompleted) {
           const claimed = claimCompletedAgentDeletion(agentId, lockedJournal.operationId);

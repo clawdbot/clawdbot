@@ -47,13 +47,29 @@ describe("lobsterdex", () => {
   it("migrates v1 array entries and backfills memories on the next visit", () => {
     localStorage.setItem("openclaw.control.lobsterdex.v1", JSON.stringify(["crimson"]));
     const migrated = getLobsterdexEntries().get("crimson");
-    expect(migrated).toEqual({ firstSeenAt: null, name: null });
+    expect(migrated).toEqual({ firstSeenAt: null, name: null, shinySeenAt: null });
     expect(getLobsterdex().has("crimson")).toBe(true);
 
     recordLobsterVisit("crimson", { name: "Pinchy" });
     const backfilled = getLobsterdexEntries().get("crimson");
     expect(backfilled?.name).toBe("Pinchy");
     expect(backfilled?.firstSeenAt).not.toBeNull();
+  });
+
+  it("logs the first shiny sighting once, even on settled entries", () => {
+    recordLobsterVisit("gold", { name: "Goldie" });
+    expect(getLobsterdexEntries().get("gold")?.shinySeenAt).toBeNull();
+
+    const before = Date.now();
+    recordLobsterVisit("gold", { name: "Impostor", shiny: true });
+    const shinySeenAt = getLobsterdexEntries().get("gold")?.shinySeenAt;
+    expect(shinySeenAt).toBeGreaterThanOrEqual(before);
+    // The shiny backfill leaves the first-visitor memory untouched...
+    expect(getLobsterdexEntries().get("gold")?.name).toBe("Goldie");
+
+    // ...and the sighting timestamp itself is immutable afterwards.
+    recordLobsterVisit("gold", { shiny: true });
+    expect(getLobsterdexEntries().get("gold")?.shinySeenAt).toBe(shinySeenAt);
   });
 
   it("tolerates corrupt storage", () => {

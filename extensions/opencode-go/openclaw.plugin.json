@@ -30,13 +30,21 @@
             "id": "deepseek-v4-pro",
             "name": "DeepSeek V4 Pro",
             "reasoning": true,
+            "thinkingLevelMap": {
+              "minimal": "high",
+              "low": "high",
+              "medium": "high",
+              "high": "high",
+              "xhigh": "max",
+              "max": "max"
+            },
             "input": ["text"],
             "contextWindow": 1000000,
             "maxTokens": 384000,
             "cost": {
-              "input": 1.74,
-              "output": 3.48,
-              "cacheRead": 0.145,
+              "input": 0.435,
+              "output": 0.87,
+              "cacheRead": 0.003625,
               "cacheWrite": 0
             },
             "compat": {
@@ -49,13 +57,21 @@
             "id": "deepseek-v4-flash",
             "name": "DeepSeek V4 Flash",
             "reasoning": true,
+            "thinkingLevelMap": {
+              "minimal": "high",
+              "low": "high",
+              "medium": "high",
+              "high": "high",
+              "xhigh": "max",
+              "max": "max"
+            },
             "input": ["text"],
             "contextWindow": 1000000,
             "maxTokens": 384000,
             "cost": {
               "input": 0.14,
               "output": 0.28,
-              "cacheRead": 0.028,
+              "cacheRead": 0.0028,
               "cacheWrite": 0
             },
             "compat": {

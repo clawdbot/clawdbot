@@ -78,10 +78,12 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-private const val PAGE_COUNT = 3
-private const val CHAT_PAGE = 0
-private const val VOICE_PAGE = 1
-private const val CONTROLS_PAGE = 2
+internal enum class WearHomePage {
+  Chat,
+  Voice,
+  Controls,
+}
+
 private const val VOICE_MODE_COUNT = 2
 private const val VOICE_HOME_MODE = 0
 private const val VOICE_THREAD_MODE = 1
@@ -104,6 +106,10 @@ internal fun OpenClawWearScreens(
   themeMode: WearThemeMode,
   autoSpeak: Boolean,
   notificationsGranted: Boolean,
+  initialPage: WearHomePage = WearHomePage.Chat,
+  navigationRequest: WearNavigationRequest? = null,
+  voiceSwipeHintEnabled: Boolean = true,
+  onNavigationRequestHandled: (Int) -> Unit = {},
   onTalk: () -> Unit,
   onType: () -> Unit,
   onRealtimeTalk: () -> Unit,
@@ -130,15 +136,25 @@ internal fun OpenClawWearScreens(
   }
 
   val colors = OpenClawWearTheme.colors
-  val pagerState = rememberPagerState(pageCount = { PAGE_COUNT })
+  val pagerState =
+    rememberPagerState(
+      initialPage = initialPage.ordinal,
+      pageCount = { WearHomePage.entries.size },
+    )
   val voicePagerState = rememberPagerState(pageCount = { VOICE_MODE_COUNT })
   val pagerScope = rememberCoroutineScope()
   val realtimeActive = snapshot.realtimeTalk.active || realtimeCapturing
-  var showVoiceSwipeHint by remember { mutableStateOf(true) }
+  var showVoiceSwipeHint by remember { mutableStateOf(voiceSwipeHintEnabled) }
   var realtimeStartedAtMillis by remember { mutableLongStateOf(0L) }
   var realtimeElapsedSeconds by remember { mutableLongStateOf(0L) }
+  LaunchedEffect(navigationRequest?.id) {
+    val request = navigationRequest ?: return@LaunchedEffect
+    val destination = wearLaunchPage(request.target, realtimeActive)
+    pagerState.scrollToPage(destination.ordinal)
+    onNavigationRequestHandled(request.id)
+  }
   LaunchedEffect(pagerState.currentPage, showVoiceSwipeHint) {
-    if (pagerState.currentPage == VOICE_PAGE && showVoiceSwipeHint) {
+    if (pagerState.currentPage == WearHomePage.Voice.ordinal && showVoiceSwipeHint) {
       delay(1_800L)
       showVoiceSwipeHint = false
     }
@@ -159,9 +175,9 @@ internal fun OpenClawWearScreens(
       delay(250L)
     }
   }
-  BackHandler(enabled = pagerState.currentPage == VOICE_PAGE) {
+  BackHandler(enabled = pagerState.currentPage == WearHomePage.Voice.ordinal) {
     pagerScope.launch {
-      pagerState.animateScrollToPage(CHAT_PAGE)
+      pagerState.animateScrollToPage(WearHomePage.Chat.ordinal)
     }
   }
   HorizontalPagerScaffold(
@@ -176,12 +192,12 @@ internal fun OpenClawWearScreens(
       modifier = Modifier.fillMaxSize(),
       rotaryScrollableBehavior = null,
       userScrollEnabled =
-        pagerState.currentPage != VOICE_PAGE ||
+        pagerState.currentPage != WearHomePage.Voice.ordinal ||
           voicePagerState.currentPage == VOICE_HOME_MODE ||
           voicePagerState.currentPage == VOICE_THREAD_MODE,
     ) { page ->
       when (page) {
-        CHAT_PAGE ->
+        WearHomePage.Chat.ordinal ->
           ChatPage(
             snapshot = snapshot,
             interaction = interaction,
@@ -198,7 +214,7 @@ internal fun OpenClawWearScreens(
             onSpeakLatest = onSpeakLatest,
             onStopSpeaking = onStopSpeaking,
           )
-        CONTROLS_PAGE ->
+        WearHomePage.Controls.ordinal ->
           ControlsPage(
             snapshot = snapshot,
             themeMode = themeMode,
@@ -216,7 +232,7 @@ internal fun OpenClawWearScreens(
         else ->
           VoicePage(
             voicePagerState = voicePagerState,
-            showSwipeHint = showVoiceSwipeHint && pagerState.currentPage == VOICE_PAGE,
+            showSwipeHint = showVoiceSwipeHint && pagerState.currentPage == WearHomePage.Voice.ordinal,
             realtimeTalk = snapshot.realtimeTalk,
             speaking = speaking,
             realtimeCapturing = realtimeCapturing,
@@ -236,6 +252,11 @@ internal fun OpenClawWearScreens(
     }
   }
 }
+
+internal fun wearLaunchPage(
+  target: WearLaunchTarget,
+  realtimeActive: Boolean,
+): WearHomePage = if (realtimeActive) WearHomePage.Voice else target.initialPage
 
 @Composable
 private fun ChatPage(
@@ -337,13 +358,11 @@ private fun ChatPage(
         )
       }
     }
-    snapshot.errorText
-      ?.takeIf(String::isNotBlank)
-      ?.let { error ->
-        item {
-          InlineError(text = error)
-        }
+    snapshot.failure?.let { failure ->
+      item {
+        InlineError(text = failureDetail(failure))
       }
+    }
   }
 }
 
@@ -784,7 +803,7 @@ private fun ThreadVoiceMode(
         contentAlignment = Alignment.Center,
       ) {
         Text(
-          text = "${stringResource(R.string.new_messages)} ↓",
+          text = stringResource(R.string.new_messages) + " ↓",
           color = colors.voiceAccent,
           fontSize = 9.sp,
           fontWeight = FontWeight.Bold,
@@ -865,7 +884,7 @@ private fun WearThreadThinking() {
         .padding(horizontal = 12.dp, vertical = 8.dp),
   ) {
     Text(
-      text = "${stringResource(R.string.thinking)}…",
+      text = stringResource(R.string.thinking) + "…",
       color = colors.textMuted,
       fontSize = 10.sp,
       fontWeight = FontWeight.SemiBold,
@@ -1112,8 +1131,8 @@ private fun ControlsPage(
     item {
       ConnectionPanel(snapshot = snapshot)
     }
-    snapshot.errorText?.takeIf(String::isNotBlank)?.let { error ->
-      item { InlineError(text = error) }
+    snapshot.failure?.let { failure ->
+      item { InlineError(text = failureDetail(failure)) }
     }
     item {
       SelectionButton(

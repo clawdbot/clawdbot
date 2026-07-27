@@ -5,7 +5,6 @@ import {
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentDir } from "../../agents/agent-scope.js";
 import {
   type AuthHealthSummary,
   type AuthProfileHealthStatus,
@@ -21,7 +20,7 @@ import {
   ensureAuthProfileStoreWithoutExternalProfiles,
   externalCliDiscoveryForConfigStatus,
   listProfilesForProvider,
-  removeAuthProfilesWithLock,
+  removeAuthProfilesAcrossOwnerStores,
   removeProviderAuthProfilesWithLock,
   resolvePersistedAuthProfileOwnerAgentDir,
 } from "../../agents/auth-profiles.js";
@@ -60,6 +59,10 @@ import { refreshActiveProviderAuthRuntimeSnapshot } from "../../secrets/runtime.
 import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import { abortChatRunsForProvider, type ChatAbortOps } from "../chat-abort.js";
 import { formatForLog } from "../ws-log.js";
+import {
+  resolveModelAuthAgentScope,
+  unknownModelAuthAgentIdError,
+} from "./model-auth-agent-scope.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
 const log = createSubsystemLogger("models-auth-status");
@@ -135,7 +138,7 @@ export type ModelAuthLogoutResult = {
 };
 
 const CACHE_TTL_MS = 60_000;
-let cached: { ts: number; result: ModelAuthStatusResult } | null = null;
+const cachedByAgentId = new Map<string, { ts: number; result: ModelAuthStatusResult }>();
 let cacheGeneration = 0;
 
 /**
@@ -146,7 +149,7 @@ let cacheGeneration = 0;
  */
 export function invalidateModelAuthStatusCache(): void {
   cacheGeneration += 1;
-  cached = null;
+  cachedByAgentId.clear();
   // The prepared provider-auth map (model-provider-auth.ts) was built from
   // the pre-mutation auth state, so it must be invalidated alongside this
   // cache whenever an auth-profile mutation lands (logout, login, token
@@ -204,9 +207,7 @@ function readLogoutProfileSelection(params: Record<string, unknown>): LogoutProf
 function createAuthLogoutAbortOps(context: GatewayRequestContext): ChatAbortOps {
   return {
     chatAbortControllers: context.chatAbortControllers,
-    chatRunBuffers: context.chatRunBuffers,
-    chatAbortedRuns: context.chatAbortedRuns,
-    clearChatRunState: context.clearChatRunState,
+    chatRunState: context.chatRunState,
     removeChatRun: context.removeChatRun,
     agentRunSeq: context.agentRunSeq,
     broadcast: context.broadcast,
@@ -234,36 +235,6 @@ async function removeProviderAuthProfilesAcrossOwnerStores(params: {
   for (const ownerAgentDir of ownerAgentDirs) {
     const updatedStore = await removeProviderAuthProfilesWithLock({
       provider: params.provider,
-      agentDir: ownerAgentDir,
-    });
-    if (!updatedStore) {
-      return false;
-    }
-  }
-  return true;
-}
-
-// Targeted UI logout preserves API-key and unrelated profiles. Ownership is
-// resolved before each locked store mutation so inherited profiles stay gone.
-async function removeAuthProfilesAcrossOwnerStores(params: {
-  agentDir: string;
-  profileIds: string[];
-}): Promise<boolean> {
-  const profilesByOwner = new Map<string | undefined, Set<string>>([
-    [params.agentDir, new Set(params.profileIds)],
-  ]);
-  for (const profileId of params.profileIds) {
-    const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({
-      agentDir: params.agentDir,
-      profileId,
-    });
-    const ownerProfiles = profilesByOwner.get(ownerAgentDir) ?? new Set<string>();
-    ownerProfiles.add(profileId);
-    profilesByOwner.set(ownerAgentDir, ownerProfiles);
-  }
-  for (const [ownerAgentDir, profileIds] of profilesByOwner) {
-    const updatedStore = await removeAuthProfilesWithLock({
-      profileIds: [...profileIds],
       agentDir: ownerAgentDir,
     });
     if (!updatedStore) {
@@ -562,7 +533,12 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
     }
     try {
       const cfg = context.getRuntimeConfig();
-      const agentDir = resolveDefaultAgentDir(cfg);
+      const scope = resolveModelAuthAgentScope(cfg, params.agentId);
+      if (!scope.ok) {
+        respond(false, undefined, unknownModelAuthAgentIdError(scope.agentId));
+        return;
+      }
+      const { agentDir } = scope;
       const authProvider = resolveProviderIdForAuth(provider, { config: cfg });
       const store = ensureAuthProfileStoreWithoutExternalProfiles(agentDir);
       const availableProfiles = listProfilesForProvider(store, provider);
@@ -630,7 +606,9 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       const { runIds: abortedRunIds } = selection.profileIds
         ? { runIds: [] as string[] }
         : abortChatRunsForProvider(createAuthLogoutAbortOps(context), {
+            cfg,
             providerId: authProvider,
+            agentId: scope.agentId,
             stopReason: "auth-revoked",
           });
       const result: ModelAuthLogoutResult = {
@@ -645,18 +623,30 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
   },
   "models.authStatus": async ({ params, respond, context }) => {
     const now = Date.now();
-    const bypassCache = Boolean((params as { refresh?: boolean } | undefined)?.refresh);
-    if (!bypassCache && cached && now - cached.ts < CACHE_TTL_MS) {
-      respond(true, cached.result, undefined, { cached: true });
-      return;
-    }
+    const bypassCache = Boolean(params.refresh);
     try {
+      let cfg = context.getRuntimeConfig();
+      let scope = resolveModelAuthAgentScope(cfg, params.agentId);
+      if (!scope.ok) {
+        respond(false, undefined, unknownModelAuthAgentIdError(scope.agentId));
+        return;
+      }
       if (bypassCache) {
         await refreshModelAuthStatusRuntimeState();
+        cfg = context.getRuntimeConfig();
+        scope = resolveModelAuthAgentScope(cfg, params.agentId);
+        if (!scope.ok) {
+          respond(false, undefined, unknownModelAuthAgentIdError(scope.agentId));
+          return;
+        }
       }
       const publishGeneration = cacheGeneration;
-      const cfg = context.getRuntimeConfig();
-      const agentDir = resolveDefaultAgentDir(cfg);
+      const { agentId, agentDir } = scope;
+      const cached = cachedByAgentId.get(agentId);
+      if (!bypassCache && cached && now - cached.ts < CACHE_TTL_MS) {
+        respond(true, cached.result, undefined, { cached: true });
+        return;
+      }
       // Use the external-profile-aware store for status reads so the dashboard
       // reflects CLI-discovered credentials without persisting them here.
       const store = ensureAuthProfileStore(agentDir, {
@@ -750,7 +740,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       );
       const result: ModelAuthStatusResult = { ts: now, providers };
       if (publishGeneration === cacheGeneration) {
-        cached = { ts: now, result };
+        cachedByAgentId.set(agentId, { ts: now, result });
       }
       respond(true, result, undefined);
     } catch (err) {

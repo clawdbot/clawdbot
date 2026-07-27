@@ -187,7 +187,7 @@ vi.mock("../infra/net/fetch-guard.js", async () => {
   };
 });
 
-const { describeImageWithModel } = await import("./image.js");
+const { describeImageWithModel, describeImagesWithModel } = await import("./image.js");
 
 describe("describeImageWithModel", () => {
   afterEach(() => {
@@ -325,6 +325,35 @@ describe("describeImageWithModel", () => {
     });
     expect(fetchOptions.signal).toBeInstanceOf(AbortSignal);
     expect(timeoutSpy).toHaveBeenCalledWith(1000);
+    expect(completeMock).not.toHaveBeenCalled();
+  });
+
+  it("does not start another MiniMax request after caller cancellation", async () => {
+    const controller = new AbortController();
+    fetchMock.mockImplementationOnce(async () => {
+      controller.abort(new Error("caller cancelled MiniMax image batch"));
+      return Response.json({
+        base_resp: { status_code: 0 },
+        content: "first image",
+      });
+    });
+
+    await expect(
+      describeImagesWithModel({
+        cfg: {},
+        agentDir: "/tmp/openclaw-agent",
+        provider: "minimax-portal",
+        model: "MiniMax-VL-01",
+        images: [
+          { buffer: Buffer.from("first"), fileName: "first.png", mime: "image/png" },
+          { buffer: Buffer.from("second"), fileName: "second.png", mime: "image/png" },
+        ],
+        timeoutMs: 1000,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("caller cancelled MiniMax image batch");
+
+    expect(fetchMock).toHaveBeenCalledOnce();
     expect(completeMock).not.toHaveBeenCalled();
   });
 

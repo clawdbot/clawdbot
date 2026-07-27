@@ -2,11 +2,13 @@ import type {
   SystemAgentChatHistoryResult,
   SystemAgentChatHistoryTurn,
 } from "@openclaw/gateway-protocol";
-import { nothing } from "lit";
+import { html, nothing } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { renderChatDivider } from "../chat/components/chat-divider.ts";
+import { renderMessageGroup } from "../chat/components/chat-message.ts";
+import { renderCustodianQuestionCard } from "./custodian-question-card.ts";
 import type { CustodianStructuredQuestion } from "./structured-question.ts";
 
 const CUSTODIAN_TRANSCRIPT_TIMEOUT_MS = 15_000;
@@ -67,7 +69,7 @@ export function custodianErrorMessage(error: unknown): string {
     : t("custodian.requestFailed");
 }
 
-export function toCustodianMessageGroup(message: CustodianMessage): MessageGroup {
+function toCustodianMessageGroup(message: CustodianMessage): MessageGroup {
   const key = `msg-${message.id}`;
   return {
     kind: "group",
@@ -123,10 +125,7 @@ export function createCustodianTranscriptMessages(
   return { messages, nextMessageId };
 }
 
-export function renderCustodianEarlierDivider(
-  message: CustodianMessage,
-  boundaryAfterId: number | null,
-) {
+function renderCustodianEarlierDivider(message: CustodianMessage, boundaryAfterId: number | null) {
   return message.id === boundaryAfterId
     ? renderChatDivider({
         kind: "divider",
@@ -135,4 +134,34 @@ export function renderCustodianEarlierDivider(
         timestamp: message.at,
       })
     : nothing;
+}
+
+export function renderCustodianTranscriptEntry(params: {
+  message: CustodianMessage;
+  boundaryAfterId: number | null;
+  showQuestion: boolean;
+  questionDisabled: boolean;
+  onSelect: (label: string) => void;
+  onSkip: () => void;
+}) {
+  const question = params.message.question;
+  return html`
+    ${params.message.text
+      ? renderMessageGroup(toCustodianMessageGroup(params.message), {
+          showReasoning: false,
+          showToolCalls: false,
+          assistantName: t("custodian.title"),
+          assistantAvatar: "OC",
+        })
+      : nothing}
+    ${renderCustodianEarlierDivider(params.message, params.boundaryAfterId)}
+    ${params.showQuestion && question
+      ? renderCustodianQuestionCard({
+          question,
+          disabled: params.questionDisabled,
+          onSelect: params.onSelect,
+          onSkip: params.onSkip,
+        })
+      : nothing}
+  `;
 }

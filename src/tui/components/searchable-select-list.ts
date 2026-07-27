@@ -365,6 +365,8 @@ export class SearchableSelectList implements Component {
     const newValue = this.searchInput.getValue();
 
     if (prevValue !== newValue) {
+      // Only current-query patterns are reusable; retaining older edits grows without bound.
+      this.regexCache.clear();
       this.updateFilter();
     }
   }

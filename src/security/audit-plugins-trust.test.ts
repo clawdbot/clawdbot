@@ -4,9 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { HookInstallRecord } from "../config/types.hooks.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
+import { writeConfigMachineState } from "../state/config-machine-state.js";
 import {
   captureEnv,
   createPathResolutionEnv,
@@ -173,6 +175,15 @@ describe("security audit install metadata findings", () => {
     return await collectPluginsTrustFindingsForTest({ cfg, stateDir });
   };
 
+  const writeHookInstalls = (
+    stateDir: string,
+    installs: Record<string, HookInstallRecord>,
+  ): void => {
+    writeConfigMachineState("hooks.internal.installs", installs, {
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    });
+  };
+
   const requireInstallFinding = (
     findings: Awaited<ReturnType<typeof runInstallMetadataAudit>>,
     checkId: string,
@@ -243,21 +254,10 @@ describe("security audit install metadata findings", () => {
               spec: "@openclaw/voice-call",
             },
           });
-          return runInstallMetadataAudit(
-            {
-              hooks: {
-                internal: {
-                  installs: {
-                    "test-hooks": {
-                      source: "npm",
-                      spec: "@openclaw/test-hooks",
-                    },
-                  },
-                },
-              },
-            },
-            stateDir,
-          );
+          writeHookInstalls(stateDir, {
+            "test-hooks": { source: "npm", spec: "@openclaw/test-hooks" },
+          });
+          return runInstallMetadataAudit({}, stateDir);
         },
         expectedPresent: [
           "plugins.installs_unpinned_npm_specs",
@@ -277,22 +277,14 @@ describe("security audit install metadata findings", () => {
               integrity: "sha512-plugin",
             },
           });
-          return runInstallMetadataAudit(
-            {
-              hooks: {
-                internal: {
-                  installs: {
-                    "test-hooks": {
-                      source: "npm",
-                      spec: "@openclaw/test-hooks@1.2.3",
-                      integrity: "sha512-hook",
-                    },
-                  },
-                },
-              },
+          writeHookInstalls(stateDir, {
+            "test-hooks": {
+              source: "npm",
+              spec: "@openclaw/test-hooks@1.2.3",
+              integrity: "sha512-hook",
             },
-            stateDir,
-          );
+          });
+          return runInstallMetadataAudit({}, stateDir);
         },
         expectedAbsent: [
           "plugins.installs_unpinned_npm_specs",
@@ -313,23 +305,15 @@ describe("security audit install metadata findings", () => {
               integrity: "sha512-plugin",
             },
           });
-          return runInstallMetadataAudit(
-            {
-              hooks: {
-                internal: {
-                  installs: {
-                    "test-hooks": {
-                      source: "npm",
-                      spec: "@openclaw/test-hooks",
-                      resolvedSpec: "@openclaw/test-hooks@1.2.3",
-                      integrity: "sha512-hook",
-                    },
-                  },
-                },
-              },
+          writeHookInstalls(stateDir, {
+            "test-hooks": {
+              source: "npm",
+              spec: "@openclaw/test-hooks",
+              resolvedSpec: "@openclaw/test-hooks@1.2.3",
+              integrity: "sha512-hook",
             },
-            stateDir,
-          );
+          });
+          return runInstallMetadataAudit({}, stateDir);
         },
         expectedPresent: [
           "plugins.installs_unpinned_npm_specs",
@@ -349,23 +333,15 @@ describe("security audit install metadata findings", () => {
               resolvedVersion: "1.2.3",
             },
           });
-          return runInstallMetadataAudit(
-            {
-              hooks: {
-                internal: {
-                  installs: {
-                    "test-hooks": {
-                      source: "npm",
-                      spec: "@openclaw/test-hooks@1.2.3",
-                      integrity: "sha512-hook",
-                      resolvedVersion: "1.2.3",
-                    },
-                  },
-                },
-              },
+          writeHookInstalls(stateDir, {
+            "test-hooks": {
+              source: "npm",
+              spec: "@openclaw/test-hooks@1.2.3",
+              integrity: "sha512-hook",
+              resolvedVersion: "1.2.3",
             },
-            stateDir,
-          );
+          });
+          return runInstallMetadataAudit({}, stateDir);
         },
         expectedPresent: ["plugins.installs_version_drift", "hooks.installs_version_drift"],
       },
@@ -566,6 +542,19 @@ describe("security audit extension tool reachability findings", () => {
                 finding.severity === "warn",
             ),
           ).toBe(true);
+        },
+      },
+      {
+        name: "reports canonical agent paths for permissive tool policy",
+        cfg: {
+          plugins: { allow: ["some-plugin"] },
+          agents: { entries: { ops: { tools: { profile: "full" } } } },
+        } satisfies OpenClawConfig,
+        assert: (findings: Awaited<ReturnType<typeof runSharedExtensionsAudit>>) => {
+          const finding = findings.find(
+            (entry) => entry.checkId === "plugins.tools_reachable_permissive_policy",
+          );
+          expect(finding?.detail).toContain("- agents.entries.ops");
         },
       },
       {

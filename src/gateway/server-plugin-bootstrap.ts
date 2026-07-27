@@ -1,5 +1,6 @@
 // Gateway plugin bootstrap helpers.
 // Applies activation config, installs runtime bindings, loads and pins plugins.
+import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import { primeConfiguredBindingRegistry } from "../channels/plugins/binding-registry.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -58,6 +59,7 @@ type GatewayPluginBootstrapParams = {
   logDiagnostics?: boolean;
   startupTrace?: GatewayStartupTrace;
   beforePrimeRegistry?: (pluginRegistry: PluginRegistry) => void;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 };
 
 function installGatewayPluginRuntimeEnvironment(cfg: OpenClawConfig) {
@@ -115,6 +117,7 @@ export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
       ? { manifestRegistry: params.pluginLookUpTable.manifestRegistry }
       : {}),
     discovery: params.pluginLookUpTable?.discovery,
+    ambientEnvTriggers: params.ambientEnvTriggers,
   });
   const resolvedConfig =
     activationSourceConfig === params.cfg
@@ -154,6 +157,7 @@ export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
     preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
     suppressPluginInfoLogs: params.suppressPluginInfoLogs,
     startupTrace: params.startupTrace,
+    ambientEnvTriggers: params.ambientEnvTriggers,
   });
   params.beforePrimeRegistry?.(loaded.pluginRegistry);
   primeConfiguredBindingRegistry({ cfg: resolvedConfig });

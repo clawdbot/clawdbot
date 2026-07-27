@@ -2,6 +2,7 @@
 import { appendFileSync } from "node:fs";
 import * as nodePty from "@lydell/node-pty";
 import type { IPty } from "@lydell/node-pty";
+import { AnsiSequenceStripper } from "../../packages/terminal-core/src/ansi-sequences.js";
 import { toErrorObject } from "../infra/errors.js";
 
 // Shared PTY harness utilities for fake-backend and local TUI smoke tests.
@@ -10,6 +11,7 @@ type PtyExitEvent = Parameters<Parameters<IPty["onExit"]>[0]>[0];
 /** Handle returned by PTY tests for input, output waits, and cleanup. */
 export type PtyRun = {
   output: () => string;
+  visibleOutput: () => string;
   write: (data: string, opts?: { delay?: boolean }) => Promise<void>;
   waitForOutput: (needle: string, timeoutMs?: number) => Promise<string>;
   waitForExit: (timeoutMs?: number) => Promise<PtyExitEvent>;
@@ -55,13 +57,13 @@ export function sleep(ms: number) {
   });
 }
 
-function readPositiveIntegerEnv(name: string): number | null {
-  const value = Number.parseInt(process.env[name] ?? "", 10);
+function readPositiveIntegerEnv(name: string, env: NodeJS.ProcessEnv = process.env): number | null {
+  const value = Number.parseInt(env[name] ?? "", 10);
   return Number.isFinite(value) && value > 0 ? value : null;
 }
 
-function readPtyDimensionEnv(name: string, fallback: number): number {
-  return readPositiveIntegerEnv(name) ?? fallback;
+function readPtyDimensionEnv(name: string, fallback: number, env: NodeJS.ProcessEnv): number {
+  return readPositiveIntegerEnv(name, env) ?? fallback;
 }
 
 async function writePtyInput(
@@ -105,21 +107,30 @@ export function startPty(
   },
 ) {
   let output = "";
+  let visibleOutput = "";
   let exitEvent: PtyExitEvent | null = null;
+  const ansiStripper = new AnsiSequenceStripper();
+  const ptyEnv = {
+    ...process.env,
+    ...opts.env,
+    TERM: "xterm-256color",
+  };
   const pty = nodePty.spawn(command, args, {
     name: "xterm-256color",
-    cols: readPtyDimensionEnv("OPENCLAW_TUI_PTY_COLS", 100),
-    rows: readPtyDimensionEnv("OPENCLAW_TUI_PTY_ROWS", 30),
+    cols: readPtyDimensionEnv("OPENCLAW_TUI_PTY_COLS", 100, ptyEnv),
+    rows: readPtyDimensionEnv("OPENCLAW_TUI_PTY_ROWS", 30, ptyEnv),
     cwd: opts.cwd,
-    env: {
-      ...process.env,
-      ...opts.env,
-      TERM: "xterm-256color",
-    },
+    env: ptyEnv,
   });
 
   const dataSubscription = pty.onData((data) => {
     output += data;
+    // PTY line wrapping and ANSI chunks must not hide visible text from behavior checks.
+    const visibleChunk = ansiStripper.write(data).replace(/\s+/gu, " ");
+    visibleOutput +=
+      visibleOutput.endsWith(" ") && visibleChunk.startsWith(" ")
+        ? visibleChunk.slice(1)
+        : visibleChunk;
     mirrorPtyOutput(data);
   });
   const exitSubscription = pty.onExit((event) => {
@@ -137,12 +148,13 @@ export function startPty(
 
   const run: PtyRun = {
     output: () => output,
+    visibleOutput: () => visibleOutput,
     write: async (data, writeOpts) => await writePtyInput(pty, data, writeOpts),
     waitForOutput: async (needle, timeoutMs = opts.outputTimeoutMs) =>
       await waitFor({
         timeoutMs,
         read: () => {
-          if (output.includes(needle)) {
+          if (visibleOutput.includes(needle.replace(/\s+/gu, " "))) {
             return output;
           }
           if (exitEvent) {

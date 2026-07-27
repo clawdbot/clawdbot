@@ -610,6 +610,8 @@ function emitDiscriminatedUnionCompatibility(name: string): string[] {
     "        switch self {",
     "        case .missingScope(let value): value.code",
     "        case .mcpAppViewExpired(let value): value.code",
+    "        case .unknownAgentId(let value): value.code",
+    "        case .wizardNotFound(let value): value.code",
     "        }",
     "    }",
     "",

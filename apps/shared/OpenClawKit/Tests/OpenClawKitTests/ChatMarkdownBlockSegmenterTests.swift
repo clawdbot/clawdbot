@@ -529,6 +529,15 @@ struct ChatMarkdownBlockSegmenterTests {
     }
 
     #if canImport(UIKit)
+    @MainActor private func fittedHeight(
+        _ view: some View,
+        width: CGFloat,
+        maximumHeight: CGFloat = 10_000) -> CGFloat
+    {
+        let controller = UIHostingController(rootView: view)
+        return controller.sizeThatFits(in: CGSize(width: width, height: maximumHeight)).height
+    }
+
     @Test @MainActor func `native list renderer builds on iOS across appearance and type size`() {
         let markdown = """
         9. **First** option
@@ -555,6 +564,41 @@ struct ChatMarkdownBlockSegmenterTests {
             window.makeKeyAndVisible()
             window.rootViewController?.view.layoutIfNeeded()
             windows.append(window)
+        }
+    }
+
+    @Test @MainActor func `native list items reject compressed multiline heights`() {
+        let samples = [
+            "The issue is not posted by an official OpenClaw organization account or a separate assistant account, so the complete author identity guidance must remain visible to the reader.",
+            "공개 이슈의 작성자에는 선택한 계정 이름이 표시되므로 회사 계정보다 개인 GitHub 계정을 사용하고 비밀번호를 공유하지 않아도 된다는 전체 안내가 화면에 보여야 합니다.",
+        ]
+
+        for width in [CGFloat(320), 768] {
+            for typeSize in [DynamicTypeSize.large, .accessibility2] {
+                for sample in samples {
+                    let prose = ChatMarkdownRenderer(
+                        text: sample,
+                        context: .assistant,
+                        variant: .standard,
+                        font: OpenClawChatTypography.body,
+                        textColor: OpenClawChatTheme.assistantText)
+                        .environment(\.dynamicTypeSize, typeSize)
+                    let list = ChatMarkdownRenderer(
+                        text: "- \(sample)",
+                        context: .assistant,
+                        variant: .standard,
+                        font: OpenClawChatTypography.body,
+                        textColor: OpenClawChatTheme.assistantText)
+                        .environment(\.dynamicTypeSize, typeSize)
+
+                    let proseHeight = self.fittedHeight(prose, width: width)
+                    let listHeight = self.fittedHeight(
+                        list,
+                        width: width,
+                        maximumHeight: proseHeight / 2)
+                    #expect(listHeight >= proseHeight)
+                }
+            }
         }
     }
     #endif

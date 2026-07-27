@@ -29,11 +29,13 @@ const DEFAULT_EXEC_REVIEWER_TIMEOUT_MS = 30_000;
 const EXEC_REVIEWER_MAX_TOKENS = 360;
 const EXEC_REVIEWER_TIMEOUT = Symbol("exec-reviewer-timeout");
 
-const execAutoReviewResponseSchema = z.object({
-  decision: z.enum(["allow", "ask"]),
-  risk: z.enum(["low", "medium", "high", "unknown"]),
-  rationale: z.string().optional(),
-});
+const execAutoReviewResponseSchema = z
+  .object({
+    decision: z.enum(["allow", "ask"]),
+    risk: z.enum(["low", "medium", "high", "unknown"]),
+    rationale: z.string().optional(),
+  })
+  .strict();
 
 /** Config for the optional model-backed exec reviewer. */
 export type ExecReviewerConfig = {
@@ -133,6 +135,70 @@ function extractJsonObject(text: string): string | null {
   return null;
 }
 
+function hasDuplicateJsonObjectKeys(text: string): boolean {
+  const keys = new Set<string>();
+  let depth = 0;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const token = text[index];
+    if (token === "{") {
+      depth += 1;
+      continue;
+    }
+    if (token === "}") {
+      depth -= 1;
+      continue;
+    }
+    if (token === "[") {
+      depth += 1;
+      continue;
+    }
+    if (token === "]") {
+      depth -= 1;
+      continue;
+    }
+    if (token !== '"') {
+      continue;
+    }
+
+    let end = index + 1;
+    let escaped = false;
+    for (; end < text.length; end += 1) {
+      const character = text[end];
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === '"') {
+        break;
+      }
+    }
+
+    if (depth === 1) {
+      let next = end + 1;
+      while (
+        text[next] === " " ||
+        text[next] === "\t" ||
+        text[next] === "\n" ||
+        text[next] === "\r"
+      ) {
+        next += 1;
+      }
+      if (text[next] === ":") {
+        const key = JSON.parse(text.slice(index, end + 1)) as string;
+        if (keys.has(key)) {
+          return true;
+        }
+        keys.add(key);
+      }
+    }
+
+    index = end;
+  }
+
+  return false;
+}
+
 /** Parses and validates reviewer JSON into a conservative exec decision. */
 function parseExecAutoReviewResponse(text: string): ExecAutoReviewDecision {
   const objectText = extractJsonObject(text);
@@ -151,6 +217,28 @@ function parseExecAutoReviewResponse(text: string): ExecAutoReviewDecision {
       decision: "ask",
       risk: "unknown",
       rationale: "exec reviewer returned malformed JSON",
+    };
+  }
+  // JSON.parse silently keeps the last duplicate key, which can turn an
+  // earlier ask or high-risk decision into an unreviewed allow.
+  if (hasDuplicateJsonObjectKeys(objectText)) {
+    return {
+      decision: "ask",
+      risk: "unknown",
+      rationale: "exec reviewer returned ambiguous JSON",
+    };
+  }
+  // Zod ignores JSON's own `__proto__` field even in strict mode, so check
+  // actual parsed keys before trusting the closed reviewer response schema.
+  if (
+    typeof parsed === "object" &&
+    parsed !== null &&
+    Object.keys(parsed).some((key) => !Object.hasOwn(execAutoReviewResponseSchema.shape, key))
+  ) {
+    return {
+      decision: "ask",
+      risk: "unknown",
+      rationale: "exec reviewer returned an unsupported response",
     };
   }
   const response = execAutoReviewResponseSchema.safeParse(parsed);

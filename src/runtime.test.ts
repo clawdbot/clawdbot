@@ -10,7 +10,12 @@ vi.mock("../packages/terminal-core/src/restore.js", () => ({
   restoreTerminalState: vi.fn(),
 }));
 
-import { createNonExitingRuntime, ExitError, writeRuntimeJson } from "./runtime.js";
+import {
+  createNonExitingRuntime,
+  ExitError,
+  writeRuntimeJson,
+  writeRuntimeStdout,
+} from "./runtime.js";
 
 describe("createNonExitingRuntime", () => {
   it("returns runtime with exit function", () => {
@@ -83,5 +88,34 @@ describe("writeRuntimeJson", () => {
     };
     writeRuntimeJson(runtime, { key: "value" }, 0);
     expect(runtime.log).toHaveBeenCalledWith('{"key":"value"}');
+  });
+});
+
+describe("writeRuntimeStdout", () => {
+  it("uses the direct stdout writer when available", () => {
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+      writeStdout: vi.fn(),
+      writeJson: vi.fn(),
+    };
+
+    writeRuntimeStdout(runtime, "plain output");
+
+    expect(runtime.writeStdout).toHaveBeenCalledWith("plain output");
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the runtime logger when no stdout writer is available", () => {
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    writeRuntimeStdout(runtime, "plain output");
+
+    expect(runtime.log).toHaveBeenCalledWith("plain output");
   });
 });

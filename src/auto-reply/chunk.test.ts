@@ -660,8 +660,6 @@ describe("chunkMarkdownTextWithMode", () => {
 });
 
 describe("resolveChunkMode", () => {
-  // All bundled channels are nested-only now; the flat chunkMode row below
-  // covers the deprecated SDK-plugin fallback that streaming.ts still reads.
   const providerCfg = {
     channels: { signal: { streaming: { chunkMode: "newline" as const } } },
   };
@@ -702,33 +700,6 @@ describe("resolveChunkMode", () => {
       },
       provider: "imessage",
       accountId: "personal",
-      expected: "newline",
-    },
-    {
-      cfg: { channels: { webchat: { chunkMode: "newline" as const } } },
-      provider: "webchat",
-      accountId: undefined,
-      expected: "length",
-    },
-    // Deprecated SDK fallback: nested config wins over a stale flat key, and
-    // a flat-only entry still resolves until the SDK deprecation window ends.
-    {
-      cfg: {
-        channels: {
-          mattermost: {
-            chunkMode: "length" as const,
-            streaming: { chunkMode: "newline" as const },
-          },
-        },
-      },
-      provider: "mattermost",
-      accountId: undefined,
-      expected: "newline",
-    },
-    {
-      cfg: { channels: { "sdk-plugin": { chunkMode: "newline" as const } } },
-      provider: "sdk-plugin",
-      accountId: undefined,
       expected: "newline",
     },
   ] as const)(

@@ -627,7 +627,6 @@ export async function loadCompactHooksHarness(): Promise<{
       compatiblePolicyHashes: undefined,
       compatibleConfigFingerprints: undefined,
     })),
-    clearCurrentPluginMetadataSnapshot: vi.fn(),
     getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
     resolvePluginMetadataControlPlaneFingerprint: vi.fn(() => "test-plugin-fingerprint"),
     restoreCurrentPluginMetadataSnapshotState: vi.fn(),
@@ -743,6 +742,10 @@ export async function loadCompactHooksHarness(): Promise<{
         agentDir: input.agentDir,
         config: input.config,
         workspaceDir: input.workspaceDir,
+        metadataSnapshot: {
+          ...emptyPluginMetadataSnapshot,
+          workspaceDir: input.workspaceDir as string | undefined,
+        },
         createStores: () => ({ authStorage: {}, modelRegistry: {} }),
       },
       release: vi.fn(),

@@ -6,7 +6,9 @@ import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
+import * as pluginHardlinkPolicy from "./hardlink-policy.js";
 import { listBuiltRuntimeEntryCandidates } from "./package-entrypoints.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import {
   cleanupTrackedTempDirs,
   makeTrackedTempDir,
@@ -463,6 +465,7 @@ async function expectRejectedPackageExtensionEntry(params: {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  clearPluginMetadataLifecycleCaches();
   cleanupTrackedTempDirs(tempDirs);
 });
 
@@ -554,6 +557,39 @@ describe("discoverOpenClawPlugins", () => {
       diagnostics: result.diagnostics,
       pluginId: "diffs-language-pack",
       messageIncludes: 'requires plugin "diffs"',
+    });
+  });
+
+  it("recognizes the validated manifest id of an explicitly configured plugin file", async () => {
+    const stateDir = makeTempDir();
+    const coreDir = path.join(stateDir, "configured-plugins", "acme-core");
+    const coreEntry = path.join(coreDir, "index.ts");
+    mkdirSafe(coreDir);
+    writePluginManifest({ pluginDir: coreDir, id: "acme-core" });
+    writePluginEntry(coreEntry);
+
+    const dependentDir = path.join(stateDir, "extensions", "acme-addon");
+    createPackagePluginWithEntry({
+      packageDir: dependentDir,
+      packageName: "@acme/acme-addon",
+      pluginId: "acme-addon",
+    });
+    writePluginManifest({
+      pluginDir: dependentDir,
+      id: "acme-addon",
+      requiresPlugins: ["acme-core"],
+    });
+
+    const result = await discoverWithStateDir(stateDir, { extraPaths: [coreEntry] });
+
+    expectCandidatePresence(result, {
+      present: ["index", "acme-addon"],
+      absent: ["acme-core"],
+    });
+    expectNoDiagnostic({
+      diagnostics: result.diagnostics,
+      pluginId: "acme-addon",
+      messageIncludes: 'requires plugin "acme-core"',
     });
   });
 
@@ -1514,7 +1550,7 @@ describe("discoverOpenClawPlugins", () => {
       pluginId: "future-channel",
       source: path.join(pluginDir, "package.json"),
       messageIncludes:
-        "plugin requires plugin API >=2026.5.27-beta.2, but this host is 2026.5.27-beta.1; skipping discovery",
+        'plugin requires plugin API >=2026.5.27-beta.2, but this host is 2026.5.27-beta.1; skipping discovery (check "openclaw --version", OPENCLAW_COMPATIBILITY_HOST_VERSION, or run "openclaw doctor")',
     });
   });
 
@@ -1550,7 +1586,7 @@ describe("discoverOpenClawPlugins", () => {
       pluginId: "malformed-channel",
       source: path.join(pluginDir, "package.json"),
       messageIncludes:
-        "invalid package plugin API metadata: package.json openclaw.compat.pluginApi must be a string; skipping discovery",
+        "invalid package plugin API metadata: package.json openclaw.compat.pluginApi must be a string; skipping discovery (check package.json openclaw.compat.pluginApi)",
     });
   });
 
@@ -2349,6 +2385,144 @@ describe("discoverOpenClawPlugins", () => {
       }
     },
   );
+
+  it("reuses bundled package manifests without repeating filesystem checks", () => {
+    const stateDir = makeTempDir();
+    const bundledDir = path.join(stateDir, "bundled");
+    const pluginDir = path.join(bundledDir, "cached-bundle");
+    createPackagePluginWithEntry({
+      packageDir: pluginDir,
+      packageName: "@openclaw/cached-bundle",
+      pluginId: "cached-bundle",
+      entryPath: "index.js",
+    });
+    const env = buildDiscoveryEnvWithOverrides(stateDir, {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+    });
+    const packageManifestPath = path.resolve(pluginDir, "package.json");
+
+    expectCandidatePresence(discoverWithEnv({ env }), { present: ["cached-bundle"] });
+    const statSync = vi.spyOn(fs, "statSync");
+    const readFileSync = vi.spyOn(fs, "readFileSync");
+
+    expectCandidatePresence(discoverWithEnv({ env }), { present: ["cached-bundle"] });
+    expect(
+      statSync.mock.calls.filter(
+        ([targetPath]) =>
+          typeof targetPath === "string" && path.resolve(targetPath) === packageManifestPath,
+      ),
+    ).toHaveLength(0);
+    expect(
+      readFileSync.mock.calls.filter(
+        ([targetPath]) =>
+          typeof targetPath === "string" && path.resolve(targetPath) === packageManifestPath,
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("refreshes same-size bundled package manifests when plugin metadata is reloaded", () => {
+    const stateDir = makeTempDir();
+    const bundledDir = path.join(stateDir, "bundled");
+    const pluginDir = path.join(bundledDir, "cached-bundle");
+    createPackagePluginWithEntry({
+      packageDir: pluginDir,
+      packageName: "@openclaw/cache-one",
+      pluginId: "cached-bundle",
+      entryPath: "index.js",
+    });
+    const env = buildDiscoveryEnvWithOverrides(stateDir, {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+    });
+    const packageManifestPath = path.join(pluginDir, "package.json");
+    const unchangedTimestamp = new Date("2025-01-01T00:00:00.000Z");
+    fs.utimesSync(packageManifestPath, unchangedTimestamp, unchangedTimestamp);
+
+    const first = discoverWithEnv({ env });
+    expect(requireCandidateById(first.candidates, "cached-bundle").packageName).toBe(
+      "@openclaw/cache-one",
+    );
+    const originalStat = fs.statSync(packageManifestPath);
+    writePluginPackageManifest({
+      packageDir: pluginDir,
+      packageName: "@openclaw/cache-two",
+      extensions: ["./index.js"],
+    });
+    fs.utimesSync(packageManifestPath, unchangedTimestamp, unchangedTimestamp);
+    const replacementStat = fs.statSync(packageManifestPath);
+    expect(replacementStat.size).toBe(originalStat.size);
+    expect(replacementStat.mtimeMs).toBe(originalStat.mtimeMs);
+
+    const beforeReload = discoverWithEnv({ env });
+    expect(requireCandidateById(beforeReload.candidates, "cached-bundle").packageName).toBe(
+      "@openclaw/cache-one",
+    );
+
+    clearPluginMetadataLifecycleCaches();
+
+    const afterReload = discoverWithEnv({ env });
+    expect(requireCandidateById(afterReload.candidates, "cached-bundle").packageName).toBe(
+      "@openclaw/cache-two",
+    );
+  });
+
+  it("keeps strict global package manifests fresh between standalone discovery calls", () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "fresh-package");
+    createPackagePluginWithEntry({
+      packageDir: pluginDir,
+      packageName: "@openclaw/cache-one",
+      pluginId: "fresh-package",
+      entryPath: "index.js",
+    });
+    const env = buildDiscoveryEnv(stateDir);
+    const packageManifestPath = path.join(pluginDir, "package.json");
+    const unchangedTimestamp = new Date("2025-01-01T00:00:00.000Z");
+    fs.utimesSync(packageManifestPath, unchangedTimestamp, unchangedTimestamp);
+
+    const first = discoverWithEnv({ env });
+    expect(requireCandidateById(first.candidates, "fresh-package").packageName).toBe(
+      "@openclaw/cache-one",
+    );
+    const originalStat = fs.statSync(packageManifestPath);
+    writePluginPackageManifest({
+      packageDir: pluginDir,
+      packageName: "@openclaw/cache-two",
+      extensions: ["./index.js"],
+    });
+    fs.utimesSync(packageManifestPath, unchangedTimestamp, unchangedTimestamp);
+    const replacementStat = fs.statSync(packageManifestPath);
+    expect(replacementStat.size).toBe(originalStat.size);
+    expect(replacementStat.mtimeMs).toBe(originalStat.mtimeMs);
+
+    const second = discoverWithEnv({ env });
+    expect(requireCandidateById(second.candidates, "fresh-package").packageName).toBe(
+      "@openclaw/cache-two",
+    );
+  });
+
+  it("does not cache missing manifests for mutable external roots with relaxed hardlink checks", () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "fresh-package");
+    mkdirSafe(pluginDir);
+    writePluginManifest({ pluginDir, id: "fresh-package" });
+    writePluginEntry(path.join(pluginDir, "index.js"));
+    const env = buildDiscoveryEnv(stateDir);
+    vi.spyOn(pluginHardlinkPolicy, "shouldRejectHardlinkedPluginFiles").mockReturnValue(false);
+
+    const first = discoverWithEnv({ env });
+    expect(requireCandidateById(first.candidates, "fresh-package").packageName).toBeUndefined();
+
+    writePluginPackageManifest({
+      packageDir: pluginDir,
+      packageName: "@openclaw/fresh-package",
+      extensions: ["./index.js"],
+    });
+
+    const second = discoverWithEnv({ env });
+    expect(requireCandidateById(second.candidates, "fresh-package").packageName).toBe(
+      "@openclaw/fresh-package",
+    );
+  });
 
   it("reflects plugin root changes on the next discovery call", () => {
     const stateDir = makeTempDir();

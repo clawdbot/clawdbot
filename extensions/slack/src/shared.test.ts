@@ -1,6 +1,7 @@
 // Slack tests cover shared plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
+import { slackSetupPlugin } from "./channel.setup.js";
 import { setSlackChannelAllowlist } from "./setup-shared.js";
 import { createSlackPluginBase, slackConfigAdapter } from "./shared.js";
 
@@ -67,6 +68,24 @@ describe("setSlackChannelAllowlist", () => {
 });
 
 describe("slackConfigAdapter", () => {
+  it("shares lightweight account accessors with setup but keeps inspection runtime-only", () => {
+    for (const key of [
+      "listAccountIds",
+      "resolveAccount",
+      "defaultAccountId",
+      "setAccountEnabled",
+      "deleteAccount",
+      "resolveAllowFrom",
+      "formatAllowFrom",
+      "resolveDefaultTo",
+    ] as const) {
+      expect(slackSetupPlugin.config[key]).toBe(slackConfigAdapter[key]);
+    }
+
+    expect(slackConfigAdapter.inspectAccount).toBeTypeOf("function");
+    expect(slackSetupPlugin.config.inspectAccount).toBeUndefined();
+  });
+
   it("clears user-identity credentials when deleting the root account", () => {
     const cfg = {
       channels: {
@@ -124,5 +143,9 @@ describe("slackConfigAdapter", () => {
 
     expect(slackConfigAdapter.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual(["U123"]);
     expect(slackConfigAdapter.resolveDefaultTo?.({ cfg, accountId: "default" })).toBe("C123");
+    expect(slackSetupPlugin.config.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual([
+      "U123",
+    ]);
+    expect(slackSetupPlugin.config.resolveDefaultTo?.({ cfg, accountId: "default" })).toBe("C123");
   });
 });

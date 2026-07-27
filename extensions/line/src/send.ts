@@ -7,11 +7,11 @@ import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime"
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveLineAccount } from "./accounts.js";
-import { messageAction } from "./actions.js";
+import { messageAction, normalizeLineMessageActions } from "./actions.js";
 import { resolveLineChannelAccessToken } from "./channel-access-token.js";
 import { validateLineMediaUrl } from "./outbound-media.js";
 import { createLineSendReceipt } from "./send-receipt.js";
-import type { LineSendResult } from "./types.js";
+import type { LineOutboundMediaKind, LineSendResult } from "./types.js";
 
 type Message = messagingApi.Message;
 type TextMessage = messagingApi.TextMessage;
@@ -56,7 +56,7 @@ interface LineSendOpts {
   accountId?: string;
   verbose?: boolean;
   mediaUrl?: string;
-  mediaKind?: "image" | "video" | "audio";
+  mediaKind?: LineOutboundMediaKind;
   previewImageUrl?: string;
   durationMs?: number;
   trackingId?: string;
@@ -241,9 +241,10 @@ async function pushLineMessages(
   }
 
   const { account, client, chatId } = createLinePushContext(to, opts);
+  const normalizedMessages = messages.map(normalizeLineMessageActions);
   const pushRequest = client.pushMessage({
     to: chatId,
-    messages,
+    messages: normalizedMessages,
   });
 
   if (behavior.errorContext) {
@@ -283,10 +284,11 @@ async function replyLineMessages(
   behavior: LineReplyBehavior = {},
 ): Promise<void> {
   const { account, client } = createLineMessagingClient(opts);
+  const normalizedMessages = messages.map(normalizeLineMessageActions);
 
   await client.replyMessage({
     replyToken,
-    messages,
+    messages: normalizedMessages,
   });
 
   recordLineOutboundActivity(account.accountId);

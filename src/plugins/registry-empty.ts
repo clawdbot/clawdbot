@@ -33,6 +33,8 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     agentHarnesses: [],
     gatewayHandlers: {},
     gatewayMethodDescriptors: [],
+    dashboardDataBindings: new Map(),
+    dashboardActionVerbs: new Map(),
     coreGatewayMethodNames: [],
     httpRoutes: [],
     hostedMediaResolvers: [],

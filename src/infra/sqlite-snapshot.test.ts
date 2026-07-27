@@ -1,10 +1,29 @@
+import { spawnSync } from "node:child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "./node-sqlite.js";
-import { createPrivateSqliteDirectory, createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
+import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
+
+const durabilityTestState = vi.hoisted(() => ({
+  syncOutcome: undefined as
+    | { status: "synced" }
+    | { status: "unsupported"; code?: string }
+    | undefined,
+}));
+
+vi.mock("@openclaw/fs-safe/durability", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@openclaw/fs-safe/durability")>();
+  return {
+    ...actual,
+    syncDirectory: async (...args: Parameters<typeof actual.syncDirectory>) =>
+      durabilityTestState.syncOutcome ?? (await actual.syncDirectory(...args)),
+  };
+});
+
+import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 
 const tempDirs: string[] = [];
 
@@ -19,7 +38,14 @@ async function createTempDir(): Promise<string> {
   return tempDir;
 }
 
+function isDirectoryOpen(flags: string | number | undefined): boolean {
+  return (
+    flags === "r" || (typeof flags === "number" && (flags & fsSync.constants.O_DIRECTORY) !== 0)
+  );
+}
+
 afterEach(async () => {
+  durabilityTestState.syncOutcome = undefined;
   await Promise.all(tempDirs.splice(0).map((tempDir) => fs.rm(tempDir, { recursive: true })));
 });
 
@@ -53,6 +79,90 @@ function createUnsafeIndexDrift(sqlitePath: string): void {
   }
 }
 
+function createHotRollbackJournal(sqlitePath: string): void {
+  const sqlite = requireNodeSqlite();
+  const database = new sqlite.DatabaseSync(sqlitePath);
+  try {
+    database.exec(`
+      PRAGMA journal_mode = DELETE;
+      PRAGMA synchronous = FULL;
+      CREATE TABLE records (
+        id INTEGER PRIMARY KEY,
+        value TEXT NOT NULL,
+        payload BLOB NOT NULL
+      );
+      WITH RECURSIVE rows(id) AS (
+        SELECT 1
+        UNION ALL
+        SELECT id + 1 FROM rows WHERE id < 256
+      )
+      INSERT INTO records (id, value, payload)
+      SELECT id, 'committed', zeroblob(8192) FROM rows;
+    `);
+  } finally {
+    database.close();
+  }
+  const crashed = spawnSync(
+    process.execPath,
+    [
+      "--no-warnings",
+      "--input-type=module",
+      "-e",
+      `
+        import { DatabaseSync } from "node:sqlite";
+        const database = new DatabaseSync(process.env.OPENCLAW_HOT_JOURNAL_PATH);
+        database.exec(
+          "PRAGMA journal_mode = DELETE; " +
+          "PRAGMA synchronous = FULL; " +
+          "PRAGMA cache_size = 2; " +
+          "PRAGMA cache_spill = ON; " +
+          "BEGIN IMMEDIATE; " +
+          "UPDATE records SET value = 'uncommitted';"
+        );
+        process.kill(process.pid, "SIGKILL");
+      `,
+    ],
+    {
+      env: { ...process.env, OPENCLAW_HOT_JOURNAL_PATH: sqlitePath },
+      encoding: "utf8",
+    },
+  );
+  if (crashed.signal !== "SIGKILL") {
+    throw new Error(
+      `hot rollback writer did not exit with SIGKILL: code=${String(crashed.status)} stderr=${crashed.stderr}`,
+    );
+  }
+  if (!fsSync.existsSync(`${sqlitePath}-journal`)) {
+    throw new Error("hot rollback writer did not leave a journal");
+  }
+}
+
+function appendSuperJournalPointer(journalPath: string, superJournalPath: string): void {
+  const name = Buffer.from(superJournalPath, "utf8");
+  const trailer = Buffer.alloc(4 + name.length + 4 + 4 + 8);
+  name.copy(trailer, 4);
+  trailer.writeUInt32BE(name.length, 4 + name.length);
+  let checksum = 0;
+  for (const byte of name) {
+    checksum = (checksum + byte) >>> 0;
+  }
+  trailer.writeUInt32BE(checksum, 8 + name.length);
+  Buffer.from([0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7]).copy(trailer, 12 + name.length);
+  fsSync.appendFileSync(journalPath, trailer);
+}
+
+function createEmptySqliteDatabase(
+  sqlite: ReturnType<typeof requireNodeSqlite>,
+  sqlitePath: string,
+): void {
+  const database = new sqlite.DatabaseSync(sqlitePath);
+  try {
+    database.exec("VACUUM;");
+  } finally {
+    database.close();
+  }
+}
+
 describe("createVerifiedSqliteSnapshot", () => {
   it.runIf(process.platform === "win32")(
     "creates private staging directories exclusively under races",
@@ -69,6 +179,42 @@ describe("createVerifiedSqliteSnapshot", () => {
       expect(rejected).toBeDefined();
       expect((rejected as PromiseRejectedResult).reason).toMatchObject({ code: "EEXIST" });
       await expect(fs.lstat(directoryPath)).resolves.toMatchObject({});
+    },
+  );
+
+  it.runIf(process.platform === "win32")(
+    "snapshots when its private staging path exceeds MAX_PATH",
+    async () => {
+      const tempDir = await createTempDir();
+      let targetDirectory = tempDir;
+      while (targetDirectory.length < 205) {
+        targetDirectory = path.join(targetDirectory, `segment-${"x".repeat(24)}`);
+      }
+      await fs.mkdir(targetDirectory, { recursive: true });
+      const sourcePath = path.join(tempDir, "source.sqlite");
+      const targetPath = path.join(targetDirectory, "snapshot.sqlite");
+      const longestStagingPath = path.join(
+        targetDirectory,
+        `.sqlite-publish-${"0".repeat(36)}-${"0".repeat(36)}`,
+        "database.sqlite",
+      );
+      expect(targetPath.length).toBeLessThan(260);
+      expect(longestStagingPath.length).toBeGreaterThan(260);
+      const sqlite = requireNodeSqlite();
+      const source = new sqlite.DatabaseSync(sourcePath);
+      source.exec("CREATE TABLE records (value TEXT NOT NULL); INSERT INTO records VALUES ('ok');");
+      source.close();
+
+      await expect(createVerifiedSqliteSnapshot({ sourcePath, targetPath })).resolves.toEqual({
+        path: targetPath,
+        userVersion: 0,
+      });
+      const snapshot = new sqlite.DatabaseSync(targetPath, { readOnly: true });
+      try {
+        expect(snapshot.prepare("SELECT value FROM records").get()).toEqual({ value: "ok" });
+      } finally {
+        snapshot.close();
+      }
     },
   );
 
@@ -100,11 +246,205 @@ describe("createVerifiedSqliteSnapshot", () => {
         expect(snapshot.prepare("SELECT value FROM records").all()).toEqual([
           { value: "survivor" },
         ]);
+        expect(snapshot.prepare("PRAGMA journal_mode;").get()).toEqual({
+          journal_mode: "delete",
+        });
+      } finally {
+        snapshot.close();
+      }
+      await expect(fs.access(`${targetPath}-wal`)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.access(`${targetPath}-shm`)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      source.close();
+    }
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "snapshots committed state from a hot rollback journal without recovering the source",
+    async () => {
+      const tempDir = await createTempDir();
+      const sourcePath = path.join(tempDir, "source.sqlite");
+      const targetPath = path.join(tempDir, "snapshot.sqlite");
+      createHotRollbackJournal(sourcePath);
+      const sourceBefore = await fs.readFile(sourcePath);
+      const journalBefore = await fs.readFile(`${sourcePath}-journal`);
+
+      await expect(createVerifiedSqliteSnapshot({ sourcePath, targetPath })).resolves.toEqual({
+        path: targetPath,
+        userVersion: 0,
+      });
+
+      await expect(fs.readFile(sourcePath)).resolves.toEqual(sourceBefore);
+      await expect(fs.readFile(`${sourcePath}-journal`)).resolves.toEqual(journalBefore);
+      const sqlite = requireNodeSqlite();
+      const snapshot = new sqlite.DatabaseSync(targetPath, { readOnly: true });
+      try {
+        expect(
+          snapshot.prepare("SELECT COUNT(*) AS count FROM records WHERE value = 'committed'").get(),
+        ).toEqual({ count: 256 });
+        expect(
+          snapshot
+            .prepare("SELECT COUNT(*) AS count FROM records WHERE value = 'uncommitted'")
+            .get(),
+        ).toEqual({ count: 0 });
+        expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({
+          integrity_check: "ok",
+        });
+      } finally {
+        snapshot.close();
+      }
+      await expect(fs.access(`${targetPath}-journal`)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "rechecks for a hot rollback journal after the direct source open fails",
+    async () => {
+      const tempDir = await createTempDir();
+      const sourcePath = path.join(tempDir, "source.sqlite");
+      const targetPath = path.join(tempDir, "snapshot.sqlite");
+      createHotRollbackJournal(sourcePath);
+      const journalPath = `${sourcePath}-journal`;
+      const lstatSync = fsSync.lstatSync.bind(fsSync);
+      let hidJournal = false;
+      vi.spyOn(fsSync, "lstatSync").mockImplementation(((pathname, options) => {
+        if (!hidJournal && path.resolve(String(pathname)) === path.resolve(journalPath)) {
+          hidJournal = true;
+          const error = new Error("missing");
+          (error as NodeJS.ErrnoException).code = "ENOENT";
+          throw error;
+        }
+        return lstatSync(pathname, options as never);
+      }) as typeof fsSync.lstatSync);
+
+      await expect(createVerifiedSqliteSnapshot({ sourcePath, targetPath })).resolves.toEqual({
+        path: targetPath,
+        userVersion: 0,
+      });
+      expect(hidJournal).toBe(true);
+      const sqlite = requireNodeSqlite();
+      const snapshot = new sqlite.DatabaseSync(targetPath, { readOnly: true });
+      expect(
+        snapshot.prepare("SELECT COUNT(*) AS count FROM records WHERE value = 'committed'").get(),
+      ).toEqual({ count: 256 });
+      snapshot.close();
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "refuses private recovery when a hot journal depends on a super-journal",
+    async () => {
+      const tempDir = await createTempDir();
+      const sourcePath = path.join(tempDir, "source.sqlite");
+      const targetPath = path.join(tempDir, "snapshot.sqlite");
+      const superJournalPath = path.join(tempDir, "source-mj000000900");
+      createHotRollbackJournal(sourcePath);
+      await fs.writeFile(superJournalPath, "super-journal");
+      appendSuperJournalPointer(`${sourcePath}-journal`, superJournalPath);
+      const sourceBefore = await fs.readFile(sourcePath);
+      const journalBefore = await fs.readFile(`${sourcePath}-journal`);
+      const superJournalBefore = await fs.readFile(superJournalPath);
+
+      await expect(createVerifiedSqliteSnapshot({ sourcePath, targetPath })).rejects.toThrow(
+        /super-journal.*cannot be recovered privately/iu,
+      );
+
+      await expect(fs.readFile(sourcePath)).resolves.toEqual(sourceBefore);
+      await expect(fs.readFile(`${sourcePath}-journal`)).resolves.toEqual(journalBefore);
+      await expect(fs.readFile(superJournalPath)).resolves.toEqual(superJournalBefore);
+      await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
+  it("ignores a stale rollback journal without changing the source family", async () => {
+    const tempDir = await createTempDir();
+    const sourcePath = path.join(tempDir, "source.sqlite");
+    const targetPath = path.join(tempDir, "snapshot.sqlite");
+    const sqlite = requireNodeSqlite();
+    const source = new sqlite.DatabaseSync(sourcePath);
+    source.exec("CREATE TABLE records (value TEXT NOT NULL); INSERT INTO records VALUES ('ok');");
+    source.close();
+    const staleJournal = Buffer.alloc(4096, 0x5a);
+    await fs.writeFile(`${sourcePath}-journal`, staleJournal);
+    const sourceBefore = await fs.readFile(sourcePath);
+
+    await expect(createVerifiedSqliteSnapshot({ sourcePath, targetPath })).resolves.toEqual({
+      path: targetPath,
+      userVersion: 0,
+    });
+
+    await expect(fs.readFile(sourcePath)).resolves.toEqual(sourceBefore);
+    await expect(fs.readFile(`${sourcePath}-journal`)).resolves.toEqual(staleJournal);
+    const snapshot = new sqlite.DatabaseSync(targetPath, { readOnly: true });
+    expect(snapshot.prepare("SELECT value FROM records").get()).toEqual({ value: "ok" });
+    snapshot.close();
+  });
+
+  it("uses online backup before compacting the private copy", async () => {
+    const tempDir = await createTempDir();
+    const sourcePath = path.join(tempDir, "source.sqlite");
+    const targetPath = path.join(tempDir, "snapshot.sqlite");
+    const sqlite = requireNodeSqlite();
+    const source = new sqlite.DatabaseSync(sourcePath);
+    source.exec("CREATE TABLE records (value TEXT NOT NULL); INSERT INTO records VALUES ('ok');");
+    source.close();
+    const backupSpy = vi.spyOn(sqlite, "backup");
+    const prepareSpy = vi.spyOn(sqlite.DatabaseSync.prototype, "prepare");
+
+    try {
+      await createVerifiedSqliteSnapshot({ sourcePath, targetPath });
+
+      expect(backupSpy).toHaveBeenCalledTimes(1);
+      expect(prepareSpy.mock.calls.some(([sql]) => /\bVACUUM\s+INTO\b/iu.test(sql))).toBe(false);
+      const snapshot = new sqlite.DatabaseSync(targetPath, { readOnly: true });
+      try {
+        expect(snapshot.prepare("SELECT value FROM records").get()).toEqual({ value: "ok" });
       } finally {
         snapshot.close();
       }
     } finally {
-      source.close();
+      prepareSpy.mockRestore();
+      backupSpy.mockRestore();
+    }
+  });
+
+  it("pins validation and backup to one WAL snapshot", async () => {
+    const tempDir = await createTempDir();
+    const sourcePath = path.join(tempDir, "source.sqlite");
+    const targetPath = path.join(tempDir, "snapshot.sqlite");
+    const sqlite = requireNodeSqlite();
+    const writer = new sqlite.DatabaseSync(sourcePath);
+    writer.exec(`
+      PRAGMA journal_mode = WAL;
+      PRAGMA wal_autocheckpoint = 0;
+      CREATE TABLE records (value TEXT NOT NULL);
+      INSERT INTO records VALUES ('before');
+      PRAGMA wal_checkpoint(TRUNCATE);
+    `);
+    const backup = sqlite.backup.bind(sqlite);
+    const backupSpy = vi.spyOn(sqlite, "backup").mockImplementationOnce(async (...args) => {
+      writer.prepare("INSERT INTO records VALUES (?)").run("during");
+      return await backup(...args);
+    });
+
+    try {
+      await createVerifiedSqliteSnapshot({ sourcePath, targetPath });
+
+      expect(writer.prepare("SELECT value FROM records ORDER BY rowid").all()).toEqual([
+        { value: "before" },
+        { value: "during" },
+      ]);
+      const snapshot = new sqlite.DatabaseSync(targetPath, { readOnly: true });
+      try {
+        expect(snapshot.prepare("SELECT value FROM records ORDER BY rowid").all()).toEqual([
+          { value: "before" },
+        ]);
+      } finally {
+        snapshot.close();
+      }
+    } finally {
+      backupSpy.mockRestore();
+      writer.close();
     }
   });
 
@@ -120,12 +460,41 @@ describe("createVerifiedSqliteSnapshot", () => {
     await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("snapshots a zero-byte generic source as an empty SQLite database", async () => {
+    const tempDir = await createTempDir();
+    const sourcePath = path.join(tempDir, "source.sqlite");
+    const targetPath = path.join(tempDir, "snapshot.sqlite");
+    await fs.writeFile(sourcePath, "");
+
+    await expect(createVerifiedSqliteSnapshot({ sourcePath, targetPath })).resolves.toEqual({
+      path: targetPath,
+      userVersion: 0,
+    });
+    expect((await fs.stat(targetPath)).size).toBeGreaterThan(0);
+  });
+
+  it("rejects a zero-byte source when nonempty input is required", async () => {
+    const tempDir = await createTempDir();
+    const sourcePath = path.join(tempDir, "source.sqlite");
+    const targetPath = path.join(tempDir, "snapshot.sqlite");
+    await fs.writeFile(sourcePath, "");
+
+    await expect(
+      createVerifiedSqliteSnapshot({
+        sourcePath,
+        targetPath,
+        requireNonEmptySource: true,
+      }),
+    ).rejects.toThrow(/snapshot source must not be empty/u);
+    await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("rejects an existing target without modifying it", async () => {
     const tempDir = await createTempDir();
     const sourcePath = path.join(tempDir, "source.sqlite");
     const targetPath = path.join(tempDir, "snapshot.sqlite");
     const sqlite = requireNodeSqlite();
-    new sqlite.DatabaseSync(sourcePath).close();
+    createEmptySqliteDatabase(sqlite, sourcePath);
     await fs.writeFile(targetPath, "keep");
 
     await expect(createVerifiedSqliteSnapshot({ sourcePath, targetPath })).rejects.toThrow(
@@ -139,7 +508,7 @@ describe("createVerifiedSqliteSnapshot", () => {
     const sourcePath = path.join(tempDir, "source.sqlite");
     const targetPath = path.join(tempDir, "snapshot.sqlite");
     const sqlite = requireNodeSqlite();
-    new sqlite.DatabaseSync(sourcePath).close();
+    createEmptySqliteDatabase(sqlite, sourcePath);
 
     await expect(
       createVerifiedSqliteSnapshot({
@@ -158,7 +527,7 @@ describe("createVerifiedSqliteSnapshot", () => {
     const sourcePath = path.join(tempDir, "source.sqlite");
     const targetPath = path.join(tempDir, "snapshot.sqlite");
     const sqlite = requireNodeSqlite();
-    new sqlite.DatabaseSync(sourcePath).close();
+    createEmptySqliteDatabase(sqlite, sourcePath);
     const originalOpen = fs.open.bind(fs);
     let stagedReadCount = 0;
     const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
@@ -191,7 +560,7 @@ describe("createVerifiedSqliteSnapshot", () => {
     const sourcePath = path.join(tempDir, "source.sqlite");
     const targetPath = path.join(tempDir, "snapshot.sqlite");
     const sqlite = requireNodeSqlite();
-    new sqlite.DatabaseSync(sourcePath).close();
+    createEmptySqliteDatabase(sqlite, sourcePath);
     let guarded = false;
 
     await expect(
@@ -213,7 +582,7 @@ describe("createVerifiedSqliteSnapshot", () => {
     const sourcePath = path.join(tempDir, "source.sqlite");
     const targetPath = path.join(tempDir, "snapshot.sqlite");
     const sqlite = requireNodeSqlite();
-    new sqlite.DatabaseSync(sourcePath).close();
+    createEmptySqliteDatabase(sqlite, sourcePath);
     let guarded = false;
 
     await expect(
@@ -235,7 +604,7 @@ describe("createVerifiedSqliteSnapshot", () => {
     const sourcePath = path.join(tempDir, "source.sqlite");
     const targetPath = path.join(tempDir, "snapshot.sqlite");
     const sqlite = requireNodeSqlite();
-    new sqlite.DatabaseSync(sourcePath).close();
+    createEmptySqliteDatabase(sqlite, sourcePath);
     const asynchronousGuard = (async () => {}) as unknown as () => void;
 
     await expect(
@@ -253,7 +622,7 @@ describe("createVerifiedSqliteSnapshot", () => {
     const sourcePath = path.join(tempDir, "source.sqlite");
     const targetPath = path.join(tempDir, "snapshot.sqlite");
     const sqlite = requireNodeSqlite();
-    new sqlite.DatabaseSync(sourcePath).close();
+    createEmptySqliteDatabase(sqlite, sourcePath);
     const asynchronousFinalCheck = (async () => {}) as unknown as () => void;
 
     await expect(
@@ -273,7 +642,7 @@ describe("createVerifiedSqliteSnapshot", () => {
     const sourcePath = path.join(tempDir, "source.sqlite");
     const targetPath = path.join(tempDir, "snapshot.sqlite");
     const sqlite = requireNodeSqlite();
-    new sqlite.DatabaseSync(sourcePath).close();
+    createEmptySqliteDatabase(sqlite, sourcePath);
 
     await expect(
       createVerifiedSqliteSnapshot({
@@ -294,7 +663,7 @@ describe("createVerifiedSqliteSnapshot", () => {
     const sourcePath = path.join(tempDir, "source.sqlite");
     const targetPath = path.join(tempDir, "snapshot.sqlite");
     const sqlite = requireNodeSqlite();
-    new sqlite.DatabaseSync(sourcePath).close();
+    createEmptySqliteDatabase(sqlite, sourcePath);
     const originalLink = fs.link.bind(fs);
     const linkSpy = vi.spyOn(fs, "link").mockImplementation(async (source, target) => {
       await originalLink(source, target);
@@ -321,7 +690,7 @@ describe("createVerifiedSqliteSnapshot", () => {
       const sourcePath = path.join(tempDir, "source.sqlite");
       const targetPath = path.join(tempDir, "snapshot.sqlite");
       const sqlite = requireNodeSqlite();
-      new sqlite.DatabaseSync(sourcePath).close();
+      createEmptySqliteDatabase(sqlite, sourcePath);
       const originalLink = fs.link.bind(fs);
       const linkSpy = vi.spyOn(fs, "link").mockImplementation(async (source, target) => {
         if (path.resolve(String(target)) === targetPath) {
@@ -349,7 +718,7 @@ describe("createVerifiedSqliteSnapshot", () => {
     const sourcePath = path.join(tempDir, "source.sqlite");
     const targetPath = path.join(tempDir, "snapshot.sqlite");
     const sqlite = requireNodeSqlite();
-    new sqlite.DatabaseSync(sourcePath).close();
+    createEmptySqliteDatabase(sqlite, sourcePath);
     const originalLink = fs.link.bind(fs);
     const originalLstat = fs.lstat.bind(fs);
     let linked = false;
@@ -384,7 +753,7 @@ describe("createVerifiedSqliteSnapshot", () => {
     const sourcePath = path.join(tempDir, "source.sqlite");
     const targetPath = path.join(tempDir, "snapshot.sqlite");
     const sqlite = requireNodeSqlite();
-    new sqlite.DatabaseSync(sourcePath).close();
+    createEmptySqliteDatabase(sqlite, sourcePath);
     const originalOpen = fs.open.bind(fs);
     const openSpy = vi.spyOn(fs, "open").mockImplementation(originalOpen);
 
@@ -407,7 +776,7 @@ describe("createVerifiedSqliteSnapshot", () => {
     const sourcePath = path.join(tempDir, "source.sqlite");
     const targetPath = path.join(tempDir, "snapshot.sqlite");
     const sqlite = requireNodeSqlite();
-    new sqlite.DatabaseSync(sourcePath).close();
+    createEmptySqliteDatabase(sqlite, sourcePath);
     const linkSpy = vi
       .spyOn(fs, "link")
       .mockRejectedValue(Object.assign(new Error("hard links unsupported"), { code: "ENOTSUP" }));
@@ -429,7 +798,7 @@ describe("createVerifiedSqliteSnapshot", () => {
     const sourcePath = path.join(tempDir, "source.sqlite");
     const targetPath = path.join(tempDir, "snapshot.sqlite");
     const sqlite = requireNodeSqlite();
-    new sqlite.DatabaseSync(sourcePath).close();
+    createEmptySqliteDatabase(sqlite, sourcePath);
     const linkSpy = vi.spyOn(fs, "link").mockImplementation(async (source, target) => {
       if (path.resolve(String(target)) === targetPath) {
         await fs.appendFile(source, "changed-before-fallback");
@@ -452,7 +821,7 @@ describe("createVerifiedSqliteSnapshot", () => {
     const sourcePath = path.join(tempDir, "source.sqlite");
     const targetPath = path.join(tempDir, "snapshot.sqlite");
     const sqlite = requireNodeSqlite();
-    new sqlite.DatabaseSync(sourcePath).close();
+    createEmptySqliteDatabase(sqlite, sourcePath);
     const originalLink = fs.link.bind(fs);
     const originalOpen = fs.open.bind(fs);
     let linked = false;
@@ -485,7 +854,7 @@ describe("createVerifiedSqliteSnapshot", () => {
     const sourcePath = path.join(tempDir, "source.sqlite");
     const targetPath = path.join(tempDir, "snapshot.sqlite");
     const sqlite = requireNodeSqlite();
-    new sqlite.DatabaseSync(sourcePath).close();
+    createEmptySqliteDatabase(sqlite, sourcePath);
     const originalChmod = fs.chmod.bind(fs);
     const chmodSpy = vi.spyOn(fs, "chmod").mockImplementation(async (filePath, mode) => {
       if (path.basename(String(filePath)).startsWith(".sqlite-publish-")) {
@@ -511,10 +880,14 @@ describe("createVerifiedSqliteSnapshot", () => {
     const sourcePath = path.join(tempDir, "source.sqlite");
     const targetPath = path.join(tempDir, "snapshot.sqlite");
     const sqlite = requireNodeSqlite();
-    new sqlite.DatabaseSync(sourcePath).close();
+    createEmptySqliteDatabase(sqlite, sourcePath);
     const originalOpen = fs.open.bind(fs);
+    let targetDirectoryOpenCount = 0;
     const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
-      if (path.resolve(String(filePath)) === tempDir) {
+      if (isDirectoryOpen(flags) && path.resolve(String(filePath)) === tempDir) {
+        targetDirectoryOpenCount += 1;
+      }
+      if (targetDirectoryOpenCount === 2 && path.resolve(String(filePath)) === tempDir) {
         throw Object.assign(new Error("directory sync failed"), { code: "EIO" });
       }
       return await originalOpen(filePath, flags, mode);
@@ -529,6 +902,67 @@ describe("createVerifiedSqliteSnapshot", () => {
       openSpy.mockRestore();
     }
   });
+
+  it.runIf(process.platform !== "win32")(
+    "removes its published target when directory sync is unsupported",
+    async () => {
+      const tempDir = await createTempDir();
+      const sourcePath = path.join(tempDir, "source.sqlite");
+      const targetPath = path.join(tempDir, "snapshot.sqlite");
+      const sqlite = requireNodeSqlite();
+      createEmptySqliteDatabase(sqlite, sourcePath);
+      durabilityTestState.syncOutcome = { status: "unsupported", code: "ENOTSUP" };
+
+      await expect(createVerifiedSqliteSnapshot({ sourcePath, targetPath })).rejects.toThrow(
+        /SQLite publication directory does not support crash-durable directory synchronization \(ENOTSUP\)/u,
+      );
+      await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects a transient publication directory replacement during sync",
+    async () => {
+      const tempDir = await createTempDir();
+      const sourcePath = path.join(tempDir, "source.sqlite");
+      const targetPath = path.join(tempDir, "snapshot.sqlite");
+      const displacedPath = `${tempDir}.displaced`;
+      const replacementPath = `${tempDir}.replacement`;
+      const sqlite = requireNodeSqlite();
+      createEmptySqliteDatabase(sqlite, sourcePath);
+      const originalOpen = fs.open.bind(fs);
+      let targetDirectoryOpenCount = 0;
+      let replaced = false;
+      const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+        const resolvedPath = path.resolve(String(filePath));
+        if (isDirectoryOpen(flags) && resolvedPath === tempDir) {
+          targetDirectoryOpenCount += 1;
+          if (targetDirectoryOpenCount === 2) {
+            replaced = true;
+            await fs.rename(tempDir, displacedPath);
+            await fs.mkdir(tempDir);
+            const replacementHandle = await originalOpen(filePath, flags, mode);
+            await fs.rename(tempDir, replacementPath);
+            await fs.rename(displacedPath, tempDir);
+            return replacementHandle;
+          }
+        }
+        return await originalOpen(filePath, flags, mode);
+      });
+
+      try {
+        await expect(createVerifiedSqliteSnapshot({ sourcePath, targetPath })).rejects.toThrow(
+          /handle changed during directory sync/u,
+        );
+        expect(replaced).toBe(true);
+        await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        openSpy.mockRestore();
+        await fs.rm(replacementPath, { recursive: true, force: true });
+        await fs.rename(displacedPath, tempDir).catch(() => undefined);
+      }
+    },
+  );
 
   it("validates both the source and transformed snapshot", async () => {
     const tempDir = await createTempDir();

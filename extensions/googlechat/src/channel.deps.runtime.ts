@@ -1,7 +1,6 @@
 // Googlechat plugin module implements channeleps behavior.
 export {
   buildChannelConfigSchema,
-  chunkTextForOutbound,
   DEFAULT_ACCOUNT_ID,
   GoogleChatConfigSchema,
   missingTargetError,

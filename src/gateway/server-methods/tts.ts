@@ -3,7 +3,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateTtsSpeakParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
@@ -35,6 +34,7 @@ import {
 import { formatForLog } from "../ws-log.js";
 import { inferSpeechMimeType } from "./speech-mime.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 /** Gateway request handlers for TTS status, preference mutation, and synthesis. */
 export const ttsHandlers: GatewayRequestHandlers = {
@@ -156,15 +156,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
   // Unlike tts.convert (gateway-local audioPath) this returns the clip inline,
   // so remote clients (mobile apps) can play it without filesystem access.
   "tts.speak": async ({ params, respond, context }) => {
-    if (!validateTtsSpeakParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid tts.speak params: ${formatValidationErrors(validateTtsSpeakParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateTtsSpeakParams, "tts.speak", respond)) {
       return;
     }
     const text = normalizeOptionalString(params.text);
@@ -174,7 +166,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
     }
     try {
       const cfg = context.getRuntimeConfig();
-      // synthesizeSpeech enforces the same messages.tts.maxTextLength bound but
+      // synthesizeSpeech enforces the same tts.maxTextLength bound but
       // reports it as a synthesis failure; pre-check to return a request error.
       const maxTextLength = resolveTtsConfig(cfg).maxTextLength;
       if (text.length > maxTextLength) {

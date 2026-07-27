@@ -49,6 +49,16 @@ export type SystemAgentConfiguredModelPlannerDeps = SystemAgentVerifiedInference
   resolveAssistantTimeoutMs?: typeof resolveSystemAgentAssistantTimeoutMs;
 };
 
+const SYSTEM_AGENT_PLANNER_RESPONSE_SCHEMA = {
+  type: "object",
+  properties: {
+    reply: { type: "string" },
+    command: { type: "string" },
+  },
+  required: ["reply"],
+  additionalProperties: false,
+} as const;
+
 export async function planSystemAgentCommand(params: {
   input: string;
   overview: SystemAgentOverview;
@@ -85,6 +95,7 @@ export async function planSystemAgentCommandWithConfiguredModel(params: {
     runIdPrefix: "openclaw-planner",
     verifiedInference: params.verifiedInference,
     deps: params.deps,
+    responseFormat: SYSTEM_AGENT_PLANNER_RESPONSE_SCHEMA,
   });
   const parsed = parseSystemAgentAssistantPlanText(result?.text);
   return parsed && result ? { ...parsed, modelLabel: result.modelLabel } : null;
@@ -116,6 +127,7 @@ async function runConfiguredSystemAgentText(params: {
   readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
   deps?: SystemAgentConfiguredModelPlannerDeps;
   timeoutMs?: number;
+  responseFormat?: Record<string, unknown>;
 }): Promise<{ text: string; modelLabel: string } | null> {
   const route = await requireVerifiedPlannerRoute(params.verifiedInference, params.deps);
   let expectedAgentHarnessRuntimeArtifact: ReturnType<
@@ -137,7 +149,8 @@ async function runConfiguredSystemAgentText(params: {
       (params.deps?.resolveAssistantTimeoutMs ?? resolveSystemAgentAssistantTimeoutMs)(route);
     const shared = {
       sessionId: `${runId}-session`,
-      agentId: "openclaw",
+      // OpenClaw is the planner surface, but the configured roster owner supplies runtime policy.
+      agentId: route.agentId,
       trigger: "manual" as const,
       sessionFile: path.join(tempDir, "session.jsonl"),
       workspaceDir: tempDir,
@@ -156,6 +169,7 @@ async function runConfiguredSystemAgentText(params: {
       messageProvider: "openclaw",
       disableTools: true,
       disableTrajectory: true,
+      ...(params.responseFormat ? { streamParams: { responseFormat: params.responseFormat } } : {}),
       ...(route.authProfileId ? { authProfileId: route.authProfileId } : {}),
     };
     const result =

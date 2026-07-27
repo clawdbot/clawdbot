@@ -72,7 +72,12 @@ afterEach(() => {
 
 describe("QuestionManager", () => {
   it("requests, gets, and deterministically lists pending questions", () => {
-    const first = manager.request({ questions, timeoutMs: 10_000, agentId: "main" });
+    const first = manager.request({
+      questions,
+      timeoutMs: 10_000,
+      agentId: "main",
+      runId: "run-first",
+    });
     vi.setSystemTime(1_001);
     const second = manager.request({
       questions: [{ ...questions[0]!, questionId: "other" }],
@@ -81,6 +86,7 @@ describe("QuestionManager", () => {
     });
 
     expect(manager.get(first.id)).toEqual(first);
+    expect(first.runId).toBe("run-first");
     expect(manager.list().map((record) => record.id)).toEqual([first.id, second.id]);
   });
 

@@ -20,6 +20,7 @@ import {
   resolveMcpAppSandboxUrl,
   type McpAppHostSandboxCsp,
 } from "./mcp-app-security.ts";
+import { collectMcpAppStyleVariables } from "./mcp-app-theme.ts";
 
 type McpAppViewPayload = {
   sandboxUrl: string;
@@ -89,6 +90,10 @@ function hostContext(element: Element | undefined, height: number): HostContext 
       hover: window.matchMedia?.("(hover: hover)").matches,
     },
     safeAreaInsets: { top: 0, right: 0, bottom: 0, left: 0 },
+    // Additive alongside `theme`: the string says which appearance is active,
+    // these say what it actually resolves to. Republished by the same theme
+    // subscription that re-sends this context.
+    styles: { variables: collectMcpAppStyleVariables() },
   };
 }
 
