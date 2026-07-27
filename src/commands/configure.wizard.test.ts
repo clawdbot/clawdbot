@@ -162,9 +162,9 @@ vi.mock("./onboard-channels.js", () => ({
   setupChannels: mocks.setupChannels,
 }));
 
-vi.mock("./onboard-search.js", () => ({
+vi.mock("../flows/search-setup.js", () => ({
   resolveSearchProviderOptions: mocks.resolveSearchProviderOptions,
-  setupSearch: mocks.setupSearch,
+  runSearchSetupFlow: mocks.setupSearch,
 }));
 
 vi.mock("../plugins/plugin-registry.js", () => ({
