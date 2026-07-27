@@ -42,6 +42,14 @@ const manifest = JSON.parse(
 ) as AnthropicManifest;
 
 describe("Anthropic plugin manifest", () => {
+  it("flags every static Anthropic API model as code-mode preferred", () => {
+    const models = manifest.modelCatalog?.providers?.anthropic?.models ?? [];
+    expect(models.length).toBeGreaterThan(0);
+    for (const model of models) {
+      expect(model.compat?.codeMode, model.id).toBe("preferred");
+    }
+  });
+
   it("publishes the exact Claude Opus 5 API contract", () => {
     const models = manifest.modelCatalog?.providers?.anthropic?.models ?? [];
     expect(models.find((model) => model.id === "claude-opus-5")).toEqual({
