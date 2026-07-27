@@ -5,12 +5,7 @@ import {
   resolveSessionFilePathOptions,
   resolveStorePath,
 } from "./paths.js";
-import {
-  loadSessionEntry,
-  listSessionEntries,
-  listSessionEntriesReadOnly,
-  resolveSessionEntryFromStore,
-} from "./session-accessor.entry.js";
+import { loadSessionEntry, resolveSessionEntrySelection } from "./session-accessor.entry.js";
 import type {
   SessionTranscriptRuntimeScope,
   SessionTranscriptReadScope,
@@ -32,8 +27,7 @@ import type { SessionEntry } from "./types.js";
 export async function resolveSessionTranscriptRuntimeTarget(
   scope: SessionTranscriptRuntimeScope,
 ): Promise<SessionTranscriptRuntimeTarget> {
-  const { agentId, sessionEntry, sessionKey, sessionStore } =
-    resolveSessionTranscriptRuntimeContext(scope);
+  const { agentId, sessionEntry, sessionKey } = resolveSessionTranscriptRuntimeContext(scope);
   if (shouldUseExplicitTranscriptFile(scope)) {
     return {
       agentId,
@@ -42,7 +36,6 @@ export async function resolveSessionTranscriptRuntimeTarget(
       sessionKey,
     };
   }
-  void sessionStore;
   return {
     agentId,
     sessionFile: resolveRuntimeSessionFile(scope, agentId, sessionEntry),
@@ -111,7 +104,6 @@ type SessionTranscriptRuntimeContext = {
   agentId: string;
   sessionEntry: SessionEntry | undefined;
   sessionKey: string;
-  sessionStore: Record<string, SessionEntry> | undefined;
 };
 
 function resolveSessionTranscriptRuntimeContext(
@@ -121,23 +113,17 @@ function resolveSessionTranscriptRuntimeContext(
   if (!agentId) {
     throw new Error(`Cannot resolve transcript scope without an agent id: ${scope.sessionKey}`);
   }
-  const sessionStore = scope.storePath
-    ? Object.fromEntries(
-        listSessionEntries({ agentId, storePath: scope.storePath }).map(({ sessionKey, entry }) => [
-          sessionKey,
-          entry,
-        ]),
-      )
-    : undefined;
-  const resolvedStoreEntry = sessionStore
-    ? resolveSessionEntryFromStore({ store: sessionStore, sessionKey: scope.sessionKey })
+  const resolvedStoreEntry = scope.storePath
+    ? resolveSessionEntrySelection({
+        ...scope,
+        agentId,
+      })
     : undefined;
   const sessionEntry = resolvedStoreEntry?.existing ?? loadSessionEntry(scope);
   const sessionKey = resolvedStoreEntry?.normalizedKey ?? scope.sessionKey;
   return {
     agentId,
     sessionKey,
-    sessionStore,
     sessionEntry,
   };
 }
@@ -193,17 +179,15 @@ export function resolveSessionTranscriptReadTarget(
   const resolvedStoreEntry =
     scope.sessionEntry || !scope.sessionKey
       ? undefined
-      : storePath
-        ? resolveSessionEntryFromStore({
-            store: Object.fromEntries(
-              listSessionEntriesReadOnly({ agentId, storePath }).map(({ sessionKey, entry }) => [
-                sessionKey,
-                entry,
-              ]),
-            ),
+      : resolveSessionEntrySelection(
+          {
+            ...(scope.env ? { env: scope.env } : {}),
+            agentId,
             sessionKey: scope.sessionKey,
-          })
-        : undefined;
+            storePath,
+          },
+          { readOnly: true },
+        );
   const sessionKey = resolvedStoreEntry?.normalizedKey ?? scope.sessionKey;
   const sessionFile = formatSqliteSessionFileMarker({
     agentId,
