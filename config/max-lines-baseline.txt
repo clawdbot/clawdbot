@@ -653,7 +653,6 @@ src/commands/models/auth.test.ts
 src/commands/models/auth.ts
 src/commands/models/list.list-command.forward-compat.test.ts
 src/commands/models/list.probe.ts
-src/commands/models/list.rows.ts
 src/commands/models/list.status-command.ts
 src/commands/models/list.status.test.ts
 src/commands/onboard-channels.e2e.test.ts
