@@ -275,7 +275,7 @@ describe("executeFollowupTurn", () => {
   it("preserves plan updates when tool-result verbosity is off", async () => {
     const onPlanUpdate = vi.fn(async () => undefined);
     state.execute.mockImplementation(async (params: AgentTurnParams) => {
-      await params.opts?.onPlanUpdate?.({ summary: "quiet plan" });
+      await params.opts?.onPlanUpdate?.({ title: "quiet plan" });
       return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
     });
 
@@ -300,7 +300,7 @@ describe("executeFollowupTurn", () => {
     });
     await result.progress.drain();
 
-    expect(onPlanUpdate).toHaveBeenCalledWith({ summary: "quiet plan" });
+    expect(onPlanUpdate).toHaveBeenCalledWith({ title: "quiet plan" });
   });
 
   it("tracks a visible failed item before suppressing duplicate default warnings", async () => {
