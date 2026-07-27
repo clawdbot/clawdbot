@@ -156,7 +156,7 @@ export function createEmbeddedRunAuthController(params: {
     clearRuntimeAuthRefreshTimer();
   };
 
-  const applyGeeRuntimeProviderAuthPolicy = (): boolean => {
+  const applyGeeRuntimeProviderAuthPolicy = async (): Promise<boolean> => {
     const policy = params.geeRuntimeProviderAuthPolicy;
     if (!policy) {
       return false;
@@ -173,15 +173,51 @@ export function createEmbeddedRunAuthController(params: {
         rawError: message,
       });
     }
-    const message = `Gee-owned runtime auth for endpoints "${endpoints}" requires host credential resolution before provider egress.`;
-    throw new FailoverError(message, {
-      reason: "auth",
-      provider: params.getProvider(),
-      model: params.getModelId(),
-      status: resolveFailoverStatus("auth"),
-      code: "gee_runtime_auth_resolution_required",
-      rawError: message,
+    const runtimeModel = params.getRuntimeModel();
+    const sourceCredentialRef = policy.credentialRefs[0]?.trim();
+    if (!sourceCredentialRef || policy.credentialRefs.length !== 1) {
+      const message = `Gee-owned runtime auth for endpoints "${endpoints}" requires exactly one host credential reference before provider egress.`;
+      throw new FailoverError(message, {
+        reason: "auth",
+        provider: params.getProvider(),
+        model: params.getModelId(),
+        status: resolveFailoverStatus("auth"),
+        code: "gee_runtime_auth_resolution_required",
+        rawError: message,
+      });
+    }
+    const preparedAuth = await prepareRuntimeAuthForModel({
+      runtimeModel,
+      apiKey: sourceCredentialRef,
+      authMode: "gee-hosted",
+      profileId: `gee:${policy.endpointIds.join(",")}`,
     });
+    applyPreparedRuntimeRequestOverrides({ runtimeModel, preparedAuth: preparedAuth ?? {} });
+    if (!preparedAuth?.apiKey) {
+      const message = `Gee-owned runtime auth for endpoints "${endpoints}" did not resolve an ephemeral provider credential.`;
+      throw new FailoverError(message, {
+        reason: "auth",
+        provider: params.getProvider(),
+        model: params.getModelId(),
+        status: resolveFailoverStatus("auth"),
+        code: "gee_runtime_auth_resolution_required",
+        rawError: message,
+      });
+    }
+    clearRuntimeAuthRefreshTimer();
+    params.authStorage.setRuntimeApiKey(runtimeModel.provider, preparedAuth.apiKey);
+    params.setRuntimeAuthState({
+      generation: nextRuntimeAuthGeneration(),
+      sourceApiKey: sourceCredentialRef,
+      authMode: "gee-hosted",
+      profileId: `gee:${policy.endpointIds.join(",")}`,
+      expiresAt: preparedAuth.expiresAt,
+    });
+    if (preparedAuth.expiresAt) {
+      scheduleRuntimeAuthRefresh();
+    }
+    params.setLastProfileId(`gee:${policy.endpointIds.join(",")}`);
+    return true;
   };
 
   const refreshRuntimeAuth = async (reason: string): Promise<void> => {
@@ -525,7 +561,7 @@ export function createEmbeddedRunAuthController(params: {
   };
 
   const initializeAuthProfile = async () => {
-    if (applyGeeRuntimeProviderAuthPolicy()) {
+    if (await applyGeeRuntimeProviderAuthPolicy()) {
       return;
     }
     try {

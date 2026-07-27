@@ -177,11 +177,16 @@ describe("createEmbeddedRunAuthController", () => {
     mocks.getApiKeyForModel.mockReset();
   });
 
-  it("fails closed for Gee-owned auth policy until host credential resolution is available", async () => {
+  it("resolves Gee-owned auth through provider runtime hooks without standalone fallback", async () => {
     const harness = createMutableAuthControllerHarness();
     const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
 
     mocks.getApiKeyForModel.mockRejectedValue(new Error("standalone auth should not run"));
+    mocks.prepareProviderRuntimeAuth.mockResolvedValue({
+      apiKey: "ephemeral-host-provider-key",
+      expiresAt: Date.now() + 60_000,
+      baseUrl: "https://hosted.example/v1",
+    });
 
     const controller = createMutableEmbeddedRunAuthController({
       harness,
@@ -190,26 +195,27 @@ describe("createEmbeddedRunAuthController", () => {
       geeRuntimeProviderAuthPolicy: createGeeRuntimeProviderAuthPolicy(),
     });
 
-    let thrown: unknown;
-    try {
-      await controller.initializeAuthProfile();
-    } catch (err) {
-      thrown = err;
-    }
+    await controller.initializeAuthProfile();
 
-    expect(isFailoverError(thrown)).toBe(true);
-    expect(describeFailoverError(thrown)).toMatchObject({
-      message: expect.stringContaining("requires host credential resolution before provider egress"),
-      reason: "auth",
-      status: 401,
-      code: "gee_runtime_auth_resolution_required",
-      provider: "custom-openai",
-      model: "test-model",
-      rawError: expect.stringContaining("requires host credential resolution before provider egress"),
-    });
     expect(mocks.getApiKeyForModel).not.toHaveBeenCalled();
-    expect(mocks.prepareProviderRuntimeAuth).not.toHaveBeenCalled();
-    expect(setRuntimeApiKey).not.toHaveBeenCalled();
+    expect(mocks.prepareProviderRuntimeAuth).toHaveBeenCalledTimes(1);
+    expect(mocks.prepareProviderRuntimeAuth).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "custom-openai",
+        context: expect.objectContaining({
+          apiKey: "gee-credential-ref",
+          authMode: "gee-hosted",
+          profileId: "gee:telegram:geeclaw",
+        }),
+      }),
+    );
+    expect(setRuntimeApiKey).toHaveBeenCalledWith("custom-openai", "ephemeral-host-provider-key");
+    expect(harness.runtimeAuthState).toMatchObject({
+      sourceApiKey: "gee-credential-ref",
+      authMode: "gee-hosted",
+      profileId: "gee:telegram:geeclaw",
+    });
+    expect(harness.runtimeModel.baseUrl).toBe("https://hosted.example/v1");
     expect(harness.apiKeyInfo).toBeNull();
   });
 
@@ -248,7 +254,7 @@ describe("createEmbeddedRunAuthController", () => {
     expect(setRuntimeApiKey).not.toHaveBeenCalled();
   });
 
-  it("does not rotate or refresh standalone auth under Gee-owned auth policy", async () => {
+  it("does not rotate standalone profiles under Gee-owned auth policy", async () => {
     const harness = createMutableAuthControllerHarness();
     const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
 
@@ -259,9 +265,9 @@ describe("createEmbeddedRunAuthController", () => {
       geeRuntimeProviderAuthPolicy: createGeeRuntimeProviderAuthPolicy(),
     });
 
-    await expect(controller.initializeAuthProfile()).rejects.toMatchObject({
-      code: "gee_runtime_auth_resolution_required",
-    });
+    mocks.prepareProviderRuntimeAuth.mockResolvedValue({ apiKey: "ephemeral-host-provider-key" });
+
+    await controller.initializeAuthProfile();
     harness.runtimeAuthState = {
       generation: 1,
       sourceApiKey: "standalone-source-key",
@@ -274,7 +280,7 @@ describe("createEmbeddedRunAuthController", () => {
       controller.maybeRefreshRuntimeAuthForAuthError("401 unauthorized", false),
     ).resolves.toBe(false);
     expect(mocks.getApiKeyForModel).not.toHaveBeenCalled();
-    expect(mocks.prepareProviderRuntimeAuth).not.toHaveBeenCalled();
+    expect(mocks.prepareProviderRuntimeAuth).toHaveBeenCalledTimes(1);
   });
 
   it("applies runtime request overrides on the first auth exchange", async () => {
