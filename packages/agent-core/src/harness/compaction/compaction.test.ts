@@ -197,14 +197,67 @@ describe("calculateContextTokens", () => {
 });
 
 describe("session-entry compaction budgeting", () => {
-  it("weights CJK text as roughly one token per character", () => {
-    const extensionGText = String.fromCodePoint(0x30000).repeat(4);
-
+  it("applies the shared common-CJK budget heuristic", () => {
     expect(estimateTokens({ role: "user", content: "hello world", timestamp: 1 })).toBe(3);
     expect(estimateTokens({ role: "user", content: "你好世界", timestamp: 1 })).toBe(4);
     expect(estimateTokens({ role: "user", content: "こんにちは", timestamp: 1 })).toBe(5);
-    expect(estimateTokens({ role: "user", content: "ｺﾝﾆﾁﾊ", timestamp: 1 })).toBe(5);
-    expect(estimateTokens({ role: "user", content: extensionGText, timestamp: 1 })).toBe(4);
+    expect(estimateTokens({ role: "user", content: "안녕하세요", timestamp: 1 })).toBe(5);
+  });
+
+  it("uses conservative weights for halfwidth and supplementary CJK", () => {
+    expect(estimateTokens({ role: "user", content: "ｺﾝﾆﾁﾊ", timestamp: 1 })).toBe(10);
+    expect(
+      estimateTokens({ role: "user", content: String.fromCodePoint(0xffa1), timestamp: 1 }),
+    ).toBe(2);
+    expect(
+      estimateTokens({ role: "user", content: String.fromCodePoint(0x20000), timestamp: 1 }),
+    ).toBe(4);
+    expect(
+      estimateTokens({ role: "user", content: String.fromCodePoint(0x30000), timestamp: 1 }),
+    ).toBe(4);
+  });
+
+  it("uses a conservative weight for rare BMP CJK", () => {
+    expect(
+      estimateTokens({ role: "user", content: String.fromCodePoint(0x3400), timestamp: 1 }),
+    ).toBe(3);
+    expect(
+      estimateTokens({ role: "user", content: String.fromCodePoint(0x9fff), timestamp: 1 }),
+    ).toBe(3);
+  });
+
+  it("accounts for decomposed Hangul and compatibility forms", () => {
+    expect(
+      estimateTokens({ role: "user", content: "안녕하세요".normalize("NFD"), timestamp: 1 }),
+    ).toBe(36);
+    expect(
+      estimateTokens({ role: "user", content: String.fromCodePoint(0xfe10), timestamp: 1 }),
+    ).toBe(2);
+    expect(
+      estimateTokens({ role: "user", content: String.fromCodePoint(0xffe0), timestamp: 1 }),
+    ).toBe(2);
+  });
+
+  it("uses a conservative weight for supplementary Japanese forms", () => {
+    expect(
+      estimateTokens({ role: "user", content: String.fromCodePoint(0x1aff0), timestamp: 1 }),
+    ).toBe(4);
+    expect(
+      estimateTokens({ role: "user", content: String.fromCodePoint(0x1f200), timestamp: 1 }),
+    ).toBe(4);
+  });
+
+  it("uses measured weights for CJK script-extension marks", () => {
+    expect(
+      estimateTokens({ role: "user", content: String.fromCodePoint(0x00b7), timestamp: 1 }),
+    ).toBe(1);
+    expect(estimateTokens({ role: "user", content: "·".repeat(32), timestamp: 1 })).toBe(32);
+    expect(
+      estimateTokens({ role: "user", content: String.fromCodePoint(0x02ca), timestamp: 1 }),
+    ).toBe(2);
+    expect(
+      estimateTokens({ role: "user", content: String.fromCodePoint(0x1d360), timestamp: 1 }),
+    ).toBe(3);
   });
 
   it("uses CJK-aware token estimates when choosing the retained tail", () => {
