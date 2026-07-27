@@ -170,8 +170,10 @@ describe("plugin board widget cells", () => {
         position: 0,
         grantState: "none",
         revision: 1,
-        readOnly: widgetReadOnly,
       };
+      if (widgetReadOnly) {
+        Reflect.set(widget, "readOnly", true);
+      }
       const provider = createApplicationContextProvider(context);
       const cell = document.createElement("openclaw-board-widget-cell");
       cell.widget = widget;
