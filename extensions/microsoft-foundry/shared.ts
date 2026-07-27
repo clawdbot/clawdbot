@@ -228,6 +228,7 @@ function supportsFoundryManualClaudeThinking(value?: string | null): boolean {
 const FOUNDRY_GPT_MODEL_TOKEN_LIMITS: Readonly<
   Record<string, { contextWindow: number; maxTokens: number }>
 > = {
+  "gpt-chat-latest": { contextWindow: 128_000, maxTokens: 16_384 },
   "gpt-5.6-sol": { contextWindow: 1_050_000, maxTokens: 128_000 },
   "gpt-5.6-terra": { contextWindow: 1_050_000, maxTokens: 128_000 },
   "gpt-5.6-luna": { contextWindow: 1_050_000, maxTokens: 128_000 },
@@ -237,16 +238,21 @@ const FOUNDRY_GPT_MODEL_TOKEN_LIMITS: Readonly<
   "gpt-5.4-mini": { contextWindow: 400_000, maxTokens: 128_000 },
   "gpt-5.4-nano": { contextWindow: 400_000, maxTokens: 128_000 },
   "gpt-5.3-codex": { contextWindow: 400_000, maxTokens: 128_000 },
+  "gpt-5.3-chat": { contextWindow: 128_000, maxTokens: 16_384 },
   "gpt-5.2": { contextWindow: 400_000, maxTokens: 128_000 },
   "gpt-5.2-codex": { contextWindow: 400_000, maxTokens: 128_000 },
+  "gpt-5.2-chat": { contextWindow: 128_000, maxTokens: 16_384 },
   "gpt-5.1": { contextWindow: 400_000, maxTokens: 128_000 },
   "gpt-5.1-codex": { contextWindow: 400_000, maxTokens: 128_000 },
   "gpt-5.1-codex-mini": { contextWindow: 400_000, maxTokens: 128_000 },
   "gpt-5.1-codex-max": { contextWindow: 400_000, maxTokens: 128_000 },
+  "gpt-5.1-chat": { contextWindow: 128_000, maxTokens: 16_384 },
   "gpt-5": { contextWindow: 400_000, maxTokens: 128_000 },
   "gpt-5-mini": { contextWindow: 400_000, maxTokens: 128_000 },
   "gpt-5-nano": { contextWindow: 400_000, maxTokens: 128_000 },
   "gpt-5-codex": { contextWindow: 400_000, maxTokens: 128_000 },
+  "gpt-5-chat": { contextWindow: 128_000, maxTokens: 16_384 },
+  "gpt-5-pro": { contextWindow: 400_000, maxTokens: 128_000 },
 };
 
 function resolveFoundryModelTokenLimits(value?: string | null): {
