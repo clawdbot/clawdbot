@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ROOT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+if [[ -z "$ROOT_DIR" ]]; then
+  echo "[publication-preflight] cannot resolve repository root" >&2
+  exit 1
+fi
+
+PREFLIGHT="$ROOT_DIR/scripts/publication-preflight.mjs"
+if [[ ! -f "$PREFLIGHT" ]]; then
+  echo "[publication-preflight] missing helper: $PREFLIGHT" >&2
+  exit 1
+fi
+
+REMOTE_NAME="${1:-}"
+REMOTE_URL="${2:-}"
+if [[ -z "$REMOTE_NAME" || -z "$REMOTE_URL" ]]; then
+  echo "[publication-preflight] pre-push did not provide a remote name and URL" >&2
+  exit 1
+fi
+
+exec node "$PREFLIGHT" hook --remote-name "$REMOTE_NAME" --remote-url "$REMOTE_URL"

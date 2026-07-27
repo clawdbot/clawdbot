@@ -45,6 +45,49 @@ We cap at **20 open PRs per author**. If you exceed this, the `r: too-many-prs` 
 
 For coordinated change sets that genuinely need more than 20 PRs, join the **#clawtributors** channel in Discord and talk to maintainers first.
 
+## Publication security preflight
+
+The repository installs a fail-closed `pre-push` hook. In a source checkout, the
+existing package `prepare` lifecycle runs `scripts/prepare-git-hooks.mjs`, which
+sets Git's local `core.hooksPath` to `git-hooks`. If hooks are missing or the
+checkout predates that lifecycle step, run this recovery command from the repo root:
+
+```bash
+node scripts/prepare-git-hooks.mjs
+```
+
+Verify the installation with `git config --get core.hooksPath`; it must print
+`git-hooks`. Before pushing a PR branch, prepare a per-worktree publication manifest
+from the exact staged file allowlist:
+
+```bash
+node scripts/publication-preflight.mjs prepare \
+  --path path/to/changed-file \
+  --inventory-file /path/to/open-pr-inventory.json
+```
+
+The manifest records the target repository, remote, base/upstream, feature branch,
+allowed paths, approved GitHub no-reply identity, and open-PR overlap strategy. Run
+the normal validation and review, then approve only the exact reviewed commit:
+
+```bash
+node scripts/publication-preflight.mjs check
+node scripts/publication-preflight.mjs approve
+git push origin HEAD
+```
+
+The hook rechecks the remote, branch ancestry, merge-free history, staged and
+committed diff, identity, secret/privacy scan, changed-path allowlist, open-PR
+overlap strategy, whitespace, and exact approved `HEAD`. It blocks publication when
+the manifest is missing, stale, incomplete, or not explicitly approved. It never
+publishes or edits unrelated working-tree files.
+
+If the hook blocks a push, do not bypass it with `--no-verify`. Read the first
+finding, correct or explicitly review the affected change, rerun `check`, and then
+run `approve` again because approval is bound to the exact `HEAD`. False positives
+should be reduced by using placeholders and the approved GitHub no-reply identity;
+do not add private values to an allowlist merely to silence a finding.
+
 ## Before You PR
 
 - Use **Node 24.15+** for source checkouts when possible. OpenClaw also supports Node 22.22.3+ and Node 25.9+, but Node 23, Node 22 before 22.22.3, and Node 24 before 24.15 are below the repository engine floor and can fail before `pnpm` commands run. See [Node install guidance](docs/install/node.md) if your local version is too old.
