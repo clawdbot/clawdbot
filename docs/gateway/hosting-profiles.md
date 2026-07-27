@@ -56,6 +56,24 @@ These commands describe the shipped support contracts. They do not infer which p
 Gateway selected; use [`openclaw ready`](/cli/ready) for active profile attribution and live
 conditions.
 
+## Validate a running profile
+
+Validate the active profile against the running Gateway's canonical readiness result:
+
+```bash
+openclaw hosting profiles validate
+openclaw hosting profiles validate container --json
+```
+
+With no argument, the command validates whichever Standard Hosting Profile the Gateway reports.
+With an argument, it also requires that exact profile. Validation checks the profile contract
+version and the required profile-condition rows, then reports canonical readiness separately. A
+profile can therefore be conformant but currently not ready, such as a `container` Gateway with a
+loopback-only listener; both states produce a nonzero exit for host and CI use.
+
+The JSON result embeds the canonical readiness result as its evidence. Validation does not load
+local configuration, invoke plugins, reproduce profile predicates, or run a second evaluator.
+
 ## Select a profile
 
 Use one of these equivalent inputs:
