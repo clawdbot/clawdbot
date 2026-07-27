@@ -208,7 +208,7 @@ export function attachEventBridge(
   });
 
   registerListener(session, unsubscribeFns, "assistant.message_delta", (event) => {
-    if (!isRootSessionEvent(event)) {
+    if (!isRootSessionEvent(event) || event.ephemeral === true) {
       return;
     }
     const messageId = readString(event.data.messageId) ?? "assistant-message";
@@ -245,7 +245,7 @@ export function attachEventBridge(
   });
 
   registerListener(session, unsubscribeFns, "assistant.reasoning_delta", (event) => {
-    if (!isRootSessionEvent(event)) {
+    if (!isRootSessionEvent(event) || event.ephemeral === true) {
       return;
     }
     const reasoningId = readString(event.data.reasoningId) ?? "assistant-reasoning";

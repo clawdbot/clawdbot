@@ -2980,6 +2980,18 @@ describe("runCopilotAttempt", () => {
       ]);
     });
 
+    it("replaces the common unkeyed active user in the pre-journal fallback", async () => {
+      const sdk = makeFakeSdk();
+      const params = makeParams() as AgentHarnessAttemptParams & { sessionTarget?: unknown };
+      delete params.sessionTarget;
+
+      const result = await runCopilotAttempt(params, { pool: makeFakePool(sdk) });
+
+      expect(result.messagesSnapshot).toMatchObject([
+        { role: "user", content: "hello", timestamp: 1 },
+      ]);
+    });
+
     it("does not collapse distinct repeated users in the pre-journal fallback", async () => {
       const sdk = makeFakeSdk();
       const recorder = makeUserTurnRecorder({ role: "user", content: "repeat", timestamp: 2 });

@@ -175,7 +175,32 @@ function isSamePreparedUser(
   const candidateKey = (candidate as { idempotencyKey?: unknown }).idempotencyKey;
   const preparedKey = (prepared as { idempotencyKey?: unknown }).idempotencyKey;
   if (typeof candidateKey === "string" || typeof preparedKey === "string") {
-    return candidateKey === preparedKey;
+    if (typeof candidateKey === "string" && typeof preparedKey === "string") {
+      return candidateKey === preparedKey;
+    }
+    if (
+      typeof candidateKey !== "string" ||
+      typeof preparedKey === "string" ||
+      !candidateKey.startsWith("copilot:")
+    ) {
+      return false;
+    }
   }
-  return false;
+  return (
+    candidate.timestamp === prepared.timestamp &&
+    userText(candidate.content) === userText(prepared.content)
+  );
+}
+
+function userText(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (Array.isArray(content) && content.length === 1) {
+    const part = content[0] as { text?: unknown; type?: unknown };
+    if (part?.type === "text" && typeof part.text === "string") {
+      return part.text;
+    }
+  }
+  return JSON.stringify(content) ?? "";
 }

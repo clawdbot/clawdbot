@@ -1111,6 +1111,34 @@ describe("attachEventBridge", () => {
     expect(bridge.buildAssistantMessage({ modelRef: MODEL_REF, now: () => 13 })).toBeUndefined();
   });
 
+  it("does not fold ephemeral deltas into a durable assistant message", () => {
+    const session = createFakeSession();
+    const bridge = attachEventBridge(session, {
+      getSdkSessionId: () => "sdk-session-id",
+      isAborted: () => false,
+    });
+
+    session.emit("assistant.message_delta", {
+      ...makeEvent("assistant.message_delta", {
+        deltaContent: "hidden text",
+        messageId: "ephemeral-message",
+      }),
+      ephemeral: true,
+    } as SessionEvent);
+    session.emit("assistant.reasoning_delta", {
+      ...makeEvent("assistant.reasoning_delta", {
+        deltaContent: "hidden reasoning",
+        reasoningId: "ephemeral-reasoning",
+      }),
+      ephemeral: true,
+    } as SessionEvent);
+    bridge.recordSendResult(makeAssistantMessageEvent("visible"));
+
+    expect(bridge.buildAssistantMessage({ modelRef: MODEL_REF, now: () => 13 })?.content).toEqual([
+      { type: "text", text: "visible" },
+    ]);
+  });
+
   it("detach is idempotent after the first unsubscribe pass", () => {
     const order: string[] = [];
     const session = createFakeSession({
