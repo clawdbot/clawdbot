@@ -14,7 +14,6 @@ import { registerSubCliByName } from "./program/register.subclis.js";
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const CHILD_PROCESS_TIMEOUT_MS = 30_000;
-const ROOT_HELP_PROCESS_TIMEOUT_MS = 60_000;
 const LAZY_GROUP_HELP_CASES = [
   { group: "backup", usageCommand: "backup", registry: "core" },
   { group: "capability", usageCommand: "infer|capability", registry: "subcli" },
@@ -135,7 +134,6 @@ async function runCliProcess(params: {
   failRunMainImport?: boolean;
   unsupportedRuntime?: boolean;
   allowRespawn?: boolean;
-  timeoutMs?: number;
   loggingViaInclude?: boolean;
   loggingViaRootInclude?: boolean;
   stateEnv?: (stateDir: string) => Record<string, string>;
@@ -187,7 +185,7 @@ async function runCliProcess(params: {
         ...params.env,
       },
       killSignal: "SIGKILL",
-      timeout: params.timeoutMs ?? CHILD_PROCESS_TIMEOUT_MS,
+      timeout: CHILD_PROCESS_TIMEOUT_MS,
     },
   );
   return { ...result, fixture };
@@ -207,11 +205,7 @@ type CliProcessFailure = Error & {
 };
 describe("CLI help process exit", () => {
   it("exits promptly after root --help", async () => {
-    const result = await runCliProcess({
-      args: ["--help"],
-      forbidTlsImport: true,
-      timeoutMs: ROOT_HELP_PROCESS_TIMEOUT_MS,
-    });
+    const result = await runCliProcess({ args: ["--help"], forbidTlsImport: true });
 
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("Usage: openclaw [options] [command]");
