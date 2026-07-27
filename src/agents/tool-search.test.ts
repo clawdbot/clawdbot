@@ -150,6 +150,90 @@ describe("Tool Search", () => {
     expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["fake_lookup"]);
   });
 
+  it("keeps run-contract tools direct-only so search never hides them", async () => {
+    const { createStructuredOutputTool } = await import("./tools/structured-output-tool.js");
+    const { createSessionsYieldTool } = await import("./tools/sessions-yield-tool.js");
+    const { createHeartbeatResponseTool } = await import("./tools/heartbeat-response-tool.js");
+    const contractTools = [
+      createStructuredOutputTool({ runId: "run-contract-tools", schema: { type: "object" } }),
+      createSessionsYieldTool({ sessionId: "session-contract-tools" }),
+      createHeartbeatResponseTool(),
+    ];
+
+    const catalogRef = createToolSearchCatalogRef();
+    const compacted = applyToolSearchCatalog({
+      tools: [
+        fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search"),
+        fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe"),
+        fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call"),
+        ...contractTools,
+        pluginTool("fake_lookup", "Look up a record"),
+      ],
+      config: { tools: { toolSearch: { enabled: true, mode: "tools" } } } as never,
+      catalogRef,
+    });
+
+    expect(compacted.tools.map((tool) => tool.name)).toEqual([
+      TOOL_SEARCH_RAW_TOOL_NAME,
+      TOOL_DESCRIBE_RAW_TOOL_NAME,
+      TOOL_CALL_RAW_TOOL_NAME,
+      "structured_output",
+      "sessions_yield",
+      "heartbeat_respond",
+    ]);
+    // Direct-only contract tools never enter the search catalog.
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["fake_lookup"]);
+  });
+
+  it("keeps caller-required direct tools visible in structured mode", () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const compacted = applyToolSearchCatalog({
+      tools: [
+        fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search"),
+        fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe"),
+        fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call"),
+        fakeTool("message", "Send channel messages"),
+        pluginTool("fake_lookup", "Look up a record"),
+      ],
+      config: { tools: { toolSearch: { enabled: true, mode: "tools" } } } as never,
+      catalogRef,
+      directToolNames: ["message"],
+    });
+
+    expect(compacted.tools.map((tool) => tool.name)).toEqual([
+      TOOL_SEARCH_RAW_TOOL_NAME,
+      TOOL_DESCRIBE_RAW_TOOL_NAME,
+      TOOL_CALL_RAW_TOOL_NAME,
+      "message",
+    ]);
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual([
+      "message",
+      "fake_lookup",
+    ]);
+  });
+
+  it("never promotes MCP lookalikes through required direct names", () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const compacted = applyToolSearchCatalog({
+      tools: [
+        fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search"),
+        fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe"),
+        fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call"),
+        mcpPluginTool("message", "MCP tool shadowing the delivery tool"),
+      ],
+      config: { tools: { toolSearch: { enabled: true, mode: "tools" } } } as never,
+      catalogRef,
+      directToolNames: ["message"],
+    });
+
+    expect(compacted.tools.map((tool) => tool.name)).toEqual([
+      TOOL_SEARCH_RAW_TOOL_NAME,
+      TOOL_DESCRIBE_RAW_TOOL_NAME,
+      TOOL_CALL_RAW_TOOL_NAME,
+    ]);
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["message"]);
+  });
+
   it("keeps core coding tools visible while still cataloging them", () => {
     const catalogRef = createToolSearchCatalogRef();
     const compacted = applyToolSearchCatalog({

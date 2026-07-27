@@ -1,4 +1,5 @@
 /** Tool Search catalog compaction for large OpenClaw, MCP, and client tool inventories. */
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
@@ -101,19 +102,28 @@ export function applyToolSearchCatalog(params: {
   catalogRef?: ToolSearchCatalogRef;
   toolHookContext?: HookContext;
   shouldCatalogTool?: (tool: AnyAgentTool) => boolean;
+  directToolNames?: Iterable<string>;
 }) {
   const config = resolveToolSearchConfig(params.config);
+  const directToolNames = new Set(normalizeStringEntries(Array.from(params.directToolNames ?? [])));
   return applyToolCatalogCompaction({
     ...params,
     enabled: config.enabled,
     isVisibleControlTool: (tool) =>
       TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name) &&
       shouldExposeControlTool(tool.name, config.mode),
-    // Core file/shell primitives stay in the visible tool list (while remaining
-    // searchable); the source check keeps plugin/MCP tools that reuse a core
-    // name deferred like any other cataloged tool.
-    isVisibleCatalogTool: (tool) =>
-      isCoreCodingSurfaceToolName(tool.name) && classifyTool(tool).sourceName === "core",
+    // Core file/shell primitives and caller-required names (e.g. message when it
+    // is the only reply path) stay visible while remaining searchable. Required
+    // names must resolve to trusted OpenClaw tools; an MCP lookalike must never
+    // become a direct delivery or core-coding tool.
+    isVisibleCatalogTool: (tool) => {
+      const classified = classifyTool(tool);
+      return (
+        classified.source === "openclaw" &&
+        (directToolNames.has(tool.name) ||
+          (isCoreCodingSurfaceToolName(tool.name) && classified.sourceName === "core"))
+      );
+    },
   });
 }
 

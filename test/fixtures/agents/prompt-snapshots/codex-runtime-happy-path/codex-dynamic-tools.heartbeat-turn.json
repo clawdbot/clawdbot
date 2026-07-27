@@ -256,19 +256,6 @@
     "type": "function"
   },
   {
-    "description": "End turn after subagent spawn; results arrive next message.",
-    "inputSchema": {
-      "properties": {
-        "message": {
-          "type": "string"
-        }
-      },
-      "type": "object"
-    },
-    "name": "sessions_yield",
-    "type": "function"
-  },
-  {
     "description": "",
     "name": "openclaw",
     "tools": [
@@ -1276,46 +1263,6 @@
       },
       {
         "deferLoading": true,
-        "description": "Record heartbeat result. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only; manage recurring tasks with cron.",
-        "inputSchema": {
-          "additionalProperties": false,
-          "properties": {
-            "nextCheck": {
-              "type": "string"
-            },
-            "notificationText": {
-              "type": "string"
-            },
-            "notify": {
-              "type": "boolean"
-            },
-            "outcome": {
-              "enum": ["no_change", "progress", "done", "blocked", "needs_attention"],
-              "type": "string"
-            },
-            "priority": {
-              "enum": ["low", "normal", "high"],
-              "type": "string"
-            },
-            "reason": {
-              "type": "string"
-            },
-            "scratch": {
-              "description": "Complete replacement for heartbeat monitor prose. Recurring schedules belong in cron jobs, not scratch.",
-              "type": "string"
-            },
-            "summary": {
-              "type": "string"
-            }
-          },
-          "required": ["outcome", "notify", "summary"],
-          "type": "object"
-        },
-        "name": "heartbeat_respond",
-        "type": "function"
-      },
-      {
-        "deferLoading": true,
         "description": "Convert text to spoken audio (TTS) with the configured voice provider. Only explicit voice/speech/TTS intent or active TTS config; never ordinary text reply. Audio auto-delivered. After success follow reply instructions; no duplicate text/audio.",
         "inputSchema": {
           "properties": {
@@ -1649,6 +1596,65 @@
           "type": "object"
         },
         "name": "web_fetch",
+        "type": "function"
+      }
+    ],
+    "type": "namespace"
+  },
+  {
+    "description": "",
+    "name": "openclaw_direct",
+    "tools": [
+      {
+        "description": "Record heartbeat result. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only; manage recurring tasks with cron.",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "nextCheck": {
+              "type": "string"
+            },
+            "notificationText": {
+              "type": "string"
+            },
+            "notify": {
+              "type": "boolean"
+            },
+            "outcome": {
+              "enum": ["no_change", "progress", "done", "blocked", "needs_attention"],
+              "type": "string"
+            },
+            "priority": {
+              "enum": ["low", "normal", "high"],
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "scratch": {
+              "description": "Complete replacement for heartbeat monitor prose. Recurring schedules belong in cron jobs, not scratch.",
+              "type": "string"
+            },
+            "summary": {
+              "type": "string"
+            }
+          },
+          "required": ["outcome", "notify", "summary"],
+          "type": "object"
+        },
+        "name": "heartbeat_respond",
+        "type": "function"
+      },
+      {
+        "description": "End turn after subagent spawn; results arrive next message.",
+        "inputSchema": {
+          "properties": {
+            "message": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "sessions_yield",
         "type": "function"
       }
     ],

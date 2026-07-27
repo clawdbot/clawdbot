@@ -9,10 +9,7 @@ import {
   CODE_MODE_WAIT_TOOL_NAME,
   createCodeModeTools,
 } from "../../code-mode.js";
-import {
-  filterLocalModelLeanTools,
-  shouldCatalogToolForLocalModelLean,
-} from "../../local-model-lean.js";
+import { filterLocalModelLeanTools } from "../../local-model-lean.js";
 import { logAgentRuntimeToolDiagnostics } from "../../runtime-plan/tools.js";
 import { buildEmptyExplicitToolAllowlistError } from "../../tool-allowlist-guard.js";
 import { filterRuntimeCompatibleTools } from "../../tool-schema-projection.js";
@@ -54,7 +51,6 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
   const { attempt, preparedToolBase } = input;
   const {
     codeModeControlsEnabledForRun,
-    localModelLeanEnabled,
     localModelLeanPreserveToolNames,
     runtimeCapabilityProfile,
     toolSearchConfig,
@@ -95,7 +91,9 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
         executeTool: input.executeCodeModeTool,
       })
     : [];
-  const directoryDirectToolNames =
+  // When the message tool is the only reply path it must stay directly visible
+  // in every search mode; a hidden delivery tool can leave the run mute.
+  const requiredDirectToolNames =
     attempt.forceMessageTool === true || attempt.sourceReplyDeliveryMode === "message_tool_only"
       ? ["message"]
       : [];
@@ -120,7 +118,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
           runId: attempt.runId,
           catalogRef: preparedToolBase.toolSearchCatalogRef,
           toolHookContext: catalogToolHookContext,
-          directToolNames: directoryDirectToolNames,
+          directToolNames: requiredDirectToolNames,
         })
       : applyToolSearchCatalog({
           tools: effectiveTools,
@@ -131,10 +129,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
           runId: attempt.runId,
           catalogRef: preparedToolBase.toolSearchCatalogRef,
           toolHookContext: catalogToolHookContext,
-          shouldCatalogTool:
-            localModelLeanEnabled && toolSearchConfig.mode === "tools"
-              ? shouldCatalogToolForLocalModelLean
-              : undefined,
+          directToolNames: requiredDirectToolNames,
         });
   const projectedToolSearchTools = filterLocalModelLeanTools({
     tools: toolSearch.tools,

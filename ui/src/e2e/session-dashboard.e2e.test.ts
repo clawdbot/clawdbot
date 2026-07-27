@@ -4,6 +4,7 @@ import path from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
+import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { SANDBOX_HOST_PATH } from "../../../src/agents/sandbox-host.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
 import {
@@ -559,6 +560,82 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
       if (recordProof && video) {
         await video.saveAs(path.join(pluginWidgetsProofDir, "workboard-plugin-widgets.webm"));
       }
+    }
+  });
+
+  it("keeps a read-only Workboard dashboard card visible without allowing status changes", async () => {
+    const context = await browser.newContext({ viewport: { height: 900, width: 1280 } });
+    const page = await context.newPage();
+    const widgetKinds = [
+      { pluginId: "workboard", kind: "workboard:card", label: "Workboard card" },
+      { pluginId: "workboard", kind: "workboard:mini", label: "Workboard summary" },
+    ];
+    const methods = [
+      "board.get",
+      "chat.metadata",
+      "chat.startup",
+      "workboard.cards.list",
+      "workboard.cards.move",
+    ];
+    const card = {
+      id: "card-widget-ready",
+      title: "Read-only dashboard card",
+      status: "ready",
+      priority: "high",
+      labels: ["dashboard"],
+      position: 1,
+      createdAt: 1,
+      updatedAt: 2,
+      agentId: "main",
+      metadata: { automation: { boardId: "platform" } },
+    };
+    const gateway = await installMockGateway(page, {
+      controlUiWidgetKinds: widgetKinds,
+      featureMethods: methods,
+      methodResponses: {
+        connect: {
+          type: "hello-ok",
+          protocol: PROTOCOL_VERSION,
+          server: { connId: "read-only-dashboard-widget", version: "e2e" },
+          auth: {
+            deviceToken: "e2e-read-only-dashboard-device-token",
+            role: "operator",
+            scopes: ["operator.read"],
+          },
+          features: { capabilities: [], events: [], methods },
+          controlUiWidgetKinds: widgetKinds,
+          snapshot: {
+            sessionDefaults: {
+              defaultAgentId: "main",
+              mainKey: "main",
+              mainSessionKey: "main",
+              scope: "agent",
+            },
+          },
+        },
+        "board.get": pluginWidgetBoardSnapshot,
+        "workboard.cards.list": {
+          cards: [card],
+          statuses: ["ready", "running", "done"],
+        },
+      },
+    });
+    await showDashboard(page);
+
+    try {
+      await page.goto(`${server.baseUrl}dashboard`);
+      const cardWidget = page.locator('[data-test-id="workboard-card-widget"]');
+      await cardWidget.waitFor();
+      await expect.poll(() => cardWidget.textContent()).toContain(card.title);
+      const status = cardWidget.getByRole("combobox");
+      await expect.poll(() => status.isDisabled()).toBe(true);
+      await status.evaluate((select) => {
+        (select as HTMLSelectElement).value = "running";
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      expect(await gateway.getRequests("workboard.cards.move")).toHaveLength(0);
+    } finally {
+      await context.close();
     }
   });
 
