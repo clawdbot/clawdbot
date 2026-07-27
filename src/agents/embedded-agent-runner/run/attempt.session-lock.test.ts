@@ -309,6 +309,31 @@ describe("createEmbeddedAttemptSessionLockController", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it("allows cleanup from an async descendant after its write callback settles", async () => {
+    let resumeDescendant!: () => void;
+    const descendantBlocked = new Promise<void>((resolve) => {
+      resumeDescendant = resolve;
+    });
+    const release = vi.fn(async () => undefined);
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: vi.fn(async () => ({ release })),
+      lockOptions: { sessionFile: "agent:main:main" },
+    });
+    let descendant!: Promise<void>;
+
+    await controller.withSessionWriteLock(() => {
+      descendant = (async () => {
+        await descendantBlocked;
+        const cleanupLock = await controller.acquireForCleanup();
+        await cleanupLock.release();
+      })();
+    });
+    resumeDescendant();
+    await descendant;
+
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("keeps a started write callback locked beyond the disposal timeout", async () => {
     vi.useFakeTimers();
     try {

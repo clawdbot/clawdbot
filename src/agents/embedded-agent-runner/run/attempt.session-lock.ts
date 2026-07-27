@@ -98,6 +98,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   let disposePromise: Promise<void> | undefined;
   let cleanupReleasePromise: Promise<void> | undefined;
   type ActiveWriteOperation = {
+    active: boolean;
     settlement?: Promise<void>;
     started: boolean;
   };
@@ -235,7 +236,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       if (cleanupStarted) {
         throw new Error("attempt cleanup started before transcript write");
       }
-      const writeOperation: ActiveWriteOperation = { started: false };
+      const writeOperation: ActiveWriteOperation = { active: true, started: false };
       const operation = serializeLifecycle(async () => {
         if (disposed) {
           throw new Error("attempt disposed before transcript write");
@@ -255,11 +256,15 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       );
       writeOperation.settlement = settlement;
       activeWriteOperations.add(writeOperation);
-      void settlement.then(() => activeWriteOperations.delete(writeOperation));
+      void settlement.then(() => {
+        writeOperation.active = false;
+        activeWriteOperations.delete(writeOperation);
+      });
       return await operation;
     },
     acquireForCleanup: async () => {
-      if (activeWriteOperation.getStore()) {
+      const currentWriteOperation = activeWriteOperation.getStore();
+      if (currentWriteOperation?.active && activeWriteOperations.has(currentWriteOperation)) {
         throw new Error("cannot start attempt cleanup inside a transcript write callback");
       }
       if (disposed) {
@@ -300,7 +305,8 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     },
     hasSessionTakeover: () => takeoverDetected,
     dispose: async () => {
-      if (activeWriteOperation.getStore()) {
+      const currentWriteOperation = activeWriteOperation.getStore();
+      if (currentWriteOperation?.active && activeWriteOperations.has(currentWriteOperation)) {
         throw new Error("cannot dispose an attempt from inside a transcript write callback");
       }
       disposePromise ??= (async () => {
