@@ -1768,6 +1768,7 @@ describe("exportTrajectoryBundle", () => {
           terminalError: "non_deliverable_terminal_turn",
           assistantTexts: ["done"],
           finalPromptText: `final prompt from ${path.join(tmpDir, "prompt.txt")}`,
+          finalPromptTextOriginalLength: 12_345,
           itemLifecycle: {
             startedCount: 1,
             completedCount: 1,
@@ -1849,6 +1850,7 @@ describe("exportTrajectoryBundle", () => {
     const tools = fs.readFileSync(path.join(outputDir, "tools.json"), "utf8");
     expect(prompts).toContain("$WORKSPACE_DIR/AGENTS.md");
     expect(artifacts).toContain("$WORKSPACE_DIR/prompt.txt");
+    expect(JSON.parse(artifacts).finalPromptTextOriginalLength).toBe(12_345);
     expect(artifacts).toContain("non_deliverable_terminal_turn");
     expect(systemPrompt).toContain("$WORKSPACE_DIR/instructions.md");
     expect(tools).toContain("$WORKSPACE_DIR/docs");

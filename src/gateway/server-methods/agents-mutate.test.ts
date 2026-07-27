@@ -6,6 +6,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { AgentDeletionAuthorityRollbackError } from "../../agents/agent-lifecycle-registry.js";
+import { WORKSPACE_BOOTSTRAP_FILENAMES } from "../../agents/workspace.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
 /* ------------------------------------------------------------------ */
 /* Mocks                                                              */
@@ -2942,6 +2943,21 @@ describe("agents.files.list", () => {
   it("does not expose retired HEARTBEAT.md workspace files", async () => {
     const names = await listAgentFileNames();
     expect(names).not.toContain("HEARTBEAT.md");
+  });
+
+  // Pins the derivation: a private copy of this list in the gateway is what let a
+  // retired file linger in the Control UI as a permanently-missing tab.
+  it("lists exactly the canonical workspace bootstrap filenames", async () => {
+    const names = await listAgentFileNames();
+    expect(names).toStrictEqual([...WORKSPACE_BOOTSTRAP_FILENAMES]);
+  });
+
+  it("lists the canonical filenames without BOOTSTRAP.md once setup completed", async () => {
+    mocks.isWorkspaceSetupCompleted.mockResolvedValue(true);
+    const names = await listAgentFileNames();
+    expect(names).toStrictEqual(
+      WORKSPACE_BOOTSTRAP_FILENAMES.filter((name) => name !== "BOOTSTRAP.md"),
+    );
   });
 
   it("rejects writes to retired HEARTBEAT.md workspace files", async () => {

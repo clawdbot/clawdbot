@@ -88,6 +88,18 @@ private actor ApprovalResolutionCapture {
     }
 }
 
+private actor WatchApprovalReadbackProbe {
+    private var approvalIDs: [String] = []
+
+    func record(_ approvalID: String) {
+        self.approvalIDs.append(approvalID)
+    }
+
+    func snapshot() -> [String] {
+        self.approvalIDs
+    }
+}
+
 private actor MockHealthSummaryService: HealthSummaryServicing {
     private(set) var periods: [OpenClawHealthSummaryPeriod] = []
 
@@ -4474,6 +4486,65 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(snapshot.approvals.map(\.id) == approvalIDs.sorted())
     }
 
+    @Test @MainActor func `watch readback classifies cached persisted and held approvals once in owner order`()
+        async throws
+    {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        NodeAppModel._test_setPersistedWatchExecApprovalBridgeStateJSON(#"""
+        {
+          "approvals": [],
+          "pendingApprovalReadbacks": [{
+            "approvalId": "approval-persisted-owner",
+            "gatewayStableID": "test-gateway"
+          }]
+        }
+        """#)
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: watchService)
+        appModel._test_setConnectedGatewayID("test-gateway")
+        try appModel._test_presentExecApprovalPrompt(#require(
+            NodeAppModel._test_makeExecApprovalPrompt(
+                id: "approval-cached-owner",
+                commandText: "echo cached",
+                expiresAtMs: 4_000_000_000_000)))
+
+        let expectedApprovalIDs = [
+            "approval-cached-owner",
+            "approval-persisted-owner",
+            "approval-held-owner",
+        ]
+        let probe = WatchApprovalReadbackProbe()
+        appModel._test_setUnifiedExecApprovalGetResponses(
+            expectedApprovalIDs.map {
+                (approvalID: $0, json: makePendingExecApprovalJSON($0))
+            },
+            beforeResponse: { approvalID in
+                await probe.record(approvalID)
+            })
+
+        await appModel._test_refreshWatchExecApprovalSnapshotOnDemand(
+            WatchExecApprovalSnapshotRequestEvent(
+                requestId: "snapshot-canonical-owner-order",
+                gatewayStableID: "test-gateway",
+                heldApprovals: [WatchExecApprovalSnapshotRequestItem(
+                    approvalId: "approval-held-owner",
+                    activeResolutionAttemptId: nil)],
+                sentAtMs: 226,
+                transport: "sendMessage"))
+
+        #expect(await probe.snapshot() == expectedApprovalIDs)
+        let snapshot = try #require(watchService.sentExecApprovalSnapshots.first {
+            $0.requestId == "snapshot-canonical-owner-order"
+        })
+        #expect(snapshot.requestId == "snapshot-canonical-owner-order")
+        #expect(snapshot.requestGatewayStableID == "test-gateway")
+        #expect(snapshot.approvals.map(\.id) == expectedApprovalIDs.sorted())
+        #expect(appModel._test_pendingPersistedExecApprovalReadbacks().isEmpty)
+    }
+
     @Test @MainActor func `canonical watch refresh does not acknowledge byte distinct owner`() async throws {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
@@ -5581,6 +5652,43 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let items = NodeAppModel._test_makeWatchChatItems(from: rawMessages)
 
         #expect(items.map(\.text) == ["Still worth reading"])
+    }
+
+    @Test func `canonical watch chat owner keeps the last five readable projected rows`() throws {
+        let rawMessages = try (0..<7).map { index in
+            try makeWatchChatRawMessage(
+                role: "assistant",
+                text: "Readable message \(index)",
+                timestamp: Double(index + 1))
+        }
+
+        let items = WatchChatPresentation.makeItems(from: rawMessages)
+
+        #expect(items.map(\.text) == (2..<7).map { "Readable message \($0)" })
+    }
+
+    @Test func `canonical watch chat owner anchors terminal tool mirrors to the submitted turn`() throws {
+        let rawMessages = try [
+            makeWatchChatRawMessage(
+                role: "user",
+                text: "Send the update",
+                timestamp: 3000,
+                idempotencyKey: "watch-run:user"),
+            makeProjectedWatchChatRawMessage(
+                role: "assistant",
+                text: "Update sent",
+                timestamp: 4000,
+                serverId: "tool-result-1",
+                isMessageToolMirror: true),
+        ]
+
+        let reply = WatchChatPresentation.replyText(
+            from: rawMessages,
+            runID: "watch-run",
+            submittedText: "Send the update",
+            submittedAtMs: 2500)
+
+        #expect(reply == "Update sent")
     }
 
     @Test func `watch chat preview reads responses output text`() throws {

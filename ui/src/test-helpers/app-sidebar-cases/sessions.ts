@@ -58,7 +58,11 @@ describe("AppSidebar session indicators", () => {
         rateLimited: false,
       }),
     );
-    const gatewayHarness = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+    const gatewayHarness = createGatewayHarness({
+      request,
+      requestSessionPullRequests: (params: { sessionKey: string }) =>
+        request("controlUi.sessionPullRequests", params),
+    } as unknown as GatewayBrowserClient);
     gatewayHarness.publish({
       hello: {
         features: { methods: ["controlUi.sessionPullRequests"] },
@@ -450,8 +454,9 @@ describe("AppSidebar session mutation feedback", () => {
     const { gateway, harness, sidebar } = await mountMutationHarness();
     const setSessionKey = vi.fn();
     (gateway.gateway as { setSessionKey: (key: string) => void }).setSessionKey = setSessionKey;
-    const state = createSessionState("main", ["agent:main:main", "agent:main:a", "agent:main:b"]);
-    const archivedRow = state.result?.sessions.find((row) => row.key === "agent:main:a");
+    const archivedKey = "agent:main:dashboard:00000002-0000-4000-8000-000000000000";
+    const state = createSessionState("main", ["agent:main:main", archivedKey, "agent:main:b"]);
+    const archivedRow = state.result?.sessions.find((row) => row.key === archivedKey);
     if (!archivedRow) {
       throw new Error("expected archive row");
     }

@@ -263,12 +263,6 @@ function applyLaneConfig(
     search: {
       ...memorySearch,
       enabled: false,
-      sync: {
-        ...(memorySearch.sync && typeof memorySearch.sync === "object" ? memorySearch.sync : {}),
-        onSearch: false,
-        onSessionStart: false,
-        watch: false,
-      },
     },
   };
 

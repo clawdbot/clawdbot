@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import { createServer as createNetServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import type { Page } from "playwright";
 import type { ViteDevServer } from "vite";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
@@ -16,6 +17,25 @@ import {
   resolveTsconfigPathAliasesForVite,
 } from "../../vite.config.ts";
 import type { ControlUiBuildInfo } from "../build-info.ts";
+
+export function controlUiSessionPath(sessionKey: string, basePath = ""): string {
+  return (
+    buildControlUiSessionPath({
+      namespace: "chat",
+      sessionKey,
+      fallbackAgentId: sessionKey.split(":")[1] || "main",
+      basePath,
+    }) ?? `${basePath}/chat`
+  );
+}
+
+export function controlUiSessionUrl(baseUrl: string, sessionKey: string): string {
+  const url = new URL(baseUrl);
+  url.pathname = controlUiSessionPath(sessionKey, url.pathname);
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+}
 
 const require = createRequire(import.meta.url);
 const json5EsmPath = require.resolve("json5/dist/index.mjs");
@@ -637,6 +657,22 @@ function installControlUiMockGateway(input: {
     return { found: true, value: matchingCase.response };
   }
 
+  /** Transcript fields a scenario configured on chat.history, replayed onto the
+   * chat.startup payload so both bootstrap paths serve the same conversation. */
+  function configuredHistoryTranscript(): Record<string, unknown> {
+    const configured = scenario.methodResponses["chat.history"];
+    if (!isRecord(configured) || responseCases(configured) || responseSequence(configured)) {
+      return {};
+    }
+    const transcript: Record<string, unknown> = {};
+    for (const field of ["messages", "sessionId", "sessionInfo", "inFlightRun", "thinkingLevel"]) {
+      if (hasOwn(configured, field)) {
+        transcript[field] = configured[field];
+      }
+    }
+    return transcript;
+  }
+
   /** Presence slice of the connect snapshot. The self-flagged entry adopts the
    * connecting client's instanceId so presence surfaces resolve "you". */
   function presenceSnapshot(connectParams: unknown): { presence?: unknown[] } {
@@ -1022,6 +1058,10 @@ function installControlUiMockGateway(input: {
           thinkingLevel: null,
           ...(scenario.inFlightRun ? { inFlightRun: scenario.inFlightRun } : {}),
           ...(scenario.sessionInfo ? { sessionInfo: scenario.sessionInfo } : {}),
+          // The transcript bootstrap picks chat.startup whenever the Gateway
+          // advertises it, so a scenario that configures only chat.history would
+          // otherwise have its transcript silently dropped on the startup path.
+          ...configuredHistoryTranscript(),
         };
       case "chat.metadata":
         return {

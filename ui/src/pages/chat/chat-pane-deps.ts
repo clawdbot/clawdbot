@@ -31,7 +31,6 @@ export {
 export type {
   ControlUiSessionBranch,
   ControlUiSessionPullRequest,
-  ControlUiSessionPullRequests,
 } from "../../../../src/gateway/control-ui-contract.js";
 export { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 export type {
@@ -161,6 +160,7 @@ export type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 export {
   applyChatAgentsList,
   clearChatHistory,
+  loadChatBranches,
   loadChatHistory,
   loadOlderChatHistoryPage,
   rewindChatHistory,
@@ -277,7 +277,7 @@ export {
   storedChatOutboxScopeKey,
 } from "./composer-persistence.ts";
 export { exportChatMarkdown } from "./export.ts";
-export { admitInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
+export { admitInitialTurnHandoff, admitInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
 export {
   hasAbortableSessionRun,
   reconcileStaleChatRunAfterSessionStatePublication,
@@ -292,6 +292,7 @@ export {
 export {
   reconcileWaitingApprovalsFromSnapshot,
   resolveActiveRunOutputTokens,
+  resolveChatProjectionRunId,
 } from "./tool-stream.ts";
 export { configureToolTitleFetcher } from "./tool-titles.ts";
 export { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";

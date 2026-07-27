@@ -123,7 +123,9 @@ export {
   clearPluginOwnedSessionState,
   listSessionEntries,
   listSessionEntriesReadOnly,
+  listSessionEntryKeysReadOnly,
   loadExactSessionEntry,
+  loadExactSessionEntryReadOnly,
   loadSessionEntry,
   loadSessionEntryReadOnly,
   openSessionEntryReadView,
@@ -135,6 +137,7 @@ export {
   replaceSessionEntrySync,
   resolveSessionEntryAccessTarget,
   resolveSessionEntryCandidateTarget,
+  resolveSessionEntrySelection,
   updateResolvedSessionEntry,
   upsertSessionEntry,
 } from "./session-accessor.entry.js";

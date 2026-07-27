@@ -31,6 +31,8 @@ type TestChatPane = HTMLElement & {
   state: ChatPageHost;
   createSession: () => Promise<boolean>;
   resetConfirmationOpen: boolean;
+  routeFace: "chat" | "dashboard";
+  onFaceChange?: (face: "chat" | "dashboard") => void;
   observerDigestHistory: ObserverDigestHistory;
   confirmConversationReset: () => Promise<boolean>;
   settleResetConfirmation: (confirmed: boolean) => void;
@@ -141,7 +143,12 @@ describe("chat pane board shell", () => {
         hasBoard: true,
       }),
     );
+    const onFaceChange = vi.fn((face: "chat" | "dashboard") => {
+      pane.routeFace = face;
+    });
+    pane.onFaceChange = onFaceChange;
     pane.persistBoardSessionView({ face: "dashboard" });
+    expect(onFaceChange).toHaveBeenCalledWith("dashboard");
     expect(pane.resolveBoardView().face).toBe("dashboard");
   });
 
@@ -365,7 +372,8 @@ describe("chat pane board shell", () => {
     };
     pane.state.sessionKey = "agent:main:main";
     pane.boardProvider = mockBoardProvider("main");
-    pane.persistBoardSessionView({ face: "dashboard", activeTabId: "research" });
+    pane.routeFace = "dashboard";
+    pane.persistBoardSessionView({ activeTabId: "research" });
 
     pane.boardProvider = mockBoardProvider("agent:main:main");
 
@@ -375,13 +383,14 @@ describe("chat pane board shell", () => {
     });
   });
 
-  it("uses in-memory board preferences before persisted settings", () => {
+  it("uses in-memory tab preferences while the route owns the face", () => {
     const pane = createTestPane();
+    pane.routeFace = "dashboard";
     pane.boardProvider = mockBoardProvider("agent:main:current");
     pane.state.settings = {
       ...loadSettings(),
       boardSessionViews: {
-        "agent:main:current": { face: "dashboard", activeTabId: "research" },
+        "agent:main:current": { activeTabId: "research" },
       },
     };
     localStorage.clear();
@@ -401,19 +410,21 @@ describe("chat pane board shell", () => {
   it("preserves preferences saved by another split pane", () => {
     const initialSettings = patchSettings({
       boardSessionViews: {
-        "agent:main:first": { face: "chat", activeTabId: "main" },
+        "agent:main:first": { activeTabId: "main" },
       },
     });
     const firstPane = createTestPane();
+    firstPane.routeFace = "dashboard";
     firstPane.state.sessionKey = "agent:main:first";
     firstPane.state.settings = initialSettings;
     firstPane.boardProvider = mockBoardProvider("agent:main:first");
     const secondPane = createTestPane();
+    secondPane.routeFace = "dashboard";
     secondPane.state.sessionKey = "agent:main:second";
     secondPane.state.settings = initialSettings;
     secondPane.boardProvider = mockBoardProvider("agent:main:second");
 
-    firstPane.persistBoardSessionView({ face: "dashboard", activeTabId: "research" });
+    firstPane.persistBoardSessionView({ activeTabId: "research" });
 
     secondPane.state.sessionKey = "agent:main:first";
     secondPane.boardProvider = mockBoardProvider("agent:main:first");
@@ -424,11 +435,11 @@ describe("chat pane board shell", () => {
 
     secondPane.state.sessionKey = "agent:main:second";
     secondPane.boardProvider = mockBoardProvider("agent:main:second");
-    secondPane.persistBoardSessionView({ face: "dashboard", activeTabId: "main" });
+    secondPane.persistBoardSessionView({ activeTabId: "main" });
 
     expect(loadSettings().boardSessionViews).toMatchObject({
-      "agent:main:first": { face: "dashboard", activeTabId: "research" },
-      "agent:main:second": { face: "dashboard", activeTabId: "main" },
+      "agent:main:first": { activeTabId: "research" },
+      "agent:main:second": { activeTabId: "main" },
     });
   });
 

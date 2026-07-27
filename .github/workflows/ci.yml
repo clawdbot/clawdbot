@@ -3233,6 +3233,50 @@ jobs:
       - name: Build iOS app
         run: pnpm ios:build
 
+      # App compilation and screenshots do not execute approval or notification
+      # lifecycles. Exercise both owners on the already provisioned simulator.
+      - name: Run focused iOS lifecycle simulator tests
+        id: ios_lifecycle_tests
+        if: env.HISTORICAL_TARGET != 'true'
+        run: |
+          set -euo pipefail
+          simulator_id="$(
+            xcrun simctl list devices available --json | node --input-type=module -e '
+              const chunks = [];
+              for await (const chunk of process.stdin) chunks.push(chunk);
+              const runtimes = JSON.parse(Buffer.concat(chunks).toString("utf8")).devices;
+              const simulator = Object.values(runtimes)
+                .flat()
+                .find((device) => device.isAvailable && device.name.startsWith("iPhone"));
+              if (!simulator) {
+                console.error("No available iPhone simulator for iOS lifecycle tests");
+                process.exit(1);
+              }
+              process.stdout.write(simulator.udid);
+            '
+          )"
+          result_bundle="apps/ios/build/LifecycleTestResults/OpenClawLifecycleTests.xcresult"
+          mkdir -p "apps/ios/build/LifecycleTestResults"
+          xcodebuild \
+            -project apps/ios/OpenClaw.xcodeproj \
+            -scheme OpenClaw \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=${simulator_id}" \
+            -resultBundlePath "$result_bundle" \
+            -parallel-testing-enabled NO \
+            -only-testing:OpenClawTests/NodeAppModelInvokeTests \
+            -only-testing:OpenClawTests/NotificationServingPreferenceTests \
+            test
+
+      - name: Upload iOS lifecycle simulator evidence
+        if: ${{ always() && steps.ios_lifecycle_tests.outcome != '' && steps.ios_lifecycle_tests.outcome != 'skipped' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ios-lifecycle-tests-${{ needs.preflight.outputs.checkout_revision }}
+          path: apps/ios/build/LifecycleTestResults/*.xcresult
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Capture iOS release screenshots
         if: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request') && env.HISTORICAL_TARGET != 'true' }}
         run: pnpm ios:screenshots

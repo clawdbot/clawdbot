@@ -37,6 +37,7 @@ function requestedPayload(overrides: Record<string, unknown> = {}) {
     ],
     agentId: "main",
     sessionKey: "agent:main:main",
+    runId: "run-question",
     createdAtMs: 1_000,
     expiresAtMs: Date.now() + 60_000,
     status: "pending",
@@ -69,6 +70,7 @@ describe("question event parsing", () => {
     ).toBe(true);
     expect(state.prompts.get("question-1")).toMatchObject({
       id: "question-1",
+      runId: "run-question",
       sessionKey: "agent:main:main",
       status: "pending",
       questions: [{ questionId: "format", options: [{ label: "Compact" }, { label: "Detailed" }] }],
@@ -84,8 +86,27 @@ describe("question event parsing", () => {
       }),
     ).toBe(true);
     expect(state.prompts.get("question-1")).toMatchObject({
+      runId: "run-question",
       status: "answered",
       answers: { answers: { format: ["Compact"] } },
+    });
+  });
+
+  it("uses the protocol run id for a background-session question", () => {
+    const state = createState();
+    expect(
+      handleQuestionPromptEvent(state, {
+        event: "question.requested",
+        payload: requestedPayload({
+          sessionKey: "agent:main:background",
+          runId: "run-background",
+        }),
+      }),
+    ).toBe(true);
+    expect(state.prompts.get("question-1")).toMatchObject({
+      sessionKey: "agent:main:background",
+      runId: "run-background",
+      status: "pending",
     });
   });
 

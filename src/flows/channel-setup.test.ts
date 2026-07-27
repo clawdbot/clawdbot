@@ -830,6 +830,130 @@ describe("setupChannels workspace shadow exclusion", () => {
     },
   );
 
+  it("enters an explicitly targeted channel before the generic setup prompts", async () => {
+    const promptOrder: string[] = [];
+    const configureInteractive = vi.fn(async ({ cfg }) => {
+      promptOrder.push("channel setup");
+      return {
+        cfg: {
+          ...cfg,
+          channels: { ...cfg.channels, "external-chat": { token: "configured" } },
+        },
+        accountId: "external-account",
+      };
+    });
+    const externalChatPlugin = makeSetupPlugin({
+      id: "external-chat",
+      label: "External Chat",
+      setupWizard: {
+        channel: "external-chat",
+        getStatus: vi.fn(async () => ({
+          channel: "external-chat",
+          configured: false,
+          statusLines: [],
+        })),
+        configure: vi.fn(),
+        configureInteractive,
+      } as ChannelSetupPlugin["setupWizard"],
+    });
+    resolveChannelSetupEntries.mockReturnValue(externalChatSetupEntries());
+    listActiveChannelSetupPlugins.mockReturnValue([externalChatPlugin]);
+    const confirm = vi.fn(async () => {
+      promptOrder.push("setup confirmation");
+      return true;
+    });
+    const select = vi.fn(async () => {
+      promptOrder.push("channel picker");
+      return "__done__";
+    });
+
+    const result = await setupChannels(
+      {} as OpenClawConfig,
+      {} as never,
+      {
+        confirm,
+        note: vi.fn(async () => undefined),
+        select,
+      } as never,
+      {
+        initialSelection: ["external-chat"],
+        finishAfterInitialSelection: true,
+        deferStatusUntilSelection: true,
+        skipDmPolicyPrompt: true,
+      },
+    );
+
+    expect(promptOrder).toEqual(["channel setup"]);
+    expect(confirm).not.toHaveBeenCalled();
+    expect(configureInteractive).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      channels: { "external-chat": { token: "configured" } },
+      plugins: { entries: { "external-chat": { enabled: true } } },
+    });
+  });
+
+  it("returns targeted channel setup Back navigation to the channel picker", async () => {
+    const promptOrder: string[] = [];
+    const configureInteractive = vi.fn(async ({ prompter }) => {
+      promptOrder.push("channel setup");
+      await prompter.text({ message: "External Chat token" });
+      return {
+        cfg: {
+          channels: { "external-chat": { token: "should-not-apply" } },
+        } as OpenClawConfig,
+        accountId: "external-account",
+      };
+    });
+    const externalChatPlugin = makeSetupPlugin({
+      id: "external-chat",
+      label: "External Chat",
+      setupWizard: {
+        channel: "external-chat",
+        getStatus: vi.fn(async () => ({
+          channel: "external-chat",
+          configured: false,
+          statusLines: [],
+        })),
+        configure: vi.fn(),
+        configureInteractive,
+      } as ChannelSetupPlugin["setupWizard"],
+    });
+    resolveChannelSetupEntries.mockReturnValue(externalChatSetupEntries());
+    listActiveChannelSetupPlugins.mockReturnValue([externalChatPlugin]);
+    const select = vi.fn(async () => {
+      promptOrder.push("channel picker");
+      return "__done__";
+    });
+    const cfg = { channels: { telegram: { botToken: "keep" } } } as OpenClawConfig;
+
+    const result = await setupChannels(
+      cfg,
+      {} as never,
+      {
+        confirm: vi.fn(async () => true),
+        note: vi.fn(async () => undefined),
+        select,
+        text: vi.fn(async () => {
+          throw new WizardNavigationError("back");
+        }),
+      } as never,
+      {
+        initialSelection: ["external-chat"],
+        finishAfterInitialSelection: true,
+        deferStatusUntilSelection: true,
+        skipDmPolicyPrompt: true,
+      },
+    );
+
+    expect(promptOrder).toEqual(["channel setup", "channel picker"]);
+    expect(select).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Select a channel",
+      }),
+    );
+    expect(result).toEqual(cfg);
+  });
+
   it("returns custom channel setup to channel selection when its first prompt goes back", async () => {
     const configureInteractive = vi.fn(async ({ prompter }) => {
       await prompter.text({ message: "Custom channel token" });

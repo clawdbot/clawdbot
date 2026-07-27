@@ -3,7 +3,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult } from "../api/types.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
 
-function createGateway(assistantAgentId = "Main") {
+function createGateway(assistantAgentId: string | null = "Main") {
   let snapshot = { client: null as GatewayBrowserClient | null, assistantAgentId };
   const listeners = new Set<(next: typeof snapshot) => void>();
   return {
@@ -98,6 +98,30 @@ describe("agent selection", () => {
     expect(selection.state).toEqual({ selectedId: "ops", scopeId: "ops" });
   });
 
+  it("adopts the hello default published by the same gateway client", () => {
+    const gateway = createGateway(null);
+    const selection = createAgentSelectionCapability(gateway.gateway, createRoster().roster);
+    const client = { request() {} } as unknown as GatewayBrowserClient;
+
+    gateway.publish({ client, assistantAgentId: null });
+    expect(selection.state).toEqual({ selectedId: null, scopeId: null });
+
+    gateway.publish({ client, assistantAgentId: "Roboclaw" });
+    expect(selection.state).toEqual({ selectedId: "roboclaw", scopeId: "roboclaw" });
+  });
+
+  it("does not replace an explicit pre-hello selection", () => {
+    const gateway = createGateway(null);
+    const selection = createAgentSelectionCapability(gateway.gateway, createRoster().roster);
+    const client = { request() {} } as unknown as GatewayBrowserClient;
+
+    gateway.publish({ client, assistantAgentId: null });
+    selection.set("Research");
+    gateway.publish({ client, assistantAgentId: "Roboclaw" });
+
+    expect(selection.state).toEqual({ selectedId: "research", scopeId: "research" });
+  });
+
   it("self-heals an unknown cold-load selection to the roster default", () => {
     const gateway = createGateway("Main");
     const roster = createRoster();
@@ -113,6 +137,22 @@ describe("agent selection", () => {
     expect(selection.state).toEqual({ selectedId: "roboclaw", scopeId: "roboclaw" });
 
     selection.set("main");
+    expect(selection.state).toEqual({ selectedId: "roboclaw", scopeId: "roboclaw" });
+  });
+
+  it("waits for the roster when the gateway has no assistant agent id", () => {
+    const gateway = createGateway(null);
+    const roster = createRoster();
+    const selection = createAgentSelectionCapability(gateway.gateway, roster.roster);
+
+    expect(selection.state).toEqual({ selectedId: null, scopeId: null });
+    roster.publish({
+      defaultId: "Roboclaw",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "roboclaw", kind: "agent" }],
+    });
+
     expect(selection.state).toEqual({ selectedId: "roboclaw", scopeId: "roboclaw" });
   });
 });

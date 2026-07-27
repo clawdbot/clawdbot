@@ -55,6 +55,7 @@ function makeRuntimeParitySummary(): QaRuntimeParitySuiteSummary {
           cells: {
             openclaw: {
               runtime: "openclaw",
+              status: "pass",
               transcriptBytes: '{"role":"assistant"}\n',
               toolCalls: [{ tool: "read_file", argsHash: "a", resultHash: "r" }],
               finalText: "done",
@@ -64,6 +65,7 @@ function makeRuntimeParitySummary(): QaRuntimeParitySuiteSummary {
             },
             codex: {
               runtime: "codex",
+              status: "pass",
               transcriptBytes: '{"role":"assistant"}\n',
               toolCalls: [{ tool: "read_file", argsHash: "a", resultHash: "r" }],
               finalText: "done",
@@ -85,6 +87,7 @@ function makeRuntimeParitySummary(): QaRuntimeParitySuiteSummary {
           cells: {
             openclaw: {
               runtime: "openclaw",
+              status: "pass",
               transcriptBytes: '{"role":"assistant"}\n',
               toolCalls: [{ tool: "read_file", argsHash: "a", resultHash: "r" }],
               finalText: "done",
@@ -94,6 +97,7 @@ function makeRuntimeParitySummary(): QaRuntimeParitySuiteSummary {
             },
             codex: {
               runtime: "codex",
+              status: "pass",
               transcriptBytes: '{"role":"assistant"}\n',
               toolCalls: [{ tool: "read_file", argsHash: "b", resultHash: "r" }],
               finalText: "done",
@@ -202,6 +206,7 @@ describe("qa agentic parity report", () => {
             cells: {
               openclaw: {
                 runtime: "openclaw",
+                status: "pass",
                 transcriptBytes: '{"role":"assistant"}\n',
                 toolCalls: [],
                 finalText: "done",
@@ -211,6 +216,7 @@ describe("qa agentic parity report", () => {
               },
               codex: {
                 runtime: "codex",
+                status: "pass",
                 transcriptBytes: '{"role":"assistant"}\n',
                 toolCalls: [],
                 finalText: "done",

@@ -18,6 +18,7 @@ import { sendDurableMessageBatch } from "../../channels/message/runtime.js";
 import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type { ChannelThreadingToolContext } from "../../channels/plugins/types.public.js";
+import { resolveChannelThreadAddressing } from "../../channels/thread-addressing.js";
 import type { InternalChannelThreadingToolContext } from "../../channels/threading-tool-context-internal.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
 import {
@@ -799,13 +800,13 @@ export const sendHandlers: GatewayRequestHandlers = {
         const providedSessionBaseKey =
           parseThreadSessionSuffix(providedSessionKey).baseSessionKey ?? providedSessionKey;
         const shouldUseDerivedThreadSessionKey =
-          channel === "slack" &&
+          resolveChannelThreadAddressing(channel) === "message" &&
           Boolean(providedSessionKey) &&
           Boolean(normalizeOptionalString(derivedRoute?.threadId)) &&
           normalizeOptionalLowercaseString(derivedRoute?.baseSessionKey) ===
             normalizeOptionalLowercaseString(providedSessionBaseKey) &&
           normalizeOptionalLowercaseString(derivedRoute?.sessionKey) !== providedSessionKey;
-        // Slack replies can refine an existing base session into a thread session after target lookup.
+        // Message-scoped threads can refine an existing base session only after target lookup.
         const outboundRoute = derivedRoute
           ? providedSessionKey
             ? shouldUseDerivedThreadSessionKey

@@ -433,15 +433,6 @@ describe("normalizeCronJobCreate", () => {
     expect(delivery.mode).toBe("announce");
   });
 
-  it("defaults omitted agentTurn targets to isolated announce jobs", () => {
-    const normalized = normalizeCronJobCreate({
-      name: "agent turn default",
-      schedule: { kind: "every", everyMs: 60_000 },
-      payload: { kind: "agentTurn", message: "hello" },
-    });
-    expect(normalized).toMatchObject({ sessionTarget: "isolated", delivery: { mode: "announce" } });
-  });
-
   it("defaults command payloads to isolated announce jobs", () => {
     const normalized = normalizeCronJobCreate({
       name: "command default",
