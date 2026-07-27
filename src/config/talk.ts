@@ -276,16 +276,12 @@ export function resolveActiveTalkProviderConfig(
 }
 
 /**
- * Build the gateway `talk.config` payload from persisted config.
+ * Build the gateway `talk.config` payload from canonical Talk config.
  * The response includes canonical provider data plus the resolved provider when selection is unambiguous.
  */
-export function buildTalkConfigResponse(value: unknown): TalkConfigResponse | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  // The gateway passes canonical output from normalizeTalkSection; doctor owns migration of
-  // legacy flat provider fields before runtime, so response construction does not revive them.
-  const normalized = normalizeTalkSection(value as TalkConfig);
+export function buildTalkConfigResponse(
+  normalized: TalkConfig | undefined,
+): TalkConfigResponse | undefined {
   if (!normalized) {
     return undefined;
   }
