@@ -217,8 +217,12 @@ function expandAcceptedAudiences(audience: string): string[] {
   const appId = parseApiSchemeAppId(audience);
   if (appId) {
     values.add(appId);
+    values.add(appId.toLowerCase());
+    values.add(`api://${appId.toLowerCase()}`);
   } else if (isPlainAppId(audience)) {
-    values.add(`api://${audience.trim()}`);
+    const normalized = audience.trim().toLowerCase();
+    values.add(normalized);
+    values.add(`api://${normalized}`);
   }
   return [...values];
 }

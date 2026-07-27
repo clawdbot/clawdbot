@@ -337,10 +337,11 @@ function areManifestToolNamesAllOptional(params: {
   manifestPlugin: PluginManifestRecord | undefined;
   toolNames: readonly string[];
 }): boolean {
+  const manifestPlugin = params.manifestPlugin;
   return Boolean(
-    params.manifestPlugin &&
+    manifestPlugin &&
     params.toolNames.length > 0 &&
-    params.toolNames.every((toolName) => isManifestToolOptional(params.manifestPlugin!, toolName)),
+    params.toolNames.every((toolName) => isManifestToolOptional(manifestPlugin, toolName)),
   );
 }
 

@@ -6,12 +6,15 @@
   "scripts": {
     "downstream": "pnpm --dir ./downstream --ignore-workspace start"
   },
-  "devDependencies": {
-    "openclaw": "workspace:*"
+  "peerDependencies": {
+    "openclaw": ">=2026.7.2"
   },
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "compat": {
+      "pluginApi": ">=2026.7.2"
+    }
   }
 }

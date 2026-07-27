@@ -87,14 +87,14 @@ describe("plugin delegated auth policy", () => {
     expect(getDelegatedAccessToken).toHaveBeenCalledTimes(1);
   });
 
-  it("normalizes Entra application audiences while rejecting missing requested scopes", async () => {
+  it("normalizes Entra application audience casing and URI forms", async () => {
     const auth = resolveDelegatedAuthForPlugin({
       auth: {
         getDelegatedAccessToken: vi.fn(async () => ({
           ok: true as const,
           token: createJwt({
             aud: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",
-            scp: "other.scope",
+            scp: "profile.read",
           }),
         })),
       },
@@ -111,6 +111,83 @@ describe("plugin delegated auth policy", () => {
       auth?.getDelegatedAccessToken({
         provider: "msteams",
         audience: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        scopes: ["profile.read"],
+      }),
+    ).resolves.toMatchObject({ ok: true });
+  });
+
+  it("accepts a multi-valued audience when one value matches the request", async () => {
+    const requestedAudience = "11111111-2222-3333-4444-555555555555";
+    const auth = resolveDelegatedAuthForPlugin({
+      auth: {
+        getDelegatedAccessToken: vi.fn(async () => ({
+          ok: true as const,
+          token: createJwt({
+            aud: ["api://unrelated", `api://${requestedAudience}`],
+          }),
+        })),
+      },
+      chatType: "direct",
+      pluginId: "demo",
+      plugins: createPluginsConfig({
+        enabled: true,
+        audiences: [requestedAudience],
+      }),
+    });
+
+    await expect(
+      auth?.getDelegatedAccessToken({
+        provider: "msteams",
+        audience: requestedAudience,
+      }),
+    ).resolves.toMatchObject({ ok: true });
+  });
+
+  it("enforces the requested audience when several audiences are allowed", async () => {
+    const requestedAudience = "11111111-2222-3333-4444-555555555555";
+    const otherAllowedAudience = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    const auth = resolveDelegatedAuthForPlugin({
+      auth: {
+        getDelegatedAccessToken: vi.fn(async () => ({
+          ok: true as const,
+          token: createJwt({ aud: otherAllowedAudience }),
+        })),
+      },
+      chatType: "direct",
+      pluginId: "demo",
+      plugins: createPluginsConfig({
+        enabled: true,
+        audiences: [requestedAudience, otherAllowedAudience],
+      }),
+    });
+
+    await expect(
+      auth?.getDelegatedAccessToken({
+        provider: "msteams",
+        audience: requestedAudience,
+      }),
+    ).resolves.toEqual({ ok: false, reason: "unavailable" });
+  });
+
+  it("rejects tokens missing a requested scope", async () => {
+    const auth = resolveDelegatedAuthForPlugin({
+      auth: {
+        getDelegatedAccessToken: vi.fn(async () => ({
+          ok: true as const,
+          token: createJwt({ scp: "other.scope" }),
+        })),
+      },
+      chatType: "direct",
+      pluginId: "demo",
+      plugins: createPluginsConfig({
+        enabled: true,
+        scopes: ["profile.read"],
+      }),
+    });
+
+    await expect(
+      auth?.getDelegatedAccessToken({
+        provider: "msteams",
         scopes: ["profile.read"],
       }),
     ).resolves.toEqual({ ok: false, reason: "unavailable" });
