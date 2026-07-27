@@ -259,6 +259,7 @@ export function getCompat(model: OpenAIModeModel) {
   const compat = model.compat ?? {};
   return {
     ...resolved,
+    cacheControlFormat: resolved.cacheControlFormat,
     reasoningEffortMap: resolveOpenAIReasoningEffortMap(model, {}),
     openRouterRouting: (resolved.openRouterRouting as Record<string, unknown> | undefined) ?? {},
     vercelGatewayRouting: resolved.vercelGatewayRouting as Record<string, unknown>,
