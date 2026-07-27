@@ -282,6 +282,14 @@ describe("startsWithSilentToken", () => {
   it("matches newline-separated leading silent tokens before word-start content", () => {
     expect(startsWithSilentToken("NO_REPLY\n\nThe user is saying")).toBe(true);
     expect(startsWithSilentToken("No_RePlY  The user is saying")).toBe(true);
+    expect(startsWithSilentToken("NO_REPLY NO_REPLY The user is saying")).toBe(true);
+  });
+
+  it("does not mistake a repeated silent token for visible reply content", () => {
+    expect(startsWithSilentToken("NO_REPLY NO_REPLY")).toBe(false);
+    expect(startsWithSilentToken("NO_REPLY\n\nNO_REPLY")).toBe(false);
+    expect(startsWithSilentToken("NO_REPLY NO_REPLY: explanation")).toBe(false);
+    expect(startsWithSilentToken("NO_REPLY NO_REPLY—note")).toBe(false);
   });
 
   it("rejects separated substantive prefixes and exact-token-only text", () => {
