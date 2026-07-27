@@ -2,11 +2,8 @@
 import "./fs-safe-defaults.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  ensureDirectoryWithinRoot,
-  findExistingAncestor,
-  writeViaSiblingTempPath,
-} from "@openclaw/fs-safe/advanced";
+import { ensureDirectoryWithinRoot, findExistingAncestor } from "@openclaw/fs-safe/advanced";
+import { writeExternalFileWithinRoot as writeExternalFileWithinRootBase } from "@openclaw/fs-safe/output";
 import {
   root as fsSafeRoot,
   type ReadResult,
@@ -118,15 +115,17 @@ export async function ensureAbsoluteDirectory(
 export async function writeExternalFileWithinRoot(
   options: ExternalFileWriteOptions,
 ): Promise<ExternalFileWriteResult> {
-  const targetPath = path.resolve(options.rootDir, options.path);
-  await writeViaSiblingTempPath({
+  const requestedPath = path.resolve(options.rootDir, options.path);
+  const result = await writeExternalFileWithinRootBase({
     rootDir: options.rootDir,
-    targetPath,
-    writeTemp: options.write,
-    fallbackFileName: options.fallbackFileName,
-    tempPrefix: options.tempPrefix,
+    path: options.path,
+    write: options.write,
+    staging: "sibling",
+    fallbackFileName: options.fallbackFileName ?? options.tempPrefix,
   });
-  return { path: targetPath };
+  // Preserve the caller-facing path spelling while carrying forward any
+  // portable basename selected by fs-safe (for example, /var vs /private/var).
+  return { path: path.join(path.dirname(requestedPath), path.basename(result.path)) };
 }
 
 /** @deprecated Use root(rootDir).read(relativePath, options). */
