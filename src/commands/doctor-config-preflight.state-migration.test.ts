@@ -21,6 +21,9 @@ const autoMigrateLegacyTaskStateSidecars = vi.hoisted(() =>
 const repairLegacyCronStoreWithoutPrompt = vi.hoisted(() =>
   vi.fn(async () => ({ changes: ["cron-imported"], warnings: [] })),
 );
+const collectCronCodexRuntimePolicyTargetsReadOnly = vi.hoisted(() =>
+  vi.fn(async () => ({ targets: [], warnings: [] })),
+);
 const readConfigFileSnapshot = vi.hoisted(() =>
   vi.fn(async () => ({
     exists: true,
@@ -44,6 +47,7 @@ vi.mock("./doctor-state-migrations.js", () => ({
 
 vi.mock("./doctor/cron/index.js", () => ({
   repairLegacyCronStoreWithoutPrompt,
+  collectCronCodexRuntimePolicyTargetsReadOnly,
 }));
 
 vi.mock("../config/io.js", () => ({
