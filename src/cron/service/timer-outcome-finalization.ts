@@ -170,7 +170,7 @@ export async function finalizeCompletedCronRunOutcomes(
   }
 }
 
-export function finishPersistedQuietCronTaskRuns(
+function finishPersistedQuietCronTaskRuns(
   state: CronServiceState,
   outcomes: readonly CronTaskRunFinalizationOutcome[],
 ): void {
@@ -181,21 +181,19 @@ export function finishPersistedQuietCronTaskRuns(
   }
 }
 
-export function clearActiveMarkersForOutcomes(
-  outcomes: readonly CronTaskRunFinalizationOutcome[],
-): void {
+function clearActiveMarkersForOutcomes(outcomes: readonly CronTaskRunFinalizationOutcome[]): void {
   for (const outcome of outcomes) {
     clearCronJobActive(outcome.jobId, outcome.activeJobMarker);
   }
 }
 
-export function filterCurrentCronRunOutcomes<T extends CronTaskRunFinalizationOutcome>(
+function filterCurrentCronRunOutcomes<T extends CronTaskRunFinalizationOutcome>(
   outcomes: readonly T[],
 ): T[] {
   return outcomes.filter((outcome) => isCronActiveJobMarkerCurrent(outcome.activeJobMarker));
 }
 
-export function finishRetiredCronTaskRuns<T extends CronTaskRunFinalizationOutcome>(
+function finishRetiredCronTaskRuns<T extends CronTaskRunFinalizationOutcome>(
   state: CronServiceState,
   outcomes: readonly T[],
   currentOutcomes: readonly T[],
