@@ -211,6 +211,11 @@
           "enum": ["subagent"],
           "type": "string"
         },
+        "runTimeoutSeconds": {
+          "description": "Per-run timeout in seconds; overrides the configured subagent default. Zero disables the timeout.",
+          "minimum": 0,
+          "type": "integer"
+        },
         "sandbox": {
           "enum": ["inherit", "require"],
           "type": "string"
