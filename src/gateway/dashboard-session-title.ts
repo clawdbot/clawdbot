@@ -27,7 +27,7 @@ const DASHBOARD_SESSION_TITLE_PROMPT =
 // call cannot pin an entry here and block future attempts.
 const sessionTitleRequests = new Map<string, Promise<boolean>>();
 
-export type SessionTitleAttempt =
+type SessionTitleAttempt =
   | { kind: "persisted" }
   | { kind: "skipped" }
   | { kind: "in-flight"; settled: Promise<boolean> };
