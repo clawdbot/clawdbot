@@ -7497,6 +7497,8 @@ public struct SessionsAbortParams: Codable, Sendable {
 public struct SessionsPatchParams: Codable, Sendable {
     public let key: String
     public let agentid: String?
+    public let expectedsessionid: String?
+    public let expectedlifecyclerevision: String?
     public let label: AnyCodable?
     public let category: AnyCodable?
     public let boardface: AnyCodable?
@@ -7529,6 +7531,8 @@ public struct SessionsPatchParams: Codable, Sendable {
     public init(
         key: String,
         agentid: String? = nil,
+        expectedsessionid: String? = nil,
+        expectedlifecyclerevision: String? = nil,
         label: AnyCodable? = nil,
         category: AnyCodable? = nil,
         boardface: AnyCodable? = nil,
@@ -7560,6 +7564,8 @@ public struct SessionsPatchParams: Codable, Sendable {
     {
         self.key = key
         self.agentid = agentid
+        self.expectedsessionid = expectedsessionid
+        self.expectedlifecyclerevision = expectedlifecyclerevision
         self.label = label
         self.category = category
         self.boardface = boardface
@@ -7593,6 +7599,8 @@ public struct SessionsPatchParams: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case key
         case agentid = "agentId"
+        case expectedsessionid = "expectedSessionId"
+        case expectedlifecyclerevision = "expectedLifecycleRevision"
         case label
         case category
         case boardface = "boardFace"
