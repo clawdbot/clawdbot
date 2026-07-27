@@ -302,7 +302,7 @@ Bundled provider catalogs currently flag these models as `"preferred"`:
 
 | Provider  | Models                                                                                                                                       |
 | --------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| anthropic | `claude-fable-5`, `claude-opus-5`, `claude-sonnet-5`, `claude-mythos-5`, `claude-opus-4-8`, `claude-sonnet-4-6`, `claude-haiku-4-5`          |
+| anthropic | `claude-fable-5`, `claude-opus-5`, `claude-sonnet-5`, `claude-mythos-5`, `claude-opus-4-8`, `claude-haiku-4-5`                               |
 | deepseek  | `deepseek-v4-pro`, `deepseek-v4-flash`                                                                                                       |
 | google    | `gemini-3-flash-preview`, `gemini-3.1-pro-preview`, `gemini-3.1-flash-lite`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.6-flash` |
 | minimax   | `MiniMax-M3`                                                                                                                                 |
