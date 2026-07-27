@@ -113,6 +113,7 @@ function renderWhatsAppButtons(params: {
   render(renderWhatsAppCard({ props, whatsapp }), container);
   const buttons = Array.from(container.querySelectorAll("button"));
   return {
+    container,
     buttons,
     labels: buttons.map((button) => button.textContent?.trim()),
   };
@@ -264,5 +265,16 @@ describe("WhatsApp card actions", () => {
     });
 
     expect(labels).toEqual(["Save", "Reload", "Show QR", "Wait for scan", "Logout", "Refresh"]);
+  });
+
+  it("renders the QR directly above the action row so it is visible next to Show QR", () => {
+    const { container } = renderWhatsAppButtons({
+      linked: false,
+      qrDataUrl: "data:image/png;base64,current-qr",
+    });
+
+    const qrRow = container.querySelector(".qr-wrap")?.closest(".settings-row");
+    expect(qrRow).not.toBeNull();
+    expect(qrRow?.nextElementSibling?.classList.contains("settings-row--actions")).toBe(true);
   });
 });
