@@ -52,6 +52,7 @@ function sanitizeCopilotReplayResponseIds(input: unknown): boolean {
     return false;
   }
   let rewrote = false;
+  // Walk backward because dropping reasoning splices input and must not skip adjacent items.
   for (let index = input.length - 1; index >= 0; index -= 1) {
     const item = input[index];
     if (!isInputItem(item)) {

@@ -54,7 +54,7 @@ describe("github-copilot connection-bound response IDs", () => {
     expect(rewriteInputIds(input)).toBe(false);
   });
 
-  it("drops incomplete or foreign reasoning and only clears dependent assistant IDs", () => {
+  it("drops adjacent incomplete or foreign reasoning and only clears dependent assistant IDs", () => {
     const invalidReasoning = [
       { id: "thinking_0", type: "reasoning", encrypted_content: "foreign" },
       { id: `rs_${"r".repeat(64)}`, type: "reasoning", encrypted_content: "oversized" },
@@ -63,15 +63,15 @@ describe("github-copilot connection-bound response IDs", () => {
       { id: "rs_i", type: "reasoning", status: "incomplete", encrypted_content: "partial" },
       { id: 123, type: "reasoning", encrypted_content: "malformed" },
     ];
-    const input: Array<Record<string, unknown>> = invalidReasoning.flatMap((reasoning) => [
-      reasoning,
+    const input: Array<Record<string, unknown>> = [
+      ...invalidReasoning,
       { id: "msg_signed", type: "message", role: "assistant" },
-    ]);
-    input.push({ id: "msg_user", type: "message", role: "user" });
+      { id: "msg_user", type: "message", role: "user" },
+    ];
 
     expect(rewriteInputIds(input)).toBe(true);
     expect(input).toEqual([
-      ...invalidReasoning.map(() => ({ type: "message", role: "assistant" })),
+      { type: "message", role: "assistant" },
       { id: "msg_user", type: "message", role: "user" },
     ]);
   });
