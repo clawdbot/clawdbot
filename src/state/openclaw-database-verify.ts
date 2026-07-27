@@ -1,4 +1,4 @@
-import type { Worker } from "node:worker_threads";
+import type { ChildProcess } from "node:child_process";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   applyOpenClawDatabaseVerificationResults,
@@ -6,6 +6,7 @@ import {
   OPENCLAW_DATABASE_VERIFY_INITIAL_DELAY_MS,
   OPENCLAW_DATABASE_VERIFY_INTERVAL_MS,
   runDatabaseVerifyWorker,
+  terminateDatabaseVerifyWorker,
 } from "./openclaw-database-verify.impl.js";
 
 const log = createSubsystemLogger("state/database-verify");
@@ -14,7 +15,7 @@ const log = createSubsystemLogger("state/database-verify");
 export function startOpenClawDatabaseIntegrityVerifier(options: { env: NodeJS.ProcessEnv }): {
   stop: () => Promise<void>;
 } {
-  let activeWorker: Worker | undefined;
+  let activeWorker: ChildProcess | undefined;
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -56,7 +57,9 @@ export function startOpenClawDatabaseIntegrityVerifier(options: { env: NodeJS.Pr
         clearTimeout(timer);
         timer = undefined;
       }
-      await activeWorker?.terminate();
+      if (activeWorker) {
+        await terminateDatabaseVerifyWorker(activeWorker);
+      }
       activeWorker = undefined;
     },
   };
