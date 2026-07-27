@@ -311,7 +311,7 @@ describe("session catalog Gateway methods", () => {
         }),
     );
     let snapshotOrdinal = 0;
-    hoisted.listSessionEntriesReadOnly.mockImplementation(({ agentId }) => {
+    hoisted.listSessionEntriesReadOnly.mockImplementation(({ agentId } = {}) => {
       snapshotOrdinal += 1;
       return [
         {
