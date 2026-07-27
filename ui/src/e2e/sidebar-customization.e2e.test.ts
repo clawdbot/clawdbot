@@ -448,7 +448,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await captureSettingsSidebarProof(settingsSidebar, "01f-settings-search-navigated.png");
       await holdUiProof(page);
       await page.keyboard.press("Escape");
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/chat");
+      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath("main"));
       await expect.poll(() => sidebar.isVisible()).toBe(true);
       await openSettingsFromIdentity();
       await expect.poll(() => settingsSidebar.isVisible()).toBe(true);
