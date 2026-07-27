@@ -72,6 +72,7 @@ import type { OutboundDeliveryResult } from "./deliver-types.js";
 import type { OutboundSendDeps } from "./deliver.js";
 import type { DurableDeliveryCompletion } from "./delivery-completion.js";
 import { shouldUseInternalSourceReplySink } from "./internal-source-reply.js";
+import { parseInteractiveParam, parseJsonMessageParam } from "./message-action-json-params.js";
 import { normalizeMessageActionInput } from "./message-action-normalization.js";
 import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
 import {
@@ -79,8 +80,6 @@ import {
   hydrateAttachmentParamsForAction,
   normalizeSandboxMediaList,
   normalizeSandboxMediaParams,
-  parseInteractiveParam,
-  parseJsonMessageParam,
   readBooleanParam,
   resolveAttachmentMediaPolicy,
   resolveExtraActionMediaSourceParamKeys,

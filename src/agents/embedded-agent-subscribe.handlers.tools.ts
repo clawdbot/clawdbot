@@ -35,7 +35,7 @@ import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import {
   parseInteractiveParam,
   parseJsonMessageParam,
-} from "../infra/outbound/message-action-params.js";
+} from "../infra/outbound/message-action-json-params.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";

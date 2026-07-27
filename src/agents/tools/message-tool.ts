@@ -54,7 +54,7 @@ import { sha256Base64UrlPrefix } from "../../infra/crypto-digest.js";
 import {
   parseInteractiveParam,
   parseJsonMessageParam,
-} from "../../infra/outbound/message-action-params.js";
+} from "../../infra/outbound/message-action-json-params.js";
 import {
   getToolResult,
   runMessageAction,
