@@ -85,6 +85,7 @@ function createFixture(options?: { rejectPostArmFence?: Error }) {
       abortSignal: new AbortController().signal,
       config: {},
       sessionFile: "/tmp/session.jsonl",
+      sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       sessionTarget: {
         agentId: "main",

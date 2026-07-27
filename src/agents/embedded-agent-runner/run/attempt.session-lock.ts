@@ -105,7 +105,6 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       throw error;
     }
   };
-  let promptReleased = false;
   let promptReleaseNeedsReload = false;
   let cleanupStarted = false;
   let promptSettled = Promise.resolve();
@@ -253,7 +252,6 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     }
   };
   const settlePromptRelease = (): void => {
-    promptReleased = false;
     promptReleaseNeedsReload = false;
     settlePrompt?.();
     settlePrompt = undefined;
@@ -280,7 +278,6 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         // The SQLite lease spans the provider prompt. Its stale deadline never
         // permits takeover from a live process owner.
         promptAborted = false;
-        promptReleased = true;
         promptReleaseNeedsReload = true;
         promptSettled = new Promise<void>((resolve) => {
           settlePrompt = resolve;
@@ -290,7 +287,6 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     releaseHeldLockForAbort: async (options) => {
       promptAborted = true;
       promptSubmissionBlocked ||= options?.terminal !== false;
-      promptReleased = false;
     },
     refreshAfterOwnedSessionWrite: () => {},
     reacquireAfterPrompt: async () => {
@@ -421,7 +417,6 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       disposePromise ??= (async () => {
         disposed = true;
         promptAborted = true;
-        promptReleased = false;
         if (cleanupLockGranted) {
           // Cleanup acquisition already drained the lifecycle queue. Its lock
           // release resolves this handoff after any tracked write settlements.

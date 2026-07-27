@@ -80,7 +80,7 @@ type CompleteEmbeddedAttemptAfterTurnInput = {
 export async function completeEmbeddedAttemptAfterTurn(
   input: CompleteEmbeddedAttemptAfterTurnInput,
 ): Promise<{ sessionIdUsed: string; sessionFileUsed?: string }> {
-  const { attempt, activeContextEngine, activeSession, sessionManager, state, runtime } = input;
+  const { attempt, activeContextEngine, sessionManager, state, runtime } = input;
   const { sessionIdUsed, sessionFileUsed } = state;
 
   // Context-engine hooks may call runtime LLM capabilities. Only the transcript

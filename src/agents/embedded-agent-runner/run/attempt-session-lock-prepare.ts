@@ -1,5 +1,6 @@
 /** Acquires and publishes the session-write ownership used by one attempt. */
 import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
+import { resolveAgentRunSessionTarget } from "../../run-session-target.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import {
   acquireSessionWriteLock,
@@ -23,7 +24,7 @@ type WithOwnedSessionWriteLock = <T>(operation: () => Promise<T> | T) => Promise
 export async function prepareEmbeddedAttemptSessionLock(input: {
   attempt: Pick<
     EmbeddedRunAttemptParams,
-    "abortSignal" | "config" | "sessionFile" | "sessionKey" | "sessionTarget"
+    "abortSignal" | "config" | "sessionFile" | "sessionId" | "sessionKey" | "sessionTarget"
   >;
   externalAbortController: {
     arm: () => void;
@@ -43,6 +44,14 @@ export async function prepareEmbeddedAttemptSessionLock(input: {
   const sessionWriteLockOptions = resolveEmbeddedAttemptSessionWriteLockOptions({
     config: attempt.config,
     compactionTimeoutMs,
+  });
+  const sessionTarget = await resolveAgentRunSessionTarget({
+    agentId: attempt.sessionTarget?.agentId,
+    config: attempt.config,
+    sessionFile: attempt.sessionFile,
+    sessionId: attempt.sessionId,
+    sessionKey: attempt.sessionKey,
+    sessionTarget: attempt.sessionTarget,
   });
 
   await externalAbortController.throwIfFiredAfterPrepCleanup();
@@ -66,7 +75,7 @@ export async function prepareEmbeddedAttemptSessionLock(input: {
     acquireSessionWriteLock,
     initialAcquireSignal: attempt.abortSignal,
     lockOptions: {
-      sessionFile: resolveSessionWriteLockTargetKey(attempt.sessionTarget),
+      sessionFile: resolveSessionWriteLockTargetKey(sessionTarget),
       targetKind: "session-key",
       ...sessionWriteLockOptions,
     },
