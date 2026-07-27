@@ -1,3 +1,4 @@
+import { messageToolOwnsVisibleReply } from "../../../auto-reply/source-reply-delivery-mode.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { extractModelCompat } from "../../../plugins/provider-model-compat.js";
 import { getPluginToolMeta } from "../../../plugins/tools.js";
@@ -57,8 +58,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
   toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor;
 }) {
   const { attempt } = params;
-  const forceDirectMessageTool =
-    attempt.forceMessageTool === true || attempt.sourceReplyDeliveryMode === "message_tool_only";
+  const forceDirectMessageTool = messageToolOwnsVisibleReply(attempt);
   const toolsAllowWithForcedRuntimeTools = mergeForcedEmbeddedAttemptToolsAllow(
     attempt.toolsAllow,
     {
@@ -337,6 +337,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     computerContextEpoch,
     cronCreatorToolAllowlist,
     effectiveToolsAllow,
+    forceDirectMessageTool,
     inheritedToolAllowlist,
     localModelLeanEnabled,
     localModelLeanPreserveToolNames,
