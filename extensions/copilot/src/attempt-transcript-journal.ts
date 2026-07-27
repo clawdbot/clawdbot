@@ -39,15 +39,29 @@ export function createAttemptTranscriptJournal(params: {
       message,
     });
   const messagesSnapshot = [...params.messages];
+  const snapshotIdempotencyKeys = new Set(
+    messagesSnapshot.flatMap((message) => {
+      const key = readIdempotencyKey(message);
+      return key && isCurrentJournalIdentity(key, params) ? [key] : [];
+    }),
+  );
   const replaceTailUser = (
     current: Extract<AgentMessage, { role: "user" }> | undefined,
     next?: AgentMessage,
   ) => {
     if (isSameUserTurn(messagesSnapshot.at(-1), current)) {
-      messagesSnapshot.pop();
+      const removed = messagesSnapshot.pop();
+      const removedKey = removed ? readIdempotencyKey(removed) : undefined;
+      if (removedKey && isCurrentJournalIdentity(removedKey, params)) {
+        snapshotIdempotencyKeys.delete(removedKey);
+      }
     }
     if (next) {
       messagesSnapshot.push(next);
+      const nextKey = readIdempotencyKey(next);
+      if (nextKey && isCurrentJournalIdentity(nextKey, params)) {
+        snapshotIdempotencyKeys.add(nextKey);
+      }
     }
   };
   // The host recorder owns prompt construction. Missing recorders fail closed
@@ -56,12 +70,6 @@ export function createAttemptTranscriptJournal(params: {
   if (currentUser) {
     replaceTailUser(currentUser, projectDisplay(currentUser));
   }
-  const snapshotIdempotencyKeys = new Set(
-    messagesSnapshot.flatMap((message) => {
-      const key = readIdempotencyKey(message);
-      return key && isCurrentJournalIdentity(key, params) ? [key] : [];
-    }),
-  );
   const target = resolveTranscriptTarget(params.attempt);
   const config = params.attempt.config;
   const seenEventIds = new Set<string>();

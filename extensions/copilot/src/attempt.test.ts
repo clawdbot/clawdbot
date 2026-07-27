@@ -3049,6 +3049,28 @@ describe("runCopilotAttempt", () => {
       });
     });
 
+    it("retains a keyed current user after replacing its staged snapshot", async () => {
+      const current: Extract<AgentMessage, { role: "user" }> = {
+        role: "user",
+        content: "keyed current",
+        idempotencyKey: "run-1:user",
+        timestamp: 2,
+      };
+      const recorder = makeUserTurnRecorder(current);
+
+      const result = await runCopilotAttempt(
+        makeParams({
+          messages: [current],
+          prompt: "keyed current",
+          userTurnTranscriptRecorder: recorder,
+        }),
+        { pool: makeFakePool(makeFakeSdk()) },
+      );
+
+      expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["user", "assistant"]);
+      expect(result.messagesSnapshot[0]).toMatchObject({ idempotencyKey: "run-1:user" });
+    });
+
     it("fails closed, aborts once, and invalidates replay after an append rejection", async () => {
       const appendError = new Error("sqlite unavailable");
       transcriptRuntimeMock.append.mockRejectedValueOnce(appendError);

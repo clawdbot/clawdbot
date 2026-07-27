@@ -266,6 +266,21 @@ describe("Copilot attempt transcript journal", () => {
     }
   });
 
+  it("marks durable skill injection replay-incomplete", async () => {
+    const { journal, session } = await createFixture();
+    await journal.persistInitialUser();
+    session.emit(
+      event("skill.invoked", "skill-invoked", {
+        content: "full injected skill content",
+        name: "example-skill",
+        path: "/skills/example/SKILL.md",
+      }),
+    );
+    await journal.barrier("skill invocation");
+
+    expect(journal.snapshot().replayInvalid).toBe(true);
+  });
+
   it("marks a hook-suppressed standalone assistant replay-incomplete", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([

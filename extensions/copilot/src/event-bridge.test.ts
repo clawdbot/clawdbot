@@ -12,6 +12,7 @@ const MODEL_REF = {
 const REGISTERED_EVENT_TYPES = [
   "user.message",
   "system.message",
+  "skill.invoked",
   "assistant.message_delta",
   "assistant.reasoning_delta",
   "assistant.message",

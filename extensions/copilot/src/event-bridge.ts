@@ -201,6 +201,12 @@ export function attachEventBridge(
     options.transcriptProjection?.journal.markReplayIncomplete();
   });
 
+  registerListener(session, unsubscribeFns, "skill.invoked", (event) => {
+    if (isRootSessionEvent(event) && event.ephemeral !== true) {
+      options.transcriptProjection?.journal.markReplayIncomplete();
+    }
+  });
+
   registerListener(session, unsubscribeFns, "assistant.message_delta", (event) => {
     if (!isRootSessionEvent(event)) {
       return;
