@@ -252,6 +252,9 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       return await operation;
     },
     acquireForCleanup: async () => {
+      if (activeWriteOperation.getStore()) {
+        throw new Error("cannot start attempt cleanup inside a transcript write callback");
+      }
       await serializeLifecycle(async () => {
         cleanupStarted = true;
         if (promptReleased) {

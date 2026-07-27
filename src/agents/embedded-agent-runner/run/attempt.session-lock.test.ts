@@ -288,6 +288,24 @@ describe("createEmbeddedAttemptSessionLockController", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it("rejects cleanup from inside a write callback", async () => {
+    const release = vi.fn(async () => undefined);
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: vi.fn(async () => ({ release })),
+      lockOptions: { sessionFile: "agent:main:main" },
+    });
+
+    await controller.withSessionWriteLock(async () => {
+      await expect(controller.acquireForCleanup()).rejects.toThrow(
+        "cannot start attempt cleanup inside a transcript write callback",
+      );
+      expect(release).not.toHaveBeenCalled();
+    });
+    const cleanupLock = await controller.acquireForCleanup();
+    await cleanupLock.release();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("keeps a started write callback locked beyond the disposal timeout", async () => {
     vi.useFakeTimers();
     try {

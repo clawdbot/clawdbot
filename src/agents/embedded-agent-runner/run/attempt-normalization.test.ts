@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { applyEmbeddedAttemptSessionIdentity } from "./attempt-session-identity.js";
+import { buildContextEngineCompactionSessionTarget } from "./session-bootstrap.js";
 
 const sessionAccessorMocks = vi.hoisted(() => ({
   listSessionEntries: vi.fn(() => []),
@@ -11,6 +12,22 @@ vi.mock("../../../config/sessions/session-accessor.js", () => sessionAccessorMoc
 beforeEach(() => {
   sessionAccessorMocks.listSessionEntries.mockReset().mockReturnValue([]);
   sessionAccessorMocks.loadSessionEntry.mockReset();
+});
+
+describe("buildContextEngineCompactionSessionTarget", () => {
+  it("uses the marker session id as the fallback compatibility key", () => {
+    expect(
+      buildContextEngineCompactionSessionTarget({
+        sessionFile: "sqlite:main:marker-session:/tmp/sessions.json",
+        sessionId: "stale-outer-session",
+      }),
+    ).toMatchObject({
+      agentId: "main",
+      sessionId: "marker-session",
+      sessionKey: "marker-session",
+      storePath: "/tmp/sessions.json",
+    });
+  });
 });
 
 function promptState(storePath = "/tmp/sessions.json") {

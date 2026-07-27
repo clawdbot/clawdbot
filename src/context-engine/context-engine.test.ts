@@ -697,7 +697,6 @@ describe("Engine contract tests", () => {
     await expect(
       delegateCompactionToRuntime({
         sessionId: "s-agent-conflict",
-        sessionKey: "agent:main:s-agent-conflict",
         sessionTarget: {
           agentId: "worker",
           sessionId: "s-agent-conflict",
@@ -707,6 +706,24 @@ describe("Engine contract tests", () => {
         tokenBudget: 4096,
       }),
     ).rejects.toThrow("successor session key conflicts with its agent identity");
+  });
+
+  it("rejects an internally consistent successor for another caller agent", async () => {
+    installCompactRuntimeSpy();
+
+    await expect(
+      delegateCompactionToRuntime({
+        agentId: "main",
+        sessionId: "s-agent-redirect",
+        sessionKey: "agent:main:s-agent-redirect",
+        sessionTarget: {
+          agentId: "worker",
+          sessionId: "s-agent-redirect",
+          sessionKey: "agent:worker:s-agent-redirect",
+        },
+        tokenBudget: 4096,
+      }),
+    ).rejects.toThrow("successor target conflicts with the caller session identity");
   });
 
   it("delegateCompactionToRuntime forwards the caller abortSignal to the runtime (#89868)", async () => {
