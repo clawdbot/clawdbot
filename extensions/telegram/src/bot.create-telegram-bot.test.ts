@@ -17,6 +17,7 @@ import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runt
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import {
   createTelegramCallbackContext,
   runTelegramTestMiddlewareChain,
@@ -435,6 +436,7 @@ describe("createTelegramBot", () => {
     throttlerSpy.mockReset();
     createTelegramBot = (opts) =>
       createTelegramBotBase({
+        botInfo: telegramBotInfoForTest,
         ...opts,
         telegramDeps: telegramBotDepsForTest,
       });
@@ -1410,7 +1412,7 @@ describe("createTelegramBot", () => {
       expect(payload.BodyForAgent).toMatch(
         /\[Forwarded from Original A[^\]]*\]\nfirst forwarded note\n\[Forwarded from Original B[^\]]*\]\nsecond forwarded note/,
       );
-      expect(payload.BodyForAgent).not.toContain("Conversation info (untrusted metadata)");
+      expect(payload.BodyForAgent).not.toContain("Conversation info:");
       expect(payload.CommandBody).toBe("first forwarded note\nsecond forwarded note");
       expect(payload.ForwardedFrom).toBeUndefined();
     } finally {
@@ -2228,7 +2230,7 @@ describe("createTelegramBot", () => {
     });
 
     expect(replySpy).toHaveBeenCalledTimes(1);
-    expect(replySpy.mock.calls.at(0)?.[0].UntrustedStructuredContext).toBeUndefined();
+    expect(replySpy.mock.calls.at(0)?.[0].ChannelStructuredContext).toBeUndefined();
     expect(sendMessageSpy).not.toHaveBeenCalled();
   });
 
@@ -2280,7 +2282,7 @@ describe("createTelegramBot", () => {
     });
 
     expect(replySpy).toHaveBeenCalledTimes(1);
-    expect(replySpy.mock.calls.at(0)?.[0].UntrustedStructuredContext).toBeUndefined();
+    expect(replySpy.mock.calls.at(0)?.[0].ChannelStructuredContext).toBeUndefined();
     expect(sendMessageSpy).not.toHaveBeenCalled();
   });
 
@@ -2333,7 +2335,7 @@ describe("createTelegramBot", () => {
     });
 
     expect(replySpy).toHaveBeenCalledTimes(1);
-    expect(replySpy.mock.calls.at(0)?.[0].UntrustedStructuredContext).toBeUndefined();
+    expect(replySpy.mock.calls.at(0)?.[0].ChannelStructuredContext).toBeUndefined();
     expect(sendMessageSpy).not.toHaveBeenCalled();
   });
 

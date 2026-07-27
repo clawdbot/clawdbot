@@ -210,6 +210,7 @@ export async function executePreparedCliRun(
     promptArg: argsPrompt,
     useResume,
     forkResume: params.forkCliSessionOnResume,
+    resumeAt: params.cliSessionResumeAt,
     sendSystemPromptOnResume: resendSystemPromptForSoftResume,
   });
 

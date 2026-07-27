@@ -21,6 +21,7 @@ export {
   normalizeModelSelection,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
+  resolveModelAliasFromPair,
   resolveModelRefFromString,
 } from "./model-selection-shared.js";
 

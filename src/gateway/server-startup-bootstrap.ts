@@ -530,6 +530,7 @@ export async function prepareGatewayServerBootstrap(input: {
     startupActivationSourceConfig,
     startupRuntimeConfig,
     cfgAtStart,
+    generatedStartupAuthToken: authBootstrap.generatedToken !== undefined,
     claimControlUiDeviceAuthMigration,
     completeControlUiDeviceAuthMigration,
     releaseControlUiDeviceAuthMigrationClaim,

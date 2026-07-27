@@ -911,7 +911,7 @@ jobs:
       package_source_sha: ${{ needs.prepare_release_package.outputs.source_sha }}
       package_version: ${{ needs.prepare_release_package.outputs.package_version }}
       suite_profile: custom
-      docker_lanes: doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor published-upgrade-survivor root-managed-vps-upgrade update-restart-auth plugins-offline plugin-update plugin-binding-command-escape
+      docker_lanes: release-typed-onboarding doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor published-upgrade-survivor root-managed-vps-upgrade update-restart-auth plugins-offline plugin-update plugin-binding-command-escape
       published_upgrade_survivor_baselines: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'last-stable-4 2026.4.23 2026.5.2 2026.4.15' || '' }}
       published_upgrade_survivor_scenarios: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'reported-issues' || '' }}
       telegram_mode: mock-openai
@@ -2191,17 +2191,19 @@ jobs:
           release_check_result() {
             local name="$1"
             local fallback="$2"
+            # Skipped lanes produce no status variants; Bash 3 treats an empty
+            # array expansion as unbound when nounset is enabled.
+            if [[ "$fallback" == "skipped" ]]; then
+              printf 'skipped\n'
+              return
+            fi
             local saw=0
             local saw_failure=0
             local saw_cancelled=0
             local saw_skipped=0
-            local variants=()
-            if [[ "$fallback" != "skipped" ]]; then
-              if [[ "$name" == "qa_lab_parity_lane_release_checks" ]]; then
-                variants=(candidate baseline)
-              else
-                variants=("")
-              fi
+            local variants=("")
+            if [[ "$name" == "qa_lab_parity_lane_release_checks" ]]; then
+              variants=(candidate baseline)
             fi
             for variant in "${variants[@]}"; do
               suffix=""
@@ -2223,10 +2225,6 @@ jobs:
                 *) saw_failure=1 ;;
               esac
             done
-            if [[ "$fallback" == "skipped" ]]; then
-              printf 'skipped\n'
-              return
-            fi
             if [[ "$saw_failure" == "1" ]]; then
               printf 'failure\n'
             elif [[ "$saw_cancelled" == "1" ]]; then

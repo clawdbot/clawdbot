@@ -76,8 +76,7 @@ async function startAndRunCheck(
 ) {
   const monitor = startDefaultMonitor(manager, overrides);
   const startupGraceMs = overrides.timing?.monitorStartupGraceMs ?? 0;
-  const checkIntervalMs = overrides.checkIntervalMs ?? DEFAULT_CHECK_INTERVAL_MS;
-  await vi.advanceTimersByTimeAsync(startupGraceMs + checkIntervalMs + 1);
+  await vi.advanceTimersByTimeAsync(startupGraceMs + 1);
   return monitor;
 }
 
@@ -192,13 +191,15 @@ describe("channel-health-monitor", () => {
     expect(removeEventListener).toHaveBeenCalledWith("abort", addEventListener.mock.calls[0]?.[1]);
   });
 
-  it("normalizes oversized check intervals before arming timers", () => {
-    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+  it("normalizes oversized check intervals before rearming timers", async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const monitor = startDefaultMonitor(createMockChannelManager(), {
       checkIntervalMs: Number.MAX_SAFE_INTEGER,
     });
 
-    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
     monitor.stop();
   });
 
@@ -212,9 +213,13 @@ describe("channel-health-monitor", () => {
 
   it("runs health check after grace period", async () => {
     const manager = createMockChannelManager();
-    const monitor = await startAndRunCheck(manager, {
+    const monitor = startDefaultMonitor(manager, {
+      checkIntervalMs: 60_000,
       timing: { monitorStartupGraceMs: 1_000 },
     });
+
+    await vi.advanceTimersByTimeAsync(1_001);
+
     expect(manager.getRuntimeSnapshot).toHaveBeenCalled();
     monitor.stop();
   });
@@ -230,10 +235,27 @@ describe("channel-health-monitor", () => {
     });
     const monitor = startDefaultMonitor(manager);
 
-    await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS + 1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
+
     await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS + 1);
 
     expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(2);
+    expect(manager.startChannel).not.toHaveBeenCalled();
+    monitor.stop();
+  });
+
+  it("does not start a replacement when channel teardown fails", async () => {
+    const manager = createSlackSnapshotManager(disconnectedAccount(Date.now() - 300_000), {
+      stopChannel: vi.fn(async () => {
+        throw new Error("stop failed");
+      }),
+    });
+
+    const monitor = await startAndRunCheck(manager, { cooldownCycles: 0 });
+
+    expect(manager.stopChannel).toHaveBeenCalledWith("slack", "default", { manual: false });
+    expect(manager.resetRestartAttempts).not.toHaveBeenCalled();
     expect(manager.startChannel).not.toHaveBeenCalled();
     monitor.stop();
   });

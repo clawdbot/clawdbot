@@ -166,6 +166,9 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
         "{sessionId}",
       ],
       forkArg: "--fork-session",
+      // Claude Code 2.1.209+ exposes this hidden print-mode flag, and stream-json
+      // emits the matching transcript UUID on assistant records.
+      resumeAtArg: "--resume-session-at",
       output: "jsonl",
       liveSession: "claude-stdio",
       input: "stdin",

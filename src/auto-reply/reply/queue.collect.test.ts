@@ -29,6 +29,36 @@ import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 
 installQueueRuntimeErrorSilencer();
 
+function createQueueSettings(overrides: Partial<QueueSettings> = {}): QueueSettings {
+  return {
+    mode: "collect",
+    debounceMs: 0,
+    cap: 50,
+    dropPolicy: "summarize",
+    ...overrides,
+  };
+}
+
+function enqueueTestRun(
+  key: string,
+  params: Parameters<typeof createRun>[0],
+  settings: QueueSettings,
+) {
+  return enqueueFollowupRun(key, createRun(params), settings);
+}
+
+function createDrainRecorder(expectedCalls = 1) {
+  const calls: FollowupRun[] = [];
+  const done = createDeferred<void>();
+  const runFollowup = async (run: FollowupRun) => {
+    calls.push(run);
+    if (calls.length >= expectedCalls) {
+      done.resolve();
+    }
+  };
+  return { calls, done, runFollowup };
+}
+
 describe("followup queue collect routing", () => {
   it("marks exclusive admission without onAbandoned and isolates collect identity", () => {
     // Failure window: cancel-only used to be inferred from missing onAbandoned,
@@ -145,38 +175,25 @@ describe("followup queue collect routing", () => {
 
   it("does not collect when destinations differ", async () => {
     const key = `test-collect-diff-to-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const expectedCalls = 2;
-    const runFollowup = async (run: FollowupRun) => {
-      calls.push(run);
-      if (calls.length >= expectedCalls) {
-        done.resolve();
-      }
-    };
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 50,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder(2);
+    const settings = createQueueSettings();
 
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "one",
         originatingChannel: "slack",
         originatingTo: "channel:A",
-      }),
+      },
       settings,
     );
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "two",
         originatingChannel: "slack",
         originatingTo: "channel:B",
-      }),
+      },
       settings,
     );
 
@@ -188,37 +205,27 @@ describe("followup queue collect routing", () => {
 
   it("collects when channel+destination match", async () => {
     const key = `test-collect-same-to-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const runFollowup = async (run: FollowupRun) => {
-      calls.push(run);
-      done.resolve();
-    };
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 50,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder();
+    const settings = createQueueSettings();
 
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "one",
         originatingChannel: "slack",
         originatingTo: "channel:A",
         originatingChatType: "channel",
-      }),
+      },
       settings,
     );
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "two",
         originatingChannel: "slack",
         originatingTo: "channel:A",
         originatingChatType: "channel",
-      }),
+      },
       settings,
     );
 
@@ -232,22 +239,16 @@ describe("followup queue collect routing", () => {
 
   it("collects Slack top-level messages when reply anchors are disabled", async () => {
     const key = `test-collect-slack-reply-off-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 50,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder();
+    const settings = createQueueSettings();
 
     for (const [prompt, replyToId] of [
       ["one", "101.001"],
       ["two", "101.002"],
     ] as const) {
-      enqueueFollowupRun(
+      enqueueTestRun(
         key,
-        createRun({
+        {
           prompt,
           messageId: replyToId,
           originatingChannel: "slack",
@@ -255,15 +256,12 @@ describe("followup queue collect routing", () => {
           originatingReplyToId: replyToId,
           originatingReplyToMode: "off",
           originatingChatType: "channel",
-        }),
+        },
         settings,
       );
     }
 
-    scheduleFollowupDrain(key, async (run) => {
-      calls.push(run);
-      done.resolve();
-    });
+    scheduleFollowupDrain(key, runFollowup);
     await done.promise;
 
     expect(calls).toHaveLength(1);
@@ -273,22 +271,16 @@ describe("followup queue collect routing", () => {
 
   it("splits collect batches when enabled reply anchors differ", async () => {
     const key = `test-collect-slack-reply-all-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 50,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder(2);
+    const settings = createQueueSettings();
 
     for (const [prompt, replyToId] of [
       ["one", "101.001"],
       ["two", "101.002"],
     ] as const) {
-      enqueueFollowupRun(
+      enqueueTestRun(
         key,
-        createRun({
+        {
           prompt,
           messageId: replyToId,
           originatingChannel: "slack",
@@ -296,17 +288,12 @@ describe("followup queue collect routing", () => {
           originatingReplyToId: replyToId,
           originatingReplyToMode: "all",
           originatingChatType: "channel",
-        }),
+        },
         settings,
       );
     }
 
-    scheduleFollowupDrain(key, async (run) => {
-      calls.push(run);
-      if (calls.length === 2) {
-        done.resolve();
-      }
-    });
+    scheduleFollowupDrain(key, runFollowup);
     await done.promise;
 
     expect(calls.map((call) => call.prompt)).toEqual(["one", "two"]);
@@ -320,29 +307,23 @@ describe("followup queue collect routing", () => {
     "splits standalone Slack collect batches by message id in %s reply mode",
     async (replyToMode, originatingChannel) => {
       const key = `test-collect-slack-standalone-${replyToMode}-${Date.now()}`;
-      const calls: FollowupRun[] = [];
-      const done = createDeferred<void>();
-      const settings: QueueSettings = {
-        mode: "collect",
-        debounceMs: 0,
-        cap: 50,
-        dropPolicy: "summarize",
-      };
+      const { calls, done } = createDrainRecorder();
+      const settings = createQueueSettings();
 
       for (const [prompt, messageId] of [
         ["one", "101.001"],
         ["two", "101.002"],
       ] as const) {
-        enqueueFollowupRun(
+        enqueueTestRun(
           key,
-          createRun({
+          {
             prompt,
             messageId,
             originatingChannel,
             originatingTo: "channel:A",
             originatingReplyToMode: replyToMode,
             originatingChatType: "channel",
-          }),
+          },
           settings,
         );
       }
@@ -362,22 +343,16 @@ describe("followup queue collect routing", () => {
 
   it("collects distinct messages inside the same routed thread", async () => {
     const key = `test-collect-shared-thread-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 50,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder();
+    const settings = createQueueSettings();
 
     for (const [prompt, messageId] of [
       ["one", "message-1"],
       ["two", "message-2"],
     ] as const) {
-      enqueueFollowupRun(
+      enqueueTestRun(
         key,
-        createRun({
+        {
           prompt,
           messageId,
           originatingChannel: "telegram",
@@ -385,15 +360,12 @@ describe("followup queue collect routing", () => {
           originatingThreadId: "topic-1",
           originatingReplyToMode: "all",
           originatingChatType: "group",
-        }),
+        },
         settings,
       );
     }
 
-    scheduleFollowupDrain(key, async (run) => {
-      calls.push(run);
-      done.resolve();
-    });
+    scheduleFollowupDrain(key, runFollowup);
     await done.promise;
 
     expect(calls).toHaveLength(1);
@@ -403,22 +375,16 @@ describe("followup queue collect routing", () => {
 
   it("does not collect when captured reply modes differ on the same anchor", async () => {
     const key = `test-collect-slack-reply-mode-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 50,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder(2);
+    const settings = createQueueSettings();
 
     for (const [prompt, messageId, replyToMode] of [
       ["first", "message-1", "first"],
       ["all", "message-2", "all"],
     ] as const) {
-      enqueueFollowupRun(
+      enqueueTestRun(
         key,
-        createRun({
+        {
           prompt,
           messageId,
           originatingChannel: "slack",
@@ -426,17 +392,12 @@ describe("followup queue collect routing", () => {
           originatingReplyToId: "101.001",
           originatingReplyToMode: replyToMode,
           originatingChatType: "channel",
-        }),
+        },
         settings,
       );
     }
 
-    scheduleFollowupDrain(key, async (run) => {
-      calls.push(run);
-      if (calls.length === 2) {
-        done.resolve();
-      }
-    });
+    scheduleFollowupDrain(key, runFollowup);
     await done.promise;
 
     expect(calls.map((call) => call.prompt)).toEqual(["first", "all"]);
@@ -445,39 +406,27 @@ describe("followup queue collect routing", () => {
 
   it("does not collect when chat types differ on the same destination", async () => {
     const key = `test-collect-diff-chat-type-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const runFollowup = async (run: FollowupRun) => {
-      calls.push(run);
-      if (calls.length >= 2) {
-        done.resolve();
-      }
-    };
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 50,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder(2);
+    const settings = createQueueSettings();
 
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "direct",
         originatingChannel: "slack",
         originatingTo: "same-target",
         originatingChatType: "direct",
-      }),
+      },
       settings,
     );
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "channel",
         originatingChannel: "slack",
         originatingTo: "same-target",
         originatingChatType: "channel",
-      }),
+      },
       settings,
     );
 
@@ -490,14 +439,8 @@ describe("followup queue collect routing", () => {
 
   it("does not collect when source delivery policy differs", async () => {
     const key = `test-collect-diff-delivery-policy-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 50,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder(2);
+    const settings = createQueueSettings();
     const createPolicyRun = (
       prompt: string,
       sourceReplyDeliveryMode: NonNullable<FollowupRun["run"]["sourceReplyDeliveryMode"]>,
@@ -519,12 +462,7 @@ describe("followup queue collect routing", () => {
 
     enqueueFollowupRun(key, createPolicyRun("automatic", "automatic"), settings);
     enqueueFollowupRun(key, createPolicyRun("private", "message_tool_only"), settings);
-    scheduleFollowupDrain(key, async (run) => {
-      calls.push(run);
-      if (calls.length >= 2) {
-        done.resolve();
-      }
-    });
+    scheduleFollowupDrain(key, runFollowup);
     await done.promise;
 
     expect(calls.map((call) => call.prompt)).toEqual([
@@ -539,14 +477,8 @@ describe("followup queue collect routing", () => {
 
   it("does not collect when task suggestion delivery differs", async () => {
     const key = `test-collect-diff-task-suggestion-delivery-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 50,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder(2);
+    const settings = createQueueSettings();
     const createTaskRun = (prompt: string, taskSuggestionDeliveryMode?: "gateway") => {
       const base = createRun({
         prompt,
@@ -565,12 +497,7 @@ describe("followup queue collect routing", () => {
 
     enqueueFollowupRun(key, createTaskRun("legacy client"), settings);
     enqueueFollowupRun(key, createTaskRun("actionable client", "gateway"), settings);
-    scheduleFollowupDrain(key, async (run) => {
-      calls.push(run);
-      if (calls.length >= 2) {
-        done.resolve();
-      }
-    });
+    scheduleFollowupDrain(key, runFollowup);
     await done.promise;
 
     expect(calls.map((call) => call.run.taskSuggestionDeliveryMode)).toEqual([
@@ -581,39 +508,27 @@ describe("followup queue collect routing", () => {
 
   it("keeps overflow summaries on the dropped source chat type", async () => {
     const key = `test-collect-overflow-chat-type-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const runFollowup = async (run: FollowupRun) => {
-      calls.push(run);
-      if (calls.length >= 2) {
-        done.resolve();
-      }
-    };
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 1,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder(2);
+    const settings = createQueueSettings({ cap: 1 });
 
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "private direct content",
         originatingChannel: "slack",
         originatingTo: "same-target",
         originatingChatType: "direct",
-      }),
+      },
       settings,
     );
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "public channel content",
         originatingChannel: "slack",
         originatingTo: "same-target",
         originatingChatType: "channel",
-      }),
+      },
       settings,
     );
 
@@ -629,42 +544,31 @@ describe("followup queue collect routing", () => {
 
   it("keeps overflow summaries on the dropped source route", async () => {
     const key = `test-collect-overflow-route-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 1,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder(2);
+    const settings = createQueueSettings({ cap: 1 });
 
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "channel A content",
         originatingChannel: "slack",
         originatingTo: "channel:A",
         originatingChatType: "channel",
-      }),
+      },
       settings,
     );
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "channel B content",
         originatingChannel: "slack",
         originatingTo: "channel:B",
         originatingChatType: "channel",
-      }),
+      },
       settings,
     );
 
-    scheduleFollowupDrain(key, async (run) => {
-      calls.push(run);
-      if (calls.length >= 2) {
-        done.resolve();
-      }
-    });
+    scheduleFollowupDrain(key, runFollowup);
     await done.promise;
 
     expect(calls[0]?.prompt).toContain("- channel A content");
@@ -676,52 +580,41 @@ describe("followup queue collect routing", () => {
 
   it("does not attribute elided private drops to a public summary", async () => {
     const key = `test-collect-overflow-elided-context-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 1,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder(3);
+    const settings = createQueueSettings({ cap: 1 });
 
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "private direct content",
         originatingChannel: "slack",
         originatingTo: "direct:A",
         originatingChatType: "direct",
-      }),
+      },
       settings,
     );
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "older public content",
         originatingChannel: "slack",
         originatingTo: "channel:B",
         originatingChatType: "channel",
-      }),
+      },
       settings,
     );
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "newer public content",
         originatingChannel: "slack",
         originatingTo: "channel:B",
         originatingChatType: "channel",
-      }),
+      },
       settings,
     );
 
-    scheduleFollowupDrain(key, async (run) => {
-      calls.push(run);
-      if (calls.length >= 3) {
-        done.resolve();
-      }
-    });
+    scheduleFollowupDrain(key, runFollowup);
     await done.promise;
 
     expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
@@ -737,22 +630,17 @@ describe("followup queue collect routing", () => {
 
   it("evicts oldest overflow context metadata when the item cap is reached", () => {
     const key = `test-collect-overflow-elision-bound-${Date.now()}`;
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 2,
-      dropPolicy: "summarize",
-    };
+    const settings = createQueueSettings({ cap: 2 });
 
     const accepted = ["A", "B", "A", "B", "A", "B", "survivor"].map((target, index) =>
-      enqueueFollowupRun(
+      enqueueTestRun(
         key,
-        createRun({
+        {
           prompt: `message ${index}`,
           originatingChannel: "slack",
           originatingTo: `channel:${target}`,
           originatingChatType: "channel",
-        }),
+        },
         settings,
       ),
     );
@@ -775,12 +663,7 @@ describe("followup queue collect routing", () => {
   it("bounds retained overflow cancellation identities by the item cap", () => {
     const key = `test-collect-overflow-source-bound-${Date.now()}`;
     const completions = Array.from({ length: 8 }, () => vi.fn());
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 2,
-      dropPolicy: "summarize",
-    };
+    const settings = createQueueSettings({ cap: 2 });
 
     for (const [index, onComplete] of completions.entries()) {
       enqueueFollowupRun(
@@ -814,12 +697,7 @@ describe("followup queue collect routing", () => {
     const key = `test-drop-new-lifecycle-${Date.now()}`;
     const onEnqueued = vi.fn();
     const onComplete = vi.fn();
-    const settings: QueueSettings = {
-      mode: "followup",
-      debounceMs: 0,
-      cap: 1,
-      dropPolicy: "new",
-    };
+    const settings = createQueueSettings({ mode: "followup", cap: 1, dropPolicy: "new" });
 
     expect(enqueueFollowupRun(key, createRun({ prompt: "existing" }), settings)).toBe(true);
     expect(
@@ -845,14 +723,8 @@ describe("followup queue collect routing", () => {
 
   it("keeps retained excess contexts isolated after evicting the oldest metadata", async () => {
     const key = `test-collect-overflow-evicted-context-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 1,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder(3);
+    const settings = createQueueSettings({ cap: 1 });
 
     const accepted = ["A", "B", "C", "D"].map((target) =>
       enqueueFollowupRun(
@@ -868,12 +740,7 @@ describe("followup queue collect routing", () => {
     );
     expect(accepted).toEqual([true, true, true, true]);
 
-    scheduleFollowupDrain(key, async (run) => {
-      calls.push(run);
-      if (calls.length >= 3) {
-        done.resolve();
-      }
-    });
+    scheduleFollowupDrain(key, runFollowup);
     await done.promise;
 
     expect(calls).toHaveLength(3);
@@ -891,14 +758,8 @@ describe("followup queue collect routing", () => {
 
   it("keeps overflow summaries under the dropped sender authorization", async () => {
     const key = `test-collect-overflow-auth-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 1,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder(2);
+    const settings = createQueueSettings({ cap: 1 });
     const dropped = createRun({
       prompt: "guest content",
       originatingChannel: "slack",
@@ -937,12 +798,7 @@ describe("followup queue collect routing", () => {
       settings,
     );
 
-    scheduleFollowupDrain(key, async (run) => {
-      calls.push(run);
-      if (calls.length >= 2) {
-        done.resolve();
-      }
-    });
+    scheduleFollowupDrain(key, runFollowup);
     await done.promise;
 
     expect(calls[0]?.prompt).toContain("- guest content");
@@ -956,14 +812,8 @@ describe("followup queue collect routing", () => {
 
   it("uses the head item authorization for non-collect overflow delivery", async () => {
     const key = `test-followup-overflow-auth-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const settings: QueueSettings = {
-      mode: "followup",
-      debounceMs: 0,
-      cap: 2,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder(3);
+    const settings = createQueueSettings({ mode: "followup", cap: 2 });
     const guestRun = (prompt: string) => {
       const base = createRun({
         prompt,
@@ -1002,12 +852,7 @@ describe("followup queue collect routing", () => {
       settings,
     );
 
-    scheduleFollowupDrain(key, async (run) => {
-      calls.push(run);
-      if (calls.length >= 3) {
-        done.resolve();
-      }
-    });
+    scheduleFollowupDrain(key, runFollowup);
     await done.promise;
 
     expect(calls).toHaveLength(3);
@@ -1024,14 +869,8 @@ describe("followup queue collect routing", () => {
 
   it("batches compatible overflow sources into one summary run", async () => {
     const key = `test-collect-overflow-group-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 3,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder(2);
+    const settings = createQueueSettings({ cap: 3 });
 
     for (const [prompt, model] of [
       ["direct A", "model-a"],
@@ -1057,24 +896,19 @@ describe("followup queue collect routing", () => {
       );
     }
     for (const prompt of ["channel D", "channel E", "channel F"]) {
-      enqueueFollowupRun(
+      enqueueTestRun(
         key,
-        createRun({
+        {
           prompt,
           originatingChannel: "slack",
           originatingTo: "same-target",
           originatingChatType: "channel",
-        }),
+        },
         settings,
       );
     }
 
-    scheduleFollowupDrain(key, async (run) => {
-      calls.push(run);
-      if (calls.length >= 2) {
-        done.resolve();
-      }
-    });
+    scheduleFollowupDrain(key, runFollowup);
     await done.promise;
 
     expect(calls).toHaveLength(2);
@@ -1097,23 +931,17 @@ describe("followup queue collect routing", () => {
   });
 
   it("scopes overflow transcript idempotency to the source route", async () => {
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 1,
-      dropPolicy: "summarize",
-    };
+    const settings = createQueueSettings({ cap: 1 });
     const drainRoute = async (to: string): Promise<FollowupRun[]> => {
       const key = `test-collect-overflow-route-key-${to}-${Date.now()}`;
-      const calls: FollowupRun[] = [];
-      const done = createDeferred<void>();
+      const { calls, done } = createDrainRecorder();
       for (const [prompt, messageId] of [
         ["dropped", "provider-local-id"],
         ["survivor", "survivor-id"],
       ] as const) {
-        enqueueFollowupRun(
+        enqueueTestRun(
           key,
-          createRun({
+          {
             prompt,
             messageId,
             originatingChannel: "slack",
@@ -1123,7 +951,7 @@ describe("followup queue collect routing", () => {
             originatingReplyToId: "reply",
             originatingReplyToMode: "all",
             originatingChatType: "channel",
-          }),
+          },
           settings,
         );
       }
@@ -1154,14 +982,8 @@ describe("followup queue collect routing", () => {
 
   it("uses the newest run for a fully elided overflow segment", async () => {
     const key = `test-collect-overflow-elided-latest-run-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 1,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder(3);
+    const settings = createQueueSettings({ cap: 1 });
 
     for (const [prompt, model, authProfileId, chatType] of [
       ["first", "model-a", "auth-a", "direct"],
@@ -1189,12 +1011,7 @@ describe("followup queue collect routing", () => {
       );
     }
 
-    scheduleFollowupDrain(key, async (run) => {
-      calls.push(run);
-      if (calls.length >= 3) {
-        done.resolve();
-      }
-    });
+    scheduleFollowupDrain(key, runFollowup);
     await done.promise;
 
     expect(calls[0]?.prompt).toContain("Dropped 1 message");
@@ -1206,14 +1023,8 @@ describe("followup queue collect routing", () => {
 
   it("splits overflow groups when source delivery policy changes", async () => {
     const key = `test-collect-overflow-delivery-policy-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 2,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder(3);
+    const settings = createQueueSettings({ cap: 2 });
     const createSource = (
       prompt: string,
       sourceReplyDeliveryMode: NonNullable<FollowupRun["run"]["sourceReplyDeliveryMode"]>,
@@ -1236,24 +1047,19 @@ describe("followup queue collect routing", () => {
     enqueueFollowupRun(key, createSource("automatic source", "automatic"), settings);
     enqueueFollowupRun(key, createSource("private source", "message_tool_only"), settings);
     for (const prompt of ["survivor one", "survivor two"]) {
-      enqueueFollowupRun(
+      enqueueTestRun(
         key,
-        createRun({
+        {
           prompt,
           originatingChannel: "slack",
           originatingTo: "channel:B",
           originatingChatType: "channel",
-        }),
+        },
         settings,
       );
     }
 
-    scheduleFollowupDrain(key, async (run) => {
-      calls.push(run);
-      if (calls.length >= 3) {
-        done.resolve();
-      }
-    });
+    scheduleFollowupDrain(key, runFollowup);
     await done.promise;
 
     expect(calls).toHaveLength(3);
@@ -1267,14 +1073,8 @@ describe("followup queue collect routing", () => {
 
   it("splits overflow groups when runtime policy identity changes", async () => {
     const key = `test-collect-overflow-runtime-policy-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 2,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder(3);
+    const settings = createQueueSettings({ cap: 2 });
     const createSource = (prompt: string, runtimePolicySessionKey: string) => {
       const base = createRun({
         prompt,
@@ -1294,24 +1094,19 @@ describe("followup queue collect routing", () => {
     enqueueFollowupRun(key, createSource("policy one", "policy:one"), settings);
     enqueueFollowupRun(key, createSource("policy two", "policy:two"), settings);
     for (const prompt of ["survivor one", "survivor two"]) {
-      enqueueFollowupRun(
+      enqueueTestRun(
         key,
-        createRun({
+        {
           prompt,
           originatingChannel: "slack",
           originatingTo: "channel:B",
           originatingChatType: "channel",
-        }),
+        },
         settings,
       );
     }
 
-    scheduleFollowupDrain(key, async (run) => {
-      calls.push(run);
-      if (calls.length >= 3) {
-        done.resolve();
-      }
-    });
+    scheduleFollowupDrain(key, runFollowup);
     await done.promise;
 
     expect(calls).toHaveLength(3);
@@ -1325,43 +1120,32 @@ describe("followup queue collect routing", () => {
 
   it("preserves the source message id for standalone overflow summaries", async () => {
     const key = `test-collect-overflow-message-id-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 1,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder(2);
+    const settings = createQueueSettings({ cap: 1 });
 
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "dropped source",
         messageId: "message-42",
         originatingChannel: "slack",
         originatingTo: "channel:A",
         originatingChatType: "channel",
-      }),
+      },
       settings,
     );
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "survivor",
         originatingChannel: "slack",
         originatingTo: "channel:B",
         originatingChatType: "channel",
-      }),
+      },
       settings,
     );
 
-    scheduleFollowupDrain(key, async (run) => {
-      calls.push(run);
-      if (calls.length >= 2) {
-        done.resolve();
-      }
-    });
+    scheduleFollowupDrain(key, runFollowup);
     await done.promise;
 
     expect(calls[0]?.prompt).toContain("- dropped source");
@@ -1376,39 +1160,27 @@ describe("followup queue collect routing", () => {
     "separates overflow when the %s chat type is missing",
     async (_missingSide, droppedChatType, survivingChatType) => {
       const key = `test-collect-overflow-missing-chat-${_missingSide}-${Date.now()}`;
-      const calls: FollowupRun[] = [];
-      const done = createDeferred<void>();
-      const runFollowup = async (run: FollowupRun) => {
-        calls.push(run);
-        if (calls.length >= 2) {
-          done.resolve();
-        }
-      };
-      const settings: QueueSettings = {
-        mode: "collect",
-        debounceMs: 0,
-        cap: 1,
-        dropPolicy: "summarize",
-      };
+      const { calls, done, runFollowup } = createDrainRecorder(2);
+      const settings = createQueueSettings({ cap: 1 });
 
-      enqueueFollowupRun(
+      enqueueTestRun(
         key,
-        createRun({
+        {
           prompt: "dropped content",
           originatingChannel: "slack",
           originatingTo: "same-target",
           originatingChatType: droppedChatType,
-        }),
+        },
         settings,
       );
-      enqueueFollowupRun(
+      enqueueTestRun(
         key,
-        createRun({
+        {
           prompt: "surviving content",
           originatingChannel: "slack",
           originatingTo: "same-target",
           originatingChatType: survivingChatType,
-        }),
+        },
         settings,
       );
 
@@ -1424,8 +1196,7 @@ describe("followup queue collect routing", () => {
 
   it("drops an aborted split summary before running the surviving item", async () => {
     const key = `test-collect-overflow-current-run-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
+    const { calls, done, runFollowup } = createDrainRecorder();
     const controller = new AbortController();
     const droppedBase = createRun({
       prompt: "private direct content",
@@ -1439,12 +1210,7 @@ describe("followup queue collect routing", () => {
       originatingTo: "same-target",
       originatingChatType: "channel",
     });
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 1,
-      dropPolicy: "summarize",
-    };
+    const settings = createQueueSettings({ cap: 1 });
 
     enqueueFollowupRun(
       key,
@@ -1480,14 +1246,12 @@ describe("followup queue collect routing", () => {
       nextModel: "current-model",
     });
 
-    scheduleFollowupDrain(key, async (run) => {
-      calls.push(run);
-      done.resolve();
-    });
+    scheduleFollowupDrain(key, runFollowup);
     await done.promise;
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.run.model).toBe("current-model");
+    expect(calls[0]?.run.requestedRouteResolution).toBe("raw");
     expect(calls[0]?.originatingChatType).toBe("channel");
     expect(calls[0]?.run.senderId).toBe("owner");
     expect(calls[0]?.run.senderIsOwner).toBe(true);
@@ -1499,31 +1263,26 @@ describe("followup queue collect routing", () => {
     const firstStarted = createDeferred<void>();
     const releaseFirst = createDeferred<void>();
     const done = createDeferred<void>();
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 1,
-      dropPolicy: "summarize",
-    };
+    const settings = createQueueSettings({ cap: 1 });
 
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "source A",
         originatingChannel: "slack",
         originatingTo: "same-target",
         originatingChatType: "direct",
-      }),
+      },
       settings,
     );
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "source B",
         originatingChannel: "slack",
         originatingTo: "same-target",
         originatingChatType: "channel",
-      }),
+      },
       settings,
     );
 
@@ -1540,14 +1299,14 @@ describe("followup queue collect routing", () => {
     });
     await firstStarted.promise;
 
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "surviving C",
         originatingChannel: "slack",
         originatingTo: "same-target",
         originatingChatType: "channel",
-      }),
+      },
       settings,
     );
     releaseFirst.resolve();
@@ -1569,12 +1328,7 @@ describe("followup queue collect routing", () => {
     const calls: FollowupRun[] = [];
     const firstStarted = createDeferred<void>();
     const releaseFirst = createDeferred<void>();
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 2,
-      dropPolicy: "summarize",
-    };
+    const settings = createQueueSettings({ cap: 2 });
     const createContextRun = (prompt: string, chatType: "direct" | "channel") =>
       createRun({
         prompt,
@@ -1612,12 +1366,7 @@ describe("followup queue collect routing", () => {
     const done = createDeferred<void>();
     const onComplete = vi.fn();
     let attempt = 0;
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 1,
-      dropPolicy: "summarize",
-    };
+    const settings = createQueueSettings({ cap: 1 });
 
     enqueueFollowupRun(
       key,
@@ -1632,14 +1381,14 @@ describe("followup queue collect routing", () => {
       },
       settings,
     );
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "public survivor",
         originatingChannel: "slack",
         originatingTo: "same-target",
         originatingChatType: "channel",
-      }),
+      },
       settings,
     );
 
@@ -1664,47 +1413,41 @@ describe("followup queue collect routing", () => {
 
   it("keeps deferred overflow summary text paired with its source route", async () => {
     const key = `test-collect-overflow-deferred-pairs-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 1,
-      dropPolicy: "summarize",
-    };
+    const { calls, done } = createDrainRecorder();
+    const settings = createQueueSettings({ cap: 1 });
 
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "source A",
         originatingChannel: "slack",
         originatingTo: "same-target",
         originatingChatType: "direct",
-      }),
+      },
       settings,
     );
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "source B",
         originatingChannel: "slack",
         originatingTo: "same-target",
         originatingChatType: "direct",
-      }),
+      },
       settings,
     );
 
     scheduleFollowupDrain(key, async (run) => {
       calls.push(run);
       if (calls.length === 1) {
-        enqueueFollowupRun(
+        enqueueTestRun(
           key,
-          createRun({
+          {
             prompt: "surviving C",
             originatingChannel: "slack",
             originatingTo: "same-target",
             originatingChatType: "channel",
-          }),
+          },
           settings,
         );
         throw new FollowupRunDeferredError();
@@ -1726,46 +1469,34 @@ describe("followup queue collect routing", () => {
 
   it("collects compatible items after one cross-channel drain", async () => {
     const key = `test-collect-after-cross-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const runFollowup = async (run: FollowupRun) => {
-      calls.push(run);
-      if (calls.length >= 2) {
-        done.resolve();
-      }
-    };
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 50,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder(2);
+    const settings = createQueueSettings();
 
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "first route",
         originatingChannel: "slack",
         originatingTo: "channel:A",
-      }),
+      },
       settings,
     );
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "second route one",
         originatingChannel: "slack",
         originatingTo: "channel:B",
-      }),
+      },
       settings,
     );
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "second route two",
         originatingChannel: "slack",
         originatingTo: "channel:B",
-      }),
+      },
       settings,
     );
 
@@ -1783,40 +1514,28 @@ describe("followup queue collect routing", () => {
 
   it("drains unresolved-origin items separately from a routed batch", async () => {
     const key = `test-collect-unresolved-origin-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const runFollowup = async (run: FollowupRun) => {
-      calls.push(run);
-      if (calls.length >= 2) {
-        done.resolve();
-      }
-    };
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 50,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder(2);
+    const settings = createQueueSettings();
 
     enqueueFollowupRun(key, createRun({ prompt: "unresolved origin" }), settings);
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "keyed one",
         originatingChannel: "slack",
         originatingTo: "channel:B",
         originatingChatType: "channel",
-      }),
+      },
       settings,
     );
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "keyed two",
         originatingChannel: "slack",
         originatingTo: "channel:B",
         originatingChatType: "channel",
-      }),
+      },
       settings,
     );
 
@@ -1837,50 +1556,39 @@ describe("followup queue collect routing", () => {
 
   it("does not collect known route-less chat types into another destination", async () => {
     const key = `test-collect-known-chat-without-route-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 50,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder(2);
+    const settings = createQueueSettings();
 
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "unresolved direct",
         originatingChatType: "direct",
-      }),
+      },
       settings,
     );
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "channel one",
         originatingChannel: "slack",
         originatingTo: "channel:B",
         originatingChatType: "channel",
-      }),
+      },
       settings,
     );
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "channel two",
         originatingChannel: "slack",
         originatingTo: "channel:B",
         originatingChatType: "channel",
-      }),
+      },
       settings,
     );
 
-    scheduleFollowupDrain(key, async (run) => {
-      calls.push(run);
-      if (calls.length >= 2) {
-        done.resolve();
-      }
-    });
+    scheduleFollowupDrain(key, runFollowup);
     await done.promise;
 
     expect(calls[0]?.prompt).toBe("unresolved direct");
@@ -1893,37 +1601,27 @@ describe("followup queue collect routing", () => {
 
   it("collects ordinary user-request followups with current turn kind", async () => {
     const key = `test-collect-user-request-kind-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const runFollowup = async (run: FollowupRun) => {
-      calls.push(run);
-      done.resolve();
-    };
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 50,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder();
+    const settings = createQueueSettings();
 
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "one",
         currentInboundEventKind: "user_request",
         originatingChannel: "slack",
         originatingTo: "channel:A",
-      }),
+      },
       settings,
     );
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "two",
         currentInboundEventKind: "user_request",
         originatingChannel: "slack",
         originatingTo: "channel:A",
-      }),
+      },
       settings,
     );
 
@@ -1938,32 +1636,19 @@ describe("followup queue collect routing", () => {
 
   it("drains runtime-context followups individually instead of collecting them", async () => {
     const key = `test-collect-runtime-context-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const expectedCalls = 2;
-    const runFollowup = async (run: FollowupRun) => {
-      calls.push(run);
-      if (calls.length >= expectedCalls) {
-        done.resolve();
-      }
-    };
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 50,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder(2);
+    const settings = createQueueSettings();
     const controller = new AbortController();
     const begin = () => () => undefined;
     const lifecycle = { onAdopted: async () => {}, onSettled: () => undefined };
 
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "[OpenClaw room event]",
         originatingChannel: "telegram",
         originatingTo: "-100123",
-      }),
+      },
       settings,
     );
     const first = getExistingFollowupQueue(key)?.items[0];
@@ -1976,13 +1661,13 @@ describe("followup queue collect routing", () => {
     first.abortSignal = controller.signal;
     first.deliveryCorrelations = [{ begin }];
     first.turnAdoptionLifecycle = lifecycle;
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "second",
         originatingChannel: "telegram",
         originatingTo: "-100123",
-      }),
+      },
       settings,
     );
 
@@ -2003,21 +1688,8 @@ describe("followup queue collect routing", () => {
   it("drains a disableCollectBatching retry individually instead of collecting it", async () => {
     const strandedReplyRetryMarker = "stranded-reply-retry";
     const key = `test-collect-disable-batching-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const expectedCalls = 3;
-    const runFollowup = async (run: FollowupRun) => {
-      calls.push(run);
-      if (calls.length >= expectedCalls) {
-        done.resolve();
-      }
-    };
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 50,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder(3);
+    const settings = createQueueSettings();
 
     const route = { originatingChannel: "slack" as const, originatingTo: "channel:A" };
     const retryPrompt = "[System] Please deliver this reply now by calling message(action=send).";
@@ -2053,12 +1725,7 @@ describe("followup queue collect routing", () => {
 
   it("can prepend priority followups before already queued items", () => {
     const key = `test-priority-followup-front-${Date.now()}`;
-    const settings: QueueSettings = {
-      mode: "followup",
-      debounceMs: 0,
-      cap: 50,
-      dropPolicy: "summarize",
-    };
+    const settings = createQueueSettings({ mode: "followup" });
 
     enqueueFollowupRun(key, createRun({ prompt: "queued later one" }), settings);
     enqueueFollowupRun(key, createRun({ prompt: "queued later two" }), settings);
@@ -2082,12 +1749,7 @@ describe("followup queue collect routing", () => {
 
   it("preserves prepended priority followups during old-item overflow eviction", () => {
     const key = `test-priority-followup-overflow-${Date.now()}`;
-    const settings: QueueSettings = {
-      mode: "followup",
-      debounceMs: 0,
-      cap: 2,
-      dropPolicy: "old",
-    };
+    const settings = createQueueSettings({ mode: "followup", cap: 2, dropPolicy: "old" });
 
     enqueueFollowupRun(key, createRun({ prompt: "queued later one" }), settings);
     enqueueFollowupRun(key, createRun({ prompt: "queued later two" }), settings);
@@ -2110,12 +1772,7 @@ describe("followup queue collect routing", () => {
 
   it("keeps a cap-one protected priority followup instead of evicting it", () => {
     const key = `test-priority-followup-cap-one-${Date.now()}`;
-    const settings: QueueSettings = {
-      mode: "followup",
-      debounceMs: 0,
-      cap: 1,
-      dropPolicy: "summarize",
-    };
+    const settings = createQueueSettings({ mode: "followup", cap: 1 });
 
     const priorityAccepted = enqueueFollowupRun(
       key,
@@ -2142,12 +1799,12 @@ describe("followup queue collect routing", () => {
 
   it("does not advance debounce stamp when overflow rejects an incoming message", () => {
     const key = `test-priority-followup-debounce-reject-${Date.now()}`;
-    const settings: QueueSettings = {
+    const settings = createQueueSettings({
       mode: "followup",
       debounceMs: 5_000,
       cap: 1,
       dropPolicy: "old",
-    };
+    });
 
     const priorityAccepted = enqueueFollowupRun(
       key,
@@ -2215,20 +1872,8 @@ describe("followup queue collect routing", () => {
 
   it("drains protected priority followups before overflow summaries", async () => {
     const key = `test-priority-followup-before-summary-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const runFollowup = async (run: FollowupRun) => {
-      calls.push(run);
-      if (calls.length >= 2) {
-        done.resolve();
-      }
-    };
-    const settings: QueueSettings = {
-      mode: "followup",
-      debounceMs: 0,
-      cap: 1,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder(2);
+    const settings = createQueueSettings({ mode: "followup", cap: 1 });
 
     enqueueFollowupRun(key, createRun({ prompt: "overflowed normal" }), settings);
     enqueueFollowupRun(
@@ -2252,18 +1897,8 @@ describe("followup queue collect routing", () => {
 
   it("carries image payloads across collected batches", async () => {
     const key = `test-collect-images-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const runFollowup = async (run: FollowupRun) => {
-      calls.push(run);
-      done.resolve();
-    };
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 50,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder();
+    const settings = createQueueSettings();
     const firstImage = { type: "image" as const, data: "first", mimeType: "image/png" };
     const secondImage = { type: "image" as const, data: "second", mimeType: "image/png" };
 
@@ -2303,21 +1938,8 @@ describe("followup queue collect routing", () => {
 
   it("splits collect batches when sender authorization changes", async () => {
     const key = `test-collect-auth-split-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const expectedCalls = 2;
-    const runFollowup = async (run: FollowupRun) => {
-      calls.push(run);
-      if (calls.length >= expectedCalls) {
-        done.resolve();
-      }
-    };
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 50,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder(2);
+    const settings = createQueueSettings();
 
     const nonOwner = createRun({
       prompt: "use the gateway tool",
@@ -2368,8 +1990,7 @@ describe("followup queue collect routing", () => {
 
   it("splits collect batches when queued cancellation owners differ", async () => {
     const key = `test-collect-cancel-owner-split-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
+    const { calls, done, runFollowup } = createDrainRecorder(2);
     const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
 
     for (const [prompt, ownerKey] of [
@@ -2390,12 +2011,7 @@ describe("followup queue collect routing", () => {
       );
     }
 
-    scheduleFollowupDrain(key, async (run) => {
-      calls.push(run);
-      if (calls.length === 2) {
-        done.resolve();
-      }
-    });
+    scheduleFollowupDrain(key, runFollowup);
     await done.promise;
 
     expect(calls).toHaveLength(2);
@@ -2407,18 +2023,8 @@ describe("followup queue collect routing", () => {
 
   it("keeps one collect batch when authorization context matches", async () => {
     const key = `test-collect-auth-match-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const runFollowup = async (run: FollowupRun) => {
-      calls.push(run);
-      done.resolve();
-    };
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 50,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder();
+    const settings = createQueueSettings();
 
     const first = createRun({
       prompt: "first",
@@ -2472,18 +2078,8 @@ describe("followup queue collect routing", () => {
 
   it("keeps one collect batch when only sender display fields drift", async () => {
     const key = `test-collect-auth-display-drift-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const runFollowup = async (run: FollowupRun) => {
-      calls.push(run);
-      done.resolve();
-    };
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 50,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder();
+    const settings = createQueueSettings();
 
     const first = createRun({
       prompt: "first",
@@ -2537,21 +2133,8 @@ describe("followup queue collect routing", () => {
 
   it("splits collect batches when exec context changes", async () => {
     const key = `test-collect-exec-split-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const expectedCalls = 2;
-    const runFollowup = async (run: FollowupRun) => {
-      calls.push(run);
-      if (calls.length >= expectedCalls) {
-        done.resolve();
-      }
-    };
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 50,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder(2);
+    const settings = createQueueSettings();
 
     const base = createRun({
       prompt: "first",
@@ -2603,18 +2186,8 @@ describe("followup queue collect routing", () => {
 
   it("uses the newest run within a matching authorization batch", async () => {
     const key = `test-collect-latest-run-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const runFollowup = async (run: FollowupRun) => {
-      calls.push(run);
-      done.resolve();
-    };
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 50,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder();
+    const settings = createQueueSettings();
 
     const first = createRun({ prompt: "first", originatingChannel: "slack", originatingTo: "A" });
     const second = createRun({
@@ -2664,47 +2237,34 @@ describe("followup queue collect routing", () => {
 
   it("delivers summary-only collect work under its source route", async () => {
     const key = `test-collect-summary-only-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const expectedCalls = 3;
-    const runFollowup = async (run: FollowupRun) => {
-      calls.push(run);
-      if (calls.length >= expectedCalls) {
-        done.resolve();
-      }
-    };
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 2,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder(3);
+    const settings = createQueueSettings({ cap: 2 });
 
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "first",
         originatingChannel: "slack",
         originatingTo: "channel:A",
-      }),
+      },
       settings,
     );
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "second",
         originatingChannel: "slack",
         originatingTo: "channel:B",
-      }),
+      },
       settings,
     );
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "third",
         originatingChannel: "slack",
         originatingTo: "channel:C",
-      }),
+      },
       settings,
     );
 
@@ -2721,21 +2281,8 @@ describe("followup queue collect routing", () => {
 
   it("preserves collect order when authorization changes more than once", async () => {
     const key = `test-collect-auth-order-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const expectedCalls = 3;
-    const runFollowup = async (run: FollowupRun) => {
-      calls.push(run);
-      if (calls.length >= expectedCalls) {
-        done.resolve();
-      }
-    };
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 50,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder(3);
+    const settings = createQueueSettings();
 
     const first = createRun({ prompt: "first", originatingChannel: "slack", originatingTo: "A" });
     const second = createRun({ prompt: "second", originatingChannel: "slack", originatingTo: "A" });
@@ -2778,37 +2325,27 @@ describe("followup queue collect routing", () => {
 
   it("collects Slack messages in same thread and preserves string thread id", async () => {
     const key = `test-collect-slack-thread-same-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const runFollowup = async (run: FollowupRun) => {
-      calls.push(run);
-      done.resolve();
-    };
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 50,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder();
+    const settings = createQueueSettings();
 
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "one",
         originatingChannel: "slack",
         originatingTo: "channel:A",
         originatingThreadId: "1706000000.000001",
-      }),
+      },
       settings,
     );
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "two",
         originatingChannel: "slack",
         originatingTo: "channel:A",
         originatingThreadId: "1706000000.000001",
-      }),
+      },
       settings,
     );
 
@@ -2820,37 +2357,27 @@ describe("followup queue collect routing", () => {
 
   it("collects messages when numeric and string thread ids share the route key", async () => {
     const key = `test-collect-thread-normalized-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const runFollowup = async (run: FollowupRun) => {
-      calls.push(run);
-      done.resolve();
-    };
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 50,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder();
+    const settings = createQueueSettings();
 
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "one",
         originatingChannel: "telegram",
         originatingTo: "-100123",
         originatingThreadId: 42.9,
-      }),
+      },
       settings,
     );
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "two",
         originatingChannel: "telegram",
         originatingTo: "-100123",
         originatingThreadId: "42",
-      }),
+      },
       settings,
     );
 
@@ -2864,34 +2391,30 @@ describe("followup queue collect routing", () => {
 
   it("collects matching local webchat routes with distinct message ids", async () => {
     const key = `test-collect-local-webchat-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
+    const { calls, done, runFollowup } = createDrainRecorder();
     const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
 
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "one",
         messageId: "webchat-message-1",
         originatingChannel: "webchat",
         originatingReplyToMode: "all",
-      }),
+      },
       settings,
     );
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "two",
         messageId: "webchat-message-2",
         originatingChannel: "webchat",
         originatingReplyToMode: "all",
-      }),
+      },
       settings,
     );
-    scheduleFollowupDrain(key, async (run) => {
-      calls.push(run);
-      done.resolve();
-    });
+    scheduleFollowupDrain(key, runFollowup);
     await done.promise;
 
     expect(calls).toHaveLength(1);
@@ -2901,40 +2424,27 @@ describe("followup queue collect routing", () => {
 
   it("does not collect Slack messages when thread ids differ", async () => {
     const key = `test-collect-slack-thread-diff-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const expectedCalls = 2;
-    const runFollowup = async (run: FollowupRun) => {
-      calls.push(run);
-      if (calls.length >= expectedCalls) {
-        done.resolve();
-      }
-    };
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 50,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder(2);
+    const settings = createQueueSettings();
 
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "one",
         originatingChannel: "slack",
         originatingTo: "channel:A",
         originatingThreadId: "1706000000.000001",
-      }),
+      },
       settings,
     );
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "two",
         originatingChannel: "slack",
         originatingTo: "channel:A",
         originatingThreadId: "1706000000.000002",
-      }),
+      },
       settings,
     );
 
@@ -2948,8 +2458,7 @@ describe("followup queue collect routing", () => {
 
   it("retries collect-mode batches without losing queued items", async () => {
     const key = `test-collect-retry-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
+    const { calls, done } = createDrainRecorder();
     let attempt = 0;
     const runFollowup = async (run: FollowupRun) => {
       attempt += 1;
@@ -2959,12 +2468,7 @@ describe("followup queue collect routing", () => {
       calls.push(run);
       done.resolve();
     };
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 50,
-      dropPolicy: "summarize",
-    };
+    const settings = createQueueSettings();
 
     enqueueFollowupRun(key, createRun({ prompt: "one" }), settings);
     enqueueFollowupRun(key, createRun({ prompt: "two" }), settings);
@@ -2992,12 +2496,7 @@ describe("followup queue collect routing", () => {
         done.resolve();
       }
     };
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 50,
-      dropPolicy: "summarize",
-    };
+    const settings = createQueueSettings();
 
     const guest = createRun({
       prompt: "guest message",
@@ -3054,8 +2553,7 @@ describe("followup queue collect routing", () => {
 
   it("retries overflow summary delivery without losing dropped previews", async () => {
     const key = `test-overflow-summary-retry-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
+    const { calls, done } = createDrainRecorder();
     let attempt = 0;
     const runFollowup = async (run: FollowupRun) => {
       attempt += 1;
@@ -3065,12 +2563,7 @@ describe("followup queue collect routing", () => {
       calls.push(run);
       done.resolve();
     };
-    const settings: QueueSettings = {
-      mode: "followup",
-      debounceMs: 0,
-      cap: 1,
-      dropPolicy: "summarize",
-    };
+    const settings = createQueueSettings({ mode: "followup", cap: 1 });
 
     enqueueFollowupRun(key, createRun({ prompt: "first" }), settings);
     enqueueFollowupRun(key, createRun({ prompt: "second" }), settings);
@@ -3086,14 +2579,8 @@ describe("followup queue collect routing", () => {
     const storePath = path.join(tempDir, "sessions.json");
     const oldTranscriptPath = path.join(tempDir, "old-session.jsonl");
     const key = `test-overflow-summary-session-rotation-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const settings: QueueSettings = {
-      mode: "followup",
-      debounceMs: 0,
-      cap: 1,
-      dropPolicy: "summarize",
-    };
+    const { calls, done } = createDrainRecorder();
+    const settings = createQueueSettings({ mode: "followup", cap: 1 });
 
     try {
       await replaceSessionEntry(
@@ -3155,12 +2642,7 @@ describe("followup queue collect routing", () => {
     const key = `test-overflow-summary-aborted-${Date.now()}`;
     const calls: FollowupRun[] = [];
     const cleaned: FollowupRun[] = [];
-    const settings: QueueSettings = {
-      mode: "followup",
-      debounceMs: 0,
-      cap: 1,
-      dropPolicy: "summarize",
-    };
+    const settings = createQueueSettings({ mode: "followup", cap: 1 });
     const controller = new AbortController();
     const onComplete = vi.fn();
 
@@ -3196,21 +2678,8 @@ describe("followup queue collect routing", () => {
 
   it("delivers the overflow summary before split auth groups", async () => {
     const key = `test-collect-overflow-summary-once-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const expectedCalls = 3;
-    const runFollowup = async (run: FollowupRun) => {
-      calls.push(run);
-      if (calls.length >= expectedCalls) {
-        done.resolve();
-      }
-    };
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 2,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder(3);
+    const settings = createQueueSettings({ cap: 2 });
 
     const droppedGuest = createRun({
       prompt: "dropped guest message",
@@ -3282,8 +2751,7 @@ describe("followup queue collect routing", () => {
 
   it("does not re-deliver overflow summary on partial auth group failure retry", async () => {
     const key = `test-collect-overflow-partial-retry-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
+    const { calls, done } = createDrainRecorder();
     let attempt = 0;
     const runFollowup = async (run: FollowupRun) => {
       attempt += 1;
@@ -3297,12 +2765,7 @@ describe("followup queue collect routing", () => {
         done.resolve();
       }
     };
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 2,
-      dropPolicy: "summarize",
-    };
+    const settings = createQueueSettings({ cap: 2 });
 
     const droppedGuest = createRun({
       prompt: "dropped guest message",
@@ -3375,39 +2838,29 @@ describe("followup queue collect routing", () => {
 
   it("preserves routing metadata on overflow summary followups", async () => {
     const key = `test-overflow-summary-routing-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const runFollowup = async (run: FollowupRun) => {
-      calls.push(run);
-      done.resolve();
-    };
-    const settings: QueueSettings = {
-      mode: "followup",
-      debounceMs: 0,
-      cap: 1,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder();
+    const settings = createQueueSettings({ mode: "followup", cap: 1 });
 
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "first",
         originatingChannel: "discord",
         originatingTo: "channel:C1",
         originatingAccountId: "work",
         originatingThreadId: "1739142736.000100",
-      }),
+      },
       settings,
     );
-    enqueueFollowupRun(
+    enqueueTestRun(
       key,
-      createRun({
+      {
         prompt: "second",
         originatingChannel: "discord",
         originatingTo: "channel:C1",
         originatingAccountId: "work",
         originatingThreadId: "1739142736.000100",
-      }),
+      },
       settings,
     );
 
@@ -3423,8 +2876,7 @@ describe("followup queue collect routing", () => {
 
   it("keeps live item runtime metadata out of standalone overflow summaries", async () => {
     const key = `test-overflow-summary-runtime-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
+    const { calls, done } = createDrainRecorder();
     const controller = new AbortController();
     const onComplete = vi.fn();
     const begin = vi.fn(() => () => undefined);
@@ -3434,12 +2886,7 @@ describe("followup queue collect routing", () => {
         done.resolve();
       }
     };
-    const settings: QueueSettings = {
-      mode: "followup",
-      debounceMs: 0,
-      cap: 1,
-      dropPolicy: "summarize",
-    };
+    const settings = createQueueSettings({ mode: "followup", cap: 1 });
 
     enqueueFollowupRun(
       key,
@@ -3483,20 +2930,8 @@ describe("followup queue collect routing", () => {
 
   it("keeps mixed overflow summaries as normal followups", async () => {
     const key = `test-overflow-summary-mixed-kind-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
-    const runFollowup = async (run: FollowupRun) => {
-      calls.push(run);
-      if (calls.length >= 2) {
-        done.resolve();
-      }
-    };
-    const settings: QueueSettings = {
-      mode: "followup",
-      debounceMs: 0,
-      cap: 1,
-      dropPolicy: "summarize",
-    };
+    const { calls, done, runFollowup } = createDrainRecorder(2);
+    const settings = createQueueSettings({ mode: "followup", cap: 1 });
 
     enqueueFollowupRun(
       key,
@@ -3527,20 +2962,14 @@ describe("followup queue collect routing", () => {
 
   it("drops an aborted summarized room event before overflow delivery", async () => {
     const key = `test-overflow-summary-lifecycle-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
+    const { calls, done } = createDrainRecorder();
     const controller = new AbortController();
     const onComplete = vi.fn();
     const runFollowup = async (run: FollowupRun) => {
       calls.push(run);
       done.resolve();
     };
-    const settings: QueueSettings = {
-      mode: "followup",
-      debounceMs: 0,
-      cap: 1,
-      dropPolicy: "summarize",
-    };
+    const settings = createQueueSettings({ mode: "followup", cap: 1 });
 
     enqueueFollowupRun(
       key,
@@ -3568,16 +2997,10 @@ describe("followup queue collect routing", () => {
 
   it("retains summarized source identities through admitted overflow delivery", async () => {
     const key = `test-overflow-summary-admitted-lifecycle-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
+    const { calls, done } = createDrainRecorder();
     const sourceCompletions = [vi.fn(), vi.fn()];
     const sourceCancellationRetirements = [vi.fn(), vi.fn()];
-    const settings: QueueSettings = {
-      mode: "followup",
-      debounceMs: 0,
-      cap: 1,
-      dropPolicy: "summarize",
-    };
+    const settings = createQueueSettings({ mode: "followup", cap: 1 });
 
     for (const [index, prompt] of ["first dropped", "second dropped"].entries()) {
       enqueueFollowupRun(
@@ -3625,12 +3048,7 @@ describe("followup queue collect routing", () => {
     const sourceComplete = vi.fn(() => {
       events.push("source-complete");
     });
-    const settings: QueueSettings = {
-      mode: "followup",
-      debounceMs: 0,
-      cap: 1,
-      dropPolicy: "summarize",
-    };
+    const settings = createQueueSettings({ mode: "followup", cap: 1 });
 
     enqueueFollowupRun(
       key,
@@ -3692,12 +3110,7 @@ describe("followup queue collect routing", () => {
       await releaseRetry.promise;
       done.resolve();
     };
-    const settings: QueueSettings = {
-      mode: "followup",
-      debounceMs: 0,
-      cap: 1,
-      dropPolicy: "summarize",
-    };
+    const settings = createQueueSettings({ mode: "followup", cap: 1 });
 
     enqueueFollowupRun(
       key,
@@ -3739,8 +3152,7 @@ describe("followup queue collect routing", () => {
 
   it("collects compatible cancelable turns and completes each source lifecycle", async () => {
     const key = `test-collect-cancelable-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
+    const { calls, done } = createDrainRecorder();
     const firstComplete = vi.fn();
     const secondComplete = vi.fn();
     const runFollowup = async (run: FollowupRun) => {
@@ -3845,8 +3257,7 @@ describe("followup queue collect routing", () => {
 
   it("collects transcript-owned turns under one aggregate recorder", async () => {
     const key = `test-collect-transcript-owner-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
+    const { calls, done, runFollowup } = createDrainRecorder();
     const firstComplete = vi.fn();
     const secondComplete = vi.fn();
     const firstCorrelation = { begin: vi.fn() };
@@ -3880,10 +3291,7 @@ describe("followup queue collect routing", () => {
       );
     }
 
-    scheduleFollowupDrain(key, async (run) => {
-      calls.push(run);
-      done.resolve();
-    });
+    scheduleFollowupDrain(key, runFollowup);
     await done.promise;
 
     expect(calls).toHaveLength(1);
@@ -3915,8 +3323,7 @@ describe("followup queue collect routing", () => {
 
   it("pairs differing inbound runtime contexts inside one collected turn", async () => {
     const key = `test-collect-runtime-context-split-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
+    const { calls, done, runFollowup } = createDrainRecorder();
     const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
 
     for (const [prompt, contextText] of [
@@ -3933,10 +3340,7 @@ describe("followup queue collect routing", () => {
       );
     }
 
-    scheduleFollowupDrain(key, async (run) => {
-      calls.push(run);
-      done.resolve();
-    });
+    scheduleFollowupDrain(key, runFollowup);
     await done.promise;
 
     expect(calls).toHaveLength(1);
@@ -3948,8 +3352,7 @@ describe("followup queue collect routing", () => {
 
   it("does not let one source cancel an admitted collected run", async () => {
     const key = `test-collect-transcript-cancel-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
+    const { calls, done } = createDrainRecorder();
     const canceled = new AbortController();
     const survivor = new AbortController();
     const sourceCompletions = [vi.fn(), vi.fn()];
@@ -4040,8 +3443,7 @@ describe("followup queue collect routing", () => {
       const canceled = new AbortController();
       const canceledComplete = vi.fn();
       const survivorComplete = vi.fn();
-      const calls: FollowupRun[] = [];
-      const done = createDeferred<void>();
+      const { calls, done } = createDrainRecorder();
       const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
 
       const enqueueSource = (prompt: string, onComplete: () => void, abortSignal?: AbortSignal) => {
@@ -4085,8 +3487,7 @@ describe("followup queue collect routing", () => {
 
   it("keeps summarized work when a different cancelable live item is aborted", async () => {
     const key = `test-summary-owner-isolation-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
+    const { calls, done } = createDrainRecorder();
     const summarizedComplete = vi.fn();
     const abortedComplete = vi.fn();
     const aborted = new AbortController();
@@ -4097,12 +3498,7 @@ describe("followup queue collect routing", () => {
       calls.push(run);
       done.resolve();
     };
-    const settings: QueueSettings = {
-      mode: "followup",
-      debounceMs: 0,
-      cap: 1,
-      dropPolicy: "summarize",
-    };
+    const settings = createQueueSettings({ mode: "followup", cap: 1 });
 
     enqueueFollowupRun(
       key,
@@ -4137,8 +3533,7 @@ describe("followup queue collect routing", () => {
 
   it("removes an aborted elided source without leaking it into the summary", async () => {
     const key = `test-elided-summary-cancel-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
+    const { calls, done } = createDrainRecorder();
     const elidedComplete = vi.fn();
     const elided = new AbortController();
     const runFollowup = async (run: FollowupRun) => {
@@ -4150,12 +3545,7 @@ describe("followup queue collect routing", () => {
         done.resolve();
       }
     };
-    const settings: QueueSettings = {
-      mode: "followup",
-      debounceMs: 0,
-      cap: 1,
-      dropPolicy: "summarize",
-    };
+    const settings = createQueueSettings({ mode: "followup", cap: 1 });
 
     enqueueFollowupRun(
       key,
@@ -4181,16 +3571,10 @@ describe("followup queue collect routing", () => {
 
   it("does not replay elided sources after an admitted summary failure", async () => {
     const key = `test-elided-summary-admitted-failure-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred<void>();
+    const { calls, done } = createDrainRecorder();
     const elidedComplete = vi.fn();
     const retainedComplete = vi.fn();
-    const settings: QueueSettings = {
-      mode: "followup",
-      debounceMs: 0,
-      cap: 1,
-      dropPolicy: "summarize",
-    };
+    const settings = createQueueSettings({ mode: "followup", cap: 1 });
 
     enqueueFollowupRun(
       key,
@@ -4235,12 +3619,7 @@ describe("followup queue collect routing", () => {
     const events: string[] = [];
     const done = createDeferred<void>();
     const secondAdmissionError = new Error("second overflow admission failed");
-    const settings: QueueSettings = {
-      mode: "followup",
-      debounceMs: 0,
-      cap: 1,
-      dropPolicy: "summarize",
-    };
+    const settings = createQueueSettings({ mode: "followup", cap: 1 });
 
     const first = createRun({ prompt: "first dropped" });
     first.turnAdoptionLifecycle = {

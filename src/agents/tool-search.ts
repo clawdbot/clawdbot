@@ -2,12 +2,15 @@
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
+import { isCoreCodingSurfaceToolName } from "./core-tool-factory-descriptors.js";
 import type { AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import {
   addClientToolsToToolCatalog,
   applyToolCatalogCompaction,
+  classifyTool,
   reusableCatalogSnapshots,
+  resolveCatalog,
   sessionCatalogs,
 } from "./tool-search-catalog.js";
 import {
@@ -107,6 +110,11 @@ export function applyToolSearchCatalog(params: {
     isVisibleControlTool: (tool) =>
       TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name) &&
       shouldExposeControlTool(tool.name, config.mode),
+    // Core file/shell primitives stay in the visible tool list (while remaining
+    // searchable); the source check keeps plugin/MCP tools that reuse a core
+    // name deferred like any other cataloged tool.
+    isVisibleCatalogTool: (tool) =>
+      isCoreCodingSurfaceToolName(tool.name) && classifyTool(tool).sourceName === "core",
   });
 }
 
@@ -132,13 +140,13 @@ export function addClientToolsToToolSearchCatalog(params: {
 /** Create Tool Search control tools for the current run/session context. */
 export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[] {
   const config = resolveToolSearchConfig(ctx.runtimeConfig ?? ctx.config);
-  const runtime = new ToolSearchRuntime(ctx, config);
+  const runtime = new ToolSearchRuntime(ctx, config, { validateInput: true });
   return [
     {
       name: TOOL_SEARCH_CODE_MODE_TOOL_NAME,
       label: "Tool Search Code",
       description:
-        "Run JavaScript in an isolated Node subprocess over a large tool catalog. APIs: `openclaw.tools.search(query: string, options?)`, `openclaw.tools.describe(id: string)`, and `openclaw.tools.call(id: string, args?)`. Search takes a positional query string. Call returns `{ tool, result }`; JSON values normally live in `result.details`.",
+        "Run JavaScript in an isolated Node subprocess over a large tool catalog. APIs: `openclaw.tools.search(query: string, options?)`, `openclaw.tools.describe(id: string)`, and `openclaw.tools.call(id: string, args?)`. Search takes a positional query string, which must be in English: matching is lexical against tool names and descriptions, which are written in English. Call returns `{ tool, result }`; JSON values normally live in `result.details`.",
       parameters: Type.Object({
         code: Type.String({
           description:
@@ -166,9 +174,11 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       name: TOOL_SEARCH_RAW_TOOL_NAME,
       label: "Tool Search",
       description:
-        "Search the effective Tool Search catalog. Pass an exact result id or name to tool_call; use tool_describe only when you need its input schema.",
+        "Search the effective Tool Search catalog. Query in English: matching is lexical against tool names and descriptions, which are written in English, so a query in another language will usually match nothing. Pass an exact result id or name to tool_call; use tool_describe only when you need its input schema.",
       parameters: Type.Object({
-        query: Type.String({ description: "Search query." }),
+        query: Type.String({
+          description: "Search query, in English. Describe the capability you need.",
+        }),
         limit: Type.Optional(
           Type.Integer({ minimum: 1, description: "Maximum number of results." }),
         ),
@@ -205,7 +215,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
         signal?: AbortSignal,
         onUpdate?: AgentToolUpdateCallback,
       ): Promise<AgentToolResult<unknown>> => {
-        const call = readToolSearchCallArgs(args);
+        const call = readToolSearchCallArgs(args, resolveCatalog(ctx));
         return jsonResult(
           await runtime.call(call.id, call.input, {
             parentToolCallId: toolCallId,

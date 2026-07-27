@@ -15,7 +15,9 @@ import {
   type NormalizedPluginsConfig,
   type PluginActivationConfigSource,
 } from "./config-state.js";
+import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { resolveOpenClawDevSourceRoot } from "./dev-source-root.js";
+import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index-install-records.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import type { PluginLoadOptions, PluginRuntimeSubagentMode } from "./loader-types.js";
 import {
@@ -345,8 +347,37 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const preferBuiltPluginArtifacts = options.preferBuiltPluginArtifacts === true;
   const runtimeSubagentMode = resolveRuntimeSubagentMode(options.runtimeOptions);
   const coreGatewayMethodNames = resolveCoreGatewayMethodNames(options);
+  // Config identity cannot prove a custom profile's environment. Only borrow
+  // the process-owned generation; full snapshots cover narrower loads, while
+  // scoped snapshots must match exactly to protect activation boundaries.
+  const currentMetadataSnapshot =
+    options.installRecords === undefined &&
+    !shouldResolveRawConfigEnvVars &&
+    (options.env === undefined || options.env === process.env)
+      ? (getCurrentPluginMetadataSnapshot({
+          config: rawConfig,
+          env,
+          workspaceDir: options.workspaceDir,
+        }) ??
+        (onlyPluginIds !== undefined
+          ? getCurrentPluginMetadataSnapshot({
+              config: rawConfig,
+              env,
+              workspaceDir: options.workspaceDir,
+              pluginIds: onlyPluginIds,
+            })
+          : undefined))
+      : undefined;
+  const preparedInstallRecords =
+    currentMetadataSnapshot &&
+    (options.manifestRegistry === undefined ||
+      options.manifestRegistry === currentMetadataSnapshot.manifestRegistry)
+      ? extractPluginInstallRecordsFromInstalledPluginIndex(currentMetadataSnapshot.index)
+      : undefined;
   const installRecords = {
-    ...(options.installRecords ?? loadInstalledPluginIndexInstallRecordsSync({ env })),
+    ...(options.installRecords ??
+      preparedInstallRecords ??
+      loadInstalledPluginIndexInstallRecordsSync({ env })),
     ...cfg.plugins?.installs,
   };
   const devSourceRoot = resolveOpenClawDevSourceRoot(env);

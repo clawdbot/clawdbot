@@ -1,5 +1,6 @@
 // Runtime model preflight tests cover provider/model checks before cron execution.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withTestTimeout } from "../../../test/helpers/promise.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -85,6 +86,148 @@ describe("preflightCronModelProvider", () => {
     const request = requireFetchPreflightRequest();
     expect(request.url).toBe("http://127.0.0.1:8000/v1/models");
     expect(request.timeoutMs).toBe(2500);
+  });
+
+  it("starts unread-body cancellation before release without waiting for a split stream", async () => {
+    const cleanupOrder: string[] = [];
+    const cancel = vi.fn(() => {
+      cleanupOrder.push("cancel");
+      return new Promise<void>(() => {});
+    });
+    const release = vi.fn(async () => {
+      cleanupOrder.push("release");
+    });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: { status: 200, bodyUsed: false, body: { cancel } },
+      release,
+    });
+    const cfg = {
+      models: {
+        providers: {
+          vllm: {
+            api: "openai-completions" as const,
+            baseUrl: "http://127.0.0.1:8000/v1",
+            models: [],
+          },
+        },
+      },
+    };
+
+    const result = await withTestTimeout(
+      preflightCronModelProvider({ cfg, provider: "vllm", model: "llama" }),
+      1_000,
+      "cron provider preflight waited for unread response-body cancellation",
+    );
+    const cached = await preflightCronModelProvider({
+      cfg,
+      provider: "vllm",
+      model: "llama-cached",
+    });
+
+    expect(result).toEqual({ status: "available" });
+    expect(cached).toEqual({ status: "available" });
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
+    expect(cleanupOrder).toEqual(["cancel", "release"]);
+  });
+
+  it("keeps a reachable provider available when response cancellation rejects", async () => {
+    const cancel = vi.fn(async () => {
+      throw new Error("provider response was already closed");
+    });
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: { status: 401, bodyUsed: false, body: { cancel } },
+      release,
+    });
+
+    const result = await preflightCronModelProvider({
+      cfg: {
+        models: {
+          providers: {
+            vllm: {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:8000/v1",
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "vllm",
+      model: "llama",
+    });
+
+    expect(result).toEqual({ status: "available" });
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("does not cancel a response body that has already been consumed", async () => {
+    const cancel = vi.fn(async () => {});
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: { status: 200, bodyUsed: true, body: { cancel } },
+      release,
+    });
+
+    const result = await preflightCronModelProvider({
+      cfg: {
+        models: {
+          providers: {
+            vllm: {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:8000/v1",
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "vllm",
+      model: "llama",
+    });
+
+    expect(result).toEqual({ status: "available" });
+    expect(cancel).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("cancels and releases every response during concurrent local-provider probes", async () => {
+    const cancel = vi.fn(async () => {});
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockImplementation(async () => ({
+      response: { status: 200, bodyUsed: false, body: { cancel } },
+      release,
+    }));
+
+    const results = await withTestTimeout(
+      Promise.all(
+        Array.from({ length: 32 }, (_, index) =>
+          preflightCronModelProvider({
+            cfg: {
+              models: {
+                providers: {
+                  vllm: {
+                    api: "openai-completions",
+                    baseUrl: `http://127.0.0.1:${18_000 + index}/v1`,
+                    models: [],
+                  },
+                },
+              },
+            },
+            provider: "vllm",
+            model: `model-${index}`,
+          }),
+        ),
+      ),
+      1_000,
+      "concurrent cron provider preflights did not release their response bodies",
+    );
+
+    expect(results).toEqual(Array.from({ length: 32 }, () => ({ status: "available" })));
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(32);
+    expect(cancel).toHaveBeenCalledTimes(32);
+    expect(release).toHaveBeenCalledTimes(32);
   });
 
   it("marks unreachable local Ollama endpoints unavailable and caches the result", async () => {

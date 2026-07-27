@@ -3087,6 +3087,30 @@ describe("WorkboardStore", () => {
     });
   });
 
+  it("does not mutate archived ready cards during repeated dispatch", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Archived ready work",
+      status: "ready",
+    });
+    const archived = await store.archive(card.id, true);
+    const changes = vi.fn();
+    store.subscribeChanges(changes);
+
+    for (let attempt = 0; attempt < 25; attempt += 1) {
+      await expect(store.dispatch(10 + attempt)).resolves.toEqual({
+        promoted: [],
+        reclaimed: [],
+        blocked: [],
+        orchestrated: [],
+        count: 0,
+      });
+    }
+
+    await expect(store.get(card.id)).resolves.toEqual(archived);
+    expect(changes).not.toHaveBeenCalled();
+  });
+
   it("applies auto orchestration dispatch caps per board", async () => {
     const boards = createMemoryStore<PersistedWorkboardBoard>();
     const store = new WorkboardStore(createMemoryStore(), { boards });

@@ -105,6 +105,36 @@ describe("completion-cli write-state", () => {
     }
   });
 
+  it("structures completion registration warnings for JSON console output", async () => {
+    const [{ registerCompletionCli }, logging] = await Promise.all([
+      import("./completion-cli.js"),
+      import("../logging.js"),
+    ]);
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-state-json-"));
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-home-json-"));
+
+    try {
+      logging.setLoggerOverride({ level: "silent", consoleLevel: "info", consoleStyle: "json" });
+      await withEnvAsync({ HOME: homeDir, OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const program = new Command();
+        program.name("openclaw");
+        registerCompletionCli(program);
+
+        await program.parseAsync(["completion", "--write-state"], { from: "user" });
+
+        expect(stderrWrites).toHaveBeenCalledTimes(1);
+        expect(JSON.parse(String(stderrWrites.mock.calls[0]?.[0]))).toMatchObject({
+          level: "warn",
+          message: expect.stringContaining("skipping subcommand `qa`"),
+        });
+      });
+    } finally {
+      logging.resetLogger();
+      await fs.rm(stateDir, { recursive: true, force: true });
+      await fs.rm(homeDir, { recursive: true, force: true });
+    }
+  });
+
   it("can skip plugin command registration for update-triggered cache writes", async () => {
     const [{ COMPLETION_SKIP_PLUGIN_COMMANDS_ENV }, { registerCompletionCli }] = await Promise.all([
       import("./completion-runtime.js"),

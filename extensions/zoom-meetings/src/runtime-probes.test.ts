@@ -147,7 +147,7 @@ describe("Zoom meeting runtime probes", () => {
         session.chrome!.health = {
           ...session.chrome!.health,
           lastCaptionText: "Caption already waiting",
-          manualActionRequired: true,
+          manualAction: { reason: "zoom-admission-required", message: "Waiting" },
           transcriptLines: 1,
         };
       },
@@ -170,7 +170,10 @@ describe("Zoom meeting runtime probes", () => {
     });
 
     expect(result.listenVerified).toBe(true);
-    expect(result.manualActionRequired).toBe(true);
+    expect(result.manualAction).toEqual({
+      reason: "zoom-admission-required",
+      message: "Waiting",
+    });
     expect(refreshCaptionHealth).toHaveBeenCalledTimes(1);
     expect(Date.now()).toBe(0);
     expect(vi.getTimerCount()).toBe(0);

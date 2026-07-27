@@ -10,6 +10,70 @@ afterEach(() => {
 });
 
 describe("chat pane pull request refresh", () => {
+  it("does not let a previous session response clobber the current PR state", async () => {
+    let resolvePrevious!: (value: {
+      pullRequests: Array<{ number: number; title: string; url: string; state: "open" }>;
+      rateLimited: boolean;
+    }) => void;
+    let resolveCurrent!: typeof resolvePrevious;
+    const previous = new Promise<Parameters<typeof resolvePrevious>[0]>((resolve) => {
+      resolvePrevious = resolve;
+    });
+    const current = new Promise<Parameters<typeof resolveCurrent>[0]>((resolve) => {
+      resolveCurrent = resolve;
+    });
+    const request = vi.fn(
+      async (_method: string, params: { sessionKey: string }) =>
+        await (params.sessionKey === "agent:main:current" ? previous : current),
+    );
+    const { pane, state } = createTestChatPane({
+      client: {
+        request,
+        requestSessionPullRequests: (params: { sessionKey: string }) =>
+          request("controlUi.sessionPullRequests", params),
+      } as unknown as GatewayBrowserClient,
+      sessions: {
+        capturePullRequestEpoch: vi.fn(() => Symbol("pr-refresh")),
+        setPullRequestSummary: vi.fn(),
+      } as unknown as SessionCapability,
+    });
+    pane.context.gateway.snapshot.hello = {
+      features: { methods: ["controlUi.sessionPullRequests"] },
+    } as never;
+
+    const previousRefresh = pane.refreshSessionPullRequests();
+    state.sessionKey = "agent:main:current-2";
+    const currentRefresh = pane.refreshSessionPullRequests();
+    resolveCurrent({
+      pullRequests: [
+        {
+          number: 2,
+          title: "Current session PR",
+          url: "https://github.com/openclaw/openclaw/pull/2",
+          state: "open",
+        },
+      ],
+      rateLimited: false,
+    });
+    await currentRefresh;
+    resolvePrevious({
+      pullRequests: [
+        {
+          number: 1,
+          title: "Previous session PR",
+          url: "https://github.com/openclaw/openclaw/pull/1",
+          state: "open",
+        },
+      ],
+      rateLimited: false,
+    });
+    await previousRefresh;
+
+    expect(pane.sessionPullRequests).toEqual([
+      expect.objectContaining({ number: 2, title: "Current session PR" }),
+    ]);
+  });
+
   it("forwards an explicit refresh and publishes live PR state", async () => {
     const request = vi.fn().mockResolvedValue({
       pullRequests: [
@@ -34,7 +98,11 @@ describe("chat pane pull request refresh", () => {
       ],
       rateLimited: false,
     });
-    const client = { request } as unknown as GatewayBrowserClient;
+    const client = {
+      request,
+      requestSessionPullRequests: (params: { sessionKey: string; refresh?: boolean }) =>
+        request("controlUi.sessionPullRequests", params),
+    } as unknown as GatewayBrowserClient;
     const epoch = Symbol("pr-refresh");
     const setPullRequestSummary = vi.fn();
     const sessions = {
@@ -83,7 +151,11 @@ describe("chat pane pull request refresh", () => {
     const epoch = Symbol("pr-refresh");
     const setPullRequestSummary = vi.fn();
     const { pane } = createTestChatPane({
-      client: { request } as unknown as GatewayBrowserClient,
+      client: {
+        request,
+        requestSessionPullRequests: (params: { sessionKey: string }) =>
+          request("controlUi.sessionPullRequests", params),
+      } as unknown as GatewayBrowserClient,
       sessions: {
         capturePullRequestEpoch: vi.fn(() => epoch),
         setPullRequestSummary,
@@ -132,7 +204,11 @@ describe("chat pane pull request refresh", () => {
     const request = vi.fn().mockResolvedValue({ pullRequests: [], rateLimited: true });
     const setPullRequestSummary = vi.fn();
     const { pane } = createTestChatPane({
-      client: { request } as unknown as GatewayBrowserClient,
+      client: {
+        request,
+        requestSessionPullRequests: (params: { sessionKey: string }) =>
+          request("controlUi.sessionPullRequests", params),
+      } as unknown as GatewayBrowserClient,
       sessions: {
         capturePullRequestEpoch: vi.fn(() => Symbol("pr-refresh")),
         setPullRequestSummary,
@@ -165,7 +241,11 @@ describe("chat pane pull request refresh", () => {
     const epoch = Symbol("pr-refresh");
     const setPullRequestSummary = vi.fn();
     const { pane } = createTestChatPane({
-      client: { request } as unknown as GatewayBrowserClient,
+      client: {
+        request,
+        requestSessionPullRequests: (params: { sessionKey: string }) =>
+          request("controlUi.sessionPullRequests", params),
+      } as unknown as GatewayBrowserClient,
       sessions: {
         capturePullRequestEpoch: vi.fn(() => epoch),
         setPullRequestSummary,

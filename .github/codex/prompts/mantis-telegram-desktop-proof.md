@@ -111,14 +111,16 @@ than Telegram-visible behavior`. Use this manifest shape and do not create
    Reopen that same Telegram button after its ticket expires and capture the
    expired state. Do not substitute Control UI, transcript, curl, or a newly
    minted button for any part of that path.
-5. Create detached worktrees under
+5. Use the workflow-prepared detached worktrees under
    `.artifacts/qa-e2e/mantis/telegram-desktop-proof-worktrees/baseline` and
-   `.artifacts/qa-e2e/mantis/telegram-desktop-proof-worktrees/candidate`, then
-   install and build each worktree with the repo's normal `pnpm` commands.
+   `.artifacts/qa-e2e/mantis/telegram-desktop-proof-worktrees/candidate`.
+   Verify their `HEAD`s match `BASELINE_SHA` and `CANDIDATE_SHA`; do not create,
+   install, rebuild, or replace them. The workflow prepared both with a pinned
+   Node/pnpm toolchain before agent secrets were available.
    If `MANTIS_CANDIDATE_TRUST` is `fork-pr-head`, treat the
    candidate worktree as untrusted fork code: do not pass GitHub, OpenAI,
-   Crabbox, Convex, or other workflow secrets into candidate install, build, or
-   runtime commands. The candidate SUT may receive only the proof runner's
+   Crabbox, Convex, or other workflow secrets into candidate runtime commands.
+   The candidate SUT may receive only the proof runner's
    short-lived Telegram bot token, generated local config/state paths, and mock
    model key needed for this isolated proof.
 6. In each worktree, run the real-user Telegram Crabbox proof flow from the
@@ -133,6 +135,14 @@ than Telegram-visible behavior`. Use this manifest shape and do not create
    own; do not kill it while Crabbox is still waiting for bootstrap. Use a long
    command timeout for `start`, `send`, `view`, and `finish`. You may iterate
    and rerun if the visual result is not convincing.
+   When the requested scenario needs `channels.telegram.linkPreview: false`,
+   pass `--link-preview false` to `start`. The runner injects that setting into
+   the isolated SUT config before Gateway startup. Do not edit the generated
+   config or restart the Gateway to apply it.
+   When the proof must show an in-place streamed edit, also pass
+   `--mock-response-chunk-delay-ms 1200` and use a mock response long enough
+   for the first chunk to clear the preview debounce. Capture both the initial
+   partial reply and the later edit before finishing.
 7. Open Telegram Desktop directly to the newest relevant message with the
    runner `view` command before finishing each recording. Keep the chat scrolled
    to the bottom so new proof messages appear in-frame.
