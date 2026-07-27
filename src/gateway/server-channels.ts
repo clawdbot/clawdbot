@@ -12,7 +12,7 @@ import { startChannelApprovalHandlerBootstrap } from "../infra/approval-handler-
 import { type BackoffPolicy, sleepWithAbort } from "../infra/backoff.js";
 import { createTaskScopedChannelRuntime } from "../infra/channel-runtime-context.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { GATEWAY_CRASH_LOOP_MANUAL_CHANNEL_START_HINT } from "../infra/gateway-boot-lifecycle.js";
+import { formatGatewayCrashLoopManualChannelStartHint } from "../infra/gateway-boot-lifecycle.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import {
   createSubsystemLogger,
@@ -482,7 +482,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       // config reloads can undo the crash-loop breaker while operators inspect.
       const suffix = accountId ? ` account ${accountId}` : "";
       ensureChannelLog(channelId).warn?.(
-        `channel autostart suppressed by crash-loop breaker; refusing automatic start for ${channelId}${suffix}. ${GATEWAY_CRASH_LOOP_MANUAL_CHANNEL_START_HINT}`,
+        `channel autostart suppressed by crash-loop breaker; refusing automatic start for ${channelId}${suffix}. ${formatGatewayCrashLoopManualChannelStartHint({ channelId, ...(accountId ? { accountId } : {}) })}`,
       );
       for (const id of accountIds) {
         setStoppedRuntime(channelId, id, {

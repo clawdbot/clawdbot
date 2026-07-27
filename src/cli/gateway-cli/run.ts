@@ -39,7 +39,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import {
   completeGatewayBootLifecycle,
   GATEWAY_CRASH_LOOP_BREAKER_REASON,
-  GATEWAY_CRASH_LOOP_MANUAL_CHANNEL_START_HINT,
+  formatGatewayCrashLoopManualChannelStartHint,
   GATEWAY_CRASH_LOOP_RECOVERED_REASON,
   inspectGatewayCrashLoopBreaker,
   recordGatewayBootStart,
@@ -1137,7 +1137,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     }
     const message =
       `gateway restart-loop breaker tripped: ${crashLoopDecision.uncleanBoots} unclean boot(s) within ${crashLoopDecision.windowMs}ms; ` +
-      `suppressing channel/provider account auto-start. Inspect the stability bundle and fix the startup crash before restarting the service. ${GATEWAY_CRASH_LOOP_MANUAL_CHANNEL_START_HINT}`;
+      `suppressing channel/provider account auto-start. Inspect the stability bundle and fix the startup crash before restarting the service. ${formatGatewayCrashLoopManualChannelStartHint()}`;
     channelAutostartSuppression = { reason: "crash-loop-breaker", message };
     gatewayLog.error(message);
     if (crashLoopDecision.shouldWriteStabilityBundle) {
