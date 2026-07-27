@@ -97,6 +97,30 @@ const loadTelegramMonitorWebhookRuntime = createLazyRuntimeModule(
   () => import("./monitor-webhook.runtime.js"),
 );
 
+export function buildTelegramIsolatedIngressOptions(params: {
+  enabled: boolean;
+  apiRoot?: string;
+  proxy?: string;
+  network?: unknown;
+  spooledUpdateHandlerTimeoutMs?: number;
+}): {
+  enabled: boolean;
+  apiRoot?: string;
+  proxy?: string;
+  network?: unknown;
+  spooledUpdateHandlerTimeoutMs?: number;
+} {
+  return {
+    enabled: params.enabled,
+    apiRoot: params.apiRoot,
+    proxy: params.proxy,
+    network: params.network,
+    ...(params.spooledUpdateHandlerTimeoutMs !== undefined
+      ? { spooledUpdateHandlerTimeoutMs: params.spooledUpdateHandlerTimeoutMs }
+      : {}),
+  };
+}
+
 export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   const logInfo = (line: string) => (opts.runtime?.log ?? console.log)(line);
   const logError = (line: string) => (opts.runtime?.error ?? console.error)(line);
@@ -286,17 +310,13 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         telegramTransport,
         createTelegramTransport: createTelegramTransportForPolling,
         setStatus: opts.setStatus,
-        isolatedIngress: {
+        isolatedIngress: buildTelegramIsolatedIngressOptions({
           enabled: opts.isolatedIngress?.enabled ?? true,
           apiRoot: account.config.apiRoot,
           proxy: account.config.proxy,
           network: account.config.network,
-          ...(account.config.spooledUpdateHandlerTimeoutMs !== undefined
-            ? {
-                spooledUpdateHandlerTimeoutMs: account.config.spooledUpdateHandlerTimeoutMs,
-              }
-            : {}),
-        },
+          spooledUpdateHandlerTimeoutMs: account.config.spooledUpdateHandlerTimeoutMs,
+        }),
       });
       await pollingSession.runUntilAbort();
     } finally {
