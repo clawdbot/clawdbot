@@ -2055,6 +2055,7 @@ describe("ci workflow guards", () => {
       "checks-fast-plugin-contracts-shard",
       "checks-node-core-test-nondist-shard",
       "checks-ui",
+      "checks-ui-e2e",
       "control-ui-i18n",
       "native-i18n",
       "qa-smoke-ci-profile",
@@ -4278,6 +4279,44 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(uiTest.run).toContain("pnpm --dir ui test");
   });
 
+  it("gates current Control UI changes on the mocked new-session Chromium E2E", () => {
+    const workflow = readCiWorkflow();
+    const ui = workflow.jobs["checks-ui"];
+    const uiE2e = workflow.jobs["checks-ui-e2e"];
+
+    expect(uiE2e.permissions).toEqual({ contents: "read" });
+    expect(uiE2e.needs).toEqual(["preflight"]);
+    expect(uiE2e.if).toBe(
+      "needs.preflight.outputs.run_ui_tests == 'true' && needs.preflight.outputs.compatibility_target != 'true'",
+    );
+    expect(uiE2e["runs-on"]).toBe(ui["runs-on"]);
+    expect(uiE2e["timeout-minutes"]).toBe(30);
+
+    const uiSetup = expectDefined(
+      ui.steps.find((step: WorkflowStep) => step.name === "Setup Node environment"),
+      "Control UI Node setup",
+    );
+    const uiE2eSetup = expectDefined(
+      uiE2e.steps.find((step: WorkflowStep) => step.name === "Setup Node environment"),
+      "Control UI E2E Node setup",
+    );
+    expect(uiE2eSetup.uses).toBe("./.github/actions/setup-node-env");
+    expect(uiE2eSetup.with).toEqual(uiSetup.with);
+
+    const chromiumInstall = expectDefined(
+      uiE2e.steps.find((step: WorkflowStep) => step.name === "Install Playwright Chromium"),
+      "Control UI E2E Chromium installation",
+    );
+    expect(chromiumInstall.run).toBe("node scripts/ensure-playwright-chromium.mjs");
+
+    const scenario = expectDefined(
+      uiE2e.steps.find((step: WorkflowStep) => step.name === "Test Control UI new-session E2E"),
+      "Control UI new-session E2E regression",
+    );
+    expect(scenario.run).toBe("pnpm test:ui:e2e ui/src/e2e/new-session-page.e2e.test.ts");
+    expect(JSON.stringify(uiE2e)).not.toContain("OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM");
+  });
+
   it("does not rebuild Control UI after build:ci-artifacts", () => {
     const workflow = readCiWorkflow();
     const buildArtifactSteps = workflow.jobs["build-artifacts"].steps;
@@ -4525,6 +4564,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "build-artifacts",
       "native-i18n",
       "checks-ui",
+      "checks-ui-e2e",
       "control-ui-i18n",
       "checks-fast-core",
       "qa-smoke-ci-profile",
@@ -4598,6 +4638,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expect(failedSelected.status).not.toBe(0);
       expect(failedSelected.stdout).toContain("checks-ui finished with failure");
       expect(failedSelected.stdout).toContain("macos-swift finished with cancelled");
+
+      const failedUiE2e = runCiGateFixture(
+        "preflight=success\nsecurity-fast=success",
+        "checks-ui=success\nchecks-ui-e2e=failure",
+      );
+      expect(failedUiE2e.status).not.toBe(0);
+      expect(failedUiE2e.stdout).toContain("checks-ui-e2e finished with failure");
     },
   );
 
