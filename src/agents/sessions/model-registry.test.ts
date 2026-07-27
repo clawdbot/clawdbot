@@ -5,13 +5,17 @@ import { dirname, join } from "node:path";
 import { getApiProvider } from "@openclaw/ai/internal/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  listPersistedPluginModelCatalogs,
+  loadPersistedPluginModelCatalogs,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
   replacePersistedPluginModelCatalogs,
 } from "../plugin-model-catalog.js";
 import { AuthStorage } from "./auth-storage.js";
 import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import { ModelRegistry, type ProviderConfigInput } from "./model-registry.js";
+
+function listPersistedPluginModelCatalogs(agentDir: string) {
+  return loadPersistedPluginModelCatalogs(agentDir).catalogs;
+}
 
 const PLUGIN_MODEL_CATALOG_FILE = "catalog.json";
 

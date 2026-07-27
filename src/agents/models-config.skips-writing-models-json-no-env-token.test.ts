@@ -16,10 +16,14 @@ import {
 import type { ProviderConfig as ModelsProviderConfig } from "./models-config.providers.secrets.js";
 import {
   encodePluginModelCatalogRelativePath,
-  listPersistedPluginModelCatalogs,
+  loadPersistedPluginModelCatalogs,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
   replacePersistedPluginModelCatalogs,
 } from "./plugin-model-catalog.js";
+
+function listPersistedPluginModelCatalogs(agentDir: string) {
+  return loadPersistedPluginModelCatalogs(agentDir).catalogs;
+}
 
 vi.mock("./auth-profiles/external-cli-sync.js", () => ({
   resolveExternalCliAuthProfiles: () => [],

@@ -35,12 +35,12 @@ export function isPluginModelCatalogMigrationFile(filename: string): boolean {
 
 type PluginModelCatalogDatabase = Pick<OpenClawAgentKyselyDatabase, "cache_entries">;
 
-export type PersistedPluginModelCatalog = {
+type PersistedPluginModelCatalog = {
   pluginId: string;
   contents: string;
 };
 
-export type PersistedPluginModelCatalogLoadResult = {
+type PersistedPluginModelCatalogLoadResult = {
   catalogs: PersistedPluginModelCatalog[];
   warnings: string[];
 };
@@ -187,7 +187,7 @@ function replacePersistedPluginModelCatalogEntries(params: {
   );
 }
 
-export type PluginModelCatalogMigrationResult = {
+type PluginModelCatalogMigrationResult = {
   detected: number;
   migrated: number;
   warnings: string[];
@@ -552,11 +552,6 @@ export function loadPersistedPluginModelCatalogs(
   };
 }
 
-/** Reads plugin-owned catalogs after any credential-preserving upgrade migration. */
-export function listPersistedPluginModelCatalogs(agentDir: string): PersistedPluginModelCatalog[] {
-  return loadPersistedPluginModelCatalogs(agentDir).catalogs;
-}
-
 /** Replaces rebuildable provider catalogs in the existing per-agent SQLite cache. */
 export function replacePersistedPluginModelCatalogs(params: {
   agentDir: string;
@@ -589,7 +584,7 @@ export function encodePluginModelCatalogRelativePath(pluginId: string): string {
 }
 
 /** Returns true only for canonical profile-relative generated catalog paths. */
-export function isPluginModelCatalogRelativePath(relativePath: string): boolean {
+function isPluginModelCatalogRelativePath(relativePath: string): boolean {
   const parts = relativePath.split(/[\\/]/);
   return (
     !path.isAbsolute(relativePath) &&

@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   encodePluginModelCatalogRelativePath,
-  listPersistedPluginModelCatalogs,
+  loadPersistedPluginModelCatalogs,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
   replacePersistedPluginModelCatalogs,
 } from "../agents/plugin-model-catalog.js";
@@ -13,11 +13,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import {
-  collectLegacyPluginModelCatalogMigrations,
-  maybeMigrateLegacyPluginModelCatalogs,
-} from "./doctor-plugin-model-catalog.js";
+import { maybeMigrateLegacyPluginModelCatalogs } from "./doctor-plugin-model-catalog.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+
+function listPersistedPluginModelCatalogs(agentDir: string) {
+  return loadPersistedPluginModelCatalogs(agentDir).catalogs;
+}
 
 const tempDirs: string[] = [];
 
@@ -215,9 +216,6 @@ describe("doctor generated plugin model catalog migration", () => {
     );
     const malformedPath = writeLegacyCatalog(agentDir, "malformed", "{not-json");
 
-    await expect(
-      collectLegacyPluginModelCatalogMigrations({ cfg: {}, agentDirs: [agentDir] }),
-    ).resolves.toEqual([]);
     await expect(
       maybeMigrateLegacyPluginModelCatalogs(migrationParams([agentDir])),
     ).resolves.toEqual({ detected: 0, migrated: 0, warnings: [] });

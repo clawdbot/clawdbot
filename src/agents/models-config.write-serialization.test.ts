@@ -13,10 +13,14 @@ import {
 import { readGeneratedModelsJson } from "./models-config.test-utils.js";
 import {
   encodePluginModelCatalogRelativePath,
-  listPersistedPluginModelCatalogs,
+  loadPersistedPluginModelCatalogs,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
   replacePersistedPluginModelCatalogs,
 } from "./plugin-model-catalog.js";
+
+function listPersistedPluginModelCatalogs(agentDir: string) {
+  return loadPersistedPluginModelCatalogs(agentDir).catalogs;
+}
 
 const planOpenClawModelsJsonMock = vi.fn();
 const writePrivateStoreTextWriteMock = vi.fn();

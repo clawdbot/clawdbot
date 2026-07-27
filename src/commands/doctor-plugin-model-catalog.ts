@@ -16,7 +16,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
-export type LegacyPluginModelCatalogMigration = {
+type LegacyPluginModelCatalogMigration = {
   agentDir: string;
   pluginId: string;
   relativePath: string;
@@ -49,7 +49,7 @@ async function readLegacyPluginCatalogContents(params: {
 }
 
 /** Detects only marker-backed catalogs produced by tagged OpenClaw releases. */
-export async function collectLegacyPluginModelCatalogMigrations(params: {
+async function collectLegacyPluginModelCatalogMigrations(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   agentDirs?: readonly string[];
