@@ -84,6 +84,7 @@ it("keeps a prepared worktree session in Coding before canonical metadata arrive
   const key = "agent:main:new-worktree";
   const context = {
     basePath: "",
+    agents: { state: { agentsList: { mainKey: "main" } } },
     agentSelection: { state: { selectedId: "main" } },
     gateway: { snapshot: { assistantAgentId: "main", hello: null } },
     sessions: {
