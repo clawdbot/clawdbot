@@ -69,7 +69,7 @@ flow:
             - ref: state
             - lambda:
                 params: [candidate]
-                expr: "candidate.conversation.id === 'qa-operator' && candidate.text.includes(config.expectedReply)"
+                expr: "candidate.conversation.id === 'qa-operator' && candidate.text.trim() === config.expectedReply"
             - expr: liveTurnTimeoutMs(env, 30000)
         - set: scenarioRequests
           value:
@@ -95,7 +95,7 @@ flow:
             message:
               expr: "`expected provider-bound CJK output below ${config.maxProviderOutputChars} raw chars, saw ${providerToolOutput.length}`"
         - assert:
-            expr: "outbound.text.includes(config.expectedReply)"
+            expr: "outbound.text.trim() === config.expectedReply"
             message:
               expr: "`agent did not finish after bounded CJK result: ${outbound.text}`"
       detailsExpr: "`status=pass sourceChars=${config.fixtureChars} providerChars=${providerToolOutput.length} truncated=${providerToolOutput.includes('truncated')} final=${outbound.text.trim()}`"
