@@ -133,13 +133,19 @@ export function requireLeaseAuthorizesSpawn(params: {
 }
 
 export function spawnResultSessionKey(result: Record<string, unknown>): string | undefined {
+  const values: string[] = [];
   for (const key of ["childSessionKey", "sessionKey", "session_key"]) {
-    const value = result[key];
-    if (typeof value === "string" && value) {
-      return value;
+    if (!Object.hasOwn(result, key)) {
+      continue;
     }
+    const value = result[key];
+    if (typeof value !== "string" || !value) {
+      return undefined;
+    }
+    values.push(value);
   }
-  return undefined;
+  const first = values[0];
+  return first && values.every((value) => value === first) ? first : undefined;
 }
 
 export function spawnResultRunId(result: Record<string, unknown>): string | undefined {

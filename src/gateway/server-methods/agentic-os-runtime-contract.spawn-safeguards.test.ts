@@ -260,6 +260,19 @@ describe("Agentic OS runtime contract spawn safeguards", () => {
 
   it("rejects accepted runner identities that diverge from the durable reservation", async () => {
     const gatewayLeaseId = await acquireLease();
+    const store = await import("../agentic-os-runtime-contract-store.js");
+    const originalSave = store.saveAgenticOsRuntimeSnapshot;
+    let saveCalls = 0;
+    const saveSpy = vi
+      .spyOn(store, "saveAgenticOsRuntimeSnapshot")
+      .mockImplementation((snapshot) => {
+        saveCalls += 1;
+        if (saveCalls === 1) {
+          originalSave(snapshot);
+          return;
+        }
+        throw new Error("synthetic indeterminate persistence outage");
+      });
     spawnSubagentDirectMock.mockResolvedValueOnce({
       status: "accepted",
       childSessionKey: "agent:ai-engineer:subagent:divergent-child",
@@ -269,18 +282,47 @@ describe("Agentic OS runtime contract spawn safeguards", () => {
 
     expectUnavailable(await invoke("sessions_spawn", spawnParamsFor(gatewayLeaseId)));
     expect(payload(await invoke("sessions_list")).sessions).toEqual([]);
-    expect(payload(await invoke("subagents.allowLease.status")).leases).toEqual([
-      expect.objectContaining({ gateway_lease_id: gatewayLeaseId, status: "active" }),
-    ]);
-
-    const accepted = payload(await invoke("sessions_spawn", spawnParamsFor(gatewayLeaseId)));
-    expect(accepted.session_key).toBe(
-      spawnSubagentDirectMock.mock.calls[1]?.[1].preallocatedChildSessionKey,
+    expect(payload(await invoke("subagents.allowLease.status")).leases).toEqual([]);
+    expect(payload(await invoke("subagents.allowLease.acquire", acquireParams))).toMatchObject({
+      gateway_lease_id: gatewayLeaseId,
+      status: "consumed",
+    });
+    expect(saveCalls).toBe(4);
+    expectInvalid(
+      await invoke("sessions_spawn", spawnParamsFor(gatewayLeaseId)),
+      "gateway_lease_id is not active",
     );
-    expect(accepted.runId).toBe(spawnSubagentDirectMock.mock.calls[1]?.[1].preallocatedRunId);
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+
+    saveSpy.mockRestore();
+    findTaskByRunIdForStatusMock.mockReturnValue(undefined);
+    vi.resetModules();
+    const restarted = await import("../agentic-os-runtime-contract.js");
+    expect(restarted.listAgenticOsSessions()).toMatchObject({ count: 0, sessions: [] });
+    expect(restarted.listAgenticOsAllowLeases()).toMatchObject({ leases: [] });
+    expect(restarted.acquireAgenticOsAllowLease(acquireParams)).toMatchObject({
+      status: "consumed",
+      gateway_lease_id: gatewayLeaseId,
+    });
   });
 
-  it("does not promote a rejected reservation after every rollback write fails", async () => {
+  it("rejects conflicting accepted session identity aliases", async () => {
+    const gatewayLeaseId = await acquireLease();
+    spawnSubagentDirectMock.mockImplementationOnce(async (_request, context) => ({
+      status: "accepted",
+      childSessionKey: context.preallocatedChildSessionKey,
+      sessionKey: "agent:ai-engineer:subagent:conflicting-alias",
+      runId: context.preallocatedRunId,
+      mode: "run",
+    }));
+
+    expectUnavailable(await invoke("sessions_spawn", spawnParamsFor(gatewayLeaseId)));
+    expect(payload(await invoke("sessions_list")).sessions).toEqual([]);
+    expect(payload(await invoke("subagents.allowLease.status")).leases).toEqual([]);
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("consumes an indeterminate reservation after every rollback write fails", async () => {
     const gatewayLeaseId = await acquireLease();
     const store = await import("../agentic-os-runtime-contract-store.js");
     const originalSave = store.saveAgenticOsRuntimeSnapshot;
@@ -313,13 +355,10 @@ describe("Agentic OS runtime contract spawn safeguards", () => {
       count: 0,
       sessions: [],
     });
-    expect(restarted.listAgenticOsAllowLeases()).toMatchObject({
-      leases: [
-        expect.objectContaining({
-          status: "active",
-          gateway_lease_id: gatewayLeaseId,
-        }),
-      ],
+    expect(restarted.listAgenticOsAllowLeases()).toMatchObject({ leases: [] });
+    expect(restarted.acquireAgenticOsAllowLease(acquireParams)).toMatchObject({
+      status: "consumed",
+      gateway_lease_id: gatewayLeaseId,
     });
   });
 

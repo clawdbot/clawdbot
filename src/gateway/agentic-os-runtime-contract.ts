@@ -62,6 +62,8 @@ const spawnPendingByClientRequestId = new Map<string, SpawnPending>();
 const ACCEPTED_SPAWN_PERSIST_ATTEMPTS = 3;
 const REJECTED_SPAWN_ROLLBACK_PERSIST_ATTEMPTS = 3;
 
+class AcceptedSpawnIdentityError extends Error {}
+
 type RuntimeSnapshot = {
   leases: LeaseRecord[];
   releaseReplays: ReleaseReplay[];
@@ -112,6 +114,10 @@ function hydrateRuntimeSnapshot(snapshot: RuntimeSnapshot): boolean {
         !durableAcceptedSession &&
         (!reservedSession || !sessionRecordHasChildRunEvidence(reservedSession))
       ) {
+        lease.consumed_at_ms =
+          typeof lease.spawn_reserved_at_ms === "number"
+            ? Math.min(lease.spawn_reserved_at_ms, hydrationNow)
+            : hydrationNow;
         clearSpawnReservation(lease);
         changed = true;
       } else {
@@ -212,6 +218,20 @@ function persistRejectedSpawnRollback(lease: LeaseRecord): void {
     }
   }
   throw lastError;
+}
+
+function consumeIndeterminateSpawn(lease: LeaseRecord): void {
+  lease.consumed_at_ms = Date.now();
+  clearSpawnReservation(lease);
+  leasesByGatewayId.delete(lease.gatewayLeaseId);
+  try {
+    persistAcceptedSpawn();
+  } catch {
+    // The pre-launch reservation remains durable when terminal persistence is
+    // unavailable. Restart recovery consumes reservations without canonical
+    // child-run evidence, so an accepted-but-invalid result cannot reopen the
+    // one-shot lease and launch a second child.
+  }
 }
 
 function rejectConflict(message: string): never {
@@ -572,7 +592,9 @@ export async function spawnAgenticOsSession(
           returnedSessionKey !== reservedSession.sessionKey ||
           returnedRunId !== reservedSession.runId
         ) {
-          throw new Error("child runner violated the preallocated spawn identity");
+          throw new AcceptedSpawnIdentityError(
+            "child runner violated the preallocated spawn identity",
+          );
         }
         const record: SessionRecord = {
           ...reservedSession,
@@ -594,6 +616,10 @@ export async function spawnAgenticOsSession(
         }
         return record;
       } catch (error) {
+        if (error instanceof AcceptedSpawnIdentityError) {
+          consumeIndeterminateSpawn(lease);
+          throw error;
+        }
         if (lease.spawn_reservation_fingerprint === fingerprint) {
           if (!lease.released_at_ms && !lease.consumed_at_ms) {
             leasesByGatewayId.set(gatewayLeaseId, lease);

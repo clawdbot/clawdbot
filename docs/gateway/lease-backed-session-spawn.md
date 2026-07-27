@@ -136,7 +136,9 @@ the same accepted projection without launching another child. Conflicting
 reuse of `idempotency_key` or `client_request_id` is rejected. The child
 runner must return the exact session key and run ID reserved by the Gateway;
 missing or divergent identities are treated as an operational contract
-failure and are never published as accepted.
+failure and are never published as accepted. Because the runner already crossed
+its acceptance boundary, the one-shot lease becomes consumed/indeterminate and
+cannot be reused to launch another child.
 
 ## Read session state
 
@@ -192,9 +194,10 @@ replay state in its canonical SQLite state database:
   child-run record proves that launch crossed the acceptance boundary. An
   exact spawn retry then returns those same reserved identities without
   invoking the child runner again;
-- a reservation without canonical acceptance evidence is cleared during
-  recovery, leaving the lease retryable instead of projecting a rejected or
-  indeterminate launch as accepted;
+- a reservation without canonical acceptance evidence is consumed as
+  indeterminate during recovery. It is not projected as accepted and the lease
+  is not reopened, preventing an ambiguous crash or failed rollback write from
+  launching a second child;
 - if the accepted session was persisted, an exact retry returns that session
   identity without invoking the child runner again.
 
