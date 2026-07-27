@@ -777,10 +777,19 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       expect(Number.parseFloat(movement.after)).toBeGreaterThanOrEqual(18);
       expect(Number.parseFloat(movement.after)).toBeLessThanOrEqual(50);
       await expectLobsterOnFooterLedge(sidebar);
-      const sprite = pet.locator(".lobster-pet:not(.lobster-pet--passer)").first();
-      await sprite.dispatchEvent("pointerdown");
-      await sprite.dispatchEvent("pointerup");
-      await expect.poll(() => sprite.getAttribute("class")).toContain("lobster-pet--act-startle");
+      // startle clears itself after LOBSTER_PET_ACT_DURATION_MS.startle (750ms), so
+      // poking over one round trip and then polling for the class over another can
+      // straddle the entire window on a loaded runner and never observe it. Poke and
+      // read the resulting class in a single in-page step, as the unit test does.
+      const startleClasses = await pet.evaluate(async (element) => {
+        const lobster = element as HTMLElement & { updateComplete: Promise<unknown> };
+        const target = lobster.querySelector<HTMLElement>(".lobster-pet:not(.lobster-pet--passer)");
+        target?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+        target?.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+        await lobster.updateComplete;
+        return target?.getAttribute("class") ?? "";
+      });
+      expect(startleClasses).toContain("lobster-pet--act-startle");
       await captureUiProof(page, "08-lobster-footer-ledge-desktop.png");
 
       await page.setViewportSize({ height: 900, width: 900 });
