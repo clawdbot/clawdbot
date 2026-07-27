@@ -162,6 +162,8 @@ export async function prepareReplyAgentPayloads(state: {
       runtimePolicySessionKey,
       opts,
     });
+    // The guard above limits this to a one-shot recovery turn. A second miss
+    // always gets a diagnostic, even when the retry produced no final text.
     const recovery = resolveStrandedReplyRecovery({
       base: followupRun,
       finalText: "",
