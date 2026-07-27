@@ -124,6 +124,7 @@ import {
   normalizeCatalogOpenTarget,
   setSettingsChangeListener,
 } from "./settings.ts";
+import { isStaleChunkImportError, scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
 
 type AppSidebarElement = HTMLElement & {
   dismissTransientMenus: () => boolean;
@@ -137,6 +138,16 @@ const EMPTY_OUTBOX_COUNT_FOR_SESSION = () => 0;
 const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
   ? "⌘K"
   : "Ctrl K";
+
+i18n.setLocaleLoadRecovery({
+  isUnrecoverableError: isStaleChunkImportError,
+  onUnrecoverableLocaleLoad: () => {
+    // Chrome 149 and WebKit can pin network-failed dynamic imports for the document. Keep the
+    // in-place retry for engines that refetch; repeat failures use the guarded stale-chunk reload
+    // owner instead of adding a locale-specific reload path.
+    void scheduleStaleChunkReload();
+  },
+});
 
 type StoredOutboxScopeHost = {
   settings: { gatewayUrl?: string | null };

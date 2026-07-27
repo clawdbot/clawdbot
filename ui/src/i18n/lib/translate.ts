@@ -11,6 +11,10 @@ import {
 import type { Locale, TranslationMap } from "./types.ts";
 
 type Subscriber = (locale: Locale) => void;
+type LocaleLoadRecovery = {
+  isUnrecoverableError: (error: unknown) => boolean;
+  onUnrecoverableLocaleLoad?: (locale: Locale) => void;
+};
 
 export { SUPPORTED_LOCALES, isSupportedLocale };
 
@@ -24,6 +28,7 @@ class I18nManager {
   private pendingLocale: Locale | null = null;
   // Only the latest selection may update retry state or become active after an async chunk load.
   private localeRequestGeneration = 0;
+  private localeLoadRecovery: LocaleLoadRecovery | undefined;
 
   constructor() {
     this.loadLocale();
@@ -79,6 +84,10 @@ class I18nManager {
   }
 
   public async setLocale(locale: Locale) {
+    return this.applyLocale(locale, false);
+  }
+
+  private async applyLocale(locale: Locale, retrying: boolean) {
     const requestGeneration = ++this.localeRequestGeneration;
     const needsTranslationLoad = locale !== DEFAULT_LOCALE && !this.translations[locale];
     if (this.locale === locale && !needsTranslationLoad) {
@@ -98,8 +107,13 @@ class I18nManager {
         }
         this.translations[locale] = translation;
       } catch (e) {
-        if (this.localeRequestGeneration === requestGeneration) {
+        const isCurrentRequest = this.localeRequestGeneration === requestGeneration;
+        if (isCurrentRequest) {
           this.pendingLocale = locale;
+        }
+        if (retrying && isCurrentRequest && this.localeLoadRecovery?.isUnrecoverableError(e)) {
+          this.persistLocale(locale);
+          this.localeLoadRecovery.onUnrecoverableLocaleLoad?.(locale);
         }
         console.error(`Failed to load locale: ${locale}`, e);
         return;
@@ -121,7 +135,13 @@ class I18nManager {
     }
     const target = this.pendingLocale;
     this.pendingLocale = null;
-    void this.setLocale(target);
+    void this.applyLocale(target, true);
+  }
+
+  public setLocaleLoadRecovery(recovery: LocaleLoadRecovery | undefined): void {
+    // Keep this leaf independent of app-level stale-chunk policy; the app injects both the
+    // error classifier and guarded recovery action.
+    this.localeLoadRecovery = recovery;
   }
 
   public registerTranslation(locale: Locale, map: TranslationMap) {

@@ -49,6 +49,7 @@ describe("I18nManager pending locale retry", () => {
     internals.pendingLocale = null;
     internals.subscribers.clear();
     internals.translations = { en };
+    i18n.setLocaleLoadRecovery(undefined);
   });
 
   afterEach(() => {
@@ -122,6 +123,55 @@ describe("I18nManager pending locale retry", () => {
 
     expect(loadTranslation).toHaveBeenCalledTimes(3);
     expect(internals.pendingLocale).toBeNull();
+  });
+
+  it("persists and reports a repeated module-import failure while keeping it pending", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const persistedLocalesAtHook: Array<string | null> = [];
+    const onUnrecoverableLocaleLoad = vi.fn(() => {
+      persistedLocalesAtHook.push(localStorage.getItem("openclaw.i18n.locale"));
+    });
+    i18n.setLocaleLoadRecovery({
+      isUnrecoverableError: (error) =>
+        error instanceof Error &&
+        /failed to fetch dynamically imported module/i.test(error.message),
+      onUnrecoverableLocaleLoad,
+    });
+    loadTranslation
+      .mockRejectedValueOnce(new Error("gateway unavailable"))
+      .mockRejectedValueOnce(
+        new Error("Failed to fetch dynamically imported module: /assets/fr-abc123.js"),
+      );
+
+    await i18n.setLocale("fr");
+    i18n.retryPendingLocale();
+    await vi.waitFor(() => expect(loadTranslation).toHaveBeenCalledTimes(2));
+
+    expect(onUnrecoverableLocaleLoad).toHaveBeenCalledExactlyOnceWith("fr");
+    expect(persistedLocalesAtHook).toEqual(["fr"]);
+    expect(localStorage.getItem("openclaw.i18n.locale")).toBe("fr");
+    expect(internals.pendingLocale).toBe("fr");
+  });
+
+  it("does not report a repeated non-import failure", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const onUnrecoverableLocaleLoad = vi.fn();
+    i18n.setLocaleLoadRecovery({
+      isUnrecoverableError: (error) =>
+        error instanceof Error &&
+        /failed to fetch dynamically imported module/i.test(error.message),
+      onUnrecoverableLocaleLoad,
+    });
+    loadTranslation
+      .mockRejectedValueOnce(new Error("gateway unavailable"))
+      .mockRejectedValueOnce(new Error("request failed"));
+
+    await i18n.setLocale("fr");
+    i18n.retryPendingLocale();
+    await vi.waitFor(() => expect(loadTranslation).toHaveBeenCalledTimes(2));
+
+    expect(onUnrecoverableLocaleLoad).not.toHaveBeenCalled();
+    expect(internals.pendingLocale).toBe("fr");
   });
 
   it("ignores an older failure after a newer locale succeeds", async () => {
