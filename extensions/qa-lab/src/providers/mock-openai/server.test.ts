@@ -4042,6 +4042,81 @@ describe("qa mock openai server", () => {
 
   it.each([
     {
+      label: "workspace-local happy",
+      prompt:
+        "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
+      operation: "Add File",
+      patchPath: "runtime-tool-fixture-patch.txt",
+    },
+    {
+      label: "workspace-escaping failure",
+      prompt:
+        "tool search qa failure target=apply_patch. Exercise the denied-input path once and then summarize.",
+      operation: "Update File",
+      patchPath: "../runtime-tool-fixture-denied.txt",
+    },
+  ])("plans an actual $label native freeform patch", async (testCase) => {
+    const server = await startMockServer();
+    const response = await postResponses(server, {
+      stream: false,
+      tools: [
+        {
+          type: "custom",
+          name: "apply_patch",
+          format: { type: "grammar", syntax: "lark", definition: "start: /.+/" },
+        },
+      ],
+      input: [makeUserInput(testCase.prompt)],
+    });
+
+    expect(response.status).toBe(200);
+    const item = outputItem(await response.json());
+    expect(item).toMatchObject({ type: "custom_tool_call", name: "apply_patch" });
+    expect(item).not.toHaveProperty("arguments");
+    expect(item.input).toEqual(
+      expect.stringContaining(`*** ${testCase.operation}: ${testCase.patchPath}\n`),
+    );
+    if (testCase.operation === "Update File") {
+      expect(item.input).toEqual(
+        expect.stringContaining("\n@@\n-runtime-tool-fixture-denied-original\n"),
+      );
+    }
+
+    const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
+    expect(debugResponse.status).toBe(200);
+    const debug = requireRecord(await debugResponse.json(), "native patch plan debug request");
+    expect(debug.plannedToolName).toBe("apply_patch");
+    expect(debug.plannedToolCallId).toBe(item.call_id);
+    expect(debug.plannedToolArgs).toEqual({ input: item.input });
+  });
+
+  it("streams native Codex patch input as custom-tool SSE", async () => {
+    const server = await startMockServer();
+    const response = await postResponses(server, {
+      stream: true,
+      tools: [
+        {
+          type: "custom",
+          name: "apply_patch",
+          format: { type: "grammar", syntax: "lark", definition: "start: /.+/" },
+        },
+      ],
+      input: [
+        makeUserInput(
+          "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
+        ),
+      ],
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain("response.custom_tool_call_input.delta");
+    expect(body).toContain('"type":"custom_tool_call"');
+    expect(body).toContain("runtime-tool-fixture-patch.txt");
+  });
+
+  it.each([
+    {
       label: "successful native patch",
       prompt:
         "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",

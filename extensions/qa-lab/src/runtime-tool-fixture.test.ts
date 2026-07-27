@@ -187,12 +187,28 @@ async function writeCodexNativePatchEvidence(
   ]);
 }
 
+async function simulateRuntimePatchHappyTurn(
+  env: Pick<QaSuiteRuntimeEnv, "gateway">,
+  params: { sessionKey: string },
+  contents: string | null = "runtime patch\n",
+) {
+  if (params.sessionKey.endsWith(":happy") && contents !== null) {
+    await fs.writeFile(
+      path.join(env.gateway.workspaceDir, "runtime-tool-fixture-patch.txt"),
+      contents,
+      "utf8",
+    );
+  }
+  return {};
+}
+
 async function runMockRuntimeToolFixtureWithOutputs(params: {
   toolName: string;
   happyArgs: Record<string, unknown>;
   failureArgs: Record<string, unknown>;
   happyOutput: string;
   failureOutput: string;
+  happyPatchContents?: string | null;
 }) {
   const env = await makeEnv({
     mock: { baseUrl: "http://127.0.0.1:9999" },
@@ -243,7 +259,12 @@ async function runMockRuntimeToolFixtureWithOutputs(params: {
     {
       createSession: vi.fn(async (_env, _label, key) => key!),
       readEffectiveTools: vi.fn(async () => new Set([params.toolName])),
-      runAgentPrompt: vi.fn(async () => ({})),
+      runAgentPrompt: vi.fn(async (runEnv, promptParams) => {
+        if (params.toolName === "apply_patch") {
+          return simulateRuntimePatchHappyTurn(runEnv, promptParams, params.happyPatchContents);
+        }
+        return {};
+      }),
       fetchJson,
       ensureImageGenerationConfigured: vi.fn(),
     },
@@ -727,7 +748,7 @@ describe("runtime tool fixture", () => {
             transcriptToolName: params.transcriptToolName,
             requireSuccessfulTranscriptToolResult: params.requireSuccessfulTranscriptToolResult,
           });
-          return {};
+          return simulateRuntimePatchHappyTurn(_env, params);
         }),
         fetchJson: vi.fn(),
         ensureImageGenerationConfigured: vi.fn(),
@@ -744,6 +765,38 @@ describe("runtime tool fixture", () => {
     await expect(
       fs.access(path.resolve(env.gateway.workspaceDir, "../runtime-tool-fixture-denied.txt")),
     ).rejects.toThrow();
+    await expect(
+      fs.access(path.join(env.gateway.workspaceDir, "runtime-tool-fixture-patch.txt")),
+    ).rejects.toThrow();
+  });
+
+  it("rejects native patch transcripts that claim success without creating the workspace file", async () => {
+    const env = await makeEnv();
+    env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME = "codex";
+    await writeCodexNativePatchEvidence(env);
+
+    await expect(
+      runRuntimeToolFixture(
+        env,
+        {
+          toolName: "apply_patch",
+          toolCoverage: {
+            bucket: "codex-native-workspace",
+            expectedLayer: "codex-native-workspace",
+            required: true,
+          },
+        },
+        {
+          createSession: vi.fn(async (_env, _label, key) => key!),
+          readEffectiveTools: vi.fn(async () => new Set<string>()),
+          runAgentPrompt: vi.fn(async () => ({})),
+          fetchJson: vi.fn(),
+          ensureImageGenerationConfigured: vi.fn(),
+        },
+      ),
+    ).rejects.toThrow(
+      "expected apply_patch to create runtime-tool-fixture-patch.txt with exact contents",
+    );
   });
 
   it("rejects native Codex patch failures that only report missing patch context", async () => {
@@ -768,7 +821,7 @@ describe("runtime tool fixture", () => {
         {
           createSession: vi.fn(async (_env, _label, key) => key!),
           readEffectiveTools: vi.fn(async () => new Set<string>()),
-          runAgentPrompt: vi.fn(async () => ({})),
+          runAgentPrompt: vi.fn(simulateRuntimePatchHappyTurn),
           fetchJson: vi.fn(),
           ensureImageGenerationConfigured: vi.fn(),
         },
@@ -819,7 +872,7 @@ describe("runtime tool fixture", () => {
         {
           createSession: vi.fn(async (_env, _label, key) => key!),
           readEffectiveTools: vi.fn(async () => new Set<string>()),
-          runAgentPrompt: vi.fn(async () => ({})),
+          runAgentPrompt: vi.fn(simulateRuntimePatchHappyTurn),
           fetchJson: vi.fn(),
           ensureImageGenerationConfigured: vi.fn(),
         },
@@ -861,7 +914,7 @@ describe("runtime tool fixture", () => {
         {
           createSession: vi.fn(async (_env, _label, key) => key!),
           readEffectiveTools: vi.fn(async () => new Set<string>()),
-          runAgentPrompt: vi.fn(async () => ({})),
+          runAgentPrompt: vi.fn(simulateRuntimePatchHappyTurn),
           fetchJson: vi.fn(),
           ensureImageGenerationConfigured: vi.fn(),
         },
@@ -896,7 +949,7 @@ describe("runtime tool fixture", () => {
               );
               await fs.writeFile(sentinelPath, "runtime patch outside the workspace\n", "utf8");
             }
-            return {};
+            return simulateRuntimePatchHappyTurn(_env, params);
           }),
           fetchJson: vi.fn(),
           ensureImageGenerationConfigured: vi.fn(),
@@ -931,7 +984,7 @@ describe("runtime tool fixture", () => {
         {
           createSession: vi.fn(async (_env, _label, key) => key!),
           readEffectiveTools: vi.fn(async () => new Set<string>()),
-          runAgentPrompt: vi.fn(async () => ({})),
+          runAgentPrompt: vi.fn(simulateRuntimePatchHappyTurn),
           fetchJson: vi.fn(),
           ensureImageGenerationConfigured: vi.fn(),
         },
@@ -1004,7 +1057,7 @@ describe("runtime tool fixture", () => {
             transcriptToolName: params.transcriptToolName,
             requireSuccessfulTranscriptToolResult: params.requireSuccessfulTranscriptToolResult,
           });
-          return {};
+          return simulateRuntimePatchHappyTurn(_env, params);
         }),
         fetchJson,
         ensureImageGenerationConfigured: vi.fn(),
@@ -1021,6 +1074,9 @@ describe("runtime tool fixture", () => {
     expect(details).not.toContain("codex-native-workspace apply_patch");
     await expect(
       fs.access(path.resolve(env.gateway.workspaceDir, "../runtime-tool-fixture-denied.txt")),
+    ).rejects.toThrow();
+    await expect(
+      fs.access(path.join(env.gateway.workspaceDir, "runtime-tool-fixture-patch.txt")),
     ).rejects.toThrow();
   });
 
@@ -1041,6 +1097,30 @@ describe("runtime tool fixture", () => {
       }),
     ).rejects.toThrow(
       "expected mock apply_patch failure to explicitly reject the workspace boundary",
+    );
+  });
+
+  it.each([
+    { label: "no workspace mutation", happyPatchContents: null },
+    { label: "incorrect workspace contents", happyPatchContents: "a fabricated patch\n" },
+  ])("rejects successful linked mock patch claims with $label", async (testCase) => {
+    await expect(
+      runMockRuntimeToolFixtureWithOutputs({
+        toolName: "apply_patch",
+        happyArgs: {
+          input:
+            "*** Begin Patch\n*** Add File: runtime-tool-fixture-patch.txt\n+runtime patch\n*** End Patch\n",
+        },
+        failureArgs: {
+          input:
+            "*** Begin Patch\n*** Update File: ../runtime-tool-fixture-denied.txt\n@@\n-runtime-tool-fixture-denied-original\n+runtime patch outside the workspace\n*** End Patch\n",
+        },
+        happyOutput: "Successfully applied patch",
+        failureOutput: "Error: Path escapes sandbox root",
+        happyPatchContents: testCase.happyPatchContents,
+      }),
+    ).rejects.toThrow(
+      "expected apply_patch to create runtime-tool-fixture-patch.txt with exact contents",
     );
   });
 
@@ -1133,7 +1213,7 @@ describe("runtime tool fixture", () => {
               transcriptToolName: params.transcriptToolName,
               requireSuccessfulTranscriptToolResult: params.requireSuccessfulTranscriptToolResult,
             });
-            return {};
+            return simulateRuntimePatchHappyTurn(_env, params);
           }),
           fetchJson,
           ensureImageGenerationConfigured: vi.fn(),

@@ -125,6 +125,40 @@ export function buildToolCallEventsWithArgs(
   ];
 }
 
+export function buildCustomToolCallEventsWithInput(name: string, input: string): StreamEvent[] {
+  const call = buildMockFunctionCall(name, { input });
+  const item = {
+    type: "custom_tool_call",
+    id: call.itemId,
+    call_id: call.callId,
+    name,
+    input,
+    status: "completed",
+  };
+  return [
+    {
+      type: "response.output_item.added",
+      item: { ...item, input: "", status: "in_progress" },
+    },
+    {
+      type: "response.custom_tool_call_input.delta",
+      item_id: call.itemId,
+      call_id: call.callId,
+      delta: input,
+    },
+    { type: "response.output_item.done", item },
+    {
+      type: "response.completed",
+      response: {
+        id: call.responseId,
+        status: "completed",
+        output: [item],
+        usage: { input_tokens: 64, output_tokens: 16, total_tokens: 80 },
+      },
+    },
+  ];
+}
+
 export function extractRememberedFact(userTexts: string[]) {
   for (const text of userTexts) {
     const qaCanaryMatch = /\bqa canary code is\s+([A-Za-z0-9-]+)/i.exec(text);

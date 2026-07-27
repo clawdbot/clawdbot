@@ -90,6 +90,7 @@ import {
   shouldUseWhatsAppContactMarker,
   shouldUseWhatsAppStickerMarker,
   extractBlockStreamingMarkerDirectives,
+  hasDeclaredCustomTool,
   hasDeclaredTool,
   hasToolDefinition,
   isQaToolSearchFixture,
@@ -137,6 +138,7 @@ import {
 import {
   readTargetFromPrompt,
   execCommandFromToolProgressPrompt,
+  buildCustomToolCallEventsWithInput,
   buildToolCallEventsWithArgs,
   extractOrbitCode,
   extractToolSearchTarget,
@@ -233,6 +235,13 @@ async function buildResponsesPayload(
     const plannedArgs = targetTool
       ? buildQaToolSearchArgs(targetTool, QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText))
       : {};
+    if (
+      targetTool === "apply_patch" &&
+      hasDeclaredCustomTool(body, targetTool) &&
+      typeof plannedArgs.input === "string"
+    ) {
+      return buildCustomToolCallEventsWithInput(targetTool, plannedArgs.input);
+    }
     if (targetTool && hasDeclaredTool(body, "tool_search_code")) {
       return buildToolCallEventsWithArgs("tool_search_code", {
         code: [

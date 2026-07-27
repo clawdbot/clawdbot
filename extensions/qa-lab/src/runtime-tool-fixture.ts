@@ -58,6 +58,7 @@ type QaRuntimeToolFixtureTranscriptToolResult = {
 
 const RUNTIME_PARITY_SESSION_KEY_DETAIL_PREFIX = "RUNTIME_PARITY_SESSION_KEY=";
 const RUNTIME_PATCH_HAPPY_FILENAME = "runtime-tool-fixture-patch.txt";
+const RUNTIME_PATCH_HAPPY_CONTENTS = "runtime patch\n";
 const RUNTIME_PATCH_DENIED_FILENAME = "runtime-tool-fixture-denied.txt";
 const RUNTIME_PATCH_DENIED_CONTENTS = "runtime-tool-fixture-denied-original\n";
 const RUNTIME_PATCH_WORKSPACE_DENIAL_RE =
@@ -796,16 +797,44 @@ export async function runRuntimeToolFixture(
       )
     : 0;
 
-  await runFixtureOperation(() =>
-    deps.runAgentPrompt(env, {
-      sessionKey: happySessionKey,
-      message: happyPrompt,
-      timeoutMs: liveTurnTimeoutMs(env, 45_000),
-      ...(happyPathOutputRequired && requireTranscriptEvidence
-        ? { transcriptToolName: toolName, requireSuccessfulTranscriptToolResult: true }
-        : {}),
-    }),
-  );
+  await runFixtureOperation(async () => {
+    const runHappyPrompt = () =>
+      deps.runAgentPrompt(env, {
+        sessionKey: happySessionKey,
+        message: happyPrompt,
+        timeoutMs: liveTurnTimeoutMs(env, 45_000),
+        ...(happyPathOutputRequired && requireTranscriptEvidence
+          ? { transcriptToolName: toolName, requireSuccessfulTranscriptToolResult: true }
+          : {}),
+      });
+    if (toolName !== "apply_patch" || !metadata.required) {
+      return runHappyPrompt();
+    }
+    const happyPatchPath = path.join(env.gateway.workspaceDir, RUNTIME_PATCH_HAPPY_FILENAME);
+    const readHappyPatchContents = async () =>
+      fs.readFile(happyPatchPath, "utf8").catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") {
+          return undefined;
+        }
+        throw error;
+      });
+    if ((await readHappyPatchContents()) !== undefined) {
+      throw new Error(
+        `apply_patch happy-path target already exists: ${RUNTIME_PATCH_HAPPY_FILENAME}`,
+      );
+    }
+    try {
+      const result = await runHappyPrompt();
+      if ((await readHappyPatchContents()) !== RUNTIME_PATCH_HAPPY_CONTENTS) {
+        throw new Error(
+          `expected apply_patch to create ${RUNTIME_PATCH_HAPPY_FILENAME} with exact contents`,
+        );
+      }
+      return result;
+    } finally {
+      await fs.rm(happyPatchPath, { force: true });
+    }
+  });
   await runFixtureOperation(async () => {
     const runFailurePrompt = () =>
       deps.runAgentPrompt(env, {
