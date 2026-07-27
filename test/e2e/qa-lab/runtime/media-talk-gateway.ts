@@ -466,7 +466,6 @@ async function runActiveTalkAgentRunProof(options: ProducerOptions): Promise<str
   const mock = await startQaMockOpenAiServer({ finalOnlyMarkerPauseMs: 60_000 });
   let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
   let client: GatewayClient | undefined;
-  let diagnosticsClient: GatewayClient | undefined;
   try {
     gateway = await startQaGatewayChild({
       repoRoot: options.repoRoot,
@@ -546,16 +545,10 @@ async function runActiveTalkAgentRunProof(options: ProducerOptions): Promise<str
     await consultRequest;
     client.stop();
     client = undefined;
-    diagnosticsClient = await connectGatewayClient({
-      clientName: GATEWAY_CLIENT_NAMES.CLI,
-      mode: GATEWAY_CLIENT_MODES.CLI,
-      token: gateway.token,
-      url: gateway.wsUrl,
-    });
-    const queuedDiagnostics = await diagnosticsClient.request<DiagnosticStabilitySnapshot>(
-      "diagnostics.stability",
-      { type: "message.queued", limit: 20 },
-    );
+    const queuedDiagnostics = (await gateway.call("diagnostics.stability", {
+      type: "message.queued",
+      limit: 20,
+    })) as DiagnosticStabilitySnapshot;
     const steeringQueueDepths = queuedDiagnostics.events
       .filter((event) => event.source === "embedded-agent-runner")
       .map((event) => event.queueDepth);
@@ -564,10 +557,10 @@ async function runActiveTalkAgentRunProof(options: ProducerOptions): Promise<str
         `active-run steering changed diagnostic backlog: ${JSON.stringify(queuedDiagnostics.events)}`,
       );
     }
-    const stateDiagnostics = await diagnosticsClient.request<DiagnosticStabilitySnapshot>(
-      "diagnostics.stability",
-      { type: "session.state", limit: 20 },
-    );
+    const stateDiagnostics = (await gateway.call("diagnostics.stability", {
+      type: "session.state",
+      limit: 20,
+    })) as DiagnosticStabilitySnapshot;
     const finalState = stateDiagnostics.events.at(-1);
     if (finalState?.outcome !== "idle" || finalState.queueDepth !== 0) {
       throw new Error(
@@ -576,7 +569,6 @@ async function runActiveTalkAgentRunProof(options: ProducerOptions): Promise<str
     }
     return `real Gateway pid=${gateway.pid ?? "unknown"}; persistent WebChat connection completed status, steer, follow-up, cancel RPCs; steeringQueueDepths=${steeringQueueDepths.join(",")}; finalState=${finalState.outcome}; finalQueueDepth=${finalState.queueDepth}`;
   } finally {
-    diagnosticsClient?.stop();
     client?.stop();
     await gateway?.stop().catch(() => undefined);
     await mock.stop();
