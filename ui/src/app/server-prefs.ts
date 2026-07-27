@@ -171,6 +171,8 @@ const LAST_SEEN_KEY = "openclaw.control.serverPrefs.v1";
 // Pending keys are local edits not yet acknowledged by the gateway. They shadow reconciliation so
 // snapshots cannot revert unacked edits, and persist so offline edits replay after reload/reconnect.
 const PENDING_KEY = "openclaw.control.serverPrefs.pending.v1";
+const CONFLICT_REDRAIN_DELAY_MS = 1_000;
+const MAX_CONFLICT_REDRAINS = 5;
 let applyingServerPrefs = false;
 let pendingScope = "";
 let pendingPrefs: ServerUiPrefs | null = null;
@@ -179,6 +181,15 @@ let pushAfterCommit: (() => void) | undefined;
 let pushDraining = false;
 let drainRequested = false;
 let pushEpoch = 0;
+let conflictRedrainTimer: ReturnType<typeof setTimeout> | null = null;
+let consecutiveConflictRedrains = 0;
+function clearConflictRedrain(): void {
+  if (conflictRedrainTimer !== null) {
+    clearTimeout(conflictRedrainTimer);
+    conflictRedrainTimer = null;
+  }
+  consecutiveConflictRedrains = 0;
+}
 function readStorage(root: string, scope: string): string | null {
   try {
     return globalThis.localStorage?.getItem(`${root}:${scope}`) ?? null;
@@ -218,6 +229,7 @@ function persistPendingPrefs(): void {
   writeStorage(PENDING_KEY, pendingScope, value);
 }
 export function resetServerUiPrefsSync() {
+  clearConflictRedrain();
   applyingServerPrefs = pushDraining = drainRequested = false;
   pendingScope = "";
   pendingPrefs = pushClient = null;
@@ -280,6 +292,7 @@ function adoptPushClient(client: GatewayBrowserClient): void {
   if (pushClient === client) {
     return;
   }
+  clearConflictRedrain();
   pushEpoch += 1;
   pushClient = client;
   pushDraining = false;
@@ -297,6 +310,20 @@ function removeBatch(batch: ServerUiPrefs): void {
   if (!Object.keys(pendingPrefs).length) {
     pendingPrefs = null;
   }
+}
+// Conflicts mean another writer committed, so bounded rescheduling converges under progress.
+// The cap prevents an endlessly conflicting server from keeping a timer chain alive.
+function scheduleConflictRedrain(client: GatewayBrowserClient, epoch: number): void {
+  if (conflictRedrainTimer !== null || consecutiveConflictRedrains >= MAX_CONFLICT_REDRAINS) {
+    return;
+  }
+  consecutiveConflictRedrains += 1;
+  conflictRedrainTimer = setTimeout(() => {
+    conflictRedrainTimer = null;
+    if (pushClient === client && pushEpoch === epoch && pendingPrefs) {
+      startPendingDrain(client);
+    }
+  }, CONFLICT_REDRAIN_DELAY_MS);
 }
 async function drainPendingPrefs(client: GatewayBrowserClient, epoch: number): Promise<void> {
   while (pendingPrefs) {
@@ -329,6 +356,7 @@ async function drainPendingPrefs(client: GatewayBrowserClient, epoch: number): P
         const lastSeen = parseStoredPrefs(readStorage(LAST_SEEN_KEY, pendingScope)) ?? {};
         writeStorage(LAST_SEEN_KEY, pendingScope, JSON.stringify({ ...lastSeen, ...batch }));
         persistPendingPrefs();
+        clearConflictRedrain();
         break;
       } catch (error) {
         if (pushClient !== client || pushEpoch !== epoch) {
@@ -341,7 +369,11 @@ async function drainPendingPrefs(client: GatewayBrowserClient, epoch: number): P
           });
           continue;
         }
-        if (conflict || !client.connected) {
+        if (conflict) {
+          scheduleConflictRedrain(client, epoch);
+          return;
+        }
+        if (!client.connected) {
           return;
         }
         // Connected viewer-scope or validation failures degrade silently to device-local state;
@@ -381,6 +413,7 @@ export function pushServerUiPrefs(
   hooks: { afterCommit?: () => void } = {},
 ): void {
   adoptPushClient(client);
+  clearConflictRedrain();
   pendingPrefs = { ...pendingPrefs, ...prefs };
   pushAfterCommit = hooks.afterCommit;
   persistPendingPrefs();
@@ -391,6 +424,7 @@ export function flushServerUiPrefs(
   hooks: { afterCommit?: () => void } = {},
 ): void {
   adoptPushClient(client);
+  clearConflictRedrain();
   pushEpoch += 1;
   pushDraining = drainRequested = false;
   pushAfterCommit = hooks.afterCommit;

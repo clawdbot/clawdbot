@@ -316,6 +316,38 @@ describe("config.patch hash-free ui.prefs LWW", () => {
     );
   });
 
+  it.each([
+    { name: "ui.prefs deletion", raw: { ui: { prefs: null } } },
+    { name: "ui deletion", raw: { ui: null } },
+    { name: "scalar ui.prefs", raw: { ui: { prefs: "stale-container" } } },
+  ])("rejects hash-free container operation: $name", async ({ raw }) => {
+    storedConfig = { ui: { prefs: { theme: "claw" } } };
+
+    const { respond } = await invokeConfigPatch({ raw });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("config base hash required") }),
+    );
+    expect(configWriteMocks.commitGatewayConfigWrite).not.toHaveBeenCalled();
+  });
+
+  it("allows a hash-free per-key null deletion below ui.prefs", async () => {
+    storedConfig = { ui: { prefs: { chatFollowUpMode: "queue", theme: "claw" } } };
+
+    const { respond } = await invokeConfigPatch({
+      raw: { ui: { prefs: { chatFollowUpMode: null } } },
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ hash: "next-hash-1" }),
+      undefined,
+    );
+    expect(storedConfig.ui?.prefs).toEqual({ theme: "claw" });
+  });
+
   it("keeps destructive array replacement explicit for hash-free patches", async () => {
     storedConfig = { ui: { prefs: { sidebarEntries: ["route:usage", "route:tasks"] } } };
 
@@ -368,7 +400,7 @@ describe("config.patch hash-free ui.prefs LWW", () => {
     );
   });
 
-  it("retries a hash-free patch against a fresh snapshot after a commit race", async () => {
+  it("surfaces a hash-free commit race without replaying stale intent", async () => {
     configWriteMocks.commitGatewayConfigWrite.mockImplementationOnce(async () => {
       storedConfig = { ui: { prefs: { locale: "de" } } };
       storedHash = "raced-hash";
@@ -377,9 +409,18 @@ describe("config.patch hash-free ui.prefs LWW", () => {
       });
     });
 
-    await invokeConfigPatch({ raw: { ui: { prefs: { theme: "knot" } } } });
+    const { respond } = await invokeConfigPatch({
+      raw: { ui: { prefs: { theme: "knot" } } },
+    });
 
-    expect(configWriteMocks.commitGatewayConfigWrite).toHaveBeenCalledTimes(2);
-    expect(storedConfig.ui?.prefs).toEqual({ locale: "de", theme: "knot" });
+    expect(configWriteMocks.commitGatewayConfigWrite).toHaveBeenCalledOnce();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("config changed since last load"),
+      }),
+    );
+    expect(storedConfig.ui?.prefs).toEqual({ locale: "de" });
   });
 });
