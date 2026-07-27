@@ -45,7 +45,11 @@ async function collectResponseEvents(socket: WebSocket, request: unknown) {
       reject(error);
     };
     const onMessage = (data: RawData) => {
-      const text = Array.isArray(data) ? Buffer.concat(data).toString("utf8") : data.toString();
+      const text = Buffer.isBuffer(data)
+        ? data.toString("utf8")
+        : Array.isArray(data)
+          ? Buffer.concat(data).toString("utf8")
+          : Buffer.from(data).toString("utf8");
       const event = JSON.parse(text) as Record<string, unknown>;
       events.push(event);
       if (event.type === "response.completed" || event.type === "error") {

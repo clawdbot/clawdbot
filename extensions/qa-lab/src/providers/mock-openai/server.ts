@@ -1315,33 +1315,33 @@ export async function startQaMockOpenAiServer(params?: {
   const inflightRequests = new Map<number, { prompt: string; allInputText: string }>();
   let nextInflightRequestId = 1;
   const imageGenerationRequests: Array<Record<string, unknown>> = [];
-  const dispatchResponses = async (params: {
+  const dispatchResponses = async (request: {
     body: Record<string, unknown>;
     raw: string;
   }): Promise<QaMockResponsesDispatchResult> => {
-    const input = Array.isArray(params.body.input)
-      ? (params.body.input as ResponsesInputItem[])
+    const input = Array.isArray(request.body.input)
+      ? (request.body.input as ResponsesInputItem[])
       : [];
     if (isRemoteCompactionV2Request(input)) {
       return { events: buildRemoteCompactionV2Events() };
     }
     const prompt = extractLastUserText(input);
-    const allInputText = extractAllRequestTexts(input, params.body);
+    const allInputText = extractAllRequestTexts(input, request.body);
     const inflightRequestId = nextInflightRequestId++;
     inflightRequests.set(inflightRequestId, { prompt, allInputText });
     let events: StreamEvent[];
     try {
-      events = await buildResponsesPayload(params.body, scenarioState);
+      events = await buildResponsesPayload(request.body, scenarioState);
     } finally {
       inflightRequests.delete(inflightRequestId);
     }
-    const resolvedModel = typeof params.body.model === "string" ? params.body.model : "";
+    const resolvedModel = typeof request.body.model === "string" ? request.body.model : "";
     recordRequest({
-      raw: params.raw,
-      body: params.body,
+      raw: request.raw,
+      body: request.body,
       prompt,
       allInputText,
-      instructions: extractInstructionsText(params.body) || undefined,
+      instructions: extractInstructionsText(request.body) || undefined,
       toolOutput: extractToolOutput(input),
       model: resolvedModel,
       providerVariant: resolveProviderVariant(resolvedModel),
