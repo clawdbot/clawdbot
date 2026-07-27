@@ -66,7 +66,7 @@ describe("normalizeBrowserUrlDraft", () => {
       "openclaw.browser.panel.v1",
       JSON.stringify({ open: true, dock: "right", height: 420, width: 560 }),
     );
-    const panel = document.createElement("openclaw-browser-panel") as HTMLElement & {
+    const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {
       available: boolean;
       suppressed: boolean;
       renderRoot: ShadowRoot;
@@ -98,7 +98,7 @@ describe("normalizeBrowserUrlDraft", () => {
       "openclaw.browser.panel.v1",
       JSON.stringify({ open: true, dock: "right", height: 420, width: 560 }),
     );
-    const panel = document.createElement("openclaw-browser-panel") as HTMLElement & {
+    const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {
       available: boolean;
       suppressed: boolean;
       browserPanelIsOpen(): boolean;
@@ -128,7 +128,7 @@ describe("normalizeBrowserUrlDraft", () => {
         return {} as T;
       },
     } as GatewayBrowserClient;
-    const panel = document.createElement("openclaw-browser-panel") as HTMLElement & {
+    const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {
       client: GatewayBrowserClient | null;
       available: boolean;
       suppressed: boolean;
