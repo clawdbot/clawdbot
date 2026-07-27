@@ -141,7 +141,8 @@ enum WatchChatPresentation {
 
     private nonisolated static func truncatedText(_ text: String) -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.count > 240 ? "\(trimmed.prefix(237))..." : trimmed
+        guard trimmed.count > 240 else { return trimmed }
+        return "\(trimmed.prefix(237))..."
     }
 
     private nonisolated static func timestampMs(_ timestamp: Double?) -> Int64? {
