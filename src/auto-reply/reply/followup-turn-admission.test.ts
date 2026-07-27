@@ -150,7 +150,6 @@ describe("admitFollowupTurn", () => {
     const queuedEntry: SessionEntry = { sessionId: "queued-session", updatedAt: 1 };
     const admittedEntry: SessionEntry = {
       sessionId: "admitted-session",
-      sessionFile: "/tmp/admitted.jsonl",
       modelSelectionLocked: true,
       updatedAt: 2,
     };
@@ -179,7 +178,7 @@ describe("admitFollowupTurn", () => {
     if (result.kind === "admitted") {
       expect(result.turn.queued.run).toMatchObject({
         sessionId: "admitted-session",
-        sessionFile: "sqlite:agent:admitted-session:/tmp/sessions.json",
+        sessionFile: "main",
         modelSelectionLocked: true,
       });
       expect(result.turn.currentInboundContext).toEqual({ text: "fresh goal" });
@@ -566,8 +565,7 @@ describe("admitFollowupTurn", () => {
         sessionId: "compacted-session",
         modelSelectionLocked: false,
       });
-      expect(result.turn.queued.run.sessionFile).toContain("compacted-session");
-      expect(result.turn.queued.run.sessionFile).not.toBe("/tmp/session.jsonl");
+      expect(result.turn.queued.run.sessionFile).toBe("main");
       expect(result.turn.queued.run.cliSessionBindingFacts).toBeUndefined();
       expect(result.turn.queued.run.autoFallbackPrimaryProbe).toBeUndefined();
       expect(result.turn.preflightCompactionApplied).toBe(true);

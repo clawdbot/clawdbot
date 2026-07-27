@@ -354,7 +354,7 @@ export async function accountFollowupTurn(params: {
       key: queueKey,
       previousSessionId: turn.queued.run.sessionId,
       nextSessionId: entry?.sessionId ?? turn.queued.run.sessionId,
-      nextSessionFile: entry?.sessionFile,
+      nextSessionFile: queueKey,
       nextProvider: accounting.providerUsed,
       nextModel: accounting.modelUsed,
       nextModelOverrideSource: entry?.modelOverrideSource,
@@ -376,7 +376,6 @@ export async function accountFollowupTurn(params: {
       lastCallUsage: accounting.runResult.meta?.agentMeta?.lastCallUsage,
       contextTokensUsed: accounting.contextTokensUsed,
       newSessionId: accounting.runResult.meta?.agentMeta?.sessionId,
-      newSessionFile: accounting.runResult.meta?.agentMeta?.sessionFile,
     });
     const refreshed = turn.session.current();
     if (refreshed) {
@@ -385,7 +384,7 @@ export async function accountFollowupTurn(params: {
         key: queueKey ?? "",
         previousSessionId,
         nextSessionId: refreshed.sessionId,
-        nextSessionFile: refreshed.sessionFile,
+        nextSessionFile: queueKey ?? sessionKey,
       });
     }
     if (accounting.verboseEnabled) {
