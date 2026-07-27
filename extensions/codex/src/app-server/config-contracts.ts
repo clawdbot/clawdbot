@@ -212,7 +212,7 @@ export type CodexAppServerRuntimeOptions = {
   approvalsReviewer: CodexAppServerApprovalsReviewer;
   serviceTier?: CodexServiceTier | null;
   networkProxy?: ResolvedCodexAppServerNetworkProxyConfig;
-  workspaceWriteNetworkAccess: boolean;
+  workspaceWriteNetworkAccess?: boolean;
 };
 
 export type CodexModelBackedReviewerContext = {
