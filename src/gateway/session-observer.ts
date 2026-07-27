@@ -560,6 +560,8 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     const eventSessionKey = event.sessionKey?.trim();
     const eventAgentId = event.agentId?.trim();
     let knownRun: SessionObserverState | DormantSessionObserverRun | undefined;
+    // Context-reduced terminals may omit either routing field. Recover their
+    // tracked owner by run id before the agent-scoped fail-closed branch.
     if (terminal && (!eventSessionKey || !eventAgentId)) {
       for (const candidate of states.values()) {
         if (candidate.runId === event.runId) {
