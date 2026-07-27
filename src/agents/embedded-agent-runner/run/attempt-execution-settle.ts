@@ -34,7 +34,7 @@ type StreamCleanupInput = {
   unsubscribe: () => void;
 };
 
-function cleanupEmbeddedAttemptStreamExecution(input: StreamCleanupInput): unknown {
+function cleanupEmbeddedAttemptStreamExecution(input: StreamCleanupInput): Error | undefined {
   const { attempt, state } = input;
   const terminal = projectAgentRunAttemptTerminal(state.terminal);
   input.clearAttemptTimeoutTimers();
@@ -49,7 +49,7 @@ function cleanupEmbeddedAttemptStreamExecution(input: StreamCleanupInput): unkno
   }
   // Every release belongs to this owner; one broken callback must not strand
   // the active run or mask the prompt failure that caused teardown.
-  let firstCleanupError: unknown;
+  let firstCleanupError: Error | undefined;
   for (const [name, cleanup] of [
     ["unsubscribe", input.unsubscribe],
     ["backend detach", () => attempt.replyOperation?.detachBackend(input.queueHandle)],
@@ -68,7 +68,7 @@ function cleanupEmbeddedAttemptStreamExecution(input: StreamCleanupInput): unkno
     try {
       cleanup();
     } catch (error) {
-      firstCleanupError ??= error;
+      firstCleanupError ??= error instanceof Error ? error : new Error(String(error));
       log.error(
         `CRITICAL: ${name} failed, possible resource leak: runId=${attempt.runId} ${String(error)}`,
       );
@@ -162,7 +162,7 @@ export async function runEmbeddedAttemptSettledPhase(
   let sessionIdUsed = activeSession.sessionId;
   let sessionFileUsed: string | undefined = attempt.sessionFile;
   let preflightRecovery: EmbeddedRunAttemptResult["preflightRecovery"];
-  let streamPhaseCompleted = false;
+  let cleanupError: Error | undefined;
   const readTerminal = () => projectAgentRunAttemptTerminal(state.terminal);
   const setFailure = (error: unknown, source: AgentRunAttemptFailureSource | null) => {
     state.terminal = setAgentRunAttemptTerminalFailure(
@@ -400,9 +400,8 @@ export async function runEmbeddedAttemptSettledPhase(
     });
     sessionIdUsed = afterTurn.sessionIdUsed;
     sessionFileUsed = afterTurn.sessionFileUsed;
-    streamPhaseCompleted = true;
   } finally {
-    const cleanupError = cleanupEmbeddedAttemptStreamExecution({
+    cleanupError = cleanupEmbeddedAttemptStreamExecution({
       attempt,
       clearAttemptTimeoutTimers,
       isProbeSession,
@@ -411,9 +410,10 @@ export async function runEmbeddedAttemptSettledPhase(
       state,
       unsubscribe,
     });
-    if (streamPhaseCompleted && cleanupError !== undefined) {
-      throw cleanupError;
-    }
+  }
+
+  if (cleanupError !== undefined) {
+    throw cleanupError;
   }
 
   const beforeAgentFinalizeRevisionReason = getBeforeAgentFinalizeRevisionReason();
