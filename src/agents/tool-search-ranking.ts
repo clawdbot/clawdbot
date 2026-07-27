@@ -293,7 +293,7 @@ const NORMALIZED_EXPANSIONS: ReadonlyArray<{
  */
 const EXPANSION_WEIGHT = 0.35;
 
-export type WeightedTerm = { term: string; weight: number };
+type WeightedTerm = { term: string; weight: number };
 
 /** Query terms: literal words at full weight, expansions discounted. */
 export function tokenizeQuery(input: string): WeightedTerm[] {
@@ -315,9 +315,9 @@ export function tokenizeQuery(input: string): WeightedTerm[] {
   return [...weights].map(([term, weight]) => ({ term, weight }));
 }
 
-export type RankedDocument<T> = { value: T; terms: readonly string[] };
+type RankedDocument<T> = { value: T; terms: readonly string[] };
 
-export type LexicalIndex<T> = {
+type LexicalIndex<T> = {
   documents: ReadonlyArray<{ value: T; termCounts: ReadonlyMap<string, number>; length: number }>;
   documentFrequency: ReadonlyMap<string, number>;
   averageLength: number;

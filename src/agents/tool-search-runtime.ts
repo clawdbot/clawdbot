@@ -49,7 +49,7 @@ function describeEntry(entry: ToolSearchCatalogEntry) {
  * "Send a message" through its `channel` parameter. Codex and the Claude API
  * tool-search tools index argument metadata for the same reason.
  */
-export function toolSearchEntryText(entry: ToolSearchCatalogEntry): string {
+function toolSearchEntryText(entry: ToolSearchCatalogEntry): string {
   // Only first-party schemas are walked. MCP and client parameters are untrusted
   // and deliberately never traversed: compactToolSearchCatalogEntry reports them
   // as "unknown" for the same reason, and a client may hand us a lazy object that

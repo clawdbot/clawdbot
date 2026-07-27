@@ -5,7 +5,7 @@ import {
   tokenizeDocument,
   tokenizeQuery,
 } from "./tool-search-ranking.js";
-import { ToolSearchRuntime, toolSearchEntryText } from "./tool-search-runtime.js";
+import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchCatalogEntry } from "./tool-search-types.js";
 
 function entry(partial: Partial<ToolSearchCatalogEntry>): ToolSearchCatalogEntry {
@@ -184,15 +184,12 @@ describe("scoreLexical", () => {
   });
 });
 
-describe("toolSearchEntryText", () => {
-  it("indexes first-party parameter names and descriptions", () => {
-    const text = toolSearchEntryText(CATALOG[4] as ToolSearchCatalogEntry);
-
-    expect(text).toContain("repository");
-    expect(text).toContain("Target repository");
-  });
-
-  it("never traverses schemas from sources the catalog treats as untrusted", () => {
+describe("untrusted schemas", () => {
+  it("never traverses parameters from a source the catalog treats as untrusted", async () => {
+    // compactToolSearchCatalogEntry already reports non-first-party parameters
+    // as "unknown"; indexing must respect the same boundary. A client can hand
+    // us a lazy object that throws on property access, and MCP-authored text
+    // must not become ranking input.
     const hostile = entry({
       source: "client",
       name: "client_pick_file",
@@ -209,9 +206,29 @@ describe("toolSearchEntryText", () => {
         ),
       },
     });
+    const ctx = {
+      catalogRef: {
+        current: {
+          entries: [...CATALOG, hostile],
+          searchCount: 0,
+          describeCount: 0,
+          callCount: 0,
+        },
+      },
+    };
+    const search = new ToolSearchRuntime(ctx as never, {
+      enabled: true,
+      mode: "directory",
+      codeTimeoutMs: 1000,
+      searchDefaultLimit: 10,
+      maxSearchLimit: 50,
+    });
 
-    expect(() => toolSearchEntryText(hostile)).not.toThrow();
-    expect(toolSearchEntryText(hostile)).not.toContain("pick_file_property");
+    // Reaching the schema at all throws, so surviving the query is the proof.
+    await expect(search.search("pick a file")).resolves.toBeDefined();
+    expect((await search.search("client_pick_file")).map((hit) => hit.name)).toContain(
+      "client_pick_file",
+    );
   });
 });
 
