@@ -541,6 +541,31 @@ describe("lmstudio stream wrapper", () => {
     expect(baseStream).toHaveBeenCalledTimes(2);
   });
 
+  it("preserves all 29 agent tools while preload failure backoff remains active", async () => {
+    ensureLmstudioModelLoadedMock.mockRejectedValueOnce(new Error("out of memory"));
+    const baseStream = buildDoneStreamFn();
+    const wrapped = createWrappedLmstudioStream(baseStream);
+    const tools = Array.from({ length: 29 }, (_, index) => ({
+      name: `agent_tool_${index}`,
+      description: `Agent tool ${index}`,
+      parameters: { type: "object" },
+    }));
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const events = await collectEvents(
+        runWrappedLmstudioStream(wrapped, {}, undefined, { tools }),
+      );
+
+      expectSingleDoneEvent(events);
+      const call = (baseStream as unknown as { mock: { calls: unknown[][] } }).mock.calls[attempt];
+      expect(call).toBeDefined();
+      expect(requireRecord(call?.[1], "base stream context").tools).toEqual(tools);
+    }
+
+    expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledTimes(1);
+    expect(baseStream).toHaveBeenCalledTimes(2);
+  });
+
   it("retries preload once the cooldown expires", async () => {
     ensureLmstudioModelLoadedMock.mockRejectedValueOnce(new Error("out of memory"));
     ensureLmstudioModelLoadedMock.mockResolvedValueOnce(undefined);
@@ -595,6 +620,38 @@ describe("lmstudio stream wrapper", () => {
     );
     expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledTimes(2);
     nowSpy.mockRestore();
+  });
+
+  it("keeps increasing preload backoff across expired consecutive failures", async () => {
+    ensureLmstudioModelLoadedMock.mockRejectedValue(new Error("out of memory"));
+    const baseStream = buildDoneStreamFn();
+    const wrapped = createWrappedLmstudioStream(baseStream);
+    const baseTime = 1_000_000;
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(baseTime);
+
+    await collectEvents(runWrappedLmstudioStream(wrapped, {}));
+    expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledTimes(1);
+
+    nowSpy.mockReturnValue(baseTime + 5_001);
+    await collectEvents(runWrappedLmstudioStream(wrapped, {}));
+    expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledTimes(2);
+
+    nowSpy.mockReturnValue(baseTime + 10_001);
+    await collectEvents(runWrappedLmstudioStream(wrapped, {}));
+    expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledTimes(2);
+
+    nowSpy.mockReturnValue(baseTime + 15_002);
+    await collectEvents(runWrappedLmstudioStream(wrapped, {}));
+    expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledTimes(3);
+
+    nowSpy.mockReturnValue(baseTime + 30_002);
+    await collectEvents(runWrappedLmstudioStream(wrapped, {}));
+    expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledTimes(3);
+
+    nowSpy.mockReturnValue(baseTime + 35_003);
+    await collectEvents(runWrappedLmstudioStream(wrapped, {}));
+    expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledTimes(4);
+    expect(baseStream).toHaveBeenCalledTimes(6);
   });
 
   it("forces supportsUsageInStreaming compat before calling the underlying stream", async () => {

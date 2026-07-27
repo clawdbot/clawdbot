@@ -34,10 +34,14 @@ extension OpenClawChatViewModel {
             let context = self.currentSessionSnapshot()
             Task { await self.pollHealthIfNeeded(force: false, sessionSnapshot: context) }
         case let .sessionsChanged(change):
-            let swarmEvent = self.observeSwarmEvent(change)
             // Broad subscribers see every agent's canonical global row. Gate
             // ownership before the shared-key projection can replace local state.
-            guard self.sessionChangeMatchesActiveAgent(change) else { return }
+            guard ChatSessionSidebarModel.sessionMatchesActiveAgent(
+                sessionKey: change.sessionKey,
+                agentId: change.agentId,
+                activeAgentId: self.activeAgentId)
+            else { return }
+            let swarmEvent = self.observeSwarmEvent(change)
             let ownedSwarmActivityNote = swarmEvent && SelfContainedSwarmHelpers.isActivityNote(change)
             self.applySessionChangeProjection(change, ownedSwarmActivityNote: ownedSwarmActivityNote)
             // Group-catalog mutations from any client arrive as reason "groups"
@@ -138,20 +142,6 @@ extension OpenClawChatViewModel {
             let context = self.currentSessionSnapshot()
             Task { await self.fetchSessions(limit: 50, sessionSnapshot: context) }
         }
-    }
-
-    private func sessionChangeMatchesActiveAgent(_ change: OpenClawChatSessionsChangedEvent) -> Bool {
-        let sessionKey = change.sessionKey?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        guard sessionKey == "global" else { return true }
-        let eventAgentId = change.agentId?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        let selectedAgentId = self.activeAgentId?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        return eventAgentId?.isEmpty == false && eventAgentId == selectedAgentId
     }
 
     private func handleSessionMessageEvent(_ payload: OpenClawSessionMessageEventPayload) {

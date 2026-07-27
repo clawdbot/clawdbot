@@ -1,6 +1,6 @@
 // Keeps fake-terminal test-only logs and opaque-session fixtures independently bounded.
 import { readFile } from "node:fs/promises";
-import { sleep } from "./tui-pty-test-support.js";
+import { sleep, type PtyRun } from "./tui-pty-test-support.js";
 
 export type FixtureLogEntry = {
   method: string;
@@ -51,6 +51,32 @@ export function objectFieldEquals(entry: FixtureLogEntry, field: string, value: 
   }
   const payload = entry.payload as Record<string, unknown>;
   return Object.hasOwn(payload, field) && payload[field] === value;
+}
+
+/** Approves a workspace skill using exact fragments that survive narrow-terminal wrapping. */
+export async function approveWorkspaceSkill(
+  fixture: {
+    run: PtyRun;
+    waitForLogEntry: (predicate: (entry: FixtureLogEntry) => boolean) => Promise<FixtureLogEntry>;
+  },
+  message: string,
+) {
+  await fixture.run.write(`${message}\r`);
+  await fixture.run.waitForOutput("workspace skill approval: Apply workspace skill proposal");
+  await fixture.run.waitForOutput("Plugin: workspace-skills");
+  // A compact PTY wraps the request; exact fragments avoid matching across terminal redraws.
+  await fixture.run.waitForOutput("Apply a pending workspace skill proposal");
+  await fixture.run.waitForOutput("into live workspace");
+  await fixture.run.waitForOutput("skills.");
+
+  await fixture.run.write("\x1b[A", { delay: false });
+  await fixture.run.write("\r");
+  await fixture.waitForLogEntry(
+    (entry) =>
+      entry.method === "resolvePluginApproval" &&
+      objectFieldEquals(entry, "decision", "allow-once"),
+  );
+  await fixture.run.waitForOutput("PTY_SKILL_APPROVAL_RESOLVED: allow-once");
 }
 
 export function buildOpaqueSessionIsolationFixture(): string {

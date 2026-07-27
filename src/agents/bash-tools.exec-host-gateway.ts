@@ -766,6 +766,7 @@ export async function processGatewayAllowlist(
     const autoReviewArgv =
       allowlistEval.segments.length === 1 &&
       autoReviewSegment !== undefined &&
+      autoReviewSegment.resolution?.policyBlocked !== true &&
       // Shell startup can execute unreviewed profile code before its bound payload.
       !isBlockedShellWrapperCommand(autoReviewSegment.argv) &&
       (autoReviewSegment.raw === undefined ||

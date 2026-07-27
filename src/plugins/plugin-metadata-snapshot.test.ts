@@ -17,6 +17,7 @@ const {
   loadPluginRegistrySnapshotWithMetadata,
   loadPluginManifestRegistry,
   loadPluginManifestRegistryForInstalledIndex,
+  loadInstalledPluginIndexWithDiscovery,
 } = vi.hoisted(() => {
   // Shared plugin workers must load this graph after this file's mocks are installed.
   vi.resetModules();
@@ -24,6 +25,7 @@ const {
     loadPluginRegistrySnapshotWithMetadata: vi.fn(),
     loadPluginManifestRegistry: vi.fn(),
     loadPluginManifestRegistryForInstalledIndex: vi.fn(),
+    loadInstalledPluginIndexWithDiscovery: vi.fn(),
   };
 });
 
@@ -50,6 +52,15 @@ vi.mock("./manifest-registry-installed.js", async (importOriginal) => {
     ...actual,
     loadPluginManifestRegistryForInstalledIndex: (params: unknown) =>
       loadPluginManifestRegistryForInstalledIndex(params),
+  };
+});
+
+vi.mock("./installed-plugin-index.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./installed-plugin-index.js")>();
+  return {
+    ...actual,
+    loadInstalledPluginIndexWithDiscovery: (params: unknown) =>
+      loadInstalledPluginIndexWithDiscovery(params),
   };
 });
 
@@ -108,7 +119,12 @@ describe("plugin metadata snapshot", () => {
     loadPluginManifestRegistry.mockReset();
     loadPluginManifestRegistry.mockReturnValue({ plugins: [], diagnostics: [] });
     loadPluginManifestRegistryForInstalledIndex.mockReset();
+    loadInstalledPluginIndexWithDiscovery.mockReset();
     loadPluginManifestRegistryForInstalledIndex.mockReturnValue(makeManifestRegistry());
+    loadInstalledPluginIndexWithDiscovery.mockReturnValue({
+      index: makeIndex(),
+      discovery: { candidates: [], diagnostics: [] },
+    });
   });
 
   afterEach(() => {
@@ -316,12 +332,69 @@ describe("plugin metadata snapshot", () => {
       diagnostics: [],
       discovery,
     });
+    loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
 
     const snapshot = loadPluginMetadataSnapshot({ config: {}, env: {} });
 
-    expect(loadPluginManifestRegistry).toHaveBeenCalledWith(expect.objectContaining({ discovery }));
-    expect(loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
+    expect(loadPluginManifestRegistry).not.toHaveBeenCalled();
+    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        index: expect.objectContaining({ plugins: [] }),
+        includeDisabled: true,
+      }),
+    );
     expect(snapshot.discovery).toBe(discovery);
+  });
+
+  it("keeps an empty installed index authoritative without rediscovering plugins", () => {
+    const index = makeIndex();
+    index.plugins = [];
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "persisted",
+      snapshot: index,
+      diagnostics: [],
+    });
+    loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+
+    const snapshot = loadPluginMetadataSnapshot({ config: {}, env: {}, index });
+
+    expect(snapshot.plugins).toEqual([]);
+    expect(snapshot.index.plugins).toEqual([]);
+    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        index: expect.objectContaining({ plugins: [] }),
+        includeDisabled: true,
+      }),
+    );
+    expect(loadInstalledPluginIndexWithDiscovery).not.toHaveBeenCalled();
+  });
+
+  it("bootstraps bundled discovery when no registry snapshot is available", () => {
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue(undefined);
+
+    const snapshot = loadPluginMetadataSnapshot({ config: {}, env: {} });
+
+    expect(snapshot.plugins.map((plugin) => plugin.id)).toEqual(["demo"]);
+    expect(snapshot.registrySource).toBe("derived");
+    expect(snapshot.index.plugins.map((plugin) => plugin.pluginId)).toEqual(["demo"]);
+    expect(loadInstalledPluginIndexWithDiscovery).toHaveBeenCalledExactlyOnceWith({
+      config: {},
+      env: {},
+    });
+    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        index: expect.objectContaining({
+          plugins: [expect.objectContaining({ pluginId: "demo" })],
+        }),
+        includeDisabled: true,
+      }),
+    );
   });
 
   it("reuses the lifecycle-owned current snapshot", () => {
@@ -368,6 +441,43 @@ describe("plugin metadata snapshot", () => {
       "pluginIds",
     );
   });
+
+  it.each([
+    { scope: "explicit empty", pluginIds: [], expectedPluginIds: [] },
+    { scope: "explicit owner", pluginIds: ["demo"], expectedPluginIds: ["demo"] },
+  ])(
+    "does not reuse an unscoped lifecycle graph for an $scope request",
+    ({ pluginIds, expectedPluginIds }) => {
+      const config = {};
+      const index = makeIndex();
+      index.policyHash = resolveInstalledPluginIndexPolicyHash(config);
+      loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+        source: "provided",
+        snapshot: index,
+        diagnostics: [],
+      });
+      const unscoped = loadPluginMetadataSnapshot({ config, env: {}, index });
+      setCurrentPluginMetadataSnapshot(unscoped, { config, env: {} });
+      loadPluginManifestRegistryForInstalledIndex.mockClear();
+      loadPluginManifestRegistryForInstalledIndex.mockImplementation(
+        (params: { pluginIds?: readonly string[] }) => ({
+          ...makeManifestRegistry(),
+          plugins: makeManifestRegistry().plugins.filter(
+            (plugin) => params.pluginIds === undefined || params.pluginIds.includes(plugin.id),
+          ),
+        }),
+      );
+
+      const scoped = resolvePluginMetadataSnapshot({ config, env: {}, pluginIds });
+
+      expect(scoped).not.toBe(unscoped);
+      expect(scoped.pluginIds).toEqual(pluginIds);
+      expect(scoped.plugins.map((plugin) => plugin.id)).toEqual(expectedPluginIds);
+      expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ pluginIds }),
+      );
+    },
+  );
 
   it("prepares provider endpoint and request facts", () => {
     const index = makeIndex();

@@ -24,6 +24,7 @@ import type { CronServiceState, CronWakeMode } from "./state.js";
 import { emit } from "./state.js";
 import { ensureLoaded, persistOrRestore, snapshotStoreForRollback } from "./store.js";
 import { tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
+import { resolveCronRunScheduleOwnership } from "./timer-outcomes.js";
 import {
   applyJobResult,
   applyScriptRunResult,
@@ -148,6 +149,14 @@ async function finishPreparedManualRun(
         return;
       }
 
+      const scheduleOwnership = resolveCronRunScheduleOwnership({
+        admittedJob: prepared.admittedJob,
+        currentJob: job,
+        activeJobMarker: prepared.activeJobMarker,
+      });
+      const scheduleMode =
+        mode === "force" || scheduleOwnership === "stale" ? "preserve" : "advance";
+
       let shouldDelete = false;
       if (coreResult.status === "ok" && coreResult.triggerEval?.fired === false) {
         // Manual due checks share scheduled quiet-tick semantics: persist the
@@ -160,7 +169,7 @@ async function finishPreparedManualRun(
             endedAt,
             triggerEval: coreResult.triggerEval,
           },
-          { scheduleMode: mode === "force" ? "preserve" : "advance" },
+          { scheduleMode },
         );
       } else {
         shouldDelete = applyJobResult(
@@ -172,15 +181,20 @@ async function finishPreparedManualRun(
             endedAt,
           },
           {
-            scheduleMode: mode === "force" ? "preserve" : "advance",
+            scheduleMode,
+            scheduleOwnership,
             scheduleOwnershipAtMs: prepared.scheduleOwnershipAtMs,
           },
         );
-        applyTriggerRunResult(job, {
-          status: coreResult.status,
-          endedAt,
-          triggerEval: coreResult.triggerEval,
-        });
+        applyTriggerRunResult(
+          job,
+          {
+            status: coreResult.status,
+            endedAt,
+            triggerEval: coreResult.triggerEval,
+          },
+          { scheduleOwnership },
+        );
         applyScriptRunResult(job, coreResult);
 
         // Stream payloads are event-owned by their batch. Generic recurring

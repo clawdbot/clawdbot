@@ -24,7 +24,7 @@ const mocks = vi.hoisted(() => ({
 async function runCatalogWithFetchGuard(params: {
   fetchGuard: LiveModelCatalogFetchGuard;
   auth: {
-    mode: "api_key" | "oauth";
+    mode: "api_key" | "oauth" | "token";
     apiKey: string;
     discoveryApiKey?: string;
     profileId?: string;
@@ -32,8 +32,9 @@ async function runCatalogWithFetchGuard(params: {
   };
   accountId?: string;
   baseUrl?: string;
+  codexProxyBaseUrl?: unknown;
 }): Promise<ModelProviderConfig> {
-  if (params.auth.mode === "oauth") {
+  if (params.auth.mode === "oauth" || params.auth.mode === "token") {
     mocks.resolveApiKeyForProvider.mockResolvedValue({
       ...params.auth,
       source: params.auth.source,
@@ -58,9 +59,22 @@ async function runCatalogWithFetchGuard(params: {
         apiKey: params.auth.apiKey,
         discoveryApiKey: params.auth.discoveryApiKey,
       }),
-      config: params.baseUrl
-        ? { models: { providers: { openai: { baseUrl: params.baseUrl, models: [] } } } }
-        : { auth: { profiles: {} } },
+      config:
+        params.baseUrl || params.codexProxyBaseUrl !== undefined
+          ? {
+              models: {
+                providers: {
+                  openai: {
+                    ...(params.baseUrl ? { baseUrl: params.baseUrl } : {}),
+                    ...(params.codexProxyBaseUrl !== undefined
+                      ? { params: { codexProxyBaseUrl: params.codexProxyBaseUrl } }
+                      : {}),
+                    models: [],
+                  },
+                },
+              },
+            }
+          : { auth: { profiles: {} } },
       agentDir: "/tmp/openai-agent",
       workspaceDir: "/tmp/openai-workspace",
     } as never);
@@ -76,29 +90,34 @@ async function runCatalogWithFetchGuard(params: {
 async function buildOpenAILiveProviderConfig(params: {
   apiKey: string;
   baseUrl?: string;
+  codexProxyBaseUrl?: unknown;
   fetchGuard: LiveModelCatalogFetchGuard;
 }): Promise<ModelProviderConfig> {
   return await runCatalogWithFetchGuard({
     fetchGuard: params.fetchGuard,
     auth: { mode: "api_key", apiKey: params.apiKey, source: "profile" },
     baseUrl: params.baseUrl,
+    codexProxyBaseUrl: params.codexProxyBaseUrl,
   });
 }
 
 async function buildOpenAICodexLiveProviderConfig(params: {
   discoveryApiKey: string;
   accountId?: string;
+  authMode?: "oauth" | "token";
+  codexProxyBaseUrl?: unknown;
   fetchGuard: LiveModelCatalogFetchGuard;
 }): Promise<ModelProviderConfig> {
   return await runCatalogWithFetchGuard({
     fetchGuard: params.fetchGuard,
     auth: {
-      mode: "oauth",
+      mode: params.authMode ?? "oauth",
       apiKey: params.discoveryApiKey,
       profileId: "openai:chatgpt",
       source: "profile",
     },
     accountId: params.accountId,
+    codexProxyBaseUrl: params.codexProxyBaseUrl,
   });
 }
 
@@ -947,6 +966,86 @@ describe("buildOpenAIProvider", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it("discovers token-profile models through a loopback Codex proxy", async () => {
+    const proxyBaseUrl = "http://127.0.0.1:7862/backend-api/codex";
+    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async (params) => ({
+      response: Response.json({
+        models: [
+          {
+            slug: "gpt-5.6-sol",
+            display_name: "GPT-5.6 Sol",
+            visibility: "list",
+            supported_reasoning_levels: ["high", "xhigh"],
+          },
+        ],
+      }),
+      finalUrl: params.url,
+      release: async () => undefined,
+    }));
+
+    const provider = await buildOpenAICodexLiveProviderConfig({
+      discoveryApiKey: "loopback-capability",
+      authMode: "token",
+      codexProxyBaseUrl: `${proxyBaseUrl}/`,
+      fetchGuard,
+    });
+
+    expect(provider).toMatchObject({
+      api: "openai-chatgpt-responses",
+      auth: "token",
+      baseUrl: proxyBaseUrl,
+    });
+    expect(provider.models).toEqual([
+      expect.objectContaining({
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        baseUrl: proxyBaseUrl,
+      }),
+    ]);
+    const request = vi.mocked(fetchGuard).mock.calls[0]?.[0];
+    expect(request?.url).toBe(
+      `${proxyBaseUrl}/models?client_version=${readPinnedCodexClientVersion()}`,
+    );
+    expect(new Headers(request?.init?.headers).get("Authorization")).toBe(
+      "Bearer loopback-capability",
+    );
+    expect(new Headers(request?.init?.headers).get("ChatGPT-Account-ID")).toBeNull();
+  });
+
+  it("rejects remote Codex proxy URLs before sending a token", async () => {
+    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn();
+
+    await expect(
+      buildOpenAICodexLiveProviderConfig({
+        discoveryApiKey: "must-not-leak",
+        authMode: "token",
+        codexProxyBaseUrl: "https://proxy.example.test/backend-api/codex",
+        fetchGuard,
+      }),
+    ).rejects.toThrow(
+      "models.providers.openai.params.codexProxyBaseUrl must be an HTTP(S) URL using 127.0.0.1 or [::1]",
+    );
+    expect(fetchGuard).not.toHaveBeenCalled();
+  });
+
+  it("keeps API-key model discovery on the Platform endpoint when a Codex proxy is configured", async () => {
+    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async (params) => ({
+      response: Response.json({ data: [] }),
+      finalUrl: params.url,
+      release: async () => undefined,
+    }));
+
+    const provider = await buildOpenAILiveProviderConfig({
+      apiKey: "platform-api-key",
+      baseUrl: OPENAI_API_BASE_URL,
+      codexProxyBaseUrl: "http://127.0.0.1:7862/backend-api/codex",
+      fetchGuard,
+    });
+
+    expect(provider.baseUrl).toBe(OPENAI_API_BASE_URL);
+    expect(vi.mocked(fetchGuard).mock.calls[0]?.[0].url).toBe("https://api.openai.com/v1/models");
+  });
+
   it("caps base and forward-compatible GPT-5.6 Codex catalog rows", async () => {
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
       response: Response.json({
@@ -1645,6 +1744,98 @@ describe("buildOpenAIProvider", () => {
       contextWindow: 1_050_000,
       maxTokens: 128_000,
     });
+  });
+
+  it("preserves loopback proxy routing through dynamic Codex resolution", () => {
+    const provider = buildOpenAIProvider();
+    const proxyBaseUrl = "http://127.0.0.1:7862/backend-api/codex";
+    const config = {
+      models: {
+        providers: {
+          openai: {
+            params: { codexProxyBaseUrl: proxyBaseUrl },
+          },
+        },
+      },
+    };
+
+    const dynamic = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "gpt-5.6-sol",
+      modelRegistry: { find: () => null },
+      authProfileMode: "token",
+      providerConfig: {
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        models: [],
+      },
+      config,
+    } as never);
+    expectFields(dynamic, {
+      provider: "openai",
+      id: "gpt-5.6-sol",
+      api: "openai-chatgpt-responses",
+      baseUrl: proxyBaseUrl,
+    });
+
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "openai",
+      modelId: "gpt-5.6-sol",
+      model: {
+        provider: "openai",
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+      },
+      config,
+    } as never);
+    expect(normalized?.baseUrl).toBe(proxyBaseUrl);
+
+    expect(
+      provider.normalizeTransport?.({
+        provider: "openai",
+        modelId: "gpt-5.6-sol",
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        config,
+      } as never),
+    ).toEqual({ api: "openai-chatgpt-responses", baseUrl: proxyBaseUrl });
+
+    expect(
+      provider.prepareExtraParams?.({
+        provider: "openai",
+        modelId: "gpt-5.6-sol",
+        model: dynamic,
+        extraParams: { effort: "xhigh", transport: "auto" },
+        config,
+      } as never),
+    ).toMatchObject({ effort: "xhigh", transport: "sse" });
+  });
+
+  it("keeps loopback proxy capabilities out of remote usage endpoints", () => {
+    const resolveOAuthToken = vi.fn(async () => ({ token: "opaque-loopback-capability" }));
+    const provider = buildOpenAIProvider();
+    expect(
+      provider.resolveUsageAuth?.({
+        provider: "openai",
+        config: {
+          models: {
+            providers: {
+              openai: {
+                params: {
+                  codexProxyBaseUrl: "http://127.0.0.1:7862/backend-api/codex",
+                },
+              },
+            },
+          },
+        },
+        env: {},
+        resolveApiKeyFromConfigAndStore: () => undefined,
+        resolveOAuthToken,
+      } as never),
+    ).toEqual({ handled: true });
+    expect(resolveOAuthToken).not.toHaveBeenCalled();
   });
 
   it("keeps HTTP Platform routes out of Codex transport gates", () => {

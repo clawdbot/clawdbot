@@ -496,6 +496,30 @@ test("createGatewaySession rechecks admin scope after incognito inheritance reso
   }
 });
 
+test("createGatewaySession persists a generated title only for a new session", async () => {
+  await createSessionStoreDir();
+  const { createGatewaySession } = await import("./session-create-service.js");
+  const key = "agent:main:dashboard:generated-worktree-title";
+  const base = {
+    cfg: getRuntimeConfig(),
+    agentId: "main",
+    key,
+    commandSource: "test",
+  };
+
+  const created = await createGatewaySession({
+    ...base,
+    generatedDisplayName: "Readable Worktree Names",
+  });
+  expect(created).toMatchObject({ ok: true, entry: { displayName: "Readable Worktree Names" } });
+
+  const reused = await createGatewaySession({
+    ...base,
+    generatedDisplayName: "Replacement Title",
+  });
+  expect(reused).toMatchObject({ ok: true, entry: { displayName: "Readable Worktree Names" } });
+});
+
 test("incognito operator RPCs treat identityless connections as owner-equivalent", async () => {
   const { dir } = await createSessionStoreDir();
   const admin = await openClient({
@@ -744,14 +768,14 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
       worktree: { id: string; path: string; branch: string };
     }>(
       "sessions.create",
-      { agentId: "main", worktree: true },
+      { agentId: "main", label: "Release planning", worktree: true },
       { client: { connect: { scopes: ["operator.admin"] } } as never },
     );
 
     expect(created.ok).toBe(true);
     const key = requireNonEmptyString(created.payload?.key, "created session key");
     const worktree = created.payload?.worktree;
-    expect(worktree?.branch).toMatch(/^openclaw\/wt-[a-f0-9]{8}$/);
+    expect(worktree?.branch).toBe("openclaw/release-planning");
     expect(created.payload?.entry.spawnedCwd).toBe(worktree?.path);
     worktreeId = worktree?.id;
     expect(findLiveRegistryWorktreeByOwner(process.env, "session", key)).toMatchObject({
@@ -1205,7 +1229,7 @@ test("sessions.create preserves a linked-worktree subdirectory", async () => {
     worktreeId = worktree?.id;
     // The managed worktree anchors at the repo root even when the workspace is nested;
     // the session cwd points at the equivalent subdirectory inside the worktree.
-    expect(worktree?.branch).toMatch(/^openclaw\/wt-[a-f0-9]{8}$/);
+    expect(worktree?.branch).toMatch(/^openclaw\/[a-z0-9]+(?:-[a-z0-9]+)+$/);
     expect(created.payload?.entry.spawnedCwd).toBe(
       path.join(requireNonEmptyString(worktree?.path, "worktree path"), "packages", "app"),
     );

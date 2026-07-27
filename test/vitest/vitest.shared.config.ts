@@ -435,6 +435,10 @@ export const sharedVitestConfig = {
         ),
       },
       {
+        find: "@openclaw/normalization-core/cjk-chars",
+        replacement: path.join(repoRoot, "packages", "normalization-core", "src", "cjk-chars.ts"),
+      },
+      {
         find: "@openclaw/normalization-core/error-coercion",
         replacement: path.join(
           repoRoot,

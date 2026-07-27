@@ -55,6 +55,10 @@ export type ChatComposerProps = {
   followUpMode?: ControlUiFollowUpMode;
   attachments?: ChatAttachment[];
   getAttachments?: () => ChatAttachment[];
+  pendingAttachmentReads?: number;
+  getPendingAttachmentReads?: () => number;
+  readSignal?: AbortSignal;
+  onPendingReadsChange?: (delta: 1 | -1) => void;
   replyTarget?: {
     messageId: string;
     text: string;

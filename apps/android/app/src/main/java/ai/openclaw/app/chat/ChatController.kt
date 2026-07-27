@@ -2163,9 +2163,10 @@ class ChatController internal constructor(
     _sessionKey.value = key
     _sessionOwnerAgentId.value = owner
     _sessions.value =
-      clearForeignGlobalObserverDigest(
+      reconcileGlobalObserverDigestOwner(
         _sessions.value,
         activeAgentId = owner ?: resolveAgentIdForSessionKey(key),
+        adoptOwnerless = false,
       )
     applyThinkingMetadata(_sessions.value.firstOrNull { it.key == key })
     _selectedModelRef.value = null
@@ -6811,17 +6812,10 @@ internal fun applySessionObserverDigest(
   digest: SessionObserverDigest,
   activeAgentId: String? = null,
 ): List<ChatSessionEntry> {
-  val digestAgentId =
-    digest.agentId
-      ?.trim()
-      ?.lowercase()
-      ?.takeIf { it.isNotEmpty() }
-  val selectedAgentId =
-    activeAgentId
-      ?.trim()
-      ?.lowercase()
-      ?.takeIf { it.isNotEmpty() }
-  val scopedSessions = clearForeignGlobalObserverDigest(sessions, selectedAgentId)
+  val digestAgentId = normalizedObserverAgentId(digest.agentId)
+  val selectedAgentId = normalizedObserverAgentId(activeAgentId)
+  val scopedSessions =
+    reconcileGlobalObserverDigestOwner(sessions, selectedAgentId, adoptOwnerless = false)
   if (
     digest.sessionKey == "global" &&
     (selectedAgentId == null || digestAgentId == null || selectedAgentId != digestAgentId)
@@ -6845,35 +6839,15 @@ internal fun applySessionObserverDigest(
 internal fun reconcileGlobalObserverDigestOwner(
   sessions: List<ChatSessionEntry>,
   activeAgentId: String?,
-): List<ChatSessionEntry> = reconcileGlobalObserverDigestOwner(sessions, activeAgentId, adoptOwnerless = true)
-
-internal fun clearForeignGlobalObserverDigest(
-  sessions: List<ChatSessionEntry>,
-  activeAgentId: String?,
-): List<ChatSessionEntry> = reconcileGlobalObserverDigestOwner(sessions, activeAgentId, adoptOwnerless = false)
-
-private fun reconcileGlobalObserverDigestOwner(
-  sessions: List<ChatSessionEntry>,
-  activeAgentId: String?,
-  adoptOwnerless: Boolean,
+  adoptOwnerless: Boolean = true,
 ): List<ChatSessionEntry> {
   // A missing owner is transient disconnect state, not a selection change.
   // Callers retain the last verified offline projection until hello supplies an owner.
-  val selectedAgentId =
-    activeAgentId
-      ?.trim()
-      ?.lowercase()
-      ?.takeIf { it.isNotEmpty() }
-      ?: return sessions
+  val selectedAgentId = normalizedObserverAgentId(activeAgentId) ?: return sessions
   val index = sessions.indexOfFirst { it.key == "global" }
   if (index < 0) return sessions
   val session = sessions[index]
-  val digestAgentId =
-    session.observerDigest
-      ?.agentId
-      ?.trim()
-      ?.lowercase()
-      ?.takeIf { it.isNotEmpty() }
+  val digestAgentId = normalizedObserverAgentId(session.observerDigest?.agentId)
   if (digestAgentId == selectedAgentId) return sessions
   return sessions.toMutableList().also {
     it[index] =
@@ -6896,22 +6870,17 @@ internal fun reconcileSessionObserverProjectionOwner(
   val digest = session.observerDigest
   if (session.key != "global" || digest == null) return session
   val owner =
-    ownerAgentId
-      ?.trim()
-      ?.lowercase()
-      ?.takeIf { it.isNotEmpty() }
+    normalizedObserverAgentId(ownerAgentId)
       ?: return session.copy(observerDigest = null, hasObserverDigestMetadata = false)
-  val digestOwner =
-    digest.agentId
-      ?.trim()
-      ?.lowercase()
-      ?.takeIf { it.isNotEmpty() }
+  val digestOwner = normalizedObserverAgentId(digest.agentId)
   return when (digestOwner) {
     null -> session.copy(observerDigest = digest.copy(agentId = owner))
     owner -> session
     else -> session.copy(observerDigest = null, hasObserverDigestMetadata = false)
   }
 }
+
+private fun normalizedObserverAgentId(agentId: String?): String? = agentId?.trim()?.lowercase()?.takeIf(String::isNotEmpty)
 
 private fun reconcileSessionObserverDigest(
   existing: SessionObserverDigest?,

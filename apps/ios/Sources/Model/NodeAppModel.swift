@@ -1272,8 +1272,13 @@ final class NodeAppModel {
         self.pushWakeLogger.info("Background grace started seconds=\(seconds, privacy: .public)")
         self.backgroundGraceTaskTimer = Task { [weak self] in
             guard let self else { return }
-            try? await Task.sleep(nanoseconds: UInt64(max(1, seconds) * 1_000_000_000))
+            do {
+                try await Task.sleep(nanoseconds: UInt64(max(1, seconds) * 1_000_000_000))
+            } catch {
+                return
+            }
             await MainActor.run {
+                guard !Task.isCancelled, self.backgroundGraceTaskID == taskID else { return }
                 self.suppressBackgroundReconnect(reason: "background_grace_timer", disconnectIfNeeded: true)
                 self.endBackgroundConnectionGracePeriod(reason: "timer")
             }
@@ -10421,6 +10426,10 @@ extension NodeAppModel {
 
 #if DEBUG
 extension NodeAppModel {
+    func _test_backgroundReconnectIsSuppressed() -> Bool {
+        self.backgroundReconnectSuppressed
+    }
+
     func _test_setActiveGatewayConnectConfig(_ config: GatewayConnectConfig?) {
         self.activeGatewayConnectConfig = config
     }

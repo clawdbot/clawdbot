@@ -594,6 +594,10 @@ export const describe1BeforeEach0 = () => {
 
 export const describe2BeforeEach0 = () => {
   resetInboundDedupe();
+  // Same routeReply reset as the sibling suite setups: queued once-values and
+  // persistent overrides must not leak between tests.
+  mocks.routeReply.mockReset();
+  mocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock" });
   sessionStoreMocks.currentEntry = undefined;
   sessionBindingMocks.resolveByConversation.mockReset();
   sessionBindingMocks.resolveByConversation.mockReturnValue(null);

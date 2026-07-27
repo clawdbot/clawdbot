@@ -175,6 +175,56 @@ describe("ChatStateController render lifecycle", () => {
     expect(requestUpdate).toHaveBeenCalledOnce();
   });
 
+  it("keeps a fresher selected-agent digest when reconnect replays stale global events", () => {
+    const requestUpdate = vi.fn();
+    const state = {
+      sessionKey: "global",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main", scope: "global" },
+      chatRunId: "run-work",
+      observerDigest: {
+        sessionKey: "global",
+        agentId: "work",
+        runId: "run-work",
+        revision: 4,
+        updatedAt: 4_000,
+        headline: "Current work status",
+        health: "grinding" as const,
+      },
+      requestUpdate,
+    } as unknown as ChatPageHost;
+
+    for (const payload of [
+      {
+        sessionKey: "global",
+        agentId: "main",
+        runId: "run-work",
+        revision: 8,
+        updatedAt: 8_000,
+        headline: "Other agent status",
+        health: "done" as const,
+      },
+      {
+        sessionKey: "global",
+        agentId: "work",
+        runId: "run-work",
+        revision: 3,
+        updatedAt: 9_000,
+        headline: "Replayed work status",
+        health: "on-track" as const,
+      },
+    ]) {
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "session.observer",
+        payload,
+      });
+    }
+
+    expect(state.observerDigest?.headline).toBe("Current work status");
+    expect(requestUpdate).not.toHaveBeenCalled();
+  });
+
   it("reconciles a selected global alias with its scoped canonical row after reconnect", () => {
     const requestUpdate = vi.fn();
     const state = {
@@ -538,6 +588,48 @@ describe("ChatStateController render lifecycle", () => {
     await completion;
 
     expect(effect).not.toHaveBeenCalled();
+  });
+
+  it("aborts attachment reads when a pane adopts a different session", () => {
+    const host = {
+      addController: () => undefined,
+      removeController: () => undefined,
+      requestUpdate: () => undefined,
+      updateComplete: Promise.resolve(true),
+    } satisfies ReactiveControllerHost;
+    const controller = new ChatStateController<ChatPageHost>(host);
+    const previousSignal = controller.attachmentReads.readSignal;
+
+    controller.attachmentReads.updatePending(previousSignal, 1);
+    expect(controller.attachmentReads.pendingReads).toBe(1);
+
+    controller.adoptComposerRoute();
+
+    expect(previousSignal.aborted).toBe(true);
+    expect(controller.attachmentReads.pendingReads).toBe(0);
+    expect(controller.attachmentReads.readSignal).not.toBe(previousSignal);
+    controller.attachmentReads.updatePending(previousSignal, 1);
+    expect(controller.attachmentReads.pendingReads).toBe(0);
+  });
+
+  it("aborts attachment reads when a chat pane disconnects", () => {
+    const host = {
+      addController: () => undefined,
+      removeController: () => undefined,
+      requestUpdate: () => undefined,
+      updateComplete: Promise.resolve(true),
+    } satisfies ReactiveControllerHost;
+    const controller = new ChatStateController<ChatPageHost>(host);
+    const previousSignal = controller.attachmentReads.readSignal;
+
+    controller.attachmentReads.updatePending(previousSignal, 1);
+    controller.hostDisconnected();
+
+    expect(previousSignal.aborted).toBe(true);
+    expect(controller.attachmentReads.pendingReads).toBe(0);
+    expect(controller.attachmentReads.readSignal).not.toBe(previousSignal);
+    controller.attachmentReads.updatePending(previousSignal, -1);
+    expect(controller.attachmentReads.pendingReads).toBe(0);
   });
 
   it("rejects lifecycle work from detached and replaced state epochs", async () => {
