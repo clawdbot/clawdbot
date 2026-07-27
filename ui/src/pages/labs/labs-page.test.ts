@@ -7,6 +7,7 @@ import {
   createApplicationContextProvider,
   type ApplicationContextProvider,
 } from "../../test-helpers/application-context.ts";
+import { LAB_FEATURES } from "./labs-registry.ts";
 import "./labs-page.ts";
 
 type LabsPageElement = HTMLElement & { updateComplete: Promise<boolean> };
@@ -81,27 +82,19 @@ describe("LabsPage", () => {
     vi.restoreAllMocks();
   });
 
-  it("renders the experimental Code Mode and Swarm entries", async () => {
+  it("renders every registered experimental entry with its documentation link", async () => {
     const { page } = await mountPage({
       tools: { codeMode: { enabled: true }, swarm: { enabled: true } },
     });
 
     expect(page.querySelector(".settings-page__intro")?.textContent).toContain("experimental");
-    expect(page.querySelectorAll(".settings-row")).toHaveLength(2);
+    expect(page.querySelectorAll(".settings-row")).toHaveLength(LAB_FEATURES.length);
     expect(page.textContent).toContain("Code Mode");
     expect(page.textContent).toContain("Swarm");
-    expect(page.textContent).not.toContain("restart required");
     expect(codeModeToggle(page).checked).toBe(true);
-    expect([...page.querySelectorAll<HTMLElement & { checked: boolean }>("wa-switch")]).toEqual([
-      expect.objectContaining({ checked: true }),
-      expect.objectContaining({ checked: true }),
-    ]);
 
     const docs = [...page.querySelectorAll<HTMLAnchorElement>(".settings-row__desc a")];
-    expect(docs.map((link) => link.href)).toEqual([
-      "https://docs.openclaw.ai/tools/code-mode",
-      "https://docs.openclaw.ai/tools/swarm",
-    ]);
+    expect(docs.map((link) => link.href)).toEqual(LAB_FEATURES.map((feature) => feature.docsUrl));
     expect(docs.every((link) => link.target === "_blank")).toBe(true);
     expect(docs.every((link) => link.rel.includes("noopener"))).toBe(true);
   });
@@ -144,6 +137,32 @@ describe("LabsPage", () => {
       expectedPatch: { tools: { swarm: { enabled: true } } },
       note: "labs: update swarm",
     },
+    {
+      // Enabling must pin the mode: resolveToolSearchConfig defaults an unset
+      // mode to "code", so a bare `enabled: true` would select the surface with
+      // the weakest recall rather than the one this row advertises.
+      label: "Tool Search",
+      index: 2,
+      sourceConfig: { tools: { toolSearch: { enabled: false } } },
+      expectedPatch: { tools: { toolSearch: { enabled: true, mode: "directory" } } },
+      note: "labs: update toolSearch",
+    },
+    {
+      label: "Lean tools for local models",
+      index: 3,
+      sourceConfig: {},
+      expectedPatch: { agents: { defaults: { experimental: { localModelLean: true } } } },
+      note: "labs: update localModelLean",
+    },
+    {
+      // Not a boolean gate: the on state is the conservative `direct` mode, so
+      // enabling here cannot start recording group or unknown conversations.
+      label: "Message audit metadata",
+      index: 4,
+      sourceConfig: { logging: { audit: { messages: "off" } } },
+      expectedPatch: { logging: { audit: { messages: "direct" } } },
+      note: "labs: update auditMessages",
+    },
   ])("writes true at the registered config path when enabling $label", async (testCase) => {
     const { page, runtimeConfig } = await mountPage(testCase.sourceConfig);
     const toggle = labToggle(page, testCase.index, testCase.label);
@@ -156,5 +175,31 @@ describe("LabsPage", () => {
       raw: testCase.expectedPatch,
       note: testCase.note,
     });
+  });
+
+  it("reads a mode-valued gate as on only for the mode this row offers", async () => {
+    const auditIndex = LAB_FEATURES.findIndex((feature) => feature.id === "auditMessages");
+
+    const off = await mountPage({ logging: { audit: { messages: "off" } } });
+    expect(labToggle(off.page, auditIndex, "audit").checked).toBe(false);
+    off.provider.remove();
+
+    const direct = await mountPage({ logging: { audit: { messages: "direct" } } });
+    expect(labToggle(direct.page, auditIndex, "audit").checked).toBe(true);
+    direct.provider.remove();
+
+    // `all` is a broader mode an operator chose deliberately elsewhere. Reading
+    // it as off would invite this row to quietly narrow their setting.
+    const all = await mountPage({ logging: { audit: { messages: "all" } } });
+    expect(labToggle(all.page, auditIndex, "audit").checked).toBe(false);
+  });
+
+  it("marks only the startup-scoped entry as needing a restart", async () => {
+    const { page } = await mountPage({});
+    const rows = [...page.querySelectorAll(".settings-row")];
+
+    const restartRows = rows.filter((row) => row.textContent?.includes("restart"));
+    expect(restartRows).toHaveLength(1);
+    expect(restartRows[0]?.textContent).toContain("Message audit metadata");
   });
 });
