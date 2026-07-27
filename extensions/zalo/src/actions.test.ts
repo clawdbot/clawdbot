@@ -74,9 +74,11 @@ describe("zaloMessageActions.handleAction", () => {
     const [url, request] = fetchMock.mock.calls[0] ?? [];
     expect(url).toBe("https://bot-api.zaloplatforms.com/bottest-zalo-token/sendMessage");
     expect(request?.method).toBe("POST");
-    expect(JSON.parse(String(request?.body))).toEqual({
-      chat_id: "dm-chat-blank-media",
-      text: "hello there",
-    });
+    expect(request?.body).toBe(
+      JSON.stringify({
+        chat_id: "dm-chat-blank-media",
+        text: "hello there",
+      }),
+    );
   });
 });
