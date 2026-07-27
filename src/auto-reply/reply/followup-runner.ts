@@ -107,6 +107,7 @@ export function createFollowupRunner(
         defaultRuntime.error?.(
           `followup queue: progress presentation failed after execution: ${formatErrorMessage(error)}`,
         );
+        operation.fail("run_failed", error);
       }
       if (
         execution.execution.outcome.kind === "settled" &&

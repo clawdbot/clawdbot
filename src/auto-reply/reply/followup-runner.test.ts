@@ -289,6 +289,7 @@ describe("createFollowupRunner", () => {
     expect(state.account).toHaveBeenCalledOnce();
     expect(state.deliver).toHaveBeenCalledOnce();
     expect(state.completeLifecycle).toHaveBeenCalledWith(turn.queued);
+    expect(turn.operation.fail).toHaveBeenCalledWith("run_failed", expect.any(Error));
   });
 
   it("reports a completed message-tool source delivery before final projection", async () => {
