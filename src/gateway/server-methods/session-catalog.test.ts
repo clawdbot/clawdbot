@@ -221,6 +221,64 @@ describe("session catalog Gateway methods", () => {
     });
   });
 
+  it("replays emitted host progress to late coalesced list callers", async () => {
+    let resolveList:
+      | ((value: Awaited<ReturnType<SessionCatalogProvider["list"]>>) => void)
+      | undefined;
+    const host = {
+      hostId: "node:late",
+      label: "Late node",
+      kind: "node" as const,
+      connected: true,
+      nodeId: "late",
+      sessions: [],
+    };
+    const list = vi.fn(
+      ({ onHost }) =>
+        new Promise<Awaited<ReturnType<SessionCatalogProvider["list"]>>>((resolve) => {
+          resolveList = resolve;
+          queueMicrotask(() => onHost?.(host));
+        }),
+    );
+    const firstBroadcast = vi.fn();
+    const secondBroadcast = vi.fn();
+    hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("codex", { list }) }];
+
+    const first = call(
+      "sessions.catalog.list",
+      { catalogId: "codex", progressId: "progress-1", limitPerHost: 5 },
+      {},
+      { connId: "first", connect: {} },
+      { broadcastToConnIds: firstBroadcast },
+    );
+    await vi.waitFor(() => expect(firstBroadcast).toHaveBeenCalledOnce());
+
+    const second = call(
+      "sessions.catalog.list",
+      { catalogId: "codex", progressId: "progress-2", limitPerHost: 5 },
+      {},
+      { connId: "second", connect: {} },
+      { broadcastToConnIds: secondBroadcast },
+    );
+    await vi.waitFor(() => expect(secondBroadcast).toHaveBeenCalledOnce());
+    resolveList?.([host]);
+    const [firstRespond, secondRespond] = await Promise.all([first, second]);
+
+    expect(list).toHaveBeenCalledOnce();
+    expect(secondBroadcast).toHaveBeenCalledWith(
+      "sessions.catalog.host",
+      expect.objectContaining({ progressId: "progress-2" }),
+      new Set(["second"]),
+      { dropIfSlow: true },
+    );
+    expect(firstRespond).toHaveBeenCalledWith(true, {
+      catalogs: [expect.objectContaining({ id: "codex", hosts: [host] })],
+    });
+    expect(secondRespond).toHaveBeenCalledWith(true, {
+      catalogs: [expect.objectContaining({ id: "codex", hosts: [host] })],
+    });
+  });
+
   it("does not coalesce different list parameters", async () => {
     hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("codex") }];
 

@@ -466,7 +466,7 @@ describe("workboard gateway methods", () => {
     }
   });
 
-  it("coalesces concurrent identical dispatch gateway calls", async () => {
+  it("does not share concurrent identical dispatch gateway results", async () => {
     type RegisteredMethod = {
       handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
       opts: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2];
@@ -537,8 +537,9 @@ describe("workboard gateway methods", () => {
       started: [expect.objectContaining({ runId: "run-card" })],
     });
     expect(secondRespond.mock.calls[0]?.[1]).toMatchObject({
-      started: [expect.objectContaining({ runId: "run-card" })],
+      started: [],
     });
+    expect(run).toHaveBeenCalledOnce();
   });
 
   it("keeps write-scope worktree dispatch within configured agent workspaces", async () => {

@@ -159,6 +159,7 @@ function catalogResult(
 type PendingCatalogList = {
   promise: Promise<SessionCatalog["hosts"]>;
   onHosts: Set<(host: SessionCatalog["hosts"][number]) => void>;
+  emittedHosts: SessionCatalog["hosts"];
 };
 
 const pendingCatalogLists = new Map<string, PendingCatalogList>();
@@ -202,10 +203,19 @@ async function listProviderHosts(
   if (pending) {
     if (options.onHost) {
       pending.onHosts.add(options.onHost);
+      for (const host of pending.emittedHosts) {
+        try {
+          options.onHost(host);
+        } catch {
+          // Progressive host replay is best-effort. The final RPC response
+          // remains authoritative for every coalesced caller.
+        }
+      }
     }
     return pending.promise;
   }
   const onHosts = new Set<(host: SessionCatalog["hosts"][number]) => void>();
+  const emittedHosts: SessionCatalog["hosts"] = [];
   if (options.onHost) {
     onHosts.add(options.onHost);
   }
@@ -216,6 +226,7 @@ async function listProviderHosts(
     ...(request.cursors !== undefined ? { cursors: request.cursors } : {}),
     sessionEntries: options.sessionEntries,
     onHost: (host) => {
+      emittedHosts.push(host);
       for (const callback of onHosts) {
         try {
           callback(host);
@@ -226,7 +237,7 @@ async function listProviderHosts(
       }
     },
   });
-  pendingCatalogLists.set(key, { promise, onHosts });
+  pendingCatalogLists.set(key, { promise, onHosts, emittedHosts });
   try {
     return await promise;
   } finally {
