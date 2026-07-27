@@ -1,5 +1,7 @@
 // Control UI chat module implements chat avatar behavior.
-import { html } from "lit";
+import { html, nothing } from "lit";
+import { live } from "lit/directives/live.js";
+import { until } from "lit/directives/until.js";
 import type { GatewayHelloOk } from "../../api/gateway.ts";
 import { normalizeBasePath } from "../../app-route-paths.ts";
 import { resolveControlUiAuthHeader } from "../../app/control-ui-auth.ts";
@@ -19,8 +21,10 @@ import type { SenderIdentity } from "../../lib/chat/sender-label.ts";
 import { formatSenderLabel } from "../../lib/chat/sender-label.ts";
 import {
   resolveAvatar,
+  resolveAvatarImageUrl,
   resolveAvatarInitials,
   resolveIdentityHue,
+  settleAvatarImageUrl,
 } from "../../lib/identity-avatar.ts";
 import {
   DEFAULT_AGENT_ID,
@@ -54,23 +58,34 @@ export function renderChatAvatar(
     if (resolved.kind === "initials") {
       return initialsAvatar;
     }
+    const imageUrl = resolveAvatarImageUrl(resolved.url);
+    if (!imageUrl) {
+      return initialsAvatar;
+    }
     // The derived route may 404 (no upload, no Gravatar); swap to initials
     // instead of a broken image. Lit reuses DOM parts, so a load must clear a
     // prior sender's error state.
-    return html`<span class="chat-avatar-slot">
+    return html`<span
+      class=${live(`chat-avatar-slot${typeof imageUrl === "string" ? "" : " is-fallback"}`)}
+    >
       <img
         class="chat-avatar user"
-        src="${resolved.url}"
+        src=${typeof imageUrl === "string"
+          ? imageUrl
+          : until(
+              imageUrl.then((url) => url ?? nothing),
+              nothing,
+            )}
         alt="${label}"
         @error=${(event: Event) => {
-          (event.currentTarget as HTMLElement)
-            .closest(".chat-avatar-slot")
-            ?.classList.add("is-fallback");
+          const image = event.currentTarget as HTMLImageElement;
+          settleAvatarImageUrl(image.getAttribute("src"));
+          image.closest(".chat-avatar-slot")?.classList.add("is-fallback");
         }}
         @load=${(event: Event) => {
-          (event.currentTarget as HTMLElement)
-            .closest(".chat-avatar-slot")
-            ?.classList.remove("is-fallback");
+          const image = event.currentTarget as HTMLImageElement;
+          settleAvatarImageUrl(image.getAttribute("src"));
+          image.closest(".chat-avatar-slot")?.classList.remove("is-fallback");
         }}
       />
       ${initialsAvatar}

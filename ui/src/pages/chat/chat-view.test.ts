@@ -1713,7 +1713,7 @@ describe("chat composer workbench", () => {
 
   it("moves the background-tasks rail to a bottom strip on narrow panes", () => {
     const backgroundTasks = {
-      agentId: "main",
+      sessionKey: "agent:main:main",
       statusRowId: "chat-tasks-status-test",
       collapsed: false,
       narrowLayout: false,
@@ -1751,7 +1751,7 @@ describe("chat composer workbench", () => {
 
   it("shows the running-tasks status row after the turn settles, not while working", () => {
     const backgroundTasks = {
-      agentId: "main",
+      sessionKey: "agent:main:main",
       statusRowId: "chat-tasks-status-test",
       collapsed: true,
       narrowLayout: false,

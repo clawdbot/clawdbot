@@ -60,7 +60,13 @@ import { normalizeProviderId } from "../agents/model-selection.js";
 import { shouldSuppressBuiltInModel } from "../agents/model-suppression.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
+import { mergeWorkspaceSetupState } from "../agents/workspace-state-store.js";
+import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { clearRuntimeConfigSnapshot } from "../config/io.js";
+import {
+  isSessionTranscriptProjectionUnavailableError,
+  SessionTranscriptProjectionUnavailableError,
+} from "../config/sessions/session-accessor.js";
 import type { ModelsConfig, ModelProviderConfig, OpenClawConfig } from "../config/types.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { ModelRegistry } from "../llm/model-registry.js";
@@ -1847,7 +1853,7 @@ describe("buildLiveGatewayConfig", () => {
     const cfg = buildLiveGatewayConfig({
       cfg: {
         agents: {
-          list: [{ id: "ops", default: true }],
+          entries: { ops: { default: true } },
         },
         bindings: [{ agentId: "ops", match: { channel: "telegram" } }],
         broadcast: {
@@ -1860,15 +1866,14 @@ describe("buildLiveGatewayConfig", () => {
       liveAgentWorkspaceDir: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
     });
 
-    expect(cfg.agents?.list).toEqual([
-      {
-        id: GATEWAY_LIVE_AGENT_ID,
+    expect(cfg.agents?.entries).toEqual({
+      [GATEWAY_LIVE_AGENT_ID]: {
         default: true,
         agentDir: GATEWAY_LIVE_CONFIG_TEST_AGENT_DIR,
         workspace: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
         sandbox: { mode: "off" },
       },
-    ]);
+    });
     expect(cfg.bindings).toBeUndefined();
     expect(cfg.broadcast).toBeUndefined();
   });
@@ -1877,14 +1882,13 @@ describe("buildLiveGatewayConfig", () => {
     const cfg = buildLiveGatewayConfig({
       cfg: {
         agents: {
-          list: [
-            {
-              id: "Dev",
+          entries: {
+            dev: {
               default: true,
               agentDir: "/operator/agent",
               workspace: "/operator/workspace",
             },
-          ],
+          },
         },
       },
       candidates: [createGatewayLiveTestModel("openai", "gpt-5.5")],
@@ -1892,15 +1896,14 @@ describe("buildLiveGatewayConfig", () => {
       liveAgentWorkspaceDir: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
     });
 
-    expect(cfg.agents?.list).toEqual([
-      {
-        id: GATEWAY_LIVE_AGENT_ID,
+    expect(cfg.agents?.entries).toEqual({
+      [GATEWAY_LIVE_AGENT_ID]: {
         default: true,
         agentDir: GATEWAY_LIVE_CONFIG_TEST_AGENT_DIR,
         workspace: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
         sandbox: { mode: "off" },
       },
-    ]);
+    });
   });
 
   it("keeps discovered live model metadata ahead of stale configured model rows", () => {
@@ -2542,12 +2545,15 @@ describe("isTransientToolReadProbeErrorForLiveModel", () => {
 
 describe("getHighSignalLiveModelPriorityIndex", () => {
   it("prefers curated Google replacements over big-pickle", () => {
-    expect(
+    const proPriority = expectDefined(
       getHighSignalLiveModelPriorityIndex({ provider: "google", id: "gemini-3.1-pro-preview" }),
-    ).toBe(4);
-    expect(
+      "curated Gemini Pro live priority",
+    );
+    const flashPriority = expectDefined(
       getHighSignalLiveModelPriorityIndex({ provider: "google", id: "gemini-3.5-flash" }),
-    ).toBe(5);
+      "curated Gemini Flash live priority",
+    );
+    expect(proPriority).toBeLessThan(flashPriority);
     expect(getHighSignalLiveModelPriorityIndex({ provider: "opencode", id: "big-pickle" })).toBe(
       null,
     );
@@ -2963,22 +2969,69 @@ type SessionAssistantEntry = {
   text: string;
 };
 
+async function retryLiveTranscriptProjectionRead<T>(read: () => Promise<T>): Promise<T> {
+  const deadline = Date.now() + GATEWAY_LIVE_PROBE_TIMEOUT_MS;
+  let delayMs = 50;
+  while (true) {
+    try {
+      return await read();
+    } catch (error) {
+      if (!isSessionTranscriptProjectionUnavailableError(error) || Date.now() >= deadline) {
+        throw error;
+      }
+      // SQLite transcript projections rebuild asynchronously; fail only after
+      // the live probe budget, not while a successful model turn is indexing.
+      await new Promise((resolve) => {
+        setTimeout(resolve, Math.min(delayMs, Math.max(0, deadline - Date.now())));
+      });
+      delayMs = Math.min(delayMs * 2, 250);
+    }
+  }
+}
+
+describe("retryLiveTranscriptProjectionRead", () => {
+  it("waits for an in-flight SQLite transcript projection", async () => {
+    let attempts = 0;
+    await expect(
+      retryLiveTranscriptProjectionRead(async () => {
+        attempts += 1;
+        if (attempts === 1) {
+          throw new SessionTranscriptProjectionUnavailableError("live-session");
+        }
+        return ["projected assistant reply"];
+      }),
+    ).resolves.toEqual(["projected assistant reply"]);
+    expect(attempts).toBe(2);
+  });
+
+  it("does not hide unrelated transcript failures", async () => {
+    const failure = new Error("transcript database unavailable");
+    await expect(
+      retryLiveTranscriptProjectionRead(async () => {
+        throw failure;
+      }),
+    ).rejects.toBe(failure);
+  });
+});
+
 async function readSessionMessagesForLiveProbe(sessionKey: string): Promise<unknown[]> {
   const { storePath, entry } = loadSessionEntry(sessionKey);
   if (!entry?.sessionId) {
     return [];
   }
-  return await readSessionMessagesAsync(
-    {
-      sessionEntry: entry,
-      sessionId: entry.sessionId,
-      sessionKey,
-      storePath,
-    },
-    {
-      mode: "full",
-      reason: "live model assistant text verification",
-    },
+  return await retryLiveTranscriptProjectionRead(async () =>
+    readSessionMessagesAsync(
+      {
+        sessionEntry: entry,
+        sessionId: entry.sessionId,
+        sessionKey,
+        storePath,
+      },
+      {
+        mode: "full",
+        reason: "live model assistant text verification",
+      },
+    ),
   );
 }
 
@@ -4468,6 +4521,14 @@ function buildMinimaxProviderOverride(params: {
   };
 }
 
+async function prepareLiveGatewayWorkspace(workspaceDir: string): Promise<void> {
+  // Real workspace setup supplies both the SQLite state and survival evidence;
+  // retired JSON markers or empty initialized workspaces block the first turn.
+  await ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: true });
+  await fs.rm(path.join(workspaceDir, "BOOTSTRAP.md"), { force: true });
+  mergeWorkspaceSetupState(workspaceDir, { setupCompletedAt: new Date().toISOString() });
+}
+
 async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
   const ultraCandidates = params.candidates.filter((model) =>
     isOpenAIGpt56UltraTarget(model, params.thinkingLevel),
@@ -4557,20 +4618,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     setTestEnvValue("OPENCLAW_AGENT_DIR", tempAgentDir);
 
     const workspaceDir = path.join(tempStateDir, "workspace-dev");
-    await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.mkdir(path.join(workspaceDir, ".openclaw"), { recursive: true });
-    await fs.writeFile(
-      path.join(workspaceDir, ".openclaw", "workspace-state.json"),
-      `${JSON.stringify(
-        {
-          version: 1,
-          setupCompletedAt: new Date().toISOString(),
-        },
-        null,
-        2,
-      )}\n`,
-    );
-    await fs.rm(path.join(workspaceDir, "BOOTSTRAP.md"), { force: true });
+    await prepareLiveGatewayWorkspace(workspaceDir);
     const nonceA = randomUUID();
     const nonceB = randomUUID();
     // Keep probe values out of the path: weak tool callers may echo the filename
@@ -5737,19 +5785,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-zai-state-"));
       setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
       const workspaceDir = path.join(tempStateDir, "workspace-dev");
-      await fs.mkdir(workspaceDir, { recursive: true });
-      await fs.mkdir(path.join(workspaceDir, ".openclaw"), { recursive: true });
-      await fs.writeFile(
-        path.join(workspaceDir, ".openclaw", "workspace-state.json"),
-        `${JSON.stringify(
-          {
-            version: 1,
-            setupCompletedAt: new Date().toISOString(),
-          },
-          null,
-          2,
-        )}\n`,
-      );
+      await prepareLiveGatewayWorkspace(workspaceDir);
       const nonceA = randomUUID();
       const nonceB = randomUUID();
       // Match the broad probe: the filename must not reveal either expected value.

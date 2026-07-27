@@ -97,6 +97,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   @state() private restoredFolderValidation: "none" | "checking" | "failed" = "none";
 
   private openedFor: string | null = null;
+  private openedAgentId = "";
   private agentsHydrated = false;
   private nodesHydrated = false;
   // Discovery retry provenance separates user choices from Gateway-derived defaults.
@@ -383,11 +384,19 @@ class NewSessionPage extends OpenClawLightDomElement {
       this.agents().length > 0,
     );
     const openKey = catalog.routeKey(this.data);
+    const resolvedAgentId = this.data?.agentId ?? "";
     if (this.openedFor !== openKey) {
       this.openedFor = openKey;
+      this.openedAgentId = resolvedAgentId;
       this.agentsHydrated = agentsReady;
       this.resetDraft();
       return;
+    }
+    if (this.openedAgentId !== resolvedAgentId) {
+      // The route named the target agent after the draft opened, so the page is
+      // still holding the fallback agent it adopted while the id was unknown.
+      this.openedAgentId = resolvedAgentId;
+      this.agentsHydrated = false;
     }
     // A hard reload can land here before agents.list resolves. Once the list
     // arrives, adopt only agent-derived defaults; a full reset would discard

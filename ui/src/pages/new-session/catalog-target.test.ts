@@ -11,7 +11,13 @@ describe("new-session catalog target", () => {
   const agents = [{ id: "main" }, { id: "research" }];
 
   it("keeps the draft identity stable while target metadata resolves", () => {
-    const pending = { agentId: "main", catalogId: "claude", model: "", catalogLabel: "" };
+    const pending = {
+      agentId: "main",
+      requestedAgentId: "main",
+      catalogId: "claude",
+      model: "",
+      catalogLabel: "",
+    };
     const ready = {
       ...pending,
       model: "anthropic/claude-opus-4-8",
@@ -21,6 +27,22 @@ describe("new-session catalog target", () => {
     expect(routeKey(pending)).toBe(routeKey(ready));
     expect(allowsSelectedAgent(pending, { id: "main" })).toBe(false);
     expect(allowsSelectedAgent(ready, { id: "main" })).toBe(true);
+  });
+
+  it("keeps the draft identity stable while the target agent resolves", () => {
+    const requested = {
+      requestedAgentId: "research",
+      catalogId: "claude",
+      model: "",
+      catalogLabel: "",
+    };
+    const unresolved = { ...requested, agentId: "" };
+    const resolved = { ...requested, agentId: "research" };
+
+    expect(routeKey(unresolved)).toBe(routeKey(resolved));
+    // Only a navigation changes the requested agent or the target.
+    expect(routeKey({ ...resolved, requestedAgentId: "main" })).not.toBe(routeKey(resolved));
+    expect(routeKey({ ...resolved, catalogId: "codex" })).not.toBe(routeKey(resolved));
   });
 
   it("fails closed when the requested creation capability is unavailable", async () => {

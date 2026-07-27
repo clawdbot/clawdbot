@@ -2028,7 +2028,8 @@ describe("cron service timer regressions", () => {
       .spyOn(cronStoreModule, "loadCronJobsStoreWithConfigJobs")
       .mockImplementation(async (storePath) => {
         loadCount += 1;
-        if (loadCount === 3) {
+        // The first catch-up outcome now reloads and persists before job two.
+        if (loadCount === 4) {
           throw new Error("startup activation reload failed");
         }
         return await realLoad(storePath);
@@ -2278,7 +2279,7 @@ describe("cron service timer regressions", () => {
 
       const timerPromise = onTimer(state);
       await secondStarted.promise;
-      expect(isCronJobActive(first.id)).toBe(true);
+      expect(isCronJobActive(first.id)).toBe(false);
       expect(isCronJobActive(second.id)).toBe(true);
       await vi.advanceTimersByTimeAsync(60_100);
       now += 60_100;

@@ -293,6 +293,11 @@ describe("tool search gateway e2e lane result", () => {
       expect(result.providerInputSnippet).toBe(inputPrefix);
       expect(result.providerToolOutputSnippet).toBe(toolOutputPrefix);
       expect(fetchMock).toHaveBeenCalledTimes(3);
+      const laneConfig = JSON.parse(await fs.readFile(configPath, "utf8")) as {
+        memory?: { search?: Record<string, unknown> };
+      };
+      expect(laneConfig.memory?.search).toMatchObject({ enabled: false });
+      expect(laneConfig.memory?.search).not.toHaveProperty("sync");
     } finally {
       await fs.rm(tempRoot, { force: true, recursive: true });
     }
