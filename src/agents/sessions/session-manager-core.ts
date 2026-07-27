@@ -79,13 +79,13 @@ export class SessionManagerCore {
       this.persistenceHeaderPending = target !== undefined;
       return;
     }
-    this.persistenceHeaderPending = false;
     const header = partitioned.fileEntries.find((entry) => entry.type === "session");
     if (target && (header?.version ?? 1) < CURRENT_SESSION_VERSION) {
       throw new Error(
         "Persisted legacy session transcripts require doctor/import migration before runtime use",
       );
     }
+    this.persistenceHeaderPending = false;
     this.persistenceTarget = target ? { ...target } : undefined;
     this.fileEntries = partitioned.fileEntries;
     this.opaqueFileEntries = partitioned.opaqueEntries;

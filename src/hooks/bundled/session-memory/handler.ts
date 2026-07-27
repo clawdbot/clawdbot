@@ -146,6 +146,26 @@ async function getRecentSqliteSessionContent(
   }
 }
 
+// The bounded reader already projects the active branch, but message pages
+// omit intervening control ancestors. Relink this snapshot so the shared
+// visibility selector can validate it without dropping active messages.
+function relinkCapturedActiveMessageEvents(events: TranscriptEvent[]): TranscriptEvent[] {
+  let parentId: string | null = null;
+  return events.map((event, index) => {
+    if (!event || typeof event !== "object" || Array.isArray(event)) {
+      return event;
+    }
+    const record = event as Record<string, unknown>;
+    if (record.type !== "message") {
+      return event;
+    }
+    const id = typeof record.id === "string" ? record.id : `session-memory-${index + 1}`;
+    const linked = { ...record, id, parentId } as TranscriptEvent;
+    parentId = id;
+    return linked;
+  });
+}
+
 function captureRecentSessionMemoryEvents(
   scope: { agentId: string; sessionId: string; sessionKey: string; storePath: string },
   messageCount: number,
@@ -158,7 +178,9 @@ function captureRecentSessionMemoryEvents(
     offset < totalMessages &&
     offset < SESSION_MEMORY_CAPTURE_MAX_SCANNED_MESSAGES &&
     capturedBytes < SESSION_MEMORY_CAPTURE_MAX_BYTES &&
-    countSessionMemoryMessages(selectVisibleTranscriptEvents(captured)) < messageCount
+    countSessionMemoryMessages(
+      selectVisibleTranscriptEvents(relinkCapturedActiveMessageEvents(captured)),
+    ) < messageCount
   ) {
     const page = readSessionTranscriptBoundedMessageTailPage(scope, {
       maxBytes: SESSION_MEMORY_CAPTURE_MAX_BYTES - capturedBytes,
@@ -176,7 +198,7 @@ function captureRecentSessionMemoryEvents(
     capturedBytes += page.serializedBytes;
     offset += page.scannedMessages;
   }
-  return captured;
+  return relinkCapturedActiveMessageEvents(captured);
 }
 
 function resolveDisplaySessionKey(params: {

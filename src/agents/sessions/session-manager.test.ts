@@ -190,6 +190,27 @@ describe("SessionManager.open", () => {
       "require doctor/import migration before runtime use",
     );
     expect(existingManager.getCwd()).toBe("/original-workspace");
+
+    const currentScope = {
+      agentId: "main",
+      sessionId: "current-persisted-session",
+      sessionKey: "agent:main:current-persisted-session",
+      storePath,
+    };
+    await upsertSessionEntry(currentScope, { sessionId: currentScope.sessionId, updatedAt: 2 });
+    const currentManager = SessionManager.open(currentScope, dir);
+    expect(() => currentManager.setSessionTarget(scope)).toThrow(
+      "require doctor/import migration before runtime use",
+    );
+    currentManager.appendModelChange("test-provider", "test-model");
+    await expect(loadTranscriptEvents(currentScope)).resolves.toEqual([
+      expect.objectContaining({
+        type: "session",
+        version: CURRENT_SESSION_VERSION,
+        id: currentScope.sessionId,
+      }),
+      expect.objectContaining({ type: "model_change" }),
+    ]);
   });
 
   it("skips malformed null rows while opening a persisted transcript", async () => {
