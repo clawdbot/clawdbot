@@ -193,7 +193,10 @@ export function createAttemptTranscriptJournal(params: {
           throw new Error("Copilot transcript user turn resolved without a message");
         }
         const outcome = await append({
-          message: { ...resolved, idempotencyKey: `${params.attempt.runId}:user` },
+          message: {
+            ...resolved,
+            idempotencyKey: `${params.attempt.runId}:user`,
+          } as TranscriptMessage,
         });
         if (isSameUserTurn(messagesSnapshot.at(-1), resolved)) {
           messagesSnapshot.pop();
@@ -257,7 +260,7 @@ export function createAttemptTranscriptJournal(params: {
         }
         const outcome = await append({
           eventId: input.eventId,
-          message: { ...input.message, idempotencyKey: key },
+          message: { ...input.message, idempotencyKey: key } as TranscriptMessage,
         });
         if (latestAssistantKey === key) {
           assistantTranscriptOwned = true;
@@ -297,7 +300,7 @@ export function createAttemptTranscriptJournal(params: {
           message: {
             ...input.message,
             idempotencyKey: `copilot-sdk:${params.sdkSessionId}:${input.eventId}`,
-          },
+          } as TranscriptMessage,
         });
         replayInvalid ||= input.replayIncomplete === true;
         if (!group.order.every((toolCallId) => group.results.has(toolCallId))) {
