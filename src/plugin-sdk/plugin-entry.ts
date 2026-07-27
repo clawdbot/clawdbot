@@ -44,11 +44,6 @@ export type OpenClawPluginSecurityAuditContext =
 export type OpenClawPluginService = import("../plugins/types.js").OpenClawPluginService;
 export type OpenClawPluginServiceContext =
   import("../plugins/types.js").OpenClawPluginServiceContext;
-export type DelegatedAccessTokenProvider =
-  import("../plugins/types.js").DelegatedAccessTokenProvider;
-export type DelegatedAccessTokenRequest = import("../plugins/types.js").DelegatedAccessTokenRequest;
-export type DelegatedAccessTokenResult = import("../plugins/types.js").DelegatedAccessTokenResult;
-export type OpenClawPluginAuthContext = import("../plugins/types.js").OpenClawPluginAuthContext;
 export type OpenClawPluginToolContext = import("../plugins/types.js").OpenClawPluginToolContext;
 export type OpenClawPluginToolFactory = import("../plugins/types.js").OpenClawPluginToolFactory;
 export type PluginLogger = import("../plugins/types.js").PluginLogger;

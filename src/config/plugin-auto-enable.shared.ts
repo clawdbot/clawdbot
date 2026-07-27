@@ -41,7 +41,6 @@ const EMPTY_PLUGIN_MANIFEST_REGISTRY: PluginManifestRegistry = {
   plugins: [],
   diagnostics: [],
 };
-
 function resolveAutoEnableProviderPluginIds(
   registry: PluginManifestRegistry,
 ): Readonly<Record<string, string>> {
@@ -55,11 +54,9 @@ function resolveAutoEnableProviderPluginIds(
   }
   return Object.fromEntries(entries);
 }
-
 function canReuseUnscopedCurrentPluginMetadataSnapshot(config: OpenClawConfig): boolean {
   return normalizePluginsConfig(config.plugins).loadPaths.length === 0;
 }
-
 function extractProviderFromModelRef(value: string): string | null {
   const trimmed = value.trim();
   const slash = trimmed.indexOf("/");

@@ -110,9 +110,7 @@ import {
   type CronCreatorToolAllowlistEntry,
 } from "./tools/cron-tool.js";
 import { wrapToolWithGatewayCallerIdentity } from "./tools/gateway-caller-context.js";
-
 const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
-
 function hasExplicitDenyPolicy(policy?: { deny?: string[] }): boolean {
   return (
     Array.isArray(policy?.deny) &&
@@ -124,7 +122,6 @@ type GuardContainerMount = {
   containerRoot: string;
   hostRoot: string;
 };
-
 function readOnlySandboxReadMounts(
   sandbox: SandboxContext | null | undefined,
 ): GuardContainerMount[] | undefined {
@@ -154,7 +151,6 @@ function readOnlySandboxReadMounts(
   }
   return mounts.length > 0 ? mounts : undefined;
 }
-
 function resolveSkillReadRoots(skillsSnapshot?: SkillSnapshot): string[] | undefined {
   const roots = new Set<string>();
   for (const skill of skillsSnapshot?.resolvedSkills ?? []) {
@@ -171,9 +167,7 @@ function resolveSkillReadRoots(skillsSnapshot?: SkillSnapshot): string[] | undef
   }
   return Array.from(roots);
 }
-
 type BashToolsModule = typeof import("./bash-tools.js");
-
 const bashToolsModuleLoader = createLazyImportLoader<BashToolsModule>(
   () => import("./bash-tools.js"),
 );

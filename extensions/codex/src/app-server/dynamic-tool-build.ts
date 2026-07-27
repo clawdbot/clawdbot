@@ -38,7 +38,6 @@ import type { CodexSandboxPolicy, CodexTurnEnvironmentParams } from "./protocol.
 import type { CodexSandboxExecEnvironment } from "./sandbox-exec-server.js";
 import { filterToolsForVisionInputs } from "./vision-tools.js";
 import { resolveCodexWebSearchPlan, type CodexNativeWebSearchSupport } from "./web-search.js";
-
 type OpenClawCodingToolsOptions = NonNullable<
   Parameters<(typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"]>[0]
 >;

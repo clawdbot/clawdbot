@@ -56,7 +56,6 @@ import {
   shouldInjectParentContext,
   summarizeParentMessage,
 } from "../thread-parent-context.js";
-
 function extractTextFromHtmlAttachments(attachments: MSTeamsAttachmentLike[]): string {
   for (const attachment of attachments) {
     const raw = extractHtmlFromAttachment(attachment);
@@ -79,7 +78,6 @@ function extractTextFromHtmlAttachments(attachments: MSTeamsAttachmentLike[]): s
   }
   return "";
 }
-
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
 import { resolveMSTeamsAllowlistMatch, resolveMSTeamsReplyPolicy } from "../policy.js";
 import { extractMSTeamsPollVote } from "../polls.js";
@@ -98,7 +96,6 @@ import {
   shouldAttemptMSTeamsGraphMediaFallback,
 } from "./inbound-media.js";
 import { resolveMSTeamsRouteSessionKey } from "./thread-session.js";
-
 function formatMSTeamsSenderReason(params: {
   reasonCode: string;
   dmPolicy?: string;
@@ -130,7 +127,6 @@ function formatMSTeamsSenderReason(params: {
       return params.reasonCode;
   }
 }
-
 function buildStoredConversationReference(params: {
   activity: MSTeamsTurnContext["activity"];
   conversationId: string;
@@ -173,7 +169,6 @@ function buildStoredConversationReference(params: {
     ...(threadId ? { threadId } : {}),
   };
 }
-
 export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
   const {
     cfg,
@@ -209,7 +204,6 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     cfg,
     channel: "msteams",
   });
-
   type MSTeamsDebounceEntry = {
     context: MSTeamsTurnContext;
     rawText: string;
@@ -218,7 +212,6 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     wasMentioned: boolean;
     implicitMentionKinds: Array<"reply_to_bot">;
   };
-
   const handleTeamsMessageNow = async (params: MSTeamsDebounceEntry) => {
     const context = params.context;
     const activity = context.activity;
@@ -236,13 +229,11 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     let quoteSenderName: string | undefined;
     const from = activity.from;
     const conversation = activity.conversation;
-
     const attachmentTypes = attachments
       .map((att) => (typeof att.contentType === "string" ? att.contentType : undefined))
       .filter(Boolean)
       .slice(0, 3);
     const htmlSummary = summarizeMSTeamsHtmlAttachments(attachments);
-
     log.info("received message", {
       rawText: truncateUtf16Safe(rawText, 50),
       text: truncateUtf16Safe(text, 50),

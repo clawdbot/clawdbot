@@ -37,7 +37,6 @@ import {
   normalizeSessionKeyPreservingOpaquePeerIds,
   parseThreadSessionSuffix,
 } from "../sessions/session-key-utils.js";
-
 export type {
   AgentPromptGuidance,
   AgentPromptGuidanceEntry,
@@ -138,11 +137,7 @@ export type {
 } from "@openclaw/model-catalog-core/model-catalog-types";
 export type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 export type {
-  DelegatedAccessTokenProvider,
-  DelegatedAccessTokenRequest,
-  DelegatedAccessTokenResult,
   OpenClawPluginActiveModelContext,
-  OpenClawPluginAuthContext,
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
 } from "../plugins/types.js";
@@ -184,7 +179,6 @@ export type {
   ChannelOutboundSessionRoute,
   ChannelMessagingAdapter,
 } from "../channels/plugins/types.core.js";
-
 function createInlineTextPairingAdapter(params: {
   idLabel: string;
   message: string;
@@ -214,7 +208,6 @@ export type { ChannelConfigUiHint } from "../channels/plugins/types.config.js";
 export type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export type { ContextEngineSessionTarget } from "../context-engine/types.js";
-
 export { definePluginEntry } from "./plugin-entry.js";
 export {
   buildJsonPluginConfigSchema,
@@ -261,7 +254,6 @@ export {
   tryReadSecretFileSync,
 } from "../infra/secret-file.js";
 export type { SecretFileReadOptions, SecretFileReadResult } from "../infra/secret-file.js";
-
 export { resolveGatewayBindUrl } from "../shared/gateway-bind-url.js";
 export type { GatewayBindUrlResult } from "../shared/gateway-bind-url.js";
 export { resolveGatewayPort } from "../config/paths.js";

@@ -1,7 +1,7 @@
 // Defines user-facing config field labels used by schema metadata.
 import { MEDIA_AUDIO_FIELD_LABELS } from "./media-audio-field-metadata.js";
+import { DELEGATED_AUTH_FIELD_LABELS } from "./schema.delegated-auth.js";
 import { NODE_CAPABILITY_FIELD_LABELS } from "./schema.node-capabilities.js";
-
 export const FIELD_LABELS: Record<string, string> = {
   meta: "Metadata",
   "meta.lastTouchedVersion": "Config Last Touched Version",
@@ -1115,14 +1115,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "plugins.slots.contextEngine": "Context Engine Plugin",
   "plugins.entries": "Plugin Entries",
   "plugins.entries.*.enabled": "Plugin Enabled",
-  "plugins.entries.*.auth": "Plugin Auth Policy",
-  "plugins.entries.*.auth.delegatedAccess": "Plugin Delegated Auth Policy",
-  "plugins.entries.*.auth.delegatedAccess.enabled": "Allow Plugin Delegated Auth",
-  "plugins.entries.*.auth.delegatedAccess.providers": "Plugin Delegated Auth Providers",
-  "plugins.entries.*.auth.delegatedAccess.audiences": "Plugin Delegated Auth Audiences",
-  "plugins.entries.*.auth.delegatedAccess.scopes": "Plugin Delegated Auth Scopes",
-  "plugins.entries.*.auth.delegatedAccess.chatTypes": "Plugin Delegated Auth Chat Types",
-  "plugins.entries.*.hooks": "Plugin Hook Policy",
+  ...DELEGATED_AUTH_FIELD_LABELS,
   "plugins.entries.*.hooks.allowConversationAccess": "Allow Conversation Access Hooks",
   "plugins.entries.*.hooks.allowPromptInjection": "Allow Prompt Injection Hooks",
   "plugins.entries.*.hooks.timeoutMs": "Plugin Hook Timeout (ms)",

@@ -132,7 +132,6 @@ import {
 } from "./stranded-reply-recovery.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
-
 type EmbeddedAgentRunResult = Awaited<ReturnType<typeof runEmbeddedAgent>>;
 
 const PRESERVED_FOLLOWUP_RESULT_CODES = new Set([

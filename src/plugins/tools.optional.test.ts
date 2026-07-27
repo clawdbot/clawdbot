@@ -2086,7 +2086,7 @@ describe("resolvePluginTools optional tools", () => {
   it("keeps mixed plugin descriptor caches auth-sensitive when any entry receives factory auth", () => {
     const delegatedAuth: OpenClawPluginAuthContext = {
       getDelegatedAccessToken: vi.fn(async () => ({
-        ok: true,
+        ok: true as const,
         token: "delegated-token",
       })),
     };

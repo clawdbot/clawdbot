@@ -1,5 +1,6 @@
 // Defines user-facing config field help text for docs and UI surfaces.
 import { MEDIA_AUDIO_FIELD_HELP } from "./media-audio-field-metadata.js";
+import { DELEGATED_AUTH_FIELD_HELP } from "./schema.delegated-auth.js";
 import { NODE_CAPABILITY_FIELD_HELP } from "./schema.node-capabilities.js";
 import { describeTalkSilenceTimeoutDefaults } from "./talk-defaults.js";
 export const FIELD_HELP: Record<string, string> = {
@@ -1481,24 +1482,7 @@ export const FIELD_HELP: Record<string, string> = {
     "Per-plugin settings keyed by plugin ID including enablement and plugin-specific runtime configuration payloads. Use this for scoped plugin tuning without changing global loader policy.",
   "plugins.entries.*.enabled":
     "Per-plugin enablement override for a specific entry, applied on top of global plugin policy (restart required). Use this to stage plugin rollout gradually across environments.",
-  "plugins.entries.*.auth":
-    "Per-plugin auth policy controls for token-bearing runtime capabilities. Keep unset unless the plugin is trusted to receive delegated user credentials.",
-  "plugins.entries.*.auth.delegatedAccess":
-    "Controls whether this plugin's tools may receive runtime delegated user access tokens through `ctx.auth`. This is separate from `tools.allow`, which only controls tool availability.",
-  "plugins.entries.*.auth.delegatedAccess.enabled":
-    "Explicitly allows this plugin's tools to request delegated user access tokens at runtime. Keep false unless the plugin is trusted to handle bearer tokens.",
-  "plugins.entries.*.auth.delegatedAccess.providers":
-    "Optional delegated auth provider allowlist for this plugin. Provider ids are supplied by the active channel runtime; for Teams, use `msteams`.",
-  "plugins.entries.*.auth.delegatedAccess.audiences":
-    "Optional token audience allowlist for this plugin. Use this to require one of these audiences before OpenClaw releases a delegated token.",
-  "plugins.entries.*.auth.delegatedAccess.scopes":
-    "Optional delegated scope allowlist for this plugin. Use this to require every requested scope to be listed here before OpenClaw releases a delegated token.",
-  "plugins.entries.*.auth.delegatedAccess.chatTypes":
-    "Optional chat type allowlist for this plugin. Use this to restrict delegated token release to trusted direct, group, or channel conversations.",
-  "plugins.entries.*.hooks":
-    "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
-  "plugins.entries.*.hooks.allowPromptInjection":
-    "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+  ...DELEGATED_AUTH_FIELD_HELP,
   "plugins.entries.*.hooks.allowConversationAccess":
     "Controls whether this plugin may read raw conversation content from typed hooks such as `before_agent_run`, `before_model_resolve`, `before_agent_reply`, `llm_input`, `llm_output`, `before_agent_finalize`, and `agent_end`. Non-bundled plugins must opt in explicitly.",
   "plugins.entries.*.hooks.timeoutMs":

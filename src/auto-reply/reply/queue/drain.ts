@@ -38,7 +38,6 @@ import {
   retireFollowupRunCancellation,
   type FollowupRun,
 } from "./types.js";
-
 // Persists the most recent runFollowup callback per queue key so that
 // enqueueFollowupRun can restart a drain that finished and deleted the queue.
 const FOLLOWUP_DRAIN_CALLBACKS_KEY = Symbol.for("openclaw.followupDrainCallbacks");
@@ -46,13 +45,11 @@ const FOLLOWUP_DRAIN_CALLBACKS_KEY = Symbol.for("openclaw.followupDrainCallbacks
 const FOLLOWUP_RUN_CALLBACKS = resolveGlobalMap<string, (run: FollowupRun) => Promise<void>>(
   FOLLOWUP_DRAIN_CALLBACKS_KEY,
 );
-
 const QUEUED_ADMISSION_OWNER_STATE_KEY = Symbol.for("openclaw.queuedAdmissionOwnerState");
 const queuedAdmissionOwnerState = resolveGlobalSingleton(QUEUED_ADMISSION_OWNER_STATE_KEY, () => ({
   keys: new WeakMap<NonNullable<FollowupRun["queuedLifecycle"]>, string>(),
   nextId: 1,
 }));
-
 function resolveQueuedLifecycleDeliveryKey(lifecycle: FollowupRun["queuedLifecycle"]): string {
   if (!lifecycle) {
     return "";
@@ -70,7 +67,6 @@ function resolveQueuedLifecycleDeliveryKey(lifecycle: FollowupRun["queuedLifecyc
   // them would let one source commit before a sibling rejects the aggregate.
   return JSON.stringify([explicitOwnerKey, admissionOwnerKey]);
 }
-
 function assertSingleAdmissionOwner(items: readonly FollowupRun[]): void {
   const owners = new Set(
     items.flatMap((item) => (item.queuedLifecycle?.onAdmitted ? [item.queuedLifecycle] : [])),
@@ -79,18 +75,15 @@ function assertSingleAdmissionOwner(items: readonly FollowupRun[]): void {
     throw new Error("followup queue cannot aggregate distinct admission lifecycles");
   }
 }
-
 export function rememberFollowupDrainCallback(
   key: string,
   runFollowup: (run: FollowupRun) => Promise<void>,
 ): void {
   FOLLOWUP_RUN_CALLBACKS.set(key, runFollowup);
 }
-
 export function clearFollowupDrainCallback(key: string): void {
   FOLLOWUP_RUN_CALLBACKS.delete(key);
 }
-
 /** Restart the drain for `key` if it is currently idle, using the stored callback. */
 export function kickFollowupDrainIfIdle(key: string): void {
   const cb = FOLLOWUP_RUN_CALLBACKS.get(key);
@@ -99,7 +92,6 @@ export function kickFollowupDrainIfIdle(key: string): void {
   }
   scheduleFollowupDrain(key, cb);
 }
-
 type OriginRoutingMetadata = Pick<
   FollowupRun,
   | "originatingChannel"
@@ -111,7 +103,6 @@ type OriginRoutingMetadata = Pick<
   | "originatingReplyToMode"
   | "originatingChatType"
 >;
-
 function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetadata {
   const source =
     items.find((item) => item.originatingChannel && item.originatingTo) ??

@@ -151,12 +151,10 @@ import type {
   OpenClawPluginToolOptions,
 } from "./tool-types.js";
 import type { WebFetchProviderPlugin, WebSearchProviderPlugin } from "./web-provider-types.js";
-
 type ModelProviderRequestTransportOverrides =
   import("../agents/provider-request-config.js").ModelProviderRequestTransportOverrides;
 type ChannelId = import("../channels/plugins/types.core.js").ChannelId;
 type ChannelPlugin = import("../channels/plugins/types.plugin.js").ChannelPlugin;
-
 export type { PluginRuntime } from "./runtime/types.js";
 export type { PluginOrigin } from "./plugin-origin.types.js";
 export type {
@@ -166,11 +164,7 @@ export type {
   PluginFormat,
 } from "./manifest-types.js";
 export type {
-  DelegatedAccessTokenProvider,
-  DelegatedAccessTokenRequest,
-  DelegatedAccessTokenResult,
   OpenClawPluginActiveModelContext,
-  OpenClawPluginAuthContext,
   OpenClawPluginHookOptions,
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
@@ -243,14 +237,12 @@ export type {
   PluginToolMetadataRegistration,
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
-
 export type ProviderAuthOptionBag = {
   token?: string;
   tokenProvider?: string;
   secretInputMode?: SecretInputMode;
   [key: string]: unknown;
 };
-
 /** Logger passed into plugin registration, services, and CLI surfaces. */
 export type PluginLogger = {
   debug?: (message: string) => void;

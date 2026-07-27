@@ -1,10 +1,11 @@
-import type {
-  DelegatedAccessTokenResult,
-  OpenClawPluginAuthContext,
-} from "openclaw/plugin-sdk/core";
+import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/core";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
 export const MSTEAMS_DELEGATED_AUTH_PROVIDER = "msteams";
+type OpenClawPluginAuthContext = NonNullable<OpenClawPluginToolContext["auth"]>;
+type DelegatedAccessTokenResult = Awaited<
+  ReturnType<OpenClawPluginAuthContext["getDelegatedAccessToken"]>
+>;
 
 export function createMSTeamsDelegatedAuthContext(params: {
   context: MSTeamsTurnContext;

@@ -19,6 +19,7 @@ describe("plugin tool execution auth", () => {
       auth: createAuth("turn-token"),
       tool: {
         name: "demo",
+        label: "demo",
         description: "demo",
         parameters: { type: "object", properties: {} },
         async execute() {
@@ -29,7 +30,7 @@ describe("plugin tool execution auth", () => {
               0,
             );
           });
-          return active;
+          return { content: [{ type: "text", text: "ok" }], details: active };
         },
       },
     });
@@ -38,25 +39,27 @@ describe("plugin tool execution auth", () => {
       ok: false,
       reason: "unavailable",
     });
-    await expect(tool.execute("call", {}, undefined, undefined)).resolves.toEqual({
-      ok: true,
-      token: "turn-token",
+    await expect(tool.execute("call", {}, undefined, undefined)).resolves.toMatchObject({
+      details: { ok: true, token: "turn-token" },
     });
     await expect(detachedRead).resolves.toEqual({ ok: false, reason: "unavailable" });
   });
 
   it("isolates concurrent executions for the same plugin", async () => {
     const scopedAuth = createExecutionScopedPluginAuthContext("demo");
-    const execute = async () => scopedAuth.getDelegatedAccessToken({ provider: "msteams" });
+    const execute = async () => ({
+      content: [{ type: "text" as const, text: "ok" }],
+      details: await scopedAuth.getDelegatedAccessToken({ provider: "msteams" }),
+    });
     const first = bindPluginToolExecutionAuth({
       pluginId: "demo",
       auth: createAuth("first"),
-      tool: { name: "first", description: "first", parameters: {}, execute },
+      tool: { name: "first", label: "first", description: "first", parameters: {}, execute },
     });
     const second = bindPluginToolExecutionAuth({
       pluginId: "demo",
       auth: createAuth("second"),
-      tool: { name: "second", description: "second", parameters: {}, execute },
+      tool: { name: "second", label: "second", description: "second", parameters: {}, execute },
     });
 
     await expect(
@@ -64,9 +67,9 @@ describe("plugin tool execution auth", () => {
         first.execute("first", {}, undefined, undefined),
         second.execute("second", {}, undefined, undefined),
       ]),
-    ).resolves.toEqual([
-      { ok: true, token: "first" },
-      { ok: true, token: "second" },
+    ).resolves.toMatchObject([
+      { details: { ok: true, token: "first" } },
+      { details: { ok: true, token: "second" } },
     ]);
   });
 });

@@ -286,7 +286,6 @@ import {
 import type { EmbeddedAgentMeta, EmbeddedAgentRunResult, TraceAttempt } from "./types.js";
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "./usage-accumulator.js";
 import { mapThinkingLevelForProvider } from "./utils.js";
-
 type ApiKeyInfo = ResolvedProviderAuth;
 
 const MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES = 1;

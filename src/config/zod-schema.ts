@@ -27,6 +27,7 @@ import {
 } from "./zod-schema.core.js";
 import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
 import { BrowserSnapshotDefaultsSchema, NodeHostAgentRunsSchema } from "./zod-schema.node-host.js";
+import { PluginEntryAuthSchema } from "./zod-schema.plugin-auth.js";
 import { ProxyConfigSchema } from "./zod-schema.proxy.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 import {
@@ -35,7 +36,6 @@ import {
   SessionSchema,
   SessionSendPolicySchema,
 } from "./zod-schema.session.js";
-
 // zod@4 ships "sideEffects": false, so bundlers tree-shake the classic entry's
 // implicit config(en()) locale registration (zod/v4/classic/external.js) and a
 // built dist renders every issue as the bare "Invalid input" fallback. Register
@@ -45,7 +45,6 @@ function installZodDefaultLocale(): void {
   z.config(z.locales.en());
 }
 installZodDefaultLocale();
-
 type ConfigSchemaShape<T extends object> = {
   [Key in keyof T]-?: z.ZodType<T[Key]>;
 };
@@ -268,21 +267,7 @@ const SkillEntrySchema = z
 const PluginEntrySchema = z
   .object({
     enabled: z.boolean().optional(),
-    auth: z
-      .object({
-        delegatedAccess: z
-          .object({
-            enabled: z.boolean().optional(),
-            providers: z.array(z.string()).optional(),
-            audiences: z.array(z.string()).optional(),
-            scopes: z.array(z.string()).optional(),
-            chatTypes: z.array(z.enum(["direct", "group", "channel"])).optional(),
-          })
-          .strict()
-          .optional(),
-      })
-      .strict()
-      .optional(),
+    auth: PluginEntryAuthSchema.optional(),
     hooks: z
       .object({
         allowPromptInjection: z.boolean().optional(),

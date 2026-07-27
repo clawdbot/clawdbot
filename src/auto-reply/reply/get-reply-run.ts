@@ -129,7 +129,6 @@ import { buildSessionStartupContextPrelude, shouldApplyStartupContext } from "./
 import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 import type { TypingController } from "./typing.js";
-
 type InternalGetReplyOptions = BaseInternalGetReplyOptions & {
   /**
    * Dispatch-owned pre-run operation. This is intentionally not part of the
