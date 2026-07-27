@@ -1,7 +1,5 @@
 // Control UI chat module implements chat avatar behavior.
-import { html, nothing } from "lit";
-import { live } from "lit/directives/live.js";
-import { until } from "lit/directives/until.js";
+import { html } from "lit";
 import type { GatewayHelloOk } from "../../api/gateway.ts";
 import { normalizeBasePath } from "../../app-route-paths.ts";
 import { resolveControlUiAuthHeader } from "../../app/control-ui-auth.ts";
@@ -10,6 +8,11 @@ import {
   resolveLocalUserAvatarUrl,
   resolveLocalUserName,
 } from "../../app/user-identity.ts";
+import {
+  identityAvatarClass,
+  renderIdentityAvatarImage,
+  resolveIdentityAvatarView,
+} from "../../components/identity-avatar-view.ts";
 import type { AssistantIdentity } from "../../lib/assistant-identity.ts";
 import {
   assistantAvatarFallbackUrl,
@@ -19,13 +22,6 @@ import {
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import type { SenderIdentity } from "../../lib/chat/sender-label.ts";
 import { formatSenderLabel } from "../../lib/chat/sender-label.ts";
-import {
-  resolveAvatar,
-  resolveAvatarImageUrl,
-  resolveAvatarInitials,
-  resolveIdentityHue,
-  settleAvatarImageUrl,
-} from "../../lib/identity-avatar.ts";
 import {
   DEFAULT_AGENT_ID,
   isUiGlobalSessionKey,
@@ -46,49 +42,27 @@ export function renderChatAvatar(
   // upload → gateway Gravatar proxy → initials), not the local viewer's.
   if (normalized === "user" && sender) {
     const label = formatSenderLabel(sender) ?? "";
-    const initials = resolveAvatarInitials(sender);
+    const view = resolveIdentityAvatarView(sender);
     const initialsAvatar = html`<div
       class="chat-avatar user chat-avatar--sender-initials"
-      style=${`background: hsl(${resolveIdentityHue(sender)} 48% 42%)`}
+      style=${`background: hsl(${view.fallback.colorSeed % 360} 48% 42%)`}
       aria-label="${label}"
     >
-      ${initials.initials}
+      ${view.fallback.initials}
     </div>`;
-    const resolved = resolveAvatar(sender);
-    if (resolved.kind === "initials") {
-      return initialsAvatar;
-    }
-    const imageUrl = resolveAvatarImageUrl(resolved.url);
-    if (!imageUrl) {
+    if (!view.imageUrl) {
       return initialsAvatar;
     }
     // The derived route may 404 (no upload, no Gravatar); swap to initials
     // instead of a broken image. Lit reuses DOM parts, so a load must clear a
     // prior sender's error state.
-    return html`<span
-      class=${live(`chat-avatar-slot${typeof imageUrl === "string" ? "" : " is-fallback"}`)}
-    >
-      <img
-        class="chat-avatar user"
-        src=${typeof imageUrl === "string"
-          ? imageUrl
-          : until(
-              imageUrl.then((url) => url ?? nothing),
-              nothing,
-            )}
-        alt="${label}"
-        @error=${(event: Event) => {
-          const image = event.currentTarget as HTMLImageElement;
-          settleAvatarImageUrl(image.getAttribute("src"));
-          image.closest(".chat-avatar-slot")?.classList.add("is-fallback");
-        }}
-        @load=${(event: Event) => {
-          const image = event.currentTarget as HTMLImageElement;
-          settleAvatarImageUrl(image.getAttribute("src"));
-          image.closest(".chat-avatar-slot")?.classList.remove("is-fallback");
-        }}
-      />
-      ${initialsAvatar}
+    return html`<span class=${identityAvatarClass("chat-avatar-slot", view)}>
+      ${renderIdentityAvatarImage({
+        view,
+        fallbackSelector: ".chat-avatar-slot",
+        className: "chat-avatar user",
+        alt: label,
+      })}${initialsAvatar}
     </span>`;
   }
   const assistantName = assistant?.name?.trim() || "Assistant";

@@ -1,8 +1,10 @@
 /* @vitest-environment jsdom */
 
+import { render } from "lit";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ControlUiBuildInfo } from "../build-info.ts";
-import { setAvatarGatewayOrigin } from "../lib/identity-avatar.ts";
+import { resolveAvatarInitials, setAvatarGatewayOrigin } from "../lib/identity-avatar.ts";
+import { renderChatAuthorAvatar } from "../pages/chat/components/chat-author-avatar.ts";
 import {
   hasMultiplePresenceIdentities,
   hasSessionPresenceViewers,
@@ -20,6 +22,41 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it("uses the same user initials and identity hue in the roster and attributed chat", async () => {
+  const user: PresenceViewer = {
+    id: "profile-riley",
+    name: "Riley",
+    email: "riley@example.test",
+    watchedSessions: [],
+  };
+  const viewerAvatar = document.createElement("openclaw-viewer-avatar") as ViewerAvatarElement;
+  viewerAvatar.user = user;
+  document.body.append(viewerAvatar);
+
+  const chat = document.createElement("div");
+  document.body.append(chat);
+  render(renderChatAuthorAvatar({ id: user.id, name: user.name, username: user.email }), chat);
+
+  const expected = resolveAvatarInitials({
+    id: user.id,
+    name: user.name,
+    username: user.email,
+  });
+  await vi.waitFor(async () => {
+    await viewerAvatar.updateComplete;
+    const rosterInitials = viewerAvatar.querySelector(".viewer-avatar > span");
+    const chatInitials = chat.querySelector(".chat-author-avatar__initials");
+    expect(rosterInitials?.textContent?.trim()).toBe(expected.initials);
+    expect(chatInitials?.textContent?.trim()).toBe(expected.initials);
+    expect(rosterInitials?.getAttribute("style")).toContain(
+      `hsl(${expected.colorSeed % 360} 48% 42%)`,
+    );
+    expect(chatInitials?.getAttribute("style")).toContain(
+      `--chat-author-avatar-hue: ${expected.colorSeed % 360}`,
+    );
+  });
+});
+
 it("uses the shared resolver and rejects cross-origin presence avatar metadata", async () => {
   const avatar = document.createElement("openclaw-viewer-avatar") as ViewerAvatarElement;
   avatar.user = {
@@ -33,7 +70,7 @@ it("uses the shared resolver and rejects cross-origin presence avatar metadata",
   await vi.waitFor(async () => {
     await avatar.updateComplete;
     expect(avatar.querySelector("img")).toBeNull();
-    expect(avatar.textContent?.trim()).toBe("MA");
+    expect(avatar.textContent?.trim()).toBe("M");
   });
 });
 
