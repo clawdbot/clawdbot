@@ -5,7 +5,10 @@ import { describe, expect, it, vi } from "vitest";
 import { FailoverError } from "../../agents/failover-error.js";
 import { AgentHarnessSessionSupersededError } from "../../agents/harness/errors.js";
 import { SessionWriteLockTimeoutError } from "../../agents/session-write-lock-error.js";
-import { withSessionWriteLockOwner } from "../../agents/session-write-lock-owner.js";
+import {
+  withActiveSessionWriteLockReplyRun,
+  withSessionWriteLockOwner,
+} from "../../agents/session-write-lock-owner.js";
 import {
   acquireSessionWriteLock,
   drainSessionWriteLockStateForTest,
@@ -33,6 +36,106 @@ import { buildKnownAgentRunFailureReplyPayload } from "./agent-runner-failure-re
 const state = setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: terminal failures", () => {
+  it("suppresses a lock failure only when another live reply-producing run owns it", async () => {
+    const { replyOperation, failMock } = createMockReplyOperation();
+    const sessionDir = await mkdtemp(join(tmpdir(), "openclaw-session-lock-proof-"));
+    const sessionFile = join(sessionDir, "session.jsonl");
+    let result:
+      | Awaited<ReturnType<Awaited<ReturnType<typeof getExecuteAgentTurnForTest>>>>
+      | undefined;
+    try {
+      await withActiveSessionWriteLockReplyRun(
+        { kind: "agent-reply", runId: "owning-run", sessionFile },
+        async () => {
+          const heldLock = await withSessionWriteLockOwner(
+            { kind: "agent-reply", runId: "owning-run" },
+            () => acquireSessionWriteLock({ sessionFile, timeoutMs: 1_000 }),
+          );
+          try {
+            const contentionError = await acquireSessionWriteLock({
+              sessionFile,
+              timeoutMs: 25,
+            }).catch((error: unknown) => error);
+            expect(contentionError).toBeInstanceOf(SessionWriteLockTimeoutError);
+            state.runWithModelFallbackMock.mockRejectedValueOnce(contentionError);
+
+            const executeAgentTurn = await getExecuteAgentTurnForTest();
+            result = await executeAgentTurn({
+              ...createMinimalRunAgentTurnParams(),
+              replyOperation,
+            });
+          } finally {
+            await heldLock.release();
+          }
+        },
+      );
+    } finally {
+      await drainSessionWriteLockStateForTest();
+      await rm(sessionDir, { recursive: true, force: true });
+    }
+
+    expect(result).toEqual({ kind: "final", payload: { text: SILENT_REPLY_TOKEN } });
+    expect(failMock).toHaveBeenCalledWith("run_failed", expect.any(SessionWriteLockTimeoutError));
+  });
+
+  it("keeps the failure visible after the owning reply run ends in a live process", async () => {
+    const sessionDir = await mkdtemp(join(tmpdir(), "openclaw-session-lock-ended-owner-"));
+    const sessionFile = join(sessionDir, "session.jsonl");
+    const heldLock = await withActiveSessionWriteLockReplyRun(
+      { kind: "agent-reply", runId: "ended-run", sessionFile },
+      () =>
+        withSessionWriteLockOwner({ kind: "agent-reply", runId: "ended-run" }, () =>
+          acquireSessionWriteLock({ sessionFile, timeoutMs: 1_000 }),
+        ),
+    );
+    let contentionError: unknown;
+    try {
+      contentionError = await acquireSessionWriteLock({ sessionFile, timeoutMs: 25 }).catch(
+        (error: unknown) => error,
+      );
+    } finally {
+      await heldLock.release();
+      await drainSessionWriteLockStateForTest();
+      await rm(sessionDir, { recursive: true, force: true });
+    }
+    state.runWithModelFallbackMock.mockRejectedValueOnce(contentionError);
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(GENERIC_RUN_FAILURE_TEXT);
+      expect(result.payload.text).not.toBe(SILENT_REPLY_TOKEN);
+    }
+  });
+
+  it("surfaces the normal failure for an uncorrelated session write lock timeout", async () => {
+    const sessionDir = await mkdtemp(join(tmpdir(), "openclaw-session-lock-unrelated-"));
+    const sessionFile = join(sessionDir, "session.jsonl");
+    const heldLock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 1_000 });
+    let contentionError: unknown;
+    try {
+      contentionError = await acquireSessionWriteLock({ sessionFile, timeoutMs: 25 }).catch(
+        (error: unknown) => error,
+      );
+    } finally {
+      await heldLock.release();
+      await drainSessionWriteLockStateForTest();
+      await rm(sessionDir, { recursive: true, force: true });
+    }
+    state.runWithModelFallbackMock.mockRejectedValueOnce(contentionError);
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(GENERIC_RUN_FAILURE_TEXT);
+      expect(result.payload.text).not.toBe(SILENT_REPLY_TOKEN);
+    }
+  });
+
   it("surfaces billing guidance for mixed-cause fallback exhaustion", async () => {
     state.runWithModelFallbackMock.mockRejectedValueOnce(
       Object.assign(

@@ -19,6 +19,7 @@ import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-erro
 import { leaseMcpAppModelContextForTurn } from "../../agents/mcp-app-model-context.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import { createAgentPatchedSessionModelRunGuard } from "../../agents/session-model-auto-revert.js";
+import { withActiveSessionWriteLockReplyRun } from "../../agents/session-write-lock-owner.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import {
@@ -498,6 +499,20 @@ export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTu
   const runId = params.opts?.runId ?? crypto.randomUUID();
   const executionParams =
     params.opts?.runId === runId ? params : { ...params, opts: { ...params.opts, runId } };
+  return await withActiveSessionWriteLockReplyRun(
+    {
+      kind: "agent-reply",
+      runId,
+      sessionFile: executionParams.followupRun.run.sessionFile,
+    },
+    () => executeAgentTurnWithRegisteredRun(executionParams, runId),
+  );
+}
+
+async function executeAgentTurnWithRegisteredRun(
+  executionParams: AgentTurnParams,
+  runId: string,
+): Promise<AgentTurnExecutionResult> {
   // Gateway writes require exact view identity against this bare session runtime;
   // requester-scoped and combined runtimes cannot cross the App view boundary.
   const runtime = executionParams.isHeartbeat

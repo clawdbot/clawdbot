@@ -769,7 +769,8 @@ function describeLockOwnerForError(params: {
 function resolveStructuredLockOwner(params: {
   payload: LockFilePayload | null;
   inspected: LockInspectionDetails;
-}): (SessionWriteLockOwnerIdentity & { pidAlive: boolean }) | undefined {
+  sessionFile: string;
+}): (SessionWriteLockOwnerIdentity & { pidAlive: boolean; sessionFile: string }) | undefined {
   if (params.payload?.ownerKind !== "agent-reply" || !params.payload.ownerRunId) {
     return undefined;
   }
@@ -777,6 +778,7 @@ function resolveStructuredLockOwner(params: {
     kind: params.payload.ownerKind,
     runId: params.payload.ownerRunId,
     pidAlive: params.inspected.pidAlive,
+    sessionFile: params.sessionFile,
   };
 }
 
@@ -973,7 +975,11 @@ export async function acquireSessionWriteLock(params: {
         respectMaxHold: !heldByThisProcess,
       });
       const owner = describeLockOwnerForError({ payload, inspected });
-      const lockOwner = resolveStructuredLockOwner({ payload, inspected });
+      const lockOwner = resolveStructuredLockOwner({
+        payload,
+        inspected,
+        sessionFile: params.sessionFile,
+      });
       throw attachSessionWriteLockOwner(
         new SessionWriteLockTimeoutError({ timeoutMs, owner, lockPath }),
         lockOwner,
@@ -1079,7 +1085,11 @@ export async function acquireSessionWriteLock(params: {
         respectMaxHold: !heldByThisProcess,
       });
       const owner = describeLockOwnerForError({ payload, inspected });
-      const lockOwner = resolveStructuredLockOwner({ payload, inspected });
+      const lockOwner = resolveStructuredLockOwner({
+        payload,
+        inspected,
+        sessionFile: params.sessionFile,
+      });
       if (isFileLockError(err, "file_lock_stale")) {
         if (
           resolveRemainingAcquireTimeoutMs(timeoutMs, startedAtMs, Date.now()) > 0 &&
