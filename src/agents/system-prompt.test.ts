@@ -1165,6 +1165,38 @@ describe("buildAgentSystemPrompt", () => {
     expect(telegramPrompt).toContain("final text normally routes to source");
   });
 
+  it("adds collapsible-details guidance only for supported full prompts", () => {
+    const supportedPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: { channel: "telegram", capabilities: ["markdownDetails"] },
+    });
+    const unsupportedPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: { channel: "discord", capabilities: [] },
+    });
+    const sameChannelUnsupportedPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: { channel: "telegram", capabilities: [] },
+    });
+    const minimalPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptMode: "minimal",
+      runtimeInfo: { channel: "telegram", capabilities: ["markdownDetails"] },
+    });
+
+    expect(supportedPrompt).toContain("## Collapsible Details");
+    expect(supportedPrompt).toContain(
+      "This surface renders `<details>` disclosures. When a reply has optional depth — long derivations, logs, background, worked examples — you may place it inside `<details><summary>Label</summary>` … `</details>` written on their own lines.",
+    );
+    expect(supportedPrompt).toContain("Never hide the actual answer behind a disclosure.");
+    expect(unsupportedPrompt).not.toContain("## Collapsible Details");
+    expect(minimalPrompt).not.toContain("## Collapsible Details");
+
+    const stablePrefix = (prompt: string) =>
+      prompt.slice(0, prompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY));
+    expect(stablePrefix(supportedPrompt)).toBe(stablePrefix(sameChannelUnsupportedPrompt));
+  });
+
   it("describes source replies without the message tool", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

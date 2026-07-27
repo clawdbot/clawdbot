@@ -2594,6 +2594,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Chunking rules
   - H2: Link policy
   - H2: Spoilers
+  - H2: Collapsible details
   - H2: Adding or updating a channel formatter
   - H2: Common gotchas
   - H2: Related
@@ -5711,6 +5712,18 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Internals and reference
   - H2: Related
 
+## plugins/beam.md
+
+- Route: /plugins/beam
+- Headings:
+  - H2: Enable
+  - H2: Authentication
+  - H2: Request
+  - H2: Storage and visibility
+  - H2: Security boundary
+  - H2: Troubleshooting
+  - H2: Related
+
 ## plugins/building-extensions.md
 
 - Route: /plugins/building-extensions
@@ -6305,6 +6318,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /plugins/reference/baseten
 - Headings:
   - H1: Baseten plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Related docs
+
+## plugins/reference/beam.md
+
+- Route: /plugins/reference/beam
+- Headings:
+  - H1: Beam plugin
   - H2: Distribution
   - H2: Surface
   - H2: Related docs
