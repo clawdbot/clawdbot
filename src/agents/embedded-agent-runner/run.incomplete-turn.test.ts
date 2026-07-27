@@ -23,13 +23,13 @@ import {
   useOpenAIPlatformAuthFixture,
   warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
+import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
 import {
   buildAttemptReplayMetadata,
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
   resolveEmptyResponseRetryInstruction,
   isIncompleteTerminalAssistantTurn,
-  resolveAuthFailurePayloadText,
   resolveIncompleteTurnPayloadText as resolveIncompleteTurnPayloadTextCore,
   resolveReasoningOnlyRetryInstruction,
   resolveReplayInvalidFlag,
@@ -4770,70 +4770,6 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.meta.livenessState).toBe("working");
     expectNoWarnMessageWith("planning");
   });
-
-  describe("resolveAuthFailurePayloadText", () => {
-    it("returns specific auth-failure text when reason is auth", () => {
-      const text = resolveAuthFailurePayloadText({
-        assistantProfileFailureReason: "auth",
-        provider: "openai",
-        modelId: "gpt-4.1",
-      });
-      expect(text).toBe(
-        "Authentication failed for model openai/gpt-4.1. Please check your API key or switch to a different model.",
-      );
-    });
-
-    it("returns specific auth-failure text when reason is auth_permanent", () => {
-      const text = resolveAuthFailurePayloadText({
-        assistantProfileFailureReason: "auth_permanent",
-        provider: "anthropic",
-        modelId: "claude-sonnet-4-5",
-      });
-      expect(text).toContain("Authentication failed for model");
-      expect(text).toContain("anthropic/claude-sonnet-4-5");
-    });
-
-    it("returns undefined for non-auth reasons", () => {
-      expect(
-        resolveAuthFailurePayloadText({
-          assistantProfileFailureReason: "rate_limit",
-          provider: "openai",
-          modelId: "gpt-4.1",
-        }),
-      ).toBeUndefined();
-      expect(
-        resolveAuthFailurePayloadText({
-          assistantProfileFailureReason: "billing",
-          provider: "openai",
-          modelId: "gpt-4.1",
-        }),
-      ).toBeUndefined();
-      expect(
-        resolveAuthFailurePayloadText({
-          assistantProfileFailureReason: "timeout",
-          provider: "openai",
-          modelId: "gpt-4.1",
-        }),
-      ).toBeUndefined();
-    });
-
-    it("returns undefined when reason is null or undefined", () => {
-      expect(
-        resolveAuthFailurePayloadText({
-          assistantProfileFailureReason: null,
-          provider: "openai",
-          modelId: "gpt-4.1",
-        }),
-      ).toBeUndefined();
-      expect(
-        resolveAuthFailurePayloadText({
-          assistantProfileFailureReason: undefined,
-          provider: "openai",
-          modelId: "gpt-4.1",
-        }),
-      ).toBeUndefined();
-    });
-  });
 });
 
 describe("resolveEmbeddedRunTerminal auth incomplete-turn gating", () => {
@@ -4911,9 +4847,7 @@ describe("resolveEmbeddedRunTerminal auth incomplete-turn gating", () => {
       reportedModelRef: { provider: "openai", model: "gpt-4.1" },
       traceAttempts: [],
       traceAttemptUsesFallback: () => false,
-      contextRecoveryState: { recovered: false } as Parameters<
-        typeof resolveEmbeddedRunTerminal
-      >[0]["contextRecoveryState"],
+      contextRecoveryState: createEmbeddedRunContextRecoveryState(),
     };
   }
 

@@ -228,7 +228,7 @@ export function hasAttemptTerminalState(attempt: TerminalAttemptState): boolean 
  * to an authentication error. Non-auth failures fall through to the generic
  * incomplete-turn warning.
  */
-export function resolveAuthFailurePayloadText(params: {
+function resolveAuthFailurePayloadText(params: {
   assistantProfileFailureReason?: AuthProfileFailureReason | null;
   provider: string;
   modelId: string;
