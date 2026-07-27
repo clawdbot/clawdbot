@@ -34,7 +34,11 @@ import {
   resolveProviderHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  isCanonicalDottedDecimalIPv4,
+  isLoopbackIpAddress,
+  isPrivateNetworkOptInEnabled,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   canonicalizeCodexResponsesBaseUrl,
@@ -310,7 +314,17 @@ function shouldAllowPrivateImageEndpoint(req: {
     return true;
   }
   const baseUrl = resolveConfiguredOpenAIImageBaseUrl(req.cfg, req.model);
-  if (!baseUrl.startsWith("http://127.0.0.1:") && !baseUrl.startsWith("http://localhost:")) {
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    return false;
+  }
+  const isLocalHttp =
+    parsed.protocol === "http:" &&
+    (parsed.hostname === "localhost" ||
+      (isCanonicalDottedDecimalIPv4(parsed.hostname) && isLoopbackIpAddress(parsed.hostname)));
+  if (!isLocalHttp) {
     return false;
   }
   return process.env.OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER === "1";

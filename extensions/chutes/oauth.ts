@@ -13,6 +13,10 @@ import {
   readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
 import { buildOAuthRequestSignal } from "openclaw/plugin-sdk/provider-oauth-runtime";
+import {
+  isCanonicalDottedDecimalIPv4,
+  isLoopbackIpAddress,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const CHUTES_AUTHORIZE_ENDPOINT = "https://api.chutes.ai/idp/authorize";
@@ -59,7 +63,11 @@ function parseRedirectUri(redirectUri: string): {
     throw new Error(`Chutes OAuth redirect URI must be http:// (got ${redirectUri})`);
   }
   const hostname = url.hostname || "127.0.0.1";
-  if (hostname !== "localhost" && hostname !== "127.0.0.1" && hostname !== "::1") {
+  if (
+    hostname !== "localhost" &&
+    hostname !== "::1" &&
+    !(isCanonicalDottedDecimalIPv4(hostname) && isLoopbackIpAddress(hostname))
+  ) {
     throw new Error(
       `Chutes OAuth redirect hostname must be loopback (got ${hostname}). Use http://127.0.0.1:<port>/...`,
     );

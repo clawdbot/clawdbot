@@ -122,6 +122,7 @@ const providerMetadataState = vi.hoisted(() => ({
 }));
 
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+  clearCurrentPluginMetadataSnapshot: vi.fn(),
   getCurrentPluginMetadataSnapshot: (params?: {
     config?: unknown;
     requireDefaultDiscoveryContext?: boolean;
@@ -858,6 +859,27 @@ describe("provider attribution", () => {
         capability: "llm",
       }),
     ).toBe("provider=qwen api=openai-responses endpoint=local route=local policy=none");
+
+    for (const hostname of ["127.0.0.2", "127.255.255.254"]) {
+      expect(
+        describeProviderRequestRoutingSummary({
+          provider: "qwen",
+          api: "openai-responses",
+          baseUrl: `http://${hostname}:1234/v1`,
+          transport: "stream",
+          capability: "llm",
+        }),
+      ).toBe("provider=qwen api=openai-responses endpoint=local route=local policy=none");
+    }
+    expect(
+      describeProviderRequestRoutingSummary({
+        provider: "qwen",
+        api: "openai-responses",
+        baseUrl: "http://128.0.0.1:1234/v1",
+        transport: "stream",
+        capability: "llm",
+      }),
+    ).toBe("provider=qwen api=openai-responses endpoint=custom route=proxy-like policy=none");
 
     expect(
       describeProviderRequestRoutingSummary({

@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
 import { hostname as readHostName } from "node:os";
+import {
+  isCanonicalDottedDecimalIPv4,
+  isLoopbackIpAddress,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import type {
   CodexAppServerConnectionClass,
   CodexAppServerDefaultPolicy,
@@ -230,10 +234,9 @@ function isLoopbackWebSocketUrl(value: string): boolean {
   const host = parsed.hostname.toLowerCase();
   return (
     host === "localhost" ||
-    host === "127.0.0.1" ||
     host === "::1" ||
     host === "[::1]" ||
-    host.startsWith("127.")
+    (isCanonicalDottedDecimalIPv4(host) && isLoopbackIpAddress(host))
   );
 }
 

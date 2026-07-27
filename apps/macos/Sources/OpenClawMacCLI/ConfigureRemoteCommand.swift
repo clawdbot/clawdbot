@@ -297,7 +297,8 @@ private func defaultPort(for url: URL) -> Int? {
 
 private func isLoopbackHost(_ host: String) -> Bool {
     let lower = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    return lower == "localhost" || lower == "127.0.0.1" || lower == "::1"
+    if lower == "localhost" || lower == "::1" { return true }
+    return ipv4Parts(lower)?.first == 127
 }
 
 private func isTrustedPlaintextRemoteHost(_ host: String) -> Bool {

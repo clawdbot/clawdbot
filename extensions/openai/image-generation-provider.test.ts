@@ -914,7 +914,7 @@ describe("openai image generation provider", () => {
         models: {
           providers: {
             openai: {
-              baseUrl: "http://127.0.0.1:44080/v1",
+              baseUrl: "http://127.0.0.2:44080/v1",
               models: [],
             },
           },

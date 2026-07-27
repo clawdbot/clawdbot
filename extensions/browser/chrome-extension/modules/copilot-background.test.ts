@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   archiveCopilotSession,
+  resolveBindingTarget,
   resolveSidePanelTabId,
   selectCopilotPanelState,
 } from "./copilot-background-shared.js";
@@ -21,6 +22,30 @@ function storageArea(initial: Record<string, unknown> = {}) {
 }
 
 describe("browser copilot background", () => {
+  it.each(["127.0.0.2", "127.255.255.254"])(
+    "accepts direct loopback binding through %s",
+    (host) => {
+      expect(
+        resolveBindingTarget({
+          relayUrl: `ws://${host}:18792`,
+          gatewayUrl: `ws://${host}:18789`,
+        }),
+      ).toBe("host");
+    },
+  );
+
+  it.each(["128.0.0.1", "127.0.0.1.evil.example"])(
+    "rejects non-loopback direct binding through %s",
+    (host) => {
+      expect(() =>
+        resolveBindingTarget({
+          relayUrl: `ws://${host}:18792`,
+          gatewayUrl: `ws://${host}:18789`,
+        }),
+      ).toThrow("direct Gateway relay");
+    },
+  );
+
   it("serializes config refreshes so a stale pairing cannot outlive unpair", async () => {
     let resolveInitial: ((config: Record<string, string>) => void) | undefined;
     const getConfig = vi

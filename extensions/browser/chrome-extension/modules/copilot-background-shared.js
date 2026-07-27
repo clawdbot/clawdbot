@@ -91,10 +91,19 @@ export function sessionKeyFromEvent(event) {
 function isLoopbackUrl(raw) {
   try {
     const host = new URL(raw).hostname.toLowerCase();
-    return host === "localhost" || host === "127.0.0.1" || host === "[::1]";
+    return host === "localhost" || host === "[::1]" || isIpv4LoopbackHostname(host);
   } catch {
     return false;
   }
+}
+
+function isIpv4LoopbackHostname(hostname) {
+  const octets = hostname.split(".");
+  return (
+    octets.length === 4 &&
+    octets[0] === "127" &&
+    octets.every((octet) => /^\d{1,3}$/.test(octet) && Number(octet) <= 255)
+  );
 }
 
 export function resolveBindingTarget(config) {

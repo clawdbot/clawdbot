@@ -1,6 +1,7 @@
 // Defines core Zod schema fragments for canonical config parsing.
 import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
@@ -561,7 +562,10 @@ const ModelCatalogRefreshConfigSchema = z
             return (
               parsed.protocol === "https:" ||
               (parsed.protocol === "http:" &&
-                ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname))
+                (parsed.hostname === "localhost" ||
+                  parsed.hostname === "[::1]" ||
+                  (isCanonicalDottedDecimalIPv4(parsed.hostname) &&
+                    isLoopbackIpAddress(parsed.hostname))))
             );
           } catch {
             return false;

@@ -28,12 +28,12 @@ const ONE_SHOT_HOST_READY_TIMEOUT_MS = 30_000;
 const ONE_SHOT_HOST_EXIT_TIMEOUT_MS = 5_000;
 const ONE_SHOT_HOST_READY_KIND = "ready-for-exit";
 
-async function freePort(): Promise<number> {
+async function freePort(host = "127.0.0.1"): Promise<number> {
   // Allocate a real loopback port to exercise child process health probes.
   return await new Promise((resolve, reject) => {
     const server = net.createServer();
     server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
+    server.listen(0, host, () => {
       const address = server.address();
       server.close(() => {
         if (address && typeof address === "object") {
@@ -307,6 +307,40 @@ describe("provider local service", () => {
         baseUrl: `http://127.0.0.1:${port}/v1`,
       }),
     );
+
+    expect(lease).toBeDefined();
+    lease?.release();
+    await waitForProbeFailure(healthUrl);
+  });
+
+  it("allows a default endpoint across the IPv4 loopback range", async () => {
+    const host = "127.0.0.2";
+    const port = await freePort(host);
+    const healthUrl = `http://${host}:${port}/v1/models`;
+    const acquire = createConfiguredProviderLocalServiceAcquirer(() => ({
+      models: {
+        providers: {
+          "gpu-loopback-range": {
+            baseUrl: "",
+            models: [],
+            localService: {
+              command: process.execPath,
+              args: [
+                "-e",
+                `const http=require("http");http.createServer((req,res)=>{res.writeHead(200);res.end("ok");}).listen(${port},${JSON.stringify(host)});`,
+              ],
+              healthUrl,
+              idleStopMs: 1,
+            },
+          },
+        },
+      },
+    }));
+
+    const lease = await acquire({
+      providerId: "gpu-loopback-range",
+      baseUrl: `http://${host}:${port}/v1`,
+    });
 
     expect(lease).toBeDefined();
     lease?.release();

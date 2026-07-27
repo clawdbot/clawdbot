@@ -1,3 +1,4 @@
+import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 // Strict parser for grouped Claw schema version 1 manifests.
 import { z } from "zod";
 import { resolveToolProfilePolicy } from "../agents/tool-policy-shared.js";
@@ -321,7 +322,10 @@ const remoteMcpServerSchema = z
   .strict()
   .superRefine((server, ctx) => {
     const url = new URL(server.url);
-    const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+    const loopback =
+      url.hostname === "localhost" ||
+      url.hostname === "[::1]" ||
+      (isCanonicalDottedDecimalIPv4(url.hostname) && isLoopbackIpAddress(url.hostname));
     if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
       ctx.addIssue({
         code: "custom",

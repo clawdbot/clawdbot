@@ -1,5 +1,15 @@
 // Chutes tests cover oauth plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const { waitForLocalOAuthCallbackMock } = vi.hoisted(() => ({
+  waitForLocalOAuthCallbackMock: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth-runtime")>()),
+  waitForLocalOAuthCallback: waitForLocalOAuthCallbackMock,
+}));
+
 import { loginChutes } from "./oauth.js";
 
 const CHUTES_TOKEN_ENDPOINT = "https://api.chutes.ai/idp/token";
@@ -98,6 +108,55 @@ afterEach(() => {
 });
 
 describe("chutes plugin OAuth", () => {
+  it.each(["127.0.0.2", "127.255.255.254"])(
+    "accepts OAuth redirect host %s across the IPv4 loopback range",
+    async (hostname) => {
+      const redirectUri = `http://${hostname}:1456/oauth-callback`;
+      waitForLocalOAuthCallbackMock.mockResolvedValue({ code: "code_test", state: "state_test" });
+      const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
+        const url = fetchInputUrl(input);
+        if (url === CHUTES_TOKEN_ENDPOINT) {
+          return new Response(
+            '{"access_token":"at_123","refresh_token":"rt_123","expires_in":3600}',
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        if (url === CHUTES_USERINFO_ENDPOINT) {
+          return new Response("{}", {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return new Response("not found", { status: 404 });
+      });
+
+      await expect(
+        loginChutes({
+          app: { clientId: "cid_test", redirectUri, scopes: ["openid"] },
+          createState: () => "state_test",
+          onAuth: vi.fn(async () => {}),
+          onPrompt: vi.fn(),
+          fetchFn,
+        }),
+      ).resolves.toMatchObject({ access: "at_123" });
+    },
+  );
+
+  it("rejects an adjacent non-loopback OAuth redirect host", async () => {
+    await expect(
+      loginChutes({
+        app: {
+          clientId: "cid_test",
+          redirectUri: "http://128.0.0.1:1456/oauth-callback",
+          scopes: ["openid"],
+        },
+        createState: () => "state_test",
+        onAuth: vi.fn(async () => {}),
+        onPrompt: vi.fn(),
+      }),
+    ).rejects.toThrow("redirect hostname must be loopback");
+  });
+
   it("rejects unsafe token lifetimes before storing credentials", async () => {
     const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
       const url =

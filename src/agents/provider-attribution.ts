@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -246,6 +247,7 @@ function resolveManifestProviderEndpoint(params: {
 function isLocalEndpointHost(host: string): boolean {
   return (
     LOCAL_ENDPOINT_HOSTS.has(host) ||
+    (isCanonicalDottedDecimalIPv4(host) && isLoopbackIpAddress(host)) ||
     host.endsWith(".localhost") ||
     host.endsWith(".local") ||
     host.endsWith(".internal")

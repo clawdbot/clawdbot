@@ -5,6 +5,7 @@
  */
 import path from "node:path";
 import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
+import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -356,7 +357,11 @@ function parsePublishedHostFromDockerPortLine(line: string): string | null {
 
 function isLoopbackPublishHost(host: string): boolean {
   const normalized = normalizeOptionalLowercaseString(host);
-  return normalized === "127.0.0.1" || normalized === "::1" || normalized === "localhost";
+  return (
+    normalized === "::1" ||
+    normalized === "localhost" ||
+    (isCanonicalDottedDecimalIPv4(normalized) && isLoopbackIpAddress(normalized))
+  );
 }
 
 async function readSandboxBrowserPortMappings(params: {

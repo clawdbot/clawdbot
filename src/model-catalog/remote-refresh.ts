@@ -2,6 +2,7 @@ import {
   validateAndSanitizeRemoteModelCatalogBundle,
   type RemoteModelCatalogBundle,
 } from "@openclaw/model-catalog-core";
+import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { compareOpenClawVersions } from "../config/version.js";
 import { readResponseWithLimit } from "../infra/http-body.js";
@@ -74,8 +75,8 @@ function isExplicitLocalHttpUrl(config: OpenClawConfig, url: string): boolean {
   return (
     parsed.protocol === "http:" &&
     (parsed.hostname === "localhost" ||
-      parsed.hostname === "127.0.0.1" ||
-      parsed.hostname === "[::1]")
+      parsed.hostname === "[::1]" ||
+      (isCanonicalDottedDecimalIPv4(parsed.hostname) && isLoopbackIpAddress(parsed.hostname)))
   );
 }
 

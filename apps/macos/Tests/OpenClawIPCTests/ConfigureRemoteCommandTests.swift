@@ -239,6 +239,24 @@ struct ConfigureRemoteCommandTests {
             #expect(throws: Error.self) {
                 try configureRemote(.init(directUrl: "ws://192.168.0.202.attacker.example:18789"))
             }
+            #expect(throws: Error.self) {
+                try configureRemote(.init(directUrl: "ws://128.0.0.1:18789"))
+            }
+        }
+    }
+
+    @Test @MainActor func `configure remote accepts the full IPv4 loopback range`() async throws {
+        for host in ["127.0.0.2", "127.255.255.254"] {
+            let configURL = FileManager().temporaryDirectory
+                .appendingPathComponent("openclaw-configure-loopback-\(UUID().uuidString).json")
+            defer { try? FileManager().removeItem(at: configURL) }
+
+            try await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configURL.path]) {
+                let output = try configureRemote(
+                    .init(directUrl: "ws://\(host):18789", token: "test-token"),
+                    defaultsSuites: [])
+                #expect(output.remoteUrl == "ws://\(host):18789")
+            }
         }
     }
 }

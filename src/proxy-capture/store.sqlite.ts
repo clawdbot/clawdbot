@@ -4,6 +4,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { StringDecoder } from "node:string_decoder";
 import { gunzipSync, gzipSync } from "node:zlib";
+import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import { normalizeNullableString as normalizeObservedValue } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { sha256Hex } from "../infra/crypto-digest.js";
@@ -195,6 +196,18 @@ function sortObservedCounts(counts: Map<string, number>): CaptureObservedDimensi
   return [...counts.entries()]
     .map(([value, count]) => ({ value, count }))
     .toSorted((left, right) => right.count - left.count || left.value.localeCompare(right.value));
+}
+
+function isLocalCapturePeer(host: string): boolean {
+  if (host.startsWith("localhost:") || host.startsWith("127.0.0.1:")) {
+    return true;
+  }
+  const separator = host.lastIndexOf(":");
+  if (separator <= 0) {
+    return false;
+  }
+  const hostname = host.slice(0, separator);
+  return isCanonicalDottedDecimalIPv4(hostname) && isLoopbackIpAddress(hostname);
 }
 
 class DebugProxyCaptureStoreImpl {
@@ -481,11 +494,7 @@ class DebugProxyCaptureStoreImpl {
         hosts.set(host, (hosts.get(host) ?? 0) + 1);
         // Local model/provider endpoints are useful to surface separately when
         // debugging why cloud-provider labels are absent.
-        if (
-          host === "127.0.0.1:11434" ||
-          host.startsWith("127.0.0.1:") ||
-          host.startsWith("localhost:")
-        ) {
+        if (isLocalCapturePeer(host)) {
           localPeers.set(host, (localPeers.get(host) ?? 0) + 1);
         }
       }

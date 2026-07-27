@@ -30,7 +30,11 @@ import {
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  fetchWithSsrFGuard,
+  isCanonicalDottedDecimalIPv4,
+  isLoopbackIpAddress,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
@@ -199,9 +203,9 @@ export function isOllamaCompatProvider(model: {
     const hostname = normalizeLowercaseStringOrEmpty(parsed.hostname);
     const isLocalhost =
       hostname === "localhost" ||
-      hostname === "127.0.0.1" ||
       hostname === "::1" ||
-      hostname === "[::1]";
+      hostname === "[::1]" ||
+      (isCanonicalDottedDecimalIPv4(hostname) && isLoopbackIpAddress(hostname));
     if (isLocalhost && parsed.port === "11434") {
       return true;
     }

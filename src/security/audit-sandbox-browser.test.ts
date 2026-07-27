@@ -204,6 +204,39 @@ describe("security audit sandbox browser findings", () => {
     );
   });
 
+  it("accepts sandbox browser ports published on the full IPv4 loopback range", async () => {
+    const findings = await collectSandboxBrowserHashLabelFindings({
+      execDockerRawFn: async (args: string[]) => {
+        if (args[0] === "ps") {
+          return {
+            stdout: Buffer.from("openclaw-sbx-browser-loopback\n"),
+            stderr: Buffer.alloc(0),
+            code: 0,
+          };
+        }
+        if (args[0] === "inspect") {
+          return {
+            stdout: Buffer.from("hash123\t2026-02-21-novnc-auth-default\n"),
+            stderr: Buffer.alloc(0),
+            code: 0,
+          };
+        }
+        if (args[0] === "port") {
+          return {
+            stdout: Buffer.from("6080/tcp -> 127.0.0.2:49101\n9222/tcp -> 127.255.255.254:49100\n"),
+            stderr: Buffer.alloc(0),
+            code: 0,
+          };
+        }
+        return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), code: 1 };
+      },
+    });
+
+    expect(hasFinding("sandbox.browser_container.non_loopback_publish", "critical", findings)).toBe(
+      false,
+    );
+  });
+
   it("does not warn about cdpSourceRange since runtime auto-derives it", () => {
     const findings = collectSandboxDangerousConfigFindings({
       agents: {

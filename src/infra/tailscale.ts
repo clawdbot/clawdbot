@@ -1,5 +1,6 @@
 // Integrates with the local Tailscale CLI for tailnet setup and sharing.
 import { existsSync } from "node:fs";
+import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -373,7 +374,10 @@ function tailscaleProxyMatchesLoopbackPort(proxy: string, port: number): boolean
   if (portStr !== String(port)) {
     return false;
   }
-  return TAILSCALE_LOOPBACK_PROXY_HOSTS.has(host);
+  return (
+    TAILSCALE_LOOPBACK_PROXY_HOSTS.has(host) ||
+    (isCanonicalDottedDecimalIPv4(host) && isLoopbackIpAddress(host))
+  );
 }
 
 function funnelStatusBackendsForPort(status: Record<string, unknown>): Set<string> {

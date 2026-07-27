@@ -280,6 +280,41 @@ describe("DebugProxyCaptureStore", () => {
     expect(store.readBlob(firstPayload.dataBlobId ?? "")).toContain('"ok":true');
   });
 
+  it("classifies the full IPv4 loopback range as local capture peers", () => {
+    const store = makeStore();
+    store.upsertSession({
+      id: "session-loopback",
+      startedAt: 1,
+      mode: "proxy-run",
+      sourceScope: "openclaw",
+      sourceProcess: "openclaw",
+    });
+    for (const [index, host] of [
+      "127.0.0.2:11434",
+      "127.255.255.254:11434",
+      "128.0.0.1:11434",
+      "localhost:11434",
+    ].entries()) {
+      store.recordEvent({
+        sessionId: "session-loopback",
+        ts: index + 1,
+        sourceScope: "openclaw",
+        sourceProcess: "provider",
+        protocol: "http",
+        direction: "outbound",
+        kind: "request",
+        flowId: `flow-${index}`,
+        host,
+      });
+    }
+
+    expect(store.summarizeSessionCoverage("session-loopback").localPeers).toEqual([
+      { value: "127.0.0.2:11434", count: 1 },
+      { value: "127.255.255.254:11434", count: 1 },
+      { value: "localhost:11434", count: 1 },
+    ]);
+  });
+
   it("keeps byte-limited UTF-8 previews on a complete character boundary", () => {
     const store = makeStore();
     const data = `${"x".repeat(8191)}étail`;

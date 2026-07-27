@@ -10,6 +10,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import {
+  isCanonicalDottedDecimalIPv4,
+  isLoopbackIpAddress,
+} from "openclaw/plugin-sdk/ssrf-runtime";
+import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   readStringValue,
@@ -167,7 +171,11 @@ function isLoopbackOriginLike(value: string): boolean {
   try {
     const url = new URL(value);
     const hostname = normalizeLowercaseStringOrEmpty(url.hostname);
-    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+    return (
+      hostname === "localhost" ||
+      hostname === "::1" ||
+      (isCanonicalDottedDecimalIPv4(hostname) && isLoopbackIpAddress(hostname))
+    );
   } catch {
     return false;
   }

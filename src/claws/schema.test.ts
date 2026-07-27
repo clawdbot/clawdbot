@@ -238,6 +238,33 @@ describe("parseClawManifest", () => {
     });
   });
 
+  it.each(["127.0.0.2", "127.255.255.254"])(
+    "accepts plaintext remote MCP on loopback host %s",
+    (hostname) => {
+      const manifest = requireManifest({
+        ...baseManifest,
+        mcpServers: {
+          local: { url: `http://${hostname}:3000/mcp`, transport: "streamable-http" },
+        },
+      });
+
+      expect(manifest.mcpServers.local).toMatchObject({
+        url: `http://${hostname}:3000/mcp`,
+      });
+    },
+  );
+
+  it("rejects plaintext remote MCP on the adjacent non-loopback range", () => {
+    const result = parseClawManifest({
+      ...baseManifest,
+      mcpServers: {
+        remote: { url: "http://128.0.0.1:3000/mcp", transport: "streamable-http" },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+  });
+
   it.each([
     {
       url: "https://example.com/mcp",

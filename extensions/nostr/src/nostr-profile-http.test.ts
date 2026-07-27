@@ -372,6 +372,34 @@ describe("nostr-profile-http", () => {
       expect(res["_getStatusCode"]()).toBe(403);
     });
 
+    it.each(["http://127.0.0.2:18789", "http://127.255.255.254:18789"])(
+      "accepts profile mutation from loopback origin %s",
+      async (origin) => {
+        const { res, run } = createProfileHttpHarness(
+          "PUT",
+          "/api/channels/nostr/default/profile",
+          {
+            body: { name: "satoshi" },
+            req: { headers: { origin } },
+          },
+        );
+        mockPublishSuccess();
+
+        await run();
+        expect(res["_getStatusCode"]()).toBe(200);
+      },
+    );
+
+    it("rejects profile mutation from a non-loopback numeric origin", async () => {
+      const { res, run } = createProfileHttpHarness("PUT", "/api/channels/nostr/default/profile", {
+        body: { name: "attacker" },
+        req: { headers: { origin: "http://128.0.0.1:18789" } },
+      });
+
+      await run();
+      expect(res["_getStatusCode"]()).toBe(403);
+    });
+
     it("rejects profile mutation with cross-site sec-fetch-site header", async () => {
       const { res, run } = createProfileHttpHarness("PUT", "/api/channels/nostr/default/profile", {
         body: { name: "attacker" },

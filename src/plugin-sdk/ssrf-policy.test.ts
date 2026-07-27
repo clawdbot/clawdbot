@@ -20,6 +20,18 @@ import {
   ssrfPolicyFromAllowPrivateNetwork,
   ssrfPolicyFromPrivateNetworkOptIn,
 } from "./ssrf-policy.js";
+import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "./ssrf-runtime.js";
+
+describe("plugin loopback IP predicates", () => {
+  it.each([
+    ["127.0.0.2", true],
+    ["127.255.255.254", true],
+    ["128.0.0.1", false],
+  ])("classifies %s as IPv4 loopback=%s", (address, expected) => {
+    expect(isCanonicalDottedDecimalIPv4(address)).toBe(true);
+    expect(isLoopbackIpAddress(address)).toBe(expected);
+  });
+});
 
 function createLookupFn(addresses: Array<{ address: string; family: number }>): LookupFn {
   return vi.fn(async (_hostname: string, options?: unknown) => {

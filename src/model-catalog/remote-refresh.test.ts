@@ -102,6 +102,28 @@ describe("remote model catalog refresh", () => {
     expect(persisted.providers.anthropic.models[0]).not.toHaveProperty("headers");
   });
 
+  it.each([
+    ["127.0.0.2", "updated"],
+    ["127.255.255.254", "updated"],
+    ["128.0.0.1", "error"],
+  ] as const)("classifies configured HTTP catalog host %s", async (hostname, status) => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(bundle)));
+    await expect(
+      refreshRemoteModelCatalog({
+        config: {
+          models: {
+            catalogRefresh: { url: `http://${hostname}:8080/catalog.json` },
+          },
+        },
+        fetchImpl,
+        databaseOptions: options(),
+        force: true,
+        bundledGeneratedAt: () => bundle.generatedAt - 1,
+      }),
+    ).resolves.toMatchObject({ status });
+    expect(fetchImpl).toHaveBeenCalledTimes(status === "updated" ? 1 : 0);
+  });
+
   it("does not report a catalog older than the bundled build as applicable", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(bundle)));
     await expect(

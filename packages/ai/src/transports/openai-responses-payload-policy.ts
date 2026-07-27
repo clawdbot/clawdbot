@@ -1,3 +1,4 @@
+import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 /**
  * OpenAI Responses payload policy.
@@ -137,6 +138,7 @@ function hostMatchesSuffix(host: string, suffix: string): boolean {
 function isLocalEndpointHost(host: string): boolean {
   return (
     LOCAL_ENDPOINT_HOSTS.has(host) ||
+    (isCanonicalDottedDecimalIPv4(host) && isLoopbackIpAddress(host)) ||
     host.endsWith(".localhost") ||
     host.endsWith(".local") ||
     host.endsWith(".internal")

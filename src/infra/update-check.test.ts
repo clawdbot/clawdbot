@@ -473,33 +473,37 @@ describe("resolveExtendedStablePackage", () => {
     });
   });
 
-  it("supports an explicit scoped-package override on a loopback test registry", async () => {
-    mockHttp.intercept({
-      url: "http://127.0.0.1:4873/%40kevins8%2Fopenclaw/extended-stable",
-      reply: { json: { version: "2000.4.34" } },
-    });
-    mockHttp.intercept({
-      url: "http://127.0.0.1:4873/%40kevins8%2Fopenclaw/2000.4.34",
-      reply: { json: { version: "2000.4.34" } },
-    });
+  it.each(["127.0.0.1", "127.0.0.2", "127.255.255.254"])(
+    "supports an explicit scoped-package override on loopback registry %s",
+    async (hostname) => {
+      const registry = `http://${hostname}:4873`;
+      mockHttp.intercept({
+        url: `${registry}/%40kevins8%2Fopenclaw/extended-stable`,
+        reply: { json: { version: "2000.4.34" } },
+      });
+      mockHttp.intercept({
+        url: `${registry}/%40kevins8%2Fopenclaw/2000.4.34`,
+        reply: { json: { version: "2000.4.34" } },
+      });
 
-    await expect(
-      resolveExtendedStablePackage({
-        installKind: "package",
-        timeoutMs: 1000,
-        packageName: "@kevins8/openclaw",
-        env: {
-          OPENCLAW_UPDATE_PACKAGE_SPEC: "@kevins8/openclaw",
-          NPM_CONFIG_REGISTRY: "http://127.0.0.1:4873/",
-        },
-      }),
-    ).resolves.toEqual({
-      status: "resolved",
-      selector: "extended-stable",
-      version: "2000.4.34",
-      packageSpec: "@kevins8/openclaw@2000.4.34",
-    });
-  });
+      await expect(
+        resolveExtendedStablePackage({
+          installKind: "package",
+          timeoutMs: 1000,
+          packageName: "@kevins8/openclaw",
+          env: {
+            OPENCLAW_UPDATE_PACKAGE_SPEC: "@kevins8/openclaw",
+            NPM_CONFIG_REGISTRY: `${registry}/`,
+          },
+        }),
+      ).resolves.toEqual({
+        status: "resolved",
+        selector: "extended-stable",
+        version: "2000.4.34",
+        packageSpec: "@kevins8/openclaw@2000.4.34",
+      });
+    },
+  );
 
   it("ignores package overrides that do not use a loopback registry", async () => {
     mockHttp.intercept({

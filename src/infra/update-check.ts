@@ -1,6 +1,7 @@
 // Computes git, dependency, and registry update status for OpenClaw installs.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
   detectPackageManager as detectPackageManagerImpl,
@@ -87,7 +88,9 @@ function isLoopbackNpmRegistry(raw: string): boolean {
     const url = new URL(raw);
     return (
       (url.protocol === "http:" || url.protocol === "https:") &&
-      (url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "[::1]")
+      (url.hostname === "localhost" ||
+        url.hostname === "[::1]" ||
+        (isCanonicalDottedDecimalIPv4(url.hostname) && isLoopbackIpAddress(url.hostname)))
     );
   } catch {
     return false;

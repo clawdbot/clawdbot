@@ -423,6 +423,13 @@ describe("models.catalogRefresh", () => {
         models: { catalogRefresh: { url: "http://localhost:8080/catalog.json" } },
       }).success,
     ).toBe(true);
+    for (const hostname of ["127.0.0.2", "127.255.255.254"]) {
+      expect(
+        OpenClawSchema.safeParse({
+          models: { catalogRefresh: { url: `http://${hostname}:8080/catalog.json` } },
+        }).success,
+      ).toBe(true);
+    }
   });
 
   it("rejects invalid refresh values", () => {
@@ -439,6 +446,11 @@ describe("models.catalogRefresh", () => {
     expect(
       OpenClawSchema.safeParse({
         models: { catalogRefresh: { url: "http://catalog.internal.example/catalog.json" } },
+      }).success,
+    ).toBe(false);
+    expect(
+      OpenClawSchema.safeParse({
+        models: { catalogRefresh: { url: "http://128.0.0.1:8080/catalog.json" } },
       }).success,
     ).toBe(false);
   });
