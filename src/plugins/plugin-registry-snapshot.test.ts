@@ -576,6 +576,39 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     expect(statFile).not.toHaveBeenCalled();
   });
 
+  it("retains only the current process-lifecycle registry graph", () => {
+    const tempRoot = makeTempDir();
+    const env = { ...createHermeticEnv(tempRoot), OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
+    const firstWorkspace = path.join(tempRoot, "first-workspace");
+    const secondWorkspace = path.join(tempRoot, "second-workspace");
+
+    const first = loadPluginRegistrySnapshotWithMetadata({
+      config: {},
+      env,
+      workspaceDir: firstWorkspace,
+    });
+    const second = loadPluginRegistrySnapshotWithMetadata({
+      config: {},
+      env,
+      workspaceDir: secondWorkspace,
+    });
+    const refreshedFirst = loadPluginRegistrySnapshotWithMetadata({
+      config: {},
+      env,
+      workspaceDir: firstWorkspace,
+    });
+
+    expect(second).not.toBe(first);
+    expect(refreshedFirst).not.toBe(first);
+    expect(
+      loadPluginRegistrySnapshotWithMetadata({
+        config: {},
+        env,
+        workspaceDir: firstWorkspace,
+      }),
+    ).toBe(refreshedFirst);
+  });
+
   it("refreshes workspace plugin discovery on explicit metadata invalidation", () => {
     const tempRoot = makeTempDir();
     const workspaceDir = path.join(tempRoot, "workspace");

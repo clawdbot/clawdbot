@@ -35,12 +35,6 @@ function resolvePluginMetadataControlPlaneFingerprint(
   });
 }
 
-export function isReusableCurrentPluginMetadataSnapshot(
-  _snapshot: PluginMetadataSnapshot,
-): boolean {
-  return true;
-}
-
 // Single-slot Gateway-owned handoff. Replace or clear it at lifecycle boundaries;
 // never accumulate historical metadata snapshots here.
 export function setCurrentPluginMetadataSnapshot(
