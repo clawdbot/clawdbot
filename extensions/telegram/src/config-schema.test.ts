@@ -580,4 +580,44 @@ describe("telegram webhook schema", () => {
       "accounts.ops.webhookSecret",
     );
   });
+
+  it("accepts spooledUpdateHandlerTimeoutMs as a positive integer", () => {
+    const res = TelegramConfigSchema.safeParse({
+      spooledUpdateHandlerTimeoutMs: 600000,
+    });
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.spooledUpdateHandlerTimeoutMs).toBe(600000);
+    }
+  });
+
+  it("rejects non-positive spooledUpdateHandlerTimeoutMs", () => {
+    expectTelegramConfigIssue({ spooledUpdateHandlerTimeoutMs: 0 }, "spooledUpdateHandlerTimeoutMs");
+    expectTelegramConfigIssue(
+      { spooledUpdateHandlerTimeoutMs: -1000 },
+      "spooledUpdateHandlerTimeoutMs",
+    );
+  });
+
+  it("rejects non-integer spooledUpdateHandlerTimeoutMs", () => {
+    expectTelegramConfigIssue(
+      { spooledUpdateHandlerTimeoutMs: 1.5 },
+      "spooledUpdateHandlerTimeoutMs",
+    );
+  });
+
+  it("accepts spooledUpdateHandlerTimeoutMs on accounts", () => {
+    const res = TelegramConfigSchema.safeParse({
+      accounts: {
+        ops: {
+          botToken: "fake",
+          spooledUpdateHandlerTimeoutMs: 300000,
+        },
+      },
+    });
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.accounts?.ops?.spooledUpdateHandlerTimeoutMs).toBe(300000);
+    }
+  });
 });

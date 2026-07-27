@@ -291,6 +291,12 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
           apiRoot: account.config.apiRoot,
           proxy: account.config.proxy,
           network: account.config.network,
+          ...(account.config.spooledUpdateHandlerTimeoutMs !== undefined
+            ? {
+                spooledUpdateHandlerTimeoutMs:
+                  account.config.spooledUpdateHandlerTimeoutMs,
+              }
+            : {}),
         },
       });
       await pollingSession.runUntilAbort();

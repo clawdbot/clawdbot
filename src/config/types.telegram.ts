@@ -151,6 +151,13 @@ export type TelegramAccountConfig = CommonChannelMessagingConfig<
     apiRoot?: string;
     /** Trusted local filesystem roots for self-hosted Telegram Bot API absolute file_path values. */
     trustedLocalFileRoots?: string[];
+    /**
+     * Maximum time (ms) a spooled/buffered inbound update can wait behind an
+     * active run before being marked failed and aborting the in-progress reply.
+     * Defaults to 5 minutes when unset; falls back to the
+     * OPENCLAW_TELEGRAM_SPOOLED_HANDLER_TIMEOUT_MS env var if omitted.
+     */
+    spooledUpdateHandlerTimeoutMs?: number;
     /** Auto-rename DM forum topics on first message using LLM. Default: true. */
     autoTopicLabel?: AutoTopicLabelConfig;
   };

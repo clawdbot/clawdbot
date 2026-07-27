@@ -270,6 +270,14 @@ const TelegramAccountSchemaBase = z
       .describe(
         "Trusted local filesystem roots for self-hosted Telegram Bot API absolute file_path values. Only absolute paths under these roots are read directly; all other absolute paths are rejected.",
       ),
+    spooledUpdateHandlerTimeoutMs: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe(
+        "Maximum time (ms) a spooled/buffered inbound update can wait behind an active run before being marked failed and aborting the in-progress reply. Defaults to 5 minutes when unset; falls back to the OPENCLAW_TELEGRAM_SPOOLED_HANDLER_TIMEOUT_MS env var if omitted.",
+      ),
     autoTopicLabel: AutoTopicLabelSchema,
   })
   .strict();
