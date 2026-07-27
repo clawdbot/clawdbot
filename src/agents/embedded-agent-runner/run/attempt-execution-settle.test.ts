@@ -81,6 +81,7 @@ function createFixture() {
       queueHandle,
       stopAcceptingSteerMessages: vi.fn(),
       getBeforeAgentFinalizeRevisionReason,
+      getCurrentRawBody: vi.fn(() => undefined),
     },
     timeout: {
       getRunAbortDeadlineAtMs: vi.fn(() => 123),
