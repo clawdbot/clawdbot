@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import type { OpenClawPluginNodeHostCommand } from "openclaw/plugin-sdk/plugin-entry";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { createRastermill } from "rastermill";
@@ -145,7 +146,11 @@ function desktopPng(result: CuaToolResult): Buffer {
   if (!image) {
     throw new Error("COMPUTER_DRIVER_ERROR: get_desktop_state returned no PNG image");
   }
-  return Buffer.from(image.data, "base64");
+  const canonicalPng = canonicalizeBase64(image.data);
+  if (!canonicalPng) {
+    throw new Error("COMPUTER_DRIVER_ERROR: get_desktop_state returned malformed PNG base64");
+  }
+  return Buffer.from(canonicalPng, "base64");
 }
 
 function screenSize(result: CuaToolResult): CuaScreenSize {
