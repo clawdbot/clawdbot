@@ -5,6 +5,7 @@ import path from "node:path";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it } from "vitest";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { parseSqliteSessionFileMarker } from "./legacy-sqlite-marker.js";
 import {
   forkSessionFromParentTranscript,
   loadTranscriptEvents,
@@ -159,7 +160,10 @@ describe("forkSessionFromParentTranscript", () => {
     expect(forkedHeader?.type).toBe("session");
     expect(forkedHeader?.id).toBe(fork.sessionId);
     expect(forkedHeader?.cwd).toBe(cwd);
-    expect(forkedHeader?.parentSession).toBe("agent:main:main");
+    expect(parseSqliteSessionFileMarker(forkedHeader?.parentSession)).toMatchObject({
+      agentId: "main",
+      sessionId: parentSessionId,
+    });
     expect(forkedEntries.map((entry) => entry.type)).toEqual([
       "session",
       "message",
@@ -710,6 +714,9 @@ describe("forkSessionFromParentTranscript", () => {
     const header = records[0];
     expect(header?.type).toBe("session");
     expect(header?.id).toBe(fork.sessionId);
-    expect(header?.parentSession).toBe("agent:main:main");
+    expect(parseSqliteSessionFileMarker(header?.parentSession)).toMatchObject({
+      agentId: "main",
+      sessionId: parentSessionId,
+    });
   });
 });

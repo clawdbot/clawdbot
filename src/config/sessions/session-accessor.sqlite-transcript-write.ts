@@ -34,7 +34,7 @@ import {
 } from "./session-accessor.sqlite-read.js";
 import {
   cloneSessionEntry,
-  formatSqliteSessionMarkerForScope,
+  formatSqliteSessionReferenceForScope,
   resolveSqliteScope,
   resolveSqliteTranscriptArchiveDirectory,
   resolveSqliteTranscriptScope,
@@ -244,7 +244,7 @@ export async function importSqliteSessionRows(
       const importedEntry = {
         ...params.entry,
         ...(preservedHarnessId ? { agentHarnessId: preservedHarnessId } : {}),
-        sessionFile: formatSqliteSessionMarkerForScope({
+        sessionFile: formatSqliteSessionReferenceForScope({
           ...resolved,
           sessionId: params.entry.sessionId,
         }),

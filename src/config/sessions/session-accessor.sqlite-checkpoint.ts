@@ -14,7 +14,7 @@ import {
 } from "./session-accessor.sqlite-entry-store.js";
 import { emitCommittedSessionIdentityDiff } from "./session-accessor.sqlite-identity.js";
 import {
-  formatSqliteSessionMarkerForScope,
+  formatSqliteSessionReferenceForScope,
   getSessionKysely,
   normalizeSqliteSessionKey,
   resolveSqliteScope,
@@ -303,7 +303,7 @@ function forkSqliteCheckpointTranscriptInTransaction(
     sessionId,
     sessionKey: params.targetSessionKey,
   };
-  const sessionFile = formatSqliteSessionMarkerForScope(targetScope);
+  const sessionFile = formatSqliteSessionReferenceForScope(targetScope);
   const selectedEvents = selected?.rows ?? legacySource?.events ?? [];
   const totalTokens = selected?.source.totalTokens ?? legacySource?.totalTokens;
   appendTranscriptEventsInTransaction(database, targetScope, [

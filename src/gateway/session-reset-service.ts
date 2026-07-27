@@ -37,6 +37,7 @@ import {
   resetSessionEntryLifecycle,
 } from "../config/sessions.js";
 import { rebindCliSessionReseedReceiptsForReset } from "../config/sessions/cli-session-binding.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveResetPreservedSelection } from "../config/sessions/reset-preserved-selection.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
 import {
@@ -843,8 +844,10 @@ export async function emitGatewayBeforeResetPluginHook(params: {
 
   const sessionKey = params.target.canonicalKey ?? params.key;
   const sessionId = params.entry?.sessionId;
-  const sessionFile = params.entry ? sessionKey : undefined;
   const agentId = normalizeAgentId(params.target.agentId ?? resolveDefaultAgentId(params.cfg));
+  const sessionFile = sessionId
+    ? formatSqliteSessionFileMarker({ agentId, sessionId, storePath: params.storePath })
+    : undefined;
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
   const messages =
     params.messages ??
