@@ -212,6 +212,30 @@ describe("tool display details", () => {
     expect(detail).toContain("(agent)");
   });
 
+  it("keeps normal search patterns concise", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        args: { command: 'rg "foo|bar" src/agents' },
+        detailMode: "explain",
+      }),
+    );
+
+    expect(detail).toBe('search "foo|bar" in src/agents');
+  });
+
+  it("uses a neutral label for recursive search summary patterns", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        args: { command: 'rg "Bash failed: search \\"foo\\" in src|search \\"bar\\"" src' },
+        detailMode: "explain",
+      }),
+    );
+
+    expect(detail).toBe("search text in src");
+  });
+
   it("summarizes bash commands with the same command explainer", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({
