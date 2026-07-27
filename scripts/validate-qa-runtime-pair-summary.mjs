@@ -17,35 +17,47 @@ const EXPLICIT_CODEX_GAP_PREFIXES = ["known-harness-gap ", "codex-native-workspa
 const FROZEN_RUNTIME_PAIR_MANIFESTS = new Map([
   [
     "311047822ecdde24e824d839ab105ef08f17be00:core",
-    [
-      "instruction-followthrough-repo-contract",
-      "subagent-fanout-synthesis",
-      "subagent-handoff",
-      "subagent-stale-child-links",
-      "config-restart-capability-flip",
-      "image-understanding-attachment",
-      "memory-recall",
-      "thread-memory-isolation",
-      "model-switch-tool-continuity",
-      "approval-turn-tool-followthrough",
-      "codex-plugin-pinned-new",
-      "codex-plugin-pinned-old",
-      "compaction-retry-mutating-tool",
-      "runtime-first-hour-20-turn",
-      "runtime-tool-apply-patch",
-      "runtime-tool-bash",
-      "runtime-tool-edit",
-      "runtime-tool-exec",
-      "runtime-tool-fs-list",
-      "runtime-tool-fs-read",
-      "runtime-tool-fs-write",
-      "runtime-tool-grep",
-      "runtime-tool-session-status",
-      "runtime-tool-sessions-spawn",
-      "runtime-tool-web-fetch",
-      "runtime-tool-web-search",
-      "source-docs-discovery-report",
-    ],
+    {
+      scenarioIds: [
+        "instruction-followthrough-repo-contract",
+        "subagent-fanout-synthesis",
+        "subagent-handoff",
+        "subagent-stale-child-links",
+        "config-restart-capability-flip",
+        "image-understanding-attachment",
+        "memory-recall",
+        "thread-memory-isolation",
+        "model-switch-tool-continuity",
+        "approval-turn-tool-followthrough",
+        "codex-plugin-pinned-new",
+        "codex-plugin-pinned-old",
+        "compaction-retry-mutating-tool",
+        "runtime-first-hour-20-turn",
+        "runtime-tool-apply-patch",
+        "runtime-tool-bash",
+        "runtime-tool-edit",
+        "runtime-tool-exec",
+        "runtime-tool-fs-list",
+        "runtime-tool-fs-read",
+        "runtime-tool-fs-write",
+        "runtime-tool-grep",
+        "runtime-tool-session-status",
+        "runtime-tool-sessions-spawn",
+        "runtime-tool-web-fetch",
+        "runtime-tool-web-search",
+        "source-docs-discovery-report",
+      ],
+      gapScenarioIds: [
+        "runtime-tool-apply-patch",
+        "runtime-tool-bash",
+        "runtime-tool-edit",
+        "runtime-tool-exec",
+        "runtime-tool-fs-list",
+        "runtime-tool-fs-read",
+        "runtime-tool-fs-write",
+        "runtime-tool-grep",
+      ],
+    },
   ],
 ]);
 
@@ -169,9 +181,11 @@ export function validateQaRuntimePairSummary(summary, options = {}) {
 
   let passed = 0;
   let skipped = 0;
+  const skippedScenarioIds = [];
   for (const [index, scenario] of summary.scenarios.entries()) {
     if (requireRuntimePairScenario(scenario, index)) {
       skipped += 1;
+      skippedScenarioIds.push(scenarioIds[index]);
     } else {
       passed += 1;
     }
@@ -196,8 +210,12 @@ export function validateQaRuntimePairSummary(summary, options = {}) {
     const manifest = FROZEN_RUNTIME_PAIR_MANIFESTS.get(`${options.targetSha}:${options.lane}`);
     if (
       !manifest ||
-      manifest.length !== scenarioIds.length ||
-      manifest.some((scenarioId, index) => scenarioId !== scenarioIds[index])
+      manifest.scenarioIds.length !== scenarioIds.length ||
+      manifest.scenarioIds.some((scenarioId, index) => scenarioId !== scenarioIds[index]) ||
+      manifest.gapScenarioIds.length !== skippedScenarioIds.length ||
+      manifest.gapScenarioIds.some(
+        (scenarioId, index) => scenarioId !== skippedScenarioIds[index],
+      )
     ) {
       throw new Error("nonzero candidate exit is not covered by a trusted frozen-lane manifest");
     }

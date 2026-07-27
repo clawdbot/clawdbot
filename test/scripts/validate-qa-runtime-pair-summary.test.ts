@@ -68,6 +68,64 @@ function summary(scenarios: ReturnType<typeof scenario>[]) {
   };
 }
 
+const frozenCoreScenarioIds = [
+  "instruction-followthrough-repo-contract",
+  "subagent-fanout-synthesis",
+  "subagent-handoff",
+  "subagent-stale-child-links",
+  "config-restart-capability-flip",
+  "image-understanding-attachment",
+  "memory-recall",
+  "thread-memory-isolation",
+  "model-switch-tool-continuity",
+  "approval-turn-tool-followthrough",
+  "codex-plugin-pinned-new",
+  "codex-plugin-pinned-old",
+  "compaction-retry-mutating-tool",
+  "runtime-first-hour-20-turn",
+  "runtime-tool-apply-patch",
+  "runtime-tool-bash",
+  "runtime-tool-edit",
+  "runtime-tool-exec",
+  "runtime-tool-fs-list",
+  "runtime-tool-fs-read",
+  "runtime-tool-fs-write",
+  "runtime-tool-grep",
+  "runtime-tool-session-status",
+  "runtime-tool-sessions-spawn",
+  "runtime-tool-web-fetch",
+  "runtime-tool-web-search",
+  "source-docs-discovery-report",
+] as const;
+const frozenCoreGapScenarioIds = new Set<string>([
+  "runtime-tool-apply-patch",
+  "runtime-tool-bash",
+  "runtime-tool-edit",
+  "runtime-tool-exec",
+  "runtime-tool-fs-list",
+  "runtime-tool-fs-read",
+  "runtime-tool-fs-write",
+  "runtime-tool-grep",
+]);
+
+function frozenCoreSummary() {
+  return summary(
+    frozenCoreScenarioIds.map((scenarioId) => {
+      const isGap = frozenCoreGapScenarioIds.has(scenarioId);
+      return scenario({
+        name: scenarioId,
+        status: isGap ? "skip" : "pass",
+        ...(isGap
+          ? {
+              codexStatus: "skip",
+              codexDetails: "known-harness-gap exec: tracked",
+            }
+          : {}),
+      });
+    }),
+  );
+}
+
 describe("frozen QA runtime-pair summary validation", () => {
   it("accepts only passing scenarios and explicit one-sided Codex-native gaps", () => {
     const fixture = summary([
@@ -167,6 +225,35 @@ describe("frozen QA runtime-pair summary validation", () => {
     incomplete.run.scenarioIds.push("missing-result");
     expect(() => validateQaRuntimePairSummary(incomplete)).toThrow(
       "do not match the declared scenario manifest",
+    );
+  });
+
+  it("pins the exact frozen scenarios that may use the explicit gap exception", () => {
+    const options = {
+      requireExplicitGap: true,
+      targetSha: "311047822ecdde24e824d839ab105ef08f17be00",
+      lane: "core",
+    };
+    const fixture = frozenCoreSummary();
+    expect(validateQaRuntimePairSummary(fixture, options)).toMatchObject({ skipped: 8 });
+
+    const expectedGap = fixture.scenarios.find(
+      (entry) => entry.runtimeParity.scenarioId === "runtime-tool-apply-patch",
+    )!;
+    expectedGap.status = "pass";
+    expectedGap.runtimeParity.drift = "none";
+    expectedGap.runtimeParity.cells.codex.status = "pass";
+    delete expectedGap.runtimeParity.cells.codex.details;
+    const unrelated = fixture.scenarios.find(
+      (entry) => entry.runtimeParity.scenarioId === "instruction-followthrough-repo-contract",
+    )!;
+    unrelated.status = "skip";
+    unrelated.runtimeParity.drift = "failure-mode";
+    unrelated.runtimeParity.cells.codex.status = "skip";
+    unrelated.runtimeParity.cells.codex.details = "known-harness-gap exec: tracked";
+
+    expect(() => validateQaRuntimePairSummary(fixture, options)).toThrow(
+      "trusted frozen-lane manifest",
     );
   });
 
