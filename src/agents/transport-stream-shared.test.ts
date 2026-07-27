@@ -110,9 +110,20 @@ describe("transport stream shared helpers", () => {
     expect(output.errorCode).toBe("OPENCLAW_RESTART_ABORT");
   });
 
-  it("falls back to a synthetic abort error for a non-Error abort reason", () => {
+  it.each([
+    ["a non-Error abort reason", () => "stringy reason"],
+    // Node's default abort reason. It is an Error, but an uncoded one, so it
+    // carries nothing the synthetic error does not.
+    ["a default uncoded abort reason", () => undefined],
+    ["an uncoded Error abort reason", () => new Error("some upstream failure")],
+  ])("falls back to the synthetic abort error for %s", (_label, makeReason) => {
     const controller = new AbortController();
-    controller.abort("stringy reason");
+    const reason = makeReason();
+    if (reason === undefined) {
+      controller.abort();
+    } else {
+      controller.abort(reason);
+    }
 
     expect(() =>
       finalizeTransportStream({
