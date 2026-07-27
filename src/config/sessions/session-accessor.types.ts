@@ -62,9 +62,8 @@ export type LogicalSessionAccessScope = {
 };
 
 export type SessionEntryListScope = Partial<Omit<SessionAccessScope, "sessionKey">> & {
-  light?: boolean;
-  limit?: number;
-  offset?: number;
+  /** Listing views do not consume the large per-run prompt snapshots. */
+  projection?: "full" | "list";
 };
 export type SessionEntryStatus = NonNullable<SessionEntry["status"]>;
 

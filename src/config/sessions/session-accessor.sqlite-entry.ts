@@ -12,7 +12,6 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
-import { getFileStatSnapshot } from "../cache-utils.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import { deriveLastRoutePatch, deriveSessionMetaPatch } from "./metadata.js";
 import type {
@@ -70,53 +69,8 @@ import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lin
 import { buildSessionCreationStamp } from "./session-entry-provenance.js";
 import { kickSessionHistoryDiskBudgetMaintenance } from "./session-history-eviction.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
-import { readSessionStoreCache, writeSessionStoreCache } from "./store-cache.js";
 import type { GroupKeyResolution, SessionEntry } from "./types.js";
 import { mergeSessionEntry, mergeSessionEntryPreserveActivity } from "./types.js";
-
-// Guards against data_version cross-connection coincidence. When the DB handle
-// closes and reopens, data_version could theoretically collide; a monotonic
-// connection token derived from handle identity provides a second layer.
-const sessionHandleMap = new WeakMap<object, number>();
-let nextSessionConnectionToken = 1;
-
-type SessionEntryListPagination = {
-  limit?: number;
-  offset?: number;
-};
-
-function getConnectionToken(database: ReturnType<typeof openOpenClawAgentDatabase>): number {
-  const stored = sessionHandleMap.get(database.db);
-  if (stored !== undefined) {
-    return stored;
-  }
-  const token = nextSessionConnectionToken;
-  nextSessionConnectionToken += 1;
-  sessionHandleMap.set(database.db, token);
-  return token;
-}
-
-function resolveSessionEntryListPagination(
-  scope: SessionEntryListScope,
-): SessionEntryListPagination {
-  return {
-    limit: resolveSessionEntryListPageValue(scope.limit, "limit"),
-    offset: resolveSessionEntryListPageValue(scope.offset, "offset"),
-  };
-}
-
-function resolveSessionEntryListPageValue(
-  value: number | undefined,
-  label: "limit" | "offset",
-): number | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (!Number.isSafeInteger(value) || value < 0) {
-    throw new RangeError(`session list ${label} must be a non-negative integer`);
-  }
-  return value;
-}
 
 // Public entry API. Async preparation precedes BEGIN; commit revalidates repository snapshots.
 
@@ -177,107 +131,9 @@ export function resolveSqliteSessionKeyBySessionId(
 
 /** Lists session entries from the additive SQLite session store. */
 export function listSqliteSessionEntries(scope: SessionEntryListScope = {}): SessionEntrySummary[] {
-  const pagination = resolveSessionEntryListPagination(scope);
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  const dbPath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved));
-
-  const currentFileStat = getFileStatSnapshot(dbPath);
-  const currentDataVersion = (
-    database.db.prepare("PRAGMA data_version").get() as { data_version?: number }
-  )?.data_version;
-  const currentConnectionToken = getConnectionToken(database);
-
-  // Cache hit: derive both light and full results from cached entries
-  const cached = readSessionStoreCache({
-    storePath: dbPath,
-    ...currentFileStat,
-    dataVersion: currentDataVersion,
-    connectionToken: currentConnectionToken,
-  });
-  if (cached) {
-    let cachedEntries = (cached.orderedSessionKeys ?? Object.keys(cached.store))
-      .filter((key) => !isInternalSessionEffectsKey(key))
-      .map((sessionKey) => [sessionKey, cached.store[sessionKey]] as const)
-      .filter((entry): entry is readonly [string, SessionEntry] => entry[1] !== undefined);
-    if (pagination.offset !== undefined) {
-      cachedEntries = cachedEntries.slice(pagination.offset);
-    }
-    if (pagination.limit !== undefined) {
-      cachedEntries = cachedEntries.slice(0, pagination.limit);
-    }
-    return cachedEntries.map(([sessionKey, entry]) => {
-      if (scope.light) {
-        // Light path must clone: we delete heavy fields from the copy.
-        const lightEntry = structuredClone(entry);
-        delete (lightEntry as Record<string, unknown>).systemPromptReport;
-        delete (lightEntry as Record<string, unknown>).skillsSnapshot;
-        return { sessionKey, entry: lightEntry };
-      }
-      // Public full-list results are mutable, so cache-owned entries cannot
-      // be shared with callers across warm reads.
-      return { sessionKey, entry: structuredClone(entry) };
-    });
-  }
-
-  // Cache miss — query all rows, filter, then paginate in memory
-  // SQL-level LIMIT/OFFSET would skip rows before internal-effect filtering,
-  // producing inconsistent pages vs the cache-hit path. Fetch all rows once
-  // and paginate after filtering so both paths return the same result set.
-  const db = getSessionKysely(database.db);
-  const query = db
-    .selectFrom("session_nodes")
-    .select(["session_key", "entry_json", "current_session_id", "updated_at"])
-    .orderBy("session_key", "asc");
-
-  const rows = executeSqliteQuerySync(database.db, query).rows;
-  const allEntries: SessionEntrySummary[] = [];
-  const orderedSessionKeys: string[] = [];
-  const storeRecord = Object.create(null) as Record<string, SessionEntry>;
-
-  for (const row of rows) {
-    const entry = parseSessionEntryRow(row);
-    if (!entry) {
-      continue;
-    }
-    // Separate clones: cache always stores the complete entry; the return
-    // clone may be light-projected. Sharing a single clone would poison the
-    // cache when light: true deletes heavy fields from the cached copy.
-    const cacheEntry = structuredClone(entry);
-    storeRecord[row.session_key] = cacheEntry;
-    orderedSessionKeys.push(row.session_key);
-    if (isInternalSessionEffectsKey(row.session_key)) {
-      continue;
-    }
-    const returnEntry = structuredClone(entry);
-    if (scope.light) {
-      delete (returnEntry as Record<string, unknown>).systemPromptReport;
-      delete (returnEntry as Record<string, unknown>).skillsSnapshot;
-    }
-    allEntries.push({ sessionKey: row.session_key, entry: returnEntry });
-  }
-
-  // Apply pagination after filtering (consistent with cache-hit slice path)
-  let result = allEntries;
-  if (pagination.offset !== undefined) {
-    result = result.slice(pagination.offset);
-  }
-  if (pagination.limit !== undefined) {
-    result = result.slice(0, pagination.limit);
-  }
-
-  // The complete snapshot is already built above. Retain it even for a page
-  // request so repeated gateway pages do not reparse the entire store.
-  writeSessionStoreCache({
-    storePath: dbPath,
-    store: storeRecord,
-    orderedSessionKeys,
-    ...currentFileStat,
-    dataVersion: currentDataVersion,
-    connectionToken: currentConnectionToken,
-  });
-
-  return result;
+  return listSqliteSessionEntriesFromDatabase(database, scope.projection);
 }
 
 /**
@@ -288,10 +144,9 @@ export function listSqliteSessionEntries(scope: SessionEntryListScope = {}): Ses
 export function listSqliteSessionEntriesReadOnly(
   scope: SessionEntryListScope = {},
 ): SessionEntrySummary[] {
-  const pagination = resolveSessionEntryListPagination(scope);
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
   const result = withOpenClawAgentDatabaseReadOnly(
-    (database) => listSqliteSessionEntriesFromDatabase(database, scope, pagination),
+    (database) => listSqliteSessionEntriesFromDatabase(database, scope.projection),
     toDatabaseOptions(resolved),
   );
   return result.found ? result.value : [];
@@ -299,41 +154,38 @@ export function listSqliteSessionEntriesReadOnly(
 
 function listSqliteSessionEntriesFromDatabase(
   database: { db: DatabaseSync },
-  scope: SessionEntryListScope = {},
-  pagination = resolveSessionEntryListPagination(scope),
-): SessionEntrySummary[] {
+  projection: SessionEntryListScope["projection"] = "full",
+) {
   const db = getSessionKysely(database.db);
-  const rows = executeSqliteQuerySync(
-    database.db,
-    db
-      .selectFrom("session_nodes")
-      .select(["session_key", "entry_json", "current_session_id", "updated_at"])
-      .orderBy("session_key", "asc"),
-  ).rows;
-  let entries = rows
+  const baseQuery = db.selectFrom("session_nodes").select("session_key");
+  const query =
+    projection === "list"
+      ? baseQuery.select((eb) =>
+          eb
+            .case()
+            .when(eb.fn<number>("json_valid", [eb.ref("entry_json")]), "=", 1)
+            .then(
+              eb.fn<string>("json_remove", [
+                eb.ref("entry_json"),
+                eb.val("$.systemPromptReport"),
+                eb.val("$.skillsSnapshot"),
+              ]),
+            )
+            .else(eb.ref("entry_json"))
+            .end()
+            .as("entry_json"),
+        )
+      : baseQuery.select("entry_json");
+  const rows = executeSqliteQuerySync(database.db, query.orderBy("session_key", "asc")).rows;
+  return rows
     .map((row) => {
       if (isInternalSessionEffectsKey(row.session_key)) {
         return undefined;
       }
       const entry = parseSessionEntryRow(row);
-      if (!entry) {
-        return undefined;
-      }
-      const returnEntry = structuredClone(entry);
-      if (scope.light) {
-        delete (returnEntry as Record<string, unknown>).systemPromptReport;
-        delete (returnEntry as Record<string, unknown>).skillsSnapshot;
-      }
-      return { sessionKey: row.session_key, entry: returnEntry };
+      return entry ? { sessionKey: row.session_key, entry } : undefined;
     })
     .filter((entry): entry is SessionEntrySummary => entry !== undefined);
-  if (pagination.offset !== undefined) {
-    entries = entries.slice(pagination.offset);
-  }
-  if (pagination.limit !== undefined) {
-    entries = entries.slice(0, pagination.limit);
-  }
-  return entries;
 }
 
 /** Lists only entries whose normalized session row has one of the requested statuses. */
