@@ -5,6 +5,7 @@ import { normalizeAgentId } from "./config-utils.js";
 import {
   isDreamingNarrativeSessionStoreKey,
   extractAgentIdFromSessionsDir,
+  extractAgentIdFromSessionPath,
   canonicalizeMainSessionAlias,
   getRuntimeConfig,
   isCronRunSessionKey,
@@ -95,15 +96,6 @@ function normalizeRealComparablePath(pathname: string): string {
 
 function rememberArtifactDir(dirs: Map<string, string>, dir: string): void {
   dirs.set(normalizeRealComparablePath(dir), dir);
-}
-
-function extractAgentIdFromSessionPath(absPath: string): string | null {
-  const parts = path.normalize(path.resolve(absPath)).split(path.sep).filter(Boolean);
-  const sessionsIndex = parts.lastIndexOf("sessions");
-  if (sessionsIndex < 2 || parts[sessionsIndex - 2] !== "agents") {
-    return null;
-  }
-  return parts[sessionsIndex - 1] || null;
 }
 
 type ResolvedSessionStoreCorpusSource = {

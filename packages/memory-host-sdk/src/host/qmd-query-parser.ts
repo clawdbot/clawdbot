@@ -21,7 +21,7 @@ export type QmdQueryResult = {
 export function parseQmdQueryJson(stdout: string, stderr: string): QmdQueryResult[] {
   const trimmedStdout = stdout.trim();
   const trimmedStderr = stderr.trim();
-  const stdoutIsMarker = trimmedStdout.length > 0 && isQmdNoResultsOutput(trimmedStdout);
+  const stdoutIsMarker = trimmedStdout.length > 0 && isOnlyQmdNoResultsOutput(trimmedStdout);
   const stderrIsMarker = trimmedStderr.length > 0 && isQmdNoResultsOutput(trimmedStderr);
   if (stdoutIsMarker || (!trimmedStdout && stderrIsMarker)) {
     return [];
@@ -37,11 +37,7 @@ export function parseQmdQueryJson(stdout: string, stderr: string): QmdQueryResul
     if (parsed !== null) {
       return parsed;
     }
-    const noisyPayload = extractFirstJsonArray(trimmedStdout);
-    if (!noisyPayload) {
-      throw new Error("qmd query JSON response was not an array");
-    }
-    const fallback = parseQmdQueryResultArray(noisyPayload);
+    const fallback = findFirstQmdResultArray(trimmedStdout);
     if (fallback !== null) {
       return fallback;
     }
@@ -70,6 +66,15 @@ function isQmdNoResultsOutput(raw: string): boolean {
   return lines.some((line) => isQmdNoResultsLine(line));
 }
 
+/** True only when stdout consists entirely of no-result markers. */
+function isOnlyQmdNoResultsOutput(raw: string): boolean {
+  const lines = raw
+    .split(/\r?\n/)
+    .map((line) => normalizeLowercaseStringOrEmpty(line).replace(/\s+/g, " "))
+    .filter((line) => line.length > 0);
+  return lines.length > 0 && lines.every((line) => isQmdNoResultsLine(line));
+}
+
 /** Match qmd no-result lines with optional warning/info prefixes. */
 function isQmdNoResultsLine(line: string): boolean {
   if (line === "no results found" || line === "no results found.") {
@@ -92,9 +97,10 @@ function parseQmdQueryResultArray(raw: string): QmdQueryResult[] | null {
     if (!Array.isArray(parsed)) {
       return null;
     }
-    return parsed.map((item) => {
-      if (typeof item !== "object" || item === null) {
-        return item as QmdQueryResult;
+    const results: QmdQueryResult[] = [];
+    for (const item of parsed) {
+      if (typeof item !== "object" || item === null || Array.isArray(item)) {
+        return null;
       }
       const record = item as Record<string, unknown>;
       const docid = typeof record.docid === "string" ? record.docid : undefined;
@@ -106,7 +112,7 @@ function parseQmdQueryResultArray(raw: string): QmdQueryResult[] | null {
       const file = typeof record.file === "string" ? record.file : undefined;
       const snippet = typeof record.snippet === "string" ? record.snippet : undefined;
       const body = typeof record.body === "string" ? record.body : undefined;
-      return {
+      results.push({
         docid,
         score,
         collection,
@@ -115,8 +121,9 @@ function parseQmdQueryResultArray(raw: string): QmdQueryResult[] | null {
         body,
         startLine: parseQmdLineNumber(record.start_line ?? record.startLine),
         endLine: parseQmdLineNumber(record.end_line ?? record.endLine),
-      } as QmdQueryResult;
-    });
+      });
+    }
+    return results;
   } catch {
     return null;
   }
@@ -127,12 +134,28 @@ function parseQmdLineNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
-/** Extract the first complete JSON array from noisy stdout. */
-function extractFirstJsonArray(raw: string): string | null {
-  const start = raw.indexOf("[");
-  if (start < 0) {
-    return null;
+/** Find the first valid result array while skipping bracketed log prefixes. */
+function findFirstQmdResultArray(raw: string): QmdQueryResult[] | null {
+  let searchFrom = 0;
+  while (searchFrom < raw.length) {
+    const start = raw.indexOf("[", searchFrom);
+    if (start < 0) {
+      return null;
+    }
+    const payload = extractJsonArrayAt(raw, start);
+    if (payload) {
+      const parsed = parseQmdQueryResultArray(payload);
+      if (parsed !== null) {
+        return parsed;
+      }
+    }
+    searchFrom = start + 1;
   }
+  return null;
+}
+
+/** Extract one complete JSON array beginning at the provided offset. */
+function extractJsonArrayAt(raw: string, start: number): string | null {
   let depth = 0;
   let inString = false;
   let escaped = false;

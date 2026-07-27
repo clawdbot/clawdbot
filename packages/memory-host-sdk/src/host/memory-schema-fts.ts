@@ -6,6 +6,57 @@ export const MEMORY_INDEX_CHUNKS_TABLE = "memory_index_chunks";
 export const MEMORY_INDEX_FTS_TABLE = "memory_index_chunks_fts";
 export const MEMORY_INDEX_PATHS_FTS_TABLE = "memory_index_paths_fts";
 
+function readFtsTableSql(db: DatabaseSync, tableName: string): string | null {
+  const row = db
+    .prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?")
+    .get(tableName) as { sql?: unknown } | undefined;
+  return typeof row?.sql === "string" ? row.sql : null;
+}
+
+function ftsTableMatchesTokenizer(sql: string, tokenizeClause: string): boolean {
+  if (!/\bUSING\s+fts5\s*\(/iu.test(sql)) {
+    return false;
+  }
+  const configuredTokenizer = /\btokenize\s*=\s*['"]([^'"]+)['"]/iu.exec(sql)?.[1];
+  return tokenizeClause.includes("trigram")
+    ? configuredTokenizer?.toLowerCase() === "trigram case_sensitive 0"
+    : configuredTokenizer === undefined ||
+        configuredTokenizer.toLowerCase().startsWith("unicode61");
+}
+
+function ftsTableHasColumns(
+  db: DatabaseSync,
+  tableName: string,
+  expectedColumns: readonly string[],
+): boolean {
+  const rows = db
+    .prepare("SELECT name FROM pragma_table_info(?) ORDER BY cid")
+    .all(tableName) as Array<{
+    name?: unknown;
+  }>;
+  return (
+    rows.length === expectedColumns.length &&
+    rows.every((row, index) => row.name === expectedColumns[index])
+  );
+}
+
+function dropMismatchedFtsTable(params: {
+  db: DatabaseSync;
+  expectedColumns: readonly string[];
+  tableName: string;
+  tokenizeClause: string;
+}): void {
+  const sql = readFtsTableSql(params.db, params.tableName);
+  if (
+    !sql ||
+    (ftsTableMatchesTokenizer(sql, params.tokenizeClause) &&
+      ftsTableHasColumns(params.db, params.tableName, params.expectedColumns))
+  ) {
+    return;
+  }
+  params.db.exec(`DROP TABLE ${params.tableName}`);
+}
+
 /** Optional canonical triggers owned by the derived path FTS index. */
 export const MEMORY_PATH_FTS_TRIGGER_DEFINITIONS = [
   {
@@ -56,15 +107,68 @@ export function rebuildMemoryChunkFts(db: DatabaseSync, ftsTable: string): void 
   `);
 }
 
+/** Ensure body FTS uses the configured tokenizer and mirrors canonical chunks. */
+export function ensureMemoryChunkFtsSchema(params: {
+  db: DatabaseSync;
+  ftsTable: string;
+  tokenizeClause: string;
+}): void {
+  params.db.exec("SAVEPOINT ensure_memory_index_chunks_fts");
+  try {
+    dropMismatchedFtsTable({
+      db: params.db,
+      expectedColumns: ["text", "id", "path", "source", "model", "start_line", "end_line"],
+      tableName: params.ftsTable,
+      tokenizeClause: params.tokenizeClause,
+    });
+    params.db.exec(
+      `CREATE VIRTUAL TABLE IF NOT EXISTS ${params.ftsTable} USING fts5(\n` +
+        `  text,\n` +
+        `  id UNINDEXED,\n` +
+        `  path UNINDEXED,\n` +
+        `  source UNINDEXED,\n` +
+        `  model UNINDEXED,\n` +
+        `  start_line UNINDEXED,\n` +
+        `  end_line UNINDEXED\n` +
+        `${params.tokenizeClause});`,
+    );
+    params.db.exec(`
+      INSERT INTO ${params.ftsTable} (
+        text, id, path, source, model, start_line, end_line
+      )
+      SELECT text, id, path, source, model, start_line, end_line
+      FROM ${MEMORY_INDEX_CHUNKS_TABLE}
+      WHERE NOT EXISTS (SELECT 1 FROM ${params.ftsTable} LIMIT 1);
+    `);
+    params.db.exec("RELEASE ensure_memory_index_chunks_fts");
+  } catch (err) {
+    params.db.exec("ROLLBACK TO ensure_memory_index_chunks_fts");
+    params.db.exec("RELEASE ensure_memory_index_chunks_fts");
+    throw err;
+  }
+}
+
 export function dropDisabledMemoryChunkFts(
   db: DatabaseSync,
   ftsTable: string,
   enabled: boolean,
 ): void {
   if (!enabled && ftsTable === MEMORY_INDEX_FTS_TABLE) {
-    // Body FTS has no maintenance triggers while disabled. Recreate it from
-    // canonical chunks on enable instead of retaining a partial derived index.
-    db.exec(`DROP TABLE IF EXISTS ${ftsTable}`);
+    // Both canonical FTS tables are derived state. Keeping path triggers while
+    // disabled wastes writes and can let a damaged derived table block source updates.
+    db.exec("SAVEPOINT disable_memory_fts");
+    try {
+      dropMemoryPathFtsTriggers(db);
+      db.exec(`
+        DROP TABLE IF EXISTS ${MEMORY_INDEX_PATHS_FTS_TABLE};
+        DROP TABLE IF EXISTS ${ftsTable};
+        RELEASE disable_memory_fts;
+      `);
+    } catch (err) {
+      db.exec("ROLLBACK TO disable_memory_fts");
+      db.exec("RELEASE disable_memory_fts");
+      throw err;
+    }
   }
 }
 
@@ -80,6 +184,7 @@ export function ensureMemoryPathFtsTriggers(db: DatabaseSync): void {
   // The named integer source identity survives VACUUM and gives every
   // FTS update/delete a direct rowid lookup instead of a virtual-table scan.
   for (const trigger of MEMORY_PATH_FTS_TRIGGER_DEFINITIONS) {
+    db.exec(`DROP TRIGGER IF EXISTS main.${trigger.name}`);
     db.exec(trigger.sql);
   }
 }
@@ -90,6 +195,13 @@ export function ensureMemoryPathFtsSchema(params: {
 }): void {
   params.db.exec("SAVEPOINT ensure_memory_index_paths_fts");
   try {
+    dropMemoryPathFtsTriggers(params.db);
+    dropMismatchedFtsTable({
+      db: params.db,
+      expectedColumns: ["path", "source"],
+      tableName: MEMORY_INDEX_PATHS_FTS_TABLE,
+      tokenizeClause: params.tokenizeClause,
+    });
     params.db.exec(`
       CREATE VIRTUAL TABLE IF NOT EXISTS ${MEMORY_INDEX_PATHS_FTS_TABLE} USING fts5(
         path,

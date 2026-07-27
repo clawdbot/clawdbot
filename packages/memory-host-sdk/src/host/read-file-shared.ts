@@ -113,6 +113,11 @@ export function buildMemoryReadResult(params: {
   suggestReadFallback?: boolean;
 }): MemoryReadResult {
   const fileLines = params.content.split("\n");
+  // A terminal line ending closes the preceding line; split()'s final empty
+  // element is not another readable line or continuation page.
+  if (fileLines.at(-1) === "") {
+    fileLines.pop();
+  }
   const start = normalizePositiveInteger(params.from, 1);
   const requestedCount = normalizePositiveInteger(
     params.lines ?? params.defaultLines,

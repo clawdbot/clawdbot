@@ -251,6 +251,121 @@ describe("memory index schema", () => {
     }
   });
 
+  it("rebuilds derived FTS tables when the configured tokenizer changes", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      const initial = ensureMemoryIndexSchema({
+        db,
+        cacheEnabled: false,
+        ftsEnabled: true,
+        ftsTokenizer: "unicode61",
+      });
+      if (!initial.ftsAvailable) {
+        return;
+      }
+      db.exec(`
+        INSERT INTO memory_index_sources (path, source, hash, mtime, size)
+        VALUES ('memory/needle.md', 'memory', 'source-hash', 1, 1);
+        INSERT INTO memory_index_chunks
+          (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+        VALUES
+          ('chunk', 'memory/needle.md', 'memory', 1, 1, 'chunk-hash', 'model', 'needle body', '[]', 1);
+        INSERT INTO memory_index_chunks_fts
+          (text, id, path, source, model, start_line, end_line)
+        VALUES ('needle body', 'chunk', 'memory/needle.md', 'memory', 'model', 1, 1);
+      `);
+
+      const changed = ensureMemoryIndexSchema({
+        db,
+        cacheEnabled: false,
+        ftsEnabled: true,
+        ftsTokenizer: "trigram",
+      });
+
+      expect(changed.ftsAvailable).toBe(true);
+      const schemas = db
+        .prepare(
+          "SELECT name, sql FROM sqlite_schema WHERE type = 'table' AND name IN ('memory_index_chunks_fts', 'memory_index_paths_fts') ORDER BY name",
+        )
+        .all() as Array<{ name: string; sql: string }>;
+      expect(schemas).toHaveLength(2);
+      expect(
+        schemas.every((entry) => entry.sql.includes("tokenize='trigram case_sensitive 0'")),
+      ).toBe(true);
+      expect(db.prepare("SELECT id, text FROM memory_index_chunks_fts").all()).toEqual([
+        { id: "chunk", text: "needle body" },
+      ]);
+      expect(db.prepare("SELECT path, source FROM memory_index_paths_fts").all()).toEqual([
+        { path: "memory/needle.md", source: "memory" },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("removes path FTS state when FTS is disabled", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      const initial = ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: true });
+      if (!initial.ftsAvailable) {
+        return;
+      }
+
+      ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
+
+      expect(
+        db
+          .prepare(
+            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'memory_index_paths_fts'",
+          )
+          .get(),
+      ).toBeUndefined();
+      expect(
+        db
+          .prepare(
+            "SELECT name FROM sqlite_schema WHERE type = 'trigger' AND name LIKE 'memory_index_paths_fts_after_%'",
+          )
+          .all(),
+      ).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("rebuilds malformed derived FTS schemas without changing canonical rows", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
+      db.exec(`
+        INSERT INTO memory_index_sources (path, source, hash, mtime, size)
+        VALUES ('memory/kept.md', 'memory', 'source-hash', 1, 1);
+        INSERT INTO memory_index_chunks
+          (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+        VALUES
+          ('kept', 'memory/kept.md', 'memory', 1, 1, 'chunk-hash', 'model', 'kept body', '[]', 1);
+        CREATE VIRTUAL TABLE memory_index_chunks_fts USING fts5(wrong);
+        CREATE VIRTUAL TABLE memory_index_paths_fts USING fts5(wrong);
+        CREATE TRIGGER memory_index_paths_fts_after_insert
+        AFTER INSERT ON memory_index_sources BEGIN SELECT 1; END;
+      `);
+
+      const repaired = ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: true });
+
+      expect(repaired.ftsAvailable).toBe(true);
+      expect(db.prepare("SELECT id, text FROM memory_index_chunks_fts").all()).toEqual([
+        { id: "kept", text: "kept body" },
+      ]);
+      expect(db.prepare("SELECT path, source FROM memory_index_paths_fts").all()).toEqual([
+        { path: "memory/kept.md", source: "memory" },
+      ]);
+      expect(db.prepare("SELECT id, text FROM memory_index_chunks").all()).toEqual([
+        { id: "kept", text: "kept body" },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
   it("backfills and maintains one path FTS row per source without changing body FTS", () => {
     const db = new DatabaseSync(":memory:");
     try {

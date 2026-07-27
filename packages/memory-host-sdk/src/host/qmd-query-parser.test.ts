@@ -25,6 +25,30 @@ complete`,
     expect(results).toEqual([{ docid: "abc", score: 0.5 }]);
   });
 
+  it("skips bracketed log prefixes before the result array", () => {
+    const results = parseQmdQueryJson(
+      `[qmd] initializing search\n[{"docid":"abc","score":0.5}]\n[qmd] complete`,
+      "",
+    );
+
+    expect(results).toEqual([{ docid: "abc", score: 0.5 }]);
+  });
+
+  it("does not let a noisy no-results line hide a result payload", () => {
+    const results = parseQmdQueryJson(
+      `warning: no results found\n[{"docid":"abc","score":0.5}]`,
+      "",
+    );
+
+    expect(results).toEqual([{ docid: "abc", score: 0.5 }]);
+  });
+
+  it("rejects non-object result array entries", () => {
+    expect(() => parseQmdQueryJson('[null, "noise", 1]', "")).toThrow(
+      /qmd query returned invalid JSON/i,
+    );
+  });
+
   it("preserves explicit qmd line metadata when present", () => {
     const results = parseQmdQueryJson(
       '[{"docid":"abc","score":0.5,"start_line":4,"end_line":6,"snippet":"@@ -10,1\\nignored"}]',

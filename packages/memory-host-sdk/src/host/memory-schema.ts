@@ -4,6 +4,7 @@ import { formatErrorMessage } from "./error-utils.js";
 import {
   dropDisabledMemoryChunkFts,
   dropMemoryPathFtsTriggers,
+  ensureMemoryChunkFtsSchema,
   ensureMemoryPathFtsSchema,
   ensureMemoryPathFtsTriggers,
   MEMORY_INDEX_CHUNKS_TABLE,
@@ -714,33 +715,22 @@ export function ensureMemoryIndexSchema(params: {
   let ftsError: string | undefined;
   if (params.ftsEnabled) {
     try {
-      const tokenizer = params.ftsTokenizer ?? "unicode61";
-      const tokenizeClause = tokenizer === "trigram" ? `, tokenize='trigram case_sensitive 0'` : "";
-      params.db.exec(
-        `CREATE VIRTUAL TABLE IF NOT EXISTS ${ftsTable} USING fts5(\n` +
-          `  text,\n` +
-          `  id UNINDEXED,\n` +
-          `  path UNINDEXED,\n` +
-          `  source UNINDEXED,\n` +
-          `  model UNINDEXED,\n` +
-          `  start_line UNINDEXED,\n` +
-          `  end_line UNINDEXED\n` +
-          `${tokenizeClause});`,
-      );
-      // A migration rebuilds an existing FTS table in its savepoint. If the
-      // table is new, this same empty-table bootstrap covers all canonical rows.
-      params.db.exec(`
-        INSERT INTO ${ftsTable} (
-          text, id, path, source, model, start_line, end_line
-        )
-        SELECT text, id, path, source, model, start_line, end_line
-        FROM ${MEMORY_INDEX_CHUNKS_TABLE}
-        WHERE NOT EXISTS (SELECT 1 FROM ${ftsTable} LIMIT 1);
-      `);
-      // Deprecated custom FTS tables preserve their body-only contract. The
-      // canonical index owns the separate path table and its source triggers.
-      if (ftsTable === MEMORY_INDEX_FTS_TABLE) {
-        ensureMemoryPathFtsSchema({ db: params.db, tokenizeClause });
+      params.db.exec("SAVEPOINT ensure_memory_fts");
+      try {
+        const tokenizer = params.ftsTokenizer ?? "unicode61";
+        const tokenizeClause =
+          tokenizer === "trigram" ? `, tokenize='trigram case_sensitive 0'` : "";
+        ensureMemoryChunkFtsSchema({ db: params.db, ftsTable, tokenizeClause });
+        // Deprecated custom FTS tables preserve their body-only contract. The
+        // canonical index owns the separate path table and its source triggers.
+        if (ftsTable === MEMORY_INDEX_FTS_TABLE) {
+          ensureMemoryPathFtsSchema({ db: params.db, tokenizeClause });
+        }
+        params.db.exec("RELEASE ensure_memory_fts");
+      } catch (err) {
+        params.db.exec("ROLLBACK TO ensure_memory_fts");
+        params.db.exec("RELEASE ensure_memory_fts");
+        throw err;
       }
       ftsAvailable = true;
     } catch (err) {

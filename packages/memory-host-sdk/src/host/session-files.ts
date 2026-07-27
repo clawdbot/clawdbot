@@ -9,6 +9,7 @@ import {
   DREAMING_NARRATIVE_RUN_PREFIX,
   isDreamingNarrativeSessionStoreKey,
   extractAgentIdFromSessionsDir,
+  extractAgentIdFromSessionPath,
   HEARTBEAT_PROMPT,
   HEARTBEAT_TOKEN,
   hasInterSessionUserProvenance,
@@ -358,19 +359,10 @@ export async function listSessionFilesForAgent(agentId: string): Promise<string[
   );
 }
 
-function extractAgentIdFromSessionPath(absPath: string): string | null {
-  const parts = path.normalize(path.resolve(absPath)).split(path.sep).filter(Boolean);
-  const sessionsIndex = parts.lastIndexOf("sessions");
-  if (sessionsIndex < 2 || parts[sessionsIndex - 2] !== "agents") {
-    return null;
-  }
-  return parts[sessionsIndex - 1] || null;
-}
-
 export function sessionPathForFile(absPath: string): string {
   const agentId = extractAgentIdFromSessionPath(absPath);
   return path
-    .join("sessions", ...(agentId ? [agentId] : []), path.basename(absPath))
+    .join("sessions", ...(agentId ? [normalizeAgentId(agentId)] : []), path.basename(absPath))
     .replace(/\\/g, "/");
 }
 

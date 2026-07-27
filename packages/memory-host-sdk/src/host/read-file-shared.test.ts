@@ -3,6 +3,33 @@ import { describe, expect, it } from "vitest";
 import { buildMemoryReadResult, buildMemoryReadResultFromSlice } from "./read-file-shared.js";
 
 describe("memory read result slicing", () => {
+  it("does not expose a phantom continuation page for a trailing line ending", () => {
+    expect(
+      buildMemoryReadResult({
+        content: "one\ntwo\n",
+        relPath: "memory/test.md",
+        lines: 2,
+      }),
+    ).toEqual({
+      text: "one\ntwo",
+      path: "memory/test.md",
+      from: 1,
+      lines: 2,
+    });
+
+    expect(
+      buildMemoryReadResult({
+        content: "",
+        relPath: "memory/empty.md",
+      }),
+    ).toEqual({
+      text: "",
+      path: "memory/empty.md",
+      from: 1,
+      lines: 0,
+    });
+  });
+
   it("uses default line windows for non-finite from and lines values", () => {
     expect(
       buildMemoryReadResult({

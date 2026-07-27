@@ -11,6 +11,7 @@ import {
   persistSessionTranscriptTurn,
   upsertSessionEntry,
 } from "../../../../src/config/sessions/session-accessor.js";
+import { extractAgentIdFromSessionsDir } from "./openclaw-runtime-session.js";
 import {
   buildSessionEntry,
   listSessionFilesForAgent,
@@ -650,6 +651,16 @@ describe("sessionPathForFile", () => {
       "sessions/loose-session.jsonl",
     );
   });
+
+  it.runIf(process.platform === "win32")(
+    "preserves the owning agent across case-variant Windows path segments",
+    () => {
+      const absPath = path.join(tmpDir, "AGENTS", "Main", "SESSIONS", "active.jsonl");
+
+      expect(extractAgentIdFromSessionsDir(path.dirname(absPath))).toBe("Main");
+      expect(sessionPathForFile(absPath)).toBe("sessions/main/active.jsonl");
+    },
+  );
 });
 
 describe("memory session sync targets", () => {
