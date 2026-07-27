@@ -49,8 +49,10 @@ function runtime(): ToolSearchRuntime {
 
 describe("tokenizeQuery", () => {
   it("collapses inflected forms to a shared root", () => {
-    expect(tokenizeQuery("scheduling")).toEqual(tokenizeDocument("schedule"));
-    expect(tokenizeQuery("reminders")).toContain("remind");
+    expect(tokenizeQuery("scheduling").map((term) => term.term)).toEqual(
+      tokenizeDocument("schedule"),
+    );
+    expect(tokenizeQuery("reminders").map((term) => term.term)).toContain("remind");
   });
 
   it.each([
@@ -75,13 +77,36 @@ describe("tokenizeQuery", () => {
   it("expands intent words toward the vocabulary descriptions use", () => {
     // "look up the price" shares no word with "Search the web", so without
     // expansion a lexical index cannot connect them at all.
-    expect(tokenizeQuery("look up the price")).toContain(tokenizeDocument("search")[0]);
+    const terms = tokenizeQuery("look up the price");
+    const search = terms.find((term) => term.term === tokenizeDocument("search")[0]);
+
+    expect(search).toBeDefined();
+    // Discounted: an expansion is a guess about wording, not something typed.
+    expect(search?.weight).toBeLessThan(1);
+    expect(terms.find((term) => term.term === tokenizeDocument("price")[0])?.weight).toBe(1);
   });
 
   it("emits both the joined name and its parts", () => {
     const terms = tokenizeDocument("web_search");
     expect(terms).toContain("web_search");
     expect(terms).toContain("web");
+  });
+
+  it("decomposes camelCase names, which MCP catalogs commonly use", () => {
+    const document = tokenizeDocument("readFile");
+
+    // Lowercasing first would leave only "readfil", which "read file" cannot meet.
+    for (const term of tokenizeQuery("read file")) {
+      expect(document).toContain(term.term);
+    }
+  });
+
+  it("does not let a singular/plural collision invent an intent", () => {
+    // "news" must not normalize to "new", or "open a new issue" acquires a
+    // web-search intent it never asked for.
+    expect(tokenizeQuery("open a new issue").map((term) => term.term)).not.toContain(
+      tokenizeDocument("search")[0],
+    );
   });
 });
 
@@ -102,6 +127,19 @@ describe("scoreLexical", () => {
     const index = buildLexicalIndex([{ value: "jp", terms: tokenizeDocument("価格 lookup") }]);
 
     expect(scoreLexical(index, tokenizeQuery("価格")).map((hit) => hit.value)).toEqual(["jp"]);
+  });
+
+  it("ranks a literal match above one reached only through expansion", () => {
+    const index = buildLexicalIndex([
+      { value: "weather", terms: tokenizeDocument("weather_now Report the weather") },
+      { value: "web", terms: tokenizeDocument("web_search Search the web") },
+    ]);
+
+    const ranked = scoreLexical(index, tokenizeQuery("weather")).toSorted(
+      (a, b) => b.score - a.score,
+    );
+
+    expect(ranked[0]?.value).toBe("weather");
   });
 
   it("ranks a rare term above one shared across the catalog", () => {

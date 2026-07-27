@@ -98,7 +98,7 @@ const QUERY_EXPANSIONS: ReadonlyArray<{ terms: readonly string[]; add: readonly 
     add: ["memory", "recall", "history"],
   },
   {
-    terms: ["remind", "later", "tomorrow", "daily", "weekly", "recurring"],
+    terms: ["remind", "reminder", "later", "tomorrow", "daily", "weekly", "recurring"],
     add: ["schedule", "cron", "reminder"],
   },
   { terms: ["say", "tell", "reply", "respond", "answer"], add: ["message", "send"] },
@@ -182,20 +182,28 @@ function stripOneSuffix(token: string): string {
  * is that catalogs are written in English, which is why `tool_search` asks the
  * model to query in English rather than this function refusing the input.
  */
+const CASE_BOUNDARY = /(?<=[\p{Ll}\p{N}])(?=\p{Lu})|(?<=\p{Lu})(?=\p{Lu}\p{Ll})/u;
+
 function splitWords(input: string): string[] {
   const words: string[] = [];
-  for (const word of input.toLowerCase().split(/[^\p{L}\p{N}_]+/u)) {
-    if (!word) {
+  for (const raw of input.split(/[^\p{L}\p{N}_]+/u)) {
+    if (!raw) {
       continue;
     }
-    words.push(word);
-    if (!word.includes("_")) {
-      continue;
-    }
-    for (const part of word.split("_")) {
-      if (part) {
-        words.push(part);
+    words.push(raw.toLowerCase());
+    const parts: string[] = [];
+    for (const underscorePart of raw.split("_")) {
+      for (const casePart of underscorePart.split(CASE_BOUNDARY)) {
+        if (casePart) {
+          parts.push(casePart.toLowerCase());
+        }
       }
+    }
+    if (parts.length < 2) {
+      continue;
+    }
+    for (const part of parts) {
+      words.push(part);
     }
   }
   return words;
@@ -210,31 +218,50 @@ export function tokenizeDocument(input: string): string[] {
 }
 
 /**
- * Expansion table keyed by stemmed trigger, so one entry covers a word's whole
- * family: "remind" also fires for "reminder" and "reminders". The table itself
- * stays written in plain words.
+ * Triggers are matched on a singularized word rather than the document stemmer.
+ * Full stemming collapses unrelated vocabulary — "news" becomes "new", so "open
+ * a new issue" would silently acquire a web-search intent — and an expansion
+ * that fires on the wrong word is worse than one that does not fire.
  */
-const STEMMED_EXPANSIONS: ReadonlyArray<{ triggers: ReadonlySet<string>; add: readonly string[] }> =
-  QUERY_EXPANSIONS.map((group) => ({
-    triggers: new Set(group.terms.map(stem)),
-    add: group.add.map(stem),
-  }));
+function normalizeTrigger(word: string): string {
+  return word.length > 4 && word.endsWith("s") && !word.endsWith("ss") ? word.slice(0, -1) : word;
+}
 
-/** Query terms: stemmed, then expanded toward the words descriptions use. */
-export function tokenizeQuery(input: string): string[] {
-  const stemmed = splitWords(input)
-    .filter((word) => !STOPWORDS.has(word))
-    .map(stem)
-    .filter(Boolean);
-  const expanded = new Set(stemmed);
-  for (const group of STEMMED_EXPANSIONS) {
-    if (stemmed.some((term) => group.triggers.has(term))) {
-      for (const addition of group.add) {
-        expanded.add(addition);
-      }
+const NORMALIZED_EXPANSIONS: ReadonlyArray<{
+  triggers: ReadonlySet<string>;
+  add: readonly string[];
+}> = QUERY_EXPANSIONS.map((group) => ({
+  triggers: new Set(group.terms.map(normalizeTrigger)),
+  add: group.add.map(stem),
+}));
+
+/**
+ * Weight for a term the caller did not write. Expansions are a hint about what
+ * the catalog might call this capability, so they must not let a merely related
+ * tool outscore one that matches the words actually typed.
+ */
+const EXPANSION_WEIGHT = 0.35;
+
+export type WeightedTerm = { term: string; weight: number };
+
+/** Query terms: literal words at full weight, expansions discounted. */
+export function tokenizeQuery(input: string): WeightedTerm[] {
+  const words = splitWords(input).filter((word) => !STOPWORDS.has(word));
+  const weights = new Map<string, number>();
+  for (const term of words.map(stem).filter(Boolean)) {
+    weights.set(term, 1);
+  }
+  const triggers = new Set(words.map(normalizeTrigger));
+  for (const group of NORMALIZED_EXPANSIONS) {
+    if (![...group.triggers].some((trigger) => triggers.has(trigger))) {
+      continue;
+    }
+    for (const addition of group.add) {
+      // A word the caller actually wrote keeps full weight.
+      weights.set(addition, Math.max(weights.get(addition) ?? 0, EXPANSION_WEIGHT));
     }
   }
-  return [...expanded];
+  return [...weights].map(([term, weight]) => ({ term, weight }));
 }
 
 export type RankedDocument<T> = { value: T; terms: readonly string[] };
@@ -275,7 +302,7 @@ export function buildLexicalIndex<T>(documents: ReadonlyArray<RankedDocument<T>>
  */
 export function scoreLexical<T>(
   index: LexicalIndex<T>,
-  queryTerms: readonly string[],
+  queryTerms: readonly WeightedTerm[],
 ): Array<{ value: T; score: number }> {
   if (queryTerms.length === 0 || index.documents.length === 0) {
     return [];
@@ -284,7 +311,7 @@ export function scoreLexical<T>(
   const results: Array<{ value: T; score: number }> = [];
   for (const document of index.documents) {
     let score = 0;
-    for (const term of queryTerms) {
+    for (const { term, weight } of queryTerms) {
       const frequency = document.termCounts.get(term);
       if (!frequency) {
         continue;
@@ -293,7 +320,7 @@ export function scoreLexical<T>(
       const idf = Math.log(1 + (total - matching + 0.5) / (matching + 0.5));
       const normalized = index.averageLength > 0 ? document.length / index.averageLength : 1;
       score +=
-        (idf * (frequency * (BM25_K1 + 1))) /
+        (weight * (idf * (frequency * (BM25_K1 + 1)))) /
         (frequency + BM25_K1 * (1 - BM25_B + BM25_B * normalized));
     }
     if (score > 0) {
