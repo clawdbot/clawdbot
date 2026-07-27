@@ -19,6 +19,7 @@ import type {
 } from "../../sessions/user-turn-transcript.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
+import { isReplyRunActiveForSessionId } from "./reply-run-registry.js";
 
 type ReplyRestartRecoveryClaimController = {
   admitUserTurn: (
@@ -321,10 +322,14 @@ export function createReplyRestartRecoveryClaimController(params: {
       return "admitted";
     }
     const updatedAt = Date.now();
+    // "running" only blocks adoption while a reply run is actually live: adopting
+    // then would race the in-flight run. The registry is process-local, so after a
+    // restart a "running" entry with no registered run is an orphan and must fall
+    // through to claim retirement below, or every later turn rejects forever.
     if (
       activeClaimRunId &&
       (entry.abortedLastRun === true ||
-        entry.status === "running" ||
+        (entry.status === "running" && isReplyRunActiveForSessionId(sessionId)) ||
         entry.restartRecoveryDeliveryReceiptState === "terminal-pending")
     ) {
       throw new Error("restart recovery claim changed before agent adoption");

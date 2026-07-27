@@ -71,4 +71,40 @@ describe("createReplyRestartRecoveryClaimController", () => {
       agentId: "main",
     });
   });
+
+  it("adopts a channel claim orphaned by a restart instead of rejecting it forever", async () => {
+    const root = tempDirs.make("openclaw-restart-orphan-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:telegram:direct:42";
+    const sessionId = "orphaned-session-id";
+    // Shape a gateway restart leaves behind: the run died with the old process,
+    // so status stays "running" and the delivery claim still names the dead run.
+    const entry = {
+      sessionId,
+      updatedAt: Date.now(),
+      status: "running" as const,
+      restartRecoveryDeliveryRunId: "run-that-died-with-the-process",
+      restartRecoveryDeliveryContext: {
+        channel: "telegram",
+        to: "telegram:42",
+        accountId: "main",
+      },
+      restartRecoverySourceIngress: "channel" as const,
+    };
+    await replaceSessionEntry({ storePath, sessionKey }, entry);
+
+    const controller = createReplyRestartRecoveryClaimController({
+      getEntry: () => entry,
+      getSessionId: () => sessionId,
+      isRestartAbort: () => false,
+      resolveDeliveryContext: () => undefined,
+      sessionKey,
+      setEntry: () => {},
+      storePath,
+    });
+
+    // No reply run is registered for this session id, so the claim is orphaned:
+    // admission must retire it and proceed rather than throw on every later turn.
+    await expect(controller.admitUserTurn()).resolves.toBe("admitted");
+  });
 });
