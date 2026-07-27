@@ -1007,6 +1007,55 @@ describe("ollama setup", () => {
     expect(upsertAuthProfileWithLock).toHaveBeenCalledTimes(1);
   });
 
+  it("persists only installed local models when selecting a discovered custom model", async () => {
+    const fetchMock = createOllamaFetchMock({ tags: ["qwen3:1.7b"] });
+    vi.stubGlobal("fetch", fetchMock);
+    const runtime = createRuntime();
+
+    const result = await configureOllamaNonInteractive({
+      nextConfig: {},
+      opts: {
+        customBaseUrl: "http://127.0.0.1:11434",
+        customModelId: "qwen3:1.7b",
+      },
+      runtime,
+    });
+
+    expect(result.models?.providers?.ollama?.models?.map((model) => model.id)).toEqual([
+      "qwen3:1.7b",
+    ]);
+    expect(result.agents?.defaults?.model).toEqual({ primary: "ollama/qwen3:1.7b" });
+    expect(fetchMock.mock.calls.map((call) => requestUrl(call[0]))).not.toContain(
+      "http://127.0.0.1:11434/api/pull",
+    );
+    expect(upsertAuthProfileWithLock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an installed suggested local model first in non-interactive setup", async () => {
+    const fetchMock = createOllamaFetchMock({ tags: ["qwen3:1.7b", "gemma4"] });
+    vi.stubGlobal("fetch", fetchMock);
+    const runtime = createRuntime();
+
+    const result = await configureOllamaNonInteractive({
+      nextConfig: {},
+      opts: {
+        customBaseUrl: "http://127.0.0.1:11434",
+        customModelId: "qwen3:1.7b",
+      },
+      runtime,
+    });
+
+    expect(result.models?.providers?.ollama?.models?.map((model) => model.id)).toEqual([
+      "gemma4",
+      "qwen3:1.7b",
+    ]);
+    expect(result.agents?.defaults?.model).toEqual({ primary: "ollama/qwen3:1.7b" });
+    expect(fetchMock.mock.calls.map((call) => requestUrl(call[0]))).not.toContain(
+      "http://127.0.0.1:11434/api/pull",
+    );
+    expect(upsertAuthProfileWithLock).toHaveBeenCalledTimes(1);
+  });
+
   it("uses the discovered latest tag as the non-interactive default without pulling", async () => {
     const fetchMock = createOllamaFetchMock({ tags: ["gemma4:latest"] });
     vi.stubGlobal("fetch", fetchMock);

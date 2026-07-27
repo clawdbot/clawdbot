@@ -849,7 +849,14 @@ export async function configureOllamaNonInteractive(params: {
   );
   const discoveredModelsByName = new Map(enrichedModels.map((model) => [model.name, model]));
   const modelNames = models.map((model) => model.name);
-  const orderedModelNames = mergeUniqueModelNames(OLLAMA_SUGGESTED_MODELS_LOCAL, modelNames);
+  // Configured local models are advertised as available, so suggested models
+  // belong in the inventory only when Ollama actually reports them as installed.
+  const orderedModelNames = mergeUniqueModelNames(
+    OLLAMA_SUGGESTED_MODELS_LOCAL.filter(
+      (modelName) => findAvailableOllamaModelName(modelName, modelNames) !== undefined,
+    ),
+    modelNames,
+  );
 
   const requestedDefaultModelId =
     explicitModel ??
