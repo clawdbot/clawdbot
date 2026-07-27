@@ -84,6 +84,27 @@ Installed third-party plugins may declare additional credential variables in the
 | `OPENCLAW_SKIP_CHANNELS`             | Start the Gateway without channel transports for troubleshooting.            |
 | `OPENCLAW_THEME`                     | Force the TUI palette to `light` or `dark`.                                  |
 
+## ClawHub install telemetry
+
+Installing a skill or a plugin from ClawHub reports that install back to ClawHub.
+The report is sent only when a ClawHub auth token resolves, so signed-out
+installs send nothing.
+
+| Variable                    | Purpose                                                     |
+| --------------------------- | ----------------------------------------------------------- |
+| `CLAWHUB_DISABLE_TELEMETRY` | Disable ClawHub install reporting with `1`, `true`, `yes`, or `on`. |
+
+`CLAWDHUB_DISABLE_TELEMETRY` is accepted as a legacy spelling of the same
+setting.
+
+What each report contains:
+
+- Skill install: the skill slug, and where present the owner handle, the
+  requested reference, the trust state, and the resolved version.
+- Plugin install: the package name and the resolved version.
+
+Reports carry no command output, file paths, or workspace contents.
+
 ## Provider credentials and workspace `.env`
 
 Do not keep provider API keys only in a workspace `.env`. OpenClaw blocks a large set of provider credential and endpoint-redirect keys from workspace `.env` files, including every known provider auth env var (for example `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `XAI_API_KEY`, `MISTRAL_API_KEY`, `GROQ_API_KEY`, `DEEPSEEK_API_KEY`, `PERPLEXITY_API_KEY`, `BRAVE_API_KEY`, `TAVILY_API_KEY`, `EXA_API_KEY`, `FIRECRAWL_API_KEY`), plus any key ending in `_API_HOST`, `_BASE_URL`, `_ENDPOINT`, or `_HOMESERVER`, and the entire `OPENCLAW_*`, `CLAWHUB_*`, `ANTHROPIC_API_KEY_*`, and `OPENAI_API_KEY_*` namespaces.
