@@ -257,13 +257,13 @@ describe("CLI help process exit", () => {
         registry === "core"
           ? await registerCoreCliByName(program, createProgramContext(), group, argv)
           : await registerSubCliByName(program, group, argv);
-      const error = await program
+      const parseResult = await program
         .parseAsync(argv.slice(2), { from: "user" })
-        .catch((error) => error);
+        .catch((cause: unknown) => cause);
 
       expect(registered).toBe(true);
-      expect(error).toBeInstanceOf(CommanderError);
-      expect(error).toMatchObject({ code: "commander.helpDisplayed", exitCode: 0 });
+      expect(parseResult).toBeInstanceOf(CommanderError);
+      expect(parseResult).toMatchObject({ code: "commander.helpDisplayed", exitCode: 0 });
       expect(stderr).toBe("");
       expect(stdout).toContain(`Usage: openclaw ${usageCommand} [options] [command]`);
     },
