@@ -17,7 +17,11 @@ import {
 } from "../snapshot/restored-recovery-point.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { completeRestoredAdmission } from "./restored-admission.js";
+import {
+  completeRestoredAdmission,
+  createRestoredAdmissionStatus,
+  prepareRestoredAdmission,
+} from "./restored-admission.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -45,6 +49,38 @@ describe("Gateway restored admission", () => {
     await expect(readRecoveryJournalRecord(fixture.journalPath, "ready")).resolves.toEqual(
       first.record,
     );
+  });
+
+  it("projects held phases and becomes ready only from committed evidence", async () => {
+    const fixture = await createFixture();
+    const descriptor = await prepareRestoredAdmission(fixture.descriptorPath, fixture.env);
+    const status = createRestoredAdmissionStatus(descriptor);
+    const heldReasons: string[] = [];
+
+    expect(status.get()).toMatchObject({
+      status: "held",
+      reason: "scheduler-reconciliation",
+      restoreOperationId: "restore-8",
+    });
+    const completed = await completeRestoredAdmission({
+      descriptor,
+      env: fixture.env,
+      startScheduler: async () => {},
+      getOwnerReadiness: () => ({ ready: true, failing: [] }),
+      setHeldReason: (reason) => {
+        heldReasons.push(reason);
+        status.setHeldReason(reason);
+      },
+    });
+    expect(heldReasons).toEqual(["owner-readiness", "ready-commit"]);
+    expect(status.get()).toMatchObject({ status: "held", reason: "ready-commit" });
+
+    status.markReady(completed.record);
+    expect(status.get()).toMatchObject({
+      status: "ready",
+      restoreOperationId: "restore-8",
+      readinessIdentity: completed.record.readinessIdentity,
+    });
   });
 
   it("quarantines changed restored bytes before scheduler start", async () => {

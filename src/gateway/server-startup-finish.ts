@@ -55,6 +55,7 @@ export async function finishGatewayStartup(params: {
   } = params;
   const {
     minimalTestGateway,
+    restoredStartup,
     deps,
     runtimeState,
     kernel,

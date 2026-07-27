@@ -34,10 +34,12 @@ export function createRestoredAdmissionBeforeReady(params: {
           await reconciliation.complete();
         },
         getOwnerReadiness: getRestoredOwnerReadiness,
+        setHeldReason: restoredStartup.status.setHeldReason,
       });
       if (!restoredStartup.release()) {
         throw new Error("restored Gateway startup lost work admission");
       }
+      restoredStartup.status.markReady(completed.record);
       startupState.restoredAdmissionReady = true;
       params.log.info("restored admission opened", {
         readinessIdentity: completed.record.readinessIdentity,

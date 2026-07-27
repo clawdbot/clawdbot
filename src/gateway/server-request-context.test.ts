@@ -48,6 +48,7 @@ function makeContextParams(
   return {
     deps: {} as never,
     runtimeState,
+    getRestoredAdmissionStatus: () => ({ status: "not-restored" }),
     getRuntimeConfig: vi.fn(() => config),
     getGatewayMethodRegistry: vi.fn(() => ({}) as never),
     sessionCompanion: {} as never,

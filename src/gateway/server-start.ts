@@ -165,10 +165,12 @@ async function prepareRestoredAdmissionStartup(): Promise<RestoredAdmissionStart
       descriptorPath,
       process.env,
     );
+    const status = restoredAdmissionModule.createRestoredAdmissionStatus(descriptor);
     return {
       descriptor,
       release,
       complete: restoredAdmissionModule.completeRestoredAdmission,
+      status,
     };
   } catch (error) {
     release();

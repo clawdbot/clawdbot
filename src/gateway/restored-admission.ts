@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
+import type { GatewayRestoreStatusResult } from "../../packages/gateway-protocol/src/index.js";
 import { stableStringify } from "../agents/stable-stringify.js";
 import { sha256File, sha256Hex } from "../infra/crypto-digest.js";
 import {
@@ -39,10 +40,22 @@ const readyRecordSchema = z
 
 export type RestoredAdmissionReadyRecord = z.infer<typeof readyRecordSchema>;
 
+export type RestoredAdmissionHeldReason =
+  | "scheduler-reconciliation"
+  | "owner-readiness"
+  | "ready-commit";
+
+export type RestoredAdmissionStatus = {
+  get: () => GatewayRestoreStatusResult;
+  setHeldReason: (reason: RestoredAdmissionHeldReason) => void;
+  markReady: (record: RestoredAdmissionReadyRecord) => void;
+};
+
 export type RestoredAdmissionStartup = {
   descriptor: RestoredAdmissionDescriptor;
   release: () => boolean;
   complete: typeof completeRestoredAdmission;
+  status: RestoredAdmissionStatus;
 };
 
 export class RestoredAdmissionCompletionError extends Error {
@@ -67,6 +80,7 @@ export async function completeRestoredAdmission(params: {
   env?: NodeJS.ProcessEnv;
   startScheduler: () => Promise<void>;
   getOwnerReadiness: () => { ready: boolean; failing: string[]; suppressed?: string[] };
+  setHeldReason?: (reason: RestoredAdmissionHeldReason) => void;
 }): Promise<{ record: RestoredAdmissionReadyRecord; replayed: boolean }> {
   const env = params.env ?? process.env;
   const descriptor =
@@ -88,6 +102,7 @@ export async function completeRestoredAdmission(params: {
       { cause: error },
     );
   }
+  params.setHeldReason?.("owner-readiness");
   const ownerReadiness = params.getOwnerReadiness();
   if (!ownerReadiness.ready) {
     throw new RestoredAdmissionCompletionError(
@@ -130,6 +145,7 @@ export async function completeRestoredAdmission(params: {
       }),
     ),
   };
+  params.setHeldReason?.("ready-commit");
   const record = readyRecordSchema.parse({
     ...recordWithoutIdentity,
     readinessIdentity: sha256Hex(stableStringify(recordWithoutIdentity)),
@@ -157,6 +173,49 @@ export async function completeRestoredAdmission(params: {
     );
   }
   return { record, replayed: false };
+}
+
+export function createRestoredAdmissionStatus(
+  descriptor: RestoredAdmissionDescriptor,
+): RestoredAdmissionStatus {
+  let heldReason: RestoredAdmissionHeldReason = "scheduler-reconciliation";
+  let readyRecord: RestoredAdmissionReadyRecord | undefined;
+  const identityFields = {
+    runtimeLineage: descriptor.result.runtimeLineage,
+    lifecycleOwnerGeneration: descriptor.result.lifecycleOwnerGeneration,
+    destinationRuntimeGeneration: descriptor.result.destinationRuntimeGeneration,
+    restoreOperationId: descriptor.result.restoreOperationId,
+    destinationOwner: descriptor.result.destinationOwner,
+    admissionIdentity: descriptor.result.admissionIdentity,
+    recoveryPointId: descriptor.result.recoveryPointId,
+    acceptanceSetId: descriptor.result.acceptanceSetId,
+    restoreReceiptIdentity: descriptor.result.restoreReceiptIdentity,
+  };
+  return {
+    get: () =>
+      readyRecord
+        ? {
+            status: "ready",
+            ...identityFields,
+            schedulerIdentity: readyRecord.schedulerIdentity,
+            ownerReadinessIdentity: readyRecord.ownerReadinessIdentity,
+            readinessIdentity: readyRecord.readinessIdentity,
+          }
+        : {
+            status: "held",
+            reason: heldReason,
+            retryAfterMs: 1_000,
+            ...identityFields,
+          },
+    setHeldReason: (reason) => {
+      if (!readyRecord) {
+        heldReason = reason;
+      }
+    },
+    markReady: (record) => {
+      readyRecord = record;
+    },
+  };
 }
 
 export async function prepareRestoredAdmission(

@@ -446,6 +446,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
     "2026.7",
     { startup: true, controlPlaneWrite: true },
   ],
+  ["gateway.restore.status", "restore", "operator.read", "2026.7"],
   ["gateway.suspend.status", "suspend", "operator.read", "2026.7"],
   // Resume is the safety escape hatch and must not sit behind write-rate limiting.
   ["gateway.suspend.resume", "suspend", "operator.admin", "2026.7"],

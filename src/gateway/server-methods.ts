@@ -51,6 +51,7 @@ import { isTargetedNonSafeGatewayRestartRequest } from "./server-methods/restart
 import type {
   GatewayRequestContext,
   GatewayRequestHandler,
+  GatewayRequestContext,
   GatewayRequestHandlers,
   GatewayRequestOptions,
   SessionMutationAuthorization,
@@ -139,6 +140,7 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./server-methods/migrations.js").then((module) => module.migrationsHandlers),
   push: () => import("./server-methods/push.js").then((module) => module.pushHandlers),
   restart: () => import("./server-methods/restart.js").then((module) => module.restartHandlers),
+  restore: () => import("./server-methods/restore.js").then((module) => module.restoreHandlers),
   suspend: () => import("./server-methods/suspend.js").then((module) => module.suspendHandlers),
   send: () => import("./server-methods/send.js").then((module) => module.sendHandlers),
   "sessions-files": () =>
@@ -289,8 +291,17 @@ const SUSPEND_CONTROL_METHODS = new Set([
   "gateway.suspend.resume",
 ]);
 
-function isGatewayMethodAllowedDuringSuspension(method: string): boolean {
-  return SUSPEND_CONTROL_METHODS.has(method);
+function isGatewayMethodAllowedDuringSuspension(
+  method: string,
+  context: GatewayRequestContext,
+): boolean {
+  if (SUSPEND_CONTROL_METHODS.has(method)) {
+    return true;
+  }
+  return (
+    method === "gateway.restore.status" &&
+    context.getRestoredAdmissionStatus().status !== "not-restored"
+  );
 }
 
 async function authorizeAuthenticatedProfileForMethod(params: {

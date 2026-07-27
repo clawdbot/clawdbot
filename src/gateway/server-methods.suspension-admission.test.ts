@@ -447,6 +447,33 @@ describe("gateway request suspension admission", () => {
     suspension?.release();
   });
 
+  it("keeps restore status reachable only for a restored admission hold", async () => {
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
+    const handler = vi.fn<GatewayRequestHandler>(({ respond }) => {
+      respond(true, { status: "held" });
+    });
+    const context = {
+      logGateway: { warn: vi.fn() },
+      getRestoredAdmissionStatus: () => ({
+        status: "held" as const,
+        restoreOperationId: "restore-8",
+      }),
+    } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"];
+
+    const status = dispatch({
+      method: "gateway.restore.status",
+      scope: "operator.read",
+      handler,
+      context,
+    });
+    await status.request;
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(status.respond).toHaveBeenCalledWith(true, { status: "held" });
+    suspension?.release();
+  });
+
   it("rejects suspension preparation nested inside another root request", async () => {
     const root = tryBeginGatewayRootWorkAdmission();
     expect(root?.ownsRoot).toBe(true);
