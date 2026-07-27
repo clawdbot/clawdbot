@@ -197,11 +197,15 @@ function sessionReferenceMatches(
 // which one was meant, so it settles the tie and keeps generated links durable at their
 // normal length. It can only narrow: a hint that matches nothing (a stale or hand-edited
 // name) leaves the original candidates for the chooser rather than dropping the session.
+//
+// A truncated set is not a tie, it is an unfinished search. Another page could hold the
+// same prefix under the same slug, so settling here would be the guess the bounded search
+// exists to avoid.
 function narrowBySlugHint(
   resolution: SessionReferenceResolution,
   slugHint: string | undefined,
 ): SessionReferenceResolution {
-  if (resolution.kind !== "ambiguous" || !slugHint) {
+  if (resolution.kind !== "ambiguous" || resolution.truncated || !slugHint) {
     return resolution;
   }
   const matched = resolution.sessions.filter(

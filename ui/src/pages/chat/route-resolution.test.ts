@@ -434,6 +434,26 @@ describe("gateway-backed session route resolution", () => {
     }
   });
 
+  it("does not settle a slug tie while the bounded search is incomplete", async () => {
+    // Only one loaded row carries the slug, but pagination stopped early: an unexamined
+    // page could hold the same prefix under the same name, so the chooser has to stand.
+    const storedRow = row({
+      key: "agent:roboclaw:thread:12345678-0aaa-4000-8000-000000000001",
+      displayName: "Deploy monitor",
+    });
+    const { context } = contextFor(({ offset = 0 }) =>
+      result(offset === 0 ? [storedRow] : [], { hasMore: true, nextOffset: offset + 20, offset }),
+    );
+    const loaded = await loadChatRoute(
+      context,
+      { pathname: "/chat/roboclaw/deploy-monitor-12345678", search: "", hash: "" },
+      "chat",
+      new AbortController().signal,
+    );
+
+    expect(loaded).toMatchObject({ kind: "ambiguous", shortId: "12345678", truncated: true });
+  });
+
   it("prefers an exact literal key over slug matches", async () => {
     const literal = row({
       key: "agent:roboclaw:default-mode-with-rare-surprises",
