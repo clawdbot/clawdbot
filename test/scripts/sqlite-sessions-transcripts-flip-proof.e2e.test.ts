@@ -201,7 +201,19 @@ describe("SQLite sessions/transcripts flip proof harness", () => {
         artifact.archiveReason === "deleted" &&
         artifact.archiveSessionId === "sqlite-shared-session",
     );
-    expect(sharedFinalArchive?.messageTexts).toContain("shared");
+    const retainedSharedImportSources = sharedFinalCheckpoint?.archiveArtifacts.filter(
+      (artifact) =>
+        artifact.path.includes("session-sqlite-import-archive") &&
+        (artifact.path.includes("sqlite-shared-a.jsonl") ||
+          artifact.path.includes("sqlite-shared-b.jsonl")),
+    );
+    expect(
+      sharedFinalArchive?.messageTexts?.includes("shared") ||
+        (retainedSharedImportSources?.length === 2 &&
+          retainedSharedImportSources.every((artifact) =>
+            artifact.messageTexts?.some((text) => text.includes("shared")),
+          )),
+    ).toBe(true);
     expect(
       report.checkpoints.some(
         (checkpoint) =>

@@ -254,6 +254,38 @@ describe("SessionManager.open", () => {
     expect(reopened.getAppendMode()).toBe("side");
   });
 
+  it("persists the current header before a first non-message entry", async () => {
+    const dir = await makeTempDir();
+    const scope = {
+      agentId: "main",
+      sessionId: "sqlite-model-change-first",
+      sessionKey: "agent:main:dashboard:sqlite-model-change-first",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    await upsertSessionEntry(scope, {
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+    });
+
+    const manager = SessionManager.open(scope, dir);
+    manager.appendModelChange("test-provider", "test-model");
+
+    await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+      expect.objectContaining({
+        type: "session",
+        version: CURRENT_SESSION_VERSION,
+        id: scope.sessionId,
+        cwd: dir,
+      }),
+      expect.objectContaining({
+        type: "model_change",
+        provider: "test-provider",
+        modelId: "test-model",
+      }),
+    ]);
+    expect(() => SessionManager.open(scope, dir)).not.toThrow();
+  });
+
   it("uses the selected logical leaf immediately after a side append control", () => {
     const manager = SessionManager.inMemory("/tmp");
     const firstId = manager.appendMessage({ role: "user", content: "first", timestamp: 1 });

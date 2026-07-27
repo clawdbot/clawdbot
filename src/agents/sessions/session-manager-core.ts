@@ -41,6 +41,7 @@ export class SessionManagerCore {
   protected appendMode: "side" | undefined;
   protected promptReleasedSideBranchParentId: string | null | undefined;
   protected persistenceTarget: SessionManagerPersistenceTarget | undefined;
+  protected persistenceHeaderPending = false;
 
   constructor(
     cwd: string,
@@ -75,8 +76,10 @@ export class SessionManagerCore {
     if (partitioned.fileEntries.length === 0) {
       this.persistenceTarget = target ? { ...target } : undefined;
       this.initializeSession({ id: target?.sessionId });
+      this.persistenceHeaderPending = target !== undefined;
       return;
     }
+    this.persistenceHeaderPending = false;
     const header = partitioned.fileEntries.find((entry) => entry.type === "session");
     if (target && (header?.version ?? 1) < CURRENT_SESSION_VERSION) {
       throw new Error(
@@ -528,6 +531,7 @@ export class SessionManagerCore {
       this.persistenceTarget,
       this.getPersistedFileEntries(leafAppendParentId, options?.leafAppendMode ?? this.appendMode),
     );
+    this.persistenceHeaderPending = false;
   }
 
   /** SQLite appends are synchronous; retained for the AgentSession contract. */

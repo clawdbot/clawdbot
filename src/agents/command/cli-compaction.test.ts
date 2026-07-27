@@ -156,6 +156,7 @@ describe("runCliTurnCompactionLifecycle", () => {
         sessionKey: "agent:main:no-compactable-entries",
         sessionEntry,
         sessionAgentId: "main",
+        storePath: path.join(tmpDir, "sessions.json"),
         workspaceDir: tmpDir,
         agentDir: tmpDir,
         provider: "test-provider",

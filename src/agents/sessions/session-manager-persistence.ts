@@ -143,6 +143,13 @@ export class SessionManagerPersistence extends SessionManagerCore {
       return;
     }
     const scope = this.persistenceTarget;
+    if (this.persistenceHeaderPending) {
+      const header = this.fileEntries[0];
+      if (!header || header.type !== "session" || !appendTranscriptEventSync(scope, header)) {
+        throw new Error("Session transcript header was not persisted");
+      }
+      this.persistenceHeaderPending = false;
+    }
     const leafEntry = parseOpaqueLeafEntry(entry);
     if (leafEntry) {
       if (!appendTranscriptEventSync(scope, entry)) {

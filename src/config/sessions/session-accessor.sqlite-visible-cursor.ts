@@ -1,10 +1,10 @@
-export const VISIBLE_MESSAGE_CURSOR_VERSION = 1;
+const VISIBLE_MESSAGE_CURSOR_VERSION = 1;
 export const DEFAULT_VISIBLE_MESSAGE_MAX_MESSAGES = 1_000;
 export const DEFAULT_VISIBLE_MESSAGE_MAX_BYTES = 1_000_000;
 export const MAX_VISIBLE_MESSAGE_MAX_MESSAGES = 10_000;
 export const MAX_VISIBLE_MESSAGE_MAX_BYTES = 64 * 1024 * 1024;
 
-export type VisibleMessageCursor = {
+type VisibleMessageCursor = {
   agentId: string;
   generation: string;
   lastEventSeq: number;

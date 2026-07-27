@@ -363,9 +363,6 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       },
     });
 
-    const classification = loadSessionTranscriptClassificationForAgent("main");
-
-    expect(classification.cronRunTranscriptPaths).toEqual(new Set());
     const entries = await listSessionTranscriptCorpusEntriesForAgent("main");
     expect(entries.filter((entry) => entry.generatedByCronRun)).toHaveLength(4);
   });

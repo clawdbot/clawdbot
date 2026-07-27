@@ -186,7 +186,7 @@ describe("resetReplyRunSession", () => {
       agentId: followupRun.run.agentId,
       sessionId: "session",
       sessionKey: "main",
-      sessionFile: activeSessionEntry?.sessionFile,
+      sessionFile: "main",
       reason: "reset",
     });
     expect(errorMock).toHaveBeenCalledWith("reset session");

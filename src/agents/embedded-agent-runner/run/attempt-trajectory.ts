@@ -34,6 +34,7 @@ export async function prepareEmbeddedAttemptTrajectory(input: {
         sessionId: activeSession.sessionId,
         sessionKey: attempt.sessionKey,
         sessionFile: trajectorySessionFile,
+        sessionTarget: attempt.sessionTarget,
         provider: attempt.provider,
         modelId: attempt.modelId,
         modelApi: attempt.model.api,

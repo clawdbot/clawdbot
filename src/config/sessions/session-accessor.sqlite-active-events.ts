@@ -37,10 +37,8 @@ import {
 } from "./session-accessor.sqlite-visible-cursor.js";
 import type { SessionTranscriptProjectionState } from "./session-transcript-index.js";
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
-import {
-  startSessionTranscriptIndexReconcile,
-  waitForSessionTranscriptIndexReconcile,
-} from "./session-transcript-reconcile.js";
+import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
+export { waitForSessionTranscriptProjection } from "./session-transcript-reconcile.js";
 export {
   isSessionTranscriptProjectionUnavailableError,
   SessionTranscriptProjectionUnavailableError,
@@ -77,13 +75,6 @@ export type SessionTranscriptBoundedMessageTailPage = SessionTranscriptMessageEv
   serializedBytes: number;
 };
 
-/** Waits for a projection rebuild already scheduled by a failed transcript read. */
-export async function waitForSessionTranscriptProjection(
-  scope: SessionTranscriptReadScope,
-): Promise<void> {
-  const resolved = resolveSqliteTranscriptReadScope(scope);
-  await waitForSessionTranscriptIndexReconcile(toDatabaseOptions(resolved));
-}
 type CurrentProjection = {
   database: OpenClawAgentDatabase;
   resolved: ReturnType<typeof resolveSqliteTranscriptReadScope>;

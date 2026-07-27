@@ -2528,12 +2528,22 @@ function validateCheckpointInvariants(
     }
   }
   if (checkpoint.label === "after-shared-final-delete") {
-    requireArchiveText(checkpoint, failures, {
-      description: "final shared transcript archive",
-      includes: ["shared"],
+    const deletedArchive = findArchiveArtifact(checkpoint, {
       reason: "deleted",
       sessionId: "sqlite-shared-session",
     });
+    if (!deletedArchive) {
+      // Both legacy files claim one session id, so the importer preserves the
+      // ambiguous sources as artifacts instead of materializing duplicate rows.
+      // Final deletion must not synthesize a second archive from empty SQLite state.
+      for (const sourceName of ["sqlite-shared-a.jsonl", "sqlite-shared-b.jsonl"]) {
+        requireArchiveText(checkpoint, failures, {
+          description: `retained shared import source ${sourceName}`,
+          includes: ["shared"],
+          pathIncludes: sourceName,
+        });
+      }
+    }
   }
 }
 

@@ -160,7 +160,11 @@ describe("forkSessionFromParentTranscript", () => {
     expect(forkedHeader?.type).toBe("session");
     expect(forkedHeader?.id).toBe(fork.sessionId);
     expect(forkedHeader?.cwd).toBe(cwd);
-    expect(parseSqliteSessionFileMarker(forkedHeader?.parentSession)).toMatchObject({
+    expect(
+      parseSqliteSessionFileMarker(
+        typeof forkedHeader?.parentSession === "string" ? forkedHeader.parentSession : undefined,
+      ),
+    ).toMatchObject({
       agentId: "main",
       sessionId: parentSessionId,
     });
@@ -714,7 +718,11 @@ describe("forkSessionFromParentTranscript", () => {
     const header = records[0];
     expect(header?.type).toBe("session");
     expect(header?.id).toBe(fork.sessionId);
-    expect(parseSqliteSessionFileMarker(header?.parentSession)).toMatchObject({
+    expect(
+      parseSqliteSessionFileMarker(
+        typeof header?.parentSession === "string" ? header.parentSession : undefined,
+      ),
+    ).toMatchObject({
       agentId: "main",
       sessionId: parentSessionId,
     });

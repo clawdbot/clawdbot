@@ -57,7 +57,7 @@ import {
 } from "./transcript-tree.js";
 import type { SessionEntry } from "./types.js";
 
-export type SessionTranscriptAppendTarget = {
+type SessionTranscriptAppendTarget = {
   agentId?: string;
   sessionId: string;
   sessionKey: string;
@@ -685,11 +685,11 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
                     }),
                 }
               : {}),
-            shouldAppend: async (target) => {
+            shouldAppend: async (appendTarget) => {
               latestEquivalentAssistantId =
                 isRedundantDeliveryMirror(params.message) && !identifiedDeliveryMirror
                   ? await findLatestEquivalentAssistantMessageId(
-                      target,
+                      appendTarget,
                       preparedUnkeyedMessage as SessionTranscriptAssistantMessage,
                       params.config,
                     )
