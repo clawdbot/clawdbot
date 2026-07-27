@@ -69,6 +69,10 @@ export class WorkboardStore extends WorkboardNotificationStore {
       const orchestrated: WorkboardCard[] = [];
       const orchestratedByBoard = new Map<string, number>();
       for (const card of await this.list({ boardId })) {
+        // Archived cards remain readable and restorable, but must never re-enter automation.
+        if (card.metadata?.archivedAt) {
+          continue;
+        }
         let latest = await this.promoteDependencyReady(card.id, now);
         const wasPromoted = latest.status !== card.status;
         const claim = latest.metadata?.claim;
@@ -224,7 +228,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
       const rows: WorkboardDiagnosticsResult["diagnostics"] = [];
       for (const card of cards) {
         const latest = await this.get(card.id);
-        if (!latest) {
+        if (!latest || latest.metadata?.archivedAt) {
           continue;
         }
         const diagnostics = mergeDiagnostics(
