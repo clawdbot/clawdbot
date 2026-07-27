@@ -98,7 +98,6 @@ export function readStreamingSandboxHttpResponse(params: {
         fail(
           `sandbox http/request produced an unterminated stdout line longer than ${SANDBOX_HTTP_STREAM_LINE_MAX_CHARS} characters`,
           null,
-          false,
         );
       }
     });
