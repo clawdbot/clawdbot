@@ -2,12 +2,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {
-  type ProviderAuthContext,
-  type ProviderAuthMethod,
-  type ProviderAuthMethodNonInteractiveContext,
-  type ProviderResolveDynamicModelContext,
-  type ProviderWrapStreamFnContext,
+import type {
+  ProviderAuthContext,
+  ProviderAuthMethod,
+  ProviderAuthMethodNonInteractiveContext,
+  ProviderResolveDynamicModelContext,
+  ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAuthProfileConfig,
