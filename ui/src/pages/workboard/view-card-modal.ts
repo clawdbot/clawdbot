@@ -44,8 +44,30 @@ const workboardTemplates = [
   defineTemplate("plugin", "plugin", "plugin", "normal"),
 ];
 
-export function openCreateModal(state: WorkboardUiState) {
+export function openCreateModal(
+  state: WorkboardUiState,
+  props: Pick<WorkboardProps, "agentsList" | "defaultAgentId" | "scopeAgentId">,
+) {
   resetDraftState(state);
+  const scopedAgentId = props.scopeAgentId?.trim();
+  const defaultAgentId = props.agentsList?.defaultId?.trim() ?? props.defaultAgentId?.trim();
+  const selectedAgentId = scopedAgentId
+    ? scopedAgentId === defaultAgentId
+      ? ""
+      : scopedAgentId
+    : state.agentFilter === "all" || state.agentFilter === "default"
+      ? ""
+      : state.agentFilter;
+  if (
+    selectedAgentId &&
+    (props.agentsList
+      ? buildAssignableAgentOptions(props.agentsList, "").some(
+          (agent) => agent.id === selectedAgentId,
+        )
+      : Boolean(scopedAgentId))
+  ) {
+    state.draftAgentId = selectedAgentId;
+  }
   state.draftOpen = true;
 }
 
