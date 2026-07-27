@@ -3,22 +3,42 @@ import type { OpenClawConfig } from "../config/types.js";
 import { resolveConfiguredProviderFallback } from "./configured-provider-fallback.js";
 
 type ModelProviders = NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
+type ConfiguredModel = ModelProviders[string]["models"][number];
 
 function configuredProviders(providers: ModelProviders): Pick<OpenClawConfig, "models"> {
   return { models: { providers } };
 }
 
-const localProvider = {
-  baseUrl: "http://127.0.0.1:9191/v1",
-  models: [{ id: "local-good", name: "Local Good" }],
-};
+function configuredModel(id: string, name: string): ConfiguredModel {
+  return {
+    id,
+    name,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 4_096,
+  };
+}
+
+function configuredProvider(
+  baseUrl: string,
+  models: ConfiguredModel[] = [],
+): ModelProviders[string] {
+  return { baseUrl, models };
+}
+
+const defaultProviderBaseUrl = "https://openai.example.com/v1";
+const localProvider = configuredProvider("http://127.0.0.1:9191/v1", [
+  configuredModel("local-good", "Local Good"),
+]);
 
 describe("resolveConfiguredProviderFallback", () => {
   it("uses a configured model when the default provider is only an empty overlay", () => {
     expect(
       resolveConfiguredProviderFallback({
         cfg: configuredProviders({
-          openai: { models: [] },
+          openai: configuredProvider(defaultProviderBaseUrl),
           "local-provider": localProvider,
         }),
         defaultProvider: "openai",
@@ -31,7 +51,9 @@ describe("resolveConfiguredProviderFallback", () => {
     expect(
       resolveConfiguredProviderFallback({
         cfg: configuredProviders({
-          openai: { models: [{ id: "other-openai-model", name: "Other OpenAI Model" }] },
+          openai: configuredProvider(defaultProviderBaseUrl, [
+            configuredModel("other-openai-model", "Other OpenAI Model"),
+          ]),
           "local-provider": localProvider,
         }),
         defaultProvider: "openai",
@@ -44,9 +66,9 @@ describe("resolveConfiguredProviderFallback", () => {
     expect(
       resolveConfiguredProviderFallback({
         cfg: configuredProviders({
-          " OpenAI ": {
-            models: [{ id: "configured-default", name: "Configured Default" }],
-          },
+          " OpenAI ": configuredProvider(defaultProviderBaseUrl, [
+            configuredModel("configured-default", "Configured Default"),
+          ]),
           "local-provider": localProvider,
         }),
         defaultProvider: "openai",
@@ -69,7 +91,9 @@ describe("resolveConfiguredProviderFallback", () => {
     expect(
       resolveConfiguredProviderFallback({
         cfg: configuredProviders({
-          openai: { models: [{ id: "configured-default", name: "Configured Default" }] },
+          openai: configuredProvider(defaultProviderBaseUrl, [
+            configuredModel("configured-default", "Configured Default"),
+          ]),
           "local-provider": localProvider,
         }),
         defaultProvider: "openai",
@@ -82,11 +106,10 @@ describe("resolveConfiguredProviderFallback", () => {
     expect(
       resolveConfiguredProviderFallback({
         cfg: configuredProviders({
-          openai: { models: [] },
-          first: {
-            baseUrl: "http://127.0.0.1:9192/v1",
-            models: [{ id: "first-model", name: "First Model" }],
-          },
+          openai: configuredProvider(defaultProviderBaseUrl),
+          first: configuredProvider("http://127.0.0.1:9192/v1", [
+            configuredModel("first-model", "First Model"),
+          ]),
           second: localProvider,
         }),
         defaultProvider: "openai",
@@ -98,7 +121,7 @@ describe("resolveConfiguredProviderFallback", () => {
   it("returns no fallback when no provider has a configured model", () => {
     expect(
       resolveConfiguredProviderFallback({
-        cfg: configuredProviders({ openai: { models: [] } }),
+        cfg: configuredProviders({ openai: configuredProvider(defaultProviderBaseUrl) }),
         defaultProvider: "openai",
         defaultModel: "missing-default-model",
       }),

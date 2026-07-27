@@ -2377,10 +2377,20 @@ describe("model-selection", () => {
       const cfg = {
         models: {
           providers: {
-            openai: { models: [] },
+            openai: { baseUrl: "https://openai.example.com/v1", models: [] },
             "local-provider": {
               baseUrl: "http://127.0.0.1:9191/v1",
-              models: [{ id: "local-good", name: "Local Good" }],
+              models: [
+                {
+                  id: "local-good",
+                  name: "Local Good",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128_000,
+                  maxTokens: 4_096,
+                },
+              ],
             },
           },
         },
