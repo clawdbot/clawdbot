@@ -128,6 +128,10 @@ function canDeliverParentReviewTaskToThreadOrigin(task: TaskRecord): boolean {
   // Parent-review terminal messages may deliver directly only when the requester origin
   // already names a concrete thread on a transport that declares thread-addressed
   // delivery; root-level origins keep routing through the parent session.
+  // Deliberately no target-shape parsing here: threadId provenance is the channel's own
+  // route/binding projection, so core trusts the tuple. A stray threadId on a non-thread
+  // target degrades to delivery at that origin's root, and send failures fall back to the
+  // parent-session queue below — the handoff cannot be lost.
   return Boolean(
     threadId &&
     channelSupportsThreadDelivery(origin?.channel) &&
