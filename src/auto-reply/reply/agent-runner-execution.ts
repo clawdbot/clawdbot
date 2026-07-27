@@ -521,6 +521,8 @@ export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTu
       }
     : executionParams;
   let terminalOutcomeCommitted = false;
+  // Callers invoke this only inside the guarded execution below, including its
+  // inner finally, so restart errors from freezeAbort reach the outer catch.
   const commitTerminalOutcome = () => {
     if (terminalOutcomeCommitted) {
       return;
