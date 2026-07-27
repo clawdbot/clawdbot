@@ -17,6 +17,8 @@ type MergeScenario = {
   existingAutoMethod?: "" | "MERGE" | "REBASE" | "SQUASH";
   mergeStateStatus?: string;
   mergeable?: string;
+  recommendation?: "ready" | "needs_work";
+  reviewArtifacts?: "valid" | "invalid";
 };
 
 function runMerge(scenario: MergeScenario = {}) {
@@ -66,6 +68,18 @@ set -euo pipefail
 source "$OPENCLAW_TEST_MERGE_SCRIPT"
 enter_worktree() { :; }
 require_artifact() { :; }
+validate_review_artifact_data() {
+  if [ "$OPENCLAW_TEST_REVIEW_ARTIFACTS" != "valid" ]; then
+    echo 'review artifact validation failed' >&2
+    return 1
+  fi
+}
+require_ready_review_recommendation() {
+  if [ "$OPENCLAW_TEST_REVIEW_RECOMMENDATION" != "ready" ]; then
+    echo 'review recommendation is not ready' >&2
+    return 1
+  fi
+}
 verify_prep_branch_matches_prepared_head() { :; }
 mark_pr_operation_side_effects_started() { :; }
 mainline_drift_requires_sync() { return 1; }
@@ -169,6 +183,8 @@ merge_run 123 "$OPENCLAW_TEST_AUTO_REQUESTED"
       OPENCLAW_TEST_MERGE_STATE_STATUS: scenario.mergeStateStatus ?? "BEHIND",
       OPENCLAW_TEST_POST_AUTO_META: postAutoMeta,
       OPENCLAW_TEST_PRE_AUTO_META: preAutoMeta,
+      OPENCLAW_TEST_REVIEW_ARTIFACTS: scenario.reviewArtifacts ?? "valid",
+      OPENCLAW_TEST_REVIEW_RECOMMENDATION: scenario.recommendation ?? "ready",
       OPENCLAW_TEST_ROOT: root,
     },
   });
@@ -179,6 +195,22 @@ merge_run 123 "$OPENCLAW_TEST_AUTO_REQUESTED"
 }
 
 describePosix("scripts/pr merge-run", () => {
+  it("refuses to merge when review artifact validation fails", () => {
+    const result = runMerge({ reviewArtifacts: "invalid" });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("review artifact validation failed");
+    expect(result.calls).not.toContain("pr merge");
+  });
+
+  it("refuses to merge when the review recommendation is not ready", () => {
+    const result = runMerge({ recommendation: "needs_work" });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("review recommendation is not ready");
+    expect(result.calls).not.toContain("pr merge");
+  });
+
   it("does not enable auto-merge when exact-head required CI is failing", () => {
     const result = runMerge({ auto: true, checks: "fail" });
 
