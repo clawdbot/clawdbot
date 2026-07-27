@@ -50,7 +50,7 @@ function rewrittenBody(params: HandleCommandsParams): string {
 }
 
 // Mirrors the handler's conversation tag for the fixture sessionKey.
-const LOOP_PREFIX = `loop[${createHash("sha256").update("agent:main:webchat:test").digest("hex").slice(0, 6)}]`;
+const LOOP_PREFIX = `loop[${createHash("sha256").update("agent:main:webchat:test").digest("hex").slice(0, 12)}]`;
 
 describe("loop command", () => {
   it("ignores non-loop text", async () => {

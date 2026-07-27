@@ -58,9 +58,12 @@ function loopShortName(prompt: string): string {
 
 // Conversation tag baked into the job name at create time. Status/stop match by
 // this same tag, so loop discovery never depends on how the cron side resolves
-// session keys (which can differ from the command pipeline's sessionKey).
+// session keys (which can differ from the command pipeline's sessionKey and
+// made stored-binding checks misfire in live testing). 48 bits keeps accidental
+// cross-conversation prefix collisions negligible; all matched jobs are still
+// the owner's own agent jobs.
 function loopConversationTag(sessionKey: string): string {
-  return createHash("sha256").update(sessionKey).digest("hex").slice(0, 6);
+  return createHash("sha256").update(sessionKey).digest("hex").slice(0, 12);
 }
 
 function loopNamePrefix(sessionKey: string): string {
