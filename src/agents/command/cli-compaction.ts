@@ -208,7 +208,11 @@ function isUnsupportedNativeHarnessCompaction(
 
 function isBenignCliCompactionNoopReason(reason: string | undefined): boolean {
   const classification = classifyCompactionReason(reason);
-  return classification === "below_threshold" || classification === "already_compacted_recently";
+  return (
+    classification === "below_threshold" ||
+    classification === "already_compacted_recently" ||
+    classification === "no_compactable_entries"
+  );
 }
 
 function isIntentionalNativeAutoCompactionSkip(
@@ -399,7 +403,7 @@ async function compactCliTranscript(params: {
   }
 
   if (!compactResult.compacted) {
-    const reason = compactResult.reason ?? "nothing to compact";
+    const reason = compactResult.reason;
     if (isBenignCliCompactionNoopReason(reason)) {
       log.info(
         `CLI transcript compaction skipped for ${params.provider}/${params.model}: ${reason}`,
@@ -407,7 +411,7 @@ async function compactCliTranscript(params: {
       return { compacted: false };
     }
     log.warn(
-      `CLI transcript compaction did not reduce context for ${params.provider}/${params.model}: ${reason}`,
+      `CLI transcript compaction did not reduce context for ${params.provider}/${params.model}: ${reason ?? "compaction did not reduce context"}`,
     );
     return {
       compacted: false,
@@ -549,7 +553,7 @@ async function compactNativeHarnessCliTranscript(params: {
   }
 
   if (!result?.compacted) {
-    const reason = result?.reason ?? "nothing to compact";
+    const reason = result?.reason;
     if (isBenignCliCompactionNoopReason(reason)) {
       log.info(
         `CLI native harness compaction skipped for ${params.provider}/${params.model}: ${reason}`,

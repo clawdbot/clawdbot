@@ -1858,5 +1858,69 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(compactCalls).toHaveLength(0);
     expect(recordCliCompactionInStore).toHaveBeenCalledTimes(1);
   });
+
+  it("treats 'no real conversation messages' as a benign compaction skip without failureReason", async () => {
+    const sessionId = "session-no-real-msg";
+    const sessionKey = "agent:main:test";
+    const storePath = path.join(tmpDir, "sessions.json");
+    const sessionFile = path.join(tmpDir, `${sessionId}.jsonl`);
+    await writeSessionFile({ sessionFile, sessionId });
+
+    const sessionEntry: SessionEntry = {
+      sessionId,
+      sessionFile,
+      updatedAt: 1,
+    };
+    await persistSessionEntry({ sessionKey, storePath, entry: sessionEntry });
+
+    const compactCalls: Array<Parameters<ContextEngine["compact"]>[0]> = [];
+    const contextEngine = {
+      ...buildContextEngine({ compactCalls }),
+      async compact() {
+        return {
+          ok: true as const,
+          compacted: false as const,
+          reason: "no real conversation messages",
+        };
+      },
+    };
+
+    setCliCompactionTestDeps({
+      resolveCliBackendConfig: () => null,
+      resolveCliContextEngine: () => contextEngine,
+      readSessionTokens: () => ({
+        tokenCount: 9500,
+        modelContextWindow: 10_000,
+      }),
+      resolveCliCompactionPolicy: () => ({
+        compactionBudget: 2000,
+        route: "must_compact",
+        shouldCompact: true,
+        estimatedPromptTokens: 9500,
+        promptBudgetBeforeReserve: 8000,
+        overflowTokens: 1500,
+        toolResultReducibleChars: 0,
+        effectiveReserveTokens: 2000,
+      }),
+      resolveLiveToolResultMaxChars: () => 20_000,
+      applyAgentAutoCompactionGuard: vi.fn(async () => ({ supported: false })),
+    });
+
+    const result = await runCliTurnCompactionLifecycle({
+      cfg: {} as OpenClawConfig,
+      sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionStore: storePath,
+      storePath,
+      sessionAgentId: "main",
+      workspaceDir: tmpDir,
+      agentDir: tmpDir,
+      provider: "openai",
+      model: "gpt-5.5",
+    });
+
+    expect(result).toEqual(sessionEntry);
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
