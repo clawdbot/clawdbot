@@ -11,8 +11,49 @@ import type {
   WorkboardKeyedStore,
 } from "./src/persistence-types.js";
 import { createWorkboardSqliteStores, resolveWorkboardSqlitePath } from "./src/sqlite-store.js";
+import { DEFAULT_CLAIM_TTL_MS } from "./src/store-constants.js";
+import { randomUUID } from "node:crypto";
+import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 
 const MAX_CARDS = 2000;
+
+interface LegacyClaimRow {
+  id: string;
+  claim_json: string;
+  agent_id: string | null;
+}
+
+const LEGACY_CLAIM_DETECT_QUERY =
+  "SELECT id FROM workboard_cards WHERE claim_json IS NOT NULL AND json_valid(claim_json) AND json_extract(claim_json, '$.ownerId') IS NULL";
+
+const LEGACY_CLAIM_FETCH_QUERY =
+  "SELECT id, claim_json, agent_id FROM workboard_cards WHERE claim_json IS NOT NULL AND json_valid(claim_json) AND json_extract(claim_json, '$.ownerId') IS NULL";
+
+function normalizeLegacyClaim(
+  claim: Record<string, unknown>,
+  agentId: string | null,
+): {
+  ownerId: string;
+  token: string;
+  claimedAt: number;
+  lastHeartbeatAt: number;
+  expiresAt: number;
+} | null {
+  if (!agentId || typeof agentId !== "string" || !agentId.trim()) {
+    return null;
+  }
+  const claimedAt =
+    typeof claim.claimedAt === "number" && Number.isFinite(claim.claimedAt)
+      ? claim.claimedAt
+      : Date.now();
+  return {
+    ownerId: agentId,
+    token: randomUUID(),
+    claimedAt,
+    lastHeartbeatAt: claimedAt,
+    expiresAt: claimedAt + DEFAULT_CLAIM_TTL_MS,
+  };
+}
 
 function migrationEnv(params: { env: NodeJS.ProcessEnv; stateDir: string }): NodeJS.ProcessEnv {
   return { ...params.env, OPENCLAW_STATE_DIR: params.stateDir };
@@ -283,6 +324,86 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         };
       } finally {
         sqlite.close();
+      }
+    },
+  },
+  {
+    id: "workboard-legacy-claim-normalize",
+    label: "Workboard legacy claim normalization",
+    doctorOnly: true,
+    async detectLegacyState(params) {
+      const env = migrationEnv(params);
+      const dbPath = resolveWorkboardSqlitePath(env);
+      const db = openNodeSqliteDatabase(dbPath);
+      try {
+        db.exec("PRAGMA busy_timeout = 5000");
+        const row = db.prepare(`SELECT COUNT(*) as count FROM (${LEGACY_CLAIM_DETECT_QUERY})`).get() as { count: number };
+        if (row.count === 0) {
+          return null;
+        }
+        return {
+          preview: [
+            `- Workboard: ${row.count} legacy claim${row.count === 1 ? "" : "s"} without ownerId detected — will be normalized to canonical shape`,
+          ],
+        };
+      } finally {
+        db.close();
+      }
+    },
+    async migrateLegacyState(params) {
+      const env = migrationEnv(params);
+      const dbPath = resolveWorkboardSqlitePath(env);
+      const db = openNodeSqliteDatabase(dbPath);
+      try {
+        db.exec("PRAGMA busy_timeout = 5000");
+        const rows = db.prepare(LEGACY_CLAIM_FETCH_QUERY).all() as LegacyClaimRow[];
+        let normalized = 0;
+        let cleared = 0;
+        const warnings: string[] = [];
+        const updateStmt = db.prepare(
+          "UPDATE workboard_cards SET claim_json = ?, updated_at = ? WHERE id = ?",
+        );
+        const now = Date.now();
+        db.exec("BEGIN IMMEDIATE");
+        try {
+          for (const row of rows) {
+            let claim: Record<string, unknown>;
+            try {
+              claim = JSON.parse(row.claim_json) as Record<string, unknown>;
+            } catch {
+              warnings.push(
+                `Skipped card ${row.id}: malformed claim_json (not valid JSON)`,
+              );
+              continue;
+            }
+            const repaired = normalizeLegacyClaim(claim, row.agent_id);
+            if (repaired) {
+              updateStmt.run(JSON.stringify(repaired), now, row.id);
+              normalized++;
+            } else {
+              updateStmt.run(null, now, row.id);
+              cleared++;
+              warnings.push(
+                `Cleared legacy claim on card ${row.id}: no agentId to map ownerId from`,
+              );
+            }
+          }
+          db.exec("COMMIT");
+        } catch (err) {
+          db.exec("ROLLBACK");
+          throw err;
+        }
+        return {
+          changes:
+            normalized + cleared > 0
+              ? [
+                  `Normalized ${normalized} legacy claim${normalized === 1 ? "" : "s"} to canonical shape (ownerId backfilled from agentId)${cleared > 0 ? `, cleared ${cleared} unrecoverable claim${cleared === 1 ? "" : "s"}` : ""}`,
+                ]
+              : [],
+          warnings,
+        };
+      } finally {
+        db.close();
       }
     },
   },
