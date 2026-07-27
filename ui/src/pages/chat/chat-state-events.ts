@@ -4,6 +4,7 @@ import { fireFirstReplyConfetti } from "../../components/confetti.ts";
 import { isGitHubPullRequestLink } from "../../components/github-link-hovercard.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
+import { pickFreshestObserverDigest } from "../../lib/observer-digest.ts";
 import {
   readSessionChangedEvent,
   type SessionChangedResult,
@@ -397,14 +398,13 @@ export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventF
     }
     const previous = state.observerDigest;
     if (
-      !previous ||
-      previous.runId !== payload.runId ||
-      payload.revision > previous.revision ||
-      (payload.revision === previous.revision && payload.updatedAt > previous.updatedAt)
+      previous?.runId === payload.runId &&
+      pickFreshestObserverDigest(previous, payload) === previous
     ) {
-      state.observerDigest = payload;
-      requestChatPageUpdate(state);
+      return;
     }
+    state.observerDigest = payload;
+    requestChatPageUpdate(state);
     return;
   }
   if (event.event === "agent" || event.event === "session.tool") {

@@ -178,19 +178,21 @@ export function deleteSessionCostUsageRollupsExcept(params: {
   databasePath?: string;
   liveKeys: ReadonlySet<string>;
 }): void {
-  const existing = readSessionCostUsageRollupRows(params.agentId, params.databasePath)
-    .map((row) => row.key)
-    .filter((key) => !params.liveKeys.has(key));
+  const existing = readSessionCostUsageRollupRows(params.agentId, params.databasePath).filter(
+    (row) => !params.liveKeys.has(row.key),
+  );
   runOpenClawAgentWriteTransaction(
     (database) => {
       const kysely = getNodeSqliteKysely<AgentCacheDatabase>(database.db);
-      for (const key of existing) {
+      for (const row of existing) {
         executeSqliteQuerySync(
           database.db,
           kysely
             .deleteFrom("cache_entries")
             .where("scope", "=", ROLLUP_SCOPE)
-            .where("key", "=", key),
+            .where("key", "=", row.key)
+            .where("value_json", "=", row.valueJson)
+            .where("updated_at", "=", row.updatedAt),
         );
       }
       executeSqliteQuerySync(

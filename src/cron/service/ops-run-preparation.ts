@@ -68,6 +68,7 @@ export type ActivatedManualRun = Extract<PreparedManualRun, { ran: true }> & {
   startedAt: number;
   taskRunId?: string;
   activeJobMarker?: CronActiveJobMarker;
+  admittedJob: CronJob;
   executionJob: CronJob;
 };
 
@@ -502,6 +503,7 @@ export async function activatePreparedManualRun(
     const activeJobMarker = markManualCronJobActive(state, job);
     // Execute against a snapshot so later reload/merge can preserve delivery
     // target writeback from disk without mutating the running object.
+    const admittedJob = structuredClone(job);
     const executionJob = structuredClone(job);
     if (mode === "force" && executionJob.trigger && !prepared.evaluateTrigger) {
       // Force means run the payload now; strip the gate only from this snapshot
@@ -517,6 +519,7 @@ export async function activatePreparedManualRun(
       runId: prepared.runId ?? taskRunId,
       taskRunId,
       activeJobMarker,
+      admittedJob,
       executionJob,
     } as const;
   });

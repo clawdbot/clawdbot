@@ -160,7 +160,7 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
         if (generation !== this.refreshGeneration || client !== this.client) {
           return;
         }
-        this.cards = normalized.cards;
+        this.cards = normalized.cards.filter((card) => !card.metadata?.archivedAt);
         this.statuses = normalized.statuses;
         this.loaded = true;
       } catch (error) {

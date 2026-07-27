@@ -5,6 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  approveWorkspaceSkill,
   buildOpaqueSessionIsolationFixture,
   objectFieldEquals,
   readFixtureLog,
@@ -701,23 +702,29 @@ describe.sequential("TUI PTY harness", () => {
   it(
     "presents and resolves workspace skill approval in the TUI",
     async () => {
-      await fixture.run.write("skill approval proof\r");
-      await fixture.run.waitForOutput("workspace skill approval: Apply workspace skill proposal");
-      await fixture.run.waitForOutput("Plugin: workspace-skills");
-      await fixture.run.waitForOutput(
-        "Apply a pending workspace skill proposal into live workspace skills.",
-      );
-
-      await fixture.run.write("\x1b[A", { delay: false });
-      await fixture.run.write("\r");
-      await fixture.waitForLogEntry(
-        (entry) =>
-          entry.method === "resolvePluginApproval" &&
-          objectFieldEquals(entry, "decision", "allow-once"),
-      );
-      await fixture.run.waitForOutput("PTY_SKILL_APPROVAL_RESOLVED: allow-once");
+      await approveWorkspaceSkill(fixture, "skill approval proof");
     },
     TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "presents and resolves workspace skill approval in a compact terminal",
+    async () => {
+      const compactFixture = await startTuiFixture({
+        env: {
+          OPENCLAW_TUI_PTY_COLS: "72",
+          OPENCLAW_TUI_PTY_ROWS: "20",
+        },
+      });
+
+      try {
+        await compactFixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+        await approveWorkspaceSkill(compactFixture, "skill approval proof");
+      } finally {
+        await compactFixture.cleanup();
+      }
+    },
+    STARTUP_TEST_TIMEOUT_MS,
   );
 
   it(

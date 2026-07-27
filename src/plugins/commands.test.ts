@@ -406,6 +406,31 @@ describe("registerPluginCommand", () => {
     expect(listRegisteredPluginAgentPromptGuidance()).toEqual(["Use /demo_cmd for demo routing."]);
   });
 
+  it.each([
+    ["zeta-plugin", "alpha-plugin"],
+    ["alpha-plugin", "zeta-plugin"],
+  ])("keeps prompt guidance stable for plugin discovery order %j", (...pluginIds) => {
+    for (const pluginId of pluginIds) {
+      const alpha = pluginId === "alpha-plugin";
+      expect(
+        registerPluginCommand(pluginId, {
+          name: alpha ? "alpha_cmd" : "zeta_cmd",
+          description: alpha ? "Alpha command" : "Zeta command",
+          agentPromptGuidance: alpha
+            ? ["Use /alpha_cmd first.", "Then finish the alpha workflow."]
+            : ["Use /zeta_cmd for zeta routing."],
+          handler: async () => ({ text: "ok" }),
+        }),
+      ).toEqual({ ok: true });
+    }
+
+    expect(listRegisteredPluginAgentPromptGuidance()).toEqual([
+      "Use /alpha_cmd first.",
+      "Then finish the alpha workflow.",
+      "Use /zeta_cmd for zeta routing.",
+    ]);
+  });
+
   it("normalizes and filters structured agent prompt guidance by surface", () => {
     const result = registerPluginCommand("demo-plugin", {
       name: "demo_cmd",

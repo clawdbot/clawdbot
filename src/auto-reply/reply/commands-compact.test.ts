@@ -317,6 +317,33 @@ describe("handleCompactCommand", () => {
     expect(vi.mocked(incrementCompactionCount)).not.toHaveBeenCalled();
   });
 
+  it("does not hide a failed manual compaction with an empty-transcript reason", async () => {
+    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
+      ok: false,
+      compacted: false,
+      reason: "no real conversation messages",
+    });
+
+    const result = await handleCompactCommand(
+      {
+        ...buildCompactParams("/compact", {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig),
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+        },
+      } as HandleCommandsParams,
+      true,
+    );
+
+    expect(result?.reply?.text).toBe(
+      "⚙️ Compaction failed: nothing compactable in this session yet • Context 12.1k",
+    );
+    expect(vi.mocked(incrementCompactionCount)).not.toHaveBeenCalled();
+  });
+
   it("treats already_compacted_recently manual compaction as skipped", async () => {
     vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
       ok: false,

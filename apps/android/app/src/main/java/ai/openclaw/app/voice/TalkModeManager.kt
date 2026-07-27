@@ -694,20 +694,16 @@ class TalkModeManager internal constructor(
         val transcript = cleared.transcript
 
         if (transcript.isEmpty()) {
-          setStatus(if (_isEnabled.value) nativeText("Listening") else nativeText("Ready"))
-          resumeRealtimeCaptureAfterPushToTalk(captureId)
-          return@withContext finishPushToTalk(
-            TalkPttStopPayload(captureId = captureId, transcript = null, status = "empty"),
-            cleared.completion,
-          )
+          return@withContext finishClearedPushToTalk(captureId, cleared, status = "empty")
         }
 
         if (!isConnected()) {
-          setStatus(nativeText("Gateway not connected"))
-          resumeRealtimeCaptureAfterPushToTalk(captureId)
-          return@withContext finishPushToTalk(
-            TalkPttStopPayload(captureId = captureId, transcript = transcript, status = "offline"),
-            cleared.completion,
+          return@withContext finishClearedPushToTalk(
+            captureId,
+            cleared,
+            status = "offline",
+            transcript = transcript,
+            statusText = nativeText("Gateway not connected"),
           )
         }
 
@@ -727,8 +723,15 @@ class TalkModeManager internal constructor(
             }
           }
         // Cancellation can win before a lazy coroutine enters its body, in which
-        // case its finally block never runs. Completion still releases ownership.
-        finishingJob.invokeOnCompletion { clearFinishingPushToTalk(captureId, finishingJob) }
+        // case its Main-confined finally block never runs. Clear only the exact
+        // owner here, then resume its microphone on Main if the parent is live.
+        finishingJob.invokeOnCompletion {
+          if (clearFinishingPushToTalk(captureId, finishingJob)) {
+            scope.launch(Dispatchers.Main.immediate) {
+              resumeRealtimeCaptureAfterPushToTalk(captureId)
+            }
+          }
+        }
         // Publish the job before it can run so stop() cannot clear ownership while
         // an untracked finalizer still uses shared chat and playback state.
         synchronized(finishingPttLock) {
@@ -748,15 +751,11 @@ class TalkModeManager internal constructor(
       withContext(NonCancellable + Dispatchers.Main) {
         val cleared = clearPushToTalkRecognition(captureId)
         if (cleared != null) {
-          setStatus(if (_isEnabled.value) nativeText("Listening") else nativeText("Ready"))
-          resumeRealtimeCaptureAfterPushToTalk(captureId)
-          finishPushToTalk(
-            TalkPttStopPayload(
-              captureId = captureId,
-              transcript = cleared.transcript.ifEmpty { null },
-              status = "cancelled",
-            ),
-            cleared.completion,
+          finishClearedPushToTalk(
+            captureId,
+            cleared,
+            status = "cancelled",
+            transcript = cleared.transcript.ifEmpty { null },
           )
         }
       }
@@ -774,12 +773,7 @@ class TalkModeManager internal constructor(
       val cleared =
         clearPushToTalkRecognition(captureId)
           ?: return@withContext TalkPttStopPayload(captureId = captureId, transcript = null, status = "idle")
-      setStatus(if (_isEnabled.value) nativeText("Listening") else nativeText("Ready"))
-      resumeRealtimeCaptureAfterPushToTalk(captureId)
-      finishPushToTalk(
-        TalkPttStopPayload(captureId = captureId, transcript = null, status = "cancelled"),
-        cleared.completion,
-      )
+      finishClearedPushToTalk(captureId, cleared, status = "cancelled")
     }
 
   /** Starts a bounded one-shot PTT turn that auto-stops on silence or timeout. */
@@ -2488,17 +2482,33 @@ class TalkModeManager internal constructor(
     return payload
   }
 
+  private fun finishClearedPushToTalk(
+    captureId: String,
+    cleared: ClearedPushToTalkCapture,
+    status: String,
+    transcript: String? = null,
+    statusText: NativeText = if (_isEnabled.value) nativeText("Listening") else nativeText("Ready"),
+  ): TalkPttStopPayload {
+    setStatus(statusText)
+    resumeRealtimeCaptureAfterPushToTalk(captureId)
+    return finishPushToTalk(
+      TalkPttStopPayload(captureId = captureId, transcript = transcript, status = status),
+      cleared.completion,
+    )
+  }
+
   private fun clearFinishingPushToTalk(
     captureId: String,
     job: Job,
-  ) {
+  ): Boolean =
     synchronized(finishingPttLock) {
-      if (finishingPttCaptureId == captureId && finishingPttJob === job) {
-        finishingPttCaptureId = null
-        finishingPttJob = null
+      if (finishingPttCaptureId != captureId || finishingPttJob !== job) {
+        return@synchronized false
       }
+      finishingPttCaptureId = null
+      finishingPttJob = null
+      true
     }
-  }
 
   private fun buildPrompt(transcript: String): String {
     val lines =

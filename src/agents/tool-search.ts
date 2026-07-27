@@ -2,11 +2,13 @@
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
+import { isCoreCodingSurfaceToolName } from "./core-tool-factory-descriptors.js";
 import type { AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import {
   addClientToolsToToolCatalog,
   applyToolCatalogCompaction,
+  classifyTool,
   reusableCatalogSnapshots,
   resolveCatalog,
   sessionCatalogs,
@@ -55,7 +57,6 @@ export {
 export { resolveToolSearchConfig } from "./tool-search-config.js";
 export {
   buildToolSchemaDirectoryPrompt,
-  estimateToolSchemaDirectoryToolNames,
   resolveToolSearchCatalogTool,
 } from "./tool-search-directory.js";
 export { ToolSearchRuntime } from "./tool-search-runtime.js";
@@ -108,6 +109,11 @@ export function applyToolSearchCatalog(params: {
     isVisibleControlTool: (tool) =>
       TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name) &&
       shouldExposeControlTool(tool.name, config.mode),
+    // Core file/shell primitives stay in the visible tool list (while remaining
+    // searchable); the source check keeps plugin/MCP tools that reuse a core
+    // name deferred like any other cataloged tool.
+    isVisibleCatalogTool: (tool) =>
+      isCoreCodingSurfaceToolName(tool.name) && classifyTool(tool).sourceName === "core",
   });
 }
 

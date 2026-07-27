@@ -9,7 +9,10 @@ import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import { buildLegacyBundledRootPath } from "./bundled-load-path-aliases.js";
 import { listBundledSourceOverlayDirs } from "./bundled-source-overlays.js";
 import { normalizePluginsConfig } from "./config-state.js";
-import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import {
+  clearCurrentPluginMetadataSnapshot,
+  getCurrentPluginMetadataSnapshot,
+} from "./current-plugin-metadata-snapshot.js";
 import { discoverConfiguredPluginLoadPaths, type PluginDiscoveryResult } from "./discovery.js";
 import { fileSignatureMatches, hashJson } from "./installed-plugin-index-hash.js";
 import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
@@ -60,7 +63,6 @@ type PluginRegistrySnapshotResult = {
   discovery?: PluginDiscoveryResult;
 };
 
-const MAX_PLUGIN_REGISTRY_SNAPSHOT_MEMOS = 8;
 const REGISTRY_SNAPSHOT_MEMO_ENV_KEYS = [
   "APPDATA",
   "HOME",
@@ -81,10 +83,12 @@ type PluginRegistrySnapshotMemo = {
   result: PluginRegistrySnapshotResult;
 };
 
-let pluginRegistrySnapshotMemos: PluginRegistrySnapshotMemo[] = [];
+let pluginRegistrySnapshotMemo: PluginRegistrySnapshotMemo | undefined;
 
 function clearLoadPluginRegistrySnapshotMemo(): void {
-  pluginRegistrySnapshotMemos = [];
+  pluginRegistrySnapshotMemo = undefined;
+  // A retired registry must not leave its published metadata graph behind.
+  clearCurrentPluginMetadataSnapshot();
 }
 
 registerPluginMetadataProcessMemoLifecycleClear(clearLoadPluginRegistrySnapshotMemo);
@@ -144,19 +148,9 @@ function resolvePluginRegistrySnapshotMemoKey(
 function findPluginRegistrySnapshotMemo(
   key: string | undefined,
 ): PluginRegistrySnapshotResult | undefined {
-  if (!key) {
-    return undefined;
-  }
-  const index = pluginRegistrySnapshotMemos.findIndex((memo) => memo.key === key);
-  if (index === -1) {
-    return undefined;
-  }
-  const [memo] = pluginRegistrySnapshotMemos.splice(index, 1);
-  if (!memo) {
-    return undefined;
-  }
-  pluginRegistrySnapshotMemos.unshift(memo);
-  return memo.result;
+  return key && pluginRegistrySnapshotMemo?.key === key
+    ? pluginRegistrySnapshotMemo.result
+    : undefined;
 }
 
 function rememberPluginRegistrySnapshotMemo(
@@ -166,10 +160,7 @@ function rememberPluginRegistrySnapshotMemo(
   if (!key) {
     return result;
   }
-  pluginRegistrySnapshotMemos = [
-    { key, result },
-    ...pluginRegistrySnapshotMemos.filter((memo) => memo.key !== key),
-  ].slice(0, MAX_PLUGIN_REGISTRY_SNAPSHOT_MEMOS);
+  pluginRegistrySnapshotMemo = { key, result };
   return result;
 }
 
