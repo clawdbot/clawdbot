@@ -1,4 +1,4 @@
-import { readPositiveIntegerParam } from "openclaw/plugin-sdk/channel-actions";
+import { readNumberParam, readPositiveIntegerParam } from "openclaw/plugin-sdk/channel-actions";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   callGatewayFromCli,
@@ -17,6 +17,7 @@ import {
 } from "./calendar.js";
 import {
   resolveGoogleMeetGatewayOperationTimeoutMs,
+  resolveGoogleMeetProbeGatewayTimeoutMs,
   type GoogleMeetConfig,
   type GoogleMeetMode,
   type GoogleMeetTransport,
@@ -158,13 +159,23 @@ export async function callGoogleMeetGatewayFromTool(params: {
   raw: Record<string, unknown>;
   runtime?: OpenClawPluginApi["runtime"];
 }): Promise<unknown> {
+  // test_speech waits inside the Gateway, so its client deadline has to cover the
+  // requested wait. Read the request the same way the handler does so both
+  // spellings of the parameter produce the same deadline.
+  const gatewayTimeoutMs =
+    params.action === "test_speech"
+      ? resolveGoogleMeetProbeGatewayTimeoutMs(
+          params.config,
+          readNumberParam(params.raw, "timeoutMs", { positiveInteger: true, strict: true }),
+        )
+      : resolveGoogleMeetGatewayOperationTimeoutMs(params.config);
   try {
     if (params.runtime) {
       return await params.runtime.gateway.request(
         googleMeetGatewayMethodForToolAction(params.action),
         params.raw,
         {
-          timeoutMs: resolveGoogleMeetGatewayOperationTimeoutMs(params.config),
+          timeoutMs: gatewayTimeoutMs,
           scopes: ["operator.admin"],
         },
       );
@@ -175,7 +186,7 @@ export async function callGoogleMeetGatewayFromTool(params: {
       googleMeetGatewayMethodForToolAction(params.action),
       {
         json: true,
-        timeout: String(resolveGoogleMeetGatewayOperationTimeoutMs(params.config)),
+        timeout: String(gatewayTimeoutMs),
       },
       params.raw,
       { progress: false, scopes: ["operator.admin"] },

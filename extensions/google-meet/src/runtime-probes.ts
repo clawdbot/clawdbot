@@ -1,6 +1,7 @@
 import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import type { GoogleMeetConfig, GoogleMeetMode, GoogleMeetTransport } from "./config.js";
 import { normalizeMeetUrl } from "./meet-url.js";
+import { resolveGoogleMeetProbeTimeoutMs } from "./probe-timeout.js";
 import type {
   GoogleMeetChromeHealth,
   GoogleMeetJoinRequest,
@@ -27,16 +28,6 @@ export type GoogleMeetRuntimeProbeContext = {
   refreshCaptionHealth(session: GoogleMeetSession): Promise<void>;
 };
 
-function resolveProbeTimeoutMs(input: number | undefined, fallback: number): number {
-  if (input === undefined) {
-    return Math.min(Math.max(fallback, 1), 120_000);
-  }
-  if (!Number.isFinite(input) || input <= 0) {
-    throw new Error("timeoutMs must be a positive number");
-  }
-  return Math.min(Math.trunc(input), 120_000);
-}
-
 const probes = MeetingPlatformAdapter.createRuntimeProbes<
   GoogleMeetConfig,
   GoogleMeetMode,
@@ -47,7 +38,7 @@ const probes = MeetingPlatformAdapter.createRuntimeProbes<
 >({
   defaultSpeechMessage: "Say exactly: Google Meet speech test complete.",
   invalidRequest: (message) => new Error(message),
-  resolveTimeoutMs: resolveProbeTimeoutMs,
+  resolveTimeoutMs: resolveGoogleMeetProbeTimeoutMs,
   shouldWaitForListening: (session) =>
     Boolean(
       (session.transport === "chrome" || session.transport === "chrome-node") &&
@@ -62,7 +53,14 @@ const probes = MeetingPlatformAdapter.createRuntimeProbes<
       throw new Error("test_listen supports chrome or chrome-node transports");
     }
   },
-  resolveSpeechTimeoutMs: (_request, config) => Math.min(config.chrome.joinTimeoutMs, 5_000),
+  // Unlike Zoom and Teams, Meet keeps a short observe-mode default so unattended
+  // speech checks stay fast (#73256). An explicit caller timeout still wins, capped
+  // like every other probe; dropping the request here is what made timeoutMs
+  // unreachable for test_speech.
+  resolveSpeechTimeoutMs: (request, config) =>
+    request.timeoutMs === undefined
+      ? Math.min(config.chrome.joinTimeoutMs, 5_000)
+      : resolveGoogleMeetProbeTimeoutMs(request.timeoutMs, config.chrome.joinTimeoutMs),
   refreshCaptionHealth: async (context, session) => await context.refreshCaptionHealth(session),
   speechModeError:
     "test_speech requires mode: agent or bidi; use join mode: transcribe for observe-only sessions.",

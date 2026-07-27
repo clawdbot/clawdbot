@@ -1,7 +1,11 @@
 // Google Meet tests cover config plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it } from "vitest";
-import { resolveGoogleMeetConfig, resolveGoogleMeetGatewayOperationTimeoutMs } from "./config.js";
+import {
+  resolveGoogleMeetConfig,
+  resolveGoogleMeetGatewayOperationTimeoutMs,
+  resolveGoogleMeetProbeGatewayTimeoutMs,
+} from "./config.js";
 
 describe("google meet gateway operation timeout", () => {
   it("caps timer config fields before runtime polling uses them", () => {
@@ -53,5 +57,33 @@ describe("google meet gateway operation timeout", () => {
         }),
       ),
     ).toBe(MAX_TIMER_TIMEOUT_MS);
+  });
+});
+
+describe("google meet probe gateway timeout", () => {
+  it("keeps the operation budget when no probe wait is requested", () => {
+    const config = resolveGoogleMeetConfig({});
+
+    expect(resolveGoogleMeetProbeGatewayTimeoutMs(config, undefined)).toBe(
+      resolveGoogleMeetGatewayOperationTimeoutMs(config),
+    );
+  });
+
+  it("covers the requested probe wait on top of the operation budget", () => {
+    const config = resolveGoogleMeetConfig({});
+
+    // Without this the caller aborts at the 60s budget and an explicit 90s probe
+    // wait can never be observed.
+    expect(resolveGoogleMeetProbeGatewayTimeoutMs(config, 30_000)).toBe(
+      resolveGoogleMeetGatewayOperationTimeoutMs(config) + 30_000,
+    );
+  });
+
+  it("covers only the capped probe wait", () => {
+    const config = resolveGoogleMeetConfig({});
+
+    expect(resolveGoogleMeetProbeGatewayTimeoutMs(config, 600_000)).toBe(
+      resolveGoogleMeetGatewayOperationTimeoutMs(config) + 120_000,
+    );
   });
 });

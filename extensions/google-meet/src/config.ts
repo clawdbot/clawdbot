@@ -15,6 +15,7 @@ import {
   normalizeOptionalString,
   normalizeOptionalTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveGoogleMeetProbeTimeoutMs } from "./probe-timeout.js";
 
 export type GoogleMeetTransport = "chrome" | "chrome-node" | "twilio";
 export type GoogleMeetMode = "agent" | "bidi" | "transcribe";
@@ -102,6 +103,27 @@ export function resolveGoogleMeetGatewayOperationTimeoutMs(config: GoogleMeetCon
     60_000,
     addTimerTimeoutGraceMs(config.chrome.joinTimeoutMs, 30_000) ?? 1,
     addTimerTimeoutGraceMs(config.voiceCall.requestTimeoutMs, 10_000) ?? 1,
+  );
+}
+
+/**
+ * Client deadline for a probe call: the operation budget plus the wait the caller
+ * asked the probe to perform. Without the requested wait folded in, an explicit
+ * timeout above the budget is cut off by the caller instead of the probe.
+ */
+export function resolveGoogleMeetProbeGatewayTimeoutMs(
+  config: GoogleMeetConfig,
+  requestedTimeoutMs: number | undefined,
+): number {
+  const operationTimeoutMs = resolveGoogleMeetGatewayOperationTimeoutMs(config);
+  if (requestedTimeoutMs === undefined) {
+    return operationTimeoutMs;
+  }
+  return (
+    addTimerTimeoutGraceMs(
+      operationTimeoutMs,
+      resolveGoogleMeetProbeTimeoutMs(requestedTimeoutMs, config.chrome.joinTimeoutMs),
+    ) ?? operationTimeoutMs
   );
 }
 

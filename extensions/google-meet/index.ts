@@ -380,6 +380,7 @@ export default definePluginEntry({
             message: normalizeOptionalString(trustedParams.message),
             requesterSessionKey: normalizeOptionalString(trustedParams.requesterSessionKey),
             agentId: normalizeOptionalString(trustedParams.agentId),
+            timeoutMs: readPositiveIntegerParam(trustedParams, "timeoutMs"),
           });
           respond(true, result);
         } catch (err) {
