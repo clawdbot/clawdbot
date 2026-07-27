@@ -1,6 +1,7 @@
 // Openai provider module implements model/runtime integration.
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { canonicalizeBase64 } from "@openclaw/media-core/base64";
 import {
   isProviderAuthProfileConfigured,
   resolveProviderAuthProfileApiKey,
@@ -489,8 +490,17 @@ function readRealtimeErrorEventId(error: unknown): string | undefined {
   return typeof eventId === "string" ? eventId : undefined;
 }
 
-function base64ToBuffer(b64: string): Buffer {
-  return Buffer.from(b64, "base64");
+function base64ToBuffer(b64: string): Buffer | null {
+  // `Buffer.from(x, "base64")` silently drops characters outside the base64
+  // alphabet, so a damaged delta would decode into garbage bytes. Validate
+  // with `canonicalizeBase64` (rejects invalid chars, bad padding, bad length)
+  // and return null so the caller can surface the error instead of playing
+  // corrupted audio.
+  const canonical = canonicalizeBase64(b64);
+  if (!canonical) {
+    return null;
+  }
+  return Buffer.from(canonical, "base64");
 }
 
 class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
@@ -1120,6 +1130,15 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           return;
         }
         const audio = base64ToBuffer(audioDelta);
+        if (!audio) {
+          // One corrupt frame must not terminate a live voice conversation,
+          // but it must never reach the speaker silently. Report through
+          // onError and let the next valid delta resume playback.
+          this.config.onError?.(
+            new Error("OpenAI Realtime voice stream returned malformed base64 audio data"),
+          );
+          return;
+        }
         this.config.onAudio(audio);
         if (event.item_id && event.item_id !== this.lastAssistantItemId) {
           this.lastAssistantItemId = event.item_id;

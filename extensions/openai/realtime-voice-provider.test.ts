@@ -1741,6 +1741,63 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(hasSentEventType(socket, "conversation.item.truncate")).toBe(false);
   });
 
+  it("reports malformed base64 audio deltas through onError without emitting audio", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const onAudio = vi.fn();
+    const onError = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio,
+      onClearAudio: vi.fn(),
+      onError,
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+
+    socket.emit(
+      "message",
+      Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
+    );
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "response.audio.delta",
+          item_id: "item_1",
+          delta: "%%%not-base64!!",
+        }),
+      ),
+    );
+    // A subsequent valid delta must still be emitted: one bad frame does not
+    // terminate the live session.
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "response.audio.delta",
+          item_id: "item_1",
+          delta: Buffer.from("assistant audio").toString("base64"),
+        }),
+      ),
+    );
+
+    expect(onAudio).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "OpenAI Realtime voice stream returned malformed base64 audio data",
+      }),
+    );
+  });
+
   it("keeps assistant playback active on server VAD when automatic audio responses are disabled", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const onAudio = vi.fn();
