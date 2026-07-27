@@ -21,9 +21,7 @@ import { normalizePluginIdScope, serializePluginIdScope } from "./plugin-scope.j
 type CurrentPluginMetadataSnapshotState = ReturnType<typeof getCurrentPluginMetadataSnapshotState>;
 let currentPluginMetadataConfigIdentityCache = new WeakSet<OpenClawConfig>();
 
-registerPluginMetadataProcessMemoLifecycleClear(() => {
-  setCurrentManifestModelIdNormalizationRecords(undefined);
-});
+registerPluginMetadataProcessMemoLifecycleClear(clearCurrentPluginMetadataSnapshot);
 
 function resolvePluginMetadataControlPlaneFingerprint(
   config?: OpenClawConfig,
