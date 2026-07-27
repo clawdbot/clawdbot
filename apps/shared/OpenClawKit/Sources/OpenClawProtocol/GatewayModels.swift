@@ -4014,6 +4014,7 @@ public struct SessionsListParams: Codable, Sendable {
     public let includederivedtitles: Bool?
     public let includelastmessage: Bool?
     public let label: String?
+    public let boardface: AnyCodable?
     public let creatorid: String?
     public let spawnedby: String?
     public let agentid: String?
@@ -4032,6 +4033,7 @@ public struct SessionsListParams: Codable, Sendable {
         includederivedtitles: Bool? = nil,
         includelastmessage: Bool? = nil,
         label: String? = nil,
+        boardface: AnyCodable? = nil,
         creatorid: String? = nil,
         spawnedby: String? = nil,
         agentid: String? = nil,
@@ -4049,6 +4051,7 @@ public struct SessionsListParams: Codable, Sendable {
         self.includederivedtitles = includederivedtitles
         self.includelastmessage = includelastmessage
         self.label = label
+        self.boardface = boardface
         self.creatorid = creatorid
         self.spawnedby = spawnedby
         self.agentid = agentid
@@ -4068,6 +4071,7 @@ public struct SessionsListParams: Codable, Sendable {
         case includederivedtitles = "includeDerivedTitles"
         case includelastmessage = "includeLastMessage"
         case label
+        case boardface = "boardFace"
         case creatorid = "creatorId"
         case spawnedby = "spawnedBy"
         case agentid = "agentId"
@@ -4938,6 +4942,7 @@ public struct SessionRow: Codable, Sendable {
     public let incognito: Bool?
     public let kind: AnyCodable
     public let label: String?
+    public let boardface: AnyCodable?
     public let displayname: String?
     public let derivedtitle: String?
     public let lastmessagepreview: String?
@@ -4993,6 +4998,7 @@ public struct SessionRow: Codable, Sendable {
         incognito: Bool? = nil,
         kind: AnyCodable,
         label: String? = nil,
+        boardface: AnyCodable? = nil,
         displayname: String? = nil,
         derivedtitle: String? = nil,
         lastmessagepreview: String? = nil,
@@ -5047,6 +5053,7 @@ public struct SessionRow: Codable, Sendable {
         self.incognito = incognito
         self.kind = kind
         self.label = label
+        self.boardface = boardface
         self.displayname = displayname
         self.derivedtitle = derivedtitle
         self.lastmessagepreview = lastmessagepreview
@@ -5103,6 +5110,7 @@ public struct SessionRow: Codable, Sendable {
         case incognito
         case kind
         case label
+        case boardface = "boardFace"
         case displayname = "displayName"
         case derivedtitle = "derivedTitle"
         case lastmessagepreview = "lastMessagePreview"
@@ -7487,6 +7495,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let agentid: String?
     public let label: AnyCodable?
     public let category: AnyCodable?
+    public let boardface: AnyCodable?
     public let icon: AnyCodable?
     public let statusnote: AnyCodable?
     public let attention: AnyCodable?
@@ -7518,6 +7527,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         agentid: String? = nil,
         label: AnyCodable? = nil,
         category: AnyCodable? = nil,
+        boardface: AnyCodable? = nil,
         icon: AnyCodable? = nil,
         statusnote: AnyCodable? = nil,
         attention: AnyCodable? = nil,
@@ -7548,6 +7558,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.agentid = agentid
         self.label = label
         self.category = category
+        self.boardface = boardface
         self.icon = icon
         self.statusnote = statusnote
         self.attention = attention
@@ -7580,6 +7591,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         case agentid = "agentId"
         case label
         case category
+        case boardface = "boardFace"
         case icon
         case statusnote = "statusNote"
         case attention
@@ -15439,6 +15451,7 @@ public struct QuestionRecord: Codable, Sendable {
     public let questions: [Question]
     public let agentid: String?
     public let sessionkey: String?
+    public let runid: String?
     public let createdatms: Int
     public let expiresatms: Int
     public let status: QuestionStatus
@@ -15450,6 +15463,7 @@ public struct QuestionRecord: Codable, Sendable {
         questions: [Question],
         agentid: String? = nil,
         sessionkey: String? = nil,
+        runid: String? = nil,
         createdatms: Int,
         expiresatms: Int,
         status: QuestionStatus,
@@ -15460,6 +15474,7 @@ public struct QuestionRecord: Codable, Sendable {
         self.questions = questions
         self.agentid = agentid
         self.sessionkey = sessionkey
+        self.runid = runid
         self.createdatms = createdatms
         self.expiresatms = expiresatms
         self.status = status
@@ -15472,6 +15487,7 @@ public struct QuestionRecord: Codable, Sendable {
         case questions
         case agentid = "agentId"
         case sessionkey = "sessionKey"
+        case runid = "runId"
         case createdatms = "createdAtMs"
         case expiresatms = "expiresAtMs"
         case status
@@ -15485,6 +15501,7 @@ public struct QuestionRequestParams: Codable, Sendable {
     public let questions: [QuestionRequestQuestion]
     public let agentid: String?
     public let sessionkey: String?
+    public let runid: String?
     public let timeoutms: Int?
 
     public init(
@@ -15492,12 +15509,14 @@ public struct QuestionRequestParams: Codable, Sendable {
         questions: [QuestionRequestQuestion],
         agentid: String? = nil,
         sessionkey: String? = nil,
+        runid: String? = nil,
         timeoutms: Int? = nil)
     {
         self.id = id
         self.questions = questions
         self.agentid = agentid
         self.sessionkey = sessionkey
+        self.runid = runid
         self.timeoutms = timeoutms
     }
 
@@ -15506,6 +15525,7 @@ public struct QuestionRequestParams: Codable, Sendable {
         case questions
         case agentid = "agentId"
         case sessionkey = "sessionKey"
+        case runid = "runId"
         case timeoutms = "timeoutMs"
     }
 }

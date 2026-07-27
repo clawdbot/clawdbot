@@ -31,7 +31,6 @@ export {
 export type {
   ControlUiSessionBranch,
   ControlUiSessionPullRequest,
-  ControlUiSessionPullRequests,
 } from "../../../../src/gateway/control-ui-contract.js";
 export { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 export type {
@@ -161,6 +160,7 @@ export type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 export {
   applyChatAgentsList,
   clearChatHistory,
+  loadChatBranches,
   loadChatHistory,
   loadOlderChatHistoryPage,
   rewindChatHistory,
@@ -292,6 +292,7 @@ export {
 export {
   reconcileWaitingApprovalsFromSnapshot,
   resolveActiveRunOutputTokens,
+  resolveChatProjectionRunId,
 } from "./tool-stream.ts";
 export { configureToolTitleFetcher } from "./tool-titles.ts";
 export { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";

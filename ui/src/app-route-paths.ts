@@ -7,6 +7,7 @@ export const INTERNAL_SESSION_PATH_PARAM = "__openclawSessionPath";
 const APP_ROUTE_DEFINITIONS = {
   chat: { path: "/chat" },
   dashboard: { path: "/dashboard" },
+  dashboards: { path: "/dashboards" },
   custodian: { path: "/custodian" },
   "new-session": { path: "/new" },
   activity: { path: "/activity" },

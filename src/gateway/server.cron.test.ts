@@ -453,6 +453,42 @@ describe("gateway server cron", () => {
     closeTrackedBrowserTabsForSessionsMock.mockClear();
   });
 
+  test("defaults cron.add agentTurn targets from available session context", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-agent-turn-default-",
+      cronEnabled: false,
+    });
+    const cronState = await createDirectCronState();
+
+    try {
+      const withContext = await directCronReq(cronState, "cron.add", {
+        name: "conversation loop",
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionKey: "agent:main:webchat:loop",
+        payload: { kind: "agentTurn", message: "check status" },
+      });
+      expect(withContext.ok).toBe(true);
+      expect(withContext.payload).toMatchObject({
+        sessionTarget: "current",
+        sessionKey: "agent:main:webchat:loop",
+        delivery: { mode: "announce" },
+      });
+
+      const withoutContext = await directCronReq(cronState, "cron.add", {
+        name: "detached loop",
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: { kind: "agentTurn", message: "check status" },
+      });
+      expect(withoutContext.ok).toBe(true);
+      expect(withoutContext.payload).toMatchObject({
+        sessionTarget: "isolated",
+        delivery: { mode: "announce" },
+      });
+    } finally {
+      await cleanupCronTestRun({ cronState, prevSkipCron });
+    }
+  });
+
   test("handles cron CRUD, normalization, and patch semantics", { timeout: 45_000 }, async () => {
     const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-",

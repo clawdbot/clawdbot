@@ -1596,9 +1596,9 @@ export function registerClaudeSessionCatalog(api: OpenClawPluginApi): void {
     label: "Claude Code",
     resolveCreateSession: ({ agentId }) => resolveClaudeCatalogCreateSession(api, agentId),
     list: async (query) => {
-      const adopted = listBoundClaudeSessions(api);
+      const adopted = listBoundClaudeSessions(api, query.sessionEntries);
       const localCliAvailable = catalogTerminal.isClaudeCliAvailable();
-      const { onHost, ...gatewayQuery } = query;
+      const { onHost, sessionEntries: _sessionEntries, ...gatewayQuery } = query;
       const mapHost = (host: ClaudeSessionCatalogHost) =>
         toGenericClaudeHost(host, adopted, localCliAvailable);
       const result = await listClaudeSessionCatalog({

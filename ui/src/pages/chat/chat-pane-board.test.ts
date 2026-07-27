@@ -390,7 +390,7 @@ describe("chat pane board shell", () => {
     pane.state.settings = {
       ...loadSettings(),
       boardSessionViews: {
-        "agent:main:current": { face: "dashboard", activeTabId: "research" },
+        "agent:main:current": { activeTabId: "research" },
       },
     };
     localStorage.clear();
@@ -410,7 +410,7 @@ describe("chat pane board shell", () => {
   it("preserves preferences saved by another split pane", () => {
     const initialSettings = patchSettings({
       boardSessionViews: {
-        "agent:main:first": { face: "chat", activeTabId: "main" },
+        "agent:main:first": { activeTabId: "main" },
       },
     });
     const firstPane = createTestPane();
@@ -438,8 +438,8 @@ describe("chat pane board shell", () => {
     secondPane.persistBoardSessionView({ activeTabId: "main" });
 
     expect(loadSettings().boardSessionViews).toMatchObject({
-      "agent:main:first": { face: "chat", activeTabId: "research" },
-      "agent:main:second": { face: "chat", activeTabId: "main" },
+      "agent:main:first": { activeTabId: "research" },
+      "agent:main:second": { activeTabId: "main" },
     });
   });
 

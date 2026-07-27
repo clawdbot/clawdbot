@@ -1,13 +1,9 @@
 import type { AssistantMessage, AssistantMessageEvent, Model } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
-import { processResponsesStream as processProviderStream } from "../providers/openai-responses-shared.js";
-import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import {
   processResponsesStream as processTransportStream,
   type OpenAIResponsesStreamEvent,
 } from "./openai-responses-stream-internal.js";
-
-type ProcessorName = "provider" | "transport";
 
 type ProjectedEvent = {
   type: string;
@@ -39,7 +35,6 @@ type ParityFixture = {
   name: string;
   events: Record<string, unknown>[];
   canonical: ProcessResult;
-  knownDivergence?: Partial<Record<ProcessorName, string>>;
 };
 
 const model = {
@@ -137,30 +132,17 @@ function projectBlock(block: AssistantMessage["content"][number]): ProjectedBloc
   };
 }
 
-async function runFixture(
-  processor: ProcessorName,
-  events: readonly Record<string, unknown>[],
-): Promise<ProcessResult> {
+async function runFixture(events: readonly Record<string, unknown>[]): Promise<ProcessResult> {
   const output = createOutput();
   const captured: AssistantMessageEvent[] = [];
   let error: string | null = null;
   try {
-    if (processor === "provider") {
-      const stream = new AssistantMessageEventStream();
-      const push = stream.push.bind(stream);
-      stream.push = (event) => {
-        captured.push(event);
-        push(event);
-      };
-      await processProviderStream(eventStream(events), output, stream, model);
-    } else {
-      await processTransportStream(
-        eventStream(events),
-        output as unknown as Parameters<typeof processTransportStream>[1],
-        { push: (event) => captured.push(event as AssistantMessageEvent) },
-        model,
-      );
-    }
+    await processTransportStream(
+      eventStream(events),
+      output,
+      { push: (event) => captured.push(event as AssistantMessageEvent) },
+      model,
+    );
   } catch (cause) {
     error = cause instanceof Error ? cause.message : String(cause);
   }
@@ -224,9 +206,6 @@ const fixtures: ParityFixture[] = [
       stopReason: "stop",
       error: null,
     },
-    knownDivergence: {
-      transport: "the transport processor has only one current non-tool item",
-    },
   },
   {
     name: "raw reasoning delta with empty summary",
@@ -260,9 +239,6 @@ const fixtures: ParityFixture[] = [
       stopReason: "stop",
       error: null,
     },
-    knownDivergence: {
-      transport: "the transport processor ignores response.reasoning_text.delta",
-    },
   },
   {
     name: "stream close without terminal response",
@@ -289,7 +265,6 @@ const fixtures: ParityFixture[] = [
       stopReason: "stop",
       error: "OpenAI Responses stream ended before a terminal response event",
     },
-    knownDivergence: { transport: "the transport processor silently accepts early close" },
   },
   {
     name: "terminal encrypted reasoning backfill",
@@ -328,9 +303,6 @@ const fixtures: ParityFixture[] = [
       responseId: "resp_backfill",
       stopReason: "stop",
       error: null,
-    },
-    knownDivergence: {
-      transport: "the transport processor does not backfill terminal encrypted reasoning",
     },
   },
   {
@@ -385,7 +357,6 @@ const fixtures: ParityFixture[] = [
       stopReason: "stop",
       error: null,
     },
-    knownDivergence: { transport: "the transport processor maps null content to empty text" },
   },
   {
     name: "finalized tool call drops streaming scratch",
@@ -441,7 +412,6 @@ const fixtures: ParityFixture[] = [
       stopReason: "toolUse",
       error: null,
     },
-    knownDivergence: { transport: "the transport processor retains partialJson" },
   },
   {
     name: "reused indexed output slot fails closed",
@@ -468,7 +438,79 @@ const fixtures: ParityFixture[] = [
       stopReason: "stop",
       error: "Responses stream reused active output index 0",
     },
-    knownDivergence: { transport: "the transport processor does not track non-tool indices" },
+  },
+  {
+    name: "deferred text materializes before an unindexed tool boundary",
+    events: [
+      {
+        type: "response.output_item.done",
+        item: {
+          id: "msg_before_tool",
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          content: [{ type: "output_text", text: "Hello", annotations: [] }],
+        },
+      },
+      {
+        type: "response.output_item.added",
+        item: {
+          id: "msg_after_tool",
+          type: "message",
+          role: "assistant",
+          status: "in_progress",
+          content: [],
+        },
+      },
+      { type: "response.output_text.delta", item_id: "msg_after_tool", delta: "Hello again" },
+      {
+        type: "response.output_item.done",
+        item: {
+          id: "fc_boundary",
+          call_id: "call_boundary",
+          type: "function_call",
+          name: "lookup",
+          arguments: "{}",
+          status: "completed",
+        },
+      },
+      {
+        type: "response.output_item.done",
+        item: {
+          id: "msg_after_tool",
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          content: [{ type: "output_text", text: "Hello again", annotations: [] }],
+        },
+      },
+      completed("resp_tool_boundary"),
+    ],
+    canonical: {
+      events: [
+        { type: "text_start", contentIndex: 0 },
+        { type: "text_end", contentIndex: 0, content: "Hello" },
+        { type: "text_start", contentIndex: 1 },
+        { type: "text_delta", contentIndex: 1, delta: "Hello again" },
+        { type: "toolcall_start", contentIndex: 2 },
+        { type: "toolcall_end", contentIndex: 2 },
+        { type: "text_end", contentIndex: 1, content: "Hello again" },
+      ],
+      content: [
+        { type: "text", text: "Hello" },
+        { type: "text", text: "Hello again" },
+        {
+          type: "toolCall",
+          id: "call_boundary|fc_boundary",
+          name: "lookup",
+          arguments: {},
+          partialJson: false,
+        },
+      ],
+      responseId: "resp_tool_boundary",
+      stopReason: "toolUse",
+      error: null,
+    },
   },
   {
     name: "normal output text lifecycle",
@@ -546,7 +588,6 @@ const fixtures: ParityFixture[] = [
       stopReason: "stop",
       error: null,
     },
-    knownDivergence: { provider: "the provider processor lacks public terminal recovery" },
   },
   {
     name: "output text delta without content part",
@@ -593,7 +634,27 @@ const fixtures: ParityFixture[] = [
       stopReason: "stop",
       error: null,
     },
-    knownDivergence: { provider: "the provider processor requires a content-part item" },
+  },
+  {
+    name: "terminal-only null message content is ignored",
+    events: [
+      completed("resp_terminal_null", [
+        {
+          id: "msg_terminal_null",
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          content: null,
+        },
+      ]),
+    ],
+    canonical: {
+      events: [],
+      content: [],
+      responseId: "resp_terminal_null",
+      stopReason: "stop",
+      error: null,
+    },
   },
   {
     name: "detailed response failure is terminal",
@@ -615,155 +676,11 @@ const fixtures: ParityFixture[] = [
       stopReason: "stop",
       error: "invalid_prompt: rejected",
     },
-    knownDivergence: { provider: "the provider processor mutates output and returns" },
   },
 ];
 
-const legacyDivergentResults: Record<string, Partial<Record<ProcessorName, ProcessResult>>> = {
-  "indexed interleaved reasoning items": {
-    transport: {
-      events: [
-        { type: "thinking_start", contentIndex: 0 },
-        { type: "thinking_start", contentIndex: 1 },
-        { type: "thinking_end", contentIndex: 1, content: "" },
-      ],
-      content: [
-        { type: "thinking", thinking: "", encrypted: false },
-        { type: "thinking", thinking: "", encrypted: false },
-      ],
-      responseId: "resp_interleaved",
-      stopReason: "stop",
-      error: null,
-    },
-  },
-  "raw reasoning delta with empty summary": {
-    transport: {
-      events: [
-        { type: "thinking_start", contentIndex: 0 },
-        { type: "thinking_end", contentIndex: 0, content: "" },
-      ],
-      content: [{ type: "thinking", thinking: "", encrypted: false }],
-      responseId: "resp_raw",
-      stopReason: "stop",
-      error: null,
-    },
-  },
-  "stream close without terminal response": {
-    transport: {
-      events: [],
-      content: [],
-      responseId: null,
-      stopReason: "stop",
-      error: null,
-    },
-  },
-  "terminal encrypted reasoning backfill": {
-    transport: {
-      events: [
-        { type: "thinking_start", contentIndex: 0 },
-        { type: "thinking_end", contentIndex: 0, content: "thought" },
-      ],
-      content: [{ type: "thinking", thinking: "thought", encrypted: false }],
-      responseId: "resp_backfill",
-      stopReason: "stop",
-      error: null,
-    },
-  },
-  "null completed message content preserves streamed text": {
-    transport: {
-      events: [
-        { type: "text_start", contentIndex: 0 },
-        { type: "text_delta", contentIndex: 0, delta: "kept" },
-        { type: "text_end", contentIndex: 0, content: "" },
-      ],
-      content: [{ type: "text", text: "" }],
-      responseId: "resp_null",
-      stopReason: "stop",
-      error: null,
-    },
-  },
-  "finalized tool call drops streaming scratch": {
-    transport: {
-      events: [
-        { type: "toolcall_start", contentIndex: 0 },
-        { type: "toolcall_delta", contentIndex: 0, delta: '{"q":"x"}' },
-        { type: "toolcall_end", contentIndex: 0 },
-      ],
-      content: [
-        {
-          type: "toolCall",
-          id: "call_scratch|fc_scratch",
-          name: "lookup",
-          arguments: { q: "x" },
-          partialJson: true,
-        },
-      ],
-      responseId: "resp_scratch",
-      stopReason: "toolUse",
-      error: null,
-    },
-  },
-  "reused indexed output slot fails closed": {
-    transport: {
-      events: [
-        { type: "thinking_start", contentIndex: 0 },
-        { type: "thinking_start", contentIndex: 1 },
-      ],
-      content: [
-        { type: "thinking", thinking: "", encrypted: false },
-        { type: "thinking", thinking: "", encrypted: false },
-      ],
-      responseId: "resp_reused",
-      stopReason: "stop",
-      error: null,
-    },
-  },
-  "terminal-only completed message recovery": {
-    provider: {
-      events: [],
-      content: [],
-      responseId: "resp_terminal_text",
-      stopReason: "stop",
-      error: null,
-    },
-  },
-  "output text delta without content part": {
-    provider: {
-      events: [
-        { type: "text_start", contentIndex: 0 },
-        { type: "text_end", contentIndex: 0, content: "compatible" },
-      ],
-      content: [{ type: "text", text: "compatible" }],
-      responseId: "resp_no_part",
-      stopReason: "stop",
-      error: null,
-    },
-  },
-  "detailed response failure is terminal": {
-    provider: {
-      events: [],
-      content: [],
-      responseId: "resp_failed",
-      stopReason: "error",
-      error: null,
-    },
-  },
-};
-
 describe("Responses stream processor parity fixtures", () => {
   it.each(fixtures)("$name", async (fixture) => {
-    for (const processor of ["provider", "transport"] as const) {
-      const result = await runFixture(processor, fixture.events);
-      const divergence = fixture.knownDivergence?.[processor];
-      if (divergence) {
-        const expected = legacyDivergentResults[fixture.name]?.[processor];
-        if (!expected) {
-          throw new Error(`Missing pinned ${processor} divergence for ${fixture.name}`);
-        }
-        expect(result, `${processor}: ${divergence}`).toEqual(expected);
-      } else {
-        expect(result, processor).toEqual(fixture.canonical);
-      }
-    }
+    expect(await runFixture(fixture.events)).toEqual(fixture.canonical);
   });
 });

@@ -510,6 +510,84 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("keeps a browser-local prompt before a clock-skewed Gateway reply", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, { historyMessages: [] });
+    const prompt = "verify clock-skewed chat order";
+    const partial = "The Gateway is replying from an earlier clock.";
+    const reply = "The Gateway reply stayed below its prompt.";
+    const appearsBefore = (lowerSelector: string, lowerText: string) =>
+      page.locator(".chat-thread-inner").evaluate(
+        (thread: Element, texts: { lowerSelector: string; lowerText: string; prompt: string }) => {
+          const findByText = (selector: string, text: string) =>
+            Array.from(thread.querySelectorAll(selector)).find((row) =>
+              (row.textContent ?? "").includes(text),
+            );
+          const promptRow = findByText(".chat-group.user", texts.prompt);
+          const lowerRow = findByText(texts.lowerSelector, texts.lowerText);
+          if (!promptRow || !lowerRow) {
+            return false;
+          }
+          return promptRow.getBoundingClientRect().top < lowerRow.getBoundingClientRect().top;
+        },
+        { lowerSelector, lowerText, prompt },
+      );
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await gateway.deferNext("chat.send");
+      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      const runId = requireString(
+        requireRecord(sendRequest.params).idempotencyKey,
+        "chat send idempotency key",
+      );
+      const browserTimestamp = await page.evaluate(() => Date.now());
+      const gatewayTimestamp = browserTimestamp - 60_000;
+      await gateway.emitGatewayEvent("chat", {
+        deltaText: partial,
+        message: {
+          content: [{ text: partial, type: "text" }],
+          role: "assistant",
+          timestamp: gatewayTimestamp,
+        },
+        runId,
+        sessionKey: "main",
+        state: "delta",
+      });
+      await page.locator(".chat-bubble.streaming", { hasText: partial }).waitFor({
+        timeout: 10_000,
+      });
+      expect(await appearsBefore(".chat-bubble.streaming", partial)).toBe(true);
+
+      await gateway.emitGatewayEvent("chat", {
+        message: {
+          content: [{ text: reply, type: "text" }],
+          role: "assistant",
+          timestamp: gatewayTimestamp,
+        },
+        runId,
+        sessionKey: "main",
+        state: "final",
+      });
+      await page.locator(".chat-group.assistant .chat-text", { hasText: reply }).waitFor({
+        timeout: 10_000,
+      });
+      expect(await appearsBefore(".chat-group.assistant", reply)).toBe(true);
+      await gateway.resolveDeferred("chat.send", { runId, status: "started" });
+      expect(await appearsBefore(".chat-group.assistant", reply)).toBe(true);
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("reconciles authoritative history before a trailing final by run identity", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
@@ -2169,7 +2247,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
       expect(await gateway.getRequests("agents.list")).toHaveLength(0);
-      expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
+      expect(await gateway.getRequests("chat.metadata")).toHaveLength(1);
       expect(await gateway.getRequests("commands.list")).toHaveLength(0);
       expect(await gateway.getRequests("models.list")).toHaveLength(0);
 

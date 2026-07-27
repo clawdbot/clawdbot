@@ -701,6 +701,24 @@ describe("chat pane presentation teardown", () => {
 });
 
 describe("chat pane connection lifecycle", () => {
+  it("rehydrates secondary session state after a same-client logical reconnect", () => {
+    const client = {
+      request: vi.fn(() => new Promise<never>(() => {})),
+    } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const deferHydration = vi.spyOn(pane, "deferSessionHydrationUntilTranscript");
+    state.connected = false;
+    pane.connectedClient = client;
+
+    pane.applyGatewaySnapshot({
+      ...pane.context.gateway.snapshot,
+      client,
+      phase: "connected",
+    });
+
+    expect(deferHydration).toHaveBeenCalledWith(state.sessionKey, expect.any(Promise));
+  });
+
   it("replays a pending exact-run stop when the gateway reconnects", async () => {
     const request = vi.fn((method: string) =>
       method === "chat.abort" ? Promise.resolve({ aborted: true }) : new Promise<never>(() => {}),

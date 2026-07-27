@@ -18,6 +18,7 @@ type NavigationItem = {
 // Worktrees is a tab of the Sessions hub, so it is not listed either.
 export const SIDEBAR_NAV_ROUTES = [
   "workboard",
+  "dashboards",
   "usage",
   "cron",
   "tasks",
@@ -224,6 +225,7 @@ const NAVIGATION_ICONS: NavigationItem = {
   nodes: "monitorSmartphone",
   chat: "messageSquare",
   dashboard: "layoutDashboard",
+  dashboards: "layoutDashboard",
   custodian: "lobster",
   config: "settings",
   profile: "circleUser",
@@ -326,6 +328,7 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   nodes: { titleKey: "tabs.nodes", subtitleKey: "subtitles.nodes" },
   chat: { titleKey: "tabs.chat", subtitleKey: "subtitles.chat" },
   dashboard: { titleKey: "tabs.chat", subtitleKey: "subtitles.chat" },
+  dashboards: { titleKey: "tabs.dashboards", subtitleKey: "subtitles.dashboards" },
   custodian: { titleKey: "tabs.custodian", subtitleKey: "subtitles.custodian" },
   config: { titleKey: "nav.settings", subtitleKey: "subtitles.config" },
   profile: { titleKey: "tabs.profile", subtitleKey: "subtitles.profile" },

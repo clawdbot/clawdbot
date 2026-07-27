@@ -135,6 +135,8 @@ describe("createApplicationGateway connection phase", () => {
       snapshot: { sessionDefaults: { defaultAgentId: "roboclaw" } },
     });
     expect(gateway.snapshot.assistantAgentId).toBe("roboclaw");
+    gateway.stop();
+    expect(gateway.snapshot.assistantAgentId).toBeNull();
   });
 
   it("publishes the hello canvas URL synchronously and clears it on disconnect", () => {

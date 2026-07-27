@@ -1,5 +1,6 @@
 // Discord tests cover native command.commands allowfrom plugin behavior.
 import { ChannelType } from "discord-api-types/v10";
+import type { dispatchChannelInboundTurn } from "openclaw/plugin-sdk/channel-inbound";
 import type { NativeCommandSpec } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -80,9 +81,34 @@ function createDispatchSpy() {
       tool: 0,
     },
   } as never);
-  nativeCommandRuntime.dispatchReplyWithDispatcher = dispatcherModule.dispatchReplyWithDispatcher;
+  nativeCommandRuntime.dispatchChannelInboundTurn = dispatchChannelInboundTurnForTest;
   return dispatchSpy;
 }
+
+const dispatchChannelInboundTurnForTest: typeof dispatchChannelInboundTurn = async (plan) => {
+  const dispatchResult = await dispatcherModule.dispatchReplyWithDispatcher({
+    ctx: plan.ctxPayload,
+    cfg: plan.cfg,
+    dispatcherOptions: {
+      ...plan.dispatcherOptions,
+      deliver: async (payload, info) => {
+        if (!("deliver" in plan.delivery) || !plan.delivery.deliver) {
+          throw new Error("expected core-managed Discord delivery");
+        }
+        await plan.delivery.deliver(payload, info);
+      },
+      onError: plan.delivery.onError,
+    },
+    replyOptions: plan.replyOptions,
+  });
+  return {
+    admission: { kind: "dispatch" },
+    dispatched: true,
+    ctxPayload: plan.ctxPayload,
+    routeSessionKey: plan.route.sessionKey,
+    dispatchResult,
+  };
+};
 
 function firstDispatchReplyCall(): Parameters<
   typeof dispatcherModule.dispatchReplyWithDispatcher
@@ -141,7 +167,7 @@ function expectChannelNotAllowedReply(interaction: MockCommandInteraction) {
 describe("Discord native slash commands with commands.allowFrom", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    nativeCommandRuntime.dispatchReplyWithDispatcher = dispatcherModule.dispatchReplyWithDispatcher;
+    nativeCommandRuntime.dispatchChannelInboundTurn = dispatchChannelInboundTurnForTest;
   });
 
   it("authorizes guild slash commands when commands.allowFrom.discord matches the sender", async () => {
