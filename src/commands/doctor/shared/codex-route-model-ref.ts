@@ -26,7 +26,8 @@ export function readLegacyDefaultsRuntime(defaults: unknown): AgentRuntimePolicy
   return asAgentRuntimePolicyConfig(asMutableRecord(defaults)?.agentRuntime);
 }
 
-const LEGACY_CODEX_PROVIDER_IDS = new Set(["codex", "openai-codex"]);
+const MLCLAW_CODEX_PROVIDER_ID = "mlclaw-codex";
+const LEGACY_CODEX_PROVIDER_IDS = new Set(["codex", "openai-codex", MLCLAW_CODEX_PROVIDER_ID]);
 
 export type LegacyCodexModelIdentity = string;
 
@@ -110,6 +111,16 @@ export function isBlockedLegacyCodexModelPair(params: {
     Boolean(providerIdentity && params.blockedModelIdentities.has(providerIdentity)) ||
     Boolean(modelIdentity && params.blockedModelIdentities.has(modelIdentity))
   );
+}
+
+export function isMlclawCodexProviderId(provider: unknown): boolean {
+  return normalizeString(provider) === MLCLAW_CODEX_PROVIDER_ID;
+}
+
+export function isMlclawCodexModelRef(model: unknown): boolean {
+  if (typeof model !== "string") return false;
+  const normalized = splitTrailingAuthProfile(model).model.trim().toLowerCase();
+  return normalized.startsWith(`${MLCLAW_CODEX_PROVIDER_ID}/`);
 }
 
 export function isLegacyCodexProviderId(provider: unknown): boolean {

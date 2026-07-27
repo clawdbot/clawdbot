@@ -14,6 +14,8 @@ import {
   isBlockedLegacyCodexModelRef,
   isOpenAICodexModelRef,
   isLegacyCodexProviderId,
+  isMlclawCodexModelRef,
+  isMlclawCodexProviderId,
   isProviderlessModelRef,
   normalizeRuntimeString,
   toCanonicalOpenAIModelRef,
@@ -113,7 +115,10 @@ function clearStaleCodexFallbackNotice(
   return true;
 }
 
-function preserveRepairedSessionRuntimeIntent(entry: SessionEntry): boolean {
+function preserveRepairedSessionRuntimeIntent(
+  entry: SessionEntry,
+  forceOpenClawRuntime: boolean,
+): boolean {
   const harnessRuntime = normalizeRuntimeString(entry.agentHarnessId);
   const overrideRuntime = normalizeRuntimeString(entry.agentRuntimeOverride);
   let changed = false;
@@ -121,7 +126,12 @@ function preserveRepairedSessionRuntimeIntent(entry: SessionEntry): boolean {
     delete entry.agentHarnessId;
     changed = true;
   }
-  if (overrideRuntime !== "openclaw" && entry.agentRuntimeOverride !== "codex") {
+  if (forceOpenClawRuntime) {
+    if (overrideRuntime !== "openclaw") {
+      entry.agentRuntimeOverride = "openclaw";
+      changed = true;
+    }
+  } else if (overrideRuntime !== "openclaw" && entry.agentRuntimeOverride !== "codex") {
     entry.agentRuntimeOverride = "codex";
     changed = true;
   }
@@ -179,6 +189,11 @@ function repairCodexSessionStoreRoutes(params: {
     if (!entry || isValidAgentHarnessSessionStoreEntry(sessionKey, entry)) {
       continue;
     }
+    const forceOpenClawRuntime =
+      isMlclawCodexProviderId(entry.modelProvider) ||
+      isMlclawCodexModelRef(entry.model) ||
+      isMlclawCodexProviderId(entry.providerOverride) ||
+      isMlclawCodexModelRef(entry.modelOverride);
     const changedRuntimeModelRoute = rewriteSessionModelPair({
       entry,
       providerKey: "modelProvider",
@@ -205,7 +220,7 @@ function repairCodexSessionStoreRoutes(params: {
       params.blockedModelIdentities,
     );
     const changedRuntimePins = changedModelRoute
-      ? preserveRepairedSessionRuntimeIntent(entry)
+      ? preserveRepairedSessionRuntimeIntent(entry, forceOpenClawRuntime)
       : false;
     if (!changedModelRoute && !changedFallbackNotice && !changedRuntimePins) {
       continue;

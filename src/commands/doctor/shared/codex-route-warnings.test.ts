@@ -4050,6 +4050,34 @@ describe("collectCodexRouteWarnings", () => {
     expect(expectDefined(store.other, "store.other test invariant").agentHarnessId).toBe("codex");
   });
 
+  it("moves ML Claw session overrides to the native OpenAI runtime", () => {
+    const store: Record<string, SessionEntry> = {
+      main: {
+        sessionId: "s-mlclaw",
+        updatedAt: 1,
+        modelProvider: "mlclaw-codex",
+        model: "gpt-5.4",
+        providerOverride: "mlclaw-codex",
+        modelOverride: "mlclaw-codex/gpt-5.4",
+        modelOverrideSource: "user",
+      },
+    };
+
+    const result = repairCodexSessionStoreRoutes({ store, now: 123 });
+
+    expect(result).toEqual({ changed: true, sessionKeys: ["main"] });
+    expect(store.main).toMatchObject({
+      modelProvider: "openai",
+      model: "gpt-5.4",
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+      modelOverrideSource: "user",
+      modelOverrideRouteResolution: "resolved",
+      agentRuntimeOverride: "openclaw",
+      updatedAt: 123,
+    });
+  });
+
   it("repairs shipped codex namespace session route refs", () => {
     const store: Record<string, SessionEntry> = {
       main: {
