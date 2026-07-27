@@ -147,7 +147,7 @@ session to confirm the effective tool list.
 
 - **Model:** native sub-agents inherit the caller unless you set `agents.defaults.subagents.model` (or per-agent `agents.entries.*.subagents.model`). ACP runtime spawns use the same configured subagent model when present; otherwise the ACP harness keeps its own default. An explicit `sessions_spawn.model` still wins.
 - **Thinking:** native sub-agents inherit the caller unless you set `agents.defaults.subagents.thinking` (or per-agent `agents.entries.*.subagents.thinking`). ACP runtime spawns also apply `agents.defaults.models["provider/model"].params.thinking` for the selected model. An explicit `sessions_spawn.thinking` still wins.
-- **Run timeout:** `sessions_spawn.timeoutSeconds` sets the child run limit for that call and overrides `agents.defaults.subagents.runTimeoutSeconds`. When omitted, OpenClaw uses the configured default, or `0` (no timeout) when no default is set. If the task declares `HANDOFF_TIMEOUT_SECONDS`, `timeoutSeconds` is required and must match it so the stated delegation budget cannot differ from the enforced limit. Per-call timeouts are unavailable with `visible: true`.
+- **Run timeout:** `sessions_spawn.timeoutSeconds` sets the child run limit for that call and overrides `agents.defaults.subagents.runTimeoutSeconds`. When omitted, OpenClaw uses the configured default, or `0` (no timeout) when no default is set. Per-call timeouts are unavailable with `visible: true`.
 - **Process lifetime:** a detached OpenClaw sub-agent has its own run lifecycle. A background task created inside an external CLI backend is different: it shares the parent CLI subprocess and stops if that parent reaches `agents.defaults.timeoutSeconds`.
 - **Task delivery:** native sub-agents receive the delegated task in their first visible `[Subagent Task]` message. The sub-agent system prompt carries runtime rules and routing context, not a hidden duplicate of the task.
 
@@ -217,9 +217,8 @@ Per-agent override: `agents.entries.*.subagents.delegationMode`.
 </ParamField>
 <ParamField path="timeoutSeconds" type="number">
   Set the child run timeout for this spawn. Overrides
-  `agents.defaults.subagents.runTimeoutSeconds`. If `task` declares
-  `HANDOFF_TIMEOUT_SECONDS`, this value is required and must match it. Not
-  available with `visible: true`. Range: `0` to `2147000` seconds.
+  `agents.defaults.subagents.runTimeoutSeconds`. Not available with
+  `visible: true`. Range: `0` to `2147000` seconds.
 </ParamField>
 <ParamField path="thread" type="boolean" default="false">
   When `true`, requests channel thread binding for this sub-agent session.

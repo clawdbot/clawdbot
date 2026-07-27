@@ -341,7 +341,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     });
 
     const result = await tool.execute("call-per-run-timeout", {
-      task: `long build\nHANDOFF_TIMEOUT_SECONDS: ${perCallTimeoutSeconds}`,
+      task: "long build",
       timeoutSeconds: perCallTimeoutSeconds,
     });
 

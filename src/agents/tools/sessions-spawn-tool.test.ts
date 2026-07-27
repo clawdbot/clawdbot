@@ -272,7 +272,7 @@ describe("sessions_spawn tool", () => {
       maximum: MAX_TIMER_TIMEOUT_SECONDS,
     });
     expect(schema.properties?.timeoutSeconds?.description).toContain("overrides");
-    expect(schema.properties?.timeoutSeconds?.description).toContain("HANDOFF_TIMEOUT_SECONDS");
+    expect(schema.properties?.timeoutSeconds?.description).not.toContain("task");
   });
 
   it("hides and rejects swarm parameters while tools.swarm is disabled", async () => {
@@ -1267,51 +1267,40 @@ describe("sessions_spawn tool", () => {
     },
   );
 
-  it("requires an explicit per-call timeout for a declared handoff contract", async () => {
-    const tool = createSessionsSpawnTool({
-      agentSessionKey: "agent:main:main",
-    });
-
-    await expect(
-      tool.execute("call-missing-handoff-timeout", {
-        task: "do thing\nHANDOFF_TIMEOUT_SECONDS: 7200",
-      }),
-    ).rejects.toThrow(
-      "sessions_spawn requires timeoutSeconds when the task declares HANDOFF_TIMEOUT_SECONDS.",
-    );
-
-    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects a per-call timeout that differs from the handoff contract", async () => {
-    const tool = createSessionsSpawnTool({
-      agentSessionKey: "agent:main:main",
-    });
-
-    await expect(
-      tool.execute("call-mismatched-handoff-timeout", {
-        task: "do thing\nHANDOFF_TIMEOUT_SECONDS: 7200",
-        timeoutSeconds: 3600,
-      }),
-    ).rejects.toThrow(
-      "sessions_spawn timeoutSeconds (3600) must match HANDOFF_TIMEOUT_SECONDS (7200).",
-    );
-
-    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
-  });
-
-  it("forwards a matching declared timeout to native subagent spawn", async () => {
-    const tool = createSessionsSpawnTool({
-      agentSessionKey: "agent:main:main",
-    });
-
-    await tool.execute("call-matching-handoff-timeout", {
+  it.each([
+    {
+      name: "missing structured timeout",
       task: "do thing\nHANDOFF_TIMEOUT_SECONDS: 7200",
+      timeoutSeconds: undefined,
+    },
+    {
+      name: "mismatched structured timeout",
+      task: "do thing\nHANDOFF_TIMEOUT_SECONDS: 7200",
+      timeoutSeconds: 3600,
+    },
+    {
+      name: "malformed task text",
+      task: "do thing\nHANDOFF_TIMEOUT_SECONDS: tomorrow",
       timeoutSeconds: 7200,
+    },
+    {
+      name: "conflicting task text",
+      task: "HANDOFF_TIMEOUT_SECONDS: 3600\nHANDOFF_TIMEOUT_SECONDS: 7200",
+      timeoutSeconds: 5400,
+    },
+  ])("treats timeout-like task text as inert: $name", async ({ task, timeoutSeconds }) => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await tool.execute("call-inert-task-timeout", {
+      task,
+      ...(timeoutSeconds === undefined ? {} : { timeoutSeconds }),
     });
 
     const spawnArgs = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 0, "spawnSubagentDirect");
-    expect(spawnArgs.runTimeoutSeconds).toBe(7200);
+    expect(spawnArgs.task).toBe(task);
+    expect(spawnArgs.runTimeoutSeconds).toBe(timeoutSeconds);
   });
 
   it("normalizes the snake-case per-call timeout alias", async () => {

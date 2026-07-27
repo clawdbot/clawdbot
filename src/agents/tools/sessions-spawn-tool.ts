@@ -70,7 +70,6 @@ const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
   "reply_to",
 ] as const;
 const UNSUPPORTED_SESSIONS_SPAWN_TIMEOUT_PARAM_KEYS = ["runTimeoutSeconds"] as const;
-const HANDOFF_TIMEOUT_CONTRACT_PATTERN = /^\s*HANDOFF_TIMEOUT_SECONDS\s*:\s*([^\r\n]*)\s*$/gim;
 
 type AcpSpawnModule = typeof import("../acp-spawn.js");
 
@@ -99,54 +98,6 @@ type SessionsSpawnThreadAvailability = {
 
 function hasAnyThreadAvailability(availability: SessionsSpawnThreadAvailability): boolean {
   return availability.subagent || availability.acp;
-}
-
-function resolveSessionsSpawnRunTimeoutSeconds(
-  params: Record<string, unknown>,
-  task: string,
-): number | undefined {
-  const runTimeoutSeconds = readNonNegativeIntegerParam(params, "timeoutSeconds", {
-    max: MAX_TIMER_TIMEOUT_SECONDS,
-    message: `timeoutSeconds must be an integer between 0 and ${MAX_TIMER_TIMEOUT_SECONDS}.`,
-  });
-  const declaredValues = Array.from(
-    task.matchAll(HANDOFF_TIMEOUT_CONTRACT_PATTERN),
-    (match) => match[1]?.trim() ?? "",
-  );
-  if (declaredValues.length === 0) {
-    return runTimeoutSeconds;
-  }
-  const declaredTimeouts = declaredValues.map((value) => {
-    if (!/^(?:0|[1-9]\d*)$/.test(value)) {
-      throw new ToolInputError(
-        "HANDOFF_TIMEOUT_SECONDS must declare a non-negative integer number of seconds.",
-      );
-    }
-    const timeout = Number(value);
-    if (!Number.isSafeInteger(timeout) || timeout > MAX_TIMER_TIMEOUT_SECONDS) {
-      throw new ToolInputError(
-        `HANDOFF_TIMEOUT_SECONDS must declare an integer between 0 and ${MAX_TIMER_TIMEOUT_SECONDS}.`,
-      );
-    }
-    return timeout;
-  });
-  const declaredTimeoutSeconds = declaredTimeouts[0];
-  if (declaredTimeouts.some((value) => value !== declaredTimeoutSeconds)) {
-    throw new ToolInputError(
-      "Conflicting HANDOFF_TIMEOUT_SECONDS values were declared in the spawn task.",
-    );
-  }
-  if (runTimeoutSeconds === undefined) {
-    throw new ToolInputError(
-      "sessions_spawn requires timeoutSeconds when the task declares HANDOFF_TIMEOUT_SECONDS.",
-    );
-  }
-  if (runTimeoutSeconds !== declaredTimeoutSeconds) {
-    throw new ToolInputError(
-      `sessions_spawn timeoutSeconds (${runTimeoutSeconds}) must match HANDOFF_TIMEOUT_SECONDS (${declaredTimeoutSeconds}).`,
-    );
-  }
-  return runTimeoutSeconds;
 }
 
 function resolveSessionsSpawnThreadAvailability(opts?: {
@@ -207,7 +158,7 @@ function createSessionsSpawnToolSchema(params: {
         minimum: 0,
         maximum: MAX_TIMER_TIMEOUT_SECONDS,
         description:
-          "Run timeout in seconds; overrides agents.defaults.subagents.runTimeoutSeconds. Must match HANDOFF_TIMEOUT_SECONDS when declared in task.",
+          "Run timeout in seconds; overrides agents.defaults.subagents.runTimeoutSeconds.",
       }),
     ),
     cwd: Type.Optional(Type.String()),
@@ -391,7 +342,10 @@ export function createSessionsSpawnTool(
         );
       }
       const task = readStringParam(params, "task", { required: true });
-      const runTimeoutSeconds = resolveSessionsSpawnRunTimeoutSeconds(params, task);
+      const runTimeoutSeconds = readNonNegativeIntegerParam(params, "timeoutSeconds", {
+        max: MAX_TIMER_TIMEOUT_SECONDS,
+        message: `timeoutSeconds must be an integer between 0 and ${MAX_TIMER_TIMEOUT_SECONDS}.`,
+      });
       const taskNameResult = normalizeSubagentTaskName(params.taskName);
       if (taskNameResult.error) {
         return jsonResult({

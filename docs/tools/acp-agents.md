@@ -542,9 +542,8 @@ Two ways to start an ACP session:
 </ParamField>
 <ParamField path="timeoutSeconds" type="number">
   Child run timeout in seconds for this spawn. Overrides
-  `agents.defaults.subagents.runTimeoutSeconds`. If the task declares
-  `HANDOFF_TIMEOUT_SECONDS`, this value is required and must match it. Range:
-  `0` to `2147000` seconds.
+  `agents.defaults.subagents.runTimeoutSeconds`. Range: `0` to `2147000`
+  seconds.
 </ParamField>
 <ParamField path="resumeSessionId" type="string">
   Resume an existing ACP session instead of creating a new one. The agent
