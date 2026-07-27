@@ -1012,43 +1012,6 @@ describe("buildOpenAIProvider", () => {
     expect(new Headers(request?.init?.headers).get("ChatGPT-Account-ID")).toBeNull();
   });
 
-  it("discovers proxy models from a materialized token without reloading its SecretRef", async () => {
-    const proxyBaseUrl = "http://127.0.0.1:7862/backend-api/codex";
-    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async (params) => ({
-      response: Response.json({
-        models: [
-          {
-            slug: "gpt-5.6-sol",
-            display_name: "GPT-5.6 Sol",
-            visibility: "list",
-            supported_reasoning_levels: ["high", "xhigh"],
-          },
-        ],
-      }),
-      finalUrl: params.url,
-      release: async () => undefined,
-    }));
-
-    const provider = await runCatalogWithFetchGuard({
-      auth: {
-        mode: "token",
-        apiKey: "materialized-loopback-capability",
-        profileId: "openai:mlclaw",
-        source: "profile",
-      },
-      codexProxyBaseUrl: proxyBaseUrl,
-      fetchGuard,
-    });
-
-    expect(provider.models).toEqual([
-      expect.objectContaining({ id: "gpt-5.6-sol", baseUrl: proxyBaseUrl }),
-    ]);
-    expect(mocks.resolveApiKeyForProvider).not.toHaveBeenCalled();
-    expect(
-      new Headers(vi.mocked(fetchGuard).mock.calls[0]?.[0].init?.headers).get("Authorization"),
-    ).toBe("Bearer materialized-loopback-capability");
-  });
-
   it("rejects remote Codex proxy URLs before sending a token", async () => {
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn();
 
@@ -1859,7 +1822,7 @@ describe("buildOpenAIProvider", () => {
       profileId: "openai:mlclaw",
     });
     mocks.resolveProviderAuthProfileMetadata.mockReturnValue({ profileId: "openai:mlclaw" });
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
       Response.json({
         models: [
           {
@@ -1871,6 +1834,7 @@ describe("buildOpenAIProvider", () => {
         ],
       }),
     );
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
     const provider = buildOpenAIProvider();
     const context = {
       provider: "openai",
@@ -1905,11 +1869,16 @@ describe("buildOpenAIProvider", () => {
         api: "openai-chatgpt-responses",
         baseUrl: proxyBaseUrl,
       });
+      await provider.prepareDynamicModel?.(context);
       expect(fetchSpy).toHaveBeenCalledOnce();
+      nowSpy.mockReturnValue(1_060_001);
+      await provider.prepareDynamicModel?.(context);
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
       expect(new Headers(fetchSpy.mock.calls[0]?.[1]?.headers).get("Authorization")).toBe(
         "Bearer materialized-loopback-capability",
       );
     } finally {
+      nowSpy.mockRestore();
       fetchSpy.mockRestore();
     }
   });

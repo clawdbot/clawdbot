@@ -70,11 +70,42 @@ import { resolveUnifiedOpenAIThinkingProfile } from "./thinking-policy.js";
 
 const PROVIDER_ID = "openai";
 const OPENAI_CODEX_DYNAMIC_MODEL_TTL_MS = 60_000;
+const OPENAI_CODEX_DYNAMIC_MODEL_CACHE_MAX = 256;
 
 type PreparedCodexModel = {
   expiresAt: number;
   model: ProviderRuntimeModel;
 };
+
+function readPreparedCodexModel(
+  cache: Map<string, PreparedCodexModel>,
+  key: string,
+): ProviderRuntimeModel | undefined {
+  const prepared = cache.get(key);
+  if (!prepared) return undefined;
+  if (prepared.expiresAt <= Date.now()) {
+    cache.delete(key);
+    return undefined;
+  }
+  return prepared.model;
+}
+
+function writePreparedCodexModel(
+  cache: Map<string, PreparedCodexModel>,
+  key: string,
+  model: ProviderRuntimeModel,
+): void {
+  const now = Date.now();
+  for (const [candidateKey, candidate] of cache) {
+    if (candidate.expiresAt <= now) cache.delete(candidateKey);
+  }
+  while (cache.size >= OPENAI_CODEX_DYNAMIC_MODEL_CACHE_MAX) {
+    const oldestKey = cache.keys().next().value;
+    if (oldestKey === undefined) break;
+    cache.delete(oldestKey);
+  }
+  cache.set(key, { expiresAt: now + OPENAI_CODEX_DYNAMIC_MODEL_TTL_MS, model });
+}
 
 function preparedCodexModelKey(ctx: ProviderResolveDynamicModelContext): string {
   return [
@@ -1012,21 +1043,18 @@ export function buildOpenAIProvider(): ProviderPlugin {
         try {
           const { resolveApiKeyForProvider, resolveProviderAuthProfileMetadata } =
             await import("openclaw/plugin-sdk/provider-auth-runtime");
-          const runtimeAuth =
-            auth.mode === "token" && auth.apiKey
-              ? auth
-              : await resolveApiKeyForProvider({
-                  provider: PROVIDER_ID,
-                  cfg: ctx.config,
-                  ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
-                  ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
-                  ...(auth.profileId
-                    ? {
-                        profileId: auth.profileId,
-                        lockedProfile: true,
-                      }
-                    : {}),
-                });
+          const runtimeAuth = await resolveApiKeyForProvider({
+            provider: PROVIDER_ID,
+            cfg: ctx.config,
+            ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
+            ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
+            ...(auth.profileId
+              ? {
+                  profileId: auth.profileId,
+                  lockedProfile: true,
+                }
+              : {}),
+          });
           if (runtimeAuth && isCodexCatalogAuthMode(runtimeAuth.mode) && runtimeAuth.apiKey) {
             const metadata = resolveProviderAuthProfileMetadata({
               provider: PROVIDER_ID,
@@ -1089,7 +1117,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
         return;
       }
       const key = preparedCodexModelKey(ctx);
-      if ((preparedCodexModels.get(key)?.expiresAt ?? 0) > Date.now()) {
+      if (readPreparedCodexModel(preparedCodexModels, key)) {
         return;
       }
       const { resolveApiKeyForProvider, resolveProviderAuthProfileMetadata } =
@@ -1123,25 +1151,20 @@ export function buildOpenAIProvider(): ProviderPlugin {
         (candidate) => normalizeOpenAIModelRouteId(candidate.id) === modelId,
       );
       if (model) {
-        preparedCodexModels.set(key, {
-          expiresAt: Date.now() + OPENAI_CODEX_DYNAMIC_MODEL_TTL_MS,
-          model: {
-            ...model,
-            provider: PROVIDER_ID,
-            api: model.api ?? "openai-chatgpt-responses",
-            baseUrl: model.baseUrl ?? provider.baseUrl,
-            input: model.input.filter(
-              (input): input is "text" | "image" => input === "text" || input === "image",
-            ),
-          },
+        writePreparedCodexModel(preparedCodexModels, key, {
+          ...model,
+          provider: PROVIDER_ID,
+          api: model.api ?? "openai-chatgpt-responses",
+          baseUrl: model.baseUrl ?? provider.baseUrl,
+          input: model.input.filter(
+            (input): input is "text" | "image" => input === "text" || input === "image",
+          ),
         });
       }
     },
     resolveDynamicModel: (ctx) => {
-      const prepared = preparedCodexModels.get(preparedCodexModelKey(ctx));
-      if (prepared && prepared.expiresAt > Date.now()) {
-        return prepared.model;
-      }
+      const prepared = readPreparedCodexModel(preparedCodexModels, preparedCodexModelKey(ctx));
+      if (prepared) return prepared;
       return shouldResolveDynamicModelThroughCodex(ctx)
         ? codexHooks.resolveDynamicModel?.(withOpenAICodexProxyRoute(ctx))
         : resolveOpenAIGptForwardCompatModel(ctx);
