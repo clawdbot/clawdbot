@@ -599,6 +599,28 @@ describe("resolveFollowupDeliveryDecision", () => {
     });
   });
 
+  it("normalizes auto-compaction notices with the originating delivery context", () => {
+    const turn = createTurn();
+    turn.queued.originatingChatType = "group";
+    turn.queued.originatingReplyToMode = "all";
+
+    const decision = resolveFollowupDeliveryDecision({
+      turn,
+      execution: createSettledExecution(),
+      accounting: createAccounting([{ text: "done" }], {
+        compactionNotice: { text: "compacted" },
+      }),
+    });
+
+    expect(decision.kind).toBe("deliver");
+    if (decision.kind === "deliver") {
+      expect(getReplyPayloadMetadata(decision.payloads[0] ?? {})?.replyDelivery).toEqual({
+        chatType: "group",
+        replyToMode: "all",
+      });
+    }
+  });
+
   it("turns a second missing source delivery into a sanitized diagnostic", () => {
     const turn = createTurn();
     turn.queued.strandedReplyRetry = true;

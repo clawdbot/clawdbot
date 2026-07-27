@@ -388,7 +388,18 @@ export function resolveFollowupDeliveryDecision(params: {
     ];
   }
   if (accounting.compactionNotice) {
-    payloads = [accounting.compactionNotice, ...payloads];
+    const compactionNotices = resolveFollowupDeliveryPayloads({
+      cfg: turn.config,
+      payloads: [accounting.compactionNotice],
+      messageProvider: turn.queued.run.messageProvider,
+      originatingAccountId: turn.queued.originatingAccountId ?? turn.queued.run.agentAccountId,
+      originatingChannel: turn.queued.originatingChannel,
+      originatingChatType: turn.queued.originatingChatType,
+      originatingReplyToMode: turn.queued.originatingReplyToMode,
+      originatingTo: turn.queued.originatingTo,
+      originatingThreadId: turn.queued.originatingThreadId,
+    });
+    payloads = [...compactionNotices, ...payloads];
   }
   const responseUsageLine = resolveResponseUsageLine({
     config: turn.config,

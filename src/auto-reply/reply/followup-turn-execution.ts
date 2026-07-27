@@ -105,10 +105,12 @@ export async function executeFollowupTurn(params: {
   const enqueueProgress = (deliver: () => Promise<void> | void): Promise<void> => {
     const deliveryTask = progressChain.then(deliver);
     progressChain = deliveryTask.catch(() => undefined);
-    const trackedTask = deliveryTask.finally(() => pendingProgressTasks.delete(trackedTask));
-    void trackedTask.catch((error: unknown) => {
+    const observedTask = deliveryTask.catch((error: unknown) => {
       pendingProgressTaskFailure ??= error;
+      throw error;
     });
+    const trackedTask = observedTask.finally(() => pendingProgressTasks.delete(trackedTask));
+    void trackedTask.catch(() => undefined);
     pendingProgressTasks.add(trackedTask);
     return trackedTask;
   };
@@ -200,10 +202,13 @@ export async function executeFollowupTurn(params: {
       if (explicit !== undefined) {
         return explicit;
       }
+      if (visibleToolError) {
+        return true;
+      }
       if (!shouldEmitToolResult()) {
         return false;
       }
-      return visibleToolError ? true : undefined;
+      return undefined;
     },
     onToolResult: async (payload) => {
       await enqueueProgress(async () => {
@@ -218,18 +223,23 @@ export async function executeFollowupTurn(params: {
           return;
         }
         await params.onToolResult(payload, { runId: turn.runId });
-        if (payload.isError === true && toolResultProgressVisible) {
+        if (payload.isError === true) {
           visibleToolError = true;
         }
       });
     },
   };
   let pendingToolTaskFailure: unknown;
+  const pendingToolTaskWatchers = new Set<Promise<void>>();
   const pendingToolTasks = new (class extends Set<Promise<void>> {
     override add(task: Promise<void>): this {
-      void task.catch((error: unknown) => {
+      const observedTask = task.catch((error: unknown) => {
         pendingToolTaskFailure ??= error;
+        throw error;
       });
+      const watcher = observedTask.finally(() => pendingToolTaskWatchers.delete(watcher));
+      void watcher.catch(() => undefined);
+      pendingToolTaskWatchers.add(watcher);
       return super.add(task);
     }
   })();
@@ -303,8 +313,16 @@ export async function executeFollowupTurn(params: {
           ),
       });
     } catch (error) {
-      while (pendingProgressTasks.size > 0 || pendingToolTasks.size > 0) {
-        await Promise.allSettled([...pendingProgressTasks, ...pendingToolTasks]);
+      while (
+        pendingProgressTasks.size > 0 ||
+        pendingToolTasks.size > 0 ||
+        pendingToolTaskWatchers.size > 0
+      ) {
+        await Promise.allSettled([
+          ...pendingProgressTasks,
+          ...pendingToolTasks,
+          ...pendingToolTaskWatchers,
+        ]);
       }
       throw error;
     }
@@ -317,8 +335,16 @@ export async function executeFollowupTurn(params: {
     progress: {
       drain: async () => {
         let firstFailure: unknown = pendingProgressTaskFailure ?? pendingToolTaskFailure;
-        while (pendingProgressTasks.size > 0 || pendingToolTasks.size > 0) {
-          const results = await Promise.allSettled([...pendingProgressTasks, ...pendingToolTasks]);
+        while (
+          pendingProgressTasks.size > 0 ||
+          pendingToolTasks.size > 0 ||
+          pendingToolTaskWatchers.size > 0
+        ) {
+          const results = await Promise.allSettled([
+            ...pendingProgressTasks,
+            ...pendingToolTasks,
+            ...pendingToolTaskWatchers,
+          ]);
           firstFailure ??= results.find((result) => result.status === "rejected")?.reason;
         }
         firstFailure ??= pendingProgressTaskFailure ?? pendingToolTaskFailure;

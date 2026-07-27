@@ -399,6 +399,43 @@ describe("executeFollowupTurn", () => {
     expect(warningSuppressed).toBe(false);
   });
 
+  it("suppresses duplicate warnings for delivered verbose-off tool errors", async () => {
+    const turn = createTurn({
+      session: {
+        kind: "session",
+        key: "main",
+        current: () => ({ sessionId: "session", updatedAt: 1, verboseLevel: "off" }),
+        publish: () => undefined,
+        adopt: () => undefined,
+      },
+    });
+    let warningSuppressed: boolean | undefined;
+    state.execute.mockImplementation(async (params: AgentTurnParams) => {
+      await params.opts?.onToolResult?.({ text: "visible failure", isError: true });
+      warningSuppressed = params.opts?.shouldSuppressToolErrorWarnings?.();
+      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+    });
+    const onToolResult = vi.fn(async () => {});
+
+    const result = await executeFollowupTurn({
+      turn,
+      defaults: {
+        typing: createTypingController(),
+        typingMode: "never",
+        defaultModel: "claude",
+      },
+      onToolResult,
+      onCompactionNoticePayload: vi.fn(async () => {}),
+    });
+    await result.progress.drain();
+
+    expect(onToolResult).toHaveBeenCalledWith(
+      { text: "visible failure", isError: true },
+      { runId: "run-1" },
+    );
+    expect(warningSuppressed).toBe(true);
+  });
+
   it("drains detached progress before the caller can project a final", async () => {
     const order: string[] = [];
     let releaseProgress!: () => void;
