@@ -7,6 +7,7 @@ import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { WebSocket } from "ws";
 import type { JsonObject, JsonValue } from "../protocol.js";
 import { requireObject, requireString, requireStringArray } from "./json-rpc.js";
+import { onChildOutputStreamError, terminateChildWithEscalation } from "./output-stream-errors.js";
 import { resolveExecServerPath } from "./path-uri.js";
 import type { ManagedProcess, OpenClawExecServer, ProcessChunk } from "./types.js";
 
@@ -124,10 +125,14 @@ async function runProcess(
     throw error;
   }
   managed.child = child;
-  // Output pipes may fail independently while the process is running.
-  const ignoreOutputStreamError = () => {};
-  child.stdout.on("error", ignoreOutputStreamError);
-  child.stderr.on("error", ignoreOutputStreamError);
+  onChildOutputStreamError(
+    child,
+    (message) => {
+      recordProcessFailure(managed, message);
+      terminateChildWithEscalation(child);
+    },
+    "sandbox process",
+  );
   const abortListener = () => child.kill("SIGTERM");
   managed.abortController.signal.addEventListener("abort", abortListener, { once: true });
   child.stdout.on("data", (chunk: Buffer) =>
@@ -137,8 +142,7 @@ async function runProcess(
   child.once("error", (error) => {
     // Node can report an abort or transport error before the child exits. The
     // backend lease and Codex terminal notifications stay owned until close.
-    managed.failure ??= error.message;
-    notifyProcessWaiters(managed);
+    recordProcessFailure(managed, error.message);
   });
   child.once("close", (code) => {
     managed.abortController.signal.removeEventListener("abort", abortListener);
@@ -147,6 +151,14 @@ async function runProcess(
   if (!managed.tty && !managed.pipeStdin) {
     child.stdin.end();
   }
+}
+
+function recordProcessFailure(managed: ManagedProcess, message: string): void {
+  if (managed.failure) {
+    return;
+  }
+  managed.failure = message;
+  notifyProcessWaiters(managed);
 }
 
 function throwIfProcessStartCancelled(managed: ManagedProcess): void {
@@ -191,15 +203,19 @@ function appendProcessChunk(
 
 function emitProcessClosed(managed: ManagedProcess, exitCode: number | null): void {
   if (!managed.exited) {
+    // Polling clients receive the detailed failure through process/read. Pushed
+    // lifecycle consumers have no per-process failure notification in the
+    // current protocol, so never let a delivery failure look like a clean exit.
+    const effectiveExitCode = managed.failure && exitCode === 0 ? 1 : exitCode;
     const exitSeq = managed.nextSeq;
     managed.nextSeq += 1;
-    managed.exitCode = exitCode;
+    managed.exitCode = effectiveExitCode;
     managed.exited = true;
-    if (exitCode !== null) {
+    if (effectiveExitCode !== null) {
       managed.emitNotification("process/exited", {
         processId: managed.processId,
         seq: exitSeq,
-        exitCode,
+        exitCode: effectiveExitCode,
       });
     }
   }

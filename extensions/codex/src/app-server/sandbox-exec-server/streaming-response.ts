@@ -5,7 +5,7 @@ import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { WebSocket } from "ws";
 import type { JsonObject, JsonValue } from "../protocol.js";
 import { readHttpHeaders, requireNumber, requireObject, requireString } from "./json-rpc.js";
-import { onChildOutputStreamError } from "./output-stream-errors.js";
+import { onChildOutputStreamError, terminateChildWithEscalation } from "./output-stream-errors.js";
 
 const SANDBOX_HTTP_STREAM_LINE_MAX_CHARS = 256 * 1024;
 
@@ -56,7 +56,7 @@ export function readStreamingSandboxHttpResponse(params: {
         reject(new Error(message));
       }
       if (terminateChild) {
-        params.child.kill("SIGTERM");
+        terminateChildWithEscalation(params.child);
       }
     };
     params.child.stdout.on("data", (chunk: Buffer) => {
@@ -122,7 +122,7 @@ export function readStreamingSandboxHttpResponse(params: {
       } else {
         reject(new Error(streamFailure));
       }
-      params.child.kill("SIGTERM");
+      terminateChildWithEscalation(params.child);
     });
     params.child.once("error", (error) => {
       childFailure ??= error.message;

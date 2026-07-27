@@ -1,16 +1,16 @@
 /**
- * Regression test: Codex sandbox exec-server subprocess owners attach no-op
- * `error` listeners to child stdout/stderr so a broken pipe cannot surface as
- * a process-fatal unhandled EventEmitter `error`.
+ * Regression test: Codex sandbox exec-server subprocess owners handle child
+ * stdout/stderr `error` events without crashing the WebSocket bridge.
  *
  * Both the process RPC path (`processes.ts`) and the streaming HTTP path
  * (`http.ts`) spawn pipe-backed children. The tests capture the real spawned
  * child and deterministically emit `error` on stdout and stderr. With the
- * listeners in place the emit is swallowed and the bridge stays usable; if
- * either production listener is removed, `emit("error")` throws synchronously
- * (no `error` listener on the stream) and the test fails.
+ * Output delivery failures fail and terminate the affected operation while the
+ * bridge stays usable. If either production listener is removed, `emit("error")`
+ * throws synchronously and the test fails.
  */
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { once } from "node:events";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -44,6 +44,7 @@ import {
   readUntilClosed,
   rpc,
 } from "./sandbox-exec-server.test-helpers.js";
+import { terminateChildWithEscalation } from "./sandbox-exec-server/output-stream-errors.js";
 
 const TMPDIR = process.env.TMPDIR ?? "/tmp";
 const TMPDIR_URL = pathToFileURL(TMPDIR).href;
@@ -55,8 +56,8 @@ function delay(ms: number): Promise<void> {
   });
 }
 
-/** Asserts the child stream still swallows a real `error` event after the fix. */
-function expectStreamErrorSuppressed(
+/** Asserts production code handles a real stream `error` event. */
+function expectStreamErrorHandled(
   stream: ChildProcessWithoutNullStreams["stdout"],
   label: string,
 ): void {
@@ -65,7 +66,7 @@ function expectStreamErrorSuppressed(
   expect(stream.listenerCount("error"), `${label} has no error listener`).toBeGreaterThan(0);
   expect(
     () => stream.emit("error", new Error("EPIPE: simulated broken output pipe")),
-    `${label} error event was not suppressed`,
+    `${label} error event was not handled`,
   ).not.toThrow();
 }
 
@@ -78,7 +79,55 @@ beforeEach(() => {
 });
 
 describe("sandbox exec-server pipe survival", () => {
-  it("process bridge suppresses stdout/stderr errors and keeps serving", async () => {
+  it("bounds close when a descendant retains an exited wrapper's output pipes", async () => {
+    const SCRIPT = String.raw`
+      const { spawn } = require("node:child_process");
+      const descendant = spawn(process.execPath, ["-e", "setTimeout(function(){},300000)"], {
+        stdio: ["ignore", process.stdout, process.stderr],
+      });
+      process.stdout.write(String(descendant.pid) + "\n");
+      process.on("SIGTERM", function() { process.exit(0); });
+      setTimeout(function(){}, 300000);
+    `;
+    const child = (await import("node:child_process")).spawn(process.execPath, [
+      "-e",
+      SCRIPT,
+    ]) as ChildProcessWithoutNullStreams;
+    const [pidChunk] = (await once(child.stdout, "data")) as [Buffer];
+    const descendantPid = Number.parseInt(pidChunk.toString("utf8").trim(), 10);
+    expect(descendantPid).toBeGreaterThan(0);
+
+    const exitPromise = once(child, "exit");
+    const closePromise = once(child, "close");
+    terminateChildWithEscalation(child);
+    await exitPromise;
+    expect(child.exitCode).toBe(0);
+
+    let closed = false;
+    void closePromise.then(() => {
+      closed = true;
+    });
+    await delay(100);
+    expect(closed).toBe(false);
+
+    try {
+      await Promise.race([
+        closePromise,
+        delay(7_000).then(() => {
+          throw new Error("child close remained blocked by descendant output pipes");
+        }),
+      ]);
+      expect(closed).toBe(true);
+    } finally {
+      try {
+        process.kill(descendantPid, "SIGKILL");
+      } catch {
+        // The descendant may already have observed the destroyed pipe.
+      }
+    }
+  });
+
+  it("process bridge fails output errors and keeps serving", async () => {
     const sandbox = createSandboxContext({
       buildExecSpec: async ({ command }) => ({
         argv: ["/bin/sh", "-c", `exec ${command}`],
@@ -93,7 +142,7 @@ describe("sandbox exec-server pipe survival", () => {
     });
     expect(env).toBeDefined();
     const socket = await openSocket(execServerUrlFromClient(client));
-    collectNotifications(socket);
+    const notifications = collectNotifications(socket);
 
     const processId = "pipe-srv-101";
     const SCRIPT = "process.stdout.write('ready\\n');setTimeout(function(){},300000)";
@@ -110,14 +159,35 @@ describe("sandbox exec-server pipe survival", () => {
     // guard; emitting `error` here is the exact event the fix must swallow.
     const child = spawnedChildren.at(-1);
     expect(child).toBeDefined();
-    expectStreamErrorSuppressed(child!.stdout, "process stdout");
-    expectStreamErrorSuppressed(child!.stderr, "process stderr");
+    expectStreamErrorHandled(child!.stdout, "process stdout");
+    expectStreamErrorHandled(child!.stderr, "process stderr");
     expect(socket.readyState).toBe(WS_OPEN);
 
     await rpc(socket, "process/terminate", { processId });
     await delay(200);
     const read = await readUntilClosed(socket, processId);
     expect(read.closed).toBe(true);
+    expect(read.failure).toContain("sandbox process output stream error");
+    expect(read.exitCode).toBe(1);
+    const processEvents = notifications.filter(
+      (notification) =>
+        notification.method === "process/output" ||
+        notification.method === "process/exited" ||
+        notification.method === "process/closed",
+    );
+    const eventSeqs = processEvents.map(
+      (notification) => (notification.params as { seq: number }).seq,
+    );
+    expect(
+      (
+        processEvents.find((notification) => notification.method === "process/exited")?.params as
+          | { exitCode?: number }
+          | undefined
+      )?.exitCode,
+    ).toBe(1);
+    expect(eventSeqs.every((seq, index) => index === 0 || seq === eventSeqs[index - 1]! + 1)).toBe(
+      true,
+    );
 
     // The bridge must still accept and run follow-up work after the pipe error.
     const followId = "pipe-srv-102";
@@ -170,8 +240,8 @@ describe("sandbox exec-server pipe survival", () => {
 
     const child = spawnedChildren.at(-1);
     expect(child).toBeDefined();
-    expectStreamErrorSuppressed(child!.stdout, "http stdout");
-    expectStreamErrorSuppressed(child!.stderr, "http stderr");
+    expectStreamErrorHandled(child!.stdout, "http stdout");
+    expectStreamErrorHandled(child!.stderr, "http stderr");
     expect(socket.readyState).toBe(WS_OPEN);
 
     socket.close();
@@ -231,12 +301,16 @@ describe("sandbox exec-server pipe survival", () => {
     // The WebSocket bridge must survive the settled failure.
     expect(socket.readyState).toBe(WS_OPEN);
 
-    // Force the child closed; finalizeExec must be called exactly once
-    // now that the child has actually exited.
-    child!.kill("SIGKILL");
-    await vi.waitFor(() => {
-      expect(finalizeExec).toHaveBeenCalledTimes(1);
-    });
+    // The bounded fallback force-closes the uncooperative child; close remains
+    // the sole owner and finalizes exactly once.
+    await vi.waitFor(
+      () => {
+        expect(kill).toHaveBeenCalledWith("SIGKILL");
+        expect(finalizeExec).toHaveBeenCalledTimes(1);
+      },
+      { timeout: 7_000 },
+    );
+    expect(finalizeExec).toHaveBeenCalledTimes(1);
     expect(finalizeExec).toHaveBeenCalledWith(expect.objectContaining({ status: "failed" }));
 
     socket.close();
@@ -275,15 +349,19 @@ describe("sandbox exec-server pipe survival", () => {
     await expect(requestPromise).rejects.toThrow();
     const child = spawnedChildren.at(-1);
     expect(child).toBeDefined();
+    const kill = vi.spyOn(child!, "kill");
 
     // Malformed stdout settles the request and asks the helper to terminate,
     // but close remains the only backend finalization owner.
     expect(finalizeExec).not.toHaveBeenCalled();
 
-    child!.kill("SIGKILL");
-    await vi.waitFor(() => {
-      expect(finalizeExec).toHaveBeenCalledTimes(1);
-    });
+    await vi.waitFor(
+      () => {
+        expect(kill).toHaveBeenCalledWith("SIGKILL");
+        expect(finalizeExec).toHaveBeenCalledTimes(1);
+      },
+      { timeout: 7_000 },
+    );
     expect(finalizeExec).toHaveBeenCalledWith(expect.objectContaining({ status: "failed" }));
 
     socket.close();
