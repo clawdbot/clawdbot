@@ -11,9 +11,12 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   COMMAND_TIMEOUT_MS,
+  createContainerizedSutSpawnSpec,
   createCrabboxWarmupArgs,
   createOpenClawGatewaySpawnSpec,
   parseArgs,
+  processTargetExists,
+  readCodexProxyPort,
   readLogTail,
   readTelegramUserProofLogTailBytes,
   recordProbeVideo,
@@ -24,6 +27,7 @@ import {
   renderSelectDesktopChat,
   renderTailscaleSshProxy,
   runCommand,
+  runSutContainerAction,
   signalCommandTree,
   stageFullSessionArtifacts,
   startLocalSut,
@@ -87,6 +91,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<voi
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { force: true, recursive: true });
   }
@@ -125,6 +130,138 @@ describe("telegram user Crabbox proof log polling", () => {
     expect(spec.args).toEqual(["openclaw", "gateway", "--port", "19042"]);
     expect(spec.options.cwd).toBe("/repo");
     expect(spec.options.shell).toBe(false);
+  });
+
+  it("routes fork SUT startup through the root-owned validating wrapper", () => {
+    const repoRoot = makeTempDir();
+    const runtimeRoot = makeTempDir();
+    const spec = createContainerizedSutSpawnSpec({
+      codexProxyPort: 43123,
+      containerName: "openclaw-telegram-sut-test",
+      gatewayEnv: {
+        TELEGRAM_BOT_TOKEN: "telegram-burner-token",
+      },
+      gatewayPort: 19042,
+      mockPort: 19043,
+      mockResponseText: "streamed response",
+      repoRoot,
+      runtimeRoot,
+      sutLane: "candidate",
+    });
+
+    expect(spec.command).toBe("sudo");
+    expect(spec.args).toContain("/usr/local/sbin/openclaw-mantis-sut-container");
+    expect(spec.args).toContain("run");
+    expect(spec.args).toContain("candidate");
+    expect(spec.args).not.toContain("docker");
+    expect(spec.args.join("\n")).not.toContain("--preserve-env");
+    expect(spec.args.join("\n")).not.toContain("CODEX_HOME");
+    expect(spec.options.env).not.toHaveProperty("CODEX_HOME");
+    expect(spec.options.env).not.toHaveProperty("OPENAI_API_KEY");
+    expect(spec.options.env).not.toHaveProperty("TELEGRAM_BOT_TOKEN");
+    expect(fs.statSync(spec.inputPath).mode & 0o777).toBe(0o600);
+    expect(JSON.parse(fs.readFileSync(spec.inputPath, "utf8"))).toEqual({
+      mockResponseText: "streamed response",
+      telegramBotToken: "telegram-burner-token",
+    });
+  });
+
+  it("reads only the loopback Responses proxy port from Codex config", () => {
+    const codexHome = makeTempDir();
+    fs.writeFileSync(
+      path.join(codexHome, "config.toml"),
+      '[model_providers.codex-action-responses-proxy]\nbase_url = "http://127.0.0.1:43123/v1"\n',
+    );
+    expect(readCodexProxyPort(codexHome)).toBe(43123);
+    fs.writeFileSync(
+      path.join(codexHome, "config.toml"),
+      '[model_providers.codex-action-responses-proxy]\nbase_url = "https://api.openai.com/v1"\n',
+    );
+    expect(readCodexProxyPort(codexHome)).toBeUndefined();
+  });
+
+  it("requires successful privileged SUT teardown commands", () => {
+    const run = vi.fn(() => ({ signal: null, status: 0, stderr: "" }));
+    runSutContainerAction(
+      "stop",
+      "openclaw-telegram-sut-test",
+      "/tmp/openclaw-tg-crabbox-sut-test",
+      run,
+    );
+    expect(run).toHaveBeenCalledWith(
+      "sudo",
+      [
+        "-n",
+        "/usr/local/sbin/openclaw-mantis-sut-container",
+        "stop",
+        "openclaw-telegram-sut-test",
+        "/tmp/openclaw-tg-crabbox-sut-test",
+      ],
+      expect.objectContaining({ encoding: "utf8", stdio: "pipe" }),
+    );
+
+    expect(() =>
+      runSutContainerAction(
+        "destroy",
+        "openclaw-telegram-sut-test",
+        "/tmp/openclaw-tg-crabbox-sut-test",
+        () => ({ signal: null, status: 1, stderr: "destroy failed" }),
+      ),
+    ).toThrow("destroy failed with exit code 1.\ndestroy failed");
+    expect(() =>
+      runSutContainerAction(
+        "stop",
+        "openclaw-telegram-sut-test",
+        "/tmp/openclaw-tg-crabbox-sut-test",
+        () => ({ signal: "SIGKILL", status: null, stderr: "" }),
+      ),
+    ).toThrow("stop was terminated by SIGKILL");
+    expect(() =>
+      runSutContainerAction(
+        "stop",
+        "openclaw-telegram-sut-test",
+        "/tmp/openclaw-tg-crabbox-sut-test",
+        () => ({ error: new Error("spawn failed"), status: null }),
+      ),
+    ).toThrow("Failed to stop container-isolated SUT: spawn failed");
+  });
+
+  it("treats permission-denied process probes as alive", () => {
+    const kill = vi.spyOn(process, "kill");
+    kill.mockImplementation(() => {
+      throw Object.assign(new Error("not permitted"), { code: "EPERM" });
+    });
+    expect(processTargetExists(1234)).toBe(true);
+
+    kill.mockImplementation(() => {
+      throw Object.assign(new Error("gone"), { code: "ESRCH" });
+    });
+    expect(processTargetExists(1234)).toBe(false);
+
+    kill.mockImplementation(() => {
+      throw Object.assign(new Error("unexpected"), { code: "EINVAL" });
+    });
+    expect(() => processTargetExists(1234)).toThrow("unexpected");
+  });
+
+  it("forces fork candidates into the isolated SUT container", () => {
+    vi.stubEnv("MANTIS_CANDIDATE_TRUST", "fork-pr-head");
+    expect(() => parseArgs(["start"])).toThrow(
+      "container proof requires --sut-repo-root and --sut-lane.",
+    );
+    expect(
+      parseArgs(["start", "--sut-lane", "candidate", "--sut-repo-root", "/prepared/candidate"]),
+    ).toMatchObject({
+      sutContainer: true,
+      sutLane: "candidate",
+      sutRepoRoot: "/prepared/candidate",
+    });
+    expect(() => parseArgs([])).toThrow("--sut-container requires the held-session start flow.");
+    vi.stubEnv("MANTIS_CANDIDATE_TRUST", "open-pr-head");
+    expect(parseArgs(["start"]).sutContainer).toBe(false);
+    expect(() => parseArgs(["start", "--sut-container"])).toThrow(
+      "container proof requires --sut-repo-root and --sut-lane.",
+    );
   });
 
   it("allows cold remote setup to outlive ordinary command timeouts", () => {
@@ -240,6 +377,16 @@ describe("telegram user Crabbox proof log polling", () => {
     expect(() => parseArgs(["--mcp-app-fixture"])).toThrow(
       "--mcp-app-fixture is available only for start sessions.",
     );
+    expect(() =>
+      parseArgs([
+        "start",
+        "--mcp-app-fixture",
+        "--sut-lane",
+        "baseline",
+        "--sut-repo-root",
+        "/prepared/baseline",
+      ]),
+    ).toThrow("--mcp-app-fixture is unavailable for container-isolated SUT proof.");
     expect(() => parseArgs(["start", "--mcp-app-fixture", "--id", "cbx_reused"])).toThrow(
       "--mcp-app-fixture requires a fresh lifecycle-owned Crabbox lease.",
     );

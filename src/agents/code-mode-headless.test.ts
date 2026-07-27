@@ -105,6 +105,120 @@ describe("headless Code Mode", () => {
     expect(result.value).toEqual(["undefined", "undefined", "undefined"]);
   });
 
+  it.each([
+    {
+      name: "template-literal import text",
+      code: "return `import('node:fs')`;",
+      value: "import('node:fs')",
+    },
+    {
+      name: "template-literal require text",
+      code: "return `require('node:fs')`;",
+      value: "require('node:fs')",
+    },
+    {
+      name: "nested template-literal module text",
+      code: "return `outer ${`require('node:fs')`}`;",
+      value: "outer require('node:fs')",
+    },
+    {
+      name: "regular-expression module text",
+      code: 'return /import.meta/.test("import.meta");',
+      value: true,
+    },
+    {
+      name: "ordinary import method",
+      code: "const api = { import(value) { return value; } }; return api.import(42);",
+      value: 42,
+    },
+    {
+      name: "ordinary require method",
+      code: "const api = { require(value) { return value; } }; return api.require(42);",
+      value: 42,
+    },
+    {
+      name: "ordinary import metadata property",
+      code: "const api = { import: { meta: 42 } }; return api.import.meta;",
+      value: 42,
+    },
+  ])("executes harmless $name in a headless guest worker", async ({ code, value }) => {
+    const result = expectCompleted(
+      await runCodeModeScriptHeadless({
+        ctx: createHeadlessHarness(),
+        code,
+      }),
+    );
+
+    expect(result.value).toBe(value);
+    expect(result.toolCallCount).toBe(0);
+  });
+
+  it("executes module-shaped regular expressions in a TypeScript headless guest", async () => {
+    const result = expectCompleted(
+      await runCodeModeScriptHeadless({
+        ctx: createHeadlessHarness(),
+        language: "typescript",
+        code: 'const value: number = 1; return /import.meta/.test("import.meta");',
+      }),
+    );
+
+    expect(result.value).toBe(true);
+    expect(result.toolCallCount).toBe(0);
+  });
+
+  it.each([
+    String.raw`return r\u0065quire('node:fs');`,
+    "return require?.('node:fs');",
+    "return (require)('node:fs');",
+    "return (0, require)('node:fs');",
+    "const load = require; return load('node:fs');",
+    "return module.require('node:fs');",
+    "return process.getBuiltinModule('node:fs');",
+    "return `${import('node:fs')}`;",
+    "return `${require('node:fs')}`;",
+    "return `${`nested ${import('node:fs')}`}`;",
+    "return `${`nested ${require('node:fs')}`}`;",
+    "const message = `import('node:fs')`; return require('node:fs');",
+    "let value = 1; return value++ / import('node:fs');",
+    "let value = 1; return value-- / import('node:fs');",
+    "const value = { of: 1 }; return value.of / import('node:fs');",
+    "const value = { return: 1 }; return value.return / import('node:fs');",
+    "const value = { if() { return 1; } }; return value.if() / import('node:fs');",
+    "const value = { return: 1 }; return value?.return / import('node:fs') / 1;",
+    "const value = { return: 1 }; return value?.return / require('node:fs') / 1;",
+    "const value = { if() { return 1; } }; return value?.if() / import('node:fs');",
+    "function run() { const await = 1; return await / (globalThis.pending = import('node:fs')); } run(); return globalThis.pending;",
+    "class Guest { #return = 1; run() { return this.#return / (globalThis.pending = import('node:fs')); } } new Guest().run(); return globalThis.pending;",
+  ])("rejects executable module access in a headless guest: %s", async (code) => {
+    const result = expectFailed(
+      await runCodeModeScriptHeadless({
+        ctx: createHeadlessHarness(),
+        code,
+      }),
+    );
+
+    expect(result.code).toBe("invalid_input");
+    expect(result.error).toContain("module access is disabled");
+    expect(result.toolCallCount).toBe(0);
+  });
+
+  it.each(["import('node:fs')", "require('node:fs')"])(
+    "rejects astral-shifted TypeScript module access in a headless guest: %s",
+    async (moduleAccess) => {
+      const result = expectFailed(
+        await runCodeModeScriptHeadless({
+          ctx: createHeadlessHarness(),
+          language: "typescript",
+          code: `const padding: string = "${"😀".repeat(96)}"; return ${moduleAccess};`,
+        }),
+      );
+
+      expect(result.code).toBe("invalid_input");
+      expect(result.error).toContain("module access is disabled");
+      expect(result.toolCallCount).toBe(0);
+    },
+  );
+
   it("injects deeply frozen trigger state and emits replacement state through json", async () => {
     const result = expectCompleted(
       await runCodeModeScriptHeadless({

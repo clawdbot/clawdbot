@@ -6,6 +6,7 @@ import {
   rewrapToolWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
+import { isCoreCodingSurfaceToolName } from "./core-tool-factory-descriptors.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import { compactToolInputHint, compactToolOutputHint } from "./tool-schema-hints.js";
 import {
@@ -223,7 +224,7 @@ function rememberReusableCatalog(key: string | undefined, catalog: ToolSearchCat
   }
 }
 
-export function classifyTool(tool: CatalogTool): {
+function classifyTool(tool: CatalogTool): {
   source: CatalogSource;
   sourceName?: string;
   mcp?: PluginToolMcpMeta;
@@ -283,6 +284,24 @@ function toCatalogEntry(
 
 function shouldCatalogTool(tool: AnyAgentTool): boolean {
   return !TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name) && tool.catalogMode !== "direct-only";
+}
+
+/**
+ * Core file/shell primitives and caller-required names (e.g. message when it is
+ * the only reply path) stay visible while remaining searchable. Both must
+ * resolve to trusted OpenClaw tools: an MCP lookalike must never become a
+ * direct delivery or core-coding tool.
+ */
+export function isDirectVisibleCatalogTool(
+  tool: AnyAgentTool,
+  directToolNames: ReadonlySet<string>,
+): boolean {
+  const classified = classifyTool(tool);
+  return (
+    classified.source === "openclaw" &&
+    (directToolNames.has(tool.name) ||
+      (isCoreCodingSurfaceToolName(tool.name) && classified.sourceName === "core"))
+  );
 }
 
 export function registerHeadlessToolSearchCatalog(params: {

@@ -45,13 +45,16 @@ function runtimeParityScenarioResultStatus(result: RuntimeParityResult) {
     runtimeParityScenarioStepStatus(result.cells.openclaw),
     runtimeParityScenarioStepStatus(result.cells.codex),
   ]);
+  if (isRuntimeParityResultPass(result)) {
+    return "pass";
+  }
   if (cellStatuses.has("fail")) {
     return "fail";
   }
   if (cellStatuses.has("skip")) {
     return "skip";
   }
-  return isRuntimeParityResultPass(result) ? "pass" : "fail";
+  return "fail";
 }
 
 export function buildRuntimeParityScenarioResult(params: {

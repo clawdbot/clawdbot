@@ -9,6 +9,7 @@ import {
   RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
   shouldKeepSubagentRunChildLink,
 } from "../agents/subagent-run-liveness.js";
+import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { isTerminalSessionStatus, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveNonNegativeNumber } from "../shared/number-coercion.js";
@@ -51,6 +52,7 @@ function truncateTitle(text: string, maxLen: number): string {
 export function deriveSessionTitle(
   entry: SessionEntry | undefined,
   firstUserMessage?: string | null,
+  externalDisplayName?: string | null,
 ): string | undefined {
   if (!entry) {
     return undefined;
@@ -61,16 +63,23 @@ export function deriveSessionTitle(
     return label;
   }
 
-  if (normalizeOptionalString(entry.displayName)) {
-    return normalizeOptionalString(entry.displayName);
+  const displayName =
+    normalizeOptionalString(externalDisplayName) ?? normalizeOptionalString(entry.displayName);
+  if (displayName) {
+    return displayName;
   }
 
-  if (normalizeOptionalString(entry.subject)) {
-    return normalizeOptionalString(entry.subject);
+  const subject = normalizeOptionalString(entry.subject);
+  if (subject) {
+    return subject;
   }
 
-  if (firstUserMessage?.trim()) {
-    const normalized = firstUserMessage.replace(/\s+/g, " ").trim();
+  // Transcript metadata is model-only; sanitize at the shared title boundary so
+  // SQLite, file-backed sessions, and every session-list client stay consistent.
+  const normalized = firstUserMessage
+    ? stripInboundMetadata(firstUserMessage).replace(/\s+/g, " ").trim()
+    : "";
+  if (normalized) {
     return truncateTitle(normalized, DERIVED_TITLE_MAX_LEN);
   }
 

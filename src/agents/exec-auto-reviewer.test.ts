@@ -151,6 +151,61 @@ describe("parseExecAutoReviewResponse", () => {
     });
   });
 
+  it.each([
+    [
+      "a later allow overwriting an earlier ask",
+      '{"decision":"ask","risk":"low","decision":"allow"}',
+    ],
+    [
+      "a later low risk overwriting an earlier high risk",
+      '{"decision":"allow","risk":"high","risk":"low"}',
+    ],
+    [
+      "a Unicode-escaped decision overwriting an earlier ask",
+      String.raw`{"decision":"ask","risk":"low","\u0064ecision":"allow"}`,
+    ],
+    [
+      "a Unicode-escaped risk overwriting an earlier high risk",
+      String.raw`{"decision":"allow","risk":"high","r\u0069sk":"low"}`,
+    ],
+    [
+      "duplicate rationale values",
+      '{"decision":"allow","risk":"low","rationale":"first","rationale":"second"}',
+    ],
+    ["an unexpected approval scope", '{"decision":"allow","risk":"low","scope":"session"}'],
+    [
+      "an unexpected approved command",
+      '{"decision":"allow","risk":"low","approvedCommand":"rm -rf /"}',
+    ],
+    [
+      "an unexpected prototype key",
+      '{"decision":"allow","risk":"low","__proto__":{"decision":"allow"}}',
+    ],
+  ])("defers ambiguous reviewer JSON with %s", async (_label, text) => {
+    await expect(reviewExecResponse(text)).resolves.toMatchObject({
+      decision: "ask",
+      risk: "unknown",
+    });
+  });
+
+  it("preserves valid rationale containing JSON-shaped quoted text", async () => {
+    const rationale = 'Read-only output mentions "decision": "ask" as literal text.';
+
+    await expect(
+      reviewExecResponse(
+        JSON.stringify({
+          decision: "allow",
+          risk: "low",
+          rationale,
+        }),
+      ),
+    ).resolves.toEqual({
+      decision: "allow-once",
+      risk: "low",
+      rationale,
+    });
+  });
+
   it("requires allow decisions to carry low risk", async () => {
     for (const risk of ["medium", "high", "unknown"] as const) {
       expect(

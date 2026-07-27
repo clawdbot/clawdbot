@@ -119,7 +119,7 @@ jobs:
       - name: Checkout harness ref
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          ref: main
+          ref: ${{ github.workflow_sha }}
           persist-credentials: false
           fetch-depth: 0
 
@@ -246,6 +246,7 @@ jobs:
       - name: Checkout harness ref
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
+          ref: ${{ github.workflow_sha }}
           persist-credentials: false
           fetch-depth: 0
 
@@ -277,6 +278,9 @@ jobs:
           crabbox media preview --help >/dev/null
 
       - name: Install local proof tools
+        env:
+          BASELINE_SHA: ${{ needs.validate_refs.outputs.baseline_revision }}
+          CANDIDATE_SHA: ${{ needs.validate_refs.outputs.candidate_revision }}
         shell: bash
         run: |
           set -euo pipefail
@@ -305,6 +309,16 @@ jobs:
           sudo install -m 0755 "${RUNNER_TEMP}/mantis-node" /usr/local/lib/mantis-toolchain/node
           sudo install -m 0755 "${RUNNER_TEMP}/mantis-pnpm" /usr/local/lib/mantis-toolchain/pnpm
           sudo install -m 0755 "${RUNNER_TEMP}/openclaw-telegram-user-crabbox-proof" /usr/local/bin/openclaw-telegram-user-crabbox-proof
+          sudo install -m 0755 scripts/mantis/mantis-sut-container.sh /usr/local/sbin/openclaw-mantis-sut-container
+          printf '/tmp/openclaw-mantis-proof-worktrees-%s-%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" \
+            | sudo tee /etc/openclaw-mantis-sut-worktrees >/dev/null
+          printf 'baseline\t%s\ncandidate\t%s\n' "$BASELINE_SHA" "$CANDIDATE_SHA" \
+            | sudo tee /etc/openclaw-mantis-sut-revisions >/dev/null
+          runtime_parent="/tmp/openclaw-mantis-sut-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          sudo install -d -m 0711 -o root -g root "$runtime_parent"
+          sudo install -d -m 0700 -o root -g root "$runtime_parent/attestations"
+          printf '%s\n' "$runtime_parent" | sudo tee /etc/openclaw-mantis-sut-runtime-root >/dev/null
+          sudo chmod 0444 /etc/openclaw-mantis-sut-worktrees /etc/openclaw-mantis-sut-revisions /etc/openclaw-mantis-sut-runtime-root
           /usr/local/lib/mantis-toolchain/node --version
           /usr/local/lib/mantis-toolchain/pnpm --version
           /usr/local/bin/openclaw-telegram-user-crabbox-proof --help >/dev/null
@@ -329,7 +343,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          worktree_root="$GITHUB_WORKSPACE/.artifacts/qa-e2e/mantis/telegram-desktop-proof-worktrees"
+          worktree_root="/tmp/openclaw-mantis-proof-worktrees-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           baseline_root="$worktree_root/baseline"
           candidate_root="$worktree_root/candidate"
           toolchain_dir=/usr/local/lib/mantis-toolchain
@@ -371,25 +385,13 @@ jobs:
 
           prepare_worktree "$baseline_root" "${RUNNER_TEMP}/mantis-baseline-home"
           sudo useradd --system --no-create-home --shell /usr/sbin/nologin mantis-builder
-          candidate_home="${RUNNER_TEMP}/mantis-candidate-home"
-          candidate_corepack_home="${RUNNER_TEMP}/mantis-candidate-corepack"
-          sudo install -d -m 0700 -o mantis-builder -g mantis-builder "$candidate_home"
-          sudo install -d -m 0700 -o mantis-builder -g mantis-builder "$candidate_corepack_home"
           sudo chown -R mantis-builder:mantis-builder "$candidate_root"
-          sudo -u mantis-builder env -i \
-            CI=1 \
-            COREPACK_HOME="$candidate_corepack_home" \
-            HOME="$candidate_home" \
-            OPENCLAW_BUILD_PRIVATE_QA=1 \
-            OPENCLAW_ENABLE_PRIVATE_QA_CLI=1 \
-            PATH="$toolchain_dir:/usr/bin:/bin" \
-            /bin/bash -c 'cd "$1" && "$2" install --frozen-lockfile && "$2" build' \
-            bash "$candidate_root" "$toolchain_dir/pnpm"
+          sudo /usr/local/sbin/openclaw-mantis-sut-container build "$candidate_root"
           test "$(cat "$candidate_root/.git")" = "$candidate_git_link"
-          git -C "$candidate_root" diff --exit-code
-          git -C "$candidate_root" diff --cached --exit-code
+          git -c safe.directory="$candidate_root" -C "$candidate_root" diff --exit-code
+          git -c safe.directory="$candidate_root" -C "$candidate_root" diff --cached --exit-code
           test "$(git -C "$baseline_root" rev-parse HEAD)" = "$BASELINE_SHA"
-          test "$(git -C "$candidate_root" rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(git -c safe.directory="$candidate_root" -C "$candidate_root" rev-parse HEAD)" = "$CANDIDATE_SHA"
 
       - name: Ensure agent key exists
         env:
@@ -410,10 +412,11 @@ jobs:
             printf '%s\n' 'Defaults env_keep += "CODEX_HOME CODEX_INTERNAL_ORIGINATOR_OVERRIDE"'
             printf '%s\n' 'Defaults env_keep += "BASELINE_REF BASELINE_SHA CANDIDATE_REF CANDIDATE_SHA"'
             printf '%s\n' 'Defaults env_keep += "CRABBOX_ACCESS_CLIENT_ID CRABBOX_ACCESS_CLIENT_SECRET CRABBOX_COORDINATOR CRABBOX_COORDINATOR_TOKEN CRABBOX_AWS_REGION CRABBOX_CAPACITY_REGIONS CRABBOX_LEASE_ID CRABBOX_PROVIDER"'
-            printf '%s\n' 'Defaults env_keep += "GH_TOKEN MANTIS_CANDIDATE_TRUST MANTIS_INSTRUCTIONS MANTIS_OUTPUT_DIR MANTIS_PR_NUMBER"'
+            printf '%s\n' 'Defaults env_keep += "GH_TOKEN GITHUB_WORKSPACE MANTIS_BASELINE_ROOT MANTIS_CANDIDATE_ROOT MANTIS_CANDIDATE_TRUST MANTIS_INSTRUCTIONS MANTIS_OUTPUT_DIR MANTIS_PR_NUMBER"'
             printf '%s\n' 'Defaults env_keep += "MANTIS_NODE_BIN MANTIS_PNPM_BIN"'
             printf '%s\n' 'Defaults env_keep += "OPENCLAW_BUILD_PRIVATE_QA OPENCLAW_ENABLE_PRIVATE_QA_CLI OPENCLAW_QA_CONVEX_SECRET_CI OPENCLAW_QA_CONVEX_SITE_URL OPENCLAW_QA_CREDENTIAL_OWNER_ID OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN"'
             printf '%s\n' 'Defaults env_keep += "OPENCLAW_TELEGRAM_USER_CRABBOX_BIN OPENCLAW_TELEGRAM_USER_CRABBOX_PROVIDER OPENCLAW_TELEGRAM_USER_DRIVER_SCRIPT OPENCLAW_TELEGRAM_USER_PROOF_CMD"'
+            printf '%s\n' 'codex ALL=(root) NOPASSWD: /usr/local/sbin/openclaw-mantis-sut-container'
           } | sudo tee /etc/sudoers.d/mantis-codex-env >/dev/null
           sudo chmod 0440 /etc/sudoers.d/mantis-codex-env
           codex_home="/tmp/mantis-codex-home-${GITHUB_RUN_ID}"
@@ -427,6 +430,10 @@ jobs:
             workspace_parent="$(dirname "$workspace_parent")"
           done
           sudo chown -R codex:codex "$GITHUB_WORKSPACE"
+          proof_worktree_root="/tmp/openclaw-mantis-proof-worktrees-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          sudo chown -R root:root "$proof_worktree_root"
+          sudo chmod -R a-w "$proof_worktree_root"
+          sudo chmod 0700 "$proof_worktree_root"
 
       - name: Run Codex Mantis Telegram agent
         uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56
@@ -445,6 +452,8 @@ jobs:
           CRABBOX_PROVIDER: ${{ needs.resolve_request.outputs.crabbox_provider }}
           GH_TOKEN: ${{ github.token }}
           MANTIS_CANDIDATE_TRUST: ${{ needs.validate_refs.outputs.candidate_trust }}
+          MANTIS_BASELINE_ROOT: /tmp/openclaw-mantis-proof-worktrees-${{ github.run_id }}-${{ github.run_attempt }}/baseline
+          MANTIS_CANDIDATE_ROOT: /tmp/openclaw-mantis-proof-worktrees-${{ github.run_id }}-${{ github.run_attempt }}/candidate
           MANTIS_INSTRUCTIONS: ${{ needs.resolve_request.outputs.instructions }}
           MANTIS_NODE_BIN: /usr/local/lib/mantis-toolchain/node
           MANTIS_OUTPUT_DIR: ${{ env.MANTIS_OUTPUT_DIR }}
@@ -519,6 +528,34 @@ jobs:
           done
           exit "$status"
 
+      - name: Validate root-owned SUT attestations
+        if: ${{ always() }}
+        env:
+          BASELINE_SHA: ${{ needs.validate_refs.outputs.baseline_revision }}
+          CANDIDATE_SHA: ${{ needs.validate_refs.outputs.candidate_revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime_parent="$(</etc/openclaw-mantis-sut-runtime-root)"
+          manifest="$MANTIS_OUTPUT_DIR/mantis-evidence.json"
+          test -f "$manifest"
+          for lane in baseline candidate; do
+            lane_status="$(jq -r --arg lane "$lane" '.comparison[$lane].status' "$manifest")"
+            if [[ "$lane" == "baseline" ]]; then
+              expected_sha="$BASELINE_SHA"
+            else
+              expected_sha="$CANDIDATE_SHA"
+            fi
+            jq -e --arg lane "$lane" --arg sha "$expected_sha" \
+              '.comparison[$lane].sha == $sha' "$manifest" >/dev/null
+            if [[ "$lane_status" == "skipped" ]]; then
+              continue
+            fi
+            sudo jq -e --arg lane "$lane" --arg sha "$expected_sha" \
+              '.lane == $lane and .sha == $sha' \
+              "$runtime_parent/attestations/$lane.json" >/dev/null
+          done
+
       - name: Inspect Mantis evidence manifest
         id: inspect
         if: ${{ always() }}
@@ -541,7 +578,10 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: mantis-telegram-desktop-proof-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ steps.inspect.outputs.output_dir }}
+          path: |
+            ${{ steps.inspect.outputs.output_dir }}/mantis-evidence.json
+            ${{ steps.inspect.outputs.output_dir }}/baseline
+            ${{ steps.inspect.outputs.output_dir }}/candidate
           retention-days: 14
           if-no-files-found: error
 
@@ -609,6 +649,7 @@ jobs:
       - name: Checkout harness ref
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
+          ref: ${{ github.workflow_sha }}
           persist-credentials: false
 
       - name: Setup Node environment
