@@ -37,12 +37,13 @@ export { type CdpActionTimeouts, waitForCdpCommittedNavigationUrl } from "./cdp-
 /** Read the current main-frame loader identity from a page-level CDP target. */
 export async function getMainFrameDocumentIdentityViaCdp(opts: {
   wsUrl: string;
+  lookup?: typeof dnsLookupCb;
   timeoutMs?: number;
 }): Promise<string | undefined> {
   return await withCdpSocket(
     opts.wsUrl,
     async (send) => await readCdpMainFrameDocumentIdentity(send),
-    { commandTimeoutMs: opts.timeoutMs ?? 5000 },
+    { commandTimeoutMs: opts.timeoutMs ?? 5000, ...(opts.lookup ? { lookup: opts.lookup } : {}) },
   );
 }
 

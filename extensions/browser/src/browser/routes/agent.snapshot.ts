@@ -785,6 +785,7 @@ export function registerBrowserAgentSnapshotRoutes(
             }
             return await getMainFrameDocumentIdentityViaCdp({
               wsUrl: tab.wsUrl,
+              ...(tab.wsLookup ? { lookup: tab.wsLookup } : {}),
               timeoutMs: plan.timeoutMs,
             }).catch(() => undefined);
           };
