@@ -3,7 +3,9 @@ import {
   advisoryCriteriaForHostingProfile,
   buildHostingProfileConditions,
   buildHostingProfileSubjects,
+  getStandardHostingProfile,
   isReadinessCriterionSelectedByHostingProfile,
+  listStandardHostingProfiles,
   requiredCriteriaForHostingProfile,
   resolveHostingProfileSelection,
 } from "./profiles.js";
@@ -16,6 +18,45 @@ const facts = {
   trustedProxySources: [],
   trustedProxyAllowLoopback: false,
 };
+
+describe("standard hosting profile catalog", () => {
+  it("lists every built-in profile in stable support order", () => {
+    expect(listStandardHostingProfiles().map((profile) => profile.id)).toEqual([
+      "local",
+      "container",
+      "reverse-proxy",
+      "node-mode",
+    ]);
+    expect(getStandardHostingProfile("container")).toMatchObject({
+      id: "container",
+      profileConditions: ["ProfileSelected", "ContainerStateReady"],
+    });
+    expect(getStandardHostingProfile("node-mode").profileConditions).toEqual([
+      "ProfileSelected",
+      "NodePairingReady",
+      "ControlledTargetsReady",
+      "CommandApprovalReady",
+      "ControlChannelReady",
+    ]);
+  });
+
+  it("returns copies that cannot mutate the shipped definitions", () => {
+    const first = getStandardHostingProfile("local");
+    (first.requiredCriteria as string[]).push("plugin.test.mutable");
+
+    expect(getStandardHostingProfile("local").requiredCriteria).not.toContain(
+      "plugin.test.mutable",
+    );
+  });
+
+  it("keeps catalog condition names aligned with runtime predicates", () => {
+    for (const profile of listStandardHostingProfiles()) {
+      expect(
+        buildHostingProfileConditions(profile.id, facts).map((condition) => condition.type),
+      ).toEqual(profile.profileConditions);
+    }
+  });
+});
 
 describe("resolveHostingProfile", () => {
   it("preserves baseline readiness when unset and honors startup precedence", () => {

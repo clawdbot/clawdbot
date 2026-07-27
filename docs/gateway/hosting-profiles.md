@@ -36,6 +36,26 @@ or disabled. Operators can promote any advisory selector through `gateway.readin
 Profiles add requirements to the universal Gateway lifecycle conditions. They do not generate or
 repair configuration, choose restart policy, or replace explicit `gateway.readiness` criteria.
 
+## Inspect the catalog
+
+The standard catalog is shipped with OpenClaw and can be inspected without loading configuration,
+starting plugins, or contacting a Gateway:
+
+```bash
+openclaw hosting profiles list
+openclaw hosting profiles inspect container
+openclaw hosting profiles inspect node-mode --json
+```
+
+`list` shows each supported posture and the number of profile conditions, required criteria, and
+advisories it selects. `inspect` shows the complete descriptor. JSON output includes
+`contractVersion: 1` and is derived from the same definitions used by runtime readiness, so release
+and support tooling does not need a second profile inventory.
+
+These commands describe the shipped support contracts. They do not infer which profile a running
+Gateway selected; use [`openclaw ready`](/cli/ready) for active profile attribution and live
+conditions.
+
 ## Select a profile
 
 Use one of these equivalent inputs:

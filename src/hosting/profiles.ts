@@ -15,9 +15,10 @@ type HostingProfileSelection = {
   source: HostingProfileSource;
 };
 
-type HostingProfileDescriptor = {
+export type HostingProfileDescriptor = {
   id: HostingProfileId;
   description: string;
+  profileConditions: readonly string[];
   requiredCriteria: readonly string[];
   advisoryCriteria: readonly string[];
 };
@@ -47,28 +48,59 @@ const STANDARD_HOSTING_PROFILES: Record<HostingProfileId, HostingProfileDescript
   local: {
     id: "local",
     description: "Local or foreground Gateway.",
+    profileConditions: ["ProfileSelected"],
     requiredCriteria: STANDARD_REQUIRED_CRITERIA,
     advisoryCriteria: STANDARD_ADVISORY_CRITERIA,
   },
   container: {
     id: "container",
     description: "Gateway directly reachable through a container listener.",
+    profileConditions: ["ProfileSelected", "ContainerStateReady"],
     requiredCriteria: STANDARD_REQUIRED_CRITERIA,
     advisoryCriteria: STANDARD_ADVISORY_CRITERIA,
   },
   "reverse-proxy": {
     id: "reverse-proxy",
     description: "Gateway behind a trusted identity proxy.",
+    profileConditions: ["ProfileSelected", "TrustedProxyReady"],
     requiredCriteria: STANDARD_REQUIRED_CRITERIA,
     advisoryCriteria: STANDARD_ADVISORY_CRITERIA,
   },
   "node-mode": {
     id: "node-mode",
     description: "Gateway controlling one or more paired execution targets.",
+    profileConditions: [
+      "ProfileSelected",
+      "NodePairingReady",
+      "ControlledTargetsReady",
+      "CommandApprovalReady",
+      "ControlChannelReady",
+    ],
     requiredCriteria: STANDARD_REQUIRED_CRITERIA,
     advisoryCriteria: STANDARD_ADVISORY_CRITERIA,
   },
 };
+
+function copyHostingProfileDescriptor(
+  descriptor: HostingProfileDescriptor,
+): HostingProfileDescriptor {
+  return {
+    ...descriptor,
+    profileConditions: [...descriptor.profileConditions],
+    requiredCriteria: [...descriptor.requiredCriteria],
+    advisoryCriteria: [...descriptor.advisoryCriteria],
+  };
+}
+
+export function listStandardHostingProfiles(): HostingProfileDescriptor[] {
+  return HOSTING_PROFILE_IDS.map((profile) =>
+    copyHostingProfileDescriptor(STANDARD_HOSTING_PROFILES[profile]),
+  );
+}
+
+export function getStandardHostingProfile(profile: HostingProfileId): HostingProfileDescriptor {
+  return copyHostingProfileDescriptor(STANDARD_HOSTING_PROFILES[profile]);
+}
 
 export function parseHostingProfileId(value: unknown): HostingProfileId | null {
   if (typeof value !== "string") {
