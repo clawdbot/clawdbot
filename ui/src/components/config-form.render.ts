@@ -61,7 +61,7 @@ export function renderConfigTierGroups(params: {
   /** Surfaces without a toolbar toggle pass this so the divider can collapse
    *  the tier again; the config page omits it and uses its toolbar button. */
   onHideAdvanced?: () => void;
-  renderTier: (node: JsonSchema) => TemplateResult;
+  renderTier: (node: JsonSchema) => TemplateResult | typeof nothing;
 }) {
   const split = splitConfigSchemaByTier({
     schema: params.schema,
