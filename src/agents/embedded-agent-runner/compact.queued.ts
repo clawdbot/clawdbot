@@ -715,9 +715,7 @@ async function compactResolvedContextEngine(
           if (
             marker &&
             (marker.agentId !== runtimeTarget.agentId ||
-              (delegatedSessionId &&
-                marker.sessionId !== delegatedSessionId &&
-                delegatedSessionId !== runtimeTarget.sessionId))
+              (delegatedSessionId && marker.sessionId !== delegatedSessionId))
           ) {
             throw new Error("Legacy context-engine successor identity is inconsistent");
           }

@@ -269,13 +269,11 @@ export class SessionManager extends SessionManagerBranching {
   }
 
   static fromEntries(entries: readonly unknown[], cwdOverride?: string): SessionManager {
-    const fileEntries = entries as readonly FileEntry[];
+    const fileEntries = structuredClone(entries) as FileEntry[];
     const header = fileEntries.find(
       (entry) => typeof entry === "object" && entry !== null && entry.type === "session",
     );
-    return new SessionManager(cwdOverride ?? header?.cwd ?? process.cwd(), undefined, [
-      ...fileEntries,
-    ]);
+    return new SessionManager(cwdOverride ?? header?.cwd ?? process.cwd(), undefined, fileEntries);
   }
 }
 

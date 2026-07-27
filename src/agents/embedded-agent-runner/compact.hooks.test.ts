@@ -4399,6 +4399,25 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     });
   });
 
+  it("rejects a marker successor that contradicts the reported session id", async () => {
+    resolveContextEngineMock.mockResolvedValue({
+      info: { ownsCompaction: false },
+      compact: contextEngineCompactMock,
+    } as never);
+    contextEngineCompactMock.mockResolvedValue({
+      ok: true,
+      compacted: true,
+      result: {
+        sessionFile: "sqlite:main:marker-session:/tmp/sessions.json",
+        sessionId: TEST_SESSION_ID,
+      },
+    } as never);
+
+    await expect(compactEmbeddedAgentSession(wrappedCompactionArgs())).rejects.toThrow(
+      "successor identity is inconsistent",
+    );
+  });
+
   it("rebinds a deprecated SQLite marker successor over the retained active entry", async () => {
     const maintain = vi.fn(async (_params?: unknown) => ({
       changed: false,

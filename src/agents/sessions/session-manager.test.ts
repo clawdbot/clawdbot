@@ -399,6 +399,35 @@ describe("SessionManager.open", () => {
     });
   });
 
+  it("does not mutate frozen caller entries during in-memory migration", () => {
+    const entries = [
+      Object.freeze({
+        type: "session" as const,
+        version: 2,
+        id: "frozen-legacy-session",
+        timestamp: "2026-01-01T00:00:00.000Z",
+        cwd: "/tmp",
+      }),
+      Object.freeze({
+        type: "message" as const,
+        id: "frozen-legacy-hook",
+        parentId: null,
+        timestamp: "2026-01-01T00:00:01.000Z",
+        message: Object.freeze({ role: "hookMessage", content: "frozen hook context" }),
+      }),
+    ] as const;
+
+    const manager = SessionManager.fromEntries(Object.freeze(entries));
+
+    expect(manager.getEntry("frozen-legacy-hook")).toMatchObject({
+      message: { role: "custom", customType: "hook", content: "frozen hook context" },
+    });
+    expect(entries[1].message).toEqual({
+      role: "hookMessage",
+      content: "frozen hook context",
+    });
+  });
+
   it("keeps stale appenders valid across a reset while snapshot replacement rotates generation", async () => {
     const dir = await makeTempDir();
     const scope = {
