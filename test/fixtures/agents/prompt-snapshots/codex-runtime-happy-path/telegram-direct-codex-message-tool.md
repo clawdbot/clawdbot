@@ -64,6 +64,7 @@
   "approvalPolicy": "never",
   "approvalsReviewer": "user",
   "config": {
+    "code_mode.direct_only_tool_namespaces": ["openclaw_direct"],
     "features.apply_patch_streaming_events": true,
     "features.code_mode": true,
     "features.code_mode_only": false,
@@ -77,7 +78,6 @@
     "message",
     "agents_list",
     "sessions_spawn",
-    "sessions_yield",
     "nodes",
     "cron",
     "tts",
@@ -89,7 +89,8 @@
     "subagents",
     "session_status",
     "web_search",
-    "web_fetch"
+    "web_fetch",
+    "sessions_yield"
   ],
   "experimentalRawEvents": true,
   "model": "gpt-5.5",
@@ -220,8 +221,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 60915,
-    "roughTokens": 15229
+    "chars": 61075,
+    "roughTokens": 15269
   },
   "openClawDeveloperInstructions": {
     "chars": 2362,
@@ -232,8 +233,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6594
   },
   "totalWithDynamicToolsJson": {
-    "chars": 87291,
-    "roughTokens": 21823
+    "chars": 87451,
+    "roughTokens": 21863
   },
   "userInputText": {
     "chars": 929,
@@ -517,7 +518,6 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
   "message",
   "agents_list",
   "sessions_spawn",
-  "sessions_yield",
   "nodes",
   "cron",
   "tts",
@@ -529,7 +529,8 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
   "subagents",
   "session_status",
   "web_search",
-  "web_fetch"
+  "web_fetch",
+  "sessions_yield"
 ]
 ```
 

@@ -33,7 +33,11 @@ export function reconcileToolCallExecutionParams(
     if (params.toolCallId && call.toolCallId !== params.toolCallId) {
       continue;
     }
-    if (call.toolName !== params.toolName || call.resultHash !== undefined) {
+    if (
+      call.toolName !== params.toolName ||
+      call.resultHash !== undefined ||
+      call.outcomeKind !== undefined
+    ) {
       continue;
     }
 

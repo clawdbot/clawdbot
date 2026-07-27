@@ -20,7 +20,10 @@ import type {
   PluginHookToolKind,
 } from "../plugins/types.js";
 import { resolveSkillWorkshopToolApproval } from "../skills/workshop/policy.js";
-import { resolveClientVoiceToolConfirmationPolicy } from "../talk/client-voice-confirmation.js";
+import {
+  checkClientVoiceToolConfirmationPolicy,
+  consumeClientVoiceToolConfirmationPolicy,
+} from "../talk/client-voice-confirmation.js";
 import {
   isClientVoiceSessionConfirmable,
   resolveClientVoiceRunBinding,
@@ -64,6 +67,23 @@ export function getBeforeToolCallPolicyDiagnosticState(): BeforeToolCallPolicyDi
 export function hasBeforeToolCallPolicy(): boolean {
   const state = getBeforeToolCallPolicyDiagnosticState();
   return state.hasBeforeToolCallHook || state.trustedToolPolicies.length > 0;
+}
+
+/** Consume voice approval only after tool-owned finalization produces execution params. */
+export function consumeFinalClientVoiceToolConfirmation(args: {
+  toolName: string;
+  params: unknown;
+  ctx?: HookContext;
+}) {
+  const voiceRun = resolveClientVoiceRunBinding(args.ctx?.runId);
+  return consumeClientVoiceToolConfirmationPolicy({
+    agentId: voiceRun?.agentId,
+    voiceSessionId: voiceRun?.voiceSessionId,
+    runId: args.ctx?.runId,
+    toolName: normalizeToolName(args.toolName || "tool"),
+    toolParams: args.params,
+    ...(voiceRun ? { isConfirmable: () => isClientVoiceSessionConfirmable(voiceRun) } : {}),
+  });
 }
 
 export async function runBeforeToolCallHook(args: {
@@ -188,7 +208,7 @@ export async function runBeforeToolCallHook(args: {
       ...(args.ctx?.workspaceDir ? { workspaceDir: args.ctx.workspaceDir } : {}),
     });
     const voiceRun = resolveClientVoiceRunBinding(args.ctx?.runId);
-    const voiceConfirmation = resolveClientVoiceToolConfirmationPolicy({
+    const voiceConfirmation = checkClientVoiceToolConfirmationPolicy({
       agentId: voiceRun?.agentId,
       voiceSessionId: voiceRun?.voiceSessionId,
       runId: args.ctx?.runId,
@@ -200,7 +220,7 @@ export async function runBeforeToolCallHook(args: {
       return {
         blocked: true,
         kind: "veto",
-        deniedReason: "plugin-before-tool-call",
+        deniedReason: "client-voice-confirmation",
         reason: voiceConfirmation.reason,
         params,
       };

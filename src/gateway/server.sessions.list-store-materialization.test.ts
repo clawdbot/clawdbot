@@ -4,6 +4,7 @@
  * connection reuse removed the per-row SQLite opens.
  */
 import { expect, test, vi } from "vitest";
+import * as sessionsConfig from "../config/sessions.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -70,6 +71,26 @@ test("sessions.list does not materialize the lookup store once per row", async (
   // The post-await sharing refresh intentionally rereads current ACL state,
   // but one request-scoped load per store keeps that refresh linear.
   expect(large).toBeLessThan(small * 12);
+});
+
+test("sessions.list discovers store targets at most once per agent", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({
+    entries: Object.fromEntries(
+      Array.from({ length: 20 }, (_, index) => [
+        `agent:main:row-${index}`,
+        sessionStoreEntry(`sess-row-${index}`),
+      ]),
+    ),
+  });
+  const discoverySpy = vi.spyOn(sessionsConfig, "resolveExistingAgentSessionStoreTargetsSync");
+  try {
+    const result = await directSessionReq("sessions.list", LIST_PARAMS);
+    expect(result.ok).toBe(true);
+    expect(discoverySpy.mock.calls.filter((call) => call[1] === "main")).toHaveLength(1);
+  } finally {
+    discoverySpy.mockRestore();
+  }
 });
 
 test("sessions.list projects out prompt snapshots without changing full entry reads", async () => {

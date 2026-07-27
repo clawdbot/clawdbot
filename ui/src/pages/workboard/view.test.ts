@@ -143,15 +143,29 @@ describe("renderWorkboard", () => {
       } as unknown as GatewayBrowserClient,
     });
 
-    renderInto(container, props);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("board.get", { sessionKey }));
+    try {
+      renderInto(container, props);
+      // The dashboard element is lazily imported; on loaded CI runners that
+      // import can outlive vi.waitFor's default timeout. Await the definition
+      // and the upgraded element's first update, which acquires the provider
+      // and issues board.get synchronously.
+      await customElements.whenDefined("openclaw-workboard-card-dashboard");
+      const dashboard = container.querySelector("openclaw-workboard-card-dashboard");
+      expect(dashboard).not.toBeNull();
+      await dashboard!.updateComplete;
+      expect(request).toHaveBeenCalledWith("board.get", { sessionKey });
 
-    state.detailCardId = null;
-    renderInto(container, props);
-    await nextFrame();
+      state.detailCardId = null;
+      renderInto(container, props);
+      await nextFrame();
 
-    expect(removeListener).toHaveBeenCalledOnce();
-    container.remove();
+      expect(removeListener).toHaveBeenCalledOnce();
+    } finally {
+      // A leaked open drawer poisons later dialog tests in this shared jsdom
+      // document, so tear down even when an assertion above fails.
+      render(nothing, container);
+      container.remove();
+    }
   });
 
   it("keeps manual recovery refresh visible while data is loading", () => {

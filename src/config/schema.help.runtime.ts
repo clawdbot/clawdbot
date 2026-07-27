@@ -112,7 +112,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.codeMode":
     "Generic OpenClaw code mode. When enabled, agent runs expose only `exec` and `wait` to the model and hide normal tools behind a QuickJS-WASI catalog bridge.",
   "tools.codeMode.enabled":
-    "Enables generic code mode. Default is off. When explicitly enabled, OpenClaw fails closed if the runtime is unavailable instead of exposing the full tool list.",
+    'Enables generic code mode. Default is off. `true` engages every tool-capable run and fails closed if the runtime is unavailable instead of exposing the full tool list. `"auto"` engages only models whose catalog flags `compat.codeMode: "preferred"`.',
   "tools.codeMode.runtime": 'Guest JavaScript runtime. Only "quickjs-wasi" is supported.',
   "tools.codeMode.mode":
     'Model-facing surface. Only "only" is supported: expose code-mode `exec` and `wait` and hide normal tools.',

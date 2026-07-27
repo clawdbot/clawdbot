@@ -22,6 +22,7 @@ import { createHeadlessAbortScope, runCodeModeScriptHeadless } from "./code-mode
 import { describeCodeModeNamespacesForPrompt } from "./code-mode-namespaces.js";
 import {
   codeModeRuntimeTesting,
+  isCodeModeEngagedForModel,
   readCode,
   readRunId,
   resolveCodeModeConfig,
@@ -58,6 +59,7 @@ export { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME };
 export {
   CodeModeHeadlessAbortError,
   CodeModeHeadlessTimeoutError,
+  isCodeModeEngagedForModel,
   runCodeModeScriptHeadless,
   resolveCodeModeConfig,
 };
@@ -251,7 +253,9 @@ export function applyCodeModeCatalog(params: {
   toolHookContext?: HookContext;
 }) {
   const config = resolveCodeModeConfig(params.config, params.agentId);
-  if (!config.enabled) {
+  // Engagement (including "auto" per-model resolution) is decided by the run
+  // gates before this is called; only a hard `false` may disable compaction.
+  if (config.enabled === false) {
     return applyToolCatalogCompaction({
       ...params,
       enabled: false,
@@ -309,7 +313,8 @@ export function addClientToolsToCodeModeCatalog(params: {
 }) {
   return addClientToolsToToolCatalog({
     ...params,
-    enabled: resolveCodeModeConfig(params.config, params.agentId).enabled,
+    // Callers gate on run engagement; "auto" counts as enabled here.
+    enabled: resolveCodeModeConfig(params.config, params.agentId).enabled !== false,
   });
 }
 

@@ -32,7 +32,7 @@ Built-in acpx harness aliases (from the pinned `acpx` dependency):
 | Alias        | Wraps                                                                                                  |
 | ------------ | ------------------------------------------------------------------------------------------------------ |
 | `claude`     | [Claude Code](https://claude.ai/code)                                                                  |
-| `codex`      | [Codex CLI](https://codex.openai.com)                                                                  |
+| `codex`      | [Codex CLI](https://developers.openai.com/codex/cli)                                                   |
 | `copilot`    | [GitHub Copilot CLI](https://docs.github.com/en/copilot/concepts/agents/copilot-cli/about-copilot-cli) |
 | `cursor`     | [Cursor CLI](https://cursor.com/docs/cli/acp) (`cursor-agent acp`)                                     |
 | `droid`      | [Factory Droid](https://www.factory.ai)                                                                |

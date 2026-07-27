@@ -631,6 +631,33 @@ describe("tool-loop-detection", () => {
       expect(reconciled).toEqual({ active: true, count: 6, variantCount: 2 });
     });
 
+    it("does not reconcile a completed loop veto as a pending call", () => {
+      const state = createState();
+      state.toolCallHistory = [
+        {
+          toolName: "write",
+          argsHash: "pending-args",
+          timestamp: 1,
+        },
+        {
+          toolName: "write",
+          argsHash: "vetoed-args",
+          outcomeKind: "tool-loop-veto",
+          timestamp: 2,
+        },
+      ];
+
+      expect(
+        reconcileToolCallExecutionParams(state, {
+          toolName: "write",
+          toolParams: { path: "/tmp/rewritten.md", content: "same content" },
+          warningThreshold: 6,
+        }),
+      ).toEqual({ active: false, count: 0, variantCount: 0 });
+      expect(state.toolCallHistory[0]?.argsHash).not.toBe("pending-args");
+      expect(state.toolCallHistory[1]?.argsHash).toBe("vetoed-args");
+    });
+
     it("keeps completed churn evidence across a pending same-tool sibling", () => {
       const state = createState();
       const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
@@ -1519,33 +1546,92 @@ describe("tool-loop-detection", () => {
       expect(hashes?.[0]).not.toBe(hashes?.[1]);
     });
 
-    it("keeps a critical send block sticky after the veto result is recorded", () => {
+    it("counts loop vetoes until the global circuit breaker becomes reachable", () => {
       const state = createState();
       const params = { action: "send", target: "feishu:oc_chat", text: "ping" };
       for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
         recordSend(state, "message", params, sendPayload(i), i);
       }
-      expect(detectToolCallLoop(state, "message", params, enabledLoopDetectionConfig).stuck).toBe(
-        true,
-      );
-      // The loop veto records a blocked result (buildBlockedToolResult, deniedReason "tool-loop");
-      // it must not reset the no-progress streak, so the next identical send is still blocked.
-      recordToolCall(state, "message", params, "message-veto", enabledLoopDetectionConfig);
-      recordToolCallOutcome(state, {
-        toolName: "message",
-        toolParams: params,
-        toolCallId: "message-veto",
-        result: {
-          content: [{ type: "text", text: "blocked" }],
-          details: { status: "blocked", deniedReason: "tool-loop" },
-        },
-        config: enabledLoopDetectionConfig,
-      });
-      const after = detectToolCallLoop(state, "message", params, enabledLoopDetectionConfig);
-      expect(after.stuck).toBe(true);
-      if (after.stuck) {
-        expect(after.level).toBe("critical");
+      for (let i = CRITICAL_THRESHOLD; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
+        const before = detectToolCallLoop(state, "message", params, enabledLoopDetectionConfig);
+        expect(before).toMatchObject({
+          stuck: true,
+          level: "critical",
+          detector: "generic_repeat",
+          count: i,
+        });
+        const recorded = recordToolCallOutcome(state, {
+          toolName: "message",
+          toolParams: params,
+          toolCallId: `message-veto-${i}`,
+          result: {
+            content: [{ type: "text", text: "blocked" }],
+            details: { status: "blocked", deniedReason: "tool-loop" },
+          },
+          config: enabledLoopDetectionConfig,
+        });
+        expect(recorded).toMatchObject({
+          toolCallId: `message-veto-${i}`,
+          outcomeKind: "tool-loop-veto",
+          resultHash: undefined,
+        });
       }
+      const after = detectToolCallLoop(state, "message", params, enabledLoopDetectionConfig);
+      expect(after).toMatchObject({
+        stuck: true,
+        level: "critical",
+        detector: "global_circuit_breaker",
+        count: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
+      });
+    });
+
+    it("does not count unrelated hashless calls as no-progress outcomes", () => {
+      const state = createState();
+      const params = { action: "send", target: "feishu:oc_chat", text: "ping" };
+      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+        recordSend(state, "message", params, sendPayload(i), i);
+      }
+      for (let i = CRITICAL_THRESHOLD; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
+        recordToolCall(state, "message", params, `pending-${i}`, enabledLoopDetectionConfig);
+      }
+
+      expect(
+        detectToolCallLoop(state, "message", params, enabledLoopDetectionConfig),
+      ).toMatchObject({
+        stuck: true,
+        detector: "generic_repeat",
+        count: CRITICAL_THRESHOLD,
+      });
+    });
+
+    it("does not carry older loop vetoes across a later progressing outcome", () => {
+      const state = createState();
+      const params = { action: "send", target: "feishu:oc_chat", text: "ping" };
+      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+        recordSend(state, "message", params, sendPayload(i), i);
+      }
+      for (let i = 0; i < 5; i += 1) {
+        recordToolCallOutcome(state, {
+          toolName: "message",
+          toolParams: params,
+          toolCallId: `old-veto-${i}`,
+          result: {
+            content: [{ type: "text", text: "blocked" }],
+            details: { status: "blocked", deniedReason: "tool-loop" },
+          },
+          config: enabledLoopDetectionConfig,
+        });
+      }
+      recordSend(state, "message", params, { ...sendPayload(25), route: { id: "new-route" } }, 25);
+
+      expect(
+        detectToolCallLoop(state, "message", params, enabledLoopDetectionConfig),
+      ).toMatchObject({
+        stuck: true,
+        level: "warning",
+        detector: "generic_repeat",
+        count: 26,
+      });
     });
 
     it("still escalates repeated plugin/approval vetoes to a critical loop", () => {

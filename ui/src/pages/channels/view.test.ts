@@ -43,6 +43,7 @@ function createProps(snapshot: ChannelsProps["snapshot"]): ChannelsProps {
     configUiHints: {},
     configSaving: false,
     configFormDirty: false,
+    showAdvancedSettings: false,
     nostrProfileFormState: null,
     nostrProfileAccountId: null,
     selectedChannel: null,
@@ -67,6 +68,7 @@ function createProps(snapshot: ChannelsProps["snapshot"]): ChannelsProps {
     onWhatsAppStart: () => {},
     onWhatsAppWait: () => {},
     onWhatsAppLogout: () => {},
+    onShowAdvancedSettings: () => {},
     onConfigPatch: () => {},
     onConfigSave: () => {},
     onConfigReload: () => {},
@@ -113,10 +115,106 @@ function renderWhatsAppButtons(params: {
   render(renderWhatsAppCard({ props, whatsapp }), container);
   const buttons = Array.from(container.querySelectorAll("button"));
   return {
+    container,
     buttons,
     labels: buttons.map((button) => button.textContent?.trim()),
   };
 }
+
+// Mirrors the tiers the gateway materializes on every channel schema path.
+const CHANNEL_TIER_SCHEMA = {
+  type: "object",
+  properties: {
+    channels: {
+      type: "object",
+      properties: {
+        whatsapp: {
+          type: "object",
+          properties: {
+            enabled: { type: "boolean" },
+            timeoutMs: { type: "integer" },
+            retry: {
+              type: "object",
+              properties: { attempts: { type: "integer" } },
+            },
+          },
+        },
+      },
+    },
+  },
+};
+
+const CHANNEL_TIER_HINTS = {
+  "channels.whatsapp.enabled": { advanced: false },
+  "channels.whatsapp.timeoutMs": { advanced: true },
+  "channels.whatsapp.retry": { advanced: true },
+  "channels.whatsapp.retry.attempts": { advanced: true },
+};
+
+function renderWhatsAppConfigForm(
+  showAdvancedSettings: boolean,
+  hints: Record<string, { advanced: boolean }> = CHANNEL_TIER_HINTS,
+) {
+  const whatsapp = createWhatsAppStatus();
+  const props = createProps({
+    ts: Date.now(),
+    channelOrder: ["whatsapp"],
+    channelLabels: { whatsapp: "WhatsApp" },
+    channels: { whatsapp },
+    channelAccounts: {},
+    channelDefaultAccountId: {},
+  });
+  const onShowAdvancedSettings = vi.fn();
+  props.configSchema = CHANNEL_TIER_SCHEMA;
+  props.configUiHints = hints;
+  props.configForm = { channels: { whatsapp: { enabled: true, timeoutMs: 5000 } } };
+  props.showAdvancedSettings = showAdvancedSettings;
+  props.onShowAdvancedSettings = onShowAdvancedSettings;
+
+  const container = document.createElement("div");
+  render(renderWhatsAppCard({ props, whatsapp }), container);
+  return { container, onShowAdvancedSettings };
+}
+
+describe("channel config advanced tier", () => {
+  it("hides advanced channel settings behind the ghost row by default", () => {
+    const { container, onShowAdvancedSettings } = renderWhatsAppConfigForm(false);
+
+    expect(container.textContent).toContain("Enabled");
+    expect(container.textContent).not.toContain("Timeout Ms");
+    expect(container.querySelector(".config-advanced-divider")).toBeNull();
+
+    const ghost = container.querySelector<HTMLButtonElement>(".config-advanced-ghost");
+    expect(ghost?.textContent).toContain("2 advanced settings hidden");
+    ghost!.click();
+    expect(onShowAdvancedSettings).toHaveBeenCalledWith(true);
+  });
+
+  it("reveals advanced channel settings with a collapse affordance", () => {
+    const { container, onShowAdvancedSettings } = renderWhatsAppConfigForm(true);
+
+    expect(container.textContent).toContain("Enabled");
+    expect(container.textContent).toContain("Timeout Ms");
+    expect(container.querySelector(".config-advanced-ghost")).toBeNull();
+
+    const collapse = container.querySelector<HTMLButtonElement>(".config-advanced-divider__toggle");
+    expect(collapse).toBeInstanceOf(HTMLButtonElement);
+    collapse!.click();
+    expect(onShowAdvancedSettings).toHaveBeenCalledWith(false);
+  });
+
+  it("keeps the collapse control for channels whose settings are all advanced", () => {
+    const { container, onShowAdvancedSettings } = renderWhatsAppConfigForm(true, {
+      ...CHANNEL_TIER_HINTS,
+      "channels.whatsapp.enabled": { advanced: true },
+    });
+
+    const collapse = container.querySelector<HTMLButtonElement>(".config-advanced-divider__toggle");
+    expect(collapse).toBeInstanceOf(HTMLButtonElement);
+    collapse!.click();
+    expect(onShowAdvancedSettings).toHaveBeenCalledWith(false);
+  });
+});
 
 describe("channel display selectors", () => {
   it("returns the channel summary configured flag when present", () => {
@@ -264,5 +362,16 @@ describe("WhatsApp card actions", () => {
     });
 
     expect(labels).toEqual(["Save", "Reload", "Show QR", "Wait for scan", "Logout", "Refresh"]);
+  });
+
+  it("renders the QR directly above the action row so it is visible next to Show QR", () => {
+    const { container } = renderWhatsAppButtons({
+      linked: false,
+      qrDataUrl: "data:image/png;base64,current-qr",
+    });
+
+    const qrRow = container.querySelector(".qr-wrap")?.closest(".settings-row");
+    expect(qrRow).not.toBeNull();
+    expect(qrRow?.nextElementSibling?.classList.contains("settings-row--actions")).toBe(true);
   });
 });

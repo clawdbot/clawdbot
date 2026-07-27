@@ -183,6 +183,7 @@
     "!dist/plugin-sdk/secure-random-runtime.d.ts",
     "!dist/plugin-sdk/session-binding-runtime.d.ts",
     "!dist/plugin-sdk/session-catalog.d.ts",
+    "!dist/plugin-sdk/session-catalog-runtime.d.ts",
     "!dist/plugin-sdk/session-key-runtime.d.ts",
     "!dist/plugin-sdk/session-transcript-hit.d.ts",
     "!dist/plugin-sdk/session-transcript-runtime.d.ts",
@@ -1005,6 +1006,9 @@
     },
     "./plugin-sdk/session-catalog": {
       "default": "./dist/plugin-sdk/session-catalog.js"
+    },
+    "./plugin-sdk/session-catalog-runtime": {
+      "default": "./dist/plugin-sdk/session-catalog-runtime.js"
     },
     "./plugin-sdk/session-discussion": {
       "types": "./dist/plugin-sdk/session-discussion.d.ts",

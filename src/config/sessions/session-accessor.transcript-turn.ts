@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { getRuntimeConfig } from "../io.js";
@@ -8,6 +9,7 @@ import {
   resolveSessionEntryFromStore,
   resolveSessionEntrySelection,
 } from "./session-accessor.entry.js";
+import { redactTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
 import { appendSqliteExpectedSessionTranscriptTurn } from "./session-accessor.sqlite.js";
 import { shouldUseExplicitTranscriptFile } from "./session-accessor.transcript-target.js";
 import { appendTranscriptMessage, emitTranscriptUpdate } from "./session-accessor.transcript.js";
@@ -23,6 +25,42 @@ import type {
 import { formatSqliteSessionFileMarker, parseSqliteSessionFileMarker } from "./sqlite-marker.js";
 import { runWithOwnedSessionTranscriptWriteLock } from "./transcript-write-context.js";
 import type { SessionEntry } from "./types.js";
+
+/** Appends one prepared ordered group in the existing transcript turn transaction. */
+export async function appendTranscriptMessages<TMessage>(
+  scope: SessionTranscriptWriteScope,
+  options: Pick<SessionTranscriptTurnPersistOptions, "config" | "cwd"> & {
+    messages: readonly Omit<
+      SessionTranscriptTurnMessageAppend,
+      "config" | "cwd" | "parentId" | "prepareMessageAfterIdempotencyCheck" | "shouldAppend"
+    >[];
+  },
+): Promise<TranscriptMessageAppendResult<TMessage>[]> {
+  if (options.messages.length === 0) {
+    return [];
+  }
+  const expectedSessionId = scope.sessionId?.trim();
+  if (!expectedSessionId) {
+    throw new Error("Cannot append a transcript batch without an exact session id");
+  }
+  const turn = await persistExpectedSessionTranscriptTurn(scope, {
+    atomicGroup: true,
+    config: options.config,
+    cwd: options.cwd,
+    expectedSessionId,
+    messages: options.messages.map((append) => ({
+      ...append,
+      eventId: append.eventId ?? randomUUID(),
+      message: redactTranscriptMessageForStorage(append.message, options),
+      now: append.now ?? Date.now(),
+    })),
+    updateMode: "none",
+  });
+  if (turn.rejectedReason) {
+    throw new Error("Transcript session changed before batch append");
+  }
+  return turn.messages as TranscriptMessageAppendResult<TMessage>[];
+}
 
 /**
  * Persists one logical transcript turn through the SQLite-backed session target.
@@ -134,7 +172,10 @@ async function persistExpectedSessionTranscriptTurn(
     sessionEntry?: SessionEntry;
     sessionStore?: Record<string, SessionEntry>;
   },
-  options: SessionTranscriptTurnPersistOptions & { expectedSessionId: string },
+  options: SessionTranscriptTurnPersistOptions & {
+    atomicGroup?: boolean;
+    expectedSessionId: string;
+  },
 ): Promise<SessionTranscriptTurnPersistResult> {
   const sessionKey = scope.sessionKey?.trim();
   if (!scope.storePath || !sessionKey) {
@@ -190,6 +231,7 @@ async function persistExpectedSessionTranscriptTurn(
           expectedLifecycleRevision: options.expectedLifecycleRevision,
           expectedSessionState: options.expectedSessionState,
           expectedSessionId,
+          atomicGroup: options.atomicGroup,
           messages: options.messages,
           sessionLifecyclePatch: options.sessionLifecyclePatch,
           sessionFile: target.sessionFile,

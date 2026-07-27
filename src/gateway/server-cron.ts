@@ -452,12 +452,14 @@ export function buildGatewayCronService(params: {
   let streamWatcherReconciliations = 0;
   const terminalExitCompletionTokens = new Map<string, object>();
   let exitWatcherGeneration = 0;
+  let exitWatcherMutationRevision = 0;
   let streamWatcherGeneration = 0;
   // Bumped when a direct watcher route begins; fences reconcile's async list
   // snapshot against mutations that commit inside the list await.
   let streamWatcherMutationRevision = 0;
   let streamWatchersStopped = false;
   const reconcileExitWatchers = async () => {
+    const revision = ++exitWatcherMutationRevision;
     const generation = exitWatcherGeneration;
     exitWatcherReconciliations += 1;
     try {
@@ -465,7 +467,7 @@ export function buildGatewayCronService(params: {
         return;
       }
       const result = await cron.list({ includeDisabled: true });
-      if (generation !== exitWatcherGeneration) {
+      if (generation !== exitWatcherGeneration || revision !== exitWatcherMutationRevision) {
         return;
       }
       const jobs: CronJob[] = Array.isArray(result) ? result : (result as { jobs: CronJob[] }).jobs;

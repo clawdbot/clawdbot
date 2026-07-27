@@ -10,6 +10,7 @@ import {
 } from "../provider-request-config.js";
 import { mergeModelMediaInput, resolveConfiguredFallbackReasoning } from "./model.compat.js";
 import {
+  clampModelMaxTokensToContextWindow,
   findConfiguredProviderModel,
   hasConfiguredFallbackSurface,
   mergeConfiguredRuntimeModelParams,
@@ -155,6 +156,16 @@ export function resolveConfiguredFallbackModel(params: {
     providerConfig?.maxTokens ??
     providerConfig?.models?.[0]?.maxTokens;
   const resolvedFallbackMaxTokens = configuredFallbackMaxTokens ?? staticCatalogModel?.maxTokens;
+  const resolvedFallbackContextWindow =
+    configuredModel?.contextWindow ??
+    providerConfig?.contextWindow ??
+    providerConfig?.models?.[0]?.contextWindow ??
+    staticCatalogModel?.contextWindow ??
+    DEFAULT_CONTEXT_TOKENS;
+  const normalizedResolvedFallbackMaxTokens = clampModelMaxTokensToContextWindow(
+    resolvedFallbackMaxTokens,
+    resolvedFallbackContextWindow,
+  );
   return normalizeResolvedModel({
     provider,
     cfg,
@@ -179,12 +190,7 @@ export function resolveConfiguredFallbackModel(params: {
             ? { thinkingLevelMap: configuredModel.thinkingLevelMap }
             : {}),
           cost: metadataModel?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow:
-            configuredModel?.contextWindow ??
-            providerConfig?.contextWindow ??
-            providerConfig?.models?.[0]?.contextWindow ??
-            staticCatalogModel?.contextWindow ??
-            DEFAULT_CONTEXT_TOKENS,
+          contextWindow: resolvedFallbackContextWindow,
           contextTokens:
             configuredModel?.contextTokens ??
             providerConfig?.contextTokens ??
@@ -192,9 +198,9 @@ export function resolveConfiguredFallbackModel(params: {
             staticCatalogModel?.contextTokens,
           // maxTokens is a wire-level output cap, not a context-budget fallback.
           // Omit an unknown cap so strict providers can apply their own limit.
-          ...(resolvedFallbackMaxTokens !== undefined
+          ...(normalizedResolvedFallbackMaxTokens !== undefined
             ? {
-                maxTokens: resolvedFallbackMaxTokens,
+                maxTokens: normalizedResolvedFallbackMaxTokens,
                 maxTokensSource:
                   configuredFallbackMaxTokens !== undefined ? "configured" : "discovered",
               }
