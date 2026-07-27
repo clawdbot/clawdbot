@@ -83,7 +83,10 @@ async function finishPreparedManualRun(
       if (!tracker || tracker.emitted) {
         return;
       }
-      const job = state.store?.jobs.find((entry) => entry.id === jobId);
+      const job =
+        prepared.activeJobMarker?.jobRemoved === true
+          ? executionJob
+          : state.store?.jobs.find((entry) => entry.id === jobId);
       // enqueueRun acknowledges a concrete run id, so every accepted request
       // needs one terminal event even if the job or service owner changes mid-run.
       emitCronRunFinished(
@@ -140,7 +143,10 @@ async function finishPreparedManualRun(
     let notifySetupTimeout = coreResult.isolatedAgentSetupTimeout !== undefined;
     await locked(state, async () => {
       await ensureLoaded(state, { skipRecompute: true });
-      if (!isCronActiveJobMarkerCurrent(prepared.activeJobMarker)) {
+      if (
+        !isCronActiveJobMarkerCurrent(prepared.activeJobMarker) ||
+        prepared.activeJobMarker?.jobRemoved === true
+      ) {
         notifySetupTimeout = false;
         return;
       }
