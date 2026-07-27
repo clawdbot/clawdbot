@@ -299,6 +299,52 @@ describe("mcp auth profile bearer projection", () => {
     expect(JSON.stringify(resolved.config)).not.toContain('{"token"');
   });
 
+  it("rejects OAuth profiles without raw access instead of projecting provider-formatted auth", async () => {
+    authMocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValueOnce({
+      version: 1,
+      profiles: {
+        "google:mcp": {
+          type: "oauth",
+          provider: "google",
+          access: "expired-access",
+          refresh: "refresh-token-must-not-project",
+          expires: 1,
+        },
+      },
+    });
+    authMocks.resolveApiKeyForProfile.mockResolvedValueOnce({
+      apiKey: JSON.stringify({
+        token: "provider-formatted-token",
+        projectId: "demo-project",
+      }),
+      provider: "google",
+      profileId: "google:mcp",
+      profileType: "oauth",
+      credential: {
+        type: "oauth",
+        provider: "google",
+        refresh: "refresh-token-must-not-project",
+        expires: Date.now() + 60_000,
+      },
+    });
+
+    await expect(
+      resolveMcpBearerBundleConfig({
+        config: {
+          mcpServers: {
+            google: {
+              url: "https://mcp.google.test/mcp",
+              type: "http",
+              auth: "oauth",
+              oauth: { authProfileId: "google:mcp" },
+            },
+          },
+        },
+        tokenProjection: "literal",
+      }),
+    ).rejects.toThrow('could not resolve raw OAuth access token for auth profile "google:mcp"');
+  });
+
   it("injects fresh bearer headers only for same-origin embedded MCP requests", async () => {
     authMocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValue({
       version: 1,

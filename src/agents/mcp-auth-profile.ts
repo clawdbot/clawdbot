@@ -89,14 +89,19 @@ async function resolveMcpAuthProfileBearerToken(
       `MCP server "${params.serverName}" could not resolve bearer auth profile "${params.profileId}". Re-authenticate or rotate the profile and retry.`,
     );
   }
-  if (
-    resolved.credential?.type !== "oauth" ||
-    typeof resolved.credential.access !== "string" ||
-    resolved.credential.access.trim().length === 0
-  ) {
+  if (resolved.profileType === "token") {
     return resolved.apiKey;
   }
-  return resolved.credential.access;
+  if (
+    resolved.credential?.type === "oauth" &&
+    typeof resolved.credential.access === "string" &&
+    resolved.credential.access.trim().length > 0
+  ) {
+    return resolved.credential.access;
+  }
+  throw new Error(
+    `MCP server "${params.serverName}" could not resolve raw OAuth access token for auth profile "${params.profileId}". Re-authenticate or rotate the profile and retry.`,
+  );
 }
 
 async function resolveMcpBearerToken(params: {
