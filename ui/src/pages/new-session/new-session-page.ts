@@ -28,7 +28,11 @@ import * as catalog from "./catalog-target.ts";
 import { CloudProfileDiscovery, selectProfiles } from "./cloud-profile-discovery.ts";
 import { PendingCloudRecoveryState, resolveScope } from "./cloud-recovery-state.ts";
 import { advanceCloudDraftSession } from "./cloud-submit.ts";
-import { renderDraftError, renderNewSessionDraftComposer } from "./composer.ts";
+import {
+  NewSessionComposerTextareaController,
+  renderDraftError,
+  renderNewSessionDraftComposer,
+} from "./composer.ts";
 import {
   buildDraftSessionCreateParams,
   canStartSessionAsDraft,
@@ -127,6 +131,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   private baseRefEditGeneration = 0;
   private browserRequestToken = 0;
   private readonly attachmentDraft = new NewSessionAttachmentDraft(() => this.requestUpdate());
+  private readonly composerTextarea = new NewSessionComposerTextareaController();
   private readonly modelControl = new NewSessionModelControl(() => this.requestUpdate());
   private gatewaySource: ApplicationContext["gateway"] | null = null;
   private gatewayClient: ApplicationContext["gateway"]["snapshot"]["client"] = null;
@@ -346,6 +351,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     globalThis.clearTimeout(this.catalogRetryTimer);
     this.catalogRetryTimer = undefined;
     this.attachmentDraft.reset({ release: true });
+    this.composerTextarea.disconnect();
     this.cloudProfileDiscovery.stop();
     super.disconnectedCallback();
   }
@@ -1403,6 +1409,7 @@ class NewSessionPage extends OpenClawLightDomElement {
           modelControl: this.modelControl,
           requiresModifier: loadSettings().chatSendShortcut === "modifier-enter",
           submitting: this.submitting,
+          textareaController: this.composerTextarea,
           messageLocked: Boolean(this.pendingCloud.sessionKey),
           onInput: (message) => {
             if (!this.submitting && !this.pendingCloud.sessionKey) {

@@ -185,6 +185,60 @@ function buildOpenAIManifestModelsForBaseUrl(baseUrl: string): ModelDefinitionCo
   );
 }
 
+function buildOpenAIDiscoverablePlatformModels(baseUrl: string): ModelDefinitionConfig[] {
+  const models = [
+    {
+      id: OPENAI_CHAT_LATEST_MODEL_ID,
+      name: "Chat Latest",
+      reasoning: false,
+      cost: OPENAI_CHAT_LATEST_COST,
+      contextWindow: 400_000,
+    },
+    {
+      id: OPENAI_GPT_54_MODEL_ID,
+      name: "GPT-5.4",
+      reasoning: true,
+      cost: OPENAI_GPT_54_COST,
+      contextWindow: OPENAI_GPT_54_CONTEXT_TOKENS,
+    },
+    {
+      id: OPENAI_GPT_54_PRO_MODEL_ID,
+      name: "GPT-5.4 Pro",
+      reasoning: true,
+      cost: OPENAI_GPT_54_PRO_COST,
+      contextWindow: OPENAI_GPT_54_PRO_CONTEXT_TOKENS,
+    },
+    {
+      id: OPENAI_GPT_54_MINI_MODEL_ID,
+      name: "GPT-5.4 Mini",
+      reasoning: true,
+      cost: OPENAI_GPT_54_MINI_COST,
+      contextWindow: OPENAI_GPT_54_MINI_CONTEXT_TOKENS,
+    },
+    {
+      id: OPENAI_GPT_54_NANO_MODEL_ID,
+      name: "GPT-5.4 Nano",
+      reasoning: true,
+      cost: OPENAI_GPT_54_NANO_COST,
+      contextWindow: OPENAI_GPT_54_NANO_CONTEXT_TOKENS,
+    },
+  ] as const;
+
+  // First-party discovery must retain provider-owned costs and capabilities;
+  // generic projection would otherwise surface valid models as zero-cost.
+  return models.map(({ id, name, reasoning, cost, contextWindow }) => ({
+    id,
+    name,
+    reasoning,
+    cost,
+    contextWindow,
+    api: "openai-responses",
+    baseUrl,
+    input: id === OPENAI_GPT_54_PRO_MODEL_ID ? ["text"] : ["text", "image"],
+    maxTokens: OPENAI_GPT_54_MAX_TOKENS,
+  }));
+}
+
 async function buildOpenAILiveProviderConfig(
   params: BuildOpenAILiveProviderConfigParams,
 ): Promise<ModelProviderConfig> {
@@ -207,6 +261,33 @@ async function buildOpenAILiveProviderConfig(
       api: "openai-responses",
     },
     models,
+    projectRows: (rows, fallback) => {
+      const discoveredIds = new Set(
+        rows.flatMap((row) => {
+          if (!row || typeof row !== "object" || Array.isArray(row)) {
+            return [];
+          }
+          const candidate = row as { id?: unknown; object?: unknown };
+          if (candidate.object !== undefined && candidate.object !== "model") {
+            return [];
+          }
+          const modelId = typeof candidate.id === "string" ? candidate.id.trim() : "";
+          return modelId ? [modelId] : [];
+        }),
+      );
+      const selectedIds = new Set<string>();
+      // Discovery alone confirms account access; leave the manifest as the
+      // advisory fallback when OpenAI cannot return an authenticated catalog.
+      return [...fallback.models, ...buildOpenAIDiscoverablePlatformModels(baseUrl)].filter(
+        (model) => {
+          if (!discoveredIds.has(model.id) || selectedIds.has(model.id)) {
+            return false;
+          }
+          selectedIds.add(model.id);
+          return true;
+        },
+      );
+    },
     apiKey: params.apiKey,
     discoveryApiKey: params.discoveryApiKey,
     fetchGuard: params.fetchGuard,

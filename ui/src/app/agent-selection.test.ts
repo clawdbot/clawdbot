@@ -3,7 +3,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult } from "../api/types.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
 
-function createGateway(assistantAgentId = "Main") {
+function createGateway(assistantAgentId: string | null = "Main") {
   let snapshot = { client: null as GatewayBrowserClient | null, assistantAgentId };
   const listeners = new Set<(next: typeof snapshot) => void>();
   return {
@@ -113,6 +113,22 @@ describe("agent selection", () => {
     expect(selection.state).toEqual({ selectedId: "roboclaw", scopeId: "roboclaw" });
 
     selection.set("main");
+    expect(selection.state).toEqual({ selectedId: "roboclaw", scopeId: "roboclaw" });
+  });
+
+  it("waits for the roster when the gateway has no assistant agent id", () => {
+    const gateway = createGateway(null);
+    const roster = createRoster();
+    const selection = createAgentSelectionCapability(gateway.gateway, roster.roster);
+
+    expect(selection.state).toEqual({ selectedId: null, scopeId: null });
+    roster.publish({
+      defaultId: "Roboclaw",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "roboclaw", kind: "agent" }],
+    });
+
     expect(selection.state).toEqual({ selectedId: "roboclaw", scopeId: "roboclaw" });
   });
 });

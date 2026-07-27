@@ -69,6 +69,14 @@ export function spawnCommandWithInvocation<
   invocation: ReturnType<typeof resolveSafeChildProcessInvocation>;
 } {
   const { baseEnv, env, windowsVerbatimArguments, ...execaOptions } = options;
+  // Bun workaround (oven-sh/bun#36049): execa forwards its whole options object to
+  // child_process.spawn. Node ignores the extra `encoding` key there, but Bun's
+  // spawn feeds it into its stream constructor and throws ERR_UNKNOWN_ENCODING for
+  // execa's "buffer". Clearing it under Bun means buffered results arrive as utf8
+  // strings instead of Buffers; callers already normalize via Buffer.from. Binary-
+  // exact output paths are unverified under Bun. Remove once the Bun issue is fixed.
+  const dropBufferEncodingForBun =
+    Boolean(process.versions.bun) && execaOptions.encoding === "buffer";
   const commandEnv = resolveCommandEnv({ argv, baseEnv, env });
   const invocation = resolveSafeChildProcessInvocation({
     argv,
@@ -78,6 +86,7 @@ export function spawnCommandWithInvocation<
   });
   const child = execa(invocation.command, invocation.args, {
     ...execaOptions,
+    ...(dropBufferEncodingForBun ? { encoding: undefined } : {}),
     env: commandEnv,
     extendEnv: false,
     shell: false,

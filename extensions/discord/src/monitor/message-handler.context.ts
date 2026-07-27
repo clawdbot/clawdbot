@@ -129,14 +129,15 @@ export async function buildDiscordMessageProcessContext(params: {
   const senderUsername = sender.isPluralKit
     ? (sender.tag ?? sender.name ?? author.username)
     : author.username;
-  const { groupSystemPrompt, ownerAllowFrom, untrustedContext } = buildDiscordInboundAccessContext({
-    channelConfig,
-    guildInfo,
-    sender: { id: sender.id, name: sender.name, tag: sender.tag },
-    allowNameMatching: isDangerousNameMatchingEnabled(discordConfig),
-    isGuild: isGuildMessage,
-    channelTopic: channelInfo?.topic,
-  });
+  const { groupSystemPrompt, ownerAllowFrom, channelStructuredContext } =
+    buildDiscordInboundAccessContext({
+      channelConfig,
+      guildInfo,
+      sender: { id: sender.id, name: sender.name, tag: sender.tag },
+      allowNameMatching: isDangerousNameMatchingEnabled(discordConfig),
+      isGuild: isGuildMessage,
+      channelTopic: channelInfo?.topic,
+    });
   const pinnedMainDmOwner = isDirectMessage
     ? resolvePinnedMainDmOwnerFromAllowlist({
         dmScope: cfg.session?.dmScope,
@@ -458,7 +459,7 @@ export async function buildDiscordMessageProcessContext(params: {
       GroupSubject: isDirectMessage ? undefined : groupChannel,
       GroupChannel: groupChannel,
       ...(isGuildMessage ? { GroupRequireMention: ctx.groupRequireMention } : {}),
-      UntrustedStructuredContext: untrustedContext,
+      ChannelStructuredContext: channelStructuredContext,
       OwnerAllowFrom: ownerAllowFrom,
     },
   });

@@ -1480,14 +1480,14 @@ describe("prepareCliRunContext", () => {
       trigger: "user",
       transcriptPrompt: "latest ask",
       currentInboundContext: {
-        text: "Sender (untrusted metadata):\nsender_id=U123",
+        text: "Sender: ⟦openclaw:ctx⟧\nsender_id=U123",
         promptJoiner: " ",
       },
       runId: "run-test-context",
     });
 
     expect(context.params.prompt).toBe(
-      "Sender (untrusted metadata):\nsender_id=U123 trusted hook context\n\nlatest ask\n\ntrusted hook tail",
+      "Sender: ⟦openclaw:ctx⟧\nsender_id=U123 trusted hook context\n\nlatest ask\n\ntrusted hook tail",
     );
     expect(context.params.transcriptPrompt).toBe("latest ask");
     expect(context.contextEngineTurnPrompt).toBe("latest ask");
@@ -1936,7 +1936,7 @@ describe("prepareCliRunContext", () => {
     const context = await fixture.prepare({
       sessionKey: "agent:main:test",
       currentInboundContext: {
-        text: "Conversation info (untrusted metadata):\nchannel=telegram",
+        text: "Conversation info: ⟦openclaw:ctx⟧\nchannel=telegram",
       },
       extraSystemPrompt: "new stable prompt",
       extraSystemPromptStatic: "new stable prompt",
