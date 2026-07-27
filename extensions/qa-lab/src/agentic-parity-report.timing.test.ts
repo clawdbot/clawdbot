@@ -4,7 +4,10 @@ import {
   buildQaRuntimeParityReport,
   renderQaRuntimeParityMarkdownReport,
 } from "./agentic-parity-report.js";
-import { measureRuntimeParityCellTiming } from "./runtime-parity-timing.js";
+import {
+  measureRuntimeParityCellTiming,
+  summarizeRuntimeParityTiming,
+} from "./runtime-parity-timing.js";
 
 describe("qa runtime parity timing reporting", () => {
   it("excludes gateway bootstrap from measured runtime execution", () => {
@@ -104,5 +107,29 @@ describe("qa runtime parity timing reporting", () => {
       fasterRuntime: "openclaw",
       speedupPercent: null,
     });
+  });
+
+  it("compares only paired captures while retaining independently measured totals", () => {
+    const timing = summarizeRuntimeParityTiming([
+      { openclawWallClockMs: 20, codexWallClockMs: 30 },
+      { openclawWallClockMs: 1_000, codexWallClockMs: null },
+    ]);
+
+    expect(timing.openclaw.totalWallClockMs).toBe(1_020);
+    expect(timing.codex.totalWallClockMs).toBe(30);
+    expect(timing.fasterRuntime).toBe("openclaw");
+    expect(timing.speedupPercent).toBeCloseTo(50);
+  });
+
+  it("does not compare independently measured totals without a complete pair", () => {
+    const timing = summarizeRuntimeParityTiming([
+      { openclawWallClockMs: 20, codexWallClockMs: null },
+      { openclawWallClockMs: null, codexWallClockMs: 30 },
+    ]);
+
+    expect(timing.openclaw.totalWallClockMs).toBe(20);
+    expect(timing.codex.totalWallClockMs).toBe(30);
+    expect(timing.fasterRuntime).toBeNull();
+    expect(timing.speedupPercent).toBeNull();
   });
 });

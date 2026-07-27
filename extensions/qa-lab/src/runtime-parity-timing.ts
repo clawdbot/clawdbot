@@ -100,9 +100,10 @@ export function summarizeRuntimeParityTiming(
       codexWallClockMs === null ? [] : [codexWallClockMs],
     ),
   );
-  const hasTimingCaptures = scenarios.some(
-    ({ openclawWallClockMs, codexWallClockMs }) =>
-      openclawWallClockMs !== null && codexWallClockMs !== null,
+  const pairedTimingCaptures = scenarios.flatMap(({ openclawWallClockMs, codexWallClockMs }) =>
+    openclawWallClockMs === null || codexWallClockMs === null
+      ? []
+      : [{ openclawWallClockMs, codexWallClockMs }],
   );
   const openclawBootstrapValues = scenarios.flatMap(({ openclawBootstrapWallClockMs }) =>
     openclawBootstrapWallClockMs == null ? [] : [openclawBootstrapWallClockMs],
@@ -122,8 +123,12 @@ export function summarizeRuntimeParityTiming(
         }
       : {}),
     ...compareRuntimeWallClockMs(
-      hasTimingCaptures ? openclaw.totalWallClockMs : null,
-      hasTimingCaptures ? codex.totalWallClockMs : null,
+      pairedTimingCaptures.length > 0
+        ? pairedTimingCaptures.reduce((total, capture) => total + capture.openclawWallClockMs, 0)
+        : null,
+      pairedTimingCaptures.length > 0
+        ? pairedTimingCaptures.reduce((total, capture) => total + capture.codexWallClockMs, 0)
+        : null,
     ),
   };
 }
