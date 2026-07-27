@@ -1,6 +1,7 @@
 // Toggles plugin enablement config for channels and agents.
 import { normalizeChatChannelId } from "../channels/ids.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizePluginId, normalizePluginTargetConfig } from "./config-state.js";
 
 /** Returns config with a plugin enabled/disabled and optional built-in channel state synced. */
 export function setPluginEnabledInConfig(
@@ -10,16 +11,23 @@ export function setPluginEnabledInConfig(
   options: { updateChannelConfig?: boolean } = {},
 ): OpenClawConfig {
   const builtInChannelId = normalizeChatChannelId(pluginId);
-  const resolvedId = builtInChannelId ?? pluginId;
+  const resolvedId = normalizePluginId(builtInChannelId ?? pluginId);
+  const normalizedConfig = normalizePluginTargetConfig(config, resolvedId);
+  const existingEntry: NonNullable<NonNullable<OpenClawConfig["plugins"]>["entries"]>[string] = {};
+  for (const [entryId, entry] of Object.entries(config.plugins?.entries ?? {})) {
+    if (normalizePluginId(entryId) === resolvedId) {
+      Object.assign(existingEntry, entry);
+    }
+  }
 
   const next: OpenClawConfig = {
-    ...config,
+    ...normalizedConfig,
     plugins: {
-      ...config.plugins,
+      ...normalizedConfig.plugins,
       entries: {
-        ...config.plugins?.entries,
+        ...normalizedConfig.plugins?.entries,
         [resolvedId]: {
-          ...(config.plugins?.entries?.[resolvedId] as object | undefined),
+          ...existingEntry,
           enabled,
         },
       },
@@ -30,7 +38,7 @@ export function setPluginEnabledInConfig(
     return next;
   }
 
-  const channels = config.channels as Record<string, unknown> | undefined;
+  const channels = normalizedConfig.channels as Record<string, unknown> | undefined;
   const existing = channels?.[builtInChannelId];
   const existingRecord =
     existing && typeof existing === "object" && !Array.isArray(existing)
@@ -40,7 +48,7 @@ export function setPluginEnabledInConfig(
   return {
     ...next,
     channels: {
-      ...config.channels,
+      ...normalizedConfig.channels,
       [builtInChannelId]: {
         ...existingRecord,
         enabled,

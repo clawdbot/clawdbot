@@ -1,5 +1,5 @@
 // Plugins CLI policy tests cover plugin command policy checks and warnings.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   buildPluginRegistrySnapshotReport,
@@ -11,6 +11,13 @@ import {
   runPluginsCommand,
   writeConfigFile,
 } from "./plugins-cli-test-helpers.js";
+
+vi.mock("../plugins/plugin-lifecycle-lease.js", () => ({
+  withPluginLifecycleLease: async (
+    _options: unknown,
+    task: () => Promise<unknown>,
+  ): Promise<unknown> => await task(),
+}));
 
 const ORIGINAL_OPENCLAW_NIX_MODE = process.env.OPENCLAW_NIX_MODE;
 
@@ -91,6 +98,27 @@ describe("plugins cli policy mutations", () => {
       policyPluginIds: ["alpha"],
       reason: "policy-changed",
     });
+  });
+
+  it("does not persist or refresh when plugin enablement is blocked", async () => {
+    const sourceConfig = {
+      plugins: {
+        deny: ["alpha"],
+      },
+    } as OpenClawConfig;
+    loadConfig.mockReturnValue(sourceConfig);
+    enablePluginInConfig.mockReturnValue({
+      config: sourceConfig,
+      enabled: false,
+      pluginId: "alpha",
+      reason: "blocked by denylist",
+    });
+    mockPluginRegistry(["alpha"]);
+
+    await runPluginsCommand(["plugins", "enable", "alpha"]);
+
+    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(refreshPluginRegistry).not.toHaveBeenCalled();
   });
 
   it("refuses plugin enablement in Nix mode before config mutation", async () => {

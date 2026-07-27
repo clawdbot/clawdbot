@@ -78,10 +78,37 @@ describe("enablePluginInConfig", () => {
       },
     },
     {
+      name: "enables a canonical plugin allowed through a compatibility id",
+      cfg: {
+        plugins: {
+          allow: ["GOOGLE-GEMINI-CLI"],
+        },
+      } as OpenClawConfig,
+      pluginId: "google",
+      expectedEnabled: true,
+      assert: (result: ReturnType<typeof enablePluginInConfig>) => {
+        expect(result.config.plugins?.entries?.google?.enabled).toBe(true);
+        expectEnabledAllowlist(result, ["google"]);
+      },
+    },
+    {
       name: "refuses enable when plugin is denylisted",
       cfg: {
         plugins: {
           deny: ["google"],
+        },
+      } as OpenClawConfig,
+      pluginId: "google",
+      expectedEnabled: false,
+      assert: (result: ReturnType<typeof enablePluginInConfig>) => {
+        expect(result.reason).toBe("blocked by denylist");
+      },
+    },
+    {
+      name: "refuses a canonical plugin denied through a compatibility id",
+      cfg: {
+        plugins: {
+          deny: ["GOOGLE-GEMINI-CLI"],
         },
       } as OpenClawConfig,
       pluginId: "google",

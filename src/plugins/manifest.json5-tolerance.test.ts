@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveMemorySlotDecision } from "./config-state.js";
 import { loadPluginManifest } from "./manifest.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -119,6 +120,54 @@ describe("loadPluginManifest JSON5 tolerance", () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.manifest.id).toBe("unquoted-keys");
+    }
+  });
+
+  it("filters and deduplicates plugin kinds", () => {
+    const dir = makeTempDir();
+    fs.writeFileSync(
+      path.join(dir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "kind-normalization",
+        kind: ["memory", "memory", "unknown", 42, "context-engine"],
+        configSchema: { type: "object" },
+      }),
+      "utf-8",
+    );
+
+    const result = loadPluginManifest(dir, false);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.manifest.kind).toEqual(["memory", "context-engine"]);
+    }
+  });
+
+  it("collapses duplicate memory kinds so slot policy cannot be bypassed", () => {
+    const dir = makeTempDir();
+    fs.writeFileSync(
+      path.join(dir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "duplicate-memory",
+        kind: ["memory", "memory"],
+        configSchema: { type: "object" },
+      }),
+      "utf-8",
+    );
+
+    const result = loadPluginManifest(dir, false);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.manifest.kind).toBe("memory");
+      expect(
+        resolveMemorySlotDecision({
+          id: result.manifest.id,
+          kind: result.manifest.kind,
+          slot: "memory-core",
+          selectedId: "memory-core",
+        }),
+      ).toEqual({ enabled: false, reason: 'memory slot set to "memory-core"' });
     }
   });
 

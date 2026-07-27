@@ -31,6 +31,29 @@ describe("setPluginEnabledInConfig", () => {
     });
   });
 
+  it("canonicalizes compatibility ids without losing existing config", () => {
+    const config = {
+      plugins: {
+        allow: ["GOOGLE-GEMINI-CLI"],
+        entries: {
+          "GOOGLE-GEMINI-CLI": {
+            enabled: false,
+            config: { region: "us" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const next = setPluginEnabledInConfig(config, "google", true);
+
+    expect(next.plugins?.allow).toEqual(["google"]);
+    expect(next.plugins?.entries?.google).toEqual({
+      enabled: true,
+      config: { region: "us" },
+    });
+    expect(next.plugins?.entries?.["GOOGLE-GEMINI-CLI"]).toBeUndefined();
+  });
+
   it("keeps built-in channel and plugin entry flags in sync", () => {
     const config = {
       channels: {
