@@ -284,9 +284,11 @@ export async function admitFollowupTurn(params: {
           ? initialEntry
           : undefined;
     const assertPersistedGeneration = (entry: SessionEntry | undefined) => {
+      const matchesExpectedGeneration = isSameSessionGeneration(entry, expectedPersistedEntry);
       if (
         params.defaults.storePath &&
-        ((entry && entry.sessionId !== operation.sessionId) || (!entry && expectedPersistedEntry))
+        ((expectedPersistedEntry && !matchesExpectedGeneration) ||
+          (!expectedPersistedEntry && entry && entry.sessionId !== operation.sessionId))
       ) {
         throw new FollowupSessionGenerationInvalidatedError(
           "Follow-up session generation changed after reply admission",
