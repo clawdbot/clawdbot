@@ -16,8 +16,16 @@ import {
   COMMUNICATION_SECTION_KEYS,
   INFRASTRUCTURE_SECTION_KEYS,
   MCP_SECTION_KEYS,
+  MEMORY_SECTION_KEYS,
   SECURITY_SECTION_KEYS,
 } from "./config-sections.ts";
+import {
+  memoryVisibleSchemaKeys,
+  resolveMemoryBackend,
+  MEMORY_BACKEND_ANCHOR_ID,
+  MEMORY_CURATED_SCHEMA_KEYS,
+  MEMORY_SEARCH_TAB_SCHEMA_KEYS,
+} from "./memory-schema.ts";
 import {
   APPEARANCE_SETTINGS_TARGET_IDS,
   COMMUNICATION_SETTINGS_TARGET_IDS,
@@ -221,6 +229,7 @@ const APPEARANCE_SECTIONS = new Set<string>(APPEARANCE_SECTION_KEYS);
 const SECURITY_SECTIONS = new Set<string>(SECURITY_SECTION_KEYS);
 const AUTOMATION_SECTIONS = new Set<string>(AUTOMATION_SECTION_KEYS);
 const MCP_SECTIONS = new Set<string>(MCP_SECTION_KEYS);
+const MEMORY_SECTIONS = new Set<string>(MEMORY_SECTION_KEYS);
 const INFRASTRUCTURE_SECTIONS = new Set<string>(INFRASTRUCTURE_SECTION_KEYS);
 const AI_AGENTS_SECTIONS = new Set<string>(AI_AGENTS_SECTION_KEYS);
 
@@ -234,9 +243,84 @@ function resolveStaticSettingsBlock(block: StaticSettingsBlockDescriptor): Stati
   };
 }
 
+/**
+ * The Memory page hides `memory.*` children the current engine/backend makes
+ * inapplicable — `memory.qmd` only renders once qmd is the selected backend.
+ * Matching the raw section would offer a destination whose editor omits the very
+ * field that matched, so search sees only what the page can show.
+ */
+function visibleMemorySchema(
+  sectionSchema: JsonSchema,
+  config: Record<string, unknown>,
+): JsonSchema {
+  const properties = sectionSchema.properties;
+  if (!properties) {
+    return sectionSchema;
+  }
+  const visible = new Set(memoryVisibleSchemaKeys(resolveMemoryBackend(config)));
+  return {
+    ...sectionSchema,
+    properties: Object.fromEntries(
+      Object.entries(properties).filter(([child]) => visible.has(child)),
+    ),
+  };
+}
+
+/**
+ * The Memory page splits `memory.*` across tabs and lifts `memory.backend` out
+ * of the editor into a curated row, so the bare section destination can land on
+ * a tab or an editor slice that omits the matched control. Only a hit one
+ * surface alone can show re-routes; a section-level match (key, label,
+ * description) is symmetric across slices and keeps the default destination.
+ */
+function memoryDestination(params: {
+  key: string;
+  schema: JsonSchema;
+  value: unknown;
+  hints: ConfigUiHints;
+  query: string;
+  editorHash: string;
+}): { search: string; hash: string } {
+  const properties = params.schema.properties;
+  if (!properties) {
+    return { search: "", hash: params.editorHash };
+  }
+  const sliceMatches = (keys: readonly string[]) => {
+    const sliced = Object.fromEntries(
+      Object.entries(properties).filter(([child]) => keys.includes(child)),
+    );
+    return (
+      Object.keys(sliced).length > 0 &&
+      matchesConfigSectionSearch({
+        key: params.key,
+        schema: { ...params.schema, properties: sliced },
+        value: params.value,
+        hints: params.hints,
+        query: params.query,
+        textMatcher: settingsSearchTextMatches,
+      })
+    );
+  };
+  const onlySliceMatches = (keys: readonly string[]) =>
+    sliceMatches(keys) &&
+    !sliceMatches(Object.keys(properties).filter((child) => !keys.includes(child)));
+  if (onlySliceMatches(MEMORY_SEARCH_TAB_SCHEMA_KEYS)) {
+    return { search: "&tab=search", hash: params.editorHash };
+  }
+  // memoryVisibleSchemaKeys drops `backend` when no engine renders the curated
+  // row, so a match here always has the anchor on the page to scroll to.
+  if (onlySliceMatches(MEMORY_CURATED_SCHEMA_KEYS)) {
+    return { search: "", hash: `#${MEMORY_BACKEND_ANCHOR_ID}` };
+  }
+  return { search: "", hash: params.editorHash };
+}
+
 function routeForConfigSection(key: string): RouteId {
   if (MCP_SECTIONS.has(key)) {
     return "mcp";
+  }
+  if (MEMORY_SECTIONS.has(key)) {
+    return "memory";
   }
   if (COMMUNICATION_SECTIONS.has(key)) {
     return "communications";
@@ -287,7 +371,10 @@ export function findSettingsSearchBlocks(params: {
     return matches;
   }
   const value = params.value ?? {};
-  for (const [key, sectionSchema] of Object.entries(schema.properties)) {
+  for (const [key, rawSectionSchema] of Object.entries(schema.properties)) {
+    const routeId = routeForConfigSection(key);
+    const sectionSchema =
+      routeId === "memory" ? visibleMemorySchema(rawSectionSchema, value) : rawSectionSchema;
     const meta = SECTION_META[key];
     const tierSplit = splitConfigSchemaByTier({
       schema: sectionSchema,
@@ -314,11 +401,23 @@ export function findSettingsSearchBlocks(params: {
       continue;
     }
     const encodedKey = encodeURIComponent(key);
+    const editorHash = `#config-section-${encodedKey}`;
+    const destination =
+      routeId === "memory"
+        ? memoryDestination({
+            key,
+            schema: sectionSchema,
+            value: value[key],
+            hints: params.uiHints,
+            query: params.query,
+            editorHash,
+          })
+        : { search: "", hash: editorHash };
     matches.push({
-      routeId: routeForConfigSection(key),
+      routeId,
       label: meta?.label ?? sectionSchema.title ?? key,
-      search: `?section=${encodedKey}${matchesAdvanced ? "&advanced=1" : ""}`,
-      hash: `#config-section-${encodedKey}`,
+      search: `?section=${encodedKey}${matchesAdvanced ? "&advanced=1" : ""}${destination.search}`,
+      hash: destination.hash,
     });
   }
   return matches;

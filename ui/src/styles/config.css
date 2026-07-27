@@ -754,6 +754,24 @@
   margin-top: 12px;
 }
 
+/* Memory */
+.memory-page {
+  display: grid;
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.memory-page__panel {
+  display: grid;
+  gap: 14px;
+}
+
+.memory-page__link {
+  color: var(--accent);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
 .mcp-command-card__grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

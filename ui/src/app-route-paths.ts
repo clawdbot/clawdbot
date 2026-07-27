@@ -24,6 +24,7 @@ const APP_ROUTE_DEFINITIONS = {
   approvals: { path: "/settings/approvals" },
   automation: { path: "/settings/automation", aliases: ["/automation"] },
   mcp: { path: "/settings/mcp", aliases: ["/mcp"] },
+  memory: { path: "/settings/memory" },
   infrastructure: { path: "/settings/infrastructure", aliases: ["/infrastructure"] },
   labs: { path: "/settings/labs" },
   about: { path: "/settings/about" },

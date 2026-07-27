@@ -3,6 +3,8 @@ import type { RouteLocation } from "@openclaw/uirouter";
 export type ConfigRouteData = {
   section: string | null;
   advanced: boolean;
+  /** Raw `?tab=`; curated hub pages normalize it against their own tab set. */
+  tab: string | null;
   targetBlockId: string | null;
 };
 
@@ -23,6 +25,7 @@ export function configRouteData(location: Pick<RouteLocation, "search" | "hash">
   return {
     section,
     advanced: searchParams.get("advanced") === "1",
+    tab: searchParams.get("tab")?.trim() || null,
     targetBlockId: configTargetIdFromHash(location.hash),
   };
 }
