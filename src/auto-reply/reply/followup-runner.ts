@@ -135,6 +135,9 @@ export function createFollowupRunner(
       }
       if (disposition.kind === "consumed") {
         completeFollowupRunLifecycle(queued);
+        if (admittedRunId) {
+          clearAgentRunContext(admittedRunId);
+        }
       } else if (disposition.kind === "retry" && admittedRunId) {
         clearAgentRunContext(admittedRunId);
       }

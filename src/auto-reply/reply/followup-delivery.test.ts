@@ -653,6 +653,24 @@ describe("resolveFollowupDeliveryDecision", () => {
       }),
     ).toEqual({ kind: "suppress", reason: "silent" });
   });
+
+  it("delivers a sanitized terminal failure in message-tool-only mode", () => {
+    const turn = createTurn();
+    turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
+
+    const decision = resolveFollowupDeliveryDecision({
+      turn,
+      execution: createSettledExecution(),
+      accounting: createAccounting([], {
+        terminalFailurePayload: { text: "terminal failure", isError: true },
+      }),
+    });
+
+    expect(decision).toMatchObject({
+      kind: "deliver",
+      payloads: [{ text: "terminal failure", isError: true }],
+    });
+  });
 });
 
 describe("deliverFollowupDecision", () => {

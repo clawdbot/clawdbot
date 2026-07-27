@@ -11,7 +11,11 @@ import { buildAgentRuntimeDeliveryPlan } from "../../agents/runtime-plan/build.j
 import { logVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
-import { getReplyPayloadMetadata, isReplyPayloadStatusNotice } from "../reply-payload.js";
+import {
+  getReplyPayloadMetadata,
+  isReplyPayloadStatusNotice,
+  markReplyPayloadForSourceSuppressionDelivery,
+} from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { normalizeAssistantFinalDeliveryText } from "./agent-runner-core.js";
 import type { AgentTurnExecutionResult } from "./agent-runner-execution.types.js";
@@ -191,7 +195,9 @@ export function resolveFollowupDeliveryDecision(params: {
     result.didSendDeterministicApprovalPrompt === true;
   const fallbackPayload = accounting.terminalFailurePayload
     ? isInteractive && !hasCompletedTerminalDeliveryEvidence(result)
-      ? accounting.terminalFailurePayload
+      ? sourcePolicy.sourceReplyDeliveryMode === "message_tool_only"
+        ? markReplyPayloadForSourceSuppressionDelivery(accounting.terminalFailurePayload)
+        : accounting.terminalFailurePayload
       : undefined
     : buildEmptyInteractiveReplyPayload({
         isInteractive,

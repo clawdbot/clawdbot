@@ -226,6 +226,7 @@ describe("createFollowupRunner", () => {
       "lifecycle-complete",
       "operation-complete",
     ]);
+    expect(state.clearRunContext).toHaveBeenCalledWith("run-1");
   });
 
   it("reports a completed message-tool source delivery before final projection", async () => {
