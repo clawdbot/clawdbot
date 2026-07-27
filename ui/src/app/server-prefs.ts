@@ -1,10 +1,4 @@
-// Server-side operator display prefs (config ui.prefs) with a browser-local
-// mirror. The config value is canonical — agents change it through the
-// approval gate and other devices pick it up — while localStorage keeps
-// instant boot and stays authoritative when this client cannot write config
-// (viewer scope, offline). Sync policy: a server-side *change* wins over the
-// local mirror; an unchanged server value never reverts local edits, so a
-// failed push degrades to device-local behavior instead of flip-flopping.
+// Server ui.prefs is canonical; pending local intent shadows snapshots until hash-free LWW ack.
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { normalizeSidebarEntries } from "../app-navigation.ts";
@@ -19,39 +13,25 @@ import {
   type UiSettings,
 } from "./settings.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
-
 const THEMES: ReadonlySet<ThemeName> = new Set(["claw", "knot", "dash", "custom"]);
 const THEME_MODES: ReadonlySet<ThemeMode> = new Set(["light", "dark", "system"]);
-
-/**
- * One descriptor per synced pref — the single source of truth for what syncs
- * through config ui.prefs. Each key defines how to validate the server value,
- * read the normalized local value, and (optionally) whether a server value is
- * applicable on this device. `clearable` keys push an explicit JSON null when
- * unset locally so the merge patch removes them server-side.
- */
 type SyncedPrefSpec<T> = {
   extract: (value: unknown) => T | undefined;
   local: (settings: UiSettings) => T | undefined;
   canApply?: (value: T, settings: UiSettings) => boolean;
   clearable?: boolean;
 };
-
 const prefSpec = <T>(specification: SyncedPrefSpec<T>) => specification;
-
 function prefValuesEqual(left: unknown, right: unknown): boolean {
   if (Array.isArray(left) && Array.isArray(right)) {
     return left.length === right.length && left.every((value, index) => value === right[index]);
   }
   return left === right;
 }
-
 const SYNCED_PREFS = {
   theme: prefSpec<ThemeName>({
     extract: (value) => (THEMES.has(value as ThemeName) ? (value as ThemeName) : undefined),
     local: (settings) => settings.theme,
-    // A server "custom" theme is only honorable once this browser imported
-    // one; the imported palette itself is too large to live in config.
     canApply: (value, settings) => value !== "custom" || Boolean(settings.customTheme),
   }),
   themeMode: prefSpec<ThemeMode>({
@@ -84,8 +64,6 @@ const SYNCED_PREFS = {
   chatFollowUpMode: prefSpec<ChatFollowUpMode>({
     extract: (value) => normalizeChatFollowUpModeOverride(value),
     local: (settings) => normalizeChatFollowUpModeOverride(settings.chatFollowUpMode),
-    // Unset means "use the server-configured queue mode"; clearing must
-    // propagate, so the push serializes an explicit null removal.
     clearable: true,
   }),
   sidebarEntries: prefSpec<string[]>({
@@ -97,15 +75,11 @@ const SYNCED_PREFS = {
     local: (settings) => settings.showAdvancedSettings === true,
   }),
 } as const;
-
 type SyncedPrefKey = keyof typeof SYNCED_PREFS;
 type SyncedPrefValue<K extends SyncedPrefKey> =
   ReturnType<(typeof SYNCED_PREFS)[K]["extract"]> extends (infer T) | undefined ? T : never;
-
 type ServerUiPrefs = { [K in SyncedPrefKey]?: SyncedPrefValue<K> | null };
-
 const SYNCED_PREF_KEYS = Object.keys(SYNCED_PREFS) as SyncedPrefKey[];
-
 function extractServerUiPrefs(configObject: unknown): ServerUiPrefs {
   const prefs = asRecord(asRecord(asRecord(configObject)?.ui)?.prefs);
   if (!prefs) {
@@ -120,7 +94,6 @@ function extractServerUiPrefs(configObject: unknown): ServerUiPrefs {
   }
   return result;
 }
-
 /** Local-settings patch that would bring the mirror in line with the server. */
 function serverPrefsLocalPatch(
   prefs: ServerUiPrefs,
@@ -133,8 +106,6 @@ function serverPrefsLocalPatch(
     if (serverValue === undefined) {
       continue;
     }
-    // Null marks a server-side removal of a clearable key: drop the local
-    // override so this device falls back to the server-configured behavior.
     if (serverValue === null) {
       if (specification.clearable && specification.local(settings) !== undefined) {
         (patch as Record<string, unknown>)[key] = undefined;
@@ -157,7 +128,6 @@ function serverPrefsLocalPatch(
   }
   return Object.keys(patch).length > 0 ? patch : null;
 }
-
 /** Synced-key delta between two local settings snapshots, for the push path. */
 export function changedServerUiPrefs(previous: UiSettings, next: UiSettings): ServerUiPrefs | null {
   const prefs: ServerUiPrefs = {};
@@ -169,7 +139,6 @@ export function changedServerUiPrefs(previous: UiSettings, next: UiSettings): Se
       continue;
     }
     if (nextValue === undefined) {
-      // JSON merge patch removes keys via explicit null.
       if (specification.clearable) {
         (prefs as Record<string, unknown>)[key] = null;
       }
@@ -179,105 +148,93 @@ export function changedServerUiPrefs(previous: UiSettings, next: UiSettings): Se
   }
   return Object.keys(prefs).length > 0 ? prefs : null;
 }
-
-// Last server value this client reconciled against, persisted per gateway
-// scope. Applying only on a server *delta* keeps an unpushable local edit
-// (viewer scope) from being reverted by every later snapshot — including the
-// first snapshot after a reload or reconnect — carrying the same old value.
-const LAST_SEEN_STORAGE_KEY = "openclaw.control.serverPrefs.v1";
-
-let lastSeenScope = "";
-let lastSeenServerPrefsKey: string | null = null;
-// Config hashes our patches replaced. A snapshot still carrying one of these
-// hashes was fetched before the patch landed; applying it would revert the
-// pushed value as if the server had changed it back. CAS guarantees the
-// replaced config had exactly the base hash, so this check is precise.
-const staleConfigHashes = new Set<string>();
-const STALE_CONFIG_HASH_LIMIT = 8;
+const LAST_SEEN_KEY = "openclaw.control.serverPrefs.v1";
+const PENDING_KEY = "openclaw.control.serverPrefs.pending.v1";
 let applyingServerPrefs = false;
-
-function loadLastSeenKey(scope: string): string | null {
-  if (scope !== lastSeenScope) {
-    lastSeenScope = scope;
-    try {
-      lastSeenServerPrefsKey = globalThis.localStorage?.getItem(
-        `${LAST_SEEN_STORAGE_KEY}:${scope}`,
-      );
-    } catch {
-      lastSeenServerPrefsKey = null;
-    }
-  }
-  return lastSeenServerPrefsKey;
-}
-
-function storeLastSeenKey(scope: string, key: string) {
-  lastSeenScope = scope;
-  lastSeenServerPrefsKey = key;
+let pendingScope = "";
+let pendingPrefs: ServerUiPrefs | null = null;
+let pushClient: GatewayBrowserClient | null = null;
+let pushAfterCommit: (() => void) | undefined;
+let pushDraining = false;
+let drainRequested = false;
+let pushEpoch = 0;
+function readStorage(root: string, scope: string): string | null {
   try {
-    globalThis.localStorage?.setItem(`${LAST_SEEN_STORAGE_KEY}:${scope}`, key);
+    return globalThis.localStorage?.getItem(`${root}:${scope}`) ?? null;
   } catch {
-    // Quota/security failures degrade to in-memory tracking for this session.
+    return null;
   }
 }
-
-export function resetServerUiPrefsSync() {
-  lastSeenScope = "";
-  lastSeenServerPrefsKey = null;
-  staleConfigHashes.clear();
-  applyingServerPrefs = false;
-  queuedClient = null;
-  queuedPrefs = null;
-  pushDraining = false;
+function writeStorage(root: string, scope: string, value: string | null): void {
+  try {
+    const key = `${root}:${scope}`;
+    if (value === null) {
+      globalThis.localStorage?.removeItem(key);
+    } else {
+      globalThis.localStorage?.setItem(key, value);
+    }
+  } catch {}
 }
-
+function parseStoredPrefs(raw: string | null): ServerUiPrefs | null {
+  try {
+    const prefs = asRecord(JSON.parse(raw ?? "null"));
+    return prefs && Object.keys(prefs).length ? (prefs as ServerUiPrefs) : null;
+  } catch {
+    return null;
+  }
+}
+function adoptPendingScope(scope: string, force = false): void {
+  if (!force && scope === pendingScope) {
+    return;
+  }
+  pendingScope = scope;
+  pendingPrefs = parseStoredPrefs(readStorage(PENDING_KEY, scope));
+}
+function persistPendingPrefs(): void {
+  const value = pendingPrefs ? JSON.stringify(pendingPrefs) : null;
+  writeStorage(PENDING_KEY, pendingScope, value);
+}
+export function resetServerUiPrefsSync() {
+  applyingServerPrefs = pushDraining = drainRequested = false;
+  pendingScope = "";
+  pendingPrefs = pushClient = null;
+}
 export function applyServerUiPrefs(
   configObject: unknown,
   hooks: {
     scope?: string;
-    snapshotHash?: string;
     onApplied: (patch: Partial<UiSettings>) => void;
   },
 ): boolean {
-  if (hooks.snapshotHash) {
-    if (staleConfigHashes.has(hooks.snapshotHash)) {
-      return false;
-    }
-    // Post-patch state observed: retire the stale marks. Hashes identify
-    // content, not age — if the pre-patch hash reappears later, another
-    // writer genuinely restored that config and it is authoritative again.
-    staleConfigHashes.clear();
-  }
   const scope = hooks.scope ?? "";
+  const shadowPrefs =
+    scope === pendingScope ? pendingPrefs : parseStoredPrefs(readStorage(PENDING_KEY, scope));
   const prefs = extractServerUiPrefs(configObject);
   const key = JSON.stringify(prefs);
-  const lastSeenRaw = loadLastSeenKey(scope);
+  const lastSeenRaw = readStorage(LAST_SEEN_KEY, scope);
   if (key === lastSeenRaw) {
     return false;
   }
-  // Apply per field: only keys whose *server* value changed since last seen.
-  // Reapplying unchanged fields would revert unpushable local edits on other
-  // keys whenever any one server field moves.
-  let lastSeen: ServerUiPrefs;
-  try {
-    lastSeen = lastSeenRaw ? (JSON.parse(lastSeenRaw) as ServerUiPrefs) : {};
-  } catch {
-    lastSeen = {};
-  }
+  const lastSeen = parseStoredPrefs(lastSeenRaw) ?? {};
   const changed: ServerUiPrefs = {};
   for (const prefKey of Object.keys(prefs) as Array<keyof ServerUiPrefs>) {
-    if (lastSeenRaw === null || !prefValuesEqual(prefs[prefKey], lastSeen[prefKey])) {
+    if (
+      !(shadowPrefs && prefKey in shadowPrefs) &&
+      (lastSeenRaw === null || !prefValuesEqual(prefs[prefKey], lastSeen[prefKey]))
+    ) {
       (changed as Record<string, unknown>)[prefKey] = prefs[prefKey];
     }
   }
-  // A clearable key that disappeared from the server was removed by another
-  // writer; surface the removal as an explicit null so the local override
-  // clears too (non-clearable keys keep their device-local value).
   for (const prefKey of Object.keys(lastSeen) as Array<keyof ServerUiPrefs>) {
-    if (!(prefKey in prefs) && SYNCED_PREFS[prefKey]?.clearable) {
+    if (
+      !(prefKey in prefs) &&
+      !(shadowPrefs && prefKey in shadowPrefs) &&
+      SYNCED_PREFS[prefKey]?.clearable
+    ) {
       (changed as Record<string, unknown>)[prefKey] = null;
     }
   }
-  storeLastSeenKey(scope, key);
+  writeStorage(LAST_SEEN_KEY, scope, key);
   const patch = serverPrefsLocalPatch(changed, loadSettings());
   if (!patch) {
     return false;
@@ -291,83 +248,124 @@ export function applyServerUiPrefs(
   hooks.onApplied(patch);
   return true;
 }
-
 export function isApplyingServerUiPrefs(): boolean {
   return applyingServerPrefs;
 }
-
-// Pending deltas coalesce into one object and drain serially, so rapid
-// changes cannot race each other's CAS hash and silently drop an update. The
-// queue is bound to one gateway client; switching gateways drops undelivered
-// deltas for the old one (they stay device-local, per the sync contract).
-let queuedClient: GatewayBrowserClient | null = null;
-let queuedPrefs: ServerUiPrefs | null = null;
-let pushDraining = false;
-
-async function drainPrefsQueue(client: GatewayBrowserClient): Promise<void> {
-  while (queuedPrefs) {
-    // The awaits below can outlive a gateway switch; a superseded drain stops
-    // instead of writing one gateway's prefs to another.
-    if (queuedClient !== client) {
+function adoptPushClient(client: GatewayBrowserClient): void {
+  if (pushClient === client) {
+    return;
+  }
+  pushEpoch += 1;
+  pushClient = client;
+  pushDraining = false;
+  adoptPendingScope(client.gatewayUrl, true);
+}
+function removeBatch(batch: ServerUiPrefs): void {
+  if (!pendingPrefs) {
+    return;
+  }
+  for (const key of Object.keys(batch) as SyncedPrefKey[]) {
+    if (prefValuesEqual(pendingPrefs[key], batch[key])) {
+      delete pendingPrefs[key];
+    }
+  }
+  if (!Object.keys(pendingPrefs).length) {
+    pendingPrefs = null;
+  }
+}
+async function drainPendingPrefs(client: GatewayBrowserClient, epoch: number): Promise<void> {
+  while (pendingPrefs) {
+    if (pushClient !== client || pushEpoch !== epoch) {
       return;
     }
-    const prefs = queuedPrefs;
-    queuedPrefs = null;
+    const batch = { ...pendingPrefs };
+    const afterCommit = pushAfterCommit;
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const snapshot = (await client.request("config.get", {})) as { hash?: string } | null;
-      const baseHash = snapshot?.hash;
-      if (!baseHash || queuedClient !== client) {
+      if (pushClient !== client || pushEpoch !== epoch) {
         return;
       }
       try {
-        const replacePaths = prefs.sidebarEntries !== undefined ? ["ui.prefs.sidebarEntries"] : [];
         await client.request("config.patch", {
-          baseHash,
-          raw: JSON.stringify({ ui: { prefs } }),
-          ...(replacePaths.length > 0 ? { replacePaths } : {}),
+          raw: JSON.stringify({ ui: { prefs: batch } }),
+          ...(batch.sidebarEntries !== undefined
+            ? { replacePaths: ["ui.prefs.sidebarEntries"] }
+            : {}),
           note: "control-ui prefs sync",
         });
-        staleConfigHashes.add(baseHash);
-        if (staleConfigHashes.size > STALE_CONFIG_HASH_LIMIT) {
-          const oldest = staleConfigHashes.values().next().value;
-          if (oldest !== undefined) {
-            staleConfigHashes.delete(oldest);
-          }
+        if (pushClient !== client || pushEpoch !== epoch) {
+          return;
         }
+        // Start refresh while pending still shadows the pre-commit snapshot published by load.
+        afterCommit?.();
+        if (pushClient !== client || pushEpoch !== epoch) {
+          return;
+        }
+        removeBatch(batch);
+        const lastSeen = parseStoredPrefs(readStorage(LAST_SEEN_KEY, pendingScope)) ?? {};
+        writeStorage(LAST_SEEN_KEY, pendingScope, JSON.stringify({ ...lastSeen, ...batch }));
+        persistPendingPrefs();
         break;
       } catch (error) {
-        if (attempt === 0 && String(error).toLowerCase().includes("hash")) {
+        if (pushClient !== client || pushEpoch !== epoch) {
+          return;
+        }
+        const conflict = String(error).includes("config changed since last load");
+        if (conflict && attempt === 0) {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 250);
+          });
           continue;
         }
+        if (conflict || !client.connected) {
+          return;
+        }
+        removeBatch(batch);
+        persistPendingPrefs();
         return;
       }
     }
   }
 }
-
-/**
- * Best-effort write-through of a local pref change to config ui.prefs.
- * Silent on failure by design: clients without operator.admin (or offline)
- * keep the change device-local.
- */
-export function pushServerUiPrefs(client: GatewayBrowserClient, prefs: ServerUiPrefs): void {
-  if (queuedClient !== client) {
-    // New gateway: abandon the old queue (its drain loop sees the client
-    // change and stops) instead of writing one gateway's prefs to another.
-    queuedClient = client;
-    queuedPrefs = null;
-    pushDraining = false;
-  }
-  queuedPrefs = { ...queuedPrefs, ...prefs };
+function startPendingDrain(client: GatewayBrowserClient): void {
   if (pushDraining) {
+    drainRequested = true;
+    return;
+  }
+  if (!pendingPrefs) {
     return;
   }
   pushDraining = true;
-  void drainPrefsQueue(client)
+  const epoch = pushEpoch;
+  void drainPendingPrefs(client, epoch)
     .catch(() => undefined)
     .finally(() => {
-      if (queuedClient === client) {
+      if (pushClient === client && pushEpoch === epoch) {
         pushDraining = false;
+        if (drainRequested) {
+          drainRequested = false;
+          startPendingDrain(client);
+        }
       }
     });
+}
+export function pushServerUiPrefs(
+  client: GatewayBrowserClient,
+  prefs: ServerUiPrefs,
+  hooks: { afterCommit?: () => void } = {},
+): void {
+  adoptPushClient(client);
+  pendingPrefs = { ...pendingPrefs, ...prefs };
+  pushAfterCommit = hooks.afterCommit;
+  persistPendingPrefs();
+  startPendingDrain(client);
+}
+export function flushServerUiPrefs(
+  client: GatewayBrowserClient,
+  hooks: { afterCommit?: () => void } = {},
+): void {
+  adoptPushClient(client);
+  pushEpoch += 1;
+  pushDraining = drainRequested = false;
+  pushAfterCommit = hooks.afterCommit;
+  startPendingDrain(client);
 }

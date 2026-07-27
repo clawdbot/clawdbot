@@ -109,6 +109,7 @@ import { controlUiPublicAssetPath } from "./public-assets.ts";
 import {
   applyServerUiPrefs,
   changedServerUiPrefs,
+  flushServerUiPrefs,
   isApplyingServerUiPrefs,
   pushServerUiPrefs,
   resetServerUiPrefsSync,
@@ -680,12 +681,11 @@ class OpenClawShell extends OpenClawLightDomElement {
   private reconcileServerUiPrefs(runtimeConfig: ApplicationContext["runtimeConfig"]) {
     const snapshot = runtimeConfig.state.configSnapshot;
     const context = this.context;
-    if (!snapshot?.config || !context) {
+    if (!snapshot?.config || !context || context.runtimeConfig !== runtimeConfig) {
       return;
     }
     applyServerUiPrefs(snapshot.config, {
       scope: context.gateway.connection.gatewayUrl,
-      snapshotHash: snapshot.hash ?? undefined,
       onApplied: (patch) => {
         if (patch.sidebarEntries !== undefined) {
           context.navigation.update({ sidebarEntries: patch.sidebarEntries });
@@ -730,8 +730,15 @@ class OpenClawShell extends OpenClawLightDomElement {
       }
       const prefs = changedServerUiPrefs(previous, next);
       const snapshot = this.context?.gateway.snapshot;
-      if (prefs && snapshot?.phase === "connected" && snapshot.client) {
-        pushServerUiPrefs(snapshot.client, prefs);
+      if (prefs && snapshot?.client) {
+        pushServerUiPrefs(snapshot.client, prefs, {
+          afterCommit: () => {
+            const runtimeConfig = this.context?.runtimeConfig;
+            if (runtimeConfig) {
+              void runtimeConfig.refresh();
+            }
+          },
+        });
       }
     });
   }
@@ -1534,6 +1541,14 @@ class OpenClawShell extends OpenClawLightDomElement {
     }
     this.runtimeConfigClient = snapshot.client;
     this.runtimeConfigSource = runtimeConfig;
+    flushServerUiPrefs(snapshot.client, {
+      afterCommit: () => {
+        const currentRuntimeConfig = this.context?.runtimeConfig;
+        if (currentRuntimeConfig) {
+          void currentRuntimeConfig.refresh();
+        }
+      },
+    });
     void runtimeConfig.ensureLoaded();
   }
 
