@@ -6,7 +6,8 @@ const mocks = vi.hoisted(() => ({
   officialCatalog: vi.fn(),
 }));
 
-vi.mock("./plugin-metadata-snapshot.js", () => ({
+vi.mock("./plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./plugin-metadata-snapshot.js")>()),
   loadPluginMetadataSnapshot: (...args: unknown[]) => mocks.metadata(...args),
 }));
 

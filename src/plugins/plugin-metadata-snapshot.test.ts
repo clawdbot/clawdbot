@@ -18,7 +18,6 @@ const {
   loadPluginManifestRegistry,
   loadPluginManifestRegistryForInstalledIndex,
 } = vi.hoisted(() => {
-  vi.resetModules();
   return {
     loadPluginRegistrySnapshotWithMetadata: vi.fn(),
     loadPluginManifestRegistry: vi.fn(),
