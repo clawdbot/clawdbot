@@ -645,17 +645,23 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       limit: CHANNEL_STARTUP_CONCURRENCY,
       tasks: accountIds.map((id) => async () => {
         const rKey = restartKey(channelId, id);
-        // An in-flight or failed plugin teardown may still own resources. Only
-        // the last queued attempt or a later successful stop clears this gate.
-        if (store.stops.has(id)) {
+        // An in-flight plugin teardown may still own resources. A rejected stop
+        // outcome only preserves diagnostics; a paired include-known rollback
+        // start can retry after the aborted task has actually settled.
+        const currentStop = store.stops.get(id);
+        if (currentStop?.status === "stopping") {
           return;
         }
         const existingTask = store.tasks.get(id);
+        const existingAbort = store.aborts.get(id);
+        const abortedTask = existingAbort?.signal.aborted === true;
+        const shouldRetryAfterCallerDeferredTask =
+          includeKnownAccounts && abortedTask && restartDeferredToCaller.has(rKey);
+        if (currentStop?.status === "rejected" && !shouldRetryAfterCallerDeferredTask) {
+          return;
+        }
         if (existingTask) {
           let clearedTimedOutRecoveryTask = false;
-          const abortedTask = store.aborts.get(id)?.signal.aborted === true;
-          const shouldRetryAfterCallerDeferredTask =
-            includeKnownAccounts && abortedTask && restartDeferredToCaller.has(rKey);
           if (shouldRetryAfterCallerDeferredTask) {
             const stoppedCleanly = await waitForChannelStopGracefully(
               existingTask,
@@ -671,6 +677,15 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               throw new Error(
                 `channel stop timed out before restarting ${channelId} account ${id}`,
               );
+            }
+            if (store.tasks.get(id) === existingTask) {
+              store.tasks.delete(id);
+            }
+            if (store.aborts.get(id) === existingAbort) {
+              store.aborts.delete(id);
+            }
+            if (currentStop?.status === "rejected") {
+              store.stops.delete(id);
             }
             if (store.tasks.has(id) || store.starting.has(id) || manuallyStopped.has(rKey)) {
               return;
@@ -1376,11 +1391,12 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               log.warn?.(`[${id}] stopAccount failed: ${formatErrorMessage(error)}`);
             }
           }
-          const stoppedCleanly = await waitForChannelStopGracefully(
-            task,
-            CHANNEL_STOP_ABORT_TIMEOUT_MS,
-          );
-          if (!stoppedCleanly) {
+          const deferTaskWaitToPairedStart =
+            outcome.status === "rejected" && !manual && preserveKnownAccount && hadLiveState;
+          const stoppedCleanly = deferTaskWaitToPairedStart
+            ? false
+            : await waitForChannelStopGracefully(task, CHANNEL_STOP_ABORT_TIMEOUT_MS);
+          if (!deferTaskWaitToPairedStart && !stoppedCleanly) {
             log.warn?.(
               `[${id}] channel stop exceeded ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms after abort; continuing shutdown`,
             );
