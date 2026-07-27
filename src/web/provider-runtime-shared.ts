@@ -1,5 +1,5 @@
 // Shared web provider config, credential, and definition resolution.
-export type WebProviderConfigSource = {
+type WebProviderConfigSource = {
   tools?: {
     web?: {
       search?: unknown;
