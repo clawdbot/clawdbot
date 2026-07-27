@@ -76,8 +76,6 @@ describe("auth profile migration isolation", () => {
       resolveApiKeyForProvider({
         provider: "openai",
         agentDir: healthyAgentDir,
-        profileId: "openai:default",
-        lockedProfile: true,
         store: snapshot.authStores.find((entry) => entry.agentDir === healthyAgentDir)?.store,
         profileId: "openai:default",
         lockedProfile: true,
