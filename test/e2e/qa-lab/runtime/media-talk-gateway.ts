@@ -442,20 +442,29 @@ async function waitForActiveTalkStatus(client: GatewayClient, sessionKey: string
 async function waitForQueuedTalkSteer(client: GatewayClient, sessionKey: string) {
   const deadline = Date.now() + 20_000;
   let lastResult: unknown;
+  let lastError: unknown;
   while (Date.now() < deadline) {
-    lastResult = await client.request("talk.client.steer", {
-      sessionKey,
-      text: "use the safer path",
-      mode: "steer",
-    });
-    if (
-      lastResult &&
-      typeof lastResult === "object" &&
-      (lastResult as Record<string, unknown>).queued === true
-    ) {
-      return lastResult;
+    try {
+      lastResult = await client.request("talk.client.steer", {
+        sessionKey,
+        text: "use the safer path",
+        mode: "steer",
+      });
+      lastError = undefined;
+      if (
+        lastResult &&
+        typeof lastResult === "object" &&
+        (lastResult as Record<string, unknown>).queued === true
+      ) {
+        return lastResult;
+      }
+    } catch (error) {
+      lastError = error;
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  if (lastError instanceof Error) {
+    throw lastError;
   }
   throw new Error(`timed out waiting for steerable Talk run: ${JSON.stringify(lastResult)}`);
 }
@@ -527,6 +536,9 @@ async function runActiveTalkAgentRunProof(options: ProducerOptions): Promise<str
       name: "openclaw_agent_consult",
       args: { question: "final-only marker streaming qa check: inspect the active run" },
     });
+    // A failed control step can end the scenario before this long-lived request
+    // is awaited; observe rejection immediately so cleanup cannot mask the cause.
+    void consultRequest.catch(() => undefined);
     const steer = await waitForQueuedTalkSteer(client, sessionKey);
     assertControlResult(steer, { mode: "steer", active: true, queued: true });
     await waitForActiveTalkStatus(client, sessionKey);
