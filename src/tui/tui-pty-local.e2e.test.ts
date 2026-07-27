@@ -11,6 +11,7 @@ import {
 } from "../../test/helpers/openclaw-test-instance.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { connectGatewayClient } from "../gateway/test-helpers.e2e.js";
 import { createDeferred } from "../test-utils/deferred.js";
 import { GatewayChatClient } from "./gateway-chat.js";
 import { sleep, startPty, waitFor, type PtyRun } from "./tui-pty-test-support.js";
@@ -54,6 +55,14 @@ const GATEWAY_SCENARIOS = {
   newSession: {
     agentId: "tui-pty-new-session",
     modelId: "tui-pty-new-session",
+    toolsProfile: "minimal",
+    replyText: "FIRST_RUN_ACTIVE",
+    holdFirstResponse: false,
+    followupReplyText: "FOLLOWUP_RUN_COMPLETE",
+  },
+  crossClient: {
+    agentId: "tui-pty-cross-client",
+    modelId: "tui-pty-cross-client",
     toolsProfile: "minimal",
     replyText: "FIRST_RUN_ACTIVE",
     holdFirstResponse: false,
@@ -1164,6 +1173,49 @@ describe("TUI PTY real backends", () => {
           await fixture.gateway.startGateway();
         }
         await fixture.cleanup();
+      }
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
+
+  registerGatewayTest(
+    "renders messages sent by another real Gateway client without restarting",
+    async ({ onTestFinished }) => {
+      const fixture = await startGatewayModeTui("crossClient", onTestFinished);
+      let externalClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+      try {
+        await fixture.run.waitForOutput("gateway connected", LOCAL_STARTUP_TIMEOUT_MS);
+        await fixture.run.write("seed cross-client session\r");
+        await fixture.run.waitForOutput("FIRST_RUN_ACTIVE", LOCAL_OUTPUT_TIMEOUT_MS);
+        const firstReplyOffset = fixture.run.output().lastIndexOf("FIRST_RUN_ACTIVE");
+        await waitForOutputAfter(fixture.run, "| idle", firstReplyOffset);
+        externalClient = await connectGatewayClient({
+          url: fixture.gateway.url,
+          token: fixture.gateway.gatewayToken,
+          scopes: ["operator.read", "operator.write"],
+          clientDisplayName: "tui-external-session-writer",
+        });
+
+        const marker = "EXTERNAL_GATEWAY_SESSION_MESSAGE";
+        await externalClient.request("sessions.send", {
+          key: fixture.sessionKey,
+          message: marker,
+          idempotencyKey: `${fixture.sessionKey}:external-message`,
+          timeoutMs: 30_000,
+        });
+
+        await fixture.run.waitForOutput(marker, LOCAL_OUTPUT_TIMEOUT_MS);
+        await fixture.run.waitForOutput("FOLLOWUP_RUN_COMPLETE", LOCAL_OUTPUT_TIMEOUT_MS);
+        const followupOffset = fixture.run.output().lastIndexOf("FOLLOWUP_RUN_COMPLETE");
+        await waitForOutputAfter(fixture.run, "| idle", followupOffset);
+        await fixture.run.write("/exit\r", { delay: false });
+        expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+      } finally {
+        try {
+          await externalClient?.stopAndWait({ timeoutMs: 1_000 });
+        } finally {
+          await fixture.cleanup();
+        }
       }
     },
     LOCAL_TEST_TIMEOUT_MS,
