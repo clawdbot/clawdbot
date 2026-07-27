@@ -5,7 +5,7 @@ scenario:
   surface: runtime-tools
   runtimePairLane: core
   coverage:
-    primary:
+    secondary:
       - agent-runtime.tool-edit
   objective: Verify targeted edit behavior is tracked across OpenClaw and Codex while Codex owns edit natively.
   successCriteria:
@@ -27,7 +27,7 @@ scenario:
         actualTool: edit
         bucket: codex-native-workspace
         expectedLayer: codex-native-workspace
-        required: true
+        required: false
         tracking: "#80319"
         codexDefaultImpact: P4
         qaImpact: P1

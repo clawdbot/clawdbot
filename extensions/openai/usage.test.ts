@@ -78,10 +78,20 @@ describe("OpenAI provider usage", () => {
       fetchFn: fetchFn as typeof fetch,
     });
 
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       provider: "openai",
+      displayName: "OpenAI",
+      windows: [],
       plan: "Admin API · proj_test",
-      billing: [{ type: "spend", amount: 12.34, unit: "USD", period: "30d" }],
+      billing: [
+        {
+          type: "spend",
+          label: "30-day API spend",
+          amount: 12.34,
+          unit: "USD",
+          period: "30d",
+        },
+      ],
       costHistory: {
         unit: "USD",
         periodDays: 30,
@@ -93,6 +103,7 @@ describe("OpenAI provider usage", () => {
             requests: 8,
             inputTokens: 600,
             cacheReadTokens: 400,
+            cacheWriteTokens: 0,
             outputTokens: 250,
             totalTokens: 1_250,
           },
@@ -103,11 +114,14 @@ describe("OpenAI provider usage", () => {
             requests: 8,
             inputTokens: 600,
             cacheReadTokens: 400,
+            cacheWriteTokens: 0,
+            outputTokens: 250,
             totalTokens: 1_250,
           },
         ],
         categories: [{ name: "Responses", amount: 12.34 }],
       },
+      summary: "8 requests · 1,250 tokens",
     });
     expect(fetchFn).toHaveBeenCalledTimes(2);
     for (const [input, init] of fetchFn.mock.calls) {

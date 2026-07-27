@@ -22,7 +22,7 @@ import type { TelegramContext, TelegramGetChat } from "./bot/types.js";
 import type { TelegramMessageDispatchReplayClaim } from "./message-dispatch-dedupe.js";
 
 export function registerTelegramMessageHandlers(
-  { bot, opts, runtime, shouldSkipUpdate }: RegisterTelegramHandlerParams,
+  { bot, runtime, shouldSkipUpdate }: RegisterTelegramHandlerParams,
   messageRuntime: TelegramHandlerMessageRuntime,
   authorizationRuntime: TelegramHandlerAuthorizationRuntime,
   inboundRuntime: TelegramHandlerInboundRuntime,
@@ -43,6 +43,7 @@ export function registerTelegramMessageHandlers(
   type InboundTelegramEvent = {
     ctxForDedupe: TelegramUpdateKeyContext;
     ctx: TelegramContext;
+    botUserId: number;
     msg: Message;
     chatId: number;
     isGroup: boolean;
@@ -84,7 +85,7 @@ export function registerTelegramMessageHandlers(
     ctxForDedupe: TelegramUpdateKeyContext;
     msg: Message;
     requireConfiguredGroup: boolean;
-    botUserId?: number;
+    botUserId: number;
   }) => {
     if (shouldSkipUpdate(params.ctxForDedupe)) {
       return;
@@ -174,16 +175,12 @@ export function registerTelegramMessageHandlers(
         storePath: sessionState.storePath,
       });
 
-      const dispatchDedupe = await claimMessageDispatchDedupe(event.msg);
+      const dispatchDedupe = await claimMessageDispatchDedupe(event.msg, event.botUserId);
       if (!dispatchDedupe.process) {
         return;
       }
       dispatchDedupeClaims = dispatchDedupe.claims;
-      await recordMessageForReplyChain(
-        event.msg,
-        resolvedThreadId ?? dmThreadId,
-        event.ctx.me?.id ?? opts.botInfo?.id,
-      );
+      await recordMessageForReplyChain(event.msg, resolvedThreadId ?? dmThreadId, event.botUserId);
       await processInboundMessage({
         authorizationCfg: gate.context.cfg,
         ctx: event.ctx,
@@ -258,6 +255,7 @@ export function registerTelegramMessageHandlers(
     await handleInboundMessageLike({
       ctxForDedupe: ctx,
       ctx: buildSyntheticContext(ctx, normalizedMsg),
+      botUserId: ctx.me.id,
       msg: normalizedMsg,
       chatId: normalizedMsg.chat.id,
       isGroup,
@@ -281,7 +279,7 @@ export function registerTelegramMessageHandlers(
       ctxForDedupe: ctx,
       msg,
       requireConfiguredGroup: false,
-      botUserId: ctx.me?.id ?? opts.botInfo?.id,
+      botUserId: ctx.me.id,
     });
   });
 
@@ -300,6 +298,7 @@ export function registerTelegramMessageHandlers(
     await handleInboundMessageLike({
       ctxForDedupe: ctx,
       ctx: buildSyntheticContext(ctx, syntheticMsg),
+      botUserId: ctx.me.id,
       msg: syntheticMsg,
       chatId,
       isGroup: true,
@@ -327,7 +326,7 @@ export function registerTelegramMessageHandlers(
       ctxForDedupe: ctx,
       msg: normalizeChannelPostMessage(post),
       requireConfiguredGroup: true,
-      botUserId: ctx.me?.id ?? opts.botInfo?.id,
+      botUserId: ctx.me.id,
     });
   });
 }

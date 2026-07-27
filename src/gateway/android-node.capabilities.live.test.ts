@@ -8,8 +8,7 @@ import {
   ANDROID_NODE_REQUIRED_NON_INTERACTIVE_COMMANDS,
   findMissingRequiredAndroidNodeCommands,
 } from "../../test/helpers/gateway/android-node-capabilities-required-commands.js";
-import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { isLiveTestEnabled, readLiveTestConfig } from "../agents/live-test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { parseNodeList, parsePairingList } from "../shared/node-list-parse.js";
@@ -323,8 +322,8 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
   },
 };
 
-function resolveGatewayConnection() {
-  const cfg = getRuntimeConfig();
+async function resolveGatewayConnection() {
+  const cfg = await readLiveTestConfig();
   const urlOverride = readString(process.env.OPENCLAW_ANDROID_GATEWAY_URL);
   const details = buildGatewayConnectionDetails({
     config: cfg,
@@ -350,15 +349,15 @@ function resolveGatewayConnection() {
 async function resolvePolicyConfigForRun(params: {
   client: GatewayClient;
   connectionDetails: ReturnType<typeof buildGatewayConnectionDetails>;
-  loadLocalConfig?: () => OpenClawConfig;
+  loadLocalConfig?: () => OpenClawConfig | Promise<OpenClawConfig>;
 }): Promise<OpenClawConfig> {
   if (shouldFetchRemotePolicyConfig(params.connectionDetails)) {
     const raw = await params.client.request("config.get", {});
     return unwrapRemoteConfigSnapshot(raw);
   }
 
-  const loadLocalConfig = params.loadLocalConfig ?? getRuntimeConfig;
-  return loadLocalConfig();
+  const loadLocalConfig = params.loadLocalConfig ?? readLiveTestConfig;
+  return await loadLocalConfig();
 }
 
 describe("resolvePolicyConfigForRun", () => {
@@ -565,7 +564,7 @@ describeLive("android node capability integration (preconditioned)", () => {
   const results = new Map<string, CommandResult>();
 
   beforeAll(async () => {
-    const { details, url, token, password } = resolveGatewayConnection();
+    const { details, url, token, password } = await resolveGatewayConnection();
     client = await connectGatewayClient({ url, token, password });
 
     const listRaw = await client.request("node.list", {});

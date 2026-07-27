@@ -32,7 +32,10 @@ import {
   type CronModelSuggestionsState,
   type CronState,
 } from "../../lib/cron/index.ts";
-import { searchForSession } from "../../lib/sessions/index.ts";
+import {
+  resolveSessionNavigationAgentId,
+  sessionNavigationTarget,
+} from "../../lib/sessions/route-navigation.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import {
@@ -332,6 +335,7 @@ class CronPage extends OpenClawLightDomElement {
 
   override render() {
     const channels = this.context.channels.state;
+    const fallbackAgentId = resolveSessionNavigationAgentId(this.context);
     const suggestions = buildCronSuggestions({
       channels,
       runtimeConfig: this.context.runtimeConfig.state,
@@ -352,6 +356,7 @@ class CronPage extends OpenClawLightDomElement {
       ${renderSettingsWorkspace(
         renderCron({
           basePath: this.context.basePath,
+          agentId: fallbackAgentId,
           loading: this.cron.cronLoading,
           status: this.cron.cronStatus,
           failingCount: this.cron.cronFailingCount,
@@ -462,7 +467,14 @@ class CronPage extends OpenClawLightDomElement {
               );
             }),
           onNavigateToChat: (sessionKey) =>
-            this.context.navigate("chat", { search: searchForSession(sessionKey) }),
+            this.context.navigate(
+              "chat",
+              sessionNavigationTarget({
+                context: this.context,
+                face: "chat",
+                sessionKey,
+              }).options,
+            ),
         }),
       )}
     `;

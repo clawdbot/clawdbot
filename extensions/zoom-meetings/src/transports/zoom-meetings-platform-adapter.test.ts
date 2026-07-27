@@ -1,10 +1,8 @@
 import { runInNewContext } from "node:vm";
+import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { zoomMeetingLeaveScript, zoomMeetingStatusScript } from "./zoom-meetings-page-scripts.js";
-import {
-  ZOOM_MEETINGS_PLATFORM_ADAPTER,
-  isZoomMeetingsRealtimeRouteReady,
-} from "./zoom-meetings-platform-adapter.js";
+import { ZOOM_MEETINGS_PLATFORM_ADAPTER } from "./zoom-meetings-platform-adapter.js";
 
 const URL = "https://acme.zoom.us/j/12345678901?pwd=abc";
 
@@ -239,7 +237,7 @@ describe("Zoom meeting platform adapter", () => {
 
   it("requires verified bidirectional audio before realtime startup", () => {
     expect(
-      isZoomMeetingsRealtimeRouteReady("agent", {
+      MeetingPlatformAdapter.isRealtimeRouteReady("agent", {
         inCall: true,
         micMuted: false,
         audioInputRouted: true,
@@ -247,7 +245,7 @@ describe("Zoom meeting platform adapter", () => {
       }),
     ).toBe(true);
     expect(
-      isZoomMeetingsRealtimeRouteReady("agent", {
+      MeetingPlatformAdapter.isRealtimeRouteReady("agent", {
         inCall: true,
         micMuted: true,
         audioInputRouted: true,

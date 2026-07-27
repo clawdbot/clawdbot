@@ -14,7 +14,28 @@ import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { buildReplyUsageState, recordReplyUsageState } from "./reply-usage-state.js";
 import { persistRunSessionUsage } from "./session-run-accounting.js";
 
-export async function accountReplyAgentRun(context: FinalizeReplyAgentRunInput) {
+type AgentTurnAccountingContext = Pick<
+  FinalizeReplyAgentRunInput,
+  | "activeSessionEntry"
+  | "activeSessionStore"
+  | "agentCfgContextTokens"
+  | "blockReplyPipeline"
+  | "cfg"
+  | "defaultModel"
+  | "followupRun"
+  | "isHeartbeat"
+  | "pendingToolTasks"
+  | "preflightCompactionApplied"
+  | "resolvedVerboseLevel"
+  | "runOutcome"
+  | "runStartedAt"
+  | "sessionCtx"
+  | "sessionKey"
+  | "shouldInjectGroupIntro"
+  | "storePath"
+>;
+
+export async function accountAgentTurn(context: AgentTurnAccountingContext) {
   const {
     activeSessionStore,
     agentCfgContextTokens,

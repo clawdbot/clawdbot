@@ -31,7 +31,7 @@ describeControlUiE2e("Control UI route CSS mocked Gateway E2E", () => {
     await server?.close();
   });
 
-  it("loads shared Markdown and session-link styles on direct Cron and Skills routes", async () => {
+  it("loads shared Markdown and session-link styles on direct Cron, Skills, and Chat routes", async () => {
     const context = await browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -143,6 +143,55 @@ describeControlUiE2e("Control UI route CSS mocked Gateway E2E", () => {
       expect(skillsStyles.preOverflow).toBe("auto");
       expect(skillsStyles.tableDisplay).toBe("block");
       expect(skillsStyles.taskListStyle).toBe("none");
+
+      const chatResponse = await page.goto(`${server.baseUrl}chat?session=main`);
+      expect(chatResponse?.status()).toBe(200);
+      await page.locator("openclaw-chat-page").waitFor();
+
+      const chatMarkdownStyles = await page.evaluate(() => {
+        const probe = document.createElement("div");
+        probe.className = "chat-text";
+        probe.style.width = "900px";
+        probe.innerHTML = `
+          <table>
+            <thead><tr><th>Dimension</th><th>Sentiment signal</th></tr></thead>
+            <tbody><tr><td>Demographics</td><td>Experience-dependent sentiment.</td></tr></tbody>
+          </table>
+          <ol><li>One central pattern</li><li>Another central pattern</li></ol>
+          <p><strong>Overall characterization:</strong> Pragmatic adoption under suspicion.</p>
+        `;
+        document.body.append(probe);
+        const dimension = probe.querySelector("th:first-child");
+        const demographics = probe.querySelector("td:first-child");
+        const list = probe.querySelector("ol");
+        const summary = probe.querySelector("ol + p");
+        if (!dimension || !demographics || !list || !summary) {
+          throw new Error("Chat Markdown style probe did not render");
+        }
+        const lineCount = (element: Element) => {
+          const range = document.createRange();
+          range.selectNodeContents(element);
+          return new Set(Array.from(range.getClientRects(), (rect) => Math.round(rect.top))).size;
+        };
+        const result = {
+          demographicsLineCount: lineCount(demographics),
+          dimensionLineCount: lineCount(dimension),
+          firstColumnWidth: dimension.getBoundingClientRect().width,
+          postListGap: summary.getBoundingClientRect().top - list.getBoundingClientRect().bottom,
+          postListMargin: Number.parseFloat(getComputedStyle(summary).marginTop),
+          summaryFontSize: Number.parseFloat(getComputedStyle(summary).fontSize),
+        };
+        probe.remove();
+        return result;
+      });
+      expect(chatMarkdownStyles.dimensionLineCount).toBe(1);
+      expect(chatMarkdownStyles.demographicsLineCount).toBe(1);
+      expect(chatMarkdownStyles.firstColumnWidth).toBeGreaterThanOrEqual(128);
+      expect(chatMarkdownStyles.postListGap).toBeGreaterThan(0);
+      expect(chatMarkdownStyles.postListMargin / chatMarkdownStyles.summaryFontSize).toBeCloseTo(
+        0.75,
+        2,
+      );
     } finally {
       await context.close();
     }

@@ -6,8 +6,8 @@ import {
   type CodexCliApiKeyCredential,
   readCodexCliActiveApiKey,
 } from "../agents/cli-credentials.js";
-import { createMergePatch } from "../config/io.write-prepare.js";
 import { applyAutoLocalModelLean } from "../config/local-model-lean-auto.js";
+import { createMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { formatErrorMessage } from "../infra/errors.js";

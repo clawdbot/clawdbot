@@ -5272,10 +5272,13 @@ describe("google-meet plugin", () => {
     expect(result.speechOutputTimedOut).toBe(false);
   });
 
-  it("uses the requested bidirectional realtime mode for test speech", async () => {
-    const runtime = meetRuntime({ defaultMode: "agent" }, noopLogger);
+  it.each([
+    ["bidi", "bidi"],
+    ["realtime", "agent"],
+  ] as const)("normalizes the %s test speech mode to %s", async (mode, expectedMode) => {
+    const runtime = meetRuntime({ defaultMode: "bidi" }, noopLogger);
     const session = meetSession({
-      mode: "bidi",
+      mode: expectedMode,
       chrome: {
         audioBackend: "blackhole-2ch",
         launched: true,
@@ -5287,14 +5290,14 @@ describe("google-meet plugin", () => {
 
     await runtime.testSpeech({
       url: MEET_URL,
-      mode: "bidi",
+      mode,
       message: "Say exactly: hello.",
     });
 
     expect(join).toHaveBeenCalledTimes(1);
     const joinArgs = requireRecord(mockCallArg(join, 0), "test speech join args");
     expect(joinArgs.message).toBe("Say exactly: hello.");
-    expect(joinArgs.mode).toBe("bidi");
+    expect(joinArgs.mode).toBe(expectedMode);
   });
 
   it("resets test speech output and loopback baselines when another agent owns the old session", async () => {
@@ -5423,7 +5426,7 @@ describe("google-meet plugin", () => {
     await expect(
       runtime.testListen({
         url: MEET_URL,
-        mode: "agent",
+        mode: "realtime",
       }),
     ).rejects.toThrow("test_listen requires mode: transcribe");
 

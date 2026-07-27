@@ -27,6 +27,7 @@ import {
   QA_BLOCK_STREAMING_PROMPT_RE,
   QA_TOOL_PROGRESS_ERROR_PROMPT_RE,
   QA_TOOL_PROGRESS_PROMPT_RE,
+  QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE,
   QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE,
   QA_A2A_MESSAGE_TOOL_MIRROR_PROMPT_RE,
   QA_GROUP_MESSAGE_UNAVAILABLE_FALLBACK_PROMPT_RE,
@@ -1491,6 +1492,18 @@ export async function startQaMockOpenAiServer(params?: {
           toolOutputCallId: extractToolOutputCallId(input) || undefined,
           ...(extractToolOutputStructuredError(input) ? { toolOutputStructuredError: true } : {}),
         });
+        if (
+          QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE.test(allInputText) &&
+          extractToolOutput(input)
+        ) {
+          writeJson(res, 503, {
+            error: {
+              type: "server_error",
+              message: "Service Unavailable",
+            },
+          });
+          return;
+        }
         if (body.stream === false) {
           const completion = events.at(-1);
           if (!completion || completion.type !== "response.completed") {

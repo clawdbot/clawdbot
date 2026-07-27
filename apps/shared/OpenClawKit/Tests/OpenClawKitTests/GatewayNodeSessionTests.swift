@@ -2173,8 +2173,8 @@ struct GatewayNodeSessionTests {
             task.sentRequestCount(method: "node.event") == 1
         }
         let firstRequest = try #require(task.sentRequests(method: "node.event").first)
-        task.emitResponse(
-            id: try #require(firstRequest["id"] as? String),
+        try task.emitResponse(
+            id: #require(firstRequest["id"] as? String),
             payload: [
                 "ok": true,
                 "event": "node.presence.activity",
@@ -2195,8 +2195,8 @@ struct GatewayNodeSessionTests {
             task.sentRequestCount(method: "node.event") == 2
         }
         let secondRequest = try #require(task.sentRequests(method: "node.event").last)
-        task.emitResponse(
-            id: try #require(secondRequest["id"] as? String),
+        try task.emitResponse(
+            id: #require(secondRequest["id"] as? String),
             payload: [
                 "ok": true,
                 "event": "node.presence.activity",
@@ -2217,13 +2217,61 @@ struct GatewayNodeSessionTests {
             task.sentRequestCount(method: "node.event") == 3
         }
         let thirdRequest = try #require(task.sentRequests(method: "node.event").last)
-        task.emitResponse(
-            id: try #require(thirdRequest["id"] as? String),
+        try task.emitResponse(
+            id: #require(thirdRequest["id"] as? String),
             payload: ["ok": true])
         let legacy = try await legacyRequest.value
         #expect(legacy == nil)
 
         await gateway.disconnect()
+    }
+
+    @Test
+    func `route bound request rejects a response after its socket is retired`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-ios-test",
+            clientMode: "node",
+            clientDisplayName: "iOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://gateway.example.invalid")),
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { request in BridgeInvokeResponse(id: request.id, ok: true) })
+        let route = try #require(await gateway.currentRoute())
+        let socket = try #require(session.latestTask())
+        let request = Task {
+            try await gateway.request(
+                method: "sessions.list",
+                paramsJSON: "{}",
+                ifCurrentRoute: route)
+        }
+        try await waitUntil("route bound request sent") {
+            socket.sentRequestCount(method: "sessions.list") == 1
+        }
+        let sent = try #require(socket.sentRequests(method: "sessions.list").first)
+
+        await gateway._test_handleChannelDisconnected("socket retired", socketGeneration: 1)
+        try socket.emitResponse(
+            id: #require(sent["id"] as? String),
+            payload: ["sessions": []])
+
+        do {
+            _ = try await request.value
+            Issue.record("late response unexpectedly crossed the retired route")
+        } catch is CancellationError {
+            // Expected: the response belongs to the retired admission generation.
+        }
     }
 
     @Test
@@ -3462,6 +3510,21 @@ struct GatewayNodeSessionTests {
             against: URL(string: "wss://gateway.example.com:7443"))
 
         #expect(normalized == "https://gateway.example.com:7443/__openclaw__/cap/token")
+    }
+
+    @Test
+    func `resolve gateway HTTP url supports relative broker routes and preserves absolute providers`() {
+        let gateway = URL(string: "wss://gateway.example.com:7443")
+
+        #expect(GatewayPluginSurfaceURL.resolveHTTPURL(
+            raw: "/plugins/codex/realtime/calls",
+            against: gateway)?.absoluteString == "https://gateway.example.com:7443/plugins/codex/realtime/calls")
+        #expect(GatewayPluginSurfaceURL.resolveHTTPURL(
+            raw: "https://api.openai.com/v1/realtime/calls",
+            against: gateway)?.absoluteString == "https://api.openai.com/v1/realtime/calls")
+        #expect(GatewayPluginSurfaceURL.resolveHTTPURL(
+            raw: "wss://gateway.example.com/realtime",
+            against: gateway) == nil)
     }
 
     @Test

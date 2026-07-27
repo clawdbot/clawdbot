@@ -2,6 +2,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isPlainObject } from "../infra/plain-object.js";
+import { isRecord } from "../utils.js";
 
 /**
  * Preserves `${VAR}` environment variable references during config write-back.
@@ -832,5 +833,103 @@ export function restoreEnvVarRefs(
 
   // Mismatched types or primitives — keep incoming
   return incoming;
+}
+
+function parentPath(value: string): string {
+  if (!value) {
+    return "";
+  }
+  if (value.endsWith("]")) {
+    const index = value.lastIndexOf("[");
+    return index > 0 ? value.slice(0, index) : "";
+  }
+  const index = value.lastIndexOf(".");
+  return index >= 0 ? value.slice(0, index) : "";
+}
+
+function isPathChanged(path: string, changedPaths: Set<string>): boolean {
+  if (changedPaths.has(path)) {
+    return true;
+  }
+  let current = parentPath(path);
+  while (current) {
+    if (changedPaths.has(current)) {
+      return true;
+    }
+    current = parentPath(current);
+  }
+  return changedPaths.has("");
+}
+
+export function restoreEnvRefsFromMap(
+  value: unknown,
+  path: string,
+  envRefMap: Map<string, string>,
+  changedPaths: Set<string>,
+  identityRestoredPaths: ReadonlySet<string> = new Set(),
+): unknown {
+  if (typeof value === "string") {
+    if (identityRestoredPaths.has(path)) {
+      return value;
+    }
+    if (!isPathChanged(path, changedPaths)) {
+      const original = envRefMap.get(path);
+      if (original !== undefined) {
+        return original;
+      }
+    }
+    return value;
+  }
+  if (Array.isArray(value)) {
+    let changed = false;
+    const next = value.map((item, index) => {
+      const updated = restoreEnvRefsFromMap(
+        item,
+        `${path}[${index}]`,
+        envRefMap,
+        changedPaths,
+        identityRestoredPaths,
+      );
+      if (updated !== item) {
+        changed = true;
+      }
+      return updated;
+    });
+    return changed ? next : value;
+  }
+  if (isRecord(value)) {
+    let changed = false;
+    const next: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(value)) {
+      const childPath = path ? `${path}.${key}` : key;
+      const updated = restoreEnvRefsFromMap(
+        child,
+        childPath,
+        envRefMap,
+        changedPaths,
+        identityRestoredPaths,
+      );
+      if (updated !== child) {
+        changed = true;
+      }
+      next[key] = updated;
+    }
+    return changed ? next : value;
+  }
+  return value;
+}
+
+export function resolveWriteEnvSnapshotForPath(params: {
+  actualConfigPath: string;
+  expectedConfigPath?: string;
+  envSnapshotForRestore?: Record<string, string | undefined>;
+}): Record<string, string | undefined> | undefined {
+  if (
+    params.expectedConfigPath === undefined ||
+    params.expectedConfigPath === params.actualConfigPath
+  ) {
+    return params.envSnapshotForRestore;
+  }
+  return undefined;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

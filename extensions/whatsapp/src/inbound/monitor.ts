@@ -1303,7 +1303,7 @@ export async function attachWebInboxToSocket(
             mentions: groupMentions,
           }
         : undefined;
-    const untrustedStructuredContext = [
+    const channelStructuredContext = [
       ...(enriched.nativeMedia
         ? [
             {
@@ -1345,8 +1345,8 @@ export async function attachWebInboxToSocket(
         body: enriched.body,
         commandBody: enriched.commandBody,
         location: enriched.location ?? undefined,
-        untrustedStructuredContext:
-          untrustedStructuredContext.length > 0 ? untrustedStructuredContext : undefined,
+        channelStructuredContext:
+          channelStructuredContext.length > 0 ? channelStructuredContext : undefined,
         media,
       },
       platform: {

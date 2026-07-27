@@ -75,7 +75,7 @@ function adaptGenericEmbeddingProvider(
         ...options,
         inputType: "document",
       }),
-    ...(provider.close ? { close: provider.close } : {}),
+    ...(provider.close ? { close: async () => await provider.close?.() } : {}),
   };
   const getRuntimeFacts = Reflect.get(provider, LOCAL_EMBEDDING_RUNTIME_FACTS);
   if (typeof getRuntimeFacts === "function") {

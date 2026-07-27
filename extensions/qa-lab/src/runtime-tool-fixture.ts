@@ -4,7 +4,7 @@ import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { loadTranscriptEventsSync } from "openclaw/plugin-sdk/session-store-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { QaSuiteInfraError } from "./errors.js";
+import { QaSuiteInfraError, QaSuiteScenarioSkipError } from "./errors.js";
 import {
   qaMockRequestCursorUrl,
   qaMockRequestsAfterUrl,
@@ -660,6 +660,9 @@ export async function runRuntimeToolFixture(
   const sessionKeys = [happySessionKey, failureSessionKey] as const;
   const withSessionDetails = (details: string) =>
     runtimeToolFixtureDetails(details, ...sessionKeys);
+  const skipFixture = (details: string): never => {
+    throw new QaSuiteScenarioSkipError(withSessionDetails(details));
+  };
   const fixtureError = (error: unknown) => runtimeToolFixtureError(error, ...sessionKeys);
   const runFixtureOperation = async <T>(operation: () => Promise<T>): Promise<T> => {
     try {
@@ -678,13 +681,13 @@ export async function runRuntimeToolFixture(
   const expectedAvailable = readBoolean(config.expectedAvailable, true);
   if (!tools.has(toolName) && !dynamicExposureIntentionallyExcluded) {
     if (!expectedAvailable) {
-      return withSessionDetails(formatExpectedUnavailableDetails(toolName, tools));
+      skipFixture(formatExpectedUnavailableDetails(toolName, tools));
     }
     if (isKnownBroken(config.knownBroken)) {
-      return withSessionDetails(formatKnownBrokenDetails(toolName, tools, config));
+      skipFixture(formatKnownBrokenDetails(toolName, tools, config));
     }
     if (isKnownHarnessGap(config.knownHarnessGap)) {
-      return withSessionDetails(formatKnownHarnessGapDetails(toolName, config));
+      skipFixture(formatKnownHarnessGapDetails(toolName, config));
     }
     throw fixtureError(
       new Error(
@@ -748,11 +751,12 @@ export async function runRuntimeToolFixture(
     if (!happyRequest.outputRequest) {
       const happyPlannedOnly = happyRequest.plannedRequest && !happyPathOutputRequired;
       if (happyPlannedOnly) {
-        // Async runtime tools prove the start call here; completion is covered
-        // by their task lifecycle scenarios.
+        skipFixture(
+          `${toolName} live provider report-only: a planned call without a linked successful result is not product execution evidence`,
+        );
       } else {
         if (isKnownHarnessGap(config.knownHarnessGap)) {
-          return withSessionDetails(formatKnownHarnessGapDetails(toolName, config));
+          skipFixture(formatKnownHarnessGapDetails(toolName, config));
         }
         throw fixtureError(
           new Error(
@@ -763,9 +767,9 @@ export async function runRuntimeToolFixture(
         );
       }
     }
-    if (happyRequest.outputRequest?.structuredFailure) {
+    if (happyRequest.outputRequest?.failure) {
       if (isKnownHarnessGap(config.knownHarnessGap)) {
-        return withSessionDetails(formatKnownHarnessGapDetails(toolName, config));
+        skipFixture(formatKnownHarnessGapDetails(toolName, config));
       }
       throw fixtureError(
         new Error(`expected live happy-path successful tool output for ${toolName}`),
@@ -780,7 +784,7 @@ export async function runRuntimeToolFixture(
     );
     if (!failureRequest.outputRequest) {
       if (isKnownHarnessGap(config.knownHarnessGap)) {
-        return withSessionDetails(formatKnownHarnessGapDetails(toolName, config));
+        skipFixture(formatKnownHarnessGapDetails(toolName, config));
       }
       throw fixtureError(
         new Error(
@@ -792,7 +796,7 @@ export async function runRuntimeToolFixture(
     }
     if (!failureRequest.failureOutputRequest) {
       if (isKnownHarnessGap(config.knownHarnessGap)) {
-        return withSessionDetails(formatKnownHarnessGapDetails(toolName, config));
+        skipFixture(formatKnownHarnessGapDetails(toolName, config));
       }
       throw fixtureError(
         new Error(`expected live failure-path tool failure output for ${toolName}`),
@@ -856,7 +860,7 @@ export async function runRuntimeToolFixture(
         new Error(`expected mock failure-path tool failure output for ${toolName}`),
       );
     }
-    return withSessionDetails(
+    skipFixture(
       formatReportOnlyMockDetails({
         toolName,
         happyRequest: happyPlannedRequest,
@@ -864,12 +868,15 @@ export async function runRuntimeToolFixture(
       }),
     );
   }
-  // Async runtime tools prove the start call here; completion is covered by
-  // their task lifecycle scenarios.
   const happyPlannedOnly = Boolean(happyPlannedRequest && !happyPathOutputRequired);
+  if (!happyRequest && happyPlannedOnly) {
+    skipFixture(
+      `${toolName} mock provider report-only: a planned call without a linked successful result is not product execution evidence`,
+    );
+  }
   if (!happyRequest && !happyPlannedOnly) {
     if (dynamicExposureIntentionallyExcluded) {
-      return withSessionDetails(
+      skipFixture(
         formatCodexNativeWorkspaceDetails({
           toolName,
           tools,
@@ -879,7 +886,7 @@ export async function runRuntimeToolFixture(
       );
     }
     if (isKnownHarnessGap(config.knownHarnessGap)) {
-      return withSessionDetails(formatKnownHarnessGapDetails(toolName, config));
+      skipFixture(formatKnownHarnessGapDetails(toolName, config));
     }
     throw fixtureError(
       new Error(
@@ -891,7 +898,7 @@ export async function runRuntimeToolFixture(
   }
   if (happyRequest && requestHasHappyPathFailureToolOutput(happyRequest.outputRequest)) {
     if (isKnownHarnessGap(config.knownHarnessGap)) {
-      return withSessionDetails(formatKnownHarnessGapDetails(toolName, config));
+      skipFixture(formatKnownHarnessGapDetails(toolName, config));
     }
     throw fixtureError(
       new Error(`expected mock happy-path successful tool output for ${toolName}`),
@@ -899,7 +906,7 @@ export async function runRuntimeToolFixture(
   }
   if (!failureRequest) {
     if (dynamicExposureIntentionallyExcluded) {
-      return withSessionDetails(
+      skipFixture(
         formatCodexNativeWorkspaceDetails({
           toolName,
           tools,
@@ -910,7 +917,7 @@ export async function runRuntimeToolFixture(
       );
     }
     if (isKnownHarnessGap(config.knownHarnessGap)) {
-      return withSessionDetails(formatKnownHarnessGapDetails(toolName, config));
+      skipFixture(formatKnownHarnessGapDetails(toolName, config));
     }
     throw fixtureError(
       new Error(
@@ -922,13 +929,13 @@ export async function runRuntimeToolFixture(
   }
   if (!requestHasFailureLikeToolOutput(failureRequest.outputRequest)) {
     if (isKnownHarnessGap(config.knownHarnessGap)) {
-      return withSessionDetails(formatKnownHarnessGapDetails(toolName, config));
+      skipFixture(formatKnownHarnessGapDetails(toolName, config));
     }
     throw fixtureError(new Error(`expected mock failure-path tool failure output for ${toolName}`));
   }
 
   if (dynamicExposureIntentionallyExcluded) {
-    return withSessionDetails(
+    skipFixture(
       formatCodexNativeWorkspaceDetails({
         toolName,
         tools,

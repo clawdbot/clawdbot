@@ -147,7 +147,18 @@ vi.mock("../agents/subagent-control.js", () => ({
 
 vi.mock("../utils/message-channel.js", () => ({
   isDeliverableMessageChannel: (channel: string) =>
-    channel === "notifychat" || channel === "guildchat" || channel === "discord",
+    channel === "notifychat" ||
+    channel === "guildchat" ||
+    channel === "discord" ||
+    channel === "slack",
+}));
+
+// Thread-addressed direct delivery requires the transport to declare capabilities.threads;
+// guildchat stays undeclared so tests can pin the deliverable-but-not-thread-capable fallback.
+vi.mock("../channels/thread-addressing.js", () => ({
+  channelSupportsThreadDelivery: (channel?: string | null) =>
+    channel === "discord" || channel === "slack",
+  resolveChannelThreadAddressing: () => "address" as const,
 }));
 
 function configureTaskRegistryMaintenanceRuntimeForTest(params: {
@@ -1670,7 +1681,6 @@ describe("task-registry", () => {
         requesterOrigin: {
           channel: "notifychat",
           to: "notifychat:123",
-          threadId: "321",
         },
         runId: "run-delivery",
         task: "Investigate issue",
@@ -1791,23 +1801,38 @@ describe("task-registry", () => {
     });
   });
 
-  it("delivers delegated ACP completion directly to an explicitly bound Discord thread", async () => {
+  it.each([
+    {
+      name: "Discord",
+      channel: "discord",
+      to: "channel:parent-channel",
+      threadId: "thread-84022",
+      ownerKey: "agent:main:discord:guild-123:channel-parent-channel",
+    },
+    {
+      name: "Slack",
+      channel: "slack",
+      to: "channel:C123",
+      threadId: "1710000000.9999",
+      ownerKey: "agent:main:slack:channel:c123",
+    },
+  ])("delivers delegated ACP completion directly to a $name thread origin", async (origin) => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryForTests();
-      const runId = "run-bound-discord-thread-terminal";
+      const runId = `run-${origin.channel}-thread-terminal`;
       hoisted.sendMessageMock.mockResolvedValue({
-        channel: "discord",
-        to: "channel:parent-channel",
+        channel: origin.channel,
+        to: origin.to,
         via: "direct",
       });
 
       createAcpTaskRecord({
-        ownerKey: "agent:main:discord:guild-123:channel-parent-channel",
+        ownerKey: origin.ownerKey,
         requesterOrigin: {
-          channel: "discord",
-          to: "channel:parent-channel",
-          threadId: "thread-84022",
+          channel: origin.channel,
+          to: origin.to,
+          threadId: origin.threadId,
         },
         runId,
         task: "Investigate thread-bound ACP delivery",
@@ -1835,9 +1860,9 @@ describe("task-registry", () => {
       await waitForAssertion(() => expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1));
       const message = sentMessageCall();
       expectRecordFields(message, {
-        channel: "discord",
-        to: "channel:parent-channel",
-        threadId: "thread-84022",
+        channel: origin.channel,
+        to: origin.to,
+        threadId: origin.threadId,
       });
       expect(String(message.content)).toContain(
         "Background task ready for review: ACP background task",
@@ -1846,82 +1871,108 @@ describe("task-registry", () => {
       expect(String(message.content)).toContain(
         "Next: parent will review/verify before calling it done.",
       );
-      expect(peekSystemEvents("agent:main:discord:guild-123:channel-parent-channel")).toStrictEqual(
-        [],
-      );
+      expect(peekSystemEvents(origin.ownerKey)).toStrictEqual([]);
     });
   });
 
-  it.each([
-    {
-      id: "missing-thread",
-      requesterOrigin: {
+  it("keeps delegated ACP completion queued when the transport does not declare thread delivery", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      const runId = "run-guildchat-thread-terminal";
+      // guildchat is deliverable but declares no thread capability, so a thread-shaped
+      // origin must keep routing through the parent session instead of direct delivery.
+      const requesterOrigin = {
+        channel: "guildchat",
+        to: "channel:room-9",
+        threadId: "thread-77",
+      };
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: requesterOrigin.channel,
+        to: requesterOrigin.to,
+        via: "direct",
+      });
+
+      createAcpTaskRecord({
+        ownerKey: "agent:main:guildchat:channel:room-9",
+        requesterOrigin,
+        runId,
+        task: "Investigate thread-bound ACP delivery",
+        terminalSummary: "ACP final answer",
+        startedAt: 100,
+      });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          endedAt: 250,
+        },
+      });
+
+      await waitForAssertion(() => {
+        const task = findTaskByRunId(runId);
+        if (!task) {
+          throw new Error(`Expected task for run ${runId}`);
+        }
+        expect(task.status).toBe("succeeded");
+        expect(task.deliveryStatus).toBe("session_queued");
+      });
+      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+      expect(peekSystemEvents("agent:main:guildchat:channel:room-9")).toEqual([
+        expect.stringContaining("Background task ready for review: ACP background task"),
+      ]);
+    });
+  });
+
+  it("keeps delegated ACP completion queued when the requester origin has no thread", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      const runId = "run-root-discord-terminal";
+      const requesterOrigin = {
         channel: "discord",
         to: "channel:parent-channel",
-      },
-    },
-    {
-      id: "non-channel-target",
-      requesterOrigin: {
-        channel: "discord",
-        to: "user:U123",
-        threadId: "thread-84022",
-      },
-    },
-    {
-      id: "non-discord-channel",
-      requesterOrigin: {
-        channel: "guildchat",
-        to: "guildchat:channel:parent-channel",
-        threadId: "thread-84022",
-      },
-    },
-  ])(
-    "keeps delegated ACP completion queued without an explicit bound Discord thread ($id)",
-    async ({ requesterOrigin }) => {
-      await withTaskRegistryTempDir(async (root) => {
-        process.env.OPENCLAW_STATE_DIR = root;
-        resetTaskRegistryForTests();
-        const runId = `run-non-bound-discord-thread-terminal-${requesterOrigin.channel}-${requesterOrigin.to}`;
-        hoisted.sendMessageMock.mockResolvedValue({
-          channel: requesterOrigin.channel,
-          to: requesterOrigin.to,
-          via: "direct",
-        });
-
-        createAcpTaskRecord({
-          ownerKey: "agent:main:discord:guild-123:channel-parent-channel",
-          requesterOrigin,
-          runId,
-          task: "Investigate thread-bound ACP delivery",
-          terminalSummary: "ACP final answer",
-          startedAt: 100,
-        });
-
-        emitAgentEvent({
-          runId,
-          stream: "lifecycle",
-          data: {
-            phase: "end",
-            endedAt: 250,
-          },
-        });
-
-        await waitForAssertion(() => {
-          const task = findTaskByRunId(runId);
-          if (!task) {
-            throw new Error(`Expected task for run ${runId}`);
-          }
-          expect(task.status).toBe("succeeded");
-          expect(task.deliveryStatus).toBe("session_queued");
-        });
-        expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
-        expect(peekSystemEvents("agent:main:discord:guild-123:channel-parent-channel")).toEqual([
-          expect.stringContaining("Background task ready for review: ACP background task"),
-        ]);
+      };
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: requesterOrigin.channel,
+        to: requesterOrigin.to,
+        via: "direct",
       });
-    },
-  );
+
+      createAcpTaskRecord({
+        ownerKey: "agent:main:discord:guild-123:channel-parent-channel",
+        requesterOrigin,
+        runId,
+        task: "Investigate thread-bound ACP delivery",
+        terminalSummary: "ACP final answer",
+        startedAt: 100,
+      });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          endedAt: 250,
+        },
+      });
+
+      await waitForAssertion(() => {
+        const task = findTaskByRunId(runId);
+        if (!task) {
+          throw new Error(`Expected task for run ${runId}`);
+        }
+        expect(task.status).toBe("succeeded");
+        expect(task.deliveryStatus).toBe("session_queued");
+      });
+      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+      expect(peekSystemEvents("agent:main:discord:guild-123:channel-parent-channel")).toEqual([
+        expect.stringContaining("Background task ready for review: ACP background task"),
+      ]);
+    });
+  });
 
   it.each([
     {
@@ -2141,7 +2192,6 @@ describe("task-registry", () => {
         requesterOrigin: {
           channel: "notifychat",
           to: "notifychat:123",
-          threadId: "321",
         },
         runId: "run-detail-leak",
         task: "Create the file and verify it",
@@ -2745,49 +2795,22 @@ describe("task-registry", () => {
 
   it.each([
     {
-      name: "keeps fresh childless codex-native subagent tasks live",
-      taskKind: "codex-native",
-      sourceId: "codex-thread:child-thread",
-      task: "Codex native child",
+      name: "keeps fresh harness-owned subagent tasks live",
+      taskKind: "external-harness",
+      sourceId: "harness:child",
+      task: "Harness-owned child",
       ageMinutes: 10,
       reconciled: 0,
       error: undefined,
     },
     {
-      name: "marks stale childless codex-native subagent tasks lost",
-      taskKind: "codex-native",
-      sourceId: "codex-thread:child-thread",
-      task: "Codex native child",
-      ageMinutes: 31,
-      reconciled: 1,
-      error: "Codex native subagent stopped reporting progress",
-    },
-    {
-      name: "keeps fresh childless copilot-native subagent tasks live",
-      taskKind: "copilot-native",
-      sourceId: "copilot-agent:child-agent",
-      task: "Copilot native child",
-      ageMinutes: 10,
-      reconciled: 0,
-      error: undefined,
-    },
-    {
-      name: "marks stale childless copilot-native subagent tasks lost",
-      taskKind: "copilot-native",
-      sourceId: "copilot-agent:child-agent",
-      task: "Copilot native child",
+      name: "marks stale harness-owned subagent tasks lost",
+      taskKind: "external-harness",
+      sourceId: "harness:child",
+      task: "Harness-owned child",
       ageMinutes: 31,
       reconciled: 1,
       error: "Native subagent stopped reporting progress",
-    },
-    {
-      name: "does not mark unrelated childless subagent tasks lost",
-      taskKind: "codex-native",
-      sourceId: "other-runtime:child-thread",
-      task: "Non-Codex childless row",
-      ageMinutes: 31,
-      reconciled: 0,
-      error: undefined,
     },
   ])("$name", async ({ taskKind, sourceId, task: taskName, ageMinutes, reconciled, error }) => {
     await withTaskRegistryTempDir(async () => {
@@ -2813,6 +2836,31 @@ describe("task-registry", () => {
         requireTaskById(task.taskId),
         error === undefined ? { status: "running", lastEventAt } : { status: "lost", error },
       );
+    });
+  });
+
+  it("uses normal reconcile grace for OpenClaw-owned subagent tasks", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryForTests();
+      const now = Date.now();
+      const task = createTaskFixture("subagent", {
+        childSessionKey: "agent:main:subagent:missing",
+        runId: "openclaw-subagent:missing",
+        task: "OpenClaw-owned child",
+        notifyPolicy: "silent",
+        lastEventAt: now - 10 * 60_000,
+      });
+
+      expect(await runTaskRegistryMaintenance()).toEqual({
+        reconciled: 1,
+        recovered: 0,
+        cleanupStamped: 0,
+        pruned: 0,
+      });
+      expectRecordFields(requireTaskById(task.taskId), {
+        status: "lost",
+        error: "backing session missing",
+      });
     });
   });
 
@@ -4771,24 +4819,17 @@ describe("task-registry", () => {
 
   it.each([
     {
-      name: "cancels childless codex-native tasks without routing through OpenClaw subagent sessions",
-      taskKind: "codex-native",
-      sourceId: "codex-thread:child-thread",
-      task: "Codex native child",
+      name: "cancels harness-owned tasks without routing through OpenClaw subagent sessions",
+      taskKind: "external-harness",
+      sourceId: "harness:child",
+      task: "Harness-owned child",
       cancellable: true,
     },
     {
-      name: "cancels childless copilot-native tasks without routing through OpenClaw subagent sessions",
-      taskKind: "copilot-native",
-      sourceId: "copilot-agent:child-agent",
-      task: "Copilot native child",
-      cancellable: true,
-    },
-    {
-      name: "does not cancel unrelated childless subagent tasks",
-      taskKind: "codex-native",
-      sourceId: "other-runtime:child-thread",
-      task: "Non-Codex childless row",
+      name: "does not cancel childless subagent tasks without a harness task kind",
+      taskKind: undefined,
+      sourceId: "openclaw-subagent:child",
+      task: "Childless OpenClaw row",
       cancellable: false,
     },
   ])("$name", async ({ taskKind, sourceId, task: taskName, cancellable }) => {

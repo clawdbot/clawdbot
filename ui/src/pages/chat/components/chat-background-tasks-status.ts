@@ -110,25 +110,25 @@ export function renderBackgroundTasksStatusRow(
       backgroundTasks.onToggleCollapsed();
     }
   };
-  // The preview tooltip anchors the whole row (not the link button), so the
-  // ticking preview content stays outside the polite live region.
+  // Keep the live announcement separate from the tooltip: rich preview
+  // content must not enter the polite region, while the popup must anchor to
+  // the link itself or its center drifts with the claw and elapsed time.
   return html`
-    <openclaw-tooltip class="chat-tasks-status__preview">
-      <div class="chat-tasks-status" id=${backgroundTasks.statusRowId} role="status">
-        <span class="chat-tasks-status__claw" aria-hidden="true">${icons.claw}</span>
-        ${status.startedMs !== null
-          ? html`
-              <!-- Ticking time stays out of the polite live region: without
-                   aria-hidden, screen readers would re-announce every second. -->
-              <span class="chat-tasks-status__time" aria-hidden="true">
-                <openclaw-elapsed-time .startMs=${status.startedMs}></openclaw-elapsed-time>
-              </span>
-              <span class="chat-tasks-status__sep" aria-hidden="true">·</span>
-            `
-          : nothing}
+    <div class="chat-tasks-status" id=${backgroundTasks.statusRowId}>
+      <span class="chat-tasks-status__claw" aria-hidden="true">${icons.claw}</span>
+      ${status.startedMs !== null
+        ? html`
+            <span class="chat-tasks-status__time" aria-hidden="true">
+              <openclaw-elapsed-time .startMs=${status.startedMs}></openclaw-elapsed-time>
+            </span>
+            <span class="chat-tasks-status__sep" aria-hidden="true">·</span>
+          `
+        : nothing}
+      <span class="agent-chat__sr-only" role="status">${label}</span>
+      <openclaw-tooltip class="chat-tasks-status__preview">
         <button class="chat-tasks-status__link" type="button" @click=${openRail}>${label}</button>
-      </div>
-      ${renderStatusPreview(backgroundTasks)}
-    </openclaw-tooltip>
+        ${renderStatusPreview(backgroundTasks)}
+      </openclaw-tooltip>
+    </div>
   `;
 }

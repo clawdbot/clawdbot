@@ -389,6 +389,32 @@ beforeEach(() => {
 });
 
 describe("modelsListCommand forward-compat", () => {
+  describe("empty model lists", () => {
+    it.each([
+      { name: "JSON", options: { json: true } },
+      { name: "plain text", options: { plain: true } },
+    ])("renders empty $name output through the canonical model table", async ({ options }) => {
+      mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
+      const runtime = createRuntime();
+      const opts = { ...options, provider: "autoqa-no-such-provider" };
+
+      await modelsListCommand(opts, runtime as never);
+
+      expect(mocks.printModelTable).toHaveBeenCalledWith([], runtime, opts);
+      expect(runtime.log).not.toHaveBeenCalledWith("No models found.");
+    });
+
+    it("preserves the human-readable message for an empty model list", async () => {
+      mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
+      const runtime = createRuntime();
+
+      await modelsListCommand({ provider: "autoqa-no-such-provider" }, runtime as never);
+
+      expect(runtime.log).toHaveBeenCalledWith("No models found.");
+      expect(mocks.printModelTable).not.toHaveBeenCalled();
+    });
+  });
+
   describe("configured rows", () => {
     it("returns manifest catalog rows for provider filters without --all", async () => {
       mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
@@ -872,6 +898,48 @@ describe("modelsListCommand forward-compat", () => {
   });
 
   describe("--all catalog supplementation", () => {
+    it("includes refreshed manifest models for runtime-backed provider lists", async () => {
+      mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
+      mocks.hasProviderRuntimeCatalogForFilter.mockResolvedValueOnce(true);
+      mocks.loadProviderCatalogModelsForList.mockResolvedValueOnce([
+        {
+          provider: "anthropic",
+          id: "claude-live",
+          name: "Claude Live",
+          api: "anthropic-messages",
+          baseUrl: "https://api.anthropic.com",
+          input: ["text"],
+          contextWindow: 200_000,
+          maxTokens: 4096,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+      ]);
+      mocks.loadSupplementalManifestCatalogRowsForList.mockReturnValueOnce([
+        {
+          provider: "anthropic",
+          id: "claude-refreshed",
+          ref: "anthropic/claude-refreshed",
+          mergeKey: "anthropic::claude-refreshed",
+          name: "Claude Refreshed",
+          source: "runtime-refresh",
+          input: ["text"],
+          reasoning: false,
+          status: "available",
+          baseUrl: "https://api.anthropic.com",
+          contextWindow: 200_000,
+        },
+      ]);
+      const runtime = createRuntime();
+
+      await modelsListCommand({ all: true, provider: "anthropic", json: true }, runtime as never);
+
+      expect(mocks.loadModelRegistry).not.toHaveBeenCalled();
+      expectRowKeys(lastPrintedRows<{ key: string }>(), [
+        "anthropic/claude-live",
+        "anthropic/claude-refreshed",
+      ]);
+    });
+
     it("keeps provider-catalog Codex availability indeterminate without model auth", async () => {
       mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
       mocks.hasProviderStaticCatalogForFilter.mockResolvedValueOnce(true);

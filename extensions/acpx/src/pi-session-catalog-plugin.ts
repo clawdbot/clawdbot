@@ -23,6 +23,7 @@ import type {
 } from "openclaw/plugin-sdk/session-catalog";
 import {
   createSessionCatalogAdoptionCoordinator,
+  importSessionCatalogHistory,
   listAdoptedSessionCatalogSessions,
   sessionCatalogAdoptedSessionKey,
   sessionCatalogAdoptedSourceKey,
@@ -35,6 +36,7 @@ import {
   type PiSessionPage,
 } from "./pi-session-catalog.js";
 import { piSessionStoreAvailable } from "./pi-session-paths.js";
+import { checkPiUpstreamActivity, linkContinuedPiSession } from "./pi-session-upstream-activity.js";
 
 const PI_SESSIONS_LIST_COMMAND = "acpx.pi.sessions.list.v1";
 const PI_SESSION_READ_COMMAND = "acpx.pi.sessions.read.v1";
@@ -60,7 +62,8 @@ const PI_ADOPTED_SESSION_KEY_PREFIX = "plugin:acpx:catalog-adopt:pi:";
 
 class PiCatalogParamsError extends Error {}
 
-const continueAdoption = createSessionCatalogAdoptionCoordinator();
+const continueAdoption =
+  createSessionCatalogAdoptionCoordinator<Awaited<ReturnType<typeof linkContinuedPiSession>>>();
 
 function validatePiThreadId(value: unknown): string {
   if (typeof value !== "string" || !SESSION_ID_PATTERN.test(value)) {
@@ -446,7 +449,7 @@ async function continuePiSession(
   api: OpenClawPluginApi,
   hostId: string,
   threadId: string,
-): Promise<{ sessionKey: string }> {
+): Promise<Awaited<ReturnType<typeof linkContinuedPiSession>>> {
   if (hostId.startsWith("node:")) {
     throw new PiCatalogParamsError("paired-node Pi session rows are view-only");
   }
@@ -477,8 +480,6 @@ async function continuePiSession(
       }
       const config = currentPiCatalogConfig(api);
       const marker = { sourceThreadId: threadId };
-      // ACPX consumes load replay before OpenClaw turn handlers attach, so the
-      // OpenClaw transcript starts empty while Pi resumes from its session file.
       const created = await api.runtime.agent.session.createSessionEntry({
         cfg: config,
         key: sessionCatalogAdoptedSessionKey(PI_ADOPTED_SESSION_KEY_PREFIX, threadId),
@@ -494,12 +495,29 @@ async function continuePiSession(
           },
           pluginExtensions: { acpx: { piSessionCatalog: marker } },
         },
-        afterCreate: async () => ({
-          pluginExtensions: { acpx: { piSessionCatalog: marker } },
-        }),
+        afterCreate: async (entry) => {
+          await importSessionCatalogHistory({
+            catalogId: "pi",
+            threadId,
+            read: async ({ cursor, limit }) =>
+              await readPiTranscript(api.runtime, {
+                hostId,
+                threadId,
+                limit,
+                ...(cursor ? { cursor } : {}),
+              }),
+            sessionId: entry.sessionId,
+            sessionKey: entry.key,
+            agentId: entry.agentId,
+            ...(record.cwd ? { cwd: record.cwd } : {}),
+            config,
+          });
+          return { pluginExtensions: { acpx: { piSessionCatalog: marker } } };
+        },
       });
       return { sessionKey: created.key };
     },
+    complete: async (continued) => await linkContinuedPiSession(continued.sessionKey, threadId),
   });
 }
 
@@ -635,6 +653,7 @@ export function registerPiSessionCatalog(api: OpenClawPluginApi): void {
     read: async (request) => await readPiTranscript(api.runtime, request),
     continueSession: async (request) =>
       await continuePiSession(api, request.hostId, request.threadId),
+    checkUpstreamActivity: checkPiUpstreamActivity,
     openTerminal: async (request) => await openPiTerminal({ runtime: api.runtime, ...request }),
   });
   for (const command of createPiSessionNodeHostCommands()) {

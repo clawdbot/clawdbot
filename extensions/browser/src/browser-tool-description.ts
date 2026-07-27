@@ -15,6 +15,7 @@ export function describeBrowserTool(opts: {
     'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
     "Repeated compatible snapshots with stable document identity mark newly appeared ref-bearing elements with [new].",
     "Use snapshot+act for UI automation. Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",
+    "To read or answer questions from page text, prefer action=extract with query (optionally selector, ignoreSelectors, or schema) over snapshot: it answers in one call without loading page content into context.",
     "For file chooser uploads, pass the trigger ref with paths in the same upload call when available; use paths-only arming only when a later trigger is intentional. Use inputRef or element to set a file input directly.",
     `target selects browser location (sandbox|host|node). Default: ${opts.targetDefault}.`,
     opts.hostHint,

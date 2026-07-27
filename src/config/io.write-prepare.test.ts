@@ -1,14 +1,11 @@
 // Covers config write preparation diffs and metadata preservation.
 import { describe, expect, it, vi } from "vitest";
-import {
-  collectChangedPaths,
-  applyUnsetPathsForWrite,
-  createMergePatch,
-  formatConfigValidationFailure,
-  restoreEnvRefsFromMap,
-  resolvePersistCandidateForWrite,
-  resolveWriteEnvSnapshotForPath,
-} from "./io.write-prepare.js";
+import { collectChangedPaths } from "./config-change-paths.js";
+import { applyUnsetPathsForWrite } from "./config-path-mutation.js";
+import { restoreEnvRefsFromMap, resolveWriteEnvSnapshotForPath } from "./env-preserve.js";
+import { formatConfigValidationFailure } from "./io.write-errors.js";
+import { resolvePersistCandidateForWrite } from "./io.write-prepare.js";
+import { createMergePatch } from "./merge-patch.js";
 import type { OpenClawConfig } from "./types.js";
 
 vi.unmock("../agents/agent-scope-config.js");
@@ -86,6 +83,88 @@ describe("config io write prepare", () => {
         main: { default: true },
         worker: { workspace: "/srv/worker" },
       },
+    });
+  });
+
+  it("preserves roster siblings for an explicit agent leaf write", () => {
+    const current = {
+      agents: {
+        entries: {
+          main: { default: true },
+          worker: { workspace: "/srv/worker" },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const nextConfig = {
+      agents: {
+        entries: {
+          main: { default: true },
+          worker: { workspace: "/srv/worker", default: false },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig: current,
+      sourceConfig: current,
+      rootAuthoredConfig: current,
+      nextConfig,
+      explicitSetPaths: [["agents", "entries", "worker", "default"]],
+      explicitSetValueSource: {
+        agents: { entries: { worker: { default: false } } },
+      },
+    }) as OpenClawConfig;
+
+    expect(persisted.agents?.entries).toEqual({
+      main: { default: true },
+      worker: { workspace: "/srv/worker", default: false },
+    });
+  });
+
+  it("rejects a canonical roster rewrite that silently drops an entry", () => {
+    const current = {
+      agents: {
+        entries: {
+          main: { default: true },
+          worker: { workspace: "/srv/worker" },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(() =>
+      resolvePersistCandidateForWrite({
+        runtimeConfig: current,
+        sourceConfig: current,
+        rootAuthoredConfig: current,
+        nextConfig: {
+          agents: { entries: { worker: { workspace: "/srv/worker" } } },
+        },
+      }),
+    ).toThrow("Config write would drop agent roster entries without an explicit deletion: main.");
+  });
+
+  it("allows an explicitly authorized agent deletion from the canonical roster", () => {
+    const current = {
+      agents: {
+        entries: {
+          main: { default: true },
+          worker: { workspace: "/srv/worker" },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig: current,
+      sourceConfig: current,
+      rootAuthoredConfig: current,
+      nextConfig: {
+        agents: { entries: { worker: { workspace: "/srv/worker" } } },
+      },
+      allowedAgentRosterRemovals: ["main"],
+    }) as OpenClawConfig;
+
+    expect(persisted.agents?.entries).toEqual({
+      worker: { workspace: "/srv/worker" },
     });
   });
 
@@ -574,6 +653,7 @@ describe("config io write prepare", () => {
       explicitSetValueSource: {
         agents: { list: [{ id: "primary", ...runtimeEntry }] },
       },
+      allowedAgentRosterRemovals: ["main"],
     }) as OpenClawConfig;
 
     expect(persisted.agents?.entries?.primary?.sandbox?.ssh?.identityData).toEqual(identityRef);
@@ -620,6 +700,7 @@ describe("config io write prepare", () => {
         agents: { list: [{ id: "primary", default: true }] },
       },
       unsetPaths: [["agents", "list", "0", "workspace"]],
+      allowedAgentRosterRemovals: ["main"],
     }) as OpenClawConfig;
 
     expect(persisted.agents?.entries).toEqual({ primary: { default: true } });
@@ -719,6 +800,7 @@ describe("config io write prepare", () => {
         },
       },
       unsetPaths: [["agents", "list", "0"]],
+      allowedAgentRosterRemovals: ["0"],
     }) as OpenClawConfig;
 
     expect(persisted.agents?.entries).toEqual({ main: { default: true } });
@@ -1067,6 +1149,7 @@ describe("config io write prepare", () => {
           },
         },
         unsetPaths: [["agents", "list", "1"]],
+        allowedAgentRosterRemovals: ["worker"],
       }) as OpenClawConfig,
       [["agents", "list", "1"]],
     );
@@ -1098,6 +1181,7 @@ describe("config io write prepare", () => {
         },
         nextConfig: { agents: { entries: { main: { default: true } } } },
         unsetPaths: [["agents", "list"]],
+        allowedAgentRosterRemovals: ["main"],
       }) as OpenClawConfig,
       [["agents", "list"]],
     );

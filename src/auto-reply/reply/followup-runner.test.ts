@@ -754,7 +754,7 @@ describe("createFollowupRunner reply-lane admission", () => {
             "Active goal: Publish the release evidence — advance it or update its status (get_goal/update_goal).",
           ],
           text: [
-            "Conversation info (untrusted metadata):",
+            "Conversation info:",
             "Active goal: Publish the release evidence — advance it or update its status (get_goal/update_goal).",
             "Current message:\nmessage_id=next-turn",
           ].join("\n\n"),

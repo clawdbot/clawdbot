@@ -14,7 +14,10 @@ import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { SessionTranscriptAppendResult } from "../../config/sessions/transcript.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../../sessions/agent-harness-session-key.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -443,6 +446,20 @@ function expectDeliverySessionMirror(params: { agentId: string; sessionKey: stri
 
 function mockDeliverySuccess(messageId: string) {
   mocks.deliverOutboundPayloads.mockResolvedValue([{ messageId, channel: "slack" }]);
+}
+
+function registerMessageThreadAddressingPlugin(id: ChannelPlugin["id"]): void {
+  const plugin: ChannelPlugin = {
+    ...createChannelTestPluginBase({ id }),
+    threading: { threadAddressing: "message" },
+  };
+  setActivePluginRegistry(
+    createTestRegistry([{ pluginId: id, source: "test", plugin }]),
+    `send-test-${id}-message-thread-addressing`,
+  );
+  mocks.getChannelPlugin.mockImplementation((channel: string) =>
+    channel === id ? plugin : undefined,
+  );
 }
 
 describe("gateway send mirroring", () => {
@@ -1676,6 +1693,7 @@ describe("gateway send mirroring", () => {
   });
 
   it("updates mirror session keys and delivery thread ids when Slack routing derives a thread", async () => {
+    registerMessageThreadAddressingPlugin("slack");
     mockDeliverySuccess("m-thread-derived");
     mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
       sessionKey: "agent:main:slack:channel:c1:thread:1710000000.9999",
@@ -1707,6 +1725,7 @@ describe("gateway send mirroring", () => {
   });
 
   it("preserves the provided session when Slack derives a thread for a different base session", async () => {
+    registerMessageThreadAddressingPlugin("slack");
     mockDeliverySuccess("m-thread-mismatch");
     mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
       sessionKey: "agent:main:slack:channel:c2:thread:1710000000.9999",
@@ -1733,6 +1752,7 @@ describe("gateway send mirroring", () => {
   });
 
   it("preserves derived thread delivery for existing thread-scoped Slack session keys", async () => {
+    registerMessageThreadAddressingPlugin("slack");
     mockDeliverySuccess("m-thread-session");
     mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
       sessionKey: "agent:main:slack:channel:c1:thread:1710000000.9999",
@@ -2675,6 +2695,7 @@ describe("gateway send mirroring", () => {
         handleAction: async () => jsonResult({ ok: true, messageId: "slack-1" }),
       },
       threading: {
+        threadAddressing: "message",
         matchesToolContextTarget: ({ target, toolContext }) =>
           target.toLowerCase() ===
           toolContext.currentMessagingTarget?.replace(/^user:/i, "").toLowerCase(),

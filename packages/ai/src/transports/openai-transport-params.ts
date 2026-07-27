@@ -9,7 +9,7 @@ import {
 } from "../internal/openai.js";
 import { clampOpenAIPromptCacheKey } from "../providers/openai-prompt-cache.js";
 import { resolveModelRequestTimeoutMs, resolveProviderRequestPolicyConfig } from "./host-policy.js";
-import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
+import { resolveOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import { resolveOpenAIReasoningEffortMap } from "./openai-reasoning-compat.js";
 import type { OpenAIModeModel } from "./openai-transport-shared.js";
 import { isCodeModeModelVisibleToolName, sha256Hex } from "./transport-utils.js";
@@ -254,67 +254,16 @@ export function buildOpenAISdkRequestOptions(
   };
 }
 
-function detectCompat(model: OpenAIModeModel) {
-  const { defaults } = detectOpenAICompletionsCompat(model);
-  return {
-    supportsStore: defaults.supportsStore,
-    supportsDeveloperRole: defaults.supportsDeveloperRole,
-    supportsReasoningEffort: defaults.supportsReasoningEffort,
-    reasoningEffortMap: {},
-    supportsUsageInStreaming: defaults.supportsUsageInStreaming,
-    maxTokensField: defaults.maxTokensField,
-    requiresToolResultName: false,
-    requiresAssistantAfterToolResult: false,
-    requiresThinkingAsText: false,
-    thinkingFormat: defaults.thinkingFormat,
-    visibleReasoningDetailTypes: defaults.visibleReasoningDetailTypes,
-    openRouterRouting: {},
-    vercelGatewayRouting: {},
-    supportsStrictMode: defaults.supportsStrictMode,
-    supportsJsonSchemaResponseFormat: defaults.supportsJsonSchemaResponseFormat,
-    requiresReasoningContentOnAssistantMessages:
-      defaults.requiresReasoningContentOnAssistantMessages,
-    requiresNonEmptyUserOrAssistantMessage: defaults.requiresNonEmptyUserOrAssistantMessage,
-  };
-}
-
 export function getCompat(model: OpenAIModeModel) {
-  const detected = detectCompat(model);
+  const resolved = resolveOpenAICompletionsCompat(model as Model<"openai-completions">);
   const compat = model.compat ?? {};
-  const supportsStore =
-    typeof compat.supportsStore === "boolean" ? compat.supportsStore : detected.supportsStore;
-  const supportsReasoningEffort =
-    typeof compat.supportsReasoningEffort === "boolean"
-      ? compat.supportsReasoningEffort
-      : detected.supportsReasoningEffort;
   return {
-    supportsStore,
-    supportsDeveloperRole: compat.supportsDeveloperRole ?? detected.supportsDeveloperRole,
-    supportsReasoningEffort,
-    reasoningEffortMap: resolveOpenAIReasoningEffortMap(model, detected.reasoningEffortMap),
-    supportsUsageInStreaming: compat.supportsUsageInStreaming ?? detected.supportsUsageInStreaming,
-    maxTokensField: (compat.maxTokensField as string | undefined) ?? detected.maxTokensField,
-    requiresToolResultName: compat.requiresToolResultName ?? detected.requiresToolResultName,
-    requiresAssistantAfterToolResult:
-      compat.requiresAssistantAfterToolResult ?? detected.requiresAssistantAfterToolResult,
-    requiresThinkingAsText: compat.requiresThinkingAsText ?? detected.requiresThinkingAsText,
-    thinkingFormat: compat.thinkingFormat ?? detected.thinkingFormat,
-    openRouterRouting: (compat.openRouterRouting as Record<string, unknown> | undefined) ?? {},
-    vercelGatewayRouting:
-      (compat.vercelGatewayRouting as Record<string, unknown> | undefined) ??
-      detected.vercelGatewayRouting,
-    supportsStrictMode: compat.supportsStrictMode ?? detected.supportsStrictMode,
-    supportsJsonSchemaResponseFormat:
-      compat.supportsJsonSchemaResponseFormat ?? detected.supportsJsonSchemaResponseFormat,
-    supportsPromptCacheKey: compat.supportsPromptCacheKey === true,
-    supportsLongCacheRetention: compat.supportsLongCacheRetention !== false,
+    ...resolved,
+    cacheControlFormat: resolved.cacheControlFormat,
+    reasoningEffortMap: resolveOpenAIReasoningEffortMap(model, {}),
+    openRouterRouting: (resolved.openRouterRouting as Record<string, unknown> | undefined) ?? {},
+    vercelGatewayRouting: resolved.vercelGatewayRouting as Record<string, unknown>,
     requiresStringContent: compat.requiresStringContent ?? false,
     strictMessageKeys: compat.strictMessageKeys === true,
-    visibleReasoningDetailTypes:
-      compat.visibleReasoningDetailTypes ?? detected.visibleReasoningDetailTypes,
-    requiresReasoningContentOnAssistantMessages:
-      compat.requiresReasoningContentOnAssistantMessages ??
-      detected.requiresReasoningContentOnAssistantMessages,
-    requiresNonEmptyUserOrAssistantMessage: detected.requiresNonEmptyUserOrAssistantMessage,
   };
 }

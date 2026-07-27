@@ -30,6 +30,8 @@ const PACKAGE_BUILD_PLUGIN_SELECTION_ENV_NAMES = [
   "OPENCLAW_EXTENSIONS",
   "OPENCLAW_DOCKER_BUILD_EXTENSIONS",
   DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV,
+  // Public package builds must not inherit a smoke lane's private QA entrypoints.
+  "OPENCLAW_BUILD_PRIVATE_QA",
 ];
 const SIGNAL_EXIT_CODES = {
   SIGHUP: 129,

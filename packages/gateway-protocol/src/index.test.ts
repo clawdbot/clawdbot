@@ -19,7 +19,6 @@ import {
   validateSessionsCompanionAskParams,
   validateSessionsCompanionResetParams,
   validateSessionsCompanionStateParams,
-  validateSessionsObserverAskParams,
   validateSessionsObserverVisibilityParams,
   validateSessionsSearchParams,
   validateSessionsUsageParams,
@@ -40,6 +39,8 @@ import {
   validateWakeParams,
   type ValidationError,
 } from "./index.js";
+import * as schemaExportRegistry from "./schema-export-registry.js";
+import * as validatorRegistry from "./validator-registry.js";
 
 /**
  * Broad protocol validator smoke tests.
@@ -61,6 +62,16 @@ const makeError = (overrides: Partial<ValidationError>): ValidationError => ({
 
 /** Runtime shape shared by all exported lazy protocol validator functions. */
 type ProtocolValidator = (value: unknown) => boolean;
+
+describe("protocol export registries", () => {
+  it("re-exports every runtime registry symbol by identity", () => {
+    for (const registry of [schemaExportRegistry, validatorRegistry]) {
+      for (const [name, value] of Object.entries(registry)) {
+        expect(protocol[name as keyof typeof protocol], name).toBe(value);
+      }
+    }
+  });
+});
 
 describe("lazy protocol validators", () => {
   it("validates through exported lazy validators", () => {
@@ -276,24 +287,6 @@ describe("lazy protocol validators", () => {
     expect(validateSessionsSearchParams({ query: "deployment failure", limit: 26 })).toBe(false);
     expect(validateSessionsSearchParams({ query: "" })).toBe(false);
     expect(validateSessionsSearchParams({ query: "x".repeat(4097) })).toBe(false);
-  });
-
-  it("validates bounded session observer questions", () => {
-    expect(
-      validateSessionsObserverAskParams({
-        sessionKey: "agent:main:current",
-        question: "Why is it rerunning that test?",
-      }),
-    ).toBe(true);
-    expect(
-      validateSessionsObserverAskParams({ sessionKey: "agent:main:current", question: "" }),
-    ).toBe(false);
-    expect(
-      validateSessionsObserverAskParams({
-        sessionKey: "agent:main:current",
-        question: "x".repeat(401),
-      }),
-    ).toBe(false);
   });
 
   it("validates closed bounded session companion params", () => {

@@ -164,6 +164,9 @@ describe("Dockerfile", () => {
     const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
     const postinstallIndex = dockerfile.indexOf("COPY scripts/postinstall-bundled-plugins.mjs");
     const prepareIndex = dockerfile.indexOf("scripts/prepare-git-hooks.mjs");
+    const importGrammarIndex = dockerfile.indexOf(
+      "COPY scripts/lib/guard-inventory-utils.mjs ./scripts/lib/guard-inventory-utils.mjs",
+    );
     const distImportHelperIndex = dockerfile.indexOf(
       "COPY scripts/lib/package-dist-imports.mjs ./scripts/lib/package-dist-imports.mjs",
     );
@@ -176,6 +179,7 @@ describe("Dockerfile", () => {
 
     expect(postinstallIndex).toBeGreaterThan(-1);
     expect(prepareIndex).toBeGreaterThan(-1);
+    expect(importGrammarIndex).toBeGreaterThan(-1);
     expect(distImportHelperIndex).toBeGreaterThan(-1);
     expect(packageManifestIndex).toBeGreaterThan(-1);
     expect(extensionManifestIndex).toBeGreaterThan(-1);
@@ -190,6 +194,7 @@ describe("Dockerfile", () => {
     );
     expect(postinstallIndex).toBeLessThan(installIndex);
     expect(prepareIndex).toBeLessThan(installIndex);
+    expect(importGrammarIndex).toBeLessThan(installIndex);
     expect(distImportHelperIndex).toBeLessThan(installIndex);
     expect(packageManifestIndex).toBeLessThan(installIndex);
     expect(extensionManifestIndex).toBeLessThan(installIndex);

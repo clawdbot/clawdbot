@@ -200,6 +200,82 @@ describe("runBrowserProxyCommand", () => {
     ({ runBrowserProxyCommand } = await import("./invoke-browser.js"));
   });
 
+  it("retries browser control startup after a rejected attempt", async () => {
+    controlServiceMocks.startBrowserControlServiceFromConfig.mockRejectedValueOnce(
+      new Error("browser startup failed"),
+    );
+    dispatcherMocks.dispatch.mockResolvedValue({ status: 200, body: { ok: true } });
+    const request = JSON.stringify({ method: "GET", path: "/snapshot" });
+
+    await expect(runBrowserProxyCommand(request)).rejects.toThrow("browser startup failed");
+    await expect(runBrowserProxyCommand(request)).resolves.toBe(
+      JSON.stringify({ result: { ok: true } }),
+    );
+
+    expect(controlServiceMocks.startBrowserControlServiceFromConfig).toHaveBeenCalledTimes(2);
+    expect(dispatcherMocks.dispatch).toHaveBeenCalledOnce();
+  });
+
+  it("retries browser control startup after the service returns disabled", async () => {
+    controlServiceMocks.startBrowserControlServiceFromConfig.mockResolvedValueOnce(false);
+    dispatcherMocks.dispatch.mockResolvedValue({ status: 200, body: { ok: true } });
+    const request = JSON.stringify({ method: "GET", path: "/snapshot" });
+
+    await expect(runBrowserProxyCommand(request)).rejects.toThrow("browser control disabled");
+    await expect(runBrowserProxyCommand(request)).resolves.toBe(
+      JSON.stringify({ result: { ok: true } }),
+    );
+
+    expect(controlServiceMocks.startBrowserControlServiceFromConfig).toHaveBeenCalledTimes(2);
+    expect(dispatcherMocks.dispatch).toHaveBeenCalledOnce();
+  });
+
+  it("shares a retried browser control startup across concurrent requests", async () => {
+    let rejectFailedStartup!: (reason?: unknown) => void;
+    const failedStartup = new Promise<boolean>((_resolve, reject) => {
+      rejectFailedStartup = reject;
+    });
+    let resolveSuccessfulStartup!: (value: boolean) => void;
+    const successfulStartup = new Promise<boolean>((resolve) => {
+      resolveSuccessfulStartup = resolve;
+    });
+    controlServiceMocks.startBrowserControlServiceFromConfig
+      .mockReturnValueOnce(failedStartup)
+      .mockReturnValueOnce(successfulStartup);
+    dispatcherMocks.dispatch.mockResolvedValue({ status: 200, body: { ok: true } });
+    const request = JSON.stringify({ method: "GET", path: "/snapshot" });
+
+    const failedRequests = Promise.allSettled([
+      runBrowserProxyCommand(request),
+      runBrowserProxyCommand(request),
+    ]);
+    expect(controlServiceMocks.startBrowserControlServiceFromConfig).toHaveBeenCalledOnce();
+    rejectFailedStartup(new Error("browser startup failed"));
+
+    await expect(failedRequests).resolves.toEqual([
+      { status: "rejected", reason: expect.any(Error) },
+      { status: "rejected", reason: expect.any(Error) },
+    ]);
+    expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
+
+    const retriedRequests = Promise.allSettled([
+      runBrowserProxyCommand(request),
+      runBrowserProxyCommand(request),
+    ]);
+    expect(controlServiceMocks.startBrowserControlServiceFromConfig).toHaveBeenCalledTimes(2);
+    resolveSuccessfulStartup(true);
+
+    await expect(retriedRequests).resolves.toEqual([
+      { status: "fulfilled", value: JSON.stringify({ result: { ok: true } }) },
+      { status: "fulfilled", value: JSON.stringify({ result: { ok: true } }) },
+    ]);
+    await expect(runBrowserProxyCommand(request)).resolves.toBe(
+      JSON.stringify({ result: { ok: true } }),
+    );
+    expect(controlServiceMocks.startBrowserControlServiceFromConfig).toHaveBeenCalledTimes(2);
+    expect(dispatcherMocks.dispatch).toHaveBeenCalledTimes(3);
+  });
+
   it("serializes plural action downloads without reading nested page paths", async () => {
     const tempDir = await fs.mkdtemp(nodePath.join(os.tmpdir(), "openclaw-browser-proxy-action-"));
     const firstPath = nodePath.join(tempDir, "first.txt");

@@ -9,14 +9,8 @@ import {
   statSync,
 } from "node:fs";
 import path from "node:path";
-import {
-  clearNodeSqliteKyselyCacheForDatabase,
-  executeSqliteQuerySync,
-  getNodeSqliteKysely,
-} from "../infra/kysely-sync.js";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
-import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   assertAgentDeletionPathFence,
@@ -26,11 +20,10 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   type OpenClawRegisteredAgentDatabase,
 } from "./openclaw-agent-db-contract.js";
+import { withOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
+import { detectOpenClawStateDatabaseSchemaMigrationsFromDatabase } from "./openclaw-state-db-schema-repair.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
-  detectOpenClawStateDatabaseSchemaMigrations,
-  OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-  OPENCLAW_STATE_SCHEMA_VERSION,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
@@ -702,20 +695,13 @@ export function listOpenClawRegisteredAgentDatabases(
     }
     return [];
   }
-  if (detectOpenClawStateDatabaseSchemaMigrations(options).length > 0) {
-    throw new Error(
-      `OpenClaw state database ${pathname} has a legacy agent database registry schema; run openclaw doctor --fix to migrate it.`,
-    );
-  }
-
-  const database = openNodeSqliteDatabase(pathname, {
-    readOnly: true,
-  });
-  try {
-    database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-    if (readSqliteUserVersion(database) > OPENCLAW_STATE_SCHEMA_VERSION) {
+  // Discovery runs per row in list hot paths, so the legacy-schema gate and the
+  // query share one process-held state handle instead of opening two
+  // connections per call.
+  return withOpenClawStateDatabaseReadOnly(({ db: database }) => {
+    if (detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(database, pathname).length > 0) {
       throw new Error(
-        `OpenClaw state database ${pathname} uses a newer schema than this OpenClaw build.`,
+        `OpenClaw state database ${pathname} has a legacy agent database registry schema; run openclaw doctor --fix to migrate it.`,
       );
     }
     const registryTable = database
@@ -743,8 +729,5 @@ export function listOpenClawRegisteredAgentDatabases(
       lastSeenAt: row.last_seen_at,
       sizeBytes: row.size_bytes,
     }));
-  } finally {
-    clearNodeSqliteKyselyCacheForDatabase(database);
-    database.close();
-  }
+  }, options);
 }

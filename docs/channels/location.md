@@ -32,7 +32,7 @@ Locations are rendered as friendly lines without brackets. Coordinates use six d
 If the channel includes a label, address, or caption/comment, it is preserved in the context payload and appears in the prompt as fenced untrusted JSON (fields are omitted when absent):
 
 ````text
-Location (untrusted metadata):
+Location:
 ```json
 {
   "latitude": 48.858844,

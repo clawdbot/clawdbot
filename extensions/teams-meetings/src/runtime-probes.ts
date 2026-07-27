@@ -48,7 +48,7 @@ const probes = MeetingPlatformAdapter.createRuntimeProbes<
   invalidRequest: (message) => new Error(message),
   resolveTimeoutMs: resolveProbeTimeoutMs,
   shouldWaitForListening: (session) => Boolean(session.chrome?.launched),
-  talkBackMode: (mode) => mode === "agent" || mode === "bidi",
+  talkBackMode: MeetingPlatformAdapter.isTalkBackMode,
 });
 
 export const testTeamsMeetingListening: (

@@ -147,7 +147,7 @@ function makeWhatsAppStructuredUserInput(text: string, mediaKind?: "sticker") {
     return makeUserInput(text);
   }
   const mediaContext = [
-    "WhatsApp media (untrusted metadata):",
+    "WhatsApp media: ⟦openclaw:ctx⟧",
     "```json",
     JSON.stringify({ source: "whatsapp", type: "media", payload: { kind: mediaKind } }),
     "```",
@@ -266,6 +266,42 @@ function explicitSessionsSpawnPrompt(token: string) {
 }
 
 describe("qa mock openai server", () => {
+  it("returns HTTP 503 only after the provider failure fixture receives tool output", async () => {
+    const server = await startMockServer();
+    const prompt = "Provider HTTP 503 after tool QA check: read QA_KICKOFF_TASK.md, then reply.";
+
+    const toolPlan = await postResponses(server, {
+      stream: false,
+      model: "gpt-5.6-luna",
+      tools: [READ_TOOL],
+      input: [makeUserInput(prompt)],
+    });
+    expect(toolPlan.status).toBe(200);
+    expect(outputItem(await toolPlan.json()).name).toBe("read");
+
+    const failure = await postResponses(server, {
+      stream: false,
+      model: "gpt-5.6-luna",
+      tools: [READ_TOOL],
+      input: [
+        makeUserInput(prompt),
+        {
+          type: "function_call_output",
+          call_id: "call_mock_provider_503",
+          output: "QA mission loaded",
+        },
+      ],
+    });
+
+    expect(failure.status).toBe(503);
+    expect(await failure.json()).toEqual({
+      error: {
+        type: "server_error",
+        message: "Service Unavailable",
+      },
+    });
+  });
+
   it("keeps cursor reads correct when retained debug requests rotate", async () => {
     const server = await startMockServer();
     const debugRequestLimit = 2_000;
@@ -3483,7 +3519,7 @@ describe("qa mock openai server", () => {
         previousExactMarkerInput,
         makeUserInput(
           [
-            "Conversation info (untrusted metadata):",
+            "Conversation info: ⟦openclaw:ctx⟧",
             "```json",
             '{"inbound_event_kind":"user_request"}',
             "```",
@@ -3499,9 +3535,7 @@ describe("qa mock openai server", () => {
         setupInput,
         previousExactMarkerInput,
         makeUserInput(
-          ["Sender (untrusted metadata):", "```json", '{"name":"QA"}', "```", "", "<contact>"].join(
-            "\n",
-          ),
+          ["Sender: ⟦openclaw:ctx⟧", "```json", '{"name":"QA"}', "```", "", "<contact>"].join("\n"),
         ),
       ],
     });
@@ -3512,7 +3546,7 @@ describe("qa mock openai server", () => {
         previousExactMarkerInput,
         makeWhatsAppStructuredUserInput(
           [
-            "Conversation info (untrusted metadata):",
+            "Conversation info: ⟦openclaw:ctx⟧",
             "```json",
             '{"inbound_event_kind":"user_request"}',
             "```",
@@ -3664,7 +3698,7 @@ describe("qa mock openai server", () => {
         "Sticker note: <media:sticker>",
       ].join("\n"),
       [
-        "WhatsApp media (untrusted metadata):",
+        "WhatsApp media: ⟦openclaw:ctx⟧",
         "```json",
         '{"source":"whatsapp","type":"media","payload":{"kind":"image"}}',
         "```",
@@ -4375,7 +4409,7 @@ describe("qa mock openai server", () => {
           content: [
             {
               type: "input_text",
-              text: 'Conversation info (untrusted metadata): {"is_group_chat": true}\n\nhello team, no bot ping here',
+              text: 'Conversation info: ⟦openclaw:ctx⟧\n{"is_group_chat": true}\n\nhello team, no bot ping here',
             },
           ],
         },

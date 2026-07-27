@@ -53,6 +53,11 @@ export type CachedLiveProviderModelRowsParams = FetchLiveProviderModelRowsParams
   shouldCacheRows?: (rows: readonly unknown[]) => boolean;
 };
 
+export type LiveModelRowProjection<T extends ModelDefinitionConfig = ModelDefinitionConfig> = (
+  rows: readonly unknown[],
+  fallback: ModelProviderConfig,
+) => readonly T[];
+
 // Live model catalogs are fetched at runtime from provider-controlled endpoints,
 // so the success body is untrusted just like the error body. A faulty or hostile
 // provider can stream an unbounded JSON document; reading it without a ceiling
@@ -79,6 +84,10 @@ export type BuildLiveModelProviderConfigParams<T extends ModelDefinitionConfig> 
     models: readonly T[];
     ttlMs?: number;
     cacheKeyParts?: readonly unknown[];
+    /** Provider-owned projection for catalogs that publish richer metadata than model ids. */
+    projectRows?: LiveModelRowProjection<T>;
+    /** Retry a rejected authenticated catalog request against the provider's public catalog. */
+    fallbackToAnonymousOnUnauthorized?: boolean;
   };
 
 export type OpenAICompatibleModelDiscoveryOptions = {
@@ -91,6 +100,12 @@ export type OpenAICompatibleModelDiscoveryOptions = {
   endpointPath?: string;
   /** Provider-specific response row selector when the response is not `{ data: [] }`. */
   readRows?: FetchLiveProviderModelRowsParams["readRows"];
+  /** Provider-owned projection when the conservative OpenAI-compatible projection is insufficient. */
+  projectRows?: LiveModelRowProjection;
+  /** Live catalog request timeout. Defaults to 5 seconds. */
+  timeoutMs?: number;
+  /** Successful live catalog cache lifetime. Defaults to 60 seconds. */
+  ttlMs?: number;
   /** Provider-specific authorization headers for non-Bearer model-list APIs. */
   buildRequestHeaders?: FetchLiveProviderModelRowsParams["buildRequestHeaders"];
   /**
@@ -443,10 +458,58 @@ function buildProviderConfig<T extends ModelDefinitionConfig>(
   };
 }
 
+async function projectCachedLiveModelRows<T extends ModelDefinitionConfig>(
+  params: BuildLiveModelProviderConfigParams<T> & {
+    fallback: ModelProviderConfig;
+    projectRows: LiveModelRowProjection<T>;
+  },
+): Promise<readonly T[]> {
+  const load = async (requestAuth: { apiKey?: string; discoveryApiKey?: string }) => {
+    const rows = await getCachedLiveProviderModelRows({
+      ...params,
+      ...requestAuth,
+      cacheKeyParts:
+        requestAuth.apiKey === params.apiKey &&
+        requestAuth.discoveryApiKey === params.discoveryApiKey
+          ? params.cacheKeyParts
+          : undefined,
+      shouldCacheRows: (candidateRows) =>
+        params.projectRows(candidateRows, params.fallback).length > 0,
+    });
+    return params.projectRows(rows, params.fallback);
+  };
+
+  try {
+    return await load({ apiKey: params.apiKey, discoveryApiKey: params.discoveryApiKey });
+  } catch (error) {
+    if (
+      params.fallbackToAnonymousOnUnauthorized &&
+      error instanceof LiveModelCatalogHttpError &&
+      error.status === 401 &&
+      (params.apiKey || params.discoveryApiKey)
+    ) {
+      return await load({ apiKey: undefined, discoveryApiKey: undefined });
+    }
+    throw error;
+  }
+}
+
 export async function buildLiveModelProviderConfig<T extends ModelDefinitionConfig>(
   params: BuildLiveModelProviderConfigParams<T>,
 ): Promise<ModelProviderConfig> {
+  const fallback = buildProviderConfig(params, params.models);
   try {
+    if (params.projectRows) {
+      const models = await projectCachedLiveModelRows({
+        ...params,
+        fallback,
+        projectRows: params.projectRows,
+      });
+      if (models.length > 0) {
+        return { ...fallback, models: [...models] };
+      }
+      return fallback;
+    }
     const liveModelIds = await getCachedLiveCatalogValue({
       keyParts: params.cacheKeyParts ?? [
         params.providerId,
@@ -467,7 +530,7 @@ export async function buildLiveModelProviderConfig<T extends ModelDefinitionConf
     // Live model catalogs are advisory. Keep provider-owned static rows visible
     // when discovery is unavailable or the provider returns an unexpected body.
   }
-  return buildProviderConfig(params, params.models);
+  return fallback;
 }
 
 function resolveLiveModelDiscoveryEndpoint(baseUrl: string, endpointPath: string): string {
@@ -494,6 +557,7 @@ export async function buildOpenAICompatibleLiveModelProviderConfig(params: {
   fetchGuard?: LiveModelCatalogFetchGuard;
   signal?: AbortSignal;
 }): Promise<ModelProviderConfig> {
+  const { models, ...providerConfig } = params.providerConfig;
   const fallback = {
     ...params.providerConfig,
     ...(params.apiKey ? { apiKey: params.apiKey } : {}),
@@ -508,30 +572,25 @@ export async function buildOpenAICompatibleLiveModelProviderConfig(params: {
   if (!endpoint) {
     return fallback;
   }
-  try {
-    const rows = await getCachedLiveProviderModelRows({
-      providerId: params.providerId,
-      endpoint,
-      apiKey: params.apiKey,
-      discoveryApiKey: params.discoveryApiKey,
-      fetchGuard: params.fetchGuard,
-      signal: params.signal,
-      ttlMs: 60_000,
-      auditContext: `${params.providerId}-model-discovery`,
-      readRows: params.modelDiscovery?.readRows,
-      buildRequestHeaders: params.modelDiscovery?.buildRequestHeaders,
-      shouldCacheRows: (modelRows) =>
-        buildOpenAICompatibleLiveModels(modelRows, fallback, acceptUnknownModel).length > 0,
-    });
-    const models = buildOpenAICompatibleLiveModels(rows, fallback, acceptUnknownModel);
-    if (models.length > 0) {
-      return { ...fallback, models };
-    }
-  } catch {
-    // Provider catalogs are advisory. Preserve the provider-owned seed when
-    // credentials, networking, or a vendor response prevents live discovery.
-  }
-  return fallback;
+  return await buildLiveModelProviderConfig({
+    providerId: params.providerId,
+    endpoint,
+    providerConfig,
+    models,
+    apiKey: params.apiKey,
+    discoveryApiKey: params.discoveryApiKey,
+    fetchGuard: params.fetchGuard,
+    signal: params.signal,
+    timeoutMs: params.modelDiscovery?.timeoutMs,
+    ttlMs: params.modelDiscovery?.ttlMs ?? 60_000,
+    auditContext: `${params.providerId}-model-discovery`,
+    readRows: params.modelDiscovery?.readRows,
+    buildRequestHeaders: params.modelDiscovery?.buildRequestHeaders,
+    projectRows:
+      params.modelDiscovery?.projectRows ??
+      ((rows, fallbackProvider) =>
+        buildOpenAICompatibleLiveModels(rows, fallbackProvider, acceptUnknownModel)),
+  });
 }
 
 export async function buildOpenAICompatibleProviderCatalog(

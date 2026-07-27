@@ -543,6 +543,7 @@ describe("release candidate checklist", () => {
         [".artifacts/preflight/openclaw-ai.tgz"],
         "/trusted",
         [".artifacts/preflight/openclaw-codex.tgz"],
+        "macOS 26.5 Node 24",
       ),
     ).toEqual([
       "exec",
@@ -554,6 +555,8 @@ describe("release candidate checklist", () => {
       ".artifacts/preflight/openclaw-ai.tgz",
       "--registry-package-tarball",
       ".artifacts/preflight/openclaw-codex.tgz",
+      "--macos-snapshot-hint",
+      "macOS 26.5 Node 24",
       "--json",
     ]);
   });

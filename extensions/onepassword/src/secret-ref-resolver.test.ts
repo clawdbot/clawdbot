@@ -2,18 +2,61 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { DEFAULT_SECRET_FILE_MAX_BYTES } from "openclaw/plugin-sdk/secret-file-runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { encodeOnePasswordSecretId } from "../onepassword-secret-id.js";
 import { createTrustedNodeFixture } from "./trusted-node.test-support.js";
 
-const resolverPath = fileURLToPath(
+const sourceResolverPath = fileURLToPath(
   new URL("../onepassword-secret-ref-resolver.js", import.meta.url),
 );
+const sourceStaticAssetPaths = [
+  sourceResolverPath,
+  fileURLToPath(new URL("../onepassword-op-path.js", import.meta.url)),
+  fileURLToPath(new URL("../onepassword-secret-id.js", import.meta.url)),
+];
 const manifestPath = fileURLToPath(new URL("../openclaw.plugin.json", import.meta.url));
 const packagePath = fileURLToPath(new URL("../package.json", import.meta.url));
+const tsxCliPath = fileURLToPath(import.meta.resolve("tsx/cli"));
+const rootTsconfigPath = path.resolve("tsconfig.json");
+const secretRefRuntimeSourceUrl = pathToFileURL(
+  path.resolve("src/plugin-sdk/secret-ref-runtime.ts"),
+).href;
 const tempDirs: string[] = [];
+let resolverPath = sourceResolverPath;
+let stagedResolverRoot: string | undefined;
+
+beforeAll(() => {
+  const tempRoot = path.join(process.cwd(), ".tmp");
+  fs.mkdirSync(tempRoot, { recursive: true });
+  stagedResolverRoot = fs.mkdtempSync(path.join(tempRoot, "onepassword-resolver-"));
+  for (const sourcePath of sourceStaticAssetPaths) {
+    const stagedPath = path.join(stagedResolverRoot, path.basename(sourcePath));
+    if (sourcePath.endsWith("onepassword-op-path.js")) {
+      fs.writeFileSync(
+        stagedPath,
+        fs
+          .readFileSync(sourcePath, "utf8")
+          .replace(
+            '"openclaw/plugin-sdk/secret-ref-runtime"',
+            JSON.stringify(secretRefRuntimeSourceUrl),
+          ),
+      );
+      continue;
+    }
+    fs.copyFileSync(sourcePath, stagedPath);
+  }
+  // Keep the relative static assets together, but resolve the real SDK from source so this
+  // focused test does not depend on a parallel build producing dist/plugin-sdk first.
+  resolverPath = path.join(stagedResolverRoot, path.basename(sourceResolverPath));
+});
+
+afterAll(() => {
+  if (stagedResolverRoot) {
+    fs.rmSync(stagedResolverRoot, { recursive: true, force: true });
+  }
+});
 
 function makeTempDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-1password-test-"));
@@ -50,17 +93,21 @@ function runResolver(params: {
     );
   }
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [resolverPath], {
-      ...(params.cwd ? { cwd: params.cwd } : {}),
-      stdio: ["pipe", "pipe", "pipe"],
-      env: {
-        ...process.env,
-        OP_SERVICE_ACCOUNT_TOKEN: "",
-        CLAW_1PASSWORD_OP: "",
-        OPENCLAW_STATE_DIR: stateDir,
-        ...params.env,
+    const child = spawn(
+      process.execPath,
+      [tsxCliPath, "--tsconfig", rootTsconfigPath, resolverPath],
+      {
+        ...(params.cwd ? { cwd: params.cwd } : {}),
+        stdio: ["pipe", "pipe", "pipe"],
+        env: {
+          ...process.env,
+          OP_SERVICE_ACCOUNT_TOKEN: "",
+          CLAW_1PASSWORD_OP: "",
+          OPENCLAW_STATE_DIR: stateDir,
+          ...params.env,
+        },
       },
-    });
+    );
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8");
@@ -87,7 +134,7 @@ afterEach(() => {
 
 describe("plugin manifest", () => {
   it("declares the 1Password resolver as a managed Node SecretRef preset", () => {
-    const resolverSource = fs.readFileSync(resolverPath, "utf8");
+    const resolverSource = fs.readFileSync(sourceResolverPath, "utf8");
     const readIntegerConstant = (name: string): number => {
       const match = new RegExp(`const ${name} = (\\d[\\d_]*)`, "u").exec(resolverSource);
       return Number(match?.[1]?.replaceAll("_", ""));

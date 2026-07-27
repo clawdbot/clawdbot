@@ -217,9 +217,6 @@ function resolvePluginNpmRuntimePackageFiles(plan) {
   if (packageRelativePathExists(plan.packageDir, "openclaw.plugin.json")) {
     merged.add("openclaw.plugin.json");
   }
-  if (packageRelativePathExists(plan.packageDir, "npm-shrinkwrap.json")) {
-    merged.add("npm-shrinkwrap.json");
-  }
   if (packageRelativePathExists(plan.packageDir, "README.md")) {
     merged.add("README.md");
   }

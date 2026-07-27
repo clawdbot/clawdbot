@@ -22,7 +22,13 @@ import { discardIgnoredResponseBody } from "./ignored-response-body.js";
 import * as parity from "./parity-shared.js";
 import { readRawQaSessionStore } from "./suite-runtime-agent-session.js";
 
+// These are the canonical QA comparison cells, not the extensible product
+// AgentHarness registry. Broader harness coverage needs its own explicit lane.
 export type RuntimeId = "openclaw" | "codex";
+
+type RuntimeParityStatus = "pass" | "fail" | "skip";
+
+const CANONICAL_RUNTIME_IDS = ["openclaw", "codex"] as const satisfies readonly RuntimeId[];
 
 export type RuntimeParityToolCall = {
   tool: string;
@@ -57,6 +63,11 @@ export type RuntimeParityCell = {
   sentinelFindings?: GatewayLogSentinelFinding[];
 };
 
+type RuntimeParityResultCell = RuntimeParityCell & {
+  status: RuntimeParityStatus;
+  details?: string;
+};
+
 export type RuntimeParityDrift =
   | "none"
   | "text-only"
@@ -68,10 +79,7 @@ export type RuntimeParityDrift =
 export type RuntimeParityResult = {
   scenarioId: string;
   runtimeParityUsage?: RuntimeParityUsagePolicy;
-  cells: {
-    openclaw: RuntimeParityCell;
-    codex: RuntimeParityCell;
-  };
+  cells: Record<RuntimeId, RuntimeParityResultCell>;
   drift: RuntimeParityDrift;
   driftDetails?: string;
 };
@@ -93,8 +101,8 @@ export function resolveRuntimeParityUsagePolicy(value: unknown): RuntimeParityUs
 }
 
 export type RuntimeParityScenarioExecution = {
-  scenarioStatus: "pass" | "fail";
-  scenarioDetails?: string;
+  status: RuntimeParityStatus;
+  details?: string;
   cell: RuntimeParityCell;
 };
 
@@ -110,8 +118,10 @@ export function runtimeParityCellStatus(
 export function isRuntimeParityResultPass(result: RuntimeParityResult) {
   return (
     result.drift !== "failure-mode" &&
-    isRuntimeParityCellPassable(result.cells.openclaw) &&
-    isRuntimeParityCellPassable(result.cells.codex)
+    CANONICAL_RUNTIME_IDS.every((runtime) => {
+      const cell = result.cells[runtime];
+      return cell?.status === "pass" && isRuntimeParityCellPassable(cell);
+    })
   );
 }
 
@@ -1099,8 +1109,8 @@ function summarizeSentinelErrorClass(findings: readonly GatewayLogSentinelFindin
 function classifyRuntimeParityCells(params: {
   openclaw: RuntimeParityCell;
   codex: RuntimeParityCell;
-  openclawScenarioStatus: "pass" | "fail";
-  codexScenarioStatus: "pass" | "fail";
+  openclawStatus: RuntimeParityStatus;
+  codexStatus: RuntimeParityStatus;
 }): Pick<RuntimeParityResult, "drift" | "driftDetails"> {
   if (
     isHardFailureRuntimeError(params.openclaw.runtimeErrorClass) ||
@@ -1128,17 +1138,21 @@ function classifyRuntimeParityCells(params: {
   }
 
   if (
-    params.openclawScenarioStatus === "fail" ||
-    params.codexScenarioStatus === "fail" ||
+    params.openclawStatus !== "pass" ||
+    params.codexStatus !== "pass" ||
     !isRuntimeParityCellPassable(params.openclaw) ||
     !isRuntimeParityCellPassable(params.codex)
   ) {
     return {
       drift: "failure-mode",
       driftDetails:
-        params.openclawScenarioStatus === params.codexScenarioStatus
-          ? "at least one runtime failed"
-          : `scenario status differs (${params.openclawScenarioStatus} vs ${params.codexScenarioStatus})`,
+        params.openclawStatus === params.codexStatus
+          ? params.openclawStatus === "skip"
+            ? "both canonical runtime-pair cells skipped"
+            : params.openclawStatus === "fail"
+              ? "both canonical runtime-pair cells failed"
+              : "at least one runtime failed"
+          : `runtime-pair cell status differs (${params.openclawStatus} vs ${params.codexStatus})`,
     };
   }
 
@@ -1398,9 +1412,9 @@ export async function captureRuntimeParityCell(
   // Retry passes retain first-attempt diagnostics; only terminal failures may
   // classify that historical text as the cell's runtime error.
   const scenarioErrorClass =
-    params.scenarioResult.status === "pass"
-      ? undefined
-      : classifyScenarioError(params.scenarioResult.details);
+    params.scenarioResult.status === "fail"
+      ? classifyScenarioError(params.scenarioResult.details)
+      : undefined;
   const sentinelErrorClass = summarizeSentinelErrorClass(sentinelFindings);
   const terminalImageResultProven = hasProvenTerminalImageResult(params.scenarioResult);
   return {
@@ -1432,15 +1446,23 @@ export async function runRuntimeParityScenario(params: {
   const drift = classifyRuntimeParityCells({
     openclaw: openclaw.cell,
     codex: codex.cell,
-    openclawScenarioStatus: openclaw.scenarioStatus,
-    codexScenarioStatus: codex.scenarioStatus,
+    openclawStatus: openclaw.status,
+    codexStatus: codex.status,
   });
   return {
     scenarioId: params.scenarioId,
     runtimeParityUsage: resolveRuntimeParityUsagePolicy(params.runtimeParityUsage),
     cells: {
-      openclaw: openclaw.cell,
-      codex: codex.cell,
+      openclaw: {
+        ...openclaw.cell,
+        status: openclaw.status,
+        ...(openclaw.details ? { details: openclaw.details } : {}),
+      },
+      codex: {
+        ...codex.cell,
+        status: codex.status,
+        ...(codex.details ? { details: codex.details } : {}),
+      },
     },
     drift: drift.drift,
     ...(drift.driftDetails ? { driftDetails: drift.driftDetails } : {}),

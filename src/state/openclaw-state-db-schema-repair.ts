@@ -171,25 +171,36 @@ export function detectOpenClawStateDatabaseSchemaMigrations(
   }
   const db = openNodeSqliteDatabase(pathname, { readOnly: true });
   try {
-    const migrations: OpenClawStateDatabaseSchemaMigration[] = [];
-    const userVersion = readSqliteUserVersion(db);
-    if (!hasCanonicalAgentDatabasesPrimaryKey(db)) {
-      migrations.push({ kind: "agent-databases-composite-primary-key", path: pathname });
-    }
-    if (!hasCanonicalAuditEventsSchema(db)) {
-      migrations.push({ kind: "audit-events-v2", path: pathname });
-    }
-    if (tableExists(db, "audit_events") && userVersion < OPENCLAW_STATE_STRICT_SCHEMA_VERSION) {
-      migrations.push({ kind: "strict-tables-v3", path: pathname });
-    }
-    if (sessionWatchMigration.needsSessionWatchCursorProvenanceMigration(db, userVersion)) {
-      migrations.push({ kind: "session-watch-cursor-provenance-v4", path: pathname });
-    }
-    migrations.push(
-      ...operatorApprovalMigration.detectOperatorApprovalSchemaMigration(db, pathname),
-    );
-    return migrations;
+    return detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(db, pathname);
   } finally {
     db.close();
   }
+}
+
+/**
+ * Detect migrations against a caller-owned handle.
+ *
+ * Registry discovery runs this per lookup while already holding a state
+ * connection; opening a second one there made reads scale with row count.
+ */
+export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
+  db: DatabaseSync,
+  pathname: string,
+): OpenClawStateDatabaseSchemaMigration[] {
+  const migrations: OpenClawStateDatabaseSchemaMigration[] = [];
+  const userVersion = readSqliteUserVersion(db);
+  if (!hasCanonicalAgentDatabasesPrimaryKey(db)) {
+    migrations.push({ kind: "agent-databases-composite-primary-key", path: pathname });
+  }
+  if (!hasCanonicalAuditEventsSchema(db)) {
+    migrations.push({ kind: "audit-events-v2", path: pathname });
+  }
+  if (tableExists(db, "audit_events") && userVersion < OPENCLAW_STATE_STRICT_SCHEMA_VERSION) {
+    migrations.push({ kind: "strict-tables-v3", path: pathname });
+  }
+  if (sessionWatchMigration.needsSessionWatchCursorProvenanceMigration(db, userVersion)) {
+    migrations.push({ kind: "session-watch-cursor-provenance-v4", path: pathname });
+  }
+  migrations.push(...operatorApprovalMigration.detectOperatorApprovalSchemaMigration(db, pathname));
+  return migrations;
 }
