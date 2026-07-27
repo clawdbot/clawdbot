@@ -4,11 +4,8 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import type { AgentTurnExecutionResult } from "./agent-runner-execution.types.js";
-import {
-  deliverFollowupDecision,
-  resolveFollowupDeliveryDecision,
-  resolveFollowupDeliveryPayloads,
-} from "./followup-delivery.js";
+import { resolveFollowupDeliveryPayloads } from "./followup-delivery-payloads.js";
+import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
 import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
 
 const deliveryState = vi.hoisted(() => ({ routeReply: vi.fn(), runtimeError: vi.fn() }));

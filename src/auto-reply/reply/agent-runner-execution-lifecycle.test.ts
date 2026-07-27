@@ -326,8 +326,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       await expect(pending).resolves.toEqual({
         kind: "final",
         payload: {
-          isError: true,
-          text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+          text: SILENT_REPLY_TOKEN,
         },
       });
     } finally {
