@@ -55,6 +55,7 @@ import {
   reviseSkillProposal,
 } from "../skills/workshop/service.js";
 import type {
+  SkillProposalApplyResult,
   SkillProposalManifest,
   SkillProposalReadResult,
   SkillProposalSupportFileInput,
@@ -393,6 +394,32 @@ async function runSkillCuratorMutation(method: "pin" | "restore" | "unpin", skil
     return unpinCuratedSkill(skill);
   }
   return restoreCuratedSkill(skill);
+}
+
+async function runSkillProposalApply(
+  resolved: ResolvedSkillsWorkspace,
+  proposalId: string,
+): Promise<SkillProposalApplyResult> {
+  try {
+    const { callGateway } = await import("../gateway/call.js");
+    return await callGateway<SkillProposalApplyResult>({
+      config: resolved.config,
+      method: "skills.proposals.apply",
+      params: { agentId: resolved.agentId, proposalId },
+      timeoutMs: GATEWAY_SKILLS_STATUS_TIMEOUT_MS,
+      clientName: GATEWAY_CLIENT_NAMES.CLI,
+      mode: GATEWAY_CLIENT_MODES.CLI,
+    });
+  } catch (err) {
+    if (resolved.config.gateway?.mode === "remote") {
+      throw err;
+    }
+  }
+  return await applySkillProposal({
+    workspaceDir: resolved.workspaceDir,
+    config: resolved.config,
+    proposalId,
+  });
 }
 
 async function readSkillProposalInput(options: {
@@ -1031,8 +1058,8 @@ export function registerSkillsCli(program: Command) {
     .action(
       async (proposalId: string, opts: { json?: boolean; agent?: string }, command: Command) => {
         try {
-          const { config, workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
-          const applied = await applySkillProposal({ workspaceDir, config, proposalId });
+          const resolved = resolveSkillsWorkspaceForCommand(command.parent, opts);
+          const applied = await runSkillProposalApply(resolved, proposalId);
           if (opts.json) {
             defaultRuntime.writeJson(applied);
             return;

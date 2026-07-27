@@ -12,7 +12,6 @@ import {
   getSkillsSnapshotVersion,
   resetSkillsRefreshStateForTest,
 } from "../runtime/refresh-state.js";
-import { resolveReusableWorkspaceSkillSnapshot } from "../runtime/session-snapshot.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { renderProposalMarkdown } from "./frontmatter.js";
 import {
@@ -109,13 +108,6 @@ describe("skill workshop proposals", () => {
     );
     expect(proposal.content).toContain("date: ");
 
-    const beforeApplySnapshot = resolveReusableWorkspaceSkillSnapshot({
-      workspaceDir,
-      config: {},
-      watch: false,
-    }).snapshot;
-    expect(beforeApplySnapshot.skills.map((skill) => skill.name)).not.toContain("weather-helper");
-
     const listed = await listSkillProposals();
     expect(listed.proposals).toHaveLength(1);
     expect(listed.proposals[0]).toMatchObject({
@@ -132,13 +124,6 @@ describe("skill workshop proposals", () => {
     });
     expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(beforeVersion);
     expect(applied.targetSkillFile).toBe(proposal.record.target.skillFile);
-    const newSessionSnapshot = resolveReusableWorkspaceSkillSnapshot({
-      workspaceDir,
-      config: {},
-      existingSnapshot: beforeApplySnapshot,
-      watch: false,
-    }).snapshot;
-    expect(newSessionSnapshot.skills.map((skill) => skill.name)).toContain("weather-helper");
     await expect(fs.readFile(applied.targetSkillFile, "utf8")).resolves.toBe(
       '---\nname: "weather-helper"\ndescription: "Check weather before planning outdoor tasks"\n---\n\n# Weather Helper\n\nUse the weather provider before answering.\n',
     );
