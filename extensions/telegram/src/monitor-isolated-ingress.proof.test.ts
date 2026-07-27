@@ -56,7 +56,6 @@ describe("PR #114171 buildTelegramIsolatedIngressOptions proof", () => {
     const accountConfig = {
       spooledUpdateHandlerTimeoutMs: 600000,
     };
-    // eslint-disable-next-line no-console
     console.log(
       "[proof] stage 1: account.config.spooledUpdateHandlerTimeoutMs =",
       accountConfig.spooledUpdateHandlerTimeoutMs,
@@ -67,7 +66,6 @@ describe("PR #114171 buildTelegramIsolatedIngressOptions proof", () => {
       enabled: true,
       spooledUpdateHandlerTimeoutMs: accountConfig.spooledUpdateHandlerTimeoutMs,
     });
-    // eslint-disable-next-line no-console
     console.log(
       "[proof] stage 2: isolatedIngress.spooledUpdateHandlerTimeoutMs =",
       isolatedIngress.spooledUpdateHandlerTimeoutMs,
@@ -79,7 +77,6 @@ describe("PR #114171 buildTelegramIsolatedIngressOptions proof", () => {
       configured: isolatedIngress.spooledUpdateHandlerTimeoutMs,
       env: {},
     });
-    // eslint-disable-next-line no-console
     console.log(
       "[proof] stage 3: resolveTelegramAdoptionStallTimeoutMs returned =",
       selectedTimeout,
@@ -91,7 +88,6 @@ describe("PR #114171 buildTelegramIsolatedIngressOptions proof", () => {
       configured: isolatedIngress.spooledUpdateHandlerTimeoutMs,
       env: { OPENCLAW_TELEGRAM_SPOOLED_HANDLER_TIMEOUT_MS: "300000" },
     });
-    // eslint-disable-next-line no-console
     console.log(
       "[proof] stage 4: with env OPENCLAW_TELEGRAM_SPOOLED_HANDLER_TIMEOUT_MS=300000, selected =",
       withEnvOverride,
