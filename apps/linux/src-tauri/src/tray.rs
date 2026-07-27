@@ -1,4 +1,5 @@
 use crate::gateway::{GatewayAction, GatewaySnapshot};
+use crate::gateway_operation_queue::GatewayOperationQueue;
 use crate::quickchat;
 use crate::DesktopState;
 use std::fs;
@@ -341,9 +342,9 @@ pub fn show_window(app: &AppHandle) {
     }
 }
 
-pub fn open_dashboard(app: &AppHandle, state: &DesktopState) {
+pub fn open_dashboard(app: &AppHandle) {
     show_window(app);
-    spawn_connect(app.clone(), state.clone());
+    app.state::<GatewayOperationQueue>().submit_connect();
 }
 
 fn handle_menu(
@@ -360,7 +361,7 @@ fn handle_menu(
             app.exit(0);
         }
         QUICKCHAT_ID => quickchat::toggle_quickchat(app),
-        OPEN_ID => open_dashboard(app, state),
+        OPEN_ID => open_dashboard(app),
         CHECK_UPDATES_ID => {
             show_window(app);
             crate::updater::spawn_check(app.clone());
@@ -376,9 +377,18 @@ fn handle_menu(
                 toggle_global_shortcut(app, global_shortcut);
             }
         }
-        START_ID => spawn_action(app.clone(), state.clone(), GatewayAction::Start),
-        STOP_ID => spawn_action(app.clone(), state.clone(), GatewayAction::Stop),
-        RESTART_ID => spawn_action(app.clone(), state.clone(), GatewayAction::Restart),
+        START_ID => {
+            app.state::<GatewayOperationQueue>()
+                .submit_action(GatewayAction::Start);
+        }
+        STOP_ID => {
+            app.state::<GatewayOperationQueue>()
+                .submit_action(GatewayAction::Stop);
+        }
+        RESTART_ID => {
+            app.state::<GatewayOperationQueue>()
+                .submit_action(GatewayAction::Restart);
+        }
         _ => {}
     }
 }
@@ -511,22 +521,6 @@ fn toggle_autostart(app: &AppHandle, item: &CheckMenuItem<tauri::Wry>) {
             let _ = item.set_checked(enabled);
         }
     }
-}
-
-fn spawn_connect(app: AppHandle, state: DesktopState) {
-    std::thread::spawn(move || {
-        if let Err(error) = state.connect_explicit_local(&app) {
-            state.show_error(&app, &error);
-        }
-    });
-}
-
-fn spawn_action(app: AppHandle, state: DesktopState, action: GatewayAction) {
-    std::thread::spawn(move || {
-        if let Err(error) = state.gateway_action(&app, action) {
-            state.show_error(&app, &error);
-        }
-    });
 }
 
 #[cfg(test)]
