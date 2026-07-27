@@ -1457,25 +1457,25 @@ export async function attachWebInboxToSocket(
       // delivery releases it in onFlush; buffered work stays visible to close.
       retainPendingDebounceKey(debounceKey);
     }
-    if (inboundMessage.event.id) {
-      const admission = requireWhatsAppInboundAdmission(inboundMessage);
-      cacheInboundMessageMeta(
-        admission.accountId,
-        inboundMessage.platform.chatJid,
-        inboundMessage.event.id,
-        {
-          participant: inboundMessage.platform.senderJid,
-          participantE164:
-            admission.conversation.kind === "direct"
-              ? inboundMessage.platform.senderE164
-              : undefined,
-          body: inboundMessage.payload.body,
-          media: enriched.nativeMedia,
-          fromMe: inboundMessage.platform.fromMe,
-        },
-      );
-    }
     try {
+      if (inboundMessage.event.id) {
+        const admission = requireWhatsAppInboundAdmission(inboundMessage);
+        cacheInboundMessageMeta(
+          admission.accountId,
+          inboundMessage.platform.chatJid,
+          inboundMessage.event.id,
+          {
+            participant: inboundMessage.platform.senderJid,
+            participantE164:
+              admission.conversation.kind === "direct"
+                ? inboundMessage.platform.senderE164
+                : undefined,
+            body: inboundMessage.payload.body,
+            media: enriched.nativeMedia,
+            fromMe: inboundMessage.platform.fromMe,
+          },
+        );
+      }
       await debouncer.enqueue(inboundMessage);
     } catch (error) {
       if (debounceKey) {

@@ -69,6 +69,7 @@ const readAllowFromStoreMock = vi.fn().mockResolvedValue([]);
 const upsertPairingRequestMock = vi.fn().mockResolvedValue({ code: "PAIRCODE", created: true });
 const saveMediaStreamSpy = vi.fn();
 const downloadMediaMessageMock = vi.hoisted(() => vi.fn());
+const cacheInboundMessageMetaMock = vi.hoisted(() => vi.fn());
 let currentMockSocket:
   | {
       ev: import("node:events").EventEmitter;
@@ -140,6 +141,17 @@ vi.mock("openclaw/plugin-sdk/media-store", async () => {
       saveMediaStreamSpy(...args);
       return actual.saveMediaStream(...args);
     }),
+  };
+});
+
+vi.mock("./quoted-message.js", async () => {
+  const actual = await vi.importActual<typeof import("./quoted-message.js")>("./quoted-message.js");
+  return {
+    ...actual,
+    cacheInboundMessageMeta: (...args: Parameters<typeof actual.cacheInboundMessageMeta>) => {
+      cacheInboundMessageMetaMock(...args);
+      return actual.cacheInboundMessageMeta(...args);
+    },
   };
 });
 
@@ -262,6 +274,7 @@ describe("web inbound media saves with extension", () => {
     currentMockSocket = undefined;
     downloadMediaMessageMock.mockClear();
     saveMediaStreamSpy.mockClear();
+    cacheInboundMessageMetaMock.mockReset();
     resetWebInboundDedupe();
   });
 
@@ -328,6 +341,43 @@ describe("web inbound media saves with extension", () => {
     expect(saveMediaStreamSpy).toHaveBeenCalled();
     const lastCall = latestSaveMediaStreamCall();
     expect(lastCall[4]).toBe(fileName);
+
+    await listener.close();
+  });
+
+  it("releases pending debounce ownership when inbound metadata bookkeeping fails", async () => {
+    const failure = new Error("metadata cache failed");
+    cacheInboundMessageMetaMock.mockImplementationOnce(() => {
+      throw failure;
+    });
+    const onMessage = vi.fn();
+    const pendingWorkCounts: number[] = [];
+    const listener = await monitorWebInbox({
+      cfg: {
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      } as never,
+      verbose: false,
+      onMessage,
+      onPendingWorkChanged: (count) => pendingWorkCounts.push(count),
+      accountId: "default",
+      authDir: path.join(HOME, "wa-auth"),
+    });
+    const realSock = await getMockSocket();
+
+    realSock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: { id: "metadata-failure", fromMe: false, remoteJid: "111@s.whatsapp.net" },
+          message: { conversation: "hello" },
+          messageTimestamp: 1_700_000_010,
+        },
+      ],
+    });
+
+    await waitForMessage(onMessage);
+    await vi.waitFor(() => expect(pendingWorkCounts.at(-1)).toBe(0));
+    expect(cacheInboundMessageMetaMock).toHaveBeenCalledTimes(2);
 
     await listener.close();
   });
