@@ -201,8 +201,13 @@ function stripOneSuffix(token: string): string {
   return token;
 }
 
-/** camelCase and PascalCase boundaries, applied before lowercasing. */
-const CASE_BOUNDARY = /(?<=[\p{Ll}\p{N}])(?=\p{Lu})|(?<=\p{Lu})(?=\p{Lu}\p{Ll})/u;
+/**
+ * Word parts inside a compound identifier, matched rather than split so an
+ * acronym stays whole. Splitting on case transitions cuts "URLs" into "UR"/"Ls"
+ * and makes the obvious query unable to reach the tool; the first alternative
+ * keeps a run of capitals together, including a trailing plural `s`.
+ */
+const WORD_PARTS = /\p{Lu}+s?(?![\p{Ll}])|\p{Lu}?\p{Ll}+|\p{N}+/gu;
 
 /**
  * Splits on anything that is not a word character, which keeps `_`-joined tool
@@ -224,10 +229,8 @@ function splitWords(input: string): string[] {
     words.push(raw.toLowerCase());
     const parts: string[] = [];
     for (const underscorePart of raw.split("_")) {
-      for (const casePart of underscorePart.split(CASE_BOUNDARY)) {
-        if (casePart) {
-          parts.push(casePart.toLowerCase());
-        }
+      for (const casePart of underscorePart.match(WORD_PARTS) ?? []) {
+        parts.push(casePart.toLowerCase());
       }
     }
     if (parts.length < 2) {
@@ -240,11 +243,25 @@ function splitWords(input: string): string[] {
   return words;
 }
 
+/**
+ * Stems for one word. `-ies` is ambiguous — "policies" is "policy" but "cookies"
+ * is "cookie" — so both readings are emitted and whichever the catalog actually
+ * uses will match. Every other word has a single stem.
+ */
+function stemVariants(word: string): string[] {
+  if (word.length > 4 && word.endsWith("ies")) {
+    const base = word.slice(0, -3);
+    return [`${base}y`, stem(`${base}ie`)];
+  }
+  const stemmed = stem(word);
+  return stemmed ? [stemmed] : [];
+}
+
 /** Indexable terms for one document, with stopwords dropped and roots collapsed. */
 export function tokenizeDocument(input: string): string[] {
   return splitWords(input)
     .filter((word) => !STOPWORDS.has(word))
-    .map(stem)
+    .flatMap(stemVariants)
     .filter(Boolean);
 }
 
@@ -282,7 +299,7 @@ export type WeightedTerm = { term: string; weight: number };
 export function tokenizeQuery(input: string): WeightedTerm[] {
   const words = splitWords(input).filter((word) => !STOPWORDS.has(word));
   const weights = new Map<string, number>();
-  for (const term of words.map(stem).filter(Boolean)) {
+  for (const term of words.flatMap(stemVariants).filter(Boolean)) {
     weights.set(term, 1);
   }
   const triggers = new Set(words.map(normalizeTrigger));

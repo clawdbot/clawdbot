@@ -328,7 +328,7 @@ export class ToolSearchRuntime {
     );
     const isExact = (entry: ToolSearchCatalogEntry) =>
       entry.name.toLowerCase() === exact || entry.id.toLowerCase() === exact;
-    return scoreLexical(index, tokenizeQuery(query))
+    const ranked = scoreLexical(index, tokenizeQuery(query))
       .toSorted(
         (a, b) =>
           Number(isExact(b.value)) - Number(isExact(a.value)) ||
@@ -336,8 +336,14 @@ export class ToolSearchRuntime {
           b.score - a.score ||
           a.value.id.localeCompare(b.value.id),
       )
+      .map((hit) => hit.value);
+    // A tool whose name is a stopword ("do") tokenizes to nothing and so never
+    // reaches the ranking at all. Naming it exactly is still an unambiguous
+    // request for it, which the previous scorer honored.
+    const exactEntries = entries.filter((entry) => isExact(entry) && !ranked.includes(entry));
+    return [...exactEntries, ...ranked]
       .slice(0, limit)
-      .map((hit) => compactToolSearchCatalogEntry(hit.value));
+      .map((entry) => compactToolSearchCatalogEntry(entry));
   };
 
   all = (options?: CatalogVisibilityOptions) =>

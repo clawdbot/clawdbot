@@ -70,14 +70,6 @@ describe("tokenizeQuery", () => {
     expect(tokenizeDocument(`${word}ing`)).toEqual(tokenizeDocument(word));
   });
 
-  it.each([
-    ["repositories", "repository"],
-    ["queries", "query"],
-    ["memories", "memory"],
-  ])("normalizes -ies back to its singular: %s", (plural, singular) => {
-    expect(tokenizeDocument(plural)).toEqual(tokenizeDocument(singular));
-  });
-
   it("fires expansions for -ies plurals of a trigger word", () => {
     // "directories" must reach the directory/folder group, not stall at
     // "directorie" and expand nothing.
@@ -261,6 +253,50 @@ describe("ToolSearchRuntime.search", () => {
     // Querying a known name is a request for that tool, not a description of one.
     const hits = await search.search("issue_create");
     expect(hits[0]?.name).toBe("issue_create");
+  });
+
+  it.each([
+    ["cookies", "cookie"],
+    ["policies", "policy"],
+    ["movies", "movie"],
+    ["repositories", "repository"],
+    ["queries", "query"],
+    ["memories", "memory"],
+  ])("matches both readings of an -ies plural: %s", (plural, singular) => {
+    // "policies" is "policy" but "cookies" is "cookie"; one rule cannot serve
+    // both, so both stems are emitted and whichever the catalog uses matches.
+    const plurals = new Set(tokenizeDocument(plural));
+    expect(tokenizeDocument(singular).some((term) => plurals.has(term))).toBe(true);
+  });
+
+  it.each([
+    ["getURLs", "url"],
+    ["getOAuthToken", "auth"],
+    ["readFile", "read"],
+  ])("keeps acronym and camelCase parts addressable: %s", (name, part) => {
+    // Splitting on case transitions alone cuts "URLs" into "UR"/"Ls".
+    expect(tokenizeDocument(name)).toContain(part);
+  });
+
+  it("returns a tool named exactly like a stopword", async () => {
+    const catalog = [
+      entry({ name: "do", description: "Run a stored action" }),
+      entry({ id: "other", name: "other", description: "Unrelated" }),
+    ];
+    const ctx = {
+      catalogRef: { current: { entries: catalog, searchCount: 0, describeCount: 0, callCount: 0 } },
+    };
+    const search = new ToolSearchRuntime(ctx as never, {
+      enabled: true,
+      mode: "directory",
+      codeTimeoutMs: 1000,
+      searchDefaultLimit: 10,
+      maxSearchLimit: 50,
+    });
+
+    // "do" tokenizes to nothing, so it never reaches the ranking; naming it
+    // exactly is still an unambiguous request for it.
+    expect((await search.search("do")).map((hit) => hit.name)).toEqual(["do"]);
   });
 
   it("does not match a term that only appears inside another word", async () => {
