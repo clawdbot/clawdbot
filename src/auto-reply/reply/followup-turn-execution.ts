@@ -179,7 +179,7 @@ export async function executeFollowupTurn(params: {
           })
       : undefined,
     onNarrationUpdate: wrap(sourceOpts?.onNarrationUpdate),
-    onPlanUpdate: wrap(sourceOpts?.onPlanUpdate, shouldEmitToolResult),
+    onPlanUpdate: wrap(sourceOpts?.onPlanUpdate),
     onApprovalEvent: wrap(sourceOpts?.onApprovalEvent, shouldEmitToolResult),
     onPatchSummary: wrap(sourceOpts?.onPatchSummary, shouldEmitToolResult),
     onCompactionStart: sourceOpts?.onCompactionStart

@@ -833,6 +833,27 @@ describe("admitFollowupTurn", () => {
     expect(operation.fail).toHaveBeenCalledWith("run_failed", expect.any(Error));
   });
 
+  it("refreshes send policy before returning a preflight failure", async () => {
+    const operation = createOperation();
+    const initialEntry: SessionEntry = { sessionId: "queued-session", updatedAt: 1 };
+    const sessionStore = { main: initialEntry };
+    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: initialEntry });
+    state.preflight.mockImplementation(async () => {
+      state.sendPolicy = "deny";
+      throw new Error("preflight failed");
+    });
+
+    const result = await admitFollowupTurn({
+      queued: createRun(),
+      defaults: createDefaults({ sessionEntry: initialEntry, sessionStore }),
+    });
+
+    expect(result).toMatchObject({
+      kind: "admitted",
+      turn: { sendPolicy: "deny", preflightFailurePayload: { text: "preflight failed" } },
+    });
+  });
+
   it("restores the item when a failing preflight observes a replacement generation", async () => {
     const operation = createOperation();
     const initialEntry: SessionEntry = {

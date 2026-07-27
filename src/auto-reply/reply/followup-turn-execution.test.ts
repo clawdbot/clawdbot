@@ -272,6 +272,37 @@ describe("executeFollowupTurn", () => {
     expect(onToolStart).toHaveBeenCalledOnce();
   });
 
+  it("preserves plan updates when tool-result verbosity is off", async () => {
+    const onPlanUpdate = vi.fn(async () => undefined);
+    state.execute.mockImplementation(async (params: AgentTurnParams) => {
+      await params.opts?.onPlanUpdate?.({ summary: "quiet plan" });
+      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+    });
+
+    const result = await executeFollowupTurn({
+      turn: createTurn({
+        session: {
+          kind: "session",
+          key: "main",
+          current: () => ({ sessionId: "session", updatedAt: 1, verboseLevel: "off" }),
+          publish: () => undefined,
+          adopt: () => undefined,
+        },
+      }),
+      defaults: {
+        typing: createTypingController(),
+        typingMode: "never",
+        defaultModel: "claude",
+        opts: { onPlanUpdate },
+      },
+      onToolResult: vi.fn(async () => {}),
+      onCompactionNoticePayload: vi.fn(async () => {}),
+    });
+    await result.progress.drain();
+
+    expect(onPlanUpdate).toHaveBeenCalledWith({ summary: "quiet plan" });
+  });
+
   it("tracks a visible failed item before suppressing duplicate default warnings", async () => {
     const onItemEvent = vi.fn(async () => undefined);
     let warningSuppressed: boolean | undefined;

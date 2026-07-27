@@ -395,6 +395,27 @@ export async function admitFollowupTurn(params: {
       sendPolicy,
       preflightCompactionApplied: false,
     };
+    const refreshTurnSessionState = (entry: SessionEntry | undefined) => {
+      sendPolicy = resolveSendPolicy({
+        cfg: config,
+        entry,
+        sessionKey: turn.queued.run.runtimePolicySessionKey ?? replySessionKey,
+        channel:
+          turn.queued.originatingChannel ??
+          turn.queued.run.messageProvider ??
+          sessionDeliveryChannel(entry),
+        chatType: normalizeChatType(
+          turn.queued.originatingChatType ?? turn.queued.run.chatType ?? entry?.chatType,
+        ),
+      });
+      currentInboundContext =
+        params.defaults.opts?.isHeartbeat === true
+          ? params.queued.currentInboundContext
+          : refreshActiveGoalContext(params.queued.currentInboundContext, entry);
+      turn.sendPolicy = sendPolicy;
+      turn.currentInboundContext = currentInboundContext;
+      turn.queued = { ...turn.queued, currentInboundContext };
+    };
     const previousCompactionCount = activeEntry?.compactionCount ?? 0;
     let pendingTerminalCompactionNotice: Exclude<CompactionNoticePhase, "start"> | undefined;
     let compactionNoticeGenerationInvalidated = false;
@@ -527,25 +548,7 @@ export async function admitFollowupTurn(params: {
           },
         };
       }
-      sendPolicy = resolveSendPolicy({
-        cfg: config,
-        entry: activeEntry,
-        sessionKey: turn.queued.run.runtimePolicySessionKey ?? replySessionKey,
-        channel:
-          turn.queued.originatingChannel ??
-          turn.queued.run.messageProvider ??
-          sessionDeliveryChannel(activeEntry),
-        chatType: normalizeChatType(
-          turn.queued.originatingChatType ?? turn.queued.run.chatType ?? activeEntry?.chatType,
-        ),
-      });
-      currentInboundContext =
-        params.defaults.opts?.isHeartbeat === true
-          ? params.queued.currentInboundContext
-          : refreshActiveGoalContext(params.queued.currentInboundContext, activeEntry);
-      turn.sendPolicy = sendPolicy;
-      turn.currentInboundContext = currentInboundContext;
-      turn.queued = { ...turn.queued, currentInboundContext };
+      refreshTurnSessionState(activeEntry);
       turn.preflightCompactionApplied =
         generationRotated || (activeEntry?.compactionCount ?? 0) > previousCompactionCount;
       preflightSucceeded = true;
@@ -560,6 +563,11 @@ export async function admitFollowupTurn(params: {
             ? params.defaults.sessionStore[replySessionKey]
             : session.current();
       assertPersistedGeneration(failureEntry);
+      if (failureEntry) {
+        session.adopt(failureEntry);
+        activeEntry = session.current() ?? failureEntry;
+      }
+      refreshTurnSessionState(activeEntry);
       if (compactionNoticeGenerationInvalidated) {
         throw new FollowupSessionGenerationInvalidatedError(
           "Follow-up session generation changed during preflight notice delivery",
