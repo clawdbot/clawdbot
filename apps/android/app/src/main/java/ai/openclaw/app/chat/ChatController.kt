@@ -6880,8 +6880,7 @@ internal fun reconcileSessionObserverProjectionOwner(
   }
 }
 
-private fun normalizedObserverAgentId(agentId: String?): String? =
-  agentId?.trim()?.lowercase()?.takeIf(String::isNotEmpty)
+private fun normalizedObserverAgentId(agentId: String?): String? = agentId?.trim()?.lowercase()?.takeIf(String::isNotEmpty)
 
 private fun reconcileSessionObserverDigest(
   existing: SessionObserverDigest?,
