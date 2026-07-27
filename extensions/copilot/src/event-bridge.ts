@@ -1,9 +1,16 @@
 // Copilot plugin module implements event bridge behavior.
-import type { MessageOptions, SessionEvent, SessionEventType } from "@github/copilot-sdk";
+import type {
+  Attachment,
+  MessageOptions,
+  SessionEvent,
+  SessionEventType,
+} from "@github/copilot-sdk";
 import type {
   AgentHarnessAttemptResult,
   AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { sanitizeToolResult } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AttemptTranscriptJournal } from "./attempt-transcript-journal.js";
 import {
   buildCopilotAssistantUsage,
   normalizeCopilotUsage,
@@ -62,6 +69,11 @@ interface EventBridgeOptions {
   onContextCompacted?: () => void;
   getSdkSessionId: () => string | undefined;
   isAborted: () => boolean;
+  transcriptProjection?: {
+    journal: AttemptTranscriptJournal;
+    modelRef: { api?: string; id: string; provider: string };
+    now: () => number;
+  };
 }
 
 interface EventBridgeSnapshot {
@@ -108,7 +120,10 @@ export function attachEventBridge(
   const reasoningOrder: string[] = [];
   const reasoningById = new Map<string, string>();
   let lastAssistantEvent: Extract<SessionEvent, { type: "assistant.message" }> | undefined;
+  let lastAssistantReasoningText: string | undefined;
   let usage: AssistantUsageSnapshot | undefined;
+  const usageByApiCallId = new Map<string, AssistantUsageSnapshot>();
+  const handledAssistantEventIds = new Set<string>();
   let streamError: Error | undefined;
   const toolMetas: AgentHarnessAttemptResult["toolMetas"] = [];
   const toolMetaIndexByCallId = new Map<string, number>();
@@ -130,6 +145,36 @@ export function attachEventBridge(
   let firstDeltaError: unknown;
   let detached = false;
   const unsubscribeFns: Array<() => void> = [];
+
+  registerListener(session, unsubscribeFns, "user.message", (event) => {
+    const projection = options.transcriptProjection;
+    if (!projection || !isRootSessionEvent(event) || event.ephemeral === true) {
+      return;
+    }
+    const source = readString(event.data.source);
+    const transformedContent = readString(event.data.transformedContent);
+    const openClawMeta = projectSdkUserMetadata(event.data.attachments, source);
+    const idempotencyKey = `copilot-sdk:${options.getSdkSessionId() ?? "unknown"}:${event.id}`;
+    // `source` is open-ended provenance, not a visibility enum. Hide the one
+    // documented injected source; unknown sources stay visible without guessing.
+    const hidden = event.data.isAutopilotContinuation === true || source === "skill-pdf";
+    projection.journal.recordSdkUser({
+      eventId: event.id,
+      autopilotContinuation: event.data.isAutopilotContinuation === true,
+      replayIncomplete: Boolean(
+        event.data.attachments?.length ||
+        (transformedContent !== undefined && transformedContent !== event.data.content),
+      ),
+      message: {
+        role: "user",
+        content: event.data.content,
+        timestamp: resolveEventTimestamp(event.timestamp, projection.now),
+        idempotencyKey,
+        ...(hidden ? { display: false } : {}),
+        ...(openClawMeta ? { __openclaw: openClawMeta } : {}),
+      } as Extract<AgentMessage, { role: "user" }>,
+    });
+  });
 
   registerListener(session, unsubscribeFns, "assistant.message_delta", (event) => {
     if (!isRootSessionEvent(event)) {
@@ -185,14 +230,10 @@ export function attachEventBridge(
   });
 
   registerListener(session, unsubscribeFns, "assistant.message", (event) => {
-    if (!isRootSessionEvent(event)) {
+    if (!isRootSessionEvent(event) || event.ephemeral === true) {
       return;
     }
-    lastAssistantEvent = event;
-    const entry = ensureMessageAccumulator(messagesById, messageOrder, event.data.messageId);
-    if (typeof event.data.content === "string" && event.data.content.length >= entry.text.length) {
-      entry.text = event.data.content;
-    }
+    handleAssistantMessage(event);
   });
 
   registerListener(session, unsubscribeFns, "assistant.usage", (event) => {
@@ -200,6 +241,10 @@ export function attachEventBridge(
       return;
     }
     usage = normalizeCopilotUsage(event.data);
+    const apiCallId = readString(event.data.apiCallId);
+    if (apiCallId && usage) {
+      usageByApiCallId.set(apiCallId, usage);
+    }
   });
 
   registerListener(session, unsubscribeFns, "tool.execution_start", (event) => {
@@ -225,6 +270,34 @@ export function attachEventBridge(
         toolName,
         ...(event.data.success ? {} : { isError: true }),
       };
+    }
+    const projection = options.transcriptProjection;
+    if (
+      projection &&
+      isRootSessionEvent(event) &&
+      event.ephemeral !== true &&
+      event.data.isUserRequested !== true
+    ) {
+      const resultText = event.data.success
+        ? (event.data.result?.content ?? "")
+        : (event.data.error?.message ?? "Tool execution failed");
+      const details = projectToolResultDetails(event.data);
+      const replayIncomplete = Boolean(
+        event.data.result?.binaryResultsForLlm?.length || event.data.result?.citableSources?.length,
+      );
+      projection.journal.recordToolResult({
+        eventId: event.id,
+        replayIncomplete,
+        message: {
+          role: "toolResult",
+          toolCallId: event.data.toolCallId,
+          toolName: toolName ?? event.data.toolDescription?.name ?? "unknown",
+          content: [{ type: "text", text: sanitizeToolDetailText(resultText) }],
+          ...(hasOwnKeys(details) ? { details } : {}),
+          isError: !event.data.success,
+          timestamp: resolveEventTimestamp(event.timestamp, projection.now),
+        },
+      });
     }
   });
 
@@ -342,6 +415,7 @@ export function attachEventBridge(
       return;
     }
     observedSessionIdle = true;
+    options.transcriptProjection?.journal.failIfPendingTools("session.idle");
     resolveSessionIdle?.();
     resolveSessionIdle = undefined;
   });
@@ -366,10 +440,14 @@ export function attachEventBridge(
 
   return {
     recordSendResult(result) {
-      if (!isAssistantMessageEvent(result)) {
+      if (
+        !isAssistantMessageEvent(result) ||
+        !isRootSessionEvent(result) ||
+        result.ephemeral === true
+      ) {
         return false;
       }
-      lastAssistantEvent = result;
+      handleAssistantMessage(result);
       return true;
     },
     awaitCompactionChain() {
@@ -417,9 +495,8 @@ export function attachEventBridge(
         event: lastAssistantEvent,
         modelRef: args.modelRef,
         now: args.now,
-        reasoningById,
-        reasoningOrder,
-        usage,
+        reasoningText: lastAssistantReasoningText,
+        usage: resolveAssistantUsage(lastAssistantEvent, usage, usageByApiCallId),
         assistantTexts: finalizeAssistantTexts(messageOrder, messagesById, lastAssistantEvent),
       });
     },
@@ -441,6 +518,49 @@ export function attachEventBridge(
       unsubscribeFns.length = 0;
     },
   };
+
+  function handleAssistantMessage(
+    event: Extract<SessionEvent, { type: "assistant.message" }>,
+  ): void {
+    if (!isRootSessionEvent(event) || event.ephemeral === true) {
+      return;
+    }
+    lastAssistantEvent = event;
+    if (handledAssistantEventIds.has(event.id)) {
+      return;
+    }
+    handledAssistantEventIds.add(event.id);
+    const entry = ensureMessageAccumulator(messagesById, messageOrder, event.data.messageId);
+    if (typeof event.data.content === "string" && event.data.content.length >= entry.text.length) {
+      entry.text = event.data.content;
+    }
+    lastAssistantReasoningText =
+      event.data.reasoningText ?? (joinReasoning(reasoningOrder, reasoningById) || undefined);
+    reasoningOrder.length = 0;
+    reasoningById.clear();
+    const projection = options.transcriptProjection;
+    if (!projection) {
+      return;
+    }
+    const message = buildAssistantMessage({
+      event,
+      modelRef: projection.modelRef,
+      now: () => resolveEventTimestamp(event.timestamp, projection.now),
+      reasoningText: lastAssistantReasoningText,
+      // Maintainer decision: optional assistant.usage must never delay canonical content.
+      // Later usage stays attempt metadata; this row uses outputTokens/zero defaults.
+      usage: resolveAssistantUsage(event, undefined, usageByApiCallId),
+      assistantTexts: [messagesById.get(event.data.messageId)?.text ?? ""],
+    });
+    if (!message) {
+      return;
+    }
+    projection.journal.recordAssistant({
+      eventId: event.id,
+      message,
+      toolCallIds: (event.data.toolRequests ?? []).map((request) => request.toolCallId),
+    });
+  }
 
   function enqueueCompactionCallback(callback: (() => void | Promise<void>) | undefined): void {
     if (!callback) {
@@ -495,16 +615,14 @@ function buildAssistantMessage(params: {
   event?: Extract<SessionEvent, { type: "assistant.message" }>;
   modelRef: { api?: string; id: string; provider: string };
   now: () => number;
-  reasoningById: Map<string, string>;
-  reasoningOrder: string[];
+  reasoningText?: string;
   usage?: AssistantUsageSnapshot;
 }): AssistantMessage | undefined {
   const event = params.event;
   const text = event
     ? event.data.content || params.assistantTexts[params.assistantTexts.length - 1] || ""
     : "";
-  const reasoningText =
-    event?.data.reasoningText ?? joinReasoning(params.reasoningOrder, params.reasoningById);
+  const reasoningText = event?.data.reasoningText ?? params.reasoningText;
   const toolRequests = event?.data.toolRequests ?? [];
   if (!text && !reasoningText && toolRequests.length === 0) {
     return undefined;
@@ -595,6 +713,95 @@ function isRootCompactionEvent(event: { agentId?: string }): boolean {
   // SDK session events include subagent compaction; only root compaction
   // affects the pooled root session's cleanup and reuse lifecycle.
   return isRootSessionEvent(event);
+}
+
+function resolveAssistantUsage(
+  event: Extract<SessionEvent, { type: "assistant.message" }> | undefined,
+  latest: AssistantUsageSnapshot | undefined,
+  byApiCallId: Map<string, AssistantUsageSnapshot>,
+): AssistantUsageSnapshot | undefined {
+  const apiCallId = readString(event?.data.apiCallId);
+  return apiCallId ? byApiCallId.get(apiCallId) : latest;
+}
+
+function resolveEventTimestamp(timestamp: string, now: () => number): number {
+  const parsed = Date.parse(timestamp);
+  return Number.isFinite(parsed) ? parsed : now();
+}
+
+function hasOwnKeys(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && Object.keys(value).length > 0);
+}
+
+function projectSdkUserMetadata(
+  attachments: Attachment[] | undefined,
+  source: string | undefined,
+): Record<string, unknown> | undefined {
+  const summaries = (attachments ?? []).map((attachment) => {
+    const summary = { ...attachment } as Record<string, unknown>;
+    delete summary.data;
+    delete summary.text;
+    delete summary.payload;
+    return summary;
+  });
+  const media = (attachments ?? []).flatMap((attachment) => {
+    if (attachment.type === "file") {
+      return [
+        {
+          path: attachment.path,
+          ...(attachment.mimeType ? { contentType: attachment.mimeType } : {}),
+        },
+      ];
+    }
+    if (attachment.type === "selection") {
+      return [{ path: attachment.filePath, kind: "document" }];
+    }
+    return [];
+  });
+  if (!source && summaries.length === 0) {
+    return undefined;
+  }
+  return {
+    ...(source ? { copilotSource: source } : {}),
+    ...(summaries.length > 0 ? { copilotAttachments: summaries } : {}),
+    ...(media.length > 0 ? { media } : {}),
+  };
+}
+
+function projectToolResultDetails(
+  data: Extract<SessionEvent, { type: "tool.execution_complete" }>["data"],
+): unknown {
+  const result = data.result;
+  const sanitizedContents = result?.contents
+    ? (sanitizeToolResult({ content: result.contents }) as { content?: unknown }).content
+    : undefined;
+  const binaryResultsForLlm = result?.binaryResultsForLlm?.map((entry) => {
+    const descriptor = { ...entry } as Record<string, unknown>;
+    delete descriptor.data;
+    return descriptor;
+  });
+  const citableSources = result?.citableSources?.map((source) => ({
+    ...source,
+    content: sanitizeToolDetailText(source.content),
+  }));
+  return sanitizeToolResult({
+    ...(result?.detailedContent
+      ? { content: [{ type: "text", text: result.detailedContent }] }
+      : {}),
+    ...(result?.structuredContent ? { structuredContent: result.structuredContent } : {}),
+    ...(sanitizedContents ? { contents: sanitizedContents } : {}),
+    ...(binaryResultsForLlm?.length ? { binaryResultsForLlm } : {}),
+    ...(citableSources?.length ? { citableSources } : {}),
+    ...(data.mcpMeta || result?.mcpMeta ? { mcpMeta: data.mcpMeta ?? result?.mcpMeta } : {}),
+  });
+}
+
+function sanitizeToolDetailText(text: string): string {
+  const sanitized = sanitizeToolResult({ content: [{ type: "text", text }] }) as {
+    content?: Array<{ text?: unknown }>;
+  };
+  const value = sanitized.content?.[0]?.text;
+  return typeof value === "string" ? value : "";
 }
 
 function joinReasoning(order: string[], reasoningById: Map<string, string>): string {

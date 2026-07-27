@@ -10,6 +10,7 @@ const MODEL_REF = {
   provider: "github-copilot",
 } as const;
 const REGISTERED_EVENT_TYPES = [
+  "user.message",
   "assistant.message_delta",
   "assistant.reasoning_delta",
   "assistant.message",
@@ -188,6 +189,12 @@ describe("attachEventBridge", () => {
     expect(bridge.snapshot().assistantTexts).toEqual(["root"]);
     expect(bridge.snapshot().startedCount).toBe(0);
     expect(bridge.snapshot().toolMetas).toEqual([{ meta: "child write", toolName: "write" }]);
+    expect(
+      bridge.recordSendResult({
+        ...makeAssistantMessageEvent("child final"),
+        agentId: "child-1",
+      } as SessionEvent),
+    ).toBe(false);
     await bridge.awaitDeltaChain();
     expect(onAssistantDelta).toHaveBeenCalledTimes(1);
   });
@@ -409,6 +416,27 @@ describe("attachEventBridge", () => {
 
     expect(shorterBridge.finalizeAssistantTexts()).toEqual(["longer"]);
     expect(longerBridge.finalizeAssistantTexts()).toEqual(["longer text"]);
+  });
+
+  it("does not let an ephemeral assistant replace the final root response", () => {
+    const session = createFakeSession();
+    const bridge = attachEventBridge(session, {
+      getSdkSessionId: () => "sdk-session-id",
+      isAborted: () => false,
+    });
+    const persisted = makeAssistantMessageEvent("persisted final");
+    session.emit("assistant.message", persisted);
+
+    expect(
+      bridge.recordSendResult({
+        ...makeAssistantMessageEvent("ephemeral final"),
+        ephemeral: true,
+        id: "ephemeral-final",
+      } as SessionEvent),
+    ).toBe(false);
+    expect(bridge.buildAssistantMessage({ modelRef: MODEL_REF, now: () => 9 })?.content).toEqual([
+      { text: "persisted final", type: "text" },
+    ]);
   });
 
   it("assistant.message with toolRequests produces toolCall content and toolUse stopReason", () => {

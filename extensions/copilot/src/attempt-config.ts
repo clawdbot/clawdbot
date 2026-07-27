@@ -30,6 +30,8 @@ export function createResult(
   params: AttemptParamsLike,
   state: {
     aborted?: boolean;
+    assistantTranscriptOwned?: boolean;
+    assistantTranscriptIdempotencyKey?: string;
     assistantTexts?: string[];
     currentAttemptAssistant?: AssistantMessage;
     currentAttemptCompletedAssistant?: AssistantMessage;
@@ -39,6 +41,7 @@ export function createResult(
     lastAssistant?: AssistantMessage;
     lastToolError?: AgentHarnessAttemptResult["lastToolError"];
     messagesSnapshot: AgentMessage[];
+    nativeReplayInvalid?: boolean;
     now: () => number;
     promptError: Error | undefined;
     resumeFailureRecovered?: boolean;
@@ -52,13 +55,21 @@ export function createResult(
   },
 ): AttemptResultWithSdkSessionId {
   const promptError = state.promptError;
+  const transcriptPersistenceFailed =
+    (promptError as PromptErrorWithCode | undefined)?.code === "transcript_persistence_failed";
   const timedOut = state.timedOut === true;
   const toolMetas = state.toolMetas ?? [];
   const replayMetadata =
     params.operation === "settled-tool-finalization"
-      ? { hadPotentialSideEffects: false, replaySafe: true }
+      ? {
+          hadPotentialSideEffects: false,
+          replaySafe: state.nativeReplayInvalid !== true && !transcriptPersistenceFailed,
+        }
       : computeReplayMetadata({
-          priorReplayInvalid: params.initialReplayState?.replayInvalid,
+          priorReplayInvalid:
+            params.initialReplayState?.replayInvalid === true ||
+            state.nativeReplayInvalid === true ||
+            transcriptPersistenceFailed,
           priorHadPotentialSideEffects: params.initialReplayState?.hadPotentialSideEffects,
           thisAttemptTimedOut: timedOut,
           thisAttemptHadPotentialSideEffects: copilotToolMetasHavePotentialSideEffects(toolMetas),
@@ -82,6 +93,14 @@ export function createResult(
     promptError !== undefined ? withPromptFailure(interruption, promptError) : interruption;
   return {
     terminal,
+    ...(state.assistantTranscriptOwned
+      ? {
+          assistantTranscriptOwned: true,
+          ...(state.assistantTranscriptIdempotencyKey
+            ? { assistantTranscriptIdempotencyKey: state.assistantTranscriptIdempotencyKey }
+            : {}),
+        }
+      : {}),
     ...(state.sdkSessionId ? { sdkSessionId: state.sdkSessionId } : {}),
     assistantTexts: state.assistantTexts ?? [],
     attemptUsage: state.usage,
@@ -333,36 +352,6 @@ export function createSystemMessageContent(
 }
 export function isRawCopilotModelRun(params: AttemptParamsLike): boolean {
   return params.modelRun === true || params.promptMode === "none";
-}
-export function readTailUserText(messages: AgentMessage[]): string | undefined {
-  const tail = messages[messages.length - 1];
-  if (!tail || tail.role !== "user") {
-    return undefined;
-  }
-  const content = (tail as { content?: unknown }).content;
-  if (typeof content === "string") {
-    return content;
-  }
-  if (Array.isArray(content)) {
-    for (const part of content) {
-      if (part && typeof part === "object" && (part as { type?: unknown }).type === "text") {
-        const text = (part as { text?: unknown }).text;
-        if (typeof text === "string" && text.length > 0) {
-          return text;
-        }
-      }
-    }
-  }
-  return undefined;
-}
-export function hasMirrorIdentity(message: AgentMessage): boolean {
-  const record = message as unknown as { __openclaw?: unknown };
-  const meta = record["__openclaw"];
-  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
-    return false;
-  }
-  const id = (meta as Record<string, unknown>).mirrorIdentity;
-  return typeof id === "string" && id.length > 0;
 }
 export function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;

@@ -28,6 +28,10 @@ import {
 import { completeCopilotAttempt } from "./attempt-finalize.js";
 import { resolveCopilotAttemptSandbox } from "./attempt-prepare.js";
 import { createCopilotSessionSetup } from "./attempt-session-setup.js";
+import {
+  createAttemptTranscriptJournal,
+  type AttemptTranscriptJournal,
+} from "./attempt-transcript-journal.js";
 import type {
   AgentHarnessAttemptResult,
   AttemptParamsLike,
@@ -98,6 +102,7 @@ export async function runCopilotExecution(context: {
   let handle: PooledClient | undefined;
   let session: SessionLike | undefined;
   let bridge: ReturnType<typeof attachEventBridge> | undefined;
+  let transcriptJournal: AttemptTranscriptJournal | undefined;
   const nativeSubagentTaskMirror = createCopilotNativeSubagentTaskMirror({
     agentId: sessionAgentId,
     now,
@@ -360,6 +365,12 @@ export async function runCopilotExecution(context: {
       readString(session.sessionId) ??
       readString(session.id) ??
       (resumeFailureRecovered ? undefined : resumeSessionId);
+    if (!sdkSessionId) {
+      throw createPromptError(
+        "transcript_persistence_failed",
+        "[copilot-attempt] canonical transcript persistence requires the Copilot SDK session id",
+      );
+    }
     sessionIdUsed = sdkSessionId ?? input.sessionId;
     if (sdkSessionId && deps.onSessionEstablished && !settledToolFinalization) {
       try {
@@ -408,7 +419,17 @@ export async function runCopilotExecution(context: {
         });
       },
       getSdkSessionId: () => sdkSessionId,
-      isAborted: () => aborted,
+      isAborted: () => aborted || transcriptJournal?.hasFailed() === true,
+      transcriptProjection: {
+        journal: (transcriptJournal = createAttemptTranscriptJournal({
+          abortSession: () => session?.abort() ?? Promise.resolve(),
+          attempt: input,
+          messages,
+          sdkSessionId,
+        })),
+        modelRef,
+        now,
+      },
     });
     activeRunHandleRef = registerCopilotActiveRun({
       abortActiveSession,
@@ -426,11 +447,15 @@ export async function runCopilotExecution(context: {
       workspaceOnly: effectiveFsWorkspaceOnly,
     });
     sessionSetup.setPromptImagesCount(messageOptions.attachments?.length ?? 0);
+    if (!settledToolFinalization) {
+      await transcriptJournal.persistInitialUser();
+    }
     if (abortRequested || params.abortSignal?.aborted) {
       aborted = true;
       externalAbort = true;
     } else {
       sentTurnStarted = true;
+      input.userTurnTranscriptRecorder?.markSentToProvider?.();
       if (!hasNativePromptHook) {
         emitLlmInput(attemptInput.prompt);
       }
@@ -438,6 +463,7 @@ export async function runCopilotExecution(context: {
       await bridge.awaitDeltaChain();
       await bridge.awaitAgentEventChain();
       const assistantCompleted = bridge.recordSendResult(result);
+      await transcriptJournal.barrier("sendAndWait");
       settledFinalizationAssistantCompleted = settledToolFinalization && assistantCompleted;
       if (!assistantCompleted && !aborted) {
         timedOut = true;
@@ -457,12 +483,27 @@ export async function runCopilotExecution(context: {
           await bridge?.awaitDeltaChain();
         } catch {}
         await bridge?.awaitAgentEventChain();
+        try {
+          await transcriptJournal?.barrier("timeout");
+        } catch (transcriptError) {
+          promptError = toError(transcriptError);
+        }
       } else {
-        promptError = toError(error);
+        try {
+          await transcriptJournal?.barrier("attempt error");
+          promptError = toError(error);
+        } catch (transcriptError) {
+          promptError = toError(transcriptError);
+        }
       }
     }
   } finally {
     settled = true;
+    try {
+      await transcriptJournal?.barrier("bridge detach");
+    } catch (transcriptError) {
+      promptError = toError(transcriptError);
+    }
     userInputBridgeRef?.cancelPending();
     if (activeRunHandleRef) {
       clearActiveEmbeddedRun(
@@ -473,7 +514,8 @@ export async function runCopilotExecution(context: {
       );
     }
     const retainSessionForDeferredCleanup =
-      bridge?.hasObservedCompaction() || (timedOut && bridge?.hasObservedSessionIdle() === false);
+      transcriptJournal?.snapshot().replayInvalid !== true &&
+      (bridge?.hasObservedCompaction() || (timedOut && bridge?.hasObservedSessionIdle() === false));
     if (retainSessionForDeferredCleanup && bridge && session && handle) {
       const cleanupAbort = new AbortController();
       const abortCleanup = () => cleanupAbort.abort();
@@ -556,6 +598,7 @@ export async function runCopilotExecution(context: {
     input,
     lastToolError,
     messages,
+    transcriptJournal,
     modelRef,
     now,
     promptError,
