@@ -11,9 +11,9 @@ import {
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import {
-  hasRetainedSessionTranscriptArchives,
+  hasPrunableSessionArchives,
   measureSessionPhysicalDiskUsage,
-  pruneSessionTranscriptArchivesToHighWater,
+  pruneSessionArchivesToHighWater,
   type SessionDiskBudgetSweepResult,
   type SessionPhysicalDiskUsage,
 } from "./disk-budget.js";
@@ -85,7 +85,7 @@ export async function inspectSqliteSessionHistoryDiskBudget(
   // Predict only definite reclamation: prunable archives or unprotected
   // historical generations. Checkpoint-only byte reclamation stays out of the
   // preview; applied summaries report it via their byte-decrease predicate.
-  if (await hasRetainedSessionTranscriptArchives(params.storePath)) {
+  if (await hasPrunableSessionArchives(params.storePath)) {
     return { diskBudget, wouldMutate: true };
   }
   const resolved = resolveSqliteScope({
@@ -323,7 +323,7 @@ async function enforceSessionHistoryMaintenanceSerialized(
     // Archive pruning shares the session write lock so a concurrent
     // reset/delete cannot race its archive file against the unlink pass.
     const archiveSweep = await runExclusiveSqliteSessionWrite(resolved, async () =>
-      pruneSessionTranscriptArchivesToHighWater({
+      pruneSessionArchivesToHighWater({
         highWaterBytes,
         storePath: params.storePath,
       }),
@@ -420,7 +420,7 @@ async function enforceSessionHistoryMaintenanceSerialized(
       // additional searchable history. No prune runs between an archive write
       // and its row-deletion commit, so a sole copy is never mid-flight here.
       const repruned = await runExclusiveSqliteSessionWrite(resolved, async () =>
-        pruneSessionTranscriptArchivesToHighWater({
+        pruneSessionArchivesToHighWater({
           highWaterBytes,
           storePath: params.storePath,
         }),
@@ -434,7 +434,7 @@ async function enforceSessionHistoryMaintenanceSerialized(
     // Candidates are exhausted but archives may remain; finish the pass at the
     // target instead of returning over budget with removable artifacts.
     const finalPrune = await runExclusiveSqliteSessionWrite(resolved, async () =>
-      pruneSessionTranscriptArchivesToHighWater({
+      pruneSessionArchivesToHighWater({
         highWaterBytes,
         storePath: params.storePath,
       }),

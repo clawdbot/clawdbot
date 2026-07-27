@@ -14,7 +14,6 @@ import {
   isCompactionCheckpointTranscriptFileName,
   isMigrationArchiveArtifactName,
   isPrimarySessionTranscriptFileName,
-  isRetainedSessionTranscriptArchiveName,
   isSessionArchiveArtifactName,
   isSessionStoreTempArtifactName,
   SESSION_STORE_TEMP_STALE_MS,
@@ -311,21 +310,24 @@ export async function measureSessionPhysicalDiskUsage(
   };
 }
 
-export async function hasRetainedSessionTranscriptArchives(storePath: string): Promise<boolean> {
+export async function hasPrunableSessionArchives(storePath: string): Promise<boolean> {
   const files = await readSessionsDirFiles(path.dirname(storePath));
-  return files.some((file) => isRetainedSessionTranscriptArchiveName(file.name));
+  return files.some((file) => isSessionArchiveArtifactName(file.name));
 }
 
-/** Removes oldest retained reset/delete archives, remeasuring physical usage after each file. */
-export async function pruneSessionTranscriptArchivesToHighWater(params: {
+/** Removes oldest archives counted by the budget, remeasuring physical usage after each file. */
+export async function pruneSessionArchivesToHighWater(params: {
   highWaterBytes: number;
   storePath: string;
 }): Promise<{ removedFiles: number; usage: SessionPhysicalDiskUsage }> {
   // Oldest-first is the hard-cap sacrifice order: under extreme pressure this
   // may prune an archive the current pass just extracted, which is preferred
   // over evicting additional sessions' searchable rows to spare a copy.
+  // The predicate must stay in step with `readSessionsDirFiles`: any archive
+  // class the measurement counts but this cannot remove becomes permanent
+  // pressure that is paid for by evicting searchable sessions instead.
   const files = (await readSessionsDirFiles(path.dirname(params.storePath)))
-    .filter((file) => isRetainedSessionTranscriptArchiveName(file.name))
+    .filter((file) => isSessionArchiveArtifactName(file.name))
     .toSorted((left, right) => left.mtimeMs - right.mtimeMs);
   let usage = await measureSessionPhysicalDiskUsage(params.storePath);
   let removedFiles = 0;

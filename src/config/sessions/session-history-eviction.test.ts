@@ -123,6 +123,66 @@ describe("SQLite historical session disk budget", () => {
     expect(sessionExists("archive-history")).toBe(true);
   });
 
+  // Manual compaction writes `.jsonl.bak.<timestamp>` archives that the physical
+  // measurement counts. Before they were prunable, this pass evicted searchable
+  // rows to pay for bytes it could never reclaim, and still finished over budget.
+  it("removes counted compaction backups before evicting searchable history", async () => {
+    await createHistoricalTranscript({
+      content: "keep searchable history",
+      nextSessionId: "archive-live",
+      sessionId: "archive-history",
+      sessionKey: "agent:main:compaction-backup-pressure",
+      updatedAt: 1,
+    });
+    database().walMaintenance.checkpoint();
+    const compactionBackup = path.join(
+      tempDir,
+      "already-compacted.jsonl.bak.2026-01-01T00-00-00.000Z",
+    );
+    fs.writeFileSync(compactionBackup, Buffer.alloc(256 * 1024));
+    const before = await measureSessionPhysicalDiskUsage(storePath);
+
+    const result = await enforceSqliteSessionHistoryDiskBudget({
+      storePath,
+      mode: "enforce",
+      maintenance: {
+        maxDiskBytes: before.totalBytes - 1,
+        highWaterBytes: before.totalBytes - 64 * 1024,
+      },
+    });
+
+    expect(result).toMatchObject({ removedEntries: 0, removedFiles: 1 });
+    expect(fs.existsSync(compactionBackup)).toBe(false);
+    expect(sessionExists("archive-history")).toBe(true);
+    expect(result?.totalBytesAfter).toBeLessThanOrEqual(result?.highWaterBytes ?? 0);
+  });
+
+  it("previews a compaction backup as definite reclamation without an evictable session", async () => {
+    await replaceSessionEntry(
+      { sessionKey: "agent:main:compaction-backup-preview", storePath },
+      { sessionId: "live-only", updatedAt: 1 },
+    );
+    const compactionBackup = path.join(
+      tempDir,
+      "already-compacted.jsonl.bak.2026-01-01T00-00-00.000Z",
+    );
+    fs.writeFileSync(compactionBackup, Buffer.alloc(256 * 1024));
+    const before = await measureSessionPhysicalDiskUsage(storePath);
+
+    const inspected = await inspectSqliteSessionHistoryDiskBudget({
+      storePath,
+      mode: "enforce",
+      maintenance: {
+        maxDiskBytes: before.totalBytes - 1,
+        highWaterBytes: before.totalBytes - 64 * 1024,
+      },
+    });
+
+    expect(inspected.diskBudget?.overBudget).toBe(true);
+    expect(inspected.wouldMutate).toBe(true);
+    expect(fs.existsSync(compactionBackup)).toBe(true);
+  });
+
   it("excludes entry, route, and admitted ids while evicting trajectory-only history", async () => {
     const sessionKey = "agent:main:history-protection";
     await replaceSessionEntry(
