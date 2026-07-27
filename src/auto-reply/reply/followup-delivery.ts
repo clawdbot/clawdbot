@@ -237,7 +237,9 @@ export function resolveFollowupDeliveryDecision(params: {
     (payload) =>
       payload.isReasoning !== true &&
       payload.isCommentary !== true &&
-      !isReplyPayloadStatusNotice(payload),
+      !isReplyPayloadStatusNotice(payload) &&
+      (sourcePolicy.sourceReplyDeliveryMode !== "message_tool_only" ||
+        getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true),
   );
   if (!hasTerminalPayload && fallbackPayload) {
     payloads = [
