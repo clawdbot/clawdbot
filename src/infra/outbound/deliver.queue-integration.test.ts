@@ -10,15 +10,28 @@ import {
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
+import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import { loadPendingDeliveries } from "./delivery-queue-storage.js";
-import { drainPendingDeliveries, type DeliverFn } from "./delivery-queue.js";
+import {
+  claimDeliveryPlatformSendAttempt,
+  drainPendingDeliveries,
+  enqueueDeliveryOnce,
+  type DeliverFn,
+} from "./delivery-queue.js";
 import {
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,
 } from "./delivery-queue.test-helpers.js";
 
 let deliverOutboundPayloads: typeof import("./deliver.js").deliverOutboundPayloads;
+
+const boundedCronCompletionRetention = {
+  idPrefix: "cron-direct-delivery:v1:",
+  maxAgeMs: 24 * 60 * 60_000,
+  maxEntries: 2_000,
+} as const;
 
 type MatrixSendFn = (
   to: string,
@@ -111,6 +124,379 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
   afterEach(() => {
     releasePinnedPluginChannelRegistry();
     setActivePluginRegistry(createEmptyPluginRegistry());
+  });
+
+  it("never lets restart recovery send a stable intent claimed by a live producer", async () => {
+    const deliveryIntentId = "cron-direct-delivery:v1:recovery-live-producer";
+    await enqueueDeliveryOnce(
+      {
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "live producer owns this send" }],
+        queuePolicy: "required",
+        completionRetention: boundedCronCompletionRetention,
+      },
+      deliveryIntentId,
+      tmpDir,
+    );
+    const producerClaimId = await claimDeliveryPlatformSendAttempt(deliveryIntentId, tmpDir);
+    expect(producerClaimId).toEqual(expect.any(String));
+
+    const deliver = vi.fn<DeliverFn>(async () => []);
+    await drainMatrixReconnect({ deliver, stateDir: tmpDir });
+
+    expect(deliver).not.toHaveBeenCalled();
+    expect((await loadPendingDeliveries(tmpDir))[0]).toMatchObject({
+      id: deliveryIntentId,
+      recoveryState: "producer_claimed",
+      producerClaimId,
+    });
+  });
+
+  it("fences recovered stable intents at the real Matrix provider boundary", async () => {
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    const deliveryIntentId = "cron-direct-delivery:v1:fenced-matrix-recovery";
+    await enqueueDeliveryOnce(
+      {
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "recover exactly once" }],
+        queuePolicy: "required",
+        completionRetention: boundedCronCompletionRetention,
+      },
+      deliveryIntentId,
+      tmpDir,
+    );
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "fenced-recovered-message" });
+    const deliver = vi.fn<DeliverFn>(async (params) =>
+      deliverOutboundPayloads({ ...params, deps: { matrix: sendMatrix } }),
+    );
+
+    await drainMatrixReconnect({ deliver, stateDir: tmpDir });
+
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deliveryQueueId: deliveryIntentId,
+        deliveryProducerClaimId: expect.any(String),
+      }),
+    );
+    expect(sendMatrix).toHaveBeenCalledOnce();
+    expect(
+      getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
+    ).toBe("completed");
+  });
+
+  it("never completes recovered Matrix sends that return no platform identity", async () => {
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    const deliveryIntentId = "cron-direct-delivery:v1:recovered-matrix-no-identity";
+    await enqueueDeliveryOnce(
+      {
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "recovery must not assume a platform send succeeded" }],
+        queuePolicy: "required",
+        completionRetention: boundedCronCompletionRetention,
+      },
+      deliveryIntentId,
+      tmpDir,
+    );
+    const sendMatrix = vi.fn().mockResolvedValue({});
+    const deliver = vi.fn<DeliverFn>(async (params) =>
+      deliverOutboundPayloads({ ...params, deps: { matrix: sendMatrix } }),
+    );
+
+    await drainMatrixReconnect({ deliver, stateDir: tmpDir });
+
+    expect(sendMatrix).toHaveBeenCalledOnce();
+    expect(
+      getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
+    ).toBe("pending");
+    expect((await loadPendingDeliveries(tmpDir))[0]).toMatchObject({
+      id: deliveryIntentId,
+      recoveryState: "unknown_after_send",
+    });
+
+    await drainMatrixReconnect({ deliver, stateDir: tmpDir });
+    expect(sendMatrix).toHaveBeenCalledOnce();
+    expect(
+      getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
+    ).not.toBe("completed");
+  });
+
+  it("replays the immutable queue-owned payload instead of regenerated producer input", async () => {
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    const deliveryIntentId = "cron-direct-delivery:v1:immutable-queue-custody";
+    await enqueueDeliveryOnce(
+      {
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "original queue-owned content" }],
+        queuePolicy: "required",
+        completionRetention: boundedCronCompletionRetention,
+      },
+      deliveryIntentId,
+      tmpDir,
+    );
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "immutable-recovered-message" });
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {} as OpenClawConfig,
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "regenerated replay must never reach the recipient" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+        deliveryIntentId,
+        completionRetention: boundedCronCompletionRetention,
+        reusePendingDeliveryIntent: true,
+      }),
+    ).resolves.toMatchObject([{ messageId: "immutable-recovered-message" }]);
+
+    expect(sendMatrix).toHaveBeenCalledOnce();
+    expect(sendMatrix.mock.calls[0]?.[1]).toBe("original queue-owned content");
+    expect(
+      getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
+    ).toBe("completed");
+  });
+
+  it("retains a completed stable delivery receipt across producer replays", async () => {
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "stable-message" });
+    const deliveryIntentId = "cron-direct-delivery:v1:stable-completion";
+    const params = {
+      cfg: {} as OpenClawConfig,
+      channel: "matrix" as const,
+      to: "!room:example",
+      payloads: [{ text: "send once" }],
+      deps: { matrix: sendMatrix },
+      queuePolicy: "required" as const,
+      deliveryIntentId,
+      completionRetention: boundedCronCompletionRetention,
+      reusePendingDeliveryIntent: true,
+    };
+
+    await expect(deliverOutboundPayloads(params)).resolves.toMatchObject([
+      { messageId: "stable-message" },
+    ]);
+    expect(
+      getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
+    ).toBe("completed");
+    await expect(deliverOutboundPayloads(params)).rejects.toThrow(
+      `Stable delivery intent is already queued: ${deliveryIntentId}`,
+    );
+    expect(sendMatrix).toHaveBeenCalledOnce();
+  });
+
+  it("retains a completed stable receipt after fully successful best-effort delivery", async () => {
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "stable-best-effort-message" });
+    const deliveryIntentId = "cron-direct-delivery:v1:best-effort-stable-completion";
+    const params = {
+      cfg: {} as OpenClawConfig,
+      channel: "matrix" as const,
+      to: "!room:example",
+      payloads: [{ text: "best-effort send once" }],
+      deps: { matrix: sendMatrix },
+      bestEffort: true,
+      queuePolicy: "best_effort" as const,
+      deliveryIntentId,
+      completionRetention: boundedCronCompletionRetention,
+      reusePendingDeliveryIntent: true,
+    };
+
+    await expect(deliverOutboundPayloads(params)).resolves.toMatchObject([
+      { messageId: "stable-best-effort-message" },
+    ]);
+    expect(
+      getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
+    ).toBe("completed");
+    await expect(deliverOutboundPayloads(params)).rejects.toThrow(
+      `Stable delivery intent is already queued: ${deliveryIntentId}`,
+    );
+    expect(sendMatrix).toHaveBeenCalledOnce();
+  });
+
+  it("holds one live claim while concurrent producers reuse a stable pending intent", async () => {
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    let resolveSend!: (value: { messageId: string }) => void;
+    let notifySendStarted!: () => void;
+    const sendStarted = new Promise<void>((resolve) => {
+      notifySendStarted = resolve;
+    });
+    const sendMatrix = vi.fn(
+      () =>
+        new Promise<{ messageId: string }>((resolve) => {
+          resolveSend = resolve;
+          notifySendStarted();
+        }),
+    );
+    const deliveryIntentId = "cron-direct-delivery:v1:concurrent-stable-completion";
+    const params = {
+      cfg: {} as OpenClawConfig,
+      channel: "matrix" as const,
+      to: "!room:example",
+      payloads: [{ text: "send exactly once" }],
+      deps: { matrix: sendMatrix },
+      queuePolicy: "required" as const,
+      deliveryIntentId,
+      completionRetention: boundedCronCompletionRetention,
+      reusePendingDeliveryIntent: true,
+    };
+
+    const first = deliverOutboundPayloads(params);
+    await sendStarted;
+    const recoveryDeliver = vi.fn<DeliverFn>(async () => []);
+    await drainMatrixReconnect({ deliver: recoveryDeliver, stateDir: tmpDir });
+    expect(recoveryDeliver).not.toHaveBeenCalled();
+    expect(sendMatrix).toHaveBeenCalledOnce();
+    const concurrentReplay = deliverOutboundPayloads(params);
+    expect(sendMatrix).toHaveBeenCalledOnce();
+    resolveSend({ messageId: "concurrent-stable-message" });
+    await expect(first).resolves.toMatchObject([{ messageId: "concurrent-stable-message" }]);
+    await expect(concurrentReplay).rejects.toThrow(
+      `Stable delivery intent is already queued: ${deliveryIntentId}`,
+    );
+    expect(
+      getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
+    ).toBe("completed");
+  });
+
+  it("never acknowledges or replays a partially sent best-effort stable intent", async () => {
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    const sendMatrix = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "best-effort-first-message" })
+      .mockRejectedValueOnce(new Error("best-effort second payload failed"));
+    const onError = vi.fn();
+    const deliveryIntentId = "cron-direct-delivery:v1:best-effort-partial-send";
+    const params = {
+      cfg: {} as OpenClawConfig,
+      channel: "matrix" as const,
+      to: "!room:example",
+      payloads: [{ text: "sent first" }, { text: "failed second" }],
+      deps: { matrix: sendMatrix },
+      bestEffort: true,
+      queuePolicy: "best_effort" as const,
+      deliveryIntentId,
+      completionRetention: boundedCronCompletionRetention,
+      reusePendingDeliveryIntent: true,
+      onError,
+    };
+
+    await expect(deliverOutboundPayloads(params)).resolves.toMatchObject([
+      { messageId: "best-effort-first-message" },
+    ]);
+    expect(onError).toHaveBeenCalledOnce();
+    expect(
+      getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
+    ).toBe("pending");
+    expect((await loadPendingDeliveries(tmpDir))[0]).toMatchObject({
+      id: deliveryIntentId,
+      recoveryState: "unknown_after_send",
+    });
+    await expect(deliverOutboundPayloads(params)).rejects.toThrow(
+      `Stable delivery intent is already queued: ${deliveryIntentId}`,
+    );
+    expect(sendMatrix).toHaveBeenCalledTimes(2);
+  });
+
+  it("never acknowledges a platform send that returns no message identity", async () => {
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    const sendMatrix = vi.fn().mockResolvedValue({});
+    const deliveryIntentId = "cron-direct-delivery:v1:no-platform-identity";
+    const params = {
+      cfg: {} as OpenClawConfig,
+      channel: "matrix" as const,
+      to: "!room:example",
+      payloads: [{ text: "provider returned no message identity" }],
+      deps: { matrix: sendMatrix },
+      queuePolicy: "required" as const,
+      deliveryIntentId,
+      completionRetention: boundedCronCompletionRetention,
+      reusePendingDeliveryIntent: true,
+    };
+
+    await expect(deliverOutboundPayloads(params)).resolves.toEqual([]);
+    expect(
+      getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
+    ).toBe("pending");
+    expect((await loadPendingDeliveries(tmpDir))[0]).toMatchObject({
+      id: deliveryIntentId,
+      recoveryState: "unknown_after_send",
+    });
+    await expect(deliverOutboundPayloads(params)).rejects.toThrow(
+      `Stable delivery intent is already queued: ${deliveryIntentId}`,
+    );
+    expect(sendMatrix).toHaveBeenCalledOnce();
+  });
+
+  it("retries a stable delivery intent only after a proven pre-dispatch failure", async () => {
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    const notDispatchedError = new PlatformMessageNotDispatchedError(
+      "provider disconnected before dispatch",
+      { cause: new Error("connect ECONNREFUSED") },
+    );
+    const sendMatrix = vi
+      .fn()
+      .mockRejectedValueOnce(notDispatchedError)
+      .mockResolvedValueOnce({ messageId: "recovered-stable-message" });
+    const deliveryIntentId = "cron-direct-delivery:v1:safe-retry";
+    const params = {
+      cfg: {} as OpenClawConfig,
+      channel: "matrix" as const,
+      to: "!room:example",
+      payloads: [{ text: "safe retry" }],
+      deps: { matrix: sendMatrix },
+      queuePolicy: "required" as const,
+      deliveryIntentId,
+      completionRetention: boundedCronCompletionRetention,
+      reusePendingDeliveryIntent: true,
+    };
+
+    await expect(deliverOutboundPayloads(params)).rejects.toThrow(
+      "provider disconnected before dispatch",
+    );
+    expect((await loadPendingDeliveries(tmpDir))[0]).toMatchObject({
+      id: deliveryIntentId,
+      retryCount: 1,
+    });
+    expect((await loadPendingDeliveries(tmpDir))[0]?.recoveryState).toBeUndefined();
+    await expect(deliverOutboundPayloads(params)).resolves.toMatchObject([
+      { messageId: "recovered-stable-message" },
+    ]);
+    expect(
+      getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
+    ).toBe("completed");
+    expect(sendMatrix).toHaveBeenCalledTimes(2);
+  });
+
+  it("never replays a stable intent after an ambiguous platform send", async () => {
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    const sendMatrix = vi.fn().mockRejectedValue(new Error("provider result was lost"));
+    const deliveryIntentId = "cron-direct-delivery:v1:unknown-platform-outcome";
+    const params = {
+      cfg: {} as OpenClawConfig,
+      channel: "matrix" as const,
+      to: "!room:example",
+      payloads: [{ text: "ambiguous send" }],
+      deps: { matrix: sendMatrix },
+      queuePolicy: "required" as const,
+      deliveryIntentId,
+      completionRetention: boundedCronCompletionRetention,
+      reusePendingDeliveryIntent: true,
+    };
+
+    await expect(deliverOutboundPayloads(params)).rejects.toThrow("provider result was lost");
+    expect((await loadPendingDeliveries(tmpDir))[0]).toMatchObject({
+      id: deliveryIntentId,
+      recoveryState: "send_attempt_started",
+    });
+    await expect(deliverOutboundPayloads(params)).rejects.toThrow(
+      `Stable delivery intent is already queued: ${deliveryIntentId}`,
+    );
+    expect(sendMatrix).toHaveBeenCalledOnce();
   });
 
   it("advances queued entry to unknown_after_send when a later payload fails after an earlier one succeeded", async () => {

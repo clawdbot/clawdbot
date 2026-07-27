@@ -6,6 +6,7 @@ import type { RenderedMessageBatchPlanItem } from "../../channels/message/types.
 import type { ReplyToMode } from "../../config/types.js";
 import type { PluginHookReplyPayloadSendingContext } from "../../plugins/hook-types.js";
 import {
+  claimDeliveryQueueEntryPlatformSend,
   completeDeliveryQueueEntry,
   commitStagedDeliveryQueueEntry,
   commitStagedDeliveryQueueEntryOnce,
@@ -14,6 +15,7 @@ import {
   loadDeliveryQueueEntries,
   loadDeliveryQueueEntry,
   moveDeliveryQueueEntryToFailed,
+  promoteDeliveryQueueEntryPlatformSend,
   reserveDeliveryQueueEntryAttempt,
   updateDeliveryQueueEntry,
   upsertDeliveryQueueEntry,
@@ -99,12 +101,18 @@ export interface QueuedDelivery extends QueuedDeliveryPayload {
   enqueuedAt: number;
   retryCount: number;
   attemptCount: number;
+  /** A recoverable cross-process pre-provider ownership lease. */
+  availableAt?: number;
+  /** Fences an active pre-provider lease against reclaimed producer ownership. */
+  producerClaimId?: string;
   lastAttemptAt?: number;
   lastError?: string;
+  /** Fences the promoted platform attempt independently of clock precision. */
+  platformSendAttemptId?: string;
   platformSendStartedAt?: number;
   /** Canonical reply target after hooks; null records an intentional root send. */
   effectiveReplyToId?: string | null;
-  recoveryState?: "send_attempt_started" | "unknown_after_send";
+  recoveryState?: "producer_claimed" | "send_attempt_started" | "unknown_after_send";
 }
 
 function queuedDeliveryMetadata(entry: QueuedDelivery): DeliveryQueueRowMetadata {
@@ -233,9 +241,11 @@ function loadEntrySpoolPaths(id: string, stateDir: string | undefined): string[]
 type AckDeliveryOptions = {
   /** Caller holds a GC-visible recovery lease until its active adapter settles. */
   retainSpoolArtifacts?: boolean;
+  /** An intentionally suppressed pre-send batch must not become a success receipt. */
+  suppressCompletionReceipt?: boolean;
 };
 
-/** Remove a successfully delivered entry, or retain its permanent producer receipt. */
+/** Remove a successfully delivered entry, or retain its producer-owned receipt. */
 export async function ackDelivery(
   id: string,
   stateDir?: string,
@@ -250,7 +260,7 @@ export async function ackDelivery(
     stateDir,
   ) as QueuedDelivery | null;
   const spoolPaths = entry ? collectEntrySpoolPaths(entry.payloads, stateDir) : [];
-  if (entry?.completionRetention === "permanent") {
+  if (entry?.completionRetention && options?.suppressCompletionReceipt !== true) {
     completeDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir);
   } else {
     deleteDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir);
@@ -282,6 +292,9 @@ export async function failDeliveryBeforePlatformSend(
     lastAttemptAt: Date.now(),
     lastError: error,
     // Clear both fields together; retaining either would preserve false send evidence.
+    availableAt: undefined,
+    producerClaimId: undefined,
+    platformSendAttemptId: undefined,
     platformSendStartedAt: undefined,
     recoveryState: undefined,
   }));
@@ -298,9 +311,27 @@ export async function failDeliveryAfterPlatformSend(
     retryCount: entry.retryCount + 1,
     lastAttemptAt: Date.now(),
     lastError: error,
+    availableAt: undefined,
+    producerClaimId: undefined,
     platformSendStartedAt: entry.platformSendStartedAt ?? Date.now(),
     recoveryState: "unknown_after_send",
   }));
+}
+
+/** Atomically transfer a stable pending producer intent to one platform sender. */
+export async function claimDeliveryPlatformSendAttempt(
+  id: string,
+  stateDir?: string,
+  reconciledPlatformSendStartedAt?: number,
+  reconciledPlatformSendAttemptId?: string,
+): Promise<string | undefined> {
+  return claimDeliveryQueueEntryPlatformSend({
+    queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
+    id,
+    stateDir,
+    ...(reconciledPlatformSendStartedAt !== undefined ? { reconciledPlatformSendStartedAt } : {}),
+    ...(reconciledPlatformSendAttemptId !== undefined ? { reconciledPlatformSendAttemptId } : {}),
+  });
 }
 
 /** Reserve one durable delivery call before invoking the provider path. */
@@ -327,9 +358,25 @@ export async function markDeliveryPlatformSendAttemptStarted(
   id: string,
   stateDir?: string,
   route?: { replyToId?: string | null },
+  producerClaimId?: string,
 ): Promise<void> {
+  if (producerClaimId) {
+    const promoted = promoteDeliveryQueueEntryPlatformSend({
+      queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
+      id,
+      claimId: producerClaimId,
+      stateDir,
+      route,
+    });
+    if (!promoted) {
+      throw new Error(`Stable delivery platform claim was lost: ${id}`);
+    }
+    return;
+  }
   updateQueuedDelivery(id, stateDir, (entry) => ({
     ...entry,
+    availableAt: undefined,
+    producerClaimId: undefined,
     platformSendStartedAt: entry.platformSendStartedAt ?? Date.now(),
     ...(route && "replyToId" in route ? { effectiveReplyToId: route.replyToId ?? null } : {}),
     recoveryState: "send_attempt_started",
@@ -344,6 +391,8 @@ export async function markDeliveryPlatformSendDispatched(
 ): Promise<void> {
   updateQueuedDelivery(id, stateDir, (entry) => ({
     ...entry,
+    availableAt: undefined,
+    producerClaimId: undefined,
     platformSendStartedAt: Date.now(),
     ...(route && "replyToId" in route ? { effectiveReplyToId: route.replyToId ?? null } : {}),
     recoveryState: "send_attempt_started",
@@ -356,6 +405,8 @@ export async function markDeliveryPlatformOutcomeUnknown(
 ): Promise<void> {
   updateQueuedDelivery(id, stateDir, (entry) => ({
     ...entry,
+    availableAt: undefined,
+    producerClaimId: undefined,
     platformSendStartedAt: entry.platformSendStartedAt ?? Date.now(),
     recoveryState: "unknown_after_send",
   }));

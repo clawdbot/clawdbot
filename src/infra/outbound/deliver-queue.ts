@@ -38,8 +38,10 @@ import {
 } from "./delivery-completion.js";
 import { releaseSpoolArtifacts, stageQueuePayloadMedia } from "./delivery-queue-media-spool.js";
 import { cancelDeliveryQueueMediaStage } from "./delivery-queue-media-staging.js";
+import { loadPendingDelivery, type QueuedDelivery } from "./delivery-queue-storage.js";
 import {
   ackDelivery,
+  claimDeliveryPlatformSendAttempt,
   enqueueDelivery,
   enqueueDeliveryOnce,
   failDelivery,
@@ -61,6 +63,31 @@ import {
 } from "./payloads.js";
 
 const log = createSubsystemLogger("outbound/deliver");
+
+function restoreQueuedDeliveryCustody(
+  params: DeliverOutboundPayloadsParams,
+  entry: QueuedDelivery,
+): DeliverOutboundPayloadsParams {
+  // A regenerated caller owns current runtime authority, never the durable
+  // effect. Recipient, staged payload, and completion stay with the first row.
+  const {
+    id: _id,
+    enqueuedAt: _enqueuedAt,
+    retryCount: _retryCount,
+    attemptCount: _attemptCount,
+    availableAt: _availableAt,
+    producerClaimId: _producerClaimId,
+    lastAttemptAt: _lastAttemptAt,
+    lastError: _lastError,
+    platformSendAttemptId: _platformSendAttemptId,
+    platformSendStartedAt: _platformSendStartedAt,
+    effectiveReplyToId: _effectiveReplyToId,
+    recoveryState: _recoveryState,
+    maxRetries: _maxRetries,
+    ...custody
+  } = entry;
+  return { ...params, ...custody };
+}
 
 function materializeQueueCustodyMedia(
   payloads: readonly ReplyPayload[],
@@ -229,6 +256,7 @@ export async function runOutboundDeliveryInternal(
         session: params.session,
         gatewayClientScopes: params.gatewayClientScopes,
         preparedMessageId: params.preparedMessageId,
+        completionRetention: params.completionRetention,
         deliveryCompletion: params.deliveryCompletion,
       };
       if (params.deliveryIntentId) {
@@ -278,31 +306,54 @@ export async function runOutboundDeliveryInternal(
     });
   }
 
-  // A prior producer already owns this stable intent. Recovery or the original
-  // live sender will finish it; a replay must not cross platform I/O again.
-  if (queued && !queued.created) {
-    throw new Error(`Stable delivery intent is already queued: ${queued.id}`);
-  }
-
   if (!queueId) {
-    return await deliverOutboundPayloadsWithQueueCleanup(params, null, auditStartedAt);
+    return await deliverOutboundPayloadsWithQueueCleanup(
+      params,
+      null,
+      auditStartedAt,
+      params.deliveryProducerClaimId,
+    );
   }
 
-  // Hold the same in-process claim used by recovery/drain while the live send
-  // owns this queue entry.
-  const claimResult = await withActiveDeliveryClaim(queueId, () =>
-    deliverOutboundPayloadsWithQueueCleanup(params, queueId, auditStartedAt),
-  );
-  if (claimResult.status === "claimed-by-other-owner") {
-    return [];
+  if (!queued?.created && !params.reusePendingDeliveryIntent) {
+    throw new Error(`Stable delivery intent is already queued: ${queueId}`);
   }
-  return claimResult.value;
+  const claimResult = await withActiveDeliveryClaim(queueId, async () => {
+    const producerClaimId = params.reusePendingDeliveryIntent
+      ? await claimDeliveryPlatformSendAttempt(queueId)
+      : undefined;
+    if (params.reusePendingDeliveryIntent && !producerClaimId) {
+      throw new Error(`Stable delivery intent is already queued: ${queueId}`);
+    }
+    let deliveryParams = params;
+    if (!queued.created) {
+      const queuedEntry = await loadPendingDelivery(queueId);
+      if (!queuedEntry || queuedEntry.producerClaimId !== producerClaimId) {
+        throw new Error(`Stable delivery platform claim was lost: ${queueId}`);
+      }
+      deliveryParams = restoreQueuedDeliveryCustody(params, queuedEntry);
+    }
+    return deliverOutboundPayloadsWithQueueCleanup(
+      deliveryParams,
+      queueId,
+      auditStartedAt,
+      producerClaimId,
+    );
+  });
+  if (claimResult.status === "claimed") {
+    return claimResult.value;
+  }
+  if (params.reusePendingDeliveryIntent) {
+    throw new Error(`Stable delivery intent is already queued: ${queueId}`);
+  }
+  return [];
 }
 
 async function deliverOutboundPayloadsWithQueueCleanup(
   params: DeliverOutboundPayloadsParams,
   queueId: string | null,
   auditStartedAt: number,
+  producerClaimId?: string,
 ): Promise<OutboundDeliveryResult[]> {
   // Wrap onError to detect partial failures under bestEffort mode.
   // When bestEffort is true, per-payload errors are caught and passed to onError
@@ -368,6 +419,7 @@ async function deliverOutboundPayloadsWithQueueCleanup(
           queuePolicy: platformQueuePolicy,
           stateDir: platformQueueStateDir,
           route,
+          producerClaimId,
           // Recovery sends read queue-owned media. Removing the row prevents a
           // duplicate replay, but the active adapter still needs the files.
           retainSpoolArtifacts: queueId === null && params.deliveryQueueId !== undefined,
@@ -503,12 +555,32 @@ async function deliverOutboundPayloadsWithQueueCleanup(
             : queuedPreSendState === "acked"
               ? "acked"
               : undefined);
+        if (results.length === 0 && postSendState === "marked") {
+          // The provider was invoked but returned no recipient-visible identity;
+          // never convert that ambiguous platform outcome into a success receipt.
+          await failDeliveryAfterPlatformSend(
+            queueId,
+            "platform send returned no delivery identity",
+          );
+          queuedPostSendState = "failed";
+          emitTerminals(() =>
+            uniformOutboundAuditTerminals(params.payloads.length, {
+              outcome: "unknown",
+              failureStage: "platform_send",
+            }),
+          );
+          return results;
+        }
         const acked =
           postSendState === "acked"
             ? true
             : postSendState === "failed"
               ? false
-              : await ackDelivery(queueId)
+              : await (
+                  results.length === 0 && params.completionRetention
+                    ? ackDelivery(queueId, undefined, { suppressCompletionReceipt: true })
+                    : ackDelivery(queueId)
+                )
                   .then(() => true)
                   .catch(async (err: unknown) => {
                     const hasSendEvidence =

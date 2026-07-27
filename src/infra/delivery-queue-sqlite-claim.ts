@@ -1,0 +1,118 @@
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  loadDeliveryQueueEntry,
+  upsertDeliveryQueueEntry,
+  type DeliveryQueueEntryState,
+} from "./delivery-queue-sqlite.js";
+import { generateSecureUuid } from "./secure-random.js";
+import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
+
+type PlatformClaimParams = {
+  queueName: string;
+  id: string;
+  stateDir?: string;
+  reconciledPlatformSendAttemptId?: string;
+  reconciledPlatformSendStartedAt?: number;
+};
+
+function transitionUnsentDeliveryQueueEntry(
+  params: PlatformClaimParams,
+  operation: "claim" | "promote",
+  transition: (entry: DeliveryQueueEntryState, now: number) => DeliveryQueueEntryState | undefined,
+): boolean {
+  // State-database opens reuse the canonical path-owned connection, so both
+  // existing queue primitives execute inside this same IMMEDIATE transaction.
+  const database = openOpenClawStateDatabase({
+    env: params.stateDir ? { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } : process.env,
+  });
+  return runSqliteImmediateTransactionSync(
+    database.db,
+    () => {
+      const current = loadDeliveryQueueEntry(params.queueName, params.id, params.stateDir);
+      if (
+        !current ||
+        (current.platformSendStartedAt !== undefined &&
+          (operation !== "claim" ||
+            current.platformSendStartedAt !== params.reconciledPlatformSendStartedAt ||
+            current.platformSendAttemptId !== params.reconciledPlatformSendAttemptId ||
+            typeof current.platformSendAttemptId !== "string"))
+      ) {
+        return false;
+      }
+      const updated = transition(current, Date.now());
+      return updated
+        ? upsertDeliveryQueueEntry({
+            queueName: params.queueName,
+            entry: updated,
+            stateDir: params.stateDir,
+            updatePendingOnly: true,
+          })
+        : false;
+    },
+    {
+      databaseLabel: "openclaw-state",
+      operationLabel: `${operation} ${params.queueName} delivery platform send`,
+    },
+  );
+}
+
+/** Claim a recoverable producer lease before any provider invocation. */
+export function claimDeliveryQueueEntryPlatformSend(
+  params: PlatformClaimParams,
+): string | undefined {
+  const claimId = generateSecureUuid();
+  return transitionUnsentDeliveryQueueEntry(params, "claim", (entry, now) => {
+    const reconciledNotSent =
+      entry.recoveryState === "send_attempt_started" &&
+      typeof params.reconciledPlatformSendStartedAt === "number" &&
+      entry.platformSendStartedAt === params.reconciledPlatformSendStartedAt &&
+      typeof params.reconciledPlatformSendAttemptId === "string" &&
+      entry.platformSendAttemptId === params.reconciledPlatformSendAttemptId;
+    if (
+      entry.recoveryState &&
+      !reconciledNotSent &&
+      (entry.recoveryState !== "producer_claimed" ||
+        typeof entry.availableAt !== "number" ||
+        entry.availableAt > now)
+    ) {
+      return undefined;
+    }
+    return {
+      ...entry,
+      availableAt: now + 30_000,
+      producerClaimId: claimId,
+      platformSendAttemptId: undefined,
+      platformSendStartedAt: undefined,
+      recoveryState: "producer_claimed",
+    };
+  })
+    ? claimId
+    : undefined;
+}
+
+/** Atomically fence the exact unexpired owner at the real provider boundary. */
+export function promoteDeliveryQueueEntryPlatformSend(
+  params: PlatformClaimParams & {
+    claimId: string;
+    route?: { replyToId?: string | null };
+  },
+): boolean {
+  return transitionUnsentDeliveryQueueEntry(params, "promote", (entry, now) =>
+    entry.recoveryState === "producer_claimed" &&
+    entry.producerClaimId === params.claimId &&
+    typeof entry.availableAt === "number" &&
+    entry.availableAt > now
+      ? {
+          ...entry,
+          availableAt: undefined,
+          producerClaimId: undefined,
+          platformSendAttemptId: params.claimId,
+          platformSendStartedAt: now,
+          ...(params.route && "replyToId" in params.route
+            ? { effectiveReplyToId: params.route.replyToId ?? null }
+            : {}),
+          recoveryState: "send_attempt_started",
+        }
+      : undefined,
+  );
+}

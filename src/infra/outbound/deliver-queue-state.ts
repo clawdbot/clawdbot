@@ -28,15 +28,26 @@ export async function persistQueuedPreSendState(params: {
   queuePolicy: OutboundDeliveryQueuePolicy;
   stateDir?: string;
   route: PlatformSendRoute;
+  producerClaimId?: string;
   retainSpoolArtifacts?: boolean;
 }): Promise<QueuedPreSendState> {
   try {
-    await markDeliveryPlatformSendAttemptStarted(params.queueId, params.stateDir, {
-      replyToId: params.route.replyToId ?? null,
-    });
+    const route = { replyToId: params.route.replyToId ?? null };
+    if (params.producerClaimId) {
+      await markDeliveryPlatformSendAttemptStarted(
+        params.queueId,
+        params.stateDir,
+        route,
+        params.producerClaimId,
+      );
+    } else {
+      await markDeliveryPlatformSendAttemptStarted(params.queueId, params.stateDir, route);
+    }
     return "marked";
   } catch (markErr: unknown) {
-    if (params.queuePolicy === "required") {
+    // A fenced producer must never discard a lease it no longer owns: doing so
+    // could erase the replacement owner and send the same intent twice.
+    if (params.queuePolicy === "required" || params.producerClaimId) {
       throw markErr;
     }
     log.warn(

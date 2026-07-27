@@ -28,6 +28,7 @@ import { pruneOrphanedDeliveryQueueMedia } from "./delivery-queue-media-spool.js
 import { loadPendingDeliveries, reserveDeliveryAttempt } from "./delivery-queue-storage.js";
 import {
   ackDelivery,
+  claimDeliveryPlatformSendAttempt,
   enqueueDelivery,
   enqueueDeliveryOnce,
   markDeliveryPlatformOutcomeUnknown,
@@ -1064,6 +1065,63 @@ describe("delivery-queue recovery", () => {
       deferredBackoff: 0,
     });
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+  });
+
+  it("atomically fences stable recovery after an adapter proves an ambiguous send was not sent", async () => {
+    const id = "cron-direct-delivery:v1:reconciled-stable-recovery";
+    await enqueueDeliveryOnce(
+      {
+        channel: "demo-channel-a",
+        to: "+1",
+        payloads: [{ text: "recover exactly once after reconciliation" }],
+        queuePolicy: "required",
+        completionRetention: {
+          idPrefix: "cron-direct-delivery:v1:",
+          maxAgeMs: 24 * 60 * 60_000,
+          maxEntries: 2_000,
+        },
+      },
+      id,
+      tmpDir(),
+    );
+    const originalAttemptId = await claimDeliveryPlatformSendAttempt(id, tmpDir());
+    if (!originalAttemptId) {
+      throw new Error("test invariant: the original stable send must own a producer claim");
+    }
+    await markDeliveryPlatformSendAttemptStarted(
+      id,
+      tmpDir(),
+      { replyToId: null },
+      originalAttemptId,
+    );
+    resolveOutboundChannelMessageAdapterMock.mockReturnValue({
+      durableFinal: {
+        capabilities: { reconcileUnknownSend: true },
+        reconcileUnknownSend: vi.fn().mockResolvedValue({ status: "not_sent" }),
+      },
+    });
+    const deliver = vi.fn(async (params: Parameters<DeliverFn>[0]) => {
+      if (!params.deliveryProducerClaimId) {
+        throw new Error("recovered provider send must own a fenced producer lease");
+      }
+      await markDeliveryPlatformSendAttemptStarted(
+        id,
+        tmpDir(),
+        { replyToId: null },
+        params.deliveryProducerClaimId,
+      );
+      return [{ channel: "demo-channel-a", messageId: "fenced-reconciled-message" }];
+    });
+
+    const { result } = await runRecovery({ deliver });
+
+    expect(result).toMatchObject({ recovered: 1, failed: 0 });
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(mockCallArg(deliver)).toMatchObject({
+      deliveryQueueId: id,
+      deliveryProducerClaimId: expect.any(String),
+    });
+    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("completed");
   });
 
   it("acks unknown-after-send entries reconciled as already sent before commit hooks", async () => {
