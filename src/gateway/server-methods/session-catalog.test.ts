@@ -265,7 +265,7 @@ describe("session catalog Gateway methods", () => {
         list: vi.fn(async ({ sessionEntries }) => {
           const adopted = sessionEntries
             ?.entriesForAgent("main")
-            .find((candidate) => candidate.sessionKey === sessionKey);
+            .find((candidate: { sessionKey: string }) => candidate.sessionKey === sessionKey);
           return [
             {
               hostId: `gateway:${id}`,

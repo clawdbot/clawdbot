@@ -13,7 +13,7 @@ import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/se
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import { projectSessionActor } from "../session-utils-row.js";
 
-export type SessionCatalogRequestEntrySnapshot = {
+type SessionCatalogRequestEntrySnapshot = {
   sessionEntries: SessionCatalogEntrySnapshot;
   projectHostCreatedActors: (host: SessionCatalogHost) => SessionCatalogHost;
 };
