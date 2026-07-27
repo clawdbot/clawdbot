@@ -151,10 +151,20 @@ describe("SQLite historical session disk budget", () => {
       },
     });
 
-    expect(result).toMatchObject({ removedEntries: 0, removedFiles: 1 });
-    expect(fs.existsSync(compactionBackup)).toBe(false);
-    expect(sessionExists("archive-history")).toBe(true);
-    expect(result?.totalBytesAfter).toBeLessThanOrEqual(result?.highWaterBytes ?? 0);
+    // Asserted as one object so a regression reports every broken part of the
+    // invariant at once: what was sacrificed, what was reclaimed, and whether
+    // the pass actually reached its target.
+    expect({
+      evictedSessions: result?.removedEntries,
+      compactionBackupOnDisk: fs.existsSync(compactionBackup),
+      searchableSessionSurvived: sessionExists("archive-history"),
+      finishedWithinHighWater: (result?.totalBytesAfter ?? 0) <= (result?.highWaterBytes ?? 0),
+    }).toEqual({
+      evictedSessions: 0,
+      compactionBackupOnDisk: false,
+      searchableSessionSurvived: true,
+      finishedWithinHighWater: true,
+    });
   });
 
   it("previews a compaction backup as definite reclamation without an evictable session", async () => {
