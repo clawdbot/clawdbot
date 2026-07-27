@@ -1403,6 +1403,12 @@ async function runRuntimeToolSchemasHealth(ctx: DoctorHealthFlowContext): Promis
   await runCoreHealthFindingNote(ctx, "core/doctor/runtime-tool-schemas");
 }
 
+async function runTelegramGeneralTopicConversationHealth(
+  ctx: DoctorHealthFlowContext,
+): Promise<void> {
+  await runCoreContributionHealth(ctx, ["core/doctor/telegram-general-topic-conversations"]);
+}
+
 async function runSkillWorkshopToolPolicyHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   await runCoreHealthFindingNote(ctx, "core/doctor/skill-workshop-tool-policy");
 }
@@ -1675,6 +1681,12 @@ function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       label: "Codex session routes",
       healthCheckIds: ["core/doctor/codex-session-routes"],
       run: runCodexSessionRouteHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:telegram-general-topic-conversations",
+      label: "Telegram General-topic conversations",
+      healthCheckIds: ["core/doctor/telegram-general-topic-conversations"],
+      run: runTelegramGeneralTopicConversationHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:session-locks",
