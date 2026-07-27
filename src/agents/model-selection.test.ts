@@ -2373,6 +2373,28 @@ describe("model-selection", () => {
       expect(result).toEqual({ provider: "n1n", model: "gpt-5.4" });
     });
 
+    it("uses a configured custom provider when the default is only an empty overlay", () => {
+      const cfg = {
+        models: {
+          providers: {
+            openai: { models: [] },
+            "local-provider": {
+              baseUrl: "http://127.0.0.1:9191/v1",
+              models: [{ id: "local-good", name: "Local Good" }],
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(
+        resolveConfiguredModelRef({
+          cfg,
+          defaultProvider: "openai",
+          defaultModel: "missing-default-model",
+        }),
+      ).toEqual({ provider: "local-provider", model: "local-good" });
+    });
+
     it("should keep default provider when it is in models.providers", () => {
       const cfg = createProviderWithModelsConfig("anthropic", [
         {
