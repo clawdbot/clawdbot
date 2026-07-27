@@ -26,7 +26,7 @@ type SqliteSessionEntryCacheValidityToken = {
   totalChanges: number;
 };
 
-export type SqliteSessionEntryCachePublicationToken = {
+type SqliteSessionEntryCachePublicationToken = {
   connection: DatabaseSync;
   totalChangesAfterCommit?: number;
   totalChangesBeforeWrite: number;
