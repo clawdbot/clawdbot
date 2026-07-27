@@ -721,7 +721,7 @@ function resolveAssistantUsage(
   byApiCallId: Map<string, AssistantUsageSnapshot>,
 ): AssistantUsageSnapshot | undefined {
   const apiCallId = readString(event?.data.apiCallId);
-  return apiCallId ? byApiCallId.get(apiCallId) : latest;
+  return apiCallId ? (byApiCallId.get(apiCallId) ?? latest) : latest;
 }
 
 function resolveEventTimestamp(timestamp: string, now: () => number): number {

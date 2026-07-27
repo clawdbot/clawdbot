@@ -633,7 +633,9 @@ describe("attachEventBridge", () => {
       isAborted: () => false,
     });
 
-    bridge.recordSendResult(makeAssistantMessageEvent("done", { outputTokens: 7 }));
+    bridge.recordSendResult(
+      makeAssistantMessageEvent("done", { apiCallId: "usage-without-id", outputTokens: 7 }),
+    );
     session.emit(
       "assistant.usage",
       makeEvent("assistant.usage", {
