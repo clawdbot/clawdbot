@@ -29,7 +29,7 @@ If CLI force-run is unavailable, tell Carlos to wait for the next scheduled 08:3
 ### HARD RULES (digest — no improvisation)
 
 1. **Default Google work:** `tools/bin/lisa-safe …` only (cheat sheet: `tools/lisa-safe.md`).
-2. **Never invent** gws subcommands; never pipes / `2>&1` / `|` / `$()` / `||` / `&&`.
+2. **Never invent** gws subcommands; never pipes / `2>&1` / `|` / `$()` / `||` / `&&`. If a command is hard-denied for opaque shell (`denylist` / `2>&1`), retry **once** without redirects/pipes, then stop that check and continue — still emit the full Telegram digest format.
 3. **Missing lisa-safe verb:** stop that check and report — do **not** improvise bare `gws`.
 4. **Carlos Tasks:** `tools/bin/lisa-carlos-tasks` only. **Never** `gws auth …` / `gws keep …`.
 
@@ -128,14 +128,17 @@ On exit `2`, `invalid_rapt`, or reauth errors:
 
 Produce this exact structure with **real data** each run. Section rules:
 
+- **TELEGRAM PLAIN TEXT ONLY.** The announced Telegram body must be a normal chat message. **Never** wrap it in Markdown code fences (`/`text / ```markdown). Fences make Telegram show a gray “Text” code card — that is a delivery failure (same bug as overnight heartbeats flipping between plain bubble and code card).
 - **A. Work:** always show the full itemized detail (i through v). Use "None." under ii–v when empty.
 - **`i. Summary` lines are strictly `Yes.` or `No.` — nothing else.** No counts, no parentheticals, no brief reasons, no descriptions appended — even in the digest. All real counts and descriptions belong exclusively in sections `ii`–`v` — never in the Summary line itself.
 - **B. Coding Work & Evals:** when Yes, show full itemized detail (Method / Description / Open Issues per coding item, plus Eval Comparisons). When no coding work and no evals: just `## B. Coding Work & Evals: No`.
 - **C. Battery Monitoring:** always show all 7 numbered items in full (never condensed). Concise, no commentary. Identical to heartbeat section C. **Telegram only — never copy into email.**
 - **D. Pipeline:** one or more exact status lines (or omit if unknown).
 - **E. Main Approve:** Monday + Clear only; otherwise omit the whole section.
+- **Exec:** never append `2>&1`, pipes, or redirects to `lisa-safe` / `lisa-carlos-tasks`. If opaque shell is hard-denied once, retry **once** without `2>&1`/pipes, then stop that check — **still emit this full Telegram format** (do not end the run on the denial).
 
-```text
+Produce exactly this structure (documentation template — copy the shape, not any fence wrapper):
+
 Morning Digest — <weekday, date>
 
 ## A. Work
@@ -147,21 +150,25 @@ Email: Yes/No.
 Unanswered Messages: Yes/No.
 
 ii. Calendar Events:
+
 1. <time> — <title> — <calendar label>.
 2. ...
-(or "None." if no events)
+   (or "None." if no events)
 
 iii. Tasks:
+
 1. <task> — <due status>.
-(or "None.")
+   (or "None.")
 
 iv. Email Messages:
+
 1. <description of unread email, action taken if from Carlos, or the specific decision/approval needed if from someone else>
-(or "None.")
+   (or "None.")
 
 v. Unanswered Messages:
+
 1. <description of any Carlos message since last cycle that wasn't fully replied to or didn't get necessary info captured into records>
-(or "None.")
+   (or "None.")
 
 ## B. Coding Work & Evals: Yes/No
 
@@ -171,6 +178,7 @@ Coding Work:
 i. Method: Cursor
 Description: <one short paragraph, plain English>
 Open Issues:
+
 1. <decision/action needed, numbered> (or "None.")
 
 ii. Method: Local
@@ -180,6 +188,7 @@ Open Issues: <...>
 (repeat i./ii./iii. etc. for each coding item, using Method: Cursor or Method: Local)
 
 iii. Eval Comparisons:
+
 1. <task, models compared, result, any decision needed>
 
 (if No coding work and no evals, just: "## B. Coding Work & Evals: No")
@@ -193,19 +202,21 @@ iii. Eval Comparisons:
 5. Routine Changes: None | <one short line>
 6. Please report current percentage and plugged status if you can.
 7. Checks: Yes/No
-(if Yes, one or more alert lines below:)
+   (if Yes, one or more alert lines below:)
+
 - Alert — <short alert description> — <short action needed or taken>
-(if No, no alert lines follow — "Checks: No" means all clear/no issues)
+  (if No, no alert lines follow — "Checks: No" means all clear/no issues)
 
 ## D. Pipeline
+
 <one or more lines from memory/pipeline-status.md, exact Ship/Pull/Staging/Main shapes only>
 (omit section D entirely if no status file / no known checkpoint)
 
 ## E. Main Approve
+
 (Monday only, and only when Main ready (Mon): Clear:)
 Ready to Approve staging→main for inherited repos? Reply Approve / yes on Telegram (email is notify-only).
 (omit section E entirely otherwise)
-```
 
 ### Battery Monitoring Checks (item 7)
 

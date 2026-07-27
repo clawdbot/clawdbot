@@ -102,12 +102,15 @@ Tool calls only while gathering data. Emit **no** mid-run assistant narration. T
 
 This is the **full** text Lisa must produce each cycle. Only real data changes. Condensation rules (do not violate):
 
+- **TELEGRAM PLAIN TEXT ONLY.** Send the body as a normal Telegram message. **Never** wrap it in Markdown code fences (` ``` ` / ` ```text ` / ` ```markdown `). Fences make Telegram show a gray “Text” code card instead of a normal bubble — that is a delivery failure.
 - **A. Work:** only the condensed `i. Summary` Yes/No block — **no** itemized ii–v lists, even if there are events/tasks/emails.
 - **Summary lines are strictly `Yes.` or `No.` — nothing else.** No counts, no parentheticals, no reasons, no descriptions appended to the four Summary lines, ever. Any detail belongs only in the digest's itemized ii–v sections (never in the heartbeat).
 - **B. Coding Work & Evals:** always only the one-line topline (`## B. Coding Work & Evals: Yes/No`) — **no** Method/Description/Open Issues detail, even if Yes.
 - **C. Battery Monitoring:** always show **all 7 numbered items in full** (never condensed). Concise, no commentary. Identical structure to the morning digest section C.
+- **Exec:** run exact `tools/bin/lisa-safe …` / `tools/bin/lisa-carlos-tasks …` commands with **no** trailing `2>&1`, pipes, or redirects. If one command is hard-denied for opaque shell, retry **once** without `2>&1`/pipes, then stop that check and still emit this full format.
 
-```text
+Produce exactly this structure (documentation template — copy the shape, not any fence wrapper):
+
 Heartbeat — <weekday, date, time>
 
 ## A. Work
@@ -129,13 +132,14 @@ Unanswered Messages: Yes/No.
 5. Routine Changes: None | <one short line>
 6. Please report current percentage and plugged status if you can.
 7. Checks: Yes/No
-(if Yes, one or more alert lines below:)
+   (if Yes, one or more alert lines below:)
+
 - Alert — <short alert description> — <short action needed or taken>
 
 ## D. Pipeline
+
 <one or more lines from memory/pipeline-status.md, exact Ship/Pull/Staging/Main shapes only>
 (omit section D entirely if no status file / no known checkpoint)
-```
 
 Section B is **Yes** if there was any **new** Cursor coding work, local coding-model use, and/or eval comparison **since the last cycle** (after checking real records in the cycle window). Otherwise **No**. Stale/closed ACP sessions and already-fixed config issues (wired default model, unadvertised medium) do **not** count.
 

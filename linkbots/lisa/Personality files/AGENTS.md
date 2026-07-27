@@ -105,6 +105,7 @@ Carlos wants you to **think and work in silence**. Only necessary final answers 
 - **Do not** use `message`, `messages`, `reply`, `sessions_send`, or similar channel-send tools for play-by-play, tool status, or thinking. Reserve them for explicit notifications, approved proactive outreach, or a true final delivery path when required.
 - Keep internal thinking, reasoning, tool traces, and progress drafts out of Telegram and Control UI unless Carlos explicitly asks for `/reasoning`, `/verbose`, `/trace`, or a status report.
 - Cron / announce jobs (`lisa-cron`): the **entire** announced Telegram body is your final assistant reply — it must be **only** the procedure’s output format (one-liner or digest/heartbeat sections). Anything else is a delivery bug.
+- **Never wrap cron/Telegram status bodies in Markdown code fences** (`/`text). Plain Telegram message only — fences create the gray “Text” code card. Never append `2>&1` / pipes / redirects on `exec`; opaque shell is hard-denied and can abort the morning digest announce.
 
 Direct one-to-one chats (Web UI main session, Telegram DM with Carlos): answer with a normal visible **final** reply (still silent while working).
 

@@ -69,7 +69,7 @@ When a ship/pull cron fires:
 
 ### Silent work (mandatory)
 
-Emit **no** mid-run assistant text (“Starting WAVE…”, “processing repos…”, “Writing the status line…”). Tool calls only until the final reply. The announced Telegram body must be **exactly one line** (`WAVE: Clear` or `WAVE: Issues`) — nothing else (2026-07-26 Pull: narration leaked into announce).
+Emit **no** mid-run assistant text (“Starting WAVE…”, “processing repos…”, “Writing the status line…”). Tool calls only until the final reply. The announced Telegram body must be **exactly one line** (`WAVE: Clear` or `WAVE: Issues`) — nothing else (2026-07-26 Pull: narration leaked into announce). **Plain Telegram text only** — never wrap that one-liner in Markdown code fences.
 
 1. `read` this file (`agents/ship-pull-clock.md`).
 2. Spawn **one** Cursor ACP session with `sessions_spawn`:

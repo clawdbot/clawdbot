@@ -120,4 +120,21 @@ describe("resolveEmbeddedRunFailureSignal", () => {
       fatalForCron: true,
     });
   });
+
+  it("does not fatally fail cron for recoverable opaque denylist hard-denies", () => {
+    // MiniMax often appends `2>&1`; yolo mode hard-denies that shape so the
+    // agent can retry analyzable `lisa-safe …`. That must not replace a later
+    // successful digest/heartbeat announce with the denied command string.
+    expect(
+      resolveEmbeddedRunFailureSignal({
+        trigger: "cron",
+        lastToolError: {
+          toolName: "exec",
+          errorCode: "SYSTEM_RUN_DENIED",
+          error:
+            "SYSTEM_RUN_DENIED: command could not be analyzed for denylist screening.\nRefused command: tools/bin/lisa-safe gmail-triage --max 5 2>&1",
+        },
+      }),
+    ).toBeUndefined();
+  });
 });
