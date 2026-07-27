@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createMeetingSession,
+  MeetingPlatformAdapter,
   MeetingSessionRuntime,
   type MeetingSessionLeaveResult,
   type MeetingSessionRuntimeHandles,
@@ -41,10 +42,7 @@ import {
   recoverCurrentMeetTab,
   recoverCurrentMeetTabOnNode,
 } from "./transports/chrome.js";
-import {
-  GOOGLE_MEET_PLATFORM_ADAPTER,
-  isGoogleMeetTalkBackMode,
-} from "./transports/google-meet-platform-adapter.js";
+import { GOOGLE_MEET_PLATFORM_ADAPTER } from "./transports/google-meet-platform-adapter.js";
 import type {
   GoogleMeetBrowserTab,
   GoogleMeetChromeHealth,
@@ -69,7 +67,7 @@ type ChromeAudioBridgeResult = NonNullable<
 type ChromeLaunchResult =
   | Awaited<ReturnType<typeof launchChromeMeet>>
   | Awaited<ReturnType<typeof launchChromeMeetOnNode>>;
-type GoogleMeetManualActionReason = NonNullable<GoogleMeetChromeHealth["manualActionReason"]>;
+type GoogleMeetManualActionReason = NonNullable<GoogleMeetChromeHealth["manualAction"]>["reason"];
 type GoogleMeetSpeechBlockedReason = NonNullable<GoogleMeetChromeHealth["speechBlockedReason"]>;
 type GoogleMeetSessionRuntime = MeetingSessionRuntime<
   GoogleMeetSession,
@@ -132,8 +130,6 @@ export class GoogleMeetRuntime {
         speech: {
           audioBridgeUnavailable: "Realtime speech requires an active Chrome audio bridge.",
           browserUnverified: "Google Meet browser state has not been verified yet.",
-          manualActionFallback:
-            "Resolve the Google Meet browser prompt before asking OpenClaw to speak.",
           microphoneMuted:
             "Turn on the OpenClaw Google Meet microphone before asking OpenClaw to speak.",
           microphoneMutedReason: "meet-microphone-muted",
@@ -156,7 +152,7 @@ export class GoogleMeetRuntime {
       resolveSpeechInstructions: (request) =>
         request.message ?? params.config.realtime.introMessage,
       isBrowserTransport,
-      isTalkBackMode: isGoogleMeetTalkBackMode,
+      isTalkBackMode: (mode) => MeetingPlatformAdapter.isTalkBackMode(mode),
       isTranscribeMode: (mode) => mode === "transcribe",
       sameMeetingUrl: (left, right) => adapter.urls.isSameMeeting(left, right),
       normalizeMeetingUrlForReuse: (url) => adapter.urls.normalizeForReuse(url),
@@ -370,7 +366,7 @@ export class GoogleMeetRuntime {
           ? session.transport === "chrome-node"
             ? "Chrome node transport joins as the signed-in Google profile on the selected node and routes realtime audio through the node bridge."
             : "Chrome transport joins as the signed-in Google profile and routes realtime audio through the configured bridge."
-          : isGoogleMeetTalkBackMode(session.mode)
+          : MeetingPlatformAdapter.isTalkBackMode(session.mode)
             ? "Chrome transport joins as the signed-in Google profile and expects BlackHole 2ch audio routing."
             : "Chrome transport joins as the signed-in Google profile without starting the realtime audio bridge.",
       );
@@ -413,7 +409,7 @@ export class GoogleMeetRuntime {
           sessionKey: delegatedAgentId
             ? `agent:${delegatedAgentId}:google-meet:${session.id}`
             : `voice:google-meet:${session.id}`,
-          message: isGoogleMeetTalkBackMode(session.mode)
+          message: MeetingPlatformAdapter.isTalkBackMode(session.mode)
             ? (request.message ??
               this.params.config.voiceCall.introMessage ??
               this.params.config.realtime.introMessage)
@@ -471,14 +467,14 @@ export class GoogleMeetRuntime {
     session: GoogleMeetSession,
   ): Promise<MeetingSessionRuntimeHandles<GoogleMeetChromeHealth> | undefined> {
     if (
-      !isGoogleMeetTalkBackMode(session.mode) ||
+      !MeetingPlatformAdapter.isTalkBackMode(session.mode) ||
       !isBrowserTransport(session.transport) ||
       session.state !== "active" ||
       !session.chrome ||
       session.chrome.audioBridge ||
       session.chrome.health?.inCall !== true ||
       session.chrome.health.micMuted !== false ||
-      session.chrome.health.manualActionRequired === true
+      session.chrome.health.manualAction
     ) {
       return undefined;
     }

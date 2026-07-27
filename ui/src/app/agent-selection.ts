@@ -35,15 +35,14 @@ export function createAgentSelectionCapability(
   const reconcileSelectedId = (value: string | null): string | null => {
     const selectedId = value?.trim() ? normalizeAgentId(value) : null;
     const agentsList = roster.state.agentsList;
-    if (
-      !selectedId ||
-      !agentsList ||
-      agentsList.agents.length === 0 ||
-      agentsList.agents.some((agent) => normalizeAgentId(agent.id) === selectedId)
-    ) {
+    if (!agentsList || agentsList.agents.length === 0) {
       return selectedId;
     }
-    return normalizeAgentId(agentsList.defaultId);
+    const defaultId = normalizeAgentId(agentsList.defaultId);
+    return !selectedId ||
+      !agentsList.agents.some((agent) => normalizeAgentId(agent.id) === selectedId)
+      ? defaultId
+      : selectedId;
   };
   const resolveScopeId = (value: string | null): string | null => {
     const scopeId = value?.trim() ? normalizeAgentId(value) : null;
@@ -56,9 +55,10 @@ export function createAgentSelectionCapability(
   const initialId = gateway.snapshot.assistantAgentId
     ? normalizeAgentId(gateway.snapshot.assistantAgentId)
     : null;
+  const initialSelectedId = reconcileSelectedId(initialId);
   let state: AgentSelectionState = {
-    selectedId: initialId,
-    scopeId: resolveScopeId(initialId),
+    selectedId: initialSelectedId,
+    scopeId: resolveScopeId(initialSelectedId),
   };
   let client = gateway.snapshot.client;
   const listeners = new Set<(next: AgentSelectionState) => void>();

@@ -12,7 +12,9 @@ import { clearPluginOwnedSessionState } from "./plugin-host-cleanup.js";
 import {
   listSqliteSessionEntries,
   listSqliteSessionEntriesReadOnly,
+  listSqliteSessionEntryKeysReadOnly,
   loadExactSqliteSessionEntry,
+  loadExactSqliteSessionEntryReadOnly,
   loadSqliteSessionEntry,
   loadSqliteSessionEntryReadOnly,
   patchSqliteSessionEntry,
@@ -330,6 +332,13 @@ export function loadExactSessionEntry(scope: SessionAccessScope): ExactSessionEn
   return loadExactSqliteSessionEntry(scope);
 }
 
+/** Exact persisted-key probe on the read-only handle; see loadExactSessionEntry. */
+export function loadExactSessionEntryReadOnly(
+  scope: SessionAccessScope,
+): ExactSessionEntry | undefined {
+  return loadExactSqliteSessionEntryReadOnly(scope);
+}
+
 /** Lists entries from the resolved store, preserving the persisted key for each row. */
 export function listSessionEntries(scope: SessionEntryListScope = {}): SessionEntrySummary[] {
   if (scope.clone === false) {
@@ -346,6 +355,11 @@ export function listSessionEntriesReadOnly(
   scope: SessionEntryListScope = {},
 ): SessionEntrySummary[] {
   return listSqliteSessionEntriesReadOnly(scope);
+}
+
+/** Lists persisted session keys only; the fallback probe for case-variant keys. */
+export function listSessionEntryKeysReadOnly(scope: SessionEntryListScope = {}): string[] {
+  return listSqliteSessionEntryKeysReadOnly(scope);
 }
 
 /**
