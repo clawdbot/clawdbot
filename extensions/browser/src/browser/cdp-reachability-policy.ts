@@ -33,6 +33,33 @@ function withCdpControlHostname(
   return withExactHostnamePolicy(ssrfPolicy, cdpHost);
 }
 
+function hasPolicyEntries(values?: string[]): boolean {
+  return (values ?? []).some((value) => value.trim().length > 0);
+}
+
+function requiresPinnedChromeMcpCdpTransport(cdpPolicy?: SsrFPolicy): boolean {
+  if (!cdpPolicy) {
+    return false;
+  }
+  const hasScopedPolicy =
+    cdpPolicy.allowRfc2544BenchmarkRange === true ||
+    cdpPolicy.allowIpv6UniqueLocalRange === true ||
+    hasPolicyEntries(cdpPolicy.allowedHostnames) ||
+    hasPolicyEntries(cdpPolicy.hostnameAllowlist) ||
+    hasPolicyEntries(cdpPolicy.allowedOrigins);
+  if (
+    !hasScopedPolicy &&
+    (cdpPolicy.dangerouslyAllowPrivateNetwork === true || cdpPolicy.allowPrivateNetwork === true)
+  ) {
+    return false;
+  }
+  return (
+    hasScopedPolicy ||
+    cdpPolicy.dangerouslyAllowPrivateNetwork === false ||
+    cdpPolicy.allowPrivateNetwork === false
+  );
+}
+
 export function resolveCdpReachabilityPolicy(
   profile: ResolvedBrowserProfile,
   ssrfPolicy?: SsrFPolicy,
@@ -60,7 +87,7 @@ export function assertChromeMcpExplicitCdpUrlAllowed(
   if (profile.driver !== "existing-session" || !profile.cdpUrl) {
     return;
   }
-  if (!cdpPolicy) {
+  if (!requiresPinnedChromeMcpCdpTransport(cdpPolicy)) {
     return;
   }
   throw new BrowserProfileUnavailableError(
