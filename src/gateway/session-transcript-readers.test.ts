@@ -8,7 +8,10 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { readSessionMessagesAroundIdWithStatsAsync } from "./session-transcript-anchor-reader.js";
@@ -360,6 +363,40 @@ describe("session transcript reader facade", () => {
     await expect(
       readSessionMessageByIdAsync({ sessionFile: marker, sessionId }, "marker-message"),
     ).resolves.toMatchObject({ found: true, seq: 1 });
+  });
+
+  test("waits for an in-flight SQLite projection before counting messages", async () => {
+    const sessionId = "reader-sqlite-rebuilding-count";
+    const scope = {
+      agentId: "main",
+      sessionId,
+      sessionKey: `agent:main:${sessionId}`,
+      storePath,
+    };
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "root",
+          parentId: null,
+          message: { role: "user", content: "cross-client prompt" },
+        },
+        {
+          eventId: "reply",
+          parentId: "root",
+          message: { role: "assistant", content: "cross-client reply" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    const database = openOpenClawAgentDatabase({
+      agentId: "main",
+      path: path.join(tempDir, "openclaw-agent.sqlite"),
+    });
+    database.db
+      .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
+      .run(sessionId);
+
+    await expect(readSessionMessageCountAsync(scope)).resolves.toBe(2);
   });
 
   test("projects SQLite transcript reads to the active branch", async () => {
