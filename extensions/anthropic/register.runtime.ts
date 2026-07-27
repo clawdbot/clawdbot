@@ -390,13 +390,66 @@ function resolveAnthropic46ForwardCompatModel(params: {
   });
 }
 
+/** Newest Claude generation whose request contract this plugin encodes. */
+const ANTHROPIC_NEWEST_KNOWN_GENERATION = { major: 5, minor: 0 } as const;
+
+/**
+ * Read the generation from either Claude id order: `claude-<family>-<major>[-<minor>]`
+ * (4.6 onward) and `claude-<major>[-<minor>]-<family>` (through 3.7). The minor
+ * capture is bounded to two digits so a trailing snapshot date such as
+ * `claude-opus-4-20250514` does not parse as a minor version.
+ */
+function resolveAnthropicModelGeneration(
+  modelId: string,
+): { major: number; minor: number } | undefined {
+  const match =
+    /claude-[a-z]+-(\d{1,2})(?:-(\d{1,2}))?(?![0-9])/.exec(modelId) ??
+    /claude-(\d{1,2})(?:-(\d{1,2}))?(?![0-9])/.exec(modelId);
+  if (!match) {
+    return undefined;
+  }
+  return { major: Number(match[1]), minor: match[2] === undefined ? 0 : Number(match[2]) };
+}
+
+/**
+ * Claude ids from a generation newer than anything this plugin encodes. Request
+ * shaping is selected by version predicates in `@openclaw/llm-core`, so such an
+ * id would otherwise fall through to pre-4.6 shaping — manual `budget_tokens`
+ * plus caller sampling params — which current models reject outright.
+ */
+function isAnthropicUnreleasedGenerationModel(modelId: string): boolean {
+  if (matchesAnthropicModernModel(modelId)) {
+    return false;
+  }
+  const generation = resolveAnthropicModelGeneration(modelId);
+  if (!generation) {
+    return false;
+  }
+  return (
+    generation.major > ANTHROPIC_NEWEST_KNOWN_GENERATION.major ||
+    (generation.major === ANTHROPIC_NEWEST_KNOWN_GENERATION.major &&
+      generation.minor > ANTHROPIC_NEWEST_KNOWN_GENERATION.minor)
+  );
+}
+
+/**
+ * Route an unreleased id onto the newest contract we encode, matching family
+ * when we recognize it. Stamping `canonicalModelId` is the same seam Bedrock and
+ * Mantle use to map a provider-native id onto a canonical Claude contract, so
+ * shaping follows without teaching the shared contracts about unknown ids.
+ */
+function resolveAnthropicUnreleasedCanonicalModelId(modelId: string): string {
+  return /(?:^|-)claude-sonnet-/.test(modelId) ? "claude-sonnet-5" : "claude-opus-5";
+}
+
 function buildAnthropicForwardCompatModel(
   ctx: ProviderResolveDynamicModelContext,
 ): ProviderRuntimeModel | undefined {
   const trimmedModelId = ctx.modelId.trim();
   const lower = normalizeLowercaseStringOrEmpty(trimmedModelId);
   const normalizedProvider = normalizeLowercaseStringOrEmpty(ctx.provider);
-  if (trimmedModelId !== lower || !matchesAnthropicModernModel(lower)) {
+  const unreleasedGeneration = isAnthropicUnreleasedGenerationModel(lower);
+  if (trimmedModelId !== lower || !(matchesAnthropicModernModel(lower) || unreleasedGeneration)) {
     return undefined;
   }
   if (isAnthropicMandatoryClaude5Model(lower) && normalizedProvider !== PROVIDER_ID) {
@@ -423,6 +476,9 @@ function buildAnthropicForwardCompatModel(
     maxTokens: isAnthropic128kOutputModel(trimmedModelId)
       ? ANTHROPIC_MODERN_MAX_OUTPUT_TOKENS
       : 64_000,
+    ...(unreleasedGeneration
+      ? { params: { canonicalModelId: resolveAnthropicUnreleasedCanonicalModelId(lower) } }
+      : {}),
     ...(supportsClaudeNativeXhighEffort({ id: trimmedModelId })
       ? {
           thinkingLevelMap: {
