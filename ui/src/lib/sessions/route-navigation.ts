@@ -8,6 +8,7 @@ import { catalogSessionSearch, parseCatalogSessionKey } from "./catalog-key.ts";
 import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
+  isUiGlobalSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
@@ -54,19 +55,31 @@ export function resolveSessionPreferredFace(
 }
 
 export function findUiSessionRow<TRouteId extends string>(
-  context: Pick<ApplicationContext<TRouteId>, "sessions">,
+  context: Pick<ApplicationContext<TRouteId>, "sessions" | "agents" | "agentSelection" | "gateway">,
   sessionKey: string,
+  agentId?: string | null,
 ): GatewaySessionRow | undefined {
-  return context.sessions.state.result?.sessions.find((candidate) =>
+  const row = context.sessions.state.result?.sessions.find((candidate) =>
     areUiSessionKeysEquivalent(candidate.key, sessionKey),
   );
+  if (!row || !isUiGlobalSessionKey(row.key)) {
+    return row;
+  }
+  // A canonical global row carries no owner in its key. Only reuse it while
+  // the list's scope matches the navigation owner or its board face can leak across agents.
+  const resultAgentId = context.sessions.state.agentId?.trim();
+  const navigationAgentId = resolveSessionNavigationAgentId(context, agentId);
+  return resultAgentId && normalizeAgentId(resultAgentId) === normalizeAgentId(navigationAgentId)
+    ? row
+    : undefined;
 }
 
 export function resolveSessionPreferredFaceForKey<TRouteId extends string>(
-  context: Pick<ApplicationContext<TRouteId>, "sessions">,
+  context: Pick<ApplicationContext<TRouteId>, "sessions" | "agents" | "agentSelection" | "gateway">,
   sessionKey: string,
+  agentId?: string | null,
 ): BoardFace {
-  return resolveSessionPreferredFace(findUiSessionRow(context, sessionKey));
+  return resolveSessionPreferredFace(findUiSessionRow(context, sessionKey, agentId));
 }
 
 export function resolveSessionNavigationAgentId<TRouteId extends string>(
@@ -125,7 +138,7 @@ export function sessionNavigationTarget<TRouteId extends string>(
     fallbackAgentId = resolveSessionNavigationAgentId(context, params.agentId);
     basePath = context.basePath;
     mainKey = resolveUiConfiguredMainKey(defaults);
-    row = findUiSessionRow(context, sessionKey);
+    row = findUiSessionRow(context, sessionKey, fallbackAgentId);
   } else {
     fallbackAgentId = params.fallbackAgentId;
     basePath = params.basePath ?? "";

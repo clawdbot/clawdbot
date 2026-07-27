@@ -831,7 +831,7 @@ class OpenClawShell extends OpenClawLightDomElement {
       sessionKey,
       agentId,
     });
-    const face = resolveSessionPreferredFaceForKey(context, sessionKey);
+    const face = resolveSessionPreferredFaceForKey(context, sessionKey, agentId);
     this.navigate(
       face,
       sessionNavigationTarget({

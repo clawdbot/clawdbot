@@ -288,7 +288,7 @@ public enum ChatSessionSidebarModel {
         let digestAgentId = self.normalized(digest.agentId)?.lowercased()
         guard digestAgentId != selectedAgentId else { return sessions }
         var updated = sessions
-        updated[index].observerDigest = if digestAgentId == nil && adoptOwnerless {
+        updated[index].observerDigest = if digestAgentId == nil, adoptOwnerless {
             OpenClawChatSessionObserverDigest(
                 agentId: selectedAgentId,
                 runId: digest.runId,
@@ -302,6 +302,33 @@ public enum ChatSessionSidebarModel {
         return updated
     }
 
+    private static func observerProjection(
+        for change: OpenClawChatSessionsChangedEvent,
+        activeAgentId: String?) -> (digest: OpenClawChatSessionObserverDigest?, present: Bool)?
+    {
+        let digest = change.observerDigest
+        let present = change.observerDigestPresent
+        let key = change.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard key == "global" else { return (digest, present) }
+        guard let owner = self.normalized(change.agentId)?.lowercased(),
+              owner == self.normalized(activeAgentId)?.lowercased()
+        else { return nil }
+        guard let digest else { return (nil, present) }
+        let digestOwner = self.normalized(digest.agentId)?.lowercased()
+        if digestOwner == nil {
+            return (
+                OpenClawChatSessionObserverDigest(
+                    agentId: owner,
+                    runId: digest.runId,
+                    revision: digest.revision,
+                    updatedAt: digest.updatedAt,
+                    headline: digest.headline,
+                    health: digest.health),
+                present)
+        }
+        return digestOwner == owner ? (digest, present) : (nil, false)
+    }
+
     /// Session snapshots own rollover and clearing. A projected digest may
     /// advance a live one, while an active-run change immediately retires any
     /// digest that no longer belongs to a server-reported run.
@@ -312,29 +339,10 @@ public enum ChatSessionSidebarModel {
     {
         guard let key = change.sessionKey else { return sessions }
         guard let index = sessions.firstIndex(where: { $0.key == key }) else { return nil }
-
-        var projectedDigest = change.observerDigest
-        var observerDigestPresent = change.observerDigestPresent
-        if key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "global" {
-            guard let owner = self.normalized(change.agentId)?.lowercased(),
-                  owner == self.normalized(activeAgentId)?.lowercased()
-            else { return sessions }
-            if let digest = projectedDigest {
-                let digestOwner = self.normalized(digest.agentId)?.lowercased()
-                if digestOwner == nil {
-                    projectedDigest = OpenClawChatSessionObserverDigest(
-                        agentId: owner,
-                        runId: digest.runId,
-                        revision: digest.revision,
-                        updatedAt: digest.updatedAt,
-                        headline: digest.headline,
-                        health: digest.health)
-                } else if digestOwner != owner {
-                    projectedDigest = nil
-                    observerDigestPresent = false
-                }
-            }
-        }
+        guard let projection = self.observerProjection(for: change, activeAgentId: activeAgentId)
+        else { return sessions }
+        let projectedDigest = projection.digest
+        let observerDigestPresent = projection.present
 
         var session = sessions[index]
         if let updatedAt = change.updatedAt {

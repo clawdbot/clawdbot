@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
+import type { ApplicationContext } from "../../app/context.ts";
 import { buildCatalogSessionKey } from "./catalog-key.ts";
 import {
   resolveSessionPreferredFace,
+  resolveSessionPreferredFaceForKey,
   SESSION_FACE_PREFERENCE_PARAM,
   sessionNavigationTarget,
 } from "./route-navigation.ts";
@@ -106,5 +108,37 @@ describe("sessionNavigationTarget", () => {
 
     expect(target.href).toBe("/chat/main/release-notes-12345678");
     expect(target.options).toEqual({ pathname: "/chat/main/release-notes-12345678" });
+  });
+
+  it("treats another agent's cached global row as uncached", () => {
+    const context = {
+      basePath: "",
+      gateway: { snapshot: { hello: null } },
+      agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
+      agentSelection: { state: { selectedId: "research" } },
+      sessions: {
+        state: {
+          agentId: "main",
+          result: {
+            sessions: [{ key: "global", boardFace: "dashboard" }],
+          },
+        },
+      },
+    } as unknown as ApplicationContext;
+
+    const face = resolveSessionPreferredFaceForKey(context, "global");
+    const target = sessionNavigationTarget({
+      context,
+      face,
+      sessionKey: "global",
+      agentId: "research",
+      preferenceDerivedFace: true,
+    });
+
+    expect(face).toBe("chat");
+    expect(target.options).toEqual({
+      pathname: "/chat/research",
+      search: `?${SESSION_FACE_PREFERENCE_PARAM}=1`,
+    });
   });
 });

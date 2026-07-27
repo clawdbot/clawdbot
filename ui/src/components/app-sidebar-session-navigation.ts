@@ -3,7 +3,6 @@ import { state } from "lit/decorators.js";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { serializeSidebarEntry } from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
-import { selectApplicationSession } from "../app/agent-selection.ts";
 import { t } from "../i18n/index.ts";
 import { listSelectableAgents } from "../lib/agents/display.ts";
 import { isCronSessionKey, resolveSessionDisplayName } from "../lib/session-display.ts";
@@ -285,18 +284,6 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     return this.sessionsStatusFilter;
   }
 
-  private setApplicationSession(sessionKey: string) {
-    const context = this.context;
-    if (context) {
-      selectApplicationSession({
-        selection: context.agentSelection,
-        gateway: context.gateway,
-        sessionKey,
-        agentId: parseAgentSessionKey(sessionKey)?.agentId ?? this.selectedAgentIdForSessions(),
-      });
-    }
-  }
-
   readonly selectSession = (sessionKey: string) => {
     const face = resolveSessionPreferredFace(this.findSidebarSessionByKey(sessionKey));
     const target = sessionNavigationTarget({
@@ -308,7 +295,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       mainKey: this.sessionMainKey(),
       preferenceDerivedFace: true,
     });
-    this.setApplicationSession(sessionKey);
+    this.setApplicationSession(sessionKey, this.selectedAgentIdForSessions());
     this.onNavigate?.(face, target.options);
   };
 
@@ -448,7 +435,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       mainKey: this.sessionMainKey(),
       preferenceDerivedFace: true,
     });
-    this.setApplicationSession(sessionKey);
+    this.setApplicationSession(sessionKey, this.selectedAgentIdForSessions());
     if (isSessionRouteId(this.activeRouteId)) {
       this.onNavigate?.(face, target.options);
     }
@@ -559,7 +546,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       row: this.findSidebarSessionByKey(key),
       mainKey: this.sessionMainKey(),
     });
-    this.setApplicationSession(key);
+    this.setApplicationSession(key, this.selectedAgentIdForSessions());
     this.onNavigate?.("chat", {
       ...target.options,
       search: `?draft=${draft}`,
