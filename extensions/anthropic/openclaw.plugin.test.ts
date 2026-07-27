@@ -25,6 +25,7 @@ type AnthropicCatalogModel = {
   thinkingLevelMap?: Record<string, string | null>;
   status?: string;
   replacedBy?: string;
+  compat?: { codeMode?: string };
 };
 
 type AnthropicManifest = {
