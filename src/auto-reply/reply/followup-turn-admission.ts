@@ -101,8 +101,7 @@ function createFollowupSessionOwner(params: {
   let ownedLifecycleRevision =
     params.entry?.sessionId === ownedSessionId ? params.entry.lifecycleRevision : undefined;
   const matchesGeneration = (entry: SessionEntry | undefined) =>
-    entry?.sessionId === ownedSessionId &&
-    entry.lifecycleRevision === ownedLifecycleRevision
+    entry?.sessionId === ownedSessionId && entry.lifecycleRevision === ownedLifecycleRevision
       ? entry
       : undefined;
   let currentEntry = matchesGeneration(params.entry);
