@@ -118,6 +118,51 @@ describe("TuiSessionRunCoordinator", () => {
     ).toBe("(no output)");
   });
 
+  it("promotes a lifecycle-confirmed run instead of newer orphan deltas", () => {
+    const { coordinator } = createCoordinator();
+    coordinator.noteSessionRun("run-confirmed", { protectStream: true });
+
+    for (let index = 0; index < 500; index += 1) {
+      coordinator.noteSessionRun(`run-orphan-${index}`);
+    }
+
+    expect(coordinator.resolveMostRecentPromotableRun()).toBe("run-confirmed");
+    coordinator.dropSessionRun("run-confirmed");
+    expect(coordinator.resolveMostRecentPromotableRun()).toBeUndefined();
+    expect(coordinator.isRetiredOrphanRun("run-orphan-499")).toBe(true);
+
+    coordinator.noteSessionRun("run-orphan-499");
+    expect(coordinator.sessionRuns.has("run-orphan-499")).toBe(false);
+
+    coordinator.noteSessionRun("run-orphan-0");
+    coordinator.noteSessionRun("run-never-seen");
+    expect(coordinator.sessionRuns.has("run-orphan-0")).toBe(false);
+    expect(coordinator.sessionRuns.has("run-never-seen")).toBe(false);
+
+    coordinator.noteSessionRun("run-orphan-499", { protectStream: true });
+    expect(coordinator.sessionRuns.has("run-orphan-499")).toBe(true);
+    expect(coordinator.isRetiredOrphanRun("run-orphan-499")).toBe(false);
+
+    coordinator.noteSessionRun("run-orphan-after-reactivation");
+    expect(coordinator.sessionRuns.has("run-orphan-after-reactivation")).toBe(false);
+
+    coordinator.clear();
+    coordinator.noteSessionRun("run-after-session-reset");
+    expect(coordinator.sessionRuns.has("run-after-session-reset")).toBe(true);
+  });
+
+  it("keeps an accepted submit eligible for activity promotion", () => {
+    const { coordinator } = createCoordinator({
+      state: {
+        pendingSubmit: { phase: "accepted", runId: "run-pending", draftText: null },
+      },
+    });
+    coordinator.noteSessionRun("run-pending");
+    coordinator.noteSessionRun("run-orphan");
+
+    expect(coordinator.resolveMostRecentPromotableRun()).toBe("run-pending");
+  });
+
   it("keeps every displayed final behind its own persistence barrier", () => {
     const { coordinator } = createCoordinator();
     coordinator.noteFinalizedRun("run-first", { displayedFinal: true });

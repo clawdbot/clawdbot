@@ -794,9 +794,10 @@ describe("tui-event-handlers: handleAgentEvent", () => {
   });
 
   it("protects concurrent lifecycle-confirmed streams from an orphan delta flood", () => {
-    const { state, chatLog, handleAgentEvent, handleChatEvent } = createHandlersHarness({
-      state: { activeChatRunId: null },
-    });
+    const { state, chatLog, setActivityStatus, handleAgentEvent, handleChatEvent } =
+      createHandlersHarness({
+        state: { activeChatRunId: null },
+      });
 
     handleChatEvent({
       runId: "run-first",
@@ -833,6 +834,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       state: "final",
       message: { role: "assistant", content: [] },
     } satisfies ChatEvent);
+    expect(state.activeChatRunId).toBe("run-first");
     handleChatEvent({
       runId: "run-first",
       sessionKey: state.currentSessionKey,
@@ -842,6 +844,213 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
     expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("second live response", "run-second");
     expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("first live response", "run-first");
+    expect(state.activeChatRunId).toBeNull();
+    expect(setActivityStatus).toHaveBeenCalledWith("idle");
+  });
+
+  it("promotes the confirmed concurrent run instead of a newer orphan delta", () => {
+    const {
+      state,
+      chatLog,
+      loadHistory,
+      setActivityStatus,
+      handleAgentEvent,
+      handleChatEvent,
+      handleSessionMessageEvent,
+      handleSessionsChangedEvent,
+    } = createHandlersHarness({ state: { activeChatRunId: null } });
+
+    handleChatEvent({
+      runId: "run-first",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: [{ type: "text", text: "first live response" }] },
+    } satisfies ChatEvent);
+    handleAgentEvent({
+      runId: "run-second",
+      sessionKey: state.currentSessionKey,
+      stream: "lifecycle",
+      data: { phase: "start" },
+    } satisfies AgentEvent);
+    handleChatEvent({
+      runId: "run-second",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: [{ type: "text", text: "second live response" }] },
+    } satisfies ChatEvent);
+
+    for (let index = 0; index < 500; index += 1) {
+      handleChatEvent({
+        runId: `run-orphan-${index}`,
+        sessionKey: state.currentSessionKey,
+        state: "delta",
+        message: { content: [{ type: "text", text: `orphan ${index}` }] },
+      } satisfies ChatEvent);
+    }
+
+    handleSessionMessageEvent({
+      sessionKey: state.currentSessionKey,
+      updatedAt: 200,
+    } satisfies SessionMessageEvent);
+    expect(loadHistory).not.toHaveBeenCalled();
+
+    handleChatEvent({
+      runId: "run-first",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { role: "assistant", content: [] },
+    } satisfies ChatEvent);
+    expect(state.activeChatRunId).toBe("run-second");
+
+    handleChatEvent({
+      runId: "run-second",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { role: "assistant", content: [] },
+    } satisfies ChatEvent);
+
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("first live response", "run-first");
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("second live response", "run-second");
+    expect(state.activeChatRunId).toBeNull();
+    expect(setActivityStatus).toHaveBeenCalledWith("idle");
+
+    for (const runId of ["run-first", "run-second"]) {
+      handleSessionsChangedEvent({
+        sessionKey: state.currentSessionKey,
+        runId,
+        phase: "end",
+      } satisfies SessionChangedEvent);
+    }
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+
+    const displayedDeltaCount = chatLog.updateAssistant.mock.calls.length;
+    handleChatEvent({
+      runId: "run-orphan-499",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: [{ type: "text", text: "late orphan" }] },
+    } satisfies ChatEvent);
+    expect(state.activeChatRunId).toBeNull();
+    expect(chatLog.updateAssistant).toHaveBeenCalledTimes(displayedDeltaCount);
+
+    handleChatEvent({
+      runId: "run-never-seen-orphan",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: [{ type: "text", text: "untracked late orphan" }] },
+    } satisfies ChatEvent);
+    expect(state.activeChatRunId).toBeNull();
+    expect(chatLog.updateAssistant).toHaveBeenCalledTimes(displayedDeltaCount);
+  });
+
+  it("keeps a lifecycle-less concurrent response when a confirmed owner finishes", () => {
+    const { state, chatLog, setActivityStatus, handleAgentEvent, handleChatEvent } =
+      createHandlersHarness({ state: { activeChatRunId: null } });
+
+    handleAgentEvent({
+      runId: "run-confirmed",
+      sessionKey: state.currentSessionKey,
+      stream: "lifecycle",
+      data: { phase: "start" },
+    } satisfies AgentEvent);
+    handleChatEvent({
+      runId: "run-confirmed",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: [{ type: "text", text: "confirmed response" }] },
+    } satisfies ChatEvent);
+    handleChatEvent({
+      runId: "run-without-lifecycle",
+      sessionKey: state.currentSessionKey,
+      seq: 1,
+      state: "delta",
+      message: { content: [{ type: "text", text: "older peer response" }] },
+    } satisfies ChatEvent);
+
+    handleChatEvent({
+      runId: "run-confirmed",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { role: "assistant", content: [] },
+    } satisfies ChatEvent);
+    expect(state.activeChatRunId).toBe("run-without-lifecycle");
+
+    handleChatEvent({
+      runId: "run-without-lifecycle",
+      sessionKey: state.currentSessionKey,
+      seq: 2,
+      state: "final",
+      message: { role: "assistant", content: [] },
+    } satisfies ChatEvent);
+
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith(
+      "older peer response",
+      "run-without-lifecycle",
+    );
+    expect(state.activeChatRunId).toBeNull();
+    expect(setActivityStatus).toHaveBeenCalledWith("idle");
+  });
+
+  it("preserves a sequenced lifecycle-less peer behind a confirmed run handoff", () => {
+    const { state, chatLog, setActivityStatus, handleAgentEvent, handleChatEvent } =
+      createHandlersHarness({ state: { activeChatRunId: null } });
+
+    handleChatEvent({
+      runId: "run-first",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: [{ type: "text", text: "first live response" }] },
+    } satisfies ChatEvent);
+    handleAgentEvent({
+      runId: "run-confirmed",
+      sessionKey: state.currentSessionKey,
+      stream: "lifecycle",
+      data: { phase: "start" },
+    } satisfies AgentEvent);
+    handleChatEvent({
+      runId: "run-confirmed",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: [{ type: "text", text: "confirmed response" }] },
+    } satisfies ChatEvent);
+    handleChatEvent({
+      runId: "run-without-lifecycle",
+      sessionKey: state.currentSessionKey,
+      seq: 1,
+      state: "delta",
+      message: { content: [{ type: "text", text: "older peer response" }] },
+    } satisfies ChatEvent);
+    handleChatEvent({
+      runId: "run-orphan",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: [{ type: "text", text: "unconfirmed orphan" }] },
+    } satisfies ChatEvent);
+
+    handleChatEvent({
+      runId: "run-first",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { role: "assistant", content: [] },
+    } satisfies ChatEvent);
+    expect(["run-confirmed", "run-without-lifecycle"]).toContain(state.activeChatRunId);
+
+    for (const runId of ["run-confirmed", "run-without-lifecycle"]) {
+      handleChatEvent({
+        runId,
+        sessionKey: state.currentSessionKey,
+        ...(runId === "run-without-lifecycle" ? { seq: 2 } : {}),
+        state: "final",
+        message: { role: "assistant", content: [] },
+      } satisfies ChatEvent);
+    }
+
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith(
+      "older peer response",
+      "run-without-lifecycle",
+    );
+    expect(state.activeChatRunId).toBeNull();
+    expect(setActivityStatus).toHaveBeenCalledWith("idle");
   });
 
   it.each([

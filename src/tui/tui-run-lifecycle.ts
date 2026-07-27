@@ -205,13 +205,13 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
     clearPendingSubmitDraft(state, runId);
   };
 
-  const acknowledgeChatRun = (runId: string) => {
+  const acknowledgeChatRun = (runId: string, options?: { protectStream?: boolean }) => {
     if (reconnectPendingRunId === runId) {
       reconnectPendingRunId = null;
     }
     clearPendingTerminalLifecycleError(runId);
     chatLog.dismissPendingSystem(runId);
-    runCoordinator.noteSessionRun(runId);
+    runCoordinator.noteSessionRun(runId, options);
     markSubmittedRunRegistered(runId);
   };
 
@@ -222,17 +222,10 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
   };
 
   const promoteMostRecentSessionRun = (): boolean => {
-    if (state.activeChatRunId || sessionRuns.size === 0) {
+    if (state.activeChatRunId) {
       return false;
     }
-    let nextRunId: string | undefined;
-    let nextSeenAt = -1;
-    for (const [runId, seenAt] of sessionRuns) {
-      if (seenAt > nextSeenAt) {
-        nextRunId = runId;
-        nextSeenAt = seenAt;
-      }
-    }
+    const nextRunId = runCoordinator.resolveMostRecentPromotableRun();
     if (!nextRunId) {
       return false;
     }

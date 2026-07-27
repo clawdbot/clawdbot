@@ -43,7 +43,9 @@ export class TuiSessionRunCoordinator {
   private readonly queuedHistoryReloadRunIds = new Set<string>();
   private readonly deferredHistoryRunEvents = new Map<string, ChatEvent>();
   private readonly sessionMessagePersistenceRunIds = new Set<string>();
-  private readonly lifecycleProtectedStreamRunIds = new Set<string>();
+  private readonly confirmedStreamRunIds = new Set<string>();
+  private readonly retiredOrphanRunIds = new Map<string, number>();
+  private rejectUnconfirmedRuns = false;
   private historyReloadInFlight = false;
   private historyReloadQueued = false;
   private historyReloadGeneration = 0;
@@ -54,7 +56,7 @@ export class TuiSessionRunCoordinator {
       return (
         runId === this.context.state.activeChatRunId ||
         runId === getPendingSubmitAcceptedRunId(this.context.state) ||
-        this.lifecycleProtectedStreamRunIds.has(runId)
+        this.confirmedStreamRunIds.has(runId)
       );
     });
   }
@@ -68,7 +70,7 @@ export class TuiSessionRunCoordinator {
       !protectActiveRun ||
       (runId !== this.context.state.activeChatRunId &&
         runId !== getPendingSubmitAcceptedRunId(this.context.state) &&
-        !this.lifecycleProtectedStreamRunIds.has(runId));
+        !this.confirmedStreamRunIds.has(runId));
 
     for (const [runId, seenAt] of runs) {
       if (runs.size <= RETAINED_TRACKED_RUNS) {
@@ -92,15 +94,22 @@ export class TuiSessionRunCoordinator {
   }
 
   noteSessionRun(runId: string, options?: { protectStream?: boolean }): void {
-    if (options?.protectStream) {
-      this.lifecycleProtectedStreamRunIds.add(runId);
-      if (this.lifecycleProtectedStreamRunIds.size > MAX_TRACKED_RUNS) {
-        for (const protectedRunId of this.lifecycleProtectedStreamRunIds) {
+    const confirmedRun =
+      options?.protectStream === true ||
+      runId === getPendingSubmitAcceptedRunId(this.context.state);
+    if (!confirmedRun && this.isRetiredOrphanRun(runId)) {
+      return;
+    }
+    if (confirmedRun) {
+      this.retiredOrphanRunIds.delete(runId);
+      this.confirmedStreamRunIds.add(runId);
+      if (this.confirmedStreamRunIds.size > MAX_TRACKED_RUNS) {
+        for (const protectedRunId of this.confirmedStreamRunIds) {
           if (
             protectedRunId !== this.context.state.activeChatRunId &&
             protectedRunId !== getPendingSubmitAcceptedRunId(this.context.state)
           ) {
-            this.lifecycleProtectedStreamRunIds.delete(protectedRunId);
+            this.confirmedStreamRunIds.delete(protectedRunId);
             break;
           }
         }
@@ -110,10 +119,57 @@ export class TuiSessionRunCoordinator {
     this.pruneRunMap(this.sessionRuns, true);
   }
 
+  isRetiredOrphanRun(runId: string): boolean {
+    return (
+      this.retiredOrphanRunIds.has(runId) ||
+      (this.rejectUnconfirmedRuns && !this.sessionRuns.has(runId))
+    );
+  }
+
+  resolveMostRecentPromotableRun(): string | undefined {
+    const pendingRunId = getPendingSubmitAcceptedRunId(this.context.state);
+    let nextRunId: string | undefined;
+    let nextSeenAt = -1;
+    let unconfirmedRunId: string | undefined;
+    let unconfirmedSeenAt = -1;
+    for (const [runId, seenAt] of this.sessionRuns) {
+      if (runId !== pendingRunId && !this.confirmedStreamRunIds.has(runId)) {
+        if (seenAt > unconfirmedSeenAt) {
+          unconfirmedRunId = runId;
+          unconfirmedSeenAt = seenAt;
+        }
+        continue;
+      }
+      if (seenAt > nextSeenAt) {
+        nextRunId = runId;
+        nextSeenAt = seenAt;
+      }
+    }
+    // Peers that omit lifecycle starts can still own a visible concurrent turn,
+    // but a confirmed run must always outrank later unconfirmed delta traffic.
+    return nextRunId ?? unconfirmedRunId;
+  }
+
   dropSessionRun(runId: string): void {
     this.sessionRuns.delete(runId);
-    this.lifecycleProtectedStreamRunIds.delete(runId);
+    const completedConfirmedRun = this.confirmedStreamRunIds.delete(runId);
     this.streamAssembler.drop(runId);
+    if (completedConfirmedRun && this.confirmedStreamRunIds.size === 0) {
+      this.rejectUnconfirmedRuns = true;
+      const activeRunId = this.context.state.activeChatRunId;
+      const pendingRunId = getPendingSubmitAcceptedRunId(this.context.state);
+      // Sequenced Gateway deltas, lifecycle starts, and accepted submits are
+      // confirmed separately; leftover orphan deltas cannot reopen completed work.
+      for (const candidateRunId of this.sessionRuns.keys()) {
+        if (candidateRunId === activeRunId || candidateRunId === pendingRunId) {
+          continue;
+        }
+        this.sessionRuns.delete(candidateRunId);
+        this.streamAssembler.drop(candidateRunId);
+        this.retiredOrphanRunIds.set(candidateRunId, Date.now());
+      }
+      this.pruneRunMap(this.retiredOrphanRunIds);
+    }
   }
 
   noteCompletedRun(runId: string): void {
@@ -326,7 +382,9 @@ export class TuiSessionRunCoordinator {
     this.historyDisplayedReloadRunIds.clear();
     this.queuedHistoryReloadRunIds.clear();
     this.deferredHistoryRunEvents.clear();
-    this.lifecycleProtectedStreamRunIds.clear();
+    this.confirmedStreamRunIds.clear();
+    this.retiredOrphanRunIds.clear();
+    this.rejectUnconfirmedRuns = false;
     this.historyReloadQueued = false;
     this.pendingHistoryRefresh = false;
     this.consumeSessionMessageRefresh();

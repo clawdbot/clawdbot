@@ -212,6 +212,14 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (!matchesSelectedTuiSession(state, evt)) {
       return;
     }
+    const isSequencedGatewayEvent = Number.isSafeInteger(evt.seq) && (evt.seq ?? -1) >= 0;
+    if (
+      runCoordinator.isRetiredOrphanRun(evt.runId) &&
+      !isSequencedGatewayEvent &&
+      evt.runId !== getPendingSubmitAcceptedRunId(state)
+    ) {
+      return;
+    }
     if (runCoordinator.isHistoryReloadingRun(evt.runId)) {
       runCoordinator.deferHistoryRunEvent(evt);
       return;
@@ -233,7 +241,11 @@ export function createEventHandlers(context: EventHandlerContext) {
         }
       }
     }
-    acknowledgeChatRun(evt.runId);
+    // Gateway chat envelopes require a non-negative sequence, even when a
+    // legacy peer omits agent lifecycle starts; orphan deltas have none.
+    acknowledgeChatRun(evt.runId, {
+      protectStream: isSequencedGatewayEvent,
+    });
     const isPendingChatRun = getPendingSubmitAcceptedRunId(state) === evt.runId;
     const isLocalChatRun = isLocalRunId?.(evt.runId) ?? false;
     const isLocalBtwRun = isLocalBtwRunId?.(evt.runId) ?? false;
