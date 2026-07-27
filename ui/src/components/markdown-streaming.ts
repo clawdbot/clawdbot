@@ -52,7 +52,7 @@ function updateDetailsStack(
     return false;
   }
   const kinds = tags.map((tag) => markdownDisclosureTagKind(tag.raw));
-  const nextSummaryClose = new Array<number>(tags.length).fill(-1);
+  const nextSummaryClose = Array.from({ length: tags.length }, () => -1);
   let nearestSummaryClose = -1;
   for (let index = tags.length - 1; index >= 0; index -= 1) {
     nextSummaryClose[index] = nearestSummaryClose;
