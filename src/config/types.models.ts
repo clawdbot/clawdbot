@@ -93,6 +93,8 @@ export type ModelCompatConfig = SupportedOpenAICompatFields &
     visibleReasoningDetailTypes?: string[];
     /** Whether this model supports tool/function calling. */
     supportsTools?: boolean;
+    /** Code-mode tier consumed by `tools.codeMode.enabled: "auto"`; absent means "capable". */
+    codeMode?: "preferred" | "capable";
     /** Whether provider accepts prompt-cache/session affinity keys. */
     supportsPromptCacheKey?: boolean;
     /** Whether all message parts must be coerced to plain strings. */
