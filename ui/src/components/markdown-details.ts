@@ -12,13 +12,13 @@ const DETAILS_STACK = Symbol("markdownDetailsStack");
 type DetailsFrame = { hasSummary: boolean };
 type DetailsBlockState = StateBlock & { [DETAILS_STACK]?: DetailsFrame[] };
 
-export type MarkdownDisclosureTag = {
+type MarkdownDisclosureTag = {
   end: number;
   raw: string;
   start: number;
 };
 
-export type MarkdownDisclosureTagKind =
+type MarkdownDisclosureTagKind =
   | "details_open"
   | "details_open_expanded"
   | "details_close"
