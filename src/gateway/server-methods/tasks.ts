@@ -11,11 +11,10 @@ import {
   validateTasksGetParams,
   validateTasksListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { getTaskById, listTaskRecordPage } from "../../tasks/runtime-internal.js";
 import { cancelDetachedTaskRunById } from "../../tasks/task-executor.js";
-import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
-import { mapTaskSummary, taskUpdatedAt } from "./task-summary.js";
+import type { TaskStatus } from "../../tasks/task-registry.types.js";
+import { mapTaskSummary } from "./task-summary.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 const DEFAULT_TASKS_LIST_LIMIT = 100;
@@ -38,36 +37,6 @@ function normalizeTaskStatusFilter(status: TasksListParams["status"]): Set<TaskS
   }
   const statuses = Array.isArray(status) ? status : [status];
   return new Set(statuses.flatMap((value) => LEDGER_STATUS_TO_TASK_STATUSES[value] ?? []));
-}
-
-// Session filtering needs all ownership keys because detached child runs may be
-// queried from the requester, child session, or owner/control-plane view.
-function taskMatchesSession(task: TaskRecord, sessionKey: string | undefined): boolean {
-  const normalized = normalizeOptionalString(sessionKey);
-  if (!normalized) {
-    return true;
-  }
-  return [task.requesterSessionKey, task.childSessionKey, task.ownerKey].some(
-    (candidate) => normalizeOptionalString(candidate) === normalized,
-  );
-}
-
-// Explicit `task.agentId` is authoritative: a task that records its own agent
-// must not also match other agents through the session-key fallback. Only
-// records that predate a direct `agentId` recover the owning agent from
-// session-style keys instead of being hidden.
-function taskMatchesAgent(task: TaskRecord, agentId: string | undefined): boolean {
-  const normalized = normalizeOptionalString(agentId);
-  if (!normalized) {
-    return true;
-  }
-  const explicitAgentId = normalizeOptionalString(task.agentId);
-  if (explicitAgentId) {
-    return explicitAgentId === normalized;
-  }
-  return [task.requesterSessionKey, task.childSessionKey, task.ownerKey].some(
-    (candidate) => parseAgentSessionKey(candidate)?.agentId === normalized,
-  );
 }
 
 // Cursor strings are offsets, not opaque tokens; reject malformed values so a
@@ -115,21 +84,9 @@ export const tasksHandlers: GatewayRequestHandlers = {
     const page = listTaskRecordPage({
       offset: cursor,
       limit,
-      matches: (task) => {
-        if (statusFilter && !statusFilter.has(task.status)) {
-          return false;
-        }
-        return (
-          taskMatchesAgent(task, params.agentId) && taskMatchesSession(task, params.sessionKey)
-        );
-      },
-      compare: (left, right) => {
-        const updatedDiff = taskUpdatedAt(right) - taskUpdatedAt(left);
-        if (updatedDiff !== 0) {
-          return updatedDiff;
-        }
-        return left.taskId < right.taskId ? -1 : left.taskId > right.taskId ? 1 : 0;
-      },
+      statuses: statusFilter ? [...statusFilter] : undefined,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
     });
     const nextOffset = cursor + page.tasks.length;
     respond(true, {

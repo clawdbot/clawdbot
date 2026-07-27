@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { isActiveTaskStatus, ensureLinkedTaskFlowRegistryReady } from "./task-registry-common.js";
 import type { TaskRegistryControlRuntime } from "./task-registry-control.types.js";
 import { cloneTaskRecord, normalizeTaskTimestamps } from "./task-registry-records.js";
@@ -32,23 +33,66 @@ import {
   type TaskRegistryGlobalWithRuntimeOverrides,
 } from "./task-registry-state.js";
 import { getTaskRegistryStore, resetTaskRegistryRuntimeForTests } from "./task-registry.store.js";
-import type { TaskRecord } from "./task-registry.types.js";
+import type { TaskRecord, TaskStatus } from "./task-registry.types.js";
 
 export function listTaskRecordsUnsorted(): TaskRecord[] {
   ensureTaskRegistryReady();
   return snapshotTaskRecords(tasks);
 }
 
+function taskMatchesRelatedSession(task: TaskRecord, sessionKey: string | undefined): boolean {
+  if (!sessionKey) {
+    return true;
+  }
+  return [task.requesterSessionKey, task.childSessionKey, task.ownerKey].some(
+    (candidate) => normalizeOptionalString(candidate) === sessionKey,
+  );
+}
+
+function taskMatchesAgent(task: TaskRecord, agentId: string | undefined): boolean {
+  if (!agentId) {
+    return true;
+  }
+  const explicitAgentId = normalizeOptionalString(task.agentId);
+  if (explicitAgentId) {
+    return explicitAgentId === agentId;
+  }
+  return [task.requesterSessionKey, task.childSessionKey, task.ownerKey].some(
+    (candidate) => parseAgentSessionKey(candidate)?.agentId === agentId,
+  );
+}
+
+function taskUpdatedAt(task: TaskRecord): number {
+  return task.lastEventAt ?? task.endedAt ?? task.startedAt ?? task.createdAt;
+}
+
 export function listTaskRecordPage(params: {
   offset: number;
   limit: number;
-  matches: (task: TaskRecord) => boolean;
-  compare: (left: TaskRecord, right: TaskRecord) => number;
+  statuses?: readonly TaskStatus[];
+  agentId?: string;
+  sessionKey?: string;
 }): { tasks: TaskRecord[]; hasMore: boolean } {
   ensureTaskRegistryReady();
-  // Select against authoritative records, then clone only the bounded page.
-  // Cloning the full retained history before filtering defeats the gateway limit.
-  const matching = [...tasks.values()].filter(params.matches).toSorted(params.compare);
+  const statuses = params.statuses ? new Set(params.statuses) : null;
+  const agentId = normalizeOptionalString(params.agentId);
+  const sessionKey = normalizeOptionalString(params.sessionKey);
+  // Filtering and ordering stay registry-owned so authoritative records never
+  // cross the boundary; only the bounded selected page is defensively cloned.
+  const matching = [...tasks.values()]
+    .filter(
+      (task) =>
+        (!statuses || statuses.has(task.status)) &&
+        taskMatchesAgent(task, agentId) &&
+        taskMatchesRelatedSession(task, sessionKey),
+    )
+    .toSorted((left, right) => {
+      const updatedDiff = taskUpdatedAt(right) - taskUpdatedAt(left);
+      if (updatedDiff !== 0) {
+        return updatedDiff;
+      }
+      return left.taskId < right.taskId ? -1 : left.taskId > right.taskId ? 1 : 0;
+    });
   const selected = matching.slice(params.offset, params.offset + params.limit);
   return {
     tasks: selected.map((task) => cloneTaskRecord(task)),
