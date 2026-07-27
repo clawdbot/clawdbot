@@ -10,7 +10,7 @@ import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 /** Mock for playwright.chromium.connectOverCDP. */
 export const connectOverCdpMock: MockFn = vi.fn();
 /** Mock for Chrome CDP WebSocket URL discovery. */
-export const getChromeWebSocketUrlMock: MockFn = vi.fn();
+export const getChromeWebSocketEndpointMock: MockFn = vi.fn();
 
 vi.mock("./playwright-core.runtime.js", () => ({
   playwrightCore: {
@@ -22,5 +22,5 @@ vi.mock("./playwright-core.runtime.js", () => ({
 }));
 
 vi.mock("./chrome.js", () => ({
-  getChromeWebSocketUrl: (...args: unknown[]) => getChromeWebSocketUrlMock(...args),
+  getChromeWebSocketEndpoint: (...args: unknown[]) => getChromeWebSocketEndpointMock(...args),
 }));

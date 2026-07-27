@@ -5,6 +5,7 @@ import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import { assertChromeMcpExplicitCdpUrlAllowed } from "./cdp-reachability-policy.js";
 import { fetchOk, normalizeCdpHttpBaseForJsonEndpoints } from "./cdp.helpers.js";
 import { appendCdpPath } from "./cdp.js";
 import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
@@ -61,7 +62,11 @@ function mergeOpenedTabSnapshot(
     return tabs;
   }
   const merged = tabs.slice();
-  merged[index] = { ...listedTab, wsUrl: openedTab.wsUrl };
+  merged[index] = {
+    ...listedTab,
+    wsUrl: openedTab.wsUrl,
+    ...(openedTab.wsLookup ? { wsLookup: openedTab.wsLookup } : {}),
+  };
   return merged;
 }
 
@@ -249,6 +254,7 @@ export function createProfileSelectionOps({
     const resolvedTargetId = await resolveTargetIdOrThrow(targetId, options);
 
     if (capabilities.usesChromeMcp) {
+      assertChromeMcpExplicitCdpUrlAllowed(profile, getCdpControlPolicy());
       const { focusChromeMcpTab } = await getChromeMcpModule();
       await focusChromeMcpTab(profile.name, resolvedTargetId, profile, options);
       runtime.lastTargetId = resolvedTargetId;
@@ -283,6 +289,7 @@ export function createProfileSelectionOps({
     const resolvedTargetId = await resolveTargetIdOrThrow(targetId, options);
 
     if (capabilities.usesChromeMcp) {
+      assertChromeMcpExplicitCdpUrlAllowed(profile, getCdpControlPolicy());
       const { closeChromeMcpTab } = await getChromeMcpModule();
       await closeChromeMcpTab(profile.name, resolvedTargetId, profile, options);
     } else {

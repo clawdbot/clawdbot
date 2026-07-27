@@ -2,7 +2,7 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
-import { getChromeWebSocketUrl, isChromeReachable } from "./chrome.js";
+import { getChromeWebSocketEndpoint, isChromeReachable } from "./chrome.js";
 
 type RunningServer = {
   server: Server;
@@ -62,8 +62,8 @@ describe("chrome loopback SSRF integration", () => {
   it("returns the loopback websocket URL under strict default SSRF policy", async () => {
     const { baseUrl } = await startLoopbackCdpServer();
 
-    await expect(getChromeWebSocketUrl(baseUrl, 500, {})).resolves.toMatch(
-      /\/devtools\/browser\/TEST$/,
-    );
+    await expect(
+      getChromeWebSocketEndpoint(baseUrl, 500, {}).then((endpoint) => endpoint?.url ?? null),
+    ).resolves.toMatch(/\/devtools\/browser\/TEST$/);
   });
 });

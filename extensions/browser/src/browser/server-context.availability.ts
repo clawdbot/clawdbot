@@ -3,7 +3,10 @@
  * launch/restart, Chrome MCP attach, and profile stop handling.
  */
 import fs from "node:fs";
-import { resolveCdpReachabilityPolicy } from "./cdp-reachability-policy.js";
+import {
+  assertChromeMcpExplicitCdpUrlAllowed,
+  resolveCdpReachabilityPolicy,
+} from "./cdp-reachability-policy.js";
 import {
   CHROME_MCP_ATTACH_READY_POLL_MS,
   CHROME_MCP_ATTACH_READY_WINDOW_MS,
@@ -190,6 +193,7 @@ export function createProfileAvailability({
       // countChromeMcpTabs creates the session if needed — no separate availability call required.
       // Status probes opt into ephemeral so they reuse a cached attach session if one exists,
       // but do not seed a new persistent session as a side effect of read-only status calls.
+      assertChromeMcpExplicitCdpUrlAllowed(profile, getCdpReachabilityPolicy());
       const { countChromeMcpTabs } = await getChromeMcpModule();
       const callOptions: { timeoutMs?: number; ephemeral?: boolean; signal?: AbortSignal } = {};
       if (timeoutMs != null) {
@@ -215,6 +219,7 @@ export function createProfileAvailability({
 
   const isTransportAvailable = async (timeoutMs?: number, signal?: AbortSignal) => {
     if (capabilities.usesChromeMcp) {
+      assertChromeMcpExplicitCdpUrlAllowed(profile, getCdpReachabilityPolicy());
       const { ensureChromeMcpAvailable } = await getChromeMcpModule();
       await ensureChromeMcpAvailable(profile.name, profile, {
         ephemeral: true,
@@ -437,6 +442,7 @@ export function createProfileAvailability({
           `Browser user data directory not found for profile "${profile.name}": ${profile.userDataDir}`,
         );
       }
+      assertChromeMcpExplicitCdpUrlAllowed(profile, getCdpReachabilityPolicy());
       const { ensureChromeMcpAvailable } = await getChromeMcpModule();
       await ensureChromeMcpAvailable(profile.name, profile, { signal });
       await waitForChromeMcpReadyAfterAttach(signal);

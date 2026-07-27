@@ -1,7 +1,10 @@
 // Browser tests cover cdp.helpers plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveCdpReachabilityPolicy } from "./cdp-reachability-policy.js";
+import {
+  assertChromeMcpExplicitCdpUrlAllowed,
+  resolveCdpReachabilityPolicy,
+} from "./cdp-reachability-policy.js";
 import { resolveCdpReachabilityTimeouts } from "./cdp-timeouts.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { assertBrowserNavigationAllowed } from "./navigation-guard.js";
@@ -87,7 +90,9 @@ describe("cdp helpers", () => {
       assertCdpEndpointAllowed("http://127.0.0.1:9222/json/version", {
         dangerouslyAllowPrivateNetwork: false,
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual(
+      expect.objectContaining({ hostname: "127.0.0.1", lookup: expect.any(Function) }),
+    );
   });
 
   it("adds exact loopback hosts to the CDP hostname allowlist", async () => {
@@ -96,7 +101,9 @@ describe("cdp helpers", () => {
         dangerouslyAllowPrivateNetwork: false,
         allowedHostnames: ["*.corp.example"],
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual(
+      expect.objectContaining({ hostname: "127.0.0.1", lookup: expect.any(Function) }),
+    );
   });
 
   it("still enforces hostname allowlist for non-loopback CDP endpoints", async () => {
@@ -131,7 +138,9 @@ describe("cdp helpers", () => {
         source: "discovered",
         configuredUrl: "http://127.0.0.1:9222",
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual(
+      expect.objectContaining({ hostname: "127.0.0.1", lookup: expect.any(Function) }),
+    );
   });
 
   it("preserves broad private authority permission through exact-host scoping", async () => {
@@ -143,7 +152,9 @@ describe("cdp helpers", () => {
         source: "discovered",
         configuredUrl: "http://127.0.0.1:9222",
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual(
+      expect.objectContaining({ hostname: "127.0.0.1", lookup: expect.any(Function) }),
+    );
   });
 
   it("blocks a discovered endpoint on another port in strict SSRF mode", async () => {
@@ -161,7 +172,9 @@ describe("cdp helpers", () => {
       assertCdpEndpointAllowed("http://127.0.0.1:9222/json/version", {
         allowedHostnames: ["api.example.com"],
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual(
+      expect.objectContaining({ hostname: "127.0.0.1", lookup: expect.any(Function) }),
+    );
   });
 
   it("releases guarded CDP fetches for bodyless requests", async () => {
@@ -342,6 +355,27 @@ describe("cdp helpers", () => {
       Authorization: `Basic ${Buffer.from("alice:p@ss word").toString("base64")}`,
     });
     expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes the default remote CDP policy object into guarded discovery fetches", async () => {
+    const release = vi.fn(async () => {});
+    const policy = {};
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: {
+        ok: true,
+        status: 200,
+      },
+      release,
+    });
+
+    await expect(
+      fetchOk("https://browserless.example:9222/json/version", 250, undefined, policy),
+    ).resolves.toBeUndefined();
+
+    const request = requireGuardedFetchRequest();
+    expect(request?.url).toBe("https://browserless.example:9222/json/version");
+    expect(request?.policy).toBe(policy);
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it("replaces navigation grants with the exact loopback CDP host", async () => {
@@ -582,5 +616,104 @@ describe("CDP reachability policy", () => {
     ).toEqual({
       allowedHostnames: ["127.0.0.1"],
     });
+  });
+
+  it("preserves Chrome MCP explicit CDP URL profiles under the default policy", () => {
+    const profile = createProfile({
+      driver: "existing-session",
+      cdpUrl: "http://127.0.0.1:9222",
+      cdpHost: "127.0.0.1",
+      cdpIsLoopback: true,
+    });
+
+    expect(() => assertChromeMcpExplicitCdpUrlAllowed(profile, {})).not.toThrow();
+  });
+
+  it("preserves Chrome MCP explicit CDP URL profiles after default CDP scoping", () => {
+    const profile = createProfile({
+      driver: "existing-session",
+      cdpUrl: "http://127.0.0.1:9222",
+      cdpHost: "127.0.0.1",
+      cdpIsLoopback: true,
+    });
+    const cdpPolicy = resolveCdpReachabilityPolicy(profile, {});
+
+    expect(cdpPolicy).toEqual({ allowedHostnames: ["127.0.0.1"] });
+    expect(() => assertChromeMcpExplicitCdpUrlAllowed(profile, cdpPolicy)).not.toThrow();
+  });
+
+  it("preserves Chrome MCP explicit CDP URL profiles when private CDP endpoints are trusted", () => {
+    const profile = createProfile({
+      driver: "existing-session",
+      cdpUrl: "http://127.0.0.1:9222",
+      cdpHost: "127.0.0.1",
+      cdpIsLoopback: true,
+    });
+
+    expect(() =>
+      assertChromeMcpExplicitCdpUrlAllowed(profile, { dangerouslyAllowPrivateNetwork: true }),
+    ).not.toThrow();
+  });
+
+  it("rejects Chrome MCP explicit CDP URL profiles under explicit strict policy", () => {
+    const profile = createProfile({
+      driver: "existing-session",
+      cdpUrl: "http://127.0.0.1:9222",
+      cdpHost: "127.0.0.1",
+      cdpIsLoopback: true,
+    });
+
+    expect(() =>
+      assertChromeMcpExplicitCdpUrlAllowed(profile, { dangerouslyAllowPrivateNetwork: false }),
+    ).toThrow(/cannot carry that pinned transport/i);
+  });
+
+  it("rejects Chrome MCP explicit CDP URL profiles after explicit strict CDP scoping", () => {
+    const profile = createProfile({
+      driver: "existing-session",
+      cdpUrl: "http://127.0.0.1:9222",
+      cdpHost: "127.0.0.1",
+      cdpIsLoopback: true,
+    });
+    const cdpPolicy = resolveCdpReachabilityPolicy(profile, {
+      dangerouslyAllowPrivateNetwork: false,
+    });
+
+    expect(cdpPolicy).toEqual({
+      dangerouslyAllowPrivateNetwork: false,
+      allowedHostnames: ["127.0.0.1"],
+    });
+    expect(() => assertChromeMcpExplicitCdpUrlAllowed(profile, cdpPolicy)).toThrow(
+      /cannot carry that pinned transport/i,
+    );
+  });
+
+  it("rejects Chrome MCP explicit CDP URL profiles under endpoint allowlists", () => {
+    const profile = createProfile({
+      driver: "existing-session",
+      cdpUrl: "http://127.0.0.1:9222",
+      cdpHost: "127.0.0.1",
+      cdpIsLoopback: true,
+    });
+
+    expect(() =>
+      assertChromeMcpExplicitCdpUrlAllowed(profile, { allowedHostnames: ["127.0.0.1"] }),
+    ).toThrow(/cannot carry that pinned transport/i);
+  });
+
+  it("does not let trusted private CDP policy override endpoint allowlists for Chrome MCP", () => {
+    const profile = createProfile({
+      driver: "existing-session",
+      cdpUrl: "http://127.0.0.1:9222",
+      cdpHost: "127.0.0.1",
+      cdpIsLoopback: true,
+    });
+
+    expect(() =>
+      assertChromeMcpExplicitCdpUrlAllowed(profile, {
+        dangerouslyAllowPrivateNetwork: true,
+        allowedHostnames: ["127.0.0.1"],
+      }),
+    ).toThrow(/cannot carry that pinned transport/i);
   });
 });

@@ -6,7 +6,7 @@
  */
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { redactCdpErrorText, withCdpSocket } from "./cdp.helpers.js";
-import { getChromeWebSocketUrl, type RunningChrome } from "./chrome.js";
+import { getChromeWebSocketEndpoint, type RunningChrome } from "./chrome.js";
 import type {
   BrowserGraphicsAcceleration,
   BrowserGraphicsDevice,
@@ -210,19 +210,28 @@ export async function inspectChromeGraphicsDiagnostics(
 ): Promise<BrowserGraphicsDiagnostics> {
   const observedAt = Date.now();
   try {
-    const wsUrl = await getChromeWebSocketUrl(cdpUrl, options.httpTimeoutMs, options.ssrfPolicy);
-    if (!wsUrl) {
+    const endpoint = await getChromeWebSocketEndpoint(
+      cdpUrl,
+      options.httpTimeoutMs,
+      options.ssrfPolicy,
+    );
+    if (!endpoint) {
       return {
         status: "unavailable",
         observedAt,
         reason: "browser-level CDP WebSocket was not advertised",
       };
     }
-    const result = await withCdpSocket(wsUrl, async (send) => await send("SystemInfo.getInfo"), {
-      handshakeTimeoutMs: options.handshakeTimeoutMs,
-      commandTimeoutMs: options.commandTimeoutMs,
-      handshakeRetries: 0,
-    });
+    const result = await withCdpSocket(
+      endpoint.url,
+      async (send) => await send("SystemInfo.getInfo"),
+      {
+        handshakeTimeoutMs: options.handshakeTimeoutMs,
+        commandTimeoutMs: options.commandTimeoutMs,
+        handshakeRetries: 0,
+        lookup: endpoint.lookup,
+      },
+    );
     return normalizeChromeGraphicsInfo(result, observedAt);
   } catch (error) {
     return {

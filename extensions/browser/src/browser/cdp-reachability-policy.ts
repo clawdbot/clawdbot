@@ -7,8 +7,14 @@
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { matchesHostnameAllowlist, normalizeHostname } from "../sdk-security-runtime.js";
 import type { ResolvedBrowserProfile } from "./config.js";
+import { BrowserProfileUnavailableError } from "./errors.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import { withExactHostnamePolicy } from "./ssrf-policy-helpers.js";
+
+// Synthetic exact-host CDP policies must retain the operator's original intent;
+// otherwise Chrome MCP cannot distinguish default control-plane scoping from a
+// user-authored restriction that genuinely requires pinned transport.
+const cdpControlSourcePolicyByScopedPolicy = new WeakMap<SsrFPolicy, SsrFPolicy>();
 
 function withCdpControlHostname(
   profile: ResolvedBrowserProfile,
@@ -29,7 +35,38 @@ function withCdpControlHostname(
   ) {
     return ssrfPolicy;
   }
-  return withExactHostnamePolicy(ssrfPolicy, cdpHost);
+  const scopedPolicy = withExactHostnamePolicy(ssrfPolicy, cdpHost);
+  cdpControlSourcePolicyByScopedPolicy.set(scopedPolicy, ssrfPolicy);
+  return scopedPolicy;
+}
+
+function hasPolicyEntries(values?: string[]): boolean {
+  return (values ?? []).some((value) => value.trim().length > 0);
+}
+
+function requiresPinnedChromeMcpCdpTransport(cdpPolicy?: SsrFPolicy): boolean {
+  if (!cdpPolicy) {
+    return false;
+  }
+  const policyIntent = cdpControlSourcePolicyByScopedPolicy.get(cdpPolicy) ?? cdpPolicy;
+  const hasScopedPolicy =
+    policyIntent.allowRfc2544BenchmarkRange === true ||
+    policyIntent.allowIpv6UniqueLocalRange === true ||
+    hasPolicyEntries(policyIntent.allowedHostnames) ||
+    hasPolicyEntries(policyIntent.hostnameAllowlist) ||
+    hasPolicyEntries(policyIntent.allowedOrigins);
+  if (
+    !hasScopedPolicy &&
+    (policyIntent.dangerouslyAllowPrivateNetwork === true ||
+      policyIntent.allowPrivateNetwork === true)
+  ) {
+    return false;
+  }
+  return (
+    hasScopedPolicy ||
+    policyIntent.dangerouslyAllowPrivateNetwork === false ||
+    policyIntent.allowPrivateNetwork === false
+  );
 }
 
 export function resolveCdpReachabilityPolicy(
@@ -51,3 +88,18 @@ export function resolveCdpReachabilityPolicy(
 
 /** Alias used by callers that treat reachability and control as one CDP policy. */
 export const resolveCdpControlPolicy = resolveCdpReachabilityPolicy;
+
+export function assertChromeMcpExplicitCdpUrlAllowed(
+  profile: ResolvedBrowserProfile,
+  cdpPolicy?: SsrFPolicy,
+): void {
+  if (profile.driver !== "existing-session" || !profile.cdpUrl) {
+    return;
+  }
+  if (!requiresPinnedChromeMcpCdpTransport(cdpPolicy)) {
+    return;
+  }
+  throw new BrowserProfileUnavailableError(
+    `Browser profile "${profile.name}" uses Chrome MCP with an explicit cdpUrl, but the active Browser CDP policy requires OpenClaw to pin the approved endpoint. Chrome MCP cannot carry that pinned transport across its subprocess boundary. Use driver "openclaw" for guarded CDP endpoints, or remove cdpUrl from this existing-session profile and attach Chrome MCP to a host-local Chrome profile.`,
+  );
+}

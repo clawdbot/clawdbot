@@ -1,3 +1,4 @@
+import type { lookup as dnsLookupCb } from "node:dns";
 /**
  * Chrome DevTools Protocol browser operations.
  *
@@ -36,12 +37,13 @@ export { type CdpActionTimeouts, waitForCdpCommittedNavigationUrl } from "./cdp-
 /** Read the current main-frame loader identity from a page-level CDP target. */
 export async function getMainFrameDocumentIdentityViaCdp(opts: {
   wsUrl: string;
+  lookup?: typeof dnsLookupCb;
   timeoutMs?: number;
 }): Promise<string | undefined> {
   return await withCdpSocket(
     opts.wsUrl,
     async (send) => await readCdpMainFrameDocumentIdentity(send),
-    { commandTimeoutMs: opts.timeoutMs ?? 5000 },
+    { commandTimeoutMs: opts.timeoutMs ?? 5000, ...(opts.lookup ? { lookup: opts.lookup } : {}) },
   );
 }
 
@@ -88,6 +90,7 @@ export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
 /** Capture a PNG or JPEG screenshot through CDP, optionally full-page. */
 export async function captureScreenshot(opts: {
   wsUrl: string;
+  lookup?: typeof dnsLookupCb;
   fullPage?: boolean;
   format?: "png" | "jpeg";
   quality?: number; // jpeg only (0..100)
@@ -198,7 +201,7 @@ export async function captureScreenshot(opts: {
         }
       }
     },
-    { commandTimeoutMs: opts.timeoutMs },
+    { commandTimeoutMs: opts.timeoutMs, lookup: opts.lookup },
   );
 }
 
@@ -217,7 +220,7 @@ export async function createTargetViaCdp(opts: {
     url: opts.url,
     ...withBrowserNavigationPolicy(opts.ssrfPolicy),
   });
-  await assertCdpEndpointAllowed(opts.cdpUrl, opts.ssrfPolicy);
+  const configuredCdpPin = await assertCdpEndpointAllowed(opts.cdpUrl, opts.ssrfPolicy);
   const cdpControlPolicy = scopeCdpPolicyToConfiguredEndpoint(opts.cdpUrl, opts.ssrfPolicy);
 
   let wsUrl: string;
@@ -270,7 +273,10 @@ export async function createTargetViaCdp(opts: {
         candidateWsUrl === opts.cdpUrl
           ? ({ source: "configured" } as const)
           : ({ source: "discovered", configuredUrl: opts.cdpUrl } as const);
-      await assertCdpEndpointAllowed(candidateWsUrl, cdpControlPolicy, endpointSource);
+      const candidateCdpPin =
+        candidateWsUrl === opts.cdpUrl
+          ? configuredCdpPin
+          : await assertCdpEndpointAllowed(candidateWsUrl, cdpControlPolicy, endpointSource);
       opts.signal?.throwIfAborted();
       return await withCdpSocket(
         candidateWsUrl,
@@ -295,6 +301,7 @@ export async function createTargetViaCdp(opts: {
         {
           commandTimeoutMs: opts.timeouts?.httpTimeoutMs ?? 5000,
           handshakeTimeoutMs: opts.timeouts?.handshakeTimeoutMs,
+          lookup: candidateCdpPin?.lookup,
         },
       );
     } catch (err) {
@@ -420,6 +427,7 @@ export function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnaps
 /** Capture an accessibility-tree snapshot through CDP. */
 export async function snapshotAria(opts: {
   wsUrl: string;
+  lookup?: typeof dnsLookupCb;
   limit?: number;
   timeoutMs?: number;
 }): Promise<{ nodes: AriaSnapshotNode[] }> {
@@ -434,7 +442,7 @@ export async function snapshotAria(opts: {
       const nodes = Array.isArray(res?.nodes) ? res.nodes : [];
       return { nodes: formatAriaSnapshot(nodes, limit) };
     },
-    { commandTimeoutMs: opts.timeoutMs ?? 5000 },
+    { commandTimeoutMs: opts.timeoutMs ?? 5000, lookup: opts.lookup },
   );
 }
 
@@ -900,6 +908,7 @@ async function buildCdpRoleSnapshot(params: {
 /** Build a role/name text snapshot with stable refs from CDP DOM and AX data. */
 export async function snapshotRoleViaCdp(opts: {
   wsUrl: string;
+  lookup?: typeof dnsLookupCb;
   options?: CdpRoleSnapshotOptions;
   urls?: boolean;
   timeoutMs?: number;
@@ -933,7 +942,7 @@ export async function snapshotRoleViaCdp(opts: {
         delta: opts.delta,
       });
     },
-    { commandTimeoutMs: opts.timeoutMs ?? 5000 },
+    { commandTimeoutMs: opts.timeoutMs ?? 5000, lookup: opts.lookup },
   );
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

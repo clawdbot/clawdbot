@@ -281,7 +281,11 @@ async function runBrowserLiveProbe(profileCtx: ProfileContext, signal: AbortSign
         summary: "No per-tab CDP WebSocket available for the lightweight live snapshot probe",
       };
     }
-    const snap = await snapshotAria({ wsUrl: tab.wsUrl, limit: 25 });
+    const snap = await snapshotAria({
+      wsUrl: tab.wsUrl,
+      ...(tab.wsLookup ? { lookup: tab.wsLookup } : {}),
+      limit: 25,
+    });
     return {
       id: "live-snapshot",
       label: "Live snapshot",
