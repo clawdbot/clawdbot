@@ -670,6 +670,7 @@ export function logMessageQueued(params: {
   sessionKey?: string;
   channel?: string;
   source: string;
+  /** False when an active run consumes the message without creating a queued turn. */
   countsTowardBacklog?: boolean;
 }) {
   if (!areDiagnosticsEnabledForProcess()) {
