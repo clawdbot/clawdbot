@@ -13,6 +13,7 @@ import {
   resolveBundledInstallPlanForCatalogEntry,
   resolveBundledInstallPlanBeforeNpm,
   resolveBundledInstallPlanForNpmFailure,
+  resolvePluginInstallSourcePlan,
 } from "./plugin-install-plan.js";
 
 function createSourceCheckoutPlugin(pluginId: string): {
@@ -31,6 +32,15 @@ function createSourceCheckoutPlugin(pluginId: string): {
 }
 
 describe("plugin install plan helpers", () => {
+  it("keeps explicit npm specs with local-looking suffixes on the registry path", () => {
+    expect(resolvePluginInstallSourcePlan({ raw: "npm:plugin.js", mode: "install" })).toMatchObject(
+      {
+        ok: true,
+        request: { source: "npm", spec: "plugin.js" },
+      },
+    );
+  });
+
   it("prefers bundled plugin for bare plugin-id specs", () => {
     const findBundledSource = vi.fn().mockReturnValue({
       pluginId: "voice-call",
