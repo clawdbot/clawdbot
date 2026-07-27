@@ -80,14 +80,14 @@ describe("resolveApplicationStartupSettings", () => {
     const startup = resolveApplicationStartupSettings(makeSettings("wss://gateway.example"), {
       pathname: "/",
       search: "",
-      hash: "#gatewayUrl=wss%3A%2F%2Fgateway.example&bootstrapToken=boot-123&session=main",
+      hash: "#gatewayUrl=wss%3A%2F%2Fgateway.example&bootstrapToken=boot-123",
     });
 
     expect(startup.pendingGatewayUrl).toBeNull();
     expect(startup.pendingGatewayToken).toBeNull();
     expect(startup.pendingBootstrapToken).toBe("boot-123");
     expect(startup.settings.token).toBe("");
-    expect(startup.location).toEqual({ pathname: "/", search: "", hash: "#session=main" });
+    expect(startup.location).toEqual({ pathname: "/", search: "", hash: "" });
   });
 
   it("carries fragment bootstrap tokens with changed gateway URLs", () => {
@@ -765,7 +765,7 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(loadSettings().chatSplitLayout).toEqual(chatSplitLayout);
   });
 
-  it("persists the last dashboard face and active tab per session", () => {
+  it("persists dashboard tab and dock state per session", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
@@ -774,11 +774,9 @@ describe("loadSettings default gateway URL derivation", () => {
     const settings = loadSettings();
     const boardSessionViews = {
       "agent:main:main": {
-        face: "dashboard" as const,
         activeTabId: "research",
         reopenDockByTab: { research: "left" as const },
       },
-      "agent:main:plain": { face: "chat" as const },
     };
 
     saveSettings({ ...settings, boardSessionViews });
@@ -786,7 +784,7 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(loadSettings().boardSessionViews).toEqual(boardSessionViews);
   });
 
-  it("drops invalid stored dashboard view settings", () => {
+  it("silently drops legacy local face while preserving per-device tab state", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
@@ -803,7 +801,9 @@ describe("loadSettings default gateway URL derivation", () => {
       }),
     );
 
-    expect(loadSettings().boardSessionViews).toEqual({});
+    expect(loadSettings().boardSessionViews).toEqual({
+      "agent:main:main": { activeTabId: "research" },
+    });
   });
 
   it("persists normalized sidebar layouts per session", () => {

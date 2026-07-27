@@ -1,7 +1,6 @@
 /**
  * QuickJS worker for Code Mode guest execution and suspended VM snapshots.
  */
-import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { parentPort, workerData } from "node:worker_threads";
@@ -342,13 +341,9 @@ function createHostRequestHandler(params: {
       args = [];
     }
     // Snapshotted method counters keep launch identity independent of unrelated bridge traffic.
-    const requestedId = bridgeIdHandle?.toString() ?? "undefined";
-    const id = requestedId === "undefined" ? `bridge:legacy:${randomUUID()}` : requestedId;
-    const validId =
-      requestedId === "undefined"
-        ? /^bridge:legacy:[0-9a-f-]+$/u.test(id)
-        : id.startsWith(`bridge:${method}:`) && /^bridge:[A-Za-z]+:[1-9]\d*$/u.test(id);
-    if (!validId) {
+    // Snapshots are process-local, so every resumable guest comes from the ID-aware source above.
+    const id = bridgeIdHandle?.toString();
+    if (!id?.startsWith(`bridge:${method}:`) || !/^bridge:[A-Za-z]+:[1-9]\d*$/u.test(id)) {
       throw new Error("invalid code mode bridge id");
     }
     if (params.pendingRequests.some((request) => request.id === id)) {

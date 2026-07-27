@@ -135,13 +135,15 @@ export function createBoardHandlers(
         invalidParams("board.get", validateBoardGetParams.errors, respond);
         return;
       }
-      const snapshot = store.getSnapshot(params.sessionKey);
+      const { snapshot, htmlDocuments } = store.getSnapshotWithHtmlDocuments(params.sessionKey);
       let sandboxPort = context.getMcpAppSandboxPort?.();
+      let sandboxOrigin: string | undefined;
+      let sandboxOriginResolved = false;
       for (const widget of snapshot.widgets) {
         if (widget.grantState !== "none" && widget.grantState !== "granted") {
           continue;
         }
-        const document = store.readWidgetHtml(snapshot.sessionKey, widget.name);
+        const document = htmlDocuments.get(widget.name);
         if (!document || document.revision !== widget.revision) {
           continue;
         }
@@ -170,9 +172,13 @@ export function createBoardHandlers(
         if (sandboxPort !== undefined) {
           widget.sandboxUrl = buildBoardWidgetSandboxPath(document);
           widget.sandboxPort = sandboxPort;
-          const configuredOrigin = context.getRuntimeConfig?.().mcp?.apps?.sandboxOrigin;
-          if (configuredOrigin) {
-            widget.sandboxOrigin = new URL(configuredOrigin).origin;
+          if (!sandboxOriginResolved) {
+            const configuredOrigin = context.getRuntimeConfig?.().mcp?.apps?.sandboxOrigin;
+            sandboxOrigin = configuredOrigin ? new URL(configuredOrigin).origin : undefined;
+            sandboxOriginResolved = true;
+          }
+          if (sandboxOrigin) {
+            widget.sandboxOrigin = sandboxOrigin;
           }
         }
       }

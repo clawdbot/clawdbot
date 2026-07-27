@@ -6,7 +6,6 @@ import {
   resolveAgentDir,
   resolveDefaultModelForAgent,
 } from "openclaw/plugin-sdk/agent-runtime";
-import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import {
   formatCommandArgMenuTitle,
   resolveEffectiveAgentRuntime,
@@ -18,12 +17,12 @@ import {
   resolveNativeCommandSessionTargets,
 } from "openclaw/plugin-sdk/command-auth-native";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "openclaw/plugin-sdk/native-command-config-runtime";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
@@ -667,9 +666,9 @@ export async function registerSlackMonitorSlashCommands(params: {
       const roomLabel = channelName ? `#${channelName}` : `#${command.channel_id}`;
       const {
         deliverSlackSlashReplies,
-        dispatchReplyWithDispatcher,
+        dispatchChannelInboundTurn,
         finalizeInboundContext,
-        recordInboundSessionMetaSafe,
+        isChannelPartialDeliveryError,
         resolveAgentRoute,
         resolveChunkMode,
         resolveConversationLabel,
@@ -689,7 +688,7 @@ export async function registerSlackMonitorSlashCommands(params: {
           },
         });
 
-      const { untrustedChannelMetadata, groupSystemPrompt } = resolveSlackRoomContextHints({
+      const { channelMetadata, groupSystemPrompt } = resolveSlackRoomContextHints({
         isRoomish,
         channelInfo,
         channelConfig,
@@ -733,7 +732,7 @@ export async function registerSlackMonitorSlashCommands(params: {
         GroupSubject: isRoomish ? roomLabel : undefined,
         GroupSpace: ctx.teamId || undefined,
         GroupSystemPrompt: groupSystemPrompt,
-        UntrustedContext: untrustedChannelMetadata ? [untrustedChannelMetadata] : undefined,
+        ChannelPromptContext: channelMetadata ? [channelMetadata] : undefined,
         SenderName: senderName,
         SenderId: command.user_id,
         Provider: "slack" as const,
@@ -750,34 +749,11 @@ export async function registerSlackMonitorSlashCommands(params: {
         OriginatingTo: slashReplyTarget,
       });
 
-      await recordInboundSessionMetaSafe({
-        cfg,
-        agentId: route.agentId,
-        sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
-        ctx: ctxPayload,
-        onError: (err) =>
-          runtime.error?.(
-            danger(`slack slash: failed updating session meta: ${formatErrorMessage(err)}`),
-          ),
-      });
-
-      const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
-        cfg,
-        agentId: route.agentId,
-        channel: "slack",
-        accountId: route.accountId,
-        transformReplyPayload: (payload) => {
-          if (payload.isReasoning === true) {
-            return null;
-          }
-          return isSlackInteractiveRepliesEnabled({ cfg, accountId: route.accountId })
-            ? compileSlackInteractiveReplies(payload)
-            : payload;
-        },
-      });
-
       const messageSentHookTarget = ctxPayload.OriginatingTo ?? ctxPayload.To ?? slashReplyTarget;
-      const deliverSlashPayloads = async (replies: ReplyPayload[]) => {
+      const deliverSlashPayloads = async (
+        replies: Parameters<typeof deliverSlackSlashReplies>[0]["replies"],
+        onReplySettled?: Parameters<typeof deliverSlackSlashReplies>[0]["onReplySettled"],
+      ) => {
         await deliverSlackSlashReplies({
           replies,
           respond,
@@ -795,24 +771,91 @@ export async function registerSlackMonitorSlashCommands(params: {
             accountId: route.accountId,
           }),
           responseBudget,
+          onReplySettled,
         });
       };
-      const pendingSlashReplies: ReplyPayload[] = [];
+      const pendingSlashReplies: Array<{
+        payload: Parameters<typeof deliverSlackSlashReplies>[0]["replies"][number];
+        finalization: ReturnType<typeof createDeferred<{ visibleReplySent: boolean }>>;
+      }> = [];
       const shouldDeliverBlockImmediately = commandDefinition?.key === "login";
 
-      const { counts } = await dispatchReplyWithDispatcher({
-        ctx: ctxPayload,
+      await dispatchChannelInboundTurn({
         cfg,
+        channel: "slack",
+        accountId: route.accountId,
+        route: {
+          agentId: route.agentId,
+          sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+        },
+        ctxPayload,
+        replyPipeline: {
+          transformReplyPayload: (payload) => {
+            if (payload.isReasoning === true) {
+              return null;
+            }
+            return isSlackInteractiveRepliesEnabled({ cfg, accountId: route.accountId })
+              ? compileSlackInteractiveReplies(payload)
+              : payload;
+          },
+        },
         dispatcherOptions: {
-          ...replyPipeline,
           // /login must expose its device code before the auth flow can finish. Other block
           // streams stay batched so the response_url planner can honor Slack's five-call cap.
-          deliver: async (payload, info) => {
-            if (info.kind === "block" && shouldDeliverBlockImmediately) {
-              await deliverSlashPayloads([payload]);
+          onSettled: async () => {
+            if (pendingSlashReplies.length === 0) {
               return;
             }
-            pendingSlashReplies.push(payload);
+            const pending = pendingSlashReplies.splice(0);
+            const settled = new Set<number>();
+            try {
+              await deliverSlashPayloads(
+                pending.map((entry) => entry.payload),
+                ({ replyIndex, visibleReplySent, error }) => {
+                  const entry = pending[replyIndex];
+                  if (!entry || settled.has(replyIndex)) {
+                    return;
+                  }
+                  settled.add(replyIndex);
+                  if (error !== undefined) {
+                    entry.finalization.reject(error);
+                    return;
+                  }
+                  entry.finalization.resolve({ visibleReplySent });
+                },
+              );
+            } catch (error) {
+              const unsettledError = isChannelPartialDeliveryError(error)
+                ? ((error as Error).cause ?? error)
+                : error;
+              for (const [replyIndex, entry] of pending.entries()) {
+                if (!settled.has(replyIndex)) {
+                  entry.finalization.reject(unsettledError);
+                }
+              }
+              throw error;
+            }
+          },
+        },
+        delivery: {
+          // The response_url helper owns provider-finalized message_sent emission. Keep
+          // observeMessageSent unset or core would emit a second lifecycle event.
+          deliver: async (payload, info) => {
+            if (info.kind === "block" && shouldDeliverBlockImmediately) {
+              let visibleReplySent = false;
+              await deliverSlashPayloads([payload], (settlement) => {
+                visibleReplySent = settlement.visibleReplySent;
+              });
+              return visibleReplySent
+                ? { visibleReplySent: true }
+                : {
+                    visibleReplySent: false,
+                    suppression: { reason: "no_visible_result" as const },
+                  };
+            }
+            const finalization = createDeferred<{ visibleReplySent: boolean }>();
+            pendingSlashReplies.push({ payload, finalization });
+            return { visibleReplySent: false, finalization: finalization.promise };
           },
           onError: (err, info) => {
             runtime.error?.(
@@ -822,14 +865,8 @@ export async function registerSlackMonitorSlashCommands(params: {
         },
         replyOptions: {
           skillFilter: channelConfig?.skills,
-          onModelSelected,
         },
       });
-      if (pendingSlashReplies.length > 0) {
-        await deliverSlashPayloads(pendingSlashReplies);
-      } else if (counts.final + counts.tool + counts.block === 0) {
-        await deliverSlashPayloads([]);
-      }
     } catch (err) {
       runtime.error?.(danger(`slack slash handler failed: ${formatErrorMessage(err)}`));
       if (!isSlackResponseAlreadyReportedError(err) && responseBudget.remaining() !== 0) {

@@ -254,6 +254,11 @@ async function probeLocalProviderEndpoint(params: {
     // have the full provider context.
     void response.status;
   } finally {
+    // Captured responses can tee their body, so awaiting branch cancellation
+    // would hang the cron probe; start cancellation before closing the agent.
+    if (!response.bodyUsed) {
+      void response.body?.cancel().catch(() => undefined);
+    }
     await release();
   }
 }

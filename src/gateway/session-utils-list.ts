@@ -101,6 +101,7 @@ function filterSessionEntries(params: {
   const includeUnknown = opts.includeUnknown === true;
   const spawnedBy = typeof opts.spawnedBy === "string" ? opts.spawnedBy : "";
   const label = normalizeOptionalString(opts.label) ?? "";
+  const boardFace = opts.boardFace;
   const agentId = typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
   const search = normalizeLowercaseStringOrEmpty(opts.search);
   const activeMinutes =
@@ -188,6 +189,12 @@ function filterSessionEntries(params: {
         return true;
       }
       return entry?.label === label;
+    })
+    .filter(([, entry]) => {
+      if (!boardFace) {
+        return true;
+      }
+      return entry?.boardFace === boardFace;
     });
 
   if (search) {

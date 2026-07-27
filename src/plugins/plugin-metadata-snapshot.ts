@@ -299,20 +299,31 @@ export function loadPluginMetadataSnapshot(
   params: LoadPluginMetadataSnapshotParams,
 ): PluginMetadataSnapshot {
   const activeTimelineSpan = getActiveDiagnosticsTimelineSpan();
-  return freezePluginMetadataSnapshot(
-    measureDiagnosticsTimelineSpanSync(
-      "plugins.metadata.scan",
-      () => loadPluginMetadataSnapshotImpl(params),
-      {
-        phase: activeTimelineSpan?.phase ?? "startup",
-        config: params.config,
-        env: params.env,
-        attributes: {
-          hasWorkspaceDir: params.workspaceDir !== undefined,
-          hasInstalledIndex: params.index !== undefined,
-        },
+  const snapshot = measureDiagnosticsTimelineSpanSync(
+    "plugins.metadata.scan",
+    () => loadPluginMetadataSnapshotImpl(params),
+    {
+      phase: activeTimelineSpan?.phase ?? "startup",
+      config: params.config,
+      env: params.env,
+      attributes: {
+        hasWorkspaceDir: params.workspaceDir !== undefined,
+        hasInstalledIndex: params.index !== undefined,
       },
-    ),
+    },
+  );
+  return measureDiagnosticsTimelineSpanSync(
+    "plugins.metadata.freeze",
+    () => freezePluginMetadataSnapshot(snapshot),
+    {
+      phase: activeTimelineSpan?.phase ?? "startup",
+      config: params.config,
+      env: params.env,
+      attributes: {
+        indexPluginCount: snapshot.index.plugins.length,
+        manifestPluginCount: snapshot.plugins.length,
+      },
+    },
   );
 }
 
@@ -387,6 +398,7 @@ function loadPluginMetadataSnapshotImpl(
           env: params.env,
           diagnostics: [...index.diagnostics],
           installRecords: index.installRecords,
+          ...(registryResult.discovery ? { discovery: registryResult.discovery } : {}),
         })
       : loadPluginManifestRegistryForInstalledIndex({
           index,

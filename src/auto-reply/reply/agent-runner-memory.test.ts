@@ -112,6 +112,7 @@ type ModelFallbackParams = {
   sessionId?: string;
   sessionKey?: string;
   fallbacksOverride?: unknown[];
+  requestedRouteResolution?: "raw" | "resolved";
   resolveAgentHarnessRuntimeOverride?: (provider: string, model: string) => string | undefined;
   prepareAgentHarnessRuntime?: (params: {
     provider: string;
@@ -1009,6 +1010,10 @@ describe("runMemoryFlushIfNeeded", () => {
               primary: "anthropic/claude",
               fallbacks: ["openai/gpt-5.4"],
             },
+            models: {
+              "ollama/qwen3:8b": { alias: "memory-flush" },
+              "openrouter/qwen3:8b": { alias: "qwen3:8b" },
+            },
             compaction: {
               memoryFlush: {
                 model: "ollama/qwen3:8b",
@@ -1033,6 +1038,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const fallbackCall = requireModelFallbackCall();
     expect(fallbackCall.provider).toBe("ollama");
     expect(fallbackCall.model).toBe("qwen3:8b");
+    expect(fallbackCall.requestedRouteResolution).toBe("raw");
     expect(fallbackCall.abortSignal).toBe(replyOperation.abortSignal);
     expect(fallbackCall.sessionId).toBe("session");
     expect(fallbackCall.fallbacksOverride).toEqual([]);

@@ -4,7 +4,7 @@ import {
   AgentDeletionAuthorityRollbackError,
   AgentDeletionCommitUncertainError,
 } from "../../agents/agent-lifecycle-registry.js";
-import { isCronJobActive } from "../active-jobs.js";
+import { isCronJobActive, noteActiveCronJobScheduleMutation } from "../active-jobs.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { deleteCronJobScratch } from "../scratch-store.js";
 import { createCronStreamSourceIdentity, cronStreamScheduleKey } from "../stream-schedule.js";
@@ -136,9 +136,10 @@ function finalizeUpdatedJob(params: {
 async function persistUpdatedJob(params: {
   state: CronServiceState;
   snapshot: CronRollbackSnapshot;
+  previousJob: CronJob;
   nextJob: CronJob;
 }) {
-  const { state, snapshot, nextJob } = params;
+  const { state, snapshot, previousJob, nextJob } = params;
   if (state.store) {
     const index = state.store.jobs.findIndex((entry) => entry.id === nextJob.id);
     if (index >= 0) {
@@ -147,6 +148,11 @@ async function persistUpdatedJob(params: {
   }
 
   await persistOrRestore(state, snapshot, { suppressScheduledJobId: nextJob.id });
+  if (!cronSchedulingInputsEqual(previousJob, nextJob)) {
+    // Mark only committed edits; a failed SQLite write cannot retire the run's
+    // schedule ownership, and idempotent re-saves must not create a new claim.
+    noteActiveCronJobScheduleMutation(nextJob.id);
+  }
   armTimer(state);
   emit(state, {
     jobId: nextJob.id,
@@ -237,7 +243,7 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
         schedulingInputsRequested: true,
         scheduleChanged: !isDeepStrictEqual(existing.schedule, nextJob.schedule),
       });
-      await persistUpdatedJob({ state, snapshot, nextJob });
+      await persistUpdatedJob({ state, snapshot, previousJob: existing, nextJob });
       return { ...nextJob, created: false, updated: true, job: nextJob };
     }
 
@@ -337,7 +343,7 @@ export async function updateLoadedJob(params: {
       "pacing" in patch,
     scheduleChanged: patch.schedule !== undefined,
   });
-  await persistUpdatedJob({ state, snapshot, nextJob });
+  await persistUpdatedJob({ state, snapshot, previousJob: job, nextJob });
   return nextJob;
 }
 

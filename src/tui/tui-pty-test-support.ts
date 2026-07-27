@@ -55,13 +55,13 @@ export function sleep(ms: number) {
   });
 }
 
-function readPositiveIntegerEnv(name: string): number | null {
-  const value = Number.parseInt(process.env[name] ?? "", 10);
+function readPositiveIntegerEnv(name: string, env: NodeJS.ProcessEnv = process.env): number | null {
+  const value = Number.parseInt(env[name] ?? "", 10);
   return Number.isFinite(value) && value > 0 ? value : null;
 }
 
-function readPtyDimensionEnv(name: string, fallback: number): number {
-  return readPositiveIntegerEnv(name) ?? fallback;
+function readPtyDimensionEnv(name: string, fallback: number, env: NodeJS.ProcessEnv): number {
+  return readPositiveIntegerEnv(name, env) ?? fallback;
 }
 
 async function writePtyInput(
@@ -106,16 +106,17 @@ export function startPty(
 ) {
   let output = "";
   let exitEvent: PtyExitEvent | null = null;
+  const ptyEnv = {
+    ...process.env,
+    ...opts.env,
+    TERM: "xterm-256color",
+  };
   const pty = nodePty.spawn(command, args, {
     name: "xterm-256color",
-    cols: readPtyDimensionEnv("OPENCLAW_TUI_PTY_COLS", 100),
-    rows: readPtyDimensionEnv("OPENCLAW_TUI_PTY_ROWS", 30),
+    cols: readPtyDimensionEnv("OPENCLAW_TUI_PTY_COLS", 100, ptyEnv),
+    rows: readPtyDimensionEnv("OPENCLAW_TUI_PTY_ROWS", 30, ptyEnv),
     cwd: opts.cwd,
-    env: {
-      ...process.env,
-      ...opts.env,
-      TERM: "xterm-256color",
-    },
+    env: ptyEnv,
   });
 
   const dataSubscription = pty.onData((data) => {

@@ -34,7 +34,7 @@ type StreamCleanupInput = {
   unsubscribe: () => void;
 };
 
-function cleanupEmbeddedAttemptStreamExecution(input: StreamCleanupInput): void {
+function cleanupEmbeddedAttemptStreamExecution(input: StreamCleanupInput): Error | undefined {
   const { attempt, state } = input;
   const terminal = projectAgentRunAttemptTerminal(state.terminal);
   input.clearAttemptTimeoutTimers();
@@ -47,22 +47,34 @@ function cleanupEmbeddedAttemptStreamExecution(input: StreamCleanupInput): void 
       `run cleanup: runId=${attempt.runId} sessionId=${attempt.sessionId} aborted=${terminal.aborted} timedOut=${terminal.timedOut}`,
     );
   }
-  try {
-    input.unsubscribe();
-  } catch (error) {
-    // A throwing unsubscribe indicates a resource leak, but must not mask the run error.
-    log.error(
-      `CRITICAL: unsubscribe failed, possible resource leak: runId=${attempt.runId} ${String(error)}`,
-    );
+  // Every release belongs to this owner; one broken callback must not strand
+  // the active run or mask the prompt failure that caused teardown.
+  let firstCleanupError: Error | undefined;
+  for (const [name, cleanup] of [
+    ["unsubscribe", input.unsubscribe],
+    ["backend detach", () => attempt.replyOperation?.detachBackend(input.queueHandle)],
+    [
+      "active run cleanup",
+      () =>
+        clearActiveEmbeddedRun(
+          attempt.sessionId,
+          input.queueHandle,
+          attempt.sessionKey,
+          attempt.sessionFile,
+        ),
+    ],
+    ["abort listener cleanup", input.removeAttemptAbortSignalListener],
+  ] as const) {
+    try {
+      cleanup();
+    } catch (error) {
+      firstCleanupError ??= error instanceof Error ? error : new Error(String(error));
+      log.error(
+        `CRITICAL: ${name} failed, possible resource leak: runId=${attempt.runId} ${String(error)}`,
+      );
+    }
   }
-  attempt.replyOperation?.detachBackend(input.queueHandle);
-  clearActiveEmbeddedRun(
-    attempt.sessionId,
-    input.queueHandle,
-    attempt.sessionKey,
-    attempt.sessionFile,
-  );
-  input.removeAttemptAbortSignalListener();
+  return firstCleanupError;
 }
 
 export async function runEmbeddedAttemptSettledPhase(
@@ -150,6 +162,7 @@ export async function runEmbeddedAttemptSettledPhase(
   let sessionIdUsed = activeSession.sessionId;
   let sessionFileUsed: string | undefined = attempt.sessionFile;
   let preflightRecovery: EmbeddedRunAttemptResult["preflightRecovery"];
+  let cleanupError: Error | undefined;
   const readTerminal = () => projectAgentRunAttemptTerminal(state.terminal);
   const setFailure = (error: unknown, source: AgentRunAttemptFailureSource | null) => {
     state.terminal = setAgentRunAttemptTerminalFailure(
@@ -388,7 +401,7 @@ export async function runEmbeddedAttemptSettledPhase(
     sessionIdUsed = afterTurn.sessionIdUsed;
     sessionFileUsed = afterTurn.sessionFileUsed;
   } finally {
-    cleanupEmbeddedAttemptStreamExecution({
+    cleanupError = cleanupEmbeddedAttemptStreamExecution({
       attempt,
       clearAttemptTimeoutTimers,
       isProbeSession,
@@ -397,6 +410,10 @@ export async function runEmbeddedAttemptSettledPhase(
       state,
       unsubscribe,
     });
+  }
+
+  if (cleanupError !== undefined) {
+    throw cleanupError;
   }
 
   const beforeAgentFinalizeRevisionReason = getBeforeAgentFinalizeRevisionReason();

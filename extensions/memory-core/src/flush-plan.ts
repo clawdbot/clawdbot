@@ -17,7 +17,7 @@ const MEMORY_FLUSH_TARGET_HINT =
 const MEMORY_FLUSH_APPEND_ONLY_HINT =
   "If memory/YYYY-MM-DD.md already exists, APPEND new content only and do not overwrite existing entries.";
 const MEMORY_FLUSH_READ_ONLY_HINT =
-  "Treat workspace bootstrap/reference files such as MEMORY.md, DREAMS.md, SOUL.md, TOOLS.md, and AGENTS.md as read-only during this flush; never overwrite, replace, or edit them.";
+  "Treat workspace bootstrap/reference files such as MEMORY.md, DREAMS.md, SOUL.md, and AGENTS.md as read-only during this flush; never overwrite, replace, or edit them.";
 const MEMORY_FLUSH_REQUIRED_HINTS = [
   MEMORY_FLUSH_TARGET_HINT,
   MEMORY_FLUSH_APPEND_ONLY_HINT,

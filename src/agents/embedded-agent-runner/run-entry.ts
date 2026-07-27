@@ -3,7 +3,7 @@ import { buildAgentRunTerminalOutcome } from "../agent-run-terminal-outcome.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import type { ModelFallbackStepFields } from "../model-fallback-observation.js";
 import { runWithModelFallback, type ModelFallbackResultClassification } from "../model-fallback.js";
-import type { FallbackAttempt } from "../model-fallback.types.js";
+import type { FallbackAttempt, ModelFallbackRouteResolution } from "../model-fallback.types.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
 import {
@@ -69,6 +69,7 @@ type EmbeddedAgentRunEntryParams<T extends EmbeddedAgentRunResult> = {
     cfg: OpenClawConfig;
     provider: string;
     model: string;
+    requestedRouteResolution?: ModelFallbackRouteResolution;
     fallbacksOverride?: string[];
     agentDir?: string;
   } & ModelManifestNormalizationContext;

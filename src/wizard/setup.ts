@@ -5,7 +5,7 @@ import { resolveOnboardingAgentTarget } from "../commands/onboard-agent-target.j
 import type { GatewayAuthChoice, OnboardMode, OnboardOptions } from "../commands/onboard-types.js";
 import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
 import { ConfigMutationConflictError, resolveGatewayPort } from "../config/config.js";
-import { createMergePatch } from "../config/io.write-prepare.js";
+import { createMergePatch } from "../config/merge-patch.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -647,8 +647,8 @@ async function runSetupWizardOnce(
   if (opts.skipSearch) {
     await prompter.note(t("wizard.setup.skipSearch"), t("wizard.setup.searchTitle"));
   } else {
-    const { setupSearch } = await import("../commands/onboard-search.js");
-    nextConfig = await setupSearch(nextConfig, runtime, prompter, {
+    const { runSearchSetupFlow } = await import("../flows/search-setup.js");
+    nextConfig = await runSearchSetupFlow(nextConfig, runtime, prompter, {
       quickstartDefaults: flow === "quickstart",
       secretInputMode: opts.secretInputMode,
     });

@@ -5,6 +5,7 @@ import {
   hasActiveCronJobs,
   hasActiveCronJobsExceptMarker,
   markCronJobActive,
+  noteActiveCronJobScheduleMutation,
   resetCronActiveJobs,
 } from "./active-jobs.js";
 
@@ -43,5 +44,56 @@ describe("hasActiveCronJobsExceptMarker", () => {
 
     expect(hasActiveCronJobsExceptMarker(staleMarker!)).toBe(true);
     expect(hasActiveCronJobsExceptMarker(replacementMarker!)).toBe(false);
+  });
+});
+
+describe("active cron schedule ownership", () => {
+  it("records durable schedule mutations on the admitted active run", () => {
+    const marker = markCronJobActive("rescheduled-job");
+
+    noteActiveCronJobScheduleMutation("rescheduled-job");
+
+    expect(marker?.scheduleMutated).toBe(true);
+  });
+
+  it("keeps a mutation after the schedule is edited back to its original value", () => {
+    const marker = markCronJobActive("rescheduled-job");
+
+    noteActiveCronJobScheduleMutation("rescheduled-job");
+    noteActiveCronJobScheduleMutation("rescheduled-job");
+
+    expect(marker?.scheduleMutated).toBe(true);
+  });
+
+  it("attributes later edits only to the replacement active run", () => {
+    const retiredMarker = markCronJobActive("rescheduled-job");
+    clearCronJobActive("rescheduled-job", retiredMarker);
+    const replacementMarker = markCronJobActive("rescheduled-job");
+
+    noteActiveCronJobScheduleMutation("rescheduled-job");
+
+    expect(retiredMarker?.scheduleMutated).toBeUndefined();
+    expect(replacementMarker?.scheduleMutated).toBe(true);
+  });
+
+  it("does not create ownership markers for jobs without an active run", () => {
+    noteActiveCronJobScheduleMutation("idle-job");
+
+    expect(hasActiveCronJobs()).toBe(false);
+  });
+
+  it("keeps schedule ownership isolated across concurrent active jobs", () => {
+    const markers = Array.from({ length: 64 }, (_, index) =>
+      markCronJobActive(`rescheduled-job-${index}`),
+    );
+
+    for (let index = 0; index < markers.length; index += 2) {
+      noteActiveCronJobScheduleMutation(`rescheduled-job-${index}`);
+      noteActiveCronJobScheduleMutation(`rescheduled-job-${index}`);
+    }
+
+    for (const [index, marker] of markers.entries()) {
+      expect(marker?.scheduleMutated).toBe(index % 2 === 0 ? true : undefined);
+    }
   });
 });

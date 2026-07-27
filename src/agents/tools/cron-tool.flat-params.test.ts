@@ -73,7 +73,7 @@ describe("cron tool flat-params", () => {
     ).toBeUndefined();
   });
 
-  it("preserves explicit top-level sessionKey during flat-params recovery", async () => {
+  it("binds recovered agentTurn jobs to the creating conversation by default", async () => {
     const tool = createCronTool(
       { agentSessionKey: "agent:main:discord:channel:ops" },
       { callGatewayTool: callGatewayToolMock },
@@ -85,9 +85,13 @@ describe("cron tool flat-params", () => {
       message: "do stuff",
     });
 
-    const [method, _gatewayOpts, params] = firstGatewayToolCall<{ sessionKey?: string }>();
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      sessionKey?: string;
+      sessionTarget?: string;
+    }>();
     expect(method).toBe("cron.add");
-    expect(params.sessionKey).toBe("agent:main:telegram:group:-100123:topic:99");
+    expect(params.sessionTarget).toBe("current");
+    expect(params.sessionKey).toBe("agent:main:discord:channel:ops");
   });
 
   it("recovers flat cron schedule shorthand for add", async () => {

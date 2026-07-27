@@ -52,6 +52,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
   const {
     formatActiveDetails,
+    formatDeferredWorkStatus,
     formatTaskBlockers,
     getActiveCounts,
     waitForActiveWorkBeforeChannelReload,
@@ -81,6 +82,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     restartRecoveryAvailable,
     getActiveCounts,
     formatActiveDetails,
+    formatDeferredWorkStatus,
     formatTaskBlockers,
   });
 
