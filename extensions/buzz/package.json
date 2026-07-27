@@ -16,7 +16,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.7.2-beta.5"
+    "openclaw": ">=2026.7.2-beta.3"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -24,18 +24,13 @@
     }
   },
   "openclaw": {
-    "extensions": [
-      "./index.ts"
-    ],
+    "extensions": ["./index.ts"],
     "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "buzz",
       "configuredState": {
         "env": {
-          "allOf": [
-            "BUZZ_RELAY_URL",
-            "BUZZ_PRIVATE_KEY"
-          ]
+          "allOf": ["BUZZ_RELAY_URL", "BUZZ_PRIVATE_KEY"]
         }
       },
       "label": "Buzz",
@@ -46,31 +41,9 @@
       "order": 56,
       "setup": {
         "fields": [
-          {
-            "key": "relayUrl",
-            "kind": "string",
-            "cli": {
-              "flags": "--relay-url <url>",
-              "description": "Buzz relay WebSocket URL"
-            }
-          },
-          {
-            "key": "privateKey",
-            "kind": "string",
-            "sensitive": true,
-            "cli": {
-              "flags": "--private-key <key>",
-              "description": "Buzz bot Nostr private key"
-            }
-          },
-          {
-            "key": "useEnv",
-            "kind": "boolean",
-            "cli": {
-              "flags": "--use-env",
-              "description": "Use BUZZ_PRIVATE_KEY with the supplied relay URL"
-            }
-          }
+          { "key": "relayUrl", "kind": "string", "cli": { "flags": "--relay-url <url>", "description": "Buzz relay WebSocket URL" } },
+          { "key": "privateKey", "kind": "string", "sensitive": true, "cli": { "flags": "--private-key <key>", "description": "Buzz bot Nostr private key" } },
+          { "key": "useEnv", "kind": "boolean", "cli": { "flags": "--use-env", "description": "Use BUZZ_PRIVATE_KEY with the supplied relay URL" } }
         ]
       }
     },
@@ -78,13 +51,13 @@
       "clawhubSpec": "clawhub:@openclaw/buzz",
       "npmSpec": "@openclaw/buzz",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.7.2-beta.5"
+      "minHostVersion": ">=2026.7.2-beta.3"
     },
     "compat": {
-      "pluginApi": ">=2026.7.2-beta.5"
+      "pluginApi": ">=2026.7.2-beta.3"
     },
     "build": {
-      "openclawVersion": "2026.7.2-beta.5"
+      "openclawVersion": "2026.7.2"
     },
     "release": {
       "publishToClawHub": true,
