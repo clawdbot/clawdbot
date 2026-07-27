@@ -1323,6 +1323,7 @@ describe("scripts/test-projects changed-target routing", () => {
       ".github/workflows/clawsweeper-dispatch.yml",
       ".github/workflows/labeler.yml",
       ".github/workflows/real-behavior-proof.yml",
+      ".github/workflows/stale.yml",
     ]) {
       expect(resolveChangedTestTargetPlan([workflowPath])).toEqual({
         mode: "targets",
