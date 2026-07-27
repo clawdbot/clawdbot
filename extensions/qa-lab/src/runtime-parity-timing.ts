@@ -1,12 +1,12 @@
 import type { RuntimeId } from "./runtime-parity.js";
 
-export type QaRuntimeWallClockMetrics = {
+type QaRuntimeWallClockMetrics = {
   totalWallClockMs: number | null;
   p50WallClockMs: number | null;
   p90WallClockMs: number | null;
 };
 
-export type QaRuntimeSpeedComparison = {
+type QaRuntimeSpeedComparison = {
   fasterRuntime: RuntimeId | "tie" | null;
   speedupPercent: number | null;
 };
@@ -38,7 +38,7 @@ export function compareRuntimeWallClockMs(
   };
 }
 
-export function summarizeRuntimeWallClock(values: number[]): QaRuntimeWallClockMetrics {
+function summarizeRuntimeWallClock(values: number[]): QaRuntimeWallClockMetrics {
   if (values.length === 0) {
     return { totalWallClockMs: null, p50WallClockMs: null, p90WallClockMs: null };
   }

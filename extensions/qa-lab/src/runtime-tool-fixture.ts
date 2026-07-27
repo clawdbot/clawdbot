@@ -893,8 +893,8 @@ export async function runRuntimeToolFixture(
     }
     const happyPatchPath = path.join(env.gateway.workspaceDir, RUNTIME_PATCH_HAPPY_FILENAME);
     const readHappyPatchContents = async () =>
-      fs.readFile(happyPatchPath, "utf8").catch((error: NodeJS.ErrnoException) => {
-        if (error.code === "ENOENT") {
+      fs.readFile(happyPatchPath, "utf8").catch((error: unknown) => {
+        if (isRecord(error) && error.code === "ENOENT") {
           return undefined;
         }
         throw error;

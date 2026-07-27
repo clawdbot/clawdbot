@@ -5,7 +5,7 @@ import type {
   CodexAppServerConnectionClass,
   CodexDynamicToolsLoading,
   CodexPluginConfig,
-} from "./config.js";
+} from "./config-contracts.js";
 
 /** Tool names owned by Codex app-server and normally excluded from OpenClaw dynamic tools. */
 const CODEX_APP_SERVER_OWNED_DYNAMIC_TOOL_EXCLUDES = [
