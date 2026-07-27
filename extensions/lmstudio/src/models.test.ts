@@ -13,6 +13,7 @@ import {
 } from "./models.fetch.js";
 import {
   mapLmstudioWireEntry,
+  mapLmstudioWireModelsToConfig,
   normalizeLmstudioConfiguredCatalogEntry,
   normalizeLmstudioProviderConfig,
   resolveLmstudioInferenceBase,
@@ -211,6 +212,63 @@ describe("lmstudio-models", () => {
     });
   });
 
+  it.each([
+    { label: "enabled", supportsTools: true },
+    { label: "disabled", supportsTools: false },
+    { label: "unknown", supportsTools: undefined },
+  ])("preserves $label tool support in configured model metadata", ({ supportsTools }) => {
+    const model = normalizeLmstudioConfiguredCatalogEntry({
+      id: "qwen3-8b-instruct",
+      compat: {
+        ...(supportsTools === undefined ? {} : { supportsTools }),
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["off", "on"],
+        reasoningEffortMap: { off: "off", high: "on" },
+      },
+    });
+
+    expect(model?.compat).toEqual({
+      ...(supportsTools === undefined ? {} : { supportsTools }),
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+      reasoningEffortMap: {
+        off: "none",
+        none: "none",
+        adaptive: "xhigh",
+        max: "xhigh",
+      },
+    });
+  });
+
+  it.each([
+    { label: "enabled", supportsTools: true },
+    { label: "disabled", supportsTools: false },
+    { label: "unknown", supportsTools: undefined },
+  ])("preserves $label native tool support in runtime and setup models", ({ supportsTools }) => {
+    const entry = {
+      type: "llm" as const,
+      key: "qwen3-8b-instruct",
+      capabilities: {
+        ...(supportsTools === undefined ? {} : { trained_for_tool_use: supportsTools }),
+        reasoning: { allowed_options: ["off", "on"], default: "on" },
+      },
+    };
+    const expectedCompat = {
+      ...(supportsTools === true ? { supportsTools } : {}),
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+      reasoningEffortMap: {
+        off: "none",
+        none: "none",
+        adaptive: "xhigh",
+        max: "xhigh",
+      },
+    };
+
+    expect(mapLmstudioWireEntry(entry)?.compat).toEqual(expectedCompat);
+    expect(mapLmstudioWireModelsToConfig([entry])[0]?.compat).toEqual(expectedCompat);
+  });
+
   it("drops malformed discovered context metadata", () => {
     const model = mapLmstudioWireEntry({
       type: "llm",
@@ -391,6 +449,7 @@ describe("lmstudio-models", () => {
           adaptive: "xhigh",
           max: "xhigh",
         },
+        supportsTools: true,
       },
       contextWindow: 262144,
       contextTokens: LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH,
@@ -406,6 +465,47 @@ describe("lmstudio-models", () => {
       contextWindow: SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
       contextTokens: LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH,
       maxTokens: SELF_HOSTED_DEFAULT_MAX_TOKENS,
+    });
+  });
+
+  it.each([
+    { label: "enabled", supportsTools: true },
+    { label: "disabled", supportsTools: false },
+    { label: "unknown", supportsTools: undefined },
+  ])("preserves $label native tool support in discovered models", async ({ supportsTools }) => {
+    const fetchMock = vi.fn(async (_url: string | URL, _init?: RequestInit) =>
+      jsonResponse({
+        models: [
+          {
+            type: "llm",
+            key: "qwen3-8b-instruct",
+            capabilities: {
+              ...(supportsTools === undefined ? {} : { trained_for_tool_use: supportsTools }),
+              reasoning: { allowed_options: ["off", "on"], default: "on" },
+            },
+          },
+        ],
+      }),
+    );
+
+    const [model] = await discoverLmstudioModels({
+      baseUrl: "http://localhost:1234/v1",
+      apiKey: "lm-token",
+      quiet: true,
+      fetchImpl: asFetch(fetchMock),
+    });
+
+    expect(model?.compat).toEqual({
+      supportsUsageInStreaming: true,
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+      reasoningEffortMap: {
+        off: "none",
+        none: "none",
+        adaptive: "xhigh",
+        max: "xhigh",
+      },
+      ...(supportsTools === true ? { supportsTools } : {}),
     });
   });
 

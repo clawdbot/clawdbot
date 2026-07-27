@@ -332,6 +332,9 @@ function normalizeLmstudioConfiguredCompat(value: unknown): ModelDefinitionConfi
   const supportedReasoningEfforts = normalizeReasoningOptions(record.supportedReasoningEfforts);
   const reasoningEffortMap = normalizeConfiguredReasoningEffortMap(record.reasoningEffortMap);
   const compat: NonNullable<ModelDefinitionConfig["compat"]> = {};
+  if (typeof record.supportsTools === "boolean") {
+    compat.supportsTools = record.supportsTools;
+  }
   if (typeof record.supportsUsageInStreaming === "boolean") {
     compat.supportsUsageInStreaming = record.supportsUsageInStreaming;
   }
@@ -535,6 +538,14 @@ export function mapLmstudioWireEntry(entry: LmstudioModelWire): LmstudioModelBas
   const effectiveContextWindow = loadedContextWindow ?? contextWindow;
   const contextTokens = Math.min(effectiveContextWindow, LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH);
   const rawDisplayName = entry.display_name?.trim();
+  const reasoningCompat = resolveLmstudioReasoningCompat(entry);
+  const trainedForToolUse = entry.capabilities?.trained_for_tool_use;
+  // Native tool training is a positive capability, not proof that LM Studio's
+  // OpenAI-compatible fallback cannot call tools.
+  const compat =
+    trainedForToolUse === true
+      ? { ...reasoningCompat, supportsTools: trainedForToolUse }
+      : reasoningCompat;
   return {
     id,
     displayName: rawDisplayName && rawDisplayName.length > 0 ? rawDisplayName : id,
@@ -547,7 +558,7 @@ export function mapLmstudioWireEntry(entry: LmstudioModelWire): LmstudioModelBas
     reasoning: resolveLmstudioReasoningCapability(entry),
     input: entry.capabilities?.vision ? ["text", "image"] : ["text"],
     cost: SELF_HOSTED_DEFAULT_COST,
-    compat: resolveLmstudioReasoningCompat(entry),
+    compat,
     contextWindow,
     contextTokens,
     maxTokens: Math.max(1, Math.min(effectiveContextWindow, SELF_HOSTED_DEFAULT_MAX_TOKENS)),
