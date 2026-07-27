@@ -86,7 +86,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
         notes: state.notes.map((note) => ({ sequence: note.sequence, text: note.text })),
       };
     }
-    const digest = readSession(sessionKey, agentId)?.observerDigest;
+    const digest = readSession(canonicalSessionKey, agentId)?.observerDigest;
     return {
       agentId,
       ...(digest?.runId ? { runId: digest.runId } : {}),

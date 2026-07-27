@@ -35,10 +35,25 @@ extension OpenClawChatViewModel {
             Task { await self.pollHealthIfNeeded(force: false, sessionSnapshot: context) }
         case let .sessionsChanged(change):
             let swarmEvent = self.observeSwarmEvent(change)
+            let changeSessionKey = change.sessionKey?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            // Broad subscribers see every agent's canonical global row. Gate
+            // ownership before the shared-key projection can replace local state.
+            if changeSessionKey == "global" {
+                let eventAgentId = change.agentId?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .lowercased()
+                let selectedAgentId = self.activeAgentId?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .lowercased()
+                guard eventAgentId?.isEmpty == false, eventAgentId == selectedAgentId else { return }
+            }
             let ownedSwarmActivityNote = swarmEvent && SelfContainedSwarmHelpers.isActivityNote(change)
             let projectedSessions = ChatSessionSidebarModel.applying(
                 sessionChange: change,
-                to: self.sessions)
+                to: self.sessions,
+                activeAgentId: self.activeAgentId)
             if let projectedSessions {
                 self.sessions = projectedSessions
             } else if !ownedSwarmActivityNote, change.reason != "patch", change.reason != "command-metadata" {

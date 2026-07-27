@@ -188,6 +188,30 @@ describe("session observer", () => {
     harness.observer.dispose();
   });
 
+  it("reads a persisted global companion through its canonical agent store key", () => {
+    const config = {
+      gateway: { controlUi: { sessionObserver: true } },
+      session: { scope: "global" as const },
+      agents: {
+        defaults: { utilityModel: "openai/gpt-test" },
+        list: [{ id: "main", default: true }, { id: "work" }],
+      },
+    } satisfies OpenClawConfig;
+    const digest = persistedLiveDigest({ agentId: "work", sessionKey: "global" });
+    const readSession = vi.fn(() => ({
+      sessionId: "global-session-id",
+      updatedAt: 1_000,
+      observerDigest: digest,
+    }));
+    const harness = createHarness({ subscribe: false, config, readSession });
+
+    const snapshot = harness.observer.getCompanionSnapshot("agent:work:main");
+
+    expect(readSession).toHaveBeenCalledWith("global", "work");
+    expect(snapshot).toMatchObject({ agentId: "work", digest, runId: digest.runId });
+    harness.observer.dispose();
+  });
+
   it("terminalizes a preamble-only digest without a utility model", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
