@@ -32,6 +32,7 @@ async function invokeAbort({
   connId,
   deviceId,
   preserveSideRuns,
+  exemptRunId,
   scopes = ["operator.write"],
   onAuthorizedAfterQueuedAbort,
   excludeRunIds,
@@ -42,6 +43,7 @@ async function invokeAbort({
   connId: string;
   deviceId: string;
   preserveSideRuns?: boolean;
+  exemptRunId?: string;
   scopes?: string[];
   onAuthorizedAfterQueuedAbort?: () => boolean;
   excludeRunIds?: ReadonlySet<string>;
@@ -60,6 +62,7 @@ async function invokeAbort({
       sessionKey,
       ...(runId ? { runId } : {}),
       ...(preserveSideRuns ? { preserveSideRuns: true } : {}),
+      ...(exemptRunId ? { exemptRunId } : {}),
     },
     client: {
       connId,
@@ -268,6 +271,36 @@ describe("chat.abort authorization", () => {
     expect(btw.controller.signal.aborted).toBe(false);
     expect(onAuthorizedAfterQueuedAbort).not.toHaveBeenCalled();
     expect(context.chatAbortControllers.has("run-btw")).toBe(true);
+  });
+
+  it("exempts the initiating run from a session-wide abort", async () => {
+    const initiator = createActiveRun("main", {
+      owner: { connId: "conn-owner", deviceId: "dev-owner" },
+    });
+    const competing = createActiveRun("main", {
+      owner: { connId: "conn-owner", deviceId: "dev-owner" },
+    });
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([
+        ["run-close", initiator],
+        ["run-other", competing],
+      ]),
+    });
+
+    const respond = await invokeAbort({
+      context,
+      connId: "conn-owner",
+      deviceId: "dev-owner",
+      exemptRunId: "run-close",
+    });
+
+    const [ok, payload] = requireLastRespondCall(respond);
+    expect(ok).toBe(true);
+    expectAbortPayload(payload, { aborted: true, runIds: ["run-other"] });
+    expect(initiator.controller.signal.aborted).toBe(false);
+    expect(competing.controller.signal.aborted).toBe(true);
+    expect(context.chatAbortControllers.has("run-close")).toBe(true);
+    expect(context.chatAbortControllers.has("run-other")).toBe(false);
   });
 
   it("preserves BTW runs waiting for chat admission", async () => {

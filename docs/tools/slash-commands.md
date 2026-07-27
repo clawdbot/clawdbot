@@ -167,9 +167,10 @@ plugins.
   <Accordion title="Sessions and runs">
     | Command | Description |
     | --- | --- |
-    | `/new [model]` | Archive the current session and start a fresh one |
+    | `/new [model]` | Archive the current session and start a fresh one. A model-looking tail keeps the model-override behavior. In text commands a free-text tail is preserved as the prompt; on native slash-command surfaces the title field names the new session instead. Use `/new --name Planning notes` or `/new name:Planning notes` to name the new session explicitly |
     | `/reset [soft [message]]` | Reset the current session in place. `soft` keeps the transcript, drops reused CLI backend session ids, and reruns startup |
     | `/name <title>` | Name or rename the current session. Omit the title to see the current name and a suggestion |
+    | `/close` | Close and archive the current session. Alias: `/delete` |
     | `/compact [instructions]` | Compact the session context. See [Compaction](/concepts/compaction) |
     | `/stop` | Abort the current run |
     | `/session idle <duration\|off>` | Manage thread-binding idle expiry |
@@ -519,7 +520,7 @@ See [BTW side questions](/tools/btw) for the full behavior.
   </Accordion>
   <Accordion title="Argument notes">
     - Commands accept an optional `:` between the command and args (`/think: high`, `/send: on`).
-    - `/new <model>` accepts a model alias, `provider/model`, or a provider name (fuzzy match); if no match, the text is treated as the message body.
+    - `/new <model>` accepts a model alias, `provider/model`, or a provider name (fuzzy match). If no match, in text commands the tail is treated as the message body, while on native slash-command surfaces it names the new session instead (see the `/new [model]` row above).
     - `/allowlist add|remove` requires `commands.config: true` and honors channel `configWrites`.
 
   </Accordion>

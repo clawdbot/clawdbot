@@ -1,0 +1,194 @@
+import { resolveMainSessionKey } from "../../config/sessions.js";
+import { resolveSessionStoreEntry } from "../../config/sessions/store-entry.js";
+import { callGateway } from "../../gateway/call.js";
+import { normalizeMainKey, parseAgentSessionKey } from "../../routing/session-key.js";
+import {
+  createSessionWorkAdmissionHandoffForCurrent,
+  SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+} from "../../sessions/session-lifecycle-admission.js";
+import { setReplyPayloadMetadata } from "../reply-payload.js";
+import { rejectUnauthorizedCommand, requireGatewayClientScope } from "./command-gates.js";
+import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
+import type {
+  CommandHandler,
+  CommandHandlerResult,
+  HandleCommandsParams,
+} from "./commands-types.js";
+
+const DELETE_SESSION_COMMANDS = new Set(["/close", "/delete"]);
+
+export function parseDeleteSessionCommand(
+  raw: string,
+): { command: "/close" | "/delete"; tail: string } | null {
+  const trimmed = raw.trim();
+  const commandEnd = trimmed.search(/\s/);
+  const commandToken = commandEnd === -1 ? trimmed : trimmed.slice(0, commandEnd);
+  const normalized = commandToken.toLowerCase();
+  if (!DELETE_SESSION_COMMANDS.has(normalized)) {
+    return null;
+  }
+  return {
+    command: normalized as "/close" | "/delete",
+    tail: commandEnd === -1 ? "" : trimmed.slice(commandEnd).trim(),
+  };
+}
+
+function deleteSessionReply(text: string): CommandHandlerResult {
+  return { shouldContinue: false, reply: { text } };
+}
+
+// The success reply for a deleted session must not be written to any transcript.
+// When /close arrives through gateway chat.send, finalization would otherwise
+// reload the now-missing entry, fall back to the deleted backing session id, and
+// append this reply with createIfMissing, resurrecting an orphan transcript row
+// immediately after deletion. Marking the reply transcript-write-blocked keeps
+// delivery live while telling finalization to skip that append.
+function deleteSessionSuccessReply(
+  text: string,
+  transcriptOwner: { sessionKey: string; agentId?: string; expectedSessionId?: string },
+): CommandHandlerResult {
+  const reply = setReplyPayloadMetadata(
+    { text },
+    {
+      sourceReplyTranscriptMirror: {
+        sessionKey: transcriptOwner.sessionKey,
+        ...(transcriptOwner.agentId ? { agentId: transcriptOwner.agentId } : {}),
+        ...(transcriptOwner.expectedSessionId
+          ? { expectedSessionId: transcriptOwner.expectedSessionId }
+          : {}),
+        transcriptWriteBlocked: true,
+      },
+    },
+  );
+  return { shouldContinue: false, reply };
+}
+
+function isAgentMainSessionKey(params: HandleCommandsParams, sessionKey: string): boolean {
+  const rest = parseAgentSessionKey(sessionKey)?.rest;
+  return rest === "main" || rest === normalizeMainKey(params.cfg.session?.mainKey);
+}
+
+export const handleDeleteSessionCommand: CommandHandler = async (params, allowTextCommands) => {
+  if (!allowTextCommands) {
+    return null;
+  }
+  const parsed = parseDeleteSessionCommand(params.command.commandBodyNormalized);
+  if (!parsed) {
+    return null;
+  }
+  if (parsed.tail) {
+    return deleteSessionReply(
+      `${parsed.command} only deletes the current session and does not accept arguments.`,
+    );
+  }
+  const unauthorized = rejectUnauthorizedCommand(params, parsed.command);
+  if (unauthorized) {
+    return unauthorized;
+  }
+  const missingAdminScope = requireGatewayClientScope(params, {
+    label: parsed.command,
+    allowedScopes: ["operator.admin"],
+    missingText: "You need operator.admin scope to delete sessions.",
+  });
+  if (missingAdminScope) {
+    return missingAdminScope;
+  }
+
+  if (!params.storePath || !params.sessionKey) {
+    return deleteSessionReply("Session deletion is not available for this session.");
+  }
+  if (
+    params.sessionKey === resolveMainSessionKey(params.cfg) ||
+    params.sessionKey === "global" ||
+    isAgentMainSessionKey(params, params.sessionKey)
+  ) {
+    return deleteSessionReply("The main session cannot be deleted from chat. Use /reset instead.");
+  }
+
+  const store = params.sessionStore ?? {};
+  const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
+  const targetEntry = resolved.existing ?? params.sessionEntry;
+  // A chat /close runs under the current turn's retained session-work admission.
+  // Deleting the same session through the gateway RPC leaves this async context,
+  // so without a handoff the server would treat the initiator's own admission as
+  // competing work and block until it drains (which cannot happen until this RPC
+  // returns). Hand the retained lease to the server so it adopts and exempts the
+  // initiating admission. When no covering admission is active this is undefined
+  // and the server falls back to the normal drain-and-retry contract.
+  const admissionHandoffId = params.storePath
+    ? createSessionWorkAdmissionHandoffForCurrent({
+        scope: params.storePath,
+        identities: [params.sessionKey],
+      })
+    : undefined;
+  // A /close issued from a gateway client (e.g. Control UI) arrives as a chat run
+  // and is itself registered in the gateway's chat-run table. The nested
+  // sessions.delete aborts competing runs on this session before deleting; without
+  // exempting the initiating run, that abort would terminate this very turn and the
+  // client would surface an "aborted" state instead of the deletion success reply.
+  // Pass the initiating run id so the server skips it during the session-wide abort.
+  const exemptChatRunId = params.opts?.runId;
+  const deletion = await callGateway<{
+    deleted?: boolean;
+    archived?: string[];
+    worktreePreserved?: { id: string; branch: string; path: string };
+  }>({
+    method: "sessions.delete",
+    // The gateway may still drain OTHER competing admitted work for up to
+    // SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS before returning success or its
+    // canonical "still active" response. Allow more than that full contract so the
+    // client does not time out (default 10s) before the lifecycle mutation reports back.
+    timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS + 5_000,
+    params: {
+      key: resolved.normalizedKey,
+      deleteTranscript: true,
+      // Bind the deletion to the incarnation the user closed: if a concurrent /new,
+      // reset, or rollover rotates this key first, the gateway returns "session
+      // changed" instead of deleting the replacement session.
+      expectedSessionId: targetEntry?.sessionId,
+      expectedLifecycleRevision: targetEntry?.lifecycleRevision,
+      expectedSessionUpdatedAt: targetEntry?.updatedAt,
+      ...(admissionHandoffId ? { admissionHandoffId } : {}),
+      ...(exemptChatRunId ? { exemptChatRunId } : {}),
+    },
+  });
+  if (!deletion?.deleted) {
+    return deleteSessionReply("No active session was found to delete.");
+  }
+
+  if (params.sessionStore) {
+    delete params.sessionStore[resolved.normalizedKey];
+    for (const legacyKey of resolved.legacyKeys) {
+      delete params.sessionStore[legacyKey];
+    }
+  }
+  params.sessionEntry = undefined;
+  markCommandSessionMetadataChanged(params);
+  const wasArchived = (deletion.archived?.length ?? 0) > 0;
+  const transcriptOwner = {
+    sessionKey: resolved.normalizedKey,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...(targetEntry?.sessionId ? { expectedSessionId: targetEntry.sessionId } : {}),
+  };
+  const closedVerb = wasArchived ? "closed and archived" : "closed";
+  // The session is gone, but if its managed worktree could not be removed the
+  // gateway reports it as preserved: dirty or unpushed work remains in an
+  // ownerless checkout. Surface it (like the Sessions UI does) instead of
+  // reporting an unconditional success that hides the cleanup failure.
+  if (deletion.worktreePreserved) {
+    const { branch, path } = deletion.worktreePreserved;
+    return deleteSessionSuccessReply(
+      `✅ Session ${closedVerb}.\n⚠️ Its worktree could not be removed and may hold uncommitted or unpushed work: branch “${branch}” at ${path}. Remove it manually when you no longer need it.`,
+      transcriptOwner,
+    );
+  }
+  // Incognito sessions delete the transcript without archiving it, so only claim
+  // an archive when the gateway actually produced one; otherwise reporting
+  // "archived" would mislead in the privacy-sensitive delete-without-archive case.
+  return deleteSessionSuccessReply(
+    wasArchived
+      ? "✅ Session closed and archived."
+      : "✅ Session closed. Its transcript was not archived.",
+    transcriptOwner,
+  );
+};

@@ -27,6 +27,8 @@ export const SESSION_ARCHIVE_ACTIVE_RUN_ERROR = "Cannot archive a session with a
 type SessionWorkAdmission = HandoffSessionWorkAdmission & {
   interrupt?: () => void;
   released: Promise<void>;
+  /** Back-reference so an in-turn initiator can hand off its own retained lease. */
+  lease?: SessionWorkAdmissionLease;
 };
 
 type SessionLifecycleAdmissionState = {
@@ -392,6 +394,39 @@ export function getSessionWorkAdmissionRelease(
   return resolveSessionWorkAdmissionRelease(params);
 }
 
+/**
+ * Creates a single-use handoff token for an admission in the CURRENT async
+ * context whose identities cover the requested ones. A chat-initiated /close
+ * runs under its own retained reply-run admission; when it deletes its own
+ * session through a nested cross-context gateway RPC, that RPC leaves the async
+ * context, so the server would treat the initiator's still-held admission as
+ * competing work and block on it. Handing the lease to the server lets it adopt
+ * (and thus exempt) the initiating admission instead of deadlocking. Returns
+ * undefined when no covering admission is active, in which case callers fall
+ * back to the drain-and-retry path.
+ */
+export function createSessionWorkAdmissionHandoffForCurrent(
+  params: SessionWorkAdmissionReleaseParams,
+): string | undefined {
+  const current = CURRENT_SESSION_WORK_ADMISSIONS.getStore();
+  if (!current || current.size === 0) {
+    return undefined;
+  }
+  const identities = normalizeSessionIdentities(params.scope, params.identities);
+  if (identities.length === 0) {
+    return undefined;
+  }
+  for (const admission of current) {
+    if (!admission.lease) {
+      continue;
+    }
+    if (identities.every((identity) => admission.identities.has(identity))) {
+      return admission.lease.createHandoff();
+    }
+  }
+  return undefined;
+}
+
 /** Active session identities for one store/lifecycle scope. */
 export function collectActiveSessionWorkAdmissionIdentities(scope: string): Set<string> {
   const normalizedScope = scope.trim();
@@ -501,6 +536,7 @@ export async function beginSessionWorkAdmission(params: {
           return await CURRENT_SESSION_WORK_ADMISSIONS.run(current, run);
         },
       };
+      admission.lease = lease;
       const signal = params.signal;
       let writerBarrierStarted = false;
       let removeAbortListener = () => {};

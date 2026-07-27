@@ -8,7 +8,11 @@ import {
   getSlashCommandDescription,
   type SlashCommandDef,
 } from "../../lib/chat/commands.ts";
-import { dispatchChatSlashCommand, refreshSlashCommands } from "./chat-commands.ts";
+import {
+  dispatchChatSlashCommand,
+  parseNamedNewCommandTitle,
+  refreshSlashCommands,
+} from "./chat-commands.ts";
 
 function requireCommandByName(name: string): Record<string, unknown> {
   const command = SLASH_COMMANDS.find((entry) => entry.name === name);
@@ -300,6 +304,28 @@ describe("conversation reset confirmation", () => {
     expect(result).toBe("cancelled");
   });
 
+  it("forwards a named /new title to the created session", async () => {
+    const createChatSession = vi.fn(async () => true);
+    const result = await dispatchChatSlashCommand(
+      { createChatSession } as never,
+      "new",
+      "--name Planning notes",
+      { sendResetMessage: vi.fn() },
+    );
+
+    expect(result).toBe("completed");
+    expect(createChatSession).toHaveBeenCalledWith({ label: "Planning notes" });
+  });
+
+  it("creates an unnamed /new session when no title is provided", async () => {
+    const createChatSession = vi.fn(async () => true);
+    await dispatchChatSlashCommand({ createChatSession } as never, "new", "", {
+      sendResetMessage: vi.fn(),
+    });
+
+    expect(createChatSession).toHaveBeenCalledWith(undefined);
+  });
+
   it("cancels /reset before sending when confirmation is rejected", async () => {
     const sendResetMessage = vi.fn(async () => {});
     const result = await dispatchChatSlashCommand(
@@ -574,5 +600,24 @@ describe("conversation reset confirmation", () => {
     await expect(pending).resolves.toBe("failed");
     expect(reset).not.toHaveBeenCalled();
     expect(host.lastError).toContain("operator.admin");
+  });
+});
+
+describe("parseNamedNewCommandTitle", () => {
+  it("extracts titles from the documented named forms", () => {
+    expect(parseNamedNewCommandTitle("--name Planning notes")).toBe("Planning notes");
+    expect(parseNamedNewCommandTitle("--name=Planning notes")).toBe("Planning notes");
+    expect(parseNamedNewCommandTitle("name:Planning notes")).toBe("Planning notes");
+  });
+
+  it("ignores empty tails and model directives", () => {
+    expect(parseNamedNewCommandTitle("")).toBeUndefined();
+    expect(parseNamedNewCommandTitle("   ")).toBeUndefined();
+    expect(parseNamedNewCommandTitle("--model openai/gpt-5.5")).toBeUndefined();
+    expect(parseNamedNewCommandTitle("model:openai/gpt-5.5")).toBeUndefined();
+  });
+
+  it("does not treat a bare prompt tail as a title", () => {
+    expect(parseNamedNewCommandTitle("summarize this thread")).toBeUndefined();
   });
 });

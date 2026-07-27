@@ -24,6 +24,7 @@ export const commandHandlerOrder = [
   "learn",
   "loop",
   "name",
+  "delete-session",
   "diagnostics",
   "tasks",
   "steer",

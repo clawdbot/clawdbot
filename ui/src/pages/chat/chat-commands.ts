@@ -72,7 +72,7 @@ export type ChatCommandHost = Parameters<typeof handleAbortChat>[0] &
     chatModelCatalog: ModelCatalogEntry[];
     sessionsResult?: SessionsListResult | null;
     sessionsResultAgentId?: string | null;
-    createChatSession?: () => Promise<boolean>;
+    createChatSession?: (options?: { label?: string }) => Promise<boolean>;
     confirmConversationReset?: () => Promise<boolean>;
     exportCurrentChat?: () => Promise<void> | void;
     refreshCurrentSessionTools?: () => Promise<void>;
@@ -327,6 +327,27 @@ export async function confirmConversationResetForCurrentSession(
   return host.chatRunId ? "deferred" : "confirmed";
 }
 
+/**
+ * Extracts an explicit session title from the Control UI `/new` argument tail.
+ * Mirrors the backend `parseExplicitNamedNewSessionTail`: honors `--name X`,
+ * `--name=X`, and `name:X` while never treating a `--model`/`model:` directive as a title.
+ */
+export function parseNamedNewCommandTitle(args: string): string | undefined {
+  const tail = args.trim();
+  if (!tail || /^(?:--model(?:=|\s+)|model:)/i.test(tail)) {
+    return undefined;
+  }
+  const flagMatch = tail.match(/^--name(?:=|\s+)(.+)$/i);
+  if (flagMatch?.[1]) {
+    return flagMatch[1].trim() || undefined;
+  }
+  const prefixMatch = tail.match(/^name:(.+)$/i);
+  if (prefixMatch?.[1]) {
+    return prefixMatch[1].trim() || undefined;
+  }
+  return undefined;
+}
+
 export async function dispatchChatSlashCommand(
   host: ChatCommandHost,
   name: string,
@@ -340,12 +361,16 @@ export async function dispatchChatSlashCommand(
       }
       await handleAbortChat(host);
       return "completed";
-    case "new":
+    case "new": {
       if (!host.createChatSession) {
         setChatCommandError(host, "New Chat is unavailable.");
         return "failed";
       }
-      return (await host.createChatSession()) ? "completed" : "cancelled";
+      const label = parseNamedNewCommandTitle(args);
+      return (await host.createChatSession(label ? { label } : undefined))
+        ? "completed"
+        : "cancelled";
+    }
     case "reset": {
       const target = captureChatCommandTarget(host);
       if (!target || !requireChatResetTarget(host, target)) {
