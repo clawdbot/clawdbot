@@ -339,6 +339,7 @@ const McpServerSchema = z
     timeout: z.number().finite().positive().optional(),
     supportsParallelToolCalls: z.boolean().optional(),
     supports_parallel_tool_calls: z.boolean().optional(),
+    authProfileId: z.string().trim().min(1).optional(),
     auth: z.literal("oauth").optional(),
     oauth: z
       .strictObject({

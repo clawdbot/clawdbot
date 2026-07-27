@@ -450,10 +450,10 @@ openclaw mcp unset context7
 
 ### Auth-profile bearer projection
 
-HTTP and SSE MCP servers configured with `auth: "oauth"` can resolve their bearer token from an
-auth profile instead of storing a literal `Authorization` header in `mcp.servers`.
+HTTP and SSE MCP servers can resolve their bearer token from an auth profile instead of storing a
+literal `Authorization` header in `mcp.servers`.
 
-Use `oauth.authProfileId` when an MCP server should project a stored bearer credential:
+Use top-level `authProfileId` when an MCP server should project a stored bearer credential:
 
 ```json
 {
@@ -462,10 +462,7 @@ Use `oauth.authProfileId` when an MCP server should project a stored bearer cred
       "docs": {
         "url": "https://mcp.example.com/mcp",
         "transport": "streamable-http",
-        "auth": "oauth",
-        "oauth": {
-          "authProfileId": "docs:mcp"
-        }
+        "authProfileId": "docs:mcp"
       }
     }
   },
@@ -488,8 +485,12 @@ Use `oauth.authProfileId` when an MCP server should project a stored bearer cred
   does not refresh them. If the profile has an `expires` timestamp and it is expired or invalid, MCP
   bearer projection fails instead of sending a stale token.
 
+For compatibility with earlier configs, `oauth.authProfileId` is still accepted when `auth: "oauth"`
+is set. Prefer the top-level `authProfileId` for new bearer-profile bindings, especially static
+token profiles, so the MCP contract is not named after one credential lifecycle.
+
 For CLI runtimes, OpenClaw resolves the profile before handing off MCP config, strips the
-OpenClaw-only `auth`/`oauth` fields, and writes only an environment placeholder such as
+OpenClaw-only `authProfileId`/`auth`/`oauth` fields, and writes only an environment placeholder such as
 `Authorization: Bearer ${OPENCLAW_MCP_AUTH_<hash>_TOKEN}` into the projected MCP config. The actual
 token value stays in the runtime environment. For embedded OpenClaw MCP clients, OpenClaw resolves
 the profile at same-origin request time and replaces any stale configured or SDK-provided
@@ -759,7 +760,7 @@ Until credentials are available, OpenClaw omits only that MCP server from the ag
 
 If a server rejects a token with `insufficient_scope`, OpenClaw preserves the requested scope and asks for `openclaw mcp login <name>` instead of repeating a refresh that cannot grant new scope. That login starts a new authorization request while keeping the previous token until replacement credentials are saved.
 
-When a remote MCP service is already backed by a separate OpenClaw refresh-capable auth profile, you can optionally set `oauth.authProfileId`. OpenClaw refreshes either credential source before runtime projection and passes only the current access token to the downstream MCP client.
+When a remote MCP service is already backed by a separate OpenClaw auth profile, you can optionally set top-level `authProfileId`. OpenClaw refreshes OAuth profiles before runtime projection and passes only the current bearer token to the downstream MCP client. Legacy `oauth.authProfileId` remains accepted for existing OAuth configs.
 
 <Steps>
   <Step title="Save the server">
@@ -772,7 +773,7 @@ When a remote MCP service is already backed by a separate OpenClaw refresh-capab
     For an auth-profile-backed bearer, save the profile binding:
 
     ```bash
-    openclaw mcp set docs '{"url":"https://mcp.example.com/mcp","transport":"streamable-http","auth":"oauth","oauth":{"authProfileId":"docs:mcp"}}'
+    openclaw mcp set docs '{"url":"https://mcp.example.com/mcp","transport":"streamable-http","authProfileId":"docs:mcp"}'
     ```
 
   </Step>

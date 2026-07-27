@@ -170,7 +170,55 @@ describe("mcp auth profile bearer projection", () => {
     expect(authMocks.resolveMcpOAuthAccessToken).not.toHaveBeenCalled();
   });
 
-  it("projects static token profiles into env-backed CLI bearer headers", async () => {
+  it("projects top-level static token profiles into env-backed CLI bearer headers", async () => {
+    authMocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValueOnce({
+      version: 1,
+      profiles: {
+        "ducktape:static": {
+          type: "token",
+          provider: "ducktape",
+          token: "static-token",
+        },
+      },
+    });
+    authMocks.resolveApiKeyForProfile.mockResolvedValueOnce({
+      apiKey: "static-token",
+      provider: "ducktape",
+      profileId: "ducktape:static",
+      profileType: "token",
+    });
+
+    const resolved = await resolveMcpBearerBundleConfig({
+      config: {
+        mcpServers: {
+          ducktape: {
+            url: "https://agents.ducktape.xyz/mcp",
+            authProfileId: "ducktape:static",
+            headers: {
+              Authorization: "Bearer stale-access",
+              "X-Trace": "keep",
+            },
+          },
+        },
+      },
+    });
+
+    const server = expectDefined(
+      resolved.config.mcpServers.ducktape,
+      "resolved.config.mcpServers.ducktape test invariant",
+    );
+    expect(server.authProfileId).toBeUndefined();
+    expect(server.auth).toBeUndefined();
+    expect(server.oauth).toBeUndefined();
+    expect(server.headers).toEqual({
+      Authorization: expect.stringMatching(/^Bearer \$\{OPENCLAW_MCP_AUTH_[A-F0-9]{12}_TOKEN}$/),
+      "X-Trace": "keep",
+    });
+    expect(Object.values(resolved.env ?? {})).toEqual(["static-token"]);
+    expect(JSON.stringify(resolved.config)).not.toContain("static-token");
+  });
+
+  it("keeps legacy oauth.authProfileId bindings compatible", async () => {
     authMocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValueOnce({
       version: 1,
       profiles: {
@@ -195,27 +243,17 @@ describe("mcp auth profile bearer projection", () => {
             url: "https://agents.ducktape.xyz/mcp",
             auth: "oauth",
             oauth: { authProfileId: "ducktape:static" },
-            headers: {
-              Authorization: "Bearer stale-access",
-              "X-Trace": "keep",
-            },
           },
         },
       },
     });
 
-    const server = expectDefined(
-      resolved.config.mcpServers.ducktape,
-      "resolved.config.mcpServers.ducktape test invariant",
-    );
-    expect(server.auth).toBeUndefined();
-    expect(server.oauth).toBeUndefined();
-    expect(server.headers).toEqual({
+    expect(resolved.config.mcpServers.ducktape?.auth).toBeUndefined();
+    expect(resolved.config.mcpServers.ducktape?.oauth).toBeUndefined();
+    expect(resolved.config.mcpServers.ducktape?.headers).toEqual({
       Authorization: expect.stringMatching(/^Bearer \$\{OPENCLAW_MCP_AUTH_[A-F0-9]{12}_TOKEN}$/),
-      "X-Trace": "keep",
     });
     expect(Object.values(resolved.env ?? {})).toEqual(["static-token"]);
-    expect(JSON.stringify(resolved.config)).not.toContain("static-token");
   });
 
   it("rejects expired token profiles instead of projecting stale bearer headers", async () => {
@@ -238,8 +276,7 @@ describe("mcp auth profile bearer projection", () => {
           mcpServers: {
             ducktape: {
               url: "https://agents.ducktape.xyz/mcp",
-              auth: "oauth",
-              oauth: { authProfileId: "ducktape:expired" },
+              authProfileId: "ducktape:expired",
             },
           },
         },

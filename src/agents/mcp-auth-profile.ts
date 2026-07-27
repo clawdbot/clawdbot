@@ -34,23 +34,33 @@ function normalizeStringHeaders(value: unknown): Record<string, string> | undefi
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
-/** Returns the refresh-capable auth profile selected for one MCP server. */
+/** Returns the bearer-capable auth profile selected for one MCP server. */
 export function resolveMcpAuthProfileId(rawServer: unknown): string | undefined {
-  if (!isRecord(rawServer) || rawServer.auth !== "oauth" || !isRecord(rawServer.oauth)) {
+  if (!isRecord(rawServer)) {
     return undefined;
   }
-  const authProfileId = rawServer.oauth.authProfileId;
-  return typeof authProfileId === "string" && authProfileId.trim().length > 0
-    ? authProfileId.trim()
+  const authProfileId = rawServer.authProfileId;
+  if (typeof authProfileId === "string" && authProfileId.trim().length > 0) {
+    return authProfileId.trim();
+  }
+  if (rawServer.auth !== "oauth" || !isRecord(rawServer.oauth)) {
+    return undefined;
+  }
+  const legacyAuthProfileId = rawServer.oauth.authProfileId;
+  return typeof legacyAuthProfileId === "string" && legacyAuthProfileId.trim().length > 0
+    ? legacyAuthProfileId.trim()
     : undefined;
 }
 
 /** Returns whether a server needs an OpenClaw-managed bearer projected externally. */
 export function requiresMcpBearerProjection(rawServer: unknown): boolean {
-  if (!isRecord(rawServer) || rawServer.auth !== "oauth") {
+  if (!isRecord(rawServer)) {
     return false;
   }
-  return Boolean(resolveMcpAuthProfileId(rawServer) || typeof rawServer.url === "string");
+  return Boolean(
+    resolveMcpAuthProfileId(rawServer) ||
+    (rawServer.auth === "oauth" && typeof rawServer.url === "string"),
+  );
 }
 
 async function resolveMcpAuthProfileBearerToken(
@@ -187,6 +197,7 @@ function buildTokenEnvVarName(serverName: string): string {
 
 function stripOpenClawOnlyOAuthConfig(server: BundleMcpServerConfig): BundleMcpServerConfig {
   const next = { ...server };
+  delete next.authProfileId;
   delete next.auth;
   delete next.oauth;
   return next;
