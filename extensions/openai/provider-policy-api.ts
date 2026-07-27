@@ -11,6 +11,7 @@ import type {
 } from "openclaw/plugin-sdk/provider-model-types";
 import {
   classifyOpenAIBaseUrl,
+  normalizeOpenAICodexLoopbackBaseUrl,
   OPENAI_API_BASE_URL,
   OPENAI_CODEX_RESPONSES_BASE_URL,
 } from "./base-url.js";
@@ -304,10 +305,13 @@ function resolveSingleObservedModelRoute(
     },
     sourceBaseUrl,
   );
+  const codexProxyBaseUrl = normalizeOpenAICodexLoopbackBaseUrl(
+    context.configuredProviderParams?.codexProxyBaseUrl,
+  );
   const chatGPTRoute = withRuntimePolicy(
     {
       api: OPENAI_CHATGPT_RESPONSES_API,
-      baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,
+      baseUrl: codexProxyBaseUrl ?? OPENAI_CODEX_RESPONSES_BASE_URL,
       authRequirement: "subscription",
       requestTransportOverrides,
     },

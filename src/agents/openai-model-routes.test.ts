@@ -28,6 +28,37 @@ describe("OpenAI model route adapter", () => {
     });
   });
 
+  it("projects a configured loopback proxy onto subscription route selection", () => {
+    expect(
+      resolveOpenAIModelRoutes({
+        provider: "openai",
+        modelId: "gpt-5.4",
+        config: {
+          models: {
+            providers: {
+              openai: {
+                params: {
+                  codexProxyBaseUrl: "http://127.0.0.1:7862/backend-api/codex",
+                },
+              },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        env: {},
+      }),
+    ).toMatchObject({
+      kind: "routes",
+      routes: [
+        { api: "openai-responses", authRequirement: "api-key" },
+        {
+          api: "openai-chatgpt-responses",
+          baseUrl: "http://127.0.0.1:7862/backend-api/codex",
+          authRequirement: "subscription",
+        },
+      ],
+    });
+  });
+
   it("ignores other providers", () => {
     expect(resolveOpenAIModelRoutes({ provider: "anthropic", modelId: "gpt-5.5" })).toBeNull();
   });

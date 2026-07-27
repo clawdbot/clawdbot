@@ -87,6 +87,7 @@ export function createProviderModelRoutesResolver(params: {
   const configuredProvider = providerConfig
     ? { api: providerConfig.api, baseUrl: providerConfig.baseUrl }
     : undefined;
+  const configuredProviderParams = providerConfig?.params;
   const normalizeConfiguredModelId = (modelId: string) =>
     normalizeModelId(provider, modelId, surface);
   const canonicalizeModelId = (modelId: string) =>
@@ -144,6 +145,7 @@ export function createProviderModelRoutesResolver(params: {
         requestTransportOverrides,
         ...(configuredModel ? { configuredModel } : {}),
         ...(configuredProvider ? { configuredProvider } : {}),
+        ...(configuredProviderParams ? { configuredProviderParams } : {}),
         env,
         ...(observedRoutes && observedRoutes.length > 0 ? { observedRoutes } : {}),
       }) ?? null

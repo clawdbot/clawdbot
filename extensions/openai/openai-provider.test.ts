@@ -1012,6 +1012,43 @@ describe("buildOpenAIProvider", () => {
     expect(new Headers(request?.init?.headers).get("ChatGPT-Account-ID")).toBeNull();
   });
 
+  it("discovers proxy models from a materialized token without reloading its SecretRef", async () => {
+    const proxyBaseUrl = "http://127.0.0.1:7862/backend-api/codex";
+    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async (params) => ({
+      response: Response.json({
+        models: [
+          {
+            slug: "gpt-5.6-sol",
+            display_name: "GPT-5.6 Sol",
+            visibility: "list",
+            supported_reasoning_levels: ["high", "xhigh"],
+          },
+        ],
+      }),
+      finalUrl: params.url,
+      release: async () => undefined,
+    }));
+
+    const provider = await runCatalogWithFetchGuard({
+      auth: {
+        mode: "token",
+        apiKey: "materialized-loopback-capability",
+        profileId: "openai:mlclaw",
+        source: "profile",
+      },
+      codexProxyBaseUrl: proxyBaseUrl,
+      fetchGuard,
+    });
+
+    expect(provider.models).toEqual([
+      expect.objectContaining({ id: "gpt-5.6-sol", baseUrl: proxyBaseUrl }),
+    ]);
+    expect(mocks.resolveApiKeyForProvider).not.toHaveBeenCalled();
+    expect(
+      new Headers(vi.mocked(fetchGuard).mock.calls[0]?.[0].init?.headers).get("Authorization"),
+    ).toBe("Bearer materialized-loopback-capability");
+  });
+
   it("rejects remote Codex proxy URLs before sending a token", async () => {
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn();
 
@@ -1811,6 +1848,70 @@ describe("buildOpenAIProvider", () => {
         config,
       } as never),
     ).toMatchObject({ effort: "xhigh", transport: "sse" });
+  });
+
+  it("warms credential-scoped proxy metadata before dynamic model materialization", async () => {
+    const proxyBaseUrl = "http://127.0.0.1:7862/backend-api/codex";
+    mocks.resolveApiKeyForProvider.mockResolvedValue({
+      mode: "token",
+      apiKey: "materialized-loopback-capability",
+      source: "profile:openai:mlclaw",
+      profileId: "openai:mlclaw",
+    });
+    mocks.resolveProviderAuthProfileMetadata.mockReturnValue({ profileId: "openai:mlclaw" });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({
+        models: [
+          {
+            slug: "gpt-5.6-sol",
+            display_name: "GPT-5.6 Sol",
+            visibility: "list",
+            supported_reasoning_levels: ["high", "xhigh"],
+          },
+        ],
+      }),
+    );
+    const provider = buildOpenAIProvider();
+    const context = {
+      provider: "openai",
+      modelId: "gpt-5.6-sol",
+      modelRegistry: { find: () => null },
+      agentDir: "/tmp/openai-agent",
+      workspaceDir: "/tmp/openai-workspace",
+      authProfileId: "openai:mlclaw",
+      authProfileMode: "token",
+      providerConfig: {
+        api: "openai-chatgpt-responses",
+        baseUrl: proxyBaseUrl,
+        models: [],
+      },
+      config: {
+        models: {
+          providers: {
+            openai: {
+              params: { codexProxyBaseUrl: proxyBaseUrl },
+            },
+          },
+        },
+      },
+    } as never;
+
+    try {
+      await provider.prepareDynamicModel?.(context);
+      expect(provider.resolveDynamicModel?.(context)).toMatchObject({
+        provider: "openai",
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        api: "openai-chatgpt-responses",
+        baseUrl: proxyBaseUrl,
+      });
+      expect(fetchSpy).toHaveBeenCalledOnce();
+      expect(new Headers(fetchSpy.mock.calls[0]?.[1]?.headers).get("Authorization")).toBe(
+        "Bearer materialized-loopback-capability",
+      );
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 
   it("keeps loopback proxy capabilities out of remote usage endpoints", () => {

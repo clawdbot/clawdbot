@@ -59,6 +59,8 @@ export type ProviderResolveModelRoutesContext = {
   requestTransportOverrides?: ProviderRouteOverridePresence;
   configuredModel?: ProviderModelRouteSource;
   configuredProvider?: ProviderModelRouteSource;
+  /** Provider-owned non-model parameters that can affect concrete route construction. */
+  configuredProviderParams?: Readonly<Record<string, unknown>>;
   /** Environment view; the provider owns interpretation of its variables. */
   env?: Readonly<Record<string, string | undefined>>;
   /** Physical route facts for one logical model; input order is not preference. */

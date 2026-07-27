@@ -69,6 +69,22 @@ import {
 import { resolveUnifiedOpenAIThinkingProfile } from "./thinking-policy.js";
 
 const PROVIDER_ID = "openai";
+const OPENAI_CODEX_DYNAMIC_MODEL_TTL_MS = 60_000;
+
+type PreparedCodexModel = {
+  expiresAt: number;
+  model: ProviderRuntimeModel;
+};
+
+function preparedCodexModelKey(ctx: ProviderResolveDynamicModelContext): string {
+  return [
+    ctx.agentDir ?? "",
+    ctx.workspaceDir ?? "",
+    ctx.authProfileId ?? "",
+    resolveOpenAICodexProxyBaseUrl(ctx.config) ?? "",
+    normalizeOpenAIModelRouteId(ctx.modelId),
+  ].join("\u0000");
+}
 
 // OpenAI-native error codes stay with the OpenAI provider hook.
 function classifyOpenAiFailoverCode(code: string | undefined) {
@@ -957,6 +973,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
   const codexHooks = buildOpenAICodexProviderHooks();
   const codexResponsesHooks = buildOpenAIResponsesProviderHooks();
   const responsesHooks = buildOpenAIResponsesProviderHooks({ transport: "sse" });
+  const preparedCodexModels = new Map<string, PreparedCodexModel>();
   return {
     id: PROVIDER_ID,
     label: "OpenAI",
@@ -995,18 +1012,21 @@ export function buildOpenAIProvider(): ProviderPlugin {
         try {
           const { resolveApiKeyForProvider, resolveProviderAuthProfileMetadata } =
             await import("openclaw/plugin-sdk/provider-auth-runtime");
-          const runtimeAuth = await resolveApiKeyForProvider({
-            provider: PROVIDER_ID,
-            cfg: ctx.config,
-            ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
-            ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
-            ...(auth.profileId
-              ? {
-                  profileId: auth.profileId,
-                  lockedProfile: true,
-                }
-              : {}),
-          });
+          const runtimeAuth =
+            auth.mode === "token" && auth.apiKey
+              ? auth
+              : await resolveApiKeyForProvider({
+                  provider: PROVIDER_ID,
+                  cfg: ctx.config,
+                  ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
+                  ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
+                  ...(auth.profileId
+                    ? {
+                        profileId: auth.profileId,
+                        lockedProfile: true,
+                      }
+                    : {}),
+                });
           if (runtimeAuth && isCodexCatalogAuthMode(runtimeAuth.mode) && runtimeAuth.apiKey) {
             const metadata = resolveProviderAuthProfileMetadata({
               provider: PROVIDER_ID,
@@ -1061,10 +1081,71 @@ export function buildOpenAIProvider(): ProviderPlugin {
       order: "simple",
       run: async () => ({ providers: { [PROVIDER_ID]: OPENAI_MANIFEST_PROVIDER } }),
     },
-    resolveDynamicModel: (ctx) =>
-      shouldResolveDynamicModelThroughCodex(ctx)
+    prepareDynamicModel: async (ctx) => {
+      if (
+        !shouldResolveDynamicModelThroughCodex(ctx) ||
+        !resolveOpenAICodexProxyBaseUrl(ctx.config)
+      ) {
+        return;
+      }
+      const key = preparedCodexModelKey(ctx);
+      if ((preparedCodexModels.get(key)?.expiresAt ?? 0) > Date.now()) {
+        return;
+      }
+      const { resolveApiKeyForProvider, resolveProviderAuthProfileMetadata } =
+        await import("openclaw/plugin-sdk/provider-auth-runtime");
+      const runtimeAuth = await resolveApiKeyForProvider({
+        provider: PROVIDER_ID,
+        cfg: ctx.config ?? {},
+        ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
+        ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
+        ...(ctx.authProfileId ? { profileId: ctx.authProfileId, lockedProfile: true } : {}),
+      });
+      if (!runtimeAuth?.apiKey || !isCodexCatalogAuthMode(runtimeAuth.mode)) {
+        return;
+      }
+      const metadata = resolveProviderAuthProfileMetadata({
+        provider: PROVIDER_ID,
+        cfg: ctx.config ?? {},
+        ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
+        ...((runtimeAuth.profileId ?? ctx.authProfileId)
+          ? { profileId: runtimeAuth.profileId ?? ctx.authProfileId }
+          : {}),
+      });
+      const provider = await buildOpenAICodexLiveProviderConfig({
+        discoveryApiKey: runtimeAuth.apiKey,
+        accountId: metadata.accountId,
+        baseUrl: resolveOpenAICodexProxyBaseUrl(ctx.config),
+        auth: runtimeAuth.mode,
+      });
+      const modelId = normalizeOpenAIModelRouteId(ctx.modelId);
+      const model = provider.models.find(
+        (candidate) => normalizeOpenAIModelRouteId(candidate.id) === modelId,
+      );
+      if (model) {
+        preparedCodexModels.set(key, {
+          expiresAt: Date.now() + OPENAI_CODEX_DYNAMIC_MODEL_TTL_MS,
+          model: {
+            ...model,
+            provider: PROVIDER_ID,
+            api: model.api ?? "openai-chatgpt-responses",
+            baseUrl: model.baseUrl ?? provider.baseUrl,
+            input: model.input.filter(
+              (input): input is "text" | "image" => input === "text" || input === "image",
+            ),
+          },
+        });
+      }
+    },
+    resolveDynamicModel: (ctx) => {
+      const prepared = preparedCodexModels.get(preparedCodexModelKey(ctx));
+      if (prepared && prepared.expiresAt > Date.now()) {
+        return prepared.model;
+      }
+      return shouldResolveDynamicModelThroughCodex(ctx)
         ? codexHooks.resolveDynamicModel?.(withOpenAICodexProxyRoute(ctx))
-        : resolveOpenAIGptForwardCompatModel(ctx),
+        : resolveOpenAIGptForwardCompatModel(ctx);
+    },
     preferRuntimeResolvedModel: (ctx) => codexHooks.preferRuntimeResolvedModel?.(ctx) ?? false,
     normalizeResolvedModel: (ctx) => {
       if (!isOpenAIProvider(ctx.provider)) {
