@@ -578,7 +578,10 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: mantis-telegram-desktop-proof-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ steps.inspect.outputs.output_dir }}
+          path: |
+            ${{ steps.inspect.outputs.output_dir }}/mantis-evidence.json
+            ${{ steps.inspect.outputs.output_dir }}/baseline
+            ${{ steps.inspect.outputs.output_dir }}/candidate
           retention-days: 14
           if-no-files-found: error
 

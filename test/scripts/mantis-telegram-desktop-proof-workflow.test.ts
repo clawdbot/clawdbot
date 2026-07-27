@@ -566,6 +566,13 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     );
     expect(workflow).toContain('sudo chmod 0700 "$proof_worktree_root"');
     expect(workflow).toContain('sudo chown -R root:root "$proof_worktree_root"');
+    const uploadPaths = String(
+      workflowStep("Upload Mantis Telegram desktop artifacts").with?.path ?? "",
+    );
+    expect(uploadPaths).toContain("/mantis-evidence.json");
+    expect(uploadPaths).toContain("/baseline");
+    expect(uploadPaths).toContain("/candidate");
+    expect(uploadPaths).not.toContain("session.json");
     expect(wrapper).toContain("#!/bin/bash");
     expect(wrapper).toContain('readonly docker_bin="/usr/bin/docker"');
     expect(wrapper).toContain('readonly flock_bin="/usr/bin/flock"');
@@ -592,6 +599,8 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(wrapper).toContain('destroy_bounded_filesystem "$runtime_root"');
     expect(wrapper).toContain('create_runtime_claim "$container_name" "$runtime_source"');
     expect(wrapper).toContain('cancel_runtime_claim "$1" "$runtime_source"');
+    expect(wrapper).toContain("terminate_runtime_claim");
+    expect(wrapper).toContain("Never reread by name here");
     expect(wrapper).toContain("refusing to destroy an active runtime claim");
     expect(wrapper).toContain("refusing to destroy runtime with pending network cleanup");
     expect(wrapper).toContain('remove_claimed_runtime_input "$runtime_parent/$1-input"');

@@ -107,6 +107,11 @@ cancel_runtime_claim() {
   if [[ ! -e "$cancel_path" && ! -L "$cancel_path" ]]; then
     install -o root -g root -m 0400 /dev/null "$cancel_path"
   fi
+}
+
+terminate_runtime_claim() {
+  # cancel_runtime_claim already captured the root-owned PID/PGID/start tuple.
+  # Never reread by name here: delayed cleanup must not target a replacement claim.
   if claim_process_is_active; then
     kill -TERM -- "-$claimed_pgid" 2>/dev/null || true
   fi
@@ -811,8 +816,11 @@ case "$command" in
     [[ "$runtime_source" =~ ^/tmp/openclaw-tg-crabbox-sut-[A-Za-z0-9]+$ ]] \
       || die "invalid runtime source"
     cancel_runtime_claim "$1" "$runtime_source"
-    remove_container_or_fail "$1"
-    cleanup_network "${1}-net"
+    stop_result=0
+    remove_container_or_fail "$1" || stop_result=1
+    cleanup_network "${1}-net" || stop_result=1
+    terminate_runtime_claim
+    exit "$stop_result"
     ;;
   destroy)
     [[ $# -eq 2 ]] || die "destroy expects a container name and runtime root"
