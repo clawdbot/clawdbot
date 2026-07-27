@@ -110,6 +110,26 @@ describe("Code Mode guest source validation", () => {
       code: "class Guest { #return = 10; run() { return this.#return / /import.meta/.source.length; } } return new Guest().run();",
     },
     {
+      name: "ordinary import method",
+      code: "const api = { import(value) { return value; } }; return api.import(42);",
+    },
+    {
+      name: "ordinary require method",
+      code: "const api = { require(value) { return value; } }; return api.require(42);",
+    },
+    {
+      name: "optional ordinary import method",
+      code: "const api = { import(value) { return value; } }; return api?.import?.(42);",
+    },
+    {
+      name: "computed ordinary require method",
+      code: 'const api = { require(value) { return value; } }; return api["require"](42);',
+    },
+    {
+      name: "ordinary import metadata property",
+      code: "const api = { import: { meta: 42 } }; return api.import.meta;",
+    },
+    {
       name: "ordinary malformed JavaScript for guest syntax diagnostics",
       code: "const answer = ;",
     },
@@ -133,6 +153,22 @@ describe("Code Mode guest source validation", () => {
     {
       name: "comment-separated require",
       code: "return require /* hidden */ ('node:fs');",
+    },
+    {
+      name: "Unicode-escaped direct require",
+      code: String.raw`return r\u0065quire('node:fs');`,
+    },
+    {
+      name: "optional direct require",
+      code: "return require?.('node:fs');",
+    },
+    {
+      name: "parenthesized direct require",
+      code: "return (require)('node:fs');",
+    },
+    {
+      name: "sequence-wrapped direct require",
+      code: "return (0, require)('node:fs');",
     },
     {
       name: "comment-separated dynamic import",
@@ -265,6 +301,14 @@ describe("Code Mode guest source validation", () => {
       name: "module-shaped comment",
       code: "const value: number = 1; /* import('node:fs') */ return value;",
     },
+    {
+      name: "ordinary typed import method",
+      code: "const api: { import(value: number): number } = { import(value) { return value; } }; return api.import(42);",
+    },
+    {
+      name: "ordinary typed require method",
+      code: "const api: { require(value: number): number } = { require(value) { return value; } }; return api.require(42);",
+    },
   ])("preserves TypeScript $name", async ({ code }) => {
     await expect(prepareSource({ code, language: "typescript", config })).resolves.toEqual(
       expect.any(String),
@@ -322,6 +366,31 @@ describe("Code Mode guest source validation", () => {
       await expect(prepareSource({ code: harmless, config })).resolves.toBe(harmless);
 
       const executable = `${prefix} / import('node:fs');${suffix}`;
+      await expect(prepareSource({ code: executable, config })).rejects.toThrow(
+        "code mode module access is disabled",
+      );
+    }
+  }, 30_000);
+
+  it("separates 20,000 ordinary methods from disguised module loaders", async () => {
+    const harmlessMethods = [
+      "api.import(value)",
+      "api.require(value)",
+      "api?.import?.(value)",
+      'api["require"](value)',
+    ];
+    const moduleExpressions = [
+      String.raw`r\u0065quire('node:fs')`,
+      "require?.('node:fs')",
+      "(require)('node:fs')",
+      "(0, require)('node:fs')",
+    ];
+
+    for (let index = 0; index < 10_000; index += 1) {
+      const harmless = `const value = ${index}; const api = { import(value) { return value; }, require(value) { return value; } }; return ${harmlessMethods[index % harmlessMethods.length]};`;
+      await expect(prepareSource({ code: harmless, config })).resolves.toBe(harmless);
+
+      const executable = `return ${moduleExpressions[index % moduleExpressions.length]};`;
       await expect(prepareSource({ code: executable, config })).rejects.toThrow(
         "code mode module access is disabled",
       );
