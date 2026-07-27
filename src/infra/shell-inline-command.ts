@@ -283,20 +283,19 @@ export function hasPowerShellProfileStartupBeforeInlineCommand(
   valueTokenIndex: number | null = resolvePowerShellInlineCommandMatch(argv).valueTokenIndex,
 ): boolean {
   let profilesDisabled = false;
-  // PowerShell defaults positional scripts to -File and bare argv to an
-  // interactive session; both still load profiles before execution.
+  // Positional scripts and bare sessions have no reviewable inline payload;
+  // never bind mutable script contents or future stdin to a command approval.
   const commandFlagIndex = valueTokenIndex === null ? argv.length : valueTokenIndex - 1;
   for (let index = 1; index < commandFlagIndex;) {
     const rawToken = argv[index] ?? "";
     if (rawToken === "--") {
-      const positionalPayload = argv[index + 1]?.trim();
-      return !profilesDisabled || !positionalPayload || positionalPayload === "-";
+      return true;
     }
     if (rawToken === "-") {
       return true;
     }
     if (!isPowerShellOptionToken(rawToken)) {
-      return !profilesDisabled;
+      return true;
     }
     const token = normalizeLowercaseStringOrEmpty(rawToken);
     if (POWERSHELL_UNREVIEWED_STARTUP_FLAGS.has(token)) {

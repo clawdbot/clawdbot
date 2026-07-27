@@ -86,9 +86,10 @@ function chooseSeeded<T>(random: () => number, values: readonly T[]): T {
 }
 
 describe.runIf(process.platform !== "win32")("exec auto-review shell stress", () => {
-  it("keeps explicit and positional profile-free PowerShell script boundaries distinct", () => {
+  it("keeps mutable PowerShell script entry points outside auto-review", () => {
     const positionalScript = ["pwsh", "-NoProfile", "./safe.ps1"];
     const explicitScript = ["pwsh", "-NoProfile", "-File", "./safe.ps1"];
+    const delimitedScript = ["pwsh", "-NoProfile", "--", "./safe.ps1"];
     const consoleScript = [
       "powershell",
       "-NoProfile",
@@ -106,12 +107,17 @@ describe.runIf(process.platform !== "win32")("exec auto-review shell stress", ()
       command: "./safe.ps1",
       valueTokenIndex: 3,
     });
+    expect(resolvePowerShellInlineCommandMatch(delimitedScript)).toEqual({
+      command: null,
+      valueTokenIndex: null,
+    });
     expect(resolvePowerShellInlineCommandMatch(consoleScript)).toEqual({
       command: "Get-Date",
       valueTokenIndex: 5,
     });
-    expect(isBlockedShellWrapperCommand(positionalScript)).toBe(false);
-    expect(isBlockedShellWrapperCommand(explicitScript)).toBe(false);
+    expect(isBlockedShellWrapperCommand(positionalScript)).toBe(true);
+    expect(isBlockedShellWrapperCommand(explicitScript)).toBe(true);
+    expect(isBlockedShellWrapperCommand(delimitedScript)).toBe(true);
     expect(isBlockedShellWrapperCommand(consoleScript)).toBe(true);
   });
 
@@ -198,7 +204,13 @@ describe.runIf(process.platform !== "win32")("exec auto-review shell stress", ()
       ["pwsh", "-NoProfile", "-Command", "Write-Output safe"],
       false,
     ],
-    ["PowerShell profile-free positional script", ["pwsh", "-NoProfile", "./safe.ps1"], false],
+    ["PowerShell profile-free positional script", ["pwsh", "-NoProfile", "./safe.ps1"], true],
+    [
+      "PowerShell profile-free explicit script",
+      ["pwsh", "-NoProfile", "-File", "./safe.ps1"],
+      true,
+    ],
+    ["PowerShell profile-free delimited script", ["pwsh", "-NoProfile", "--", "./safe.ps1"], true],
     ["PowerShell abbreviated profile-free command", ["pwsh", "-nop", "-c", "Get-Date"], false],
   ])("classifies %s using the canonical shell policy", (_name, argv, blocked) => {
     expect(isBlockedShellWrapperCommand(argv)).toBe(blocked);
@@ -286,6 +298,9 @@ describe.runIf(process.platform !== "win32")("exec auto-review shell stress", ()
     ["PowerShell profile-free interactive session", "pwsh -NoProfile"],
     ["PowerShell profile-free positional stdin", "pwsh -NoProfile -"],
     ["PowerShell profile-free delimited stdin", "pwsh -NoProfile -- -"],
+    ["PowerShell profile-free positional script", "pwsh -NoProfile ./safe.ps1"],
+    ["PowerShell profile-free explicit script", "pwsh -NoProfile -File ./safe.ps1"],
+    ["PowerShell profile-free delimited script", "pwsh -NoProfile -- ./safe.ps1"],
     [
       "Windows PowerShell console startup despite disabled profiles",
       "powershell -NoProfile -PSConsoleFile ./evil.psc1 -Command 'Write-Output safe'",
@@ -426,9 +441,6 @@ describe.runIf(process.platform !== "win32")("exec auto-review shell stress", ()
     "pwsh -NoProfile -Command 'Write-Output safe'",
     "pwsh -nop -c 'Write-Output safe'",
     "pwsh /NoProfile /c 'Write-Output safe'",
-    "pwsh -NoProfile ./safe.ps1",
-    "pwsh -NoProfile -File ./safe.ps1",
-    "pwsh -NoProfile -- ./safe.ps1",
   ])("preserves ordinary reviewable command: %s", async (command) => {
     for (const host of ["gateway", "node", "codex-app-server"] as const) {
       await expect(

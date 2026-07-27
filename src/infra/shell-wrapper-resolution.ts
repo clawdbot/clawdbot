@@ -13,6 +13,7 @@ import {
   hasPosixInteractiveStartupBeforeInlineCommand,
   hasPosixLoginStartupBeforeInlineCommand,
   isPowerShellInlineEncodedCommandFlag,
+  isPowerShellInlineFileCommandFlag,
   NUSHELL_INLINE_COMMAND_FLAGS,
   POSIX_INLINE_COMMAND_FLAGS,
   resolveInlineCommandMatch,
@@ -578,13 +579,14 @@ export function isBlockedShellWrapperCommand(argv: string[], rawCommand?: string
   }
   if (wrapper.kind === "powershell") {
     const { command, valueTokenIndex } = resolvePowerShellInlineCommandMatch(candidate.argv);
-    // Profiles and login scripts run before the payload; encoded flags hide
-    // that payload entirely. Require a human unless startup is explicitly off.
+    // Profiles run before the payload; encoded commands and mutable script
+    // files have no content bound to the approval. Escalate each to a human.
     if (
       hasPowerShellProfileStartupBeforeInlineCommand(candidate.argv, valueTokenIndex) ||
       (valueTokenIndex !== null &&
         (command === "-" ||
-          isPowerShellInlineEncodedCommandFlag(candidate.argv[valueTokenIndex - 1] ?? "")))
+          isPowerShellInlineEncodedCommandFlag(candidate.argv[valueTokenIndex - 1] ?? "") ||
+          isPowerShellInlineFileCommandFlag(candidate.argv[valueTokenIndex - 1] ?? "")))
     ) {
       return true;
     }
