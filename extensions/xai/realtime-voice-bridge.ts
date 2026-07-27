@@ -33,6 +33,7 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
   private connected = false;
   private sessionConfigured = false;
   private intentionallyClosed = false;
+  private terminalError: Error | null = null;
   private reconnectAttempts = 0;
   private pendingAudio: Buffer[] = [];
   private pendingToolResults: Array<{
@@ -47,6 +48,9 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
   private reconnectAbortController = new AbortController();
 
   async connect(): Promise<void> {
+    if (this.terminalError) {
+      throw this.terminalError;
+    }
     this.intentionallyClosed = false;
     if (this.reconnectAbortController.signal.aborted) {
       this.reconnectAbortController = new AbortController();
@@ -146,6 +150,8 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
     await new Promise<void>((resolve, reject) => {
       let settled = false;
       let startupFailureClosing = false;
+      let terminalFailure: Error | undefined;
+      let terminalCloseNotified = false;
       const settleResolve = () => {
         if (!settled) {
           settled = true;
@@ -159,6 +165,14 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
           clearTimeout(connectTimeout);
           reject(error);
         }
+      };
+      const notifyTerminalClose = (error: Error) => {
+        settleReject(error);
+        if (terminalCloseNotified) {
+          return;
+        }
+        terminalCloseNotified = true;
+        this.config.onClose?.("error");
       };
       const connectTimeout = setTimeout(() => {
         if (!this.sessionConfigured && !this.intentionallyClosed) {
@@ -187,6 +201,28 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
         settleReject(error);
         if (ws.readyState !== WebSocket.CLOSED) {
           ws.close(1000, "startup failed");
+        }
+      };
+      const failConnection = (error: Error) => {
+        if (terminalFailure) {
+          return;
+        }
+        terminalFailure = error;
+        this.terminalError = error;
+        this.intentionallyClosed = true;
+        this.reconnectAbortController.abort();
+        this.connected = false;
+        this.sessionConfigured = false;
+        this.pendingToolResultAcks.clear();
+        try {
+          this.config.onError?.(error);
+        } finally {
+          if (ws.readyState !== WebSocket.CLOSED) {
+            ws.close(1002, "Malformed audio payload");
+          } else {
+            this.ws = null;
+            notifyTerminalClose(error);
+          }
         }
       };
 
@@ -227,7 +263,11 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
             rejectStartup(new Error(readXaiRealtimeErrorDetail(event.error)));
             return;
           }
-          this.handleEvent(event);
+          const eventFailure = this.handleEvent(event);
+          if (eventFailure) {
+            failConnection(eventFailure);
+            return;
+          }
           if (event.type === "session.updated") {
             settleResolve();
           }
@@ -268,6 +308,15 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
                 : undefined,
           },
         });
+        if (terminalFailure) {
+          if (this.ws === ws) {
+            this.ws = null;
+          }
+          this.connected = false;
+          this.sessionConfigured = false;
+          notifyTerminalClose(terminalFailure);
+          return;
+        }
         if (startupFailureClosing) {
           if (this.ws === ws) {
             this.connected = false;
@@ -343,6 +392,9 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
         detail: `reason=${reason} attempt=${attempt}`,
       });
     } catch (error) {
+      if (this.terminalError) {
+        return;
+      }
       this.config.onError?.(error instanceof Error ? error : new Error(String(error)));
       await this.attemptReconnect(reason);
     }

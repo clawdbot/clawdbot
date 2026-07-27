@@ -1,3 +1,4 @@
+import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   XAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX,
@@ -14,7 +15,7 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
 
   protected abstract onSessionUpdated(): void;
 
-  protected handleEvent(event: XaiRealtimeEvent): void {
+  protected handleEvent(event: XaiRealtimeEvent): Error | undefined {
     this.config.onEvent?.({
       direction: "server",
       type: event.type,
@@ -70,7 +71,11 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
         if (!audioDelta) {
           return;
         }
-        this.config.onAudio(Buffer.from(audioDelta, "base64"));
+        const canonicalAudio = canonicalizeBase64(audioDelta);
+        if (!canonicalAudio) {
+          return new Error("xAI realtime voice stream returned malformed base64 audio data");
+        }
+        this.config.onAudio(Buffer.from(canonicalAudio, "base64"));
         if (event.item_id && event.item_id !== this.lastAssistantItemId) {
           this.lastAssistantItemId = event.item_id;
           this.responseStartTimestamp = this.latestMediaTimestamp;

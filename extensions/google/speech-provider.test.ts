@@ -31,7 +31,7 @@ beforeAll(async () => {
 
 installProviderHttpMockCleanup();
 
-function googleTtsResponse(pcm = Buffer.from([1, 0, 2, 0])) {
+function googleTtsResponse(audio: Buffer | string = Buffer.from([1, 0, 2, 0])) {
   return {
     ok: true,
     json: async () => ({
@@ -42,7 +42,7 @@ function googleTtsResponse(pcm = Buffer.from([1, 0, 2, 0])) {
               {
                 inlineData: {
                   mimeType: "audio/L16;codec=pcm;rate=24000",
-                  data: pcm.toString("base64"),
+                  data: typeof audio === "string" ? audio : audio.toString("base64"),
                 },
               },
             ],
@@ -351,27 +351,9 @@ describe("Google speech provider", () => {
     expect(result.audioBuffer.subarray(44)).toEqual(pcm);
   });
 
-  it("rejects malformed base64 audio payloads instead of decoding corrupted PCM", async () => {
+  it("rejects Gemini audio with non-canonical base64 pad bits", async () => {
     const malformedResponse = {
-      response: {
-        ok: true,
-        json: async () => ({
-          candidates: [
-            {
-              content: {
-                parts: [
-                  {
-                    inlineData: {
-                      mimeType: "audio/L16;codec=pcm;rate=24000",
-                      data: "%%%not-base64!!",
-                    },
-                  },
-                ],
-              },
-            },
-          ],
-        }),
-      },
+      response: googleTtsResponse("ZE=="),
       release: vi.fn(async () => {}),
     };
     const requestSequence = vi.fn().mockResolvedValue(malformedResponse);
@@ -380,7 +362,7 @@ describe("Google speech provider", () => {
 
     await expect(
       provider.synthesize({
-        text: "Hello from OpenClaw.",
+        text: "Reject malformed audio.",
         cfg: {},
         providerConfig: {
           apiKey: "google-test-key",
@@ -389,7 +371,6 @@ describe("Google speech provider", () => {
         timeoutMs: 5_000,
       }),
     ).rejects.toThrow("Google TTS response returned malformed base64 audio data");
-    // Payload decode failures reuse the existing retry-once framework.
     expect(requestSequence).toHaveBeenCalledTimes(2);
   });
 
