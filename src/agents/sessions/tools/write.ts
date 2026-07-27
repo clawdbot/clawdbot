@@ -574,9 +574,11 @@ export function createWriteToolDefinition(
           !sessionWrittenPaths.has(absolutePath)
         ) {
           throw new Error(
-            `File already exists: ${path} (${precheck.beforeStat.size} bytes) and its content differs. ` +
-              `To replace it, call write again with overwrite: true. ` +
-              `If the existing content matters, read it first or choose a different path.`,
+            `File already exists: ${path} (${precheck.beforeStat.size} bytes) with different content; ` +
+              `replacing it would permanently destroy that content. ` +
+              `First read the file to check whether it must be kept; if it must, write your new content ` +
+              `to a different file name instead. Only retry with overwrite: true once you are certain ` +
+              `the existing content is disposable.`,
           );
         }
         // Terminal no-op: file already has identical content.
