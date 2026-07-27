@@ -795,7 +795,7 @@ describe("runCopilotAttempt", () => {
     const pool = makeFakePool(sdk);
 
     const result = await runCopilotAttempt(
-      makeParams({ initialReplayState: { sdkSessionId: "legacy-session" } }),
+      makeParams({ initialReplayState: { sdkSessionId: "legacy-session" } as never }),
       { pool },
     );
 
@@ -2998,7 +2998,7 @@ describe("runCopilotAttempt", () => {
         code: "transcript_persistence_failed",
       });
       expect(result.messagesSnapshot).toMatchObject([
-        { role: "user", content: params.userTurnTranscriptRecorder?.message.content },
+        { role: "user", content: params.userTurnTranscriptRecorder?.message?.content },
       ]);
       expect(
         (result as AgentHarnessAttemptResult & { journalValidated?: boolean }).journalValidated,
@@ -3078,7 +3078,7 @@ describe("runCopilotAttempt", () => {
               content: "repeat",
               idempotencyKey: "copilot:legacy:user:content-fingerprint",
               timestamp: 1,
-            },
+            } as AgentMessage,
           ],
           prompt: "repeat",
           userTurnTranscriptRecorder: recorder,
@@ -3103,7 +3103,7 @@ describe("runCopilotAttempt", () => {
               content: "active",
               idempotencyKey: "copilot:legacy:user:content-fingerprint",
               timestamp: 2,
-            },
+            } as AgentMessage,
           ],
           prompt: "active",
           userTurnTranscriptRecorder: recorder,
@@ -3119,12 +3119,12 @@ describe("runCopilotAttempt", () => {
     });
 
     it("retains a keyed current user after replacing its staged snapshot", async () => {
-      const current: Extract<AgentMessage, { role: "user" }> = {
+      const current = {
         role: "user",
         content: "keyed current",
         idempotencyKey: "run-1:user",
         timestamp: 2,
-      };
+      } as Extract<AgentMessage, { role: "user" }> & { idempotencyKey: string };
       const recorder = makeUserTurnRecorder(current);
 
       const result = await runCopilotAttempt(
@@ -3165,7 +3165,7 @@ describe("runCopilotAttempt", () => {
       transcriptRuntimeMock.appendStrict.mockResolvedValueOnce({
         kind: "rejected",
         reason: "session-rebound",
-      });
+      } as never);
       const sdk = makeFakeSdk();
 
       const result = await runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });

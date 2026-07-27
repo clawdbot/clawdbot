@@ -178,7 +178,9 @@ export function createAttemptTranscriptJournal(params: {
     // Hooks must finish before BEGIN. This skips steady-state replay hooks; the
     // transaction still revalidates all identities against cross-process races.
     const messages =
-      persistedCount === writes.length ? writes.map((write) => write.message) : writes.map(prepare);
+      persistedCount === writes.length
+        ? writes.map((write) => write.message)
+        : writes.map((write) => prepare(write));
     // Hook omission belongs to policy, but the journal owns structure: one block or
     // structurally destructive rewrite suppresses the complete assistant/result group.
     if (

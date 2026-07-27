@@ -383,7 +383,10 @@ export async function appendSessionTranscriptMessageByIdentityStrict<TMessage>(
         ...(params.now !== undefined ? { now: params.now } : {}),
         ...(params.parentId !== undefined ? { parentId: params.parentId } : {}),
         ...(params.prepareMessageAfterIdempotencyCheck
-          ? { prepareMessageAfterIdempotencyCheck: params.prepareMessageAfterIdempotencyCheck }
+          ? {
+              prepareMessageAfterIdempotencyCheck: (message: unknown) =>
+                params.prepareMessageAfterIdempotencyCheck?.(message as TMessage),
+            }
           : {}),
         ...(params.useRawWhenLinear !== undefined
           ? { useRawWhenLinear: params.useRawWhenLinear }
