@@ -29,7 +29,7 @@ import {
   type OpenShellExecContext,
 } from "./cli.js";
 import { resolveOpenShellPluginConfig, type ResolvedOpenShellPluginConfig } from "./config.js";
-import { createOpenShellFsBridge } from "./fs-bridge.js";
+import { createOpenShellFsBridge, WORKSPACE_SKILL_ROOT_PARTS } from "./fs-bridge.js";
 import {
   DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS,
   movePathWithCopyFallback,
@@ -48,8 +48,7 @@ type PendingExec = {
 const MATERIALIZED_SKILLS_REMOTE_PARTS = [".openclaw", "sandbox-skills"] as const;
 const PROTECTED_SKILL_ROOT_PARTS: readonly (readonly string[])[] = [
   MATERIALIZED_SKILLS_REMOTE_PARTS,
-  ["skills"],
-  [".agents", "skills"],
+  ...WORKSPACE_SKILL_ROOT_PARTS,
 ];
 function buildOpenShellDirectoryUploadArgs(params: {
   sandboxName: string;

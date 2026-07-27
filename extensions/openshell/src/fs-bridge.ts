@@ -22,7 +22,7 @@ type FsSafeRoot = Awaited<ReturnType<typeof fsRoot>>;
 type FsSafeStat = Awaited<ReturnType<FsSafeRoot["stat"]>>;
 
 const MATERIALIZED_SKILLS_CONTAINER_PARTS = [".openclaw", "sandbox-skills", "skills"] as const;
-const WORKSPACE_SKILL_ROOT_PARTS: readonly (readonly string[])[] = [
+export const WORKSPACE_SKILL_ROOT_PARTS: readonly (readonly string[])[] = [
   ["skills"],
   [".agents", "skills"],
 ];
