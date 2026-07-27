@@ -998,8 +998,9 @@ describe("gateway send mirroring", () => {
       isWebchatConnect: () => false,
     });
 
-    await Promise.resolve();
-    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => {
+      expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(2);
+    });
     expect(mocks.dispatchChannelMessageAction.mock.calls[0]?.[0]).toMatchObject({
       conversationReadOrigin: "direct-operator",
     });
@@ -3104,8 +3105,10 @@ describe("gateway send mirroring", () => {
 
     expect(firstRespondCall(respond)[0]).toBe(true);
     const actionCall = lastDispatchChannelMessageActionCall();
-    // workspaceDir is what lets loadWebMedia resolve relative paths against
-    // the agent workspace instead of the gateway cwd; bare roots cannot.
+    // Relative sources must be workspace-resolved before dispatch: channel
+    // action handlers consume split roots fields and cannot recover the
+    // workspace base once params cross the plugin boundary.
+    expect(actionCall?.params?.mediaUrl).toBe(`${TEST_AGENT_WORKSPACE}/work/report/report.md`);
     expect(actionCall?.mediaAccess?.workspaceDir).toBe(TEST_AGENT_WORKSPACE);
     expect(actionCall?.mediaAccess?.localRoots).toContain(TEST_AGENT_WORKSPACE);
     expect(actionCall?.mediaLocalRoots).toContain(TEST_AGENT_WORKSPACE);

@@ -248,6 +248,49 @@ describe("message action media helpers", () => {
     }
   });
 
+  maybeIt("resolves bare relative host media params against the workspace (#114299)", async () => {
+    const workspaceDir = "/tmp/openclaw-agent-workspace";
+    const attachment: Record<string, unknown> = { path: "work/replies/photo.png" };
+    const args: Record<string, unknown> = {
+      media: "work/report/report.md",
+      mediaUrl: "./work/report/report.md",
+      fileUrl: "../outside/escape.md",
+      attachments: [attachment],
+      // Remote/scheme, home, and absolute sources must pass through untouched.
+      image: "https://example.com/cover.png",
+      avatarPath: "~/avatars/profile.png",
+      avatarUrl: "/opt/media/avatar.jpg",
+    };
+
+    await normalizeSandboxMediaParams({
+      args,
+      mediaPolicy: { mode: "host" },
+      extraParamKeys: matrixMediaSourceParamKeys,
+      structuredAttachments: "all",
+      workspaceDir,
+    });
+
+    expect(args.media).toBe(path.join(workspaceDir, "work", "report", "report.md"));
+    expect(args.mediaUrl).toBe(path.join(workspaceDir, "work", "report", "report.md"));
+    // Escapes resolve outside the workspace and stay subject to the roots allowlist.
+    expect(args.fileUrl).toBe(path.resolve(workspaceDir, "../outside/escape.md"));
+    expect(attachment.path).toBe(path.join(workspaceDir, "work", "replies", "photo.png"));
+    expect(args.image).toBe("https://example.com/cover.png");
+    expect(args.avatarPath).toBe("~/avatars/profile.png");
+    expect(args.avatarUrl).toBe("/opt/media/avatar.jpg");
+  });
+
+  maybeIt("leaves relative host media params unresolved without a workspace", async () => {
+    const args: Record<string, unknown> = { mediaUrl: "work/report/report.md" };
+
+    await normalizeSandboxMediaParams({
+      args,
+      mediaPolicy: { mode: "host" },
+    });
+
+    expect(args.mediaUrl).toBe("work/report/report.md");
+  });
+
   it("collects host media source hints from the shared media-source key set", () => {
     expect(
       collectActionMediaSourceHints(

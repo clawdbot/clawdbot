@@ -7,7 +7,7 @@ import {
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/schema/error-codes.js";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveAgentIdentity, resolveResponsePrefix } from "../../agents/identity.js";
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import {
@@ -1931,6 +1931,7 @@ export async function runMessageAction(
     mediaPolicy: normalizationPolicy,
     extraParamKeys: extraActionMediaSourceParamKeys,
     structuredAttachments: structuredAttachmentMode,
+    workspaceDir: resolvedAgentId ? resolveAgentWorkspaceDir(cfg, resolvedAgentId) : undefined,
   });
 
   const mediaAccess = resolveAgentScopedOutboundMediaAccess({

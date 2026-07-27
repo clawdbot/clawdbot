@@ -31,6 +31,7 @@ import { resolveMessageChannelSelection } from "../../infra/outbound/channel-sel
 import {
   collectActionMediaSourceHints,
   hydrateAttachmentParamsForAction,
+  normalizeSandboxMediaParams,
   resolveAttachmentMediaPolicy,
 } from "../../infra/outbound/message-action-params.js";
 import {
@@ -540,16 +541,26 @@ export const sendHandlers: GatewayRequestHandlers = {
         // relative media paths resolve against the agent workspace instead of
         // the gateway cwd. Must match the in-process runner's resolution so
         // gateway-forwarded actions cannot widen or narrow file reads.
+        const structuredAttachmentMode = request.action === "send" ? "all" : "selected";
         const mediaAccess = resolveAgentScopedOutboundMediaAccess({
           cfg,
           agentId,
           mediaSources: collectActionMediaSourceHints(request.params, undefined, {
-            structuredAttachments: request.action === "send" ? "all" : "selected",
+            structuredAttachments: structuredAttachmentMode,
           }),
           sessionKey,
           messageProvider: sessionKey ? undefined : channel,
           accountId: sessionKey ? (trustedContext.requesterAccountId ?? accountId) : accountId,
           requesterSenderId: trustedContext.requesterSenderId,
+        });
+        // Resolve bare relative sources before dispatch: channel action
+        // handlers consume split roots/readFile fields and cannot recover the
+        // workspace base once params cross the plugin boundary (#114299).
+        await normalizeSandboxMediaParams({
+          args: request.params,
+          mediaPolicy: resolveAttachmentMediaPolicy({ mediaAccess }),
+          structuredAttachments: structuredAttachmentMode,
+          workspaceDir: mediaAccess.workspaceDir,
         });
         if (request.action === "send") {
           await hydrateAttachmentParamsForAction({

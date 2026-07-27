@@ -1,5 +1,6 @@
 // Message-action param normalization hydrates media sources, sandbox paths,
 // base64 buffers, JSON params, and plugin-owned media aliases.
+import path from "node:path";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { basenameFromAnyPath } from "@openclaw/media-core/file-name";
 import { extensionForMime } from "@openclaw/media-core/mime";
@@ -540,25 +541,54 @@ async function hydrateAttachmentPayload(params: {
   }
 }
 
-/** Rewrites action media params to sandbox-safe paths and rejects data URLs. */
+const MEDIA_SOURCE_SCHEME_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
+
+/**
+ * Resolves a bare relative media source against the agent workspace. Channel
+ * plugins receive only split roots/readFile fields on some boundaries, so an
+ * unresolved relative path would be validated against the gateway cwd and
+ * rejected (#114299). Remote/scheme, home, UNC, and absolute sources pass
+ * through untouched.
+ */
+function resolveWorkspaceRelativeMediaSource(media: string, workspaceDir: string): string {
+  const trimmed = media.trim();
+  if (
+    !trimmed ||
+    MEDIA_SOURCE_SCHEME_RE.test(trimmed) ||
+    trimmed.startsWith("~") ||
+    trimmed.startsWith("\\\\") ||
+    path.isAbsolute(trimmed)
+  ) {
+    return media;
+  }
+  return path.resolve(workspaceDir, trimmed);
+}
+
+/** Rewrites action media params to sandbox/workspace-safe paths and rejects data URLs. */
 export async function normalizeSandboxMediaParams(params: {
   args: Record<string, unknown>;
   mediaPolicy: AttachmentMediaPolicy;
   extraParamKeys?: readonly string[];
   structuredAttachments?: StructuredAttachmentMode;
+  /** Host-mode resolution base for bare relative media sources. */
+  workspaceDir?: string;
 }): Promise<void> {
   const sandboxRoot =
     params.mediaPolicy.mode === "sandbox" ? params.mediaPolicy.sandboxRoot.trim() : undefined;
+  const workspaceDir = sandboxRoot ? undefined : params.workspaceDir?.trim() || undefined;
+  const resolveMediaSource = async (media: string): Promise<string> => {
+    if (sandboxRoot) {
+      return await resolveSandboxedMediaSource({ media, sandboxRoot });
+    }
+    return workspaceDir ? resolveWorkspaceRelativeMediaSource(media, workspaceDir) : media;
+  };
   for (const key of buildActionMediaSourceParamKeys(params.extraParamKeys)) {
     const entry = resolveMediaParamEntry(params.args, key);
     if (!entry) {
       continue;
     }
     assertMediaNotDataUrl(entry.value);
-    if (!sandboxRoot) {
-      continue;
-    }
-    const normalized = await resolveSandboxedMediaSource({ media: entry.value, sandboxRoot });
+    const normalized = await resolveMediaSource(entry.value);
     if (normalized !== entry.value) {
       params.args[entry.key] = normalized;
     }
@@ -574,13 +604,7 @@ export async function normalizeSandboxMediaParams(params: {
   }
   for (const attachmentSource of attachmentSources) {
     assertMediaNotDataUrl(attachmentSource.value);
-    if (!sandboxRoot) {
-      continue;
-    }
-    const normalized = await resolveSandboxedMediaSource({
-      media: attachmentSource.value,
-      sandboxRoot,
-    });
+    const normalized = await resolveMediaSource(attachmentSource.value);
     if (normalized !== attachmentSource.value) {
       attachmentSource.attachment[attachmentSource.key] = normalized;
     }
