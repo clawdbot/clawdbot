@@ -159,6 +159,44 @@ describe("collectChannelLegacyConfigRules", () => {
     expect(listPluginDoctorLegacyConfigRulesMock).not.toHaveBeenCalled();
   });
 
+  it("skips runtime fallbacks for empty and unresolved contracts in plugin-free mode", () => {
+    loadBundledChannelDoctorContractApiMock.mockImplementation((channelId: string) =>
+      channelId === "imessage" ? { legacyConfigRules: [] } : undefined,
+    );
+    getBootstrapChannelPluginMock.mockReturnValue({
+      doctor: {
+        legacyConfigRules: [
+          {
+            path: ["channels", "imessage", "legacy"],
+            message: "should not load bootstrap rules",
+          },
+        ],
+      },
+    });
+    listPluginDoctorLegacyConfigRulesMock.mockReturnValue([
+      {
+        path: ["channels", "custom-chat", "legacy"],
+        message: "should not scan plugin contracts",
+      },
+    ]);
+
+    const rules = collectChannelLegacyConfigRules(
+      {
+        channels: {
+          imessage: {},
+          "custom-chat": {},
+        },
+      },
+      undefined,
+      undefined,
+      "none",
+    );
+
+    expect(rules).toStrictEqual([]);
+    expect(getBootstrapChannelPluginMock).not.toHaveBeenCalled();
+    expect(listPluginDoctorLegacyConfigRulesMock).not.toHaveBeenCalled();
+  });
+
   it("scopes channel legacy scans to touched channels during dry-run validation", () => {
     loadBundledChannelDoctorContractApiMock.mockImplementation((channelId: string) => ({
       legacyConfigRules: [

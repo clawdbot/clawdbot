@@ -20,6 +20,7 @@ import {
   collectRelevantDoctorPluginIds,
   listPluginDoctorSessionStoreAgentIds,
 } from "../plugins/doctor-contract-registry.js";
+import type { PluginRuntimeMode } from "../plugins/plugin-runtime-mode.js";
 import {
   LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
@@ -78,6 +79,7 @@ function canonicalizeSessionKeyForAgent(params: {
   preserveCanonicalAgentOwner?: boolean;
   preserveAmbiguousKeys?: boolean;
   preserveForeignMainAliases?: boolean;
+  pluginRuntime?: PluginRuntimeMode;
 }): string {
   const raw = params.key.trim();
   if (!raw) {
@@ -178,10 +180,15 @@ function canonicalizeSessionKeyForAgent(params: {
     const rest = raw.slice("subagent:".length);
     return normalizeLowercaseStringOrEmpty(`agent:${agentId}:subagent:${rest}`);
   }
+  if (params.pluginRuntime === "none") {
+    // Without channel surfaces, opaque legacy keys cannot be classified safely.
+    // Preserve them for the full pass instead of persisting a generic fallback.
+    return params.key;
+  }
   // Channel-owned legacy shapes must win before the generic group/channel
   // fallback so plugin-specific legacy group keys can canonicalize to their
   // owning channel instead of the generic `...:unknown:group:...` bucket.
-  for (const surface of getLegacySessionSurfaces()) {
+  for (const surface of getLegacySessionSurfaces(params.pluginRuntime)) {
     const canonicalized = surface.canonicalizeLegacySessionKey?.({
       key: raw,
       agentId,
@@ -202,7 +209,12 @@ function canonicalizeSessionKeyForAgent(params: {
 
 export function pickLatestLegacyDirectEntry(
   store: Record<string, SessionEntryLike>,
+  pluginRuntime: PluginRuntimeMode = "full",
 ): SessionEntryLike | null {
+  // Plugin-free preflight cannot distinguish an opaque direct key from a channel-owned key.
+  if (pluginRuntime === "none") {
+    return null;
+  }
   let best: SessionEntryLike | null = null;
   let bestUpdated = -1;
   for (const [key, entry] of Object.entries(store)) {
@@ -223,7 +235,7 @@ export function pickLatestLegacyDirectEntry(
     if (normalizedLower.startsWith("subagent:")) {
       continue;
     }
-    if (isLegacyGroupKey(normalized) || isSurfaceGroupKey(normalized)) {
+    if (isLegacyGroupKey(normalized, pluginRuntime) || isSurfaceGroupKey(normalized)) {
       continue;
     }
     const updatedAt = typeof entry.updatedAt === "number" ? entry.updatedAt : 0;
@@ -289,6 +301,7 @@ export function canonicalizeSessionStore(params: {
   preserveCanonicalAgentOwner?: boolean;
   preserveAmbiguousKeys?: boolean;
   preserveForeignMainAliases?: boolean;
+  pluginRuntime?: PluginRuntimeMode;
 }): { store: Record<string, SessionEntryLike>; legacyKeys: string[] } {
   const canonical = Object.create(null) as Record<string, SessionEntryLike>;
   const meta = new Map<string, { isCanonical: boolean; updatedAt: number }>();
@@ -307,6 +320,7 @@ export function canonicalizeSessionStore(params: {
       preserveCanonicalAgentOwner: params.preserveCanonicalAgentOwner,
       preserveAmbiguousKeys: params.preserveAmbiguousKeys,
       preserveForeignMainAliases: params.preserveForeignMainAliases,
+      pluginRuntime: params.pluginRuntime,
     });
     const isCanonical = canonicalKey === key;
     if (!isCanonical) {
@@ -682,6 +696,7 @@ export function listLegacySessionKeys(params: {
   scope?: SessionScope;
   preserveAmbiguousKeys?: boolean;
   preserveForeignMainAliases?: boolean;
+  pluginRuntime?: PluginRuntimeMode;
 }): string[] {
   const legacy: string[] = [];
   for (const key of Object.keys(params.store)) {
@@ -694,6 +709,7 @@ export function listLegacySessionKeys(params: {
       preserveCanonicalAgentOwner: params.preserveAmbiguousKeys,
       preserveAmbiguousKeys: params.preserveAmbiguousKeys,
       preserveForeignMainAliases: params.preserveForeignMainAliases,
+      pluginRuntime: params.pluginRuntime,
     });
     if (canonical !== key) {
       legacy.push(key);
@@ -727,6 +743,7 @@ export async function migrateOrphanedSessionKeys(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   additionalAgentIds?: readonly string[];
+  pluginRuntime?: PluginRuntimeMode;
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const changes: string[] = [];
   const warnings: string[] = [];
@@ -737,11 +754,13 @@ export async function migrateOrphanedSessionKeys(params: {
   const storeConfig = params.cfg.session?.store;
   const pluginAgentIds =
     params.additionalAgentIds ??
-    listPluginDoctorSessionStoreAgentIds({
-      config: params.cfg,
-      env,
-      pluginIds: collectRelevantDoctorPluginIds(params.cfg),
-    });
+    (params.pluginRuntime === "none"
+      ? []
+      : listPluginDoctorSessionStoreAgentIds({
+          config: params.cfg,
+          env,
+          pluginIds: collectRelevantDoctorPluginIds(params.cfg),
+        }));
   const pluginAgentIdSet = new Set(pluginAgentIds.map((id) => normalizeAgentId(id)));
 
   // Collect all known agent store paths with their owning agentIds.
@@ -886,6 +905,7 @@ export async function migrateOrphanedSessionKeys(params: {
         preserveCanonicalAgentOwner: true,
         preserveAmbiguousKeys,
         preserveForeignMainAliases: pluginForeignMainAliasRisk,
+        pluginRuntime: params.pluginRuntime,
       });
       working = canonicalized;
       // Each pass only counts keys it changed from the current working store, so
@@ -923,7 +943,12 @@ export async function migrateLegacyAcpSessionMetadata(params: {
   env?: NodeJS.ProcessEnv;
   now?: () => number;
   pluginSessionStoreAgentIds?: readonly string[];
+  pluginRuntime?: PluginRuntimeMode;
 }): Promise<{ changes: string[]; warnings: string[] }> {
+  // ACP metadata keys must follow the same channel-aware canonicalization as their sessions.
+  if (params.pluginRuntime === "none") {
+    return { changes: [], warnings: [] };
+  }
   const changes: string[] = [];
   const warnings: string[] = [];
   const env = params.env ?? process.env;
@@ -1085,6 +1110,7 @@ export async function migrateLegacyAcpSessionMetadata(params: {
           mainKey,
           scope,
           skipCrossAgentRemap: true,
+          pluginRuntime: params.pluginRuntime,
         });
         writeAcpSessionMetaForMigration({
           sessionKey: canonicalSessionKey,

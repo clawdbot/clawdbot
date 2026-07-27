@@ -98,6 +98,7 @@ export async function migrateLegacySessions(
     preserveCanonicalAgentOwner: true,
     preserveAmbiguousKeys: detected.sessions.preserveAmbiguousKeys,
     preserveForeignMainAliases: detected.sessions.preserveForeignMainAliases,
+    pluginRuntime: detected.pluginRuntime,
   });
   const canonicalizedLegacy = canonicalizeSessionStore({
     store: legacyStore,
@@ -106,6 +107,7 @@ export async function migrateLegacySessions(
     scope: detected.targetScope,
     preserveCanonicalAgentOwner: true,
     preserveForeignMainAliases: detected.sessions.preserveForeignMainAliases,
+    pluginRuntime: detected.pluginRuntime,
   });
   const preservedLegacyForeignMainAliasCount = detected.sessions.preserveForeignMainAliases
     ? Object.keys(legacyStore).filter((key) =>
@@ -144,7 +146,7 @@ export async function migrateLegacySessions(
   });
   let migratedDirectChatKey: string | undefined;
   if (!merged[mainKey]) {
-    const latest = pickLatestLegacyDirectEntry(legacyStore);
+    const latest = pickLatestLegacyDirectEntry(legacyStore, detected.pluginRuntime);
     if (latest?.sessionId) {
       merged[mainKey] = latest;
       migratedDirectChatKey = mainKey;

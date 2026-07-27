@@ -1888,6 +1888,57 @@ describe("state migrations", () => {
     await expectMissingPath(restartSentinelPath);
   });
 
+  it("runs a full migration pass after a plugin-free core pass", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const legacyStorePath = path.join(stateDir, "sessions", "sessions.json");
+    await fs.mkdir(path.dirname(legacyStorePath), { recursive: true });
+    await fs.writeFile(
+      legacyStorePath,
+      JSON.stringify({
+        "legacy-direct": {
+          sessionId: "legacy-direct-session",
+          updatedAt: 1,
+        },
+      }),
+      "utf8",
+    );
+
+    const pluginFree = await autoMigrateLegacyState({
+      cfg,
+      env,
+      homedir: () => root,
+      pluginRuntime: "none",
+    });
+    await expect(fs.readFile(legacyStorePath, "utf8")).resolves.toContain("legacy-direct-session");
+    const full = await autoMigrateLegacyState({
+      cfg,
+      env,
+      homedir: () => root,
+      pluginRuntime: "full",
+    });
+    const repeatedFull = await autoMigrateLegacyState({
+      cfg,
+      env,
+      homedir: () => root,
+      pluginRuntime: "full",
+    });
+
+    expect(pluginFree.skipped).toBe(false);
+    expect(full.skipped).toBe(false);
+    expect(repeatedFull.skipped).toBe(true);
+    const targetStore = JSON.parse(
+      await fs.readFile(
+        path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json"),
+        "utf8",
+      ),
+    ) as Record<string, { sessionId?: string }>;
+    expect(targetStore["agent:worker-1:desk"]?.sessionId).toBe("legacy-direct-session");
+    await expectMissingPath(legacyStorePath);
+  });
+
   it("runs plugin doctor migrations after repairing shared state schema", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");

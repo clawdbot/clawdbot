@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { note } from "../../../packages/terminal-core/src/note.js";
+import type { PluginRuntimeMode } from "../../plugins/plugin-runtime-mode.js";
 import { ExitError } from "../../runtime.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { formatCliCommand } from "../command-format.js";
@@ -77,9 +78,18 @@ describe("ensureConfigReady", () => {
   const tempRoots: string[] = [];
   let envSnapshot: ReturnType<typeof captureEnv> | undefined;
 
-  async function runEnsureConfigReady(commandPath: string[], suppressDoctorStdout = false) {
+  async function runEnsureConfigReady(
+    commandPath: string[],
+    suppressDoctorStdout = false,
+    pluginRuntime?: PluginRuntimeMode,
+  ) {
     const runtime = makeRuntime();
-    await ensureConfigReady({ runtime: runtime as never, commandPath, suppressDoctorStdout });
+    await ensureConfigReady({
+      runtime: runtime as never,
+      commandPath,
+      suppressDoctorStdout,
+      ...(pluginRuntime ? { pluginRuntime } : {}),
+    });
     return runtime;
   }
 
@@ -135,6 +145,7 @@ describe("ensureConfigReady", () => {
       "OPENCLAW_NIX_MODE",
       "OPENCLAW_PROFILE",
       "OPENCLAW_STATE_DIR",
+      "VITEST",
     ]);
     vi.clearAllMocks();
     resetConfigGuardStateForTests();
@@ -157,7 +168,12 @@ describe("ensureConfigReady", () => {
     }
   });
 
-  it.each([
+  const migrationCases: Array<{
+    name: string;
+    commandPath: string[];
+    expectedDoctorCalls: number;
+    pluginRuntime?: PluginRuntimeMode;
+  }> = [
     {
       name: "skips doctor flow for status task reads without legacy state",
       commandPath: ["status"],
@@ -183,22 +199,47 @@ describe("ensureConfigReady", () => {
       commandPath: ["message"],
       expectedDoctorCalls: 1,
     },
-  ])("$name", async ({ commandPath, expectedDoctorCalls }) => {
-    await runEnsureConfigReady(commandPath);
+    {
+      name: "runs gateway calls without plugin-runtime evaluation",
+      commandPath: ["gateway", "call"],
+      expectedDoctorCalls: 1,
+      pluginRuntime: "none",
+    },
+  ];
+
+  it.each(migrationCases)("$name", async ({ commandPath, expectedDoctorCalls, pluginRuntime }) => {
+    await runEnsureConfigReady(commandPath, false, pluginRuntime);
     expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledTimes(expectedDoctorCalls);
     if (expectedDoctorCalls > 0) {
       expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledWith({
         migrateState: true,
         migrateLegacyConfig: false,
         invalidConfigNote: false,
+        ...(pluginRuntime ? { pluginRuntime } : {}),
       });
     }
+  });
+
+  it("caches config snapshots separately for each plugin runtime mode", async () => {
+    setTestEnvValue("VITEST", "false");
+
+    await runEnsureConfigReady(["update", "status"], false, "full");
+    await runEnsureConfigReady(["update", "status"], false, "none");
+    await runEnsureConfigReady(["update", "status"], false, "full");
+
+    expect(readConfigFileSnapshotMock.mock.calls).toEqual([
+      [{ pluginRuntime: "full" }],
+      [{ pluginRuntime: "none" }],
+    ]);
   });
 
   it("keeps status config guard reads non-observing", async () => {
     await runEnsureConfigReady(["status"]);
 
-    expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({ observe: false });
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({
+      observe: false,
+      pluginRuntime: "full",
+    });
   });
 
   it("runs doctor flow when lightweight startup detection finds legacy state", async () => {

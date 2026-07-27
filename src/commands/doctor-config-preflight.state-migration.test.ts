@@ -453,6 +453,31 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
   });
 
+  it("leases plugin-free core migrations without stamping the full startup checkpoint", async () => {
+    needsStartupMigrationCheckpoint.mockReturnValue(true);
+
+    await runDoctorConfigPreflight({
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+      requireStartupMigrationCheckpoint: true,
+      pluginRuntime: "none",
+    });
+
+    expect(autoMigrateLegacyStateDir).toHaveBeenCalledOnce();
+    expect(autoMigrateLegacyState).toHaveBeenCalledWith({
+      cfg: { gateway: { mode: "local", port: 19091 } },
+      env: process.env,
+      recoverCorruptTargetStore: undefined,
+      pluginRuntime: "none",
+    });
+    const pinnedEnv = acquireStartupMigrationLease.mock.calls[0]?.[0]?.env;
+    expect(needsStartupMigrationCheckpoint).toHaveBeenCalledWith({ env: pinnedEnv });
+    expect(acquireStartupMigrationLease).toHaveBeenCalledOnce();
+    expect(runPostCorePluginConvergence).not.toHaveBeenCalled();
+    expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
+    expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
+  });
+
   it("records the startup migration checkpoint when state migrations only leave notices", async () => {
     needsStartupMigrationCheckpoint.mockReturnValue(true);
     autoMigrateLegacyStateDir.mockResolvedValueOnce({
@@ -704,6 +729,29 @@ describe("runDoctorConfigPreflight state migration", () => {
       "OpenClaw startup migrations did not complete cleanly; refusing to report the gateway ready.",
     );
 
+    expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
+    expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
+  });
+
+  it("blocks the plugin-free gateway phase when core migration warnings remain", async () => {
+    needsStartupMigrationCheckpoint.mockReturnValue(true);
+    autoMigrateLegacyStateDir.mockResolvedValueOnce({
+      migrated: false,
+      skipped: false,
+      changes: [],
+      warnings: ["Left legacy state directory in place."],
+    });
+
+    await expect(
+      runDoctorConfigPreflight({
+        migrateLegacyConfig: false,
+        invalidConfigNote: false,
+        requireStartupMigrationCheckpoint: true,
+        pluginRuntime: "none",
+      }),
+    ).rejects.toThrow("refusing to report the gateway ready");
+
+    expect(runPostCorePluginConvergence).not.toHaveBeenCalled();
     expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
     expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
   });

@@ -193,7 +193,11 @@ export async function readConfigFileSnapshotInternal(
     );
     if (!validated.ok) {
       const legacyIssues = await deps.measure("config.snapshot.read.legacy-issues", () =>
-        collectInvalidConfigLegacyIssues(effectiveConfigRaw, effectiveParsed),
+        collectInvalidConfigLegacyIssues(
+          effectiveConfigRaw,
+          effectiveParsed,
+          context.options.pluginRuntime ?? "full",
+        ),
       );
       // Invalid snapshots stay inspectable, but rejected env.vars must not become runtime state.
       restoreEnvChangesIfUnchanged({

@@ -132,6 +132,7 @@ const addGatewayRunCommandMock = vi.hoisted(() =>
 const ensureCliExecutionBootstrapMock = vi.hoisted(() =>
   vi.fn<(_opts: CliExecutionBootstrapOptions) => Promise<void>>(async () => {}),
 );
+const runGatewayStartupMigrationsMock = vi.hoisted(() => vi.fn(async () => undefined));
 const emitCliBannerMock = vi.hoisted(() => vi.fn());
 const enableConsoleCaptureMock = vi.hoisted(() => vi.fn());
 const progressDoneMock = vi.hoisted(() => vi.fn());
@@ -196,6 +197,10 @@ vi.mock("./gateway-cli/run-command.js", () => ({
 
 vi.mock("./command-execution-startup.js", () => ({
   ensureCliExecutionBootstrap: ensureCliExecutionBootstrapMock,
+}));
+
+vi.mock("./gateway-cli/startup-migrations.js", () => ({
+  runGatewayStartupMigrations: runGatewayStartupMigrationsMock,
 }));
 
 vi.mock("../version.js", () => ({
@@ -658,6 +663,9 @@ describe("runCli exit behavior", () => {
     const bootstrapOrder = ensureCliExecutionBootstrapMock.mock.invocationCallOrder[0] ?? 0;
     expect(recoveryOrder).toBeGreaterThan(0);
     expect(bootstrapOrder).toBeGreaterThan(recoveryOrder);
+    expect(runGatewayStartupMigrationsMock).toHaveBeenCalledWith({
+      beforeStateMigrations: expect.any(Function),
+    });
   });
 
   it("defers config-drift exit to the migration owner before startup migrations", async () => {

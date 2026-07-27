@@ -18,6 +18,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { StartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
+import type { PluginRuntimeMode } from "../plugins/plugin-runtime-mode.js";
 import {
   buildDegradedPluginsFromVerificationFailures,
   formatPluginVerificationDiagnostic,
@@ -125,19 +126,21 @@ export type DoctorConfigPreflightResult = {
 
 function collectDoctorLegacyIssues(
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
+  pluginRuntime: PluginRuntimeMode,
 ): LegacyConfigIssue[] {
   if (!snapshot.exists) {
     return [];
   }
   const resolvedRaw = snapshot.sourceConfig ?? snapshot.config ?? {};
   const sourceRaw = snapshot.parsed ?? resolvedRaw;
-  return findDoctorLegacyConfigIssues(resolvedRaw, sourceRaw);
+  return findDoctorLegacyConfigIssues(resolvedRaw, sourceRaw, undefined, pluginRuntime);
 }
 
 function addDoctorLegacyIssues(
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
+  pluginRuntime: PluginRuntimeMode,
 ): Awaited<ReturnType<typeof readConfigFileSnapshot>> {
-  const legacyIssues = collectDoctorLegacyIssues(snapshot);
+  const legacyIssues = collectDoctorLegacyIssues(snapshot, pluginRuntime);
   if (legacyIssues.length === 0) {
     return snapshot;
   }
@@ -416,8 +419,10 @@ export async function runDoctorConfigPreflight(
     skipPristineStartupStateMigrations?: boolean;
     /** Enable migrations that may retire security-sensitive stores only during explicit repair. */
     doctorOnlyStateMigrations?: boolean;
+    pluginRuntime?: PluginRuntimeMode;
   } = {},
 ): Promise<DoctorConfigPreflightResult> {
+  const pluginRuntime = options.pluginRuntime ?? "full";
   const stateMigrationsRequested = options.migrateState !== false;
   const startupCheckpoint =
     options.requireStartupMigrationCheckpoint === true
@@ -425,6 +430,7 @@ export async function runDoctorConfigPreflight(
       : undefined;
   let stateMigrations: Awaited<ReturnType<typeof loadDoctorStateMigrations>> | undefined;
   let startupMigrationEnv = process.env;
+  let needsStartupCheckpoint = false;
   let shouldRecordStartupCheckpoint = false;
   let skipPristineStartupStateMigrations = options.skipPristineStartupStateMigrations === true;
   let skipPristineCoreStateMigrations =
@@ -468,10 +474,13 @@ export async function runDoctorConfigPreflight(
     if (startupCheckpoint) {
       // Later config reads can apply state selectors. Pin the accepted lease target for its lifetime.
       startupMigrationEnv = cloneEnvWithPlatformSemantics(process.env);
-      shouldRecordStartupCheckpoint = startupCheckpoint.needsStartupMigrationCheckpoint({
+      needsStartupCheckpoint = startupCheckpoint.needsStartupMigrationCheckpoint({
         env: startupMigrationEnv,
       });
-      startupMigrationLease = shouldRecordStartupCheckpoint
+      // Plugin-free startup still leases core mutations, but cannot prove plugin-owned
+      // convergence complete and must not stamp the process-wide full checkpoint.
+      shouldRecordStartupCheckpoint = needsStartupCheckpoint && pluginRuntime === "full";
+      startupMigrationLease = needsStartupCheckpoint
         ? startupCheckpoint.acquireStartupMigrationLease({ env: startupMigrationEnv })
         : undefined;
       if (startupMigrationLease) {
@@ -489,7 +498,7 @@ export async function runDoctorConfigPreflight(
     // migration. Keep repeated Gateway boots out of the legacy/plugin migration import graph.
     stateMigrations =
       stateMigrationsRequested &&
-      (!startupCheckpoint || shouldRecordStartupCheckpoint) &&
+      (!startupCheckpoint || needsStartupCheckpoint) &&
       !skipPristineStartupStateMigrations
         ? await measureStartupPreflightStep("state-migrations-import", loadDoctorStateMigrations)
         : undefined;
@@ -511,11 +520,13 @@ export async function runDoctorConfigPreflight(
     const readOptions = {
       ...(options.observe === false ? { observe: false } : {}),
       skipPluginValidation: shouldSkipPluginValidationForDoctorConfigPreflight(),
+      pluginRuntime,
     };
     let snapshot = addDoctorLegacyIssues(
       await measureStartupPreflightStep("config-snapshot", () =>
         readConfigFileSnapshot(readOptions),
       ),
+      pluginRuntime,
     );
     if (options.repairPrefixedConfig === true && snapshot.exists && !snapshot.valid) {
       if (await recoverConfigFromJsonRootSuffix(snapshot)) {
@@ -523,7 +534,7 @@ export async function runDoctorConfigPreflight(
           "Removed non-JSON prefix from openclaw.json; original saved as .clobbered.*.",
           "Config",
         );
-        snapshot = addDoctorLegacyIssues(await readConfigFileSnapshot(readOptions));
+        snapshot = addDoctorLegacyIssues(await readConfigFileSnapshot(readOptions), pluginRuntime);
       } else if (
         await recoverConfigFromLastKnownGood({ snapshot, reason: "doctor-invalid-config" })
       ) {
@@ -531,7 +542,7 @@ export async function runDoctorConfigPreflight(
           "Restored openclaw.json from last-known-good; original saved as .clobbered.*.",
           "Config",
         );
-        snapshot = addDoctorLegacyIssues(await readConfigFileSnapshot(readOptions));
+        snapshot = addDoctorLegacyIssues(await readConfigFileSnapshot(readOptions), pluginRuntime);
       }
       if (
         !snapshot.valid &&
@@ -593,6 +604,7 @@ export async function runDoctorConfigPreflight(
             await autoMigrateLegacyPluginDoctorState({
               config: pluginDoctorOnlyConfig,
               env: process.env,
+              ...(options.pluginRuntime ? { pluginRuntime } : {}),
             }),
           );
         } else if (stateMigrationInput.cfg) {
@@ -623,6 +635,7 @@ export async function runDoctorConfigPreflight(
             env: process.env,
             recoverCorruptTargetStore: options.recoverCorruptTargetStore,
             doctorOnlyStateMigrations: options.doctorOnlyStateMigrations,
+            ...(options.pluginRuntime ? { pluginRuntime } : {}),
           });
           doctorMediaPersistenceAttempted = options.doctorOnlyStateMigrations === true;
           noteStartupStateMigrationResult(legacyStateResult);
@@ -631,6 +644,7 @@ export async function runDoctorConfigPreflight(
             await autoMigrateLegacyPluginDoctorState({
               config: stateMigrationInput.pluginDoctorConfig,
               env: process.env,
+              ...(options.pluginRuntime ? { pluginRuntime } : {}),
             }),
           );
           noteStartupStateMigrationResult(
@@ -659,7 +673,7 @@ export async function runDoctorConfigPreflight(
       );
     }
     if (startupCheckpoint) {
-      if (shouldRecordStartupCheckpoint) {
+      if (startupMigrationLease) {
         if (startupMigrationHeartbeatError) {
           throw startupMigrationHeartbeatError instanceof Error
             ? startupMigrationHeartbeatError
@@ -673,6 +687,8 @@ export async function runDoctorConfigPreflight(
             }),
           );
         }
+      }
+      if (shouldRecordStartupCheckpoint) {
         if (!snapshot.valid) {
           throwStartupMigrationRefusal(
             formatStartupMigrationFailure({
@@ -682,32 +698,33 @@ export async function runDoctorConfigPreflight(
           );
         }
       }
-      // This state is established before the first Gateway plugin load and remains
-      // fixed for the boot. Refresh it on every process start because migration
-      // checkpoints do not persist plugin availability or quarantine state.
-      setActiveDegradedPlugins([]);
-      if (snapshot.valid) {
-        const pluginConvergence = shouldRecordStartupCheckpoint
-          ? await runStartupUpgradeConvergence({
-              cfg: baseConfig,
-              env: process.env,
-            })
-          : await refreshStartupPluginQuarantine({
-              cfg: baseConfig,
-              env: process.env,
-            });
-        setActiveDegradedPlugins(pluginConvergence.quarantinedPlugins);
-        if (pluginConvergence.blockingDiagnostic) {
-          throwStartupMigrationRefusal(
-            formatStartupPluginVerificationFailure(pluginConvergence.blockingDiagnostic),
-          );
+      if (pluginRuntime === "full") {
+        // This state is established before the first Gateway plugin load and remains
+        // fixed for the boot. Plugin-free CLI preflight must leave it to Gateway startup.
+        setActiveDegradedPlugins([]);
+        if (snapshot.valid) {
+          const pluginConvergence = shouldRecordStartupCheckpoint
+            ? await runStartupUpgradeConvergence({
+                cfg: baseConfig,
+                env: process.env,
+              })
+            : await refreshStartupPluginQuarantine({
+                cfg: baseConfig,
+                env: process.env,
+              });
+          setActiveDegradedPlugins(pluginConvergence.quarantinedPlugins);
+          if (pluginConvergence.blockingDiagnostic) {
+            throwStartupMigrationRefusal(
+              formatStartupPluginVerificationFailure(pluginConvergence.blockingDiagnostic),
+            );
+          }
         }
-      }
-      if (shouldRecordStartupCheckpoint) {
-        startupCheckpoint.recordSuccessfulStartupMigrations({
-          env: startupMigrationEnv,
-          lease: startupMigrationLease,
-        });
+        if (shouldRecordStartupCheckpoint) {
+          startupCheckpoint.recordSuccessfulStartupMigrations({
+            env: startupMigrationEnv,
+            lease: startupMigrationLease,
+          });
+        }
       }
     }
 

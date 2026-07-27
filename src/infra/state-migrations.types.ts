@@ -1,6 +1,7 @@
 import type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.core.js";
 import type { SessionScope } from "../config/sessions/types.js";
 import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-registry.js";
+import type { PluginRuntimeMode } from "../plugins/plugin-runtime-mode.js";
 import type { LegacyAuditLogsDetection } from "./state-migrations.audit-logs.types.js";
 import type { LegacyChannelPairingStateDetection } from "./state-migrations.channel-pairing.js";
 import type { LegacyDeviceIdentityDetection } from "./state-migrations.device-identity.types.js";
@@ -23,6 +24,7 @@ export type SessionStoreAliasPlan = {
 
 export type LegacyStateDetection = {
   doctorOnlyStateMigrations?: boolean;
+  pluginRuntime?: PluginRuntimeMode;
   targetAgentId: string;
   targetMainKey: string;
   targetScope?: SessionScope;

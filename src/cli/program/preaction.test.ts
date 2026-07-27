@@ -15,6 +15,7 @@ type EnsureConfigReadyOptions = {
   allowInvalid?: boolean;
   beforeStateMigrations?: () => Promise<boolean>;
   commandPath?: string[];
+  pluginRuntime?: "full" | "none";
   requireConfig?: boolean;
   skipPristineCoreStateMigrations?: boolean;
   skipPristineStartupStateMigrations?: boolean;
@@ -27,6 +28,7 @@ const routeLogsToStderrMock = vi.fn();
 const prepareGatewayRunBootstrapMock = vi.fn(async () => true);
 const recheckGatewayRunBootstrapMock = vi.fn(async () => true);
 const reloadTrustedGatewayRunEnvironmentMock = vi.fn(async () => true);
+const runGatewayStartupMigrationsMock = vi.fn(async () => undefined);
 const wasPreparedGatewayRunCoreStatePristineMock = vi.fn(() => true);
 const wasPreparedGatewayRunStatePristineMock = vi.fn(() => true);
 
@@ -72,6 +74,10 @@ vi.mock("../gateway-cli/pre-bootstrap.js", () => ({
   reloadTrustedGatewayRunEnvironment: reloadTrustedGatewayRunEnvironmentMock,
   wasPreparedGatewayRunCoreStatePristine: wasPreparedGatewayRunCoreStatePristineMock,
   wasPreparedGatewayRunStatePristine: wasPreparedGatewayRunStatePristineMock,
+}));
+
+vi.mock("../gateway-cli/startup-migrations.js", () => ({
+  runGatewayStartupMigrations: runGatewayStartupMigrationsMock,
 }));
 
 let registerPreActionHooks: typeof import("./preaction.js").registerPreActionHooks;
@@ -290,6 +296,7 @@ describe("registerPreActionHooks", () => {
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
       commandPath: ["status"],
+      pluginRuntime: "none",
     });
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
     expect(processTitleSetSpy).toHaveBeenCalledWith("openclaw-status");
@@ -305,6 +312,7 @@ describe("registerPreActionHooks", () => {
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
       commandPath: ["agents", "list"],
+      pluginRuntime: "none",
     });
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
     processTitleSetSpy.mockRestore();
@@ -338,6 +346,7 @@ describe("registerPreActionHooks", () => {
       runtime: runtimeMock,
     });
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(runGatewayStartupMigrationsMock).not.toHaveBeenCalled();
   });
 
   it("passes the gateway config recheck to the state migration boundary", async () => {
@@ -350,6 +359,7 @@ describe("registerPreActionHooks", () => {
       expect.objectContaining({
         beforeStateMigrations: expect.any(Function),
         commandPath: ["gateway", "run"],
+        pluginRuntime: "none",
         skipPristineCoreStateMigrations: true,
         skipPristineStartupStateMigrations: true,
       }),
@@ -363,6 +373,12 @@ describe("registerPreActionHooks", () => {
     expect(reloadTrustedGatewayRunEnvironmentMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
     });
+    expect(runGatewayStartupMigrationsMock).toHaveBeenCalledWith({
+      beforeStateMigrations,
+    });
+    expect(runGatewayStartupMigrationsMock.mock.invocationCallOrder[0]).toBeLessThan(
+      reloadTrustedGatewayRunEnvironmentMock.mock.invocationCallOrder[0] ?? 0,
+    );
   });
 
   it("passes --allow-unconfigured through as an invalid-config override", async () => {
@@ -381,6 +397,7 @@ describe("registerPreActionHooks", () => {
       expect.objectContaining({
         allowInvalid: true,
         commandPath: ["gateway", "run"],
+        pluginRuntime: "none",
       }),
     );
   });
@@ -394,6 +411,7 @@ describe("registerPreActionHooks", () => {
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
       commandPath: ["update"],
+      pluginRuntime: "none",
       allowInvalid: true,
     });
 
@@ -406,6 +424,7 @@ describe("registerPreActionHooks", () => {
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
       commandPath: ["update", "status"],
+      pluginRuntime: "none",
       allowInvalid: true,
       suppressDoctorStdout: true,
     });
@@ -420,6 +439,7 @@ describe("registerPreActionHooks", () => {
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
       commandPath: ["agent"],
+      pluginRuntime: "full",
     });
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "all",
@@ -435,6 +455,7 @@ describe("registerPreActionHooks", () => {
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
       commandPath: ["agent"],
+      pluginRuntime: "full",
       suppressDoctorStdout: true,
     });
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
@@ -463,6 +484,7 @@ describe("registerPreActionHooks", () => {
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
       commandPath: ["onboard"],
+      pluginRuntime: "none",
     });
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
 
@@ -475,6 +497,7 @@ describe("registerPreActionHooks", () => {
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
       commandPath: ["channels", "add"],
+      pluginRuntime: "none",
     });
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
@@ -550,6 +573,7 @@ describe("registerPreActionHooks", () => {
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
       commandPath: ["plugins", "install"],
+      pluginRuntime: "none",
       allowInvalid: true,
     });
 
@@ -562,6 +586,7 @@ describe("registerPreActionHooks", () => {
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
       commandPath: ["plugins", "install"],
+      pluginRuntime: "none",
       allowInvalid: true,
     });
 
@@ -574,6 +599,7 @@ describe("registerPreActionHooks", () => {
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
       commandPath: ["plugins", "install"],
+      pluginRuntime: "none",
       allowInvalid: true,
     });
 
@@ -586,6 +612,7 @@ describe("registerPreActionHooks", () => {
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
       commandPath: ["plugins", "install"],
+      pluginRuntime: "none",
       allowInvalid: true,
     });
 
@@ -598,6 +625,7 @@ describe("registerPreActionHooks", () => {
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
       commandPath: ["plugins", "install"],
+      pluginRuntime: "none",
     });
 
     vi.clearAllMocks();
@@ -609,6 +637,7 @@ describe("registerPreActionHooks", () => {
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
       commandPath: ["plugins", "install"],
+      pluginRuntime: "none",
       allowInvalid: true,
     });
 
@@ -629,6 +658,7 @@ describe("registerPreActionHooks", () => {
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
       commandPath: ["plugins", "install"],
+      pluginRuntime: "none",
     });
   });
 
@@ -663,6 +693,7 @@ describe("registerPreActionHooks", () => {
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
       commandPath: ["status"],
+      pluginRuntime: "none",
       suppressDoctorStdout: true,
     });
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
@@ -676,6 +707,7 @@ describe("registerPreActionHooks", () => {
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
       commandPath: ["update", "status"],
+      pluginRuntime: "none",
       allowInvalid: true,
       suppressDoctorStdout: true,
     });
@@ -690,6 +722,7 @@ describe("registerPreActionHooks", () => {
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
       commandPath: ["config", "set"],
+      pluginRuntime: "none",
     });
   });
 
@@ -767,6 +800,7 @@ describe("registerPreActionHooks", () => {
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
       commandPath: ["machine"],
+      pluginRuntime: "none",
       suppressDoctorStdout: true,
     });
   });
@@ -781,6 +815,7 @@ describe("registerPreActionHooks", () => {
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
       commandPath: ["acp"],
+      pluginRuntime: "none",
       suppressDoctorStdout: true,
     });
 
@@ -794,6 +829,7 @@ describe("registerPreActionHooks", () => {
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
       commandPath: ["acp", "client"],
+      pluginRuntime: "none",
     });
 
     vi.clearAllMocks();
@@ -806,6 +842,7 @@ describe("registerPreActionHooks", () => {
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
       commandPath: ["mcp", "serve"],
+      pluginRuntime: "none",
       suppressDoctorStdout: true,
     });
   });

@@ -6,6 +6,7 @@
 import type { LegacyConfigRule } from "../../config/legacy.shared.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { listPluginDoctorLegacyConfigRules } from "../../plugins/doctor-contract-registry.js";
+import type { PluginRuntimeMode } from "../../plugins/plugin-runtime-mode.js";
 import { getBootstrapChannelPlugin } from "./bootstrap-registry.js";
 import { loadBundledChannelDoctorContractApi } from "./doctor-contract-api.js";
 import type { ChannelId } from "./types.public.js";
@@ -83,6 +84,7 @@ export function collectChannelLegacyConfigRules(
   raw?: unknown,
   touchedPaths?: ReadonlyArray<ReadonlyArray<string>>,
   excludedChannelIds?: ReadonlySet<ChannelId>,
+  pluginRuntime: PluginRuntimeMode = "full",
 ): LegacyConfigRule[] {
   const channelIds = collectRelevantChannelIdsForTouchedPaths({
     raw,
@@ -96,6 +98,11 @@ export function collectChannelLegacyConfigRules(
     const contractRules = contractApi?.legacyConfigRules;
     if (Array.isArray(contractRules)) {
       rules.push(...contractRules);
+      continue;
+    }
+    if (pluginRuntime === "none") {
+      // Plugin-free CLI preflight trusts only the narrow bundled contract surface.
+      // Unresolved channels defer runtime-backed discovery to doctor or plugin startup.
       continue;
     }
 

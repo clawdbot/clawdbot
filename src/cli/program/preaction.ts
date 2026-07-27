@@ -186,6 +186,10 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       skipConfigGuard: shouldBypassConfigGuardForCommandPath(commandPath),
     });
     if (beforeStateMigrations) {
+      // The config guard intentionally avoids plugin runtime; gateway readiness still
+      // requires the plugin-aware migration pass and full startup checkpoint.
+      const { runGatewayStartupMigrations } = await import("../gateway-cli/startup-migrations.js");
+      await runGatewayStartupMigrations({ beforeStateMigrations });
       const { reloadTrustedGatewayRunEnvironment } =
         await import("../gateway-cli/pre-bootstrap.js");
       await reloadTrustedGatewayRunEnvironment({ runtime: defaultRuntime });

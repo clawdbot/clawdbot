@@ -8,6 +8,7 @@ import {
   collectRelevantDoctorPluginIdsForTouchedPaths,
   listPluginDoctorLegacyConfigRules,
 } from "../../../plugins/doctor-contract-registry.js";
+import type { PluginRuntimeMode } from "../../../plugins/plugin-runtime-mode.js";
 
 function collectConfiguredChannelIds(raw: unknown): ReadonlySet<string> {
   if (!raw || typeof raw !== "object") {
@@ -23,7 +24,11 @@ function collectConfiguredChannelIds(raw: unknown): ReadonlySet<string> {
 function collectPluginLegacyConfigRules(
   raw: unknown,
   touchedPaths?: ReadonlyArray<ReadonlyArray<string>>,
+  pluginRuntime: PluginRuntimeMode = "full",
 ): LegacyConfigRule[] {
+  if (pluginRuntime === "none") {
+    return [];
+  }
   const channelIds = collectConfiguredChannelIds(raw);
   const pluginIds = (
     touchedPaths
@@ -41,13 +46,14 @@ export function findDoctorLegacyConfigIssues(
   raw: unknown,
   sourceRaw?: unknown,
   touchedPaths?: ReadonlyArray<ReadonlyArray<string>>,
+  pluginRuntime: PluginRuntimeMode = "full",
 ): LegacyConfigIssue[] {
   return findLegacyConfigIssues(
     raw,
     sourceRaw,
     [
-      ...collectChannelLegacyConfigRules(raw, touchedPaths),
-      ...collectPluginLegacyConfigRules(raw, touchedPaths),
+      ...collectChannelLegacyConfigRules(raw, touchedPaths, undefined, pluginRuntime),
+      ...collectPluginLegacyConfigRules(raw, touchedPaths, pluginRuntime),
     ],
     touchedPaths,
   );

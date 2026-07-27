@@ -1,6 +1,7 @@
 import type fs from "node:fs";
 import type JSON5 from "json5";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginRuntimeMode } from "../plugins/plugin-runtime-mode.js";
 import type {
   ConfigWriteAfterWrite,
   RuntimeConfigSnapshotRefreshOptions,
@@ -111,6 +112,7 @@ export type NormalizedConfigIoDeps = Required<ConfigIoDeps>;
 
 export type ConfigIoFactoryOptions = ConfigIoDeps & {
   pluginValidation?: "full" | "skip";
+  pluginRuntime?: PluginRuntimeMode;
   preservedLegacyRootKeys?: readonly string[];
   shellEnvFallback?: "load" | "defer";
 };
@@ -125,6 +127,7 @@ export type ConfigSnapshotReadOptions = {
     candidate: OpenClawConfig,
     current: OpenClawConfig,
   ) => boolean | Promise<boolean>;
+  pluginRuntime?: PluginRuntimeMode;
   skipPluginValidation?: boolean;
   preservedLegacyRootKeys?: readonly string[];
   suppressFutureVersionWarning?: boolean;
