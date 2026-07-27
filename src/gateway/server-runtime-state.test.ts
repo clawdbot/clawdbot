@@ -84,6 +84,61 @@ describe("createGatewayRuntimeState", () => {
     expect(getActivePluginChannelRegistry()).toBe(startupRegistry);
   });
 
+  it("delegates directly after lazily loading the plugin HTTP handler", async () => {
+    const registry = createEmptyPluginRegistry();
+    const routes = registry.httpRoutes;
+    routes.push({
+      path: "/demo",
+      auth: "plugin",
+      match: "exact",
+      handler: (_req, res) => {
+        res.statusCode = 204;
+        res.end();
+        return true;
+      },
+      pluginId: "demo",
+      source: "test",
+    });
+    let routeReads = 0;
+    Object.defineProperty(registry, "httpRoutes", {
+      configurable: true,
+      get: () => {
+        routeReads++;
+        return routes;
+      },
+    });
+    const runtimeState = await createGatewayRuntimeStateForTest(registry);
+    const server = runtimeState.httpServers[0];
+    if (!server) {
+      throw new Error("expected gateway HTTP server");
+    }
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected TCP gateway address");
+    }
+    try {
+      routeReads = 0;
+      await expect(fetch(`http://127.0.0.1:${address.port}/demo`)).resolves.toMatchObject({
+        status: 204,
+      });
+      const firstRequestReads = routeReads;
+
+      routeReads = 0;
+      await expect(fetch(`http://127.0.0.1:${address.port}/demo`)).resolves.toMatchObject({
+        status: 204,
+      });
+
+      expect(firstRequestReads).toBe(routeReads + 1);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
   it("fails startup when the required IPv4 loopback alias cannot bind", async () => {
     const warn = vi.fn();
     mocks.resolveGatewayListenHosts.mockResolvedValue(["100.64.0.1", "127.0.0.1"]);
