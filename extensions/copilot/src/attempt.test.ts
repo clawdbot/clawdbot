@@ -2996,6 +2996,30 @@ describe("runCopilotAttempt", () => {
       expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["user", "assistant"]);
     });
 
+    it("invalidates replay when storage rewrites a singleton payload", async () => {
+      transcriptRuntimeMock.appendStrict.mockImplementationOnce(async (params) => {
+        const stored = await appendPreparedTranscriptMessage(params);
+        if (!stored) {
+          return { kind: "suppressed" as const };
+        }
+        return {
+          kind: "result" as const,
+          result: {
+            ...stored,
+            message: { ...stored.message, content: "[storage-redacted]" },
+          },
+        };
+      });
+
+      const result = await runCopilotAttempt(makeParams(), { pool: makeFakePool(makeFakeSdk()) });
+
+      expect(result.replayMetadata.replaySafe).toBe(false);
+      expect(result.messagesSnapshot[0]).toMatchObject({
+        role: "user",
+        content: "[storage-redacted]",
+      });
+    });
+
     it("fails before dispatch when the exact transcript target is absent", async () => {
       const sdk = makeFakeSdk();
       const params = makeParams({ trigger: "memory" }) as AgentHarnessAttemptParams & {
@@ -3058,6 +3082,27 @@ describe("runCopilotAttempt", () => {
       recorder.markBlocked();
       const params = makeParams({
         messages: [{ role: "user", content: "blocked", timestamp: 1 }],
+        userTurnTranscriptRecorder: recorder,
+      }) as AgentHarnessAttemptParams & { sessionTarget?: unknown };
+      delete params.sessionTarget;
+
+      const result = await runCopilotAttempt(params, { pool: makeFakePool(sdk) });
+
+      expect(result.messagesSnapshot).toEqual([]);
+    });
+
+    it("does not restore a keyed blocked user when pre-journal setup fails", async () => {
+      const sdk = makeFakeSdk();
+      const current = {
+        role: "user",
+        content: "blocked",
+        idempotencyKey: "run-1:user",
+        timestamp: 1,
+      } as Extract<AgentMessage, { role: "user" }> & { idempotencyKey: string };
+      const recorder = makeUserTurnRecorder(current);
+      recorder.markBlocked();
+      const params = makeParams({
+        messages: [current],
         userTurnTranscriptRecorder: recorder,
       }) as AgentHarnessAttemptParams & { sessionTarget?: unknown };
       delete params.sessionTarget;
@@ -3272,6 +3317,51 @@ describe("runCopilotAttempt", () => {
       expect(result.replayMetadata.replaySafe).toBe(false);
     });
 
+    it("invalidates replay when storage rewrites a tool-group payload", async () => {
+      transcriptRuntimeMock.appendBatch.mockImplementationOnce(async (params) =>
+        params.messages.map((message, index) => ({
+          appended: true,
+          message:
+            index === 1
+              ? {
+                  ...(message.message as object),
+                  content: [{ type: "text", text: "[storage-redacted]" }],
+                }
+              : message.message,
+          messageId: (message.eventId as string | undefined) ?? "transcript-message",
+        })),
+      );
+      const sdk = makeFakeSdk({
+        onCreateSession: (session) => {
+          session.sendAndWait.mockImplementationOnce(async () => {
+            session.emit("assistant.message", {
+              content: "checking",
+              messageId: "tools",
+              toolRequests: [{ name: "read", toolCallId: "call-1" }],
+            });
+            session.emit("tool.execution_complete", {
+              result: { content: "done" },
+              success: true,
+              toolCallId: "call-1",
+            });
+            const final = makeAssistantMessageEvent("final after tool");
+            session.emit("assistant.message", { __eventId: "assistant-final", ...final.data });
+            return final;
+          });
+        },
+      });
+
+      const result = await runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
+
+      expect(result.terminal).toEqual({ kind: "ok" });
+      expect(result.replayMetadata.replaySafe).toBe(false);
+      expect(
+        result.messagesSnapshot.find((message) => message.role === "toolResult"),
+      ).toMatchObject({
+        content: [{ type: "text", text: "[storage-redacted]" }],
+      });
+    });
+
     it("treats before_message_write blocking as authoritative ownership", async () => {
       initializeGlobalHookRunner(
         createMockPluginRegistry([
@@ -3397,6 +3487,24 @@ describe("runCopilotAttempt", () => {
 
       expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["assistant"]);
       expect(result.messagesSnapshot[0]).toMatchObject({ display: false });
+    });
+
+    it("removes a keyed blocked user from the returned snapshot", async () => {
+      const current = {
+        role: "user",
+        content: "blocked",
+        idempotencyKey: "run-1:user",
+        timestamp: 1,
+      } as Extract<AgentMessage, { role: "user" }> & { idempotencyKey: string };
+      const recorder = makeUserTurnRecorder(current);
+      recorder.markBlocked();
+
+      const result = await runCopilotAttempt(
+        makeParams({ messages: [current], userTurnTranscriptRecorder: recorder }),
+        { pool: makeFakePool(makeFakeSdk()) },
+      );
+
+      expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["assistant"]);
     });
 
     it("preserves an unrelated user tail when persisting the current turn", async () => {

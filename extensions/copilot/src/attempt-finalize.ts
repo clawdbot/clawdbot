@@ -79,11 +79,17 @@ export async function completeCopilotAttempt(params: {
   // Pre-journal failures keep the prepared input snapshot. Reconstructing a
   // user/assistant mirror here would restore the deleted dual-write owner.
   const recorder = input.userTurnTranscriptRecorder;
+  const currentRunUserKey = `${input.runId}:user`;
   const messagesSnapshot =
     transcript?.messagesSnapshot ??
     (recorder?.isBlocked()
-      ? removePreparedUser(messages, recorder.message)
-      : includePreparedUser(messages, recorder?.message, input.trigger === "memory"));
+      ? removePreparedUser(messages, recorder.message, currentRunUserKey)
+      : includePreparedUser(
+          messages,
+          recorder?.message,
+          input.trigger === "memory",
+          currentRunUserKey,
+        ));
   const result = createResult(input, {
     aborted,
     assistantTexts,
@@ -166,6 +172,7 @@ function includePreparedUser(
   messages: AgentMessage[],
   prepared: Extract<AgentMessage, { role: "user" }> | undefined,
   hidden: boolean,
+  currentRunUserKey: string,
 ): AgentMessage[] {
   if (!prepared) {
     return messages;
@@ -175,7 +182,7 @@ function includePreparedUser(
     message: prepared,
   }) as Extract<AgentMessage, { role: "user" }>;
   const tail = messages.at(-1);
-  if (isSamePreparedUser(tail, projected)) {
+  if (isSamePreparedUser(tail, projected, currentRunUserKey)) {
     return [...messages.slice(0, -1), projected];
   }
   return [...messages, projected];
@@ -184,8 +191,9 @@ function includePreparedUser(
 function removePreparedUser(
   messages: AgentMessage[],
   prepared: Extract<AgentMessage, { role: "user" }> | undefined,
+  currentRunUserKey: string,
 ): AgentMessage[] {
-  return prepared && isSamePreparedUser(messages.at(-1), prepared)
+  return prepared && isSamePreparedUser(messages.at(-1), prepared, currentRunUserKey)
     ? messages.slice(0, -1)
     : messages;
 }
@@ -193,6 +201,7 @@ function removePreparedUser(
 function isSamePreparedUser(
   candidate: AgentMessage | undefined,
   prepared: Extract<AgentMessage, { role: "user" }>,
+  currentRunUserKey: string,
 ): boolean {
   if (candidate?.role !== "user") {
     return false;
@@ -209,7 +218,7 @@ function isSamePreparedUser(
     if (
       typeof candidateKey !== "string" ||
       typeof preparedKey === "string" ||
-      !candidateKey.startsWith("copilot:")
+      (!candidateKey.startsWith("copilot:") && candidateKey !== currentRunUserKey)
     ) {
       return false;
     }

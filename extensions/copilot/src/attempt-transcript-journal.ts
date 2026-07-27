@@ -50,7 +50,7 @@ export function createAttemptTranscriptJournal(params: {
     current: Extract<AgentMessage, { role: "user" }> | undefined,
     next?: AgentMessage,
   ) => {
-    if (isSameUserTurn(messagesSnapshot.at(-1), current)) {
+    if (isSameUserTurn(messagesSnapshot.at(-1), current, `${params.attempt.runId}:user`)) {
       const removed = messagesSnapshot.pop();
       const removedKey = removed ? readIdempotencyKey(removed) : undefined;
       if (removedKey && isCurrentJournalIdentity(removedKey, params)) {
@@ -158,6 +158,14 @@ export function createAttemptTranscriptJournal(params: {
     if (outcome.kind === "rejected") {
       throw new Error("Transcript session changed before singleton append");
     }
+    if (
+      !isDeepStrictEqual(
+        projectReplayPayload(write.message),
+        projectReplayPayload(outcome.result.message as TranscriptMessage),
+      )
+    ) {
+      replayInvalid = true;
+    }
     return outcome.result as AppendResult;
   };
 
@@ -205,6 +213,17 @@ export function createAttemptTranscriptJournal(params: {
       )
     ) {
       throw new Error("Copilot transcript replayed an invalid tool group");
+    }
+    if (
+      results.some(
+        (result, index) =>
+          !isDeepStrictEqual(
+            projectReplayPayload(writes[index]!.message),
+            projectReplayPayload(result.message as TranscriptMessage),
+          ),
+      )
+    ) {
+      replayInvalid = true;
     }
     return results;
   };
@@ -552,6 +571,7 @@ function isCompleteToolGroup(messages: TranscriptMessage[], order: string[]): bo
 function isSameUserTurn(
   candidate: AgentMessage | undefined,
   current: Extract<AgentMessage, { role: "user" }> | undefined,
+  currentRunUserKey: string,
 ): boolean {
   if (candidate?.role !== "user" || !current) {
     return false;
@@ -568,7 +588,7 @@ function isSameUserTurn(
     if (
       typeof candidateKey !== "string" ||
       typeof currentKey === "string" ||
-      !candidateKey.startsWith("copilot:")
+      (!candidateKey.startsWith("copilot:") && candidateKey !== currentRunUserKey)
     ) {
       return false;
     }
