@@ -623,6 +623,53 @@ describe("CodexAppServerClient", () => {
     });
   });
 
+  it("aborts an in-flight server request when its transport closes", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    let requestSignal: AbortSignal | undefined;
+    harness.client.addRequestHandler((_request, signal) => {
+      requestSignal = signal;
+      return new Promise<never>(() => {});
+    });
+
+    harness.send({ id: "srv-close", method: "item/tool/call", params: { tool: "message" } });
+    await vi.waitFor(() => expect(requestSignal).toBeDefined());
+
+    harness.client.close();
+
+    expect(requestSignal?.aborted).toBe(true);
+  });
+
+  it("runs every close handler even when an earlier handler throws", () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const laterHandler = vi.fn();
+    harness.client.addCloseHandler(() => {
+      throw new Error("broken close observer");
+    });
+    harness.client.addCloseHandler(laterHandler);
+
+    expect(() => harness.client.close()).not.toThrow();
+
+    expect(laterHandler).toHaveBeenCalledWith(harness.client);
+    expect(warn).toHaveBeenCalledWith("codex app-server close handler failed", {
+      error: expect.any(Error),
+    });
+  });
+
+  it("notifies a close handler registered after the transport already closed", () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    harness.client.close();
+    const lateHandler = vi.fn();
+
+    const remove = harness.client.addCloseHandler(lateHandler);
+
+    expect(lateHandler).toHaveBeenCalledWith(harness.client);
+    expect(remove()).toBeUndefined();
+  });
+
   it("fails closed for unhandled native app-server approvals", async () => {
     const harness = createClientHarness();
     clients.push(harness.client);

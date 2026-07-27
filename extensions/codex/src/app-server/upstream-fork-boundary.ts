@@ -1,6 +1,7 @@
 import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
 import type { CodexSessionCatalogControl } from "../session-catalog-types.js";
 import type { CodexThreadItem, CodexTurn } from "./protocol.js";
+import { listCodexThreadTurns } from "./thread-history.js";
 
 type CodexUpstreamForkBoundaryFailureCode =
   | "steer-message"
@@ -20,8 +21,6 @@ type CodexUpstreamForkBoundary = {
 type CodexUpstreamForkBoundaryResult =
   | { ok: true; boundary: CodexUpstreamForkBoundary; editorText?: string }
   | { ok: false; code: CodexUpstreamForkBoundaryFailureCode; message: string };
-
-const TURN_PAGE_LIMIT = 100;
 
 type UserInput = {
   type?: unknown;
@@ -219,28 +218,7 @@ export async function listCodexUpstreamTurns(
   control: CodexSessionCatalogControl,
   threadId: string,
 ): Promise<CodexTurn[]> {
-  const turns: CodexTurn[] = [];
-  const seenCursors = new Set<string>();
-  let cursor: string | undefined;
-  for (;;) {
-    const page = await control.listTurnPage({
-      threadId,
-      limit: TURN_PAGE_LIMIT,
-      sortDirection: "asc",
-      itemsView: "full",
-      ...(cursor ? { cursor } : {}),
-    });
-    turns.push(...page.data);
-    const nextCursor = page.nextCursor?.trim() || undefined;
-    if (!nextCursor) {
-      return turns;
-    }
-    if (seenCursors.has(nextCursor)) {
-      throw new Error("Codex returned a repeated thread/turns/list cursor");
-    }
-    seenCursors.add(nextCursor);
-    cursor = nextCursor;
-  }
+  return await listCodexThreadTurns(control, threadId);
 }
 
 export async function resolveCodexUpstreamForkBoundary(params: {
@@ -253,15 +231,6 @@ export async function resolveCodexUpstreamForkBoundary(params: {
   control: CodexSessionCatalogControl;
 }): Promise<CodexUpstreamForkBoundaryResult> {
   try {
-    // Paginated-history threads reject itemsView "full" turn reads (thread/items/list
-    // is required); fork support for them is future work — fail closed with intent.
-    const thread = await params.control.readThread(params.threadId, false);
-    if (thread.historyMode === "paginated") {
-      return failure(
-        "upstream-unavailable",
-        "This Codex thread uses paginated history, which cannot be forked from OpenClaw yet.",
-      );
-    }
     const entries = await readVisibleSessionTranscriptMessageEntries({
       agentId: params.agentId,
       sessionId: params.sessionId,

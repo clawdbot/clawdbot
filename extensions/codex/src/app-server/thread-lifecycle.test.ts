@@ -1958,6 +1958,105 @@ describe("Codex app-server supervised branch lifecycle", () => {
     });
   });
 
+  it("materializes a paginated source through full turn pages", async () => {
+    const sourceThreadId = "thread-source-paginated";
+    const probeThreadId = "thread-probe-paginated";
+    const finalThreadId = "thread-final-paginated";
+    const lastTurnId = "turn-terminal";
+    const workspaceDir = path.join(tempDir, "workspace-paginated");
+    const attempt = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    await seedPendingSupervisionBinding({
+      attempt,
+      cwd: workspaceDir,
+      pending: { sourceThreadId, lastTurnId },
+    });
+    const terminalTurn = {
+      id: lastTurnId,
+      status: "completed",
+      items: [
+        {
+          id: "user-1",
+          type: "userMessage",
+          content: [{ type: "text", text: "Paginated question" }],
+        },
+        { id: "assistant-1", type: "agentMessage", text: "Paginated answer" },
+      ],
+    };
+    const request = vi.fn(async (method: string, requestParams: unknown) => {
+      if (method === "thread/read") {
+        const read = requestParams as { threadId: string; includeTurns?: boolean };
+        if (read.includeTurns) {
+          throw new Error("paginated threads do not support thread/read(includeTurns=true)");
+        }
+        return {
+          thread: {
+            ...sourceThread({ threadId: sourceThreadId }),
+            historyMode: "paginated",
+            turns: undefined,
+          },
+        };
+      }
+      if (method === "thread/turns/list") {
+        return { data: [terminalTurn] };
+      }
+      if (method === "thread/fork") {
+        return nativeThreadResult(probeThreadId, "native-effective", "native-provider");
+      }
+      if (method === "thread/start") {
+        return nativeThreadResult(finalThreadId, "native-effective", "native-provider");
+      }
+      if (method === "thread/inject_items" || method === "thread/archive") {
+        return {};
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await expect(
+      startOrResumeThread({
+        client: { request } as never,
+        params: attempt,
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer: createThreadLifecycleAppServerOptions(),
+      }),
+    ).resolves.toMatchObject({
+      threadId: finalThreadId,
+      lifecycle: { action: "forked" },
+      conversationSourceTransferComplete: true,
+    });
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/read",
+      "thread/read",
+      "thread/turns/list",
+      "thread/fork",
+      "thread/start",
+      "thread/inject_items",
+      "thread/archive",
+    ]);
+    expect(request.mock.calls[2]?.[1]).toEqual({
+      threadId: sourceThreadId,
+      limit: 100,
+      sortDirection: "asc",
+      itemsView: "full",
+    });
+    expect(request.mock.calls[5]?.[1]).toEqual({
+      threadId: finalThreadId,
+      items: [
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Paginated question" }],
+        },
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Paginated answer" }],
+        },
+      ],
+    });
+  });
+
   it("rejects materialization after the supervised source connection changes", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const attempt = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);

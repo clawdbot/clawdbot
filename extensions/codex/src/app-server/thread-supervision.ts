@@ -30,6 +30,7 @@ import type {
   CodexAppServerPendingSupervisionBranch,
   CodexAppServerThreadBinding,
 } from "./session-binding.js";
+import { readCodexThreadWithTurns } from "./thread-history.js";
 import {
   CodexThreadBindingConflictAfterCleanupError,
   CodexThreadBindingConflictError,
@@ -90,15 +91,26 @@ export async function materializePendingSupervisionBranch(
   pending = await recoverPendingSupervisionArtifacts(params, pending);
   params.throwIfAborted();
 
-  const sourceResponse = await params.lifecycleTiming.measure("supervision-source-read", () =>
-    params.client.request(
-      "thread/read",
-      { threadId: pending.sourceThreadId, includeTurns: true },
-      { signal: params.signal },
+  const sourceThread = await params.lifecycleTiming.measure("supervision-source-read", () =>
+    readCodexThreadWithTurns(
+      {
+        readThread: async (threadId, includeTurns = false) =>
+          (
+            await params.client.request(
+              "thread/read",
+              { threadId, includeTurns },
+              { signal: params.signal },
+            )
+          ).thread,
+        listTurnPage: async (requestParams) =>
+          await params.client.request("thread/turns/list", requestParams, {
+            signal: params.signal,
+          }),
+      },
+      pending.sourceThreadId,
     ),
   );
   params.throwIfAborted();
-  const sourceThread = sourceResponse.thread;
   if (sourceThread.id !== pending.sourceThreadId) {
     throw new Error(
       `Codex supervision source read returned ${sourceThread.id} for ${pending.sourceThreadId}`,

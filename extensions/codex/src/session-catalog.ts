@@ -40,6 +40,7 @@ import {
   releaseLeasedSharedCodexAppServerClient,
 } from "./app-server/shared-client.js";
 import { assertCodexArchiveDescendantsUnowned } from "./app-server/thread-archive-guard.js";
+import { readCodexThreadWithTurns } from "./app-server/thread-history.js";
 import { codexControlRequest } from "./command-rpc.js";
 import { resolveCodexCatalogCreateSession } from "./session-catalog-create.js";
 import {
@@ -1003,7 +1004,7 @@ async function continueLocalCodexSessionInner(params: {
   });
   if (existing) {
     const boundThreadId = requireBoundThread(existing);
-    const boundThread = await params.control.readThread(boundThreadId, true);
+    const boundThread = await readCodexThreadWithTurns(params.control, boundThreadId);
     if (boundThread.id !== boundThreadId) {
       throw new Error("Codex app-server returned a different thread than requested");
     }
@@ -1040,7 +1041,7 @@ async function continueLocalCodexSessionInner(params: {
     return { sessionKey: existing.key, disposition: "existing" };
   }
 
-  const sourceThread = await params.control.readThread(params.threadId, true);
+  const sourceThread = await readCodexThreadWithTurns(params.control, params.threadId);
   if (sourceThread.id !== params.threadId) {
     throw new Error("Codex app-server returned a different thread than requested");
   }
@@ -1062,7 +1063,7 @@ async function continueLocalCodexSessionInner(params: {
   const baselineThread =
     boundThreadId === sourceThread.id
       ? sourceThread
-      : await params.control.readThread(boundThreadId, true);
+      : await readCodexThreadWithTurns(params.control, boundThreadId);
   if (baselineThread.id !== boundThreadId) {
     throw new Error("Codex app-server returned a different thread than requested");
   }
