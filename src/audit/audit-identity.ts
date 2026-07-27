@@ -7,7 +7,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import { registerDurableSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 
 type AuditIdentityDatabase = Pick<
@@ -38,8 +38,8 @@ type AuditIdentityKind = "account" | "actor" | "conversation" | "message" | "tar
 
 function registerAuditIdentityKeyForRedaction(key: Uint8Array): void {
   const bytes = Buffer.from(key);
-  registerSecretValueForRedaction(bytes.toString("hex"));
-  registerSecretValueForRedaction(bytes.toString("base64url"));
+  registerDurableSecretValueForRedaction(bytes.toString("hex"));
+  registerDurableSecretValueForRedaction(bytes.toString("base64url"));
 }
 
 function parseAuditIdentityKey(row: AuditIdentityKeyRow): AuditIdentityKey {

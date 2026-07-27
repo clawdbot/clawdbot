@@ -15,7 +15,11 @@ import {
   resolveRedactOptions,
 } from "./redact.js";
 import { withFullContextToolPayloadRedaction } from "./redact.test-support.js";
-import { registerSecretValueForRedaction } from "./secret-redaction-registry.js";
+import {
+  isSecretValueRegisteredForRedaction,
+  registerDurableSecretValueForRedaction,
+  registerSecretValueForRedaction,
+} from "./secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "./secret-redaction-registry.test-support.js";
 
 const defaults = getDefaultRedactPatterns();
@@ -106,6 +110,43 @@ describe("registered exact secret values", () => {
 
     expect(redactSensitiveText(first, { mode: "off" })).not.toContain(first);
     expect(redactSensitiveText(second, { mode: "off" })).toBe(second);
+  });
+
+  it("keeps durable values masked after transient registry churn", () => {
+    const bootSecret = "durable-boot-credential-000";
+    registerDurableSecretValueForRedaction(bootSecret);
+    for (let index = 0; index <= 512; index += 1) {
+      registerSecretValueForRedaction(`transient-churn-value-${index.toString().padStart(3, "0")}`);
+    }
+
+    expect(redactSensitiveText(bootSecret, { mode: "off" })).not.toContain(bootSecret);
+    expect(isSecretValueRegisteredForRedaction(bootSecret)).toBe(true);
+  });
+
+  it("keeps a durable value durable when re-registered as transient", () => {
+    const bootSecret = "durable-boot-credential-001";
+    registerDurableSecretValueForRedaction(bootSecret);
+    registerSecretValueForRedaction(bootSecret);
+    for (let index = 0; index <= 512; index += 1) {
+      registerSecretValueForRedaction(`transient-churn-value-${index.toString().padStart(3, "0")}`);
+    }
+
+    expect(redactSensitiveText(bootSecret, { mode: "off" })).not.toContain(bootSecret);
+  });
+
+  it("bounds the durable tier by evicting the oldest durable value", () => {
+    const first = "durable-registry-value-000";
+    registerDurableSecretValueForRedaction(first);
+    for (let index = 1; index <= 512; index += 1) {
+      registerDurableSecretValueForRedaction(
+        `durable-registry-value-${index.toString().padStart(3, "0")}`,
+      );
+    }
+
+    expect(redactSensitiveText(first, { mode: "off" })).toBe(first);
+    expect(redactSensitiveText("durable-registry-value-512", { mode: "off" })).not.toContain(
+      "durable-registry-value-512",
+    );
   });
 });
 

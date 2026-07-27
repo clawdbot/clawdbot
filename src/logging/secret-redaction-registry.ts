@@ -3,58 +3,81 @@ import { escapeRegExp } from "../shared/regexp.js";
 const MIN_SECRET_VALUE_LENGTH = 6;
 const MAX_SECRET_VALUES = 512;
 
+const durableValues = new Map<string, true>();
 const registeredValues = new Map<string, true>();
 let compiledMatcher: RegExp | undefined;
 let firstChars = new Set<string>();
 
 function rebuildProbe(): void {
-  firstChars = new Set([...registeredValues.keys()].map((value) => value.charAt(0)));
+  firstChars = new Set(
+    [...durableValues.keys(), ...registeredValues.keys()].map((value) => value.charAt(0)),
+  );
   compiledMatcher = undefined;
 }
 
-function registerOneSecretValue(value: string): void {
-  if (registeredValues.delete(value)) {
-    registeredValues.set(value, true);
+function insertWithBoundedEviction(values: Map<string, true>, value: string): void {
+  if (values.delete(value)) {
+    values.set(value, true);
     return;
   }
-  registeredValues.set(value, true);
-  if (registeredValues.size > MAX_SECRET_VALUES) {
-    const oldest = registeredValues.keys().next().value;
+  values.set(value, true);
+  if (values.size > MAX_SECRET_VALUES) {
+    const oldest = values.keys().next().value;
     if (oldest !== undefined) {
-      registeredValues.delete(oldest);
+      values.delete(oldest);
     }
   }
   rebuildProbe();
 }
 
-/** Registers one resolved secret for exact-value log redaction. */
-export function registerSecretValueForRedaction(value: string): void {
+function registerOneSecretValue(value: string, durable: boolean): void {
+  if (durable) {
+    registeredValues.delete(value);
+    insertWithBoundedEviction(durableValues, value);
+    return;
+  }
+  if (durableValues.has(value)) {
+    return;
+  }
+  insertWithBoundedEviction(registeredValues, value);
+}
+
+function registerSecretValueForms(value: string, durable: boolean): void {
   if (value.length < MIN_SECRET_VALUE_LENGTH) {
     return;
   }
   // URL egress percent-encodes injected values; redact that surface form too.
   const encoded = encodeURIComponent(value);
   if (encoded !== value) {
-    registerOneSecretValue(encoded);
+    registerOneSecretValue(encoded, durable);
   }
   // Captured structured payloads are serialized before persistence, so retain
   // the JSON string-content form for credentials with escaped characters.
   const jsonEscaped = JSON.stringify(value).slice(1, -1);
   if (jsonEscaped !== value) {
-    registerOneSecretValue(jsonEscaped);
+    registerOneSecretValue(jsonEscaped, durable);
   }
   // Keep the raw value newest so bounded-registry eviction cannot drop the
   // active credential while retaining only a transformed representation.
-  registerOneSecretValue(value);
+  registerOneSecretValue(value, durable);
+}
+
+/** Registers one resolved secret for exact-value log redaction. */
+export function registerSecretValueForRedaction(value: string): void {
+  registerSecretValueForms(value, false);
+}
+
+export function registerDurableSecretValueForRedaction(value: string): void {
+  registerSecretValueForms(value, true);
 }
 
 /** Returns whether a value has SecretRef provenance in the process registry. */
 export function isSecretValueRegisteredForRedaction(value: string): boolean {
-  return registeredValues.has(value);
+  return durableValues.has(value) || registeredValues.has(value);
 }
 
 export function hasRegisteredSecretValuesForRedaction(): boolean {
-  return registeredValues.size > 0;
+  return durableValues.size > 0 || registeredValues.size > 0;
 }
 
 /** Replaces registered exact values while preserving the caller's mask convention. */
@@ -62,7 +85,7 @@ export function redactRegisteredSecretValues(
   text: string,
   mask: (value: string) => string,
 ): string {
-  if (!text || registeredValues.size === 0) {
+  if (!text || !hasRegisteredSecretValuesForRedaction()) {
     return text;
   }
   let couldMatch = false;
@@ -76,7 +99,7 @@ export function redactRegisteredSecretValues(
     return text;
   }
   compiledMatcher ??= new RegExp(
-    [...registeredValues.keys()]
+    [...durableValues.keys(), ...registeredValues.keys()]
       .toSorted((left, right) => right.length - left.length)
       .map(escapeRegExp)
       .join("|"),
@@ -86,6 +109,7 @@ export function redactRegisteredSecretValues(
 }
 
 function resetSecretRedactionRegistryForTest(): void {
+  durableValues.clear();
   registeredValues.clear();
   rebuildProbe();
 }
