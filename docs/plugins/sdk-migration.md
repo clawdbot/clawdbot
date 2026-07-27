@@ -85,9 +85,44 @@ External-plugin compatibility work follows this order:
 6. Remove only after the announced migration window, usually in a major
    release.
 
+### AuthStorage SQLite migration
+
+`AuthStorage.forAgent(agentDir)` is the canonical provider-keyed session SDK
+facade. It persists provider-default credentials through the agent's
+`openclaw-agent.sqlite` auth-profile rows and never creates `auth.json`.
+
+`AuthStorage.create(authPath)` remains as a named deprecated adapter for
+existing plugins. The path is used only to derive the owning agent directory;
+the adapter reads and writes SQLite, not the named JSON file. Migrate to
+`forAgent(...)` now. The path-taking form emits
+`AUTH_STORAGE_CREATE_DEPRECATED` and is eligible for removal after
+2026-10-01, provided the published-plugin reader sweep is clean.
+
+Direct `FileAuthStorageBackend` imports remain available through the same
+window as a SQLite-backed compatibility adapter. They emit
+`FILE_AUTH_STORAGE_BACKEND_DEPRECATED`; replace backend construction with
+`AuthStorage.forAgent(agentDir)`. Neither deprecated path reads or writes the
+legacy file.
+
 If a manifest field is still accepted, keep using it until docs and
 diagnostics say otherwise. New code should prefer the documented replacement;
 existing plugins should not break during ordinary minor releases.
+
+The dated compatibility registry also tracks shipped annotations that do not
+belong to one legacy subpath. These records use 2026-10-01 as the earliest
+review date; removal still requires the reader condition in the final column.
+
+| Compatibility code                        | Replacement                                                                                    | Removal condition                                                                            |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `plugin-sdk-broad-runtime-barrels`        | Focused capability subpaths                                                                    | No bundled or published imports of the seven enumerated broad barrels remain.                |
+| `plugin-sdk-provider-owned-helper-shims`  | Provider-local auth/model/replay/OAuth/stream APIs                                             | Every enumerated helper is migrated in official providers and absent from published plugins. |
+| `message-presentation-legacy-bridges`     | `MessagePresentation` and channel presentation renderers                                       | Producers and official channel packages no longer emit or read legacy interactive replies.   |
+| `plugin-sdk-focused-compat-aliases`       | The focused replacement named by each `@deprecated` annotation                                 | Every enumerated alias has zero bundled and published readers.                               |
+| `agent-harness-terminal-result-aliases`   | `AgentHarnessAttemptResult.terminal` and `visibleReplies`                                      | Harness plugins no longer read legacy terminal booleans or `sourceVisibleReplies`.           |
+| `official-plugin-export-aliases`          | Canonical Google Meet testing, presentation renderers, and host-owned Discord timeout behavior | Minimum supported official plugin packages no longer import the aliases.                     |
+| `memory-host-compatibility-aliases`       | Canonical memory tables and prepared runtime config                                            | Memory integrations no longer pass table overrides or call legacy `loadConfig`.              |
+| `plugin-runtime-api-compat-aliases`       | Namespaced plugin APIs and focused runtime methods                                             | All enumerated flat API/runtime aliases have no readers.                                     |
+| `plugin-provider-manifest-compat-aliases` | Manifest-owned kind/setup metadata and model catalog registration                              | Providers no longer publish runtime kind or legacy catalog hooks.                            |
 
 ### Published channel setup compatibility
 
@@ -141,9 +176,10 @@ key at a time.
 3. Resolve each candidate's latest published version. Run `npm pack <package>@<version> --json --pack-destination <temp-dir>`, unpack it, and inspect shipped `dist` JavaScript and declarations for direct or destructured field reads. Download the ClawHub artifact when a package has no npm release.
 4. Record package, version, field or promotion key, and matching file. A field or key is deletable only when no published plugin artifact reads it. Keep the reader names in the code comments beside the retained field and key lists synchronized with the sweep.
 
-This is a source/type compatibility record only. It has no runtime adapter or
-compatibility-registry entry because runtime setup input objects and setup
-behavior are unchanged.
+This is a source/type compatibility record only. The registry entry has
+`removeAfter: 2026-10-01`, but setup input runtime objects and behavior are
+unchanged. The date starts a review; each field remains until its published
+artifact reader count is zero.
 
 Audit the current migration queue with `pnpm plugins:boundary-report`:
 
@@ -161,8 +197,10 @@ records normally have an explicit `removeAfter` date rather than a vague "next
 major release". A record whose owner has not approved a date leaves
 `removeAfter` absent, appears as `no-date`, and is never eligible for removal.
 The report groups deprecated records by date, counts local code/doc references,
-surfaces cross-owner reserved SDK imports, and summarizes the private
-memory-host SDK bridge. Reserved SDK subpaths must have tracked owner usage;
+lists `removal-pending` dates with their blockers and surface-token reader
+references, surfaces cross-owner reserved SDK imports, and summarizes the
+private memory-host SDK bridge. Those reader references are triage signals, not
+published-artifact proof. Reserved SDK subpaths must have tracked owner usage;
 unused reserved exports should be removed from the public SDK.
 
 ### Media legacy projection
@@ -779,9 +817,9 @@ timeline for current status.
 
     | Migrating surface | Replacement |
     | ----------------- | ----------- |
-    | Deprecated `loadSessionStore(...)`, `updateSessionStore(...)`, and `resolveSessionStoreEntry(...)` | `getSessionEntry(...)`, `listSessionEntries(...)`, and row-level session mutations. |
+    | Deprecated `loadSessionStore(...)`, `updateSessionStore(...)`, and `resolveSessionStoreEntry(...)`, including package-root `loadSessionStore(...)` | `getSessionEntry(...)`, `listSessionEntries(...)`, and row-level session mutations. |
     | Deprecated `resolveSessionFilePath(...)` | Session identity (`sessionKey`, `sessionId`, and SDK runtime target helpers) plus Gateway methods that operate on the current session. |
-    | Removed `saveSessionStore(...)` | Gateway-owned session runtime APIs; plugin code should request or mutate session state through documented runtime/context helpers instead of writing the active store file. |
+    | Deprecated package-root `saveSessionStore(...)` and removed SDK file-store writes | Gateway-owned session runtime APIs; plugin code should request or mutate session state through documented runtime/context helpers instead of writing the active store file. |
     | Removed `resolveSessionTranscriptPathInDir(...)` and `resolveAndPersistSessionFile(...)` | Session identity and Gateway methods that operate on the current session. |
     | `readLatestAssistantTextFromSessionTranscript(...)` | Identity-backed transcript readers exposed by the current runtime context, or Gateway history/session methods when the plugin is outside the transcript owner path. |
     | `SessionTranscriptUpdate.sessionFile` | `SessionTranscriptUpdate.target` with `agentId`, `sessionKey`, and `sessionId`. |

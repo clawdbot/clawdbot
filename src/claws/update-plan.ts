@@ -81,7 +81,8 @@ export async function buildClawUpdatePlan(params: {
 }): Promise<ClawUpdatePlan> {
   const ownsDatabase = !params.stateOptions?.database;
   const database =
-    params.stateOptions?.database ?? openExistingOpenClawStateDatabaseReadOnly(params.stateOptions);
+    params.stateOptions?.database ??
+    (await openExistingOpenClawStateDatabaseReadOnly(params.stateOptions));
   if (!database) {
     return makeEmptyClawUpdatePlan({
       agentId: params.agentId,

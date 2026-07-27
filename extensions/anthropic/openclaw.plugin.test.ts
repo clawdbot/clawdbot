@@ -23,6 +23,8 @@ type AnthropicCatalogModel = {
     cacheWrite?: number;
   };
   thinkingLevelMap?: Record<string, string | null>;
+  status?: string;
+  replacedBy?: string;
 };
 
 type AnthropicManifest = {
@@ -97,47 +99,42 @@ describe("Anthropic plugin manifest", () => {
     });
   });
 
-  it("declares direct API limits without overstating bare Claude CLI context", () => {
+  it("declares Opus 4.8 limits without overstating bare Claude CLI context", () => {
     const models = manifest.modelCatalog?.providers?.anthropic?.models ?? [];
-    for (const id of ["claude-opus-4-7", "claude-sonnet-4-6", "claude-opus-4-6"]) {
-      expect(models.find((model) => model.id === id)).toMatchObject({
-        contextWindow: 1_000_000,
-        maxTokens: 128_000,
-      });
-    }
+    expect(models.find((model) => model.id === "claude-opus-4-8")).toMatchObject({
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      status: "deprecated",
+      replacedBy: "claude-opus-5",
+    });
     const cliModels = manifest.modelCatalog?.providers?.["claude-cli"]?.models ?? [];
-    for (const id of ["claude-opus-4-7", "claude-sonnet-4-6", "claude-opus-4-6"]) {
-      expect(cliModels.find((model) => model.id === id)).toMatchObject({
-        contextWindow: 200_000,
-        maxTokens: 128_000,
-      });
-    }
     expect(cliModels.find((model) => model.id === "claude-opus-4-8")).toMatchObject({
       contextWindow: 200_000,
       maxTokens: 128_000,
+      status: "deprecated",
+      replacedBy: "claude-opus-5",
     });
   });
 
-  it("resolves both official Claude Haiku 4.5 API identifiers from the static catalog", () => {
+  it("keeps only the dateless Claude Haiku 4.5 identifier in the static catalog", () => {
     expect(manifest.modelCatalog?.discovery?.anthropic).toBe("refreshable");
 
     const models = manifest.modelCatalog?.providers?.anthropic?.models ?? [];
-    for (const id of ["claude-haiku-4-5", "claude-haiku-4-5-20251001"]) {
-      expect(models.find((model) => model.id === id)).toEqual({
-        id,
-        name: "Claude Haiku 4.5",
-        reasoning: true,
-        input: ["text", "image"],
-        mediaInput: {
-          image: {
-            maxSidePx: 1568,
-            preferredSidePx: 1568,
-            tokenMode: "provider",
-          },
+    expect(models.find((model) => model.id === "claude-haiku-4-5")).toEqual({
+      id: "claude-haiku-4-5",
+      name: "Claude Haiku 4.5",
+      reasoning: true,
+      input: ["text", "image"],
+      mediaInput: {
+        image: {
+          maxSidePx: 1568,
+          preferredSidePx: 1568,
+          tokenMode: "provider",
         },
-        contextWindow: 200000,
-        maxTokens: 64000,
-      });
-    }
+      },
+      contextWindow: 200000,
+      maxTokens: 64000,
+    });
+    expect(models.find((model) => model.id === "claude-haiku-4-5-20251001")).toBeUndefined();
   });
 });

@@ -78,7 +78,6 @@ export function renderBar(params: {
   data?: NewSessionRouteData;
   agentSelect: unknown;
   placeSelect: unknown;
-  draftVisibilityControl: unknown;
   retrying: boolean;
   onRetry: () => void;
 }) {
@@ -86,7 +85,7 @@ export function renderBar(params: {
   return html`
     <div class="new-session-page__triggers">
       ${renderTarget(params.data)} ${isTarget(params.data) ? nothing : params.agentSelect}
-      ${params.placeSelect} ${params.draftVisibilityControl}
+      ${params.placeSelect}
       ${pending
         ? html`<span class="new-session-page__catalog-unavailable">
             ${t("newSession.catalogUnavailable")}

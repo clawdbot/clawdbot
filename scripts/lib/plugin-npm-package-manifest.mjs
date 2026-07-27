@@ -4,7 +4,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import JSON5 from "json5";
-import { packageJsonForShrinkwrap, readShrinkwrapOverrides } from "../generate-npm-shrinkwrap.mjs";
+import {
+  generateNpmPackageLock,
+  packageJsonForNpmLock,
+  readNpmLockOverrides,
+} from "../generate-npm-package-lock.mjs";
 import { resolveNpmRunner } from "../npm-runner.mjs";
 import {
   listPluginNpmRuntimeBuildOutputs,
@@ -341,10 +345,10 @@ function installPackageLocalBundledDependencies(params) {
     return () => {};
   }
 
-  const shrinkwrapPath = path.join(params.packageDir, "npm-shrinkwrap.json");
-  if (!fs.existsSync(shrinkwrapPath)) {
+  const packageLockPath = path.join(params.packageDir, "package-lock.json");
+  if (fs.existsSync(packageLockPath)) {
     throw new Error(
-      `package-local bundled dependency install requires npm-shrinkwrap.json for ${params.pluginDir}`,
+      `package-local bundled dependency install refuses to replace existing package-lock.json for ${params.pluginDir}`,
     );
   }
 
@@ -363,17 +367,15 @@ function installPackageLocalBundledDependencies(params) {
   };
   delete installPackageJsonBase.peerDependencies;
   delete installPackageJsonBase.peerDependenciesMeta;
-  const installPackageJson = packageJsonForShrinkwrap(
-    installPackageJsonBase,
-    readShrinkwrapOverrides(),
-  );
+  const installPackageJson = packageJsonForNpmLock(installPackageJsonBase, readNpmLockOverrides());
   const installPackageJsonText = `${JSON.stringify(installPackageJson, null, 2)}\n`;
   if (installPackageJsonText !== packedPackageJsonText) {
-    // npm validates peer edges against the shrinkwrap during ci even when peers are omitted.
+    // npm validates peer edges against the package lock during ci even when peers are omitted.
     // The peer metadata belongs in the packed plugin, not in this temporary dependency install.
     fs.writeFileSync(packageJsonPath, installPackageJsonText, "utf8");
   }
   try {
+    fs.writeFileSync(packageLockPath, generateNpmPackageLock(params.packageDir), "utf8");
     const result = spawnNpmSync(
       [
         "ci",
@@ -404,6 +406,7 @@ function installPackageLocalBundledDependencies(params) {
     installMissingOptionalBundledDependencies(params);
   } finally {
     fs.writeFileSync(packageJsonPath, packedPackageJsonText, "utf8");
+    fs.rmSync(packageLockPath, { force: true });
   }
   return () => {
     fs.rmSync(nodeModulesPath, { recursive: true, force: true });

@@ -2,7 +2,6 @@
 export {
   deliveryContextFromSession,
   deliveryContextKey,
-  mergeDeliveryContext,
   normalizeDeliveryContext,
   sessionDeliveryChannel,
 } from "./delivery-context.shared.js";

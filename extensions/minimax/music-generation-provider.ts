@@ -1,9 +1,9 @@
 // Minimax provider module implements model/runtime integration.
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import type {
   GeneratedMusicAsset,
   MusicGenerationProvider,
-  MusicGenerationRequest,
 } from "openclaw/plugin-sdk/music-generation";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -26,7 +26,6 @@ const DEFAULT_MINIMAX_MUSIC_BASE_URL = "https://api.minimax.io";
 const DEFAULT_MINIMAX_MUSIC_MODEL = "music-2.6";
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_OPERATION_TIMEOUT_MS = 300_000;
-const DEFAULT_GENERATED_MUSIC_MAX_BYTES = 16 * 1024 * 1024;
 const STREAM_ENVELOPE_MAX_BYTES_MULTIPLIER = 5;
 const STREAM_ENVELOPE_OVERHEAD_BYTES = 64 * 1024;
 
@@ -125,14 +124,6 @@ function decodePossibleText(data: string): string {
 function isLikelyRemoteUrl(value: string | undefined): boolean {
   const trimmed = normalizeOptionalString(value);
   return Boolean(trimmed && /^https?:\/\//iu.test(trimmed));
-}
-
-function resolveGeneratedMusicMaxBytes(req: MusicGenerationRequest): number {
-  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * 1024 * 1024);
-  }
-  return DEFAULT_GENERATED_MUSIC_MAX_BYTES;
 }
 
 async function downloadTrackFromUrl(params: {
@@ -404,7 +395,7 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
         await assertOkOrThrowHttpError(res, "MiniMax music generation failed");
         const contentType = normalizeOptionalString(res.headers.get("content-type")) ?? "";
         const lowerContentType = contentType.toLowerCase();
-        const maxGeneratedMusicBytes = resolveGeneratedMusicMaxBytes(req);
+        const maxGeneratedMusicBytes = resolveGeneratedMediaMaxBytes(req.cfg, "audio");
         const payload =
           lowerContentType.includes("text/event-stream") || lowerContentType.startsWith("audio/")
             ? null
@@ -438,7 +429,7 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
                 defaultTimeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
               }),
               fetchFn,
-              maxBytes: resolveGeneratedMusicMaxBytes(req),
+              maxBytes: maxGeneratedMusicBytes,
               policy: requestPolicy,
             })
           : inlineAudio

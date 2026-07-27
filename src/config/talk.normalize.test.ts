@@ -4,6 +4,11 @@ import { TALK_TEST_PROVIDER_ID } from "../test-utils/talk-test-provider.js";
 import { buildTalkConfigResponse, normalizeTalkSection } from "./talk.js";
 
 describe("talk normalization", () => {
+  it("preserves the explicit ambient Talk agent", () => {
+    expect(normalizeTalkSection({ agentId: " ops " })).toEqual({ agentId: "ops" });
+    expect(buildTalkConfigResponse({ agentId: "ops" })).toEqual({ agentId: "ops" });
+  });
+
   it("keeps core Talk normalization generic and ignores legacy provider-flat fields", () => {
     const normalized = normalizeTalkSection({
       voiceId: "voice-123",

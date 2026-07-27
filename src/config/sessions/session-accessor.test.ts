@@ -40,8 +40,10 @@ import {
   recordInboundSessionMeta,
   replaceSessionEntry,
   resetSessionEntryLifecycle,
+  SessionInitializationAgentScopeMismatchError,
   resolveSessionEntryAccessTarget,
   resolveSessionEntryCandidateTarget,
+  resolveSessionEntrySelection,
   resolveSessionTranscriptReadTarget,
   resolveSessionTranscriptRuntimeReadTarget,
   resolveSessionTranscriptRuntimeTarget,
@@ -143,6 +145,34 @@ describe("session accessor seam", () => {
       sessionId: "session-1",
       updatedAt: expect.any(Number),
     });
+  });
+
+  it("derives a scoped key owner before fixed-store read and write target resolution", async () => {
+    const fixedStorePath = path.join(tempDir, "fixed-sessions.json");
+    const scope = {
+      defaultAgentId: "main",
+      sessionKey: "agent:ops:main",
+      storePath: fixedStorePath,
+    };
+
+    await replaceSessionEntry(scope, {
+      sessionId: "ops-session",
+      updatedAt: 10,
+    });
+
+    expect(loadSessionEntry(scope)).toMatchObject({ sessionId: "ops-session" });
+    await expect(loadTranscriptEvents({ ...scope, sessionId: "ops-session" })).resolves.toEqual([]);
+    const opsPath = resolveSqliteTargetFromSessionStorePath(fixedStorePath, {
+      agentId: "ops",
+      defaultAgentId: "main",
+    }).path;
+    const mainPath = resolveSqliteTargetFromSessionStorePath(fixedStorePath, {
+      agentId: "main",
+      defaultAgentId: "main",
+    }).path;
+    expect(opsPath).not.toBe(mainPath);
+    expect(fs.existsSync(opsPath)).toBe(true);
+    expect(fs.existsSync(mainPath)).toBe(false);
   });
 
   it("excludes transcript-only nodes from logical entry counts and keys", async () => {
@@ -895,6 +925,54 @@ describe("session accessor seam", () => {
     expect(fs.existsSync(storePath)).toBe(false);
   });
 
+  it("resolves canonical candidate and transcript rows without parsing unrelated sessions", async () => {
+    const sessionKey = "agent:main:focused-session";
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      { sessionId: "focused-session", updatedAt: 42 },
+    );
+    const databasePath = expectDefined(
+      resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
+      "focused session database path",
+    );
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+    const unrelatedEntryJson = "{ unrelated, intentionally invalid JSON";
+    database.db
+      .prepare(
+        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+      )
+      .run("agent:main:unrelated-session", "unrelated-session", unrelatedEntryJson, 1);
+
+    const parse = vi.spyOn(JSON, "parse");
+    try {
+      expect(
+        resolveSessionEntrySelection({ agentId: "main", sessionKey, storePath }),
+      ).toMatchObject({
+        existing: { sessionId: "focused-session" },
+        legacyKeys: [],
+        normalizedKey: sessionKey,
+      });
+      expect(
+        resolveSessionEntryCandidateTarget({
+          agentId: "main",
+          candidateKeys: [sessionKey],
+          cfg: { session: { store: storePath } },
+        }),
+      ).toMatchObject({ sessionKey, entry: { sessionId: "focused-session" }, persisted: true });
+      expect(
+        resolveSessionTranscriptReadTarget({
+          agentId: "main",
+          sessionId: "focused-session",
+          sessionKey,
+          storePath,
+        }),
+      ).toMatchObject({ agentId: "main", sessionId: "focused-session", sessionKey });
+      expect(parse).not.toHaveBeenCalledWith(unrelatedEntryJson);
+    } finally {
+      parse.mockRestore();
+    }
+  });
+
   it("resolves non-main candidate entries from custom agent store templates", async () => {
     const storeTemplate = path.join(tempDir, "{agentId}.json");
     const supportStorePath = path.join(tempDir, "support.json");
@@ -913,7 +991,10 @@ describe("session accessor seam", () => {
     const resolved = resolveSessionEntryCandidateTarget({
       agentId: "support",
       candidateKeys: ["agent:support:main"],
-      cfg: { session: { store: storeTemplate } },
+      cfg: {
+        session: { store: storeTemplate },
+        agents: { entries: { support: { default: true } } },
+      },
     });
 
     expect(resolved).toMatchObject({
@@ -941,7 +1022,10 @@ describe("session accessor seam", () => {
     );
 
     const resolved = resolveSessionEntryAccessTarget({
-      cfg: { session: { store: storeTemplate } },
+      cfg: {
+        session: { store: storeTemplate },
+        agents: { entries: { support: { default: true } } },
+      },
       sessionKey: "agent:support:main",
     });
 
@@ -1240,7 +1324,11 @@ describe("session accessor seam", () => {
       },
     );
 
-    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+    const snapshot = loadReplySessionInitializationSnapshot({
+      agentId: "main",
+      sessionKey,
+      storePath,
+    });
     const committed = await commitReplySessionInitialization({
       activeSessionKey: sessionKey,
       agentId: "main",
@@ -1279,7 +1367,11 @@ describe("session accessor seam", () => {
       },
     );
 
-    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+    const snapshot = loadReplySessionInitializationSnapshot({
+      agentId: "main",
+      sessionKey,
+      storePath,
+    });
     const committed = await commitReplySessionInitialization({
       activeSessionKey: sessionKey,
       agentId: "main",
@@ -1311,7 +1403,11 @@ describe("session accessor seam", () => {
         updatedAt: 10,
       },
     );
-    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+    const snapshot = loadReplySessionInitializationSnapshot({
+      agentId: "main",
+      sessionKey,
+      storePath,
+    });
     await upsertSessionEntry(
       { sessionKey, storePath },
       {
@@ -1350,7 +1446,11 @@ describe("session accessor seam", () => {
         updatedAt: 10,
       },
     );
-    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+    const snapshot = loadReplySessionInitializationSnapshot({
+      agentId: "main",
+      sessionKey,
+      storePath,
+    });
     const current = loadSessionEntry({ sessionKey, storePath });
     if (!current) {
       throw new Error("expected existing session entry");
@@ -1408,7 +1508,11 @@ describe("session accessor seam", () => {
       },
     );
 
-    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+    const snapshot = loadReplySessionInitializationSnapshot({
+      agentId: "main",
+      sessionKey,
+      storePath,
+    });
 
     // Background activity (heartbeat runner, delivery retry, etc.) can touch
     // metadata fields without rotating the session. The initialization guard
@@ -1470,7 +1574,11 @@ describe("session accessor seam", () => {
       },
     );
 
-    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+    const snapshot = loadReplySessionInitializationSnapshot({
+      agentId: "main",
+      sessionKey,
+      storePath,
+    });
 
     const current = loadSessionEntry({ sessionKey, storePath });
     if (!current) {
@@ -1536,7 +1644,11 @@ describe("session accessor seam", () => {
       },
     );
 
-    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+    const snapshot = loadReplySessionInitializationSnapshot({
+      agentId: "main",
+      sessionKey,
+      storePath,
+    });
     if (!snapshot.currentEntry) {
       throw new Error("expected reply session initialization snapshot");
     }
@@ -1603,7 +1715,11 @@ describe("session accessor seam", () => {
       },
     );
 
-    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+    const snapshot = loadReplySessionInitializationSnapshot({
+      agentId: "main",
+      sessionKey,
+      storePath,
+    });
 
     const current = loadSessionEntry({ sessionKey, storePath });
     if (!current) {
@@ -1669,7 +1785,11 @@ describe("session accessor seam", () => {
       ],
     });
 
-    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+    const snapshot = loadReplySessionInitializationSnapshot({
+      agentId: "main",
+      sessionKey,
+      storePath,
+    });
     const committed = await commitReplySessionInitialization({
       activeSessionKey: sessionKey,
       agentId: "main",
@@ -1691,6 +1811,39 @@ describe("session accessor seam", () => {
     expect(loadSessionEntry({ sessionKey, storePath })?.sessionId).toBe("next-session");
   });
 
+  it("rejects a reply initialization key scoped to another explicit agent", () => {
+    try {
+      loadReplySessionInitializationSnapshot({
+        agentId: "main",
+        sessionKey: "agent:ops:main",
+        storePath,
+      });
+      throw new Error("expected agent scope mismatch");
+    } catch (error) {
+      expect(error).toBeInstanceOf(SessionInitializationAgentScopeMismatchError);
+      expect(error).toMatchObject({
+        code: "SESSION_INITIALIZATION_AGENT_SCOPE_MISMATCH",
+        agentId: "main",
+        sessionKeyAgentId: "ops",
+      });
+    }
+  });
+
+  it("allows an unscoped legacy alias with an explicit agent owner", async () => {
+    await upsertSessionEntry(
+      { agentId: "ops", sessionKey: "main", storePath },
+      { sessionId: "legacy-ops-session", updatedAt: 10 },
+    );
+
+    const snapshot = loadReplySessionInitializationSnapshot({
+      agentId: "ops",
+      sessionKey: "main",
+      storePath,
+    });
+
+    expect(snapshot.currentEntry?.sessionId).toBe("legacy-ops-session");
+  });
+
   it("rejects reply session initialization when the entry is deleted during prepare", async () => {
     const sessionKey = "agent:main:main";
     await upsertSessionEntry(
@@ -1700,7 +1853,11 @@ describe("session accessor seam", () => {
         updatedAt: 10,
       },
     );
-    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+    const snapshot = loadReplySessionInitializationSnapshot({
+      agentId: "main",
+      sessionKey,
+      storePath,
+    });
 
     const committed = await commitReplySessionInitialization({
       activeSessionKey: sessionKey,

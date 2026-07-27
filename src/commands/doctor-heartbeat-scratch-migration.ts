@@ -18,6 +18,7 @@ import {
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
 import type { HealthFinding } from "../flows/health-checks.js";
+import { formatErrorMessage as errorMessage } from "../infra/errors.js";
 import { resolveHeartbeatAgents } from "../infra/heartbeat-runner.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { readRegularFile } from "../infra/regular-file.js";
@@ -40,10 +41,6 @@ type HeartbeatSource = {
   content: string;
   sha256: string;
 };
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 async function readHeartbeatSource(
   cfg: OpenClawConfig,

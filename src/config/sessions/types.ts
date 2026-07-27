@@ -11,6 +11,7 @@ import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/
 import type { ChatType } from "../../channels/chat-type.js";
 import type { CronScheduledToolPolicy } from "../../cron/scheduled-tool-policy.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
+import type { SessionBoardFace } from "../../shared/session-types.js";
 import type { Skill } from "../../skills/loading/skill-contract.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
@@ -63,6 +64,8 @@ export type CliSessionReseedReceipt = {
 
 export type CliSessionBinding = {
   sessionId: string;
+  /** Last successful assistant boundary accepted by the backend's resume contract. */
+  resumeCheckpointId?: string;
   /** Resume with the backend's fork argument once, then clear before process start. */
   forkNextResume?: true;
   /** Trust an explicitly attached CLI session even when auth, prompt, or MCP fingerprints drift. */
@@ -78,6 +81,12 @@ export type CliSessionBinding = {
   mcpResumeHash?: string;
   /** Identifies one synthetic history prompt and the trusted local handling of its user turn. */
   reseedReceipt?: CliSessionReseedReceipt;
+};
+
+type AcpSessionBinding = {
+  acpBackendId: string;
+  acpAgentId: string;
+  agentSessionId: string;
 };
 
 export type SessionCompactionCheckpointReason =
@@ -438,6 +447,8 @@ export type SessionEntry = SessionRestartRecoveryState &
      * Resets only preserve user-driven overrides.
      */
     modelOverrideSource?: "auto" | "user";
+    /** Present only when providerOverride/modelOverride are a canonical route pair. */
+    modelOverrideRouteResolution?: "resolved";
     /** Selected model that produced the current auto fallback override. */
     modelOverrideFallbackOriginProvider?: string;
     modelOverrideFallbackOriginModel?: string;
@@ -520,10 +531,14 @@ export type SessionEntry = SessionRestartRecoveryState &
     memoryFlushLastFailureError?: string;
     cliSessionIds?: Record<string, string>;
     cliSessionBindings?: Record<string, CliSessionBinding>;
+    /** Initialization fence for seeding canonical ACP metadata; cleared after creation. */
+    acpSessionBinding?: AcpSessionBinding;
     claudeCliSessionId?: string;
     label?: string;
     /** User-defined organization bucket for session lists; unrelated to chat groupId/groupChannel. */
     category?: string;
+    /** Preferred Control UI face when a caller opens this session without explicit face intent. */
+    boardFace?: SessionBoardFace;
     displayName?: string;
     /** Canonical delivery state. Legacy delivery fields are migrated by `openclaw doctor --fix`. */
     delivery?: SessionDeliveryState;

@@ -169,6 +169,15 @@ describe("command-path-policy", () => {
       }),
     ).toBe("default");
 
+    expectResolvedPolicy(["agent", "exec"], {
+      bypassConfigGuard: true,
+      loadPlugins: "never",
+      pluginRegistry: { scope: "all" },
+      ownsProtocolStdout: true,
+      hideBanner: true,
+      networkProxy: "default",
+    });
+
     for (const commandPath of [
       ["agents"],
       ["agents", "list"],
@@ -320,6 +329,12 @@ describe("command-path-policy", () => {
     expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "skills", "search", "browser"])).toBe(
       "default",
     );
+  });
+
+  it("routes ClawHub skill verification through the network proxy", () => {
+    expect(
+      resolveCliNetworkProxyPolicy(["node", "openclaw", "skills", "verify", "@demo-owner/weather"]),
+    ).toBe("default");
   });
 
   it("uses the longest catalog command path for deep network proxy overrides", async () => {

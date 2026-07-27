@@ -121,6 +121,7 @@ private final class AISetupRouteIdentity: @unchecked Sendable {
 private actor AISetupRequestRecorder {
     private var methods: [String] = []
     private var apiKeys: [String] = []
+    private var authChoices: [String] = []
 
     func record(_ message: URLSessionWebSocketTask.Message) {
         guard let request = aiSetupRequest(from: message) else { return }
@@ -128,10 +129,13 @@ private actor AISetupRequestRecorder {
         if let apiKey = request.params["apiKey"] as? String {
             self.apiKeys.append(apiKey)
         }
+        if let authChoice = request.params["authChoice"] as? String {
+            self.authChoices.append(authChoice)
+        }
     }
 
-    func snapshot() -> (methods: [String], apiKeys: [String]) {
-        (self.methods, self.apiKeys)
+    func snapshot() -> (methods: [String], apiKeys: [String], authChoices: [String]) {
+        (self.methods, self.apiKeys, self.authChoices)
     }
 }
 
@@ -347,7 +351,7 @@ private func configuredModelResponse(id: String) -> Data {
 
 private func waitForAISetupRequests(
     _ recorder: AISetupRequestRecorder,
-    count: Int) async -> (methods: [String], apiKeys: [String])
+    count: Int) async -> (methods: [String], apiKeys: [String], authChoices: [String])
 {
     for _ in 0..<200 {
         let snapshot = await recorder.snapshot()
@@ -357,6 +361,25 @@ private func waitForAISetupRequests(
         try? await Task.sleep(nanoseconds: 5_000_000)
     }
     return await recorder.snapshot()
+}
+
+private func wizardStartResponse(id: String, sessionID: String) -> Data {
+    Data(
+        """
+        {"type":"res","id":"\(id)","ok":true,"payload":{
+          "sessionId":"\(sessionID)","done":false,"status":"running"
+        }}
+        """.utf8)
+}
+
+private func wizardProgressResponse(id: String, sessionID: String) -> Data {
+    Data(
+        """
+        {"type":"res","id":"\(id)","ok":true,"payload":{
+          "sessionId":"\(sessionID)","done":false,"status":"running",
+          "step":{"id":"download","type":"progress","message":"Downloading model: 25%"}
+        }}
+        """.utf8)
 }
 
 private func settleQueuedAISetupTasks() async {
@@ -586,6 +609,95 @@ struct OnboardingAISetupTests {
 
     @Test func `provider auth transport outlives device code windows`() {
         #expect(OnboardingAISetupModel.providerAuthRequestTimeoutMs > 15 * 60 * 1000)
+    }
+
+    @Test func `prepare choices use wire presentation and hide usable local models`() throws {
+        let candidates = [OnboardingAISetupModel.Candidate(
+            kind: "provider-auto:ollama",
+            label: "Ollama",
+            detail: "available locally",
+            modelRef: "ollama/qwen3:8b",
+            credentials: true)]
+        let installs = [OnboardingAISetupModel.RecommendedInstall(
+            id: "ollama",
+            label: "Wire Ollama",
+            hint: "Wire hint",
+            website: "https://ollama.com/download",
+            icon: "https://cdn.simpleicons.org/ollama")]
+
+        let options = OnboardingAISetupModel.prepareOptions(
+            candidates: candidates,
+            manualProviders: [],
+            authOptions: [],
+            recommendedInstalls: installs)
+
+        #expect(options.map(\.id) == ["llama-cpp"])
+        #expect(options.first?.label == "Local model (llama.cpp)")
+        #expect(OnboardingAISetupModel.ProviderWizardKind.prepare.startMethod ==
+            "openclaw.setup.prepare.start")
+    }
+
+    @Test func `prepare action starts shared wizard with the local auth choice`() async throws {
+        let recorder = AISetupRequestRecorder()
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(
+                sendHook: { task, message, sendIndex in
+                    guard sendIndex > 0, let request = aiSetupRequest(from: message) else { return }
+                    if respondToAISetupHealth(task: task, request: request) {
+                        return
+                    }
+                    await recorder.record(message)
+                    switch request.method {
+                    case "openclaw.setup.detect":
+                        task.emitReceiveSuccess(.data(detectedSetupResponse(id: request.id)))
+                    case "openclaw.setup.prepare.start":
+                        let sessionID = request.params["sessionId"] as? String ?? "prepare-session"
+                        task.emitReceiveSuccess(.data(wizardStartResponse(
+                            id: request.id,
+                            sessionID: sessionID)))
+                    case "wizard.next":
+                        let sessionID = request.params["sessionId"] as? String ?? "prepare-session"
+                        task.emitReceiveSuccess(.data(wizardProgressResponse(
+                            id: request.id,
+                            sessionID: sessionID)))
+                    default:
+                        break
+                    }
+                },
+                receiveHook: { task, receiveIndex in
+                    if receiveIndex == 0 {
+                        return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                    }
+                    let id = task.snapshotConnectRequestID() ?? "connect"
+                    return .data(GatewayWebSocketTestSupport.connectOkData(
+                        id: id,
+                        methods: ["openclaw.setup.prepare.start"]))
+                })
+        })
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let gateway = GatewayConnection(
+            configProvider: { (url: url, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+        let model = OnboardingAISetupModel(
+            gateway: gateway,
+            routeIdentityProvider: { "local" })
+
+        await model.detectAndAutoConnect()
+        let option = try #require(model.prepareOptions.first { $0.id == "llama-cpp" })
+        model.startProviderPrepare(option)
+        let requests = await waitForAISetupRequests(recorder, count: 3)
+
+        #expect(requests.methods == [
+            "openclaw.setup.detect",
+            "openclaw.setup.prepare.start",
+            "wizard.next",
+        ])
+        #expect(requests.authChoices == ["llama-cpp"])
+        #expect(model.isPreparingModel)
+        for _ in 0..<200 where model.authStep.map(wizardStepType) != "progress" {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        #expect(model.authStep.map(wizardStepType) == "progress")
     }
 
     @Test func `provider auth opens only safe external links`() {

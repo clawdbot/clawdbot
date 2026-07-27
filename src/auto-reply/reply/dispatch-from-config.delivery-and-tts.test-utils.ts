@@ -1219,6 +1219,156 @@ describe("dispatchReplyFromConfig", () => {
     expect(blockReplySentTexts).toContain("The answer is 42");
   });
 
+  it("does not redeliver a final that already settled as an identical block", async () => {
+    setNoAbort();
+    const delivered: Array<{ kind: string; text?: string }> = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload, info) => {
+        delivered.push({ kind: info.kind, text: payload.text });
+      },
+    });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      await opts?.onBlockReply?.({ text: "rewritten command answer" });
+      return { text: "rewritten command answer" };
+    };
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "qa-channel", Surface: "qa-channel" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(delivered).toEqual([{ kind: "block", text: "rewritten command answer" }]);
+    expect(result.counts).toEqual({ tool: 0, block: 1, final: 0 });
+  });
+
+  it("keeps the final fallback when an identical block delivery fails", async () => {
+    setNoAbort();
+    const delivered: Array<{ kind: string; text?: string }> = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload, info) => {
+        if (info.kind === "block") {
+          throw new Error("block delivery failed");
+        }
+        delivered.push({ kind: info.kind, text: payload.text });
+      },
+    });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      await opts?.onBlockReply?.({ text: "retry this final" });
+      return { text: "retry this final" };
+    };
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "qa-channel", Surface: "qa-channel" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(delivered).toEqual([{ kind: "final", text: "retry this final" }]);
+    expect(result.counts).toEqual({ tool: 0, block: 1, final: 1 });
+  });
+
+  it("does not send the final fallback when aborted during block settlement", async () => {
+    setNoAbort();
+    let markBlockStarted: (() => void) | undefined;
+    let releaseBlock: (() => void) | undefined;
+    const blockStarted = new Promise<void>((resolve) => {
+      markBlockStarted = resolve;
+    });
+    const blockRelease = new Promise<void>((resolve) => {
+      releaseBlock = resolve;
+    });
+    const delivered: Array<{ kind: string; text?: string }> = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload, info) => {
+        if (info.kind === "block") {
+          markBlockStarted?.();
+          await blockRelease;
+          throw new Error("block delivery failed after abort");
+        }
+        delivered.push({ kind: info.kind, text: payload.text });
+      },
+    });
+    const abortController = new AbortController();
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      await opts?.onBlockReply?.({ text: "cancelled rewritten answer" });
+      return { text: "cancelled rewritten answer" };
+    };
+
+    const dispatch = dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "qa-channel", Surface: "qa-channel" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyOptions: { abortSignal: abortController.signal },
+      replyResolver,
+    });
+    await blockStarted;
+    abortController.abort();
+    await dispatch;
+    expect(delivered).toEqual([]);
+
+    releaseBlock?.();
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(delivered).toEqual([]);
+  });
+
+  it("keeps final-only TTS media after deduping identical block text", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const delivered: Array<{ kind: string; payload: ReplyPayload }> = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload, info) => {
+        delivered.push({ kind: info.kind, payload });
+      },
+    });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      await opts?.onBlockReply?.({ text: "spoken rewritten answer" });
+      return { text: "spoken rewritten answer" };
+    };
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "qa-channel", Surface: "qa-channel" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(delivered).toEqual([
+      { kind: "block", payload: { text: "spoken rewritten answer" } },
+      {
+        kind: "final",
+        payload: expect.objectContaining({
+          text: undefined,
+          mediaUrl: "https://example.com/tts-synth.opus",
+          audioAsVoice: true,
+        }),
+      },
+    ]);
+    expect(result.counts).toEqual({ tool: 0, block: 1, final: 1 });
+  });
+
   it("delivers opted-in block reasoning payloads without applying TTS", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();

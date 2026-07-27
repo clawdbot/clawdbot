@@ -495,7 +495,7 @@ export async function runSetupInferenceTest(params: {
       result = (await runCli({
         sessionId,
         sessionKey: `temp:setup-inference:${runId}`,
-        agentId: plan.agentId ?? "openclaw",
+        agentId: plan.routeAgentId ?? plan.agentId ?? "openclaw",
         trigger: "manual",
         sessionFile,
         workspaceDir: tempDir,
@@ -523,7 +523,7 @@ export async function runSetupInferenceTest(params: {
       result = (await runEmbedded({
         sessionId,
         sessionKey: `temp:setup-inference:${runId}`,
-        agentId: plan.agentId ?? "openclaw",
+        agentId: plan.routeAgentId ?? plan.agentId ?? "openclaw",
         trigger: "manual",
         sessionFile,
         workspaceDir: tempDir,

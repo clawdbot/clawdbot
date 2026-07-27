@@ -131,6 +131,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "channel-pairing": 0,
   "channel-policy": 7,
   "channel-send-result": 1,
+  "reply-runtime": 1,
+  "security-runtime": 1,
   "session-store-runtime": 4,
   // +2: shipped Slack and Discord setup helpers retained through their package migration window.
   "setup-runtime": 2,
@@ -148,7 +150,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS",
       // +1: session-discussion binds one external discussion provider to sessions.
       // +1: focused media-local-roots replacement for the legacy agent-media facade.
-      141,
+      // +1: account-aware channel DM policy setup descriptors.
+      142,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -173,7 +176,13 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +6: canonical session delivery normalization, access, and projection helpers.
       // +5: focused media-local-roots helpers and typed hook media contracts.
       // +1: model-independent agent-harness preflight failure contract.
-      4717,
+      // +3: channel DM policy factory and its account/patch callback contracts.
+      // +1: typed owner-required error for session store path resolution.
+      // +1: native approval messaging target resolver.
+      // +1: shared plugin SecretRef setup plan helper.
+      // +1: shared multi-claim ingress lifecycle fan-in.
+      // +3: channel prompt-context entry/compat types and channel metadata builder.
+      4727,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -195,7 +204,11 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: canonical unknown-value to Error coercion.
       // +6: canonical session delivery normalization, access, and projection helpers.
       // +2: focused media-local-roots helpers.
-      2857,
+      // +3: channel DM policy factory and its account/patch callbacks.
+      // +1: native approval messaging target resolver.
+      // +1: shared multi-claim ingress lifecycle fan-in.
+      // +1: channel metadata builder.
+      2863,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -203,7 +216,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +3: canonical incognito classifier projected through deprecated compatibility barrels.
       // +2: shipped Slack and Discord setup compatibility helpers.
       // +10: named media legacy projection deprecations across public compatibility barrels.
-      1698,
+      // +2: channel prompt-context type and metadata builder compatibility aliases.
+      1700,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

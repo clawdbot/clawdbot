@@ -108,7 +108,7 @@ describe("security audit exec surface findings", () => {
         "warn",
         await collectSecurityAuditFindings({
           agents: {
-            list: [{ id: "ops" }],
+            entries: { ops: {} },
           },
         } satisfies OpenClawConfig),
       ),
@@ -138,6 +138,66 @@ describe("security audit exec surface findings", () => {
         } satisfies OpenClawConfig),
       ),
     ).toBe(false);
+  });
+
+  it("honors global strictInlineEval for a named default agent approval scope", async () => {
+    saveExecApprovals({
+      version: 1,
+      agents: {
+        ops: {
+          allowlist: [{ pattern: "/usr/bin/python3" }],
+        },
+      },
+    });
+
+    expect(
+      hasFinding(
+        "tools.exec.allowlist_interpreter_without_strict_inline_eval",
+        "warn",
+        await collectSecurityAuditFindings({
+          agents: {
+            entries: {
+              ops: { default: true },
+            },
+          },
+          tools: {
+            exec: {
+              strictInlineEval: true,
+            },
+          },
+        } satisfies OpenClawConfig),
+      ),
+    ).toBe(false);
+  });
+
+  it("honors a named default agent strictInlineEval override", async () => {
+    saveExecApprovals({
+      version: 1,
+      agents: {
+        ops: {
+          allowlist: [{ pattern: "/usr/bin/python3" }],
+        },
+      },
+    });
+
+    expect(
+      hasFinding(
+        "tools.exec.allowlist_interpreter_without_strict_inline_eval",
+        "warn",
+        await collectSecurityAuditFindings({
+          agents: {
+            entries: {
+              ops: { default: true, tools: { exec: { strictInlineEval: false } } },
+            },
+          },
+          tools: {
+            exec: {
+              strictInlineEval: true,
+            },
+          },
+        } satisfies OpenClawConfig),
+      ),
+    ).toBe(true);
   });
 
   it("flags open channel access combined with exec-enabled scopes", async () => {
@@ -191,6 +251,25 @@ describe("security audit exec surface findings", () => {
     expect(finding.detail).toContain("tools");
     expect(finding.detail).toContain("runtime=[exec, process]");
     expect(finding.remediation).toContain("deny exec and process");
+  });
+
+  it("reports canonical agent paths for filesystem policy drift", async () => {
+    const findings = await collectSecurityAuditFindings({
+      agents: {
+        entries: {
+          ops: {
+            default: true,
+            tools: {
+              allow: ["read", "exec", "process"],
+              deny: ["write", "edit", "apply_patch"],
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig);
+
+    const finding = requireFinding("tools.exec.fs_tools_disabled_but_exec_enabled", findings);
+    expect(finding.detail).toContain("agents.entries.ops.tools");
   });
 
   it("does not warn when sandbox filesystem policy constrains exec", async () => {

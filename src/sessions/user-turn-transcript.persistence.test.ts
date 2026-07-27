@@ -100,10 +100,6 @@ describe("persistUserTurnTranscript", () => {
       role: "user",
       content: "What is in this image?",
       timestamp: 123,
-      MediaPath: "/tmp/image.png",
-      MediaPaths: ["/tmp/image.png"],
-      MediaType: "image/png",
-      MediaTypes: ["image/png"],
       __openclaw: {
         senderIsOwner: true,
         media: [{ path: "/tmp/image.png", contentType: "image/png" }],
@@ -124,10 +120,6 @@ describe("persistUserTurnTranscript", () => {
       role: "user",
       content: "Inspect both",
       timestamp: 456,
-      MediaPath: "/tmp/image.png",
-      MediaPaths: ["/tmp/image.png", "https://example.test/report.pdf"],
-      MediaType: "image/png",
-      MediaTypes: ["image/png", "application/pdf"],
       __openclaw: {
         media: [
           { path: "/tmp/image.png", contentType: "image/png" },

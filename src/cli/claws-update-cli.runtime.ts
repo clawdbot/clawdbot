@@ -83,7 +83,7 @@ export async function runClawsUpdateCommand(
 
   let source = opts.from;
   if (!source) {
-    const database = openExistingOpenClawStateDatabaseReadOnly();
+    const database = await openExistingOpenClawStateDatabaseReadOnly();
     let status: Awaited<ReturnType<typeof readClawStatus>> | { records: never[] } = {
       records: [],
     };

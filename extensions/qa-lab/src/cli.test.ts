@@ -255,6 +255,23 @@ describe("qa cli registration", () => {
     expect(runQaLabSelfCheckCommand).not.toHaveBeenCalled();
   });
 
+  it("forwards fail-fast to taxonomy-backed QA profile runs", async () => {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "qa",
+      "run",
+      "--qa-profile",
+      "smoke-ci",
+      "--fail-fast",
+    ]);
+
+    expect(runQaProfileCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ failFast: true, profile: "smoke-ci" }),
+    );
+    expect(runQaLabSelfCheckCommand).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["--output-dir", [".artifacts/qa-e2e/smoke-ci"]],
     ["--surface", ["agents"]],
@@ -268,6 +285,7 @@ describe("qa cli registration", () => {
     ["--alt-model", ["anthropic/claude-sonnet-4-6"]],
     ["--concurrency", ["2"]],
     ["--allow-failures", []],
+    ["--fail-fast", []],
     ["--fast", []],
   ])("rejects qa run profile-only flag %s without --qa-profile", async (flag, values) => {
     await expect(
@@ -892,6 +910,20 @@ describe("qa cli registration", () => {
     const options = requireQaSuiteOptions();
     expect(options.allowFailures).toBe(true);
     expect(options.providerMode).toBeUndefined();
+  });
+
+  it.each(["host", "multipass"])("forwards --fail-fast to the %s suite runner", async (runner) => {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "qa",
+      "suite",
+      "--runner",
+      runner,
+      "--fail-fast",
+    ]);
+
+    expect(requireQaSuiteOptions()).toEqual(expect.objectContaining({ failFast: true, runner }));
   });
 
   it("forwards --pack for suite runs", async () => {

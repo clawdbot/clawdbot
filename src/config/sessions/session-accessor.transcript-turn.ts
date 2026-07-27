@@ -1,11 +1,12 @@
+import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { getRuntimeConfig } from "../io.js";
 import { resolveStorePath } from "./paths.js";
 import { updateSessionEntry } from "./session-accessor.entry-mutation.js";
 import {
   loadSessionEntry,
-  listSessionEntries,
   resolveSessionEntryFromStore,
+  resolveSessionEntrySelection,
 } from "./session-accessor.entry.js";
 import { appendSqliteExpectedSessionTranscriptTurn } from "./session-accessor.sqlite.js";
 import { shouldUseExplicitTranscriptFile } from "./session-accessor.transcript-target.js";
@@ -42,7 +43,7 @@ export async function persistSessionTranscriptTurn(
   if (options.sessionLifecyclePatch) {
     throw new Error("Cannot patch session lifecycle without an expected session id");
   }
-  const target = await resolveTranscriptTurnTarget(scope);
+  const target = await resolveTranscriptTurnTarget(scope, options.config);
   const appendedMessages = await runWithOwnedSessionTranscriptWriteLock(
     {
       sessionFile: target.sessionFile,
@@ -141,16 +142,23 @@ async function persistExpectedSessionTranscriptTurn(
   }
   const storePath = scope.storePath;
   const expectedSessionId = options.expectedSessionId;
-  const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(sessionKey);
+  const agentId =
+    scope.agentId ??
+    resolveAgentIdFromSessionKey(
+      sessionKey,
+      resolveDefaultAgentId(options.config ?? getRuntimeConfig()),
+    );
   if (!agentId) {
     throw new Error(`Cannot resolve transcript turn without an agent id: ${sessionKey}`);
   }
-  const store =
-    scope.sessionStore ??
-    Object.fromEntries(
-      listSessionEntries({ storePath }).map(({ sessionKey: entryKey, entry }) => [entryKey, entry]),
-    );
-  const resolved = resolveSessionEntryFromStore({ store, sessionKey });
+  const resolved = scope.sessionStore
+    ? resolveSessionEntryFromStore({ store: scope.sessionStore, sessionKey })
+    : resolveSessionEntrySelection({
+        agentId,
+        ...(scope.env ? { env: scope.env } : {}),
+        sessionKey,
+        storePath,
+      });
   const sessionFile = formatSqliteSessionFileMarker({
     agentId,
     sessionId: expectedSessionId,
@@ -171,6 +179,7 @@ async function persistExpectedSessionTranscriptTurn(
     () =>
       appendSqliteExpectedSessionTranscriptTurn(
         {
+          agentId,
           sessionKey: resolved.normalizedKey,
           sessionId: expectedSessionId,
           storePath,
@@ -222,6 +231,7 @@ async function resolveTranscriptTurnTarget(
     sessionEntry?: SessionEntry;
     sessionStore?: Record<string, SessionEntry>;
   },
+  config?: import("../types.openclaw.js").OpenClawConfig,
 ): Promise<
   SessionTranscriptTurnWriteContext & {
     sessionEntry: SessionEntry | undefined;
@@ -247,7 +257,9 @@ async function resolveTranscriptTurnTarget(
       "Cannot persist a transcript turn without a session key and session id or explicit session file",
     );
   }
-  const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(sessionKey);
+  const agentId =
+    scope.agentId ??
+    resolveAgentIdFromSessionKey(sessionKey, resolveDefaultAgentId(config ?? getRuntimeConfig()));
   if (!agentId) {
     throw new Error(`Cannot resolve transcript turn without an agent id: ${sessionKey}`);
   }
@@ -257,15 +269,14 @@ async function resolveTranscriptTurnTarget(
       agentId,
       env: scope.env,
     });
-  const store =
-    scope.sessionStore ??
-    Object.fromEntries(
-      listSessionEntries({
+  const resolved = scope.sessionStore
+    ? resolveSessionEntryFromStore({ store: scope.sessionStore, sessionKey })
+    : resolveSessionEntrySelection({
         agentId,
+        ...(scope.env ? { env: scope.env } : {}),
+        sessionKey,
         storePath,
-      }).map(({ sessionKey: entryKey, entry }) => [entryKey, entry]),
-    );
-  const resolved = store ? resolveSessionEntryFromStore({ store, sessionKey }) : undefined;
+      });
   const sessionEntry =
     resolved?.existing ??
     scope.sessionEntry ??

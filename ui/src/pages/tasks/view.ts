@@ -1,10 +1,10 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
-import { pathForRoute } from "../../app-route-paths.ts";
 import { icon, type IconName } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import type { BoardFace } from "../../lib/board/settings.ts";
 import { formatMs, formatRelativeTimestamp } from "../../lib/format.ts";
-import { searchForSession } from "../../lib/sessions/index.ts";
+import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import {
   partitionTasks,
   taskDetail,
@@ -19,12 +19,15 @@ import {
 
 type TasksProps = {
   basePath: string;
+  agentId: string;
+  mainKey: string;
   connected: boolean;
   canCancel: boolean;
   loading: boolean;
   error: string | null;
   tasks: TaskSummary[];
   cancellingTaskIds: ReadonlySet<string>;
+  sessionFace: (sessionKey: string) => BoardFace;
   onCancel: (taskId: string) => void;
   onNavigateToChat: (sessionKey: string) => void;
 };
@@ -34,7 +37,14 @@ function renderSessionLink(task: TaskSummary, props: TasksProps) {
   if (!sessionKey) {
     return nothing;
   }
-  const href = `${pathForRoute("chat", props.basePath)}${searchForSession(sessionKey)}`;
+  const face = props.sessionFace(sessionKey);
+  const href = sessionNavigationTarget({
+    face,
+    sessionKey,
+    fallbackAgentId: props.agentId,
+    basePath: props.basePath,
+    mainKey: props.mainKey,
+  }).href;
   return html`<a
     class="session-link"
     href=${href}

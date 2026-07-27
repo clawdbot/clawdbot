@@ -18,6 +18,10 @@ const mockGetCurrentPluginMetadataSnapshot = vi.hoisted(() => vi.fn());
 let readBestEffortRuntimeConfigSchema: typeof import("./runtime-schema.js").readBestEffortRuntimeConfigSchema;
 let loadGatewayRuntimeConfigSchema: typeof import("./runtime-schema.js").loadGatewayRuntimeConfigSchema;
 
+function explicitMainRoster(): OpenClawConfig {
+  return { agents: { list: [{ id: "main", default: true }] } };
+}
+
 vi.mock("./config.js", () => {
   return {
     getRuntimeConfig: () => mockLoadConfig(),
@@ -199,12 +203,15 @@ describe("readBestEffortRuntimeConfigSchema", () => {
 
   beforeAll(async () => {
     vi.clearAllMocks();
-    mockLoadConfig.mockReturnValue({});
+    mockLoadConfig.mockReturnValue(explicitMainRoster());
     mockLoadPluginManifestRegistry.mockReturnValue(makeManifestRegistry());
     mockReadConfigFileSnapshot.mockResolvedValueOnce(
       makeSnapshot({
         valid: true,
-        config: { plugins: { entries: { demo: { enabled: true } } } },
+        config: {
+          ...explicitMainRoster(),
+          plugins: { entries: { demo: { enabled: true } } },
+        },
       }),
     );
 
@@ -219,14 +226,17 @@ describe("readBestEffortRuntimeConfigSchema", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockLoadConfig.mockReturnValue({});
+    mockLoadConfig.mockReturnValue(explicitMainRoster());
     mockLoadPluginManifestRegistry.mockReturnValue(makeManifestRegistry());
   });
 
   it("merges manifest plugin metadata for valid configs", async () => {
     const { channelProps, entryProps, loadArg, manifestRegistryLoadCount } = validConfigSchemaCase;
     expect(manifestRegistryLoadCount).toBe(1);
-    expect(loadArg?.config).toEqual({ plugins: { entries: { demo: { enabled: true } } } });
+    expect(loadArg?.config).toEqual({
+      ...explicitMainRoster(),
+      plugins: { entries: { demo: { enabled: true } } },
+    });
     expect(loadArg).not.toHaveProperty("cache", false);
     expect(loadArg).not.toHaveProperty("bundledChannelConfigCollector");
     expect(channelProps).toHaveProperty("telegram");
@@ -241,7 +251,10 @@ describe("readBestEffortRuntimeConfigSchema", () => {
 
     expect(mockLoadPluginManifestRegistry).toHaveBeenCalledTimes(1);
     const loadArg = getManifestRegistryLoadArg();
-    expect(loadArg?.config).toEqual({ plugins: { enabled: true } });
+    expect(loadArg?.config).toEqual({
+      ...explicitMainRoster(),
+      plugins: { enabled: true },
+    });
     expect(loadArg).not.toHaveProperty("cache", false);
     expect(loadArg).not.toHaveProperty("bundledChannelConfigCollector");
     expect(channelProps).toHaveProperty("telegram");
@@ -253,7 +266,10 @@ describe("readBestEffortRuntimeConfigSchema", () => {
 describe("loadGatewayRuntimeConfigSchema", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockLoadConfig.mockReturnValue({ plugins: { entries: { demo: { enabled: true } } } });
+    mockLoadConfig.mockReturnValue({
+      ...explicitMainRoster(),
+      plugins: { entries: { demo: { enabled: true } } },
+    });
     mockLoadPluginManifestRegistry.mockReturnValue(makeManifestRegistry());
   });
 
@@ -265,7 +281,10 @@ describe("loadGatewayRuntimeConfigSchema", () => {
 
     expect(mockLoadPluginManifestRegistry).toHaveBeenCalledTimes(1);
     const loadArg = getManifestRegistryLoadArg();
-    expect(loadArg?.config).toEqual({ plugins: { entries: { demo: { enabled: true } } } });
+    expect(loadArg?.config).toEqual({
+      ...explicitMainRoster(),
+      plugins: { entries: { demo: { enabled: true } } },
+    });
     expect(loadArg).not.toHaveProperty("bundledChannelConfigCollector");
     expect(channelProps).toHaveProperty("telegram");
     expect(channelProps).toHaveProperty("matrix");
@@ -311,7 +330,10 @@ describe("loadGatewayRuntimeConfigSchema", () => {
 
     expect(mockGetCurrentPluginMetadataSnapshot).toHaveBeenCalledTimes(1);
     const metadataArg = getCurrentMetadataSnapshotArg();
-    expect(metadataArg?.config).toEqual({ plugins: { entries: { demo: { enabled: true } } } });
+    expect(metadataArg?.config).toEqual({
+      ...explicitMainRoster(),
+      plugins: { entries: { demo: { enabled: true } } },
+    });
     expect(mockLoadPluginManifestRegistry).not.toHaveBeenCalled();
     expect(channelProps).toHaveProperty("telegram");
     expect(JSON.stringify(channelProps?.telegram)).toContain("botToken");

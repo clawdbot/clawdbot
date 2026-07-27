@@ -1293,8 +1293,7 @@ describe("mattermost inbound user posts", () => {
           chatmode: "onmessage",
           dmPolicy: "open",
           groupPolicy: "open",
-          streaming: "off",
-          blockStreaming: true,
+          streaming: { mode: "off", block: { enabled: true } },
         },
       },
     };

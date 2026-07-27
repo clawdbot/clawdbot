@@ -120,7 +120,25 @@ client-provided app tools.
 
 `openclaw.tools.search(query, options?)`
 
-Searches the effective catalog for the current run. Results are compact and safe
+Searches the effective catalog for the current run.
+
+Queries must be written in English. Ranking is lexical (Okapi BM25 over tool
+names, descriptions, and first-party parameter names and descriptions), with
+light English stemming so `scheduling` reaches a tool described as `Schedule a
+recurring task`, and a small intent expansion so `look up the price` reaches one
+described as `Search the web`. Tool names and descriptions are written in English,
+so a query in another language will usually match nothing. It is not rejected —
+a catalog may legitimately describe a tool in another script — but it is also no
+longer answered with an arbitrary slice of the catalog presented as if it were
+ranked, which is what the previous scorer did whenever a query produced no
+usable terms. Both `tool_search` and the code-mode bridge state this
+requirement in their model-facing descriptions.
+
+Untrusted parameter schemas are never indexed. MCP and client tools are matched
+on name and description only, which is the same boundary that defers their input
+signatures as `input: "unknown"`.
+
+Results are compact and safe
 to put back into prompt context. Each hit includes a bounded TypeScript-style
 `input` signature, such as `{ id: string; mode?: "drip" | "flood" }`, so the
 model can skip `describe` when that signature is sufficient. A trusted
@@ -282,15 +300,23 @@ Disable it:
 
 ## Prompt and telemetry
 
-Tool Search records enough telemetry to compare it with direct tool exposure:
+Code mode attaches a `telemetry` object to every `tool_search_code` result:
 
-- total serialized tool and prompt bytes sent to the harness
-- catalog size and source breakdown
-- search, describe, and call counts
-- final tool calls executed through OpenClaw
-- selected tool ids and sources
+- `catalogSize`: number of catalog entries the runtime resolved
+- `sources`: catalog entry counts split into `openclaw`, `mcp`, and `client`
+- `searchCount`, `describeCount`, `callCount`: running totals for the catalog
+  session, carried across calls rather than reset per call
 
-Session logs should make it possible to answer:
+`tools` and `directory` mode emit no telemetry object; their `tool_search`,
+`tool_describe`, and `tool_call` results carry only the catalog data for that
+operation. OpenClaw does not record serialized tool or prompt byte counts. The
+[E2E scenario](#e2e-validation) measures provider payload bytes separately from
+the mock provider lane, not from the runtime.
+
+Regardless of mode, target tool calls are projected into the session transcript
+as normal tool call and tool result pairs, and search, describe, and call
+results carry each tool's `id` and `source`. Session logs therefore still
+answer:
 
 - how many tool schemas the model saw up front
 - how many search and describe operations it performed

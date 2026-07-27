@@ -1,12 +1,11 @@
 // Resolves normalized exec approval policy without persistence side effects.
-import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import {
   DEFAULT_ASK,
   DEFAULT_AUTO_ALLOW_SKILLS,
   DEFAULT_EXEC_APPROVAL_ASK_FALLBACK,
   DEFAULT_SECURITY,
   normalizeExecApprovalsInternal,
-  resolveExecApprovalsPath,
+  resolveExecApprovalsDisplayPath,
   resolveExecApprovalsSocketPath,
 } from "./exec-approvals-config.js";
 import type { ExecApprovalsDefaultOverrides } from "./exec-approvals-contracts.js";
@@ -159,7 +158,7 @@ export function resolveExecApprovalsFromFilePrepared(params: {
   const rawFile = params.rawFile;
   const file = params.file;
   const defaults = file.defaults ?? {};
-  const agentKey = params.agentId ?? DEFAULT_AGENT_ID;
+  const agentKey = params.agentId ?? "default";
   const agent = file.agents?.[agentKey] ?? {};
   const wildcard = file.agents?.["*"] ?? {};
   const rawAgent = rawFile.agents?.[agentKey] ?? {};
@@ -218,7 +217,7 @@ export function resolveExecApprovalsFromFilePrepared(params: {
     ...(Array.isArray(agent.allowlist) ? agent.allowlist : []),
   ];
   return {
-    path: params.path ?? resolveExecApprovalsPath(),
+    path: params.path ?? resolveExecApprovalsDisplayPath(),
     socketPath: expandHomePrefix(
       params.socketPath ?? file.socket?.path ?? resolveExecApprovalsSocketPath(),
     ),

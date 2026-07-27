@@ -16,8 +16,12 @@ import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-s
 import type { GatewayAuthConfig, GatewayTailscaleConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetAgentEventsForTest } from "../infra/agent-events.js";
+import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
+import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { getPairedDevice } from "../infra/device-pairing.js";
 import { clearGatewaySubagentRuntime } from "../plugins/runtime/gateway-bindings.test-fixtures.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { callGateway } from "./call.js";
 import { startGatewayServer } from "./server.js";
 import {
   connectDeviceAuthReq,
@@ -184,6 +188,55 @@ describe("gateway e2e", () => {
 
   beforeAll(async () => {
     ({ createConfigIO } = await import("../config/config.js"));
+  });
+
+  it("pairs the local CLI before a runtime-token loopback gateway becomes ready", async () => {
+    const { envSnapshot, tempHome } = await setupGatewayTempHome({
+      prefix: "openclaw-gw-runtime-token-cli-pairing-",
+    });
+    let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+    try {
+      deleteTestEnvValue("OPENCLAW_GATEWAY_TOKEN");
+      const configPath = await createGatewayConfigPath(tempHome);
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+      const initialConfig: OpenClawConfig = {
+        gateway: { mode: "local", bind: "loopback" },
+        logging: { level: "info" },
+      };
+      await createConfigIO({ configPath }).writeConfigFile(initialConfig);
+      const port = await getFreeGatewayPort();
+      server = await startGatewayServer(port, {
+        bind: "loopback",
+        controlUiEnabled: false,
+        sidecarStartup: "defer",
+      });
+
+      await expect(
+        callGateway({
+          config: initialConfig,
+          localPortOverride: port,
+          method: "health",
+          timeoutMs: 5_000,
+        }),
+      ).resolves.toEqual(expect.any(Object));
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+      expect(persisted.gateway?.auth?.token).toBeUndefined();
+      const identity = loadOrCreateDeviceIdentity();
+      expect(loadDeviceAuthToken({ deviceId: identity.deviceId, role: "operator" })).toMatchObject({
+        scopes: expect.arrayContaining(["operator.admin"]),
+      });
+      await expect(getPairedDevice(identity.deviceId)).resolves.toMatchObject({
+        approvedVia: "silent",
+        approvedScopes: expect.arrayContaining(["operator.admin"]),
+      });
+    } finally {
+      if (server) {
+        await server.close({ reason: "runtime-token local CLI pairing test complete" });
+      }
+      await removeGatewayTempHome(tempHome);
+      envSnapshot.restore();
+    }
   });
 
   it.each(["generated", "explicit-override", "secret-ref-override", "runtime-overrides"] as const)(

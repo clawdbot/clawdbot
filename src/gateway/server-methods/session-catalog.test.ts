@@ -4,15 +4,18 @@ import { gatewaySubagentState } from "../../plugins/runtime/gateway-bindings.js"
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 
-type CatalogSessionRowLoader = (
-  sessionKey: string,
-  options?: { agentId?: string; clone?: boolean },
-) => { createdActor?: { type: "human" | "agent" | "system"; id?: string; label?: string } } | null;
-
 const hoisted = vi.hoisted(() => ({
   activeRegistry: { sessionCatalogs: [] as unknown[] },
   pinnedSessionExtensionRegistry: undefined as { sessionCatalogs: unknown[] } | undefined,
-  loadGatewaySessionRow: vi.fn<CatalogSessionRowLoader>(() => null),
+  listSessionEntriesReadOnly: vi.fn<
+    (scope?: { agentId?: string }) => Array<{
+      sessionKey: string;
+      entry: {
+        createdActor?: { type: "human" | "agent" | "system"; id?: string };
+        updatedAt?: number;
+      };
+    }>
+  >(() => []),
   recordSessionStateEvent: vi.fn(),
   upsertSessionUpstreamLink: vi.fn(),
 }));
@@ -39,9 +42,9 @@ vi.mock("../../sessions/session-upstream-links.js", () => ({
 vi.mock("../../plugins/session-conversation-binding.js", () => ({
   bindPluginSessionConversation: conversationBindingMocks.bindPluginSessionConversation,
 }));
-vi.mock("../session-utils.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../session-utils.js")>();
-  return { ...actual, loadGatewaySessionRow: hoisted.loadGatewaySessionRow };
+vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/sessions/session-accessor.js")>();
+  return { ...actual, listSessionEntriesReadOnly: hoisted.listSessionEntriesReadOnly };
 });
 
 const { resolveSessionCatalogCreateTarget, sessionCatalogHandlers } =
@@ -81,8 +84,8 @@ describe("session catalog Gateway methods", () => {
   beforeEach(() => {
     hoisted.activeRegistry.sessionCatalogs = [];
     hoisted.pinnedSessionExtensionRegistry = undefined;
-    hoisted.loadGatewaySessionRow.mockReset();
-    hoisted.loadGatewaySessionRow.mockReturnValue(null);
+    hoisted.listSessionEntriesReadOnly.mockReset();
+    hoisted.listSessionEntriesReadOnly.mockReturnValue([]);
     hoisted.recordSessionStateEvent.mockClear();
     hoisted.upsertSessionUpstreamLink.mockClear();
     conversationBindingMocks.bindPluginSessionConversation.mockClear();
@@ -192,11 +195,12 @@ describe("session catalog Gateway methods", () => {
         },
       ],
     };
-    hoisted.loadGatewaySessionRow.mockImplementation((sessionKey: string) =>
-      sessionKey === "agent:main:owned"
-        ? { createdActor: { type: "human", id: "profile-ada", label: "Ada" } }
-        : null,
-    );
+    hoisted.listSessionEntriesReadOnly.mockReturnValue([
+      {
+        sessionKey: "agent:main:owned",
+        entry: { createdActor: { type: "agent", id: "worker-1" }, updatedAt: 1 },
+      },
+    ]);
     hoisted.activeRegistry.sessionCatalogs = [
       {
         provider: provider("claude", {
@@ -218,7 +222,7 @@ describe("session catalog Gateway methods", () => {
     const projectedSessions = [
       expect.objectContaining({
         threadId: "owned-thread",
-        createdActor: { type: "human", id: "profile-ada", label: "Ada" },
+        createdActor: { type: "agent", id: "worker-1" },
       }),
       expect.not.objectContaining({ createdActor: expect.anything() }),
       expect.not.objectContaining({ createdActor: expect.anything() }),
@@ -241,10 +245,109 @@ describe("session catalog Gateway methods", () => {
         }),
       ],
     });
-    expect(hoisted.loadGatewaySessionRow).toHaveBeenCalledWith("agent:main:owned", {
-      agentId: "main",
+    expect(hoisted.listSessionEntriesReadOnly).toHaveBeenCalledOnce();
+    expect(hoisted.listSessionEntriesReadOnly).toHaveBeenCalledWith({ agentId: "main" });
+  });
+
+  it("shares one per-agent entry snapshot across catalogs and creator projection", async () => {
+    hoisted.listSessionEntriesReadOnly.mockReturnValue([
+      {
+        sessionKey: "agent:main:alpha-adopted",
+        entry: { createdActor: { type: "agent", id: "worker-alpha" }, updatedAt: 2 },
+      },
+      {
+        sessionKey: "agent:main:zeta-adopted",
+        entry: { createdActor: { type: "system", id: "scheduler" }, updatedAt: 1 },
+      },
+    ]);
+    const catalogProvider = (id: string, sessionKey: string) =>
+      provider(id, {
+        list: vi.fn(async ({ sessionEntries }) => {
+          const adopted = sessionEntries
+            ?.entriesForAgent("main")
+            .find((candidate: { sessionKey: string }) => candidate.sessionKey === sessionKey);
+          return [
+            {
+              hostId: `gateway:${id}`,
+              label: `${id} host`,
+              kind: "gateway" as const,
+              connected: true,
+              sessions: adopted
+                ? [
+                    {
+                      threadId: `${id}-thread`,
+                      status: "stored" as const,
+                      archived: false,
+                      sessionKey: adopted.sessionKey,
+                      canContinue: true,
+                      canArchive: false,
+                    },
+                  ]
+                : [],
+            },
+          ];
+        }),
+      });
+    hoisted.activeRegistry.sessionCatalogs = [
+      { provider: catalogProvider("zeta", "agent:main:zeta-adopted") },
+      { provider: catalogProvider("alpha", "agent:main:alpha-adopted") },
+    ];
+
+    const respond = await call("sessions.catalog.list", {});
+
+    expect(hoisted.listSessionEntriesReadOnly).toHaveBeenCalledOnce();
+    expect(respond).toHaveBeenCalledWith(true, {
+      catalogs: [
+        {
+          id: "alpha",
+          label: "ALPHA",
+          capabilities: { continueSession: false, archive: false },
+          hosts: [
+            {
+              hostId: "gateway:alpha",
+              label: "alpha host",
+              kind: "gateway",
+              connected: true,
+              sessions: [
+                {
+                  threadId: "alpha-thread",
+                  status: "stored",
+                  archived: false,
+                  sessionKey: "agent:main:alpha-adopted",
+                  canContinue: true,
+                  canArchive: false,
+                  createdActor: { type: "agent", id: "worker-alpha" },
+                },
+              ],
+            },
+          ],
+        },
+        {
+          id: "zeta",
+          label: "ZETA",
+          capabilities: { continueSession: false, archive: false },
+          hosts: [
+            {
+              hostId: "gateway:zeta",
+              label: "zeta host",
+              kind: "gateway",
+              connected: true,
+              sessions: [
+                {
+                  threadId: "zeta-thread",
+                  status: "stored",
+                  archived: false,
+                  sessionKey: "agent:main:zeta-adopted",
+                  canContinue: true,
+                  canArchive: false,
+                  createdActor: { type: "system", id: "scheduler" },
+                },
+              ],
+            },
+          ],
+        },
+      ],
     });
-    expect(hoisted.loadGatewaySessionRow).toHaveBeenCalledTimes(2);
   });
 
   it("uses the pinned Gateway catalog runtime after active registry churn", async () => {

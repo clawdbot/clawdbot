@@ -36,7 +36,9 @@ export {
   resolveClaudeSonnet5ModelIdentity,
   requiresClaudeDefaultSampling,
   requiresClaudeMandatoryAdaptiveThinking,
+  supportsClaude1MContext,
   supportsClaudeAdaptiveThinking,
+  supportsClaudeFastMode,
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
 } from "@openclaw/llm-core";
@@ -173,6 +175,7 @@ export {
 export {
   cloneFirstTemplateModel,
   matchesExactOrPrefix,
+  resolveFamilyForwardCompatModel,
 } from "../plugins/provider-model-helpers.js";
 import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
 

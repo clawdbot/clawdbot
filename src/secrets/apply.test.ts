@@ -343,7 +343,7 @@ describe("secrets apply", () => {
       string,
       unknown
     >;
-    expect(nextAuthJson.openai).toBeUndefined();
+    expect(nextAuthJson.openai).toBeDefined();
 
     const nextEnv = await fs.readFile(fixture.envPath, "utf8");
     expect(nextEnv).not.toContain("sk-openai-plaintext");

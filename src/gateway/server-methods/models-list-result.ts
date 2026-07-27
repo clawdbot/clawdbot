@@ -43,6 +43,7 @@ import {
   createOpenAIModelRoutesResolver,
   openAIModelCatalogRoutePolicy,
 } from "../../agents/openai-model-routes.js";
+import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-model-catalog-owner.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { getRuntimeConfigSourceSnapshot } from "../../config/config.js";
@@ -505,9 +506,6 @@ export async function buildModelsListResult(
     },
     onTimeout: handleCatalogTimeout,
   });
-  if (loadedSnapshot && !loadedSnapshot.agentId) {
-    return { models: [] };
-  }
   if (
     loadedSnapshot &&
     loadedReadOnly &&
@@ -533,14 +531,17 @@ export async function buildModelsListResult(
       },
     });
     if (!escalationTimedOut && fullSnapshot) {
+      if (!publishedModelCatalogOwnerMatchesAgent(fullSnapshot, escalationAgentId)) {
+        return { models: [] };
+      }
       loadedSnapshot = fullSnapshot;
       snapshot = escalatedCatalog;
     }
   }
   if (
     loadedSnapshot &&
-    (!loadedSnapshot.agentId ||
-      (params.agentId !== undefined && normalizeAgentId(loadedSnapshot.agentId) !== initialAgentId))
+    params.agentId !== undefined &&
+    !publishedModelCatalogOwnerMatchesAgent(loadedSnapshot, initialAgentId)
   ) {
     return { models: [] };
   }

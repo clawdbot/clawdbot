@@ -141,8 +141,11 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       continue;
     }
     sentFinalPayloadDedupeKeys.add(finalPayloadDedupeKey);
-    attemptedFinalDelivery = true;
     const finalReply = await sendFinalPayload(reply, { deliveryId: String(replyIndex) });
+    if (finalReply.dedupedAgainstBlock) {
+      continue;
+    }
+    attemptedFinalDelivery = true;
     queuedFinal = finalReply.queuedFinal || queuedFinal;
     routedFinalCount += finalReply.routedFinalCount;
     if (finalReply.queuedFinal) {

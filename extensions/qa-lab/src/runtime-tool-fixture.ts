@@ -1,8 +1,10 @@
 // Qa Lab plugin module implements runtime tool fixture behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { loadTranscriptEventsSync } from "openclaw/plugin-sdk/session-store-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { QaSuiteInfraError, QaSuiteScenarioSkipError } from "./errors.js";
 import {
   qaMockRequestCursorUrl,
   qaMockRequestsAfterUrl,
@@ -54,6 +56,28 @@ type QaRuntimeToolFixtureTranscriptToolResult = {
   structuredFailure: boolean;
 };
 
+const RUNTIME_PARITY_SESSION_KEY_DETAIL_PREFIX = "RUNTIME_PARITY_SESSION_KEY=";
+
+function runtimeParitySessionKeyDetails(...sessionKeys: string[]) {
+  return sessionKeys.map(
+    (sessionKey) => `${RUNTIME_PARITY_SESSION_KEY_DETAIL_PREFIX}${sessionKey}`,
+  );
+}
+
+function runtimeToolFixtureDetails(details: string, ...sessionKeys: string[]) {
+  return [details, ...runtimeParitySessionKeyDetails(...sessionKeys)].join("\n");
+}
+
+function runtimeToolFixtureError(error: unknown, ...sessionKeys: string[]) {
+  const message = [
+    ...runtimeParitySessionKeyDetails(...sessionKeys),
+    formatErrorMessage(error),
+  ].join("\n");
+  return error instanceof QaSuiteInfraError
+    ? new QaSuiteInfraError(error.code, message, { cause: error })
+    : new Error(message, { cause: error });
+}
+
 type QaRuntimeToolFixtureDeps = {
   createSession: (
     env: Pick<QaSuiteRuntimeEnv, "gateway" | "primaryModel" | "alternateModel" | "providerMode">,
@@ -70,6 +94,8 @@ type QaRuntimeToolFixtureDeps = {
       sessionKey: string;
       message: string;
       timeoutMs?: number;
+      transcriptToolName?: string;
+      requireSuccessfulTranscriptToolResult?: boolean;
     },
   ) => Promise<unknown>;
   fetchJson: (url: string) => Promise<unknown>;
@@ -631,7 +657,21 @@ export async function runRuntimeToolFixture(
     `Runtime tool fixture: ${toolName} failure`,
     `agent:qa:runtime-tool:${toolName}:failure`,
   );
-  const tools = await deps.readEffectiveTools(env, happySessionKey);
+  const sessionKeys = [happySessionKey, failureSessionKey] as const;
+  const withSessionDetails = (details: string) =>
+    runtimeToolFixtureDetails(details, ...sessionKeys);
+  const skipFixture = (details: string): never => {
+    throw new QaSuiteScenarioSkipError(withSessionDetails(details));
+  };
+  const fixtureError = (error: unknown) => runtimeToolFixtureError(error, ...sessionKeys);
+  const runFixtureOperation = async <T>(operation: () => Promise<T>): Promise<T> => {
+    try {
+      return await operation();
+    } catch (error) {
+      throw fixtureError(error);
+    }
+  };
+  const tools = await runFixtureOperation(() => deps.readEffectiveTools(env, happySessionKey));
   const metadata = readRuntimeToolCoverageMetadata({
     config,
   });
@@ -641,16 +681,18 @@ export async function runRuntimeToolFixture(
   const expectedAvailable = readBoolean(config.expectedAvailable, true);
   if (!tools.has(toolName) && !dynamicExposureIntentionallyExcluded) {
     if (!expectedAvailable) {
-      return formatExpectedUnavailableDetails(toolName, tools);
+      skipFixture(formatExpectedUnavailableDetails(toolName, tools));
     }
     if (isKnownBroken(config.knownBroken)) {
-      return formatKnownBrokenDetails(toolName, tools, config);
+      skipFixture(formatKnownBrokenDetails(toolName, tools, config));
     }
     if (isKnownHarnessGap(config.knownHarnessGap)) {
-      return formatKnownHarnessGapDetails(toolName, config);
+      skipFixture(formatKnownHarnessGapDetails(toolName, config));
     }
-    throw new Error(
-      `${toolName} not present in effective tools. Available tools: ${[...tools].toSorted().join(", ")}`,
+    throw fixtureError(
+      new Error(
+        `${toolName} not present in effective tools. Available tools: ${[...tools].toSorted().join(", ")}`,
+      ),
     );
   }
 
@@ -668,83 +710,116 @@ export async function runRuntimeToolFixture(
     `failure target=${toolName}`,
   );
   const happyPathOutputRequired = readBoolean(config.happyPathOutputRequired, true);
-  const requestCursorBefore = env.mock
-    ? readQaMockRequestCursor(await deps.fetchJson(qaMockRequestCursorUrl(env.mock.baseUrl)))
+  const requireTranscriptEvidence =
+    metadata.required &&
+    !dynamicExposureIntentionallyExcluded &&
+    !isKnownHarnessGap(config.knownHarnessGap);
+  const mockBaseUrl = env.mock?.baseUrl;
+  const requestCursorBefore = mockBaseUrl
+    ? await runFixtureOperation(async () =>
+        readQaMockRequestCursor(await deps.fetchJson(qaMockRequestCursorUrl(mockBaseUrl))),
+      )
     : 0;
 
-  await deps.runAgentPrompt(env, {
-    sessionKey: happySessionKey,
-    message: happyPrompt,
-    timeoutMs: liveTurnTimeoutMs(env, 45_000),
-  });
-  await deps.runAgentPrompt(env, {
-    sessionKey: failureSessionKey,
-    message: failurePrompt,
-    timeoutMs: liveTurnTimeoutMs(env, 45_000),
-  });
+  await runFixtureOperation(() =>
+    deps.runAgentPrompt(env, {
+      sessionKey: happySessionKey,
+      message: happyPrompt,
+      timeoutMs: liveTurnTimeoutMs(env, 45_000),
+      ...(happyPathOutputRequired && requireTranscriptEvidence
+        ? { transcriptToolName: toolName, requireSuccessfulTranscriptToolResult: true }
+        : {}),
+    }),
+  );
+  await runFixtureOperation(() =>
+    deps.runAgentPrompt(env, {
+      sessionKey: failureSessionKey,
+      message: failurePrompt,
+      timeoutMs: liveTurnTimeoutMs(env, 45_000),
+      ...(requireTranscriptEvidence ? { transcriptToolName: toolName } : {}),
+    }),
+  );
 
   if (!env.mock) {
-    const happyRequest = await readLiveToolEvidence({
-      env,
-      sessionKey: happySessionKey,
-      toolName,
-    });
+    const happyRequest = await runFixtureOperation(() =>
+      readLiveToolEvidence({
+        env,
+        sessionKey: happySessionKey,
+        toolName,
+      }),
+    );
     if (!happyRequest.outputRequest) {
       const happyPlannedOnly = happyRequest.plannedRequest && !happyPathOutputRequired;
       if (happyPlannedOnly) {
-        // Async runtime tools prove the start call here; completion is covered
-        // by their task lifecycle scenarios.
+        skipFixture(
+          `${toolName} live provider report-only: a planned call without a linked successful result is not product execution evidence`,
+        );
       } else {
         if (isKnownHarnessGap(config.knownHarnessGap)) {
-          return formatKnownHarnessGapDetails(toolName, config);
+          skipFixture(formatKnownHarnessGapDetails(toolName, config));
         }
-        throw new Error(
-          happyRequest.plannedRequest
-            ? `expected live happy-path tool output for ${toolName}`
-            : `expected live happy-path tool call for ${toolName}`,
+        throw fixtureError(
+          new Error(
+            happyRequest.plannedRequest
+              ? `expected live happy-path tool output for ${toolName}`
+              : `expected live happy-path tool call for ${toolName}`,
+          ),
         );
       }
     }
-    if (happyRequest.outputRequest?.structuredFailure) {
+    if (happyRequest.outputRequest?.failure) {
       if (isKnownHarnessGap(config.knownHarnessGap)) {
-        return formatKnownHarnessGapDetails(toolName, config);
+        skipFixture(formatKnownHarnessGapDetails(toolName, config));
       }
-      throw new Error(`expected live happy-path successful tool output for ${toolName}`);
+      throw fixtureError(
+        new Error(`expected live happy-path successful tool output for ${toolName}`),
+      );
     }
-    const failureRequest = await readLiveToolEvidence({
-      env,
-      sessionKey: failureSessionKey,
-      toolName,
-    });
+    const failureRequest = await runFixtureOperation(() =>
+      readLiveToolEvidence({
+        env,
+        sessionKey: failureSessionKey,
+        toolName,
+      }),
+    );
     if (!failureRequest.outputRequest) {
       if (isKnownHarnessGap(config.knownHarnessGap)) {
-        return formatKnownHarnessGapDetails(toolName, config);
+        skipFixture(formatKnownHarnessGapDetails(toolName, config));
       }
-      throw new Error(
-        failureRequest.plannedRequest
-          ? `expected live failure-path tool output for ${toolName}`
-          : `expected live failure-path tool call for ${toolName}`,
+      throw fixtureError(
+        new Error(
+          failureRequest.plannedRequest
+            ? `expected live failure-path tool output for ${toolName}`
+            : `expected live failure-path tool call for ${toolName}`,
+        ),
       );
     }
     if (!failureRequest.failureOutputRequest) {
       if (isKnownHarnessGap(config.knownHarnessGap)) {
-        return formatKnownHarnessGapDetails(toolName, config);
+        skipFixture(formatKnownHarnessGapDetails(toolName, config));
       }
-      throw new Error(`expected live failure-path tool failure output for ${toolName}`);
+      throw fixtureError(
+        new Error(`expected live failure-path tool failure output for ${toolName}`),
+      );
     }
-    return [
-      `${toolName} live provider happy planned args (diagnostic only): ${JSON.stringify(happyRequest.plannedRequest?.args ?? {})}`,
-      happyPathOutputRequired
-        ? undefined
-        : `${toolName} live provider happy direct output not required for this async fixture`,
-      `${toolName} live provider failure planned args (diagnostic only): ${JSON.stringify(failureRequest.plannedRequest?.args ?? {})}`,
-    ]
-      .filter(Boolean)
-      .join("\n");
+    return withSessionDetails(
+      [
+        `${toolName} live provider happy planned args (diagnostic only): ${JSON.stringify(happyRequest.plannedRequest?.args ?? {})}`,
+        happyPathOutputRequired
+          ? undefined
+          : `${toolName} live provider happy direct output not required for this async fixture`,
+        `${toolName} live provider failure planned args (diagnostic only): ${JSON.stringify(failureRequest.plannedRequest?.args ?? {})}`,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
   }
 
-  const requests = readQaRuntimeToolFixtureRequests(
-    await deps.fetchJson(qaMockRequestsAfterUrl(env.mock.baseUrl, requestCursorBefore)),
+  const activeMockBaseUrl = env.mock.baseUrl;
+  const requests = await runFixtureOperation(async () =>
+    readQaRuntimeToolFixtureRequests(
+      await deps.fetchJson(qaMockRequestsAfterUrl(activeMockBaseUrl, requestCursorBefore)),
+    ),
   );
   const happyPlannedRequest = findPlannedRequest({
     requests,
@@ -775,91 +850,112 @@ export async function runRuntimeToolFixture(
     !happyRequest
   ) {
     if (!plannedRequestHasPrompt(happyPlannedRequest)) {
-      throw new Error(`expected mock happy-path prompt args for ${toolName}`);
+      throw fixtureError(new Error(`expected mock happy-path prompt args for ${toolName}`));
     }
     if (!plannedRequestHasDeniedInputFailure(failurePlannedRequest)) {
-      throw new Error(`expected mock failure-path denied-input args for ${toolName}`);
+      throw fixtureError(new Error(`expected mock failure-path denied-input args for ${toolName}`));
     }
     if (failureRequest && !requestHasFailureLikeToolOutput(failureRequest.outputRequest)) {
-      throw new Error(`expected mock failure-path tool failure output for ${toolName}`);
+      throw fixtureError(
+        new Error(`expected mock failure-path tool failure output for ${toolName}`),
+      );
     }
-    return formatReportOnlyMockDetails({
-      toolName,
-      happyRequest: happyPlannedRequest,
-      failureRequest: failurePlannedRequest,
-    });
+    skipFixture(
+      formatReportOnlyMockDetails({
+        toolName,
+        happyRequest: happyPlannedRequest,
+        failureRequest: failurePlannedRequest,
+      }),
+    );
   }
-  // Async runtime tools prove the start call here; completion is covered by
-  // their task lifecycle scenarios.
   const happyPlannedOnly = Boolean(happyPlannedRequest && !happyPathOutputRequired);
+  if (!happyRequest && happyPlannedOnly) {
+    skipFixture(
+      `${toolName} mock provider report-only: a planned call without a linked successful result is not product execution evidence`,
+    );
+  }
   if (!happyRequest && !happyPlannedOnly) {
     if (dynamicExposureIntentionallyExcluded) {
-      return formatCodexNativeWorkspaceDetails({
-        toolName,
-        tools,
-        reason: metadata.reason,
-        happyRequest: happyPlannedRequest,
-      });
+      skipFixture(
+        formatCodexNativeWorkspaceDetails({
+          toolName,
+          tools,
+          reason: metadata.reason,
+          happyRequest: happyPlannedRequest,
+        }),
+      );
     }
     if (isKnownHarnessGap(config.knownHarnessGap)) {
-      return formatKnownHarnessGapDetails(toolName, config);
+      skipFixture(formatKnownHarnessGapDetails(toolName, config));
     }
-    throw new Error(
-      happyPlannedRequest
-        ? `expected mock happy-path tool output for ${toolName}`
-        : `expected mock happy-path request for ${toolName}`,
+    throw fixtureError(
+      new Error(
+        happyPlannedRequest
+          ? `expected mock happy-path tool output for ${toolName}`
+          : `expected mock happy-path request for ${toolName}`,
+      ),
     );
   }
   if (happyRequest && requestHasHappyPathFailureToolOutput(happyRequest.outputRequest)) {
     if (isKnownHarnessGap(config.knownHarnessGap)) {
-      return formatKnownHarnessGapDetails(toolName, config);
+      skipFixture(formatKnownHarnessGapDetails(toolName, config));
     }
-    throw new Error(`expected mock happy-path successful tool output for ${toolName}`);
+    throw fixtureError(
+      new Error(`expected mock happy-path successful tool output for ${toolName}`),
+    );
   }
   if (!failureRequest) {
     if (dynamicExposureIntentionallyExcluded) {
-      return formatCodexNativeWorkspaceDetails({
-        toolName,
-        tools,
-        reason: metadata.reason,
-        happyRequest: happyPlannedRequest,
-        failureRequest: failurePlannedRequest,
-      });
+      skipFixture(
+        formatCodexNativeWorkspaceDetails({
+          toolName,
+          tools,
+          reason: metadata.reason,
+          happyRequest: happyPlannedRequest,
+          failureRequest: failurePlannedRequest,
+        }),
+      );
     }
     if (isKnownHarnessGap(config.knownHarnessGap)) {
-      return formatKnownHarnessGapDetails(toolName, config);
+      skipFixture(formatKnownHarnessGapDetails(toolName, config));
     }
-    throw new Error(
-      failurePlannedRequest
-        ? `expected mock failure-path tool output for ${toolName}`
-        : `expected mock failure-path request for ${toolName}`,
+    throw fixtureError(
+      new Error(
+        failurePlannedRequest
+          ? `expected mock failure-path tool output for ${toolName}`
+          : `expected mock failure-path request for ${toolName}`,
+      ),
     );
   }
   if (!requestHasFailureLikeToolOutput(failureRequest.outputRequest)) {
     if (isKnownHarnessGap(config.knownHarnessGap)) {
-      return formatKnownHarnessGapDetails(toolName, config);
+      skipFixture(formatKnownHarnessGapDetails(toolName, config));
     }
-    throw new Error(`expected mock failure-path tool failure output for ${toolName}`);
+    throw fixtureError(new Error(`expected mock failure-path tool failure output for ${toolName}`));
   }
 
   if (dynamicExposureIntentionallyExcluded) {
-    return formatCodexNativeWorkspaceDetails({
-      toolName,
-      tools,
-      reason: metadata.reason,
-      happyRequest: happyRequest?.plannedRequest ?? happyPlannedRequest,
-      failureRequest: failureRequest.plannedRequest,
-    });
+    skipFixture(
+      formatCodexNativeWorkspaceDetails({
+        toolName,
+        tools,
+        reason: metadata.reason,
+        happyRequest: happyRequest?.plannedRequest ?? happyPlannedRequest,
+        failureRequest: failureRequest.plannedRequest,
+      }),
+    );
   }
 
-  return [
-    `${toolName} mock provider happy planned args (diagnostic only): ${formatPlannedToolArgs((happyRequest?.plannedRequest ?? happyPlannedRequest)?.plannedToolArgs)}`,
-    happyPathOutputRequired
-      ? undefined
-      : `${toolName} mock provider happy direct output not required for this async fixture`,
-    `${toolName} mock provider failure planned args (diagnostic only): ${formatPlannedToolArgs(failureRequest.plannedRequest.plannedToolArgs)}`,
-  ]
-    .filter(Boolean)
-    .join("\n");
+  return withSessionDetails(
+    [
+      `${toolName} mock provider happy planned args (diagnostic only): ${formatPlannedToolArgs((happyRequest?.plannedRequest ?? happyPlannedRequest)?.plannedToolArgs)}`,
+      happyPathOutputRequired
+        ? undefined
+        : `${toolName} mock provider happy direct output not required for this async fixture`,
+      `${toolName} mock provider failure planned args (diagnostic only): ${formatPlannedToolArgs(failureRequest.plannedRequest.plannedToolArgs)}`,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  );
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

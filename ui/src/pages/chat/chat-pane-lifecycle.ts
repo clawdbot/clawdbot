@@ -246,6 +246,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneReset {
       pageState.requestUpdate?.();
     };
     pageState.refreshSessionPullRequests = (options) => this.refreshSessionPullRequests(options);
+    pageState.openSessionCompanion = (question) => this.submitSessionCompanionQuestion(question);
     this.state = pageState;
     if (this.sessionKey) {
       const initialSessionKey = this.setPaneSessionKey(this.sessionKey);
@@ -346,11 +347,9 @@ export abstract class ChatPaneLifecycle extends ChatPaneReset {
         ? this.sessionKey
         : resolveSessionKey(this.sessionKey, this.context.gateway.snapshot.hello);
       if (nextSessionKey) {
+        // Availability belongs to one activation. The replacement probe starts
+        // after its transcript commit in deferSessionHydrationUntilTranscript.
         this.sessionDiscussionStates.delete(nextSessionKey);
-        // Resolve availability before the action renders: the methods are
-        // advertised even without a provider, so an unprobed session would
-        // otherwise show a dead Discussion button on provider-less installs.
-        void this.probeSessionDiscussion(nextSessionKey);
       }
       if (nextSessionKey && nextSessionKey !== this.state.sessionKey) {
         this.switchPaneSession(nextSessionKey);
@@ -395,30 +394,15 @@ export abstract class ChatPaneLifecycle extends ChatPaneReset {
       areUiSessionKeysEquivalent(row.key, this.state?.sessionKey ?? ""),
     );
     // Active runs count even without a digest: a hidden observer generates
-    // none, and the HUD module owns the restore control for turning it back on.
+    // none, and the rail module owns the restore control for turning it back on.
     const observerRunId = resolveChatPaneObserverRunId({
       localRunId: this.state?.chatRunId ?? null,
       session: selectedSessionRow,
       digest: null,
     });
     if (this.state?.observerDigest || selectedSessionRow?.observerDigest || observerRunId) {
-      this.ensureObserverHud();
+      this.ensureSessionRail();
     }
-  }
-
-  protected ensureObserverHud() {
-    if (this.observerHudReady || this.observerHudLoad) {
-      return;
-    }
-    this.observerHudLoad = import("./components/chat-observer-hud.ts")
-      .then(() => {
-        if (this.isConnected) {
-          this.observerHudReady = true;
-        }
-      })
-      .finally(() => {
-        this.observerHudLoad = null;
-      });
   }
 
   override disconnectedCallback() {
@@ -428,6 +412,9 @@ export abstract class ChatPaneLifecycle extends ChatPaneReset {
     this.paneResizeObserver?.disconnect();
     this.paneResizeObserver = null;
     this.connectionGeneration += 1;
+    this.deferredSessionHydrationRequestVersion += 1;
+    this.sessionDiscussionPanels.clear();
+    this.sessionCompanionHydrationKey = "";
     this.taskSuggestionsRequestVersion += 1;
     this.taskSuggestions = [];
     this.taskSuggestionBusyIds.clear();

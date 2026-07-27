@@ -84,7 +84,7 @@ async function readWorkspaceFileWithGuards(params: {
   try {
     // A transient FS race (EAGAIN/EWOULDBLOCK/EINTR under load) on the open or
     // read must not drop the agent's bootstrap file for the turn — this reader
-    // runs every turn for AGENTS/SOUL/HEARTBEAT/etc. Retry the whole open+read so
+    // runs every turn for AGENTS/SOUL/TOOLS/etc. Retry the whole open+read so
     // each attempt uses a fresh fd (retrying readFileSync on the same fd could
     // return truncated content after a partial read); the inode-identity guard
     // in openRootFile still protects against a swapped file between attempts.

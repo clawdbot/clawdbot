@@ -1,7 +1,6 @@
 // Covers outbound delivery core: hooks, queue cleanup, durable capability
 // checks, adapter sends, transcript mirroring, and payload outcomes.
 import fsPromises from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -32,6 +31,7 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
+import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -4262,10 +4262,10 @@ describe("deliverOutboundPayloads", () => {
     const sourceDir = await fsPromises.realpath(
       await fsPromises.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "deliver-spool-")),
     );
-    const stateDir = await fsPromises.realpath(
-      await fsPromises.mkdtemp(path.join(os.tmpdir(), "openclaw-deliver-spool-state-")),
-    );
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const openClawState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-deliver-spool-state-",
+    });
     // Real MPEG-1 Layer III frames: host-local media sends are buffer-verified,
     // so placeholder text would be rejected before staging is even exercised.
     const source = path.join(sourceDir, "voice.mp3");
@@ -4281,7 +4281,6 @@ describe("deliverOutboundPayloads", () => {
     const payload = { mediaUrl: source, audioAsVoice: true };
 
     try {
-      process.env.OPENCLAW_STATE_DIR = stateDir;
       await deliverOutboundPayloads({
         cfg: matrixChunkConfig,
         channel: "matrix",
@@ -4303,13 +4302,8 @@ describe("deliverOutboundPayloads", () => {
       expect(payload.mediaUrl).toBe(source);
       expect(sendMatrix.mock.calls[0]?.[0]?.mediaUrl ?? source).toBe(source);
     } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
       await fsPromises.rm(sourceDir, { recursive: true, force: true });
-      await fsPromises.rm(stateDir, { recursive: true, force: true });
+      await openClawState.cleanup();
     }
   });
 
@@ -4330,10 +4324,11 @@ describe("deliverOutboundPayloads", () => {
     // Deliberately outside the OpenClaw temp root: that root is itself a default
     // media root, so a state dir inside it would admit the source by containment
     // and hide whether the agent-scoped capability is what grants access.
-    const stateDir = await fsPromises.realpath(
-      await fsPromises.mkdtemp(path.join(os.tmpdir(), "openclaw-deliver-ws-")),
-    );
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const openClawState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-deliver-ws-",
+    });
+    const stateDir = openClawState.stateDir;
     const workspaceDir = path.join(stateDir, "workspace-proofagent");
     // Host-local sends are buffer-verified, so the fixture needs real audio.
     const source = path.join(workspaceDir, "voice.mp3");
@@ -4348,7 +4343,6 @@ describe("deliverOutboundPayloads", () => {
     const payload = { mediaUrl: source, audioAsVoice: true };
 
     try {
-      process.env.OPENCLAW_STATE_DIR = stateDir;
       await fsPromises.mkdir(workspaceDir, { recursive: true });
       await fsPromises.writeFile(source, mp3);
       await deliverOutboundPayloads({
@@ -4375,12 +4369,7 @@ describe("deliverOutboundPayloads", () => {
       expect(payload.mediaUrl).toBe(source);
       expect(sendMatrix).toHaveBeenCalled();
     } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-      await fsPromises.rm(stateDir, { recursive: true, force: true });
+      await openClawState.cleanup();
     }
   });
 

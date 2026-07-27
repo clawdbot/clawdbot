@@ -1,9 +1,15 @@
 // Session transcript facade resolves transcript files, appends mirror messages, and reads tails.
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionManager } from "../../agents/sessions/session-manager.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  normalizeAgentId,
+  parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+  scopeLegacySessionKeyToAgent,
+} from "../../routing/session-key.js";
 import {
   extractAssistantVisibleText,
   extractFirstTextBlock,
@@ -17,20 +23,19 @@ import {
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveDefaultSessionStorePath, resolveStorePath } from "./paths.js";
 import {
-  listSessionEntries,
   loadSessionEntryReadOnly,
   loadTranscriptEvents,
   isSessionTranscriptProjectionUnavailableError,
   persistSessionTranscriptTurn,
   readLatestTranscriptAssistantText,
   readSessionTranscriptMessageEventPage,
+  resolveSessionEntrySelection,
   updateSessionEntry,
   type SessionTranscriptTurnWriteContext,
   type SessionTranscriptTurnExpectedState,
 } from "./session-accessor.js";
 import type { SessionTranscriptTurnLifecyclePatch } from "./session-transcript-turn-lifecycle.types.js";
 import { parseSqliteSessionFileMarker, type SqliteSessionFileMarker } from "./sqlite-marker.js";
-import { resolveSessionStoreEntry } from "./store-entry.js";
 import {
   applyBeforeMessageWriteToAssistant,
   type AssistantBeforeMessageWrite,
@@ -105,10 +110,24 @@ type ReadRecentSessionConversationTextOptions = {
 };
 
 type ReadRecentSessionConversationTextParams = ReadRecentSessionConversationTextOptions & {
-  agentId?: string;
+  agentId: string;
   sessionKey: string;
   storePath?: string;
 };
+
+class SessionTranscriptAgentScopeMismatchError extends Error {
+  readonly code = "SESSION_TRANSCRIPT_AGENT_SCOPE_MISMATCH";
+
+  constructor(
+    readonly agentId: string,
+    readonly sessionKeyAgentId: string,
+  ) {
+    super(
+      `Session transcript agent scope mismatch: explicit agent "${agentId}" does not match session key agent "${sessionKeyAgentId}".`,
+    );
+    this.name = "SessionTranscriptAgentScopeMismatchError";
+  }
+}
 
 export type LatestAssistantTranscriptText = AssistantTranscriptText;
 type TailAssistantTranscriptText = AssistantTranscriptText;
@@ -267,9 +286,19 @@ function resolveSessionConversationTranscriptTarget(params: {
   if (!sessionKey) {
     return {};
   }
-  const agentId = params.agentId ?? resolveAgentIdFromSessionKey(sessionKey) ?? "main";
+  const explicitAgentId = params.agentId?.trim() ? normalizeAgentId(params.agentId) : undefined;
+  const sessionKeyAgentId = parseAgentSessionKey(sessionKey)?.agentId;
+  if (
+    explicitAgentId &&
+    sessionKeyAgentId &&
+    explicitAgentId !== normalizeAgentId(sessionKeyAgentId)
+  ) {
+    throw new SessionTranscriptAgentScopeMismatchError(explicitAgentId, sessionKeyAgentId);
+  }
+  const agentId = explicitAgentId ?? resolveAgentIdFromSessionKey(sessionKey);
+  const scopedSessionKey = scopeLegacySessionKeyToAgent({ agentId, sessionKey }) ?? sessionKey;
   const storePath = params.storePath ?? resolveDefaultSessionStorePath(agentId);
-  const entry = loadSessionEntryReadOnly({ agentId, sessionKey, storePath });
+  const entry = loadSessionEntryReadOnly({ agentId, sessionKey: scopedSessionKey, storePath });
   if (!entry?.sessionId) {
     return {};
   }
@@ -489,15 +518,17 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   const explicitAgentId = params.agentId?.trim() || undefined;
   const sessionAgentId = parseAgentSessionKey(sessionKey)?.agentId;
   const transcriptAgentId = explicitAgentId ?? sessionAgentId;
-  const storeAgentId = transcriptAgentId ?? resolveAgentIdFromSessionKey(sessionKey);
+  const configuredDefaultAgentId =
+    !transcriptAgentId && params.config ? resolveDefaultAgentId(params.config) : undefined;
+  const storeAgentId =
+    transcriptAgentId ?? resolveAgentIdFromSessionKey(sessionKey, configuredDefaultAgentId);
   const storePath =
     params.storePath ?? resolveStorePath(params.config?.session?.store, { agentId: storeAgentId });
-  const store = Object.fromEntries(
-    listSessionEntries({ agentId: transcriptAgentId, storePath }).map(
-      ({ sessionKey: entryKey, entry }) => [entryKey, entry],
-    ),
-  );
-  const resolved = resolveSessionStoreEntry({ store, sessionKey });
+  const resolved = resolveSessionEntrySelection({
+    ...(transcriptAgentId ? { agentId: transcriptAgentId } : {}),
+    sessionKey,
+    storePath,
+  });
   const entry = resolved.existing;
   if (params.expectedSessionId && entry?.sessionId !== params.expectedSessionId) {
     return {

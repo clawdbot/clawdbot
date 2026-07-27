@@ -298,6 +298,9 @@ async function resolveCodexAppServerClientStartContext(
     throw new Error("Prepared Codex API-key auth is missing its resolved key.");
   }
   if (preparedAuth && requestedStartOptions.homeScope === "user") {
+    // Backstop for the auth-bridge handoff: an app-server on the operator's native
+    // home persists api-key logins into CODEX_HOME/auth.json and replaces the live
+    // ChatGPT account for token logins, so prepared auth must never reach it.
     throw new Error("Prepared Codex auth requires an isolated app-server home.");
   }
   const preparedAuthRequirement = inferAuthRequirement(preparedAuth);

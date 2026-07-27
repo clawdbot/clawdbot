@@ -227,7 +227,13 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
 
   const isSessionKeyAllowed = (key: string): boolean => {
     if (!conversationRecall || !anchorSessionKey || !recallAgentId) {
-      return guard?.check(key).allowed === true;
+      // A bare global key is local to the selected agent store. Reattach that
+      // owner before applying visibility or non-default agents look cross-agent.
+      const visibilityKey =
+        scopedAgentId && isGlobalSessionKeyForSharedScope(params.cfg, key)
+          ? `agent:${scopedAgentId}:global`
+          : key;
+      return guard?.check(visibilityKey).allowed === true;
     }
     const candidateEntry = combinedSessionStore[key];
     // Canonical and legacy alias keys can identify one transcript. Exclude the

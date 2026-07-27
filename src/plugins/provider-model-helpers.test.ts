@@ -1,7 +1,11 @@
 // Covers provider model helper behavior for plugin model registries.
 import type { ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import { describe, expect, it } from "vitest";
-import { cloneFirstTemplateModel, matchesExactOrPrefix } from "./provider-model-helpers.js";
+import {
+  cloneFirstTemplateModel,
+  matchesExactOrPrefix,
+  resolveFamilyForwardCompatModel,
+} from "./provider-model-helpers.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import type { ProviderResolveDynamicModelContext } from "./types.js";
 
@@ -112,4 +116,61 @@ describe("matchesExactOrPrefix", () => {
       expected: false,
     },
   ] as const)("matches $id against prefixes", expectPrefixMatchCase);
+});
+
+describe("resolveFamilyForwardCompatModel", () => {
+  it("selects the first matching family and ordered cross-provider template", () => {
+    const ctx = createContext([
+      createTemplateModel("template-b", { provider: "template-provider", reasoning: false }),
+    ]);
+
+    expect(
+      resolveFamilyForwardCompatModel({
+        providerId: "test-provider",
+        ctx,
+        cases: [
+          {
+            match: (id) => id.startsWith("next-"),
+            templateSources: [
+              { templateIds: ["missing"] },
+              { providerId: "template-provider", templateIds: ["template-b"] },
+            ],
+            patch: { provider: "test-provider", reasoning: true },
+          },
+        ],
+      }),
+    ).toMatchObject({
+      id: "next-model",
+      name: "next-model",
+      provider: "test-provider",
+      reasoning: true,
+    });
+  });
+
+  it("synthesizes a normalized model when a matched family has no template", () => {
+    expect(
+      resolveFamilyForwardCompatModel({
+        providerId: "test-provider",
+        ctx: createContext([]),
+        cases: [
+          {
+            match: (id) => id === "next-model",
+            templateIds: ["missing"],
+            patch: ({ normalizedModelId }) => ({
+              api: "openai-responses",
+              provider: "test-provider",
+              reasoning: normalizedModelId === "next-model",
+            }),
+          },
+        ],
+        synthesize: true,
+      }),
+    ).toMatchObject({
+      id: "next-model",
+      name: "next-model",
+      provider: "test-provider",
+      api: "openai-responses",
+      reasoning: true,
+    });
+  });
 });

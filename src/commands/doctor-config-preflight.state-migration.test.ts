@@ -77,6 +77,9 @@ const autoMigrateLegacyTaskStateSidecars = vi.hoisted(() =>
     }),
   ),
 );
+const migrateLegacyMediaPersistence = vi.hoisted(() =>
+  vi.fn(() => ({ changes: [], warnings: [] })),
+);
 const repairLegacyCronStoreWithoutPrompt = vi.hoisted(() =>
   vi.fn(
     async (): Promise<{
@@ -156,6 +159,7 @@ vi.mock("./doctor-state-migrations.js", () => ({
   autoMigrateLegacyStateDir,
   autoMigrateLegacyPluginDoctorState,
   autoMigrateLegacyTaskStateSidecars,
+  migrateLegacyMediaPersistence,
 }));
 
 vi.mock("./doctor/cron/legacy-repair.js", () => ({
@@ -953,7 +957,7 @@ describe("runDoctorConfigPreflight state migration", () => {
         }),
         agents: expect.objectContaining({
           defaults: expect.objectContaining({}),
-          entries: { main: {} },
+          entries: { main: { default: true } },
         }),
       }),
       migrateCodexModelRefs: false,
@@ -969,7 +973,7 @@ describe("runDoctorConfigPreflight state migration", () => {
         }),
         agents: expect.objectContaining({
           defaults: expect.objectContaining({}),
-          entries: { main: {} },
+          entries: { main: { default: true } },
         }),
       }),
       pluginDoctorConfig: resolvedConfig,

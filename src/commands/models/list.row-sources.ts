@@ -61,6 +61,16 @@ export async function appendAllModelRowSources(
         seenKeys,
         staticOnly: params.sourcePlan.kind === "provider-runtime-static",
       });
+      if (params.sourcePlan.manifestCatalogRows.length > 0) {
+        // Runtime discovery keeps precedence; refreshed manifest rows fill only
+        // model refs the provider runtime has not materialized yet.
+        catalogRows += await appendManifestCatalogRows({
+          rows: params.rows,
+          context: { ...params.context, skipRuntimeModelSuppression: true },
+          seenKeys,
+          manifestRows: params.sourcePlan.manifestCatalogRows,
+        });
+      }
     }
     if (params.entries && params.entries.length > 0) {
       const missingEntries = params.entries.filter((entry) => !seenKeys.has(entry.key));
@@ -84,7 +94,8 @@ export async function appendAllModelRowSources(
     if (
       catalogRows === 0 &&
       params.rows.length === 0 &&
-      params.sourcePlan.fallbackToRegistryWhenEmpty
+      (params.sourcePlan.kind === "provider-runtime-static" ||
+        params.sourcePlan.kind === "provider-runtime-scoped")
     ) {
       // Provider-scoped static sources can be empty when a plugin exposes only
       // runtime discovery; tell the caller to load the registry and retry.

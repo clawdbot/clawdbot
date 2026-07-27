@@ -52,6 +52,9 @@ export function scanPolicyDataHandling(
   cfg: Record<string, unknown>,
 ): readonly PolicyDataHandlingEvidence[] {
   const entries: PolicyDataHandlingEvidence[] = [];
+  // Redaction has no config surface: src/logging/redact.ts always redacts. This invariant
+  // record is how dataHandling.sensitiveLogging.requireRedaction reports as satisfied in
+  // `openclaw policy check` evidence and the attestation, since no doctor check can fail.
   entries.push({
     id: "logging-redaction",
     kind: "sensitiveLoggingRedaction",

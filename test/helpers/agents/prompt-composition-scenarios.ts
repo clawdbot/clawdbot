@@ -459,7 +459,7 @@ function createDiscordBoundaryScenario(workspaceDir: string): PromptScenario {
     MessageSid: "1503084621145964846",
     Body: body,
     BodyStripped: body,
-    UntrustedStructuredContext: [
+    ChannelStructuredContext: [
       {
         label: "Discord channel metadata",
         source: "discord",
@@ -521,7 +521,7 @@ async function createToolRichScenario(workspaceDir: string): Promise<PromptScena
         label: "Tool-rich turn asking for search, read, and file edits",
         systemPrompt,
         bodyPrompt: [
-          "Conversation info (untrusted metadata):",
+          "Conversation info:",
           "```json",
           JSON.stringify({ message_id: "tool-1", sender_id: "U9", was_mentioned: true }, null, 2),
           "```",
@@ -535,12 +535,12 @@ async function createToolRichScenario(workspaceDir: string): Promise<PromptScena
         label: "Follow-up after a fictional tool call",
         systemPrompt,
         bodyPrompt: [
-          "Conversation info (untrusted metadata):",
+          "Conversation info:",
           "```json",
           JSON.stringify({ message_id: "tool-2", sender_id: "U9" }, null, 2),
           "```",
           "",
-          "Tool transcript summary (untrusted, for context):",
+          "Tool transcript summary:",
           "```json",
           JSON.stringify(
             [
@@ -569,6 +569,7 @@ async function createBootstrapWarningScenario(workspaceDir: string): Promise<Pro
         bootstrapMaxChars: 1_500,
         bootstrapTotalMaxChars: 2_200,
       },
+      entries: { main: { default: true } },
     },
   } satisfies OpenClawConfig;
   const largeAgents = "# AGENTS.md\n\n" + "Rules.\n".repeat(5_000);

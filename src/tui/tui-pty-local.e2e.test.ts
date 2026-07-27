@@ -67,6 +67,14 @@ const GATEWAY_SCENARIOS = {
     holdFirstResponse: true,
     followupReplyText: "FOLLOWUP_RUN_COMPLETE",
   },
+  reset: {
+    agentId: "tui-pty-reset",
+    modelId: "tui-pty-reset",
+    toolsProfile: "minimal",
+    replyText: "FIRST_RUN_ACTIVE",
+    holdFirstResponse: true,
+    followupReplyText: "FOLLOWUP_RUN_COMPLETE",
+  },
   emptyReply: {
     agentId: "tui-pty-empty-reply",
     modelId: "tui-pty-empty-reply",
@@ -96,6 +104,12 @@ const GATEWAY_SCENARIOS = {
     modelId: "tui-pty-reconnect",
     toolsProfile: "minimal",
     replyText: "RECONNECTED_RUN_COMPLETE",
+  },
+  ctrlD: {
+    agentId: "tui-pty-ctrl-d",
+    modelId: "tui-pty-ctrl-d",
+    toolsProfile: "minimal",
+    replyText: "CTRL_D_FORWARD_DELETE_COMPLETE",
   },
 } as const satisfies Record<string, GatewayScenario>;
 
@@ -127,37 +141,18 @@ async function waitForOutputAfter(run: PtyRun, needle: string, offset: number) {
 }
 
 async function createFreshSession(run: PtyRun, newSessionPrefix: string) {
-  const deadline = Date.now() + LOCAL_STARTUP_TIMEOUT_MS;
-  let attempts = 0;
-  let outputOffset = run.output().length;
-  while (Date.now() < deadline) {
-    attempts += 1;
-    await run.write("/new\r", { delay: false });
-    const outcome = await waitFor({
-      timeoutMs: Math.max(1, deadline - Date.now()),
-      read: () => {
-        const output = run.output();
-        if (output.includes(newSessionPrefix, outputOffset)) {
-          return "created";
-        }
-        return output.includes(SESSION_ROLLOVER_BUSY_MESSAGE, outputOffset) ? "busy" : null;
-      },
-      onTimeout: () =>
-        new Error(`timed out creating a fresh session after ${attempts} attempts\n${run.output()}`),
-    });
-    if (outcome === "created") {
-      return;
-    }
-
-    // Redraws can repeat an old rejection after this attempt's offset. Keep
-    // watching that attempt through settle so an accepted /new is not retried.
-    await sleep(SUBMISSION_SETTLE_MS);
-    if (run.output().includes(newSessionPrefix, outputOffset)) {
-      return;
-    }
-    outputOffset = run.output().length;
-  }
-  throw new Error(`timed out creating a fresh session after ${attempts} attempts\n${run.output()}`);
+  const outputOffset = run.output().length;
+  await run.write("/new\r", { delay: false });
+  await waitFor({
+    timeoutMs: LOCAL_STARTUP_TIMEOUT_MS,
+    read: () => (run.output().includes(newSessionPrefix, outputOffset) ? true : null),
+    onTimeout: () =>
+      new Error(`timed out creating a fresh session after one submission\n${run.output()}`),
+  });
+  const newSessionOffset = run.output().lastIndexOf(newSessionPrefix);
+  // Wait for the accepted session's own idle redraw; older PTY frames can
+  // replay busy messages and must never cause a second session creation.
+  await waitForOutputAfter(run, "| idle", newSessionOffset);
 }
 
 async function readRequestBody(req: IncomingMessage): Promise<string> {
@@ -821,6 +816,42 @@ describe("TUI PTY real backends", () => {
     await expect(cleanupSharedGatewayFixture(Promise.resolve(fixture))).rejects.toBe(cleanupError);
   });
 
+  it("does not replay a session rollover when an old busy notice is redrawn", async () => {
+    const newSessionPrefix = "new session: agent:main:tui-";
+    const acceptedSession = createDeferred();
+    const writes: string[] = [];
+    let output = "";
+    let acceptanceTimer: ReturnType<typeof setTimeout> | undefined;
+    const run = {
+      output: () => output,
+      write: async (data: string) => {
+        writes.push(data);
+        if (writes.length === 1) {
+          output += `${SESSION_ROLLOVER_BUSY_MESSAGE}\n`;
+          acceptanceTimer = setTimeout(() => {
+            output += `${newSessionPrefix}accepted\nlocal ready | idle\n`;
+            acceptedSession.resolve();
+          }, SUBMISSION_SETTLE_MS + 50);
+          return;
+        }
+        output += `${newSessionPrefix}duplicate\nlocal ready | idle\n`;
+      },
+      waitForOutput: async () => output,
+      waitForExit: async () => ({ exitCode: 0, signal: 0 }),
+      dispose: async () => {},
+    } satisfies PtyRun;
+
+    try {
+      await createFreshSession(run, newSessionPrefix);
+      await acceptedSession.promise;
+      expect(writes).toEqual(["/new\r"]);
+    } finally {
+      if (acceptanceTimer) {
+        clearTimeout(acceptanceTimer);
+      }
+    }
+  });
+
   it(
     "drives the real local backend with a mocked model endpoint",
     async ({ onTestFinished }) => {
@@ -855,6 +886,8 @@ describe("TUI PTY real backends", () => {
         expect(request?.body.model).toBe("gpt-5.5");
         await fixture.run.waitForOutput("LOCAL_PTY_RESPONSE");
 
+        const responseOffset = fixture.run.output().lastIndexOf("LOCAL_PTY_RESPONSE");
+        await waitForOutputAfter(fixture.run, "| idle", responseOffset);
         await createFreshSession(fixture.run, "new session: agent:main:tui-");
         await fixture.run.write("send after local new\r");
         await waitFor({
@@ -1043,6 +1076,54 @@ describe("TUI PTY real backends", () => {
   }
 
   registerGatewayTest(
+    "forwards Ctrl+D-edited terminal input through the real Gateway",
+    async ({ onTestFinished }) => {
+      const fixture = await startGatewayModeTui("ctrlD", onTestFinished);
+      try {
+        await fixture.run.waitForOutput("gateway connected", LOCAL_STARTUP_TIMEOUT_MS);
+        await fixture.run.write("keepXword", { delay: false });
+        await fixture.run.write("\u001b[D".repeat(5), { delay: false });
+        await fixture.run.write("\u0004", { delay: false });
+        await fixture.run.write("\r", { delay: false });
+
+        await waitFor({
+          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+          read: () => (fixture.mockModel.requests().length === 1 ? true : null),
+          onTimeout: () =>
+            new Error(
+              `Ctrl+D-edited terminal input did not reach the real Gateway\n${fixture.gateway.logs()}\n${fixture.run.output()}`,
+            ),
+        });
+        const request = JSON.stringify(fixture.mockModel.requests()[0]?.body);
+        expect(request).toContain("keepword");
+        expect(request).not.toContain("keepXword");
+        await fixture.run.waitForOutput("CTRL_D_FORWARD_DELETE_COMPLETE");
+
+        await fixture.run.write("/exit\r", { delay: false });
+        expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+      } finally {
+        await fixture.cleanup();
+      }
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
+
+  registerGatewayTest(
+    "exits the real Gateway terminal when Ctrl+D is pressed with empty input",
+    async ({ onTestFinished }) => {
+      const fixture = await startGatewayModeTui("ctrlD", onTestFinished);
+      try {
+        await fixture.run.waitForOutput("gateway connected", LOCAL_STARTUP_TIMEOUT_MS);
+        await fixture.run.write("\u0004", { delay: false });
+        expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+      } finally {
+        await fixture.cleanup();
+      }
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
+
+  registerGatewayTest(
     "preserves a disconnected draft across a real Gateway restart",
     async ({ onTestFinished }) => {
       const fixture = await startGatewayModeTui("reconnect", onTestFinished);
@@ -1097,6 +1178,8 @@ describe("TUI PTY real backends", () => {
         await fixture.run.write("seed gateway session\r");
         await fixture.run.waitForOutput("FIRST_RUN_ACTIVE");
 
+        const responseOffset = fixture.run.output().lastIndexOf("FIRST_RUN_ACTIVE");
+        await waitForOutputAfter(fixture.run, "| idle", responseOffset);
         const newSessionPrefix = `new session: agent:${fixture.agentId}:tui-`;
         await createFreshSession(fixture.run, newSessionPrefix);
         const newSessionKey = fixture.run
@@ -1118,6 +1201,50 @@ describe("TUI PTY real backends", () => {
         const freshRequest = JSON.stringify(fixture.mockModel.requests()[1]?.body);
         expect(freshRequest).toContain("send after gateway new");
         expect(freshRequest).not.toContain("seed gateway session");
+
+        await fixture.run.write("/exit\r", { delay: false });
+        expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+      } finally {
+        await fixture.cleanup();
+      }
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
+
+  registerGatewayTest(
+    "preserves a running session when /reset is typed against the real Gateway",
+    async ({ onTestFinished }) => {
+      const fixture = await startGatewayModeTui("reset", onTestFinished);
+      try {
+        await fixture.run.waitForOutput("gateway connected", LOCAL_STARTUP_TIMEOUT_MS);
+        await fixture.run.write("keep the active Gateway turn\r");
+        await waitFor({
+          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+          read: () => (fixture.mockModel.requests().length === 1 ? true : null),
+          onTimeout: () =>
+            new Error(`active Gateway turn did not reach the model\n${fixture.run.output()}`),
+        });
+
+        await fixture.run.write("/reset\r", { delay: false });
+        await fixture.run.waitForOutput("abort the current run before /reset", 5_000);
+        expect(fixture.mockModel.requests()).toHaveLength(1);
+
+        fixture.mockModel.releaseFirstResponse();
+        await fixture.run.waitForOutput("FIRST_RUN_ACTIVE");
+
+        await fixture.run.write("continue the preserved Gateway session\r");
+        await waitFor({
+          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+          read: () => (fixture.mockModel.requests().length === 2 ? true : null),
+          onTimeout: () =>
+            new Error(
+              `preserved Gateway session did not accept its next turn\n${fixture.gateway.logs()}\n${fixture.run.output()}`,
+            ),
+        });
+        const preservedRequest = JSON.stringify(fixture.mockModel.requests()[1]?.body);
+        expect(preservedRequest).toContain("keep the active Gateway turn");
+        expect(preservedRequest).toContain("continue the preserved Gateway session");
+        await fixture.run.waitForOutput("FOLLOWUP_RUN_COMPLETE");
 
         await fixture.run.write("/exit\r", { delay: false });
         expect((await fixture.run.waitForExit()).exitCode).toBe(0);

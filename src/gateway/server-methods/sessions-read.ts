@@ -51,6 +51,7 @@ import {
   readRecentSessionMessagesWithStatsAsync,
   readSessionPreviewItemsFromTranscript,
 } from "../session-transcript-readers.js";
+import type { GatewaySessionStoreCache } from "../session-utils-store-lookup.js";
 import {
   buildGatewaySessionRow,
   listSessionsFromStoreAsync,
@@ -232,6 +233,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           () =>
             loadCombinedSessionStoreForGateway(cfg, {
               agentId: p.agentId,
+              projection: "list",
             }),
           {
             config: cfg,
@@ -277,10 +279,15 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             },
           },
         );
+        // One cache for the whole listing: sharing resolution otherwise
+        // materialized every entry of a candidate store once per row.
+        const sharingStoreCache: GatewaySessionStoreCache = new Map();
         const sharingTargets = result.sessions.map((session) =>
           resolveSessionSharingTarget({
             cfg,
+            projection: "list",
             sessionKey: session.key,
+            storeCache: sharingStoreCache,
             ...(session.key === "global" && p.agentId ? { agentId: p.agentId } : {}),
           }),
         );

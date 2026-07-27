@@ -41,11 +41,52 @@ import {
   markComposerInputIntent,
   suppressStaleSubmittedDraftReplay,
 } from "./chat-composer-state.ts";
-import type { ChatComposerProps } from "./chat-composer-types.ts";
+import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 import { renderChatComposerView } from "./chat-composer-view.ts";
 import { createGatewayQuestionPanelProps } from "./chat-question-card.ts";
 
 export { isChatRunWorking, resetChatComposerState } from "./chat-composer-state.ts";
+
+function handleSlashMenuKeyDown<T>(
+  event: KeyboardEvent,
+  state: ChatComposerState,
+  items: readonly T[],
+  paneId: string,
+  requestUpdate: () => void,
+  onSelect: (item: T, submit: boolean) => void,
+): boolean {
+  switch (event.key) {
+    case "ArrowDown":
+      event.preventDefault();
+      state.slashMenuIndex = (state.slashMenuIndex + 1) % items.length;
+      requestUpdate();
+      scrollActiveSlashMenuOptionIntoView(state, paneId);
+      return true;
+    case "ArrowUp":
+      event.preventDefault();
+      state.slashMenuIndex = (state.slashMenuIndex - 1 + items.length) % items.length;
+      requestUpdate();
+      scrollActiveSlashMenuOptionIntoView(state, paneId);
+      return true;
+    case "Tab":
+    case "Enter": {
+      event.preventDefault();
+      const item = items[state.slashMenuIndex];
+      if (item !== undefined) {
+        onSelect(item, event.key === "Enter");
+      }
+      return true;
+    }
+    case "Escape":
+      event.preventDefault();
+      state.slashMenuOpen = false;
+      resetSlashMenuState(state);
+      requestUpdate();
+      return true;
+    default:
+      return false;
+  }
+}
 
 export function renderChatComposer(props: ChatComposerProps) {
   const state = getChatComposerState(props.paneId);
@@ -249,86 +290,35 @@ export function renderChatComposer(props: ChatComposerProps) {
       state.slashMenuMode === "args" &&
       state.slashMenuArgItems.length > 0
     ) {
-      const len = state.slashMenuArgItems.length;
-      switch (event.key) {
-        case "ArrowDown":
-          event.preventDefault();
-          state.slashMenuIndex = (state.slashMenuIndex + 1) % len;
-          requestUpdate();
-          scrollActiveSlashMenuOptionIntoView(state, props.paneId);
-          return;
-        case "ArrowUp":
-          event.preventDefault();
-          state.slashMenuIndex = (state.slashMenuIndex - 1 + len) % len;
-          requestUpdate();
-          scrollActiveSlashMenuOptionIntoView(state, props.paneId);
-          return;
-        case "Tab":
-          event.preventDefault();
-          {
-            const arg = state.slashMenuArgItems[state.slashMenuIndex];
-            if (arg !== undefined) {
-              selectSlashArg(arg, props, requestUpdate, false);
-            }
-          }
-          return;
-        case "Enter":
-          event.preventDefault();
-          {
-            const arg = state.slashMenuArgItems[state.slashMenuIndex];
-            if (arg !== undefined) {
-              selectSlashArg(arg, props, requestUpdate, true);
-            }
-          }
-          return;
-        case "Escape":
-          event.preventDefault();
-          state.slashMenuOpen = false;
-          resetSlashMenuState(state);
-          requestUpdate();
-          return;
+      if (
+        handleSlashMenuKeyDown(
+          event,
+          state,
+          state.slashMenuArgItems,
+          props.paneId,
+          requestUpdate,
+          (arg, submit) => selectSlashArg(arg, props, requestUpdate, submit),
+        )
+      ) {
+        return;
       }
     }
 
     if (props.connected && state.slashMenuOpen && state.slashMenuItems.length > 0) {
-      const len = state.slashMenuItems.length;
-      switch (event.key) {
-        case "ArrowDown":
-          event.preventDefault();
-          state.slashMenuIndex = (state.slashMenuIndex + 1) % len;
-          requestUpdate();
-          scrollActiveSlashMenuOptionIntoView(state, props.paneId);
-          return;
-        case "ArrowUp":
-          event.preventDefault();
-          state.slashMenuIndex = (state.slashMenuIndex - 1 + len) % len;
-          requestUpdate();
-          scrollActiveSlashMenuOptionIntoView(state, props.paneId);
-          return;
-        case "Tab":
-          event.preventDefault();
-          {
-            const command = state.slashMenuItems[state.slashMenuIndex];
-            if (command) {
-              tabCompleteSlashCommand(command, props, requestUpdate);
-            }
-          }
-          return;
-        case "Enter":
-          event.preventDefault();
-          {
-            const command = state.slashMenuItems[state.slashMenuIndex];
-            if (command) {
-              selectSlashCommand(command, props, requestUpdate);
-            }
-          }
-          return;
-        case "Escape":
-          event.preventDefault();
-          state.slashMenuOpen = false;
-          resetSlashMenuState(state);
-          requestUpdate();
-          return;
+      if (
+        handleSlashMenuKeyDown(
+          event,
+          state,
+          state.slashMenuItems,
+          props.paneId,
+          requestUpdate,
+          (command, submit) =>
+            submit
+              ? selectSlashCommand(command, props, requestUpdate)
+              : tabCompleteSlashCommand(command, props, requestUpdate),
+        )
+      ) {
+        return;
       }
     }
 

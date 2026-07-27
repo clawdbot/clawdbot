@@ -466,7 +466,7 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: ${{ inputs.source == 'ref' && 'true' || 'false' }}
-          install-deps: "false"
+          install-deps: "true"
 
       - name: Validate package artifact input identity
         id: input_artifact
@@ -780,6 +780,13 @@ jobs:
           ref: ${{ inputs.workflow_ref }}
           fetch-depth: 1
           persist-credentials: false
+
+      - name: Setup package validation dependencies
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
+          install-deps: "true"
 
       - name: Download package-under-test artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8

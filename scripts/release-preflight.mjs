@@ -25,12 +25,10 @@ const releaseTasks = [
     check: nodeCommand("--import", "tsx", "scripts/sync-plugin-versions.ts", "--check"),
   },
   {
-    id: "npm-shrinkwraps",
-    name: "npm shrinkwraps",
+    id: "npm-package-locks",
+    name: "npm package locks",
     scopes: ["dependencies", "plugins", "version"],
-    fix: nodeCommand("scripts/generate-npm-shrinkwrap.mjs", "--changed"),
-    fixAfter: ["plugin-versions", "plugin-sdk-exports"],
-    check: nodeCommand("scripts/generate-npm-shrinkwrap.mjs", "--all", "--check"),
+    check: nodeCommand("scripts/generate-npm-package-lock.mjs", "--all"),
   },
   {
     id: "plugin-inventory",
