@@ -600,6 +600,7 @@ export default definePluginEntry({
       prepareDynamicModel: dynamicModels.prepareDynamicModel,
       resolveDynamicModel: dynamicModels.resolveDynamicModel,
       preferRuntimeResolvedModel: dynamicModels.preferRuntimeResolvedModel,
+      formatApiKey: (credential) => (credential.type === "oauth" ? credential.refresh.trim() : ""),
       wrapStreamFn: wrapCopilotProviderStream,
       buildReplayPolicy: ({ modelId }) => buildGithubCopilotReplayPolicy(modelId),
       sanitizeReplayHistory: sanitizeGithubCopilotReplayHistory,

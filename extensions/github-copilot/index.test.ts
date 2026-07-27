@@ -174,6 +174,20 @@ function registerProviderWithPluginConfig(pluginConfig: Record<string, unknown>)
 }
 
 describe("github-copilot plugin", () => {
+  it("formats legacy OAuth profiles with the durable GitHub credential", () => {
+    const provider = registerProviderWithPluginConfig({});
+
+    expect(
+      provider.formatApiKey?.({
+        type: "oauth",
+        provider: "github-copilot",
+        access: "short-lived-copilot-token",
+        refresh: " durable-github-token ",
+        expires: Date.now() + 60_000,
+      }),
+    ).toBe("durable-github-token");
+  });
+
   it("preserves the source token supplied by the auth layer for runtime auth", async () => {
     mocks.resolveCopilotRuntimeAuth.mockResolvedValueOnce({
       apiKey: "github-source-token",
