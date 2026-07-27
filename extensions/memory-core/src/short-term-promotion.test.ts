@@ -2910,6 +2910,9 @@ describe("short-term promotion", () => {
 
   it("audits and repairs invalid store metadata plus stale locks", async () => {
     await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
+        "Gateway host uses qmd vector search for router notes.",
+      ]);
       await testing.writeRawRecallStore(workspaceDir, {
         version: 1,
         updatedAt: "2026-04-04T00:00:00.000Z",
@@ -2960,8 +2963,124 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("audits and repairs dangling recall entries and their phase signals", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-01", ["Live source note."]);
+      await fs.mkdir(path.join(workspaceDir, "memory", "2026-04-02.md"));
+      const buildEntry = (key: string, entryPath: string) => ({
+        key,
+        path: entryPath,
+        startLine: 1,
+        endLine: 1,
+        source: "memory" as const,
+        snippet: `${key} recall`,
+        recallCount: 2,
+        dailyCount: 0,
+        groundedCount: 0,
+        totalScore: 1.8,
+        maxScore: 0.95,
+        firstRecalledAt: "2026-04-01T00:00:00.000Z",
+        lastRecalledAt: "2026-04-04T00:00:00.000Z",
+        queryHashes: ["a", "b"],
+        recallDays: ["2026-04-04"],
+        conceptTags: [],
+      });
+      await testing.writeRawRecallStore(workspaceDir, {
+        version: 1,
+        updatedAt: "2026-04-04T00:00:00.000Z",
+        entries: {
+          live: buildEntry("live", "memory/2026-04-01.md"),
+          directory: buildEntry("directory", "memory/2026-04-02.md"),
+          missing: buildEntry("missing", "memory/2026-04-03.md"),
+        },
+      });
+      await testing.writeRawPhaseSignalStore(workspaceDir, {
+        version: 1,
+        updatedAt: "2026-04-04T00:00:00.000Z",
+        entries: {
+          live: { key: "live", lightHits: 1, remHits: 0 },
+          directory: { key: "directory", lightHits: 1, remHits: 1 },
+          missing: { key: "missing", lightHits: 0, remHits: 1 },
+          unrelated: { key: "unrelated", lightHits: 1, remHits: 0 },
+        },
+      });
+
+      const auditBefore = await auditShortTermPromotionArtifacts({ workspaceDir });
+      expect(auditBefore.danglingEntryCount).toBe(2);
+      expect(auditBefore.issues).toContainEqual({
+        severity: "warn",
+        code: "recall-store-dangling",
+        message:
+          "Short-term recall store contains 2 entries whose source file is missing or not a regular file.",
+        fixable: true,
+      });
+
+      const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
+      expect(repair.changed).toBe(true);
+      expect(repair.rewroteStore).toBe(true);
+      expect(repair.removedDanglingEntries).toBe(2);
+      expect(Object.keys(await readRecallStoreEntries(workspaceDir))).toEqual(["live"]);
+      const phaseSignals = await testing.readPhaseSignalStore(
+        workspaceDir,
+        new Date().toISOString(),
+      );
+      expect(Object.keys(phaseSignals.entries)).toEqual(["live", "unrelated"]);
+
+      const auditAfter = await auditShortTermPromotionArtifacts({ workspaceDir });
+      expect(auditAfter.danglingEntryCount).toBe(0);
+      expect(auditAfter.issues.map((issue) => issue.code)).not.toContain("recall-store-dangling");
+    });
+  });
+
+  it("fails closed without changing recall state when source inspection is denied", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const entry = {
+        key: "protected",
+        path: "memory/2026-04-01.md",
+        startLine: 1,
+        endLine: 1,
+        source: "memory" as const,
+        snippet: "Protected source recall",
+        recallCount: 2,
+        dailyCount: 0,
+        groundedCount: 0,
+        totalScore: 1.8,
+        maxScore: 0.95,
+        firstRecalledAt: "2026-04-01T00:00:00.000Z",
+        lastRecalledAt: "2026-04-04T00:00:00.000Z",
+        queryHashes: ["a", "b"],
+        recallDays: ["2026-04-04"],
+        conceptTags: [],
+      };
+      await testing.writeRawRecallStore(workspaceDir, {
+        version: 1,
+        updatedAt: "2026-04-04T00:00:00.000Z",
+        entries: { protected: entry },
+      });
+      await testing.writeRawPhaseSignalStore(workspaceDir, {
+        version: 1,
+        updatedAt: "2026-04-04T00:00:00.000Z",
+        entries: {
+          protected: { key: "protected", lightHits: 1, remHits: 1 },
+        },
+      });
+      const nowIso = "2026-04-05T00:00:00.000Z";
+      const recallBefore = await testing.readRecallStore(workspaceDir, nowIso);
+      const phaseSignalsBefore = await testing.readPhaseSignalStore(workspaceDir, nowIso);
+      const permissionError = Object.assign(new Error("permission denied"), { code: "EACCES" });
+      vi.spyOn(fs, "stat").mockRejectedValue(permissionError);
+
+      await expect(repairShortTermPromotionArtifacts({ workspaceDir })).rejects.toBe(
+        permissionError,
+      );
+      expect(await testing.readRecallStore(workspaceDir, nowIso)).toEqual(recallBefore);
+      expect(await testing.readPhaseSignalStore(workspaceDir, nowIso)).toEqual(phaseSignalsBefore);
+    });
+  });
+
   it("audits and repairs oversized recall stores", async () => {
     await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-01", ["Oversized recall source."]);
       const maxEntries = testing.SHORT_TERM_RECALL_MAX_ENTRIES;
       const maxSnippetChars = testing.SHORT_TERM_RECALL_MAX_SNIPPET_CHARS;
       await testing.writeRawRecallStore(workspaceDir, {
@@ -3066,6 +3185,7 @@ describe("short-term promotion", () => {
   it("does not rewrite an already normalized healthy recall store", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const snippet = "Gateway host uses qmd vector search for router notes.";
+      await writeDailyMemoryNote(workspaceDir, "2026-04-01", [snippet]);
       const raw = {
         version: 1,
         updatedAt: "2026-04-04T00:00:00.000Z",
