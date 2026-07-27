@@ -294,7 +294,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             // materialized every entry of a candidate store once per row.
             const sharingStoreCache: GatewaySessionStoreCache = new Map();
             const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
-            const sharingTargets = result.sessions.map((session) =>
+            const resolvedSharingTargets = result.sessions.map((session) =>
               resolveSessionSharingTarget({
                 cfg,
                 projection: "list",
@@ -304,7 +304,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                 ...(session.key === "global" && p.agentId ? { agentId: p.agentId } : {}),
               }),
             );
-            const membershipKeys = new Set<string>();
+            const resolvedMembershipKeys = new Set<string>();
             if (identityId && !isGatewayAdmin(client)) {
               const groups = new Map<
                 string,
@@ -314,7 +314,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                   storePath: string;
                 }
               >();
-              for (const target of sharingTargets) {
+              for (const target of resolvedSharingTargets) {
                 if (!target) {
                   continue;
                 }
@@ -341,11 +341,14 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                   group.sessionKeys,
                   identityId,
                 )) {
-                  membershipKeys.add(`${group.agentId}\0${group.storePath}\0${sessionKey}`);
+                  resolvedMembershipKeys.add(`${group.agentId}\0${group.storePath}\0${sessionKey}`);
                 }
               }
             }
-            return { sharingTargets, membershipKeys };
+            return {
+              sharingTargets: resolvedSharingTargets,
+              membershipKeys: resolvedMembershipKeys,
+            };
           },
           {
             config: cfg,
