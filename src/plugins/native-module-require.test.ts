@@ -1,6 +1,7 @@
 /** Tests native module require behavior for plugin runtime loading. */
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import Module from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -8,7 +9,6 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   clearNativeRequireJavaScriptModuleCache,
   isJavaScriptModulePath,
-  isNativeRequireSourceTransformFallbackError,
   tryNativeRequireJavaScriptModule,
 } from "./native-module-require.js";
 
@@ -57,13 +57,26 @@ describe("tryNativeRequireJavaScriptModule", () => {
     });
   });
 
-  it("classifies an in-flight ESM require race for source-transform fallback", () => {
+  it("declines an in-flight ESM require race for source-transform fallback", () => {
     const modulePath = "/plugins/discord/dist/index.js";
     const error = Object.assign(new Error("ESM is still loading"), {
       code: "ERR_REQUIRE_ESM_RACE_CONDITION",
     });
+    const moduleWithLoad = Module as typeof Module & {
+      _load: (request: string, parent: NodeJS.Module | undefined, isMain: boolean) => unknown;
+    };
+    const originalLoad = moduleWithLoad._load;
+    moduleWithLoad._load = () => {
+      throw error;
+    };
 
-    expect(isNativeRequireSourceTransformFallbackError(error, modulePath)).toBe(true);
+    try {
+      expect(tryNativeRequireJavaScriptModule(modulePath, { allowWindows: true })).toEqual({
+        ok: false,
+      });
+    } finally {
+      moduleWithLoad._load = originalLoad;
+    }
   });
 
   it("declines missing target modules so callers can try source fallback", () => {

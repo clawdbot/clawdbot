@@ -44,10 +44,7 @@ function isMissingTargetModuleError(
   return firstLine.includes(`'${modulePath}'`) || firstLine.includes(`"${modulePath}"`);
 }
 
-export function isNativeRequireSourceTransformFallbackError(
-  error: unknown,
-  modulePath: string,
-): boolean {
+function isSourceTransformFallbackError(error: unknown, modulePath: string): boolean {
   if (!error || typeof error !== "object") {
     return false;
   }
@@ -83,7 +80,7 @@ export function tryNativeRequireJavaScriptModule(
     const code =
       error && typeof error === "object" ? (error as { code?: unknown }).code : undefined;
     if (
-      isNativeRequireSourceTransformFallbackError(error, modulePath) ||
+      isSourceTransformFallbackError(error, modulePath) ||
       options.fallbackOnNativeError ||
       (options.fallbackOnMissingDependency === true &&
         (code === "MODULE_NOT_FOUND" || code === "ERR_MODULE_NOT_FOUND"))
