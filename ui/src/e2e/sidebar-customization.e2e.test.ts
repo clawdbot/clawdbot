@@ -809,6 +809,17 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
           "wa-dropdown.sidebar-customize-menu:not(.sidebar-more-menu):not(.sidebar-agent-menu)",
         )
         .locator('[role="menuitem"], [role="menuitemcheckbox"]');
+      // The pin editor installs roving focus asynchronously. Pressing End before it
+      // settles sends the key to the outgoing More menu, so the list never moves and
+      // the focus assertions below can never become true.
+      await expect
+        .poll(() =>
+          pinItems.evaluateAll((items) => items.filter((item) => item.tabIndex === 0).length),
+        )
+        .toBe(1);
+      await expect
+        .poll(() => pinItems.first().evaluate((element) => element === document.activeElement))
+        .toBe(true);
       await page.keyboard.press("End");
       await expect
         .poll(() => pinItems.last().evaluate((element) => element === document.activeElement))
