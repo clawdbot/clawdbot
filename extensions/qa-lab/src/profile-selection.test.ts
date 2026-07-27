@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolveLiveTransportQaScenarioIds } from "./live-transports/shared/scenario-selection.js";
-import { resolveQaProfileScenarios } from "./profile-selection.js";
+import { resolveQaProfileScenarios } from "./profile-planning.js";
 import { readQaScenarioPack } from "./scenario-catalog.js";
 import { readQaScorecardTaxonomyReport } from "./scorecard-taxonomy.js";
 

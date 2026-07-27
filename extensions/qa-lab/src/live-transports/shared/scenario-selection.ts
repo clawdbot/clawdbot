@@ -1,5 +1,5 @@
 import type { QaProviderModeInput } from "../../model-selection.js";
-import { resolveQaProfileScenarios } from "../../profile-selection.js";
+import { resolveQaProfileScenarios } from "../../profile-planning.js";
 
 export function resolveLiveTransportQaScenarioIds(params: {
   channelId: string;

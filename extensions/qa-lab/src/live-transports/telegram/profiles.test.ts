@@ -35,7 +35,7 @@ describe("Telegram QA profiles", () => {
   it("rejects unknown profiles and channel-ineligible explicit scenarios", () => {
     expect(() =>
       resolveTelegramQaScenarioIds({ providerMode: "live-frontier", profile: "transport" }),
-    ).toThrow("QA taxonomy profile must be one of");
+    ).toThrow("QA run profile must be one of");
     expect(() =>
       resolveTelegramQaScenarioIds({
         providerMode: "live-frontier",

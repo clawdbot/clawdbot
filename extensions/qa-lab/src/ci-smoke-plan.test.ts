@@ -2,7 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createQaSmokeCiPart, selectQaSmokeCiEligibilityChannel } from "./ci-smoke-plan.js";
-import { resolveQaProfileScenarios } from "./profile-selection.js";
+import { resolveQaProfileScenarios } from "./profile-planning.js";
 import { readQaScenarioPack } from "./scenario-catalog.js";
 import { readQaScorecardTaxonomyReport } from "./scorecard-taxonomy.js";
 
@@ -10,8 +10,8 @@ const smokeProfileMock = vi.hoisted(() => ({
   mode: "actual" as "actual" | "empty" | "ineligible" | "missing-coverage" | "unsupported",
 }));
 
-vi.mock("./profile-selection.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./profile-selection.js")>();
+vi.mock("./profile-planning.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./profile-planning.js")>();
   return {
     ...actual,
     resolveQaProfileScenarios(params: Parameters<typeof actual.resolveQaProfileScenarios>[0]) {

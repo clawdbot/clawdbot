@@ -464,7 +464,7 @@ describe("discord live qa runtime", () => {
 
   it("fails when any requested Discord scenario id is unknown", () => {
     expect(() => testing.findScenario(["discord-canary", "typo-scenario"])).toThrow(
-      "unknown QA scenario id: typo-scenario",
+      "unknown QA scenario id(s): typo-scenario",
     );
   });
 
