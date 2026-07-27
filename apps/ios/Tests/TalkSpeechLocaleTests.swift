@@ -43,7 +43,8 @@ import Testing
         let locale = TalkSpeechLocale.resolvedSynthesisLocaleID(
             directiveLanguage: " tr_TR ",
             localSelection: "de-DE",
-            gatewaySelection: "ru-RU")
+            gatewaySelection: "ru-RU",
+            isVoiceAvailable: { _ in true })
 
         #expect(locale == "tr-TR")
     }
@@ -52,11 +53,13 @@ import Testing
         let local = TalkSpeechLocale.resolvedSynthesisLocaleID(
             directiveLanguage: nil,
             localSelection: "de_DE",
-            gatewaySelection: "ru-RU")
+            gatewaySelection: "ru-RU",
+            isVoiceAvailable: { _ in true })
         let gateway = TalkSpeechLocale.resolvedSynthesisLocaleID(
             directiveLanguage: nil,
             localSelection: TalkSpeechLocale.automaticID,
-            gatewaySelection: "ru_RU")
+            gatewaySelection: "ru_RU",
+            isVoiceAvailable: { _ in true })
 
         #expect(local == "de-DE")
         #expect(gateway == "ru-RU")
@@ -66,8 +69,44 @@ import Testing
         let locale = TalkSpeechLocale.resolvedSynthesisLocaleID(
             directiveLanguage: nil,
             localSelection: TalkSpeechLocale.automaticID,
-            gatewaySelection: nil)
+            gatewaySelection: nil,
+            isVoiceAvailable: { _ in true })
 
         #expect(locale == nil)
+    }
+
+    @Test func unavailableDirectiveFallsThroughToAvailableLocalVoice() {
+        let locale = TalkSpeechLocale.resolvedSynthesisLocaleID(
+            directiveLanguage: "zz-ZZ",
+            localSelection: "fr-FR",
+            gatewaySelection: "tr-TR",
+            isVoiceAvailable: { $0 == "fr-FR" })
+
+        #expect(locale == "fr-FR")
+    }
+
+    @Test func unavailableDirectiveAndLocalVoicesFallThroughToGatewayVoice() {
+        let locale = TalkSpeechLocale.resolvedSynthesisLocaleID(
+            directiveLanguage: "zz-ZZ",
+            localSelection: "yy-YY",
+            gatewaySelection: "tr_TR",
+            isVoiceAvailable: { $0 == "tr-TR" })
+
+        #expect(locale == "tr-TR")
+    }
+
+    @Test func unavailableCandidatesUseSystemDefaultOnlyAfterEveryCandidateFails() {
+        var checkedLocaleIDs: [String] = []
+        let locale = TalkSpeechLocale.resolvedSynthesisLocaleID(
+            directiveLanguage: "zz-ZZ",
+            localSelection: "fr-FR",
+            gatewaySelection: "tr-TR",
+            isVoiceAvailable: {
+                checkedLocaleIDs.append($0)
+                return false
+            })
+
+        #expect(locale == nil)
+        #expect(checkedLocaleIDs == ["zz-ZZ", "fr-FR", "tr-TR"])
     }
 }

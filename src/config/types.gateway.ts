@@ -109,7 +109,7 @@ export type TalkConfig = {
     | "ultra";
   /** Optional fast mode override for the agent run behind Talk realtime consults. */
   consultFastMode?: boolean;
-  /** BCP 47 locale id used for Talk speech recognition on device nodes. */
+  /** BCP 47 locale id used for Talk speech recognition on device nodes and the iOS system-voice fallback. */
   speechLocale?: string;
   /** Stop speaking when user starts talking (default: true). */
   interruptOnSpeech?: boolean;

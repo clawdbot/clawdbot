@@ -332,6 +332,10 @@ struct TalkGatewaySpeechClientTests {
         let providerCompatible = manager._test_resolvedSpeechLanguages(
             directiveLanguage: "tr",
             localSelection: TalkSpeechLocale.automaticID)
+        let unavailableDirective = manager._test_resolvedSpeechLanguages(
+            directiveLanguage: "zz-ZZ",
+            localSelection: TalkSpeechLocale.automaticID,
+            isSystemVoiceAvailable: { $0 == "tr-TR" })
 
         #expect(configured.provider == nil)
         #expect(configured.systemVoice == "tr-TR")
@@ -339,6 +343,8 @@ struct TalkGatewaySpeechClientTests {
         #expect(directive.systemVoice == "de-DE")
         #expect(providerCompatible.provider == "tr")
         #expect(providerCompatible.systemVoice == "tr")
+        #expect(unavailableDirective.provider == nil)
+        #expect(unavailableDirective.systemVoice == "tr-TR")
     }
 
     @Test func `explicit realtime config keeps realtime relay`() {

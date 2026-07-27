@@ -3178,7 +3178,8 @@ final class TalkModeManager: NSObject {
 
     private func resolvedSpeechLanguages(
         directiveLanguage: String?,
-        localSelection: String? = UserDefaults.standard.string(forKey: TalkSpeechLocale.storageKey))
+        localSelection: String? = UserDefaults.standard.string(forKey: TalkSpeechLocale.storageKey),
+        isSystemVoiceAvailable: (String) -> Bool = TalkSpeechLocale.isSystemVoiceAvailable)
         -> TalkSpeechLanguageSelection
     {
         TalkSpeechLanguageSelection(
@@ -3186,7 +3187,8 @@ final class TalkModeManager: NSObject {
             systemVoice: TalkSpeechLocale.resolvedSynthesisLocaleID(
                 directiveLanguage: directiveLanguage,
                 localSelection: localSelection,
-                gatewaySelection: self.gatewaySpeechLocaleID))
+                gatewaySelection: self.gatewaySpeechLocaleID,
+                isVoiceAvailable: isSystemVoiceAvailable))
     }
 
     private func resolvedElevenLabsAPIKey() -> String? {
@@ -4975,11 +4977,14 @@ extension TalkModeManager {
 
     func _test_resolvedSpeechLanguages(
         directiveLanguage: String?,
-        localSelection: String?) -> (provider: String?, systemVoice: String?)
+        localSelection: String?,
+        isSystemVoiceAvailable: (String) -> Bool = { _ in true })
+        -> (provider: String?, systemVoice: String?)
     {
         let selection = self.resolvedSpeechLanguages(
             directiveLanguage: directiveLanguage,
-            localSelection: localSelection)
+            localSelection: localSelection,
+            isSystemVoiceAvailable: isSystemVoiceAvailable)
         return (selection.provider, selection.systemVoice)
     }
 
