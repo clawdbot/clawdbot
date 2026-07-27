@@ -19,21 +19,21 @@ function slugifyLabel(label: string): string {
 export function fallbackDiscussionLabel(sessionKey: string, agentId?: string): string {
   const agentSegment = agentId?.trim() ? slugifyLabel(agentId) : "";
   const hash = shortSessionHash(sessionKey).slice(0, 8);
-  // Channel identity lives in external_ref/channelId; this short name is display-only.
-  // resolveAvailableChannelName suffixes collisions instead of relying on a long hash.
   return `s-${agentSegment ? `${agentSegment}-` : ""}${hash}`;
 }
 
 export function resolveDiscussionLabel(
-  entry: { label?: string; displayName?: string; subject?: string },
+  entry: { label?: string; displayName?: string; subject?: string } | string | undefined,
   sessionKey: string,
   agentId?: string,
 ): string {
-  // Keep this entry-only prefix aligned with deriveSessionTitle in src/gateway/session-utils-core.ts.
+  if (typeof entry === "string") {
+    return entry.trim() || fallbackDiscussionLabel(sessionKey, agentId);
+  }
   return (
-    entry.label?.trim() ||
-    entry.displayName?.trim() ||
-    entry.subject?.trim() ||
+    entry?.label?.trim() ||
+    entry?.displayName?.trim() ||
+    entry?.subject?.trim() ||
     fallbackDiscussionLabel(sessionKey, agentId)
   );
 }
