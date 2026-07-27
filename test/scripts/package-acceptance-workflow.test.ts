@@ -2432,6 +2432,17 @@ describe("package artifact reuse", () => {
     expect(packageAcceptanceJob.with).toMatchObject({
       allow_frozen_target_scenario_omissions:
         "${{ inputs.allow_frozen_target_scenario_omissions }}",
+      artifact_digest: "${{ needs.prepare_release_package.outputs.artifact_digest }}",
+      artifact_id: "${{ needs.prepare_release_package.outputs.artifact_id }}",
+      artifact_name: "${{ needs.prepare_release_package.outputs.artifact_name }}",
+      artifact_run_attempt: "${{ needs.prepare_release_package.outputs.artifact_run_attempt }}",
+      artifact_run_id: "${{ needs.prepare_release_package.outputs.artifact_run_id }}",
+      package_file_name: "${{ needs.prepare_release_package.outputs.package_file_name }}",
+      package_sha256:
+        "${{ (needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.resolve_target.outputs.release_package_spec == '') && needs.prepare_release_package.outputs.package_sha256 || '' }}",
+      package_source_sha: "${{ needs.prepare_release_package.outputs.source_sha }}",
+      package_version: "${{ needs.prepare_release_package.outputs.package_version }}",
+      suite_profile: "custom",
     });
     expect(dockerAcceptanceJob.with).toMatchObject({
       allow_frozen_target_scenario_omissions:
@@ -2463,9 +2474,20 @@ describe("package artifact reuse", () => {
       "package_sha256: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.resolve_target.outputs.release_package_spec == '') && needs.prepare_release_package.outputs.package_sha256 || '' }}",
     );
     expect(workflow).toContain("suite_profile: custom");
-    expect(workflow).toContain(
-      "docker_lanes: doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor published-upgrade-survivor root-managed-vps-upgrade update-restart-auth plugins-offline plugin-update plugin-binding-command-escape",
-    );
+    expect(String(packageAcceptanceJob.with?.docker_lanes ?? "").split(/\s+/u)).toEqual([
+      "release-typed-onboarding",
+      "doctor-switch",
+      "update-channel-switch",
+      "skill-install",
+      "update-corrupt-plugin",
+      "upgrade-survivor",
+      "published-upgrade-survivor",
+      "root-managed-vps-upgrade",
+      "update-restart-auth",
+      "plugins-offline",
+      "plugin-update",
+      "plugin-binding-command-escape",
+    ]);
     expect(workflow).toContain(
       "published_upgrade_survivor_baselines: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'last-stable-4 2026.4.23 2026.5.2 2026.4.15' || '' }}",
     );

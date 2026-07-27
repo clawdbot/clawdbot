@@ -1251,6 +1251,7 @@ describe("followup queue collect routing", () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.run.model).toBe("current-model");
+    expect(calls[0]?.run.requestedRouteResolution).toBe("raw");
     expect(calls[0]?.originatingChatType).toBe("channel");
     expect(calls[0]?.run.senderId).toBe("owner");
     expect(calls[0]?.run.senderIsOwner).toBe(true);

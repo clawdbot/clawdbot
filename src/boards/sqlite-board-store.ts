@@ -28,6 +28,7 @@ import {
   createBoardGrantSnapshot,
   createBoardWidgetPutSnapshot,
   type BoardStore,
+  type BoardSnapshotWithHtmlDocuments,
   type BoardWidgetHtmlDocument,
   type BoardWidgetMcpAppDocument,
 } from "./board-store.js";
@@ -159,6 +160,27 @@ function readStoredBoard(database: BoardDatabaseHandle, sessionKey: string): Sto
     },
     { databaseLabel: database.path, operationLabel: "board.read" },
   );
+}
+
+function rowToHtmlDocument(
+  row: Pick<
+    SelectedBoardWidgetRow,
+    "content_kind" | "html" | "revision" | "sha256" | "view_generation" | "grant_state" | "manifest"
+  >,
+): BoardWidgetHtmlDocument | undefined {
+  if (row.content_kind !== "html" || row.html === null || row.view_generation === null) {
+    return undefined;
+  }
+  const manifest = parseManifest(row.manifest);
+  const declared = manifest.declared;
+  return {
+    html: Buffer.from(row.html).toString("utf8"),
+    revision: row.revision,
+    sha256: row.sha256,
+    viewGeneration: row.view_generation,
+    grantState: effectiveGrantState(row.grant_state as BoardWidget["grantState"], manifest),
+    ...(declared ? { declared } : {}),
+  };
 }
 
 function upsertTabs(
@@ -375,6 +397,33 @@ export class SqliteBoardStore implements BoardStore {
     );
   }
 
+  getSnapshotWithHtmlDocuments(sessionKey: string): BoardSnapshotWithHtmlDocuments {
+    const resolved = this.resolve(sessionKey);
+    const result = withOpenClawAgentDatabaseReadOnly(
+      (database) =>
+        hasSession(database, resolved.sessionKey) && boardTablesPresent(database)
+          ? readStoredBoard(database, resolved.sessionKey)
+          : undefined,
+      {
+        agentId: resolved.agentId,
+        ...(resolved.path ? { path: resolved.path } : {}),
+        env: this.options.env,
+      },
+    );
+    const stored = result.found ? result.value : undefined;
+    const htmlDocuments = new Map<string, BoardWidgetHtmlDocument>();
+    for (const row of stored?.widgetRows ?? []) {
+      const document = rowToHtmlDocument(row);
+      if (document) {
+        htmlDocuments.set(row.name, document);
+      }
+    }
+    return {
+      snapshot: cloneBoardSnapshot(stored?.snapshot ?? emptyBoardSnapshot(resolved.sessionKey)),
+      htmlDocuments,
+    };
+  }
+
   applyOps(sessionKey: string, ops: readonly BoardOp[]): BoardSnapshot {
     if (ops.length === 0) {
       return this.getSnapshot(sessionKey);
@@ -587,19 +636,7 @@ export class SqliteBoardStore implements BoardStore {
         if (!row) {
           return undefined;
         }
-        if (row.content_kind === "html" && row.html !== null && row.view_generation !== null) {
-          const manifest = parseManifest(row.manifest);
-          const declared = manifest.declared;
-          return {
-            html: Buffer.from(row.html).toString("utf8"),
-            revision: row.revision,
-            sha256: row.sha256,
-            viewGeneration: row.view_generation,
-            grantState: effectiveGrantState(row.grant_state as BoardWidget["grantState"], manifest),
-            ...(declared ? { declared } : {}),
-          };
-        }
-        return undefined;
+        return rowToHtmlDocument(row);
       },
       {
         agentId: resolved.agentId,
