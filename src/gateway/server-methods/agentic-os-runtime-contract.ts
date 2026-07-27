@@ -86,6 +86,7 @@ function rejectConnectedClientMissingAdmin(
 function readOptionalPositiveInteger(
   params: Record<string, unknown>,
   key: string,
+  max?: number,
 ): number | undefined {
   if (!Object.hasOwn(params, key)) {
     return undefined;
@@ -93,6 +94,9 @@ function readOptionalPositiveInteger(
   const value = params[key];
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
     throw new ContractInputError(`invalid positive integer: ${key}`);
+  }
+  if (max !== undefined && value > max) {
+    throw new ContractInputError(`${key} exceeds maximum ${max}`);
   }
   return value;
 }
@@ -269,7 +273,7 @@ export const agenticOsRuntimeContractHandlers: GatewayRequestHandlers = {
     await respondWithContract(opts.params, opts.respond, async (input) => {
       const tracked = historyAgenticOsSession(input, authenticatedPrincipalId(opts.client));
       const sessionKey = tracked.session_key;
-      const limit = readOptionalPositiveInteger(input, "limit");
+      const limit = readOptionalPositiveInteger(input, "limit", 1000);
       const includeTools = readOptionalBoolean(input, "includeTools");
       let canonical: Record<string, unknown>;
       try {

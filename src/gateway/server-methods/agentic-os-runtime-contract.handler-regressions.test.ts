@@ -221,14 +221,17 @@ describe("Agentic OS runtime handler regressions", () => {
   });
 
   it("rejects malformed sessions_history limit values before canonical history reads", async () => {
-    for (const limit of ["5", Number.NaN, Number.POSITIVE_INFINITY, 0, -1, 1.5, null, {}]) {
+    for (const limit of ["5", Number.NaN, Number.POSITIVE_INFINITY, 0, -1, 1.5, null, {}, 1001]) {
       const response = await invoke("sessions_history", null, {
         sessionKey: "agent:ai-engineer:subagent:child",
         limit,
       });
 
       expect(response[0]).toBe(false);
-      expect(response[2]?.message).toContain("invalid positive integer: limit");
+      expect(response[2]?.code).toBe("INVALID_REQUEST");
+      expect(response[2]?.message).toMatch(
+        /invalid positive integer: limit|limit exceeds maximum 1000/,
+      );
     }
     expect(canonicalHistory.requests).toEqual([]);
   });

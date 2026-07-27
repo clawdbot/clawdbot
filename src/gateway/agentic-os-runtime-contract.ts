@@ -102,22 +102,26 @@ function hydrateRuntimeSnapshot(snapshot: RuntimeSnapshot): boolean {
     snapshot.sessions.map((session) => [session.gatewayLeaseId, session]),
   );
   for (const lease of snapshot.leases) {
-    if (lease.spawn_reservation_fingerprint && !lease.released_at_ms && !lease.consumed_at_ms) {
+    if (lease.spawn_reservation_fingerprint && !lease.consumed_at_ms) {
       // A pending promise cannot survive process restart. Promote a durable
       // reservation only when an accepted snapshot or canonical child-run
       // evidence proves that launch crossed the acceptance boundary. Otherwise
       // clear the stale reservation so a definitively rejected launch cannot
-      // reappear as accepted after a failed rollback write.
+      // reappear as accepted after a failed rollback write. Release can race a
+      // pending runner after reservation persistence; canonical child-run
+      // evidence still wins so exact spawn replay remains crash-safe.
       const durableAcceptedSession = acceptedSessionByLease.get(lease.gatewayLeaseId);
       const reservedSession = lease.spawn_reservation;
       if (
         !durableAcceptedSession &&
         (!reservedSession || !sessionRecordHasChildRunEvidence(reservedSession))
       ) {
-        lease.consumed_at_ms =
-          typeof lease.spawn_reserved_at_ms === "number"
-            ? Math.min(lease.spawn_reserved_at_ms, hydrationNow)
-            : hydrationNow;
+        if (!lease.released_at_ms) {
+          lease.consumed_at_ms =
+            typeof lease.spawn_reserved_at_ms === "number"
+              ? Math.min(lease.spawn_reserved_at_ms, hydrationNow)
+              : hydrationNow;
+        }
         clearSpawnReservation(lease);
         changed = true;
       } else {

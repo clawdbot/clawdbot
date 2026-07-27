@@ -5,9 +5,13 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const findTaskByRunIdForStatusMock = vi.hoisted(() => vi.fn());
+const spawnSubagentDirectMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../tasks/task-status-access.js", () => ({
   findTaskByRunIdForStatus: findTaskByRunIdForStatusMock,
+}));
+vi.mock("../agents/subagent-spawn.js", () => ({
+  spawnSubagentDirect: spawnSubagentDirectMock,
 }));
 
 const acquireParams = {
@@ -37,6 +41,10 @@ describe("Agentic OS allow lease release persistence", () => {
     runtimeStateDir = mkdtempSync(path.join(tmpdir(), "openclaw-agentic-os-release-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", runtimeStateDir);
     findTaskByRunIdForStatusMock.mockReset();
+    spawnSubagentDirectMock.mockReset();
+    spawnSubagentDirectMock.mockImplementation(async () => {
+      throw new Error("runner must not be invoked during hydrated replay");
+    });
     vi.resetModules();
   });
 
@@ -188,5 +196,99 @@ describe("Agentic OS allow lease release persistence", () => {
       childSessionKey: reservedSession.sessionKey,
       runId: reservedSession.runId,
     });
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("reconciles released reserved accepted child evidence into exact spawn replay", async () => {
+    const contract = await import("./agentic-os-runtime-contract.js");
+    const shared = await import("./agentic-os-runtime-contract-shared.js");
+    const acquired = contract.acquireAgenticOsAllowLease(acquireParams);
+    const gatewayLeaseId = acquired.gateway_lease_id as string;
+    const releaseParams = {
+      ...releaseOwnerParams,
+      release_idempotency_key: "lease-release-raced-with-accepted-spawn",
+      gateway_lease_id: gatewayLeaseId,
+    };
+    const released = contract.releaseAgenticOsAllowLease(releaseParams);
+    const store = await import("./agentic-os-runtime-contract-store.js");
+    const snapshot = store.loadAgenticOsRuntimeSnapshot() as {
+      leases: Array<Record<string, unknown>>;
+      releaseReplays: unknown[];
+      sessions: unknown[];
+    };
+    const reservedAt = Date.now();
+    const task = "released reservation still has accepted child evidence";
+    const metadata = {
+      run_id: acquireParams.run_id,
+      transition_id: acquireParams.transition_id,
+      client_request_id: "spawn-release-race",
+      idempotency_key: "spawn-release-race-idem",
+      phase: acquireParams.phase,
+      agent_id: acquireParams.agent_id,
+      task_digest: createHash("sha256").update(task).digest("hex"),
+    };
+    const spawnParams = {
+      task,
+      runtime: "subagent",
+      agentId: "ai-engineer",
+      gateway_lease_id: gatewayLeaseId,
+      client_request_id: "spawn-release-race",
+      idempotency_key: "spawn-release-race-idem",
+      metadata,
+    };
+    const fingerprint = shared.stableJson({
+      client_request_id: spawnParams.client_request_id,
+      idempotency_key: spawnParams.idempotency_key,
+      gateway_lease_id: spawnParams.gateway_lease_id,
+      task,
+      taskName: undefined,
+      runtime: "subagent",
+      mode: "run",
+      cleanup: undefined,
+      context: undefined,
+      lightContext: false,
+      agentId: "ai-engineer",
+      metadata,
+    });
+    const reservedSession = {
+      sessionKey: "agent:ai-engineer:subagent:released-reserved-accepted",
+      fingerprint,
+      clientRequestId: spawnParams.client_request_id,
+      idempotencyKey: spawnParams.idempotency_key,
+      gatewayLeaseId,
+      metadata: {
+        metadata_contract_version: "v1",
+        normalized: metadata,
+        raw_json: shared.stableJson(metadata),
+      },
+      agentId: "ai-engineer",
+      authenticatedPrincipalId: "internal",
+      runId: "released-reserved-accepted-run",
+      created_at_ms: reservedAt,
+    };
+    Object.assign(snapshot.leases[0]!, {
+      spawn_reserved_at_ms: reservedAt,
+      spawn_reservation_fingerprint: fingerprint,
+      spawn_reservation: reservedSession,
+    });
+    store.saveAgenticOsRuntimeSnapshot(snapshot);
+    findTaskByRunIdForStatusMock.mockReturnValue({
+      status: "running",
+      runId: reservedSession.runId,
+    });
+
+    vi.resetModules();
+    const restarted = await import("./agentic-os-runtime-contract.js");
+    expect(restarted.releaseAgenticOsAllowLease(releaseParams)).toEqual(released);
+    expect(restarted.acquireAgenticOsAllowLease(acquireParams)).toMatchObject({
+      status: "released",
+      gateway_lease_id: gatewayLeaseId,
+    });
+    await expect(restarted.spawnAgenticOsSession(spawnParams)).resolves.toMatchObject({
+      status: "accepted",
+      childSessionKey: reservedSession.sessionKey,
+      runId: reservedSession.runId,
+    });
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 });

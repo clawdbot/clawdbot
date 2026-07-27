@@ -55,6 +55,12 @@ should use the [lease-backed session spawning contract](/gateway/lease-backed-se
 For UI integrations, subscribe to Gateway events and render only the event
 families your app understands.
 
+When an external orchestrator needs to spawn a child on behalf of the
+configured default agent, first call `tools.catalog` without `agentId`. The
+response includes the resolved default `agentId`; use that exact value as the
+lease `requester_agent_id`. This keeps external authorization aligned with the
+Gateway's configured default agent instead of assuming it is named `main`.
+
 ## Cooperative host suspension
 
 Hosting controllers that freeze or snapshot a running process can use the
