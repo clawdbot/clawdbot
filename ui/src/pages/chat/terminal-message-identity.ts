@@ -21,7 +21,7 @@ export function rememberLiveTerminalRun(
   return message;
 }
 
-function isLiveTerminalForRun(message: unknown, runId: string): boolean {
+export function isLiveTerminalForRun(message: unknown, runId: string): boolean {
   return Boolean(
     message && typeof message === "object" && liveTerminalRunIds.get(message) === runId,
   );
