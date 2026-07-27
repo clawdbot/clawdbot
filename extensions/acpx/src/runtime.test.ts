@@ -4084,6 +4084,11 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   it.each([
     new Error("no rollout found for thread id codex-session-missing"),
     Object.assign(new Error("Resource not found: session"), { code: -32002 }),
+    Object.assign(new Error("Resource not found: codex-session-missing"), {
+      name: "RequestError",
+      code: -32002,
+      data: { uri: "codex-session-missing" },
+    }),
     Object.assign(new Error("Internal error"), {
       name: "RequestError",
       code: -32603,

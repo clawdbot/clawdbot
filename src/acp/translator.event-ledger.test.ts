@@ -146,6 +146,22 @@ describe("ACP translator event ledger replay", () => {
     expect(resumedSessionStore.getSession(created.sessionId)?.sessionKey).toBe(
       firstSession.sessionKey,
     );
+
+    const twiceResumedSessionStore = createInMemorySessionStore();
+    const twiceResumedAgent = new AcpGatewayAgent(
+      createAcpConnection(),
+      createAcpGateway(resumedRequest),
+      {
+        eventLedger,
+        sessionStore: twiceResumedSessionStore,
+      },
+    );
+
+    await twiceResumedAgent.resumeSession(createResumeSessionRequest(created.sessionId));
+
+    expect(twiceResumedSessionStore.getSession(created.sessionId)?.sessionKey).toBe(
+      firstSession.sessionKey,
+    );
   });
 
   it("loads complete ledger-backed sessions without the lossy Gateway transcript fallback", async () => {

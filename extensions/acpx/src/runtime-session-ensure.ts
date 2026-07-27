@@ -45,6 +45,27 @@ function hasMissingResumeTargetHint(value: unknown, depth = 0): boolean {
   return Object.values(value).some((entry) => hasMissingResumeTargetHint(entry, depth + 1));
 }
 
+function isRequestedResumeTargetNotFound(value: unknown, resumeSessionId: string): boolean {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as {
+    code?: unknown;
+    data?: unknown;
+    message?: unknown;
+  };
+  if (record.code !== -32002) {
+    return false;
+  }
+  const resourceUri =
+    record.data && typeof record.data === "object"
+      ? (record.data as { uri?: unknown }).uri
+      : undefined;
+  return (
+    resourceUri === resumeSessionId || record.message === `Resource not found: ${resumeSessionId}`
+  );
+}
+
 export async function withResumeEnsureErrorNormalization<T>(params: {
   input: RuntimeEnsureInput;
   run: () => Promise<T>;
@@ -52,7 +73,12 @@ export async function withResumeEnsureErrorNormalization<T>(params: {
   try {
     return await params.run();
   } catch (error) {
-    if (!params.input.resumeSessionId?.trim() || !hasMissingResumeTargetHint(error)) {
+    const resumeSessionId = params.input.resumeSessionId?.trim();
+    if (
+      !resumeSessionId ||
+      (!hasMissingResumeTargetHint(error) &&
+        !isRequestedResumeTargetNotFound(error, resumeSessionId))
+    ) {
       throw error;
     }
     const detail = error instanceof Error ? error.message : "resume target not found";
