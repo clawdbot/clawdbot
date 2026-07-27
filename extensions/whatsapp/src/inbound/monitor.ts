@@ -1,4 +1,5 @@
 // Whatsapp plugin module implements monitor behavior.
+import { createHash } from "node:crypto";
 import type {
   AnyMessageContent,
   MiscMessageGenerationOptions,
@@ -1127,6 +1128,11 @@ export async function attachWebInboxToSocket(
     return msgTsMs < appendAfterMs;
   };
 
+  // Live rows keep receive-time identity facts until their first drain attempt.
+  // Restart replay has no entry and re-normalizes from the persisted payload.
+  type PreparedInbound = NonNullable<Awaited<ReturnType<typeof normalizeInboundMessage>>>;
+  const preparedInboundByDurableId = new Map<string, Promise<PreparedInbound | null | undefined>>();
+
   type EnrichedInboundMessage = {
     body: string;
     commandBody: string;
@@ -1417,10 +1423,24 @@ export async function attachWebInboxToSocket(
   ): Promise<"completed" | "deferred"> => {
     const { message: msg, ...context } = admission;
     rememberBaileysMessage(msg.key?.remoteJid, msg.key?.id, msg.message);
+    const remoteJid = msg.key?.remoteJid;
+    const id = msg.key?.id;
+    const durableId =
+      remoteJid && id
+        ? createHash("sha256").update(`${remoteJid}\n${id}`).digest("hex")
+        : undefined;
+    const preparation = durableId ? preparedInboundByDurableId.get(durableId) : undefined;
+    if (durableId) {
+      preparedInboundByDurableId.delete(durableId);
+    }
     if (context.skipRecentOutboundEcho === true) {
       return "completed";
     }
-    const inbound = await normalizeInboundMessage(msg);
+    const prepared = await preparation;
+    if (prepared === null) {
+      return "completed";
+    }
+    const inbound = prepared ?? (await normalizeInboundMessage(msg));
     if (!inbound) {
       return "completed";
     }
@@ -1499,6 +1519,37 @@ export async function attachWebInboxToSocket(
       const receivedAt = Date.now();
       const skipStaleAppend = shouldSkipStaleAppend(msg, upsert.type);
       const skipRecentOutboundEcho = shouldSkipRecentOutboundEcho(msg);
+      const remoteJid = msg.key?.remoteJid;
+      const id = msg.key?.id;
+      const durableId =
+        remoteJid && id
+          ? createHash("sha256").update(`${remoteJid}\n${id}`).digest("hex")
+          : undefined;
+      let resolvePrepared: ((inbound: PreparedInbound | null | undefined) => void) | undefined;
+      // A redelivery must not replace the first accepted delivery's preparation.
+      if (durableId && !preparedInboundByDurableId.has(durableId)) {
+        if (preparedInboundByDurableId.size >= 1000) {
+          const oldest = preparedInboundByDurableId.keys().next().value;
+          if (oldest !== undefined) {
+            preparedInboundByDurableId.delete(oldest);
+          }
+        }
+        preparedInboundByDurableId.set(
+          durableId,
+          new Promise((resolve) => {
+            resolvePrepared = resolve;
+          }),
+        );
+      }
+      const finishPreparation = (
+        inbound: PreparedInbound | null | undefined,
+        keepForDrain = false,
+      ) => {
+        resolvePrepared?.(inbound);
+        if (!keepForDrain && durableId && resolvePrepared) {
+          preparedInboundByDurableId.delete(durableId);
+        }
+      };
       let result: Awaited<ReturnType<typeof durableInboundMonitor.admit>>;
       try {
         // Shared admission owns the serialized [0, 100, 300] append retries and
@@ -1515,6 +1566,7 @@ export async function attachWebInboxToSocket(
           { receivedAt },
         );
       } catch (error) {
+        finishPreparation(undefined);
         const formattedError = formatError(error);
         inboundLogger.error(
           { error: formattedError },
@@ -1526,10 +1578,28 @@ export async function attachWebInboxToSocket(
         continue;
       }
       if (result.kind === "durable" && result.queueResult.kind === "completed") {
+        finishPreparation(undefined);
         const inbound = await normalizeInboundMessage(msg);
         if (inbound) {
           await maybeMarkNonSelfChatReadReceipt(inbound, buildReadReceiptTarget(inbound));
         }
+      } else if (result.kind === "durable" && result.queueResult.kind === "accepted") {
+        if (skipRecentOutboundEcho) {
+          finishPreparation(null);
+        } else {
+          try {
+            finishPreparation(await normalizeInboundMessage(msg), true);
+          } catch (error) {
+            finishPreparation(undefined);
+            inboundLogger.warn(
+              { error: formatError(error) },
+              "failed preparing WhatsApp inbound identity; durable drain will normalize again",
+            );
+          }
+        }
+      } else {
+        // Pending redelivery leaves the first accepted delivery's preparation in place.
+        finishPreparation(undefined);
       }
     }
   };
