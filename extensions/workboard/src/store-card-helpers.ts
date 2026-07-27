@@ -13,6 +13,7 @@ import {
   type WorkboardNotification,
   type WorkboardRunAttempt,
   type WorkboardStatus,
+  type WorkboardStatusTransition,
 } from "@openclaw/workboard-contract";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -129,6 +130,30 @@ export function appendEvent(
       ...event,
     },
   ].slice(-MAX_CARD_EVENTS);
+}
+
+export function appendStatusTransition(
+  existing: WorkboardCard,
+  next: WorkboardCard,
+  at = Date.now(),
+): WorkboardStatusTransition[] | undefined {
+  if (existing.status === next.status) {
+    return next.metadata?.statusTransitions;
+  }
+  const previous = next.metadata?.statusTransitions ?? existing.metadata?.statusTransitions ?? [];
+  const revision = previous.length + 1;
+  const transition: WorkboardStatusTransition = {
+    id: randomUUID(),
+    cardId: next.id,
+    fromStatus: existing.status,
+    toStatus: next.status,
+    createdAt: at,
+    sequence: at * 1000 + revision,
+    revision,
+    ...(cardSessionKey(next) ? { sessionKey: cardSessionKey(next) } : {}),
+    ...(cardRunId(next) ? { runId: cardRunId(next) } : {}),
+  };
+  return [...previous, transition];
 }
 
 function latestMetadataIdChanged(
@@ -744,63 +769,30 @@ export function compareNotifications(a: WorkboardNotification, b: WorkboardNotif
 }
 
 /**
- * Project durable `status_changed` notifications from a card's move history.
+ * Read durable `status_changed` notifications from transition-time records.
  *
- * These are NOT persisted as notification rows. Exactly like the synthesized
- * `stale` notification, they are derived at read time from data the store
- * already writes atomically with the card — here, the `moved` lifecycle events
- * that `updateCard` appends in the same write as the status field. A card's
- * status change and its `status_changed` projection therefore share a single
- * atomic persist and can never diverge, and every existing card's history is
- * covered retroactively with no schema migration.
- *
- * Only real transitions are projected: `moved` events whose `fromStatus` and
- * `toStatus` differ. Position-only moves reuse the `moved` kind with equal
- * endpoints and are skipped, so a no-op status write produces nothing. Card
- * creation (`created`) is birth, not a change, and carries no `fromStatus`, so
- * it is skipped too. `revision` is the 1-based ordinal of the transition within
- * the card's retained move history, a stable idempotency discriminator; the
- * derived `sequence` (`at * 1000 + revision`) shares the millisecond-scaled
- * numbering used by persisted rows and synthesized `stale`, so the cursor
- * orders and de-duplicates all three kinds together.
+ * These records are persisted separately from the capped recent event ring,
+ * so cursor replay, transition scope, and notification ids do not change when
+ * ordinary card history is trimmed.
  */
 export function synthesizeStatusChangedNotifications(card: WorkboardCard): WorkboardNotification[] {
-  const events = card.events;
-  if (!events?.length) {
-    return [];
-  }
-  const cardSession = cardSessionKey(card);
-  const cardRun = cardRunId(card);
-  const result: WorkboardNotification[] = [];
-  let revision = 0;
-  for (const event of events) {
-    if (
-      event.kind !== "moved" ||
-      event.fromStatus === undefined ||
-      event.toStatus === undefined ||
-      event.fromStatus === event.toStatus ||
-      typeof event.at !== "number" ||
-      !Number.isFinite(event.at)
-    ) {
-      continue;
+  return (card.metadata?.statusTransitions ?? []).flatMap((transition) => {
+    if (transition.cardId !== card.id) {
+      return [];
     }
-    revision += 1;
-    const eventSessionKey = event.sessionKey ?? cardSession;
-    const eventRunId = event.runId ?? cardRun;
-    result.push({
-      id: `status:${card.id}:${event.id}`,
-      kind: "status_changed",
-      createdAt: event.at,
-      sequence: event.at * 1000 + revision,
-      message: `Status changed ${event.fromStatus} → ${event.toStatus}.`,
+    return [{
+      id: `status:${card.id}:${transition.id}`,
+      kind: "status_changed" as const,
+      createdAt: transition.createdAt,
+      sequence: transition.sequence,
+      message: `Status changed ${transition.fromStatus} → ${transition.toStatus}.`,
       cardId: card.id,
-      fromStatus: event.fromStatus,
-      toStatus: event.toStatus,
-      revision,
-      ...(eventSessionKey ? { sessionKey: eventSessionKey } : {}),
-      ...(eventRunId ? { runId: eventRunId } : {}),
-    });
-  }
-  return result;
+      fromStatus: transition.fromStatus,
+      toStatus: transition.toStatus,
+      revision: transition.revision,
+      ...(transition.sessionKey ? { sessionKey: transition.sessionKey } : {}),
+      ...(transition.runId ? { runId: transition.runId } : {}),
+    }];
+  });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

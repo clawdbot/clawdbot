@@ -122,6 +122,18 @@ export type WorkboardEvent = {
   runId?: string;
 };
 
+export type WorkboardStatusTransition = {
+  id: string;
+  cardId: string;
+  fromStatus: WorkboardStatus;
+  toStatus: WorkboardStatus;
+  createdAt: number;
+  sequence: number;
+  revision: number;
+  sessionKey?: string;
+  runId?: string;
+};
+
 export type WorkboardRunAttempt = {
   id: string;
   status: WorkboardAttemptStatus;
@@ -240,17 +252,16 @@ export type WorkboardNotification = {
    */
   cardId?: string;
   /**
-   * Status-transition endpoints. Populated only on `status_changed` events,
-   * projected from the card's durable move history. `fromStatus === toStatus`
-   * never occurs — no-op moves are not projected.
+   * Status-transition endpoints. Populated only on persisted
+   * `status_changed` transition notifications. `fromStatus === toStatus` never
+   * occurs — no-op moves are not persisted as transitions.
    */
   fromStatus?: WorkboardStatus;
   toStatus?: WorkboardStatus;
   /**
-   * Monotonic 1-based ordinal of the status transition within the card's
-   * retained move history. With `cardId` and `toStatus` it forms a stable
-   * idempotency key for a single transition. Populated only on
-   * `status_changed` events.
+   * Monotonic 1-based ordinal of the persisted status transition within
+   * the card. With `cardId` and `toStatus` it forms a stable idempotency
+   * key for a single transition. Populated only on `status_changed` events.
    */
   revision?: number;
 };
@@ -356,6 +367,7 @@ export type WorkboardMetadata = {
   claim?: WorkboardClaim;
   diagnostics?: WorkboardDiagnostic[];
   notifications?: WorkboardNotification[];
+  statusTransitions?: WorkboardStatusTransition[];
   templateId?: WorkboardTemplateId;
   archivedAt?: number;
   stale?: WorkboardStaleState;

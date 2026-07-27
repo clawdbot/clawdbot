@@ -97,9 +97,10 @@ rewritten into another valid state.
 ### Notification kinds
 
 Notification subscriptions (`workboard_notify_subscribe` and the CLI/gateway
-equivalents) deliver these durable event kinds. A subscription with no
-`eventKinds` filter receives all of them; a subscription that lists `eventKinds`
-receives only the kinds it names.
+equivalents) deliver these durable event kinds. `status_changed` is strict
+opt-in: a subscription must include it in `eventKinds`. A subscription with no
+`eventKinds` filter keeps the historical terminal stream (`completed`, `failed`,
+`stale`) and does not receive `status_changed`.
 
 | Kind             | Emitted when                                                                                                                               | Extra fields                                   |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------- |
@@ -109,11 +110,13 @@ receives only the kinds it names.
 | `status_changed` | A card moves between any two statuses (e.g. `todo → ready`, `running → review`, `review → done`, any `→ blocked`, unblock back to `todo`). | `cardId`, `fromStatus`, `toStatus`, `revision` |
 
 `status_changed` is a single generalized event covering every lifecycle
-transition, rather than one kind per status. It is projected at read time from
-the card's durable `moved` lifecycle events — the same events the store writes
-atomically with the status field — so the transition and its notification share
-one persist and can never diverge, and every existing card's history is covered
-with no schema migration. Only real transitions are reported: a no-op status
+transition, rather than one kind per status. The store persists an immutable
+transition record at the same time it writes the new status, including the
+transition id, timestamp, sequence, revision, and the run/session scope that was
+active at transition time. The notification reader replays those transition
+records instead of deriving from the capped recent-events ring, so ordinary
+card-history trimming does not change notification ids, revision numbers, or
+run/session attribution. Only real transitions are reported: a no-op status
 write (`status === status`) and a position-only move produce no `status_changed`
 event, and card creation is not a transition. `revision` is the card's 1-based
 transition ordinal; together with `cardId` and `toStatus` it forms a stable
@@ -127,9 +130,9 @@ not request `status_changed` (via `eventKinds`) never receive it.
 
 > **Compatibility / migration.** `status_changed` is additive and
 > backward-compatible. Existing subscribers keep receiving the exact same
-> `completed`/`failed`/`stale` stream; no persisted card schema, SQLite table, or
-> `SCHEMA_VERSION` changes. To adopt it, add `"status_changed"` to a
-> subscription's `eventKinds` (or subscribe with no filter). Consumers should key
+> `completed`/`failed`/`stale` stream. The persisted card schema adds
+> transition records so replay is independent of the capped recent-events ring.
+> To adopt it, add `"status_changed"` to a subscription's `eventKinds`. Consumers should key
 > on `cardId + revision + toStatus` (or the notification `id`) for idempotency
 > and ignore any unknown future notification kinds, as the Control UI already
 > does.

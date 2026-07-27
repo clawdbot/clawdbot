@@ -1,11 +1,10 @@
-// Focused coverage for the synthesized `status_changed` durable notification.
+// Focused coverage for the persisted `status_changed` durable notification.
 //
-// `status_changed` is projected at read time from the card's `moved` lifecycle
-// events (the same events `updateCard` writes atomically with the status
-// field), exactly as `stale` is projected from `card.metadata.stale`. These
-// tests pin the transition matrix, the no-op guard, subscription scoping, the
-// durable cursor, and backward-compatibility with the existing
-// completed/failed/stale notifications.
+// `status_changed` is read from transition-time records that `updateCard`
+// writes atomically with the status field. These tests pin the transition
+// matrix, the no-op guard, subscription scoping, durable cursor behavior,
+// retained-history durability, transition-time run/session scope, and
+// backward-compatibility with the existing completed/failed/stale notifications.
 import { describe, expect, it } from "vitest";
 import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
 import { WorkboardStore } from "./store.js";
@@ -195,6 +194,61 @@ describe("workboard status_changed notification", () => {
     const second = await store.advanceNotificationEvents({ subscriptionId: sub.id });
     expect(second.events).toHaveLength(1);
     expect(second.events[0]).toMatchObject({ fromStatus: "ready", toStatus: "running" });
+  });
+
+
+  it("keeps replay after ordinary card events are trimmed", async () => {
+    const memory = createMemoryStore();
+    const store = new WorkboardStore(memory);
+    const card = await store.create({ title: "T", status: "todo" });
+    const sub = await store.subscribeNotifications({
+      boardId: BOARD,
+      cardId: card.id,
+      eventKinds: ["status_changed"],
+    });
+    await store.update(card.id, { status: "ready" });
+    const entry = await memory.lookup(card.id);
+    expect(entry?.card.metadata?.statusTransitions).toHaveLength(1);
+    if (entry) {
+      entry.card.events = [];
+      await memory.register(card.id, entry);
+    }
+    const { events } = await store.notificationEvents({ subscriptionId: sub.id });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ fromStatus: "todo", toStatus: "ready", revision: 1 });
+  });
+
+  it("keeps transition-time run and session scope after the card is relinked", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "T",
+      status: "todo",
+      sessionKey: "agent:old",
+      runId: "run-old",
+    });
+    await store.update(card.id, { status: "ready" });
+    await store.update(card.id, { sessionKey: "agent:new", runId: "run-new" });
+
+    const oldSub = await store.subscribeNotifications({
+      boardId: BOARD,
+      cardId: card.id,
+      sessionKey: "agent:old",
+      runId: "run-old",
+      eventKinds: ["status_changed"],
+    });
+    const newSub = await store.subscribeNotifications({
+      boardId: BOARD,
+      cardId: card.id,
+      sessionKey: "agent:new",
+      runId: "run-new",
+      eventKinds: ["status_changed"],
+    });
+
+    const oldEvents = (await store.notificationEvents({ subscriptionId: oldSub.id })).events;
+    const newEvents = (await store.notificationEvents({ subscriptionId: newSub.id })).events;
+    expect(oldEvents).toHaveLength(1);
+    expect(oldEvents[0]).toMatchObject({ sessionKey: "agent:old", runId: "run-old" });
+    expect(newEvents).toHaveLength(0);
   });
 
   it("keeps completed/failed/stale for a no-eventKinds subscription and withholds status_changed", async () => {

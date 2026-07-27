@@ -14,6 +14,7 @@ import type {
   WorkboardNotification,
   WorkboardProof,
   WorkboardRunAttempt,
+  WorkboardStatusTransition,
   WorkboardWorkerLog,
 } from "@openclaw/workboard-contract";
 import {
@@ -30,7 +31,7 @@ import type {
   WorkboardKeyedStore,
 } from "./persistence-types.js";
 const WORKBOARD_DB_RELATIVE_PATH = ["plugins", "workboard", "workboard.sqlite"] as const;
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 const WORKBOARD_SQLITE_BUSY_TIMEOUT_MS = 5000;
 const WORKBOARD_SQLITE_DIR_MODE = 0o700;
 const WORKBOARD_SQLITE_FILE_MODE = 0o600;
@@ -294,6 +295,19 @@ const WORKBOARD_SCHEMA_SQL = `
       message TEXT NOT NULL,
       created_at INTEGER NOT NULL,
       sequence INTEGER,
+      session_key TEXT,
+      run_id TEXT
+    ) STRICT;
+
+    CREATE TABLE IF NOT EXISTS workboard_card_status_transitions (
+      id TEXT PRIMARY KEY,
+      card_id TEXT NOT NULL REFERENCES workboard_cards(id) ON DELETE CASCADE,
+      ordinal INTEGER NOT NULL,
+      from_status TEXT NOT NULL,
+      to_status TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      sequence INTEGER NOT NULL,
+      revision INTEGER NOT NULL,
       session_key TEXT,
       run_id TEXT
     ) STRICT;
@@ -673,6 +687,26 @@ function readMetadata(db: DatabaseSync, row: Row): WorkboardMetadata | undefined
     }
     return entry;
   });
+  const statusTransitions = childRows(db, "workboard_card_status_transitions", cardId).map((child) => {
+    const transition: WorkboardStatusTransition = {
+      id: requiredString(child, "id"),
+      cardId,
+      fromStatus: requiredString(child, "from_status") as WorkboardStatusTransition["fromStatus"],
+      toStatus: requiredString(child, "to_status") as WorkboardStatusTransition["toStatus"],
+      createdAt: requiredNumber(child, "created_at"),
+      sequence: requiredNumber(child, "sequence"),
+      revision: requiredNumber(child, "revision"),
+    };
+    const sessionKey = stringValue(child, "session_key");
+    const runId = stringValue(child, "run_id");
+    if (sessionKey) {
+      transition.sessionKey = sessionKey;
+    }
+    if (runId) {
+      transition.runId = runId;
+    }
+    return transition;
+  });
   const protocol = db
     .prepare("SELECT * FROM workboard_worker_protocol WHERE card_id = ?")
     .get(cardId) as Row | undefined;
@@ -703,6 +737,7 @@ function readMetadata(db: DatabaseSync, row: Row): WorkboardMetadata | undefined
     ...(claim ? { claim } : {}),
     ...(diagnostics.length > 0 ? { diagnostics } : {}),
     ...(notifications.length > 0 ? { notifications } : {}),
+    ...(statusTransitions.length > 0 ? { statusTransitions } : {}),
     ...(stringValue(row, "template_id")
       ? { templateId: stringValue(row, "template_id") as WorkboardMetadata["templateId"] }
       : {}),
@@ -1049,6 +1084,32 @@ function insertCard(db: DatabaseSync, card: WorkboardCard): void {
         entry.message,
         entry.createdAt,
         bindNull(entry.sequence),
+        bindNull(entry.sessionKey),
+        bindNull(entry.runId),
+      );
+    },
+  );
+  insertChildren(
+    db,
+    "workboard_card_status_transitions",
+    card.id,
+    metadata?.statusTransitions,
+    (entry, ordinal) => {
+      db.prepare(
+        `
+          INSERT INTO workboard_card_status_transitions
+            (id, card_id, ordinal, from_status, to_status, created_at, sequence, revision, session_key, run_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+      ).run(
+        entry.id,
+        card.id,
+        ordinal,
+        entry.fromStatus,
+        entry.toStatus,
+        entry.createdAt,
+        entry.sequence,
+        entry.revision,
         bindNull(entry.sessionKey),
         bindNull(entry.runId),
       );
