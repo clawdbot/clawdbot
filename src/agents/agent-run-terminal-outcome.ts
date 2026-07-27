@@ -233,7 +233,14 @@ export function mergeAgentRunAttemptTerminal(
         ? incoming
         : current;
     if (selected.source === "observation") {
-      return withAgentRunAttemptFailure({ kind: "timeout", phase, source: "observation" }, failure);
+      const observationPhase =
+        current.phase === "compaction" || incoming.phase === "compaction"
+          ? "compaction"
+          : "tool_execution";
+      return withAgentRunAttemptFailure(
+        { kind: "timeout", phase: observationPhase, source: "observation" },
+        failure,
+      );
     }
     return withAgentRunAttemptFailure(
       {

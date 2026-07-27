@@ -324,6 +324,24 @@ describe("agent run terminal outcome", () => {
 });
 
 describe("agent run attempt terminal", () => {
+  it("merges observation-only timeout phases without creating a run timeout", () => {
+    const toolExecution = {
+      kind: "timeout",
+      phase: "tool_execution",
+      source: "observation",
+    } as const;
+    const compaction = { kind: "timeout", phase: "compaction", source: "observation" } as const;
+
+    for (const [current, incoming] of [
+      [toolExecution, compaction],
+      [compaction, toolExecution],
+    ]) {
+      const terminal = mergeAgentRunAttemptTerminal(current, incoming);
+      expect(terminal).toEqual(compaction);
+      expect(projectAgentRunAttemptTerminal(terminal).timedOut).toBe(false);
+    }
+  });
+
   it("keeps timeout phase and source precedence in the canonical owner", () => {
     const failure = new Error("provider failed while aborting");
     const failed = mergeAgentRunAttemptTerminal(
