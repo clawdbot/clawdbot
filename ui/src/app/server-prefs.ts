@@ -183,6 +183,11 @@ let drainRequested = false;
 let pushEpoch = 0;
 let conflictRedrainTimer: ReturnType<typeof setTimeout> | null = null;
 let consecutiveConflictRedrains = 0;
+// A loaded config snapshot object is immutable. Re-evaluating a retained object after lastSeen
+// moves would treat stale values as fresh deltas and revert acked edits, including after refresh
+// failure. Only new objects are evaluated; the post-ack request-version bump makes them post-commit.
+let lastReconciledScope = "";
+let lastReconciledConfigObject: unknown = null;
 function clearConflictRedrain(): void {
   if (conflictRedrainTimer !== null) {
     clearTimeout(conflictRedrainTimer);
@@ -233,6 +238,8 @@ export function resetServerUiPrefsSync() {
   applyingServerPrefs = pushDraining = drainRequested = false;
   pendingScope = "";
   pendingPrefs = pushClient = null;
+  lastReconciledScope = "";
+  lastReconciledConfigObject = null;
 }
 export function applyServerUiPrefs(
   configObject: unknown,
@@ -242,12 +249,20 @@ export function applyServerUiPrefs(
   },
 ): boolean {
   const scope = hooks.scope ?? "";
+  if (scope === lastReconciledScope && configObject === lastReconciledConfigObject) {
+    return false;
+  }
+  const recordReconciledObject = () => {
+    lastReconciledScope = scope;
+    lastReconciledConfigObject = configObject;
+  };
   const shadowPrefs =
     scope === pendingScope ? pendingPrefs : parseStoredPrefs(readStorage(PENDING_KEY, scope));
   const prefs = extractServerUiPrefs(configObject);
   const key = JSON.stringify(prefs);
   const lastSeenRaw = readStorage(LAST_SEEN_KEY, scope);
   if (key === lastSeenRaw) {
+    recordReconciledObject();
     return false;
   }
   const lastSeen = parseStoredPrefs(lastSeenRaw) ?? {};
@@ -272,6 +287,7 @@ export function applyServerUiPrefs(
     }
   }
   writeStorage(LAST_SEEN_KEY, scope, key);
+  recordReconciledObject();
   const patch = serverPrefsLocalPatch(changed, loadSettings());
   if (!patch) {
     return false;

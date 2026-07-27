@@ -88,6 +88,66 @@ describe("applyServerUiPrefs", () => {
     expect(loadSettings().themeMode).toBe("light");
   });
 
+  it("does not reapply a retained pre-commit snapshot after an ack moves lastSeen", async () => {
+    const scope = "ws://gw";
+    const oldSnapshot = configWithPrefs({ themeMode: "light" });
+    const onApplied = vi.fn();
+    applyServerUiPrefs(oldSnapshot, { scope, onApplied });
+    patchSettings({ themeMode: "dark" });
+    const request = vi.fn(async () => ({}));
+    const client = { connected: true, gatewayUrl: scope, request } as unknown as Parameters<
+      typeof pushServerUiPrefs
+    >[0];
+
+    pushServerUiPrefs(client, { themeMode: "dark" });
+    await vi.waitFor(() =>
+      expect(localStorage.getItem(`openclaw.control.serverPrefs.pending.v1:${scope}`)).toBeNull(),
+    );
+
+    expect(applyServerUiPrefs(oldSnapshot, { scope, onApplied })).toBe(false);
+    expect(loadSettings().themeMode).toBe("dark");
+  });
+
+  it("treats a new object with old content after ack as a genuine LWW restore", async () => {
+    const scope = "ws://gw";
+    const oldSnapshot = configWithPrefs({ themeMode: "light" });
+    const onApplied = vi.fn();
+    applyServerUiPrefs(oldSnapshot, { scope, onApplied });
+    patchSettings({ themeMode: "dark" });
+    const request = vi.fn(async () => ({}));
+    const client = { connected: true, gatewayUrl: scope, request } as unknown as Parameters<
+      typeof pushServerUiPrefs
+    >[0];
+    pushServerUiPrefs(client, { themeMode: "dark" });
+    await vi.waitFor(() =>
+      expect(localStorage.getItem(`openclaw.control.serverPrefs.pending.v1:${scope}`)).toBeNull(),
+    );
+
+    // A new post-bump snapshot object represents a genuine foreign restore and is LWW-correct.
+    expect(applyServerUiPrefs(configWithPrefs({ themeMode: "light" }), { scope, onApplied })).toBe(
+      true,
+    );
+    expect(loadSettings().themeMode).toBe("light");
+  });
+
+  it("clears the retained-object memo on reset", () => {
+    const scope = "ws://memo";
+    const snapshot = configWithPrefs({ themeMode: "dark" });
+    const onApplied = vi.fn();
+    expect(applyServerUiPrefs(snapshot, { scope, onApplied })).toBe(true);
+    patchSettings({ themeMode: "light" });
+    localStorage.setItem(
+      `openclaw.control.serverPrefs.v1:${scope}`,
+      JSON.stringify({ themeMode: "light" }),
+    );
+    expect(applyServerUiPrefs(snapshot, { scope, onApplied })).toBe(false);
+
+    resetServerUiPrefsSync();
+
+    expect(applyServerUiPrefs(snapshot, { scope, onApplied })).toBe(true);
+    expect(loadSettings().themeMode).toBe("dark");
+  });
+
   it("keeps an unpushed local edit across a sync reset (reload/reconnect)", () => {
     const onApplied = vi.fn();
     const config = configWithPrefs({ themeMode: "dark" });
