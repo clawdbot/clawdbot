@@ -51,6 +51,11 @@ export function registerAgentTurnCommand(
     .option("--agent <id>", "Agent id (overrides routing bindings)")
     .option("--model <id>", "Model override for this run (provider/model or model id)")
     .option(
+      "--light-context",
+      "Use lightweight bootstrap context without workspace bootstrap files",
+      false,
+    )
+    .option(
       "--thinking <level>",
       "Thinking level: off | minimal | low | medium | high | xhigh | adaptive | max where supported",
     )

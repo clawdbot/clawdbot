@@ -147,6 +147,15 @@ describe("agent command registration", () => {
     expect(deps).toBeUndefined();
   });
 
+  it("forwards lightweight bootstrap context for one-shot agent runs", async () => {
+    await runCli(["agent", "--message", "hi", "--agent", "ops", "--light-context"]);
+
+    const [options, callRuntime, deps] = commandCall(agentCliCommandMock);
+    expect((options as { lightContext?: boolean }).lightContext).toBe(true);
+    expect(callRuntime).toBe(runtime);
+    expect(deps).toBeUndefined();
+  });
+
   it("forwards an explicit session key to the agent command", async () => {
     await runCli(["agent", "--message", "hi", "--session-key", "agent:ops:incident-42"]);
 

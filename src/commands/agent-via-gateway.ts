@@ -83,6 +83,7 @@ type AgentCliOpts = {
   lane?: string;
   runId?: string;
   extraSystemPrompt?: string;
+  lightContext?: boolean;
   local?: boolean;
 };
 type AgentDispatchOpts = Omit<AgentCliOpts, "messageFile"> & {
@@ -748,6 +749,7 @@ async function agentViaGatewayCommand(
             timeout: timeoutSeconds,
             lane: opts.lane,
             extraSystemPrompt: opts.extraSystemPrompt,
+            ...(opts.lightContext === true ? { bootstrapContextMode: "lightweight" as const } : {}),
             cleanupBundleMcpOnRunEnd: true,
             idempotencyKey,
           },
@@ -904,6 +906,9 @@ export async function agentCliCommand(
           cleanupBundleMcpOnRunEnd: true,
           cleanupCliLiveSessionOnRunEnd: true,
           oneShotCliRun: true,
+          ...(gatewayDispatchOpts.lightContext === true
+            ? { bootstrapContextMode: "lightweight" as const }
+            : {}),
           abortSignal: signalBridge.signal,
         },
         runtime,

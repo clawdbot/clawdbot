@@ -345,6 +345,18 @@ describe("agentCliCommand", () => {
     }, overrides);
   });
 
+  it("forwards lightweight bootstrap context to the Gateway", async () => {
+    await withTempStore(async () => {
+      mockGatewaySuccessReply();
+
+      await agentCliCommand({ message: "hi", to: "+1555", lightContext: true }, runtime);
+
+      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
+      const params = requireRecord(request.params, "gateway request params");
+      expect(params.bootstrapContextMode).toBe("lightweight");
+    });
+  });
+
   it("reads a UTF-8 message file for gateway dispatch", async () => {
     await withTempStore(async ({ dir }) => {
       const messageFile = path.join(dir, "task.md");
@@ -1800,6 +1812,28 @@ describe("agentCliCommand", () => {
       expect(localOpts.cleanupCliLiveSessionOnRunEnd).toBe(true);
       expect(localOpts.oneShotCliRun).toBe(true);
       expect(runtime.log).toHaveBeenCalledWith("local");
+    });
+  });
+
+  it("forwards lightweight bootstrap context to local embedded runs", async () => {
+    await withTempStore(async () => {
+      mockLocalAgentReply();
+
+      await agentCliCommand(
+        {
+          message: "hi",
+          to: "+1555",
+          local: true,
+          lightContext: true,
+        },
+        runtime,
+      );
+
+      const localOpts = requireRecord(
+        requireFirstCallArg(agentCommand, "embedded agent"),
+        "embedded agent options",
+      );
+      expect(localOpts.bootstrapContextMode).toBe("lightweight");
     });
   });
 
