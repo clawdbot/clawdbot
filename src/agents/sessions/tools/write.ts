@@ -551,6 +551,9 @@ export function createWriteToolDefinition(
       void ctx;
       const absolutePath = resolveToCwd(path, cwd);
       const dir = dirname(absolutePath);
+      // Restore newline escape sequences that some models emit literally
+      // in tool call arguments rather than as actual newline characters.
+      content = content.replaceAll("\\n", "\n");
       return withFileMutationQueue(absolutePath, async () => {
         const precheck = await readOriginalWriteState(absolutePath, content, ops);
         if (signal?.aborted) {
