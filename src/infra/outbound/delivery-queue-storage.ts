@@ -63,6 +63,8 @@ export type QueuedDeliveryPayload = {
   queuePolicy?: "required" | "best_effort";
   /** Caller preflight explicitly required provider unknown-send reconciliation. */
   requireUnknownSendReconciliation?: boolean;
+  /** Reusable producer intents require one SQLite-fenced platform owner. */
+  requiresProducerClaim?: boolean;
   /**
    * Original payloads before plugin hooks. On recovery, hooks re-run on these
    * payloads — this is intentional since hooks are stateless transforms and
@@ -135,6 +137,7 @@ function createQueuedDelivery(params: QueuedDeliveryPayload, id: string): Queued
     accountId: params.accountId,
     queuePolicy: params.queuePolicy,
     requireUnknownSendReconciliation: params.requireUnknownSendReconciliation,
+    ...(params.requiresProducerClaim === true ? { requiresProducerClaim: true } : {}),
     payloads: params.payloads,
     renderedBatchPlan: params.renderedBatchPlan,
     threadId: params.threadId,
@@ -558,7 +561,11 @@ export async function failPendingDelivery(
   stateDir?: string,
 ): Promise<FailPendingDeliveryResult> {
   let result: FailPendingDeliveryResult = { status: "not_pending" };
-  const attemptId = typeof params.entry.completionRetention === "object" ? null : undefined;
+  const attemptId =
+    typeof params.entry.completionRetention === "object" ||
+    params.entry.requiresProducerClaim === true
+      ? null
+      : undefined;
   if (attemptId !== undefined) {
     transitionOwnedDeliveryQueueEntry(
       {

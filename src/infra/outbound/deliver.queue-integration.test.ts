@@ -186,6 +186,7 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
         payloads: [{ text: "the original permanent producer owns this send" }],
         queuePolicy: "required",
         completionRetention: "permanent",
+        requiresProducerClaim: true,
         maxRetries: 1,
       },
       deliveryIntentId,
@@ -213,6 +214,43 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
       producerClaimId,
       attemptCount: 1,
     });
+  });
+
+  it("claims pristine reusable permanent Matrix intents before recovery provider I/O", async () => {
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    const deliveryIntentId = "permanent-matrix-pristine-fenced-recovery";
+    await enqueueDeliveryOnce(
+      {
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "send the pristine permanent intent exactly once" }],
+        queuePolicy: "required",
+        completionRetention: "permanent",
+        requiresProducerClaim: true,
+      },
+      deliveryIntentId,
+      tmpDir,
+    );
+    const sendMatrix = vi.fn().mockResolvedValue({
+      messageId: "pristine-permanent-matrix-message",
+    });
+    const deliver = vi.fn<DeliverFn>(async (params) =>
+      deliverOutboundPayloads({ ...params, deps: { matrix: sendMatrix } }),
+    );
+
+    await drainMatrixReconnect({ deliver, stateDir: tmpDir });
+
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deliveryQueueId: deliveryIntentId,
+        deliveryProducerClaimId: expect.any(String),
+      }),
+    );
+    expect(sendMatrix).toHaveBeenCalledOnce();
+    expect(
+      getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
+    ).toBe("completed");
   });
 
   it("retains permanent receipts when stable delivery is intentionally suppressed", async () => {

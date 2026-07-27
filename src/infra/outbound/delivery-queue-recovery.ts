@@ -428,7 +428,7 @@ function recoveryPlatformAttemptId(
 ): string | null | undefined {
   return claimedAttemptId !== undefined
     ? claimedAttemptId
-    : typeof entry.completionRetention === "object"
+    : typeof entry.completionRetention === "object" || entry.requiresProducerClaim === true
       ? null
       : undefined;
 }
@@ -785,6 +785,7 @@ async function drainQueuedEntry(opts: {
   // crossing provider I/O; an active live producer keeps its original lease.
   const requiresProducerClaim =
     typeof entry.completionRetention === "object" ||
+    entry.requiresProducerClaim === true ||
     typeof entry.producerClaimId === "string" ||
     typeof entry.platformSendAttemptId === "string";
   const producerClaimId = requiresProducerClaim
