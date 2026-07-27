@@ -45,7 +45,7 @@ export type SessionsPatchResult = {
   resolved?: {
     modelProvider?: string;
     model?: string;
-    agentRuntime?: import("./schema.js").GatewayAgentRuntime;
+    agentRuntime?: import("./schema/agents-models-skills.js").GatewayAgentRuntime;
     thinkingLevel?: string;
     thinkingLevels?: Array<{ id: string; label: string }>;
   };
