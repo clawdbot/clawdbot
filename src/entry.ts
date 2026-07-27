@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { format } from "node:util";
 import { isRootHelpInvocation } from "./cli/argv.js";
 import { parseCliContainerArgs, resolveCliContainerTarget } from "./cli/container-target.js";
-import { runCliWithExitFinalization } from "./cli/one-shot-exit.js";
+import { requestExitAfterOneShotOutput, runCliWithExitFinalization } from "./cli/one-shot-exit.js";
 import {
   tryOutputPrecomputedCommandHelp,
   type PrecomputedCommandHelpDeps,
@@ -268,10 +268,12 @@ async function runMainOrRootHelp(argv: string[]): Promise<void> {
     run: async () => {
       if (await tryHandleRootHelpFastPath(argv)) {
         await flushEntryStartupTraceForEarlyReturn(argv);
+        requestExitAfterOneShotOutput();
         return;
       }
       if (await tryHandlePrecomputedCommandHelpFastPath(argv)) {
         await flushEntryStartupTraceForEarlyReturn(argv);
+        requestExitAfterOneShotOutput();
         return;
       }
       const { runCli } = await gatewayEntryStartupTrace.measure(
