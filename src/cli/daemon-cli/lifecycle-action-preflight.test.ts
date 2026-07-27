@@ -3,10 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetConfigRuntimeState } from "../../config/config.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
-import {
-  type DaemonServiceAction,
-  getServiceActionPreflightFailure,
-} from "./lifecycle-action-preflight.js";
+import { getServiceActionPreflightFailure } from "./lifecycle-action-preflight.js";
 
 afterEach(() => {
   resetConfigRuntimeState();
@@ -57,7 +54,7 @@ describe("getServiceActionPreflightFailure", () => {
     },
   );
 
-  it.each(["start", "restart"] satisfies DaemonServiceAction[])(
+  it.each(["start", "restart"] as const)(
     "allows %s when no legacy credential files exist",
     async (action) => {
       await withIsolatedLifecycleState(async () => {

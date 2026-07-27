@@ -11,9 +11,9 @@ import { collectCandidateAgentDirs } from "../../secrets/runtime-fast-path.js";
 import { formatPluginPackagingRuntimeOutputRecoveryHint } from "../config-recovery-hints.js";
 
 /** Service lifecycle actions; only start/restart bring the gateway up. */
-export type DaemonServiceAction = "start" | "restart" | "stop" | "uninstall";
+type DaemonServiceAction = "start" | "restart" | "stop" | "uninstall";
 
-export type ServiceActionPreflightFailure = {
+type ServiceActionPreflightFailure = {
   message: string;
   hints?: string[];
 };
