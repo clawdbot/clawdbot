@@ -1,10 +1,10 @@
 import { spawn, type SpawnOptionsWithoutStdio } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveNpmRunner } from "../../../scripts/npm-runner.mjs";
 import { createNodeEvalArgs } from "../../../src/test-utils/node-process.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 
 type CommandResult = { stdout: string; stderr: string };
 type PackageManifest = {
@@ -14,7 +14,7 @@ type PackageManifest = {
 };
 
 const COMMAND_TIMEOUT_MS = 180_000;
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const compatibility = {
   "@openclaw/ai/providers": {
@@ -254,14 +254,6 @@ function compatibilityTypeSource(): string {
 }
 
 describe("@openclaw/ai packed package", () => {
-  afterEach(async () => {
-    await Promise.all(
-      tempDirs
-        .splice(0)
-        .map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })),
-    );
-  });
-
   it("installs externally and preserves every published compatibility export", async () => {
     const repoRoot = process.cwd();
     const packageRoot = path.join(repoRoot, "packages", "ai");
@@ -275,8 +267,7 @@ describe("@openclaw/ai packed package", () => {
     if (!nodeTypesVersion) {
       throw new Error("root package is missing the @types/node version used by package checks");
     }
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ai-consumer-"));
-    tempDirs.push(tempDir);
+    const tempDir = tempDirs.make("openclaw-ai-consumer-");
 
     await runCommand(
       process.execPath,
