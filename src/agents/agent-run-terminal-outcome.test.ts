@@ -295,13 +295,13 @@ describe("agent run terminal outcome", () => {
     for (const [current, incoming] of [
       [timeout, earlierCancellation],
       [earlierCancellation, timeout],
-    ]) {
+    ] as const) {
       expect(mergeAgentRunTerminalOutcome(current, incoming)).toBe(earlierCancellation);
     }
     for (const [current, incoming] of [
       [timeout, laterCancellation],
       [laterCancellation, timeout],
-    ]) {
+    ] as const) {
       expect(mergeAgentRunTerminalOutcome(current, incoming)).toBe(timeout);
     }
   });
@@ -335,7 +335,7 @@ describe("agent run attempt terminal", () => {
     for (const [current, incoming] of [
       [toolExecution, compaction],
       [compaction, toolExecution],
-    ]) {
+    ] as const) {
       const terminal = mergeAgentRunAttemptTerminal(current, incoming);
       expect(terminal).toEqual(compaction);
       expect(projectAgentRunAttemptTerminal(terminal).timedOut).toBe(false);
