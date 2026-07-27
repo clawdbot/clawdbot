@@ -223,6 +223,42 @@ describe("attachEventBridge", () => {
     expect(bridge.snapshot().assistantTexts).toEqual(["ab", "x"]);
   });
 
+  it("ignored child and ephemeral users do not split a root assistant API call", () => {
+    const session = createFakeSession();
+    const bridge = attachEventBridge(session, {
+      getSdkSessionId: () => "sdk-session-id",
+      isAborted: () => false,
+    });
+
+    session.emit("assistant.message", {
+      ...makeAssistantMessageEvent("first", {
+        apiCallId: "shared-call",
+        messageId: "chunk-a",
+      }),
+      id: "assistant-chunk-a",
+    } as SessionEvent);
+    session.emit("user.message", {
+      ...makeEvent("user.message", { content: "child" }),
+      agentId: "child-1",
+    } as SessionEvent);
+    session.emit("user.message", {
+      ...makeEvent("user.message", { content: "ephemeral" }),
+      ephemeral: true,
+    } as SessionEvent);
+    session.emit("assistant.message", {
+      ...makeAssistantMessageEvent("second", {
+        apiCallId: "shared-call",
+        messageId: "chunk-b",
+      }),
+      id: "assistant-chunk-b",
+    } as SessionEvent);
+    bridge.flushTranscriptProjection();
+
+    expect(bridge.buildAssistantMessage({ modelRef: MODEL_REF, now: () => 9 })?.content).toEqual([
+      { type: "text", text: "firstsecond" },
+    ]);
+  });
+
   it("onAssistantDelta receives appended text, live sessionId, and current usage", async () => {
     const session = createFakeSession();
     let sdkSessionId = "sdk-session-1";

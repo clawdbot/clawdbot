@@ -158,9 +158,12 @@ export function attachEventBridge(
   const unsubscribeFns: Array<() => void> = [];
 
   registerListener(session, unsubscribeFns, "user.message", (event) => {
+    if (!isRootSessionEvent(event) || event.ephemeral === true) {
+      return;
+    }
     flushPendingAssistantProjection();
     const projection = options.transcriptProjection;
-    if (!projection || !isRootSessionEvent(event) || event.ephemeral === true) {
+    if (!projection) {
       return;
     }
     const source = readString(event.data.source);

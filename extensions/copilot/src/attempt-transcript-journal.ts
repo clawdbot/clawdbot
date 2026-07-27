@@ -121,7 +121,12 @@ export function createAttemptTranscriptJournal(params: {
       ...(write.eventId ? { eventId: write.eventId } : {}),
       idempotencyLookup: "scan",
       message: write.message,
-      prepareMessageAfterIdempotencyCheck: () => prepare(write),
+      prepareMessageAfterIdempotencyCheck: () => {
+        const prepared = prepare(write);
+        return prepared && isCompatibleSingletonRewrite(write.message, prepared)
+          ? prepared
+          : undefined;
+      },
     })) as AppendResult;
   };
 
@@ -232,6 +237,7 @@ export function createAttemptTranscriptJournal(params: {
         return await barrier("user prompt");
       }
       if (recorder.isBlocked()) {
+        replayInvalid = true;
         replaceTailUser(recorder.message);
         return;
       }
@@ -407,6 +413,20 @@ function readAssistantToolCallIds(message: TranscriptMessage): string[] {
   return message.role === "assistant"
     ? message.content.flatMap((part) => (part.type === "toolCall" ? [part.id] : []))
     : [];
+}
+
+function isCompatibleSingletonRewrite(
+  original: TranscriptMessage,
+  prepared: TranscriptMessage,
+): boolean {
+  // Hooks may redact content, but role and tool topology are journal-owned;
+  // accepting either rewrite would make the canonical replay structurally false.
+  return (
+    original.role === prepared.role &&
+    (original.role !== "assistant" ||
+      JSON.stringify(readAssistantToolCallIds(original)) ===
+        JSON.stringify(readAssistantToolCallIds(prepared)))
+  );
 }
 
 function readIdempotencyKey(message: TranscriptMessage): string | undefined {

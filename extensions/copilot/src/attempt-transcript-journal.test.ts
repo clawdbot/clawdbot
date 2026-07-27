@@ -217,6 +217,15 @@ describe("Copilot attempt transcript journal", () => {
     expect(recorder.markBlocked).toHaveBeenCalledOnce();
   });
 
+  it("marks an already-blocked initial user replay-incomplete", async () => {
+    const { journal, recorder } = await createFixture();
+    recorder.markBlocked();
+
+    await journal.persistInitialUser();
+
+    expect(journal.snapshot()).toMatchObject({ messagesSnapshot: [], replayInvalid: true });
+  });
+
   it("marks empty transformed user content replay-incomplete", async () => {
     const { journal, session } = await createFixture();
     await journal.persistInitialUser();
@@ -271,6 +280,50 @@ describe("Copilot attempt transcript journal", () => {
     expect(
       transcriptMessages(await readSessionTranscriptEvents(target)).map((row) => row.message.role),
     ).toEqual(["user"]);
+  });
+
+  it("rejects structurally destructive singleton hook replacements", async () => {
+    for (const replacement of [
+      { role: "user", content: "changed role", timestamp: 2 } as AgentMessage,
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "injected", name: "read", arguments: {} }],
+        provider: "github-copilot",
+        model: "gpt-5",
+        stopReason: "toolUse",
+        timestamp: 2,
+      } as AgentMessage,
+    ]) {
+      resetGlobalHookRunner();
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "before_message_write",
+            handler: (input: unknown) =>
+              (input as { message: AgentMessage }).message.role === "assistant"
+                ? { message: replacement }
+                : undefined,
+          },
+        ]),
+      );
+      const { journal, session, target } = await createFixture();
+      await journal.persistInitialUser();
+      session.emit(event("user.message", "initial-user", { content: "inspect" }));
+      session.emit(
+        event("assistant.message", "rewritten-assistant", {
+          content: "provider-visible response",
+          messageId: "rewritten-assistant",
+        }),
+      );
+      await journal.barrier("rewritten assistant");
+
+      expect(journal.snapshot().replayInvalid).toBe(true);
+      expect(
+        transcriptMessages(await readSessionTranscriptEvents(target)).map(
+          (row) => row.message.role,
+        ),
+      ).toEqual(["user"]);
+    }
   });
 
   it("commits a hidden tool turn to SQLite in assistant request order", async () => {
