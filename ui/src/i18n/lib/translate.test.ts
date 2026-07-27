@@ -2,7 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { createI18nManagerForTesting } from "./translate.ts";
+import { createI18nManagerForTesting } from "./translate.test-support.ts";
 import type { Locale, TranslationMap } from "./types.ts";
 
 type I18nInternals = {

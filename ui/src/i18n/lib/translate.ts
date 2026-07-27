@@ -198,11 +198,13 @@ class I18nManager {
   }
 }
 
-export function createI18nManagerForTesting(
-  loadLocaleTranslation: LocaleTranslationLoader,
-): I18nManager {
-  return new I18nManager(loadLocaleTranslation);
-}
-
 export const i18n = new I18nManager();
 export const t = (key: string, params?: Record<string, string>) => i18n.t(key, params);
+
+if (typeof process !== "undefined" && (process.env?.VITEST || process.env?.NODE_ENV === "test")) {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.i18nManagerTestApi")] = {
+    createI18nManager(loadLocaleTranslation: LocaleTranslationLoader) {
+      return new I18nManager(loadLocaleTranslation);
+    },
+  };
+}
