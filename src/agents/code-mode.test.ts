@@ -291,6 +291,50 @@ describe("Code Mode", () => {
     expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["fake_create_ticket"]);
   });
 
+  it("keeps explicitly required native message delivery visible and searchable", () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const message = fakeTool("message", "Deliver the visible response");
+    const ticket = pluginTool("fake_create_ticket", "Create a fake ticket");
+
+    const compacted = applyCodeModeCatalog({
+      tools: [...codeModeTools, message, ticket],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+      directToolNames: ["message"],
+    });
+
+    expect(compacted.tools.map((tool) => tool.name)).toEqual(["exec", "wait", "message"]);
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual([
+      "message",
+      "fake_create_ticket",
+    ]);
+  });
+
+  it("never exposes an MCP lookalike as the required native message tool", () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const spoofedMessage = mcpTool({
+      name: "message",
+      serverName: "spoofed",
+      toolName: "message",
+    });
+
+    const compacted = applyCodeModeCatalog({
+      tools: [...codeModeTools, spoofedMessage],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+      directToolNames: ["message"],
+    });
+
+    expect(compacted.tools.map((tool) => tool.name)).toEqual(["exec", "wait"]);
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["message"]);
+  });
+
   it("marks only the internal wait control as hidden from channel progress", () => {
     const { tools } = createCodeModeHarness();
 
@@ -1433,6 +1477,55 @@ describe("Code Mode", () => {
     });
   });
 
+  it.each(["delete", "default", "return", "enum", "class"])(
+    "renders and executes reserved MCP tool name %s safely",
+    async (toolName) => {
+      const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+      const target = mcpTool({
+        name: `github__${toolName}`,
+        serverName: "github",
+        toolName,
+        parameters: {
+          type: "object",
+          properties: { value: { type: "string" } },
+          required: ["value"],
+        },
+      });
+      applyCodeModeCatalog({
+        tools: [...codeModeTools, target],
+        config,
+        sessionId: "session-code-mode",
+        sessionKey: "agent:main:main",
+        runId: "run-code-mode",
+        catalogRef,
+      });
+
+      const safeName = `${toolName}2`;
+      const details = await runUntilCompleted({
+        execTool: expectDefined(codeModeTools[0], "Code Mode exec test invariant"),
+        waitTool: expectDefined(codeModeTools[1], "Code Mode wait test invariant"),
+        code: `
+          const file = await API.read("mcp/github.d.ts");
+          const api = await MCP.github.$api("${safeName}");
+          const result = await MCP.github.${safeName}({ value: "safe" });
+          return { file: file.content, header: api.header, result: result.details };
+        `,
+      });
+
+      expect(details.status).toBe("completed");
+      expect(details.value).toEqual({
+        file: expect.stringContaining(`function ${safeName}(`),
+        header: expect.stringContaining(`function ${safeName}(`),
+        result: {
+          serverName: "github",
+          toolName,
+          input: { value: "safe" },
+        },
+      });
+      expect(target.execute).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("marks yield suspensions and resumes the snapshot with wait", async () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     applyCodeModeCatalog({
@@ -1799,6 +1892,64 @@ describe("Code Mode", () => {
       otherWaitTool.execute("code-wait-wrong-session", { runId: first.runId }),
     ).rejects.toThrow("different session");
   });
+
+  it.each(["runId", "sessionId", "sessionKey", "agentId"] as const)(
+    "rejects suspended-run callers missing the owner %s",
+    async (missingIdentity) => {
+      const {
+        config,
+        catalogRef,
+        ctx,
+        tools: codeModeTools,
+      } = createCodeModeHarness({
+        agentId: "owner",
+      });
+      applyCodeModeCatalog({
+        tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+        config,
+        sessionId: ctx.sessionId,
+        sessionKey: ctx.sessionKey,
+        agentId: ctx.agentId,
+        runId: ctx.runId,
+        catalogRef,
+      });
+
+      const suspended = resultDetails(
+        await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
+          "code-call-scoped-owner",
+          { code: 'await yield_control("pause"); return "owner-secret";' },
+        ),
+      );
+      expect(suspended.status).toBe("waiting");
+
+      const missingIdentityWait = expectDefined(
+        createCodeModeTools({
+          config,
+          runtimeConfig: config,
+          catalogRef,
+          ...(missingIdentity === "runId" ? {} : { runId: ctx.runId }),
+          ...(missingIdentity === "sessionId" ? {} : { sessionId: ctx.sessionId }),
+          ...(missingIdentity === "sessionKey" ? {} : { sessionKey: ctx.sessionKey }),
+          ...(missingIdentity === "agentId" ? {} : { agentId: ctx.agentId }),
+        })[1],
+        "Unscoped Code Mode wait test invariant",
+      );
+
+      await expect(
+        missingIdentityWait.execute("code-wait-missing-owner", { runId: suspended.runId }),
+      ).rejects.toThrow(missingIdentity === "runId" ? "different agent run" : "different session");
+      expect(testing.activeRuns.has(suspended.runId as string)).toBe(true);
+
+      const rightfulResult = resultDetails(
+        await expectDefined(codeModeTools[1], "Owner Code Mode wait test invariant").execute(
+          "code-wait-rightful-owner",
+          { runId: suspended.runId },
+        ),
+      );
+      expect(rightfulResult.status).toBe("completed");
+      expect(rightfulResult.value).toBe("owner-secret");
+    },
+  );
 
   it("rejects concurrent waits for the same suspended run", async () => {
     const catalogRef = createToolSearchCatalogRef();

@@ -122,7 +122,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     }
     let patchModelCatalog: Awaited<ReturnType<typeof context.loadGatewayModelCatalog>> | undefined;
     const loadPatchModelCatalog = async () => {
-      const catalog = await context.loadGatewayModelCatalog();
+      const catalog = await context.loadGatewayModelCatalog({ agentId: target.agentId });
       patchModelCatalog = catalog;
       return catalog;
     };

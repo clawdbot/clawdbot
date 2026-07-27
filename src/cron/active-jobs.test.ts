@@ -5,6 +5,7 @@ import {
   hasActiveCronJobs,
   hasActiveCronJobsExceptMarker,
   markCronJobActive,
+  noteActiveCronJobRemoval,
   noteActiveCronJobScheduleMutation,
   resetCronActiveJobs,
 } from "./active-jobs.js";
@@ -48,6 +49,31 @@ describe("hasActiveCronJobsExceptMarker", () => {
 });
 
 describe("active cron schedule ownership", () => {
+  it("records durable job removal without releasing the active run marker", () => {
+    const marker = markCronJobActive("removed-job");
+
+    noteActiveCronJobRemoval("removed-job");
+
+    expect(marker?.scheduleMutated).toBe(true);
+    expect(marker?.jobRemoved).toBe(true);
+    expect(hasActiveCronJobs()).toBe(true);
+  });
+
+  it("does not mistake an ordinary schedule edit for job removal", () => {
+    const marker = markCronJobActive("updated-job");
+
+    noteActiveCronJobScheduleMutation("updated-job");
+
+    expect(marker?.scheduleMutated).toBe(true);
+    expect(marker?.jobRemoved).toBeUndefined();
+  });
+
+  it("does not create active markers when removing an idle job", () => {
+    noteActiveCronJobRemoval("idle-removed-job");
+
+    expect(hasActiveCronJobs()).toBe(false);
+  });
+
   it("records durable schedule mutations on the admitted active run", () => {
     const marker = markCronJobActive("rescheduled-job");
 

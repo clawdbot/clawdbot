@@ -41,6 +41,7 @@ import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import { optionalStringEnum } from "./schema/typebox.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import { resolveSwarmConfig } from "./swarm-config.js";
+import { isDirectVisibleCatalogTool } from "./tool-search-catalog.js";
 import {
   addClientToolsToToolCatalog,
   applyToolCatalogCompaction,
@@ -251,6 +252,7 @@ export function applyCodeModeCatalog(params: {
   runId?: string;
   catalogRef?: ToolSearchCatalogRef;
   toolHookContext?: HookContext;
+  directToolNames?: Iterable<string>;
 }) {
   const config = resolveCodeModeConfig(params.config, params.agentId);
   // Engagement (including "auto" per-model resolution) is decided by the run
@@ -270,11 +272,16 @@ export function applyCodeModeCatalog(params: {
         tool.name !== TOOL_DESCRIBE_RAW_TOOL_NAME &&
         tool.name !== TOOL_CALL_RAW_TOOL_NAME),
   );
+  const directToolNames = new Set(params.directToolNames);
   const compacted = applyToolCatalogCompaction({
     ...params,
     tools,
     enabled: true,
     isVisibleControlTool: isCodeModeControlTool,
+    // Code mode never exposes core shell/file tools just because structured
+    // search does; only explicitly required, trusted direct tools may remain.
+    isVisibleCatalogTool: (tool) =>
+      directToolNames.has(tool.name) && isDirectVisibleCatalogTool(tool, directToolNames),
     shouldCatalogTool: (tool) => !isCodeModeControlTool(tool),
   });
   // Only the catalog ref reflects the freshly compacted run catalog. Without it
