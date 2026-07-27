@@ -6,6 +6,15 @@ import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
 
 const MCP_CALL_INPUT_MAX_BYTES = 1024 * 1024;
 
+// Typed so the caller can tell an overflow from an ordinary read failure without
+// matching on error text, which a file path or fs message could otherwise spoof.
+class McpCallInputTooLargeError extends Error {
+  constructor(maxBytes: number) {
+    super(`MCP call input exceeds ${maxBytes} bytes.`);
+    this.name = "McpCallInputTooLargeError";
+  }
+}
+
 type McpCallInputOptions = {
   input?: string;
   inputFile?: string;
@@ -50,7 +59,7 @@ async function readBoundedStdin(maxBytes = MCP_CALL_INPUT_MAX_BYTES): Promise<st
   }
   const bytes = await readByteStreamWithLimit(process.stdin, {
     maxBytes,
-    onOverflow: ({ maxBytes: limit }) => new Error(`MCP call input exceeds ${limit} bytes.`),
+    onOverflow: ({ maxBytes: limit }) => new McpCallInputTooLargeError(limit),
   });
   return bytes.toString("utf8");
 }
@@ -61,6 +70,12 @@ async function readBoundedInputFile(
 ): Promise<string> {
   const handle = await fs.open(filePath, "r");
   try {
+    // Check the size here so overflow surfaces as our typed error; the bounded
+    // read stays as the backstop for a file that grows after this stat.
+    const { size } = await handle.stat();
+    if (size > maxBytes) {
+      throw new McpCallInputTooLargeError(maxBytes);
+    }
     return (await readFileDescriptorBounded(handle.fd, maxBytes)).toString("utf8");
   } finally {
     await handle.close();
@@ -90,7 +105,7 @@ export async function resolveMcpCallInput(
     if (Buffer.byteLength(inline, "utf8") > MCP_CALL_INPUT_MAX_BYTES) {
       return {
         ok: false,
-        error: `MCP call input exceeds ${MCP_CALL_INPUT_MAX_BYTES} bytes.`,
+        error: new McpCallInputTooLargeError(MCP_CALL_INPUT_MAX_BYTES).message,
       };
     }
     return parseMcpCallJsonObject(inline, "--input");
@@ -100,10 +115,10 @@ export async function resolveMcpCallInput(
     const raw = filePath === "-" ? await readBoundedStdin() : await readBoundedInputFile(filePath);
     return parseMcpCallJsonObject(raw, filePath === "-" ? "stdin" : "--input-file");
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (message.includes("exceeds")) {
-      return { ok: false, error: message };
+    if (err instanceof McpCallInputTooLargeError) {
+      return { ok: false, error: err.message };
     }
+    const message = err instanceof Error ? err.message : String(err);
     if (filePath === "-") {
       return { ok: false, error: message };
     }

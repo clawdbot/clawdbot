@@ -870,14 +870,18 @@ export function registerMcpCli(program: Command) {
         };
         process.once("SIGINT", onSignal);
         process.once("SIGTERM", onSignal);
-        try {
+        // Post-connect failures return a message instead of calling fail() inline:
+        // defaultRuntime.exit() runs process.exit() synchronously, so an inline
+        // fail() would skip the finally below and leave the MCP session or its
+        // stdio child running. Dispose first, then exit.
+        const runCall = async (): Promise<string | undefined> => {
           const catalog = await runtime.getCatalog();
           const diagnostic = catalog.diagnostics?.find((entry) => entry.serverName === serverName);
           if (diagnostic) {
-            fail(`MCP call failed for "${serverName}" in ${loaded.path}: ${diagnostic.message}`);
+            return `MCP call failed for "${serverName}" in ${loaded.path}: ${diagnostic.message}`;
           }
           if (!catalog.servers[serverName]) {
-            fail(`MCP call did not connect to "${serverName}" in ${loaded.path}.`);
+            return `MCP call did not connect to "${serverName}" in ${loaded.path}.`;
           }
           const matchedTool = catalog.tools.find(
             (tool) => tool.serverName === serverName && tool.toolName === toolName,
@@ -887,28 +891,26 @@ export function registerMcpCli(program: Command) {
               .filter((tool) => tool.serverName === serverName)
               .map((tool) => tool.toolName)
               .toSorted();
-            fail(
-              `MCP tool "${toolName}" is unavailable on server "${serverName}" (unknown, filtered, or not advertised). Available tools: ${available.length > 0 ? available.join(", ") : "(none)"}.`,
-            );
+            return `MCP tool "${toolName}" is unavailable on server "${serverName}" (unknown, filtered, or not advertised). Available tools: ${available.length > 0 ? available.join(", ") : "(none)"}.`;
           }
           const result = await runtime.callTool(serverName, toolName, inputResult.value);
           printJson(result);
-          if (result.isError === true) {
-            fail(`MCP tool "${toolName}" on server "${serverName}" returned isError=true.`);
-          }
+          return result.isError === true
+            ? `MCP tool "${toolName}" on server "${serverName}" returned isError=true.`
+            : undefined;
+        };
+        let failure: string | undefined;
+        try {
+          failure = await runCall();
         } catch (err) {
-          // fail()/runtime.exit throw ExitError or test "__exit__:N" sentinels; rethrow them.
-          if (
-            (err instanceof Error && err.name === "ExitError") ||
-            (err instanceof Error && err.message.startsWith("__exit__:"))
-          ) {
-            throw err;
-          }
-          fail(`MCP call failed for "${serverName}"/${toolName}: ${formatErrorMessage(err)}`);
+          failure = `MCP call failed for "${serverName}"/${toolName}: ${formatErrorMessage(err)}`;
         } finally {
           process.off("SIGINT", onSignal);
           process.off("SIGTERM", onSignal);
           await disposeRuntime();
+        }
+        if (failure) {
+          fail(failure);
         }
       },
     );
