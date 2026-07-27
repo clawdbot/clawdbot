@@ -98,10 +98,13 @@ export function createAttemptTranscriptJournal(params: {
     queue = queue.then(() => (firstFailure ? undefined : task())).catch(captureFailure);
   };
 
-  const prepare = (write: PendingWrite): TranscriptMessage | undefined => {
-    const message = write.message;
+  const prepare = (
+    write: PendingWrite,
+    options: { singleton?: boolean } = {},
+  ): TranscriptMessage | undefined => {
+    const message = structuredClone(write.message) as TranscriptMessage;
     const hooked = runAgentHarnessBeforeMessageWriteHook({
-      message,
+      message: structuredClone(message) as TranscriptMessage,
       agentId: target.agentId,
       sessionKey: target.sessionKey,
     });
@@ -113,12 +116,15 @@ export function createAttemptTranscriptJournal(params: {
       message.role === "toolResult"
         ? { toolCallId: message.toolCallId, toolName: message.toolName }
         : {};
-    return projectDisplay({
+    const prepared = projectDisplay({
       ...hooked,
       ...toolIdentity,
       ...(idempotencyKey ? { idempotencyKey } : {}),
       ...((message as { display?: boolean }).display === false ? { display: false } : {}),
     }) as TranscriptMessage;
+    return options.singleton && !isCompatibleSingletonRewrite(message, prepared)
+      ? undefined
+      : prepared;
   };
 
   const append = async (write: PendingWrite): Promise<AppendResult> => {
@@ -128,12 +134,7 @@ export function createAttemptTranscriptJournal(params: {
       ...(write.eventId ? { eventId: write.eventId } : {}),
       idempotencyLookup: "scan",
       message: write.message,
-      prepareMessageAfterIdempotencyCheck: () => {
-        const prepared = prepare(write);
-        return prepared && isCompatibleSingletonRewrite(write.message, prepared)
-          ? prepared
-          : undefined;
-      },
+      prepareMessageAfterIdempotencyCheck: () => prepare(write, { singleton: true }),
     })) as AppendResult;
   };
 

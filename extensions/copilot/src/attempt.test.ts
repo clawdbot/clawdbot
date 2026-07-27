@@ -3225,9 +3225,8 @@ describe("runCopilotAttempt", () => {
                   message: AgentMessage & { idempotencyKey?: string };
                 }
               ).message;
-              const replacement = { ...message };
-              delete replacement.idempotencyKey;
-              return { message: replacement };
+              delete message.idempotencyKey;
+              return { message };
             },
           },
         ]),

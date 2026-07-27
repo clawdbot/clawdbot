@@ -312,10 +312,14 @@ describe("Copilot attempt transcript journal", () => {
         createMockPluginRegistry([
           {
             hookName: "before_message_write",
-            handler: (input: unknown) =>
-              (input as { message: AgentMessage }).message.role === "assistant"
-                ? { message: replacement }
-                : undefined,
+            handler: (input: unknown) => {
+              const message = (input as { message: AgentMessage }).message;
+              if (message.role !== "assistant") {
+                return undefined;
+              }
+              Object.assign(message, replacement);
+              return { message };
+            },
           },
         ]),
       );
