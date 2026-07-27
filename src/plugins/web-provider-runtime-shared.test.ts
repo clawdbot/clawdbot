@@ -455,6 +455,46 @@ describe("web-provider-runtime-shared", () => {
     expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
   });
 
+  it("does not treat an active registry missing declared candidates as authoritative", () => {
+    // Regression: an active registry with SOME web providers used to win even when a
+    // manifest-declared candidate (npm-installed Brave with BRAVE_API_KEY set) was
+    // absent from it, so env-var auto-detect could never see the installed provider.
+    const activeRegistry = { source: "active" };
+    const scopedRegistry = { source: "scoped" };
+    const mapRegistryProviders = vi.fn(({ registry }) =>
+      registry === scopedRegistry ? ["brave", "grok"] : ["grok"],
+    );
+    mocks.getLoadedRuntimePluginRegistry.mockImplementation((args: unknown) => {
+      const requiredPluginIds = (args as { requiredPluginIds?: readonly string[] })
+        ?.requiredPluginIds;
+      // Simulate active-registry coverage: brave never loaded at startup.
+      if (requiredPluginIds?.includes("brave")) {
+        return undefined;
+      }
+      return activeRegistry as never;
+    });
+    mocks.loadOpenClawPlugins.mockReturnValue(scopedRegistry as never);
+
+    const result = resolveRuntimeWebProviders(
+      {
+        config: {},
+        env: { BRAVE_API_KEY: "key" } as never,
+      },
+      {
+        resolveBundledResolutionConfig: () => ({
+          config: {},
+          activationSourceConfig: {},
+          autoEnabledReasons: {},
+        }),
+        resolveCandidatePluginIds: () => ["brave", "xai"],
+        mapRegistryProviders,
+      },
+    );
+
+    expect(result).toEqual(["brave", "grok"]);
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
+  });
+
   it("falls back when the direct runtime registry has no web providers", () => {
     const activeRegistry = { source: "active" };
     const fallbackRegistry = { source: "fallback" };

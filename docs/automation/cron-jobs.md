@@ -110,9 +110,13 @@ When a stream job also has `trigger.script`, the gate runs once per closed batch
 
 Recurring jobs can set `pacing.min` and/or `pacing.max` to duration strings such as `15m` or `4h`; at least one bound is required. Use `--pacing-min` and `--pacing-max` with `cron add|edit` (`--clear-pacing` removes both bounds).
 
-During an isolated run, a paced job can call the `cron` tool with `action: "next_check"` and `in: "30m"`. The proposal applies only to that currently running job and is measured from successful run completion. OpenClaw silently clamps it to the configured bounds.
+During an agent-turn run, a paced job can call the `cron` tool with `action: "next_check"` and `in: "30m"`. The proposal applies only to that currently running job and is measured from successful run completion. OpenClaw silently clamps it to the configured bounds.
 
 Pacing without a proposal leaves the normal schedule unchanged. Failed, timed-out, and skipped runs discard the proposal, so existing retry and error-backoff behavior takes precedence. Manually forcing a recurring job is out-of-band and preserves its pending natural or paced slot. For condition-triggered jobs, the built-in minimum interval remains a lower bound even when a proposal requests an earlier check.
+
+### `/loop` chat shortcut
+
+In chat, the owner-only `/loop [interval] <prompt>` command creates a recurring agent-turn job bound to that conversation. Give an interval such as `5m` for fixed cadence, or omit it to let the loop self-pace between 1 minute and 1 hour with `next_check`. Use `/loop status` to list conversation-bound loops and `/loop stop [name]` to remove them.
 
 ### Day-of-month and day-of-week use OR logic
 
@@ -283,6 +287,8 @@ Throws, timeouts, exhausted tool budgets, invalid results, and `nextCheck` witho
 | Isolated        | `isolated`          | Dedicated `cron:<jobId>` | Reports, background chores      |
 | Current session | `current`           | Bound at creation time   | Context-aware recurring work    |
 | Custom session  | `session:custom-id` | Persistent named session | Workflows that build on history |
+
+Agent-turn jobs default to the creating conversation when the create request carries session context. Callers without a session key, including CLI and API callers that do not supply one, fall back to `isolated`. System events and heartbeats still default to `main`; command and script payloads still default to `isolated`.
 
 <AccordionGroup>
   <Accordion title="Main session vs isolated vs custom">

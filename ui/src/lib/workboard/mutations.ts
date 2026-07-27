@@ -18,7 +18,14 @@ import {
   type WorkboardHost,
 } from "./runtime.ts";
 import { applyTaskSummariesToState, listWorkboardTasks } from "./task-links.ts";
-import type { WorkboardDispatchSummary, WorkboardStatus } from "./types.ts";
+import type { WorkboardDispatchSummary, WorkboardStatus, WorkboardUiState } from "./types.ts";
+
+function selectedBoardParams(state: Pick<WorkboardUiState, "boards" | "boardFilter">): {
+  boardId?: string;
+} {
+  const boardId = state.boards.find((board) => board.id === state.boardFilter)?.id;
+  return boardId ? { boardId } : {};
+}
 
 function normalizeDispatchSummary(value: unknown): WorkboardDispatchSummary {
   const countArray = (key: string) =>
@@ -54,7 +61,10 @@ async function createWorkboardCard(params: {
   state.error = null;
   params.requestUpdate?.();
   try {
-    const payload = await params.client.request("workboard.cards.create", draftPayload(state));
+    const payload = await params.client.request("workboard.cards.create", {
+      ...draftPayload(state),
+      ...selectedBoardParams(state),
+    });
     replaceCard(state, normalizeCardPayload(payload));
     resetDraftState(state);
   } catch (error) {
@@ -287,7 +297,10 @@ export async function dispatchWorkboard(params: {
   state.lastDispatchSummary = null;
   params.requestUpdate?.();
   try {
-    const dispatchResult = await params.client.request("workboard.cards.dispatch", {});
+    const dispatchResult = await params.client.request(
+      "workboard.cards.dispatch",
+      selectedBoardParams(state),
+    );
     const payload = await params.client.request("workboard.cards.list", {});
     const normalized = normalizeCardsPayload(payload);
     state.cards = normalized.cards;

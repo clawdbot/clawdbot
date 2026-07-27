@@ -7,6 +7,10 @@ import { clampNumber } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import { toCodeModeJsonSafe } from "./code-mode-json.js";
 import { createCodeModeApiVirtualFiles } from "./code-mode-namespaces.js";
+import {
+  CODE_MODE_SHELL_SOURCE_ERROR,
+  isShellLikeCodeModeSource,
+} from "./code-mode-shell-source.js";
 import type { ToolSearchConfig, ToolSearchToolContext } from "./tool-search.js";
 import { asToolParamsRecord, ToolInputError } from "./tools/common.js";
 
@@ -422,6 +426,9 @@ export async function prepareSource(input: {
     throw new ToolInputError("code mode module access is disabled.");
   }
   if (language === "javascript") {
+    if (isShellLikeCodeModeSource(input.code)) {
+      throw new ToolInputError(CODE_MODE_SHELL_SOURCE_ERROR);
+    }
     return input.code;
   }
   const ts = await loadTypeScriptRuntime();
@@ -443,6 +450,12 @@ export async function prepareSource(input: {
   }
   if (rejectsModuleAccess(transformed.outputText)) {
     throw new ToolInputError("code mode module access is disabled.");
+  }
+  if (
+    isShellLikeCodeModeSource(input.code, transformed.outputText) ||
+    isShellLikeCodeModeSource(transformed.outputText)
+  ) {
+    throw new ToolInputError(CODE_MODE_SHELL_SOURCE_ERROR);
   }
   return transformed.outputText;
 }

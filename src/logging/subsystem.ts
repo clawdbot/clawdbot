@@ -8,6 +8,7 @@ import { isVerbose } from "../global-state.js";
 import { defaultRuntime, type OutputRuntimeEnv, type RuntimeEnv } from "../runtime.js";
 import {
   formatConsoleTimestamp,
+  formatJsonConsoleLine,
   getConsoleSettings,
   shouldLogSubsystemToConsole,
 } from "./console.js";
@@ -253,15 +254,12 @@ function formatConsoleLine(opts: {
   const displaySubsystem =
     opts.style === "json" ? opts.subsystem : formatSubsystemForConsole(opts.subsystem);
   if (opts.style === "json") {
-    return redactSensitiveText(
-      JSON.stringify({
-        time: formatConsoleTimestamp("json"),
-        level: opts.level,
-        subsystem: displaySubsystem,
-        message: opts.message,
-        ...opts.meta,
-      }),
-    );
+    return formatJsonConsoleLine({
+      level: opts.level,
+      subsystem: displaySubsystem,
+      message: opts.message,
+      meta: opts.meta,
+    });
   }
   const color = getColorForConsole();
   const prefix = `[${displaySubsystem}]`;
@@ -458,8 +456,9 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
       if (isFileLogLevelEnabled("info")) {
         logToFile(getChildLogger({ subsystem: resolvedSubsystem }), "info", message, { raw: true });
       }
+      const consoleSettings = getConsoleSettings();
       if (
-        shouldLogToConsole("info", { level: getConsoleSettings().level }) &&
+        shouldLogToConsole("info", { level: consoleSettings.level }) &&
         shouldLogSubsystemToConsole(resolvedSubsystem)
       ) {
         if (
@@ -471,7 +470,17 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
         ) {
           return;
         }
-        writeConsoleLine("info", message);
+        writeConsoleLine(
+          "info",
+          consoleSettings.style === "json"
+            ? formatJsonConsoleLine({
+                level: "info",
+                subsystem: resolvedSubsystem,
+                message,
+              })
+            : message,
+          { redacted: consoleSettings.style === "json" },
+        );
       }
     },
     child(name) {

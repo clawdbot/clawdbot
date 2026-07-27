@@ -29,6 +29,7 @@ import { ensureCodexComputerUseServiceApp } from "./computer-use-service.js";
 import {
   resolveCodexAppServerUserHomeDir,
   resolveCodexComputerUseConfig,
+  type CodexAppServerHomeScope,
   type CodexAppServerStartOptions,
 } from "./config.js";
 import {
@@ -259,11 +260,17 @@ export async function resolveCodexAppServerPreparedAuthHandoff(params: {
   authProfileId?: string;
   authProfileStore: AuthProfileStore;
   agentDir?: string;
+  homeScope?: CodexAppServerHomeScope;
   config?: AuthProfileOrderConfig;
   subscriptionProfileRequiredError: string;
   subscriptionProfileUnusableError: string;
 }) {
-  if (params.authRequirement === "api-key") {
+  // A user-home app-server owns the operator's native Codex account. Codex persists
+  // api-key logins into CODEX_HOME/auth.json and swaps the live account for external
+  // token logins, so a prepared OpenClaw handoff here would rewrite the account that
+  // Codex CLI and Desktop share. Native homes are verified, never logged into.
+  const usesNativeHome = params.homeScope === "user";
+  if (params.authRequirement === "api-key" && !usesNativeHome) {
     const apiKey = params.resolvedApiKey?.trim();
     if (!apiKey) {
       throw new Error("Prepared Codex API-key route is missing its resolved API key.");
@@ -281,7 +288,7 @@ export async function resolveCodexAppServerPreparedAuthHandoff(params: {
     agentDir: params.agentDir,
     config: params.config,
   });
-  if (params.authRequirement !== "subscription") {
+  if (usesNativeHome || params.authRequirement !== "subscription") {
     return { authProfileId, nativeAuthProfile };
   }
   if (!authProfileId || !nativeAuthProfile) {

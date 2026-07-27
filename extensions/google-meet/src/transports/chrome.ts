@@ -9,6 +9,7 @@ import {
   readMeetingTranscriptWithBrowser,
   recoverMeetingBrowserTab,
   resolveLocalMeetingBrowserRequest,
+  MeetingPlatformAdapter,
   startMeetingAgentRealtimeEngine,
   startMeetingRealtimeEngine,
   type MeetingRealtimeAudioEngineHandle,
@@ -27,10 +28,7 @@ import {
   resolveChromeNode,
   type BrowserTab,
 } from "./chrome-browser-proxy.js";
-import {
-  GOOGLE_MEET_PLATFORM_ADAPTER,
-  isGoogleMeetTalkBackMode,
-} from "./google-meet-platform-adapter.js";
+import { GOOGLE_MEET_PLATFORM_ADAPTER } from "./google-meet-platform-adapter.js";
 import { GOOGLE_MEET_NODE_COMMAND } from "./google-meet-platform-constants.js";
 import type {
   GoogleMeetBrowserTab,
@@ -104,7 +102,7 @@ export async function launchChromeMeet(params: {
   tab?: GoogleMeetBrowserTab;
 }> {
   const checkRealtimeAudioPrerequisites = async () => {
-    if (!isGoogleMeetTalkBackMode(params.mode)) {
+    if (!MeetingPlatformAdapter.isTalkBackMode(params.mode)) {
       return;
     }
     await assertBlackHole2chAvailable({
@@ -130,7 +128,7 @@ export async function launchChromeMeet(params: {
     | ({ type: "command-pair" } & ChromeRealtimeAudioBridgeHandle)
     | undefined
   > => {
-    if (!isGoogleMeetTalkBackMode(params.mode)) {
+    if (!MeetingPlatformAdapter.isTalkBackMode(params.mode)) {
       return undefined;
     }
     if (params.config.chrome.audioBridgeCommand) {
@@ -224,10 +222,10 @@ export async function launchChromeMeet(params: {
     },
   });
   const shouldStartRealtimeBridge =
-    isGoogleMeetTalkBackMode(params.mode) &&
+    MeetingPlatformAdapter.isTalkBackMode(params.mode) &&
     result.browser?.inCall === true &&
     result.browser.micMuted === false &&
-    result.browser.manualActionRequired !== true;
+    result.browser.manualAction === undefined;
   const audioBridge = shouldStartRealtimeBridge ? await startRealtimeAudioBridge() : undefined;
   return { ...result, audioBridge };
 }
@@ -524,10 +522,10 @@ export async function launchChromeMeetOnNode(params: {
   // Browser-managed joins require explicit unmuted health before node audio starts.
   if (
     params.config.chrome.launch &&
-    isGoogleMeetTalkBackMode(params.mode) &&
+    MeetingPlatformAdapter.isTalkBackMode(params.mode) &&
     (browserControl.browser?.inCall !== true ||
       browserControl.browser.micMuted !== false ||
-      browserControl.browser.manualActionRequired === true)
+      browserControl.browser.manualAction)
   ) {
     return {
       nodeId,

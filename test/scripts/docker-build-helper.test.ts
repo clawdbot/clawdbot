@@ -2331,6 +2331,16 @@ grep -qx -- "OPENCLAW_E2E_COMMAND_TIMEOUT=23s" "$TMPDIR/package-args"
     );
   });
 
+  it("preserves actionable, secret-safe typed onboarding failure diagnostics", () => {
+    const script = readFileSync(RELEASE_TYPED_ONBOARDING_SCENARIO_PATH, "utf8");
+
+    expect(script).toContain("set -Eeuo pipefail");
+    expect(script).toContain("{ exec 3>&-; } 2>/dev/null || true");
+    expect(script).toContain("--suppress-gateway-token-output");
+    expect(script).not.toContain("exec 3>&- 2>/dev/null || true");
+    expect(script).not.toContain('"$HOME/.openclaw/agents/main/agent/auth-profiles.json"');
+  });
+
   it("keeps append-only mock E2E state under per-run scratch roots", () => {
     const scripts = [
       {

@@ -70,6 +70,7 @@ export function resolveCronPreflightCandidates(params: {
     cfg: params.cfg,
     provider: params.provider,
     model: params.model,
+    requestedRouteResolution: "resolved",
     fallbacksOverride,
   });
 }

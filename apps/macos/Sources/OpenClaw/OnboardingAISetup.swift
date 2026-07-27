@@ -1344,6 +1344,13 @@ extension OnboardingAISetupModel {
         self.authSelection = max(0, options.firstIndex {
             anyCodableEqual($0.value, step?.initialvalue)
         } ?? 0)
+        // Gateway-executed steps render progress and expose no input control, so
+        // no user action would ever ask for the next frame. Keep polling; the
+        // session long-polls until the next update or the terminal result, so a
+        // download reports live instead of freezing on its first frame.
+        if let step, wizardStepExecutor(step) == "gateway" {
+            self.advanceProviderAuth(stepID: nil, value: nil)
+        }
     }
 
     private func reconcileProviderAuthAfterUnknownOutcome(

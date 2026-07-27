@@ -953,6 +953,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
   },
   security: slackSecurityAdapter,
   threading: {
+    threadAddressing: "message",
     matchesToolContextTarget: ({ target, toolContext }) =>
       slackContextTargetsMatch(target, toolContext),
     scopedAccountReplyToMode: {

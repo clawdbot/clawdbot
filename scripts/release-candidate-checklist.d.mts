@@ -256,12 +256,14 @@ export function candidateParallelsArgs(
   dependencyTarballPaths?: unknown[],
   toolingRoot?: string,
   registryPackageTarballPaths?: unknown[],
+  macosSnapshotHint?: string,
 ): unknown[];
 export function candidateParallelsShellCommand(
   tarballPath: unknown,
   timeoutBin: unknown,
   dependencyTarballPaths?: unknown[],
   registryPackageTarballPaths?: unknown[],
+  macosSnapshotHint?: string,
 ): string;
 declare function gitIsAncestor(ancestor: unknown, target: unknown): boolean;
 declare function loadCandidateShippedBaseline(ref: unknown): {

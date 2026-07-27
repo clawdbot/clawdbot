@@ -13,7 +13,6 @@ import {
   resolveUsageCostAgentDir,
   resolveUsageCostCacheDatabasePath,
   resolveUsageCostPricingFingerprint,
-  type UsageCostRefreshResult,
 } from "./session-cost-usage-aggregation.js";
 import { isSessionCostUsageRefreshRunning } from "./session-cost-usage-cache.sqlite.js";
 import {
@@ -87,17 +86,6 @@ export async function loadCostUsageSummary(params: {
   });
 }
 
-async function refreshCostUsageCache(params: {
-  config?: OpenClawConfig;
-  agentId: string;
-  agentDir?: string;
-  maxFiles?: number;
-  sessionFiles?: string[];
-  startMs?: number;
-}): Promise<UsageCostRefreshResult> {
-  return await refreshCostUsageCacheForAgent(params);
-}
-
 export async function loadCostUsageSummaryFromCache(params: {
   startMs: number;
   endMs: number;
@@ -116,7 +104,7 @@ export async function loadCostUsageSummaryFromCache(params: {
   if (params.requestRefresh !== false && staleFiles.length > 0) {
     const cachedFiles = countUsableUsageCostRollups({ rollups, files });
     if (params.refreshMode === "sync-when-empty" && cachedFiles === 0) {
-      const result = await refreshCostUsageCache({
+      const result = await refreshCostUsageCacheForAgent({
         config: params.config,
         agentId: params.agentId,
         agentDir,

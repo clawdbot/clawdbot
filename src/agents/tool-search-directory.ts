@@ -7,24 +7,27 @@ import {
   applyToolCatalogCompaction,
   classifyTool,
   collectUniqueCatalogToolNames,
-  compactToolSearchCatalogEntry,
   resolveCatalog,
   visibleCatalogEntries,
 } from "./tool-search-catalog.js";
 import { resolveToolSearchConfig } from "./tool-search-config.js";
-import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import {
   TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES,
   TOOL_SEARCH_CONTROL_TOOL_NAMES,
   TOOL_SEARCH_RAW_TOOL_NAME,
   type CatalogVisibilityOptions,
+  type ToolSearchCatalogEntry,
   type ToolSearchCatalogRef,
+  type ToolSearchMode,
   type ToolSearchToolContext,
 } from "./tool-search-types.js";
 import { ToolInputError, type AnyAgentTool } from "./tools/common.js";
 
 export const MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS = 18_000;
 const TOOL_DIRECTORY_IDENTIFIER_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u;
+// Catalog entry arrays are immutable snapshots. Keying their rendered directory by
+// array identity preserves prompt-prefix bytes without retaining retired catalogs.
+const toolSchemaDirectoryPromptCache = new WeakMap<ToolSearchCatalogEntry[], Map<string, string>>();
 
 type ToolSearchDirectoryIntent = {
   tokens: Set<string>;
@@ -84,11 +87,24 @@ export function buildToolSchemaDirectoryPrompt(
   ctx: ToolSearchToolContext,
   options?: CatalogVisibilityOptions,
 ): string {
-  const runtime = new ToolSearchRuntime(
-    ctx,
-    resolveToolSearchConfig(ctx.runtimeConfig ?? ctx.config),
+  const config = resolveToolSearchConfig(ctx.runtimeConfig ?? ctx.config);
+  const catalog = resolveCatalog(ctx);
+  const cacheKey = `${config.mode}:${options?.includeMcp === false ? "without-mcp" : "all"}`;
+  let cachedPrompts = toolSchemaDirectoryPromptCache.get(catalog.entries);
+  const cachedPrompt = cachedPrompts?.get(cacheKey);
+  if (cachedPrompt !== undefined) {
+    return cachedPrompt;
+  }
+  const prompt = formatToolSearchCatalogDirectory(
+    visibleCatalogEntries(catalog, options),
+    config.mode,
   );
-  return formatToolSearchCatalogDirectory(runtime.all(options));
+  if (!cachedPrompts) {
+    cachedPrompts = new Map<string, string>();
+    toolSchemaDirectoryPromptCache.set(catalog.entries, cachedPrompts);
+  }
+  cachedPrompts.set(cacheKey, prompt);
+  return prompt;
 }
 
 export function resolveToolSearchCatalogTool(
@@ -129,9 +145,7 @@ function formatToolDirectoryIdentifier(value: string | undefined): string | unde
   return trimmed && TOOL_DIRECTORY_IDENTIFIER_RE.test(trimmed) ? trimmed : undefined;
 }
 
-function formatToolDirectoryEntry(
-  entry: ReturnType<typeof compactToolSearchCatalogEntry>,
-): string | undefined {
+function formatToolDirectoryEntry(entry: ToolSearchCatalogEntry): string | undefined {
   if (entry.source !== "openclaw") {
     return undefined;
   }
@@ -145,17 +159,31 @@ function formatToolDirectoryEntry(
   return `- ${name}${owner}: ${description || "No description."}`;
 }
 
-function renderToolSearchCatalogDirectory(lines: string[], total: number): string {
+function renderToolSearchCatalogDirectory(
+  lines: string[],
+  total: number,
+  mode: ToolSearchMode,
+): string {
   const omitted = total - lines.length;
-  const footer =
-    omitted > 0
-      ? `${omitted} additional tools omitted. Use tool_search to find them, then tool_describe to load a full schema before tool_call.`
-      : "Call tool_describe with a listed tool name to load its full schema before using tool_call.";
-  return ["Available deferred-schema tools:", ...lines, "", footer].join("\n");
+  const guidance =
+    mode === "code"
+      ? "Use tool_search_code with openclaw.tools.search(query), openclaw.tools.describe(id), and openclaw.tools.call(id, args)."
+      : omitted > 0
+        ? "Use tool_search to find them, then tool_describe to load a full schema before tool_call."
+        : "Call tool_describe with a listed tool name to load its full schema before using tool_call.";
+  const footer = omitted > 0 ? `${omitted} additional tools omitted. ${guidance}` : guidance;
+  return [
+    "Available deferred-schema tools:",
+    ...lines,
+    "",
+    "Policy-approved MCP and client tools may also be discoverable through search.",
+    footer,
+  ].join("\n");
 }
 
 function formatToolSearchCatalogDirectory(
-  entries: Array<ReturnType<typeof compactToolSearchCatalogEntry>>,
+  entries: ToolSearchCatalogEntry[],
+  mode: ToolSearchMode,
 ): string {
   if (entries.length === 0) {
     return "Available deferred-schema tools: none.";
@@ -169,7 +197,7 @@ function formatToolSearchCatalogDirectory(
     .toSorted((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
     .map(formatToolDirectoryEntry)
     .filter((line): line is string => Boolean(line));
-  const fullDirectory = renderToolSearchCatalogDirectory(lines, entries.length);
+  const fullDirectory = renderToolSearchCatalogDirectory(lines, entries.length, mode);
   if (fullDirectory.length <= MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS) {
     return fullDirectory;
   }
@@ -178,7 +206,7 @@ function formatToolSearchCatalogDirectory(
   while (low < high) {
     const middle = Math.ceil((low + high) / 2);
     if (
-      renderToolSearchCatalogDirectory(lines.slice(0, middle), entries.length).length <=
+      renderToolSearchCatalogDirectory(lines.slice(0, middle), entries.length, mode).length <=
       MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS
     ) {
       low = middle;
@@ -186,7 +214,7 @@ function formatToolSearchCatalogDirectory(
       high = middle - 1;
     }
   }
-  return renderToolSearchCatalogDirectory(lines.slice(0, low), entries.length);
+  return renderToolSearchCatalogDirectory(lines.slice(0, low), entries.length, mode);
 }
 
 const TOOL_DIRECTORY_HYDRATION_KEYWORDS: Array<{

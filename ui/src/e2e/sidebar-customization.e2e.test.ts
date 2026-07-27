@@ -5,6 +5,8 @@ import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
+  controlUiSessionPath,
+  controlUiSessionUrl,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -674,7 +676,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
     await installMockGateway(page);
 
     try {
-      await page.goto(`${server.baseUrl}chat?session=${encodeURIComponent("agent:main:work")}`);
+      await page.goto(controlUiSessionUrl(server.baseUrl, "agent:main:work"));
       await page.locator("openclaw-app-sidebar .sidebar-brand__new-thread").click();
 
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
@@ -886,16 +888,30 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
     });
     const page = await context.newPage();
     const agentsList = {
-      agents: [
-        { id: "main", identity: { name: "Main" }, name: "Main" },
-        { id: "research", identity: { name: "Research" }, name: "Research" },
-      ],
+      agents: [{ id: "main" }, { id: "research" }],
       defaultId: "main",
       mainKey: "main",
       scope: "agent",
     };
     await installMockGateway(page, {
       methodResponses: {
+        "agent.identity.get": {
+          cases: [
+            {
+              match: { agentId: "main" },
+              response: { agentId: "main", avatar: "", emoji: "🦞", name: "Main" },
+            },
+            {
+              match: { agentId: "research" },
+              response: {
+                agentId: "research",
+                avatar:
+                  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+                name: "Research",
+              },
+            },
+          ],
+        },
         "agents.list": agentsList,
         "chat.startup": {
           agentsList,
@@ -921,6 +937,9 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
           ),
         )
         .toBe(true);
+      await expect
+        .poll(() => researchSwitch.locator("img.agent-select__avatar").getAttribute("src"))
+        .toContain("data:image/png;base64,");
       await expect.poll(() => menu.getByText(/^New thread —/).count()).toBe(0);
       await expect
         .poll(() => mainSwitch.evaluate((element) => element === document.activeElement))
@@ -931,8 +950,61 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
         .toBe(true);
       await captureUiProof(page, "agent-menu-without-new-session-rows.png");
       await page.keyboard.press("Enter");
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/chat");
-      expect(new URL(page.url()).searchParams.get("session")).toBe("agent:research:main");
+      await expect
+        .poll(() => new URL(page.url()).pathname)
+        .toBe(controlUiSessionPath("agent:research:main"));
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("shows a workspace identity avatar in the sidebar agent card", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    const agentsList = {
+      agents: [{ id: "main" }],
+      defaultId: "main",
+      mainKey: "main",
+      scope: "agent",
+    };
+    const avatar =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "agent.identity.get": {
+          agentId: "main",
+          avatar,
+          avatarStatus: "data",
+          name: "Workspace Molty",
+        },
+        "agents.list": agentsList,
+        "chat.startup": {
+          agentsList,
+          messages: [],
+          metadata: { models: [] },
+          sessionId: "control-ui-e2e-session",
+          thinkingLevel: null,
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await gateway.waitForRequest("agent.identity.get");
+      const card = page.locator("openclaw-app-sidebar openclaw-sidebar-agent-card");
+      await expect
+        .poll(() => card.locator(".sidebar-agent-card__name").textContent())
+        .toContain("Workspace Molty");
+      const image = card.locator(".sidebar-agent-card__avatar img");
+      await expect.poll(() => image.getAttribute("src")).toBe(avatar);
+      await expect
+        .poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth))
+        .toBe(1);
+      await captureUiProof(page, "workspace-agent-avatar.png");
     } finally {
       await context.close();
     }

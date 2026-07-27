@@ -23,20 +23,19 @@ import {
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveDefaultSessionStorePath, resolveStorePath } from "./paths.js";
 import {
-  listSessionEntries,
   loadSessionEntryReadOnly,
   loadTranscriptEvents,
   isSessionTranscriptProjectionUnavailableError,
   persistSessionTranscriptTurn,
   readLatestTranscriptAssistantText,
   readSessionTranscriptMessageEventPage,
+  resolveSessionEntrySelection,
   updateSessionEntry,
   type SessionTranscriptTurnWriteContext,
   type SessionTranscriptTurnExpectedState,
 } from "./session-accessor.js";
 import type { SessionTranscriptTurnLifecyclePatch } from "./session-transcript-turn-lifecycle.types.js";
 import { parseSqliteSessionFileMarker, type SqliteSessionFileMarker } from "./sqlite-marker.js";
-import { resolveSessionStoreEntry } from "./store-entry.js";
 import {
   applyBeforeMessageWriteToAssistant,
   type AssistantBeforeMessageWrite,
@@ -525,12 +524,11 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
     transcriptAgentId ?? resolveAgentIdFromSessionKey(sessionKey, configuredDefaultAgentId);
   const storePath =
     params.storePath ?? resolveStorePath(params.config?.session?.store, { agentId: storeAgentId });
-  const store = Object.fromEntries(
-    listSessionEntries({ agentId: transcriptAgentId, storePath }).map(
-      ({ sessionKey: entryKey, entry }) => [entryKey, entry],
-    ),
-  );
-  const resolved = resolveSessionStoreEntry({ store, sessionKey });
+  const resolved = resolveSessionEntrySelection({
+    ...(transcriptAgentId ? { agentId: transcriptAgentId } : {}),
+    sessionKey,
+    storePath,
+  });
   const entry = resolved.existing;
   if (params.expectedSessionId && entry?.sessionId !== params.expectedSessionId) {
     return {

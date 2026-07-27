@@ -16,6 +16,7 @@ const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM 
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/chat-background-tasks");
 const baseTime = Date.now();
+const chatSessionKey = "agent:main:main";
 
 const runningSubagent = {
   id: "task-subagent",
@@ -25,6 +26,7 @@ const runningSubagent = {
   status: "running",
   title: "Map model routing code",
   agentId: "main",
+  ownerKey: chatSessionKey,
   childSessionKey: "agent:main:subagent:routing",
   createdAt: baseTime - 5_000,
   updatedAt: baseTime,
@@ -42,6 +44,7 @@ const queuedCron = {
   status: "queued",
   title: "Nightly cleanup",
   agentId: "main",
+  ownerKey: chatSessionKey,
   sessionKey: "agent:main:cron:cleanup",
   createdAt: baseTime - 10_000,
   updatedAt: baseTime - 1_000,
@@ -55,6 +58,7 @@ const finishedCli = {
   status: "failed",
   title: "Generate media index",
   agentId: "main",
+  ownerKey: chatSessionKey,
   sessionKey: "agent:main:cli:media",
   createdAt: baseTime - 30_000,
   updatedAt: baseTime - 20_000,
@@ -69,6 +73,7 @@ const runningExec = {
   status: "running",
   title: "CLI command",
   agentId: "main",
+  ownerKey: chatSessionKey,
   createdAt: baseTime - 2_000,
   updatedAt: baseTime,
   startedAt: baseTime - 2_000,
@@ -175,7 +180,8 @@ describeControlUiE2e("Control UI chat background-tasks rail mocked Gateway E2E",
       const listRequests = await gateway.getRequests("tasks.list");
       expect(listRequests.length).toBeGreaterThanOrEqual(2);
       for (const request of listRequests) {
-        expect((request.params as { agentId?: string }).agentId).toBe("main");
+        expect(request.params).toMatchObject({ sessionKey: "main" });
+        expect(request.params).not.toHaveProperty("agentId");
       }
       await page.screenshot({ path: path.join(artifactDir, "01-rail-open.png"), fullPage: true });
 

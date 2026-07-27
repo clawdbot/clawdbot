@@ -246,6 +246,7 @@
     "!dist/extensions/arcee/**",
     "!dist/extensions/baseten/**",
     "!dist/extensions/brave/**",
+    "!dist/extensions/buzz/**",
     "!dist/extensions/cerebras/**",
     "!dist/extensions/chutes/**",
     "!dist/extensions/clickclack/**",
@@ -690,6 +691,10 @@
     "./plugin-sdk/gateway-runtime": {
       "types": "./dist/plugin-sdk/gateway-runtime.d.ts",
       "default": "./dist/plugin-sdk/gateway-runtime.js"
+    },
+    "./plugin-sdk/cli-argv": {
+      "types": "./dist/plugin-sdk/cli-argv.d.ts",
+      "default": "./dist/plugin-sdk/cli-argv.js"
     },
     "./plugin-sdk/cli-runtime": {
       "default": "./dist/plugin-sdk/cli-runtime.js"

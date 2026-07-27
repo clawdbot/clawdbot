@@ -1762,6 +1762,7 @@
                 "pages": [
                   "web/index",
                   "web/control-ui",
+                  "web/urls",
                   "web/dashboard",
                   "web/dashboards",
                   "web/dashboard-architecture",
@@ -1945,7 +1946,6 @@
                   "reference/templates/HEARTBEAT",
                   "reference/templates/IDENTITY",
                   "reference/templates/SOUL",
-                  "reference/templates/TOOLS",
                   "reference/templates/USER"
                 ]
               },

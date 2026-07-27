@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { SessionsCatalogHostEvent } from "../../../packages/gateway-protocol/src/index.ts";
 import {
   canRunPlaywrightChromium,
+  controlUiSessionPath,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -793,7 +794,9 @@ suite("Codex native session catalog", () => {
       sessionKey: "agent:main:adopted-codex",
       message: "continue with the final checks",
     });
-    await expect.poll(() => page.url()).toMatch(/session=agent%3Amain%3Aadopted-codex/);
+    await expect
+      .poll(() => new URL(page.url()).pathname)
+      .toBe(controlUiSessionPath("agent:main:adopted-codex"));
     await page.close();
   });
 });

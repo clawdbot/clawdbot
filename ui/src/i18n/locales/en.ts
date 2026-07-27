@@ -41,6 +41,7 @@ export const en: TranslationMap = {
     unselect: "Unselect",
     enabled: "Enabled",
     disabled: "Disabled",
+    failed: "Failed",
     none: "none",
     na: "n/a",
     never: "never",
@@ -578,6 +579,11 @@ export const en: TranslationMap = {
     createOutcomeUnknown:
       "The Gateway changed while this thread was starting. Check recent threads before starting this task again.",
     catalogUnavailable: "This thread target is unavailable.",
+  },
+  dashboardsPage: {
+    emptyTitle: "No dashboards yet",
+    emptyDescription: "Open a thread and switch to the Dashboard face to add it here.",
+    loadError: "Could not load dashboards: {error}",
   },
   sessionsView: {
     deletePreservedWorktrees:
@@ -1797,6 +1803,7 @@ export const en: TranslationMap = {
     skillWorkshop: "Skill Workshop",
     nodes: "Devices",
     chat: "Chat",
+    dashboards: "Dashboards",
     custodian: "OpenClaw",
     config: "Config",
     profile: "Profile",
@@ -1804,6 +1811,7 @@ export const en: TranslationMap = {
     appearance: "Appearance",
     automation: "Automation",
     mcp: "MCP",
+    memory: "Memory",
     infrastructure: "Infrastructure",
     labs: "Labs",
     about: "About",
@@ -1833,6 +1841,7 @@ export const en: TranslationMap = {
     skillWorkshop: "Review, refine, and apply proposals before they become live skills.",
     nodes: "Paired devices, pairing approvals, and exec bindings.",
     chat: "Gateway chat for quick interventions.",
+    dashboards: "Threads that open on their dashboard face.",
     custodian: "System setup and care.",
     config: "Model defaults, language, and gateway host.",
     profile: "Your agent's stats, streaks, and life in the reef.",
@@ -1840,6 +1849,7 @@ export const en: TranslationMap = {
     appearance: "Theme, UI, and setup wizard settings.",
     automation: "Commands, hooks, cron, and plugins.",
     mcp: "MCP servers, auth, tools, and diagnostics.",
+    memory: "Memory engine, backend, search, and dreaming.",
     infrastructure: "Gateway, web, browser, and media settings.",
     labs: "Experimental agent and tool capabilities.",
     about: "Control UI and connected Gateway build identity.",
@@ -2105,6 +2115,152 @@ export const en: TranslationMap = {
     tlsVerifyOff: "TLS verify off",
     mtls: "mTLS",
   },
+  memoryPage: {
+    tablistLabel: "Memory sections",
+    tabs: {
+      overview: "Overview",
+      search: "Search",
+      dreaming: "Dreaming",
+    },
+    engine: {
+      title: "Engine",
+      description:
+        "Exactly one memory plugin owns the memory slot. Selecting an engine enables it and disables the others.",
+      rowTitle: "Memory engine",
+      off: "Off",
+      autoHint: "No engine is pinned in config, so the slot falls back to its default owner.",
+      explicitHint: "This engine is pinned in config under plugins.slots.memory.",
+      offHint: "Memory is switched off in config: plugins.slots.memory is set to none.",
+      catalogUnavailable: "Connect to the gateway to change the memory engine.",
+      changeFailed: "Could not change the memory engine",
+      disabledTitle: "This engine is disabled",
+      disabledHint:
+        "The memory slot points at this plugin, but the plugin itself is disabled, so memory is not running.",
+      enable: "Enable",
+    },
+    backend: {
+      title: "Backend",
+      description: "How memory is stored and retrieved for the selected engine.",
+      rowTitle: "Retrieval backend",
+      builtin: "Built-in",
+      qmd: "QMD",
+      builtinHint: "Memory files are indexed and searched by OpenClaw itself.",
+      qmdHint: "Retrieval is delegated to QMD. Its settings appear below.",
+    },
+    addons: {
+      title: "Add-ons",
+      description:
+        "These plugins layer on top of the engine instead of competing for the slot, so any combination can run at once.",
+      activeMemory: {
+        title: "Active memory",
+      },
+      memoryWiki: {
+        title: "Memory wiki",
+      },
+      stateUnknown: "Unknown",
+      manage: "Enable or disable add-ons",
+      manageLink: "Open Plugins",
+    },
+    import: {
+      title: "Import",
+      description: "Bring existing memory from other assistants into an agent workspace.",
+      link: "Open Memory Import",
+    },
+    search: {
+      intro: "Embedding and retrieval defaults shared by every agent that has no memory override.",
+    },
+    dreaming: {
+      intro:
+        "Dreaming runs as one managed cron job across every agent workspace, so these settings are global. They are owned by the {plugin} plugin.",
+      schedule: {
+        title: "Schedule",
+        description: "When the full sweep runs and which model narrates it.",
+      },
+      frequency: {
+        label: "Dreaming frequency",
+        help: "Cron cadence for the full dreaming sweep (light, REM, then deep). Leave empty for the plugin default.",
+        placeholder: "0 3 * * *",
+      },
+      timezone: {
+        label: "Timezone",
+        help: "IANA timezone used to interpret the cron cadence.",
+        placeholder: "Europe/Vienna",
+      },
+      model: {
+        label: "Dreaming model",
+        help: "Provider/model override for dream diary narration. Requires subagent model overrides to be allowed.",
+        placeholder: "anthropic/claude-sonnet-4-6",
+      },
+      verboseLogging: {
+        label: "Verbose logging",
+        help: "Log each dreaming phase in detail. Useful when tuning thresholds.",
+      },
+      storage: {
+        title: "Storage",
+        description: "Where promoted memories and dreaming reports are written.",
+        modeLabel: "Storage mode",
+        modeHelp: "Inline writes into the memory file; separate keeps a dedicated report file.",
+        modes: {
+          inline: "Inline",
+          separate: "Separate",
+          both: "Both",
+        },
+        separateReportsLabel: "Separate reports",
+        separateReportsHelp: "Keep dreaming reports out of the main memory file.",
+      },
+      phases: {
+        light: {
+          title: "Light phase",
+          description: "Cheap recent-activity pass that stages replay candidates.",
+        },
+        deep: {
+          title: "Deep phase",
+          description: "Scored promotion pass that graduates short-term entries into memory.",
+        },
+        rem: {
+          title: "REM phase",
+          description: "Pattern pass that looks for recurring themes across the lookback window.",
+        },
+      },
+      phaseFields: {
+        enabled: "Enabled",
+        enabledHelp: "Run this phase during the sweep.",
+        lookbackDays: "Lookback days",
+        lookbackDaysHelp: "How far back this phase reads. Leave empty for the plugin default.",
+        limit: "Limit",
+        limitHelp: "Maximum entries this phase processes per run.",
+        dedupeSimilarity: "Dedupe similarity",
+        dedupeSimilarityHelp: "Similarity above which two candidates are treated as duplicates.",
+        minScore: "Minimum score",
+        minScoreHelp: "Promotion score an entry must reach.",
+        minRecallCount: "Minimum recalls",
+        minRecallCountHelp: "How often an entry must be recalled before it can be promoted.",
+        minUniqueQueries: "Minimum unique queries",
+        minUniqueQueriesHelp: "How many distinct queries must have surfaced the entry.",
+        recencyHalfLifeDays: "Recency half-life (days)",
+        recencyHalfLifeDaysHelp: "How quickly older recall signals lose weight.",
+        maxAgeDays: "Maximum age (days)",
+        maxAgeDaysHelp: "Ignore short-term entries older than this.",
+        maxPromotedSnippetTokens: "Max promoted snippet tokens",
+        maxPromotedSnippetTokensHelp:
+          "Token budget for each promoted snippet. Provenance stays attached.",
+        minPatternStrength: "Minimum pattern strength",
+        minPatternStrengthHelp: "Strength a recurring pattern must reach to be reported.",
+      },
+      agentScope: {
+        title: "Agent view",
+        description:
+          "The settings above are global. The dream diary, short-term counts, and maintenance actions below belong to one agent.",
+        rowTitle: "Agent",
+      },
+      unsupported: {
+        title: "Dreaming settings",
+        rowTitle: "Not available for this engine",
+        description:
+          "The {plugin} plugin owns the memory slot and its config schema has no dreaming section, so these settings cannot be stored. Switch the engine on the Overview tab to edit them.",
+      },
+    },
+  },
   sessionsPage: {
     hubTablistLabel: "Threads sections",
   },
@@ -2257,6 +2413,21 @@ export const en: TranslationMap = {
       description: "Let Code Mode orchestrate groups of subagents in parallel.",
       empty: "No active swarms.",
       defaultPhase: "Unphased",
+    },
+    toolSearch: {
+      title: "Tool Search",
+      description:
+        "Keep a bounded tool directory visible and defer the rest behind search, so large MCP and plugin catalogs stop crowding the prompt.",
+    },
+    localModelLean: {
+      title: "Lean tools for local models",
+      description:
+        "Drop heavyweight default tools that smaller local models handle poorly, leaving a shorter set they can use reliably.",
+    },
+    auditMessages: {
+      title: "Message audit metadata",
+      description:
+        "Record content-free metadata for direct conversations in the audit ledger. Message content is never stored.",
     },
   },
   aboutPage: {
@@ -3047,6 +3218,7 @@ export const en: TranslationMap = {
     },
   },
   attention: {
+    cronErrorUnknown: "Unknown error",
     cronFailed: "{count} cron job(s) failed",
     cronOverdue: "{count} cron job(s) overdue",
     modelAuthExpired: "Model auth expired: {providers}",
@@ -3795,6 +3967,11 @@ export const en: TranslationMap = {
     },
     outputTokens: "{count} output tokens",
     archivedSessionDisabled: "This session is archived. Unarchive it to continue the conversation.",
+    sessionRoute: {
+      chooseTitle: "Choose a session",
+      multipleMatches: "More than one session matches {shortId}.",
+      additionalMatches: "Search results remain. Use a longer id prefix.",
+    },
     sessionSharing: {
       menu: "Thread sharing",
       current: "Thread visibility: {visibility}",

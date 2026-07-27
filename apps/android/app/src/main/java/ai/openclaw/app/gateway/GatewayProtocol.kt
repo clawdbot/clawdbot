@@ -101,6 +101,7 @@ data class QuestionRecord(
   val questions: List<Question>,
   val agentId: String? = null,
   val sessionKey: String? = null,
+  val runId: String? = null,
   val createdAtMs: Long,
   val expiresAtMs: Long,
   val status: String,
@@ -127,6 +128,7 @@ data class SessionObserverPlanProgress(
 @Serializable
 data class SessionObserverDigest(
   val sessionKey: String,
+  val agentId: String? = null,
   val runId: String? = null,
   val revision: Long,
   val updatedAt: Long,

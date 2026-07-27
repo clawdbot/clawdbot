@@ -37,6 +37,7 @@ type SessionCatalogRenderSnapshot = {
   basePath: string;
   routeSessionKey: string;
   newSessionAgentId: string;
+  mainKey: string;
   loadingMoreCatalogIds: ReadonlySet<string>;
   projectGrouping: CatalogProjectGrouping;
   liveRows: readonly GatewaySessionRow[];
@@ -292,6 +293,7 @@ function renderSessionCatalog(params: {
       basePath: snapshot.basePath,
       routeSessionKey: snapshot.routeSessionKey,
       newSessionAgentId: snapshot.newSessionAgentId,
+      mainKey: snapshot.mainKey,
       collapsedSections: host.collapsedSessionSections,
       loadingMoreCatalogIds: snapshot.loadingMoreCatalogIds,
       projectGrouping: snapshot.projectGrouping,

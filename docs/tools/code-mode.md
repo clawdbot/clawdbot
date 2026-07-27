@@ -32,6 +32,12 @@ Both are JavaScript execution surfaces, not shell-command surfaces. Treat them
 as independent, differently-implemented features that happen to expose
 identically-named `exec`/`wait` tools.
 
+In OpenClaw code mode, `command` is a JavaScript or TypeScript alias for
+`code`, not a shell command. For shell or file operations, call the appropriate
+catalog tool from guest JavaScript with `tools.callValue`. Recognizable shell
+commands are rejected before the QuickJS worker starts with actionable
+`invalid_input` guidance.
+
 ## What it does
 
 - The model-visible tool list becomes `exec`, `wait`, plus any direct-only tool

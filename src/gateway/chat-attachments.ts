@@ -6,11 +6,13 @@ import { extensionForMime, mimeTypeFromFilePath } from "@openclaw/media-core/mim
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
+import type { SubsystemLogger } from "../logging/subsystem.js";
 import type { MediaFact } from "../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import { deleteMediaBuffer, saveMediaBuffer, type SavedMedia } from "../media/store.js";
+import { formatForLog } from "./ws-log.js";
 
 export type ChatAttachment = {
   type?: string;
@@ -62,6 +64,20 @@ const OFFLOAD_THRESHOLD_BYTES = 2_000_000;
 const TEXT_ONLY_OFFLOAD_LIMIT = 10;
 
 const DEFAULT_CHAT_ATTACHMENT_MAX_MB = 20;
+
+export function logAttachmentFailure(
+  log: Pick<SubsystemLogger, "error">,
+  label: string,
+  err: unknown,
+): void {
+  const primary = formatUncaughtError(err);
+  const cause = err instanceof Error ? err.cause : undefined;
+  const causeText = cause === undefined ? "" : formatUncaughtError(cause);
+  log.error(label, {
+    error: !causeText || causeText === primary ? primary : `${primary}\nCaused by: ${causeText}`,
+    consoleMessage: `${label}: ${formatForLog(err)}`,
+  });
+}
 
 export function stripImageMediaMarkers(message: string, refs: readonly OffloadedRef[]): string {
   return refs.reduce((projected, ref) => {
