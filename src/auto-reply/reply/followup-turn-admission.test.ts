@@ -560,6 +560,39 @@ describe("admitFollowupTurn", () => {
     );
   });
 
+  it("adopts a generation written through the owned preflight store view", async () => {
+    const operation = createOperation();
+    const initialEntry: SessionEntry = {
+      sessionId: "queued-session",
+      lifecycleRevision: "initial",
+      updatedAt: 1,
+    };
+    const rotatedEntry: SessionEntry = {
+      sessionId: "compacted-session",
+      lifecycleRevision: "compacted",
+      updatedAt: 2,
+    };
+    const sessionStore = { main: initialEntry };
+    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: initialEntry });
+    state.preflight.mockImplementation(
+      async ({ sessionStore: ownedStore }: { sessionStore: Record<string, SessionEntry> }) => {
+        ownedStore.main = rotatedEntry;
+        return ownedStore.main;
+      },
+    );
+
+    const result = await admitFollowupTurn({
+      queued: createRun(),
+      defaults: createDefaults({ sessionEntry: initialEntry, sessionStore }),
+    });
+
+    expect(result).toMatchObject({
+      kind: "admitted",
+      turn: { queued: { run: { sessionId: "compacted-session" } } },
+    });
+    expect(sessionStore.main).toBe(rotatedEntry);
+  });
+
   it("restores the item when preflight adoption races a replacement generation", async () => {
     const operation = createOperation();
     const initialEntry: SessionEntry = {
@@ -764,6 +797,31 @@ describe("admitFollowupTurn", () => {
       }),
     ).rejects.toBe(failure);
     expect(operation.complete).toHaveBeenCalledOnce();
+  });
+
+  it("delivers an incomplete terminal notice after ordinary preflight failure", async () => {
+    const operation = createOperation();
+    const initialEntry: SessionEntry = { sessionId: "queued-session", updatedAt: 1 };
+    const onCompactionNoticePayload = vi.fn(async () => {});
+    state.shouldNotifyCompaction = true;
+    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: initialEntry });
+    state.preflight.mockImplementation(async ({ onCompactionNotice }) => {
+      await onCompactionNotice?.("start");
+      await onCompactionNotice?.("incomplete");
+      throw new Error("preflight failed");
+    });
+
+    const result = await admitFollowupTurn({
+      queued: createRun(),
+      defaults: createDefaults({ sessionEntry: initialEntry }),
+      onCompactionNoticePayload,
+    });
+
+    expect(result).toMatchObject({ kind: "admitted", turn: { preflightFailurePayload: {} } });
+    expect(onCompactionNoticePayload.mock.calls.map(([payload]) => payload)).toEqual([
+      { text: "start" },
+      { text: "incomplete" },
+    ]);
   });
 
   it("restores the item when generation changes before a compaction notice", async () => {

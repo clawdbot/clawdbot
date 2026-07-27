@@ -210,7 +210,14 @@ function createFollowupSessionStoreView(params: {
     configurable: true,
     enumerable: true,
     get: () => params.owner.current(),
-    set: (entry: SessionEntry | undefined) => params.owner.publish(entry),
+    set: (entry: SessionEntry | undefined) => {
+      const current = params.owner.current();
+      if (entry && !isSameSessionGeneration(entry, current)) {
+        params.owner.adopt(entry);
+        return;
+      }
+      params.owner.publish(entry);
+    },
   });
   return view;
 }
@@ -419,7 +426,6 @@ export async function admitFollowupTurn(params: {
     const previousCompactionCount = activeEntry?.compactionCount ?? 0;
     let pendingTerminalCompactionNotice: Exclude<CompactionNoticePhase, "start"> | undefined;
     let compactionNoticeGenerationInvalidated = false;
-    let preflightSucceeded = false;
     const notifyPreflightCompaction =
       sendPolicy === "allow" &&
       queued.currentInboundEventKind !== "room_event" &&
@@ -475,6 +481,7 @@ export async function admitFollowupTurn(params: {
           }
         : undefined;
     try {
+      const previousEntry = session.current();
       activeEntry = await runPreflightCompactionIfNeeded({
         cfg: config,
         followupRun: turn.queued,
@@ -494,7 +501,6 @@ export async function admitFollowupTurn(params: {
           "Follow-up session generation changed during preflight notice delivery",
         );
       }
-      const previousEntry = session.current();
       if (replySessionKey && params.defaults.storePath) {
         const persistedEntry = loadSessionEntry({
           storePath: params.defaults.storePath,
@@ -551,7 +557,6 @@ export async function admitFollowupTurn(params: {
       refreshTurnSessionState(activeEntry);
       turn.preflightCompactionApplied =
         generationRotated || (activeEntry?.compactionCount ?? 0) > previousCompactionCount;
-      preflightSucceeded = true;
     } catch (error) {
       const failureEntry =
         replySessionKey && params.defaults.storePath
@@ -583,12 +588,11 @@ export async function admitFollowupTurn(params: {
       });
       if (!text) {
         turn.preflightError = error;
-        return { kind: "admitted", turn };
+      } else {
+        turn.preflightFailurePayload = markReplyPayloadForSourceSuppressionDelivery({ text });
       }
-      turn.preflightFailurePayload = markReplyPayloadForSourceSuppressionDelivery({ text });
     }
     if (
-      preflightSucceeded &&
       pendingTerminalCompactionNotice &&
       turn.sendPolicy === "allow" &&
       turn.queued.currentInboundEventKind !== "room_event"
