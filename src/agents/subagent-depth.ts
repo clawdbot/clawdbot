@@ -34,7 +34,7 @@ export function readSubagentSessionStore<T extends SessionDepthEntry = SessionDe
   try {
     return Object.fromEntries(
       listSessionEntriesReadOnly({ agentId, storePath, clone: false }).map(
-        ({ sessionKey, entry }) => [sessionKey, entry as T],
+        ({ sessionKey, entry }) => [sessionKey, entry as unknown as T],
       ),
     );
   } catch {
