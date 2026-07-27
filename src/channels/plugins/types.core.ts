@@ -581,10 +581,6 @@ export type ChannelMessagingAdapter = {
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => ReplyPayload | null;
-  enableInteractiveReplies?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-  }) => boolean;
   hasStructuredReplyPayload?: (params: { payload: ReplyPayload }) => boolean;
   targetResolver?: {
     looksLikeId?: (raw: string, normalized?: string) => boolean;

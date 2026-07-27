@@ -19,10 +19,6 @@ import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/secur
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { reactSlackMessage, removeSlackReaction } from "../../actions.js";
 import { formatSlackError } from "../../errors.js";
-import {
-  compileSlackInteractiveReplies,
-  isSlackInteractiveRepliesEnabled,
-} from "../../interactive-replies.js";
 import { resolveSlackStreamingConfig } from "../../stream-mode.js";
 import { resolveSlackThreadTargets } from "../../threading.js";
 import { normalizeSlackAllowOwnerEntry } from "../allow-list.js";
@@ -200,9 +196,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
       if (payload.isReasoning === true) {
         return null;
       }
-      return isSlackInteractiveRepliesEnabled({ cfg, accountId: route.accountId })
-        ? compileSlackInteractiveReplies(payload)
-        : payload;
+      return payload;
     },
     typing: {
       start: async () => {

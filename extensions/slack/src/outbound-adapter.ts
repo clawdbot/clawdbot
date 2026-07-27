@@ -23,10 +23,6 @@ import {
   resolveSlackAuthoredTextPlacement,
   type SlackAuthoredTextPlacement,
 } from "./authored-text.js";
-import {
-  compileSlackInteractiveReplies,
-  isSlackInteractiveRepliesEnabled,
-} from "./interactive-replies.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 import { SLACK_PRESENTATION_CAPABILITIES } from "./presentation.js";
@@ -279,22 +275,12 @@ export const slackOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: null,
   textChunkLimit: SLACK_TEXT_LIMIT,
-  normalizePayload: ({ payload, cfg, accountId }) =>
-    isSlackInteractiveRepliesEnabled({ cfg, accountId })
-      ? compileSlackInteractiveReplies(payload)
-      : payload,
   presentationCapabilities: SLACK_PRESENTATION_CAPABILITIES,
-  renderPresentation: ({ payload, ctx }) => {
-    const payloadForBudget = isSlackInteractiveRepliesEnabled({
-      cfg: ctx.cfg,
-      accountId: ctx.accountId,
-    })
-      ? compileSlackInteractiveReplies(payload)
-      : payload;
+  renderPresentation: ({ payload }) => {
     const slackData = payload.channelData?.slack as SlackOutboundChannelData | undefined;
-    const resolution = resolveSlackOutboundBlockResolution(payloadForBudget);
+    const resolution = resolveSlackOutboundBlockResolution(payload);
     return resolution.segments.length > 0
-      ? withSlackRenderedPresentation(payloadForBudget, slackData, resolution)
+      ? withSlackRenderedPresentation(payload, slackData, resolution)
       : null;
   },
   sendPayload: async (ctx) => {
