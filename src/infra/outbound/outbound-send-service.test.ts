@@ -199,7 +199,7 @@ describe("executeSendAction", () => {
         params: { to: "channel:123", message: "hello" },
         dryRun: false,
         mirror: {
-          sessionKey: "agent:main:demo-outbound:channel:123",
+          sessionKey: `agent:${params.mirror?.agentId ?? "main"}:demo-outbound:channel:123`,
           ...params.mirror,
         },
       },
@@ -246,6 +246,72 @@ describe("executeSendAction", () => {
     mocks.createAgentScopedHostMediaReadFile.mockClear();
     mocks.resolveAgentScopedOutboundMediaAccess.mockClear();
     mocks.appendAssistantMessageToSessionTranscript.mockClear();
+  });
+
+  it("rejects paired ownership failures before send or poll plugin dispatch", async () => {
+    await expect(
+      executeSendAction({
+        ctx: {
+          cfg: {},
+          channel: "demo-outbound",
+          params: { to: "channel:123", message: "hello" },
+          agentId: "work",
+          sessionKey: "agent:main:demo-outbound:channel:123",
+          dryRun: false,
+        },
+        to: "channel:123",
+        message: "hello",
+      }),
+    ).rejects.toThrow('executeSendAction agentId "work" does not match session key agent "main"');
+
+    const resolveCorePoll = vi.fn(() => ({
+      to: "channel:123",
+      question: "Lunch?",
+      options: ["Pizza", "Sushi"],
+      maxSelections: 1,
+    }));
+    await expect(
+      executePollAction({
+        ctx: {
+          cfg: {},
+          channel: "demo-outbound",
+          params: {},
+          mirror: {
+            agentId: "work",
+            sessionKey: "agent:main:demo-outbound:channel:123",
+          },
+          dryRun: false,
+        },
+        resolveCorePoll,
+      }),
+    ).rejects.toThrow(
+      'executePollAction agentId "work" does not match mirror session key agent "main"',
+    );
+
+    await expect(
+      executeSendAction({
+        ctx: {
+          cfg: {},
+          channel: "demo-outbound",
+          params: { to: "channel:123", message: "hello" },
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          mirror: {
+            sessionKey: "agent:work:demo-outbound:channel:123",
+          },
+          dryRun: false,
+        },
+        to: "channel:123",
+        message: "hello",
+      }),
+    ).rejects.toThrow(
+      'executeSendAction mirror session key agent "work" does not match operation agent "main"',
+    );
+
+    expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+    expect(mocks.sendPoll).not.toHaveBeenCalled();
+    expect(resolveCorePoll).not.toHaveBeenCalled();
   });
 
   it("forwards ctx.agentId to sendMessage on core outbound path", async () => {
@@ -985,7 +1051,7 @@ describe("executeSendAction", () => {
 
     expectMirrorWrite({
       agentId: "agent-9",
-      sessionKey: "agent:main:demo-outbound:channel:123",
+      sessionKey: "agent:agent-9:demo-outbound:channel:123",
       text: "hello",
       mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
     });

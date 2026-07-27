@@ -48,6 +48,7 @@ import {
   uniformOutboundAuditTerminals,
 } from "./outbound-audit.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
+import { assertOutboundDeliverySessionOwnership } from "./session-owner.js";
 
 const log = createSubsystemLogger("outbound/deliver");
 
@@ -77,6 +78,16 @@ export async function runOutboundDeliveryInternal(
       startedAt: auditStartedAt,
     });
   };
+  try {
+    assertOutboundDeliverySessionOwnership({
+      ownerLabel: "runOutboundDelivery",
+      session: params.session,
+      mirror: params.mirror,
+    });
+  } catch (error) {
+    emitPreQueueFailure();
+    throw error;
+  }
   if (params.requireUnknownSendReconciliation === true && payloads.length !== 1) {
     emitPreQueueFailure();
     throw new Error(

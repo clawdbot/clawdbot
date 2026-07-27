@@ -443,6 +443,24 @@ describe("gateway url override hardening", () => {
     }
   });
 
+  it("accepts same-owner control and transcript sessions through the legacy gateway pair", async () => {
+    const result = await sendThreadChatGatewayMessage({
+      agentId: "main",
+      requesterSessionKey: "agent:main:main",
+      mirror: {
+        agentId: "main",
+        sessionKey: "agent:main:threadchat:channel:town-square",
+      },
+    });
+
+    expect(result.params).toMatchObject({
+      agentId: "main",
+      sessionKey: "agent:main:threadchat:channel:town-square",
+    });
+    expect(result.params).not.toHaveProperty("requesterSessionKey");
+    expect(result.params).not.toHaveProperty("mirrorAgentId");
+  });
+
   it("forwards buffer metadata for gateway delivery-mode sends", async () => {
     const buffer = Buffer.from("gateway delivery bytes").toString("base64");
     const result = await sendThreadChatGatewayMessage({

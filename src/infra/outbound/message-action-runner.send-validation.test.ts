@@ -36,6 +36,114 @@ describe("runMessageAction send validation", () => {
     setActivePluginRegistry(createTestRegistry([]));
   });
 
+  it("rejects mismatched and malformed session ownership before message policy", async () => {
+    await expect(
+      runMessageAction({
+        cfg: emptyConfig,
+        action: "send",
+        params: { message: "hello from codex" },
+        toolContext: { currentChannelProvider: "webchat" },
+        sessionKey: "agent:main:webchat:direct:current-run",
+        agentId: "work",
+        sourceReplyDeliveryMode: "message_tool_only",
+      }),
+    ).rejects.toThrow('message action agentId "work" does not match session key agent "main"');
+
+    await expect(
+      runMessageAction({
+        cfg: emptyConfig,
+        action: "send",
+        params: { message: "hello from codex" },
+        toolContext: { currentChannelProvider: "webchat" },
+        sessionKey: "agent::broken",
+        sourceReplyDeliveryMode: "message_tool_only",
+      }),
+    ).rejects.toThrow("is malformed");
+  });
+
+  it("rejects mismatched transcript mirror ownership before channel delivery", async () => {
+    const sendText = vi.fn(async () => ({
+      channel: "workspace",
+      messageId: "workspace-test-message",
+    }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "workspace",
+          source: "test",
+          plugin: {
+            ...workspaceTestPlugin,
+            outbound: {
+              ...workspaceTestPlugin.outbound,
+              sendText,
+            },
+          },
+        },
+      ]),
+    );
+
+    await expect(
+      runMessageAction({
+        cfg: workspaceConfig,
+        action: "send",
+        params: {
+          channel: "workspace",
+          target: "#C12345678",
+          message: "hello from codex",
+        },
+        transcriptMirror: {
+          agentId: "work",
+          sessionKey: "agent:main:workspace:channel:C12345678",
+        },
+      }),
+    ).rejects.toThrow(
+      'message action agentId "work" does not match mirror session key agent "main"',
+    );
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
+  it("rejects different control and transcript owners before channel delivery", async () => {
+    const sendText = vi.fn(async () => ({
+      channel: "workspace",
+      messageId: "workspace-test-message",
+    }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "workspace",
+          source: "test",
+          plugin: {
+            ...workspaceTestPlugin,
+            outbound: {
+              ...workspaceTestPlugin.outbound,
+              sendText,
+            },
+          },
+        },
+      ]),
+    );
+
+    await expect(
+      runMessageAction({
+        cfg: workspaceConfig,
+        action: "send",
+        params: {
+          channel: "workspace",
+          target: "#C12345678",
+          message: "hello from codex",
+        },
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        transcriptMirror: {
+          sessionKey: "agent:work:workspace:channel:C12345678",
+        },
+      }),
+    ).rejects.toThrow(
+      'message action mirror session key agent "work" does not match operation agent "main"',
+    );
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
   it("requires message when no media hint is provided", async () => {
     await expect(
       runDrySend({
@@ -137,7 +245,7 @@ describe("runMessageAction send validation", () => {
       toolContext: {
         currentChannelProvider: "webchat",
       },
-      sessionKey: "agent:main",
+      sessionKey: "agent:main:main",
       sourceReplyDeliveryMode: "message_tool_only",
     });
 
@@ -260,7 +368,7 @@ describe("runMessageAction send validation", () => {
       toolContext: {
         currentChannelProvider: "webchat",
       },
-      sessionKey: "agent:main",
+      sessionKey: "agent:main:main",
       sourceReplyDeliveryMode: "message_tool_only",
     });
 
@@ -286,7 +394,7 @@ describe("runMessageAction send validation", () => {
         toolContext: {
           currentChannelProvider: "webchat",
         },
-        sessionKey: "agent:main",
+        sessionKey: "agent:main:main",
         sourceReplyDeliveryMode: "automatic",
       }),
     ).rejects.toThrow(/requires a target/i);
@@ -319,7 +427,7 @@ describe("runMessageAction send validation", () => {
       toolContext: {
         currentChannelProvider: "webchat",
       },
-      sessionKey: "agent:main",
+      sessionKey: "agent:main:main",
       sourceReplyDeliveryMode: "message_tool_only",
       dryRun: true,
     });
@@ -595,7 +703,7 @@ describe("message body alias normalization", () => {
       toolContext: {
         currentChannelProvider: "webchat",
       },
-      sessionKey: "agent:main",
+      sessionKey: "agent:main:main",
       sourceReplyDeliveryMode: "message_tool_only",
     });
 

@@ -476,6 +476,86 @@ describe("delivery-queue recovery", () => {
     });
   });
 
+  it("dead-letters mismatched and malformed ownership before admission, backoff, or replay", async () => {
+    const auditEvents: TrustedMessageAuditEvent[] = [];
+    const unsubscribe = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
+    const mismatchId = await enqueueDelivery(
+      {
+        channel: "slack",
+        to: "C123",
+        payloads: [{ text: "mismatch" }],
+        session: {
+          agentId: "work",
+          key: "agent:main:slack:channel:C123",
+        },
+      },
+      tmpDir(),
+    );
+    const malformedId = await enqueueDelivery(
+      {
+        channel: "slack",
+        to: "C456",
+        payloads: [{ text: "malformed" }],
+        mirror: {
+          sessionKey: "agent::broken",
+        },
+      },
+      tmpDir(),
+    );
+    setQueuedEntryState(tmpDir(), mismatchId, {
+      retryCount: 3,
+      lastAttemptAt: Date.now(),
+    });
+    setQueuedEntryState(tmpDir(), malformedId, {
+      retryCount: 4,
+      lastAttemptAt: Date.now(),
+    });
+    const admitDeferredDelivery = vi.fn(() => ({ status: "allowed" as const }));
+    resolveOutboundChannelMessageAdapterMock.mockReturnValue({
+      durableFinal: { admitDeferredDelivery },
+    });
+    const deliver = vi.fn();
+
+    const { result } = await runRecovery({ deliver });
+    unsubscribe();
+
+    expect(result).toEqual({
+      recovered: 0,
+      failed: 2,
+      skippedMaxRetries: 0,
+      deferredBackoff: 0,
+    });
+    expect(admitDeferredDelivery).not.toHaveBeenCalled();
+    expect(resolveOutboundChannelMessageAdapterMock).not.toHaveBeenCalled();
+    expect(deliver).not.toHaveBeenCalled();
+    expect(sleepMock).not.toHaveBeenCalled();
+    expect(readOutboundQueueStatus(tmpDir(), mismatchId)).toBe("failed");
+    expect(readOutboundQueueStatus(tmpDir(), malformedId)).toBe("failed");
+    expect(readQueuedEntry(tmpDir(), mismatchId)).toMatchObject({
+      retryCount: 3,
+      lastError: 'queued delivery agentId "work" does not match session key agent "main"',
+    });
+    expect(readQueuedEntry(tmpDir(), malformedId)).toMatchObject({
+      retryCount: 4,
+      lastError: expect.stringContaining("mirror session key"),
+    });
+    expect(auditEvents).toHaveLength(2);
+    expect(auditEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sourceId: `message:outbound:queue:${mismatchId}:payload:0`,
+          outcome: "failed",
+          failureStage: "queue",
+        }),
+        expect.objectContaining({
+          sourceId: `message:outbound:queue:${malformedId}:payload:0`,
+          outcome: "failed",
+          failureStage: "queue",
+        }),
+      ]),
+    );
+  });
+
   it("paces startup replay instead of draining eligible entries back-to-back", async () => {
     vi.useFakeTimers();
     const startedAt = new Date("2026-04-23T00:00:00.000Z");
@@ -1917,7 +1997,7 @@ describe("delivery-queue recovery", () => {
     }
   });
 
-  it("replays stored delivery options during recovery", async () => {
+  it("replays stored delivery options with a cross-agent policy key", async () => {
     await enqueueRecoveryDelivery({
       replyToId: "root-message",
       replyToMode: "first",
@@ -1944,7 +2024,8 @@ describe("delivery-queue recovery", () => {
       },
       session: {
         key: "agent:main:main",
-        agentId: "agent-main",
+        agentId: "main",
+        policyKey: "agent:policy-owner:directchat:direct:+1",
         requesterAccountId: "acct-1",
         requesterSenderId: "sender-1",
         requesterSenderName: "Sender One",
@@ -1992,7 +2073,8 @@ describe("delivery-queue recovery", () => {
     });
     expect(deliverInput.session).toEqual({
       key: "agent:main:main",
-      agentId: "agent-main",
+      agentId: "main",
+      policyKey: "agent:policy-owner:directchat:direct:+1",
       requesterAccountId: "acct-1",
       requesterSenderId: "sender-1",
       requesterSenderName: "Sender One",

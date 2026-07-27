@@ -458,6 +458,89 @@ describe("deliverOutboundPayloads", () => {
     expect(results).toEqual([{ channel: "matrix", messageId: "m1", roomId: "!room:example" }]);
   });
 
+  it("rejects mismatched session ownership before queue or platform I/O", async () => {
+    const events: TrustedMessageAuditEvent[] = [];
+    const unsubscribe = onTrustedMessageAuditEvent((event) => events.push(event));
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
+
+    try {
+      await expect(
+        deliverOutboundPayloads({
+          cfg: matrixChunkConfig,
+          channel: "matrix",
+          to: "!room:example",
+          payloads: [{ text: "hello" }],
+          deps: { matrix: sendMatrix },
+          session: {
+            agentId: "work",
+            key: "agent:main:matrix:room:ops",
+          },
+        }),
+      ).rejects.toThrow(
+        'runOutboundDelivery agentId "work" does not match session key agent "main"',
+      );
+    } finally {
+      unsubscribe();
+    }
+
+    expect(queueMocks.enqueueDelivery).not.toHaveBeenCalled();
+    expect(queueMocks.enqueueDeliveryOnce).not.toHaveBeenCalled();
+    expect(sendMatrix).not.toHaveBeenCalled();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ outcome: "failed", failureStage: "queue" });
+  });
+
+  it("accepts same-owner control and transcript keys with a cross-agent policy key", async () => {
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
+
+    await deliverOutboundPayloads({
+      cfg: matrixChunkConfig,
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "hello" }],
+      deps: { matrix: sendMatrix },
+      session: {
+        agentId: "controller",
+        key: "agent:controller:acp:spawned",
+        policyKey: "agent:policy-owner:matrix:room:ops",
+      },
+      mirror: {
+        agentId: "controller",
+        sessionKey: "agent:controller:matrix:room:ops",
+      },
+    });
+
+    expect(sendMatrix).toHaveBeenCalledOnce();
+  });
+
+  it("rejects different control and transcript owners before queueing or sending", async () => {
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: matrixChunkConfig,
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "hello" }],
+        deps: { matrix: sendMatrix },
+        session: {
+          agentId: "controller",
+          key: "agent:controller:acp:spawned",
+          policyKey: "agent:policy-owner:matrix:room:ops",
+        },
+        mirror: {
+          sessionKey: "agent:transcript:matrix:room:ops",
+        },
+      }),
+    ).rejects.toThrow(
+      'runOutboundDelivery mirror session key agent "transcript" does not match operation agent "controller"',
+    );
+
+    expect(queueMocks.enqueueDelivery).not.toHaveBeenCalled();
+    expect(queueMocks.enqueueDeliveryOnce).not.toHaveBeenCalled();
+    expect(sendMatrix).not.toHaveBeenCalled();
+  });
+
   it("reports unsupported durable final delivery when required capabilities are missing", async () => {
     setTestOutbound({
       deliveryMode: "direct",

@@ -199,6 +199,44 @@ describe("drainPendingDeliveries for reconnect", () => {
     expect(after.lastError).toBe("transient failure");
   });
 
+  it("dead-letters invalid ownership before reconnect admission or replay", async () => {
+    const log = createRecoveryLog();
+    const deliver = vi.fn<DeliverFn>(async () => {});
+    const id = await enqueueDelivery(
+      {
+        channel: "directchat",
+        to: "+1555",
+        payloads: [{ text: "hi" }],
+        accountId: "acct1",
+        session: {
+          agentId: "main",
+          key: "agent:main:directchat:direct:+1555",
+        },
+        mirror: {
+          sessionKey: "agent:work:directchat:direct:+1555",
+        },
+      },
+      tmpDir,
+    );
+    setQueuedEntryState(tmpDir, id, {
+      retryCount: 2,
+      lastAttemptAt: Date.now(),
+      lastError: NO_LISTENER_ERROR,
+    });
+
+    await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
+
+    expect(deliver).not.toHaveBeenCalled();
+    expect(resolveOutboundChannelMessageAdapterMock).not.toHaveBeenCalled();
+    expect(sleepMock).not.toHaveBeenCalled();
+    expect(readOutboundQueueStatus(tmpDir, id)).toBe("failed");
+    expect(readQueuedEntry(tmpDir, id)).toMatchObject({
+      retryCount: 2,
+      lastError:
+        'queued delivery mirror session key agent "work" does not match operation agent "main"',
+    });
+  });
+
   it("records retry state if delivery fails during drain", async () => {
     const log = createRecoveryLog();
     const deliver = createTransientFailureDeliver();

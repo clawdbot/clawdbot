@@ -111,6 +111,7 @@ import {
   materializeMessagePresentationFallback,
 } from "./outbound-send-service.js";
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
+import { assertAgentSessionOwnerPairs } from "./session-owner.js";
 import {
   beginTerminalSourceReplyDelivery,
   cancelTerminalSourceReplyDelivery,
@@ -1848,8 +1849,22 @@ export async function runMessageAction(
 ): Promise<MessageActionRunResult> {
   const cfg = input.cfg;
   let params = { ...input.params };
+  const explicitAgentId = normalizeOptionalString(input.agentId);
+  assertAgentSessionOwnerPairs([
+    {
+      ownerLabel: "message action",
+      agentId: explicitAgentId,
+      sessionKey: input.sessionKey,
+    },
+    {
+      ownerLabel: "message action",
+      agentId: input.transcriptMirror?.agentId,
+      sessionKey: input.transcriptMirror?.sessionKey,
+      sessionKeyLabel: "mirror session key",
+    },
+  ]);
   const resolvedAgentId =
-    input.agentId ??
+    explicitAgentId ??
     (input.sessionKey
       ? resolveSessionAgentId({ sessionKey: input.sessionKey, config: cfg })
       : undefined);

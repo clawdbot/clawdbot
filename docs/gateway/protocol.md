@@ -493,6 +493,14 @@ methods. Treat this as feature discovery, not a full enumeration of
 
   <Accordion title="Messaging and logs">
     - `send` is the direct outbound-delivery RPC for channel/account/thread-targeted sends outside the chat runner.
+    - `send` and `message.action` reject a request when an explicit `agentId`
+      does not own its agent-scoped `sessionKey`. Agent-scoped keys must use the
+      complete `agent:<agentId>:<session>` shape; malformed `agent:` keys are
+      rejected, while legacy unscoped session keys remain valid.
+      Queue recovery applies the same ownership check and permanently fails
+      inconsistent stored deliveries instead of replaying them. `policyKey` is
+      excluded because routed delivery can intentionally use another agent's
+      policy or origin session.
     - `logs.tail` returns the configured gateway file-log tail with cursor/limit and max-byte controls.
 
   </Accordion>

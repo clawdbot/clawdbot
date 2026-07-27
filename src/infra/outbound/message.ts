@@ -37,6 +37,7 @@ import {
   type NormalizedOutboundPayload,
 } from "./payloads.js";
 import { buildOutboundSessionContext } from "./session-context.js";
+import { assertAgentSessionOwnerPairs } from "./session-owner.js";
 import { resolveOutboundTarget } from "./targets.js";
 
 const SEND_BUFFER_MEDIA_URL = "buffer://message-send/attachment";
@@ -342,6 +343,20 @@ async function resolveGatewayIdempotencyKey(idempotencyKey?: string): Promise<st
 }
 
 export async function sendMessage(params: MessageSendParams): Promise<MessageSendResult> {
+  assertAgentSessionOwnerPairs([
+    {
+      ownerLabel: "sendMessage",
+      agentId: params.agentId,
+      sessionKey: params.requesterSessionKey,
+      sessionKeyLabel: "requester session key",
+    },
+    {
+      ownerLabel: "sendMessage",
+      agentId: params.mirror?.agentId,
+      sessionKey: params.mirror?.sessionKey,
+      sessionKeyLabel: "mirror session key",
+    },
+  ]);
   const cfg = await resolveMessageConfig(params.cfg);
   const channel = await resolveRequiredChannel({ cfg, channel: params.channel });
   const plugin = resolveRequiredPlugin(channel, cfg);

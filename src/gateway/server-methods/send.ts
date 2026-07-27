@@ -41,6 +41,7 @@ import {
   projectOutboundPayloadPlanForMirror,
 } from "../../infra/outbound/payloads.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
+import { validateAgentSessionOwnerPair } from "../../infra/outbound/session-owner.js";
 import {
   beginTerminalSourceReplyDelivery,
   cancelTerminalSourceReplyDelivery,
@@ -417,6 +418,20 @@ function createGatewayInflightUnavailableFailure(params: {
   };
 }
 
+function createGatewayInflightInvalidRequestFailure(params: {
+  context: GatewayRequestContext;
+  dedupeKey: string;
+  message: string;
+}): InflightResult {
+  const error = errorShape(ErrorCodes.INVALID_REQUEST, params.message);
+  cacheGatewayDedupeFailure({
+    context: params.context,
+    dedupeKey: params.dedupeKey,
+    error,
+  });
+  return { ok: false, error };
+}
+
 async function mirrorDeliveredSourceReplyToTranscriptBestEffort(params: {
   context: GatewayRequestContext;
   mirror: Parameters<typeof mirrorDeliveredSourceReplyToTranscript>[0];
@@ -506,6 +521,20 @@ export const sendHandlers: GatewayRequestHandlers = {
     }
     const { dedupeKey, inflightMap } = inflight;
     const work = (async (): Promise<InflightResult> => {
+      const sessionKey = normalizeOptionalString(request.sessionKey) ?? undefined;
+      const explicitAgentId = normalizeOptionalString(request.agentId);
+      const ownership = validateAgentSessionOwnerPair({
+        ownerLabel: "message.action",
+        agentId: explicitAgentId,
+        sessionKey,
+      });
+      if (!ownership.ok) {
+        return createGatewayInflightInvalidRequestFailure({
+          context,
+          dedupeKey,
+          message: ownership.error.message,
+        });
+      }
       const resolvedChannel = await resolveRequestedChannel({
         requestChannel: request.channel,
         unsupportedMessage: (input) => `unsupported channel: ${input}`,
@@ -529,9 +558,8 @@ export const sendHandlers: GatewayRequestHandlers = {
       }
 
       try {
-        const sessionKey = normalizeOptionalString(request.sessionKey) ?? undefined;
         const agentId =
-          normalizeOptionalString(request.agentId) ??
+          explicitAgentId ??
           (sessionKey ? resolveSessionAgentId({ sessionKey, config: cfg }) : undefined);
         const accountId = normalizeOptionalString(request.accountId) ?? undefined;
         if (request.action === "send") {
@@ -688,6 +716,21 @@ export const sendHandlers: GatewayRequestHandlers = {
     const threadId = normalizeOptionalString(request.threadId);
 
     const work = (async (): Promise<InflightResult> => {
+      const providedSessionKey =
+        normalizeSessionKeyPreservingOpaquePeerIds(request.sessionKey) || undefined;
+      const explicitAgentId = normalizeOptionalString(request.agentId);
+      const ownership = validateAgentSessionOwnerPair({
+        ownerLabel: "send",
+        agentId: explicitAgentId,
+        sessionKey: providedSessionKey,
+      });
+      if (!ownership.ok) {
+        return createGatewayInflightInvalidRequestFailure({
+          context,
+          dedupeKey,
+          message: ownership.error.message,
+        });
+      }
       const resolvedChannel = await resolveInternalDeliveryChannel(request.channel, context);
       if (resolvedChannel.kind !== "ready") {
         return resolvedChannel.result;
@@ -726,9 +769,6 @@ export const sendHandlers: GatewayRequestHandlers = {
         // Preserve opaque, case-sensitive peer IDs (e.g. Matrix room ids) on an
         // explicit session key instead of raw-lowercasing it (openclaw#75670).
         // Non-enrolled channels still canonicalize to lowercase via the registry.
-        const providedSessionKey =
-          normalizeSessionKeyPreservingOpaquePeerIds(request.sessionKey) || undefined;
-        const explicitAgentId = normalizeOptionalString(request.agentId);
         const sessionAgentId = providedSessionKey
           ? resolveSessionAgentId({ sessionKey: providedSessionKey, config: cfg })
           : undefined;

@@ -1391,6 +1391,26 @@ describe("gateway send mirroring", () => {
     });
   });
 
+  it("keeps explicit agent ownership for legacy unscoped session keys", async () => {
+    mockDeliverySuccess("m-legacy-unscoped-agent");
+
+    await runSend({
+      to: "channel:C1",
+      message: "hello",
+      channel: "slack",
+      agentId: "work",
+      sessionKey: "legacy:slack:channel:c1",
+      idempotencyKey: "idem-legacy-unscoped-agent",
+    });
+
+    expect(outboundRouteCall()?.agentId).toBe("work");
+    expect(outboundRouteCall()?.currentSessionKey).toBe("legacy:slack:channel:c1");
+    expectDeliverySessionMirror({
+      agentId: "work",
+      sessionKey: "legacy:slack:channel:c1",
+    });
+  });
+
   it("rejects a missing reserved agent-harness session before persistence or delivery", async () => {
     const sessionKey = "agent:main:harness:codex:supervision:missing";
 
@@ -1487,22 +1507,84 @@ describe("gateway send mirroring", () => {
     expect(deliveryCall()?.mirror?.agentId).toBe("work");
   });
 
-  it("prefers explicit agentId over sessionKey agent for delivery and mirror", async () => {
-    mockDeliverySuccess("m-agent-precedence");
-
-    await runSend({
+  it("rejects explicit agentId when it conflicts with the sessionKey agent", async () => {
+    const { respond } = await runSend({
       to: "channel:C1",
       message: "hello",
       channel: "slack",
       agentId: "work",
       sessionKey: "agent:main:slack:channel:c1",
-      idempotencyKey: "idem-agent-precedence",
+      idempotencyKey: "idem-agent-mismatch",
     });
 
-    expect(deliveryCall()?.session?.agentId).toBe("work");
-    expect(deliveryCall()?.session?.key).toBe("agent:main:slack:channel:c1");
-    expect(deliveryCall()?.mirror?.sessionKey).toBe("agent:main:slack:channel:c1");
-    expect(deliveryCall()?.mirror?.agentId).toBe("work");
+    expect(firstRespondCall(respond)).toMatchObject([
+      false,
+      undefined,
+      {
+        code: "INVALID_REQUEST",
+        message: 'send agentId "work" does not match session key agent "main"',
+      },
+      undefined,
+    ]);
+    expect(mocks.getChannelPlugin).not.toHaveBeenCalled();
+    expect(mocks.resolveOutboundTarget).not.toHaveBeenCalled();
+    expect(mocks.resolveOutboundSessionRoute).not.toHaveBeenCalled();
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it.each(["agent::broken", "agent:main"])(
+    "rejects malformed agent-scoped send session key %s before channel work",
+    async (sessionKey) => {
+      const { respond } = await runSend({
+        to: "channel:C1",
+        message: "hello",
+        channel: "slack",
+        sessionKey,
+        idempotencyKey: `idem-malformed-${sessionKey}`,
+      });
+
+      expect(firstRespondCall(respond)?.[2]).toMatchObject({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("is malformed"),
+      });
+      expect(mocks.getChannelPlugin).not.toHaveBeenCalled();
+      expect(mocks.resolveOutboundTarget).not.toHaveBeenCalled();
+      expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    },
+  );
+
+  it("caches ownership validation failures under the send idempotency key", async () => {
+    const context = makeContext();
+    const invoke = async () => {
+      const respond = vi.fn();
+      await expectDefined(sendHandlers.send, "sendHandlers.send test invariant").call(
+        sendHandlers,
+        {
+          params: {
+            to: "channel:C1",
+            message: "hello",
+            channel: "slack",
+            agentId: "work",
+            sessionKey: "agent:main:slack:channel:c1",
+            idempotencyKey: "idem-agent-mismatch-cached",
+          } as never,
+          respond,
+          context,
+          req: { type: "req", id: "1", method: "send" },
+          client: null as never,
+          isWebchatConnect: () => false,
+        },
+      );
+      return respond;
+    };
+
+    const firstRespond = await invoke();
+    const secondRespond = await invoke();
+
+    expect(firstRespondCall(firstRespond)?.[2]?.code).toBe("INVALID_REQUEST");
+    expect(firstRespondCall(secondRespond)?.[3]).toEqual({ cached: true });
+    expect(mocks.getChannelPlugin).not.toHaveBeenCalled();
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
   it("ignores blank explicit agentId and falls back to sessionKey agent", async () => {
@@ -1887,6 +1969,52 @@ describe("gateway send mirroring", () => {
         }),
       }),
     );
+  });
+
+  it("rejects message.action agentId when it conflicts with the sessionKey agent", async () => {
+    const { respond } = await runMessageActionRequest(
+      {
+        channel: "whatsapp",
+        action: "react",
+        params: { messageId: "wamid.1", emoji: "ok" },
+        sessionKey: "agent:main:whatsapp:direct:15551234567",
+        agentId: "work",
+        idempotencyKey: "idem-message-action-agent-mismatch",
+      },
+      null,
+    );
+
+    expect(firstRespondCall(respond)).toMatchObject([
+      false,
+      undefined,
+      {
+        code: "INVALID_REQUEST",
+        message: 'message.action agentId "work" does not match session key agent "main"',
+      },
+      undefined,
+    ]);
+    expect(mocks.getChannelPlugin).not.toHaveBeenCalled();
+    expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed message.action session keys before plugin discovery", async () => {
+    const { respond } = await runMessageActionRequest(
+      {
+        channel: "whatsapp",
+        action: "react",
+        params: { messageId: "wamid.1", emoji: "ok" },
+        sessionKey: "agent::broken",
+        idempotencyKey: "idem-message-action-malformed-session",
+      },
+      null,
+    );
+
+    expect(firstRespondCall(respond)?.[2]).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("is malformed"),
+    });
+    expect(mocks.getChannelPlugin).not.toHaveBeenCalled();
+    expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
   });
 
   it("strips current-turn context from unauthenticated message action callers", async () => {

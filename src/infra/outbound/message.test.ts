@@ -162,6 +162,60 @@ describe("sendMessage", () => {
     expectRecordFields(deliveryParams.session, { agentId: "work" }, "outbound session");
   });
 
+  it("rejects requester and mirror pair mismatches before channel resolution", async () => {
+    await expect(
+      sendMessage({
+        cfg: {},
+        channel: "forum",
+        to: "123456",
+        content: "hi",
+        agentId: "work",
+        requesterSessionKey: "agent:main:forum:group:ops",
+      }),
+    ).rejects.toThrow(
+      'sendMessage agentId "work" does not match requester session key agent "main"',
+    );
+
+    await expect(
+      sendMessage({
+        cfg: {},
+        channel: "forum",
+        to: "123456",
+        content: "hi",
+        mirror: {
+          agentId: "work",
+          sessionKey: "agent:main:forum:dm:123456",
+        },
+      }),
+    ).rejects.toThrow('sendMessage agentId "work" does not match mirror session key agent "main"');
+
+    expect(mocks.getChannelPlugin).not.toHaveBeenCalled();
+    expect(mocks.resolveOutboundTarget).not.toHaveBeenCalled();
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("rejects different control and mirror owners before channel resolution", async () => {
+    await expect(
+      sendMessage({
+        cfg: {},
+        channel: "forum",
+        to: "123456",
+        content: "hi",
+        agentId: "controller",
+        requesterSessionKey: "agent:controller:main",
+        mirror: {
+          sessionKey: "agent:transcript:forum:dm:123456",
+        },
+      }),
+    ).rejects.toThrow(
+      'sendMessage mirror session key agent "transcript" does not match operation agent "controller"',
+    );
+
+    expect(mocks.getChannelPlugin).not.toHaveBeenCalled();
+    expect(mocks.resolveOutboundTarget).not.toHaveBeenCalled();
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
   it("forwards requesterSenderId into the outbound delivery session", async () => {
     await sendMessage({
       cfg: {},
