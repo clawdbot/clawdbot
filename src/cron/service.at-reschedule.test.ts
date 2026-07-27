@@ -25,6 +25,7 @@ function createAtJob(
   };
 }
 
+// regression: #19676
 describe("Cron issue #19676 at-job reschedule", () => {
   it("returns undefined for a completed one-shot job that has not been rescheduled", () => {
     const job = createAtJob({

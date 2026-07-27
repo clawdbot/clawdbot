@@ -63,6 +63,7 @@ async function expectJobDoesNotRefireWhenNextRunIsUnresolved(params: {
   expect(params.state.store?.jobs[0]?.state.nextRunAtMs).toBeUndefined();
 }
 
+// regression: #66019
 describe("#66019 unresolved next-run repro", () => {
   it("does not refire a recurring cron job 2s later when next-run resolution returns undefined", async () => {
     const store = issue66019Fixtures.makeStorePath();

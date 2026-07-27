@@ -214,6 +214,7 @@ async function resolveLastTarget(cfg: OpenClawConfig) {
   return resolveDeliveryTarget(cfg, AGENT_ID, { channel: "last", to: undefined });
 }
 
+// regression: #91613
 describe("resolveDeliveryTarget — issue #91613 cross-room drain fix", () => {
   it("REFUSES implicit/keyless isolated-cron delivery inherited from the SHARED agent-main bucket's last recipient", async () => {
     // A DIFFERENT conversation last wrote the single shared agent-main bucket, leaving its room
