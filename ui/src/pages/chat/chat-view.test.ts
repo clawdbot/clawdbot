@@ -3649,7 +3649,6 @@ describe("chat attachment picker", () => {
       const onSend = vi.fn(() => {
         expect(attachments.map((attachment) => attachment.fileName)).toEqual(["proof.png"]);
       });
-      let reads: ChatAttachmentReadLifecycle;
       const redraw = () => {
         const readSignal = reads.readSignal;
         render(
@@ -3672,7 +3671,7 @@ describe("chat attachment picker", () => {
           container,
         );
       };
-      reads = new ChatAttachmentReadLifecycle(redraw);
+      const reads = new ChatAttachmentReadLifecycle(redraw);
       redraw();
 
       if (entry === "clipboard") {

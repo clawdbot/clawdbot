@@ -25,8 +25,13 @@ async function installDeferredAttachmentReader(page: Page): Promise<void> {
   await page.addInitScript(() => {
     const proof = { aborts: 0, finish: undefined as (() => void) | undefined };
     (globalThis as unknown as { attachmentReadProof: typeof proof }).attachmentReadProof = proof;
-    const readAsDataURL = FileReader.prototype.readAsDataURL;
-    const abort = FileReader.prototype.abort;
+    // Keep the native methods before overriding them so deferred completion and
+    // cancellation cannot recursively call their own test hooks.
+    const readAsDataURL = Reflect.get(
+      FileReader.prototype,
+      "readAsDataURL",
+    ) as FileReader["readAsDataURL"];
+    const abort = Reflect.get(FileReader.prototype, "abort") as FileReader["abort"];
     FileReader.prototype.readAsDataURL = function (blob: Blob) {
       proof.finish = () => readAsDataURL.call(this, blob);
     };
