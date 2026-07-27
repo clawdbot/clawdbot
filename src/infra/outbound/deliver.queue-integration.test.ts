@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
@@ -12,6 +14,7 @@ import {
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
+import { collectEntrySpoolPaths, stageQueuePayloadMedia } from "./delivery-queue-media-spool.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import { loadPendingDeliveries } from "./delivery-queue-storage.js";
 import {
@@ -63,6 +66,14 @@ const matrixOutboundForQueueTest: ChannelOutboundAdapter = {
       await resolveMatrixSender(deps)(to, text, {
         cfg,
         accountId: accountId ?? undefined,
+      }),
+    ),
+  sendMedia: async ({ cfg, to, text, mediaUrl, accountId, deps }) =>
+    withMatrixChannel(
+      await resolveMatrixSender(deps)(to, text ?? "", {
+        cfg,
+        accountId: accountId ?? undefined,
+        mediaUrl,
       }),
     ),
 };
@@ -259,6 +270,84 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     expect(
       getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
     ).toBe("completed");
+  });
+
+  it("reuses durable Matrix media after regenerated producer files disappear", async () => {
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    const deliveryIntentId = "cron-direct-delivery:v1:immutable-staged-matrix-media";
+    const originalSource = path.join(tmpDir, "original-stable-media.ogg");
+    const originalBytes = "original durable Matrix attachment";
+    await fs.writeFile(originalSource, originalBytes);
+    const staged = await stageQueuePayloadMedia({
+      payloads: [{ text: "original queue-owned caption", mediaUrl: originalSource }],
+      mediaAccess: { localRoots: [tmpDir] },
+      maxBytes: 1024 * 1024,
+      stateDir: tmpDir,
+    });
+    if (staged.status !== "staged") {
+      throw new Error("test invariant: original producer media must be durably staged");
+    }
+    const spoolPath = staged.artifacts[0];
+    if (!spoolPath) {
+      throw new Error("test invariant: original media must have a queue-owned spool artifact");
+    }
+    await enqueueDeliveryOnce(
+      {
+        channel: "matrix",
+        to: "!room:example",
+        payloads: staged.payloads,
+        queuePolicy: "required",
+        completionRetention: boundedCronCompletionRetention,
+      },
+      deliveryIntentId,
+      tmpDir,
+      staged.mediaStageId,
+    );
+    const pending = (await loadPendingDeliveries(tmpDir))[0];
+    expect(collectEntrySpoolPaths(pending?.payloads ?? [], tmpDir)).toEqual([spoolPath]);
+    await fs.rm(originalSource);
+
+    let deliveredBytes: string | undefined;
+    const sendMatrix = vi.fn(
+      async (_to: string, _text: string, options?: Record<string, unknown>) => {
+        if (typeof options?.mediaUrl !== "string") {
+          throw new Error("test invariant: Matrix must receive the original staged attachment");
+        }
+        deliveredBytes = await fs.readFile(options.mediaUrl, "utf8");
+        return { messageId: "immutable-staged-matrix-message" };
+      },
+    );
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {} as OpenClawConfig,
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [
+          {
+            text: "regenerated caption must never replace queue custody",
+            mediaUrl: path.join(tmpDir, "missing-regenerated-producer-media.ogg"),
+          },
+        ],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+        deliveryIntentId,
+        completionRetention: boundedCronCompletionRetention,
+        reusePendingDeliveryIntent: true,
+      }),
+    ).resolves.toMatchObject([{ messageId: "immutable-staged-matrix-message" }]);
+
+    expect(sendMatrix).toHaveBeenCalledOnce();
+    expect(sendMatrix).toHaveBeenCalledWith(
+      "!room:example",
+      "original queue-owned caption",
+      expect.objectContaining({ mediaUrl: spoolPath }),
+    );
+    expect(deliveredBytes).toBe(originalBytes);
+    expect(
+      getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
+    ).toBe("completed");
+    await expect(fs.stat(spoolPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("retains a completed stable delivery receipt across producer replays", async () => {

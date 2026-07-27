@@ -166,6 +166,14 @@ export async function runOutboundDeliveryInternal(
     params.renderedBatchPlan ?? createRenderedMessageBatchPlan(params.payloads);
 
   const stageAndEnqueueDelivery = async (): Promise<{ id: string; created: boolean } | null> => {
+    if (params.deliveryIntentId && params.reusePendingDeliveryIntent) {
+      const existing = await loadPendingDelivery(params.deliveryIntentId);
+      if (existing) {
+        // Durable custody owns its already-staged media. A regenerated TTS or
+        // producer file may have vanished, so claim the row before staging it.
+        return { id: existing.id, created: false };
+      }
+    }
     // Legacy `MEDIA:` text directives carry local media that only materializes
     // into structured fields at send time, so the spool (which reads structured
     // media) would skip it and a retry would read the vanished producer path.
