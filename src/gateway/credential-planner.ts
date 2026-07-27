@@ -139,7 +139,6 @@ export function createGatewayCredentialPlan(params: {
     (authMode !== "token" && authMode !== "none" && !tokenCanWin);
   const localTokenSurfaceActive =
     localTokenCanWin &&
-    !envToken &&
     (authMode === "token" ||
       (authMode === undefined && !(envPassword || localPassword.configured)));
 
