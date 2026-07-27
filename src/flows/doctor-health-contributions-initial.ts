@@ -15,6 +15,7 @@ import {
   runSandboxHealth,
   runSessionLocksHealth,
   runSessionSnapshotsHealth,
+  runSessionTranscriptLabelsHealth,
   runSessionTranscriptsHealth,
   runStateIntegrityHealth,
 } from "./doctor-health-contribution-runners.state.js";
@@ -35,6 +36,13 @@ function legacyOwnedRepair(
       ? { status: "repaired", changes: [], effects }
       : { status: "skipped", reason, changes: [], effects };
   };
+}
+
+async function runTelegramGeneralTopicConversationHealth(
+  ctx: DoctorHealthFlowContext,
+): Promise<void> {
+  const { runCoreContributionHealth } = await import("./doctor-health-contribution-core.js");
+  await runCoreContributionHealth(ctx, ["core/doctor/telegram-general-topic-conversations"]);
 }
 
 export function resolveInitialDoctorHealthContributions(params: {
@@ -265,6 +273,12 @@ export function resolveInitialDoctorHealthContributions(params: {
       run: runCodexSessionRouteHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:telegram-general-topic-conversations",
+      label: "Telegram General-topic conversations",
+      healthCheckIds: ["core/doctor/telegram-general-topic-conversations"],
+      run: runTelegramGeneralTopicConversationHealth,
+    }),
+    createDoctorHealthContribution({
       id: "doctor:session-locks",
       label: "Session locks",
       healthCheckIds: ["core/doctor/session-locks"],
@@ -292,6 +306,11 @@ export function resolveInitialDoctorHealthContributions(params: {
         }, "legacy doctor session transcript contribution owns transcript rewrites"),
       },
       run: runSessionTranscriptsHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:session-transcript-labels",
+      label: "Session transcript labels",
+      run: runSessionTranscriptLabelsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:session-snapshots",

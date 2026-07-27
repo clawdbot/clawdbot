@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { icon, type IconName } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import type { BoardFace } from "../../lib/board/settings.ts";
 import { formatMs, formatRelativeTimestamp } from "../../lib/format.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import {
@@ -26,6 +27,7 @@ type TasksProps = {
   error: string | null;
   tasks: TaskSummary[];
   cancellingTaskIds: ReadonlySet<string>;
+  sessionFace: (sessionKey: string) => BoardFace;
   onCancel: (taskId: string) => void;
   onNavigateToChat: (sessionKey: string) => void;
 };
@@ -35,8 +37,9 @@ function renderSessionLink(task: TaskSummary, props: TasksProps) {
   if (!sessionKey) {
     return nothing;
   }
+  const face = props.sessionFace(sessionKey);
   const href = sessionNavigationTarget({
-    face: "chat",
+    face,
     sessionKey,
     fallbackAgentId: props.agentId,
     basePath: props.basePath,

@@ -8,6 +8,7 @@ export const SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS = [
   "modelOverride",
   "agentRuntimeOverride",
   "modelOverrideSource",
+  "modelOverrideRouteResolution",
   "modelOverrideFallbackOriginProvider",
   "modelOverrideFallbackOriginModel",
   "authProfileOverride",

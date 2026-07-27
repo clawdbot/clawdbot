@@ -145,7 +145,7 @@ async function showDashboard(page: Page): Promise<void> {
       unknown
     >;
     settings.boardSessionViews = {
-      [key]: { face: "dashboard", activeTabId: "main" },
+      [key]: { activeTabId: "main" },
     };
     localStorage.setItem(settingsKey, JSON.stringify(settings));
   }, sessionKey);
@@ -303,7 +303,7 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
     });
     await showDashboard(page);
 
-    await page.goto(`${server.baseUrl}chat`);
+    await page.goto(`${server.baseUrl}dashboard`);
     await expect
       .poll(async () => (await gateway.getRequests("board.get")).length, { timeout: 30_000 })
       .toBeGreaterThan(0);
@@ -403,7 +403,7 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
     });
     await showDashboard(page);
 
-    await page.goto(`${server.baseUrl}chat`);
+    await page.goto(`${server.baseUrl}dashboard`);
     await page.locator(".board-session-surface").waitFor();
     const preview = page.locator('.chat-tool-card__preview[data-kind="canvas"]');
     await preview.hover();
@@ -481,7 +481,7 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
     await showDashboard(page);
 
     try {
-      await page.goto(`${server.baseUrl}chat`);
+      await page.goto(`${server.baseUrl}dashboard`);
       const cardWidget = page.locator('[data-test-id="workboard-card-widget"]');
       const miniWidget = page.locator('[data-test-id="workboard-mini-widget"]');
       await cardWidget.waitFor();
@@ -589,7 +589,7 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
     await showDashboard(page);
 
     try {
-      await page.goto(`${server.baseUrl}chat`);
+      await page.goto(`${server.baseUrl}dashboard`);
       const chip = page.locator(".board-session-surface__workboard-chip");
       await chip.waitFor();
       await expect.poll(() => chip.textContent()).toContain("Ship dashboard stitch");
@@ -721,7 +721,7 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
       await showDashboard(page);
 
       try {
-        await page.goto(`${server.baseUrl}chat`);
+        await page.goto(`${server.baseUrl}dashboard`);
         await expect
           .poll(async () => (await gateway.getRequests("board.get")).length)
           .toBeGreaterThan(0);

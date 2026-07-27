@@ -145,7 +145,7 @@ export function createMeetingRuntimeProbes<
       health?.verifiedOutputGeneration === health?.outputGeneration;
     const shouldWait =
       result.spoken === true &&
-      health?.manualActionRequired !== true &&
+      health?.manualAction === undefined &&
       context.hasHealthHandle(result.session.id);
     if (shouldWait && !verified()) {
       const deadline =
@@ -162,9 +162,7 @@ export function createMeetingRuntimeProbes<
     return {
       createdSession: !before.has(result.session.id),
       inCall: health?.inCall,
-      manualActionRequired: health?.manualActionRequired,
-      manualActionReason: health?.manualActionReason,
-      manualActionMessage: health?.manualActionMessage,
+      manualAction: health?.manualAction,
       spoken: result.spoken ?? false,
       speechOutputVerified,
       speechOutputTimedOut: shouldWait && !speechOutputVerified,
@@ -218,7 +216,7 @@ export function createMeetingRuntimeProbes<
       Boolean(health?.lastCaptionAt && health.lastCaptionAt !== start.at) ||
       Boolean(health?.lastCaptionText && health.lastCaptionText !== start.text);
     const shouldWait =
-      health?.manualActionRequired !== true && options.shouldWaitForListening(result.session);
+      health?.manualAction === undefined && options.shouldWaitForListening(result.session);
     let listenVerified = advanced();
     if (shouldWait && !listenVerified) {
       const deadline =
@@ -254,7 +252,7 @@ export function createMeetingRuntimeProbes<
         if (advanced()) {
           listenVerified = true;
         }
-        if (listenVerified || health?.manualActionRequired) {
+        if (listenVerified || health?.manualAction) {
           break;
         }
         const retryDelayMs = deadline - Date.now();
@@ -267,11 +265,9 @@ export function createMeetingRuntimeProbes<
     return {
       createdSession: !before.has(result.session.id),
       inCall: health?.inCall,
-      manualActionRequired: health?.manualActionRequired,
-      manualActionReason: health?.manualActionReason,
-      manualActionMessage: health?.manualActionMessage,
+      manualAction: health?.manualAction,
       listenVerified,
-      listenTimedOut: shouldWait && !listenVerified && health?.manualActionRequired !== true,
+      listenTimedOut: shouldWait && !listenVerified && health?.manualAction === undefined,
       captioning: health?.captioning,
       captionsEnabledAttempted: health?.captionsEnabledAttempted,
       transcriptLines: health?.transcriptLines,

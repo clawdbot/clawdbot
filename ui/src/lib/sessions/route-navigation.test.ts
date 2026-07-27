@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { buildCatalogSessionKey } from "./catalog-key.ts";
-import { sessionNavigationTarget } from "./route-navigation.ts";
+import { resolveSessionPreferredFace, sessionNavigationTarget } from "./route-navigation.ts";
 
 describe("sessionNavigationTarget", () => {
+  it("defaults generic opens to chat and honors a stored dashboard preference", () => {
+    expect(resolveSessionPreferredFace(undefined)).toBe("chat");
+    expect(resolveSessionPreferredFace({ boardFace: "chat" })).toBe("chat");
+    expect(resolveSessionPreferredFace({ boardFace: "dashboard" })).toBe("dashboard");
+  });
+
   it("keeps different catalog threads on different destinations", () => {
     const first = sessionNavigationTarget({
       face: "chat",

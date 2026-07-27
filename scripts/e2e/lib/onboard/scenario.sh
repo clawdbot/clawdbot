@@ -131,7 +131,7 @@ stop_gateway() {
 }
 
 cleanup_wizard_case() {
-  exec 3>&- 2>/dev/null || true
+  { exec 3>&-; } 2>/dev/null || true
   openclaw_e2e_stop_process "${wizard_pid:-}"
   stop_gateway "${gw_pid:-}"
   rm -rf "${input_fifo_dir:-}"

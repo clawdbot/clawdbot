@@ -185,6 +185,7 @@ vi.mock("../config/mutate.js", async () => {
 
 import { ConfigMutationConflictError } from "../config/mutate.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
+import { maybeInstallDaemon } from "./configure.daemon.js";
 import { runConfigureWizard } from "./configure.wizard.js";
 
 const EMPTY_CONFIG_SNAPSHOT = {
@@ -350,6 +351,91 @@ describe("runConfigureWizard", () => {
     }));
     mocks.guardCancel.mockReset();
     mocks.guardCancel.mockImplementation((value: unknown) => value);
+  });
+
+  it("runs selected sections in canonical order and commits their combined config once", async () => {
+    setupBaseWizardState();
+    queueWizardPrompts({ select: ["local", "configure"], confirm: [] });
+    const events: string[] = [];
+    mocks.promptAuthConfig.mockImplementationOnce(async (cfg: OpenClawConfig) => {
+      events.push("model");
+      return cfg;
+    });
+    mocks.promptGatewayConfig.mockImplementationOnce(async (cfg: OpenClawConfig) => {
+      events.push("gateway");
+      return { config: cfg, port: 18789 };
+    });
+    mocks.setupChannels.mockImplementationOnce(async (cfg: OpenClawConfig) => {
+      events.push("channels");
+      return cfg;
+    });
+    mocks.writeConfigFile.mockImplementationOnce(async () => {
+      events.push("commit");
+    });
+
+    await runConfigureWizard(
+      { command: "configure", sections: ["channels", "gateway", "model"] },
+      createRuntime(),
+    );
+
+    expect(events).toEqual(["model", "gateway", "channels", "commit"]);
+    expect(mocks.writeConfigFile).toHaveBeenCalledOnce();
+  });
+
+  it("commits every interactive section before running the next section", async () => {
+    setupBaseWizardState();
+    queueWizardPrompts({
+      select: ["local", "model", "gateway", "channels", "configure", "__continue"],
+      confirm: [],
+    });
+    const events: string[] = [];
+    mocks.promptAuthConfig.mockImplementationOnce(async (cfg: OpenClawConfig) => {
+      events.push("model");
+      return cfg;
+    });
+    mocks.promptGatewayConfig.mockImplementationOnce(async (cfg: OpenClawConfig) => {
+      events.push("gateway");
+      return { config: cfg, port: 18789 };
+    });
+    mocks.setupChannels.mockImplementationOnce(async (cfg: OpenClawConfig) => {
+      events.push("channels");
+      return cfg;
+    });
+    for (let index = 0; index < 3; index += 1) {
+      mocks.writeConfigFile.mockImplementationOnce(async () => {
+        events.push("commit");
+      });
+    }
+
+    await runConfigureWizard({ command: "configure" }, createRuntime());
+
+    expect(events).toEqual(["model", "commit", "gateway", "commit", "channels", "commit"]);
+    expect(mocks.writeConfigFile).toHaveBeenCalledTimes(3);
+  });
+
+  it("commits selected gateway config before installing its configured daemon port", async () => {
+    setupBaseWizardState();
+    queueWizardPrompts({ select: ["local"], confirm: [] });
+    const events: string[] = [];
+    mocks.promptGatewayConfig.mockImplementationOnce(async (cfg: OpenClawConfig) => {
+      events.push("gateway");
+      return { config: cfg, port: 18991 };
+    });
+    mocks.writeConfigFile.mockImplementationOnce(async () => {
+      events.push("commit");
+    });
+    vi.mocked(maybeInstallDaemon).mockImplementationOnce(async () => {
+      events.push("daemon");
+    });
+
+    await runConfigureWizard(
+      { command: "configure", sections: ["daemon", "gateway"] },
+      createRuntime(),
+    );
+
+    expect(events).toEqual(["gateway", "commit", "daemon"]);
+    expect(maybeInstallDaemon).toHaveBeenCalledWith(expect.objectContaining({ port: 18991 }));
+    expect(mocks.clackText).not.toHaveBeenCalled();
   });
 
   it("persists gateway.mode=local when only the run mode is selected", async () => {

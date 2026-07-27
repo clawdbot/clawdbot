@@ -354,13 +354,67 @@ export function createNpmLockGuardCommand(paths) {
   };
 }
 
+// Enough of the wrapper tail to hold its run summary; the rest is streamed, not kept.
+const DELEGATION_OUTPUT_TAIL_LIMIT = 64 * 1024;
+
+/**
+ * Signatures of a failure that happened before the remote command was dispatched:
+ * the broker or its API was unreachable, or no lease was ever obtained.
+ */
+const BACKEND_UNAVAILABLE_SIGNATURES = [
+  /request failed: \w+ "https?:\/\/[^"]*blacksmith[^"]*"/iu,
+  /context deadline exceeded/iu,
+  /(?:no such host|dial tcp|connection refused|network is unreachable)/iu,
+  /failed to (?:acquire|create|warm|start)\b[^\n]*\b(?:lease|testbox)/iu,
+];
+
+/**
+ * Whether a failed delegation provably never ran our command.
+ *
+ * Fails closed on purpose. A missing final summary alone cannot prove the remote
+ * never started — a wrapper that crashes or loses its output transport after
+ * dispatch looks identical — so this requires a positive pre-dispatch signature
+ * and treats everything else as a real failure. Getting this backwards is the
+ * dangerous direction: some lanes (prompt snapshots) are Linux-only truth, so a
+ * local rerun on macOS could turn an unknown or failing gate green.
+ *
+ * `command-exit` vetoes regardless: it only appears once the command reached the
+ * box, so it is proof a verdict exists and must be propagated as-is.
+ */
+export function delegationFailedBeforeRunning(output) {
+  if (/"errorKind"\s*:\s*"command-exit"/u.test(output)) {
+    return false;
+  }
+  return BACKEND_UNAVAILABLE_SIGNATURES.some((signature) => signature.test(output));
+}
+
 async function runChangedCheckViaCrabbox(argv = [], env = process.env) {
   console.error("[check:changed] delegating to Blacksmith Testbox via the Node wrapper.");
-  return await runManagedCommand({
+  let tail = "";
+  const exitCode = await runManagedCommand({
     bin: "node",
     args: buildChangedCheckCrabboxArgs(argv),
     env,
+    stdio: ["inherit", "pipe", "pipe"],
+    onReady: (child) => {
+      for (const stream of [child.stdout, child.stderr]) {
+        stream?.on("data", (chunk) => {
+          tail = (tail + chunk).slice(-DELEGATION_OUTPUT_TAIL_LIMIT);
+          // Inherited stdio used to get OS backpressure for free. Piping means we
+          // have to reapply it, or a verbose delegated run buffers its whole
+          // output in this process when stderr is an async pipe (typical in CI).
+          if (!process.stderr.write(chunk)) {
+            stream.pause();
+            process.stderr.once("drain", () => stream.resume());
+          }
+        });
+      }
+    },
   });
+  return {
+    exitCode,
+    backendUnavailable: exitCode !== 0 && delegationFailedBeforeRunning(tail),
+  };
 }
 
 export function createChangedCheckPlan(result, options = {}) {
@@ -1006,7 +1060,13 @@ if (isDirectRun()) {
       if (!shouldDelegateChangedCheckToCrabbox(argv, process.env)) {
         throw error;
       }
-      process.exitCode = await runChangedCheckViaCrabbox(argv, process.env);
+      // No local fallback here: this path exists because the checkout cannot
+      // resolve the diff refs itself, so there is nothing local to run.
+      const delegated = await runChangedCheckViaCrabbox(argv, process.env);
+      if (delegated.backendUnavailable) {
+        throw error;
+      }
+      process.exitCode = delegated.exitCode;
     }
     if (paths) {
       const result = detectChangedLanesForPaths({
@@ -1028,7 +1088,20 @@ if (isDirectRun()) {
             : undefined,
         })
       ) {
-        process.exitCode = await runChangedCheckViaCrabbox(argv, process.env);
+        const delegated = await runChangedCheckViaCrabbox(argv, process.env);
+        if (delegated.backendUnavailable) {
+          // Say this loudly: the proof below is local, so whoever reads the run
+          // knows which machine produced it and that Linux-only lanes are unproven.
+          console.error(
+            "[check:changed] Blacksmith never ran the checks (no run summary). Falling back to local execution; note this in the proof summary.",
+          );
+        }
+        process.exitCode = delegated.backendUnavailable
+          ? await runChangedCheck(result, {
+              ...args,
+              explicitPaths: args.paths.length > 0,
+            })
+          : delegated.exitCode;
       } else {
         process.exitCode = await runChangedCheck(result, {
           ...args,
