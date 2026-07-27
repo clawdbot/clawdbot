@@ -141,7 +141,10 @@ user Codex home:
 User-home mode supports a local managed stdio process or the shared Unix-socket
 transport. It uses `$CODEX_HOME` when set and `~/.codex` otherwise, including
 that home's native Codex auth, config, plugins, and thread store. OpenClaw does
-not inject an OpenClaw auth profile into this app-server.
+not inject an OpenClaw auth profile into this app-server, even when the agent's
+model route has a stored OpenAI profile: a subscription route is verified
+against the native account instead. Log in with Codex itself if a turn reports
+missing subscription credentials.
 
 Owner turns gain the `codex_threads` tool: list, search, read, fork, rename,
 archive, and restore native threads. Fork a thread to continue it in
