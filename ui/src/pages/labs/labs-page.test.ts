@@ -221,3 +221,54 @@ describe("LabsPage", () => {
     expect(restartRows[0]?.textContent).toContain("Message audit metadata");
   });
 });
+
+describe("LabsPage tool search enablement", () => {
+  const toolSearchIndex = LAB_FEATURES.findIndex((feature) => feature.id === "toolSearch");
+
+  // readToolSearchConfig + readBoolean(raw.enabled, configured): an object that
+  // configures anything besides `enabled` is already on at runtime.
+  it.each([
+    { label: "boolean shorthand", config: { tools: { toolSearch: true } }, expected: true },
+    {
+      label: "explicit enabled",
+      config: { tools: { toolSearch: { enabled: true } } },
+      expected: true,
+    },
+    {
+      label: "mode without enabled",
+      config: { tools: { toolSearch: { mode: "tools" } } },
+      expected: true,
+    },
+    {
+      label: "explicit disabled",
+      config: { tools: { toolSearch: { enabled: false } } },
+      expected: false,
+    },
+    { label: "boolean false", config: { tools: { toolSearch: false } }, expected: false },
+    { label: "unset", config: {}, expected: false },
+  ])("reads $label as $expected", async ({ config, expected }) => {
+    const { page, provider } = await mountPage(config);
+
+    expect(labToggle(page, toolSearchIndex, "Tool Search").checked).toBe(expected);
+    provider.remove();
+  });
+
+  it("does not replace an operator's existing mode when already on", async () => {
+    const { page, runtimeConfig } = await mountPage({
+      tools: { toolSearch: { mode: "tools" } },
+    });
+    const toggle = labToggle(page, toolSearchIndex, "Tool Search");
+
+    // The row reads as on, so the only move available is turning it off — it
+    // cannot be clicked into overwriting `tools` with `directory`.
+    expect(toggle.checked).toBe(true);
+    toggle.checked = false;
+    toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+
+    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    expect(runtimeConfig.patch).toHaveBeenCalledWith({
+      raw: { tools: { toolSearch: { enabled: false } } },
+      note: "labs: update toolSearch",
+    });
+  });
+});

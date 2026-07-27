@@ -25,6 +25,13 @@ export type LabFeature = {
    */
   activeValues: readonly LabFeatureValue[];
   /**
+   * Replaces the leaf read when the runtime decides enablement from more than
+   * one key. Receives the value at the gate's parent, which may be the boolean
+   * shorthand. Must mirror the runtime resolver it cites, or the row will
+   * misreport a config the runtime considers on.
+   */
+  readEnabled: ((raw: unknown) => boolean) | null;
+  /**
    * Extra keys written beside the gate when enabling, relative to the gate's
    * parent. Labs pins the variant we actually recommend rather than inheriting
    * whatever a bare enable defaults to.
@@ -43,6 +50,7 @@ export const LAB_FEATURES = [
     onValue: true,
     offValue: false,
     activeValues: [true],
+    readEnabled: null,
     enableAlso: null,
     restartHint: null,
   },
@@ -55,6 +63,7 @@ export const LAB_FEATURES = [
     onValue: true,
     offValue: false,
     activeValues: [true],
+    readEnabled: null,
     enableAlso: null,
     restartHint: null,
   },
@@ -67,6 +76,22 @@ export const LAB_FEATURES = [
     onValue: true,
     offValue: false,
     activeValues: [true],
+    // Mirrors resolveToolSearchConfig: the boolean shorthand decides directly,
+    // and an object configuring anything besides `enabled` is already on.
+    // Reading only the `enabled` leaf would show `{ mode: "tools" }` as off and
+    // let a click replace that operator's mode with ours.
+    readEnabled: (raw) => {
+      if (typeof raw === "boolean") {
+        return raw;
+      }
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+        return false;
+      }
+      const node = raw as Record<string, unknown>;
+      return typeof node.enabled === "boolean"
+        ? node.enabled
+        : Object.keys(node).some((key) => key !== "enabled");
+    },
     // resolveToolSearchConfig defaults an unset mode to "code" even in object
     // form, which is the surface with the weakest recall. Pin the bounded
     // directory instead, so enabling from Labs is the variant we recommend.
@@ -82,6 +107,7 @@ export const LAB_FEATURES = [
     onValue: true,
     offValue: false,
     activeValues: [true],
+    readEnabled: null,
     enableAlso: null,
     restartHint: null,
   },
@@ -97,6 +123,7 @@ export const LAB_FEATURES = [
     onValue: "direct",
     offValue: "off",
     activeValues: ["direct", "all"],
+    readEnabled: null,
     enableAlso: null,
     // startGatewayEventSubscriptions resolves the mode once and bakes it into
     // the recorder, so this outlives the reload plan's `logging: none` rule.
@@ -125,6 +152,9 @@ export function isLabFeatureEnabled(
   const parentPath = feature.configPath.slice(0, -1);
   const key = feature.configPath.at(-1);
   const parent = recordAtPath(config, parentPath);
+  if (feature.readEnabled) {
+    return feature.readEnabled(parent);
+  }
   // Feature gates accept the shipped boolean shorthand as well as the object
   // form. A registry path ending in `enabled` must reflect either shape.
   if (key === "enabled" && typeof parent === "boolean") {
