@@ -35,7 +35,8 @@ export type CodeModeLanguage = "javascript" | "typescript";
 
 /** Resolved Code Mode runtime limits and visible language options. */
 export type CodeModeConfig = {
-  enabled: boolean;
+  /** Master switch tier: true/false, or "auto" (engage per model catalog flag). */
+  enabled: boolean | "auto";
   runtime: "quickjs-wasi";
   mode: "only";
   languages: CodeModeLanguage[];
@@ -124,6 +125,9 @@ function normalizeCodeModeRawConfig(value: unknown): Record<string, unknown> | u
   if (codeMode === false) {
     return { enabled: false };
   }
+  if (codeMode === "auto") {
+    return { enabled: "auto" };
+  }
   return isRecord(codeMode) ? codeMode : undefined;
 }
 
@@ -137,8 +141,8 @@ function readCodeModeRawConfig(config?: OpenClawConfig, agentId?: string): Recor
   return agentRaw ? { ...globalRaw, ...agentRaw } : globalRaw;
 }
 
-function readBoolean(value: unknown, fallback: boolean): boolean {
-  return typeof value === "boolean" ? value : fallback;
+function readEnabled(value: unknown): boolean | "auto" {
+  return typeof value === "boolean" || value === "auto" ? value : false;
 }
 
 export function readPositiveInteger(value: unknown, fallback: number): number {
@@ -164,7 +168,7 @@ export function resolveCodeModeConfig(config?: OpenClawConfig, agentId?: string)
     DEFAULT_MAX_SEARCH_LIMIT,
   );
   return {
-    enabled: readBoolean(raw.enabled, false),
+    enabled: readEnabled(raw.enabled),
     runtime: "quickjs-wasi",
     mode: "only",
     languages: readLanguages(raw.languages),
@@ -201,6 +205,27 @@ export function resolveCodeModeConfig(config?: OpenClawConfig, agentId?: string)
     ),
     maxSearchLimit,
   };
+}
+
+/**
+ * Resolves the master switch against one model's catalog capability flag.
+ * `true`/`false` are absolute; `"auto"` engages only for models whose catalog
+ * compat declares `codeMode: "preferred"`. This gates the model-facing tool
+ * surface only; runs that route to a provider-native harness (for example the
+ * default OpenAI Codex surface) never reach this embedded-runtime gate.
+ */
+export function isCodeModeEngagedForModel(
+  config: Pick<CodeModeConfig, "enabled">,
+  model: { compat?: unknown } | undefined,
+): boolean {
+  if (config.enabled !== "auto") {
+    return config.enabled;
+  }
+  const compat =
+    model?.compat && typeof model.compat === "object"
+      ? (model.compat as { codeMode?: unknown })
+      : undefined;
+  return compat?.codeMode === "preferred";
 }
 
 export function toToolSearchConfig(config: CodeModeConfig): ToolSearchConfig {
@@ -436,10 +461,116 @@ function maskCodeLiteralsAndComments(
   }
 }
 
+function isModuleLoaderCallee(callee: import("acorn").Expression | import("acorn").Super): boolean {
+  if (callee.type === "ParenthesizedExpression") {
+    return isModuleLoaderCallee(callee.expression);
+  }
+  if (callee.type === "ChainExpression") {
+    return isModuleLoaderCallee(callee.expression);
+  }
+  if (callee.type === "SequenceExpression") {
+    const expression = callee.expressions[callee.expressions.length - 1];
+    return expression !== undefined && isModuleLoaderCallee(expression);
+  }
+  return callee.type === "Identifier" && callee.name === "require";
+}
+
+function containsModuleAccess(node: import("acorn").AnyNode): boolean {
+  if (
+    node.type === "ImportDeclaration" ||
+    node.type === "ImportExpression" ||
+    (node.type === "MetaProperty" && node.meta.name === "import") ||
+    (node.type === "CallExpression" && isModuleLoaderCallee(node.callee))
+  ) {
+    return true;
+  }
+
+  for (const value of Object.values(node)) {
+    if (Array.isArray(value)) {
+      for (const child of value) {
+        if (
+          child !== null &&
+          typeof child === "object" &&
+          "type" in child &&
+          typeof child.type === "string" &&
+          containsModuleAccess(child as import("acorn").AnyNode)
+        ) {
+          return true;
+        }
+      }
+      continue;
+    }
+    if (
+      value !== null &&
+      typeof value === "object" &&
+      "type" in value &&
+      typeof value.type === "string" &&
+      containsModuleAccess(value as import("acorn").AnyNode)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function typeScriptContainsModuleAccess(code: string, ts: typeof import("typescript")): boolean {
+  const source = ts.createSourceFile(
+    "code-mode.ts",
+    code,
+    ts.ScriptTarget.ES2022,
+    true,
+    ts.ScriptKind.TS,
+  );
+
+  const isLoaderCallee = (expression: import("typescript").Expression): boolean => {
+    if (ts.isParenthesizedExpression(expression)) {
+      return isLoaderCallee(expression.expression);
+    }
+    if (
+      ts.isBinaryExpression(expression) &&
+      expression.operatorToken.kind === ts.SyntaxKind.CommaToken
+    ) {
+      return isLoaderCallee(expression.right);
+    }
+    return ts.isIdentifier(expression) && expression.text === "require";
+  };
+
+  const visit = (node: import("typescript").Node): boolean => {
+    if (
+      ts.isImportDeclaration(node) ||
+      ts.isImportEqualsDeclaration(node) ||
+      (ts.isMetaProperty(node) && node.keywordToken === ts.SyntaxKind.ImportKeyword) ||
+      (ts.isCallExpression(node) &&
+        (node.expression.kind === ts.SyntaxKind.ImportKeyword || isLoaderCallee(node.expression)))
+    ) {
+      return true;
+    }
+    return ts.forEachChild(node, (child) => (visit(child) ? true : undefined)) === true;
+  };
+
+  return visit(source);
+}
+
 function rejectsModuleAccess(
   code: string,
   typescriptRuntime?: typeof import("typescript"),
 ): boolean {
+  try {
+    const source = parse(`(async () => {\n${code}\n})`, {
+      ecmaVersion: "latest",
+    });
+    // The WASI guest has no host module loader. Only executable module syntax
+    // belongs in this early check; ordinary guest methods are not capabilities.
+    return containsModuleAccess(source);
+  } catch {
+    if (typescriptRuntime) {
+      try {
+        return typeScriptContainsModuleAccess(code, typescriptRuntime);
+      } catch {
+        // Keep malformed input on the conservative lexical fallback.
+      }
+    }
+  }
   const source = maskCodeLiteralsAndComments(code, typescriptRuntime);
   return /\bimport\b\s*(?:\.|\(|["'`{*]|\w)|\brequire\b\s*\(/u.test(source);
 }

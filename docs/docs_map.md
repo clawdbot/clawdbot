@@ -929,8 +929,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Commands and slash behavior
   - H2: Native charts
   - H2: Native tables
-  - H2: Interactive replies
-  - H3: Plugin-owned modal submissions
+  - H2: Plugin-owned modal submissions
   - H2: Native approvals in Slack
   - H2: Events and operational behavior
   - H3: Presence events
@@ -2594,6 +2593,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Chunking rules
   - H2: Link policy
   - H2: Spoilers
+  - H2: Collapsible details
   - H2: Adding or updating a channel formatter
   - H2: Common gotchas
   - H2: Related
@@ -9919,6 +9919,10 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Scope
   - H2: Terms
   - H2: Configuration
+  - H2: Automatic per-model activation
+  - H3: The compat.codeMode catalog flag
+  - H3: Shipped preferred models
+  - H3: Choosing when to enable
   - H2: Activation
   - H2: Model-visible tools
   - H2: exec

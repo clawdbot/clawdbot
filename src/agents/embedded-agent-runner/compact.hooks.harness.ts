@@ -627,7 +627,6 @@ export async function loadCompactHooksHarness(): Promise<{
       compatiblePolicyHashes: undefined,
       compatibleConfigFingerprints: undefined,
     })),
-    clearCurrentPluginMetadataSnapshot: vi.fn(),
     getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
     resolvePluginMetadataControlPlaneFingerprint: vi.fn(() => "test-plugin-fingerprint"),
     restoreCurrentPluginMetadataSnapshotState: vi.fn(),
