@@ -1431,6 +1431,17 @@ openclaw-session-owner-chip {
   color: var(--ok);
 }
 
+/* Pending routes share the native mascot without exposing transient panel text. */
+.lazy-view-state--loading {
+  display: grid;
+  flex: 1 1 auto;
+  place-items: center;
+  min-width: 0;
+  min-height: min(50dvh, 360px);
+  width: 100%;
+  margin: auto;
+}
+
 /* Lazy route load failure — a centered panel state, not a stretched callout. */
 .lazy-view-error {
   margin: auto;

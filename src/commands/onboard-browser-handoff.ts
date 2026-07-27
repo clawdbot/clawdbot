@@ -108,8 +108,6 @@ async function resolveBrowserHatchTarget(
     config,
     env,
     modeOverride: "local",
-    localTokenPrecedence: "config-first",
-    localPasswordPrecedence: "config-first",
   });
   const auth = resolveGatewayAuth({
     authConfig: {

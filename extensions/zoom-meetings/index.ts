@@ -3,6 +3,7 @@ import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { Type } from "typebox";
+import { ZOOM_MEETINGS_CLI_DESCRIPTOR } from "./src/cli-output-mode.js";
 import {
   resolveZoomMeetingsConfig,
   resolveZoomMeetingsGatewayOperationTimeoutMs,
@@ -115,13 +116,7 @@ export default definePluginEntry(
         },
         {
           commands: ["zoommeetings"],
-          descriptors: [
-            {
-              name: "zoommeetings",
-              description: "Join and manage Zoom meeting guests",
-              hasSubcommands: true,
-            },
-          ],
+          descriptors: [ZOOM_MEETINGS_CLI_DESCRIPTOR],
         },
       );
     },

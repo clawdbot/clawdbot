@@ -46,6 +46,7 @@ export const SessionObserverPlanProgressSchema = closedObject({
 /** Live session status judgment broadcast to subscribed operator clients. */
 export const SessionObserverDigestSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   runId: Type.Optional(NonEmptyString),
   revision: Type.Integer({ minimum: 1 }),
   updatedAt: Type.Integer({ minimum: 0 }),

@@ -535,6 +535,23 @@ describe("createOpenClawCodingTools", () => {
     expect(inheritedAllow?.includes("exec")).toBe(false);
   });
 
+  it("keeps restricted spawn inheritance in the caller-owned runtime snapshot", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+    const inheritedToolAllowlistRef: string[] = [];
+
+    createOpenClawCodingTools({
+      config: { tools: { allow: ["read", "sessions_spawn"] } },
+      inheritedToolAllowlistRef,
+    });
+
+    expect(latestCreateOpenClawToolsOptions().inheritedToolAllowlist).toBe(
+      inheritedToolAllowlistRef,
+    );
+    expectListIncludes(inheritedToolAllowlistRef, ["read", "sessions_spawn"]);
+    expect(inheritedToolAllowlistRef).not.toContain("exec");
+  });
+
   it("preserves runtime-allowed message through restrictive profiles", () => {
     const tools = createOpenClawCodingTools({
       config: { tools: { profile: "minimal" } },

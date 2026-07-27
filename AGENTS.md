@@ -115,7 +115,7 @@ Skills own workflows; root owns hard policy and routing.
 
 ## Commands
 
-- Runtime: Node 22.22.3+, 24.15+, or 25.9+; Node 24 recommended. Keep Node + Bun paths working.
+- Runtime: Node 22.22.3+, 24.15+, or 25.9+; Node 26 recommended (CI and release workflows still pin Node 24). Keep Node + Bun paths working.
 - Package manager/runtime: repo defaults only. No swaps without approval.
 - Install: `pnpm install` (keep Bun lock/patches aligned if touched). Agent dependency installation for tests/builds defaults to the selected remote box; do not reconcile a local Codex worktree just to run validation.
 - CLI: `pnpm openclaw ...` or `pnpm dev`; build: `pnpm build`.

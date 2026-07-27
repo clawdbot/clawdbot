@@ -4,6 +4,10 @@ import path from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  buildControlUiCspHeader,
+  computeInlineScriptHashes,
+} from "../../../src/gateway/control-ui-csp.ts";
+import {
   canRunPlaywrightChromium,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
@@ -148,6 +152,7 @@ const testPresenceUsers = [
     id: testProfile.id,
     name: testProfile.displayName,
     email: testProfile.emails[0],
+    avatarUrl: `/api/users/${testProfile.id}/avatar?v=${testProfile.updatedAt}`,
   },
 ];
 
@@ -215,9 +220,31 @@ describeControlUiE2e("Control UI profile page mocked Gateway E2E", () => {
     }
   });
 
-  it("renders the gateway avatar route in the profile preview", async () => {
-    const context = await browser.newContext();
+  it("shares one authenticated avatar between the sidebar and profile preview", async () => {
+    if (captureUiProof) {
+      await mkdir(proofDir, { recursive: true });
+    }
+    const context = await browser.newContext({
+      ...(captureUiProof
+        ? { recordVideo: { dir: proofDir, size: { width: 1280, height: 800 } } }
+        : {}),
+      viewport: { width: 1280, height: 800 },
+    });
     const page = await context.newPage();
+    await page.route(`${server.baseUrl}settings/profile`, async (route) => {
+      const response = await route.fetch();
+      const body = await response.text();
+      await route.fulfill({
+        body,
+        headers: {
+          ...response.headers(),
+          "content-security-policy": buildControlUiCspHeader({
+            inlineScriptHashes: computeInlineScriptHashes(body),
+          }),
+        },
+        response,
+      });
+    });
     const gatewayUrl = server.baseUrl.replace(/^http/u, "ws").replace(/\/$/u, "");
     await page.addInitScript((sameOriginGatewayUrl) => {
       (
@@ -229,20 +256,42 @@ describeControlUiE2e("Control UI profile page mocked Gateway E2E", () => {
         token: "test",
       };
     }, gatewayUrl);
-    const avatarRequests: string[] = [];
-    // The gateway serves the avatar (uploaded first, Gravatar fallback second)
-    // behind its own same-origin route; the Control UI renders only that route,
-    // so the preview never requests gravatar.com directly — the Control UI CSP
-    // (img-src 'self') would block it.
+    const avatarRequests: Array<{ authorization?: string; url: string }> = [];
+    let releaseRevisedAvatar: (() => void) | undefined;
+    const revisedAvatarReady = new Promise<void>((resolve) => {
+      releaseRevisedAvatar = resolve;
+    });
+    // Profile images require the same bearer auth as gateway RPCs. One cached
+    // blob keeps the sidebar and preview inside the Control UI's image CSP.
     await page.route(`**/api/users/${testProfile.id}/avatar*`, async (route) => {
-      avatarRequests.push(route.request().url());
+      const revision = new URL(route.request().url()).searchParams.get("v");
+      avatarRequests.push({
+        authorization: route.request().headers().authorization,
+        url: route.request().url(),
+      });
+      if (revision === "3") {
+        // Hold the real response so Chromium can prove pending fallback and
+        // stable image-node identity before the replacement finishes loading.
+        await revisedAvatarReady;
+      }
+      if (revision === "4") {
+        await route.fulfill({
+          body: JSON.stringify({ ok: false, error: { type: "not_found" } }),
+          contentType: "application/json",
+          status: 404,
+        });
+        return;
+      }
       await route.fulfill({
-        body: '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>',
-        contentType: "image/svg+xml",
+        body: Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/a6kAAAAASUVORK5CYII=",
+          "base64",
+        ),
+        contentType: "image/png",
         status: 200,
       });
     });
-    await installMockGateway(page, {
+    const gateway = await installMockGateway(page, {
       presenceUsers: testPresenceUsers,
       methodResponses: {
         "usage.cost": usageCostResponse,
@@ -254,19 +303,144 @@ describeControlUiE2e("Control UI profile page mocked Gateway E2E", () => {
     try {
       const response = await page.goto(`${server.baseUrl}settings/profile`);
       expect(response?.status()).toBe(200);
+      expect(response?.headers()["content-security-policy"]).toContain(
+        "img-src 'self' data: blob:",
+      );
 
       const profileAvatar = page.locator("#settings-profile-identity openclaw-viewer-avatar img");
       await profileAvatar.waitFor({ timeout: 10_000 });
-      // profile-page derives the src from userProfileAvatarUrl(id, updatedAt);
-      // the gateway origin may absolutize it, so match the canonical path suffix.
-      expect(await profileAvatar.getAttribute("src")).toContain(
-        `/api/users/${testProfile.id}/avatar?v=2`,
+      const imageUrl = await profileAvatar.getAttribute("src");
+      expect(imageUrl).toMatch(/^blob:/u);
+      await expect
+        .poll(() => profileAvatar.evaluate((image) => (image as HTMLImageElement).naturalWidth))
+        .toBe(1);
+      expect(
+        await profileAvatar.evaluate((image) =>
+          image.closest(".viewer-avatar")?.classList.contains("is-fallback"),
+        ),
+      ).toBe(false);
+      if (captureUiProof) {
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(proofDir, "03-authenticated-profile-avatar.png"),
+        });
+      }
+
+      await page.getByRole("button", { name: "Back to app" }).click();
+      const sidebarAvatar = page.locator(".sidebar-identity-card openclaw-viewer-avatar img");
+      await sidebarAvatar.waitFor({ timeout: 10_000 });
+      await expect.poll(() => avatarRequests.length).toBe(1);
+      expect(avatarRequests[0]).toEqual({
+        authorization: "Bearer e2e-device-token",
+        url: expect.stringContaining(`/api/users/${testProfile.id}/avatar?v=2`),
+      });
+      expect(await sidebarAvatar.getAttribute("src")).toBe(imageUrl);
+      expect(
+        await sidebarAvatar.evaluate((image) =>
+          image.closest(".viewer-avatar")?.classList.contains("is-fallback"),
+        ),
+      ).toBe(false);
+      if (captureUiProof) {
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(proofDir, "03-authenticated-user-avatar-cache.png"),
+        });
+      }
+
+      const originalSidebarImage = await sidebarAvatar.elementHandle();
+      expect(originalSidebarImage).not.toBeNull();
+      const connect = await gateway.waitForRequest("connect");
+      const selfInstanceId = (connect.params as { client?: { instanceId?: string } } | undefined)
+        ?.client?.instanceId;
+      expect(selfInstanceId).toBeTruthy();
+      const publishAvatarRevision = async (revision: number) => {
+        await gateway.emitGatewayEvent("presence", {
+          presence: [
+            {
+              instanceId: selfInstanceId,
+              mode: "webchat",
+              reason: "connect",
+              user: {
+                id: testProfile.id,
+                name: testProfile.displayName,
+                email: testProfile.emails[0],
+                avatarUrl: `/api/users/${testProfile.id}/avatar?v=${revision}`,
+              },
+              watchedSessions: [],
+            },
+          ],
+        });
+      };
+
+      await publishAvatarRevision(3);
+      await expect.poll(() => avatarRequests.length).toBe(2);
+      expect(
+        await originalSidebarImage?.evaluate((image) =>
+          image.closest(".viewer-avatar")?.classList.contains("is-fallback"),
+        ),
+      ).toBe(true);
+      expect(await originalSidebarImage?.evaluate((image) => image.isConnected)).toBe(true);
+
+      releaseRevisedAvatar?.();
+      await expect
+        .poll(() => sidebarAvatar.evaluate((image) => (image as HTMLImageElement).naturalWidth))
+        .toBe(1);
+      const revisedImageUrl = await sidebarAvatar.getAttribute("src");
+      expect(revisedImageUrl).toMatch(/^blob:/u);
+      expect(revisedImageUrl).not.toBe(imageUrl);
+      expect(await originalSidebarImage?.evaluate((image) => image.getAttribute("src"))).toBe(
+        revisedImageUrl,
       );
+      expect(
+        await sidebarAvatar.evaluate((image) =>
+          image.closest(".viewer-avatar")?.classList.contains("is-fallback"),
+        ),
+      ).toBe(false);
+      expect(avatarRequests[1]).toEqual({
+        authorization: "Bearer e2e-device-token",
+        url: expect.stringContaining(`/api/users/${testProfile.id}/avatar?v=3`),
+      });
+      if (captureUiProof) {
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(proofDir, "04-authenticated-user-avatar-revision.png"),
+        });
+      }
+
+      const missingAvatarResponse = page.waitForResponse(
+        (candidateResponse) =>
+          candidateResponse.url().includes(`/api/users/${testProfile.id}/avatar?v=4`) &&
+          candidateResponse.status() === 404,
+      );
+      await publishAvatarRevision(4);
+      await missingAvatarResponse;
+      await expect.poll(() => avatarRequests.length).toBe(3);
+      await expect.poll(() => sidebarAvatar.getAttribute("src")).toBeNull();
       await expect
         .poll(() =>
-          avatarRequests.some((url) => url.includes(`/api/users/${testProfile.id}/avatar`)),
+          sidebarAvatar.evaluate((image) =>
+            image.closest(".viewer-avatar")?.classList.contains("is-fallback"),
+          ),
         )
         .toBe(true);
+      await expect
+        .poll(async () =>
+          (
+            await page.locator(".sidebar-identity-card .viewer-avatar__fallback").textContent()
+          )?.trim(),
+        )
+        .toBe("TP");
+      expect(await originalSidebarImage?.evaluate((image) => image.isConnected)).toBe(true);
+      expect(avatarRequests[2]).toEqual({
+        authorization: "Bearer e2e-device-token",
+        url: expect.stringContaining(`/api/users/${testProfile.id}/avatar?v=4`),
+      });
+      if (captureUiProof) {
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(proofDir, "05-authenticated-user-avatar-missing.png"),
+        });
+      }
     } finally {
       await context.close();
     }

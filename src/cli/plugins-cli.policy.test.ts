@@ -8,6 +8,7 @@ import {
   refreshPluginRegistry,
   resetPluginsCliTestState,
   runtimeErrors,
+  runtimeLogs,
   runPluginsCommand,
   writeConfigFile,
 } from "./plugins-cli-test-helpers.js";
@@ -91,6 +92,40 @@ describe("plugins cli policy mutations", () => {
       policyPluginIds: ["alpha"],
       reason: "policy-changed",
     });
+  });
+
+  it.each([
+    {
+      policy: "globally disabled plugins",
+      plugins: { enabled: false },
+      reason: "plugins disabled",
+    },
+    {
+      policy: "a plugin denylist",
+      plugins: { deny: ["alpha"] },
+      reason: "blocked by denylist",
+    },
+    {
+      policy: "a restrictive plugin allowlist",
+      plugins: { allow: ["other-plugin"] },
+      reason: "blocked by allowlist",
+    },
+  ])("does not mutate plugin state when $policy blocks enablement", async ({ plugins, reason }) => {
+    const sourceConfig = { plugins } as OpenClawConfig;
+    loadConfig.mockReturnValue(sourceConfig);
+    enablePluginInConfig.mockReturnValue({
+      config: sourceConfig,
+      enabled: false,
+      pluginId: "alpha",
+      reason,
+    });
+    mockPluginRegistry(["alpha"]);
+
+    await runPluginsCommand(["plugins", "enable", "alpha"]);
+
+    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(refreshPluginRegistry).not.toHaveBeenCalled();
+    expect(runtimeLogs).toContain(`Plugin "alpha" could not be enabled (${reason}).`);
   });
 
   it("refuses plugin enablement in Nix mode before config mutation", async () => {

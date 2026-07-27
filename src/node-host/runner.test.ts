@@ -285,8 +285,7 @@ describe("runNodeHost", () => {
         },
       },
       env: process.env,
-      localTokenPrecedence: "env-first",
-      localPasswordPrecedence: "env-first",
+      localPrecedence: "env-first",
       remoteTokenPrecedence: "env-first",
       remotePasswordPrecedence: "env-first",
     });

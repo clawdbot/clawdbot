@@ -82,7 +82,7 @@ function isReservedSessionRest(rest: string, mainKey: string | undefined): boole
   );
 }
 
-function controlUiSessionSlug(displayName: string | undefined | null): string {
+export function controlUiSessionSlug(displayName: string | undefined | null): string {
   const tokens = (displayName ?? "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/gu, "-")

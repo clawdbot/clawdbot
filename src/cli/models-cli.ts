@@ -2,6 +2,8 @@
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import { isModelsStatusJsonOutput } from "./models-output-mode.js";
+import { setCommandJsonMode } from "./program/json-mode.js";
 
 type ModelsCliRuntime = typeof import("./models-cli.runtime.js");
 
@@ -48,6 +50,7 @@ export function registerModelsCli(program: Command) {
       () =>
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/models", "docs.openclaw.ai/cli/models")}\n`,
     );
+  setCommandJsonMode(models, "output", ({ argv }) => isModelsStatusJsonOutput(argv));
 
   models
     .command("list")

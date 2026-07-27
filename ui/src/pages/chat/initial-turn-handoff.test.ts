@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import {
   admitInitialUserMessageHandoff,
+  isPendingInitialUserMessage,
   prepareInitialUserMessageHandoff,
   reconcileInitialUserMessageHandoff,
 } from "./initial-turn-handoff.ts";
@@ -80,6 +81,33 @@ describe("initial user message handoff", () => {
     expect(admitInitialUserMessageHandoff(handoff, { chatMessages: [], client }, sessionKey)).toBe(
       false,
     );
+  });
+
+  it("identifies an already-projected prompt so history cannot re-place it", () => {
+    const sessionKey = "agent:main:new-session";
+    const client = {};
+    const handoff = createInitialUserMessageHandoff();
+    prepareInitialUserMessageHandoff(
+      handoff,
+      sessionKey,
+      { text: "keep this above the replies it started", createdAt: 10 },
+      client,
+    );
+
+    const host = { chatMessages: [] as unknown[], client };
+    admitInitialUserMessageHandoff(handoff, host, sessionKey);
+    const projected = host.chatMessages[0];
+
+    expect(isPendingInitialUserMessage(handoff, host, sessionKey, projected)).toBe(true);
+    expect(
+      isPendingInitialUserMessage(handoff, host, sessionKey, {
+        role: "assistant",
+        content: [{ type: "text", text: "reply" }],
+        timestamp: 11,
+      }),
+    ).toBe(false);
+    expect(isPendingInitialUserMessage(handoff, host, "agent:main:other", projected)).toBe(false);
+    expect(isPendingInitialUserMessage(undefined, host, sessionKey, projected)).toBe(false);
   });
 
   it("does not duplicate a first prompt that history already loaded", () => {

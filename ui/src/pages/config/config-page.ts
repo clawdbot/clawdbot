@@ -1087,7 +1087,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     const model = resolveModelPrimary(agentsDefaults?.model) ?? "default";
     const thinkingLevel =
       typeof agentsDefaults?.thinkingDefault === "string" ? agentsDefaults.thinkingDefault : "off";
-    const fastMode = agentsDefaults?.fastMode;
+    const fastMode = agentsDefaults?.fastModeDefault;
     const appConfig = this.context.config.current;
     return renderQuickSettings({
       locale: isSupportedLocale(this.settings.locale) ? this.settings.locale : i18n.getLocale(),
@@ -1122,7 +1122,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       onThinkingChange: (level) =>
         runtimeConfig.patchForm(["agents", "defaults", "thinkingDefault"], level),
       onFastModeChange: (mode: FastMode) =>
-        runtimeConfig.patchForm(["agents", "defaults", "fastMode"], mode),
+        runtimeConfig.patchForm(["agents", "defaults", "fastModeDefault"], mode),
     });
   }
 

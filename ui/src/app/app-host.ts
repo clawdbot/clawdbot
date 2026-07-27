@@ -14,6 +14,7 @@ import "../components/github-link-hovercard-registration.ts";
 import "../components/login-gate.ts";
 import "../components/macos-titlebar-controls.ts";
 import "../components/onboarding-memory-import.ts";
+import "../components/openclaw-mascot.ts";
 import "../components/resizable-divider.ts";
 import "../components/sidebar-update-card.ts";
 import "../components/tooltip.ts";
@@ -76,6 +77,7 @@ import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
 import { newSessionSearch, type NewSessionTarget } from "../pages/new-session/location.ts";
 import { renderDevicePairSetup } from "../pages/nodes/view-pairing.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
+import { selectApplicationSession } from "./agent-selection.ts";
 import { selectShellRouteState, type ShellRouteState } from "./app-host-route-state.ts";
 import { findInlineApproval } from "./approval-presentation.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
@@ -215,16 +217,10 @@ function resolveTerminalThemeMode(): "dark" | "light" {
   return document.documentElement.dataset.themeMode === "light" ? "light" : "dark";
 }
 
-// The mascot SVG animates via SMIL, so it must load through <img src> —
-// inlining the markup would freeze it (see ui/public/favicon.svg).
-function renderConnectingSplash(basePath: string) {
+function renderConnectingSplash() {
   return html`
     <main class="connect-splash" role="status" aria-live="polite" aria-label=${t("common.loading")}>
-      <img
-        class="connect-splash__logo"
-        src=${controlUiPublicAssetPath("favicon.svg", basePath)}
-        alt=""
-      />
+      <openclaw-mascot mood="thinking" .size=${120}></openclaw-mascot>
     </main>
   `;
 }
@@ -416,7 +412,7 @@ class OpenClawApp extends OpenClawLightDomElement {
           fullscreen
         ></openclaw-terminal-panel>
         ${!isOptionalElementDefined(TERMINAL_PANEL_ELEMENT) && terminalAvailable
-          ? renderConnectingSplash(context.basePath)
+          ? renderConnectingSplash()
           : nothing}
         ${!terminalAvailable && (gatewayConnected || gatewaySnapshot.lastError)
           ? html`<div class="terminal-view-unavailable">${t("terminal.unavailable")}</div>`
@@ -439,7 +435,7 @@ class OpenClawApp extends OpenClawLightDomElement {
     if (initialConnectPending) {
       return html`
         <openclaw-tooltip-provider>
-          ${renderConnectingSplash(context.basePath)} ${gatewayUrlConfirmation}
+          ${renderConnectingSplash()} ${gatewayUrlConfirmation}
         </openclaw-tooltip-provider>
       `;
     }
@@ -819,6 +815,29 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.settingsPreloadTimers.clear();
   }
 
+  private selectChatSession(sessionKey: string, agentId?: string | null) {
+    const context = this.context;
+    if (!context) {
+      return;
+    }
+    selectApplicationSession({
+      selection: context.agentSelection,
+      gateway: context.gateway,
+      sessionKey,
+      agentId,
+    });
+    const face = resolveSessionPreferredFaceForKey(context, sessionKey, agentId);
+    this.navigate(
+      face,
+      sessionNavigationTarget({
+        context,
+        face,
+        sessionKey,
+        ...(agentId ? { agentId } : {}),
+        preferenceDerivedFace: true,
+      }).options,
+    );
+  }
   private readonly handleGatewayEvent = (event: GatewayEventFrame) => {
     this.sidebarWorkboardRuntime?.handleGatewayEvent(event.event);
     if (event.event === "session.observer") {
@@ -834,13 +853,7 @@ class OpenClawShell extends OpenClawLightDomElement {
             selectedSessionKey: this.activeSessionKey,
             sessionHost: this.storedOutboxScopeHost(context),
             sessions: context.sessions.state.result?.sessions ?? [],
-            onOpen: (sessionKey) => {
-              context.gateway.setSessionKey(sessionKey);
-              const face = resolveSessionPreferredFaceForKey(context, sessionKey);
-              // Ambiguous one-segment keys intentionally fall back to /chat;
-              // the removed query deep-link format is not a compatibility path.
-              this.navigate(face, sessionNavigationTarget({ context, face, sessionKey }).options);
-            },
+            onOpen: (sessionKey, agentId) => this.selectChatSession(sessionKey, agentId),
           }),
         );
       }
@@ -897,12 +910,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     if (handled || (command.kind !== "navigate" && command.kind !== "split")) {
       return;
     }
-    context.gateway.setSessionKey(command.sessionKey);
-    const face = resolveSessionPreferredFaceForKey(context, command.sessionKey);
-    this.navigate(
-      face,
-      sessionNavigationTarget({ context, face, sessionKey: command.sessionKey }).options,
-    );
+    this.selectChatSession(command.sessionKey);
   };
 
   private scheduleAgentRosterRefresh() {
@@ -1657,7 +1665,11 @@ class OpenClawShell extends OpenClawLightDomElement {
         const committedSessionKey = routeState.committedSessionKey;
         if (committedSessionKey) {
           this.activeSessionKey = committedSessionKey;
-          routeContext.gateway.setSessionKey(committedSessionKey);
+          selectApplicationSession({
+            selection: routeContext.agentSelection,
+            gateway: routeContext.gateway,
+            sessionKey: committedSessionKey,
+          });
         }
       }
     }
@@ -1762,11 +1774,7 @@ class OpenClawShell extends OpenClawLightDomElement {
       ${isOptionalElementDefined(this.commandPaletteElement)
         ? html`<openclaw-command-palette
             .onNavigate=${(routeId: RouteId) => this.navigate(routeId)}
-            .onSelectSession=${(sessionKey: string) => {
-              context.gateway.setSessionKey(sessionKey);
-              const face = resolveSessionPreferredFaceForKey(context, sessionKey);
-              this.navigate(face, sessionNavigationTarget({ context, face, sessionKey }).options);
-            }}
+            .onSelectSession=${(sessionKey: string) => this.selectChatSession(sessionKey)}
             .onSlashCommand=${this.handleCommandPaletteSlashCommand}
           ></openclaw-command-palette>`
         : nothing}

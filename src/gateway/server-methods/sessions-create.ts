@@ -360,6 +360,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       resetMainWhenUnspecified: !hasInitialTurn,
       commandSource: "webchat",
       creation: resolveOperatorSessionCreation(client, { allowTrustedHint: true }),
+      authorizedPluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
       loadGatewayModelCatalog: context.loadGatewayModelCatalog,
       afterCreate: hasInitialTurn
         ? async ({ key, agentId, entry, storePath }) => {

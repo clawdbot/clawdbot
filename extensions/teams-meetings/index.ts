@@ -3,6 +3,7 @@ import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { Type } from "typebox";
+import { TEAMS_MEETINGS_CLI_DESCRIPTOR } from "./src/cli-output-mode.js";
 import {
   resolveTeamsMeetingsConfig,
   resolveTeamsMeetingsGatewayOperationTimeoutMs,
@@ -120,13 +121,7 @@ export default definePluginEntry(
         },
         {
           commands: ["teamsmeetings"],
-          descriptors: [
-            {
-              name: "teamsmeetings",
-              description: "Join and manage Microsoft Teams meeting guests",
-              hasSubcommands: true,
-            },
-          ],
+          descriptors: [TEAMS_MEETINGS_CLI_DESCRIPTOR],
         },
       );
     },

@@ -702,92 +702,24 @@ function createQueuedRun(
 }
 
 describe("createFollowupRunner reply-lane admission", () => {
-  it("drops stale active-goal context after the persisted goal completes", async () => {
+  // Goal-context text refresh is covered directly in inbound-meta.test.ts; the
+  // admission-time composition boundary is covered in get-reply-run.media-only.test.ts.
+  it("keeps the originating client caps on queued embedded runs", async () => {
+    // Regression: the queued path built runEmbeddedAgent params inline and
+    // dropped run.clientCaps, so capability-gated tools vanished after drain.
     runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
-    const storePath = path.join(
-      tmpdir(),
-      `openclaw-followup-completed-goal-${crypto.randomUUID()}.json`,
-    );
-    const activeEntry: SessionEntry = {
-      sessionId: "session-completed-goal",
-      updatedAt: 1,
-      goal: {
-        schemaVersion: 1,
-        id: "goal-1",
-        objective: "Publish the release evidence",
-        status: "active",
-        createdAt: 1,
-        updatedAt: 1,
-        tokenStart: 0,
-        tokensUsed: 0,
-        continuationTurns: 0,
-      },
-    };
-    const completedEntry: SessionEntry = {
-      ...activeEntry,
-      updatedAt: 2,
-      goal: { ...activeEntry.goal!, status: "complete", updatedAt: 2 },
-    };
-    registerFollowupTestSessionStore(storePath, { main: completedEntry });
     admitReplyTurnMock.mockResolvedValueOnce({
       status: "admitted",
       operation: createReplyOperationForTest({
         sessionKey: "main",
-        sessionId: completedEntry.sessionId,
+        sessionId: "session-client-caps",
         resetTriggered: false,
       }),
     });
     const runner = createFollowupRunner({
       typing: createMockTypingController(),
       typingMode: "instant",
-      sessionEntry: activeEntry,
-      sessionStore: { main: activeEntry },
       sessionKey: "main",
-      storePath,
-      defaultModel: "anthropic/claude",
-    });
-
-    await runner(
-      createQueuedRun({
-        currentInboundContext: {
-          injectedGoalContexts: [
-            "Active goal: Publish the release evidence — advance it or update its status (get_goal/update_goal).",
-          ],
-          text: [
-            "Conversation info:",
-            "Active goal: Publish the release evidence — advance it or update its status (get_goal/update_goal).",
-            "Current message:\nmessage_id=next-turn",
-          ].join("\n\n"),
-        },
-        run: {
-          sessionId: "session-completed-goal",
-          sessionKey: "main",
-          provider: "anthropic",
-          model: "claude",
-        },
-      }),
-    );
-
-    const call = requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent");
-    const context = requireRecord(call.currentInboundContext, "current inbound context");
-    expect(context.text).toContain("Current message:\nmessage_id=next-turn");
-    expect(context.text).not.toContain("Active goal:");
-  }, 300_000);
-
-  it("keeps the originating client caps on queued embedded runs", async () => {
-    // Regression: the queued path built runEmbeddedAgent params inline and
-    // dropped run.clientCaps, so capability-gated tools vanished after drain.
-    runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
-    const storePath = "/tmp/openclaw-followup-client-caps.json";
-    const sessionEntry: SessionEntry = { sessionId: "session-client-caps", updatedAt: 1 };
-    registerFollowupTestSessionStore(storePath, { main: sessionEntry });
-    const runner = createFollowupRunner({
-      typing: createMockTypingController(),
-      typingMode: "instant",
-      sessionEntry,
-      sessionStore: { main: sessionEntry },
-      sessionKey: "main",
-      storePath,
       defaultModel: "anthropic/claude",
     });
 
@@ -805,7 +737,8 @@ describe("createFollowupRunner reply-lane admission", () => {
 
     const call = requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent");
     expect(call.clientCaps).toEqual(["tool-events", "inline-widgets"]);
-  });
+    // Constrained CI workers charge this file's cold module-reset pause to its first test.
+  }, 300_000);
 
   it("adopts a matching admission-time model lock for queued execution", async () => {
     const storePath = "/tmp/openclaw-followup-admission-model-lock.json";

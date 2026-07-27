@@ -268,7 +268,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     const sessionKey = "agent:main:visible-initial-prompt";
     const message = "keep this prompt visible while the agent works";
     const activeOutputTimestamp = Date.now() + 60_000;
-    const gateway = await installMockGateway(page, {
+    await installMockGateway(page, {
       methodResponses: {
         "sessions.create": { key: sessionKey, runStarted: true },
         "chat.history": {
@@ -307,7 +307,8 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
         timeout: 30_000,
       });
-      await gateway.waitForRequest("chat.history");
+      // The transcript fetch rides chat.startup or chat.history depending on what
+      // the Gateway advertises, so wait on the rendered rows instead of the method.
       await page.getByText("SKILL.md", { exact: true }).waitFor();
 
       await expect.poll(() => page.locator(".chat-group.user").textContent()).toContain(message);
@@ -347,10 +348,9 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}new`);
       await page.locator(".new-session-page__message").fill(message);
       await page.getByRole("button", { name: "Start thread" }).click();
-      await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
+      await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
         timeout: 30_000,
       });
-      await gateway.waitForRequest("chat.history");
       await expect.poll(() => page.locator(".chat-group.user").textContent()).toContain(message);
 
       const socketsBeforeReconnect = await gateway.getSocketCount();
@@ -404,7 +404,9 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     const sessionKey = "agent:main:single-image-prompt";
     const message = "testing if dual prompts show";
     const gateway = await installMockGateway(page, {
-      deferredMethods: ["chat.history"],
+      // The transcript bootstrap rides chat.startup while the Gateway advertises it,
+      // so that is the request this scenario holds open to observe reconciliation.
+      deferredMethods: ["chat.startup"],
       methodResponses: {
         "sessions.create": {
           key: sessionKey,
@@ -445,8 +447,6 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
         timeout: 30_000,
       });
-      await gateway.waitForRequest("chat.history");
-
       const userRow = page.locator(".chat-group.user");
       const userImage = userRow.locator("img.chat-message-image");
       await expect.poll(() => userRow.count()).toBe(1);
@@ -457,7 +457,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await expect.poll(() => userRow.textContent()).toContain(message);
       await expect.poll(() => userRow.textContent()).not.toContain("Attached image");
 
-      await gateway.resolveDeferred("chat.history");
+      await gateway.resolveDeferred("chat.startup");
 
       await expect.poll(() => userRow.count()).toBe(1);
       await expect.poll(() => userImage.count()).toBe(1);
