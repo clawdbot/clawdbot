@@ -213,9 +213,7 @@ export function validateQaRuntimePairSummary(summary, options = {}) {
       manifest.scenarioIds.length !== scenarioIds.length ||
       manifest.scenarioIds.some((scenarioId, index) => scenarioId !== scenarioIds[index]) ||
       manifest.gapScenarioIds.length !== skippedScenarioIds.length ||
-      manifest.gapScenarioIds.some(
-        (scenarioId, index) => scenarioId !== skippedScenarioIds[index],
-      )
+      manifest.gapScenarioIds.some((scenarioId, index) => scenarioId !== skippedScenarioIds[index])
     ) {
       throw new Error("nonzero candidate exit is not covered by a trusted frozen-lane manifest");
     }
@@ -280,16 +278,22 @@ export function validateQaRuntimePairReport(summary, reportSummary, reportMarkdo
         return true;
       }
       const next = reportMarkdown.indexOf("\n### ", start + heading.length);
-      const section = reportMarkdown.slice(start, next < 0 ? undefined : next);
+      const sectionLines = new Set(
+        reportMarkdown.slice(start, next < 0 ? undefined : next).split("\n"),
+      );
       const expectedStatus = scenario.status === "skip" ? "fail" : "pass";
       return (
-        !section.includes(`\n- status: ${expectedStatus}\n`) ||
-        !section.includes(`\n- drift: ${scenario.runtimeParity.drift}\n`) ||
-        !section.includes(
-          `\n- openclaw: ${projectedReportCellStatus(scenario.runtimeParity.cells.openclaw)} `,
+        !sectionLines.has(`- status: ${expectedStatus}`) ||
+        !sectionLines.has(`- drift: ${scenario.runtimeParity.drift}`) ||
+        ![...sectionLines].some((line) =>
+          line.startsWith(
+            `- openclaw: ${projectedReportCellStatus(scenario.runtimeParity.cells.openclaw)} `,
+          ),
         ) ||
-        !section.includes(
-          `\n- codex: ${projectedReportCellStatus(scenario.runtimeParity.cells.codex)} `,
+        ![...sectionLines].some((line) =>
+          line.startsWith(
+            `- codex: ${projectedReportCellStatus(scenario.runtimeParity.cells.codex)} `,
+          ),
         )
       );
     })

@@ -23,11 +23,7 @@ type ScenarioParams = {
   codexDetails?: string;
 };
 
-function cell(
-  runtime: "openclaw" | "codex",
-  status: CellStatus,
-  details?: string,
-): RuntimeCell {
+function cell(runtime: "openclaw" | "codex", status: CellStatus, details?: string): RuntimeCell {
   return {
     runtime,
     status,

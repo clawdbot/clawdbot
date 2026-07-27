@@ -1479,14 +1479,14 @@ describe("package artifact reuse", () => {
       "github-token": "${{ github.token }}",
       "run-id": "${{ inputs.artifact_run_id }}",
     });
-    const resolve = workflowStep(resolvePackage, "Resolve package candidate");
-    expect(resolve.env).toMatchObject({
+    const resolveStep = workflowStep(resolvePackage, "Resolve package candidate");
+    expect(resolveStep.env).toMatchObject({
       PACKAGE_FILE_NAME: "${{ inputs.package_file_name }}",
       PACKAGE_SHA256: "${{ inputs.package_sha256 }}",
       PACKAGE_SOURCE_SHA: "${{ inputs.package_source_sha }}",
       PACKAGE_VERSION: "${{ inputs.package_version }}",
     });
-    expectTextToIncludeAll(resolve.run, [
+    expectTextToIncludeAll(resolveStep.run, [
       'artifact_tarball="${artifact_dir}/${PACKAGE_FILE_NAME}"',
       "Selected artifact package SHA-256 differs from package_sha256.",
       "Resolved package identity differs from the declared immutable tuple.",
@@ -2823,9 +2823,9 @@ describe("package artifact reuse", () => {
     expect(runtimePairStepNames.indexOf("Run runtime-pair lane")).toBeLessThan(
       runtimePairStepNames.indexOf("Checkout trusted validator after candidate suite"),
     );
-    expect(
-      workflowStep(laneJob, "Generate runtime-pair lane report")["continue-on-error"],
-    ).toBe(true);
+    expect(workflowStep(laneJob, "Generate runtime-pair lane report")["continue-on-error"]).toBe(
+      true,
+    );
     const runtimePairReport = workflowStep(laneJob, "Validate runtime-pair lane report").run;
     expect(runtimePairReport).toContain(
       '--report-summary "$report_dir/qa-runtime-parity-summary.json"',
