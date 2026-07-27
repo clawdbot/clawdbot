@@ -4,14 +4,8 @@ import { safeParseJson } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Insertable, Selectable } from "kysely";
-import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../../config/config.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
-import {
-  listSessionEntriesReadOnly,
-  patchSessionEntryWithKey,
-  type SessionEntrySummary,
-} from "../../config/sessions/session-accessor.js";
+import { patchSessionEntryWithKey } from "../../config/sessions/session-accessor.js";
 import {
   mergeSessionEntry,
   type AcpSessionRuntimeOptions,
@@ -25,15 +19,21 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import {
+  readSessionEntryFromStore,
+  resolveSessionStorePathForAcp,
+  resolveStoreEntryForSessionKey,
+} from "./session-meta-store.js";
 
 /** ACP metadata joined with its legacy session-store row and config context. */
+export { resolveSessionStorePathForAcp } from "./session-meta-store.js";
+
 export type AcpSessionStoreEntry = {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -51,45 +51,6 @@ type AcpSessionMetaDatabase = Pick<OpenClawStateKyselyDatabase, "acp_sessions">;
 type AcpSessionRow = Selectable<AcpSessionsTable>;
 type AcpSessionEntryBinding = Pick<SessionEntry, "lifecycleRevision"> &
   Partial<Pick<SessionEntry, "sessionId" | "sessionStartedAt">>;
-
-function resolveStoreSessionKey(
-  entries: readonly SessionEntrySummary[],
-  sessionKey: string,
-): string {
-  const normalized = sessionKey.trim();
-  if (!normalized) {
-    return "";
-  }
-  if (entries.some((entry) => entry.sessionKey === normalized)) {
-    return normalized;
-  }
-  const lower = normalizeLowercaseStringOrEmpty(normalized);
-  if (entries.some((entry) => entry.sessionKey === lower)) {
-    return lower;
-  }
-  for (const entry of entries) {
-    if (normalizeLowercaseStringOrEmpty(entry.sessionKey) === lower) {
-      return entry.sessionKey;
-    }
-  }
-  return lower;
-}
-
-/** Resolves the session store path that owns an ACP session key. */
-export function resolveSessionStorePathForAcp(params: {
-  sessionKey: string;
-  cfg?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-}): { cfg: OpenClawConfig; agentId?: string; storePath: string } {
-  const cfg = params.cfg ?? getRuntimeConfig();
-  const parsed = parseAgentSessionKey(params.sessionKey);
-  const agentId = parsed?.agentId ?? resolveDefaultAgentId(cfg);
-  return {
-    cfg,
-    agentId,
-    storePath: resolveStorePath(cfg.session?.store, { agentId, env: params.env }),
-  };
-}
 
 function getAcpSessionKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<AcpSessionMetaDatabase>(db);
@@ -410,44 +371,6 @@ function upsertAcpSessionMetaRow(db: DatabaseSync, row: Insertable<AcpSessionsTa
   );
 }
 
-function readSessionEntryFromStore(params: {
-  sessionKey: string;
-  cfg?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  clone?: boolean;
-}): {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  storePath: string;
-  storeSessionKey: string;
-  entry?: SessionEntry;
-  storeReadFailed?: boolean;
-} {
-  const { cfg, agentId, storePath } = resolveSessionStorePathForAcp({
-    sessionKey: params.sessionKey,
-    cfg: params.cfg,
-    env: params.env,
-  });
-  try {
-    const entries = listSessionEntriesReadOnly({
-      ...(agentId ? { agentId } : {}),
-      storePath,
-      ...(params.clone === false ? { clone: false } : {}),
-    });
-    const storeSessionKey = resolveStoreSessionKey(entries, params.sessionKey);
-    const entry = entries.find((candidate) => candidate.sessionKey === storeSessionKey)?.entry;
-    return { cfg, agentId, storePath, storeSessionKey, entry };
-  } catch {
-    return {
-      cfg,
-      agentId,
-      storePath,
-      storeSessionKey: normalizeLowercaseStringOrEmpty(params.sessionKey),
-      storeReadFailed: true,
-    };
-  }
-}
-
 export function readAcpSessionEntry(params: {
   sessionKey: string;
   cfg?: OpenClawConfig;
@@ -503,20 +426,18 @@ export async function listAcpSessionEntries(params: {
       cfg,
       env: params.env,
     });
-    let sessionEntries: SessionEntrySummary[];
+    let storeSessionKey: string;
+    let entry: SessionEntry | undefined;
     try {
-      sessionEntries = listSessionEntriesReadOnly({
+      ({ storeSessionKey, entry } = resolveStoreEntryForSessionKey({
         ...(agentId ? { agentId } : {}),
         storePath,
+        sessionKey,
         ...(params.clone === false ? { clone: false } : {}),
-      });
+      }));
     } catch {
       continue;
     }
-    const storeSessionKey = resolveStoreSessionKey(sessionEntries, sessionKey);
-    const entry = sessionEntries.find(
-      (candidate) => candidate.sessionKey === storeSessionKey,
-    )?.entry;
     const readableRow = resolveReadableAcpSessionRow({
       row,
       entry,

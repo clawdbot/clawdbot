@@ -68,7 +68,7 @@ export function resolveModelExtraParamSources(params: {
 }
 
 /** Returns whether embedded OpenClaw would apply authored provider request parameters. */
-export function hasModelExtraParams(
+export function hasAuthoredProviderRequestParams(
   params: Parameters<typeof resolveModelExtraParamSources>[0],
 ): boolean {
   const sources = resolveModelExtraParamSources(params);

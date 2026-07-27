@@ -16,7 +16,6 @@ import {
   buildConfiguredModelCatalog,
   legacyModelKey,
   modelKey,
-  normalizeModelRef,
   normalizeProviderId,
   normalizeStoredOverrideModel,
   resolvePersistedOverrideModelRef,
@@ -24,7 +23,6 @@ import {
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
 import {
-  RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
   createModelVisibilityPolicy,
   type ModelVisibilityPolicy,
 } from "../../agents/model-visibility-policy.js";
@@ -48,6 +46,7 @@ export {
   resolveModelDirectiveSelection,
   type ModelDirectiveSelection,
 } from "./model-selection-directive.js";
+import { normalizeRuntimeRef, resolveRuntimeNormalization } from "./model-runtime-normalization.js";
 import {
   isStaleHeartbeatAutoFallbackOverride,
   normalizeStoredRuntimeModelRef,
@@ -123,9 +122,6 @@ const modelCatalogRuntimeLoader = createLazyImportLoader(
 const sessionPersistenceRuntimeLoader = createLazyImportLoader(
   () => import("./session-entry-persistence.js"),
 );
-function normalizeRuntimeModelRef(provider: string, model: string) {
-  return normalizeModelRef(provider, model, RUNTIME_MODEL_VISIBILITY_NORMALIZATION);
-}
 
 function loadPreparedModelCatalogRuntime() {
   return modelCatalogRuntimeLoader.load();
@@ -197,6 +193,8 @@ export async function createModelSelectionState(params: {
     agentId: catalogAgentId,
     agentDir: resolveAgentDir(cfg, catalogAgentId),
   };
+  const runtimeModelNormalization = resolveRuntimeNormalization(cfg);
+  const { manifestPlugins } = runtimeModelNormalization;
 
   let provider = params.provider;
   let model = params.model;
@@ -211,7 +209,7 @@ export async function createModelSelectionState(params: {
     defaultProvider,
     defaultModel,
     agentId: params.agentId,
-    ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+    ...runtimeModelNormalization,
   });
   const hasAllowlist = !visibilityPolicy.allowAny;
   const hasConfiguredModels =
@@ -221,7 +219,7 @@ export async function createModelSelectionState(params: {
     provider: defaultProvider,
     model: defaultModel,
   });
-  const configuredModelCatalog = buildConfiguredModelCatalog({ cfg });
+  const configuredModelCatalog = buildConfiguredModelCatalog({ cfg, manifestPlugins });
   const needsModelCatalog =
     params.hasModelDirective ||
     (hasAllowlist && visibilityPolicy.hasProviderWildcards && !defaultModelVisibleByWildcard);
@@ -270,15 +268,26 @@ export async function createModelSelectionState(params: {
     normalizeProviderId(directStoredModelOverride.provider ?? "") === OPENAI_CODEX_PROVIDER_ID &&
     normalizeProviderId(primaryProvider) === OPENAI_PROVIDER_ID &&
     primaryHarnessPolicy.runtime === "codex" &&
-    normalizeRuntimeModelRef(OPENAI_PROVIDER_ID, directStoredModelOverride.model).model ===
-      normalizeRuntimeModelRef(OPENAI_PROVIDER_ID, primaryModel).model;
-  const normalizedCurrentSelection = normalizeRuntimeModelRef(provider, model);
+    normalizeRuntimeRef(
+      OPENAI_PROVIDER_ID,
+      directStoredModelOverride.model,
+      runtimeModelNormalization,
+    ).model ===
+      normalizeRuntimeRef(OPENAI_PROVIDER_ID, primaryModel, runtimeModelNormalization).model;
+  const normalizedCurrentSelection = normalizeRuntimeRef(
+    provider,
+    model,
+    runtimeModelNormalization,
+  );
   const normalizedDirectOverride = directStoredModelOverride
-    ? normalizeRuntimeModelRef(directStoredModelOverride.provider, directStoredModelOverride.model)
+    ? normalizeRuntimeRef(
+        directStoredModelOverride.provider,
+        directStoredModelOverride.model,
+        runtimeModelNormalization,
+      )
     : null;
-  // Only treat the legacy auto pin as stale when the current selection differs from the stored
-  // override. The current==stored case is the turn that deliberately re-applies the pin (e.g. an
-  // explicit run override); clearing there would fight that intent, so the guard must stay.
+  // A current selection equal to the stored legacy pin deliberately reapplies it; clearing then
+  // would fight an explicit override, so only treat differing selections as stale.
   const staleLegacyAutoFallbackWithoutOrigin =
     directStoredModelOverride?.source === "session" &&
     hasLegacyAutoFallbackWithoutOrigin(sessionEntry) &&
@@ -307,7 +316,7 @@ export async function createModelSelectionState(params: {
       defaultProvider,
       defaultModel,
       agentId: params.agentId,
-      ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+      ...runtimeModelNormalization,
     });
     allowedModelCatalog = visibilityPolicy.allowedCatalog;
     allowedModelKeys = visibilityPolicy.allowedKeys;
@@ -322,7 +331,7 @@ export async function createModelSelectionState(params: {
       defaultProvider,
       defaultModel,
       agentId: params.agentId,
-      ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+      ...runtimeModelNormalization,
     });
     allowedModelCatalog = visibilityPolicy.allowedCatalog;
     allowedModelKeys = visibilityPolicy.allowedKeys;
@@ -346,15 +355,12 @@ export async function createModelSelectionState(params: {
       directStoredOverride.model,
       cfg,
       sessionEntry,
+      runtimeModelNormalization,
     );
     const key = modelKey(normalizedOverride.provider, normalizedOverride.model);
     const overrideAllowed = visibilityPolicy.allowsKey(key);
-    // A degraded catalog (discovery failed, static/empty fallback) makes the
-    // allow-list unreliable, so `!allowsKey` cannot prove a pin is really
-    // disallowed. Never destroy the pin for that: the turn already falls back to
-    // the primary via the allowsKey gate below, and the override is re-evaluated
-    // once discovery recovers. Stale is a config fact (override model absent from
-    // config), catalog-independent, so it still resets.
+    // A degraded catalog cannot prove a pin is disallowed. Preserve it while the turn falls back
+    // to primary, then re-evaluate after discovery recovers; config-proven stale pins still reset.
     const overrideTemporarilyUnavailable =
       !staleDirectStoredOverride && !overrideAllowed && !catalogAuthoritative;
     if (overrideTemporarilyUnavailable) {
@@ -437,6 +443,7 @@ export async function createModelSelectionState(params: {
       storedOverride.model,
       cfg,
       sessionEntry,
+      runtimeModelNormalization,
     );
     const key = modelKey(normalizedStoredOverride.provider, normalizedStoredOverride.model);
     if (visibilityPolicy.allowsKey(key)) {
@@ -519,7 +526,7 @@ export async function createModelSelectionState(params: {
       defaultProvider,
       defaultModel,
       agentId: params.agentId,
-      ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+      ...runtimeModelNormalization,
     }).allowedCatalog;
   const loadManifestCatalog = async () => {
     if (manifestModelCatalog) {

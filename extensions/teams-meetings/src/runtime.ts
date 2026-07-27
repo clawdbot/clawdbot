@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createMeetingSession,
+  MeetingPlatformAdapter,
   MeetingSessionRuntime,
   type MeetingSessionRuntimeHandles,
   type MeetingSessionRuntimeJoinContext,
@@ -27,11 +28,7 @@ import {
   readTeamsMeetingTranscript,
   recoverCurrentTeamsMeetingTab,
 } from "./transports/chrome.js";
-import {
-  TEAMS_MEETINGS_PLATFORM_ADAPTER,
-  isTeamsMeetingsRealtimeRouteReady,
-  isTeamsMeetingsTalkBackMode,
-} from "./transports/teams-meetings-platform-adapter.js";
+import { TEAMS_MEETINGS_PLATFORM_ADAPTER } from "./transports/teams-meetings-platform-adapter.js";
 import type {
   TeamsMeetingsBrowserTab,
   TeamsMeetingsChromeHealth,
@@ -157,7 +154,7 @@ export class TeamsMeetingsRuntime {
       resolveSpeechInstructions: (request) =>
         request.message ?? params.config.realtime.introMessage,
       isBrowserTransport: () => true,
-      isTalkBackMode: isTeamsMeetingsTalkBackMode,
+      isTalkBackMode: (mode) => MeetingPlatformAdapter.isTalkBackMode(mode),
       isTranscribeMode: (mode) => mode === "transcribe",
       sameMeetingUrl: (left, right) =>
         TEAMS_MEETINGS_PLATFORM_ADAPTER.urls.isSameMeeting(left, right),
@@ -378,11 +375,11 @@ export class TeamsMeetingsRuntime {
     session: TeamsMeetingsSession,
   ): Promise<MeetingSessionRuntimeHandles<TeamsMeetingsChromeHealth> | undefined> {
     if (
-      !isTeamsMeetingsTalkBackMode(session.mode) ||
+      !MeetingPlatformAdapter.isTalkBackMode(session.mode) ||
       session.state !== "active" ||
       !session.chrome ||
       session.chrome.audioBridge ||
-      !isTeamsMeetingsRealtimeRouteReady(session.mode, session.chrome.health)
+      !MeetingPlatformAdapter.isRealtimeRouteReady(session.mode, session.chrome.health)
     ) {
       return undefined;
     }

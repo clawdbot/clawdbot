@@ -2,9 +2,11 @@
 export {
   listSqliteSessionEntries,
   listSqliteSessionEntriesReadOnly,
+  listSqliteSessionEntryKeysReadOnly,
   listSqliteSessionEntriesByStatus,
   listSqliteSessionTranscriptInstances,
   loadExactSqliteSessionEntry,
+  loadExactSqliteSessionEntryReadOnly,
   loadSqliteSessionEntry,
   loadSqliteSessionEntryReadOnly,
   patchSqliteSessionEntry,

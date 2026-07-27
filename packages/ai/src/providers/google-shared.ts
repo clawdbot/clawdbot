@@ -14,6 +14,7 @@ import {
   ThinkingLevel,
 } from "@google/genai";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
+import { transportAbortError } from "../transports/transport-stream-shared.js";
 import type {
   Api,
   AssistantMessage,
@@ -907,7 +908,7 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
   endCurrentBlock();
 
   if (params.signal?.aborted) {
-    throw new Error("Request was aborted");
+    throw transportAbortError(params.signal);
   }
 
   if (params.output.stopReason === "aborted" || params.output.stopReason === "error") {

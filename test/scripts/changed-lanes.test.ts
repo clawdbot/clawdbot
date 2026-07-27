@@ -38,6 +38,7 @@ import {
   shouldRunSqliteSessionSchemaBaselineCheck,
   shouldRunTestTempCreationReport,
   createNpmLockGuardCommand,
+  delegationFailedBeforeRunning,
 } from "../../scripts/check-changed.mjs";
 import { resolveOxfmtInvocation } from "../../scripts/format-docs.mjs";
 import { isDirectRunPath } from "../../scripts/lib/direct-run.mjs";
@@ -2081,5 +2082,54 @@ describe("scripts/changed-lanes", () => {
       },
       { name: "package patch guard", args: ["deps:patches:check"] },
     ]);
+  });
+});
+
+describe("delegationFailedBeforeRunning", () => {
+  // The wrapper only prints a run summary once the command reached the box, so
+  // the summary is the evidence that a verdict exists at all.
+  it("treats a lease or network failure as never having run", () => {
+    const output = [
+      'request failed: Get "https://backend.blacksmith.sh/api/testbox/list?all=true": context deadline exceeded',
+      "blacksmith testbox run exited 1",
+    ].join("\n");
+
+    expect(delegationFailedBeforeRunning(output)).toBe(true);
+  });
+
+  it("treats a reported command exit as a real check failure", () => {
+    const output = [
+      "  64.95s  failed:1   typecheck core tests",
+      '{"provider":"blacksmith-testbox","runStatus":"failed","errorKind":"command-exit","exitCode":1}',
+    ].join("\n");
+
+    // Falling back locally here would re-run on macOS and could pass a lane
+    // whose truth is Linux, turning a red gate green.
+    expect(delegationFailedBeforeRunning(output)).toBe(false);
+  });
+
+  it("does not mistake an infrastructure error kind for a command verdict", () => {
+    const output = [
+      "failed to acquire lease for testbox",
+      '{"provider":"blacksmith-testbox","runStatus":"failed","errorKind":"lease-timeout","exitCode":1}',
+    ].join("\n");
+
+    expect(delegationFailedBeforeRunning(output)).toBe(true);
+  });
+
+  // A crash after dispatch produces no summary either, so absence of one cannot
+  // be read as "never ran" — that is how an unknown Linux result would go green.
+  it("fails closed when the wrapper dies without saying why", () => {
+    expect(delegationFailedBeforeRunning("node: killed\n")).toBe(false);
+    expect(delegationFailedBeforeRunning("")).toBe(false);
+  });
+
+  it("keeps a command verdict authoritative even alongside network noise", () => {
+    const output = [
+      'request failed: Get "https://backend.blacksmith.sh/api/testbox/list": context deadline exceeded',
+      '{"provider":"blacksmith-testbox","runStatus":"failed","errorKind":"command-exit","exitCode":1}',
+    ].join("\n");
+
+    expect(delegationFailedBeforeRunning(output)).toBe(false);
   });
 });

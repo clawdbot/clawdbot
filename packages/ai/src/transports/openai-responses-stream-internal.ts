@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
+import type {
+  ResponseCreateParamsStreaming,
+  ResponseOutputMessage,
+  ResponseStreamEvent,
+} from "openai/resources/responses/responses.js";
 import {
   createResponsesToolCallTracker,
   isResponsesTextContentPartType,
@@ -31,6 +35,66 @@ import {
   throwIfModelStreamAborted,
   type MutableAssistantOutput,
 } from "./openai-transport-shared.js";
+
+type ResponsesConsumedEventType =
+  | "error"
+  | "response.completed"
+  | "response.content_part.added"
+  | "response.created"
+  | "response.failed"
+  | "response.function_call_arguments.delta"
+  | "response.function_call_arguments.done"
+  | "response.incomplete"
+  | "response.output_item.added"
+  | "response.output_item.done"
+  | "response.output_text.delta"
+  | "response.reasoning_summary_part.added"
+  | "response.reasoning_summary_part.done"
+  | "response.reasoning_summary_text.delta"
+  | "response.reasoning_text.delta"
+  | "response.refusal.delta";
+
+type OpenAIResponsesConsumedEvent = Extract<
+  ResponseStreamEvent,
+  { type: ResponsesConsumedEventType }
+>;
+type OpenAIResponsesIgnoredSdkEvent = Exclude<ResponseStreamEvent, OpenAIResponsesConsumedEvent>;
+type ResponsesTextContentPart =
+  | ResponseOutputMessage["content"][number]
+  | {
+      type: "text";
+      text: string;
+    };
+type ResponsesStreamOutputMessage = Omit<ResponseOutputMessage, "content"> & {
+  content: ResponsesTextContentPart[] | null;
+};
+type ResponsesContentPartAddedEvent = Extract<
+  ResponseStreamEvent,
+  { type: "response.content_part.added" }
+>;
+type ResponsesOutputItemDoneEvent = Extract<
+  ResponseStreamEvent,
+  { type: "response.output_item.done" }
+>;
+
+/** Private structural event contract shared by Responses stream callers. */
+export type OpenAIResponsesStreamEvent =
+  | OpenAIResponsesConsumedEvent
+  | OpenAIResponsesIgnoredSdkEvent
+  | (Omit<ResponsesContentPartAddedEvent, "part"> & {
+      part: Extract<ResponsesTextContentPart, { type: "text" }>;
+    })
+  | (Omit<ResponsesOutputItemDoneEvent, "item"> & {
+      item: ResponsesStreamOutputMessage;
+    })
+  | {
+      type: "response.text.delta";
+      delta: string;
+      output_index?: number;
+      item_id?: string;
+      content_index?: number;
+      sequence_number?: number;
+    };
 
 export async function processResponsesStream(
   openaiStream: AsyncIterable<unknown>,
@@ -235,7 +299,7 @@ export async function processResponsesStream(
   const cooperativeScheduler = createModelStreamCooperativeScheduler(options?.signal);
   for await (const rawEvent of guardedStream) {
     throwIfModelStreamAborted(options?.signal);
-    const event = rawEvent as Record<string, unknown>;
+    const event = rawEvent as unknown as Record<string, unknown>;
     const type = stringifyUnknown(event.type);
     eventCount += 1;
     eventTypes.set(type, (eventTypes.get(type) ?? 0) + 1);

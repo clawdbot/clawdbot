@@ -35,15 +35,15 @@ import {
   hasSessionRelatedCronJobs,
   hasUnbackedReminderCommitment,
 } from "./agent-runner-reminder-guard.js";
-import type { accountReplyAgentRun } from "./agent-runner-result-accounting.js";
+import type { accountAgentTurn } from "./agent-runner-result-accounting.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 import { resolveResponseUsageLine } from "./agent-runner-usage-line.js";
 import { attachMcpAppChannelAction } from "./mcp-app-channel-action.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { resolveOriginMessageTo } from "./origin-routing.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
-import { buildStrandedReplyDeliveryFailurePayload } from "./stranded-reply-recovery.js";
-type ReplyAgentAccounting = Awaited<ReturnType<typeof accountReplyAgentRun>>;
+import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
+type ReplyAgentAccounting = Awaited<ReturnType<typeof accountAgentTurn>>;
 
 export async function prepareReplyAgentPayloads(state: {
   context: FinalizeReplyAgentRunInput;
@@ -162,13 +162,18 @@ export async function prepareReplyAgentPayloads(state: {
       runtimePolicySessionKey,
       opts,
     });
-    if (
-      sourceReplyPolicy.sourceReplyDeliveryMode !== "message_tool_only" ||
-      sourceReplyPolicy.sendPolicyDenied
-    ) {
-      return undefined;
-    }
-    return buildStrandedReplyDeliveryFailurePayload();
+    // The guard above limits this to a one-shot recovery turn. A second miss
+    // always gets a diagnostic, even when the retry produced no final text.
+    const recovery = resolveStrandedReplyRecovery({
+      base: followupRun,
+      finalText: "",
+      sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
+      sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
+      successfulSourceReplyDelivery: completedSourceReplyDelivery,
+      isHeartbeat,
+      isRoomEvent: false,
+    });
+    return recovery.kind === "diagnostic" ? recovery.payload : undefined;
   };
   if (opts?.sourceReplyDeliveryMode === "message_tool_only" && completedSourceReplyDelivery) {
     await opts.onObservedReplyDelivery?.();

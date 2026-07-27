@@ -2407,6 +2407,21 @@ export const en: TranslationMap = {
       empty: "No active swarms.",
       defaultPhase: "Unphased",
     },
+    toolSearch: {
+      title: "Tool Search",
+      description:
+        "Keep a bounded tool directory visible and defer the rest behind search, so large MCP and plugin catalogs stop crowding the prompt.",
+    },
+    localModelLean: {
+      title: "Lean tools for local models",
+      description:
+        "Drop heavyweight default tools that smaller local models handle poorly, leaving a shorter set they can use reliably.",
+    },
+    auditMessages: {
+      title: "Message audit metadata",
+      description:
+        "Record content-free metadata for direct conversations in the audit ledger. Message content is never stored.",
+    },
   },
   aboutPage: {
     productName: "OpenClaw",
@@ -3196,6 +3211,7 @@ export const en: TranslationMap = {
     },
   },
   attention: {
+    cronErrorUnknown: "Unknown error",
     cronFailed: "{count} cron job(s) failed",
     cronOverdue: "{count} cron job(s) overdue",
     modelAuthExpired: "Model auth expired: {providers}",

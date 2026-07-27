@@ -1,8 +1,6 @@
+import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import { describe, expect, it, vi } from "vitest";
-import {
-  TEAMS_MEETINGS_PLATFORM_ADAPTER,
-  isTeamsMeetingsRealtimeRouteReady,
-} from "./teams-meetings-platform-adapter.js";
+import { TEAMS_MEETINGS_PLATFORM_ADAPTER } from "./teams-meetings-platform-adapter.js";
 import {
   CONSUMER_URL,
   MEETING_STATE_KEY,
@@ -746,7 +744,7 @@ describe("Microsoft Teams meeting platform adapter", () => {
 
   it("requires positive input and output route evidence before realtime", () => {
     expect(
-      isTeamsMeetingsRealtimeRouteReady("agent", {
+      MeetingPlatformAdapter.isRealtimeRouteReady("agent", {
         audioInputRouted: true,
         audioOutputRouted: true,
         inCall: true,
@@ -758,10 +756,10 @@ describe("Microsoft Teams meeting platform adapter", () => {
       { audioInputRouted: true, inCall: true, micMuted: false },
       { audioInputRouted: true, audioOutputRouted: true, inCall: true },
     ]) {
-      expect(isTeamsMeetingsRealtimeRouteReady("agent", health)).toBe(false);
+      expect(MeetingPlatformAdapter.isRealtimeRouteReady("agent", health)).toBe(false);
     }
     expect(
-      isTeamsMeetingsRealtimeRouteReady("transcribe", {
+      MeetingPlatformAdapter.isRealtimeRouteReady("transcribe", {
         audioInputRouted: true,
         audioOutputRouted: true,
         inCall: true,

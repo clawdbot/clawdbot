@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createMeetingSession,
+  MeetingPlatformAdapter,
   MeetingSessionRuntime,
   type MeetingSessionRuntimeHandles,
   type MeetingSessionRuntimeJoinContext,
@@ -34,11 +35,7 @@ import type {
   ZoomMeetingsJoinResult,
   ZoomMeetingsSession,
 } from "./transports/types.js";
-import {
-  ZOOM_MEETINGS_PLATFORM_ADAPTER,
-  isZoomMeetingsRealtimeRouteReady,
-  isZoomMeetingsTalkBackMode,
-} from "./transports/zoom-meetings-platform-adapter.js";
+import { ZOOM_MEETINGS_PLATFORM_ADAPTER } from "./transports/zoom-meetings-platform-adapter.js";
 import { hasSameZoomMeetingJoinCredential } from "./transports/zoom-meetings-urls.js";
 
 type ManualActionReason = NonNullable<ZoomMeetingsChromeHealth["manualActionReason"]>;
@@ -164,7 +161,7 @@ export class ZoomMeetingsRuntime {
       resolveSpeechInstructions: (request) =>
         request.message ?? params.config.realtime.introMessage,
       isBrowserTransport: () => true,
-      isTalkBackMode: isZoomMeetingsTalkBackMode,
+      isTalkBackMode: (mode) => MeetingPlatformAdapter.isTalkBackMode(mode),
       isTranscribeMode: (mode) => mode === "transcribe",
       sameMeetingUrl: (left, right) =>
         ZOOM_MEETINGS_PLATFORM_ADAPTER.urls.isSameMeeting(left, right),
@@ -439,11 +436,11 @@ export class ZoomMeetingsRuntime {
   ): Promise<MeetingSessionRuntimeHandles<ZoomMeetingsChromeHealth> | undefined> {
     const bridgeClosed = session.chrome?.health?.bridgeClosed === true;
     if (
-      !isZoomMeetingsTalkBackMode(session.mode) ||
+      !MeetingPlatformAdapter.isTalkBackMode(session.mode) ||
       session.state !== "active" ||
       !session.chrome ||
       (session.chrome.audioBridge && !bridgeClosed) ||
-      !isZoomMeetingsRealtimeRouteReady(session.mode, session.chrome.health)
+      !MeetingPlatformAdapter.isRealtimeRouteReady(session.mode, session.chrome.health)
     ) {
       return undefined;
     }

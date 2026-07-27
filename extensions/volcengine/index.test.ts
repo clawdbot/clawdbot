@@ -3,10 +3,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
-import {
-  VOLCENGINE_UNSUPPORTED_TOOL_SCHEMA_KEYWORDS,
-  resolveVolcengineToolSchemaCompatPatch,
-} from "./api.js";
+import { VOLCENGINE_UNSUPPORTED_TOOL_SCHEMA_KEYWORDS } from "./api.js";
 import plugin from "./index.js";
 import { DOUBAO_CODING_MODEL_CATALOG, DOUBAO_MODEL_CATALOG } from "./models.js";
 
@@ -75,9 +72,6 @@ describe("volcengine plugin", () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
     expect(provider.hookAliases).toContain("volcengine-plan");
-    expect(resolveVolcengineToolSchemaCompatPatch()).toEqual({
-      unsupportedToolSchemaKeywords: [...VOLCENGINE_UNSUPPORTED_TOOL_SCHEMA_KEYWORDS],
-    });
 
     const normalized = provider.normalizeResolvedModel?.({
       provider: "volcengine-plan",
@@ -97,5 +91,8 @@ describe("volcengine plugin", () => {
       "not",
       ...VOLCENGINE_UNSUPPORTED_TOOL_SCHEMA_KEYWORDS,
     ]);
+
+    const normalizedAgain = provider.normalizeResolvedModel?.({ model: normalized } as never);
+    expect(normalizedAgain).toBe(normalized);
   });
 });

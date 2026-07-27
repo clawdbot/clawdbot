@@ -79,6 +79,61 @@ describe("transport stream shared helpers", () => {
     expect(end).toHaveBeenCalledTimes(1);
   });
 
+  it("rethrows the abort reason so its code reaches the persisted message", () => {
+    // The reason carries the caller's coded AbortError; synthesizing a fresh
+    // Error here would strip `code` and force consumers back onto error text.
+    const controller = new AbortController();
+    const reason = Object.assign(new Error("agent run aborted for restart"), {
+      name: "AbortError",
+      code: "OPENCLAW_RESTART_ABORT",
+    });
+    controller.abort(reason);
+    const output: { stopReason: string; errorMessage?: string; errorCode?: string } = {
+      stopReason: "stop",
+    };
+
+    expect(() =>
+      finalizeTransportStream({
+        stream: { push: vi.fn(), end: vi.fn() },
+        output,
+        signal: controller.signal,
+      }),
+    ).toThrow(reason);
+
+    failTransportStream({
+      stream: { push: vi.fn(), end: vi.fn() },
+      output,
+      signal: controller.signal,
+      error: reason,
+    });
+    expect(output.stopReason).toBe("aborted");
+    expect(output.errorCode).toBe("OPENCLAW_RESTART_ABORT");
+  });
+
+  it.each([
+    ["a non-Error abort reason", () => "stringy reason"],
+    // Node's default abort reason. It is an Error, but an uncoded one, so it
+    // carries nothing the synthetic error does not.
+    ["a default uncoded abort reason", () => undefined],
+    ["an uncoded Error abort reason", () => new Error("some upstream failure")],
+  ])("falls back to the synthetic abort error for %s", (_label, makeReason) => {
+    const controller = new AbortController();
+    const reason = makeReason();
+    if (reason === undefined) {
+      controller.abort();
+    } else {
+      controller.abort(reason);
+    }
+
+    expect(() =>
+      finalizeTransportStream({
+        stream: { push: vi.fn(), end: vi.fn() },
+        output: { stopReason: "stop" },
+        signal: controller.signal,
+      }),
+    ).toThrow("Request was aborted");
+  });
+
   it("marks transport stream failures and runs cleanup", () => {
     // Failure finalization mutates the output message before emitting it so
     // downstream transcript consumers see the same error state as the stream.

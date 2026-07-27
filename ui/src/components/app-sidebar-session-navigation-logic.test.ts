@@ -17,7 +17,10 @@ function projectDraftOwnership(
         selfUser: selfUserId ? { id: selfUserId } : undefined,
       },
     },
-    sessions: { pullRequestSummary: () => undefined },
+    sessions: {
+      isPreparedWorkSession: () => false,
+      pullRequestSummary: () => undefined,
+    },
   } as unknown as Parameters<typeof buildSidebarSessionNavigationState>[0]["context"];
   const navigation = buildSidebarSessionNavigationState({
     context,
@@ -75,4 +78,42 @@ describe("sidebar draft ownership presentation", () => {
       ),
     ).toBe(false);
   });
+});
+
+it("keeps a prepared worktree session in Coding before canonical metadata arrives", () => {
+  const key = "agent:main:new-worktree";
+  const context = {
+    basePath: "",
+    agents: { state: { agentsList: { mainKey: "main" } } },
+    agentSelection: { state: { selectedId: "main" } },
+    gateway: { snapshot: { assistantAgentId: "main", hello: null } },
+    sessions: {
+      isPreparedWorkSession: (candidate: string) => candidate === key,
+      pullRequestSummary: () => undefined,
+    },
+  } as unknown as Parameters<typeof buildSidebarSessionNavigationState>[0]["context"];
+  const navigation = buildSidebarSessionNavigationState({
+    context,
+    routeSessionKey: key,
+    sessionsResult: {
+      ts: 1,
+      path: "(multiple)",
+      count: 1,
+      defaults: { modelProvider: null, model: null, contextTokens: null },
+      sessions: [{ key, kind: "direct", updatedAt: 1 }],
+    },
+    sessionsAgentId: null,
+    showCron: false,
+    statusFilter: "active",
+    compareSessions: () => 0,
+    highlightCurrentSession: true,
+    runtimeSampledAtByRow: new WeakMap(),
+    loadingChildSessionKeys: new Set(),
+    outboxCountForSessionKey: () => 0,
+    resolveAttention: () => ({ kind: "none" }),
+    resolveAgentStatusNote: () => undefined,
+  });
+
+  expect(navigation.visibleSessions).toHaveLength(1);
+  expect(navigation.visibleSessions[0]?.workSession).toBe(true);
 });
