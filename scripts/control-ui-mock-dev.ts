@@ -18,7 +18,11 @@ import {
   resolveTsconfigPathAliasesForVite,
 } from "../ui/vite.config.ts";
 import { buildBackgroundTasksMock } from "./control-ui-mock-background-tasks.ts";
-import { buildChannelsStatusMock, buildChannelWizardMocks } from "./control-ui-mock-channels.ts";
+import {
+  buildChannelsPairingMock,
+  buildChannelsStatusMock,
+  buildChannelWizardMocks,
+} from "./control-ui-mock-channels.ts";
 import { buildCronMocks } from "./control-ui-mock-cron.ts";
 import { buildPluginCatalogMock } from "./control-ui-mock-plugins.ts";
 import { buildSkillWorkshopMocks } from "./control-ui-mock-skill-workshop.js";
@@ -1476,11 +1480,36 @@ async function createChatPickerScenario(
       },
       "plugins.list": buildPluginCatalogMock(),
       "channels.status": buildChannelsStatusMock(baseTime),
-      "channels.pairing.list": {
-        accounts: [],
-        requests: [],
-        commandOwnerConfigured: true,
-        limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
+      "channels.pairing.list": buildChannelsPairingMock(baseTime),
+      "channels.pairing.approve": {
+        cases: [
+          {
+            match: { requestId: "pairing-req-1" },
+            response: {
+              requestId: "pairing-req-1",
+              senderId: "552731142",
+              notification: "sent",
+              commandOwnerBootstrap: "not-requested",
+            },
+          },
+          {
+            response: {
+              requestId: "pairing-req-2",
+              senderId: "+1 555 0192",
+              notification: "unsupported",
+              commandOwnerBootstrap: "not-requested",
+            },
+          },
+        ],
+      },
+      "channels.pairing.dismiss": {
+        cases: [
+          {
+            match: { requestId: "pairing-req-1" },
+            response: { requestId: "pairing-req-1", senderId: "552731142" },
+          },
+          { response: { requestId: "pairing-req-2", senderId: "+1 555 0192" } },
+        ],
       },
       "web.login.start": {
         message: "Scan the QR code with WhatsApp to link this device.",
