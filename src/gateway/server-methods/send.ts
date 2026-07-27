@@ -76,6 +76,7 @@ import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/m
 import { resolveGatewayConversationReadOrigin } from "../conversation-read-origin.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
+import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import {
@@ -100,7 +101,55 @@ type MessageOperationRouteBinding = {
   reservedRoute?: MessageOperationRoute;
 };
 
+type MessageOperationRouteBindingEntry = {
+  requestScope: string;
+  retainUntilSettled: boolean;
+  ts: number;
+};
+
+// Send and poll callers can spell one canonical route four ways by omitting or
+// supplying channel/account defaults. Preserve every alias for the full result budget.
+const MESSAGE_OPERATION_ROUTE_BINDING_MAX = DEDUPE_MAX * 4;
+const messageOperationRouteBindings = new WeakMap<
+  GatewayRequestContext,
+  Map<string, MessageOperationRouteBindingEntry>
+>();
 const messageOperationRouteBindingQueues = new WeakMap<GatewayRequestContext, KeyedAsyncQueue>();
+
+function pruneMessageOperationRouteBindings(
+  bindings: Map<string, MessageOperationRouteBindingEntry>,
+  now: number,
+): void {
+  for (const [key, entry] of bindings) {
+    if (!entry.retainUntilSettled && now - entry.ts > DEDUPE_TTL_MS) {
+      bindings.delete(key);
+    }
+  }
+  const excess = bindings.size - MESSAGE_OPERATION_ROUTE_BINDING_MAX;
+  if (excess <= 0) {
+    return;
+  }
+  const oldestSettledKeys = [...bindings.entries()]
+    .filter(([, entry]) => !entry.retainUntilSettled)
+    .toSorted(([, left], [, right]) => left.ts - right.ts)
+    .slice(0, excess)
+    .map(([key]) => key);
+  for (const key of oldestSettledKeys) {
+    bindings.delete(key);
+  }
+}
+
+function getMessageOperationRouteBindings(
+  context: GatewayRequestContext,
+): Map<string, MessageOperationRouteBindingEntry> {
+  let bindings = messageOperationRouteBindings.get(context);
+  if (!bindings) {
+    bindings = new Map();
+    messageOperationRouteBindings.set(context, bindings);
+  }
+  pruneMessageOperationRouteBindings(bindings, Date.now());
+  return bindings;
+}
 
 function getMessageOperationRouteBindingQueue(context: GatewayRequestContext): KeyedAsyncQueue {
   let queue = messageOperationRouteBindingQueues.get(context);
@@ -320,7 +369,9 @@ function resolveMessageOperationRouteBinding(params: {
   const key = `${params.prefix}${authorityScope}:route-binding:${explicitRouteScope}:${params.idempotencyKey}`;
   return {
     key,
-    reservedRoute: parseMessageOperationRoute(params.context.dedupe.get(key)?.requestIdentity),
+    reservedRoute: parseMessageOperationRoute(
+      getMessageOperationRouteBindings(params.context).get(key)?.requestScope,
+    ),
   };
 }
 
@@ -332,21 +383,23 @@ function bindMessageOperationRoute(params: {
   if (!params.binding) {
     return true;
   }
-  const existing = params.context.dedupe.get(params.binding.key);
+  const bindings = getMessageOperationRouteBindings(params.context);
+  const existing = bindings.get(params.binding.key);
   if (existing) {
-    if (existing.requestIdentity !== params.requestScope) {
+    if (existing.requestScope !== params.requestScope) {
       return false;
     }
-    params.context.dedupe.set(params.binding.key, { ...existing, ts: Date.now() });
+    bindings.set(params.binding.key, { ...existing, ts: Date.now() });
     return true;
   }
   // Bind the canonical route before dispatch so retries can replay without
   // consulting mutable defaults or plugin/account configuration.
-  params.context.dedupe.set(params.binding.key, {
+  bindings.set(params.binding.key, {
     ts: Date.now(),
-    ok: true,
-    requestIdentity: params.requestScope,
+    requestScope: params.requestScope,
+    retainUntilSettled: false,
   });
+  pruneMessageOperationRouteBindings(bindings, Date.now());
   return true;
 }
 
@@ -358,13 +411,15 @@ function refreshMessageOperationRouteBinding(params: {
   if (!params.binding) {
     return;
   }
-  const existing = params.context.dedupe.get(params.binding.key);
-  if (existing?.requestIdentity === params.requestScope) {
-    params.context.dedupe.set(params.binding.key, {
+  const bindings = getMessageOperationRouteBindings(params.context);
+  const existing = bindings.get(params.binding.key);
+  if (existing?.requestScope === params.requestScope) {
+    bindings.set(params.binding.key, {
       ...existing,
       ts: Date.now(),
       retainUntilSettled: false,
     });
+    pruneMessageOperationRouteBindings(bindings, Date.now());
   }
 }
 
@@ -376,11 +431,12 @@ function retainMessageOperationRouteBinding(params: {
   if (!params.binding) {
     return;
   }
-  const existing = params.context.dedupe.get(params.binding.key);
-  if (existing?.requestIdentity === params.requestScope) {
-    // Maintenance must not sever the mutable-default binding from its canonical
-    // in-flight operation; settlement below starts the ordinary bounded TTL.
-    params.context.dedupe.set(params.binding.key, {
+  const bindings = getMessageOperationRouteBindings(params.context);
+  const existing = bindings.get(params.binding.key);
+  if (existing?.requestScope === params.requestScope) {
+    // Active provider work owns this alias even past TTL or capacity pressure;
+    // settlement below restarts ordinary expiry.
+    bindings.set(params.binding.key, {
       ...existing,
       retainUntilSettled: true,
     });

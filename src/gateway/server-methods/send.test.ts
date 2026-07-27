@@ -20,7 +20,7 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
-import { DEDUPE_TTL_MS } from "../server-constants.js";
+import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
 import { startGatewayMaintenanceTimers } from "../server-maintenance.js";
 import { createGatewayMaintenanceStateForTest } from "../test-helpers.maintenance-state.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -1272,10 +1272,7 @@ describe("gateway send mirroring", () => {
       await vi.waitFor(() => {
         expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(1);
       });
-      const activeBinding = [...context.dedupe.entries()].find(([key]) =>
-        key.includes(":route-binding:"),
-      );
-      expect(activeBinding?.[1].retainUntilSettled).toBe(true);
+      expect([...context.dedupe.keys()].some((key) => key.includes(":route-binding:"))).toBe(false);
 
       await vi.advanceTimersByTimeAsync(DEDUPE_TTL_MS + 60_000);
       defaultAccountId = "secondary";
@@ -1292,7 +1289,61 @@ describe("gateway send mirroring", () => {
       expect(firstRespondCall(retryRespond)?.[0]).toBe(true);
       expect(firstRespondCall(retryRespond)?.[3]?.cached).toBe(true);
       expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(1);
-      expect(context.dedupe.get(activeBinding?.[0] ?? "")?.retainUntilSettled).toBe(false);
+    } finally {
+      clearInterval(maintenance.tickInterval);
+      clearInterval(maintenance.healthInterval);
+      clearInterval(maintenance.dedupeCleanup);
+      clearInterval(maintenance.worktreeCleanup);
+      if (maintenance.mediaCleanup) {
+        clearInterval(maintenance.mediaCleanup);
+      }
+      maintenance.skillCuratorCleanup();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not let settled route aliases evict canonical results before ttl", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-26T00:00:00Z"));
+    let defaultAccountId = "primary";
+    mockMutableMessageRouteAccounts(() => defaultAccountId);
+    const context = makeContext();
+    const maintenance = startGatewayMaintenanceTimers({
+      ...createGatewayMaintenanceStateForTest(),
+      dedupe: context.dedupe,
+      runWorktreeGc: vi.fn(async () => undefined),
+    });
+    const operationCount = Math.floor(DEDUPE_MAX / 2) + 1;
+    const invoke = (idempotencyKey: string, respond: ReturnType<typeof vi.fn>) =>
+      invokeGatewayMessageMethod({
+        method: "message.action",
+        request: {
+          channel: "slack",
+          action: "send",
+          params: { target: "channel:current", message: "hi" },
+          idempotencyKey,
+        },
+        respond,
+        context,
+      });
+
+    try {
+      for (let index = 0; index < operationCount; index += 1) {
+        await invoke(`idem-action-capacity-${index}`, vi.fn());
+      }
+
+      expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(operationCount);
+      expect(context.dedupe.size).toBe(operationCount);
+      expect([...context.dedupe.keys()].some((key) => key.includes(":route-binding:"))).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      defaultAccountId = "secondary";
+      const retryRespond = vi.fn();
+      await invoke("idem-action-capacity-0", retryRespond);
+
+      expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(operationCount);
+      expect(firstRespondCall(retryRespond)?.[0]).toBe(true);
+      expect(firstRespondCall(retryRespond)?.[3]?.cached).toBe(true);
     } finally {
       clearInterval(maintenance.tickInterval);
       clearInterval(maintenance.healthInterval);
