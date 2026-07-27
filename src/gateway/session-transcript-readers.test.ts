@@ -1,7 +1,7 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   persistSessionTranscriptTurn,
   upsertSessionEntry,
@@ -20,6 +20,8 @@ import {
   type SessionTranscriptReadScope,
 } from "./session-transcript-readers.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 describe("session transcript reader facade", () => {
   let tempDir: string;
   let storePath: string;
@@ -27,7 +29,7 @@ describe("session transcript reader facade", () => {
 
   beforeEach(() => {
     envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-transcript-readers-"));
+    tempDir = tempDirs.make("openclaw-transcript-readers-");
     storePath = path.join(tempDir, "sessions.json");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
   });
@@ -36,7 +38,6 @@ describe("session transcript reader facade", () => {
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     envSnapshot.restore();
-    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
   function writeTranscript(sessionId: string, events: unknown[]): SessionTranscriptReadScope {
