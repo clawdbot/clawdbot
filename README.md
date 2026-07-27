@@ -294,7 +294,7 @@ Minimal `~/.openclaw/openclaw.json` (model + defaults):
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=openclaw/openclaw&type=date&legend=top-left)](https://www.star-history.com/#openclaw/openclaw&type=date&legend=top-left)
+[View OpenClaw's star history](https://www.star-history.com/#openclaw/openclaw&type=date&legend=top-left).
 
 ## Molty
 
