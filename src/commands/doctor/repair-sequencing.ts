@@ -64,22 +64,28 @@ export async function runDoctorRepairSequence(params: {
   const env = params.env ?? process.env;
   const sanitizeLines = (lines: string[]) => lines.map((line) => sanitizeForLog(line)).join("\n");
 
+  const collectOutcomeNotes = (outcome: { changes: string[]; warnings?: string[] }) => {
+    if (outcome.changes.length > 0) {
+      changeNotes.push(sanitizeLines(outcome.changes));
+    }
+    if (outcome.warnings && outcome.warnings.length > 0) {
+      warningNotes.push(sanitizeLines(outcome.warnings));
+    }
+  };
+
   const applyMutation = (mutation: {
     config: DoctorConfigMutationState["candidate"];
     changes: string[];
     warnings?: string[];
   }) => {
     if (mutation.changes.length > 0) {
-      changeNotes.push(sanitizeLines(mutation.changes));
       state = applyDoctorConfigMutation({
         state,
         mutation,
         shouldRepair: true,
       });
     }
-    if (mutation.warnings && mutation.warnings.length > 0) {
-      warningNotes.push(sanitizeLines(mutation.warnings));
-    }
+    collectOutcomeNotes(mutation);
   };
 
   for (const mutation of await collectChannelDoctorRepairMutations({
@@ -197,54 +203,29 @@ export async function runDoctorRepairSequence(params: {
   applyMutation(maybeRepairLegacyToolsBySenderKeys(state.candidate));
   applyMutation(maybeRepairExecSafeBinProfiles(state.candidate));
   const pluginDependencyCleanup = await cleanupLegacyPluginDependencyState({ env });
-  if (pluginDependencyCleanup.changes.length > 0) {
-    changeNotes.push(sanitizeLines(pluginDependencyCleanup.changes));
-  }
-  if (pluginDependencyCleanup.warnings.length > 0) {
-    warningNotes.push(sanitizeLines(pluginDependencyCleanup.warnings));
-  }
+  collectOutcomeNotes(pluginDependencyCleanup);
   const onboardingRecommendationsMigration = migrateLegacyOnboardingRecommendationsScope({
     cfg: state.candidate,
     env,
   });
-  if (onboardingRecommendationsMigration.changes.length > 0) {
-    changeNotes.push(sanitizeLines(onboardingRecommendationsMigration.changes));
-  }
-  if (onboardingRecommendationsMigration.warnings.length > 0) {
-    warningNotes.push(sanitizeLines(onboardingRecommendationsMigration.warnings));
-  }
+  collectOutcomeNotes(onboardingRecommendationsMigration);
   const legacyOAuthSidecarRepair = await maybeRepairLegacyOAuthSidecarProfiles({
     cfg: state.candidate,
     prompter: { confirmAutoFix: async () => true },
     emitNotes: false,
     env,
   });
-  if (legacyOAuthSidecarRepair.changes.length > 0) {
-    changeNotes.push(sanitizeLines(legacyOAuthSidecarRepair.changes));
-  }
-  if (legacyOAuthSidecarRepair.warnings.length > 0) {
-    warningNotes.push(sanitizeLines(legacyOAuthSidecarRepair.warnings));
-  }
+  collectOutcomeNotes(legacyOAuthSidecarRepair);
   const openAIAuthProviderRepair = await maybeRepairOpenAICodexAuthProfileStores({
     cfg: state.candidate,
     env,
   });
-  if (openAIAuthProviderRepair.changes.length > 0) {
-    changeNotes.push(sanitizeLines(openAIAuthProviderRepair.changes));
-  }
-  if (openAIAuthProviderRepair.warnings.length > 0) {
-    warningNotes.push(sanitizeLines(openAIAuthProviderRepair.warnings));
-  }
+  collectOutcomeNotes(openAIAuthProviderRepair);
   const staleOAuthShadowRepair = await repairStaleOAuthProfileShadows({
     cfg: state.candidate,
     env,
   });
-  if (staleOAuthShadowRepair.changes.length > 0) {
-    changeNotes.push(sanitizeLines(staleOAuthShadowRepair.changes));
-  }
-  if (staleOAuthShadowRepair.warnings.length > 0) {
-    warningNotes.push(sanitizeLines(staleOAuthShadowRepair.warnings));
-  }
+  collectOutcomeNotes(staleOAuthShadowRepair);
   const authProfileSqliteMigration = await maybeMigrateAuthProfileJsonStoresToSqlite({
     cfg: state.candidate,
     prompter: { confirmAutoFix: async () => true },
@@ -260,12 +241,7 @@ export async function runDoctorRepairSequence(params: {
       shouldRepair: true,
     });
   }
-  if (authProfileSqliteMigration.changes.length > 0) {
-    changeNotes.push(sanitizeLines(authProfileSqliteMigration.changes));
-  }
-  if (authProfileSqliteMigration.warnings.length > 0) {
-    warningNotes.push(sanitizeLines(authProfileSqliteMigration.warnings));
-  }
+  collectOutcomeNotes(authProfileSqliteMigration);
   const staleAuthOrderRepair = maybeRepairStaleConfiguredAuthOrders({
     cfg: state.candidate,
     env,
