@@ -1010,7 +1010,7 @@ export async function runRuntimeToolFixture(
     }
     if (
       toolName === "apply_patch" &&
-      !isWorkspaceBoundaryFailureToolOutput(failureRequest.failureOutputRequest.text)
+      !isWorkspaceBoundaryFailureToolOutput(failureRequest.failureOutputRequest?.text)
     ) {
       throw fixtureError(
         new Error("expected live apply_patch failure to explicitly reject the workspace boundary"),

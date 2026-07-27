@@ -114,6 +114,7 @@ async function writeCodexNativePatchEvidence(
     failurePath?: string;
     happyKind?: string;
     failureKind?: string;
+    failureStructuredError?: boolean;
   } = {},
 ) {
   const toolName = "apply_patch";
@@ -174,7 +175,7 @@ async function writeCodexNativePatchEvidence(
       role: "toolResult",
       toolName,
       toolCallId: "native-patch-failure",
-      isError: true,
+      isError: options.failureStructuredError ?? true,
       content: [
         {
           type: "toolResult",
@@ -829,6 +830,35 @@ describe("runtime tool fixture", () => {
     ).rejects.toThrow(
       "expected live apply_patch failure to explicitly reject the workspace boundary",
     );
+  });
+
+  it("rejects native Codex patch failures without a linked failure result", async () => {
+    const env = await makeEnv();
+    env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME = "codex";
+    await writeCodexNativePatchEvidence(env, "apply_patch completed", {
+      failureStructuredError: false,
+    });
+
+    await expect(
+      runRuntimeToolFixture(
+        env,
+        {
+          toolName: "apply_patch",
+          toolCoverage: {
+            bucket: "codex-native-workspace",
+            expectedLayer: "codex-native-workspace",
+            required: true,
+          },
+        },
+        {
+          createSession: vi.fn(async (_env, _label, key) => key!),
+          readEffectiveTools: vi.fn(async () => new Set<string>()),
+          runAgentPrompt: vi.fn(simulateRuntimePatchHappyTurn),
+          fetchJson: vi.fn(),
+          ensureImageGenerationConfigured: vi.fn(),
+        },
+      ),
+    ).rejects.toThrow("expected live failure-path tool failure output for apply_patch");
   });
 
   it.each([

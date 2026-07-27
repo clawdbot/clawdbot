@@ -40,7 +40,8 @@ scenario:
         tool search qa failure target=apply_patch. Call apply_patch exactly once
         with a complete patch that attempts to update
         ../runtime-tool-fixture-denied.txt by replacing its existing
-        runtime-tool-fixture-denied-original line, then summarize the actual
+        runtime-tool-fixture-denied-original line with
+        runtime patch outside the workspace, then summarize the actual
         workspace-escape rejection.
       promptSnippet: "target=apply_patch"
       failurePromptSnippet: "failure target=apply_patch"

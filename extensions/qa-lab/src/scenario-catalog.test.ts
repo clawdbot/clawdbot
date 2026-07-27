@@ -388,6 +388,9 @@ describe("qa scenario catalog", () => {
     expect(readQaScenarioExecutionConfig(applyPatch.id)?.failurePrompt).toContain(
       "runtime-tool-fixture-denied-original",
     );
+    expect(readQaScenarioExecutionConfig(applyPatch.id)?.failurePrompt).toContain(
+      "runtime patch outside the workspace",
+    );
     expect(readQaScenarioExecutionConfig(applyPatch.id)?.failurePrompt).not.toContain(
       "missing-context",
     );
