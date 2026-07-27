@@ -33,7 +33,7 @@ export function setCliSessionBinding(
   binding: CliSessionBinding,
 ): void {
   const normalized = normalizeProviderId(provider);
-  const trimmed = binding.sessionId.trim();
+  const trimmed = binding?.sessionId?.trim();
   if (!trimmed) {
     return;
   }
