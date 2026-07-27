@@ -650,7 +650,7 @@ export async function analyzeNodeApprovalRequirement(params: {
   const autoReviewArgv =
     autoReviewBindingEval.segments.length === 1 &&
     autoReviewSegment !== undefined &&
-    !isBlockedShellWrapperCommand(autoReviewSegment.argv, autoReviewSegment.raw) &&
+    !isBlockedShellWrapperCommand(autoReviewSegment.argv) &&
     (autoReviewSegment.raw === undefined ||
       autoReviewSegment.raw.trim() === autoReviewBindingCommand.trim())
       ? autoReviewSegment.argv

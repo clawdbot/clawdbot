@@ -768,7 +768,7 @@ export async function processGatewayAllowlist(
     const autoReviewArgv =
       allowlistEval.segments.length === 1 &&
       autoReviewSegment !== undefined &&
-      !isBlockedShellWrapperCommand(autoReviewSegment.argv, autoReviewSegment.raw) &&
+      !isBlockedShellWrapperCommand(autoReviewSegment.argv) &&
       (autoReviewSegment?.raw === undefined ||
         autoReviewSegment.raw.trim() === params.command.trim())
         ? autoReviewSegment.argv

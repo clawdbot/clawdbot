@@ -67,7 +67,7 @@ export async function buildExecAutoReviewInputForShellCommand(params: {
   }
   // Login and interactive shell startup may execute code outside the inline payload.
   // Keep opaque wrappers on the explicit human-approval path.
-  if (isBlockedShellWrapperCommand(segment.argv, segment.raw)) {
+  if (isBlockedShellWrapperCommand(segment.argv)) {
     return undefined;
   }
   if (
