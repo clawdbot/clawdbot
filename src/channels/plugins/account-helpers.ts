@@ -120,7 +120,8 @@ export function createAccountListHelpers<
     listConfiguredAccountIds,
     listAccountIds,
     resolveDefaultAccountId,
-    resolveAccountConfig(cfg: OpenClawConfig, accountId: string): TConfig {
+    // Channel owners destructure this resolver; an arrow keeps it independent of `this`.
+    resolveAccountConfig: (cfg: OpenClawConfig, accountId: string): TConfig => {
       const channelConfig = cfg.channels?.[channelKey] as TConfig | undefined;
       const accounts = (
         channelConfig as (TConfig & { accounts?: Record<string, Partial<TConfig>> }) | undefined
