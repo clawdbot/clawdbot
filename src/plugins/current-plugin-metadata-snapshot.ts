@@ -18,7 +18,6 @@ import type {
 import { normalizePluginIdScope, serializePluginIdScope } from "./plugin-scope.js";
 
 type CurrentPluginMetadataSnapshotState = ReturnType<typeof getCurrentPluginMetadataSnapshotState>;
-export { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 
 function resolvePluginMetadataControlPlaneFingerprint(
   config?: OpenClawConfig,

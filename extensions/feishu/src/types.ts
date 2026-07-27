@@ -101,8 +101,6 @@ export type FeishuToolsConfig = {
   scopes?: boolean;
   /** Bitable/Base operations (default: true). */
   bitable?: boolean;
-  /** @deprecated Use bitable. */
-  base?: boolean;
 };
 
 export type DynamicAgentCreationConfig = {

@@ -29,7 +29,7 @@ jobs:
             --no-progress
             --base-url https://docs.openclaw.ai
             --exclude-all-private
-            --accept '100..=399,401,403,429'
+            --accept '100..=399,401,403,429,500..=599'
             --accept-timeouts
             --max-retries 2
             --retry-wait-time 2

@@ -190,6 +190,81 @@ describe("gateway board provider lifecycle", () => {
     expect(provider.snapshot$.value.revision).toBe(2);
   });
 
+  it("coalesces same-tick widget refreshes into one in-flight board.get", async () => {
+    const snapshot = {
+      sessionKey: "agent:main:coalesced",
+      revision: 1,
+      tabs: [],
+      widgets: [],
+    };
+    let resolveRequest: ((value: typeof snapshot) => void) | undefined;
+    const request = vi.fn(
+      () =>
+        new Promise<typeof snapshot>((resolve) => {
+          resolveRequest = resolve;
+        }),
+    );
+    const provider = new GatewayBoardProvider(
+      snapshot.sessionKey,
+      { request: request as never, addEventListener: () => () => {} },
+      false,
+    );
+
+    const refreshes = [
+      provider.refreshWidgetFrame("first"),
+      provider.refreshWidgetFrame("second"),
+      provider.refreshWidgetFrame("third"),
+    ];
+    expect(request).toHaveBeenCalledOnce();
+    resolveRequest?.(snapshot);
+    await Promise.all(refreshes);
+    await Promise.resolve();
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledWith("board.get", { sessionKey: snapshot.sessionKey });
+  });
+
+  it("rereads when board.changed arrives during an in-flight board.get", async () => {
+    const initial = {
+      sessionKey: "agent:main:changed-during-refresh",
+      revision: 1,
+      tabs: [],
+      widgets: [],
+    };
+    const changed = { ...initial, revision: 2 };
+    let listener: ((event: { event: string; payload: unknown }) => void) | undefined;
+    const resolvers: Array<(value: typeof initial) => void> = [];
+    const request = vi.fn(
+      () =>
+        new Promise<typeof initial>((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    const provider = new GatewayBoardProvider(
+      initial.sessionKey,
+      {
+        request: request as never,
+        addEventListener: (next) => {
+          listener = next as typeof listener;
+          return () => {};
+        },
+      },
+      false,
+    );
+
+    const refresh = provider.refreshWidgetFrame("status");
+    listener?.({
+      event: "board.changed",
+      payload: { sessionKey: initial.sessionKey, revision: changed.revision },
+    });
+    resolvers[0]?.(initial);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    resolvers[1]?.(changed);
+    await refresh;
+
+    expect(provider.snapshot$.value.revision).toBe(changed.revision);
+  });
+
   it("preserves minted view metadata across layout and grant mutation snapshots", async () => {
     const widget = {
       name: "alpha",

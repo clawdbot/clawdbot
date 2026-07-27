@@ -24,7 +24,7 @@ import {
   switchChatThinkingLevel,
 } from "./chat-session.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
-import type { ChatPageHost } from "./chat-state.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
 import {
   admitStoredChatComposerQueueItem,
   listStoredChatOutboxes,
@@ -158,7 +158,7 @@ let handleSendChat: typeof import("./chat-send-submit.ts").handleSendChat;
 let steerQueuedChatMessage: typeof import("./chat-send-actions.ts").steerQueuedChatMessage;
 let handleAbortChat: typeof import("./run-lifecycle.ts").handleAbortChat;
 let hasAbortableSessionRun: typeof import("./run-lifecycle.ts").hasAbortableSessionRun;
-let handlePageGatewayEvent: typeof import("./chat-state.ts").handlePageGatewayEvent;
+let handlePageGatewayEvent: typeof import("./chat-state-events.ts").handlePageGatewayEvent;
 let loadChatBranches: typeof import("./chat-history.ts").loadChatBranches;
 let loadChatHistory: typeof import("./chat-history.ts").loadChatHistory;
 let clearPendingQueueItemsForRun: typeof import("./chat-queue.ts").clearPendingQueueItemsForRun;
@@ -173,7 +173,7 @@ let flushChatQueueForEvent: typeof import("./chat-send-actions.ts").flushChatQue
 let retryReconnectableQueuedChatSends: typeof import("./chat-send-actions.ts").retryReconnectableQueuedChatSends;
 let retryQueuedChatMessage: typeof import("./chat-send-actions.ts").retryQueuedChatMessage;
 let recordChatSendServerTiming: typeof import("./chat-send-timing.ts").recordChatSendServerTiming;
-let refreshPageChat: typeof import("./chat-state.ts").refreshPageChat;
+let refreshPageChat: typeof import("./chat-state-refresh.ts").refreshPageChat;
 
 async function loadChatHelpers(): Promise<void> {
   ({
@@ -184,9 +184,8 @@ async function loadChatHelpers(): Promise<void> {
   } = await import("./chat-send-actions.ts"));
   ({ handleSendChat } = await import("./chat-send-submit.ts"));
   ({ recordChatSendServerTiming } = await import("./chat-send-timing.ts"));
-  const chatState = await import("./chat-state.ts");
-  handlePageGatewayEvent = chatState.handlePageGatewayEvent;
-  refreshPageChat = chatState.refreshPageChat;
+  ({ handlePageGatewayEvent } = await import("./chat-state-events.ts"));
+  ({ refreshPageChat } = await import("./chat-state-refresh.ts"));
   ({ loadChatBranches, loadChatHistory } = await import("./chat-history.ts"));
   ({ handleAbortChat, hasAbortableSessionRun } = await import("./run-lifecycle.ts"));
   ({

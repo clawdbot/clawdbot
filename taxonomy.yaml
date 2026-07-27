@@ -16,7 +16,6 @@ profiles:
       - agent-runtime.model-and-runtime-selection
       - agent-runtime.tool-calls-and-response-handling
       - session-memory.cross-client-history-and-session-parity
-      - session-memory.memory
       - gateway.gateway-rpc-apis-and-events
       - gateway.websocket-connection
       - channels.channel-actions-commands-and-approvals

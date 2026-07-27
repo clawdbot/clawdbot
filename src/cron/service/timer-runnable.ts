@@ -1,3 +1,4 @@
+import { parseAbsoluteTimeMs } from "../parse.js";
 import type { CronJob } from "../types.js";
 import {
   computeJobPreviousRunAtMs,
@@ -35,10 +36,20 @@ export function isRunnableJob(params: {
   }
   const lastRunStatus = resolveJobLastRunStatus(job);
   if (params.skipAtIfAlreadyRan && job.schedule.kind === "at" && lastRunStatus) {
-    // One-shot with terminal status: skip unless it has an explicit retry
-    // scheduled after the failed/skipped run (#24355, #91775).
     const lastRun = job.state.lastRunAtMs;
     const nextRun = job.state.nextRunAtMs;
+    // Terminal history belongs to the old occurrence. A matching newer
+    // one-shot still owns its scheduled catch-up after a restart.
+    if (
+      typeof lastRun === "number" &&
+      typeof nextRun === "number" &&
+      nextRun > lastRun &&
+      parseAbsoluteTimeMs(job.schedule.at) === nextRun
+    ) {
+      return nowMs >= nextRun;
+    }
+    // Other terminal one-shots stay consumed unless their owner explicitly
+    // scheduled a failed/skipped retry (#24355, #91775).
     if (isScheduledTerminalOneShotRetry(job, lastRunStatus, lastRun, nextRun)) {
       return typeof nextRun === "number" && nowMs >= nextRun;
     }

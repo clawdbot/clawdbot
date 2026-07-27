@@ -2009,6 +2009,31 @@ describe("Code Mode", () => {
       code: 'return `${/import.meta/.test("import.meta")}`;',
       value: "true",
     },
+    {
+      name: "ordinary import method",
+      code: "const api = { import(value) { return value; } }; return api.import(42);",
+      value: 42,
+    },
+    {
+      name: "ordinary require method",
+      code: "const api = { require(value) { return value; } }; return api.require(42);",
+      value: 42,
+    },
+    {
+      name: "optional ordinary import method",
+      code: "const api = { import(value) { return value; } }; return api?.import?.(42);",
+      value: 42,
+    },
+    {
+      name: "computed ordinary require method",
+      code: 'const api = { require(value) { return value; } }; return api["require"](42);',
+      value: 42,
+    },
+    {
+      name: "ordinary import metadata property",
+      code: "const api = { import: { meta: 42 } }; return api.import.meta;",
+      value: 42,
+    },
   ])("executes harmless $name in the real guest worker", async ({ code, value }) => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     applyCodeModeCatalog({
@@ -2027,6 +2052,30 @@ describe("Code Mode", () => {
     });
 
     expect(details).toMatchObject({ status: "completed", value });
+    expect(testing.activeRuns.size).toBe(0);
+  });
+
+  it("never exposes Node module-loader globals to the real guest worker", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
+      code: "return [typeof process, typeof module, typeof require];",
+    });
+
+    expect(details).toMatchObject({
+      status: "completed",
+      value: ["undefined", "undefined", "undefined"],
+    });
     expect(testing.activeRuns.size).toBe(0);
   });
 
@@ -2309,6 +2358,13 @@ describe("Code Mode", () => {
 
   it.each([
     "const fs = require('node:fs'); return fs;",
+    String.raw`return r\u0065quire('node:fs');`,
+    "return require?.('node:fs');",
+    "return (require)('node:fs');",
+    "return (0, require)('node:fs');",
+    "const load = require; return load('node:fs');",
+    "return module.require('node:fs');",
+    "return process.getBuiltinModule('node:fs');",
     "return import('node:fs');",
     "return import.meta.url;",
     "return `${import('node:fs')}`;",
