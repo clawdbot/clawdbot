@@ -4,6 +4,7 @@ import { detectMime } from "openclaw/plugin-sdk/media-mime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { FileChooser, Page } from "playwright-core";
 import { ACT_MAX_WAIT_TIME_MS, resolveActWaitTimeoutMs } from "./act-policy.js";
+import { isLoopbackHost } from "./cdp.helpers.js";
 import { normalizeBrowserEvaluateFunctionSource } from "./evaluate-source.js";
 import { resolveStrictExistingUploadPaths } from "./paths.js";
 import {
@@ -42,6 +43,7 @@ type PlaywrightFilePayload = {
   name: string;
   mimeType: string;
   buffer: Buffer;
+  lastModifiedMs?: number;
 };
 
 async function toPlaywrightFilePayloads(paths: string[]): Promise<PlaywrightFilePayload[]> {
@@ -53,21 +55,30 @@ async function toPlaywrightFilePayloads(paths: string[]): Promise<PlaywrightFile
     );
   }
   return await Promise.all(
-    paths.map(async (filePath) => {
+    paths.map(async (filePath, index) => {
       const buffer = await fs.readFile(filePath);
       return {
         name: path.basename(filePath),
         mimeType: (await detectMime({ buffer, filePath })) ?? DEFAULT_UPLOAD_MIME_TYPE,
         buffer,
+        lastModifiedMs: stats[index]?.mtimeMs,
       };
     }),
   );
 }
 
+function isLoopbackCdpUrl(cdpUrl: string): boolean {
+  try {
+    return isLoopbackHost(new URL(cdpUrl.replace(/^ws/i, "http")).hostname);
+  } catch {
+    return false;
+  }
+}
+
 function shouldUsePlaywrightFilePayloads(
-  opts: Pick<NavigationTargetOptions, "ssrfPolicy">,
+  opts: Pick<NavigationTargetOptions, "cdpUrl" | "ssrfPolicy">,
 ): boolean {
-  return Boolean(opts.ssrfPolicy);
+  return Boolean(opts.ssrfPolicy) && !isLoopbackCdpUrl(opts.cdpUrl);
 }
 
 type BrowserWaitPredicateState = {

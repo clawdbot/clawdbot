@@ -103,7 +103,7 @@ describe("setFileChooserFilesViaPlaywright", () => {
     };
     locator = null;
     readFile.mockResolvedValue(Buffer.from("upload contents"));
-    stat.mockResolvedValue({ size: Buffer.byteLength("upload contents") });
+    stat.mockResolvedValue({ size: Buffer.byteLength("upload contents"), mtimeMs: 1700000000000 });
     detectMime.mockResolvedValue("text/plain");
     resolveStrictExistingUploadPaths.mockResolvedValue({
       ok: true,
@@ -154,6 +154,7 @@ describe("setFileChooserFilesViaPlaywright", () => {
           name: "ok.txt",
           mimeType: "text/plain",
           buffer: Buffer.from("upload contents"),
+          lastModifiedMs: 1700000000000,
         },
       ],
       { timeout: 250 },
@@ -167,7 +168,7 @@ describe("setInputFilesViaPlaywright", () => {
     page = null;
     locator = null;
     readFile.mockResolvedValue(Buffer.from("upload contents"));
-    stat.mockResolvedValue({ size: Buffer.byteLength("upload contents") });
+    stat.mockResolvedValue({ size: Buffer.byteLength("upload contents"), mtimeMs: 1700000000000 });
     detectMime.mockResolvedValue("text/plain");
     resolveStrictExistingUploadPaths.mockResolvedValue({
       ok: true,
@@ -219,6 +220,7 @@ describe("setInputFilesViaPlaywright", () => {
         name: "ok.txt",
         mimeType: "text/plain",
         buffer: Buffer.from("upload contents"),
+        lastModifiedMs: 1700000000000,
       },
     ]);
     expect(setInputFiles).toHaveBeenCalledTimes(1);
@@ -242,6 +244,7 @@ describe("setInputFilesViaPlaywright", () => {
         name: "ok.txt",
         mimeType: "application/octet-stream",
         buffer: Buffer.from("upload contents"),
+        lastModifiedMs: 1700000000000,
       },
     ]);
   });
@@ -264,7 +267,7 @@ describe("setInputFilesViaPlaywright", () => {
     expect(setInputFiles).not.toHaveBeenCalled();
   });
 
-  it("converts guarded loopback uploads to payloads inside the browser policy guard", async () => {
+  it("keeps guarded loopback uploads as path handoffs inside the browser policy guard", async () => {
     const { setInputFiles } = seedSingleLocatorPage();
 
     await setInputFilesViaPlaywright({
@@ -275,15 +278,10 @@ describe("setInputFilesViaPlaywright", () => {
       ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
     });
 
-    expect(stat).toHaveBeenCalledWith("/private/tmp/openclaw/uploads/ok.txt");
-    expect(readFile).toHaveBeenCalledWith("/private/tmp/openclaw/uploads/ok.txt");
-    expect(setInputFiles).toHaveBeenCalledWith([
-      {
-        name: "ok.txt",
-        mimeType: "text/plain",
-        buffer: Buffer.from("upload contents"),
-      },
-    ]);
+    expect(stat).not.toHaveBeenCalled();
+    expect(readFile).not.toHaveBeenCalled();
+    expect(detectMime).not.toHaveBeenCalled();
+    expect(setInputFiles).toHaveBeenCalledWith(["/private/tmp/openclaw/uploads/ok.txt"]);
     expect(withPageNavigationRequestGuard).toHaveBeenCalledTimes(1);
     expect(setInputFiles).toHaveBeenCalledTimes(1);
     expect(assertPageNavigationCompletedSafely).toHaveBeenCalledTimes(1);
