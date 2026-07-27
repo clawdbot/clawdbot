@@ -1140,6 +1140,10 @@ describe("exec abort edge cases", () => {
     async () => {
       const abortController = new AbortController();
       abortController.abort();
+      // Note: signal.throwIfAborted() fires before the tool starts, throwing
+      // the standard DOMException "This operation was aborted" rather than
+      // the custom "Tool execution was aborted" message used when abort fires
+      // during execution.
       await expect(
         execTool.execute(
           nextCallId(),
@@ -1147,7 +1151,7 @@ describe("exec abort edge cases", () => {
           abortController.signal,
           vi.fn(),
         ),
-      ).rejects.toThrow("Tool execution was aborted");
+      ).rejects.toThrow("This operation was aborted");
     },
     isWin ? 5_000 : 3_000,
   );
