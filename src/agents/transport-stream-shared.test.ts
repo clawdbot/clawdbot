@@ -79,6 +79,50 @@ describe("transport stream shared helpers", () => {
     expect(end).toHaveBeenCalledTimes(1);
   });
 
+  it("rethrows the abort reason so its code reaches the persisted message", () => {
+    // The reason carries the caller's coded AbortError; synthesizing a fresh
+    // Error here would strip `code` and force consumers back onto error text.
+    const controller = new AbortController();
+    const reason = Object.assign(new Error("agent run aborted for restart"), {
+      name: "AbortError",
+      code: "OPENCLAW_RESTART_ABORT",
+    });
+    controller.abort(reason);
+    const output: { stopReason: string; errorMessage?: string; errorCode?: string } = {
+      stopReason: "stop",
+    };
+
+    expect(() =>
+      finalizeTransportStream({
+        stream: { push: vi.fn(), end: vi.fn() },
+        output,
+        signal: controller.signal,
+      }),
+    ).toThrow(reason);
+
+    failTransportStream({
+      stream: { push: vi.fn(), end: vi.fn() },
+      output,
+      signal: controller.signal,
+      error: reason,
+    });
+    expect(output.stopReason).toBe("aborted");
+    expect(output.errorCode).toBe("OPENCLAW_RESTART_ABORT");
+  });
+
+  it("falls back to a synthetic abort error for a non-Error abort reason", () => {
+    const controller = new AbortController();
+    controller.abort("stringy reason");
+
+    expect(() =>
+      finalizeTransportStream({
+        stream: { push: vi.fn(), end: vi.fn() },
+        output: { stopReason: "stop" },
+        signal: controller.signal,
+      }),
+    ).toThrow("Request was aborted");
+  });
+
   it("marks transport stream failures and runs cleanup", () => {
     // Failure finalization mutates the output message before emitting it so
     // downstream transcript consumers see the same error state as the stream.

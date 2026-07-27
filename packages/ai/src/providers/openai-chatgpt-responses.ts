@@ -36,6 +36,7 @@ import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.j
 import { parseRetryAfterHttpDateMs } from "../internal/retry-after.js";
 import { sleepWithAbort } from "../internal/retry-sleep.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
+import { transportAbortError } from "../transports/transport-stream-shared.js";
 import type {
   Api,
   AssistantMessage,
@@ -341,7 +342,7 @@ export const streamOpenAICodexResponses: StreamFunction<
             );
 
             if (activeSignal?.aborted) {
-              throw new Error("Request was aborted");
+              throw transportAbortError(activeSignal);
             }
             stream.push({
               type: "done",
@@ -398,7 +399,7 @@ export const streamOpenAICodexResponses: StreamFunction<
 
       for (let attempt = 0; attempt <= maxRetries; attempt++) {
         if (activeSignal?.aborted) {
-          throw new Error("Request was aborted");
+          throw transportAbortError(activeSignal);
         }
 
         let attemptResponse: Response;
@@ -480,7 +481,7 @@ export const streamOpenAICodexResponses: StreamFunction<
       await processStream(response, output, stream, model, options, firstEventAbort.abort);
 
       if (activeSignal?.aborted) {
-        throw new Error("Request was aborted");
+        throw transportAbortError(activeSignal);
       }
 
       stream.push({
@@ -1349,7 +1350,7 @@ async function* parseWebSocket(
   try {
     while (true) {
       if (signal?.aborted) {
-        throw new Error("Request was aborted");
+        throw transportAbortError(signal);
       }
       const next = queue.shift();
       if (next !== undefined) {
@@ -1482,7 +1483,7 @@ async function processWebSocketStream(
     useCachedContext && entry ? buildCachedWebSocketRequestBody(entry, fullBody) : fullBody;
   try {
     if (options?.signal?.aborted) {
-      throw new Error("Request was aborted");
+      throw transportAbortError(options.signal);
     }
     socket.send(JSON.stringify({ type: "response.create", ...requestBody }));
     await processResponsesStream(

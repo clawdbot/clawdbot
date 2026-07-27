@@ -19,6 +19,7 @@ import {
   clampThinkingLevel,
 } from "../model-utils.js";
 import { resolveOpenAIReasoningEffortMap } from "../transports/openai-reasoning-compat.js";
+import { transportAbortError } from "../transports/transport-stream-shared.js";
 import type {
   AssistantMessage,
   CacheRetention,
@@ -569,7 +570,7 @@ export const streamOpenAICompletions: StreamFunction<
         finishBlock(block);
       }
       if (options?.signal?.aborted) {
-        throw new Error("Request was aborted");
+        throw transportAbortError(options.signal);
       }
 
       if (output.stopReason === "aborted") {

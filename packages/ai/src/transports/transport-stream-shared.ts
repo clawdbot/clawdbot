@@ -119,6 +119,17 @@ export function createWritableTransportEventStream() {
   };
 }
 
+/**
+ * Abort error to surface for an aborted `signal`.
+ *
+ * Prefers the caller's abort reason so its `code` survives into `errorCode` on
+ * the persisted assistant message. Synthesizing a fresh Error drops that code
+ * and forces consumers to recognize aborts by matching error text instead.
+ */
+export function transportAbortError(signal?: AbortSignal): Error {
+  return signal?.reason instanceof Error ? signal.reason : new Error("Request was aborted");
+}
+
 export function finalizeTransportStream(params: {
   stream: WritableTransportStream;
   output: TransportOutputShape;
@@ -126,7 +137,7 @@ export function finalizeTransportStream(params: {
 }): void {
   const { stream, output, signal } = params;
   if (signal?.aborted) {
-    throw new Error("Request was aborted");
+    throw transportAbortError(signal);
   }
   if (output.stopReason === "aborted" || output.stopReason === "error") {
     throw new Error(output.errorMessage ?? "An unknown error occurred");
