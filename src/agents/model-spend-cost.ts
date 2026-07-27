@@ -2,7 +2,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
 import { MICRO_USD_PER_USD } from "../utils/micro-usd.js";
 import {
-  estimateUsageCost,
   type ModelCostRates,
   resolveModelCostConfig,
   resolveUsageCostRates,
@@ -58,22 +57,31 @@ export function resolveModelSpendCostMicroUsd(params: {
       })
     : undefined;
   const cost = resolvedCost ?? params.model.cost;
-  const usd = estimateUsageCost({ usage, cost });
   const rates: ModelCostRates | undefined = resolveUsageCostRates({ usage, cost });
+  const pricedBuckets = [
+    { tokens: usage.input, rate: rates?.input },
+    { tokens: usage.output, rate: rates?.output },
+    { tokens: usage.cacheRead, rate: rates?.cacheRead },
+    { tokens: usage.cacheWrite, rate: rates?.cacheWrite },
+  ];
   const pricingComplete =
     rates !== undefined &&
-    usd !== undefined &&
-    usd >= 0 &&
-    [
-      { tokens: usage.input, rate: rates.input },
-      { tokens: usage.output, rate: rates.output },
-      { tokens: usage.cacheRead, rate: rates.cacheRead },
-      { tokens: usage.cacheWrite, rate: rates.cacheWrite },
-    ].every(
-      (bucket) => (bucket.tokens ?? 0) <= 0 || (Number.isFinite(bucket.rate) && bucket.rate > 0),
+    pricedBuckets.every(
+      (bucket) =>
+        (bucket.tokens ?? 0) <= 0 ||
+        (typeof bucket.rate === "number" && Number.isFinite(bucket.rate) && bucket.rate > 0),
     );
+  const knownUsd = pricedBuckets.reduce((total, bucket) => {
+    const tokens = bucket.tokens ?? 0;
+    return tokens > 0 &&
+      typeof bucket.rate === "number" &&
+      Number.isFinite(bucket.rate) &&
+      bucket.rate > 0
+      ? total + (tokens * bucket.rate) / 1_000_000
+      : total;
+  }, 0);
   return {
-    costMicroUsd: ceilUsdToMicroUsd(pricingComplete ? usd : 0),
+    costMicroUsd: ceilUsdToMicroUsd(knownUsd),
     trackingComplete: usageComplete && pricingComplete,
   };
 }

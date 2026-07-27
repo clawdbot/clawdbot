@@ -230,6 +230,9 @@ function preparePendingModelSpendAlert(params: {
       db
         .selectFrom("model_spend_daily")
         .selectAll()
+        // Alert watermarks are provider-row scoped. Filter first so a removed
+        // provider cannot reuse the current allowlist's interval.
+        .where("provider", "in", spendConfig.providers)
         .orderBy("day_key", "asc")
         .orderBy("timezone", "asc")
         .orderBy("provider", "asc"),

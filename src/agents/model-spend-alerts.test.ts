@@ -127,6 +127,34 @@ describe("model spend alerts", () => {
         usage: { input: 1 },
       }),
     ).toEqual({ costMicroUsd: 1, trackingComplete: false });
+    expect(
+      resolveModelSpendCostMicroUsd({
+        model: model({ cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 } }),
+        usage: {
+          input: 1_000_000,
+          output: 1_000_000,
+          cacheRead: 1_000_000,
+          cacheWrite: 0,
+          total: 3_000_000,
+        },
+      }),
+    ).toEqual({ costMicroUsd: 3_000_000, trackingComplete: false });
+    for (const invalidOutputRate of [-1, Number.POSITIVE_INFINITY]) {
+      expect(
+        resolveModelSpendCostMicroUsd({
+          model: model({
+            cost: { input: 1, output: invalidOutputRate, cacheRead: 0, cacheWrite: 0 },
+          }),
+          usage: {
+            input: 1_000_000,
+            output: 1_000_000,
+            cacheRead: 0,
+            cacheWrite: 0,
+            total: 2_000_000,
+          },
+        }),
+      ).toEqual({ costMicroUsd: 1_000_000, trackingComplete: false });
+    }
   });
 
   it("combines crossed thresholds and advances the alert watermark before delivery", () => {
@@ -256,6 +284,22 @@ describe("model spend alerts", () => {
           chatType: "direct",
         })?.text,
       ).toContain("deepseek reached $1.50");
+    });
+  });
+
+  it("does not prepare alerts for providers removed from the allowlist", () => {
+    const stateDir = tempDirs.make("openclaw-model-spend-provider-change-");
+    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+      const tracked = config({ everyUsd: 10 });
+      record({ total: 9, cfg: tracked });
+
+      expect(
+        preparePendingModelSpendAlert({
+          cfg: config({ everyUsd: 1, providers: ["other-provider"] }),
+          agentId: "main",
+        }),
+      ).toBeUndefined();
+      expect(preparePendingModelSpendAlert({ cfg: tracked, agentId: "main" })).toBeUndefined();
     });
   });
 
