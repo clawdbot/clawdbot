@@ -1,5 +1,6 @@
 import type { resolveContextEngine } from "../../../context-engine/registry.js";
 import { resolveCompactionSuccessorTranscript } from "../../../context-engine/types.js";
+import { afterCompactionSkipFields } from "../compaction-skip.js";
 import { log } from "../logger.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
@@ -84,7 +85,6 @@ export function createEmbeddedRunCompactionRuntime(input: {
     if (
       contextEngine.info.ownsCompaction !== true ||
       !compactResult.ok ||
-      !compactResult.compacted ||
       !hookRunner?.hasHooks("after_compaction")
     ) {
       return;
@@ -93,12 +93,12 @@ export function createEmbeddedRunCompactionRuntime(input: {
       await hookRunner.runAfterCompaction(
         {
           messageCount: -1,
-          compactedCount: -1,
           tokenCount: compactResult.result?.tokensAfter,
           sessionFile:
             resolveCompactionSuccessorTranscript(compactResult).sessionFile ??
             sessionPromptState.sessionFile,
           ...(previousSessionId ? { previousSessionId } : {}),
+          ...afterCompactionSkipFields(compactResult),
         },
         resolveActiveHookContext(),
       );

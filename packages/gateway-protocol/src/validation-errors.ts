@@ -42,7 +42,7 @@ export function formatValidationErrors(errors: ValidationError[] | null | undefi
         firstStringParam(err?.params?.additionalProperties);
       if (additionalProperty) {
         const where = instancePath ? `at ${instancePath}` : "at root";
-        parts.push(`${where}: unexpected property '${additionalProperty}'`);
+        parts.push(`${where}: unexpected property ${JSON.stringify(additionalProperty)}`);
         continue;
       }
     }
@@ -52,7 +52,7 @@ export function formatValidationErrors(errors: ValidationError[] | null | undefi
         firstStringParam(err?.params?.requiredProperties);
       if (missingProperty) {
         const where = instancePath ? `at ${instancePath}: ` : "";
-        parts.push(`${where}must have required property '${missingProperty}'`);
+        parts.push(`${where}must have required property ${JSON.stringify(missingProperty)}`);
         continue;
       }
     }
@@ -73,4 +73,18 @@ export function formatValidationErrors(errors: ValidationError[] | null | undefi
 
   const unique = [...new Set(parts.filter((part) => part.trim()))];
   return unique.length > 0 ? unique.join("; ") : "unknown validation error";
+}
+
+export function messageReportsUnexpectedProperty(
+  message: string,
+  propertyName: string,
+  requestContext?: string,
+): boolean {
+  if (requestContext !== undefined && !message.includes(requestContext)) {
+    return false;
+  }
+  return (
+    message.includes(`unexpected property '${propertyName}'`) ||
+    message.includes(`unexpected property ${JSON.stringify(propertyName)}`)
+  );
 }

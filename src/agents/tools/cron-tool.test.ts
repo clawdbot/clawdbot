@@ -631,37 +631,43 @@ describe("cron tool", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
-  it("retries cron.list without compact for older gateways", async () => {
-    callGatewayMock
-      .mockRejectedValueOnce(
-        new GatewayClientRequestError({
-          code: "INVALID_REQUEST",
-          message: "invalid cron.list params: at root: unexpected property 'compact'",
-        }),
-      )
-      .mockResolvedValueOnce({ jobs: [] });
-    const tool = createTestCronTool({
-      agentSessionKey: "agent:agent-123:telegram:direct:channing",
-    });
+  it.each([
+    ["legacy single-quoted", "invalid cron.list params: at root: unexpected property 'compact'"],
+    ["JSON-quoted", 'invalid cron.list params: at root: unexpected property "compact"'],
+  ])(
+    "retries cron.list without compact for older gateways (%s rejection)",
+    async (_label, message) => {
+      callGatewayMock
+        .mockRejectedValueOnce(
+          new GatewayClientRequestError({
+            code: "INVALID_REQUEST",
+            message,
+          }),
+        )
+        .mockResolvedValueOnce({ jobs: [] });
+      const tool = createTestCronTool({
+        agentSessionKey: "agent:agent-123:telegram:direct:channing",
+      });
 
-    await tool.execute("call-list-older-gateway", { action: "list" });
+      await tool.execute("call-list-older-gateway", { action: "list" });
 
-    expect(readGatewayCall(0)).toEqual({
-      method: "cron.list",
-      params: {
-        includeDisabled: false,
-        compact: true,
-        agentId: "agent-123",
-      },
-    });
-    expect(readGatewayCall(1)).toEqual({
-      method: "cron.list",
-      params: {
-        includeDisabled: false,
-        agentId: "agent-123",
-      },
-    });
-  });
+      expect(readGatewayCall(0)).toEqual({
+        method: "cron.list",
+        params: {
+          includeDisabled: false,
+          compact: true,
+          agentId: "agent-123",
+        },
+      });
+      expect(readGatewayCall(1)).toEqual({
+        method: "cron.list",
+        params: {
+          includeDisabled: false,
+          agentId: "agent-123",
+        },
+      });
+    },
+  );
 
   describe("wake routing", () => {
     // Pin the agentId / sessionKey resolution contract for `action: "wake"`.

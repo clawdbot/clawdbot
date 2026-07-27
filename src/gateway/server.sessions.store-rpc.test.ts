@@ -455,7 +455,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
     expect(rejected.ok, field).toBe(false);
     expect(rejected.error, field).toMatchObject({
       code: "INVALID_REQUEST",
-      message: expect.stringContaining(`unexpected property '${field}'`),
+      message: expect.stringContaining(`unexpected property ${JSON.stringify(field)}`),
     });
   }
 

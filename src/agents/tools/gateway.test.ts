@@ -456,27 +456,35 @@ describe("gateway tool defaults", () => {
     );
   });
 
-  it("explains stale gateway cron connection metadata rejections", async () => {
-    mocks.callGateway.mockRejectedValueOnce(
-      new Error(
-        "invalid connect params: at /auth: unexpected property 'agentRuntimeIdentityToken'",
-      ),
-    );
+  it.each([
+    [
+      "legacy single-quoted",
+      "invalid connect params: at /auth: unexpected property 'agentRuntimeIdentityToken'",
+    ],
+    [
+      "JSON-quoted",
+      'invalid connect params: at /auth: unexpected property "agentRuntimeIdentityToken"',
+    ],
+  ])(
+    "explains stale gateway cron connection metadata rejections (%s rejection)",
+    async (_label, message) => {
+      mocks.callGateway.mockRejectedValueOnce(new Error(message));
 
-    await expect(
-      withGatewayToolCallerIdentity(
-        { agentId: "ops", sessionKey: "agent:ops:telegram:direct:alice" },
-        async () => {
-          await callGatewayTool("cron.remove", {}, { id: "job-1" });
-        },
-      ),
-    ).rejects.toThrow(
-      "The running Gateway is from an older OpenClaw build and rejected current agent runtime connection metadata. Restart the Gateway with `openclaw gateway restart`, then retry.",
-    );
+      await expect(
+        withGatewayToolCallerIdentity(
+          { agentId: "ops", sessionKey: "agent:ops:telegram:direct:alice" },
+          async () => {
+            await callGatewayTool("cron.remove", {}, { id: "job-1" });
+          },
+        ),
+      ).rejects.toThrow(
+        "The running Gateway is from an older OpenClaw build and rejected current agent runtime connection metadata. Restart the Gateway with `openclaw gateway restart`, then retry.",
+      );
 
-    const call = capturedGatewayCall();
-    expect(call.agentRuntimeIdentityToken).toEqual(expect.any(String));
-  });
+      const call = capturedGatewayCall();
+      expect(call.agentRuntimeIdentityToken).toEqual(expect.any(String));
+    },
+  );
 
   it("explains fail-closed stale gateway cron identity rejections", async () => {
     mocks.callGateway.mockRejectedValueOnce(
@@ -674,47 +682,53 @@ describe("gateway tool defaults", () => {
     });
   });
 
-  it("strips turn-source fields for gateways with the preceding node schema", async () => {
-    const schemaError = Object.assign(
-      new Error("invalid node.invoke params: at root: unexpected property 'turnSourceChannel'"),
-      {
+  it.each([
+    [
+      "legacy single-quoted",
+      "invalid node.invoke params: at root: unexpected property 'turnSourceChannel'",
+    ],
+    ["JSON-quoted", 'invalid node.invoke params: at root: unexpected property "turnSourceChannel"'],
+  ])(
+    "strips turn-source fields for gateways with the preceding node schema (%s rejection)",
+    async (_label, message) => {
+      const schemaError = Object.assign(new Error(message), {
         name: "GatewayClientRequestError",
         gatewayCode: "INVALID_REQUEST",
-      },
-    );
-    mocks.callGateway.mockRejectedValueOnce(schemaError).mockResolvedValueOnce({ ok: true });
+      });
+      mocks.callGateway.mockRejectedValueOnce(schemaError).mockResolvedValueOnce({ ok: true });
 
-    await withGatewayToolCallerIdentity(
-      {
-        agentId: "ops",
-        sessionKey: "agent:ops:main",
-        turnSourceChannel: "telegram",
-        turnSourceTo: "chat:123",
-      },
-      async () => {
-        await callGatewayTool(
-          "node.invoke",
-          {},
-          {
-            nodeId: "node-1",
-            command: "device.info",
-            idempotencyKey: "invoke-preceding-schema",
-          },
-        );
-      },
-    );
+      await withGatewayToolCallerIdentity(
+        {
+          agentId: "ops",
+          sessionKey: "agent:ops:main",
+          turnSourceChannel: "telegram",
+          turnSourceTo: "chat:123",
+        },
+        async () => {
+          await callGatewayTool(
+            "node.invoke",
+            {},
+            {
+              nodeId: "node-1",
+              command: "device.info",
+              idempotencyKey: "invoke-preceding-schema",
+            },
+          );
+        },
+      );
 
-    expect(mocks.callGateway).toHaveBeenCalledTimes(2);
-    expect(mocks.callGateway.mock.calls[1]?.[0].params).toEqual({
-      nodeId: "node-1",
-      command: "device.info",
-      idempotencyKey: "invoke-preceding-schema",
-    });
-    expect(mocks.callGateway.mock.calls[1]?.[0]).toHaveProperty(
-      "agentRuntimeIdentityToken",
-      expect.any(String),
-    );
-  });
+      expect(mocks.callGateway).toHaveBeenCalledTimes(2);
+      expect(mocks.callGateway.mock.calls[1]?.[0].params).toEqual({
+        nodeId: "node-1",
+        command: "device.info",
+        idempotencyKey: "invoke-preceding-schema",
+      });
+      expect(mocks.callGateway.mock.calls[1]?.[0]).toHaveProperty(
+        "agentRuntimeIdentityToken",
+        expect.any(String),
+      );
+    },
+  );
 
   it("does not retry a dispatched node invoke whose error resembles schema rejection", async () => {
     const dispatchedError = Object.assign(

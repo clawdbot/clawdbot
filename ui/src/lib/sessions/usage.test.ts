@@ -28,32 +28,41 @@ describe("buildSessionUsageDateParams", () => {
 });
 
 describe("requestSessionsUsage", () => {
-  it("retries older gateways with the legacy UTC offset", async () => {
-    const result = { sessions: [] };
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(
-        new GatewayRequestError({
-          code: "INVALID_REQUEST",
-          message: "invalid sessions.usage params: at root: unexpected property 'timeZone'",
-        }),
-      )
-      .mockResolvedValueOnce(result);
-    const params = {
-      range: "all",
-      mode: "specific",
-      timeZone: "Europe/Vienna",
-      utcOffset: "UTC+2",
-    };
+  it.each([
+    [
+      "legacy single-quoted",
+      "invalid sessions.usage params: at root: unexpected property 'timeZone'",
+    ],
+    ["JSON-quoted", 'invalid sessions.usage params: at root: unexpected property "timeZone"'],
+  ])(
+    "retries older gateways with the legacy UTC offset (%s rejection)",
+    async (_label, message) => {
+      const result = { sessions: [] };
+      const request = vi
+        .fn()
+        .mockRejectedValueOnce(
+          new GatewayRequestError({
+            code: "INVALID_REQUEST",
+            message,
+          }),
+        )
+        .mockResolvedValueOnce(result);
+      const params = {
+        range: "all",
+        mode: "specific",
+        timeZone: "Europe/Vienna",
+        utcOffset: "UTC+2",
+      };
 
-    await expect(requestSessionsUsage({ request } as never, params)).resolves.toBe(result);
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.usage", params);
-    expect(request).toHaveBeenNthCalledWith(2, "sessions.usage", {
-      range: "all",
-      mode: "specific",
-      utcOffset: "UTC+2",
-    });
-  });
+      await expect(requestSessionsUsage({ request } as never, params)).resolves.toBe(result);
+      expect(request).toHaveBeenNthCalledWith(1, "sessions.usage", params);
+      expect(request).toHaveBeenNthCalledWith(2, "sessions.usage", {
+        range: "all",
+        mode: "specific",
+        utcOffset: "UTC+2",
+      });
+    },
+  );
 
   it("does not retry unrelated invalid usage parameters", async () => {
     const error = new GatewayRequestError({

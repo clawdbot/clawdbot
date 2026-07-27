@@ -1,3 +1,4 @@
+import { messageReportsUnexpectedProperty } from "../../../../packages/gateway-protocol/src/validation-errors.js";
 import type { SessionUsageTimeSeries } from "../../../../src/shared/session-usage-timeseries-types.js";
 import type { SessionsUsageResult } from "../../../../src/shared/usage-types.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
@@ -56,7 +57,7 @@ function isOlderGatewayWithoutUsageTimeZone(
     error instanceof GatewayRequestError &&
     error.gatewayCode === "INVALID_REQUEST" &&
     error.message.includes("invalid sessions.usage params:") &&
-    error.message.includes("unexpected property 'timeZone'")
+    messageReportsUnexpectedProperty(error.message, "timeZone")
   );
 }
 

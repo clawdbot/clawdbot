@@ -48,6 +48,7 @@ import {
   compactContextEngineWithSafetyTimeout,
   resolveCompactionTimeoutMs,
 } from "./compaction-safety-timeout.js";
+import { afterCompactionSkipFields } from "./compaction-skip.js";
 import {
   rotateTranscriptFileAfterCompaction,
   shouldRotateCompactionTranscript,
@@ -730,7 +731,6 @@ async function compactResolvedContextEngine(
         }
         if (
           result.ok &&
-          result.compacted &&
           hookRunner?.hasHooks?.("after_compaction") &&
           hookRunner.runAfterCompaction
         ) {
@@ -742,12 +742,12 @@ async function compactResolvedContextEngine(
             await hookRunner.runAfterCompaction(
               {
                 messageCount: -1,
-                compactedCount: -1,
                 tokenCount: result.result?.tokensAfter,
                 sessionFile: postCompactionSessionFile,
                 ...(postCompactionSessionId !== params.sessionId
                   ? { previousSessionId: params.sessionId }
                   : {}),
+                ...afterCompactionSkipFields(result),
               },
               afterHookCtx,
             );

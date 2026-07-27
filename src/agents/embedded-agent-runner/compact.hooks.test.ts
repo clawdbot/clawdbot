@@ -1789,6 +1789,40 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     });
   });
 
+  it("fires after_compaction on the no-op skip so paired observers are not left waiting", async () => {
+    hookRunner.hasHooks.mockReturnValue(true);
+    sessionMessages.splice(0, sessionMessages.length, {
+      role: "user",
+      content: "<b>HEARTBEAT_OK</b>",
+      timestamp: 1,
+    });
+
+    const result = await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      provider: "openai",
+      model: "gpt-primary",
+      messageProvider: "telegram",
+    });
+
+    expectRecordFields(result, {
+      ok: true,
+      compacted: false,
+    });
+    expect(hookRunner.runBeforeCompaction).toHaveBeenCalledTimes(1);
+    expect(hookRunner.runAfterCompaction).toHaveBeenCalledTimes(1);
+    expectRecordFields(mockCallArg(hookRunner.runAfterCompaction), {
+      compactedCount: 0,
+      reason: "no_real_conversation_messages",
+    });
+    expectRecordFields(mockCallArg(hookRunner.runAfterCompaction, 0, 1), {
+      sessionKey: TEST_SESSION_KEY,
+      messageProvider: "telegram",
+    });
+  });
+
   it("emits internal + plugin compaction hooks with counts", async () => {
     hookRunner.hasHooks.mockReturnValue(true);
     await runCompactionHooks({
@@ -2586,6 +2620,61 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expectRecordFields(mockCallArg(hookRunner.runAfterCompaction, 0, 1), {
       sessionKey: TEST_SESSION_KEY,
       messageProvider: "telegram",
+    });
+  });
+
+  it("fires after_compaction with compactedCount 0 when the engine skips compaction", async () => {
+    hookRunner.hasHooks.mockReturnValue(true);
+    contextEngineCompactMock.mockResolvedValue({
+      ok: true,
+      compacted: false,
+      reason: "no_real_conversation_messages",
+      result: undefined,
+    });
+
+    const result = await compactEmbeddedAgentSession(
+      wrappedCompactionArgs({
+        messageChannel: "telegram",
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.compacted).toBe(false);
+
+    expect(hookRunner.runBeforeCompaction).toHaveBeenCalledTimes(1);
+    expect(hookRunner.runAfterCompaction).toHaveBeenCalledTimes(1);
+    expect(mockCallArg(hookRunner.runAfterCompaction)).toEqual({
+      messageCount: -1,
+      compactedCount: 0,
+      tokenCount: undefined,
+      sessionFile: TEST_SESSION_FILE,
+      reason: "no_real_conversation_messages",
+    });
+    expectRecordFields(mockCallArg(hookRunner.runAfterCompaction, 0, 1), {
+      sessionKey: TEST_SESSION_KEY,
+      messageProvider: "telegram",
+    });
+  });
+
+  it("defaults the skip reason to policy_skipped when the engine omits one", async () => {
+    hookRunner.hasHooks.mockReturnValue(true);
+    contextEngineCompactMock.mockResolvedValue({
+      ok: true,
+      compacted: false,
+      reason: undefined,
+      result: undefined,
+    });
+
+    const result = await compactEmbeddedAgentSession(wrappedCompactionArgs({}));
+
+    expect(result.ok).toBe(true);
+    expect(result.compacted).toBe(false);
+    expect(mockCallArg(hookRunner.runAfterCompaction)).toEqual({
+      messageCount: -1,
+      compactedCount: 0,
+      tokenCount: undefined,
+      sessionFile: TEST_SESSION_FILE,
+      reason: "policy_skipped",
     });
   });
 

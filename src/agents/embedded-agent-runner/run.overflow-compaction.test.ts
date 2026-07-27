@@ -3735,6 +3735,33 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     });
   });
 
+  it("fires after_compaction on a no-op overflow recovery so paired observers stay balanced", async () => {
+    mockedContextEngine.info.ownsCompaction = true;
+    mockedGlobalHookRunner.hasHooks.mockImplementation(
+      (hookName) => hookName === "before_compaction" || hookName === "after_compaction",
+    );
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: makeOverflowError() }))
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    mockedCompactDirect.mockResolvedValueOnce({
+      ok: true,
+      compacted: false,
+      reason: "no_real_conversation_messages",
+    });
+
+    await runEmbeddedAgent(overflowBaseRunParams);
+
+    expect(mockedGlobalHookRunner.runBeforeCompaction).toHaveBeenCalledTimes(1);
+    expect(mockedGlobalHookRunner.runAfterCompaction).toHaveBeenCalledTimes(1);
+    expect(mockCallArg(mockedGlobalHookRunner.runAfterCompaction)).toEqual({
+      messageCount: -1,
+      compactedCount: 0,
+      tokenCount: undefined,
+      sessionFile: "/tmp/session.json",
+      reason: "no_real_conversation_messages",
+    });
+  });
+
   it("runs maintenance after successful overflow-recovery compaction", async () => {
     mockedContextEngine.info.ownsCompaction = true;
     mockedRunEmbeddedAttempt

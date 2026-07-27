@@ -45,6 +45,7 @@ import {
   runAfterCompactionHooks,
   runBeforeCompactionHooks,
   runPostCompactionSideEffects,
+  runSkippedCompactionHooks,
 } from "./compaction-hooks.js";
 import {
   compactWithSafetyTimeout,
@@ -365,17 +366,20 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             observedTokenCount,
             estimateTokensFn: estimateTokens,
           });
-          const { hookSessionKey, missingSessionKey } = await runBeforeCompactionHooks({
+          const hookBase = {
             hookRunner,
             sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
             sessionAgentId,
             workspaceDir: effectiveWorkspace,
             messageProvider: resolvedMessageProvider,
-            metrics: beforeHookMetrics,
             onHookMessages: params.onCompactionHookMessages,
+          };
+          const { hookSessionKey, missingSessionKey } = await runBeforeCompactionHooks({
+            ...hookBase,
+            sessionKey: params.sessionKey,
+            metrics: beforeHookMetrics,
           });
-          const { messageCountOriginal } = beforeHookMetrics;
+          const afterHookBase = { ...hookBase, hookSessionKey, missingSessionKey };
           const diagEnabled = log.isEnabled("debug");
           const preMetrics = diagEnabled
             ? summarizeCompactionMessages(session.messages)
@@ -397,17 +401,19 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             log.info(
               `[compaction] skipping — no real conversation messages (sessionKey=${params.sessionKey ?? params.sessionId})`,
             );
-            return {
-              ok: true,
-              compacted: false,
-              reason: "no real conversation messages",
-            };
+            await runSkippedCompactionHooks(afterHookBase, {
+              messageCountAfter: beforeHookMetrics.messageCountOriginal,
+              tokensAfter: observedTokenCount,
+              sessionFile: params.sessionFile,
+              reason: "no_real_conversation_messages",
+            });
+            return { ok: true, compacted: false, reason: "no real conversation messages" };
           }
 
           const compactStartedAt = Date.now();
           // Measure compactedCount from the original pre-limiting transcript so compaction
           // lifecycle metrics represent total reduction through the compaction pipeline.
-          const messageCountCompactionInput = messageCountOriginal;
+          const messageCountCompactionInput = beforeHookMetrics.messageCountOriginal;
           // Estimate all limited transcript messages before compaction. This is the
           // same token domain as messagesAfter; result.tokensBefore can cover only the
           // summarizable subset.
@@ -536,13 +542,8 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             );
           }
           await runAfterCompactionHooks({
-            hookRunner,
+            ...afterHookBase,
             sessionId: activeSessionId,
-            sessionAgentId,
-            hookSessionKey,
-            missingSessionKey,
-            workspaceDir: effectiveWorkspace,
-            messageProvider: resolvedMessageProvider,
             messageCountAfter,
             tokensAfter,
             compactedCount,
@@ -553,7 +554,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             summaryLength: typeof result.summary === "string" ? result.summary.length : undefined,
             tokensBefore: result.tokensBefore,
             firstKeptEntryId: effectiveFirstKeptEntryId,
-            onHookMessages: params.onCompactionHookMessages,
           });
           return {
             ok: true,

@@ -135,7 +135,7 @@ describe("buildJsonPluginConfigSchema", () => {
     expect(result.safeParse?.({})).toEqual({
       success: false,
       error: {
-        issues: [{ path: ["100001"], message: "must have required property '100001'" }],
+        issues: [{ path: ["100001"], message: 'must have required property "100001"' }],
       },
     });
   });

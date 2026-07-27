@@ -4,6 +4,7 @@
  * Manages scheduled jobs, wake/run actions, delivery context, and reminder-style payload normalization.
  */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { messageReportsUnexpectedProperty } from "../../../packages/gateway-protocol/src/validation-errors.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
 import { resolveCronCreationDelivery } from "../../cron/delivery-context.js";
@@ -276,8 +277,7 @@ function isOlderGatewayWithoutCompactCronList(error: unknown): boolean {
   return (
     error instanceof GatewayClientRequestError &&
     error.gatewayCode === "INVALID_REQUEST" &&
-    error.message.includes("invalid cron.list params") &&
-    error.message.includes("unexpected property 'compact'")
+    messageReportsUnexpectedProperty(error.message, "compact", "invalid cron.list params")
   );
 }
 

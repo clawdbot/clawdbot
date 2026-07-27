@@ -241,6 +241,38 @@ describe("schema validator", () => {
     ).toThrow("invalid schema");
   });
 
+  it("escapes embedded quotes/backslashes in required-property messages", () => {
+    const weird = 'weird"key\\path';
+    const result = expectValidationFailure({
+      cacheKey: "schema-validator.test.required-escape",
+      schema: {
+        type: "object",
+        properties: { [weird]: { type: "string" } },
+        required: [weird],
+      },
+      value: {},
+    });
+
+    const message = result.errors.map((entry) => entry.message).join("\n");
+    expect(message).toContain(`must have required property ${JSON.stringify(weird)}`);
+  });
+
+  it("escapes embedded quotes/backslashes in additional-property messages", () => {
+    const weird = 'weird"key\\path';
+    const result = expectValidationFailure({
+      cacheKey: "schema-validator.test.additional-escape",
+      schema: {
+        type: "object",
+        properties: {},
+        additionalProperties: false,
+      },
+      value: { [weird]: "x" },
+    });
+
+    const message = result.errors.map((entry) => entry.message).join("\n");
+    expect(message).toContain(JSON.stringify(weird));
+  });
+
   it("rejects invalid JSON Schema constraint keyword values", () => {
     for (const [cacheKey, schema] of [
       [
@@ -2015,7 +2047,9 @@ describe("schema validator", () => {
       throw new Error("expected terminal sanitization validation issue");
     }
     expect(issue.path).toContain("\n");
-    expect(issue.message).toContain("\n");
+    expect(issue.message).toContain("\\n");
+    expect(issue.message).not.toContain("\n");
+    expect(issue.message).not.toContain("\x1b");
     expect(issue.text).toContain("\\n");
     expect(issue.text).toContain("\\t");
     expect(issue.text).not.toContain("\n");

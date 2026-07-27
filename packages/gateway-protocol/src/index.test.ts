@@ -447,7 +447,7 @@ describe("formatValidationErrors", () => {
       params: { additionalProperty: "token" },
     });
 
-    expect(formatValidationErrors([err])).toBe("at root: unexpected property 'token'");
+    expect(formatValidationErrors([err])).toBe('at root: unexpected property "token"');
   });
 
   it("formats additionalProperties with instancePath", () => {
@@ -457,7 +457,7 @@ describe("formatValidationErrors", () => {
       params: { additionalProperty: "token" },
     });
 
-    expect(formatValidationErrors([err])).toBe("at /auth: unexpected property 'token'");
+    expect(formatValidationErrors([err])).toBe('at /auth: unexpected property "token"');
   });
 
   it("formats message with path for other errors", () => {
@@ -594,7 +594,7 @@ describe("validateTalkClientCreateParams", () => {
       }),
     ).toBe(false);
     expect(formatValidationErrors(validateTalkClientCreateParams.errors)).toContain(
-      "unexpected property 'instructions'",
+      'unexpected property "instructions"',
     );
   });
 
@@ -633,7 +633,7 @@ describe("validateTalkSession", () => {
       }),
     ).toBe(false);
     expect(formatValidationErrors(validateTalkSessionCreateParams.errors)).toContain(
-      "unexpected property 'instructionsOverride'",
+      'unexpected property "instructionsOverride"',
     );
     expect(validateTalkSessionCreateParams({ mode: "realtime", language: "de-DE" })).toBe(false);
   });

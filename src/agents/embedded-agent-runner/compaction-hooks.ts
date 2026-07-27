@@ -148,6 +148,7 @@ type CompactionHookRunner = {
       tokenCount?: number;
       compactedCount: number;
       sessionFile: string;
+      reason?: string;
     },
     context: {
       sessionId: string;
@@ -297,8 +298,7 @@ export function estimateTokensAfterCompaction(params: {
   return tokensAfter;
 }
 
-/** Runs internal and plugin after-compaction hooks with the final compacted metrics. */
-export async function runAfterCompactionHooks(params: {
+type AfterCompactionHookParams = {
   hookRunner?: CompactionHookRunner | null;
   sessionId: string;
   sessionAgentId: string;
@@ -314,13 +314,43 @@ export async function runAfterCompactionHooks(params: {
   summaryLength?: number;
   tokensBefore?: number;
   firstKeptEntryId?: string;
+  reason?: string;
   onHookMessages?: (payload: {
     phase: "after";
     messages: string[];
     sessionId: string;
     sessionKey: string;
   }) => void | Promise<void>;
-}) {
+};
+
+type SkippedCompactionHookBase = Omit<
+  AfterCompactionHookParams,
+  | "messageCountAfter"
+  | "tokensAfter"
+  | "compactedCount"
+  | "sessionFile"
+  | "reason"
+  | "previousSessionId"
+  | "summaryLength"
+  | "tokensBefore"
+  | "firstKeptEntryId"
+>;
+
+/** Runs after-compaction hooks for a compaction that completed without compacting anything. */
+export async function runSkippedCompactionHooks(
+  base: SkippedCompactionHookBase,
+  skip: {
+    messageCountAfter: number;
+    tokensAfter?: number;
+    sessionFile: string;
+    reason: string;
+  },
+) {
+  await runAfterCompactionHooks({ ...base, ...skip, compactedCount: 0 });
+}
+
+/** Runs internal and plugin after-compaction hooks with the final compacted metrics. */
+export async function runAfterCompactionHooks(params: AfterCompactionHookParams) {
   try {
     const hookEvent = createInternalHookEvent("session", "compact:after", params.hookSessionKey, {
       sessionId: params.sessionId,
@@ -332,6 +362,7 @@ export async function runAfterCompactionHooks(params: {
       tokensBefore: params.tokensBefore,
       tokensAfter: params.tokensAfter,
       firstKeptEntryId: params.firstKeptEntryId,
+      ...(params.reason !== undefined ? { reason: params.reason } : {}),
     });
     await triggerInternalHook(hookEvent);
     if (hookEvent.messages.length > 0) {
@@ -357,6 +388,7 @@ export async function runAfterCompactionHooks(params: {
           compactedCount: params.compactedCount,
           sessionFile: params.sessionFile,
           ...(params.previousSessionId ? { previousSessionId: params.previousSessionId } : {}),
+          ...(params.reason !== undefined ? { reason: params.reason } : {}),
         },
         {
           sessionId: params.sessionId,

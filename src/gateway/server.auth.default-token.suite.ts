@@ -620,7 +620,7 @@ export function registerDefaultAuthTokenSuite(): void {
         device: deviceWithoutNonce,
       });
       expect(res.ok).toBe(false);
-      expect(res.error?.message ?? "").toContain("must have required property 'nonce'");
+      expect(res.error?.message ?? "").toContain('must have required property "nonce"');
       await new Promise<void>((resolve) => {
         ws.once("close", () => resolve());
       });

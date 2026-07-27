@@ -334,70 +334,79 @@ describe("resolveSessionReference", () => {
     });
   });
 
-  it("retries literal current probes without allowMissing for older gateways", async () => {
-    const unsupportedAllowMissing = () =>
-      new GatewayClientRequestError({
-        code: "INVALID_REQUEST",
-        message: "invalid sessions.resolve params: at root: unexpected property 'allowMissing'",
-      });
-    callGatewayMock
-      .mockRejectedValueOnce(unsupportedAllowMissing())
-      .mockRejectedValueOnce(
+  it.each([
+    [
+      "legacy single-quoted",
+      "invalid sessions.resolve params: at root: unexpected property 'allowMissing'",
+    ],
+    ["JSON-quoted", 'invalid sessions.resolve params: at root: unexpected property "allowMissing"'],
+  ])(
+    "retries literal current probes without allowMissing for older gateways (%s rejection)",
+    async (_label, message) => {
+      const unsupportedAllowMissing = () =>
         new GatewayClientRequestError({
           code: "INVALID_REQUEST",
-          message: "No session found: current",
-        }),
-      )
-      .mockRejectedValueOnce(unsupportedAllowMissing())
-      .mockResolvedValueOnce({ key: "agent:ops:main" });
+          message,
+        });
+      callGatewayMock
+        .mockRejectedValueOnce(unsupportedAllowMissing())
+        .mockRejectedValueOnce(
+          new GatewayClientRequestError({
+            code: "INVALID_REQUEST",
+            message: "No session found: current",
+          }),
+        )
+        .mockRejectedValueOnce(unsupportedAllowMissing())
+        .mockResolvedValueOnce({ key: "agent:ops:main" });
 
-    const result = await resolveSessionReference({
-      sessionKey: "current",
-      alias: "main",
-      mainKey: "main",
-      requesterInternalKey: "agent:main:subagent:child",
-      restrictToSpawned: false,
-    });
-    expectResolvedSessionReference(result, {
-      key: "agent:ops:main",
-      displayKey: "agent:ops:main",
-      resolvedViaSessionId: true,
-    });
-    expect(callGatewayMock).toHaveBeenNthCalledWith(1, {
-      method: "sessions.resolve",
-      params: {
-        key: "current",
-        spawnedBy: undefined,
-        allowMissing: true,
-      },
-    });
-    expect(callGatewayMock).toHaveBeenNthCalledWith(2, {
-      method: "sessions.resolve",
-      params: {
-        key: "current",
-        spawnedBy: undefined,
-      },
-    });
-    expect(callGatewayMock).toHaveBeenNthCalledWith(3, {
-      method: "sessions.resolve",
-      params: {
-        sessionId: "current",
-        spawnedBy: undefined,
-        includeGlobal: true,
-        includeUnknown: true,
-        allowMissing: true,
-      },
-    });
-    expect(callGatewayMock).toHaveBeenNthCalledWith(4, {
-      method: "sessions.resolve",
-      params: {
-        sessionId: "current",
-        spawnedBy: undefined,
-        includeGlobal: true,
-        includeUnknown: true,
-      },
-    });
-  });
+      const result = await resolveSessionReference({
+        sessionKey: "current",
+        alias: "main",
+        mainKey: "main",
+        requesterInternalKey: "agent:main:subagent:child",
+        restrictToSpawned: false,
+      });
+      expectResolvedSessionReference(result, {
+        key: "agent:ops:main",
+        displayKey: "agent:ops:main",
+        resolvedViaSessionId: true,
+      });
+      expect(callGatewayMock).toHaveBeenNthCalledWith(1, {
+        method: "sessions.resolve",
+        params: {
+          key: "current",
+          spawnedBy: undefined,
+          allowMissing: true,
+        },
+      });
+      expect(callGatewayMock).toHaveBeenNthCalledWith(2, {
+        method: "sessions.resolve",
+        params: {
+          key: "current",
+          spawnedBy: undefined,
+        },
+      });
+      expect(callGatewayMock).toHaveBeenNthCalledWith(3, {
+        method: "sessions.resolve",
+        params: {
+          sessionId: "current",
+          spawnedBy: undefined,
+          includeGlobal: true,
+          includeUnknown: true,
+          allowMissing: true,
+        },
+      });
+      expect(callGatewayMock).toHaveBeenNthCalledWith(4, {
+        method: "sessions.resolve",
+        params: {
+          sessionId: "current",
+          spawnedBy: undefined,
+          includeGlobal: true,
+          includeUnknown: true,
+        },
+      });
+    },
+  );
 
   it("does not compatibility-retry unrelated gateway failures", async () => {
     callGatewayMock.mockRejectedValueOnce(new Error("gateway timeout")).mockResolvedValueOnce({});

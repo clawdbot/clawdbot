@@ -274,7 +274,7 @@ function formatRequiredMessage(error: TypeBoxValidationError): string | null {
   if (!missingProperty) {
     return null;
   }
-  return `must have required property '${missingProperty}'`;
+  return `must have required property ${JSON.stringify(missingProperty)}`;
 }
 
 function formatAdditionalPropertiesMessage(error: TypeBoxValidationError): string | null {
@@ -282,7 +282,7 @@ function formatAdditionalPropertiesMessage(error: TypeBoxValidationError): strin
   if (additionalProperties.length === 0) {
     return null;
   }
-  const quoted = additionalProperties.map((entry) => `"${entry}"`).join(", ");
+  const quoted = additionalProperties.map((entry) => JSON.stringify(entry)).join(", ");
   return `must not have additional properties: ${quoted}`;
 }
 

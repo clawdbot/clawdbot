@@ -469,7 +469,7 @@ describe("plugin session actions", () => {
     });
     await expectValidationError("bad-ok", { includes: "/ok: must be boolean" });
     await expectValidationError("error-shaped-success", {
-      includes: "unexpected property 'error'",
+      includes: 'unexpected property "error"',
     });
     await expectValidationError("bad-error-details", {
       exact: "plugin session action details must be JSON-compatible",
@@ -478,10 +478,10 @@ describe("plugin session actions", () => {
       includes: "/continueAgent: must be boolean",
     });
     await expectValidationError("mixed-branch-fields", {
-      includes: "unexpected property 'continueAgent'",
+      includes: 'unexpected property "continueAgent"',
     });
     await expectValidationError("unknown-success-field", {
-      includes: "unexpected property 'extra'",
+      includes: 'unexpected property "extra"',
     });
     const throwsSecret = await callValidationAction("throws-secret");
     const throwsSecretError = requireHookError(throwsSecret);
