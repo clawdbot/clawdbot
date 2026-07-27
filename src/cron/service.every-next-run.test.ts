@@ -29,6 +29,7 @@ function expectTimestamp(value: number | undefined | null, label: string): numbe
   return value;
 }
 
+// regression: #22895
 describe("Cron issue #22895 interval scheduling", () => {
   it("uses lastRunAtMs cadence when the next interval is still in the future", () => {
     const nowMs = Date.parse("2026-02-22T10:10:00.000Z");

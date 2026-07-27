@@ -14,9 +14,11 @@ import {
 } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
+  buildSessionTranscriptProjection,
   extractTranscriptIndexEntry,
   hasTranscriptMessage,
   shouldProjectActiveEvent,
+  type SessionTranscriptProjectionSourceRow,
   type TranscriptIndexEntry,
 } from "./session-transcript-projection-rebuild.js";
 import {
@@ -25,11 +27,6 @@ import {
   isSessionTranscriptSideAppendEntry,
   parseSessionTranscriptTreeEntry,
 } from "./transcript-tree.js";
-import {
-  resolveVisibleTranscriptAppendParentId,
-  selectVisibleTranscriptEventEntries,
-} from "./transcript-visible-events.js";
-
 type TranscriptIndexDatabase = Pick<
   OpenClawAgentKyselyDatabase,
   | "session_windows"
@@ -45,15 +42,6 @@ export type SessionTranscriptProjectionState = {
   indexedSeq: number;
   leafEventId: string | null;
   needsRebuild: boolean;
-};
-
-type SessionTranscriptProjectionSourceRow = {
-  event: unknown;
-  seq: number;
-  // Row's own created_at, used as the FTS fallback timestamp for events that carry no embedded
-  // timestamp. Mirrors the forward-append path (applyForwardIndex passes params.createdAt) so a
-  // full rebuild reproduces the same timestamps instead of stamping Date.now().
-  createdAt: number;
 };
 
 function getIndexKysely(db: DatabaseSync) {
@@ -338,46 +326,30 @@ function rebuildSessionTranscriptIndexInTransaction(
   sessionId: string,
   rows: readonly SessionTranscriptProjectionSourceRow[],
 ): void {
+  const projection = buildSessionTranscriptProjection({
+    rows,
+    sessionId,
+    sourceTranscriptUpdatedAt: null,
+  });
   deleteFtsRows(db, sessionId);
   deleteActiveEventRows(db, sessionId);
-  const now = Date.now();
-  const events = rows.map((row) => row.event);
-  let activeEventCount = 0;
-  let activeMessageCount = 0;
-  for (const entry of selectVisibleTranscriptEventEntries(events)) {
-    const source = rows[entry.seq - 1];
-    // Stamp timestamp-less events with their own row's created_at (matching the append path); only
-    // fall back to `now` when the source row is somehow missing.
-    const indexed = extractTranscriptIndexEntry(entry.event, source?.createdAt ?? now);
-    if (indexed) {
-      insertFtsRow(db, sessionId, indexed);
-    }
-    if (!source || !shouldProjectActiveEvent(entry.event)) {
-      continue;
-    }
-    const projectsMessage = hasTranscriptMessage(entry.event);
-    insertActiveEventRow(db, {
-      activePosition: activeEventCount,
-      eventSeq: source.seq,
-      messagePosition: projectsMessage ? activeMessageCount : null,
-      sessionId,
-    });
-    activeEventCount += 1;
-    if (projectsMessage) {
-      activeMessageCount += 1;
-    }
+  for (const entry of projection.ftsRows) {
+    insertFtsRow(db, sessionId, entry);
+  }
+  for (const row of projection.activeRows) {
+    insertActiveEventRow(db, { ...row, sessionId });
   }
   writeWatermark(
     db,
     sessionId,
     {
-      activeEventCount,
-      activeMessageCount,
-      indexedSeq: rows.at(-1)?.seq ?? -1,
-      leafEventId: resolveVisibleTranscriptAppendParentId(events),
+      activeEventCount: projection.activeEventCount,
+      activeMessageCount: projection.activeMessageCount,
+      indexedSeq: projection.sourceIndexedSeq,
+      leafEventId: projection.leafEventId,
       needsRebuild: false,
     },
-    now,
+    Date.now(),
   );
 }
 

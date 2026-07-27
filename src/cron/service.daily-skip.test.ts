@@ -16,6 +16,7 @@ import type { CronJob } from "./types.js";
  * which only fills in missing nextRunAtMs values and never overwrites
  * existing (including past-due) ones.
  */
+// regression: #17852
 describe("issue #17852 - daily cron jobs should not skip days", () => {
   const HOUR_MS = 3_600_000;
   const DAY_MS = 24 * HOUR_MS;

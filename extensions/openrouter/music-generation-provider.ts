@@ -1,6 +1,7 @@
 // Openrouter provider module implements model/runtime integration.
 import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
+import { canonicalizeBase64, estimateBase64DecodedBytes } from "openclaw/plugin-sdk/media-runtime";
 import type {
   MusicGenerationProvider,
   MusicGenerationRequest,
@@ -140,11 +141,19 @@ function appendDecodedOpenRouterMusicAudio(
   if (!base64) {
     return;
   }
-  const decodedBytes = Buffer.byteLength(base64, "base64");
-  if (decodedBytes > result.maxBytes - result.audioBytes) {
+  const remainingBytes = result.maxBytes - result.audioBytes;
+  if (estimateBase64DecodedBytes(base64) > remainingBytes) {
     throw createOpenRouterMusicTooLargeError("audio", result.maxBytes);
   }
-  const buffer = Buffer.from(base64, "base64");
+  const canonicalAudio = canonicalizeBase64(base64);
+  if (!canonicalAudio) {
+    throw new Error("OpenRouter music generation returned malformed base64 audio data");
+  }
+  const decodedBytes = Buffer.byteLength(canonicalAudio, "base64");
+  if (decodedBytes > remainingBytes) {
+    throw createOpenRouterMusicTooLargeError("audio", result.maxBytes);
+  }
+  const buffer = Buffer.from(canonicalAudio, "base64");
   const nextBytes = result.audioBytes + buffer.byteLength;
   if (nextBytes > result.maxBytes) {
     throw createOpenRouterMusicTooLargeError("audio", result.maxBytes);

@@ -604,6 +604,44 @@ describe("bridgeCodexAppServerStartOptions", () => {
     });
   });
 
+  it("declines every prepared handoff for a user-home app-server", async () => {
+    const authProfileStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:work": {
+          type: "token",
+          provider: "openai",
+          token: "prepared-subscription-token",
+          email: "prepared@example.test",
+        },
+      },
+    };
+
+    await expect(
+      resolveCodexAppServerPreparedAuthHandoff({
+        authRequirement: "subscription",
+        authProfileId: "openai:work",
+        authProfileStore,
+        agentDir: "/tmp/openclaw-agent",
+        homeScope: "user",
+        subscriptionProfileRequiredError: "profile required",
+        subscriptionProfileUnusableError: "profile unusable",
+      }),
+    ).resolves.toEqual({ authProfileId: "openai:work", nativeAuthProfile: true });
+
+    await expect(
+      resolveCodexAppServerPreparedAuthHandoff({
+        authRequirement: "api-key",
+        authProfileId: "openai:work",
+        authProfileStore,
+        agentDir: "/tmp/openclaw-agent",
+        homeScope: "user",
+        subscriptionProfileRequiredError: "profile required",
+        subscriptionProfileUnusableError: "profile unusable",
+      }),
+    ).resolves.toEqual({ authProfileId: "openai:work", nativeAuthProfile: true });
+  });
+
   it("materializes one prepared subscription profile snapshot", async () => {
     const authProfileStore: AuthProfileStore = {
       version: 1,

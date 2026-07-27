@@ -152,6 +152,7 @@ describe("full-release-validation-at-sha", () => {
     const source = readFileSync("scripts/full-release-validation-at-sha.mjs", "utf8");
     expect(source).toContain("actions/runs/${parentRunId}");
     expect(source).toContain("workflowRun.head_sha !== workflowSha");
+    expect(source).toContain("return suite;");
     expect(source).not.toContain('"graphql"');
     expect(source).not.toContain('["run", "watch"');
   });

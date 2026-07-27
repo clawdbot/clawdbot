@@ -38,6 +38,7 @@ function requireEnqueueSystemEventCall(
   return call as [string, { agentId?: string } | undefined];
 }
 
+// regression: #16156
 describe("#16156: cron.list() must not silently advance past-due recurring jobs", () => {
   it("does not skip a cron job when list() is called while the job is past-due", async () => {
     const store = await makeStorePath();

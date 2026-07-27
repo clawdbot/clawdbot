@@ -354,6 +354,27 @@ export function registerModelsCli(program: Command) {
     });
 
   auth
+    .command("logout")
+    .description("Remove a saved auth profile (see `models auth list` for ids)")
+    .argument("<profileId>", "Auth profile id (e.g. openai:manual)")
+    .option("--agent <id>", "Agent id (default: configured default agent)")
+    .option("--yes", "Skip the confirmation prompt", false)
+    .action(async (profileId: string, opts, command) => {
+      await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
+        const agent = resolveModelAgentOption(command, opts);
+        const { modelsAuthLogoutCommand } = await import("../commands/models/auth-logout.js");
+        await modelsAuthLogoutCommand(
+          {
+            profileId,
+            agent,
+            yes: Boolean(opts.yes),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  auth
     .command("login")
     .description("Run a provider plugin auth flow (OAuth/API key)")
     .option("--provider <id>", "Provider id registered by a plugin")

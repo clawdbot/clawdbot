@@ -65,7 +65,6 @@ export type SessionEntryListScope = Partial<Omit<SessionAccessScope, "sessionKey
   /** Listing views do not consume the large per-run prompt snapshots. */
   projection?: "full" | "list";
 };
-export type SessionEntryStatus = NonNullable<SessionEntry["status"]>;
 
 export type ResolvedSessionEntryAccessTarget = {
   /** Agent owner inferred from the canonical session key. */

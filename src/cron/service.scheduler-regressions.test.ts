@@ -229,6 +229,7 @@ describe("Cron issue regressions", () => {
     cron.stop();
   });
 
+  // regression: #13845
   it("#13845: one-shot jobs with terminal statuses do not re-fire on restart", async () => {
     const store = cronIssueRegressionFixtures.makeStorePath();
     const pastAt = Date.parse("2026-02-06T09:00:00.000Z");

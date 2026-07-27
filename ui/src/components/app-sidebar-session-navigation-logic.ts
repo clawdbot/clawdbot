@@ -132,6 +132,7 @@ export function buildSidebarSessionNavigationState(input: {
         basePath: context?.basePath ?? "",
         row,
         mainKey,
+        preferenceDerivedFace: true,
       }).href,
       active: row.key === navigation.activeRowKey,
       visuallyActive: input.highlightCurrentSession && row.key === navigation.currentSessionKey,
