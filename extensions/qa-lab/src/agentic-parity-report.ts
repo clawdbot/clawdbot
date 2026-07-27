@@ -686,6 +686,12 @@ export function buildQaRuntimeParityReport(params: {
       codexToolCalls: codexCell.toolCalls.length,
       openclawWallClockMs: openclawCell.wallClockMs,
       codexWallClockMs: codexCell.wallClockMs,
+      ...(openclawCell.bootstrapWallClockMs === undefined
+        ? {}
+        : { openclawBootstrapWallClockMs: openclawCell.bootstrapWallClockMs }),
+      ...(codexCell.bootstrapWallClockMs === undefined
+        ? {}
+        : { codexBootstrapWallClockMs: codexCell.bootstrapWallClockMs }),
       ...compareRuntimeWallClockMs(openclawCell.wallClockMs, codexCell.wallClockMs),
     } satisfies QaRuntimeParityScenarioReport;
     if (parityStatus === "fail") {

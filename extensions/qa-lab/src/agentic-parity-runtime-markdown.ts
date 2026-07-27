@@ -45,6 +45,17 @@ export function renderQaRuntimeParityMarkdownReport(report: QaRuntimeParityRepor
     `- Faster runtime: ${formatRuntimeSpeedComparison(report.timing)}`,
     "",
   ];
+  if (report.timing.bootstrap) {
+    lines.push(
+      "## Gateway Bootstrap (Excluded From Runtime Timing)",
+      "",
+      "| Runtime | Total bootstrap | p50 per scenario | p90 per scenario |",
+      "| --- | ---: | ---: | ---: |",
+      `| openclaw | ${formatRuntimeWallClockMs(report.timing.bootstrap.openclaw.totalWallClockMs)} | ${formatRuntimeWallClockMs(report.timing.bootstrap.openclaw.p50WallClockMs)} | ${formatRuntimeWallClockMs(report.timing.bootstrap.openclaw.p90WallClockMs)} |`,
+      `| codex | ${formatRuntimeWallClockMs(report.timing.bootstrap.codex.totalWallClockMs)} | ${formatRuntimeWallClockMs(report.timing.bootstrap.codex.p50WallClockMs)} | ${formatRuntimeWallClockMs(report.timing.bootstrap.codex.p90WallClockMs)} |`,
+      "",
+    );
+  }
   if (report.failures.length > 0) {
     lines.push("## Gate Failures", "");
     for (const failure of report.failures) {
@@ -69,6 +80,14 @@ export function renderQaRuntimeParityMarkdownReport(report: QaRuntimeParityRepor
     lines.push(
       `- wall time: openclaw ${formatRuntimeWallClockMs(scenario.openclawWallClockMs)}; codex ${formatRuntimeWallClockMs(scenario.codexWallClockMs)}; ${formatRuntimeSpeedComparison(scenario)}`,
     );
+    if (
+      scenario.openclawBootstrapWallClockMs !== undefined ||
+      scenario.codexBootstrapWallClockMs !== undefined
+    ) {
+      lines.push(
+        `- gateway bootstrap (excluded): openclaw ${formatRuntimeWallClockMs(scenario.openclawBootstrapWallClockMs ?? null)}; codex ${formatRuntimeWallClockMs(scenario.codexBootstrapWallClockMs ?? null)}`,
+      );
+    }
     lines.push(
       `- prompt cache: openclaw ${formatRuntimeCacheHitPercent(scenario.openclawUsage?.cacheHitPercent)} (${formatRuntimeCacheCount(scenario.openclawUsage?.cachedInputTokens)} cached, ${formatRuntimeCacheCount(scenario.openclawUsage?.uncachedInputTokens)} uncached input); codex ${formatRuntimeCacheHitPercent(scenario.codexUsage?.cacheHitPercent)} (${formatRuntimeCacheCount(scenario.codexUsage?.cachedInputTokens)} cached, ${formatRuntimeCacheCount(scenario.codexUsage?.uncachedInputTokens)} uncached input)`,
     );

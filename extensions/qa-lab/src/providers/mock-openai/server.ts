@@ -139,6 +139,10 @@ import {
   parseToolOutputJson,
 } from "./mock-openai-input.js";
 import {
+  attachQaMockResponsesWebSocketServer,
+  type QaMockResponsesDispatchResult,
+} from "./mock-openai-responses-websocket.js";
+import {
   readTargetFromPrompt,
   execCommandFromToolProgressPrompt,
   buildCustomToolCallEventsWithInput,
@@ -1337,6 +1341,59 @@ export async function startQaMockOpenAiServer(params?: {
   const inflightRequests = new Map<number, { prompt: string; allInputText: string }>();
   let nextInflightRequestId = 1;
   const imageGenerationRequests: Array<Record<string, unknown>> = [];
+  const dispatchResponses = async (params: {
+    body: Record<string, unknown>;
+    raw: string;
+  }): Promise<QaMockResponsesDispatchResult> => {
+    const input = Array.isArray(params.body.input)
+      ? (params.body.input as ResponsesInputItem[])
+      : [];
+    if (isRemoteCompactionV2Request(input)) {
+      return { events: buildRemoteCompactionV2Events() };
+    }
+    const prompt = extractLastUserText(input);
+    const allInputText = extractAllRequestTexts(input, params.body);
+    const inflightRequestId = nextInflightRequestId++;
+    inflightRequests.set(inflightRequestId, { prompt, allInputText });
+    let events: StreamEvent[];
+    try {
+      events = await buildResponsesPayload(params.body, scenarioState);
+    } finally {
+      inflightRequests.delete(inflightRequestId);
+    }
+    const resolvedModel = typeof params.body.model === "string" ? params.body.model : "";
+    recordRequest({
+      raw: params.raw,
+      body: params.body,
+      prompt,
+      allInputText,
+      instructions: extractInstructionsText(params.body) || undefined,
+      toolOutput: extractToolOutput(input),
+      model: resolvedModel,
+      providerVariant: resolveProviderVariant(resolvedModel),
+      imageInputCount: countImageInputs(input),
+      plannedToolCallId: extractPlannedToolCallId(events),
+      plannedToolName: extractPlannedToolName(events),
+      plannedToolArgs: extractPlannedToolArgs(events),
+      toolOutputCallId: extractToolOutputCallId(input) || undefined,
+      ...(extractToolOutputStructuredError(input) ? { toolOutputStructuredError: true } : {}),
+    });
+    return {
+      events,
+      ...(QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE.test(allInputText) && extractToolOutput(input)
+        ? {
+            failure: {
+              status: 503,
+              type: "server_error",
+              message: "Service Unavailable",
+            },
+          }
+        : {}),
+      ...(QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE.test(allInputText)
+        ? { previewPauseMs: finalOnlyMarkerPauseMs }
+        : {}),
+    };
+  };
   const server = createServer((req, res) => {
     void (async () => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -1478,45 +1535,17 @@ export async function startQaMockOpenAiServer(params?: {
           }
           return;
         }
-        const prompt = extractLastUserText(input);
-        const allInputText = extractAllRequestTexts(input, body);
-        const inflightRequestId = nextInflightRequestId++;
-        inflightRequests.set(inflightRequestId, { prompt, allInputText });
-        let events: StreamEvent[];
-        try {
-          events = await buildResponsesPayload(body, scenarioState);
-        } finally {
-          inflightRequests.delete(inflightRequestId);
-        }
-        const resolvedModel = typeof body.model === "string" ? body.model : "";
-        recordRequest({
-          raw,
-          body,
-          prompt,
-          allInputText,
-          instructions: extractInstructionsText(body) || undefined,
-          toolOutput: extractToolOutput(input),
-          model: resolvedModel,
-          providerVariant: resolveProviderVariant(resolvedModel),
-          imageInputCount: countImageInputs(input),
-          plannedToolCallId: extractPlannedToolCallId(events),
-          plannedToolName: extractPlannedToolName(events),
-          plannedToolArgs: extractPlannedToolArgs(events),
-          toolOutputCallId: extractToolOutputCallId(input) || undefined,
-          ...(extractToolOutputStructuredError(input) ? { toolOutputStructuredError: true } : {}),
-        });
-        if (
-          QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE.test(allInputText) &&
-          extractToolOutput(input)
-        ) {
-          writeJson(res, 503, {
+        const dispatched = await dispatchResponses({ body, raw });
+        if (dispatched.failure) {
+          writeJson(res, dispatched.failure.status, {
             error: {
-              type: "server_error",
-              message: "Service Unavailable",
+              type: dispatched.failure.type,
+              message: dispatched.failure.message,
             },
           });
           return;
         }
+        const { events } = dispatched;
         if (body.stream === false) {
           const completion = events.at(-1);
           if (!completion || completion.type !== "response.completed") {
@@ -1526,8 +1555,8 @@ export async function startQaMockOpenAiServer(params?: {
           writeJson(res, 200, completion.response);
           return;
         }
-        if (QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE.test(allInputText)) {
-          await writeSseWithPreviewPause(res, events, finalOnlyMarkerPauseMs);
+        if (dispatched.previewPauseMs !== undefined) {
+          await writeSseWithPreviewPause(res, events, dispatched.previewPauseMs);
         } else {
           writeSse(res, events);
         }
@@ -1584,6 +1613,10 @@ export async function startQaMockOpenAiServer(params?: {
       writeJson(res, 404, { error: "not found" });
     })();
   });
+  const responsesWebSocket = attachQaMockResponsesWebSocketServer({
+    server,
+    dispatch: dispatchResponses,
+  });
 
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -1598,6 +1631,7 @@ export async function startQaMockOpenAiServer(params?: {
   return {
     baseUrl: `http://${host}:${address.port}`,
     async stop() {
+      await responsesWebSocket.close();
       await closeQaHttpServer(server);
     },
   };

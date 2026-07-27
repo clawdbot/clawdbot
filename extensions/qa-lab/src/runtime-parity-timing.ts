@@ -14,7 +14,37 @@ type QaRuntimeSpeedComparison = {
 export type QaRuntimeTiming = QaRuntimeSpeedComparison & {
   openclaw: QaRuntimeWallClockMetrics;
   codex: QaRuntimeWallClockMetrics;
+  bootstrap?: {
+    openclaw: QaRuntimeWallClockMetrics;
+    codex: QaRuntimeWallClockMetrics;
+  };
 };
+
+export type QaRuntimeParityCellTiming = {
+  wallClockMs: number;
+  bootstrapWallClockMs: number;
+};
+
+export function measureRuntimeParityCellTiming(params: {
+  suiteStartedAt: Date;
+  bootstrapFinishedAt?: Date;
+  scenarioStartedAt: Date;
+  scenarioFinishedAt: Date;
+}): QaRuntimeParityCellTiming {
+  return {
+    // Gateway/provider startup is harness bootstrap, not an agent turn. Keep
+    // both measurements so a faster report cannot hide cold-start regressions.
+    wallClockMs: Math.max(
+      1,
+      params.scenarioFinishedAt.getTime() - params.scenarioStartedAt.getTime(),
+    ),
+    bootstrapWallClockMs: Math.max(
+      0,
+      (params.bootstrapFinishedAt ?? params.scenarioStartedAt).getTime() -
+        params.suiteStartedAt.getTime(),
+    ),
+  };
+}
 
 export function compareRuntimeWallClockMs(
   openclawWallClockMs: number | null,
@@ -56,6 +86,8 @@ export function summarizeRuntimeParityTiming(
   scenarios: readonly {
     openclawWallClockMs: number | null;
     codexWallClockMs: number | null;
+    openclawBootstrapWallClockMs?: number | null;
+    codexBootstrapWallClockMs?: number | null;
   }[],
 ): QaRuntimeTiming {
   const openclaw = summarizeRuntimeWallClock(
@@ -72,9 +104,23 @@ export function summarizeRuntimeParityTiming(
     ({ openclawWallClockMs, codexWallClockMs }) =>
       openclawWallClockMs !== null && codexWallClockMs !== null,
   );
+  const openclawBootstrapValues = scenarios.flatMap(({ openclawBootstrapWallClockMs }) =>
+    openclawBootstrapWallClockMs == null ? [] : [openclawBootstrapWallClockMs],
+  );
+  const codexBootstrapValues = scenarios.flatMap(({ codexBootstrapWallClockMs }) =>
+    codexBootstrapWallClockMs == null ? [] : [codexBootstrapWallClockMs],
+  );
   return {
     openclaw,
     codex,
+    ...(openclawBootstrapValues.length > 0 || codexBootstrapValues.length > 0
+      ? {
+          bootstrap: {
+            openclaw: summarizeRuntimeWallClock(openclawBootstrapValues),
+            codex: summarizeRuntimeWallClock(codexBootstrapValues),
+          },
+        }
+      : {}),
     ...compareRuntimeWallClockMs(
       hasTimingCaptures ? openclaw.totalWallClockMs : null,
       hasTimingCaptures ? codex.totalWallClockMs : null,

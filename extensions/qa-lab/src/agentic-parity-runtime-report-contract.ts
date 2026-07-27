@@ -18,6 +18,8 @@ export type QaRuntimeParityScenarioReport = {
   codexToolCalls: number;
   openclawWallClockMs: number | null;
   codexWallClockMs: number | null;
+  openclawBootstrapWallClockMs?: number;
+  codexBootstrapWallClockMs?: number;
   fasterRuntime: RuntimeId | "tie" | null;
   speedupPercent: number | null;
 };

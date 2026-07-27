@@ -4170,6 +4170,15 @@ describe("qa mock openai server", () => {
       structuredError: true,
     },
     {
+      label: "upstream Codex native patch rejection without a wire error flag",
+      prompt:
+        "tool search qa failure target=apply_patch. Exercise the denied-input path once and then summarize.",
+      output: "patch rejected: writing outside of the project; rejected by user approval settings",
+      expectedOutput:
+        "patch rejected: writing outside of the project; rejected by user approval settings",
+      structuredError: false,
+    },
+    {
       label: "structured native patch output",
       prompt:
         "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
