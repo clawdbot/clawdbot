@@ -1,11 +1,24 @@
 import { Value } from "typebox/value";
-import { describe, it, expect } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { createFindToolDefinition } from "./find.js";
 
-const definition = createFindToolDefinition("/tmp/test-cwd");
+let receivedLimit: number | undefined;
+const definition = createFindToolDefinition("/tmp/test-cwd", {
+  operations: {
+    exists: () => true,
+    glob: (_pattern, _cwd, options) => {
+      receivedLimit = options.limit;
+      return ["/tmp/test-cwd/result.ts"];
+    },
+  },
+});
 const schema = definition.parameters;
 
 describe("findSchema limit (production)", () => {
+  beforeEach(() => {
+    receivedLimit = undefined;
+  });
+
   it("accepts valid positive integer limit", () => {
     const result = Value.Check(schema, { pattern: "*.ts", limit: 10 });
     expect(result).toBe(true);
@@ -56,38 +69,20 @@ describe("findSchema limit (production)", () => {
         {} as never,
       ),
     ).rejects.toThrow("Limit must be an integer");
+
+    expect(receivedLimit).toBeUndefined();
   });
 
   it("execution boundary does not reject valid integer limit", async () => {
-    // Valid integer limit should NOT throw "Limit must be an integer".
-    // It may throw other errors (e.g. fd not available), but those are unrelated.
-    try {
-      await definition.execute(
-        "test-call",
-        { pattern: "*.ts", limit: 10 },
-        undefined,
-        undefined,
-        {} as never,
-      );
-    } catch (e) {
-      expect(e instanceof Error ? e.message : String(e)).not.toContain("Limit must be an integer");
-    }
-  });
+    const result = await definition.execute(
+      "test-call",
+      { pattern: "*.ts", limit: 10 },
+      undefined,
+      undefined,
+      {} as never,
+    );
 
-  it("execution boundary keeps default-limit fallback for non-finite values", async () => {
-    // Number.POSITIVE_INFINITY bypasses JSON schema validation only via direct
-    // execute calls; the established behavior falls back to the default limit
-    // instead of rejecting (covered by find.test.ts on the delegation path).
-    try {
-      await definition.execute(
-        "test-call",
-        { pattern: "*.ts", limit: Number.POSITIVE_INFINITY },
-        undefined,
-        undefined,
-        {} as never,
-      );
-    } catch (e) {
-      expect(e instanceof Error ? e.message : String(e)).not.toContain("Limit must be an integer");
-    }
+    expect(result.content).toEqual([{ type: "text", text: "result.ts" }]);
+    expect(receivedLimit).toBe(10);
   });
 });
