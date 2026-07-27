@@ -581,7 +581,7 @@ function scenarioCoverageIds(scenario: QaSeedScenarioWithSource) {
   return [...(scenario.coverage?.primary ?? []), ...(scenario.coverage?.secondary ?? [])];
 }
 
-export function selectQaScorecardProfileScenarios(params: {
+function selectQaScorecardProfileScenarios(params: {
   coverageIds: readonly string[];
   profileId: string;
   scenarios: readonly QaSeedScenarioWithSource[];
