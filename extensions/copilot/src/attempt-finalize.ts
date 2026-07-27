@@ -100,6 +100,11 @@ export async function completeCopilotAttempt(params: {
     },
     lastAssistant,
     lastToolError,
+    journalValidated:
+      transcript !== undefined &&
+      !nativeSessionHistoryUnvalidated &&
+      transcriptJournal?.hasFailed() !== true &&
+      transcript?.replayInvalid !== true,
     messagesSnapshot,
     assistantTranscriptOwned: transcript?.assistantTranscriptOwned,
     assistantTranscriptIdempotencyKey: transcript?.assistantTranscriptIdempotencyKey,

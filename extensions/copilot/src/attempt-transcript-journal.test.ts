@@ -182,7 +182,7 @@ describe("Copilot attempt transcript journal", () => {
   it("gives a queued tool completion one grace turn before failing the barrier", async () => {
     const { journal, session } = await createFixture();
     await journal.persistInitialUser();
-    session.emit(event("user.message", "initial-user", { content: "inspect" }));
+    session.emit(event("user.message", "initial-user", { content: "inspect both files" }));
     session.emit(
       event("assistant.message", "assistant-tools", {
         content: "checking",
@@ -365,6 +365,75 @@ describe("Copilot attempt transcript journal", () => {
     expect(
       transcriptMessages(await readSessionTranscriptEvents(target)).map((row) => row.message.role),
     ).toEqual(["user"]);
+  });
+
+  it("marks replay incomplete when a hook rewrites provider-visible assistant content", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_message_write",
+          handler: (input: unknown) => {
+            const message = (input as { message: AgentMessage }).message;
+            if (message.role !== "assistant") {
+              return undefined;
+            }
+            const first = message.content[0];
+            if (first?.type === "text") {
+              first.text = "redacted";
+            }
+            return { message };
+          },
+        },
+      ]),
+    );
+    const { journal, session } = await createFixture();
+    await journal.persistInitialUser();
+    session.emit(event("user.message", "initial-user", { content: "inspect" }));
+    session.emit(
+      event("assistant.message", "rewritten-content", {
+        content: "provider-visible response",
+        messageId: "rewritten-content",
+      }),
+    );
+    await journal.barrier("rewritten content");
+
+    expect(journal.snapshot().replayInvalid).toBe(true);
+  });
+
+  it("keeps replay valid for semantically equal hook payloads with reordered keys", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_message_write",
+          handler: (input: unknown) => {
+            const message = (input as { message: AgentMessage }).message;
+            if (message.role !== "assistant") {
+              return undefined;
+            }
+            return {
+              message: {
+                ...message,
+                content: message.content.map((part) =>
+                  part.type === "text" ? { type: "text" as const, text: part.text } : part,
+                ),
+              },
+            };
+          },
+        },
+      ]),
+    );
+    const { journal, session } = await createFixture();
+    await journal.persistInitialUser();
+    session.emit(event("user.message", "initial-user", { content: "inspect both files" }));
+    session.emit(
+      event("assistant.message", "same-content", {
+        content: "same",
+        messageId: "same-content",
+      }),
+    );
+    await journal.barrier("same semantic content");
+
+    expect(journal.snapshot().replayInvalid).toBe(false);
   });
 
   it("rejects structurally destructive singleton hook replacements", async () => {

@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   projectAgentHarnessTranscriptMessageForDisplay,
@@ -111,6 +112,7 @@ export function createAttemptTranscriptJournal(params: {
     options: { singleton?: boolean } = {},
   ): TranscriptMessage | undefined => {
     const message = structuredClone(write.message) as TranscriptMessage;
+    const originalReplayPayload = structuredClone(projectReplayPayload(message));
     const hooked = runAgentHarnessBeforeMessageWriteHook({
       message: structuredClone(message) as TranscriptMessage,
       agentId: target.agentId,
@@ -118,6 +120,11 @@ export function createAttemptTranscriptJournal(params: {
     });
     if (!hooked) {
       return undefined;
+    }
+    if (
+      !isDeepStrictEqual(originalReplayPayload, projectReplayPayload(hooked as TranscriptMessage))
+    ) {
+      replayInvalid = true;
     }
     const idempotencyKey = (message as { idempotencyKey?: string }).idempotencyKey;
     const toolIdentity =
@@ -476,6 +483,30 @@ function isCompatibleSingletonRewrite(
       JSON.stringify(readAssistantToolCallIds(original)) ===
         JSON.stringify(readAssistantToolCallIds(prepared)))
   );
+}
+
+function projectReplayPayload(message: TranscriptMessage): unknown {
+  switch (message.role) {
+    case "user":
+      return { role: message.role, content: message.content };
+    case "assistant":
+      return {
+        role: message.role,
+        content: message.content,
+        api: message.api,
+        model: message.model,
+        provider: message.provider,
+        stopReason: message.stopReason,
+      };
+    case "toolResult":
+      return {
+        role: message.role,
+        content: message.content,
+        isError: message.isError,
+        toolCallId: message.toolCallId,
+        toolName: message.toolName,
+      };
+  }
 }
 
 function readIdempotencyKey(message: AgentMessage): string | undefined {

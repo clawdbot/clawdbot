@@ -101,6 +101,7 @@ export async function runCopilotExecution(context: {
   // Resumed sessions may predate the atomic journal or survive a crash. Only a
   // session created under this journal can be deleted after incomplete cleanup.
   let nativeSessionCreatedFresh = false;
+  let nativeSessionHistoryValidated = false;
   let disconnectError: Error | undefined;
   let handle: PooledClient | undefined;
   let session: SessionLike | undefined;
@@ -345,6 +346,7 @@ export async function runCopilotExecution(context: {
           ...sessionConfig,
           continuePendingWork: false,
         })) as unknown as SessionLike;
+        nativeSessionHistoryValidated = input.initialReplayState?.journalValidated === true;
       } catch (error: unknown) {
         if (settledToolFinalization) {
           throw createPromptError(
@@ -360,10 +362,12 @@ export async function runCopilotExecution(context: {
         resumeFailureRecovered = true;
         session = (await client.createSession(sessionConfig)) as unknown as SessionLike;
         nativeSessionCreatedFresh = true;
+        nativeSessionHistoryValidated = true;
       }
     } else {
       session = (await client.createSession(sessionConfig)) as unknown as SessionLike;
       nativeSessionCreatedFresh = true;
+      nativeSessionHistoryValidated = true;
     }
     sessionRef.current = session;
     sdkSessionId =
@@ -607,7 +611,7 @@ export async function runCopilotExecution(context: {
     input,
     lastToolError,
     messages,
-    nativeSessionHistoryUnvalidated: !nativeSessionCreatedFresh,
+    nativeSessionHistoryUnvalidated: !nativeSessionHistoryValidated,
     transcriptJournal,
     modelRef,
     now,

@@ -39,6 +39,7 @@ export function createResult(
     externalAbort?: boolean;
     itemLifecycle?: { activeCount: number; completedCount: number; startedCount: number };
     lastAssistant?: AssistantMessage;
+    journalValidated?: boolean;
     lastToolError?: AgentHarnessAttemptResult["lastToolError"];
     messagesSnapshot: AgentMessage[];
     nativeReplayInvalid?: boolean;
@@ -102,6 +103,7 @@ export function createResult(
         }
       : {}),
     ...(state.sdkSessionId ? { sdkSessionId: state.sdkSessionId } : {}),
+    ...(state.journalValidated !== undefined ? { journalValidated: state.journalValidated } : {}),
     assistantTexts: state.assistantTexts ?? [],
     attemptUsage: state.usage,
     cloudCodeAssistFormatError: false,

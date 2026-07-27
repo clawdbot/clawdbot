@@ -401,7 +401,7 @@ function makeParams(
         profileVersion?: string;
         useLoggedInUser?: boolean;
       };
-      initialReplayState: { sdkSessionId?: string };
+      initialReplayState: { journalValidated?: boolean; sdkSessionId?: string };
       messages: AgentMessage[];
       model: { api: string; id: string; provider: string };
       onAssistantDelta: (payload: { delta: string; text: string }) => void | Promise<void>;
@@ -801,6 +801,9 @@ describe("runCopilotAttempt", () => {
 
     expect(result.terminal).toEqual({ kind: "ok" });
     expect(result.replayMetadata.replaySafe).toBe(false);
+    expect(
+      (result as AgentHarnessAttemptResult & { journalValidated?: boolean }).journalValidated,
+    ).toBe(false);
     await vi.advanceTimersByTimeAsync(180_000);
 
     expect(sdk.sessions[0]?.disconnect).toHaveBeenCalledTimes(1);
@@ -1281,8 +1284,10 @@ describe("runCopilotAttempt", () => {
     });
     const pool = makeFakePool(sdk);
 
-    await runCopilotAttempt(
-      makeParams({ initialReplayState: { sdkSessionId: "resume-1" } as never }),
+    const result = await runCopilotAttempt(
+      makeParams({
+        initialReplayState: { journalValidated: true, sdkSessionId: "resume-1" } as never,
+      }),
       { pool },
     );
 
@@ -1292,6 +1297,10 @@ describe("runCopilotAttempt", () => {
       (requireResumeSessionConfig(sdk) as { continuePendingWork?: boolean }).continuePendingWork,
     ).toBe(false);
     expect(sdk.createSession).toHaveBeenCalledTimes(0);
+    expect(result.replayMetadata.replaySafe).toBe(true);
+    expect(
+      (result as AgentHarnessAttemptResult & { journalValidated?: boolean }).journalValidated,
+    ).toBe(true);
   });
 
   it("replay-shim: replayInvalid:true forces createSession even when sdkSessionId is present", async () => {
@@ -2988,6 +2997,9 @@ describe("runCopilotAttempt", () => {
       expect(result.messagesSnapshot).toMatchObject([
         { role: "user", content: params.userTurnTranscriptRecorder?.message.content },
       ]);
+      expect(
+        (result as AgentHarnessAttemptResult & { journalValidated?: boolean }).journalValidated,
+      ).toBe(false);
     });
 
     it("keeps a pre-journal memory user hidden when setup fails", async () => {
