@@ -116,7 +116,7 @@ function resolveTelegramProbe() {
   );
 }
 
-function isTelegramRichMessagesEnabled(cfg: OpenClawConfig, accountId?: string): boolean {
+function isTelegramRichMessagesEnabled(cfg: OpenClawConfig, accountId?: string | null): boolean {
   const selectedAccountId = accountId ?? resolveDefaultTelegramAccountId(cfg);
   return mergeTelegramAccountConfig(cfg, selectedAccountId).richMessages === true;
 }
