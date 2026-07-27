@@ -633,5 +633,6 @@ export function copyAttemptDeliveryState(attempt: EmbeddedRunAttemptResult) {
     heartbeatToolResponse: attempt.heartbeatToolResponse,
     successfulCronAdds: attempt.successfulCronAdds,
     acceptedSessionSpawns: attempt.acceptedSessionSpawns,
+    yieldMessage: attempt.yieldMessage,
   };
 }

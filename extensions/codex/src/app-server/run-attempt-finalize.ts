@@ -145,6 +145,7 @@ export async function finalizeCodexAttempt(
   }
   const result = activeProjector.buildResult(toolBridge.telemetry, {
     yieldDetected: toolState.yieldDetected,
+    yieldMessage: toolState.yieldMessage,
   });
   const projectedTerminal = attemptTerminal.project(result.terminal);
   const effectiveTimedOut = state.timedOut && !recoveredTurnWatchTimeout;

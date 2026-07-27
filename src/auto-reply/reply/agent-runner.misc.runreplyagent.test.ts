@@ -348,6 +348,7 @@ describe("runReplyAgent auto-compaction token update", () => {
     sessionEntry: Record<string, unknown>;
     config?: Record<string, unknown>;
     sessionFile?: string;
+    sessionKey?: string;
     workspaceDir?: string;
   }) {
     const typing = createMockTypingController();
@@ -366,7 +367,7 @@ describe("runReplyAgent auto-compaction token update", () => {
         agentId: "main",
         agentDir: "/tmp/agent",
         sessionId: "session",
-        sessionKey: "main",
+        sessionKey: params.sessionKey ?? "main",
         messageProvider: "whatsapp",
         sessionFile: params.sessionFile ?? "/tmp/session.jsonl",
         workspaceDir: params.workspaceDir ?? "/tmp",
@@ -390,10 +391,12 @@ describe("runReplyAgent auto-compaction token update", () => {
     options?: {
       agentEvents?: Array<{ stream: string; data: Record<string, unknown> }>;
       config?: OpenClawConfig;
+      isHeartbeat?: boolean;
+      sessionKey?: string;
       onBlockReply?: (payload: unknown) => Promise<void> | void;
     },
   ) {
-    const sessionKey = "main";
+    const sessionKey = options?.sessionKey ?? "main";
     const sessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
@@ -427,6 +430,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       storePath: "",
       sessionEntry,
       config: options?.config,
+      sessionKey,
     });
     return runReplyAgent({
       commandBody: "hello",
@@ -437,7 +441,14 @@ describe("runReplyAgent auto-compaction token update", () => {
       shouldFollowup: false,
       isActive: false,
       isStreaming: false,
-      opts: options?.onBlockReply ? { onBlockReply: options.onBlockReply } : undefined,
+      opts: options?.onBlockReply
+        ? {
+            onBlockReply: options.onBlockReply,
+            ...(options?.isHeartbeat ? { isHeartbeat: true } : {}),
+          }
+        : options?.isHeartbeat
+          ? { isHeartbeat: true }
+          : undefined,
       typing,
       sessionCtx,
       sessionEntry,
@@ -632,6 +643,56 @@ describe("runReplyAgent auto-compaction token update", () => {
         acceptedSessionSpawns: [{ runId: "child-run", childSessionKey: "agent:main:child" }],
         meta: { agentMeta: {} },
       }),
+    ).toBeUndefined();
+  });
+
+  it("delivers the sessions_yield acknowledgment on an otherwise silent spawn-and-yield turn", async () => {
+    const result = await runEmptyDirectReply({
+      acceptedSessionSpawns: [{ runId: "child-run", childSessionKey: "agent:main:child" }],
+      yieldMessage: "On it — spawned a subagent, will report back.",
+      meta: { agentMeta: {}, yielded: true },
+    });
+
+    expect(requireRecord(result, "yield acknowledgment").text).toBe(
+      "On it — spawned a subagent, will report back.",
+    );
+  });
+
+  it("suppresses the yield acknowledgment when the source already received a visible reply", async () => {
+    expect(
+      await runEmptyDirectReply({
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["already replied visibly"],
+        messagingToolSentTargets: [{ to: "+15550001111", provider: "whatsapp" }],
+        yieldMessage: "On it — spawned a subagent, will report back.",
+        meta: { agentMeta: {}, yielded: true },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("suppresses the yield acknowledgment for heartbeat runs", async () => {
+    expect(
+      await runEmptyDirectReply(
+        {
+          acceptedSessionSpawns: [{ runId: "child-run", childSessionKey: "agent:main:child" }],
+          yieldMessage: "On it — spawned a subagent, will report back.",
+          meta: { agentMeta: {}, yielded: true },
+        },
+        { isHeartbeat: true },
+      ),
+    ).toBeUndefined();
+  });
+
+  it("suppresses the yield acknowledgment for subagent sessions", async () => {
+    expect(
+      await runEmptyDirectReply(
+        {
+          acceptedSessionSpawns: [{ runId: "child-run", childSessionKey: "agent:main:child" }],
+          yieldMessage: "On it — spawned a subagent, will report back.",
+          meta: { agentMeta: {}, yielded: true },
+        },
+        { sessionKey: "agent:main:subagent:child-run" },
+      ),
     ).toBeUndefined();
   });
 

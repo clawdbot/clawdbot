@@ -12,6 +12,7 @@ import {
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
+import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import { buildFallbackClearedNotice, buildFallbackNotice } from "../fallback-state.js";
 import {
@@ -174,6 +175,32 @@ export async function prepareReplyAgentPayloads(state: {
       isRoomEvent: false,
     });
     return recovery.kind === "diagnostic" ? recovery.payload : undefined;
+  };
+  const buildYieldAcknowledgmentPayload = (): ReplyPayload | undefined => {
+    // A spawn-and-yield (or cron-and-yield) turn produces no payloads of its
+    // own, and spawns/cron adds count as outbound-delivery evidence even
+    // though nothing visible reaches the source conversation — without this,
+    // the model's sessions_yield acknowledgment is silently dropped (#107788).
+    const yieldMessage = runResult.yieldMessage?.trim();
+    if (!yieldMessage || isHeartbeat || followupRun.run.silentExpected === true) {
+      return undefined;
+    }
+    // Internal sessions have no external reply lane; the acknowledgment must
+    // not leak into a subagent transcript as if it were a user-facing reply.
+    if (isSubagentSessionKey(sessionKey)) {
+      return undefined;
+    }
+    // Suppress only when the source conversation already received a visible
+    // reply through the block stream or a messaging-tool send. Spawns and
+    // cron adds deliver nothing to the source, so they must not suppress the
+    // acknowledgment.
+    if (successfulSourceReplyDelivery || completedSourceReplyDelivery) {
+      return undefined;
+    }
+    if (blockReplyPipeline?.didStream() && !blockReplyPipeline.isAborted()) {
+      return undefined;
+    }
+    return { text: yieldMessage };
   };
   // Route-aware message-tool delivery attests observed delivery in every mode:
   // an automatic-mode turn answered via the message tool plus NO_REPLY must not
@@ -358,6 +385,13 @@ export async function prepareReplyAgentPayloads(state: {
       return {
         kind: "return" as const,
         value: returnWithQueuedFollowupDrain(strandedRetryDiagnostic),
+      };
+    }
+    const yieldAcknowledgmentPayload = buildYieldAcknowledgmentPayload();
+    if (yieldAcknowledgmentPayload) {
+      return {
+        kind: "return" as const,
+        value: await returnPreparedFallbackPayload(yieldAcknowledgmentPayload),
       };
     }
     return { kind: "return" as const, value: returnWithQueuedFollowupDrain(undefined) };

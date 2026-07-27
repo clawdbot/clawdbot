@@ -10,6 +10,7 @@ function completeResult(params?: {
     completed: boolean;
   }>;
   pendingToolMediaReply?: { mediaUrls?: string[]; audioAsVoice?: boolean };
+  yieldMessage?: string | null;
   toolMetas?: Array<{
     toolName: string;
     meta?: string;
@@ -58,7 +59,8 @@ function completeResult(params?: {
       terminal: { kind: "ok" },
       sessionIdUsed: "session-1",
       messagesSnapshot: [],
-      yieldDetected: false,
+      yieldDetected: params?.yieldMessage != null,
+      yieldMessage: params?.yieldMessage ?? undefined,
       didDeliverSourceReplyViaMessageTool: false,
       diagnosticTrace: { traceId: "trace-1", spanId: "span-1" },
     } as never,
@@ -133,6 +135,15 @@ describe("attempt result projection", () => {
     expect(completeResult({ pendingToolMediaReply: { audioAsVoice: true } }).toolAudioAsVoice).toBe(
       true,
     );
+  });
+
+  it("carries the sessions_yield acknowledgment message onto the result", () => {
+    expect(completeResult().yieldMessage).toBeUndefined();
+    expect(completeResult({ yieldMessage: null }).yieldMessage).toBeUndefined();
+    expect(
+      completeResult({ yieldMessage: "On it — spawned a subagent, will report back." })
+        .yieldMessage,
+    ).toBe("On it — spawned a subagent, will report back.");
   });
 
   it("projects the latest MCP App channel view without result data", () => {

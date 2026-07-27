@@ -563,4 +563,32 @@ describe("CodexAppServerEventProjector commentary projection", () => {
 
     expect(result.yieldDetected).toBe(true);
   });
+
+  it("carries the sessions_yield message into attempt results", () => {
+    const projector = new CodexAppServerEventProjector(
+      {
+        prompt: "hello",
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        runId: "run-1",
+        provider: "openai",
+        modelId: "gpt-5.4-codex",
+        model: createCodexTestModel(),
+        thinkLevel: "medium",
+      } as EmbeddedRunAttemptParams,
+      THREAD_ID,
+      TURN_ID,
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry(), {
+      yieldDetected: true,
+      yieldMessage: "On it — spawned a subagent, will report back.",
+    });
+
+    expect(result.yieldMessage).toBe("On it — spawned a subagent, will report back.");
+
+    const noMessage = projector.buildResult(buildEmptyToolTelemetry(), { yieldDetected: true });
+    expect(noMessage.yieldMessage).toBeUndefined();
+  });
 });

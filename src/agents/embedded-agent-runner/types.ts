@@ -263,6 +263,10 @@ export type EmbeddedAgentRunResult = {
   heartbeatToolResponse?: HeartbeatToolResponse;
   // Count of successful cron.add tool calls in this run.
   successfulCronAdds?: number;
+  // Model-provided sessions_yield acknowledgment for an otherwise silent
+  // yielded turn. Emitted at most once, only when the source turn has no
+  // other visible delivery (spawns/cron alone do not count as visible).
+  yieldMessage?: string;
 };
 
 export type EmbeddedAgentCompactResult = {

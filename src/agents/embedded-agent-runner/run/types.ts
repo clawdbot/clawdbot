@@ -316,6 +316,12 @@ export type EmbeddedRunAttemptResult = {
     describe: number;
     call: number;
   };
+  /**
+   * Model-provided sessions_yield acknowledgment message, captured when the
+   * yield aborts the attempt. Consumed per attempt by the reply pipeline; it
+   * is emitted only when the source turn produced no other visible delivery.
+   */
+  yieldMessage?: string;
   replayMetadata: EmbeddedRunReplayMetadata;
   /**
    * Replay metadata for this attempt before prior session state is accumulated.
