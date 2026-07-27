@@ -61,6 +61,7 @@ export function createAgentSelectionCapability(
     scopeId: resolveScopeId(initialSelectedId),
   };
   let client = gateway.snapshot.client;
+  let assistantAgentId = initialId;
   const listeners = new Set<(next: AgentSelectionState) => void>();
 
   const publish = (next: AgentSelectionState) => {
@@ -79,10 +80,16 @@ export function createAgentSelectionCapability(
   };
 
   gateway.subscribe((next) => {
-    if (next.client !== client) {
-      client = next.client;
-      const selectedId = next.assistantAgentId ? normalizeAgentId(next.assistantAgentId) : null;
-      publish({ selectedId, scopeId: selectedId });
+    const nextAssistantAgentId = next.assistantAgentId
+      ? normalizeAgentId(next.assistantAgentId)
+      : null;
+    const clientChanged = next.client !== client;
+    const assistantChanged = nextAssistantAgentId !== assistantAgentId;
+    const followedPreviousDefault = state.selectedId === assistantAgentId;
+    client = next.client;
+    assistantAgentId = nextAssistantAgentId;
+    if (clientChanged || (assistantChanged && (!state.selectedId || followedPreviousDefault))) {
+      publish({ selectedId: nextAssistantAgentId, scopeId: nextAssistantAgentId });
     }
   });
   roster.subscribe(() => publish(state));

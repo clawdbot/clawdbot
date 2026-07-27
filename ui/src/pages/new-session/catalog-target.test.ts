@@ -65,4 +65,11 @@ describe("new-session catalog target", () => {
     expect(resolveAgentId({ ...target, agentId: "retired" }, agents, "main")).toBe("main");
     expect(resolveAgentId({ ...target, agentId: "" }, agents, "research")).toBe("research");
   });
+
+  it("reconciles a provisional new-thread picker value after the roster loads", () => {
+    const location = { agentId: "main", catalogId: "" };
+
+    expect(resolveAgentId(location, [], "main")).toBe("main");
+    expect(resolveAgentId(location, [{ id: "roboclaw" }], "roboclaw")).toBe("roboclaw");
+  });
 });
