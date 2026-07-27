@@ -211,6 +211,33 @@ describe("google video generation provider", () => {
     expect(httpOptions).not.toHaveProperty("apiVersion");
   });
 
+  it.each([
+    ["invalid alphabet", "not-base64!"],
+    ["non-canonical pad bits", "ZE=="],
+  ])("rejects %s in inline video bytes", async (_scenario, videoBytes) => {
+    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "google-key",
+      source: "env",
+      mode: "api-key",
+    });
+    generateVideosMock.mockResolvedValue({
+      done: true,
+      response: {
+        generatedVideos: [{ video: { videoBytes, mimeType: "video/mp4" } }],
+      },
+    });
+
+    await expect(
+      buildGoogleVideoGenerationProvider().generateVideo({
+        provider: "google",
+        model: "veo-3.1-fast-generate-preview",
+        prompt: "A tiny robot watering a windowsill garden",
+        cfg: {},
+        durationSeconds: 3,
+      }),
+    ).rejects.toThrow("Google video generation returned malformed base64 video data");
+  });
+
   it("rejects inline video bytes that exceed the configured media cap", async () => {
     vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "google-key",

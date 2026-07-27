@@ -23,6 +23,7 @@ import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./inpu
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 import type { PendingChatAbort } from "./run-lifecycle.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
+import type { SidebarLayout } from "./sidebar-layout.ts";
 import type {
   CompactionStatus,
   FallbackStatus,
@@ -92,6 +93,10 @@ export type ChatPageHost = ChatHost &
     planStatus: PlanStatus | null;
     observerDigest: SessionObserverDigest | null;
     knownAgentRunIds: Set<string>;
+    /** `sessionKey|runId` scopes that already forced a PR-chips refresh mid-stream. */
+    streamPullRequestRefreshKeys?: Set<string>;
+    /** Rolling stream suffix so a PR URL split across delta chunks still matches. */
+    streamPullRequestTail?: { scope: string; text: string };
     waitingApprovalStatuses: Map<string, WaitingApprovalStatus>;
     waitingApprovalResolvedIds: Set<string>;
     chatRunStatus: ChatProps["runStatus"];
@@ -115,11 +120,13 @@ export type ChatPageHost = ChatHost &
     chatIsProgrammaticScroll: boolean;
     chatProgrammaticScrollTarget: number;
     chatScrollToEnd?: (options: { behavior?: ScrollBehavior }) => void;
-    sidebarOpen: boolean;
+    sidebarLayout: SidebarLayout;
     sidebarContent: SidebarContent | null;
+    sidebarFocusPanelId: string;
+    sidebarFocusVersion: number;
+    updateSidebarActivePanel: (panelId: string) => void;
     imageLightbox: ImageLightboxItem | null;
     imageLightboxRequestVersion: number;
-    splitRatio: number;
     querySelector: (selectors: string) => Element | null;
     renderLifecycle: RenderLifecycle;
     onModelChanged: () => Promise<void> | void;
@@ -142,10 +149,10 @@ export type ChatPageHost = ChatHost &
     retryQueuedChatMessage: (id: string) => Promise<void>;
     steerQueuedChatMessage: (id: string) => Promise<void>;
     handleCloseSidebar: () => void;
+    updateSidebarLayout: (layout: SidebarLayout) => void;
     beginImageOpen: () => number;
     handleOpenImage: (item: ImageLightboxItem, requestVersion?: number) => void;
     handleCloseImage: () => void;
-    handleSplitRatioChange: (ratio: number) => void;
     announceSessionSwitch?: (sessionKey: string, label: string) => void;
     createChatSession?: () => Promise<boolean>;
     confirmConversationReset?: () => Promise<boolean>;

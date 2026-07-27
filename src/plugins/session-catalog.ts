@@ -16,6 +16,8 @@ export type SessionCatalogListProviderParams = {
   limitPerHost?: number;
   hostIds?: string[];
   cursors?: Record<string, string>;
+  /** Request-owned session entries. Providers must not retain this past `list`. */
+  sessionEntries?: SessionCatalogEntrySnapshot;
   /** Publishes completed hosts without waiting for slower machines in the same list. */
   onHost?: (host: SessionCatalogHost) => void;
 };
@@ -53,6 +55,17 @@ export type SessionCatalogCreateTarget = {
   agentRuntime: string;
 };
 
+export type SessionCatalogEntrySummary = ReturnType<
+  PluginRuntime["agent"]["session"]["listSessionEntries"]
+>[number];
+
+/** Mutable store contents captured lazily and reused only within one catalog request. */
+export type SessionCatalogEntrySnapshot = {
+  entriesForAgent: (agentId: string) => readonly SessionCatalogEntrySummary[];
+};
+
+type SessionCatalogAgentEntry = SessionCatalogEntrySummary & { agentId: string };
+
 export type SessionUpstreamJsonValue =
   | null
   | boolean
@@ -61,7 +74,7 @@ export type SessionUpstreamJsonValue =
   | SessionUpstreamJsonValue[]
   | { [key: string]: SessionUpstreamJsonValue };
 
-export type SessionUpstreamKind = "claude-cli" | "codex-app-server";
+export type SessionUpstreamKind = "claude-cli" | "codex-app-server" | "opencode-cli" | "pi-cli";
 
 export type SessionUpstreamProbe = {
   sessionKey: string;
@@ -73,6 +86,15 @@ export type SessionUpstreamProbe = {
   marker: SessionUpstreamJsonValue | null;
   ownRecentUserTexts: string[];
 };
+
+export function normalizeUserText(text: string): string {
+  return text.trim().replace(/\s+/g, " ");
+}
+
+export function isExternalUserText(probe: SessionUpstreamProbe, text: string | undefined): boolean {
+  const normalized = text === undefined ? "" : normalizeUserText(text);
+  return !probe.ownRecentUserTexts.includes(normalized);
+}
 
 export type SessionUpstreamActivity =
   | {
@@ -129,9 +151,25 @@ export type SessionCatalogProvider = {
 };
 
 type SessionCatalogAdoptedSource = { hostId: string; threadId: string };
-type SessionCatalogEntry = ReturnType<
-  PluginRuntime["agent"]["session"]["listSessionEntries"]
->[number]["entry"];
+type SessionCatalogEntry = SessionCatalogEntrySummary["entry"];
+
+export function listSessionCatalogEntries(params: {
+  config: OpenClawConfig;
+  runtime: PluginRuntime;
+  sessionEntries?: SessionCatalogEntrySnapshot;
+}): SessionCatalogAgentEntry[] {
+  const defaultAgentId = resolveDefaultAgentId(params.config);
+  const agentIds = [
+    defaultAgentId,
+    ...listAgentIds(params.config).filter((agentId) => agentId !== defaultAgentId),
+  ];
+  return agentIds.flatMap((agentId) => {
+    const entries = params.sessionEntries
+      ? params.sessionEntries.entriesForAgent(agentId)
+      : params.runtime.agent.session.listSessionEntries({ agentId, readOnly: true });
+    return entries.map((entry) => Object.assign({}, entry, { agentId }));
+  });
+}
 
 export function sessionCatalogAdoptedSourceKey(hostId: string, threadId: string): string {
   return `${hostId}\0${threadId}`;
@@ -145,17 +183,11 @@ export function listAdoptedSessionCatalogSessions(params: {
   config: OpenClawConfig;
   pluginId: string;
   runtime: PluginRuntime;
+  sessionEntries?: SessionCatalogEntrySnapshot;
   sourceFromEntry: (entry: SessionCatalogEntry) => SessionCatalogAdoptedSource | undefined;
 }): Map<string, string> {
-  const defaultAgentId = resolveDefaultAgentId(params.config);
-  const agentIds = [
-    defaultAgentId,
-    ...listAgentIds(params.config).filter((agentId) => agentId !== defaultAgentId),
-  ];
   const adopted = new Map<string, string>();
-  for (const { sessionKey, entry } of agentIds.flatMap((agentId) =>
-    params.runtime.agent.session.listSessionEntries({ agentId, readOnly: true }),
-  )) {
+  for (const { sessionKey, entry } of listSessionCatalogEntries(params)) {
     const source = params.sourceFromEntry(entry);
     if (source && entry.pluginOwnerId === params.pluginId && entry.initializationPending !== true) {
       adopted.set(sessionCatalogAdoptedSourceKey(source.hostId, source.threadId), sessionKey);
@@ -164,28 +196,38 @@ export function listAdoptedSessionCatalogSessions(params: {
   return adopted;
 }
 
-export function createSessionCatalogAdoptionCoordinator() {
-  const operations = new Map<string, Promise<{ sessionKey: string }>>();
+// `complete` is intentionally required, not optional-with-fallback: adoption and its
+// upstream baseline must share one single-flight operation, or concurrent continues
+// race to baseline the same thread. This helper shipped in no release tag yet
+// (added #113718), so no external plugin can depend on the older 3-field shape.
+export function createSessionCatalogAdoptionCoordinator<TResult extends { sessionKey: string }>() {
+  const operations = new Map<string, Promise<TResult>>();
   return async (params: {
     sourceKey: string;
     findExisting: () => string | undefined;
     create: () => Promise<{ sessionKey: string }>;
-  }): Promise<{ sessionKey: string }> => {
-    const existing = params.findExisting();
-    if (existing) {
-      return { sessionKey: existing };
-    }
+    complete: (continued: { sessionKey: string }) => Promise<TResult>;
+  }): Promise<TResult> => {
     const pending = operations.get(params.sourceKey);
     if (pending) {
       return await pending;
     }
-    const operation = params.create().catch((error: unknown) => {
-      const raced = params.findExisting();
-      if (raced) {
-        return { sessionKey: raced };
+    const operation = (async () => {
+      const existing = params.findExisting();
+      if (existing) {
+        // The gateway's same-source link upsert preserves its active marker. Re-running
+        // completion only supplies a new baseline after that link was removed.
+        return await params.complete({ sessionKey: existing });
       }
-      throw error;
-    });
+      const continued = await params.create().catch((error: unknown) => {
+        const raced = params.findExisting();
+        if (raced) {
+          return { sessionKey: raced };
+        }
+        throw error;
+      });
+      return await params.complete(continued);
+    })();
     operations.set(params.sourceKey, operation);
     try {
       return await operation;

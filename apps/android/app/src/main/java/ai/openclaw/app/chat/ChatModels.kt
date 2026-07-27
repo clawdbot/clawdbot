@@ -41,6 +41,18 @@ data class SessionBranch(
 
 data class SessionRewindResult(
   val editorText: String?,
+  val editorAttachments: List<SessionEditorAttachment>,
+)
+
+data class SessionForkResult(
+  val sessionKey: String,
+  val editorText: String?,
+  val editorAttachments: List<SessionEditorAttachment>,
+)
+
+data class SessionEditorAttachment(
+  val mimeType: String,
+  val data: String,
 )
 
 data class ChatTranscriptAnchorState(

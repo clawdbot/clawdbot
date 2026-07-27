@@ -393,10 +393,13 @@ describe("Code Mode", () => {
     expect(execTool.description).toContain("returns its JSON value directly");
     expect(execTool.description).toContain("const hit = ALL_TOOLS.find");
     expect(execTool.description).toContain('"javascript" or "typescript"');
+    expect(execTool.description).toContain("never a shell command");
+    expect(execTool.description).toContain("do not retry failed shell source");
 
     expect(parameters.properties?.code?.description).toContain(
       "`tools.search` takes a query string, not an object",
     );
+    expect(parameters.properties?.command?.description).toContain("Not a shell command");
     expect(parameters.properties?.code?.description).toContain(
       "Select exact ids from `ALL_TOOLS` or `tools.search`",
     );
@@ -691,6 +694,134 @@ describe("Code Mode", () => {
       }),
     ).rejects.toThrow("code and command must match when both are provided");
   });
+
+  it.each([
+    { code: "ls -la /workspace/" },
+    { code: "ls -1" },
+    { command: "ls -la /workspace/" },
+    { code: "pwd", command: "pwd" },
+    { command: "pwd;" },
+    { command: "pwd; // inspect the workspace" },
+    { code: "# inspect the workspace\npwd" },
+    { code: "#!/bin/sh\npwd" },
+    { code: "pwd\nls -la /workspace" },
+    { command: "pwd;ls -la /workspace" },
+    { command: "/bin/ls /workspace/" },
+    { command: "./gradlew test" },
+    { code: ".\\gradlew.bat test" },
+    { command: ".\\script.ps1" },
+    { code: "C:\\workspace\\run.cmd /q" },
+    { code: "/workspace/run.sh --verbose" },
+    { command: "sh -c 'ls /workspace/'" },
+    { command: "git status" },
+    { command: 'git status; const note = "git";' },
+    { command: "ls -1; const metadata = { ls: true };" },
+    { code: "ls -1; const note = 'function ls';" },
+    { command: "ls -1; let ls = 7;" },
+    { command: "npm test" },
+    { command: "NODE_ENV=test npm test" },
+    { code: "NODE_ENV=test\nnpm test" },
+    { code: "FOO=bar ./gradlew test" },
+    { command: 'GREETING="hello world" npm test' },
+    { command: "whoami" },
+    { code: "set -euo pipefail" },
+    { command: "exit" },
+    { command: "if [ -d /workspace ]; then pwd; fi" },
+    { code: "while test -d /workspace; do pwd; done" },
+    { command: 'for ((i=0; i<3; i++)); do echo "$i"; done' },
+    { code: "function task { pwd; }" },
+    { command: "source ./env" },
+    { code: "command ls" },
+    { command: "go test ./..." },
+    { code: "cargo test" },
+    { command: "sort /workspace/file" },
+    { code: "wc -l file" },
+    { command: "jq . file.json" },
+    { code: "exec ls" },
+    { command: "custom-tool --format=json" },
+    { command: "ls > output" },
+    { code: "ls>output" },
+    { command: "ls >output" },
+    { code: "ls >> output" },
+    { command: "cat<input" },
+    { code: "// inspect the workspace\npwd" },
+    { command: "/* inspect the workspace */ pwd;" },
+    { code: "rg code-mode src/agents" },
+  ])("rejects shell source before starting a guest worker: %j", async (args) => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...tools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = resultDetails(
+      await expectDefined(tools[0], "tools[0] test invariant").execute(
+        "code-call-shell-source",
+        args,
+      ),
+    );
+
+    expect(details.status).toBe("failed");
+    expect(details.code).toBe("invalid_input");
+    expect(details.error).toMatch(/JavaScript or TypeScript, not shell commands/);
+    expect(testing.activeRuns.size).toBe(0);
+  });
+
+  it.each([
+    { code: "true;", value: null },
+    { code: "false;", value: null },
+    { code: "return true || false;", value: true },
+    { code: "return -1;", value: -1 },
+    { code: "return /foo/.test('foo');", value: true },
+    { code: "Infinity -1; return 42;", value: 42 },
+    { code: "eval; return typeof eval;", value: "function" },
+    { code: "if (true) { return -1; }", value: -1 },
+    { code: "for (let i = 0; i < 3; i++) { if (i === 2) { return i; } }", value: 2 },
+    { code: "function task() { return 7; } return task();", value: 7 },
+    { code: "// explain the guest program\nreturn 7;", value: 7 },
+    { code: "const ls = 7; return ls;", value: 7 },
+    { code: "const echo = (value) => value; return echo('hello');", value: "hello" },
+    { code: "test instanceof Function; function test() {}", value: null },
+    { code: "ls -1; function ls() {}", value: null },
+    { code: "ls -1; function/**/ls() {}", value: null },
+    { code: "ls > limit; function ls() {} var limit = 1;", value: null },
+    { code: "echo `hello`; function echo(parts) { return parts[0]; }", value: null },
+    { code: "pwd; var { pwd } = { pwd: 7 }; return pwd;", value: 7 },
+    { code: "pwd; var [pwd] = [7]; return pwd;", value: 7 },
+    { code: "pwd; for (var pwd of [7]) {} return pwd;", value: 7 },
+    { code: "pwd; var other = 1, pwd = 7; return pwd;", value: 7 },
+    { code: "pwd; function* pwd() { yield 7; } return pwd().next().value;", value: 7 },
+    { code: "pwd; function/**/pwd() { return 7; } return pwd();", value: 7 },
+    { code: "pwd; var/**/{ pwd } = { pwd: 7 }; return pwd;", value: 7 },
+    { code: "node -version; function/**/node() {}; var version = 1;", value: null },
+  ])(
+    "executes valid shell-like JavaScript without false rejection: %j",
+    async ({ code, value }) => {
+      const { config, catalogRef, tools } = createCodeModeHarness();
+      applyCodeModeCatalog({
+        tools: [...tools, pluginTool("fake_noop", "Noop")],
+        config,
+        sessionId: "session-code-mode",
+        sessionKey: "agent:main:main",
+        runId: "run-code-mode",
+        catalogRef,
+      });
+
+      const details = resultDetails(
+        await expectDefined(tools[0], "tools[0] test invariant").execute(
+          "code-call-valid-shell-like-source",
+          { code },
+        ),
+      );
+
+      expect(details.status).toBe("completed");
+      expect(details.value).toBe(value);
+    },
+  );
 
   it("runs JavaScript through QuickJS-WASI and resumes nested tool calls with wait", async () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
@@ -2034,6 +2165,28 @@ describe("Code Mode", () => {
 
     expect(details.status).toBe("completed");
     expect(details.value).toEqual({ value: 42 });
+
+    const commandLikeTypeScript = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
+      language: "typescript",
+      code: "node -1; var node: number = 7; return node;",
+    });
+
+    expect(commandLikeTypeScript.status).toBe("completed");
+    expect(commandLikeTypeScript.value).toBe(7);
+
+    const typedShell = resultDetails(
+      await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
+        "code-call-typescript-shell-source",
+        { code: "pwd", language: "typescript" },
+      ),
+    );
+
+    expect(typedShell.status).toBe("failed");
+    expect(typedShell.code).toBe("invalid_input");
+    expect(typedShell.error).toMatch(/JavaScript or TypeScript, not shell commands/);
+    expect(testing.activeRuns.size).toBe(0);
   });
 
   it.each([

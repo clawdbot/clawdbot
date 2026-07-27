@@ -31,7 +31,6 @@ export {
 export type {
   ControlUiSessionBranch,
   ControlUiSessionPullRequest,
-  ControlUiSessionPullRequests,
 } from "../../../../src/gateway/control-ui-contract.js";
 export { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 export type {
@@ -85,7 +84,6 @@ export {
   hasSessionPresenceViewers,
 } from "../../components/viewer-facepile.ts";
 export { t } from "../../i18n/index.ts";
-export { resolveBoardChatLayoutWidth } from "../../lib/board/chat-layout.ts";
 export {
   acquireBoardProviderForSession,
   boardProviderCacheKey,
@@ -135,10 +133,13 @@ export {
 export {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
+  canonicalUiSessionKeyForPersistence,
+  normalizeAgentId,
   normalizeSessionKeyForUiComparison,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
   resolveUiConfiguredMainKey,
+  resolveUiGlobalAliasAgentId,
   uiSessionEventMatches,
 } from "../../lib/sessions/session-key.ts";
 export { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
@@ -156,10 +157,12 @@ export {
 } from "./board-session-surface.ts";
 export { catalogMessageId } from "./catalog-message-id.ts";
 export { refreshChatAvatar } from "./chat-avatar.ts";
+export { replaceChatAttachmentsFromEditor } from "./attachment-payload-store.ts";
 export type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 export {
   applyChatAgentsList,
   clearChatHistory,
+  loadChatBranches,
   loadChatHistory,
   loadOlderChatHistoryPage,
   rewindChatHistory,
@@ -204,11 +207,28 @@ export {
   retryChatComposerMemoryFallback,
   resolveChatAgentId,
   resolveChatAvatarUrl,
+  selectedChatSessionRow,
   saveRouteSessionSettings,
   type ChatPageHost,
 } from "./chat-state.ts";
 export { resetChatViewState } from "./chat-view-state.ts";
 export { renderChat, type ChatProps } from "./chat-view.ts";
+export {
+  SIDEBAR_NARROW_BREAKPOINT_PX,
+  activatePanel,
+  closeSlot,
+  detachPanelToColumn,
+  fitSidebarLayout,
+  isSidebarRegionCollapsed,
+  mergePanelIntoColumn,
+  sidebarPrimaryWidth,
+  normalizeSidebarLayout,
+  openSlot,
+  resizeColumn,
+  type SidebarLayout,
+  type SidebarSide,
+  type SidebarSlotId,
+} from "./sidebar-layout.ts";
 export { renderCatalogTerminalButton } from "./components/catalog-terminal-button.ts";
 export { chatAttachmentFromDataUrl } from "./components/chat-attachments.ts";
 export {
@@ -246,12 +266,7 @@ export {
   toggleSessionWorkspace,
   type SessionWorkspaceProps,
 } from "./components/chat-session-workspace.ts";
-export {
-  CHAT_DETAIL_FULL_MESSAGE_MAX_CHARS,
-  type DetailFullMessageResult,
-  type SidebarContent,
-  type SidebarFullMessageRequest,
-} from "./components/chat-sidebar.ts";
+export type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
 export {
   ChatTranscriptController,
   resetChatThreadPresentationState,
@@ -265,7 +280,7 @@ export {
   storedChatOutboxScopeKey,
 } from "./composer-persistence.ts";
 export { exportChatMarkdown } from "./export.ts";
-export { admitInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
+export { admitInitialTurnHandoff, admitInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
 export {
   hasAbortableSessionRun,
   reconcileStaleChatRunAfterSessionStatePublication,
@@ -280,6 +295,7 @@ export {
 export {
   reconcileWaitingApprovalsFromSnapshot,
   resolveActiveRunOutputTokens,
+  resolveChatProjectionRunId,
 } from "./tool-stream.ts";
 export { configureToolTitleFetcher } from "./tool-titles.ts";
 export { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";

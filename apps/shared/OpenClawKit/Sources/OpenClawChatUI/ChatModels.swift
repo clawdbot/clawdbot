@@ -572,13 +572,20 @@ public struct OpenClawChatCreateSessionResponse: Codable, Sendable {
     public let sessionId: String?
 }
 
+public struct OpenClawChatEditorAttachment: Codable, Sendable {
+    public let mimeType: String
+    public let data: String
+}
+
 public struct OpenClawChatRewindResponse: Codable, Sendable {
     public let editorText: String?
+    public let editorAttachments: [OpenClawChatEditorAttachment]?
 }
 
 public struct OpenClawChatForkAtMessageResponse: Codable, Sendable {
     public let sessionKey: String
     public let editorText: String?
+    public let editorAttachments: [OpenClawChatEditorAttachment]?
 }
 
 public struct OpenClawChatSessionBranch: Codable, Sendable, Equatable, Identifiable {

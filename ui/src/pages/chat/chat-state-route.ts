@@ -1,5 +1,5 @@
 import { loadLocalAssistantIdentity } from "../../app/assistant-identity.ts";
-import { patchSettings } from "../../app/settings.ts";
+import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
@@ -7,12 +7,16 @@ import {
   DEFAULT_MAIN_KEY,
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
+  canonicalUiSessionKeyForPersistence,
+  isUiGlobalSessionKey,
+  isUiGlobalScopeConfigured,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveUiDefaultAgentId,
   resolveUiConfiguredMainKey,
   resolveUiKnownSelectedGlobalAgentId,
   resolveUiSelectedGlobalAgentId,
+  uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
 import { syncVisibleChatQueueProjection } from "./chat-queue.ts";
 import { resetChatRealtimeConversation } from "./chat-realtime.ts";
@@ -38,6 +42,7 @@ import {
   readChatSessionSnapshot,
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
+import { normalizeSidebarLayout } from "./sidebar-layout.ts";
 import { clearAuthoritativeTerminal } from "./terminal-message-identity.ts";
 
 let lastChatComposerMemoryFallbackSequence = 0;
@@ -55,6 +60,37 @@ export function canCreateChatSession(state: ChatPageHost) {
     state.chatStream === null &&
     state.chatQueue.length === 0
   );
+}
+
+export function selectedChatSessionRow(state: ChatPageHost) {
+  const rows = state.sessionsResult?.sessions ?? [];
+  const exact = rows.find((candidate) =>
+    areUiSessionKeysEquivalent(candidate.key, state.sessionKey),
+  );
+  const row =
+    exact ??
+    (isUiGlobalScopeConfigured(state)
+      ? rows.find((candidate) =>
+          uiSessionRowMatchesSelectedChat(state, candidate.key, state.sessionKey),
+        )
+      : undefined);
+  if (!row || !isUiGlobalSessionKey(row.key)) {
+    return row;
+  }
+  const selectedAgentId = resolveUiSelectedGlobalAgentId(state);
+  if (
+    state.sessionsResultAgentId &&
+    normalizeAgentId(state.sessionsResultAgentId) !== selectedAgentId
+  ) {
+    return undefined;
+  }
+  if (
+    row.observerDigest?.agentId &&
+    normalizeAgentId(row.observerDigest.agentId) !== selectedAgentId
+  ) {
+    return { ...row, observerDigest: undefined };
+  }
+  return row;
 }
 
 function saveChatQueueForSession(state: ChatPageHost, sessionKey: string) {
@@ -241,9 +277,14 @@ export function resetChatStateForRouteSession(
   saveChatMessagesForSession(state, previousSessionKey);
   const snapshot = restoreChatMessagesForSession(state, sessionKey);
   state.sessionKey = sessionKey;
-  if (state.sidebarContent?.kind === "session-discussion") {
-    state.sidebarContent = { ...state.sidebarContent, sessionKey };
-  }
+  state.sidebarContent = null;
+  const sidebarSessionKey = canonicalUiSessionKeyForPersistence(state, sessionKey);
+  const sidebarSettings = loadSettings();
+  state.sidebarLayout = normalizeSidebarLayout(
+    sidebarSettings.sidebarSessionLayouts?.[sidebarSessionKey],
+  );
+  state.sidebarFocusPanelId = sidebarSettings.sidebarSessionActivePanels?.[sidebarSessionKey] ?? "";
+  state.sidebarFocusVersion += 1;
   invalidateImageLightbox(state);
   state.selectedChatSessionArchived =
     state.sessionsResult?.sessions.some(

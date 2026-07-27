@@ -68,35 +68,6 @@ function resolveViewportDimension(value: unknown, label: "width" | "height"): nu
   return dimension;
 }
 
-/** Capture serialized HTML from the resolved Playwright page. */
-export async function pageContentViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  ssrfPolicy?: SsrFPolicy;
-  signal?: AbortSignal;
-}): Promise<string> {
-  const page = await getPageForTargetId(opts);
-  opts.signal?.throwIfAborted();
-  if (!opts.signal) {
-    return await page.content();
-  }
-  let onAbort: (() => void) | undefined;
-  const aborted = new Promise<never>((_, reject) => {
-    onAbort = () => {
-      const reason = opts.signal?.reason;
-      reject(reason instanceof Error ? reason : new Error("browser page capture aborted"));
-    };
-    opts.signal?.addEventListener("abort", onAbort, { once: true });
-  });
-  try {
-    return await Promise.race([page.content(), aborted]);
-  } finally {
-    if (onAbort) {
-      opts.signal.removeEventListener("abort", onAbort);
-    }
-  }
-}
-
 async function collectSnapshotUrls(page: Page): Promise<SnapshotUrlEntry[]> {
   const urls = await page
     .evaluate(() => {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getRemoteModelCatalogOverlay } from "./remote-overlay.js";
+import { getRemoteModelCatalogOverlay, getRemoteModelCatalogPricing } from "./remote-overlay.js";
 import {
   resetRemoteModelCatalogOverlayForTest,
   setRemoteModelCatalogOverlaySourcesForTest,
@@ -16,6 +16,7 @@ const bundle = {
   minVersion: "2026.7.0",
   sourceCommit: "abc",
   providers: { anthropic: { models: [{ id: "new" }] } },
+  pricing: { "openai/gpt-external": { input: 2.5, output: 10 } },
 };
 
 beforeEach(() => {
@@ -40,6 +41,10 @@ describe("remote model catalog overlay", () => {
   it("loads a newer compatible bundle once", () => {
     expect(getRemoteModelCatalogOverlay({})).toHaveProperty("anthropic");
     expect(getRemoteModelCatalogOverlay({})).toHaveProperty("anthropic");
+    expect(getRemoteModelCatalogPricing({})?.["openai/gpt-external"]).toEqual({
+      input: 2.5,
+      output: 10,
+    });
     expect(mocks.read).toHaveBeenCalledOnce();
   });
 

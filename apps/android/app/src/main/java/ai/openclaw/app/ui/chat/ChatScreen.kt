@@ -540,8 +540,12 @@ fun ChatScreen(
         owner = composerOwner,
         mainSessionKey = mainSessionKey,
       ) ?: return@LaunchedEffect
-    inputDrafts[composerOwner] =
+    val merged =
       mergeChatDraft(draft = claimed, currentInput = input, currentOwner = composerOwner) ?: return@LaunchedEffect
+    inputDrafts[composerOwner] = merged
+    // Rewind/fork replace the composer wholesale; an attachment staged during the
+    // in-flight round-trip is accepted collateral rather than a draft revision field.
+    claimed.attachments?.let { composerState.replaceAttachments(composerOwner, it) }
   }
 
   LaunchedEffect(composerOwner, pendingSendAdmissionIds) {
@@ -709,23 +713,25 @@ fun ChatScreen(
               owner = composerOwner,
               expectedExistingText = expectedInput,
               acceptsEmptyText = true,
+              attachments = result.editorAttachments.toPendingAttachments(),
             ),
           )
         }
       },
       onForkMessage = { entryId ->
         scope.launch {
-          val (newKey, editorText) = viewModel.forkChatAtEntry(entryId) ?: return@launch
-          val newOwner = composerOwner.copy(sessionKey = newKey)
+          val result = viewModel.forkChatAtEntry(entryId) ?: return@launch
+          val newOwner = composerOwner.copy(sessionKey = result.sessionKey)
           val expectedInput = inputDrafts[newOwner].orEmpty()
-          viewModel.switchChatSession(newKey, composerOwner.agentId)
+          viewModel.switchChatSession(result.sessionKey, composerOwner.agentId)
           viewModel.setChatDraft(
             ChatDraft(
-              text = editorText.orEmpty(),
+              text = result.editorText.orEmpty(),
               placement = ChatDraftPlacement.Replace,
               owner = newOwner,
               expectedExistingText = expectedInput,
               acceptsEmptyText = true,
+              attachments = result.editorAttachments.toPendingAttachments(),
             ),
           )
         }

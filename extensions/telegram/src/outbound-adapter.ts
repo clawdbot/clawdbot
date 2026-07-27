@@ -413,6 +413,9 @@ export function createTelegramOutboundAdapter(
     chunkerMode: "markdown",
     extractMarkdownImages: true,
     textChunkLimit: TELEGRAM_TEXT_CHUNK_LIMIT,
+    preserveMarkdownDetails: ({ cfg, accountId }) =>
+      mergeTelegramAccountConfig(cfg, accountId ?? resolveDefaultTelegramAccountId(cfg))
+        .richMessages === true,
     // Default Telegram delivery reparses this result as Markdown; use its bold
     // and strike delimiters. Rich accounts must keep the agent's HTML islands
     // (<details>, <tg-math-block>, checkbox lists) intact — the blocks emitter

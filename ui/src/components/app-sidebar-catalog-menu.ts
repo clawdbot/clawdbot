@@ -16,7 +16,7 @@ export class SidebarCatalogMenuController {
       beforeOpen: () => void;
       requestUpdate: () => void;
       terminalAvailable: () => boolean;
-      navigate: (search: string) => void;
+      navigate: (request: Pick<CatalogSessionMenuRequest, "navigation" | "routeId">) => void;
     },
   ) {}
 
@@ -55,7 +55,7 @@ export class SidebarCatalogMenuController {
       }
       return;
     }
-    this.hooks.navigate(menu.search);
+    this.hooks.navigate(menu);
   }
 
   render() {

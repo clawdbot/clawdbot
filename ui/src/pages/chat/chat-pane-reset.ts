@@ -157,7 +157,7 @@ export abstract class ChatPaneReset extends ChatPaneBoard {
         // A reset reuses the session key; prior-run digests must not survive
         // into the fresh conversation or keep injecting the observer card.
         this.observerDigestHistory.markReset(
-          this.resolveBoardSessionKey(previousSessionKey),
+          this.resolveObserverDigestHistoryKey(previousSessionKey),
           preResetSessionId,
         );
         // Recompute rather than null: the builtin snapshot also carries the

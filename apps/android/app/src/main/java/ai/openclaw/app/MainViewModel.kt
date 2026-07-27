@@ -17,6 +17,7 @@ import ai.openclaw.app.chat.GatewayDefaultAgentOwner
 import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.OutgoingAttachment
 import ai.openclaw.app.chat.SessionBranch
+import ai.openclaw.app.chat.SessionForkResult
 import ai.openclaw.app.chat.SessionRewindResult
 import ai.openclaw.app.chat.defaultChatThinkingLevelSelection
 import ai.openclaw.app.chat.resolveChatComposerOwner
@@ -77,6 +78,8 @@ internal data class ChatDraft(
   val owner: ChatComposerOwner? = null,
   val expectedExistingText: String? = null,
   val acceptsEmptyText: Boolean = false,
+  // Attachment payloads stay in ViewModel heap state; saved drafts persist text only.
+  val attachments: List<PendingAttachment>? = null,
 )
 
 internal fun claimChatDraftForOwner(
@@ -1587,7 +1590,7 @@ class MainViewModel private constructor(
 
   suspend fun rewindChatAtEntry(entryId: String): SessionRewindResult? = ensureRuntime().rewindChatAtEntry(entryId)
 
-  suspend fun forkChatAtEntry(entryId: String): Pair<String, String?>? = ensureRuntime().forkChatAtEntry(entryId)
+  suspend fun forkChatAtEntry(entryId: String): SessionForkResult? = ensureRuntime().forkChatAtEntry(entryId)
 
   suspend fun refreshChatSessionBranches(): Boolean = ensureRuntime().refreshChatSessionBranches()
 

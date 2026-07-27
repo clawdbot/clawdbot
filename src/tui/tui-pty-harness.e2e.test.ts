@@ -1,15 +1,18 @@
 // Exercises the fake-backend TUI PTY harness and visible terminal output.
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+  approveWorkspaceSkill,
+  buildOpaqueSessionIsolationFixture,
+  objectFieldEquals,
+  readFixtureLog,
+  waitForFixtureLogEntry,
+  type FixtureLogEntry,
+} from "./tui-pty-harness-fixture-test-support.js";
 import { sleep, startPty, type PtyRun } from "./tui-pty-test-support.js";
-
-type FixtureLogEntry = {
-  method: string;
-  payload?: unknown;
-};
 
 const activeRuns: PtyRun[] = [];
 const STARTUP_TIMEOUT_MS = 20_000;
@@ -17,47 +20,6 @@ const OUTPUT_TIMEOUT_MS = 2_000;
 const EXIT_TIMEOUT_MS = 4_000;
 const TEST_TIMEOUT_MS = 5_000;
 const STARTUP_TEST_TIMEOUT_MS = 25_000;
-
-async function readFixtureLog(logPath: string): Promise<FixtureLogEntry[]> {
-  try {
-    const text = await readFile(logPath, "utf8");
-    return text
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as FixtureLogEntry);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
-    }
-    throw error;
-  }
-}
-
-async function waitForFixtureLogEntry(
-  logPath: string,
-  predicate: (entry: FixtureLogEntry) => boolean,
-  timeoutMs = OUTPUT_TIMEOUT_MS,
-) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const entries = await readFixtureLog(logPath);
-    const match = entries.find(predicate);
-    if (match) {
-      return match;
-    }
-    await sleep(25);
-  }
-  const entries = await readFixtureLog(logPath);
-  throw new Error(`timed out waiting for fixture log entry\n${JSON.stringify(entries, null, 2)}`);
-}
-
-function objectFieldEquals(entry: FixtureLogEntry, field: string, value: unknown) {
-  if (typeof entry.payload !== "object" || entry.payload === null) {
-    return false;
-  }
-  const payload = entry.payload as Record<string, unknown>;
-  return Object.hasOwn(payload, field) && payload[field] === value;
-}
 
 async function writeTuiPtyFixtureScript(dir: string) {
   // Temp files sit outside the repo package scope; .mts preserves the ESM contract under tsx.
@@ -231,6 +193,7 @@ async function writeTuiPtyFixtureScript(dir: string) {
             });
             return { runId };
           }
+          ${buildOpaqueSessionIsolationFixture()}
           const responseDelayMs =
             opts.message === "slow prompt" ||
             opts.message === "slow reset proof" ||
@@ -526,7 +489,7 @@ async function startTuiFixture(opts: { env?: NodeJS.ProcessEnv } = {}) {
     run,
     logPath,
     waitForLogEntry: async (predicate: (entry: FixtureLogEntry) => boolean, timeoutMs?: number) =>
-      await waitForFixtureLogEntry(logPath, predicate, timeoutMs),
+      await waitForFixtureLogEntry(logPath, predicate, timeoutMs ?? OUTPUT_TIMEOUT_MS, run.output),
     cleanup: async () => {
       await run.dispose();
       await rm(tempDir, { recursive: true, force: true });
@@ -739,23 +702,29 @@ describe.sequential("TUI PTY harness", () => {
   it(
     "presents and resolves workspace skill approval in the TUI",
     async () => {
-      await fixture.run.write("skill approval proof\r");
-      await fixture.run.waitForOutput("workspace skill approval: Apply workspace skill proposal");
-      await fixture.run.waitForOutput("Plugin: workspace-skills");
-      await fixture.run.waitForOutput(
-        "Apply a pending workspace skill proposal into live workspace skills.",
-      );
-
-      await fixture.run.write("\x1b[A", { delay: false });
-      await fixture.run.write("\r");
-      await fixture.waitForLogEntry(
-        (entry) =>
-          entry.method === "resolvePluginApproval" &&
-          objectFieldEquals(entry, "decision", "allow-once"),
-      );
-      await fixture.run.waitForOutput("PTY_SKILL_APPROVAL_RESOLVED: allow-once");
+      await approveWorkspaceSkill(fixture, "skill approval proof");
     },
     TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "presents and resolves workspace skill approval in a compact terminal",
+    async () => {
+      const compactFixture = await startTuiFixture({
+        env: {
+          OPENCLAW_TUI_PTY_COLS: "72",
+          OPENCLAW_TUI_PTY_ROWS: "20",
+        },
+      });
+
+      try {
+        await compactFixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+        await approveWorkspaceSkill(compactFixture, "skill approval proof");
+      } finally {
+        await compactFixture.cleanup();
+      }
+    },
+    STARTUP_TEST_TIMEOUT_MS,
   );
 
   it(
@@ -972,6 +941,38 @@ describe.sequential("TUI PTY harness", () => {
       await fixture.waitForLogEntry(
         (entry) => entry.method === "patchSession" && objectFieldEquals(entry, field, level),
       );
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it.each([
+    {
+      provider: "Matrix",
+      sessionKey: "agent:main:matrix:channel:!MixedRoomAbCdEf:example.org",
+      message: "opaque session isolation proof: Matrix",
+    },
+    {
+      provider: "Signal",
+      sessionKey: "agent:main:signal:group:AbC123=",
+      message: "opaque session isolation proof: Signal",
+    },
+  ])(
+    "keeps case-distinct $provider conversations out of the visible terminal",
+    async ({ sessionKey, message }) => {
+      await fixture.run.write(`/session ${sessionKey}\r`, { delay: false });
+      await fixture.waitForLogEntry(
+        (entry) =>
+          entry.method === "loadHistory" && objectFieldEquals(entry, "sessionKey", sessionKey),
+      );
+
+      const outputOffset = fixture.run.output().length;
+      await fixture.run.write(`${message}\r`, { delay: false });
+      await fixture.waitForLogEntry((entry) => entry.method === "foreignSessionEvent");
+      await fixture.run.waitForOutput(`PTY_RESPONSE: ${message}`);
+
+      const sessionOutput = fixture.run.output().slice(outputOffset);
+      expect(sessionOutput).toContain(`PTY_RESPONSE: ${message}`);
+      expect(sessionOutput).not.toContain("PTY_FOREIGN_OPAQUE_SESSION_MESSAGE");
     },
     TEST_TIMEOUT_MS,
   );

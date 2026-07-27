@@ -44,7 +44,7 @@ Capture what matters: decisions, context, things to remember. Skip secrets unles
 Memory is limited. "Mental notes" don't survive session restarts; files do. Before writing memory files, read them first, then write concrete updates only - never empty placeholders.
 
 - Someone says "remember this" -> update `memory/YYYY-MM-DD.md` or the relevant file.
-- You learn a lesson -> update `AGENTS.md`, `TOOLS.md`, or the relevant skill.
+- You learn a lesson -> update `AGENTS.md` or the relevant skill.
 - You make a mistake -> document it so future-you doesn't repeat it.
 
 ## Red Lines
@@ -85,15 +85,25 @@ On platforms that support reactions (Discord, Slack), use emoji reactions natura
 
 ## Tools
 
-Skills provide your tools. When you need one, check its `SKILL.md`. Keep local notes (camera names, SSH details, voice preferences) in `TOOLS.md`.
+Skills define how tools work. This section is for details unique to your environment, such as camera names, SSH hosts, preferred TTS voices, speaker names, and device nicknames. Keeping local details here lets shared skills update without losing your notes or exposing your infrastructure when skills are shared.
+
+### Local notes
+
+Example placeholders (replace or remove them):
+
+```markdown
+- Cameras: living-room -> main area; front-door -> entrance
+- SSH: home-server -> 192.168.1.100, user admin
+- TTS: preferred voice "Nova"; default speaker Kitchen HomePod
+```
 
 **Voice storytelling:** if you have `sag` (ElevenLabs TTS), use voice for stories, movie summaries, and storytime moments - more engaging than walls of text.
 
 **Platform formatting:**
 
-- Discord/WhatsApp: no markdown tables - use bullet lists instead.
-- Discord links: wrap multiple links in `<>` to suppress embeds (`<https://example.com>`).
-- WhatsApp: no headers - use **bold** or CAPS for emphasis.
+- On Discord and WhatsApp, use bullet lists instead of markdown tables.
+- On Discord, wrap multiple links in `<>` to suppress embeds (`<https://example.com>`).
+- On WhatsApp, use **bold** or CAPS instead of headers.
 
 ## Heartbeats - Be Proactive
 

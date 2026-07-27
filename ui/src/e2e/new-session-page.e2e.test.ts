@@ -7,6 +7,8 @@ import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
+  controlUiSessionPath,
+  controlUiSessionUrl,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -24,12 +26,19 @@ const uiProofArtifactDir = path.join(
   "control-ui-e2e",
   "cloud-worker-session",
 );
+const reconnectProofArtifactDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "initial-prompt-reconnect",
+);
 
 const WORKSPACE = "/home/peter/openclaw";
 const PICKED = "/home/peter/openclaw/packages";
 const SOURCE_REPO = "/tmp/source-repo";
 const TARGET_REPO = "/tmp/target-repo";
 const REFRESHED_RESEARCH_WORKSPACE = "/home/peter/research-next";
+const MOVED_WORKSPACE = "/home/peter/openclaw-next";
 const NODE_HOME = "/Users/peter";
 const NODE_PICKED = "/Users/peter/Projects";
 const NODE_UNC = "\\\\server\\share\\repo";
@@ -84,6 +93,66 @@ async function replaceGatewayClient(page: Page) {
   });
 }
 
+async function navigateInApp(page: Page, routeId: string, search = "") {
+  await page.evaluate(
+    ({ targetRouteId, targetSearch }) => {
+      const app = document.querySelector("openclaw-app") as HTMLElement & {
+        runtime?: {
+          context: {
+            navigate: (routeId: string, options?: { search?: string }) => void;
+          };
+        };
+      };
+      if (!app.runtime) {
+        throw new Error("OpenClaw application runtime is unavailable");
+      }
+      app.runtime.context.navigate(targetRouteId, { search: targetSearch });
+    },
+    { targetRouteId: routeId, targetSearch: search },
+  );
+}
+
+/**
+ * Chat first pushes its base path and then commits the canonical session path.
+ * A repeated URL alone cannot prove that the router has finished, so require
+ * the successful active match and browser location to agree before leaving.
+ */
+async function waitForCommittedChatRoute(page: Page) {
+  await page.waitForURL((url) => url.pathname.startsWith("/chat/"));
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const app = document.querySelector("openclaw-app") as HTMLElement & {
+          runtime?: {
+            router: {
+              getState: () => {
+                status: string;
+                resolvedLocation: { pathname: string } | null;
+                matches: { routeId: string }[];
+                pendingMatches: unknown[];
+              };
+            };
+          };
+        };
+        const state = app.runtime?.router.getState();
+        return (
+          state?.status === "success" &&
+          state.matches[0]?.routeId === "chat" &&
+          state.resolvedLocation?.pathname === window.location.pathname &&
+          state.pendingMatches.length === 0
+        );
+      }),
+    )
+    .toBe(true);
+}
+
+async function choosePackagesFolder(page: Page) {
+  await page.locator("#new-session-place-trigger").click();
+  await page.getByRole("button", { name: "Browse folders" }).click();
+  await page.locator(".new-session-page__browser-entry", { hasText: "packages" }).click();
+  await page.getByRole("button", { name: "Use this folder" }).click();
+}
+
 let browser: Browser;
 let server: ControlUiE2eServer;
 
@@ -99,6 +168,71 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
   afterAll(async () => {
     await browser?.close();
     await server?.close();
+  });
+
+  it("grows the first prompt through ten lines before using a narrow scrollbar", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      const message = page.locator(".new-session-page__message");
+      await message.waitFor();
+
+      const initial = await message.evaluate((element) => ({
+        height: element.clientHeight,
+        overflowY: getComputedStyle(element).overflowY,
+      }));
+      await message.fill(Array.from({ length: 10 }, (_, index) => `line ${index + 1}`).join("\n"));
+      const tenLines = await message.evaluate((element) => {
+        const style = getComputedStyle(element);
+        return {
+          height: element.clientHeight,
+          lineHeight: Number.parseFloat(style.lineHeight),
+          overflowY: style.overflowY,
+          padding: Number.parseFloat(style.paddingTop) + Number.parseFloat(style.paddingBottom),
+          scrollbarWidth: style.scrollbarWidth,
+          webkitScrollbarWidth: getComputedStyle(element, "::-webkit-scrollbar").width,
+        };
+      });
+
+      expect(tenLines.height).toBeGreaterThan(initial.height);
+      expect(tenLines.height).toBeGreaterThanOrEqual(
+        Math.floor(tenLines.lineHeight * 10 + tenLines.padding) - 1,
+      );
+      expect(tenLines.overflowY).toBe("hidden");
+      expect(tenLines.scrollbarWidth).toBe("thin");
+      expect(Number.parseFloat(tenLines.webkitScrollbarWidth)).toBeLessThanOrEqual(6);
+      await captureUiProof(page, "new-session-composer-ten-lines.png");
+
+      const longPrompt = Array.from({ length: 14 }, (_, index) => `line ${index + 1}`).join("\n");
+      await message.fill(longPrompt);
+      const capped = await message.evaluate((element) => ({
+        clientHeight: element.clientHeight,
+        overflowY: getComputedStyle(element).overflowY,
+        scrollHeight: element.scrollHeight,
+      }));
+      expect(capped.clientHeight).toBeLessThan(capped.scrollHeight);
+      expect(capped.overflowY).toBe("auto");
+      await captureUiProof(page, "new-session-composer-capped-scrollbar.png");
+      const start = page.getByRole("button", { name: "Start thread" });
+      await expect(start.isVisible()).resolves.toBe(true);
+      await expect(start.isEnabled()).resolves.toBe(true);
+      await start.focus();
+      await expect(start.evaluate((element) => document.activeElement === element)).resolves.toBe(
+        true,
+      );
+      await start.press("Enter");
+      await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
+        params: { message: longPrompt },
+      });
+    } finally {
+      await context.close();
+    }
   });
 
   it("pastes an image into the draft and forwards it with the initial turn", async () => {
@@ -153,7 +287,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     const gateway = await installMockGateway(page, {
       methodResponses: {
         "sessions.create": { key: sessionKey, runStarted: true },
-        "chat.history": {
+        "chat.startup": {
           messages: [
             {
               role: "assistant",
@@ -186,10 +320,10 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}new`);
       await page.locator(".new-session-page__message").fill(message);
       await page.getByRole("button", { name: "Start thread" }).click();
-      await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
+      await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
         timeout: 30_000,
       });
-      await gateway.waitForRequest("chat.history");
+      await gateway.waitForRequest("chat.startup");
       await page.getByText("SKILL.md", { exact: true }).waitFor();
 
       await expect.poll(() => page.locator(".chat-group.user").textContent()).toContain(message);
@@ -206,6 +340,76 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     }
   });
 
+  it("keeps the initial prompt visible across a Gateway reconnect", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const sessionKey = "agent:main:reconnected-initial-prompt";
+    const message = "keep this first prompt through reconnect";
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.create": { key: sessionKey, runStarted: true },
+        "chat.startup": {
+          messages: [],
+          sessionId: "reconnected-initial-prompt",
+          sessionInfo: { hasActiveRun: true, key: sessionKey, status: "running" },
+        },
+      },
+    });
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      await page.locator(".new-session-page__message").fill(message);
+      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
+        timeout: 30_000,
+      });
+      await gateway.waitForRequest("chat.startup");
+      await expect.poll(() => page.locator(".chat-group.user").textContent()).toContain(message);
+
+      const socketsBeforeReconnect = await gateway.getSocketCount();
+      await gateway.setOnline(false);
+      await expect
+        .poll(() => gateway.getSocketCount(), { timeout: 10_000 })
+        .toBeGreaterThan(socketsBeforeReconnect);
+      await gateway.setOnline(true);
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const app = document.querySelector("openclaw-app") as HTMLElement & {
+              runtime?: { context: { gateway: { snapshot: { phase: string } } } };
+            };
+            return app.runtime?.context.gateway.snapshot.phase;
+          }),
+        )
+        .toBe("connected");
+      await page.evaluate((selectedSessionKey) => {
+        const pane = document.querySelector("openclaw-chat-pane") as unknown as HTMLElement & {
+          state: { chatMessages: unknown[]; chatMessagesBySession: Map<string, unknown> };
+          switchPaneSession: (sessionKey: string) => void;
+        };
+        pane.state.chatMessages = [];
+        pane.state.chatMessagesBySession.clear();
+        pane.switchPaneSession("agent:main:temporary-session");
+        pane.switchPaneSession(selectedSessionKey);
+      }, sessionKey);
+      if (captureUiProofEnabled) {
+        await mkdir(reconnectProofArtifactDir, { recursive: true });
+        await page.screenshot({
+          path: path.join(reconnectProofArtifactDir, "reconnected-session.png"),
+          fullPage: true,
+        });
+      }
+
+      await expect.poll(() => page.locator(".chat-group.user").textContent()).toContain(message);
+      await expect.poll(() => page.locator(".chat-group.user").count()).toBe(1);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("reconciles an image-bearing initial prompt into one user row", async () => {
     const context = await browser.newContext({
       locale: "en-US",
@@ -216,7 +420,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     const sessionKey = "agent:main:single-image-prompt";
     const message = "testing if dual prompts show";
     const gateway = await installMockGateway(page, {
-      deferredMethods: ["chat.history"],
+      deferredMethods: ["chat.startup"],
       methodResponses: {
         "sessions.create": {
           key: sessionKey,
@@ -224,7 +428,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
           runStarted: true,
           messageSeq: 1,
         },
-        "chat.history": {
+        "chat.startup": {
           messages: [
             {
               role: "user",
@@ -254,10 +458,10 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await composer.fill(message);
       await pastePng(composer);
       await page.getByRole("button", { name: "Start thread" }).click();
-      await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
+      await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
         timeout: 30_000,
       });
-      await gateway.waitForRequest("chat.history");
+      await gateway.waitForRequest("chat.startup");
 
       const userRow = page.locator(".chat-group.user");
       const userImage = userRow.locator("img.chat-message-image");
@@ -269,7 +473,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await expect.poll(() => userRow.textContent()).toContain(message);
       await expect.poll(() => userRow.textContent()).not.toContain("Attached image");
 
-      await gateway.resolveDeferred("chat.history");
+      await gateway.resolveDeferred("chat.startup");
 
       await expect.poll(() => userRow.count()).toBe(1);
       await expect.poll(() => userImage.count()).toBe(1);
@@ -506,7 +710,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
       await page.getByRole("button", { name: "Start thread" }).click();
       await page.waitForURL(
-        (url) => url.searchParams.get("session") === "agent:main:preview-cleanup",
+        (url) => url.pathname === controlUiSessionPath("agent:main:preview-cleanup"),
       );
       await expect.poll(async () => await proof()).toEqual({ created: 4, revoked: 4 });
     } finally {
@@ -578,6 +782,634 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         message: "use this model",
         model: "anthropic/claude-sonnet-4-6",
       });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("restores valid preferences and repairs a worktree rejected by workspace metadata", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      workspaceGit: true,
+      models: [
+        { id: "gpt-5.5", name: "GPT 5.5", provider: "openai" },
+        {
+          id: "claude-sonnet-4-6",
+          name: "Claude Sonnet 4.6",
+          provider: "anthropic",
+        },
+      ],
+      methodResponses: {
+        "agents.list": {
+          agents: [
+            {
+              id: "main",
+              identity: { name: "Main" },
+              name: "Main",
+              workspace: WORKSPACE,
+              workspaceGit: true,
+            },
+          ],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+        },
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+          repositoryStatus: "git",
+        },
+        "fs.listDir": {
+          cases: [
+            {
+              match: { path: WORKSPACE },
+              response: {
+                path: WORKSPACE,
+                parent: "/home/peter",
+                home: "/home/peter",
+                entries: [{ name: "packages", path: PICKED }],
+              },
+            },
+            {
+              match: { path: PICKED },
+              response: {
+                path: PICKED,
+                parent: WORKSPACE,
+                home: "/home/peter",
+                entries: [],
+              },
+            },
+          ],
+        },
+      },
+    });
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      const placeTrigger = page.locator("#new-session-place-trigger");
+      await choosePackagesFolder(page);
+      await placeTrigger.click();
+      await page.getByRole("button", { name: "Worktree" }).click();
+      await page.keyboard.press("Escape");
+
+      const modelSelect = page.locator('[data-chat-model-select="true"]');
+      await modelSelect.click();
+      await page.locator('[data-chat-model-provider="anthropic"]').click();
+      await page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
+      const thinkingSlider = page.locator('[data-chat-thinking-slider="true"]');
+      await thinkingSlider.press("End");
+      await expect.poll(() => modelSelect.getAttribute("data-chat-thinking-value")).toBe("high");
+
+      await page.goto(`${server.baseUrl}new`);
+      await expect
+        .poll(() => placeTrigger.locator(".new-session-page__trigger-label").textContent())
+        .toBe("packages");
+      await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("true");
+      await expect
+        .poll(() => modelSelect.getAttribute("data-chat-select-value"))
+        .toBe("anthropic/claude-sonnet-4-6");
+      await expect.poll(() => modelSelect.getAttribute("data-chat-thinking-value")).toBe("high");
+      await captureUiProof(page, "new-session-preferences-restored.png");
+
+      const branchRequests = await gateway.getRequests("worktrees.branches");
+      expect(branchRequests.at(-1)?.params).toMatchObject({ repoRoot: PICKED });
+
+      await page.evaluate((workspace) => {
+        const key = Array.from({ length: localStorage.length }, (_, index) =>
+          localStorage.key(index),
+        ).find((candidate) => candidate?.startsWith("openclaw.new-session.preferences.v1:"));
+        if (!key) {
+          throw new Error("missing new-session preference");
+        }
+        const value = JSON.parse(localStorage.getItem(key) ?? "null") as {
+          agents?: Record<string, { folder?: string; workspace?: string }>;
+        };
+        const main = value.agents?.main;
+        if (!main) {
+          throw new Error("missing main-agent preference");
+        }
+        main.folder = workspace;
+        main.workspace = workspace;
+        localStorage.setItem(key, JSON.stringify(value));
+      }, WORKSPACE);
+      await gateway.setMethodResponse("agents.list", {
+        agents: [
+          {
+            id: "main",
+            identity: { name: "Main" },
+            name: "Main",
+            workspace: WORKSPACE,
+            workspaceGit: false,
+          },
+        ],
+        defaultId: "main",
+        mainKey: "main",
+        scope: "agent",
+      });
+      await page.reload();
+      await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("false");
+      const storedWorktree = await page.evaluate(() => {
+        const key = Array.from({ length: localStorage.length }, (_, index) =>
+          localStorage.key(index),
+        ).find((candidate) => candidate?.startsWith("openclaw.new-session.preferences.v1:"));
+        const value = key
+          ? (JSON.parse(localStorage.getItem(key) ?? "null") as {
+              agents?: Record<string, { worktree?: boolean }>;
+            } | null)
+          : null;
+        return value?.agents?.main?.worktree;
+      });
+      expect(storedWorktree).toBe(false);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("blocks an immediate submit until remembered model and worktree choices validate", async () => {
+    const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const models = [
+      { id: "gpt-5.5", name: "GPT 5.5", provider: "openai" },
+      {
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
+        provider: "anthropic",
+      },
+    ];
+    const branches = {
+      branches: [{ kind: "local", name: "main" }],
+      defaultBranch: "main",
+      repositoryStatus: "git",
+    };
+    const gateway = await installMockGateway(page, {
+      workspaceGit: true,
+      models,
+      methodResponses: {
+        "agents.list": {
+          agents: [
+            {
+              id: "main",
+              identity: { name: "Main" },
+              name: "Main",
+              workspace: WORKSPACE,
+              workspaceGit: true,
+            },
+          ],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+        },
+        "worktrees.branches": branches,
+        "fs.listDir": {
+          cases: [
+            {
+              match: { path: WORKSPACE },
+              response: {
+                path: WORKSPACE,
+                parent: "/home/peter",
+                home: "/home/peter",
+                entries: [{ name: "packages", path: PICKED }],
+              },
+            },
+            {
+              match: { path: PICKED },
+              response: { path: PICKED, parent: WORKSPACE, home: "/home/peter", entries: [] },
+            },
+          ],
+        },
+        "sessions.create": { key: "agent:main:restored-fast-submit", runStarted: true },
+      },
+    });
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      await choosePackagesFolder(page);
+      const placeTrigger = page.locator("#new-session-place-trigger");
+      await placeTrigger.click();
+      await page.getByRole("button", { name: "Worktree" }).click();
+      await page.keyboard.press("Escape");
+      const modelSelect = page.locator('[data-chat-model-select="true"]');
+      await modelSelect.click();
+      await page.locator('[data-chat-model-provider="anthropic"]').click();
+      await page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
+
+      await navigateInApp(page, "chat");
+      await waitForCommittedChatRoute(page);
+      const metadataRequests = (await gateway.getRequests("chat.metadata")).length;
+      const branchRequests = (await gateway.getRequests("worktrees.branches")).length;
+      await gateway.deferNext("chat.metadata");
+      await gateway.deferNext("worktrees.branches");
+      await navigateInApp(page, "new-session");
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
+      await expect
+        .poll(async () => (await gateway.getRequests("chat.metadata")).length)
+        .toBe(metadataRequests + 1);
+      await expect
+        .poll(async () => (await gateway.getRequests("worktrees.branches")).length)
+        .toBe(branchRequests + 1);
+
+      await page.locator(".new-session-page__message").fill("keep both remembered choices");
+      const start = page.getByRole("button", { name: "Start thread" });
+      await expect.poll(() => start.isDisabled()).toBe(true);
+
+      await gateway.resolveDeferred("chat.metadata", { models });
+      await expect.poll(() => start.isDisabled()).toBe(true);
+      await gateway.rejectDeferred("worktrees.branches", {
+        code: "UNAVAILABLE",
+        message: "branch lookup unavailable",
+      });
+      // A failed lookup disables the worktree toggle, so restoring the stored
+      // choice would strand the draft behind a control the user cannot clear.
+      // The draft drops it and stays submittable; storage keeps the preference.
+      await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("false");
+      await expect.poll(() => start.isDisabled()).toBe(false);
+
+      await page.reload();
+      await page.locator(".new-session-page__message").fill("keep both remembered choices");
+      await expect
+        .poll(() => modelSelect.getAttribute("data-chat-select-value"))
+        .toBe("anthropic/claude-sonnet-4-6");
+      await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("true");
+      await expect.poll(() => start.isDisabled()).toBe(false);
+      await start.click();
+
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({
+        cwd: PICKED,
+        message: "keep both remembered choices",
+        model: "anthropic/claude-sonnet-4-6",
+        worktree: true,
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("repairs a remembered default folder when the agent workspace moves", async () => {
+    const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      workspaceGit: true,
+      models: [
+        { id: "gpt-5.5", name: "GPT 5.5", provider: "openai" },
+        {
+          id: "claude-sonnet-4-6",
+          name: "Claude Sonnet 4.6",
+          provider: "anthropic",
+        },
+      ],
+      methodResponses: {
+        "agents.list": {
+          agents: [
+            {
+              id: "main",
+              identity: { name: "Main" },
+              name: "Main",
+              workspace: WORKSPACE,
+              workspaceGit: true,
+            },
+          ],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+        },
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+          repositoryStatus: "git",
+        },
+        "fs.listDir": {
+          path: WORKSPACE,
+          parent: "/home/peter",
+          home: "/home/peter",
+          entries: [],
+        },
+      },
+    });
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      const placeTrigger = page.locator("#new-session-place-trigger");
+      await placeTrigger.click();
+      await page.getByRole("button", { name: "Browse folders" }).click();
+      await page.getByRole("button", { name: "Use this folder" }).click();
+      await navigateInApp(page, "chat");
+      await page.waitForURL((url) => url.pathname.endsWith("/chat"));
+
+      await gateway.setMethodResponse("agents.list", {
+        agents: [
+          {
+            id: "main",
+            identity: { name: "Main" },
+            name: "Main",
+            workspace: MOVED_WORKSPACE,
+            workspaceGit: true,
+          },
+        ],
+        defaultId: "main",
+        mainKey: "main",
+        scope: "agent",
+      });
+      await page.reload();
+      await navigateInApp(page, "new-session");
+      await expect
+        .poll(() => placeTrigger.locator(".new-session-page__trigger-label").textContent())
+        .toBe("openclaw-next");
+
+      const modelSelect = page.locator('[data-chat-model-select="true"]');
+      await modelSelect.click();
+      await page.locator('[data-chat-model-provider="anthropic"]').click();
+      await page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
+      const storedPreference = await page.evaluate(() => {
+        const key = Array.from({ length: localStorage.length }, (_, index) =>
+          localStorage.key(index),
+        ).find((candidate) => candidate?.startsWith("openclaw.new-session.preferences.v1:"));
+        if (!key) {
+          return null;
+        }
+        const value = JSON.parse(localStorage.getItem(key) ?? "null") as {
+          agents?: Record<string, unknown>;
+        } | null;
+        return value?.agents?.main ?? null;
+      });
+      expect(storedPreference).toMatchObject({
+        workspace: MOVED_WORKSPACE,
+        folder: MOVED_WORKSPACE,
+        model: "anthropic/claude-sonnet-4-6",
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("falls back to the current workspace when the remembered folder is gone", async () => {
+    const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      workspace: WORKSPACE,
+      workspaceGit: true,
+      methodResponses: {
+        "agents.list": {
+          agents: [
+            {
+              id: "main",
+              identity: { name: "Main" },
+              name: "Main",
+              workspace: WORKSPACE,
+              workspaceGit: true,
+            },
+          ],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+        },
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+          repositoryStatus: "git",
+        },
+        "fs.listDir": {
+          cases: [
+            {
+              match: { path: WORKSPACE },
+              response: {
+                path: WORKSPACE,
+                parent: "/home/peter",
+                home: "/home/peter",
+                entries: [{ name: "packages", path: PICKED }],
+              },
+            },
+            {
+              match: { path: PICKED },
+              response: { path: PICKED, parent: WORKSPACE, home: "/home/peter", entries: [] },
+            },
+          ],
+        },
+        "sessions.create": { key: "agent:main:stale-folder-fallback", runStarted: true },
+      },
+    });
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      await choosePackagesFolder(page);
+
+      await navigateInApp(page, "chat");
+      await waitForCommittedChatRoute(page);
+      const validationRequests = (await gateway.getRequests("fs.listDir")).length;
+      await gateway.deferNext("fs.listDir");
+      await navigateInApp(page, "new-session");
+      await expect
+        .poll(async () => (await gateway.getRequests("fs.listDir")).length)
+        .toBeGreaterThan(validationRequests);
+      const message = page.locator(".new-session-page__message");
+      await message.fill("use a safe folder");
+      await expect
+        .poll(() => page.getByRole("button", { name: "Start thread" }).isDisabled())
+        .toBe(true);
+
+      await gateway.rejectDeferred("fs.listDir", {
+        code: "INVALID_REQUEST",
+        message: `Error: ENOENT: no such file or directory, scandir '${PICKED}'`,
+      });
+      const placeTrigger = page.locator("#new-session-place-trigger");
+      await expect
+        .poll(() => placeTrigger.locator(".new-session-page__trigger-label").textContent())
+        .toBe("openclaw");
+
+      const pickedListRequests = (await gateway.getRequests("fs.listDir")).filter(
+        (request) =>
+          typeof request.params === "object" &&
+          request.params != null &&
+          "path" in request.params &&
+          request.params.path === PICKED,
+      ).length;
+      await navigateInApp(page, "chat");
+      await waitForCommittedChatRoute(page);
+      await navigateInApp(page, "new-session");
+      await expect
+        .poll(() => placeTrigger.locator(".new-session-page__trigger-label").textContent())
+        .toBe("openclaw");
+      await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("false");
+      await expect
+        .poll(
+          async () =>
+            (await gateway.getRequests("fs.listDir")).filter(
+              (request) =>
+                typeof request.params === "object" &&
+                request.params != null &&
+                "path" in request.params &&
+                request.params.path === PICKED,
+            ).length,
+        )
+        .toBe(pickedListRequests);
+
+      await message.fill("use the repaired preference");
+      await expect
+        .poll(() => page.getByRole("button", { name: "Start thread" }).isDisabled())
+        .toBe(false);
+      await page.getByRole("button", { name: "Start thread" }).click();
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).not.toHaveProperty("cwd");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps a newer folder choice when remembered-folder validation finishes late", async () => {
+    const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      workspace: WORKSPACE,
+      workspaceGit: true,
+      methodResponses: {
+        "agents.list": {
+          agents: [
+            {
+              id: "main",
+              identity: { name: "Main" },
+              name: "Main",
+              workspace: WORKSPACE,
+              workspaceGit: true,
+            },
+          ],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+        },
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+          repositoryStatus: "git",
+        },
+        "fs.listDir": {
+          cases: [
+            {
+              match: { path: WORKSPACE },
+              response: {
+                path: WORKSPACE,
+                parent: "/home/peter",
+                home: "/home/peter",
+                entries: [{ name: "packages", path: PICKED }],
+              },
+            },
+            {
+              match: { path: PICKED },
+              response: { path: PICKED, parent: WORKSPACE, home: "/home/peter", entries: [] },
+            },
+          ],
+        },
+        "sessions.create": { key: "agent:main:newer-folder-wins", runStarted: true },
+      },
+    });
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      await choosePackagesFolder(page);
+
+      await navigateInApp(page, "chat");
+      await waitForCommittedChatRoute(page);
+      const validationRequests = (await gateway.getRequests("fs.listDir")).length;
+      await gateway.deferNext("fs.listDir");
+      await navigateInApp(page, "new-session");
+      await expect
+        .poll(async () => (await gateway.getRequests("fs.listDir")).length)
+        .toBeGreaterThan(validationRequests);
+
+      const placeTrigger = page.locator("#new-session-place-trigger");
+      await placeTrigger.click();
+      await page
+        .locator('wa-popover.new-session-page__place-popover [data-value="workspace"]')
+        .click();
+      await gateway.resolveDeferred("fs.listDir", {
+        path: PICKED,
+        parent: WORKSPACE,
+        home: "/home/peter",
+        entries: [],
+      });
+      await expect
+        .poll(() => placeTrigger.locator(".new-session-page__trigger-label").textContent())
+        .toBe("openclaw");
+
+      await page.locator(".new-session-page__message").fill("keep the newer choice");
+      await page.getByRole("button", { name: "Start thread" }).click();
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).not.toHaveProperty("cwd");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps a folder chosen before the agent roster finishes loading submit-ready", async () => {
+    const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["agents.list"],
+      workspaceGit: true,
+      methodResponses: {
+        "agents.list": {
+          agents: [
+            {
+              id: "main",
+              identity: { name: "Main" },
+              name: "Main",
+              workspace: WORKSPACE,
+              workspaceGit: true,
+            },
+          ],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+        },
+        "fs.listDir": { path: TARGET_REPO, home: "/home/peter", entries: [] },
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+          repositoryStatus: "git",
+        },
+      },
+    });
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      const trigger = page.locator("#new-session-place-trigger");
+      await trigger.click();
+      await page.getByRole("button", { name: "Browse folders" }).click();
+      await page.locator("input.new-session-page__browser-path").fill(TARGET_REPO);
+      await page.getByRole("button", { name: "Use this folder" }).click();
+      await gateway.resolveDeferred("agents.list", {
+        agents: [
+          {
+            id: "main",
+            identity: { name: "Main" },
+            name: "Main",
+            workspace: WORKSPACE,
+            workspaceGit: true,
+          },
+        ],
+        defaultId: "main",
+        mainKey: "main",
+        scope: "agent",
+      });
+
+      await page.locator(".new-session-page__message").fill("keep my early folder choice");
+      await expect
+        .poll(() => page.getByRole("button", { name: "Start thread" }).isDisabled())
+        .toBe(false);
+      await expect
+        .poll(() => trigger.locator(".new-session-page__trigger-label").textContent())
+        .toContain("target-repo");
+      const storedPreference = await page.evaluate(() => {
+        const key = Array.from({ length: localStorage.length }, (_, index) =>
+          localStorage.key(index),
+        ).find((candidate) => candidate?.startsWith("openclaw.new-session.preferences.v1:"));
+        if (!key) {
+          return null;
+        }
+        const value = JSON.parse(localStorage.getItem(key) ?? "null") as {
+          agents?: Record<string, unknown>;
+        } | null;
+        return value?.agents?.main ?? null;
+      });
+      expect(storedPreference).toMatchObject({ folder: TARGET_REPO });
     } finally {
       await context.close();
     }
@@ -760,8 +1592,8 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       });
 
       await expect
-        .poll(() => new URL(page.url()).search)
-        .toContain(`session=${encodeURIComponent("agent:main:draft-e2e")}`);
+        .poll(() => new URL(page.url()).pathname)
+        .toBe(controlUiSessionPath("agent:main:draft-e2e"));
     } finally {
       await context.close();
     }
@@ -1416,9 +2248,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         ts: Date.now(),
       });
       await gateway.emitGatewayEvent("sessions.changed", { sessionKey, reason: "dispatch" });
-      await page.goto(
-        `${server.baseUrl}chat?session=${encodeURIComponent("agent:cloud:neutral-e2e")}`,
-      );
+      await page.goto(controlUiSessionUrl(server.baseUrl, "agent:cloud:neutral-e2e"));
       const managedSessionKey = "agent:cloud:managed-e2e";
       const sessionRow = page.locator(`[data-session-key="${managedSessionKey}"]`);
       const localSessionRow = page.locator('[data-session-key="agent:cloud:local-e2e"]');
@@ -1657,7 +2487,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         message,
       });
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-      await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
+      await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
         timeout: 30_000,
       });
     } finally {
@@ -1845,6 +2675,9 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await page.getByRole("button", { name: "Start thread" }).click();
       const firstCreate = await gateway.waitForRequest("sessions.create");
       const firstKey = (firstCreate.params as { key?: string }).key;
+      if (!firstKey) {
+        throw new Error("expected the first recovery create to include a session key");
+      }
       expect(firstKey).toMatch(/^agent:cloud:dashboard:/);
 
       await page.reload();
@@ -1863,7 +2696,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       expect(await gateway.waitForRequest("sessions.send")).toMatchObject({
         params: { key: firstKey, agentId: "cloud", message },
       });
-      await page.waitForURL((url) => url.searchParams.get("session") === firstKey, {
+      await page.waitForURL((url) => url.pathname === controlUiSessionPath(firstKey), {
         timeout: 30_000,
       });
     } finally {
@@ -2063,7 +2896,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         .poll(async () => (await gateway.getRequests("environments.list")).length)
         .toBeGreaterThan(profileRequests);
       await page.getByRole("button", { name: "Start thread" }).click();
-      await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
+      await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
         timeout: 30_000,
       });
 
@@ -2235,9 +3068,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         agentId: "main",
         message: "create during refresh",
       });
-      await expect
-        .poll(() => new URL(page.url()).search)
-        .toContain(`session=${encodeURIComponent(sessionKey)}`);
+      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionKey));
 
       await gateway.resolveDeferred("sessions.list", listResponse);
     } finally {
@@ -2613,6 +3444,18 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         .toBe(branchRequests + 1);
 
       await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("false");
+      const storedWorktree = await page.evaluate(() => {
+        const key = Array.from({ length: localStorage.length }, (_, index) =>
+          localStorage.key(index),
+        ).find((candidate) => candidate?.startsWith("openclaw.new-session.preferences.v1:"));
+        const value = key
+          ? (JSON.parse(localStorage.getItem(key) ?? "null") as {
+              agents?: Record<string, { worktree?: boolean }>;
+            } | null)
+          : null;
+        return value?.agents?.main?.worktree;
+      });
+      expect(storedWorktree).toBe(false);
       await trigger.click();
       expect(await place.getByRole("button", { name: "Worktree" }).count()).toBe(0);
       await page.keyboard.press("Escape");
@@ -3048,7 +3891,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
             "The Gateway changed while this thread was starting. Check recent threads before starting this task again.",
           )
           .waitFor();
-        expect(new URL(page.url()).searchParams.get("session")).toBeNull();
+        expect(new URL(page.url()).pathname).toBe("/new");
         expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
       } finally {
         await context.close();
@@ -3228,7 +4071,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await expect.poll(async () => (await gateway.getRequests("sessions.create")).length).toBe(2);
       const retry = (await gateway.getRequests("sessions.create")).at(-1);
       expect(retry?.params).toMatchObject({ message: submittedMessage });
-      await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
+      await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
         timeout: 30_000,
       });
     } finally {
@@ -3308,7 +4151,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
       });
 
-      await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
+      await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
         timeout: 30_000,
       });
       await expect
@@ -3382,7 +4225,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await pastePng(composer);
       await page.getByRole("button", { name: "Start thread" }).click();
 
-      await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
+      await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
         timeout: 30_000,
       });
       await expect
@@ -3421,6 +4264,13 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
               identity: { name: "Main" },
               name: "Main",
               workspace: WORKSPACE,
+              workspaceGit: true,
+            },
+            {
+              id: "research",
+              identity: { name: "Research" },
+              name: "Research",
+              workspace: "/home/peter/research",
               workspaceGit: true,
             },
           ],
@@ -3533,11 +4383,22 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       // Using a node folder retargets the draft to that node.
       await expect.poll(() => placeLabel.textContent()).toBe("Projects · MacBook");
 
+      // A node cwd belongs to the selected agent's draft and must not leak
+      // across an agent change, even though the execution node stays selected.
+      const agentPicker = page.locator(".new-session-page__select--agent openclaw-agent-select");
+      await agentPicker.locator(".agent-select__trigger").click();
+      await agentPicker
+        .locator("wa-dropdown-item[data-agent-option]")
+        .filter({ hasText: "Research" })
+        .click();
+      await page.getByRole("heading", { name: "Research" }).waitFor();
+      await expect.poll(() => placeLabel.textContent()).toBe("Agent workspace · MacBook");
+
       // Clearing the path applies the node's default directory (empty folder),
       // the state the replaced clearable folder textbox could express.
       await placeTrigger.click();
       await placeSelect.getByRole("button", { name: "Browse folders" }).click();
-      await expect.poll(() => pathInput.inputValue()).toBe(NODE_PICKED);
+      await expect.poll(() => pathInput.inputValue()).toBe(NODE_HOME);
       await pathInput.fill("");
       await page.getByRole("button", { name: "Use this folder" }).click();
       await expect.poll(() => placeLabel.textContent()).toBe("Agent workspace · MacBook");
@@ -3569,7 +4430,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await page.getByRole("button", { name: "Start thread" }).click();
       const createRequest = await gateway.waitForRequest("sessions.create");
       expect(createRequest.params).toMatchObject({
-        agentId: "main",
+        agentId: "research",
         message: "inspect the remote checkout",
         execNode: "old-node",
         cwd: EXEC_ONLY_PICKED,

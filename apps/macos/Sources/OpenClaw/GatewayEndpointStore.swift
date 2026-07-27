@@ -596,10 +596,6 @@ actor GatewayEndpointStore {
         return port
     }
 
-    func requireConfig() async throws -> GatewayConnection.Config {
-        try await self.requireEndpoint().config
-    }
-
     /// Returns endpoint credentials and tunnel authority from the same actor
     /// snapshot. Callers must never stitch these values together across awaits.
     func requireEndpoint() async throws -> GatewayConnection.EndpointSnapshot {

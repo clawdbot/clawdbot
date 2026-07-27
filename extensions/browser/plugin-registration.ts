@@ -14,13 +14,14 @@ import type {
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { isBrowserMachineOutput } from "./cli-output-mode.js";
 import {
   BROWSER_REQUEST_GATEWAY_METHOD,
   BROWSER_REQUEST_GATEWAY_SCOPE,
 } from "./src/browser-gateway-contract.js";
 import { parseBrowserTabToolBinding } from "./src/browser-tool-binding.js";
 import { describeBrowserTool } from "./src/browser-tool-description.js";
-import { BrowserToolSchema } from "./src/browser-tool.schema.js";
+import { BrowserToolOutputSchema, BrowserToolSchema } from "./src/browser-tool.schema.js";
 import { initializeBrowserSessionTabStore } from "./src/browser/session-tab-store.js";
 import {
   configureSystemProfileImportStateStore,
@@ -57,6 +58,7 @@ const BROWSER_CLI_DESCRIPTOR = {
   name: "browser",
   description: "Manage OpenClaw's dedicated browser (Chrome/Chromium)",
   hasSubcommands: true,
+  machineOutput: isBrowserMachineOutput,
 };
 
 function createLazyBrowserTool(opts?: {
@@ -92,6 +94,7 @@ function createLazyBrowserTool(opts?: {
     name: "browser",
     description: describeBrowserTool({ targetDefault, hostHint }),
     parameters: BrowserToolSchema,
+    outputSchema: BrowserToolOutputSchema,
     execute: async (toolCallId, args, signal, onUpdate) => {
       const { createBrowserTool } = await loadBrowserRegistrationRuntimeModule();
       const tool = createBrowserTool(

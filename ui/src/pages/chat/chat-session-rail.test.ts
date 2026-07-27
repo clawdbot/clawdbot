@@ -204,7 +204,7 @@ describe("ChatSessionRailElement", () => {
   });
 
   async function mount(overrides: Partial<ChatSessionRailElement> = {}) {
-    const element = new ChatSessionRailElement();
+    const element = document.createElement("openclaw-chat-session-rail") as ChatSessionRailElement;
     element.sessionKey = "agent:main:run";
     element.digest = digest();
     element.running = true;

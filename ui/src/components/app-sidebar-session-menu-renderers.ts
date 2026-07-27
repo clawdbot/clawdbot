@@ -94,7 +94,10 @@ export function renderSidebarCatalogViewMenu(params: {
   position: { x: number; y: number } | null;
   trigger: HTMLElement | null;
   grouping: CatalogProjectGrouping;
+  creators: readonly SessionCreatorOption[];
+  creatorFilterId: string | null;
   onGroupingChange: (grouping: CatalogProjectGrouping) => void;
+  onCreatorFilterChange: (creatorId: string | null) => void;
   onClose: (restoreFocus: boolean) => void;
 }) {
   const position = params.position;
@@ -103,6 +106,7 @@ export function renderSidebarCatalogViewMenu(params: {
   }
   const groupingOptions = [
     { grouping: "project", label: t("chat.sidebar.catalogGroupByProject") },
+    { grouping: "person", label: t("chat.sidebar.catalogGroupByPerson") },
     { grouping: "none", label: t("sessionsView.groupByNone") },
   ] as const satisfies ReadonlyArray<{ grouping: CatalogProjectGrouping; label: string }>;
   return keyed(
@@ -120,6 +124,8 @@ export function renderSidebarCatalogViewMenu(params: {
             const value = event.detail.item.value;
             if (value?.startsWith("grouping:")) {
               params.onGroupingChange(value.slice("grouping:".length) as CatalogProjectGrouping);
+            } else if (value?.startsWith("creator:")) {
+              params.onCreatorFilterChange(value.slice("creator:".length) || null);
             }
           }}
           @keydown=${(event: KeyboardEvent) =>
@@ -154,6 +160,45 @@ export function renderSidebarCatalogViewMenu(params: {
               </wa-dropdown-item>
             `,
           )}
+          ${params.creators.length >= 2
+            ? html`
+                <div class="session-menu__separator" role="separator"></div>
+                <div class="sidebar-session-sort-menu__title">${t("sessionsView.people")}</div>
+                <wa-dropdown-item
+                  class="sidebar-session-sort-menu__item"
+                  value="creator:"
+                  role="menuitemradio"
+                  aria-checked=${String(params.creatorFilterId === null)}
+                  ${ref((element) =>
+                    syncDropdownItemRadio(element, params.creatorFilterId === null),
+                  )}
+                >
+                  <span slot="details" class="session-menu__check" aria-hidden="true"
+                    >${params.creatorFilterId === null ? icons.check : nothing}</span
+                  >
+                  <span class="session-menu__text">${t("sessionsView.allCreators")}</span>
+                </wa-dropdown-item>
+                ${params.creators.map(
+                  (creator) => html`
+                    <wa-dropdown-item
+                      class="sidebar-session-sort-menu__item"
+                      value=${`creator:${creator.id}`}
+                      role="menuitemradio"
+                      aria-checked=${String(params.creatorFilterId === creator.id)}
+                      ${ref((element) =>
+                        syncDropdownItemRadio(element, params.creatorFilterId === creator.id),
+                      )}
+                    >
+                      <span slot="details" class="session-menu__check" aria-hidden="true"
+                        >${params.creatorFilterId === creator.id ? icons.check : nothing}</span
+                      >
+                      ${renderSessionOwnerChip(creator, "row")}
+                      <span class="session-menu__text">${creator.label ?? creator.id}</span>
+                    </wa-dropdown-item>
+                  `,
+                )}
+              `
+            : nothing}
         </wa-dropdown>
       </openclaw-menu-surface>
     `,

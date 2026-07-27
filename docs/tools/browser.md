@@ -108,6 +108,11 @@ returns only the answer; keep `snapshot` for choosing actions and obtaining
 refs. Extraction requires a Playwright-backed profile and falls back to a
 snapshot workflow when it cannot complete.
 
+On large pages, pass `selector` to capture only the relevant CSS subtree and
+`ignoreSelectors` to remove repeated chrome before conversion. Pass a JSON
+`schema` when the caller needs validated machine-usable fields in
+`details.json`; without it, extraction remains a free-text answer.
+
 ## Missing browser command or tool
 
 If `openclaw browser` is unknown after an upgrade, `browser.request` is missing, or the agent reports the browser tool as unavailable, the usual cause is a `plugins.allow` list that omits `browser` and no root `browser` config block exists. Add it:

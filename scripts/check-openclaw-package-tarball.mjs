@@ -328,7 +328,10 @@ const PACKAGE_INSTALL_GUARD_RELATIVE_PATH = "dist/openclaw-install-guard";
 const REQUIRED_TARBALL_ENTRY_PREFIXES = ["dist/control-ui/assets/"];
 const LEGACY_PACKAGE_ACCEPTANCE_COMPAT_MAX = { year: 2026, month: 4, day: 25 };
 const LEGACY_LOCAL_BUILD_METADATA_COMPAT_MAX = { year: 2026, month: 4, day: 26 };
-const LEGACY_SHRINKWRAP_COMPAT_MAX = { year: 2026, month: 5, day: 20 };
+const LEGACY_SHRINKWRAP_OMISSION_COMPAT_MAX = { year: 2026, month: 5, day: 20 };
+// 2026.7.2-beta.4 is the last published artifact known to ship shrinkwrap.
+// The whole 2026.7.2 train is transitional; later trains must be lockless.
+const NPM_SHRINKWRAP_TRANSITION_TRAIN = { year: 2026, month: 7, day: 2 };
 // 2026.7.1 shipped before the guard existed. Historical inspection may still check it.
 const LEGACY_INSTALL_GUARD_COMPAT_MAX = { year: 2026, month: 7, day: 1 };
 const FORBIDDEN_LOCAL_BUILD_METADATA_FILES = new Set(LOCAL_BUILD_METADATA_DIST_PATHS);
@@ -393,14 +396,19 @@ function isLegacyLocalBuildMetadataCompatVersion(version) {
   return parsed ? compareCalver(parsed, LEGACY_LOCAL_BUILD_METADATA_COMPAT_MAX) <= 0 : false;
 }
 
-function isLegacyShrinkwrapCompatVersion(version) {
-  const parsed = parseCalver(version);
-  return parsed ? compareCalver(parsed, LEGACY_SHRINKWRAP_COMPAT_MAX) <= 0 : false;
-}
-
 function isLegacyInstallGuardCompatVersion(version) {
   const parsed = parseCalver(version);
   return parsed ? compareCalver(parsed, LEGACY_INSTALL_GUARD_COMPAT_MAX) <= 0 : false;
+}
+
+function isLegacyShrinkwrapOmissionCompatVersion(version) {
+  const parsed = parseCalver(version);
+  return parsed ? compareCalver(parsed, LEGACY_SHRINKWRAP_OMISSION_COMPAT_MAX) <= 0 : false;
+}
+
+function compareNpmShrinkwrapTransitionTrain(version) {
+  const parsed = parseCalver(version);
+  return parsed ? compareCalver(parsed, NPM_SHRINKWRAP_TRANSITION_TRAIN) : null;
 }
 
 function readTarEntry(entryPath) {
@@ -467,22 +475,32 @@ if (entrySet.has("package.json")) {
   }
 }
 if (entrySet.has("package-lock.json")) {
-  errors.push("package tarball must ship npm-shrinkwrap.json, not package-lock.json");
+  errors.push("package tarball must not contain package-lock.json");
 }
-if (!entrySet.has(PACKAGE_INSTALL_GUARD_RELATIVE_PATH)) {
-  if (isLegacyInstallGuardCompatVersion(packageVersion)) {
-    warnings.push("legacy package omits the preinstall completion guard");
-  } else {
-    errors.push(`missing required tar entry ${PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`);
+const shrinkwrapTransitionComparison = compareNpmShrinkwrapTransitionTrain(packageVersion);
+const hasShrinkwrap = entrySet.has("npm-shrinkwrap.json");
+let shouldValidateShrinkwrap = false;
+if (shrinkwrapTransitionComparison !== null && shrinkwrapTransitionComparison > 0) {
+  if (hasShrinkwrap) {
+    errors.push("package tarball must not contain npm-shrinkwrap.json");
   }
-}
-if (!entrySet.has("npm-shrinkwrap.json")) {
-  if (isLegacyShrinkwrapCompatVersion(packageVersion)) {
+} else if (shrinkwrapTransitionComparison === 0) {
+  if (hasShrinkwrap) {
+    warnings.push(
+      "2026.7.2 transition package contains npm-shrinkwrap.json from the published beta train",
+    );
+    shouldValidateShrinkwrap = true;
+  }
+} else if (!hasShrinkwrap) {
+  if (isLegacyShrinkwrapOmissionCompatVersion(packageVersion)) {
     warnings.push("legacy package omits npm-shrinkwrap.json");
   } else {
-    errors.push("missing required tar entry npm-shrinkwrap.json");
+    errors.push("legacy package is missing required tar entry npm-shrinkwrap.json");
   }
 } else {
+  shouldValidateShrinkwrap = true;
+}
+if (shouldValidateShrinkwrap) {
   try {
     const shrinkwrap = JSON.parse(readTarEntry("npm-shrinkwrap.json"));
     const rootPackage = shrinkwrap.packages?.[""];
@@ -520,6 +538,13 @@ if (!entrySet.has("npm-shrinkwrap.json")) {
     errors.push(
       `unreadable npm-shrinkwrap.json: ${error instanceof Error ? error.message : String(error)}`,
     );
+  }
+}
+if (!entrySet.has(PACKAGE_INSTALL_GUARD_RELATIVE_PATH)) {
+  if (isLegacyInstallGuardCompatVersion(packageVersion)) {
+    warnings.push("legacy package omits the preinstall completion guard");
+  } else {
+    errors.push(`missing required tar entry ${PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`);
   }
 }
 for (const forbiddenEntry of FORBIDDEN_LOCAL_BUILD_METADATA_FILES) {

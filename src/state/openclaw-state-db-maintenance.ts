@@ -70,6 +70,7 @@ const STATE_V5_ADDITIVE_TABLES = [
   "worker_environment_credentials",
   "worker_transcript_commit_heads",
   "worker_transcript_commits",
+  ...LAZY_ADDITIVE_STATE_TABLES,
 ] as const;
 
 /** Open shared SQLite database handle plus WAL maintenance lifecycle. */

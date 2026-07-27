@@ -698,6 +698,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const cfg = getRuntimeConfig();
     const { storePath, store } = loadCombinedSessionStoreForGateway(cfg, {
       agentId: opts?.agentId,
+      projection: "list",
     });
     return (await listSessionsFromStoreAsync({
       cfg,

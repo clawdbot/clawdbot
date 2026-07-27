@@ -3513,6 +3513,21 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
+    func `resolve gateway HTTP url supports relative broker routes and preserves absolute providers`() {
+        let gateway = URL(string: "wss://gateway.example.com:7443")
+
+        #expect(GatewayPluginSurfaceURL.resolveHTTPURL(
+            raw: "/plugins/codex/realtime/calls",
+            against: gateway)?.absoluteString == "https://gateway.example.com:7443/plugins/codex/realtime/calls")
+        #expect(GatewayPluginSurfaceURL.resolveHTTPURL(
+            raw: "https://api.openai.com/v1/realtime/calls",
+            against: gateway)?.absoluteString == "https://api.openai.com/v1/realtime/calls")
+        #expect(GatewayPluginSurfaceURL.resolveHTTPURL(
+            raw: "wss://gateway.example.com/realtime",
+            against: gateway) == nil)
+    }
+
+    @Test
     func `gateway TLS pin applies only to the same canvas endpoint`() {
         let fingerprint = String(repeating: "ab", count: 32)
         let gateway = URL(string: "wss://gateway.example.com:7443")

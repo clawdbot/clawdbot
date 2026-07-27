@@ -145,6 +145,28 @@ describe("Workboard plugin widgets", () => {
     );
   });
 
+  it("does not render or move an archived card", async () => {
+    const archivedCard = {
+      ...cards[0],
+      title: "Archived ready card",
+      metadata: { ...cards[0].metadata, archivedAt: 10 },
+    };
+    const request = vi.fn(async () => ({
+      cards: [archivedCard],
+      statuses: ["ready", "running", "done"],
+    }));
+    const element = document.createElement("openclaw-workboard-card-widget");
+    element.widget = pluginWidget("workboard:card", { cardId: archivedCard.id });
+    element.sessionKey = "agent:main:test";
+
+    await mount(element, createContext(request), request);
+
+    expect(element.querySelector(".workboard-widget__state")).not.toBeNull();
+    expect(element.textContent).not.toContain(archivedCard.title);
+    expect(element.querySelector("select")).toBeNull();
+    expect(request).not.toHaveBeenCalledWith("workboard.cards.move", expect.anything());
+  });
+
   it("renders per-status board counts and the top ready/running cards", async () => {
     const request = vi.fn(async () => ({ cards, statuses: ["ready", "running", "done"] }));
     const element = document.createElement("openclaw-workboard-mini-widget");
@@ -161,6 +183,33 @@ describe("Workboard plugin widgets", () => {
     expect(element.textContent).toContain("Running card");
     expect(element.textContent).toContain("Ready card");
     expect(element.querySelector("a")?.getAttribute("href")).toBe("/control/workboard?board=ops");
+  });
+
+  it("excludes archived running cards from board counts and active cards", async () => {
+    const archivedCard = {
+      ...cards[1],
+      id: "card-archived",
+      title: "Archived running card",
+      metadata: { ...cards[1].metadata, archivedAt: 10 },
+    };
+    const request = vi.fn(async () => ({
+      cards: [...cards, archivedCard],
+      statuses: ["ready", "running", "done"],
+    }));
+    const element = document.createElement("openclaw-workboard-mini-widget");
+    element.widget = pluginWidget("workboard:mini", { boardId: "ops", limit: 5 });
+    element.sessionKey = "agent:main:test";
+
+    await mount(element, createContext(request), request);
+
+    const counts = [...element.querySelectorAll(".workboard-widget-mini__counts span")].map(
+      (entry) => entry.textContent?.replace(/\s+/g, " ").trim(),
+    );
+    expect(counts).toContain("1 Ready");
+    expect(counts).toContain("1 Running");
+    expect(counts).toContain("1 Done");
+    expect(element.textContent).toContain("Running card");
+    expect(element.textContent).not.toContain(archivedCard.title);
   });
 
   it("aggregates every board when no boardId prop is set", async () => {

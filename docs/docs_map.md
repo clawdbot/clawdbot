@@ -69,6 +69,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Heartbeat task migration
   - H3: Stream sources
   - H3: Dynamic cadence (pacing)
+  - H3: /loop chat shortcut
   - H3: Day-of-month and day-of-week use OR logic
   - H2: Event triggers (condition watchers)
   - H2: Payloads
@@ -291,6 +292,27 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Config schema
   - H3: Fields
   - H2: Limitations
+  - H2: Related
+
+## channels/buzz.md
+
+- Route: /channels/buzz
+- Headings:
+  - H2: What it does
+  - H2: Buzz identity and room model
+  - H2: Before you start
+  - H2: Install
+  - H2: Guided setup
+  - H3: Bot approval
+  - H2: Agent tools and messaging
+  - H3: Route rooms to different agents
+  - H2: Access control
+  - H2: Manual configuration
+  - H3: Bot key storage
+  - H2: Verify the connection
+  - H2: Rotate the bot identity
+  - H2: Current limits and roadmap
+  - H2: Troubleshooting
   - H2: Related
 
 ## channels/channel-routing.md
@@ -1258,6 +1280,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /cli/agent
 - Headings:
   - H1: openclaw agent
+  - H2: agent exec
+  - H3: agent exec options
   - H2: Options
   - H2: Examples
   - H2: Notes
@@ -2906,6 +2930,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /concepts/queue-steering
 - Headings:
   - H2: Runtime boundary
+  - H2: Why steering waits for the current batch
   - H2: Modes
   - H2: Burst example
   - H2: Scope
@@ -3404,7 +3429,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: tools.agentToAgent
   - H3: tools.sessions
   - H3: `tools.sessions_spawn`
-  - H3: tools.experimental
+  - H3: tools.updatePlan
   - H3: agents.defaults.subagents
   - H2: Custom providers and base URLs
   - H3: Provider field details
@@ -3477,7 +3502,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Bridge (legacy, removed)
   - H2: Cron
   - H3: cron.failureAlert
-  - H3: cron.failureDestination
   - H2: Media model template variables
   - H2: Config includes ($include)
   - H2: Related
@@ -4007,6 +4031,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Related
 
+## gateway/security/dependency-locking.md
+
+- Route: /gateway/security/dependency-locking
+- Headings:
+  - H2: Published package behavior
+  - H2: Validate npm dependency graphs
+  - H2: Inspect a plugin tarball
+
 ## gateway/security/exposure-runbook.md
 
 - Route: /gateway/security/exposure-runbook
@@ -4104,14 +4136,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What stays protected without Python
   - H2: What Python adds
   - H2: Plugin and core guidance
-
-## gateway/security/shrinkwrap.md
-
-- Route: /gateway/security/shrinkwrap
-- Headings:
-  - H2: Why it matters
-  - H2: Generating and checking
-  - H2: Inspecting a published package
 
 ## gateway/tailscale.md
 
@@ -5528,6 +5552,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /platforms/mac/webchat
 - Headings:
   - H2: Multiple Gateway windows
+  - H3: Gateway picker
   - H2: Quick Chat bar
   - H2: Launch and debugging
   - H2: How it is wired
@@ -5873,6 +5898,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Compatibility registry
   - H2: Deprecation policy
   - H2: Current compatibility areas
+  - H3: Channel prompt-context identifier aliases
   - H3: WhatsApp inbound callback flat aliases
   - H3: WhatsApp inbound admission fields
   - H2: Plugin inspector package
@@ -7581,6 +7607,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What changed
   - H3: Why
   - H2: Compatibility policy
+  - H3: AuthStorage SQLite migration
   - H3: Published channel setup compatibility
   - H3: Channel setup input field compatibility
   - H4: Verifying readers
@@ -8760,7 +8787,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Soul (required)
   - H2: Shared spaces (recommended)
   - H2: Memory system (recommended)
-  - H2: Tools and skills
+  - H2: Tools
+  - H3: Local notes
   - H2: Backup tip (recommended)
   - H2: What OpenClaw does
   - H2: Core skills (enable in Settings → Skills)
@@ -9036,6 +9064,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Existing solutions preflight
   - H2: Daily memory (recommended)
   - H2: Heartbeats (optional)
+  - H2: Tools
   - H2: Customize
   - H2: C-3PO Origin Memory
   - H3: Birth Day: 2026-01-09
@@ -9110,24 +9139,11 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Continuity
   - H2: Related
 
-## reference/templates/TOOLS.dev.md
-
-- Route: /reference/templates/TOOLS.dev
-- Headings:
-  - H1: TOOLS.md - User Tool Notes (editable)
-  - H2: Examples
-  - H3: imsg
-  - H3: sag
-  - H2: Related
-
 ## reference/templates/TOOLS.md
 
 - Route: /reference/templates/TOOLS
 - Headings:
-  - H1: TOOLS.md - Local Notes
-  - H2: Examples
-  - H2: Why Separate?
-  - H2: Related
+  - H1: TOOLS.md is retired
 
 ## reference/templates/USER.dev.md
 
@@ -9718,6 +9734,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /tools/browser-control
 - Headings:
   - H2: Control API (optional)
+  - H3: Page extraction
   - H3: /act error contract
   - H3: Playwright requirement
   - H4: Docker Playwright install
@@ -10450,6 +10467,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Bundled plugin commands
   - H3: Skill commands
   - H2: /tools: what the agent can use now
+  - H2: /loop: recurring conversation work
   - H2: /model: model selection
   - H2: /config: on-disk config writes
   - H2: /mcp: MCP server config
@@ -10780,6 +10798,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /web/dashboards
 - Headings:
+  - H2: Find your dashboards
   - H2: Build a dashboard by asking
   - H2: The board
   - H2: What widgets are allowed to do
@@ -10831,6 +10850,17 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Options
   - H2: Troubleshooting
   - H2: Connection troubleshooting
+  - H2: Related
+
+## web/urls.md
+
+- Route: /web/urls
+- Headings:
+  - H2: Session and dashboard URLs
+  - H3: Stability contract
+  - H2: Route table
+  - H2: Special documents and startup modes
+  - H2: Remote Gateway handoff
   - H2: Related
 
 ## web/webchat.md

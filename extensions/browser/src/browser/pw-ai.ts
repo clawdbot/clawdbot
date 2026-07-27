@@ -31,6 +31,7 @@ import {
   uploadViaPlaywright,
   waitForDownloadViaPlaywright,
 } from "./pw-tools-core.downloads.js";
+import { pageContentViaPlaywright } from "./pw-tools-core.extract.js";
 import {
   batchViaPlaywright,
   clickViaPlaywright,
@@ -53,7 +54,6 @@ import { responseBodyViaPlaywright } from "./pw-tools-core.responses.js";
 import {
   closePageViaPlaywright,
   navigateViaPlaywright,
-  pageContentViaPlaywright,
   pdfViaPlaywright,
   resizeViewportViaPlaywright,
   snapshotAiViaPlaywright,

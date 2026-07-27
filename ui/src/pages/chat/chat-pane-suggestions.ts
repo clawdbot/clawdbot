@@ -6,7 +6,6 @@ import {
   resolveChatAgentId,
   scopedAgentParamsForSession,
   type ControlUiSessionPullRequest,
-  type ControlUiSessionPullRequests,
   type TaskSuggestion,
   type TaskSuggestionEvent,
   type TaskSuggestionsAcceptResult,
@@ -79,14 +78,14 @@ export abstract class ChatPaneSuggestions extends ChatPaneSharing {
     }
     const pullRequestEpoch = scope.context.sessions.capturePullRequestEpoch(sessionKey);
     try {
-      const result = await scope.client.request<ControlUiSessionPullRequests>(
-        "controlUi.sessionPullRequests",
-        {
-          sessionKey,
-          ...scopedAgentParamsForSession(scope.state, sessionKey),
-          ...(options.refresh ? { refresh: true } : {}),
-        },
-      );
+      const result = await scope.client.requestSessionPullRequests({
+        sessionKey,
+        ...scopedAgentParamsForSession(scope.state, sessionKey),
+        ...(options.refresh ? { refresh: true } : {}),
+      });
+      if (!result) {
+        return;
+      }
       if (
         requestVersion !== this.sessionPullRequestsRequestVersion ||
         !this.isConnectionScopeCurrent(scope) ||

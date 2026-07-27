@@ -23,6 +23,11 @@ const mocks = vi.hoisted(() => ({
   runDoctorHealthRepairs: vi.fn(),
   maybeRepairLegacyFlatAuthProfileStores: vi.fn().mockResolvedValue(undefined),
   maybeRepairCanonicalApiKeyFieldAlias: vi.fn().mockResolvedValue(undefined),
+  maybeMigrateLegacyPluginModelCatalogs: vi.fn().mockResolvedValue({
+    detected: 0,
+    migrated: 0,
+    warnings: [],
+  }),
   maybeRepairGatewayDaemon: vi.fn().mockResolvedValue(undefined),
   maybeRepairLegacyOAuthProfileIds: vi.fn(async (cfg: unknown) => cfg),
   maybeRepairLegacyOAuthSidecarProfiles: vi.fn().mockResolvedValue(undefined),
@@ -106,7 +111,9 @@ const mocks = vi.hoisted(() => ({
   collectHeartbeatCadenceMigrationFindings: vi.fn(async () => [] as unknown[]),
   maybeMigrateHeartbeatCadenceToCron: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
   collectHeartbeatScratchMigrationFindings: vi.fn(async () => [] as unknown[]),
+  collectToolsMdMigrationFindings: vi.fn(async () => [] as unknown[]),
   maybeMigrateHeartbeatFilesToScratch: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
+  maybeMigrateToolsMd: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
   collectHeartbeatTaskMigrationFindings: vi.fn(async () => [] as unknown[]),
   maybeMigrateHeartbeatTasksToCron: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
   collectWhatsappResponsivenessHealthFindings: vi.fn((): readonly HealthFinding[] => []),
@@ -205,6 +212,10 @@ vi.mock("../commands/doctor-gateway-services.js", () => ({
 vi.mock("../commands/doctor-auth-flat-profiles.js", () => ({
   maybeRepairLegacyFlatAuthProfileStores: mocks.maybeRepairLegacyFlatAuthProfileStores,
   maybeRepairCanonicalApiKeyFieldAlias: mocks.maybeRepairCanonicalApiKeyFieldAlias,
+}));
+
+vi.mock("../commands/doctor-plugin-model-catalog.js", () => ({
+  maybeMigrateLegacyPluginModelCatalogs: mocks.maybeMigrateLegacyPluginModelCatalogs,
 }));
 
 vi.mock("../commands/doctor-gateway-daemon-flow.js", () => ({
@@ -411,6 +422,11 @@ vi.mock("../commands/doctor-heartbeat-scratch-migration.js", () => ({
   maybeMigrateHeartbeatFilesToScratch: mocks.maybeMigrateHeartbeatFilesToScratch,
 }));
 
+vi.mock("../commands/doctor-tools-md-migration.js", () => ({
+  collectToolsMdMigrationFindings: mocks.collectToolsMdMigrationFindings,
+  maybeMigrateToolsMd: mocks.maybeMigrateToolsMd,
+}));
+
 vi.mock("../commands/doctor-heartbeat-task-migration.js", () => ({
   collectHeartbeatTaskMigrationFindings: mocks.collectHeartbeatTaskMigrationFindings,
   maybeMigrateHeartbeatTasksToCron: mocks.maybeMigrateHeartbeatTasksToCron,
@@ -540,6 +556,12 @@ describe("doctor health contributions", () => {
     mocks.maybeRepairLegacyFlatAuthProfileStores.mockResolvedValue(undefined);
     mocks.maybeRepairCanonicalApiKeyFieldAlias.mockClear();
     mocks.maybeRepairCanonicalApiKeyFieldAlias.mockResolvedValue(undefined);
+    mocks.maybeMigrateLegacyPluginModelCatalogs.mockClear();
+    mocks.maybeMigrateLegacyPluginModelCatalogs.mockResolvedValue({
+      detected: 0,
+      migrated: 0,
+      warnings: [],
+    });
     mocks.maybeRepairGatewayDaemon.mockClear();
     mocks.maybeRepairGatewayDaemon.mockResolvedValue(undefined);
     mocks.maybeRepairLegacyOAuthProfileIds.mockClear();
@@ -685,6 +707,10 @@ describe("doctor health contributions", () => {
     mocks.collectHeartbeatScratchMigrationFindings.mockResolvedValue([]);
     mocks.maybeMigrateHeartbeatFilesToScratch.mockReset();
     mocks.maybeMigrateHeartbeatFilesToScratch.mockResolvedValue({ changes: [], warnings: [] });
+    mocks.collectToolsMdMigrationFindings.mockReset();
+    mocks.collectToolsMdMigrationFindings.mockResolvedValue([]);
+    mocks.maybeMigrateToolsMd.mockReset();
+    mocks.maybeMigrateToolsMd.mockResolvedValue({ changes: [], warnings: [] });
     mocks.collectHeartbeatTaskMigrationFindings.mockReset();
     mocks.collectHeartbeatTaskMigrationFindings.mockResolvedValue([]);
     mocks.maybeMigrateHeartbeatTasksToCron.mockReset();
@@ -1714,6 +1740,11 @@ describe("doctor health contributions", () => {
     expect(mocks.maybeRepairCanonicalApiKeyFieldAlias).toHaveBeenCalledWith({
       cfg: ctx.cfg,
       prompter: ctx.prompter,
+    });
+    expect(mocks.maybeMigrateLegacyPluginModelCatalogs).toHaveBeenCalledWith({
+      cfg: ctx.cfg,
+      prompter: ctx.prompter,
+      runtime: ctx.runtime,
     });
   });
 

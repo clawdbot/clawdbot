@@ -55,6 +55,7 @@ import java.util.concurrent.atomic.AtomicLong
 internal const val SESSION_LIST_FETCH_LIMIT = 200
 private val QUESTION_REFRESH_RETRY_DELAYS_MS = longArrayOf(1_000L, 2_000L, 4_000L)
 private val SWARM_REFRESH_RETRY_DELAYS_MS = longArrayOf(1_000L, 2_000L, 4_000L)
+private const val SESSION_EDITOR_MAX_BASE64_CHARS = ((OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES + 2) / 3) * 4
 
 internal fun chatOutboxQueueFailureText(): NativeText = ChatController.queueFailureText()
 
@@ -1128,7 +1129,10 @@ class ChatController internal constructor(
           false
         }
       if (!historyApplied || !branchApplied) recoverOutboxAfterSessionMutationRefreshFailure(snapshot, mutationLease)
-      SessionRewindResult(editorText)
+      SessionRewindResult(
+        editorText = editorText,
+        editorAttachments = parseSessionEditorAttachments(root?.get("editorAttachments")),
+      )
     } catch (err: CancellationException) {
       withContext(NonCancellable) {
         recoverOutboxAfterSessionMutationRefreshFailure(snapshot, mutationLease)
@@ -1152,7 +1156,7 @@ class ChatController internal constructor(
   suspend fun forkSessionAtEntry(
     sessionKey: String,
     entryId: String,
-  ): Pair<String, String?>? {
+  ): SessionForkResult? {
     val entry = entryId.trim().takeIf { it.isNotEmpty() } ?: return null
     val snapshot = currentSessionActionSnapshot(sessionKey) ?: return null
     if (!canPerformMessageSessionAction(snapshot)) return null
@@ -1185,7 +1189,11 @@ class ChatController internal constructor(
         fetchSessionsForCurrentWindow()
         return null
       }
-      createdKey to root?.get("editorText").asStringOrNull()
+      SessionForkResult(
+        sessionKey = createdKey,
+        editorText = root?.get("editorText").asStringOrNull(),
+        editorAttachments = parseSessionEditorAttachments(root?.get("editorAttachments")),
+      )
     } catch (err: CancellationException) {
       withContext(NonCancellable) {
         cancelOutboxSessionMutation(snapshot, mutationLease)
@@ -2154,6 +2162,12 @@ class ChatController internal constructor(
     }
     _sessionKey.value = key
     _sessionOwnerAgentId.value = owner
+    _sessions.value =
+      reconcileGlobalObserverDigestOwner(
+        _sessions.value,
+        activeAgentId = owner ?: resolveAgentIdForSessionKey(key),
+        adoptOwnerless = false,
+      )
     applyThinkingMetadata(_sessions.value.firstOrNull { it.key == key })
     _selectedModelRef.value = null
     lastHandledTerminalRunId = null
@@ -3712,7 +3726,11 @@ class ChatController internal constructor(
           requestCacheScope == currentCacheScope() &&
           requestOwnerIsCurrent()
         ) {
-          _sessions.value = cachedSessions.map { session -> session.copy(ownerAgentId = requestAgentId) }
+          _sessions.value =
+            reconcileGlobalObserverDigestOwner(
+              cachedSessions.map { session -> session.copy(ownerAgentId = requestAgentId) },
+              activeAgentId = requestAgentId,
+            )
         }
       }
     }
@@ -5247,7 +5265,13 @@ class ChatController internal constructor(
 
   private fun handleSessionObserverEvent(payloadJson: String) {
     val digest = runCatching { json.decodeFromString<SessionObserverDigest>(payloadJson) }.getOrNull() ?: return
-    _sessions.value = applySessionObserverDigest(_sessions.value, digest)
+    val selectedAgentId = _sessionOwnerAgentId.value ?: resolveAgentIdForSessionKey(_sessionKey.value)
+    _sessions.value =
+      applySessionObserverDigest(
+        _sessions.value,
+        digest,
+        activeAgentId = selectedAgentId,
+      )
   }
 
   private fun scheduleSessionsChangedBranchReconciliation(
@@ -5315,8 +5339,9 @@ class ChatController internal constructor(
       return
     }
     if (eventOwner != visibleOwner) return
+    val ownedEntry = reconcileSessionObserverProjectionOwner(entry, eventOwner)
     upsertSessionEntry(
-      entry = if (entry.ownerAgentId == eventOwner) entry else entry.copy(ownerAgentId = eventOwner),
+      entry = if (ownedEntry.ownerAgentId == eventOwner) ownedEntry else ownedEntry.copy(ownerAgentId = eventOwner),
       clearedFields = parseExplicitSessionClears(eventObject),
     )
   }
@@ -6658,6 +6683,30 @@ private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
 
 private fun JsonElement?.asArrayOrNull(): JsonArray? = this as? JsonArray
 
+private fun parseSessionEditorAttachments(value: JsonElement?): List<SessionEditorAttachment> =
+  value.asArrayOrNull()?.mapNotNull { element ->
+    val attachment = element.asObjectOrNull() ?: return@mapNotNull null
+    val mimeType =
+      attachment["mimeType"]
+        .asStringOrNull()
+        ?.trim()
+        ?.takeIf { it.startsWith("image/", ignoreCase = true) }
+        ?: return@mapNotNull null
+    val data =
+      attachment["data"]
+        .asStringOrNull()
+        ?.takeIf { it.isNotEmpty() && it.length.toLong() <= SESSION_EDITOR_MAX_BASE64_CHARS }
+        ?: return@mapNotNull null
+    val decoded =
+      try {
+        Base64.getDecoder().decode(data)
+      } catch (_: IllegalArgumentException) {
+        return@mapNotNull null
+      }
+    if (decoded.isEmpty() || decoded.size.toLong() > OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES) return@mapNotNull null
+    SessionEditorAttachment(mimeType = mimeType, data = data)
+  } ?: emptyList()
+
 private fun JsonElement?.asStringOrNull(): String? =
   when (this) {
     is JsonNull -> null
@@ -6761,20 +6810,77 @@ internal fun mergeChatSessionEntry(
 internal fun applySessionObserverDigest(
   sessions: List<ChatSessionEntry>,
   digest: SessionObserverDigest,
+  activeAgentId: String? = null,
 ): List<ChatSessionEntry> {
-  val index = sessions.indexOfFirst { it.key == digest.sessionKey }
-  if (index < 0) return sessions
-  val session = sessions[index]
-  val runId = digest.runId?.trim()?.takeIf { it.isNotEmpty() } ?: return sessions
+  val digestAgentId = normalizedObserverAgentId(digest.agentId)
+  val selectedAgentId = normalizedObserverAgentId(activeAgentId)
+  val scopedSessions =
+    reconcileGlobalObserverDigestOwner(sessions, selectedAgentId, adoptOwnerless = false)
+  if (
+    digest.sessionKey == "global" &&
+    (selectedAgentId == null || digestAgentId == null || selectedAgentId != digestAgentId)
+  ) {
+    return scopedSessions
+  }
+  val index = scopedSessions.indexOfFirst { it.key == digest.sessionKey }
+  if (index < 0) return scopedSessions
+  val session = scopedSessions[index]
+  val runId = digest.runId?.trim()?.takeIf { it.isNotEmpty() } ?: return scopedSessions
   val isRunning = session.hasActiveRun == true || session.status?.trim()?.lowercase() == "running"
   val matchesActiveRun = session.activeRunIds.orEmpty().any { it.trim() == runId }
-  if (!isRunning || !matchesActiveRun) return sessions
+  if (!isRunning || !matchesActiveRun) return scopedSessions
   val previous = session.observerDigest
-  if (previous?.runId == runId && !observerDigestIsNewer(digest, previous)) return sessions
-  return sessions.toMutableList().also {
+  if (previous?.runId == runId && !observerDigestIsNewer(digest, previous)) return scopedSessions
+  return scopedSessions.toMutableList().also {
     it[index] = session.copy(observerDigest = digest, hasObserverDigestMetadata = true)
   }
 }
+
+internal fun reconcileGlobalObserverDigestOwner(
+  sessions: List<ChatSessionEntry>,
+  activeAgentId: String?,
+  adoptOwnerless: Boolean = true,
+): List<ChatSessionEntry> {
+  // A missing owner is transient disconnect state, not a selection change.
+  // Callers retain the last verified offline projection until hello supplies an owner.
+  val selectedAgentId = normalizedObserverAgentId(activeAgentId) ?: return sessions
+  val index = sessions.indexOfFirst { it.key == "global" }
+  if (index < 0) return sessions
+  val session = sessions[index]
+  val digestAgentId = normalizedObserverAgentId(session.observerDigest?.agentId)
+  if (digestAgentId == selectedAgentId) return sessions
+  return sessions.toMutableList().also {
+    it[index] =
+      session.copy(
+        observerDigest =
+          if (digestAgentId == null && adoptOwnerless) {
+            session.observerDigest?.copy(agentId = selectedAgentId)
+          } else {
+            null
+          },
+        hasObserverDigestMetadata = true,
+      )
+  }
+}
+
+internal fun reconcileSessionObserverProjectionOwner(
+  session: ChatSessionEntry,
+  ownerAgentId: String?,
+): ChatSessionEntry {
+  val digest = session.observerDigest
+  if (session.key != "global" || digest == null) return session
+  val owner =
+    normalizedObserverAgentId(ownerAgentId)
+      ?: return session.copy(observerDigest = null, hasObserverDigestMetadata = false)
+  val digestOwner = normalizedObserverAgentId(digest.agentId)
+  return when (digestOwner) {
+    null -> session.copy(observerDigest = digest.copy(agentId = owner))
+    owner -> session
+    else -> session.copy(observerDigest = null, hasObserverDigestMetadata = false)
+  }
+}
+
+private fun normalizedObserverAgentId(agentId: String?): String? = agentId?.trim()?.lowercase()?.takeIf(String::isNotEmpty)
 
 private fun reconcileSessionObserverDigest(
   existing: SessionObserverDigest?,

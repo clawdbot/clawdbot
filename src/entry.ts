@@ -3,6 +3,7 @@
 // CLI process entrypoint for OpenClaw command execution.
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { format } from "node:util";
 import { isRootHelpInvocation } from "./cli/argv.js";
 import { parseCliContainerArgs, resolveCliContainerTarget } from "./cli/container-target.js";
 import { runCliWithExitFinalization } from "./cli/one-shot-exit.js";
@@ -12,7 +13,10 @@ import {
 } from "./cli/precomputed-help.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import type { RootHelpRenderOptions } from "./cli/program/root-help.js";
-import { createGatewayStartupTrace } from "./cli/startup-trace.js";
+import {
+  configureGatewayStartupTraceConsoleFormatting,
+  createGatewayStartupTrace,
+} from "./cli/startup-trace.js";
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
 import {
   enableOpenClawCompileCache,
@@ -33,6 +37,50 @@ const ENTRY_WRAPPER_PAIRS = [
 
 const loadRootHelpLiveConfigModule = async () => await import("./cli/root-help-live-config.js");
 const loadRootHelpMetadataModule = async () => await import("./cli/root-help-metadata.js");
+
+async function writeCapturedCliArgumentError(message: string): Promise<void> {
+  const { loadCliDotEnv } = await import("./cli/dotenv.js");
+  loadCliDotEnv({ quiet: true });
+  await configureGatewayStartupTraceConsoleFormatting(gatewayEntryStartupTrace);
+  const { enableConsoleCapture } = await import("./logging.js");
+  enableConsoleCapture();
+  console.error(`[openclaw] ${message}`);
+}
+
+async function writeCliDiagnosticBlock(message: string): Promise<void> {
+  const { loadCliDotEnv } = await import("./cli/dotenv.js");
+  loadCliDotEnv({ quiet: true });
+  await configureGatewayStartupTraceConsoleFormatting(gatewayEntryStartupTrace);
+  const { formatConsoleDiagnosticBlock } = await import("./logging/json-console-line.js");
+  process.stderr.write(formatConsoleDiagnosticBlock({ level: "error", message: `${message}\n` }));
+}
+
+async function prepareCliDiagnosticBlockWriter(): Promise<
+  (message: string, error?: unknown) => void
+> {
+  const { loadCliDotEnv } = await import("./cli/dotenv.js");
+  loadCliDotEnv({ quiet: true });
+  await configureGatewayStartupTraceConsoleFormatting(gatewayEntryStartupTrace);
+  const { formatConsoleDiagnosticBlock } = await import("./logging/json-console-line.js");
+  return (message, error) => {
+    const formatted = error === undefined ? message : format(message, error);
+    process.stderr.write(
+      formatConsoleDiagnosticBlock({
+        level: "error",
+        message: formatted.endsWith("\n") ? formatted : `${formatted}\n`,
+      }),
+    );
+  };
+}
+
+async function flushEntryStartupTraceForEarlyReturn(argv: string[]): Promise<void> {
+  if (!gatewayEntryStartupTrace.enabled) {
+    return;
+  }
+  const { loadCliDotEnvForEarlyDiagnostic } = await import("./cli/dotenv.js");
+  await loadCliDotEnvForEarlyDiagnostic(argv);
+  await configureGatewayStartupTraceConsoleFormatting(gatewayEntryStartupTrace);
+}
 
 function shouldForceReadOnlyAuthStore(argv: string[]): boolean {
   const tokens = argv.slice(2).filter((token) => token.length > 0 && !token.startsWith("-"));
@@ -61,22 +109,39 @@ if (
 } else {
   const entryFile = fileURLToPath(import.meta.url);
   const installRoot = resolveEntryInstallRoot(entryFile);
-  const waitingForCompileCacheRespawn = respawnWithoutOpenClawCompileCacheIfNeeded({
+  process.title = "openclaw";
+  ensureOpenClawExecMarkerOnProcess();
+  installProcessWarningFilter();
+  normalizeEnv();
+  process.argv = normalizeWindowsArgv(process.argv);
+  const earlyProfile = parseCliProfileArgs(process.argv);
+  if (earlyProfile.ok && earlyProfile.profile) {
+    applyCliProfileEnv({ profile: earlyProfile.profile });
+  }
+  const { assertSupportedRuntime, isCurrentRuntimeSupported } =
+    await import("./infra/runtime-guard.js");
+  if (!isCurrentRuntimeSupported()) {
+    const { loadCliDotEnv } = await import("./cli/dotenv.js");
+    loadCliDotEnv({ quiet: true });
+    await configureGatewayStartupTraceConsoleFormatting(gatewayEntryStartupTrace);
+  }
+  assertSupportedRuntime();
+  gatewayEntryStartupTrace.mark("bootstrap");
+
+  const waitingForCompileCacheRespawn = await respawnWithoutOpenClawCompileCacheIfNeeded({
     currentFile: entryFile,
     installRoot,
+    prepareWriteError: async () => {
+      // The child environment was already snapshotted. Load dotenv only to format
+      // the parent trace; command-specific dotenv ordering remains child-owned.
+      const writeError = await prepareCliDiagnosticBlockWriter();
+      return (message) => writeError(message);
+    },
   });
   if (!waitingForCompileCacheRespawn) {
-    process.title = "openclaw";
-    ensureOpenClawExecMarkerOnProcess();
-    installProcessWarningFilter();
-    normalizeEnv();
-    const { assertSupportedRuntime } = await import("./infra/runtime-guard.js");
-    assertSupportedRuntime();
-
     enableOpenClawCompileCache({
       installRoot,
     });
-    gatewayEntryStartupTrace.mark("bootstrap");
 
     if (shouldForceReadOnlyAuthStore(process.argv)) {
       process.env.OPENCLAW_AUTH_STORE_READONLY = "1";
@@ -87,43 +152,43 @@ if (
       process.env.FORCE_COLOR = "0";
     }
 
-    function ensureCliRespawnReady(): boolean {
+    async function ensureCliRespawnReady(): Promise<boolean> {
       const plan = buildCliRespawnPlan();
       if (!plan) {
         return false;
       }
 
-      runCliRespawnPlan(plan);
+      // The child environment was already snapshotted. Load dotenv only to format
+      // the parent trace; command-specific dotenv ordering remains child-owned.
+      const writeError = await prepareCliDiagnosticBlockWriter();
+      runCliRespawnPlan(plan, undefined, writeError);
       // Parent must not continue running the CLI.
       return true;
     }
 
-    process.argv = normalizeWindowsArgv(process.argv);
-
-    if (!ensureCliRespawnReady()) {
+    if (!(await ensureCliRespawnReady())) {
       const parsedContainer = parseCliContainerArgs(process.argv);
       if (!parsedContainer.ok) {
-        console.error(`[openclaw] ${parsedContainer.error}`);
+        await writeCapturedCliArgumentError(parsedContainer.error);
         process.exit(2);
       }
 
       const parsed = parseCliProfileArgs(parsedContainer.argv);
       if (!parsed.ok) {
         // Keep it simple; Commander will handle rich help/errors after we strip flags.
-        console.error(`[openclaw] ${parsed.error}`);
+        await writeCapturedCliArgumentError(parsed.error);
         process.exit(2);
       }
 
       const containerTargetName = resolveCliContainerTarget(process.argv);
-      if (containerTargetName && parsed.profile) {
-        console.error("[openclaw] --container cannot be combined with --profile/--dev");
-        process.exit(2);
-      }
-
       if (parsed.profile) {
         applyCliProfileEnv({ profile: parsed.profile });
         // Keep Commander and ad-hoc argv checks consistent.
         process.argv = parsed.argv;
+      }
+      if (containerTargetName && parsed.profile) {
+        await writeCapturedCliArgumentError("--container cannot be combined with --profile/--dev");
+        process.exit(2);
       }
       gatewayEntryStartupTrace.mark("argv");
 
@@ -142,7 +207,7 @@ export async function tryHandleRootHelpFastPath(
     loadRootHelpRenderOptionsForConfigSensitivePlugins?: (
       env?: NodeJS.ProcessEnv,
     ) => Promise<RootHelpRenderOptions | null>;
-    onError?: (error: unknown) => void;
+    onError?: (error: unknown) => void | Promise<void>;
     env?: NodeJS.ProcessEnv;
   } = {},
 ): Promise<boolean> {
@@ -154,11 +219,9 @@ export async function tryHandleRootHelpFastPath(
   }
   const handleError =
     deps.onError ??
-    ((error: unknown) => {
-      console.error(
-        "[openclaw] Failed to display help:",
-        error instanceof Error ? (error.stack ?? error.message) : error,
-      );
+    (async (error: unknown) => {
+      const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
+      await writeCliDiagnosticBlock(`[openclaw] Failed to display help: ${detail}`);
       process.exit(1);
     });
   try {
@@ -179,7 +242,7 @@ export async function tryHandleRootHelpFastPath(
     await outputRootHelp(liveRootHelpOptions ?? undefined);
     return true;
   } catch (error) {
-    handleError(error);
+    await handleError(error);
     return true;
   }
 }
@@ -204,18 +267,25 @@ async function runMainOrRootHelp(argv: string[]): Promise<void> {
   await runCliWithExitFinalization({
     run: async () => {
       if (await tryHandleRootHelpFastPath(argv)) {
+        await flushEntryStartupTraceForEarlyReturn(argv);
         return;
       }
       if (await tryHandlePrecomputedCommandHelpFastPath(argv)) {
+        await flushEntryStartupTraceForEarlyReturn(argv);
         return;
       }
       const { runCli } = await gatewayEntryStartupTrace.measure(
         "run-main-import",
         () => import("./cli/run-main.js"),
       );
-      await runCli(argv);
+      await runCli(argv, { additionalStartupTrace: gatewayEntryStartupTrace });
     },
     onError: async (error) => {
+      const { loadCliDotEnvForEarlyDiagnostic } = await import("./cli/dotenv.js");
+      await loadCliDotEnvForEarlyDiagnostic(argv);
+      await configureGatewayStartupTraceConsoleFormatting(gatewayEntryStartupTrace);
+      const { enableConsoleCapture } = await import("./logging.js");
+      enableConsoleCapture();
       const { formatCliFailureLines } = await import("./cli/failure-output.js");
       for (const line of formatCliFailureLines({
         title: "Could not start the CLI.",

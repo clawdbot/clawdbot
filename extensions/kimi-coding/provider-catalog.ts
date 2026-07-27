@@ -24,7 +24,8 @@ const KIMI_K3_COST = {
   cacheRead: 0.3,
   cacheWrite: 0,
 };
-// Catalog the model maximum; Kimi membership entitlements may enforce a lower live limit.
+// k3 serves up to 1M context, tier-gated server-side; k3-256k is the cheaper 256K variant.
+// Legacy k3[1m] was retired upstream and normalizes to k3 for shipped configurations.
 const KIMI_K3_CONTEXT_WINDOW = 1_048_576;
 const KIMI_K3_MAX_TOKENS = 131_072;
 const KIMI_K3_THINKING_LEVEL_MAP = {
@@ -66,12 +67,12 @@ export function buildKimiCodingProvider(): ModelProviderConfig {
       },
       ...KIMI_K3_MODEL_IDS.map((id) => ({
         id,
-        name: "Kimi K3",
+        name: id === "k3" ? "Kimi K3" : "Kimi K3 (256k)",
         reasoning: true,
         thinkingLevelMap: { ...KIMI_K3_THINKING_LEVEL_MAP },
         input: [...KIMI_CODING_INPUT],
         cost: KIMI_K3_COST,
-        contextWindow: KIMI_K3_CONTEXT_WINDOW,
+        contextWindow: id === "k3" ? KIMI_K3_CONTEXT_WINDOW : KIMI_CODING_DEFAULT_CONTEXT_WINDOW,
         maxTokens: KIMI_K3_MAX_TOKENS,
       })),
     ],

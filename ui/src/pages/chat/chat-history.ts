@@ -40,6 +40,7 @@ import {
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import { replaceChatAttachmentsFromEditor } from "./attachment-payload-store.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import {
   isRetryableStartupUnavailable,
@@ -55,7 +56,10 @@ import {
   preserveOptimisticTailMessages,
   readTranscriptSequence,
 } from "./history-merge.ts";
-import { reconcileInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
+import {
+  isPendingInitialUserMessage,
+  reconcileInitialUserMessageHandoff,
+} from "./initial-turn-handoff.ts";
 import {
   controlUiNowMs,
   recordControlUiPerformanceEvent,
@@ -676,6 +680,7 @@ type InFlightChatHistoryRequest = {
 };
 
 type LoadChatHistoryOptions = {
+  deferBranches?: boolean;
   startup?: boolean;
 };
 
@@ -869,6 +874,12 @@ export async function rewindChatHistory(
     if (!visibleSessionMatches(state, sessionKey, agentParams.agentId)) {
       return null;
     }
+    // Restored images intentionally stay in this tab's memory; persisted composer drafts remain
+    // text-only so large payloads do not enter local storage.
+    state.chatAttachments = replaceChatAttachmentsFromEditor(
+      state.chatAttachments,
+      result.editorAttachments,
+    );
     state.handleChatDraftChange(editorText);
     return result;
   } catch (error) {
@@ -986,8 +997,9 @@ export async function loadChatHistory(
     return inFlight.promise;
   }
   if (
-    state.chatBranchesSessionKey !== sessionKey ||
-    state.chatBranchesConnectionEpoch !== connectionEpoch
+    opts.deferBranches !== true &&
+    (state.chatBranchesSessionKey !== sessionKey ||
+      state.chatBranchesConnectionEpoch !== connectionEpoch)
   ) {
     void loadChatBranches(state);
   }
@@ -1178,6 +1190,9 @@ async function loadChatHistoryUncached(
       reconciledTerminal.previousMessages,
       reconciledTerminal.currentMessages,
       authoritativeMessages,
+    ).filter(
+      (message) =>
+        !isPendingInitialUserMessage(state.initialUserMessage, state, sessionKey, message),
     );
     state.chatMessages = preserveOptimisticTailMessages(
       authoritativeMessages,

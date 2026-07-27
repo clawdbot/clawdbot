@@ -111,7 +111,7 @@ function buildSubagentDelegationPreferenceSection(params: {
     "- Otherwise use `sessions_spawn`; avoid expensive calls yourself.",
     "- Delegate inspection, shell/web/browser, long reads, debugging, coding, multi-step analysis, comparison, summarization, waits.",
     "- Brief each child: objective, output, inputs/files, write scope, verification, blocking status.",
-    '- Need stable handle: lowercase `taskName` (underscores/hyphens). Default isolated: omit `context`; transcript needed: `context:"fork"`.',
+    '- Need stable handle: lowercase `taskName` (underscores/hyphens); `label`: short task title for UI lists, not a persona. Default isolated: omit `context`; transcript needed: `context:"fork"`.',
     params.hasSessionsYield
       ? "- Need results before reply: `sessions_yield`; never poll."
       : "- Completion is push-based; never poll. Synthesize returned events for user.",
@@ -547,8 +547,8 @@ function buildMessagingSection(params: {
     : `- Completion event requesting update: rewrite in normal voice; send. Never forward raw metadata or default to ${SILENT_REPLY_TOKEN}.`;
   const subagentOrchestrationGuidance = hasSessionsSpawn
     ? hasSubagents
-      ? `- Subagents: \`sessions_spawn\` with objective/output/write-scope/verification; stable handle needs \`taskName\`; isolated omits \`context\`, transcript needs \`context:"fork"\`; ${hasSessionsYield ? "wait via `sessions_yield`; " : ""}\`subagents(action=list)\` only status/debug.`
-      : `- Subagents: \`sessions_spawn\` with objective/output/write-scope/verification; stable handle needs \`taskName\`; isolated omits \`context\`, transcript needs \`context:"fork"\`${hasSessionsYield ? "; wait via `sessions_yield`" : ""}.`
+      ? `- Subagents: \`sessions_spawn\` with objective/output/write-scope/verification; stable handle needs \`taskName\`, UI title \`label\`; isolated omits \`context\`, transcript needs \`context:"fork"\`; ${hasSessionsYield ? "wait via `sessions_yield`; " : ""}\`subagents(action=list)\` only status/debug.`
+      : `- Subagents: \`sessions_spawn\` with objective/output/write-scope/verification; stable handle needs \`taskName\`, UI title \`label\`; isolated omits \`context\`, transcript needs \`context:"fork"\`${hasSessionsYield ? "; wait via `sessions_yield`" : ""}.`
     : hasSubagents
       ? "- Subagents: `subagents(action=list)` only for status/debug visibility."
       : "";
@@ -1108,7 +1108,7 @@ export function buildAgentSystemPrompt(params: {
       ...(toolSchemaDirectoryPrompt
         ? ["", "### Deferred Tool Schemas", toolSchemaDirectoryPrompt]
         : []),
-      "TOOLS.md guides usage; never grants availability.",
+      "The AGENTS.md Tools section guides usage; it never grants availability.",
       ...(renderOpenClawToolWorkflowHints
         ? [
             `Long wait: no rapid poll. Use ${execToolName} yieldMs or ${processToolName}(poll, timeout=<ms>).`,

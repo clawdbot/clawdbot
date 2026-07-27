@@ -23,6 +23,7 @@ import type {
   GatewayAgentRuntime,
   GatewayAgentRow as SharedGatewayAgentRow,
   GatewayThinkingLevelOption,
+  SessionBoardFace,
   SessionsListResultBase,
   SessionsPatchResultBase,
 } from "../shared/session-types.js";
@@ -83,6 +84,8 @@ export type GatewaySessionRow = {
   label?: string;
   /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
   category?: string;
+  /** Preferred Control UI face for generic session navigation. */
+  boardFace?: SessionBoardFace;
   displayName?: string;
   derivedTitle?: string;
   lastMessagePreview?: string;
@@ -104,7 +107,7 @@ export type GatewaySessionRow = {
   agentStatus?: SessionEntry["agentStatus"];
   observerDigest?: Pick<
     SessionObserverDigest,
-    "runId" | "headline" | "health" | "updatedAt" | "revision"
+    "agentId" | "runId" | "headline" | "health" | "updatedAt" | "revision"
   >;
   /** Last real user/channel interaction; background work does not advance it. */
   lastInteractionAt?: number;

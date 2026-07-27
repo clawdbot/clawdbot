@@ -107,6 +107,13 @@ const legacyRestartSentinelRuntimeImportSpecifiers = new Set([
   "node:path",
   "path",
 ]);
+const legacyExecApprovalsMigrationPath = "src/infra/state-migrations.exec-approvals.ts";
+const legacyExecApprovalsConfigPath = "src/infra/exec-approvals-config.ts";
+const legacyExecApprovalsRuntimePath = "src/infra/exec-approvals-store.ts";
+// Stable oc:// URI identity, not a filesystem path; see the owning module.
+const stableExecApprovalsPolicyUriPath = "extensions/policy/src/exec-approvals-uri.ts";
+const legacyExecApprovalsFilenamePattern =
+  /(?:^|[/\\])exec-approvals\.json(?:\.doctor-importing)?$/u;
 
 const legacyStorePatterns = [
   /\bsessions\.json\b/u,
@@ -154,6 +161,7 @@ const allowedRuntimeMigrationPaths = [
   "src/infra/state-migrations.managed-outgoing-images.ts",
   "src/infra/state-migrations.apns.ts",
   "src/infra/state-migrations.mcp-oauth.ts",
+  legacyExecApprovalsMigrationPath,
   legacyRestartSentinelMigrationPath,
   "src/infra/state-migrations.workspace-setup.ts",
   "src/infra/state-migrations.web-push.ts",
@@ -487,6 +495,39 @@ function collectLegacyRestartSentinelBoundaryViolations(sourceFile, relativePath
   return violations;
 }
 
+function collectLegacyExecApprovalsBoundaryViolations(sourceFile, relativePath) {
+  if (
+    relativePath === legacyExecApprovalsMigrationPath ||
+    relativePath === legacyExecApprovalsConfigPath ||
+    relativePath === stableExecApprovalsPolicyUriPath
+  ) {
+    return [];
+  }
+
+  const violations = [];
+  function visit(node) {
+    if (ts.isStringLiteralLike(node) && legacyExecApprovalsFilenamePattern.test(node.text)) {
+      violations.push({
+        kind: "legacy exec approvals reference",
+        line: toLine(sourceFile, node),
+      });
+    }
+    if (
+      relativePath === legacyExecApprovalsRuntimePath &&
+      ts.isImportDeclaration(node) &&
+      legacyRestartSentinelRuntimeImportSpecifiers.has(importSource(node))
+    ) {
+      violations.push({
+        kind: "legacy exec approvals filesystem import",
+        line: toLine(sourceFile, node),
+      });
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(sourceFile);
+  return violations;
+}
+
 function isHelperWriteModuleSource(source) {
   return (
     source === "openclaw/plugin-sdk/file-access-runtime" ||
@@ -691,10 +732,10 @@ export function collectDatabaseFirstLegacyStoreViolations(
 ) {
   const relativePath = inputRelativePath.replaceAll("\\", "/");
   const sourceFile = ts.createSourceFile(relativePath, content, ts.ScriptTarget.Latest, true);
-  const boundaryViolations = collectLegacyRestartSentinelBoundaryViolations(
-    sourceFile,
-    relativePath,
-  );
+  const boundaryViolations = [
+    ...collectLegacyRestartSentinelBoundaryViolations(sourceFile, relativePath),
+    ...collectLegacyExecApprovalsBoundaryViolations(sourceFile, relativePath),
+  ];
   if (isAllowedLegacyOwnerPath(relativePath)) {
     return boundaryViolations;
   }

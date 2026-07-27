@@ -1415,6 +1415,8 @@ export function createRuntimeConfigCapability(
     if (writesSuspended) {
       return Promise.resolve(false);
     }
+    const client = state.client;
+    const connectionEpoch = currentConfigConnectionEpoch(state);
     cancelScheduledAutoSave();
     // Start synchronously when no explicit op is queued so the submit binds
     // to the CURRENT connection epoch; only genuine queuing pays the hop.
@@ -1428,6 +1430,9 @@ export function createRuntimeConfigCapability(
         // The updater may have started while we drained; suspension must be a
         // real barrier or an apply could restart the gateway mid-update.
         if (writesSuspended || disposed) {
+          return false;
+        }
+        if (!client || !isCurrentConfigConnection(state, client, connectionEpoch)) {
           return false;
         }
         manualFlightInfo = null;
@@ -1480,6 +1485,9 @@ export function createRuntimeConfigCapability(
     if (clientChanged || connectionChanged) {
       configLoad = null;
       schemaLoad = null;
+      // A dead prior-connection flight must not keep the reconnected owner's
+      // explicit-operation FIFO waiting forever.
+      explicitOpQueue = null;
       // A reconnect may reuse the client object. Keep generations monotonic so work
       // from the previous connection cannot commit into the new connection epoch.
       invalidateConfigConnection(state);

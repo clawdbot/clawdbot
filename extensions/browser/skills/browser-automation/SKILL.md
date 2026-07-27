@@ -22,6 +22,9 @@ Use this skill when you need the `browser` tool for anything beyond a single pag
    - Avoid relying on raw DevTools `targetId` except for immediate diagnostics; it can change under Chromium target replacement.
 3. Read before you click:
    - For “read the page and answer X,” use `action="extract"` with `query` so only the answer returns.
+   - Prefer `selector` to scope extraction on large pages and list views; use `ignoreSelectors` to drop repeated chrome.
+   - Use `schema` when downstream work needs validated, machine-usable fields instead of prose.
+   - For virtualized lists, scroll through each segment, extract it, then merge the structured results.
    - Use `action="snapshot"` instead when you need action refs or page structure.
    - If extract returns `NOT_FOUND` or asks for snapshot fallback, inspect the page with a snapshot.
    - Use `action="snapshot"` on the intended `targetId`.

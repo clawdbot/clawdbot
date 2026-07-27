@@ -73,12 +73,13 @@ export function renderSidebarAgentMenuForController(controller: SidebarMenusCont
   const { host } = controller;
   const position = controller.agentMenuPosition;
   const trigger = controller.agentMenuTrigger;
-  const { activeId, agent, agents } = host.activeChipAgent();
+  const { activeId, agent, agents, identity, identities } = host.activeChipAgent();
   return renderSidebarAgentMenu({
     position,
     activeId,
-    activeName: agent ? normalizeAgentLabel(agent) : activeId,
+    activeName: identity?.name?.trim() || (agent ? normalizeAgentLabel(agent) : activeId),
     agents,
+    identities,
     filter: controller.agentMenuFilter,
     pinnedAgentIds: host.pinnedAgentIds,
     connected: host.connected,
@@ -327,8 +328,15 @@ export function renderSidebarCatalogViewMenuForController(controller: SidebarMen
     position,
     trigger: controller.catalogViewMenuTrigger,
     grouping: host.catalogProjectGrouping,
+    creators: host.sessionOwnershipVisible ? host.sessionCreatorOptions : [],
+    creatorFilterId: host.sessionCreatorFilterActive ? host.sessionCreatorFilterId : null,
     onGroupingChange: (grouping) => {
       host.setCatalogProjectGrouping(grouping);
+      controller.closeCatalogViewMenu({ restoreFocus: true });
+    },
+    onCreatorFilterChange: (creatorId) => {
+      host.sessionCreatorFilterId = creatorId;
+      void host.sessionDataContext?.sessions.setCreatorFilter(creatorId);
       controller.closeCatalogViewMenu({ restoreFocus: true });
     },
     onClose: (restoreFocus) => {

@@ -127,11 +127,6 @@ export const QWEN_TOKEN_PLAN_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig>
   },
 ];
 
-export function isQwenTokenPlanModelId(modelId: string): boolean {
-  const normalized = modelId.trim().toLowerCase();
-  return QWEN_TOKEN_PLAN_MODEL_CATALOG.some((model) => model.id.toLowerCase() === normalized);
-}
-
 export const QWEN_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig> = [
   {
     id: "qwen3.5-plus",

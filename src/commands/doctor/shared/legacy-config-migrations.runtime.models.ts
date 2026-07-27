@@ -42,6 +42,25 @@ const LEGACY_DEFAULT_MODEL_MIGRATION = defineLegacyConfigMigration({
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS = [
   LEGACY_DEFAULT_MODEL_MIGRATION,
   defineLegacyConfigMigration({
+    id: "models.pricing-retired",
+    describe: "Remove the retired client-side model pricing bootstrap toggle",
+    legacyRules: [
+      {
+        path: ["models", "pricing"],
+        message:
+          'models.pricing is retired because pricing ships with the hosted catalog; run "openclaw doctor --fix" to remove it.',
+      },
+    ],
+    apply: (raw, changes) => {
+      const models = getRecord(raw.models);
+      if (!models || !Object.hasOwn(models, "pricing")) {
+        return;
+      }
+      delete models.pricing;
+      changes.push("Removed models.pricing (pricing now ships with the hosted model catalog).");
+    },
+  }),
+  defineLegacyConfigMigration({
     id: "models.providers.*.models.*.compat->provider-catalog",
     describe: "Move known-model compatibility capability ownership into provider catalogs",
     legacyRules: catalog.MODEL_COMPAT_CATALOG_RULES,

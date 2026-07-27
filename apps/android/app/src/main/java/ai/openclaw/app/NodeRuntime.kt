@@ -29,6 +29,7 @@ import ai.openclaw.app.chat.MessageSpeechController
 import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.OutgoingAttachment
 import ai.openclaw.app.chat.SessionBranch
+import ai.openclaw.app.chat.SessionForkResult
 import ai.openclaw.app.chat.SessionRewindResult
 import ai.openclaw.app.chat.SystemSpeechSpeaker
 import ai.openclaw.app.gateway.DeviceAuthEntry
@@ -3631,6 +3632,8 @@ class NodeRuntime private constructor(
   private suspend fun runTalkPttCommand(block: suspend () -> GatewaySession.InvokeResult): GatewaySession.InvokeResult =
     try {
       block()
+    } catch (err: CancellationException) {
+      throw err
     } catch (err: Throwable) {
       val (code, message) = invokeErrorFromThrowable(err)
       GatewaySession.InvokeResult.error(code = code, message = message)
@@ -4644,23 +4647,17 @@ class NodeRuntime private constructor(
     }
   }
 
-  fun disconnect() {
-    synchronized(gatewayLifecycleIntentLock) {
-      preferredGatewayReconnectSuppressed = true
-      secondaryGatewayConnectionsEnabled.value = false
-      gatewayLifecycleIntentSeq.incrementAndGet()
-      disconnectSecondaryGatewayConnections()
-      disconnect(retireRunState = false)
-    }
-  }
+  fun disconnect() = disconnectGatewayLifecycle(retireRunState = false)
 
-  fun prepareForGatewaySetup() {
+  fun prepareForGatewaySetup() = disconnectGatewayLifecycle(retireRunState = true)
+
+  private fun disconnectGatewayLifecycle(retireRunState: Boolean) {
     synchronized(gatewayLifecycleIntentLock) {
       preferredGatewayReconnectSuppressed = true
       secondaryGatewayConnectionsEnabled.value = false
       gatewayLifecycleIntentSeq.incrementAndGet()
       disconnectSecondaryGatewayConnections()
-      disconnect(retireRunState = true)
+      disconnect(retireRunState)
     }
   }
 
@@ -5040,7 +5037,7 @@ class NodeRuntime private constructor(
 
   suspend fun rewindChatAtEntry(entryId: String): SessionRewindResult? = chat.rewindSessionAtEntryResult(chatSessionKey.value, entryId)
 
-  suspend fun forkChatAtEntry(entryId: String): Pair<String, String?>? = chat.forkSessionAtEntry(chatSessionKey.value, entryId)
+  suspend fun forkChatAtEntry(entryId: String): SessionForkResult? = chat.forkSessionAtEntry(chatSessionKey.value, entryId)
 
   suspend fun refreshChatSessionBranches(): Boolean = chat.refreshSessionBranches()
 
@@ -6979,6 +6976,8 @@ class NodeRuntime private constructor(
                   id = row.id,
                   createdAtMs = row.createdAtMs ?: System.currentTimeMillis(),
                 )
+              } catch (err: CancellationException) {
+                throw err
               } catch (_: Throwable) {
                 null
               }
@@ -7015,6 +7014,8 @@ class NodeRuntime private constructor(
         rows = rows,
         terminalApprovals = terminalApprovals,
       )
+    } catch (err: CancellationException) {
+      throw err
     } catch (_: Throwable) {
       publishGatewayData(gatewayScope) {
         if (execApprovalsRefreshSeq.get() == refreshGeneration) {
@@ -7071,6 +7072,8 @@ class NodeRuntime private constructor(
             markExecApprovalResolved(id)
           }
       }
+    } catch (err: CancellationException) {
+      throw err
     } catch (_: Throwable) {
       if (isGatewayDataScopeCurrent(gatewayScope)) {
         refreshExecApprovalsFromGateway()
@@ -7350,6 +7353,8 @@ class NodeRuntime private constructor(
             pendingWrite.createdAtMs
               ?: _execApprovals.value.firstOrNull { it.id == pendingWrite.id }?.createdAtMs,
         )
+      } catch (err: CancellationException) {
+        throw err
       } catch (_: Throwable) {
         return
       }

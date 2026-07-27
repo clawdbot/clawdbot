@@ -1990,11 +1990,10 @@ jobs:
 
       - name: Setup artifact package validation environment
         if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_id != ''
-        uses: ./.release-harness/.github/actions/setup-node-env
+        uses: ./.release-harness/.github/actions/setup-pnpm-store-cache
         with:
           node-version: ${{ env.NODE_VERSION }}
-          install-bun: "false"
-          install-deps: "false"
+          package-manager-file: .release-harness/package.json
           use-actions-cache: "false"
 
       - name: Install trusted package validation dependencies
@@ -3326,7 +3325,8 @@ jobs:
               echo "OPENCLAW_TEST_CONSOLE=1" >> "$GITHUB_ENV"
               ;;
             live-codex-harness*-docker)
-              # Keep CI on the API-key path for now. The staged Codex auth secret
+              # TODO(2026-10-01): Repair or remove stale staged Codex auth, then choose the canonical CI auth path.
+              # Keep CI on the API-key path. The staged Codex auth secret
               # is currently stale, but the wrapper still supports codex-auth for
               # local maintainer reruns without changing Peter's flow.
               echo "OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key" >> "$GITHUB_ENV"

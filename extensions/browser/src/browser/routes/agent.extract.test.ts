@@ -13,7 +13,18 @@ const routeState = vi.hoisted(() => ({
       cdpIsLoopback: true,
     },
   },
-  pageContentViaPlaywright: vi.fn(async () => "<main>Private page body</main>"),
+  pageContentViaPlaywright: vi.fn<
+    () => Promise<
+      | { ok: true; html: string }
+      | {
+          ok: false;
+          error: "invalid_selector" | "selector_not_found";
+        }
+    >
+  >(async () => ({
+    ok: true,
+    html: "<main>Private page body</main>",
+  })),
   withPlaywrightRouteContext: vi.fn(),
 }));
 
@@ -81,6 +92,46 @@ describe("browser extract route", () => {
       targetId: "t1",
       ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
       signal: expect.any(AbortSignal),
+      selector: undefined,
+      ignoreSelectors: [],
+    });
+  });
+
+  it("forwards selector scoping and ignored nodes to Playwright capture", async () => {
+    const response = createBrowserRouteResponse();
+    await getExtractHandler()?.(
+      {
+        params: {},
+        query: {},
+        body: { selector: "main", ignoreSelectors: ["nav", "footer"] },
+      },
+      response.res,
+    );
+
+    expect(routeState.pageContentViaPlaywright).toHaveBeenCalledWith(
+      expect.objectContaining({ selector: "main", ignoreSelectors: ["nav", "footer"] }),
+    );
+  });
+
+  it("returns a selector no-match result without falling back to the full page", async () => {
+    routeState.pageContentViaPlaywright.mockResolvedValueOnce({
+      ok: false,
+      error: "selector_not_found",
+      message: "hostile page-controlled text",
+    } as never);
+    const response = createBrowserRouteResponse();
+    await getExtractHandler()?.(
+      { params: {}, query: {}, body: { selector: ".missing" } },
+      response.res,
+    );
+
+    expect(response.body).toEqual({
+      ok: false,
+      error: "selector_not_found",
+      message:
+        'CSS selector ".missing" matched no usable elements; check selector and ignoreSelectors, or omit selector to extract the whole page.',
+      targetId: "t1",
+      url: "https://example.com",
     });
   });
 
@@ -95,7 +146,10 @@ describe("browser extract route", () => {
   });
 
   it("rejects oversized HTML before returning it to the caller", async () => {
-    routeState.pageContentViaPlaywright.mockResolvedValueOnce("x".repeat(2_000_001));
+    routeState.pageContentViaPlaywright.mockResolvedValueOnce({
+      ok: true,
+      html: "x".repeat(2_000_001),
+    });
     const response = createBrowserRouteResponse();
     await getExtractHandler()?.({ params: {}, query: {}, body: {} }, response.res);
 

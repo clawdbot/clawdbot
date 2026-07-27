@@ -16,13 +16,10 @@ import type { MattermostMonitorContext } from "./monitor-types.js";
 import {
   createMattermostReplyDeliveryBarrier,
   deliverMattermostReplyPayload,
+  toMattermostChannelDeliveryResult,
 } from "./reply-delivery.js";
 import type { ReplyPayload } from "./runtime-api.js";
-import {
-  createChannelMessageReplyPipeline,
-  logTypingFailure,
-  registerPluginHttpRoute,
-} from "./runtime-api.js";
+import { logTypingFailure, registerPluginHttpRoute } from "./runtime-api.js";
 import { sendMessageMattermost } from "./send.js";
 
 export function registerMattermostInteractions(params: {
@@ -180,12 +177,51 @@ export function registerMattermostInteractions(params: {
           channel: "mattermost",
           accountId: account.accountId,
         });
-        const { onModelSelected, typingCallbacks, ...replyPipeline } =
-          createChannelMessageReplyPipeline({
-            cfg,
+        const deliveryBarrier = createMattermostReplyDeliveryBarrier({
+          isDirect: kind === "direct",
+          dmRetryOptions: account.config.dmChannelRetry,
+        });
+        await core.channel.inbound.dispatch({
+          cfg,
+          channel: "mattermost",
+          accountId: account.accountId,
+          route: {
             agentId: route.agentId,
-            channel: "mattermost",
-            accountId: account.accountId,
+            dmScope: route.dmScope,
+            sessionKey: threadContext.sessionKey,
+          },
+          ctxPayload,
+          delivery: {
+            deliver: async (payload: ReplyPayload) => {
+              const result = toMattermostChannelDeliveryResult(
+                await deliverMattermostReplyPayload({
+                  core,
+                  cfg,
+                  payload,
+                  to,
+                  accountId: account.accountId,
+                  agentId: route.agentId,
+                  replyToId: resolveMattermostReplyRootId({
+                    kind,
+                    threadRootId: threadContext.effectiveReplyToId,
+                    replyToId: payload.replyToId,
+                  }),
+                  textLimit,
+                  tableMode,
+                  sendMessage: sendMessageMattermost,
+                  onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
+                }),
+              );
+              if (result.visibleReplySent) {
+                runtime.log?.(`delivered button-click reply to ${to}`);
+              }
+              return result;
+            },
+            onError: (err, info) => {
+              runtime.error?.(`mattermost button-click ${info.kind} reply failed: ${String(err)}`);
+            },
+          },
+          replyPipeline: {
             typing: {
               start: () => sendTypingIndicator(button.channelId, threadContext.effectiveReplyToId),
               onStartError: (err) => {
@@ -197,48 +233,15 @@ export function registerMattermostInteractions(params: {
                 });
               },
             },
-          });
-        const deliveryBarrier = createMattermostReplyDeliveryBarrier({
-          isDirect: kind === "direct",
-          dmRetryOptions: account.config.dmChannelRetry,
-        });
-        await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-          ctx: ctxPayload,
-          cfg,
+          },
           dispatcherOptions: {
-            ...replyPipeline,
             resolveFollowupAdmissionBarrierTimeoutPolicy: deliveryBarrier.resolveTimeoutPolicy,
             onDeliverySettled: deliveryBarrier.markDeliverySettled,
             humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
-            deliver: async (payload: ReplyPayload) => {
-              await deliverMattermostReplyPayload({
-                core,
-                cfg,
-                payload,
-                to,
-                accountId: account.accountId,
-                agentId: route.agentId,
-                replyToId: resolveMattermostReplyRootId({
-                  kind,
-                  threadRootId: threadContext.effectiveReplyToId,
-                  replyToId: payload.replyToId,
-                }),
-                textLimit,
-                tableMode,
-                sendMessage: sendMessageMattermost,
-                onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
-              });
-              runtime.log?.(`delivered button-click reply to ${to}`);
-            },
-            onError: (err, info) => {
-              runtime.error?.(`mattermost button-click ${info.kind} reply failed: ${String(err)}`);
-            },
-            typingCallbacks,
           },
           replyOptions: {
             disableBlockStreaming:
               typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
-            onModelSelected,
           },
         });
       },

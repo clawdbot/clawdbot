@@ -125,6 +125,110 @@ describe("TuiStreamAssembler", () => {
     expect(second).toBeNull();
   });
 
+  it("bounds orphaned stream state while preserving recently active runs", () => {
+    const assembler = new TuiStreamAssembler();
+    for (let index = 0; index < 200; index += 1) {
+      assembler.ingestDelta(`run-${index}`, messageWithContent([text(`Draft ${index}`)]), false);
+    }
+
+    assembler.ingestDelta("run-0", messageWithContent([text("Recently active")]), false);
+    assembler.ingestDelta("run-200", messageWithContent([text("Newest")]), false);
+
+    expect(assembler.finalize("run-0", { role: "assistant", content: [] }, false)).toBe(
+      "Recently active",
+    );
+    expect(assembler.finalize("run-1", { role: "assistant", content: [] }, false)).toBe(
+      "(no output)",
+    );
+    expect(assembler.finalize("run-200", { role: "assistant", content: [] }, false)).toBe("Newest");
+  });
+
+  it("does not evict an active run when an evicted run finalizes late", () => {
+    const assembler = new TuiStreamAssembler();
+    for (let index = 0; index < 201; index += 1) {
+      assembler.ingestDelta(`run-${index}`, messageWithContent([text(`Draft ${index}`)]), false);
+    }
+
+    expect(assembler.finalize("run-0", messageWithContent([text("Late final")]), false)).toBe(
+      "Late final",
+    );
+    expect(assembler.finalize("run-1", { role: "assistant", content: [] }, false)).toBe("Draft 1");
+  });
+
+  it("keeps a live run available across thousands of orphaned stream updates", () => {
+    const assembler = new TuiStreamAssembler();
+    assembler.ingestDelta("run-live", messageWithContent([text("Still streaming")]), false);
+
+    for (let index = 0; index < 2_000; index += 1) {
+      assembler.ingestDelta(
+        `run-orphan-${index}`,
+        messageWithContent([text(`Draft ${index}`)]),
+        false,
+      );
+      if (index % 100 === 0) {
+        assembler.ingestDelta("run-live", messageWithContent([text("Still streaming")]), false);
+      }
+    }
+
+    expect(assembler.finalize("run-live", { role: "assistant", content: [] }, false)).toBe(
+      "Still streaming",
+    );
+    expect(assembler.finalize("run-orphan-0", { role: "assistant", content: [] }, false)).toBe(
+      "(no output)",
+    );
+    expect(assembler.finalize("run-orphan-1999", { role: "assistant", content: [] }, false)).toBe(
+      "Draft 1999",
+    );
+  });
+
+  it("protects a paused live stream across thousands of orphaned updates", () => {
+    const assembler = new TuiStreamAssembler((runId) => runId === "run-live");
+    assembler.ingestDelta("run-live", messageWithContent([text("Before the tool call")]), false);
+
+    for (let index = 0; index < 2_000; index += 1) {
+      assembler.ingestDelta(
+        `run-orphan-${index}`,
+        messageWithContent([text(`Draft ${index}`)]),
+        false,
+      );
+    }
+
+    expect(assembler.finalize("run-live", { role: "assistant", content: [] }, false)).toBe(
+      "Before the tool call",
+    );
+    expect(assembler.finalize("run-orphan-0", { role: "assistant", content: [] }, false)).toBe(
+      "(no output)",
+    );
+    expect(assembler.finalize("run-orphan-1999", { role: "assistant", content: [] }, false)).toBe(
+      "Draft 1999",
+    );
+  });
+
+  it("protects concurrent live streams without retaining abandoned runs", () => {
+    const protectedRuns = new Set(["run-first", "run-second"]);
+    const assembler = new TuiStreamAssembler((runId) => protectedRuns.has(runId));
+    assembler.ingestDelta("run-first", messageWithContent([text("First live response")]), false);
+    assembler.ingestDelta("run-second", messageWithContent([text("Second live response")]), false);
+
+    for (let index = 0; index < 500; index += 1) {
+      assembler.ingestDelta(
+        `run-orphan-${index}`,
+        messageWithContent([text(`Draft ${index}`)]),
+        false,
+      );
+    }
+
+    expect(assembler.finalize("run-first", { role: "assistant", content: [] }, false)).toBe(
+      "First live response",
+    );
+    expect(assembler.finalize("run-second", { role: "assistant", content: [] }, false)).toBe(
+      "Second live response",
+    );
+    expect(assembler.finalize("run-orphan-0", { role: "assistant", content: [] }, false)).toBe(
+      "(no output)",
+    );
+  });
+
   it("keeps streamed delta text when incoming tool boundary drops a block", () => {
     const assembler = new TuiStreamAssembler();
     const first = assembler.ingestDelta("run-delta-boundary", TEXT_ONLY_TWO_BLOCKS, false);

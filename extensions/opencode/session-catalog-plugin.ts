@@ -20,6 +20,7 @@ import type {
 } from "openclaw/plugin-sdk/session-catalog";
 import {
   createSessionCatalogAdoptionCoordinator,
+  importSessionCatalogHistory,
   listAdoptedSessionCatalogSessions,
   sessionCatalogAdoptedSessionKey,
   sessionCatalogAdoptedSourceKey,
@@ -46,6 +47,10 @@ import {
   readLocalOpenCodeTranscriptPage,
   type OpenCodeSessionPage,
 } from "./session-catalog.js";
+import {
+  checkOpenCodeUpstreamActivity,
+  linkContinuedOpenCodeSession,
+} from "./session-upstream-activity.js";
 
 const MAX_HOSTS = 100;
 const TRANSCRIPT_ITEM_TYPES = new Set([
@@ -60,7 +65,10 @@ const ACPX_BACKEND_ID = "acpx";
 const OPENCODE_ACP_AGENT_ID = "opencode";
 const OPENCODE_ADOPTED_SESSION_KEY_PREFIX = "plugin:opencode:catalog-adopt:";
 
-const continueAdoption = createSessionCatalogAdoptionCoordinator();
+const continueAdoption =
+  createSessionCatalogAdoptionCoordinator<
+    Awaited<ReturnType<typeof linkContinuedOpenCodeSession>>
+  >();
 
 function isOptionalString(value: unknown): boolean {
   return value === undefined || typeof value === "string";
@@ -456,7 +464,7 @@ async function continueOpenCodeSession(
   api: OpenClawPluginApi,
   hostId: string,
   threadId: string,
-): Promise<{ sessionKey: string }> {
+): Promise<Awaited<ReturnType<typeof linkContinuedOpenCodeSession>>> {
   if (hostId.startsWith("node:")) {
     throw new OpenCodeCatalogParamsError("paired-node OpenCode session rows are view-only");
   }
@@ -494,8 +502,6 @@ async function continueOpenCodeSession(
         throw new OpenCodeCatalogParamsError(currentAvailability.message);
       }
       const marker = { sourceThreadId: threadId };
-      // ACPX binds the native session before OpenClaw turn handlers attach, so
-      // the OpenClaw transcript starts empty while OpenCode retains server context.
       const created = await api.runtime.agent.session.createSessionEntry({
         cfg: config,
         key: sessionCatalogAdoptedSessionKey(OPENCODE_ADOPTED_SESSION_KEY_PREFIX, threadId),
@@ -511,12 +517,30 @@ async function continueOpenCodeSession(
           },
           pluginExtensions: { opencode: { sessionCatalog: marker } },
         },
-        afterCreate: async () => ({
-          pluginExtensions: { opencode: { sessionCatalog: marker } },
-        }),
+        afterCreate: async (entry) => {
+          await importSessionCatalogHistory({
+            catalogId: "opencode",
+            threadId,
+            read: async ({ cursor, limit }) =>
+              await readOpenCodeTranscript(api.runtime, {
+                hostId,
+                threadId,
+                limit,
+                ...(cursor ? { cursor } : {}),
+              }),
+            sessionId: entry.sessionId,
+            sessionKey: entry.key,
+            agentId: entry.agentId,
+            ...(record.cwd ? { cwd: record.cwd } : {}),
+            config,
+          });
+          return { pluginExtensions: { opencode: { sessionCatalog: marker } } };
+        },
       });
       return { sessionKey: created.key };
     },
+    complete: async (continued) =>
+      await linkContinuedOpenCodeSession(continued.sessionKey, threadId),
   });
 }
 
@@ -531,6 +555,7 @@ export function registerOpenCodeSessionCatalog(api: OpenClawPluginApi): void {
     read: async (request) => await readOpenCodeTranscript(api.runtime, request),
     continueSession: async (request) =>
       await continueOpenCodeSession(api, request.hostId, request.threadId),
+    checkUpstreamActivity: checkOpenCodeUpstreamActivity,
     openTerminal: async (request) =>
       await openOpenCodeCatalogTerminal({
         runtime: api.runtime,

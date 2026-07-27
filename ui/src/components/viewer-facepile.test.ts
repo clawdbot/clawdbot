@@ -1,8 +1,10 @@
 /* @vitest-environment jsdom */
 
+import { render } from "lit";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ControlUiBuildInfo } from "../build-info.ts";
-import { setAvatarGatewayOrigin } from "../lib/identity-avatar.ts";
+import { resolveAvatarInitials, setAvatarGatewayOrigin } from "../lib/identity-avatar.ts";
+import { renderChatAuthorAvatar } from "../pages/chat/components/chat-author-avatar.ts";
 import {
   hasMultiplePresenceIdentities,
   hasSessionPresenceViewers,
@@ -20,6 +22,41 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it("uses the same user initials and identity hue in the roster and attributed chat", async () => {
+  const user: PresenceViewer = {
+    id: "profile-riley",
+    name: "Riley",
+    email: "riley@example.test",
+    watchedSessions: [],
+  };
+  const viewerAvatar = document.createElement("openclaw-viewer-avatar") as ViewerAvatarElement;
+  viewerAvatar.user = user;
+  document.body.append(viewerAvatar);
+
+  const chat = document.createElement("div");
+  document.body.append(chat);
+  render(renderChatAuthorAvatar({ id: user.id, name: user.name, username: user.email }), chat);
+
+  const expected = resolveAvatarInitials({
+    id: user.id,
+    name: user.name,
+    username: user.email,
+  });
+  await vi.waitFor(async () => {
+    await viewerAvatar.updateComplete;
+    const rosterInitials = viewerAvatar.querySelector(".viewer-avatar > span");
+    const chatInitials = chat.querySelector(".chat-author-avatar__initials");
+    expect(rosterInitials?.textContent?.trim()).toBe(expected.initials);
+    expect(chatInitials?.textContent?.trim()).toBe(expected.initials);
+    expect(rosterInitials?.getAttribute("style")).toContain(
+      `hsl(${expected.colorSeed % 360} 48% 42%)`,
+    );
+    expect(chatInitials?.getAttribute("style")).toContain(
+      `--chat-author-avatar-hue: ${expected.colorSeed % 360}`,
+    );
+  });
+});
+
 it("uses the shared resolver and rejects cross-origin presence avatar metadata", async () => {
   const avatar = document.createElement("openclaw-viewer-avatar") as ViewerAvatarElement;
   avatar.user = {
@@ -33,7 +70,7 @@ it("uses the shared resolver and rejects cross-origin presence avatar metadata",
   await vi.waitFor(async () => {
     await avatar.updateComplete;
     expect(avatar.querySelector("img")).toBeNull();
-    expect(avatar.textContent?.trim()).toBe("MA");
+    expect(avatar.textContent?.trim()).toBe("M");
   });
 });
 
@@ -51,6 +88,64 @@ it("renders trusted presence avatar routes directly", async () => {
     await avatar.updateComplete;
     expect(avatar.querySelector("img")?.getAttribute("src")).toBe("/api/users/profile-ada/avatar");
   });
+});
+
+it("derives a missing presence avatar from the durable profile id, not the email", async () => {
+  const profileId = "c3e32452-0467-47e5-aafa-233cd5dae29f";
+  const avatar = document.createElement("openclaw-viewer-avatar") as ViewerAvatarElement;
+  avatar.user = {
+    id: profileId,
+    email: "ada@example.test",
+    name: "Ada Lovelace",
+    watchedSessions: [],
+  };
+  document.body.append(avatar);
+
+  await vi.waitFor(async () => {
+    await avatar.updateComplete;
+    expect(avatar.querySelector("img")?.getAttribute("src")).toBe(`/api/users/${profileId}/avatar`);
+  });
+});
+
+it("shares an authenticated avatar blob between the same user in the roster and profile", async () => {
+  setAvatarGatewayOrigin("https://gateway.example.test", "Bearer viewer-token");
+  const fetchAvatar = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    new Response(new Uint8Array([1, 2, 3]), {
+      headers: { "content-type": "image/png" },
+    }),
+  );
+  vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:shared-viewer-avatar");
+  const user: PresenceViewer = {
+    id: "profile-ada",
+    email: "ada@example.test",
+    name: "Ada Lovelace",
+    avatarUrl: "/api/users/profile-ada/avatar?v=7",
+    watchedSessions: [],
+  };
+  const avatars = Array.from({ length: 2 }, () => {
+    const avatar = document.createElement("openclaw-viewer-avatar") as ViewerAvatarElement;
+    avatar.user = user;
+    document.body.append(avatar);
+    return avatar;
+  });
+
+  await vi.waitFor(async () => {
+    await Promise.all(avatars.map((avatar) => avatar.updateComplete));
+    expect(avatars.map((avatar) => avatar.querySelector("img")?.getAttribute("src"))).toEqual([
+      "blob:shared-viewer-avatar",
+      "blob:shared-viewer-avatar",
+    ]);
+  });
+
+  expect(fetchAvatar).toHaveBeenCalledOnce();
+  expect(fetchAvatar).toHaveBeenCalledWith(
+    "https://gateway.example.test/api/users/profile-ada/avatar?v=7",
+    expect.objectContaining({ headers: { Authorization: "Bearer viewer-token" } }),
+  );
+  for (const avatar of avatars) {
+    avatar.querySelector("img")?.dispatchEvent(new Event("load"));
+    expect(avatar.querySelector(".viewer-avatar")?.classList.contains("is-fallback")).toBe(false);
+  }
 });
 
 type ViewerFacepileElement = HTMLElement & {

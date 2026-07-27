@@ -30,6 +30,7 @@ const extractMocks = vi.hoisted(() => ({
     },
   })),
   resolveBrowserExtractTimeoutMs: vi.fn(() => 60_000),
+  validateBrowserExtractSchema: vi.fn(() => undefined),
 }));
 
 vi.mock("../browser-extract.js", () => extractMocks);
@@ -56,6 +57,7 @@ describe("browser action observe commands", () => {
     mocks.callBrowserRequest.mockClear();
     extractMocks.completeBrowserExtract.mockClear();
     extractMocks.resolveBrowserExtractTimeoutMs.mockClear();
+    extractMocks.validateBrowserExtractSchema.mockClear();
     getBrowserCliRuntimeCapture().resetRuntimeCapture();
   });
 
@@ -91,6 +93,63 @@ describe("browser action observe commands", () => {
     );
     expect(getBrowserCliRuntimeCapture().runtimeLogs.join("\n")).toContain("The answer.");
     expect(getBrowserCliRuntimeCapture().runtimeLogs.join("\n")).not.toContain("Private page body");
+  });
+
+  it("passes extract scoping and structured-output flags through", async () => {
+    mocks.callBrowserRequest.mockResolvedValueOnce({
+      ok: true,
+      targetId: "t1",
+      url: "https://example.com",
+      html: "<main>Scoped page body</main>",
+    });
+    const program = createActionObserveProgram();
+
+    await program.parseAsync(
+      [
+        "browser",
+        "extract",
+        "What is the answer?",
+        "--selector",
+        "main",
+        "--ignore-selector",
+        "nav",
+        "--ignore-selector",
+        ".ad",
+        "--schema",
+        '{"type":"object"}',
+      ],
+      { from: "user" },
+    );
+
+    expect(mocks.callBrowserRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ json: false }),
+      expect.objectContaining({
+        body: expect.objectContaining({
+          selector: "main",
+          ignoreSelectors: ["nav", ".ad"],
+        }),
+      }),
+      { timeoutMs: 60_000 },
+    );
+    expect(extractMocks.completeBrowserExtract).toHaveBeenCalledWith(
+      expect.objectContaining({ schema: { type: "object" } }),
+    );
+  });
+
+  it("passes a successful empty capture to extraction", async () => {
+    mocks.callBrowserRequest.mockResolvedValueOnce({
+      ok: true,
+      targetId: "t1",
+      url: "https://example.com",
+      html: "",
+    });
+    const program = createActionObserveProgram();
+
+    await program.parseAsync(["browser", "extract", "What is present?"], { from: "user" });
+
+    expect(extractMocks.completeBrowserExtract).toHaveBeenCalledWith(
+      expect.objectContaining({ html: "" }),
+    );
   });
 
   it("rejects non-decimal responsebody numeric flags before dispatch", async () => {

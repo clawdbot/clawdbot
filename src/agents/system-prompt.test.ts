@@ -1020,12 +1020,12 @@ describe("buildAgentSystemPrompt", () => {
     expect(messagingPrompt).not.toContain("subagents(action=list)");
 
     expect(spawnOnlyPrompt).toContain(
-      '- Subagents: `sessions_spawn` with objective/output/write-scope/verification; stable handle needs `taskName`; isolated omits `context`, transcript needs `context:"fork"`.',
+      '- Subagents: `sessions_spawn` with objective/output/write-scope/verification; stable handle needs `taskName`, UI title `label`; isolated omits `context`, transcript needs `context:"fork"`.',
     );
     expect(spawnOnlyPrompt).not.toContain("manage already-spawned children");
 
     expect(orchestrationPrompt).toContain(
-      '- Subagents: `sessions_spawn` with objective/output/write-scope/verification; stable handle needs `taskName`; isolated omits `context`, transcript needs `context:"fork"`; `subagents(action=list)` only status/debug.',
+      '- Subagents: `sessions_spawn` with objective/output/write-scope/verification; stable handle needs `taskName`, UI title `label`; isolated omits `context`, transcript needs `context:"fork"`; `subagents(action=list)` only status/debug.',
     );
     expect(orchestrationWaitPrompt).toContain("wait via `sessions_yield`");
   });
@@ -1598,6 +1598,33 @@ describe("buildAgentSystemPrompt", () => {
     for (const variant of [otherOwnerPrompt, manualApprovalPrompt]) {
       expect(variant.slice(0, variant.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY))).toBe(stablePrefix);
     }
+  });
+
+  it("keeps automatic tool discovery in the stable prompt-cache prefix", () => {
+    const toolSchemaDirectoryPrompt = [
+      "Available deferred-schema tools:",
+      "- fake_calendar: Schedule a calendar event",
+      "- fake_weather: Read current weather",
+      "",
+      "Use tool_search_code with openclaw.tools.search(query).",
+    ].join("\n");
+    const buildPrompt = (owner: string) =>
+      buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        toolNames: ["tool_search_code"],
+        toolSchemaDirectoryPrompt,
+        ownerNumbers: [owner],
+      });
+    const first = buildPrompt("+123");
+    const second = buildPrompt("+456");
+    const firstBoundary = first.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
+    const secondBoundary = second.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
+
+    expect(firstBoundary).toBeGreaterThan(first.indexOf("### Deferred Tool Schemas"));
+    expect(first.slice(0, firstBoundary)).toBe(second.slice(0, secondBoundary));
+    expect(first.slice(0, firstBoundary)).toContain(toolSchemaDirectoryPrompt);
+    expect(first.slice(firstBoundary)).toContain("Allowlisted senders: +123");
+    expect(second.slice(secondBoundary)).toContain("Allowlisted senders: +456");
   });
 });
 

@@ -1,4 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  configureAiTransportHost,
+  getAiTransportHost,
+  type AiProviderRequestCapabilities,
+  type AiProviderRequestPolicyInput,
+} from "../host.js";
 import type { AssistantMessage, Context, Model, OpenAICompletionsCompat } from "../types.js";
 
 const mockOpenAI = vi.hoisted(() => ({
@@ -45,7 +51,7 @@ vi.mock("openai", () => {
 import {
   resolveOpenAICompletionsCompat,
   type ResolvedOpenAICompletionsCompat,
-} from "./openai-completions-compat.js";
+} from "../transports/openai-completions-compat.js";
 import { streamOpenAICompletions } from "./openai-completions.js";
 
 const baseModel: Model<"openai-completions"> = {
@@ -63,6 +69,7 @@ const baseModel: Model<"openai-completions"> = {
 
 const userMessage = { role: "user", content: "hello", timestamp: 1 } as const;
 const context: Context = { messages: [userMessage] };
+let previousAiTransportHost: ReturnType<typeof getAiTransportHost>;
 
 function createModel(
   overrides: Partial<Model<"openai-completions">> & {
@@ -70,6 +77,68 @@ function createModel(
   } = {},
 ): Model<"openai-completions"> {
   return { ...baseModel, ...overrides };
+}
+
+function resolveTestEndpointClass(baseUrl: string | undefined): string {
+  if (!baseUrl) {
+    return "default";
+  }
+  const host = new URL(baseUrl).hostname;
+  const exactClasses: Record<string, string> = {
+    "api.openai.com": "openai-public",
+    "api.cerebras.ai": "cerebras-native",
+    "api.x.ai": "xai-native",
+    "api.moonshot.ai": "moonshot-native",
+    "api.moonshot.cn": "moonshot-native",
+    "llm.chutes.ai": "chutes-native",
+    "api.z.ai": "zai-native",
+    "api.deepseek.com": "deepseek-native",
+    "127.0.0.1": "local",
+    localhost: "local",
+  };
+  const exactClass = exactClasses[host];
+  if (exactClass) {
+    return exactClass;
+  }
+  if (host.endsWith(".openai.azure.com")) {
+    return "azure-openai";
+  }
+  if (host.endsWith("openrouter.ai")) {
+    return "openrouter";
+  }
+  if (host.endsWith("opencode.ai")) {
+    return "opencode-native";
+  }
+  if (host.endsWith("xiaomimimo.com")) {
+    return "xiaomi-native";
+  }
+  return "custom";
+}
+
+function resolveTestCapabilities(
+  input: AiProviderRequestPolicyInput,
+): AiProviderRequestCapabilities {
+  const endpointClass = resolveTestEndpointClass(input.baseUrl);
+  const provider = input.provider;
+  const knownProviderFamily =
+    provider === "moonshotai" || provider === "moonshotai-cn"
+      ? "moonshot"
+      : provider === "openai" || provider === "azure-openai"
+        ? "openai-family"
+        : (provider ?? "unknown");
+  const usesConfiguredBaseUrl = endpointClass !== "default";
+  const usesKnownNativeOpenAIEndpoint =
+    endpointClass === "openai-public" ||
+    endpointClass === "openai" ||
+    endpointClass === "azure-openai";
+  return {
+    endpointClass,
+    knownProviderFamily,
+    supportsNativeStreamingUsageCompat: endpointClass === "moonshot-native",
+    supportsOpenAICompletionsStreamingUsageCompat: false,
+    usesExplicitProxyLikeEndpoint: usesConfiguredBaseUrl && !usesKnownNativeOpenAIEndpoint,
+    allowsAnthropicServiceTier: false,
+  };
 }
 
 const defaultResolvedCompat = {
@@ -92,7 +161,332 @@ const defaultResolvedCompat = {
   sessionAffinity: "none",
   supportsPromptCacheKey: false,
   supportsLongCacheRetention: true,
+  visibleReasoningDetailTypes: [],
+  requiresNonEmptyUserOrAssistantMessage: false,
 } satisfies ResolvedOpenAICompletionsCompat;
+
+const proxyResolvedCompat = {
+  ...defaultResolvedCompat,
+  supportsStore: false,
+  supportsDeveloperRole: false,
+  supportsReasoningEffort: false,
+  supportsUsageInStreaming: false,
+  supportsStrictMode: false,
+} satisfies ResolvedOpenAICompletionsCompat;
+
+type DuplicatedCompatFields = Pick<
+  ResolvedOpenAICompletionsCompat,
+  | "supportsStore"
+  | "supportsDeveloperRole"
+  | "supportsReasoningEffort"
+  | "maxTokensField"
+  | "thinkingFormat"
+  | "supportsStrictMode"
+  | "supportsJsonSchemaResponseFormat"
+>;
+
+const defaultDuplicatedCompat = {
+  supportsStore: true,
+  supportsDeveloperRole: true,
+  supportsReasoningEffort: true,
+  maxTokensField: "max_completion_tokens",
+  thinkingFormat: "openai",
+  supportsStrictMode: true,
+  supportsJsonSchemaResponseFormat: false,
+} satisfies DuplicatedCompatFields;
+
+function duplicatedCompatFields(compat: ResolvedOpenAICompletionsCompat): DuplicatedCompatFields {
+  return {
+    supportsStore: compat.supportsStore,
+    supportsDeveloperRole: compat.supportsDeveloperRole,
+    supportsReasoningEffort: compat.supportsReasoningEffort,
+    maxTokensField: compat.maxTokensField,
+    thinkingFormat: compat.thinkingFormat,
+    supportsStrictMode: compat.supportsStrictMode,
+    supportsJsonSchemaResponseFormat: compat.supportsJsonSchemaResponseFormat,
+  };
+}
+
+const legacyOpenRouterCompat = {
+  ...defaultDuplicatedCompat,
+  supportsDeveloperRole: false,
+  thinkingFormat: "openrouter",
+} satisfies DuplicatedCompatFields;
+const legacyCerebrasCompat = {
+  ...defaultDuplicatedCompat,
+  supportsStore: false,
+  supportsDeveloperRole: false,
+} satisfies DuplicatedCompatFields;
+const legacyXaiCompat = {
+  ...legacyCerebrasCompat,
+  supportsReasoningEffort: false,
+} satisfies DuplicatedCompatFields;
+const legacyMoonshotCompat = {
+  ...legacyXaiCompat,
+  maxTokensField: "max_tokens",
+  supportsStrictMode: false,
+} satisfies DuplicatedCompatFields;
+const legacyCloudflareGatewayCompat = legacyMoonshotCompat;
+const legacyTogetherCompat = {
+  ...legacyMoonshotCompat,
+  thinkingFormat: "together",
+} satisfies DuplicatedCompatFields;
+const legacyZaiCompat = {
+  ...legacyXaiCompat,
+  maxTokensField: "max_tokens",
+  thinkingFormat: "zai",
+} satisfies DuplicatedCompatFields;
+const legacyXiaomiCompat = {
+  ...defaultDuplicatedCompat,
+  thinkingFormat: "deepseek",
+} satisfies DuplicatedCompatFields;
+const legacyDeepseekEndpointCompat = {
+  ...defaultDuplicatedCompat,
+  supportsStore: false,
+  supportsDeveloperRole: false,
+  thinkingFormat: "deepseek",
+} satisfies DuplicatedCompatFields;
+const legacyChutesCompat = {
+  ...legacyCerebrasCompat,
+  maxTokensField: "max_tokens",
+} satisfies DuplicatedCompatFields;
+
+const canonicalProxyCompat = {
+  ...defaultDuplicatedCompat,
+  supportsStore: false,
+  supportsDeveloperRole: false,
+  supportsReasoningEffort: false,
+  supportsStrictMode: false,
+} satisfies DuplicatedCompatFields;
+const canonicalOpenRouterCompat = {
+  ...canonicalProxyCompat,
+  thinkingFormat: "openrouter",
+} satisfies DuplicatedCompatFields;
+const canonicalChutesCompat = {
+  ...canonicalProxyCompat,
+  maxTokensField: "max_tokens",
+} satisfies DuplicatedCompatFields;
+const canonicalTogetherCompat = {
+  ...canonicalChutesCompat,
+  thinkingFormat: "together",
+} satisfies DuplicatedCompatFields;
+const canonicalZaiCompat = {
+  ...canonicalChutesCompat,
+  thinkingFormat: "zai",
+} satisfies DuplicatedCompatFields;
+const canonicalDeepseekCompat = {
+  ...canonicalProxyCompat,
+  thinkingFormat: "deepseek",
+} satisfies DuplicatedCompatFields;
+const endpointPolicyDivergence =
+  "canonical transport endpoint policy replaces the legacy provider/URL heuristic";
+
+type MatrixParityCase = readonly [
+  name: string,
+  overrides: Partial<Model<"openai-completions">>,
+  legacyExpected: DuplicatedCompatFields,
+  expected: DuplicatedCompatFields,
+  divergence: string | undefined,
+];
+
+const legacyMatrixParityCases = [
+  [
+    "provider openrouter",
+    { provider: "openrouter" },
+    legacyOpenRouterCompat,
+    canonicalOpenRouterCompat,
+    endpointPolicyDivergence,
+  ],
+  [
+    "endpoint openrouter.ai",
+    { provider: "custom", baseUrl: "https://openrouter.ai/api/v1" },
+    legacyOpenRouterCompat,
+    canonicalOpenRouterCompat,
+    endpointPolicyDivergence,
+  ],
+  [
+    "OpenRouter Anthropic model",
+    { provider: "openrouter", id: "anthropic/claude-sonnet-4.6" },
+    { ...legacyOpenRouterCompat, supportsDeveloperRole: true },
+    canonicalOpenRouterCompat,
+    endpointPolicyDivergence,
+  ],
+  [
+    "OpenRouter OpenAI model",
+    { provider: "openrouter", id: "openai/gpt-5.6-luna" },
+    { ...legacyOpenRouterCompat, supportsDeveloperRole: true },
+    canonicalOpenRouterCompat,
+    endpointPolicyDivergence,
+  ],
+  [
+    "provider cerebras",
+    { provider: "cerebras" },
+    legacyCerebrasCompat,
+    canonicalProxyCompat,
+    endpointPolicyDivergence,
+  ],
+  [
+    "endpoint cerebras.ai",
+    { provider: "custom", baseUrl: "https://api.cerebras.ai/v1" },
+    legacyCerebrasCompat,
+    canonicalProxyCompat,
+    endpointPolicyDivergence,
+  ],
+  [
+    "provider xai",
+    { provider: "xai" },
+    legacyXaiCompat,
+    canonicalProxyCompat,
+    endpointPolicyDivergence,
+  ],
+  [
+    "endpoint api.x.ai",
+    { provider: "custom", baseUrl: "https://api.x.ai/v1" },
+    legacyXaiCompat,
+    canonicalProxyCompat,
+    endpointPolicyDivergence,
+  ],
+  [
+    "provider moonshotai",
+    { provider: "moonshotai" },
+    legacyMoonshotCompat,
+    legacyMoonshotCompat,
+    undefined,
+  ],
+  [
+    "provider moonshotai-cn",
+    { provider: "moonshotai-cn" },
+    legacyMoonshotCompat,
+    legacyMoonshotCompat,
+    undefined,
+  ],
+  [
+    "endpoint Moonshot global",
+    { provider: "custom", baseUrl: "https://api.moonshot.ai/v1" },
+    legacyMoonshotCompat,
+    legacyMoonshotCompat,
+    undefined,
+  ],
+  [
+    "endpoint Moonshot China",
+    { provider: "custom", baseUrl: "https://api.moonshot.cn/v1" },
+    legacyMoonshotCompat,
+    legacyMoonshotCompat,
+    undefined,
+  ],
+  [
+    "provider Cloudflare Workers AI",
+    { provider: "cloudflare-workers-ai" },
+    legacyCerebrasCompat,
+    canonicalProxyCompat,
+    endpointPolicyDivergence,
+  ],
+  [
+    "endpoint Cloudflare Workers AI",
+    { provider: "custom", baseUrl: "https://api.cloudflare.com/client/v4/accounts/test/ai/run" },
+    legacyCerebrasCompat,
+    canonicalProxyCompat,
+    endpointPolicyDivergence,
+  ],
+  [
+    "provider Cloudflare AI Gateway",
+    { provider: "cloudflare-ai-gateway" },
+    legacyCloudflareGatewayCompat,
+    legacyCloudflareGatewayCompat,
+    undefined,
+  ],
+  [
+    "endpoint Cloudflare AI Gateway",
+    { provider: "custom", baseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway/compat" },
+    legacyCloudflareGatewayCompat,
+    legacyCloudflareGatewayCompat,
+    undefined,
+  ],
+  [
+    "provider opencode",
+    { provider: "opencode" },
+    legacyCerebrasCompat,
+    canonicalProxyCompat,
+    endpointPolicyDivergence,
+  ],
+  [
+    "endpoint opencode.ai",
+    { provider: "custom", baseUrl: "https://api.opencode.ai/v1" },
+    legacyCerebrasCompat,
+    canonicalProxyCompat,
+    endpointPolicyDivergence,
+  ],
+  [
+    "endpoint chutes.ai",
+    { provider: "custom", baseUrl: "https://llm.chutes.ai/v1" },
+    legacyChutesCompat,
+    canonicalChutesCompat,
+    endpointPolicyDivergence,
+  ],
+  [
+    "provider together",
+    { provider: "together" },
+    legacyTogetherCompat,
+    canonicalTogetherCompat,
+    undefined,
+  ],
+  [
+    "endpoint together.ai",
+    { provider: "custom", baseUrl: "https://api.together.ai/v1" },
+    legacyTogetherCompat,
+    canonicalTogetherCompat,
+    undefined,
+  ],
+  [
+    "endpoint together.xyz",
+    { provider: "custom", baseUrl: "https://api.together.xyz/v1" },
+    legacyTogetherCompat,
+    canonicalTogetherCompat,
+    undefined,
+  ],
+  [
+    "provider zai",
+    { provider: "zai" },
+    legacyZaiCompat,
+    canonicalProxyCompat,
+    endpointPolicyDivergence,
+  ],
+  [
+    "endpoint api.z.ai",
+    { provider: "custom", baseUrl: "https://api.z.ai/api/paas/v4" },
+    legacyZaiCompat,
+    canonicalZaiCompat,
+    endpointPolicyDivergence,
+  ],
+  [
+    "provider xiaomi",
+    { provider: "xiaomi" },
+    legacyXiaomiCompat,
+    canonicalProxyCompat,
+    endpointPolicyDivergence,
+  ],
+  [
+    "endpoint xiaomimimo.com",
+    { provider: "custom", baseUrl: "https://api.xiaomimimo.com/v1" },
+    legacyXiaomiCompat,
+    canonicalDeepseekCompat,
+    endpointPolicyDivergence,
+  ],
+  [
+    "provider deepseek",
+    { provider: "deepseek" },
+    legacyXiaomiCompat,
+    canonicalProxyCompat,
+    endpointPolicyDivergence,
+  ],
+  [
+    "endpoint deepseek.com",
+    { provider: "custom", baseUrl: "https://api.deepseek.com/v1" },
+    legacyDeepseekEndpointCompat,
+    canonicalDeepseekCompat,
+    endpointPolicyDivergence,
+  ],
+] satisfies MatrixParityCase[];
 
 function chunk(delta: Record<string, unknown>, finishReason?: string): unknown {
   return {
@@ -102,6 +496,8 @@ function chunk(delta: Record<string, unknown>, finishReason?: string): unknown {
 }
 
 beforeEach(() => {
+  previousAiTransportHost = getAiTransportHost();
+  configureAiTransportHost({ resolveProviderRequestCapabilities: resolveTestCapabilities });
   mockOpenAI.chunks = [chunk({ content: "ok" }), chunk({}, "stop")];
   mockOpenAI.clientOptions = [];
   mockOpenAI.payloads = [];
@@ -109,7 +505,26 @@ beforeEach(() => {
   mockOpenAI.nextError = undefined;
 });
 
+afterEach(() => {
+  configureAiTransportHost(previousAiTransportHost);
+});
+
 describe("OpenAI-compatible completions compatibility", () => {
+  it.each(legacyMatrixParityCases)(
+    "maps former provider matrix case %s to canonical endpoint policy",
+    (_name, overrides, legacyExpected, expected, divergence) => {
+      expect(
+        duplicatedCompatFields(resolveOpenAICompletionsCompat(createModel(overrides))),
+      ).toEqual(expected);
+      if (divergence) {
+        expect(expected).not.toEqual(legacyExpected);
+        expect(divergence).toBe(endpointPolicyDivergence);
+      } else {
+        expect(expected).toEqual(legacyExpected);
+      }
+    },
+  );
+
   it("lets Ollama tools win over JSON Schema response formats", async () => {
     const model = createModel({
       id: "gemma4:e4b",
@@ -176,10 +591,11 @@ describe("OpenAI-compatible completions compatibility", () => {
         compat: { sendSessionAffinityHeaders: true },
       }),
       expected: {
-        ...defaultResolvedCompat,
+        ...proxyResolvedCompat,
         thinkingFormat: "openrouter",
         cacheControlFormat: "anthropic",
         sessionAffinity: "openrouter",
+        visibleReasoningDetailTypes: ["response.output_text", "response.text"],
       },
     },
     {
@@ -190,9 +606,9 @@ describe("OpenAI-compatible completions compatibility", () => {
         baseUrl: "https://openrouter.ai/api/v1",
       }),
       expected: {
-        ...defaultResolvedCompat,
-        supportsDeveloperRole: false,
+        ...proxyResolvedCompat,
         thinkingFormat: "openrouter",
+        visibleReasoningDetailTypes: ["response.output_text", "response.text"],
       },
     },
     {
@@ -203,10 +619,7 @@ describe("OpenAI-compatible completions compatibility", () => {
         baseUrl: "https://api.z.ai/api/paas/v4",
       }),
       expected: {
-        ...defaultResolvedCompat,
-        supportsStore: false,
-        supportsDeveloperRole: false,
-        supportsReasoningEffort: false,
+        ...proxyResolvedCompat,
         maxTokensField: "max_tokens",
         thinkingFormat: "zai",
       },
@@ -227,7 +640,12 @@ describe("OpenAI-compatible completions compatibility", () => {
         provider: "azure-openai",
         baseUrl: "https://example.openai.azure.com/openai/deployments/luna",
       }),
-      expected: defaultResolvedCompat,
+      expected: {
+        ...defaultResolvedCompat,
+        supportsDeveloperRole: false,
+        supportsUsageInStreaming: false,
+        supportsStrictMode: false,
+      },
     },
     {
       name: "OpenAI legacy model",
@@ -241,7 +659,7 @@ describe("OpenAI-compatible completions compatibility", () => {
     {
       name: "custom proxy",
       model: createModel(),
-      expected: defaultResolvedCompat,
+      expected: proxyResolvedCompat,
     },
     {
       name: "custom proxy with OpenRouter routing",
@@ -252,7 +670,7 @@ describe("OpenAI-compatible completions compatibility", () => {
         },
       }),
       expected: {
-        ...defaultResolvedCompat,
+        ...proxyResolvedCompat,
         openRouterRouting: { only: ["google-vertex"] },
         sessionAffinity: "openrouter",
       },
@@ -316,8 +734,8 @@ describe("OpenAI-compatible completions compatibility", () => {
   });
 
   it.each([
-    { modelId: "openai/gpt-5.6-luna", expectedRole: "developer" },
-    { modelId: "anthropic/claude-sonnet-4.6", expectedRole: "developer" },
+    { modelId: "openai/gpt-5.6-luna", expectedRole: "system" },
+    { modelId: "anthropic/claude-sonnet-4.6", expectedRole: "system" },
     { modelId: "moonshotai/kimi-k2.6", expectedRole: "system" },
   ])("uses $expectedRole instructions for OpenRouter model $modelId", async (testCase) => {
     let payload: unknown;

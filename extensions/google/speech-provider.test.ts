@@ -7,9 +7,13 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 
 const transcodeAudioBufferToOpusMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
-  transcodeAudioBufferToOpus: transcodeAudioBufferToOpusMock,
-}));
+vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
+  const { canonicalizeBase64 } = await import("@openclaw/media-core/base64");
+  return {
+    canonicalizeBase64,
+    transcodeAudioBufferToOpus: transcodeAudioBufferToOpusMock,
+  };
+});
 
 const {
   assertOkOrThrowProviderErrorMock,
@@ -27,7 +31,7 @@ beforeAll(async () => {
 
 installProviderHttpMockCleanup();
 
-function googleTtsResponse(pcm = Buffer.from([1, 0, 2, 0])) {
+function googleTtsResponse(audio: Buffer | string = Buffer.from([1, 0, 2, 0])) {
   return {
     ok: true,
     json: async () => ({
@@ -38,7 +42,7 @@ function googleTtsResponse(pcm = Buffer.from([1, 0, 2, 0])) {
               {
                 inlineData: {
                   mimeType: "audio/L16;codec=pcm;rate=24000",
-                  data: pcm.toString("base64"),
+                  data: typeof audio === "string" ? audio : audio.toString("base64"),
                 },
               },
             ],
@@ -345,6 +349,29 @@ describe("Google speech provider", () => {
 
     expect(requestSequence).toHaveBeenCalledTimes(2);
     expect(result.audioBuffer.subarray(44)).toEqual(pcm);
+  });
+
+  it("rejects Gemini audio with non-canonical base64 pad bits", async () => {
+    const malformedResponse = {
+      response: googleTtsResponse("ZE=="),
+      release: vi.fn(async () => {}),
+    };
+    const requestSequence = vi.fn().mockResolvedValue(malformedResponse);
+    postJsonRequestMock.mockImplementation(requestSequence);
+    const provider = buildGoogleSpeechProvider();
+
+    await expect(
+      provider.synthesize({
+        text: "Reject malformed audio.",
+        cfg: {},
+        providerConfig: {
+          apiKey: "google-test-key",
+        },
+        target: "audio-file",
+        timeoutMs: 5_000,
+      }),
+    ).rejects.toThrow("Google TTS response returned malformed base64 audio data");
+    expect(requestSequence).toHaveBeenCalledTimes(2);
   });
 
   it("retries once when Gemini TTS fetch aborts", async () => {

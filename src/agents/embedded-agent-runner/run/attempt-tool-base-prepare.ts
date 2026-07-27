@@ -118,6 +118,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
       : undefined;
   const toolSearchTargetTranscriptProjections: ToolSearchTargetTranscriptProjection[] = [];
   const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
+  const inheritedToolAllowlist: string[] = [];
   const spawnWorkspaceDir =
     params.effectiveCwd !== params.effectiveWorkspace
       ? params.resolvedWorkspace
@@ -303,6 +304,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
           enableHeartbeatTool: attempt.enableHeartbeatTool,
           forceHeartbeatTool: attempt.forceHeartbeatTool,
           runtimeToolAllowlist: effectiveToolsAllow,
+          inheritedToolAllowlistRef: inheritedToolAllowlist,
           cronCreatorToolAllowlistRef: cronCreatorToolAllowlist,
           authProfileStore: attempt.authProfileStore,
           recordToolPrepStage: params.markCoreToolStage,
@@ -335,6 +337,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     computerContextEpoch,
     cronCreatorToolAllowlist,
     effectiveToolsAllow,
+    inheritedToolAllowlist,
     localModelLeanEnabled,
     localModelLeanPreserveToolNames,
     replaySafetyOptions,

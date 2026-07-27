@@ -144,8 +144,17 @@ async function showDashboard(page: Page): Promise<void> {
       string,
       unknown
     >;
+    const boardSessionViews =
+      settings.boardSessionViews && typeof settings.boardSessionViews === "object"
+        ? (settings.boardSessionViews as Record<string, unknown>)
+        : {};
+    const savedView = boardSessionViews[key];
     settings.boardSessionViews = {
-      [key]: { face: "dashboard", activeTabId: "main" },
+      ...boardSessionViews,
+      [key]: {
+        activeTabId: "main",
+        ...(savedView && typeof savedView === "object" ? savedView : {}),
+      },
     };
     localStorage.setItem(settingsKey, JSON.stringify(settings));
   }, sessionKey);
@@ -264,6 +273,16 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
   it("pins Canvas HTML, follows board commands, and persists dock resizing", async () => {
     const context = await browser.newContext({ viewport: { height: 900, width: 1280 } });
     const page = await context.newPage();
+    const resizableBoardSnapshot = {
+      ...boardSnapshot,
+      tabs: boardSnapshot.tabs.map((tab) =>
+        tab.tabId === "research" ? { ...tab, chatDock: "bottom" } : tab,
+      ),
+    };
+    const resizablePinnedBoardSnapshot = {
+      ...pinnedBoardSnapshot,
+      tabs: resizableBoardSnapshot.tabs,
+    };
     const gateway = await installMockGateway(page, {
       sessionKey,
       featureCapabilities: [GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC],
@@ -297,13 +316,13 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
         },
       ],
       methodResponses: {
-        "board.get": boardSnapshot,
-        "board.widget.put": pinnedBoardSnapshot,
+        "board.get": resizableBoardSnapshot,
+        "board.widget.put": resizablePinnedBoardSnapshot,
       },
     });
     await showDashboard(page);
 
-    await page.goto(`${server.baseUrl}chat`);
+    await page.goto(`${server.baseUrl}dashboard`);
     await expect
       .poll(async () => (await gateway.getRequests("board.get")).length, { timeout: 30_000 })
       .toBeGreaterThan(0);
@@ -323,7 +342,7 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
     await expect
       .poll(() => preview.getByRole("button", { name: "Pinned" }).isDisabled())
       .toBe(true);
-    await gateway.setMethodResponse("board.get", pinnedBoardSnapshot);
+    await gateway.setMethodResponse("board.get", resizablePinnedBoardSnapshot);
 
     await gateway.emitGatewayEvent("board.command", {
       sessionKey,
@@ -336,9 +355,9 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
     const dock = page.locator(".board-session-surface__chat");
     await divider.focus();
     await page.keyboard.press("End");
-    await expect.poll(() => dock.getAttribute("style")).not.toBe("width: 420px");
+    await expect.poll(() => dock.getAttribute("style")).not.toBe("height: 320px");
     const persistedStyle = await dock.getAttribute("style");
-    expect(persistedStyle).toMatch(/^width: \d+(?:\.\d+)?px$/u);
+    expect(persistedStyle).toMatch(/^height: \d+(?:\.\d+)?px$/u);
 
     await page.reload();
     await page.locator(".board-session-surface__chat").waitFor();
@@ -403,7 +422,7 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
     });
     await showDashboard(page);
 
-    await page.goto(`${server.baseUrl}chat`);
+    await page.goto(`${server.baseUrl}dashboard`);
     await page.locator(".board-session-surface").waitFor();
     const preview = page.locator('.chat-tool-card__preview[data-kind="canvas"]');
     await preview.hover();
@@ -481,7 +500,7 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
     await showDashboard(page);
 
     try {
-      await page.goto(`${server.baseUrl}chat`);
+      await page.goto(`${server.baseUrl}dashboard`);
       const cardWidget = page.locator('[data-test-id="workboard-card-widget"]');
       const miniWidget = page.locator('[data-test-id="workboard-mini-widget"]');
       await cardWidget.waitFor();
@@ -589,7 +608,7 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
     await showDashboard(page);
 
     try {
-      await page.goto(`${server.baseUrl}chat`);
+      await page.goto(`${server.baseUrl}dashboard`);
       const chip = page.locator(".board-session-surface__workboard-chip");
       await chip.waitFor();
       await expect.poll(() => chip.textContent()).toContain("Ship dashboard stitch");
@@ -721,7 +740,7 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
       await showDashboard(page);
 
       try {
-        await page.goto(`${server.baseUrl}chat`);
+        await page.goto(`${server.baseUrl}dashboard`);
         await expect
           .poll(async () => (await gateway.getRequests("board.get")).length)
           .toBeGreaterThan(0);

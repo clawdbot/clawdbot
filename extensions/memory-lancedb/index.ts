@@ -655,10 +655,14 @@ export default definePluginEntry({
           `memory-lancedb: initialized (db: ${resolvedDbPath}, model: ${cfg.embedding.model})`,
         );
       },
-      stop: () => {
-        db.close();
-        memoryRecallCooldowns.clear();
-        api.logger.info("memory-lancedb: stopped");
+      stop: async () => {
+        try {
+          await embeddings.close?.();
+        } finally {
+          db.close();
+          memoryRecallCooldowns.clear();
+          api.logger.info("memory-lancedb: stopped");
+        }
       },
     });
   },

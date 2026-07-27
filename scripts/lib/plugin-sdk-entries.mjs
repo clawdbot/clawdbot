@@ -48,7 +48,6 @@ const nonProductionPluginSdkSubpathSet = new Set([
   "channel-contract-testing",
   "channel-target-testing",
   "channel-test-helpers",
-  "codex-native-task-runtime",
   "plugin-test-api",
   "plugin-test-contracts",
   "plugin-state-test-runtime",

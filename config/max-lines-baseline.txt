@@ -73,7 +73,6 @@ extensions/comfy/workflow-runtime.ts
 extensions/copilot/harness.test.ts
 extensions/copilot/harness.ts
 extensions/copilot/src/attempt.test.ts
-extensions/copilot/src/attempt.ts
 extensions/copilot/src/event-bridge.test.ts
 extensions/copilot/src/tool-bridge.test.ts
 extensions/crabbox/src/crabbox-worker-provider.test.ts
@@ -151,7 +150,6 @@ extensions/mattermost/src/channel.ts
 extensions/mattermost/src/mattermost/monitor.inbound-system-event.test.ts
 extensions/mattermost/src/mattermost/slash-http.ts
 extensions/memory-core/doctor-contract-api.test.ts
-extensions/memory-core/src/cli.runtime.ts
 extensions/memory-core/src/cli.test.ts
 extensions/memory-core/src/dreaming-narrative.test.ts
 extensions/memory-core/src/dreaming-narrative.ts
@@ -235,7 +233,6 @@ extensions/qa-lab/src/runtime-tool-fixture.ts
 extensions/qa-lab/src/scorecard-taxonomy.ts
 extensions/qa-lab/src/suite-launch.runtime.test.ts
 extensions/qa-lab/src/suite-launch.runtime.ts
-extensions/qa-lab/src/suite.ts
 extensions/qa-lab/src/test-file-scenario-runner.test.ts
 extensions/qa-lab/web/src/app.ts
 extensions/qqbot/src/engine/gateway/outbound-dispatch.test.ts
@@ -330,12 +327,10 @@ packages/ai/src/providers/openai-chatgpt-responses.ts
 packages/ai/src/providers/openai-completions.test.ts
 packages/ai/src/providers/openai-completions.ts
 packages/ai/src/providers/openai-responses-shared.test.ts
-packages/ai/src/providers/openai-responses-shared.ts
 packages/ai/src/transports/anthropic-transport-stream.test.ts
 packages/ai/src/transports/anthropic-transport-stream.ts
 packages/ai/src/transports/openai-completions-transport.ts
 packages/gateway-client/src/client.ts
-packages/gateway-protocol/src/index.ts
 packages/gateway-protocol/src/schema/agents-models-skills.ts
 packages/gateway-protocol/src/schema/protocol-schemas.ts
 packages/markdown-core/src/ir.ts
@@ -352,7 +347,6 @@ src/acp/translator.ts
 src/agents/acp-spawn-parent-stream.test.ts
 src/agents/acp-spawn-parent-stream.ts
 src/agents/acp-spawn.test.ts
-src/agents/acp-spawn.ts
 src/agents/agent-bundle-mcp-runtime.test.ts
 src/agents/agent-bundle-mcp-runtime.ts
 src/agents/agent-command.live-model-switch.test.ts
@@ -499,7 +493,6 @@ src/agents/subagent-registry-run-manager.ts
 src/agents/subagent-registry.steer-restart.test.ts
 src/agents/subagent-registry.test.ts
 src/agents/subagent-spawn.test.ts
-src/agents/subagent-spawn.ts
 src/agents/system-prompt.test.ts
 src/agents/system-prompt.ts
 src/agents/tool-display-common.ts
@@ -507,7 +500,6 @@ src/agents/tool-loop-detection.test.ts
 src/agents/tool-search.test.ts
 src/agents/tools/computer-tool.ts
 src/agents/tools/cron-tool.test.ts
-src/agents/tools/cron-tool.ts
 src/agents/tools/image-generate-tool.test.ts
 src/agents/tools/image-generate-tool.ts
 src/agents/tools/image-tool.test.ts
@@ -660,7 +652,6 @@ src/commands/models/auth.test.ts
 src/commands/models/auth.ts
 src/commands/models/list.list-command.forward-compat.test.ts
 src/commands/models/list.probe.ts
-src/commands/models/list.rows.ts
 src/commands/models/list.status-command.ts
 src/commands/models/list.status.test.ts
 src/commands/onboard-channels.e2e.test.ts
@@ -694,21 +685,17 @@ src/config/zod-schema.core.ts
 src/context-engine/context-engine.test.ts
 src/context-engine/registry.ts
 src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts
-src/cron/isolated-agent/delivery-dispatch.ts
 src/cron/isolated-agent/delivery-target.test.ts
 src/cron/isolated-agent/run-executor.ts
 src/cron/isolated-agent/run.message-tool-policy.test.ts
 src/cron/isolated-agent/run.test-harness.ts
-src/cron/isolated-agent/run.ts
 src/cron/service.jobs.test.ts
-src/cron/service/jobs.ts
 src/cron/service/ops.test.ts
 src/cron/service/timer.regression.test.ts
 src/cron/store.test.ts
 src/daemon/launchd.test.ts
 src/daemon/launchd.ts
 src/daemon/schtasks.startup-fallback.test.ts
-src/daemon/schtasks.ts
 src/daemon/systemd.test.ts
 src/daemon/systemd.ts
 src/fleet/backup.runtime.ts
@@ -720,7 +707,6 @@ src/flows/doctor-core-checks.runtime.test.ts
 src/flows/doctor-core-checks.runtime.ts
 src/flows/doctor-core-checks.ts
 src/flows/doctor-health-contributions.test.ts
-src/flows/doctor-health-contributions.ts
 src/flows/model-picker.ts
 src/gateway/auth.test.ts
 src/gateway/call.test.ts
@@ -738,8 +724,6 @@ src/gateway/gateway-models.profiles.live.test.ts
 src/gateway/managed-image-attachments.test.ts
 src/gateway/managed-image-attachments.ts
 src/gateway/mcp-http.test.ts
-src/gateway/model-pricing-cache.test.ts
-src/gateway/model-pricing-cache.ts
 src/gateway/node-registry.test.ts
 src/gateway/node-registry.ts
 src/gateway/openai-http.test.ts
@@ -816,7 +800,6 @@ src/gateway/session-utils.test.ts
 src/gateway/sessions-history-http.test.ts
 src/gateway/sessions-patch.test.ts
 src/gateway/talk-realtime-relay.test.ts
-src/gateway/talk-realtime-relay.ts
 src/gateway/test-helpers.server.ts
 src/gateway/tools-invoke-http.test.ts
 src/gateway/watch-node-http.ts
@@ -840,7 +823,6 @@ src/infra/diagnostic-events.ts
 src/infra/exec-approval-forwarder.ts
 src/infra/exec-approvals-allow-always.test.ts
 src/infra/exec-approvals-allowlist.ts
-src/infra/exec-approvals-store.test.ts
 src/infra/exec-authorization-plan.ts
 src/infra/heartbeat-runner.returns-default-unset.test.ts
 src/infra/host-env-security.test.ts
@@ -1000,7 +982,6 @@ src/tui/embedded-backend.ts
 src/tui/tui-command-handlers.test.ts
 src/tui/tui-command-handlers.ts
 src/tui/tui-event-handlers.test.ts
-src/tui/tui-event-handlers.ts
 src/tui/tui-pty-local.e2e.test.ts
 src/tui/tui-session-actions.test.ts
 src/tui/tui.ts
