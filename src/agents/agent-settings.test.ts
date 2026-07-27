@@ -11,6 +11,34 @@ import { shouldCompact } from "./sessions/compaction/compaction.js";
 import { SettingsManager } from "./sessions/settings-manager.js";
 
 describe("applyAgentCompactionSettingsFromConfig", () => {
+  it.each([false, true])(
+    "applies and reapplies compaction.enabled=%s after a settings reload",
+    (configuredEnabled) => {
+      let enabled = !configuredEnabled;
+      const settingsManager = {
+        getCompactionEnabled: () => enabled,
+        getCompactionReserveTokens: () => 20_000,
+        getCompactionKeepRecentTokens: () => 20_000,
+        setCompactionEnabled: vi.fn((value: boolean) => {
+          enabled = value;
+        }),
+        applyOverrides: vi.fn(),
+      };
+      const cfg = {
+        agents: { defaults: { compaction: { enabled: configuredEnabled } } },
+      };
+
+      const first = applyAgentCompactionSettingsFromConfig({ settingsManager, cfg });
+      enabled = !configuredEnabled;
+      const afterReload = applyAgentCompactionSettingsFromConfig({ settingsManager, cfg });
+
+      expect(first.didOverride).toBe(true);
+      expect(afterReload.didOverride).toBe(true);
+      expect(enabled).toBe(configuredEnabled);
+      expect(settingsManager.setCompactionEnabled).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it("bumps reserveTokens when below floor", () => {
     const settingsManager = SettingsManager.inMemory();
     const applyOverrides = vi.spyOn(settingsManager, "applyOverrides");

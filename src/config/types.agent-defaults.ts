@@ -382,7 +382,7 @@ export type AgentCompactionMidTurnPrecheckConfig = {
 };
 
 export type AgentCompactionConfig = {
-  /** Enable automatic compaction (default: true). Set false to disable auto-compaction. */
+  /** Enable embedded proactive auto-compaction. Default: true. */
   enabled?: boolean;
   /** Compaction summarization mode. */
   mode?: AgentCompactionMode;

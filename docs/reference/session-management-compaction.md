@@ -237,6 +237,8 @@ Two additional guards run outside these two triggers:
 
 OpenClaw enforces a built-in reserve for embedded runs and caps it against the active model context window so it cannot consume the whole prompt budget. This keeps small-context local models from entering compaction from the first token while leaving enough headroom for multi-turn housekeeping such as the memory flush.
 
+Set `enabled: false` to disable threshold-driven auto-compaction inside the embedded agent runtime. OpenClaw's preflight and overflow-recovery compaction paths remain available, and manual `/compact` continues to work.
+
 Manual `/compact` honors an explicit `agents.defaults.compaction.keepRecentTokens` and keeps the runtime's recent-tail cut point. Without an explicit keep budget, manual compaction is a hard checkpoint and rebuilt context starts from the new summary.
 
 When `truncateAfterCompaction` is enabled, OpenClaw rotates the active transcript to a compacted successor after compaction. Branch/restore checkpoint actions use that compacted successor; legacy pre-compaction checkpoint files remain readable while referenced.
