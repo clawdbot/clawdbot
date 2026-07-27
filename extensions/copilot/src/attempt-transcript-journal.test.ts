@@ -537,6 +537,36 @@ describe("Copilot attempt transcript journal", () => {
     expect(journal.snapshot().replayInvalid).toBe(false);
   });
 
+  it("keeps the latest cumulative snapshot for one assistant message id", async () => {
+    const { bridge, journal, session, target } = await createFixture();
+    await journal.persistInitialUser();
+    session.emit(event("user.message", "initial-user", { content: "inspect" }));
+    session.emit(
+      event("assistant.message", "assistant-snapshot-a", {
+        apiCallId: "api-call-snapshot",
+        content: "checking",
+        messageId: "assistant-snapshot",
+      }),
+    );
+    session.emit(
+      event("assistant.message", "assistant-snapshot-b", {
+        apiCallId: "api-call-snapshot",
+        content: "checking now",
+        messageId: "assistant-snapshot",
+      }),
+    );
+    bridge.flushTranscriptProjection();
+    await journal.barrier("cumulative assistant snapshot");
+
+    const rows = transcriptMessages(await readSessionTranscriptEvents(target));
+    expect(rows.map((row) => row.message.role)).toEqual(["user", "assistant"]);
+    expect(rows.filter((row) => row.message.role === "assistant")).toHaveLength(1);
+    expect(rows.at(-1)?.message).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "checking now" }],
+    });
+  });
+
   it("marks unprojected assistant provider round-trip state replay-incomplete", async () => {
     const { journal, session } = await createFixture();
     await journal.persistInitialUser();

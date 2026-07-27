@@ -1,5 +1,8 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { runAgentHarnessLlmOutputHook } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  projectAgentHarnessTranscriptMessageForDisplay,
+  runAgentHarnessLlmOutputHook,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { finalizeCopilotAttempt } from "./attempt-cleanup.js";
 import { createResult } from "./attempt-config.js";
 import type { AttemptTranscriptJournal } from "./attempt-transcript-journal.js";
@@ -75,7 +78,11 @@ export async function completeCopilotAttempt(params: {
   // user/assistant mirror here would restore the deleted dual-write owner.
   const messagesSnapshot =
     transcript?.messagesSnapshot ??
-    includePreparedUser(messages, input.userTurnTranscriptRecorder?.message);
+    includePreparedUser(
+      messages,
+      input.userTurnTranscriptRecorder?.message,
+      input.trigger === "memory",
+    );
   const result = createResult(input, {
     aborted,
     assistantTexts,
@@ -151,15 +158,20 @@ export async function completeCopilotAttempt(params: {
 function includePreparedUser(
   messages: AgentMessage[],
   prepared: Extract<AgentMessage, { role: "user" }> | undefined,
+  hidden: boolean,
 ): AgentMessage[] {
   if (!prepared) {
     return messages;
   }
+  const projected = projectAgentHarnessTranscriptMessageForDisplay({
+    hidden: hidden || (prepared as { display?: boolean }).display === false,
+    message: prepared,
+  }) as Extract<AgentMessage, { role: "user" }>;
   const tail = messages.at(-1);
-  if (isSamePreparedUser(tail, prepared)) {
-    return [...messages.slice(0, -1), prepared];
+  if (isSamePreparedUser(tail, projected)) {
+    return [...messages.slice(0, -1), projected];
   }
-  return [...messages, prepared];
+  return [...messages, projected];
 }
 
 function isSamePreparedUser(

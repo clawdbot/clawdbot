@@ -618,7 +618,14 @@ export function attachEventBridge(
       flushPendingAssistantProjection();
       pendingAssistantProjection = { apiCallId, chunks: [] };
     }
-    pendingAssistantProjection.chunks.push(chunk);
+    const priorChunkIndex = pendingAssistantProjection.chunks.findIndex(
+      (candidate) => candidate.event.data.messageId === event.data.messageId,
+    );
+    if (priorChunkIndex === -1) {
+      pendingAssistantProjection.chunks.push(chunk);
+    } else {
+      pendingAssistantProjection.chunks[priorChunkIndex] = chunk;
+    }
   }
 
   function flushPendingAssistantProjection(apiCallId?: string): void {

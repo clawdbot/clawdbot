@@ -2980,6 +2980,23 @@ describe("runCopilotAttempt", () => {
       ]);
     });
 
+    it("keeps a pre-journal memory user hidden when setup fails", async () => {
+      const sdk = makeFakeSdk();
+      const params = makeParams({
+        messages: [],
+        trigger: "memory",
+      }) as AgentHarnessAttemptParams & {
+        sessionTarget?: unknown;
+      };
+      delete params.sessionTarget;
+
+      const result = await runCopilotAttempt(params, { pool: makeFakePool(sdk) });
+
+      expect(result.messagesSnapshot).toMatchObject([
+        { role: "user", content: "hello", display: false },
+      ]);
+    });
+
     it("replaces the common unkeyed active user in the pre-journal fallback", async () => {
       const sdk = makeFakeSdk();
       const params = makeParams() as AgentHarnessAttemptParams & { sessionTarget?: unknown };
