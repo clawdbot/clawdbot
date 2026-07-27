@@ -185,6 +185,7 @@ export function attachEventBridge(
       autopilotContinuation: event.data.isAutopilotContinuation === true,
       replayIncomplete: Boolean(
         event.data.attachments?.length ||
+        (event.data.agentMode !== undefined && event.data.agentMode !== "interactive") ||
         (transformedContent !== undefined && transformedContent !== event.data.content),
       ),
       message: {
@@ -722,6 +723,7 @@ export function attachEventBridge(
       if (replayIncomplete) {
         projection.journal.markReplayIncomplete();
       }
+      projection.journal.recordAssistantProjectionGap();
       return;
     }
     projection.journal.recordAssistant({

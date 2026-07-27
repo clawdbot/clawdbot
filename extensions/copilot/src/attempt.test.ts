@@ -1279,7 +1279,10 @@ describe("runCopilotAttempt", () => {
   it("resume path", async () => {
     const sdk = makeFakeSdk({
       onResumeSession: (session) => {
-        session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("resumed"));
+        session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("user.message", { content: "hello" });
+          return makeAssistantMessageEvent("resumed");
+        });
       },
     });
     const pool = makeFakePool(sdk);

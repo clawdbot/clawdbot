@@ -8,6 +8,7 @@ export type AssistantUsageSnapshot = CopilotUsageSnapshot;
 
 export interface AttemptTranscriptJournalProjection {
   markReplayIncomplete(): void;
+  recordAssistantProjectionGap(): void;
   recordAssistant(input: {
     eventId: string;
     message: AssistantMessage;

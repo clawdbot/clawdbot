@@ -81,6 +81,7 @@ export function createAttemptTranscriptJournal(params: {
   let abortPromise: Promise<void> | undefined;
   let replayInvalid = false;
   let initialSdkUserObserved = false;
+  let initialSdkUserValidated = false;
   let persistedInitialUser: Extract<AgentMessage, { role: "user" }> | undefined;
   let latestAssistantKey: string | undefined;
   let assistantTranscriptOwned = false;
@@ -279,6 +280,12 @@ export function createAttemptTranscriptJournal(params: {
     markReplayIncomplete() {
       replayInvalid = true;
     },
+    recordAssistantProjectionGap() {
+      replayInvalid = true;
+      latestAssistantKey = undefined;
+      assistantTranscriptOwned = false;
+      assistantTranscriptIdempotencyKey = undefined;
+    },
     async persistInitialUser() {
       const recorder = params.attempt.userTurnTranscriptRecorder;
       if (!recorder) {
@@ -335,6 +342,8 @@ export function createAttemptTranscriptJournal(params: {
           userText(persistedInitialUser.content) !== userText(input.message.content)
         ) {
           replayInvalid = true;
+        } else {
+          initialSdkUserValidated = true;
         }
         return;
       }
@@ -444,6 +453,7 @@ export function createAttemptTranscriptJournal(params: {
     snapshot: () => ({
       assistantTranscriptOwned,
       assistantTranscriptIdempotencyKey,
+      initialSdkUserValidated,
       messagesSnapshot: [...messagesSnapshot],
       replayInvalid,
     }),

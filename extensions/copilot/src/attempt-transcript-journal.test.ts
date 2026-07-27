@@ -285,6 +285,20 @@ describe("Copilot attempt transcript journal", () => {
     expect(journal.snapshot().replayInvalid).toBe(true);
   });
 
+  it("marks non-interactive SDK user modes replay-incomplete", async () => {
+    const { journal, session } = await createFixture();
+    await journal.persistInitialUser();
+    session.emit(
+      event("user.message", "plan-user", {
+        agentMode: "plan",
+        content: "inspect both files",
+      }),
+    );
+    await journal.barrier("plan user");
+
+    expect(journal.snapshot().replayInvalid).toBe(true);
+  });
+
   it("marks durable system and developer prompts replay-incomplete", async () => {
     for (const role of ["system", "developer"] as const) {
       const { journal, session } = await createFixture();
@@ -738,6 +752,52 @@ describe("Copilot attempt transcript journal", () => {
       role: "assistant",
       content: [{ type: "text", text: "visible" }],
     });
+  });
+
+  it("clears prior assistant ownership when the final durable projection is empty", async () => {
+    const { bridge, journal, session } = await createFixture();
+    await journal.persistInitialUser();
+    session.emit(event("user.message", "initial-user", { content: "inspect both files" }));
+    session.emit(
+      event("assistant.message", "tool-assistant", {
+        content: "checking",
+        messageId: "tool-assistant",
+        toolRequests: [{ arguments: {}, name: "read", toolCallId: "call-1" }],
+      }),
+    );
+    session.emit(
+      event("tool.execution_complete", "tool-result", {
+        result: { content: "done" },
+        success: true,
+        toolCallId: "call-1",
+      }),
+    );
+    session.emit({
+      ...event("assistant.message_delta", "final-delta", {
+        deltaContent: "streamed final",
+        messageId: "final-message",
+      }),
+      ephemeral: true,
+    } as SessionEvent);
+    session.emit(
+      event("assistant.message", "final-empty", {
+        content: "",
+        messageId: "final-message",
+      }),
+    );
+    bridge.flushTranscriptProjection();
+    await journal.barrier("empty final projection");
+
+    expect(journal.snapshot()).toMatchObject({
+      assistantTranscriptOwned: false,
+      replayInvalid: true,
+    });
+    expect(
+      bridge.buildAssistantMessage({
+        modelRef: { api: "openai-responses", id: "gpt-5", provider: "github-copilot" },
+        now: () => 3,
+      })?.content,
+    ).toEqual([{ type: "text", text: "streamed final" }]);
   });
 
   it("marks unprojected assistant provider round-trip state replay-incomplete", async () => {
