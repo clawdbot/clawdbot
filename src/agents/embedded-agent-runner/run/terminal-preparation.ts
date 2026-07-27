@@ -1,5 +1,6 @@
 import { copyReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import type { AssistantMessage } from "../../../llm/types.js";
+import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import type { NormalizedUsage, UsageLike } from "../../usage.js";
 import { resolveEmbeddedRunFailureSignal } from "../failure-signal.js";
@@ -15,6 +16,11 @@ import {
 import type { RunEmbeddedAgentParams } from "./params.js";
 import { buildEmbeddedRunPayloads } from "./payloads.js";
 import { buildTraceToolSummary } from "./run-attempt-result.js";
+import {
+  isEmbeddedRunTerminalInterrupted,
+  isEmbeddedRunTerminalTimeout,
+  type EmbeddedRunTerminalState,
+} from "./terminal-outcome.js";
 import { mergeAttemptToolMediaPayloads } from "./tool-media-payloads.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
@@ -35,10 +41,7 @@ export function prepareEmbeddedRunTerminal(input: {
   lastTurnTotal?: number;
   contextRecoveryState: EmbeddedRunContextRecoveryState;
   resolvedToolResultFormat: NonNullable<RunEmbeddedAgentParams["toolResultFormat"]>;
-  terminalInterrupted: boolean;
-  terminalTimedOut: boolean;
-  timedOutDuringCompaction: boolean;
-  timedOutDuringToolExecution: boolean;
+  terminalState: EmbeddedRunTerminalState;
 }): {
   agentMeta: EmbeddedAgentMeta;
   reportedModelRef: { provider: string; model: string };
@@ -54,8 +57,13 @@ export function prepareEmbeddedRunTerminal(input: {
   failureSignal: ReturnType<typeof resolveEmbeddedRunFailureSignal>;
 } {
   const { runParams, attempt } = input;
+  const { timedOutDuringCompaction, timedOutDuringToolExecution } = projectAgentRunAttemptTerminal(
+    attempt.terminal,
+  );
   const timedOutDuringPrompt =
-    input.terminalTimedOut && !input.timedOutDuringCompaction && !input.timedOutDuringToolExecution;
+    isEmbeddedRunTerminalTimeout(input.terminalState.outcome) &&
+    !timedOutDuringCompaction &&
+    !timedOutDuringToolExecution;
   // Session transcript fallbacks can reference an earlier rewritten turn.
   // Terminal delivery and metadata must stay scoped to this model attempt.
   const terminalAssistant = input.currentAttemptCompletedAssistant;
@@ -132,7 +140,7 @@ export function prepareEmbeddedRunTerminal(input: {
     sourceReplyDeliveryMode: runParams.sourceReplyDeliveryMode,
     agentId: runParams.agentId,
     runId: runParams.runId,
-    runAborted: input.terminalInterrupted,
+    runAborted: isEmbeddedRunTerminalInterrupted(input.terminalState.outcome),
     didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
     heartbeatToolResponse: attempt.heartbeatToolResponse,
   });
