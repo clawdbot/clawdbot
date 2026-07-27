@@ -186,6 +186,47 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
     });
   });
 
+  it("clears a matching older pending final when its operational retry is silenced", async () => {
+    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+      const cfg = {
+        ...createHeartbeatConfig(storePath),
+        messages: {
+          operationalReplies: { policy: "silent" },
+        },
+      } as unknown as OpenClawConfig;
+      const NOW = Date.now();
+      const operationalText = "usage limit reached";
+      const sessionKey = await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+        updatedAt: NOW - 60_000,
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: operationalText,
+        pendingFinalDeliveryCreatedAt: NOW - 30_000,
+        pendingFinalDeliveryAttemptCount: 2,
+        pendingFinalDeliveryLastError: "prior-delivery-failure",
+      });
+      await patchEntry(storePath, sessionKey, {
+        pendingFinalDeliveryIntentId: "intent-older-silenced-operational",
+      });
+
+      replySpy.mockResolvedValue(
+        markReplyPayloadForSourceSuppressionDelivery({ text: operationalText, isError: true }),
+      );
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: heartbeatDeps(sendTelegram, replySpy, NOW),
+      });
+
+      expect(result.status).toBe("ran");
+      expect(sendTelegram).not.toHaveBeenCalled();
+      expectPendingFinalDeliveryCleared(await readEntry(storePath, sessionKey));
+    });
+  });
+
   it("releases operational once reservations when heartbeat send fails", async () => {
     await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
       const cfg = {

@@ -430,10 +430,11 @@ export async function finalizeHeartbeatOutcome(params: {
       });
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
-    await clearHeartbeatPendingFinalDeliveryIfOwned({
+    await clearHeartbeatPendingFinalDeliveryIfHandled({
       storePath,
       sessionKey,
       startedAt,
+      capturedEntry: operationalReplySourceEntry,
     });
     await restoreHeartbeatUpdatedAt({ storePath, sessionKey, updatedAt: previousUpdatedAt });
     emitHeartbeatEvent({
@@ -603,17 +604,38 @@ function consumeInspectedSystemEvents(wake: ReadyHeartbeatWake, prepared: Prepar
   }
 }
 
-async function clearHeartbeatPendingFinalDeliveryIfOwned(params: {
+async function clearHeartbeatPendingFinalDeliveryIfHandled(params: {
   storePath: string;
   sessionKey: string;
   startedAt: number;
+  capturedEntry: SessionEntry | undefined;
 }): Promise<void> {
+  const capturedIntentId = normalizeOptionalString(
+    params.capturedEntry?.pendingFinalDeliveryIntentId,
+  );
+  const capturedCreatedAt = params.capturedEntry?.pendingFinalDeliveryCreatedAt;
+  const capturedText = normalizeOptionalString(params.capturedEntry?.pendingFinalDeliveryText);
   await patchSessionEntry(
     { storePath: params.storePath, sessionKey: params.sessionKey },
-    (current) =>
-      heartbeatRunOwnsPendingFinalDelivery(current, params.startedAt)
+    (current) => {
+      if (heartbeatRunOwnsPendingFinalDelivery(current, params.startedAt)) {
+        return CLEARED_PENDING_FINAL_DELIVERY_FIELDS;
+      }
+      // Silent/redirect can satisfy a recovery from an earlier heartbeat.
+      // Match the captured identity so a newer concurrent final survives.
+      const matchesCapturedIntent =
+        capturedIntentId !== undefined &&
+        normalizeOptionalString(current?.pendingFinalDeliveryIntentId) === capturedIntentId;
+      const matchesCapturedFallback =
+        capturedIntentId === undefined &&
+        typeof capturedCreatedAt === "number" &&
+        current?.pendingFinalDeliveryCreatedAt === capturedCreatedAt &&
+        capturedText !== undefined &&
+        normalizeOptionalString(current?.pendingFinalDeliveryText) === capturedText;
+      return matchesCapturedIntent || matchesCapturedFallback
         ? CLEARED_PENDING_FINAL_DELIVERY_FIELDS
-        : null,
+        : null;
+    },
     { preserveActivity: true },
   );
 }
