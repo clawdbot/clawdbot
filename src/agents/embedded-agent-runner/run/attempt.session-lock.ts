@@ -89,6 +89,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   let promptSubmissionBlocked = false;
   let takeoverDetected = false;
   let promptReleased = false;
+  let promptReleaseNeedsReload = false;
   let cleanupStarted = false;
   let promptSettled = Promise.resolve();
   let settlePrompt: (() => void) | undefined;
@@ -180,6 +181,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   };
   const settlePromptRelease = (): void => {
     promptReleased = false;
+    promptReleaseNeedsReload = false;
     settlePrompt?.();
     settlePrompt = undefined;
   };
@@ -201,6 +203,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         }
         promptAborted = false;
         promptReleased = true;
+        promptReleaseNeedsReload = true;
         promptSettled = new Promise<void>((resolve) => {
           settlePrompt = resolve;
         });
@@ -220,7 +223,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     reacquireAfterPrompt: async () =>
       await serializeLifecycle(async () => {
         try {
-          if (disposed || promptAborted || cleanupStarted) {
+          if (disposed || cleanupStarted || (promptAborted && !promptReleaseNeedsReload)) {
             return;
           }
           await reloadPromptReleasedState();
@@ -275,7 +278,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
           throw new Error("attempt disposed before cleanup");
         }
         cleanupStarted = true;
-        if (promptReleased) {
+        if (promptReleaseNeedsReload) {
           try {
             if (!disposed) {
               await reloadPromptReleasedState();
@@ -286,6 +289,9 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         }
       });
       await serializeLifecycle(() => {});
+      if (disposed) {
+        throw new Error("attempt disposed before cleanup");
+      }
       return {
         release: () => {
           cleanupReleasePromise ??= (async () => {

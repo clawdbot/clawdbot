@@ -35,6 +35,40 @@ it("filters legacy row metadata with a noncanonical transcript id", () => {
   ).toBeUndefined();
 });
 
+it("preserves shipped pending key-as-session-id rows without a transcript id", () => {
+  expect(
+    normalizePersistedSessionEntryShape(
+      {
+        sessionId: "agent:child:main",
+        updatedAt: 42,
+      },
+      { sessionKey: "agent:child:main" },
+    ),
+  ).toMatchObject({ initializationPending: true, updatedAt: 42 });
+  expect(
+    normalizePersistedSessionEntryShape(
+      {
+        sessionId: "agent:child:main",
+        updatedAt: 42,
+      },
+      { sessionKey: "agent:child:main" },
+    ),
+  ).not.toHaveProperty("sessionId");
+});
+
+it("rejects locked key-as-session-id rows instead of treating them as pending", () => {
+  expect(
+    normalizePersistedSessionEntryShape(
+      {
+        modelSelectionLocked: true,
+        sessionId: "agent:child:main",
+        updatedAt: 42,
+      },
+      { sessionKey: "agent:child:main" },
+    ),
+  ).toBeUndefined();
+});
+
 describe("session path safety", () => {
   it("rejects unsafe session IDs", () => {
     const unsafeSessionIds = [

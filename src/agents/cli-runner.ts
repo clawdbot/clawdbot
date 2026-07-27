@@ -925,6 +925,7 @@ export async function runPreparedCliAgent(
           },
         );
         if (persistedEntry?.sessionId !== sessionTarget.sessionId) {
+          // Skip only this stale blocked-message write; the outer runner still returns blocked.
           return;
         }
         sessionManager = SessionManager.open(sessionTarget);

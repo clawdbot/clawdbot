@@ -1,5 +1,6 @@
 // Store entry shape normalization rejects unsafe persisted metadata before runtime use.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { validateSessionId } from "./paths.js";
 import type { SessionEntry } from "./types.js";
 
@@ -44,7 +45,10 @@ export function projectCanonicalSessionEntryShape(value: Record<string, unknown>
 }
 
 /** Normalizes persisted session store entries before they reach runtime callers. */
-export function normalizePersistedSessionEntryShape(value: unknown): SessionEntry | undefined {
+export function normalizePersistedSessionEntryShape(
+  value: unknown,
+  options: { sessionKey?: string } = {},
+): SessionEntry | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
@@ -56,17 +60,31 @@ export function normalizePersistedSessionEntryShape(value: unknown): SessionEntr
       return undefined;
     }
     const sessionId = value.sessionId.trim();
-    if (modelSelectionLocked && sessionId !== value.sessionId) {
-      // A harness lock protects the exact durable identity. Repairing it here
-      // would make a corrupted row look valid before ownership validation.
-      return undefined;
-    }
-    const transcriptSessionId = normalizeTranscriptSessionId(sessionId);
-    if (!transcriptSessionId) {
-      return undefined;
-    }
-    if (sessionId !== value.sessionId) {
-      next = { ...next, sessionId };
+    const legacySessionFile = value.sessionFile;
+    const pendingLegacyKeyId =
+      !modelSelectionLocked &&
+      options.sessionKey !== undefined &&
+      parseAgentSessionKey(options.sessionKey) !== null &&
+      sessionId === options.sessionKey &&
+      (value.initializationPending === true ||
+        typeof legacySessionFile !== "string" ||
+        !legacySessionFile.trim());
+    if (pendingLegacyKeyId) {
+      const { sessionId: _legacyPendingSessionId, ...pendingEntry } = next;
+      next = { ...pendingEntry, initializationPending: true } as SessionEntry;
+    } else {
+      if (modelSelectionLocked && sessionId !== value.sessionId) {
+        // A harness lock protects the exact durable identity. Repairing it here
+        // would make a corrupted row look valid before ownership validation.
+        return undefined;
+      }
+      const transcriptSessionId = normalizeTranscriptSessionId(sessionId);
+      if (!transcriptSessionId) {
+        return undefined;
+      }
+      if (sessionId !== value.sessionId) {
+        next = { ...next, sessionId };
+      }
     }
   }
 

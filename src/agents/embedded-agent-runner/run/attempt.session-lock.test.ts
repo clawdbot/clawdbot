@@ -540,6 +540,62 @@ describe("createEmbeddedAttemptSessionLockController", () => {
     expect(reloadPromptReleasedSessionFile).toHaveBeenCalledOnce();
   });
 
+  it("reloads released transcript state during cleanup after a terminal abort", async () => {
+    const reloadPromptReleasedSessionFile = vi.fn(async () => undefined);
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: vi.fn(async () => ({ release: async () => undefined })),
+      lockOptions: { sessionFile: "agent:main:main" },
+      reloadPromptReleasedSessionFile,
+    });
+
+    await controller.releaseForPrompt();
+    await controller.releaseHeldLockForAbort();
+    const cleanupLock = await controller.acquireForCleanup();
+
+    expect(reloadPromptReleasedSessionFile).toHaveBeenCalledOnce();
+    await cleanupLock.release();
+  });
+
+  it("rejects cleanup acquisition when disposal wins during prompt reload", async () => {
+    vi.useFakeTimers();
+    try {
+      let markReloadStarted!: () => void;
+      const reloadStarted = new Promise<void>((resolve) => {
+        markReloadStarted = resolve;
+      });
+      let finishReload!: () => void;
+      const reloadBlocked = new Promise<void>((resolve) => {
+        finishReload = resolve;
+      });
+      const controller = await createEmbeddedAttemptSessionLockController({
+        acquireSessionWriteLock: vi.fn(async () => ({ release: async () => undefined })),
+        lockOptions: { sessionFile: "agent:main:main" },
+        reloadPromptReleasedSessionFile: async () => {
+          markReloadStarted();
+          await reloadBlocked;
+        },
+      });
+      await controller.releaseForPrompt();
+      const cleanupAcquisition = controller.acquireForCleanup();
+      const cleanupOutcome = cleanupAcquisition.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      await reloadStarted;
+
+      const disposal = controller.dispose();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect(disposal).resolves.toBeUndefined();
+      finishReload();
+
+      await expect(cleanupOutcome).resolves.toEqual(
+        expect.objectContaining({ message: "attempt disposed before cleanup" }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("lets cleanup settle a completed prompt when the SDK omits reacquire", async () => {
     const reloadPromptReleasedSessionFile = vi.fn(async () => undefined);
     const controller = await createEmbeddedAttemptSessionLockController({
