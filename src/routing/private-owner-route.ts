@@ -31,10 +31,12 @@ export function isPrivateOwnerRouteTarget(params: {
 function buildPrivateOwnerRouteKeys(target: { channel: string; to: string }): Set<string> {
   const channel = normalizeLowercaseStringOrEmpty(target.channel);
   const plugin = getLoadedChannelPluginById(channel);
-  const to = normalizeLowercaseStringOrEmpty(target.to);
+  const normalizedTo = normalizeLowercaseStringOrEmpty(target.to);
   const targetIds = new Set([
-    to,
-    to.startsWith("user:") ? normalizeLowercaseStringOrEmpty(to.slice("user:".length)) : "",
+    normalizedTo,
+    normalizedTo.startsWith("user:")
+      ? normalizeLowercaseStringOrEmpty(normalizedTo.slice("user:".length))
+      : "",
   ]);
   const keys = new Set<string>();
   for (const to of targetIds) {
